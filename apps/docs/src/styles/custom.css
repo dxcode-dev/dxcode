@@ -1,0 +1,53 @@
+:root {
+  --sl-color-accent-low: #27320d;
+  --sl-color-accent: #a7e541;
+  --sl-color-accent-high: #dfffa3;
+  --sl-color-white: #f7f7f2;
+  --sl-color-gray-1: #e8e9df;
+  --sl-color-gray-2: #bec2b6;
+  --sl-color-gray-3: #858b82;
+  --sl-color-gray-4: #555c57;
+  --sl-color-gray-5: #343a3a;
+  --sl-color-gray-6: #232832;
+  --sl-color-black: #151923;
+}
+
+:root[data-theme="light"] {
+  --sl-color-accent-low: #edf8d7;
+  --sl-color-accent: #527a10;
+  --sl-color-accent-high: #263d08;
+  --sl-color-white: #171b24;
+  --sl-color-gray-1: #29302e;
+  --sl-color-gray-2: #4a524e;
+  --sl-color-gray-3: #6f7872;
+  --sl-color-gray-4: #aeb5ac;
+  --sl-color-gray-5: #dde1d8;
+  --sl-color-gray-6: #eef0e9;
+  --sl-color-gray-7: #f8f9f4;
+  --sl-color-black: #ffffff;
+}
+
+body {
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+code,
+kbd,
+pre,
+samp {
+  font-family: "Courier New", Courier, monospace;
+}
+
+@media (min-width: 50rem) {
+  .hero {
+    padding-block: 2.5rem 2rem;
+  }
+
+  .hero h1 {
+    font-size: 3rem;
+  }
+}
+
+.card {
+  border-radius: 0.8rem;
+}

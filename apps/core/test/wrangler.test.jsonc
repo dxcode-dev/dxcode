@@ -1,0 +1,70 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "dx-core-d1-tests",
+  "compatibility_date": "2026-08-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "DX_RUNTIME_MODE": "deployed",
+    "DX_CONFIG_ENCRYPTION_KEYS": "{\"activeVersion\":1,\"keys\":{\"1\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}}"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "dx-product-store-test",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "../migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "DX_STORAGE",
+      "bucket_name": "dx-storage-test"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PLUGIN_TRIGGER_DELIVERY",
+        "class_name": "PluginTriggerDeliveryObject"
+      },
+      {
+        "name": "THREAD_EXECUTION",
+        "class_name": "ThreadExecutionObject"
+      },
+      {
+        "name": "SUBSCRIPTION_CREDENTIAL_COORDINATOR",
+        "class_name": "SubscriptionCredentialCoordinatorObject"
+      },
+      {
+        "name": "REALTIME_HUB",
+        "class_name": "RealtimeHub"
+      },
+      {
+        "name": "BYOK_CREDENTIAL_COORDINATOR",
+        "class_name": "ByokCredentialCoordinatorObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v2-plugin-trigger-delivery",
+      "new_sqlite_classes": ["PluginTriggerDeliveryObject"]
+    },
+    {
+      "tag": "v3-thread-execution",
+      "new_sqlite_classes": ["ThreadExecutionObject"]
+    },
+    {
+      "tag": "v4-subscription-credential-coordinator",
+      "new_sqlite_classes": ["SubscriptionCredentialCoordinatorObject"]
+    },
+    {
+      "tag": "v5-realtime-hub",
+      "new_sqlite_classes": ["RealtimeHub"]
+    },
+    {
+      "tag": "v5-byok-credential-coordinator",
+      "new_sqlite_classes": ["ByokCredentialCoordinatorObject"]
+    }
+  ]
+}

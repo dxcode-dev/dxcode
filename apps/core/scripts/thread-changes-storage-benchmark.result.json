@@ -1,0 +1,75 @@
+{
+  "environment": {
+    "runtime": "v22.23.2",
+    "platform": "linux",
+    "arch": "x64",
+    "samples": 200,
+    "note": "Prototype encode/JSON-decode CPU timings, not production schema validation or cloud latency. Read counts include prefix over-read. Patch reads assume index already loaded in the request. Half of patches are duplicates; savings depend on content."
+  },
+  "fixtures": {
+    "small": {
+      "wholeJson": {
+        "bytesStored": 5892,
+        "puts": 1,
+        "indexReads": 5892,
+        "indexGets": 1,
+        "patchReads": 0,
+        "patchGets": 0,
+        "encodeMedianMs": 0.02751299999999901,
+        "decodeIndexMedianMs": 0.025617999999980157
+      },
+      "splitTwoObjects": {
+        "bytesStored": 4513,
+        "puts": 2,
+        "indexReads": 1923,
+        "indexGets": 1,
+        "patchReads": 522,
+        "patchGets": 1,
+        "encodeMedianMs": 0.02174999999999727,
+        "decodeIndexMedianMs": 0.01006399999999985
+      },
+      "packedSingle": {
+        "bytesStored": 4513,
+        "puts": 1,
+        "indexReads": 4513,
+        "indexGets": 1,
+        "patchReads": 522,
+        "patchGets": 1,
+        "encodeMedianMs": 0.017444000000011783,
+        "decodeIndexMedianMs": 0.009104000000007773
+      }
+    },
+    "nearLimit": {
+      "wholeJson": {
+        "bytesStored": 6507899,
+        "puts": 1,
+        "indexReads": 6507899,
+        "indexGets": 1,
+        "patchReads": 0,
+        "patchGets": 0,
+        "encodeMedianMs": 26.748317999999927,
+        "decodeIndexMedianMs": 27.49134099999992
+      },
+      "splitTwoObjects": {
+        "bytesStored": 3332572,
+        "puts": 2,
+        "indexReads": 122062,
+        "indexGets": 1,
+        "patchReads": 8010,
+        "patchGets": 1,
+        "encodeMedianMs": 2.8849000000009255,
+        "decodeIndexMedianMs": 0.5554019999999582
+      },
+      "packedSingle": {
+        "bytesStored": 3332572,
+        "puts": 1,
+        "indexReads": 187598,
+        "indexGets": 2,
+        "patchReads": 8010,
+        "patchGets": 1,
+        "encodeMedianMs": 2.743252999998731,
+        "decodeIndexMedianMs": 0.5462490000008984
+      }
+    }
+  }
+}

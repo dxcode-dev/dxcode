@@ -1,0 +1,77 @@
+diff --git a/lib/Cloudflare/StateStore/State.js b/lib/Cloudflare/StateStore/State.js
+index a226ab1fa2670ca319a9b675baca73ca89c1241b..fa71fa7536181cc9789893f1c674d48939424822 100644
+--- a/lib/Cloudflare/StateStore/State.js
++++ b/lib/Cloudflare/StateStore/State.js
+@@ -513,13 +513,25 @@ export const loginWithCloudflare = (profileName, force) => Effect.gen(function*
+             return credentials;
+         }
+     }
+-    // 1. Locate the single Secrets Store on the account.
+-    const store = yield* SecretsStore.listStores
++    // 1. Select the Secrets Store that contains the state-store token. An
++    // account may contain unrelated stores, so selecting the first store can
++    // build an invalid edge-preview binding.
++    const stores = Array.from(yield* SecretsStore.listStores
+         .items({ accountId })
+-        .pipe(Stream.runHead, Effect.map(Option.getOrUndefined));
++        .pipe(Stream.runCollect));
++    let store;
++    for (const candidate of stores) {
++        const secrets = yield* SecretsStore.listStoreSecrets
++            .items({ accountId, storeId: candidate.id })
++            .pipe(Stream.runCollect);
++        if (Array.from(secrets).some((secret) => secret.name === AuthTokenSecretName)) {
++            store = candidate;
++            break;
++        }
++    }
+     if (!store) {
+         return yield* Effect.fail(new AuthError({
+-            message: "No Secrets Store found on this account. Deploy the state store first.",
++            message: "No Secrets Store containing the Alchemy state-store token was found on this account. Deploy the state store first.",
+         }));
+     }
+     // 2. Fetch the auth-token from Secrets Store with a temporary edge-preview worker
+diff --git a/src/Cloudflare/StateStore/State.ts b/src/Cloudflare/StateStore/State.ts
+index 2be16eb514ee165c4dc7aabf487f12719c25137a..4fb092265c4c260eda3fa20e640ad0bd68603194 100644
+--- a/src/Cloudflare/StateStore/State.ts
++++ b/src/Cloudflare/StateStore/State.ts
+@@ -740,15 +740,33 @@ export const loginWithCloudflare = (profileName: string, force: boolean) =>
+       }
+     }
+ 
+-    // 1. Locate the single Secrets Store on the account.
+-    const store = yield* SecretsStore.listStores
+-      .items({ accountId })
+-      .pipe(Stream.runHead, Effect.map(Option.getOrUndefined));
++    // 1. Locate the Secrets Store that contains the state-store token. An
++    // account may contain unrelated stores, so selecting the first store can
++    // build an invalid edge-preview binding.
++    const stores = Array.from(
++      yield* SecretsStore.listStores
++        .items({ accountId })
++        .pipe(Stream.runCollect),
++    );
++    let store: (typeof stores)[number] | undefined;
++    for (const candidate of stores) {
++      const secrets = yield* SecretsStore.listStoreSecrets
++        .items({ accountId, storeId: candidate.id })
++        .pipe(Stream.runCollect);
++      if (
++        Array.from(secrets).some(
++          (secret) => secret.name === AuthTokenSecretName,
++        )
++      ) {
++        store = candidate;
++        break;
++      }
++    }
+     if (!store) {
+       return yield* Effect.fail(
+         new AuthError({
+           message:
+-            "No Secrets Store found on this account. Deploy the state store first.",
++            "No Secrets Store containing the Alchemy state-store token was found on this account. Deploy the state store first.",
+         }),
+       );
+     }

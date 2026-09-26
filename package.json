@@ -1,0 +1,75 @@
+{
+  "name": "dx",
+  "private": true,
+  "version": "0.1.0",
+  "license": "FSL-1.1-ALv2",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=22.19.0",
+    "pnpm": ">=9.15.0 <10"
+  },
+  "pnpm": {
+    "overrides": {
+      "@opentelemetry/api": "1.9.0",
+      "@better-auth/utils": "0.4.2",
+      "@earendil-works/pi-ai": "0.85.1",
+      "@flue/runtime": "file:third-party/flue/runtime-b67b036c10210b11d1adf1e984f956388f976e75.tgz"
+    },
+    "patchedDependencies": {
+      "alchemy@2.0.0-beta.74": "third-party/alchemy/alchemy@2.0.0-beta.74.patch"
+    }
+  },
+  "scripts": {
+    "build": "pnpm --filter @dx/web build && pnpm --filter @dx/core build && pnpm --filter @dx/docs build",
+    "build:production": "node scripts/build-production-package.mjs",
+    "build:dxd": "cargo build --release --locked --manifest-path apps/dxd/Cargo.toml",
+    "format": "biome format . --write",
+    "format:check": "biome format .",
+    "lint": "biome lint . && node scripts/check-web-architecture.mjs",
+    "react:doctor": "pnpm --filter @dx/web run doctor",
+    "typecheck": "tsc -b --pretty false",
+    "test:lint-plugins": "node scripts/test-biome-plugins.mjs",
+    "test:web-architecture": "node scripts/test-web-architecture.mjs",
+    "test:unit": "vitest run",
+    "test:dxd": "cargo test --locked --manifest-path apps/dxd/Cargo.toml",
+    "test:frontend-network": "pnpm --filter @dx/web test:network",
+    "test:integration": "pnpm --filter @dx/core test:worker && pnpm --filter @dx/core test:lifecycle",
+    "test": "pnpm test:unit && pnpm test:integration",
+    "check:boundaries": "node scripts/check-package-boundaries.mjs",
+    "validate:cloudflare": "pnpm --filter @dx/core validate:cloudflare",
+    "dev": "node scripts/dev-local.mjs",
+    "dev:model-preview": "node scripts/dev-local.mjs --model-preview",
+    "dev:reset": "node scripts/reset-local.mjs",
+    "dev:web": "pnpm --filter @dx/web dev",
+    "docs:dev": "pnpm --filter @dx/docs dev",
+    "docs:check": "pnpm --filter @dx/docs check",
+    "docs:build": "pnpm --filter @dx/docs build",
+    "deploy:selfhost": "node scripts/run-alchemy-deployment.mjs deploy selfhost",
+    "dx:deploy": "node scripts/dx-deploy.mjs",
+    "deploy:selfhost:destroy": "node scripts/run-alchemy-deployment.mjs destroy selfhost",
+    "deploy:selfhost:template": "node deploy/e2b/build.mjs",
+    "deploy:selfhost:dxd": "node scripts/build-dxd-linux.mjs",
+    "typecheck:alchemy": "tsc -p tsconfig.alchemy.json --pretty false"
+  },
+  "devDependencies": {
+    "@babel/parser": "8.0.4",
+    "@babel/traverse": "8.0.4",
+    "@biomejs/biome": "2.5.9",
+    "@effect/platform-node": "4.0.0-rc.110",
+    "@effect/tsgo": "0.36.5",
+    "@types/node": "26.2.0",
+    "alchemy": "2.0.0-beta.74",
+    "e2b": "2.44.0",
+    "effect": "4.0.0-rc.110",
+    "jsonc-parser": "3.3.1",
+    "msw": "^2.14.0",
+    "typescript": "7.0.2",
+    "vitest": "4.1.11"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dxcode-dev/dxcode.git"
+  },
+  "bugs": "https://github.com/dxcode-dev/dxcode/issues",
+  "homepage": "https://github.com/dxcode-dev/dxcode#readme"
+}

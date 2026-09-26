@@ -1,0 +1,17 @@
+{
+  "name": "@dx/domain",
+  "private": true,
+  "version": "0.1.0",
+  "license": "FSL-1.1-ALv2",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "effect": "4.0.0-rc.110"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dxcode-dev/dxcode.git"
+  }
+}

@@ -1,0 +1,20 @@
+[
+  {
+    "id": "a1.tiny",
+    "label": "a1.tiny",
+    "templateSuffix": "a1-tiny",
+    "resources": { "cpuCores": 1, "memoryMb": 2048, "diskGb": 20 }
+  },
+  {
+    "id": "a1.small",
+    "label": "a1.small",
+    "templateSuffix": "a1-small",
+    "resources": { "cpuCores": 2, "memoryMb": 4096, "diskGb": 20 }
+  },
+  {
+    "id": "a1.medium",
+    "label": "a1.medium",
+    "templateSuffix": "a1-medium",
+    "resources": { "cpuCores": 4, "memoryMb": 8192, "diskGb": 20 }
+  }
+]

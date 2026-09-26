@@ -1,0 +1,151 @@
+body {
+  margin: 0;
+  background: #eee9de;
+  color: #193345;
+  font-family: "DM Sans", sans-serif;
+}
+.teaser {
+  width: 1536px;
+  height: 1024px;
+  position: relative;
+  overflow: hidden;
+  background: #193345;
+  color: #f5f2e9;
+}
+.teaser.ivory {
+  background: #f5f2e9;
+  color: #193345;
+}
+.teaser-clouds {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.teaser header {
+  position: absolute;
+  inset: 68px 88px auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.teaser .dx-brand-wordmark-glyph {
+  font-size: 112px;
+}
+.teaser header > span {
+  font:
+    14px / 1.6 "DM Mono",
+    monospace;
+  letter-spacing: 0.13em;
+  text-align: right;
+}
+.teaser-message {
+  position: absolute;
+  left: 88px;
+  right: 88px;
+  top: 286px;
+}
+.teaser-message p {
+  font:
+    14px / 1.5 "DM Mono",
+    monospace;
+  letter-spacing: 0.16em;
+  color: #c4aa74;
+  margin: 0 0 26px;
+}
+.ivory .teaser-message p {
+  color: #84672e;
+}
+.teaser h1 {
+  font-size: 106px;
+  line-height: 1.04;
+  font-weight: 400;
+  letter-spacing: -0.045em;
+  margin: 0;
+}
+.teaser h1 em {
+  font-family: "Instrument Serif", serif;
+  font-weight: 400;
+}
+.teaser footer {
+  position: absolute;
+  left: 88px;
+  right: 88px;
+  bottom: 48px;
+  display: flex;
+  justify-content: space-between;
+  font:
+    13px / 1.5 "DM Mono",
+    monospace;
+  letter-spacing: 0.08em;
+}
+.navy footer {
+  color: #f5f2e9;
+  text-shadow: 0 1px 8px #193345;
+}
+.composition-2 .teaser-message,
+.composition-4 .teaser-message {
+  text-align: center;
+}
+.composition-2 h1 {
+  font-size: 120px;
+}
+.composition-4 h1 {
+  font-size: 124px;
+}
+.composition-3 .teaser-message {
+  left: 180px;
+}
+.composition-5 .teaser-message {
+  top: 278px;
+}
+.composition-6 .teaser-message {
+  top: 276px;
+}
+.composition-6 h1 {
+  font-size: 112px;
+}
+.teaser-gallery {
+  max-width: 1120px;
+  padding: 50px 24px;
+  margin: auto;
+}
+.teaser-gallery > h1 {
+  font-size: 56px;
+  letter-spacing: -0.04em;
+  margin: 0 0 12px;
+}
+.teaser-gallery > p {
+  margin-bottom: 50px;
+}
+.teaser-gallery section {
+  margin-bottom: 50px;
+  display: grid;
+  grid-template-columns: 768px 1fr;
+  gap: 30px;
+}
+.teaser-preview {
+  width: 768px;
+  height: 512px;
+  overflow: hidden;
+}
+.teaser-preview .teaser {
+  transform: scale(0.5);
+  transform-origin: top left;
+}
+.teaser-detail {
+  align-self: center;
+  line-height: 1.6;
+}
+.teaser-detail a {
+  color: inherit;
+}
+@media (max-width: 1000px) {
+  .teaser-gallery section {
+    display: block;
+  }
+  .teaser-preview {
+    zoom: 0.75;
+  }
+}

@@ -1,0 +1,25 @@
+name: Bug report
+description: Report reproducible incorrect behavior
+body:
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: Include the expected behavior and the actual behavior.
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: DX version
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Reproduction
+      description: Give the smallest sequence that reproduces the problem. Remove secrets.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Logs
+      description: Paste relevant redacted logs.

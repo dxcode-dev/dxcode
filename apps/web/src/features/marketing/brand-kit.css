@@ -1,0 +1,159 @@
+body {
+  margin: 0;
+  background: #f5f2e9;
+  font-family: "DM Sans", sans-serif;
+  color: #193345;
+}
+.brand-export {
+  position: relative;
+  overflow: hidden;
+  background: #f5f2e9;
+}
+.brand-export .background {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.brand-copy {
+  position: absolute;
+  left: 6%;
+  top: 15%;
+}
+.brand-copy .dx-brand-wordmark-glyph {
+  font-size: 80px;
+}
+.brand-copy h1 {
+  font-size: 60px;
+  letter-spacing: -0.045em;
+  line-height: 1.06;
+  margin: 32px 0;
+  font-weight: 500;
+}
+.brand-copy em {
+  font-family: "Instrument Serif", serif;
+  font-weight: 400;
+}
+.brand-copy p {
+  font-size: 20px;
+  letter-spacing: 0.08em;
+}
+.x-header .brand-copy {
+  left: 14%;
+  top: 12%;
+}
+.x-header .brand-copy h1 {
+  font-size: 52px;
+  margin: 22px 0;
+}
+.github-social .background,
+.social-card .background,
+.presentation .background {
+  object-fit: contain;
+  object-position: right bottom;
+}
+.github-social .brand-copy,
+.social-card .brand-copy {
+  top: 11%;
+}
+.poster {
+  color: #f5f2e9;
+  background: #193345;
+}
+.poster .brand-copy {
+  left: 9%;
+  top: 6%;
+}
+.poster .brand-copy h1 {
+  font-size: 94px;
+  margin: 42px 0;
+}
+.poster .brand-copy p {
+  font-size: 28px;
+  color: #ceb47c;
+}
+.presentation .brand-copy {
+  left: 7%;
+  top: 11%;
+}
+.presentation .brand-copy h1 {
+  font-size: 100px;
+}
+.presentation .brand-copy .dx-brand-wordmark-glyph {
+  font-size: 120px;
+}
+.avatar-navy {
+  background: #193345;
+  color: #f5f2e9;
+}
+.avatar-ivory {
+  background: #f5f2e9;
+  color: #193345;
+}
+.avatar-navy .brand-copy,
+.avatar-ivory .brand-copy {
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+.avatar-navy .dx-brand-wordmark-glyph,
+.avatar-ivory .dx-brand-wordmark-glyph {
+  font-size: 480px;
+}
+.brand-gallery {
+  max-width: 1000px;
+  margin: 50px auto;
+}
+.brand-gallery h1 {
+  font-size: 52px;
+  letter-spacing: -0.04em;
+}
+.brand-gallery section {
+  margin: 50px 0;
+}
+.brand-gallery a {
+  display: block;
+  margin-bottom: 16px;
+  color: inherit;
+}
+.thumbnail {
+  zoom: 0.48;
+  width: max-content;
+  border: 1px solid #c9c4b7;
+}
+.github-social .background,
+.social-card .background,
+.presentation .background {
+  mask-image: linear-gradient(to bottom, transparent 28%, #000 54%);
+}
+
+.x-prelaunch {
+  color: #f5f2e9;
+  background: #193345;
+}
+.x-prelaunch .background {
+  object-position: center 63%;
+}
+.x-prelaunch::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, #19334599, #193345e6 35%, #19334500 85%);
+}
+.x-prelaunch .brand-copy {
+  left: 400px;
+  top: 74px;
+  z-index: 1;
+}
+.x-prelaunch .brand-copy .dx-brand-wordmark-glyph {
+  font-size: 76px;
+}
+.x-prelaunch .brand-copy h1 {
+  font-size: 66px;
+  margin: 18px 0 22px;
+}
+.x-prelaunch .brand-copy p {
+  color: #d3b87b;
+  font-size: 15px;
+  letter-spacing: 0.12em;
+}

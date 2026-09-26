@@ -1,0 +1,18 @@
+engine biome(1.0)
+language js(typescript)
+
+or {
+  `$value._tag === $tag` as $match,
+  `$tag === $value._tag` as $match,
+  `$value._tag !== $tag` as $match,
+  `$tag !== $value._tag` as $match,
+  `$value._tag == $tag` as $match,
+  `$tag == $value._tag` as $match,
+  `$value._tag != $tag` as $match,
+  `$tag != $value._tag` as $match,
+  `"_tag" in $value` as $match,
+  `'_tag' in $value` as $match,
+  JsSwitchStatement() as $match where { $match <: contains `$value._tag` }
+} where {
+  register_diagnostic(span=$match, message="Do not inspect an Effect error `_tag` manually. Keep the error channel typed and use `Match.value`/`Match.tag`, `Effect.catchTag`, or `Effect.tapErrorTag`.", severity="error")
+}

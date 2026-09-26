@@ -1,0 +1,242 @@
+{
+  "version": 1,
+  "bindings": [
+    {
+      "name": "AI",
+      "type": "workers-ai",
+      "provenance": "authored-wrangler"
+    },
+    {
+      "name": "BETTER_AUTH_SECRET",
+      "type": "secret",
+      "provenance": "authored-wrangler"
+    },
+    {
+      "name": "BYOK_CREDENTIAL_COORDINATOR",
+      "type": "durable-object",
+      "provenance": "authored-wrangler"
+    },
+    {
+      "name": "DB",
+      "type": "d1",
+      "provenance": "authored-wrangler"
+    },
+    {
+      "name": "DX_AUTH_EMAIL_FROM",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_AUTH_TRUSTED_ORIGINS",
+      "type": "text",
+      "provenance": "alchemy"
+    },
+    {
+      "name": "DX_AUTH_URL",
+      "type": "text",
+      "provenance": "alchemy"
+    },
+    {
+      "name": "DX_CONFIG_ENCRYPTION_KEYS",
+      "type": "secret",
+      "provenance": "authored-wrangler"
+    },
+    {
+      "name": "DX_DEPLOYMENT_REVISION",
+      "type": "text",
+      "provenance": "alchemy"
+    },
+    {
+      "name": "DX_DEPLOYMENT_TARGET",
+      "type": "text",
+      "provenance": "alchemy"
+    },
+    {
+      "name": "DX_DXD_PUBLIC_URL",
+      "type": "text",
+      "provenance": "alchemy"
+    },
+    {
+      "name": "DX_DXD_RELEASE_SHA256",
+      "type": "text",
+      "provenance": "alchemy"
+    },
+    {
+      "name": "DX_DXD_RELEASE_URL",
+      "type": "text",
+      "provenance": "alchemy"
+    },
+    {
+      "name": "DX_E2B_TEMPLATE",
+      "type": "text",
+      "provenance": "alchemy"
+    },
+    {
+      "name": "DX_E2B_TEMPLATE_BUILD_ID",
+      "type": "text",
+      "provenance": "alchemy"
+    },
+    {
+      "name": "DX_E2B_TIMEOUT_MS",
+      "type": "text",
+      "provenance": "alchemy"
+    },
+    {
+      "name": "DX_ENV",
+      "type": "text",
+      "provenance": "authored-wrangler"
+    },
+    {
+      "name": "DX_GITHUB_COPILOT_CLIENT_ID",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_INTEGRATION_BITBUCKET_OAUTH",
+      "type": "secret",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_INTEGRATION_GITHUB_APP",
+      "type": "secret",
+      "provenance": "alchemy"
+    },
+    {
+      "name": "DX_MANAGED_SSH_SIGNING_ENABLED",
+      "type": "text",
+      "provenance": "alchemy"
+    },
+    {
+      "name": "DX_MIGRATION_MANIFEST_VERSION",
+      "type": "text",
+      "provenance": "alchemy"
+    },
+    {
+      "name": "DX_MODEL_DEPLOYMENT_PROVIDERS",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_MODEL_ENDPOINT_ALLOWLIST",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_MODEL_WORKERS_AI_ENABLED",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_RUNNER_PROFILE_CATALOG",
+      "type": "text",
+      "provenance": "authored-wrangler"
+    },
+    {
+      "name": "DX_RUNTIME_MODE",
+      "type": "text",
+      "provenance": "authored-wrangler"
+    },
+    {
+      "name": "DX_SIGNUP_ENABLED",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_SOURCE_CONTROL_SCHEMA_VERSION",
+      "type": "text",
+      "provenance": "alchemy"
+    },
+    {
+      "name": "DX_SOURCE_SHALLOW_CLONE",
+      "type": "text",
+      "provenance": "alchemy"
+    },
+    {
+      "name": "DX_STORAGE",
+      "type": "r2",
+      "provenance": "authored-wrangler"
+    },
+    {
+      "name": "DX_TURNSTILE_SECRET_KEY",
+      "type": "secret",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_TURNSTILE_SITE_KEY",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_WORKLOAD_IDENTITY_AUDIENCE_POLICIES",
+      "type": "text",
+      "provenance": "authored-wrangler"
+    },
+    {
+      "name": "DX_WORKLOAD_IDENTITY_ISSUER",
+      "type": "text",
+      "provenance": "authored-wrangler"
+    },
+    {
+      "name": "DX_WORKLOAD_IDENTITY_SIGNING_KEYS",
+      "type": "secret",
+      "provenance": "authored-wrangler"
+    },
+    {
+      "name": "DX_WORKSPACE_INACTIVITY_MS",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "E2B_API_KEY",
+      "type": "secret",
+      "provenance": "authored-wrangler"
+    },
+    {
+      "name": "EMAIL",
+      "type": "send-email",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "FLUE_DX_AGENT_AGENT",
+      "type": "durable-object",
+      "provenance": "generated-flue"
+    },
+    {
+      "name": "PLUGIN_TRIGGER_DELIVERY",
+      "type": "durable-object",
+      "provenance": "authored-wrangler"
+    },
+    {
+      "name": "REALTIME_HUB",
+      "type": "durable-object",
+      "provenance": "authored-wrangler"
+    },
+    {
+      "name": "SARVAM_API_KEY",
+      "type": "secret",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "SUBSCRIPTION_CREDENTIAL_COORDINATOR",
+      "type": "durable-object",
+      "provenance": "authored-wrangler"
+    },
+    {
+      "name": "THREAD_EXECUTION",
+      "type": "durable-object",
+      "provenance": "authored-wrangler"
+    }
+  ]
+}

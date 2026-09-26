@@ -1,0 +1,215 @@
+.markdown.transcript-markdown {
+  --markdown-mono: "IBM Plex Mono", monospace;
+  --markdown-keyword: light-dark(#a52270, #ff7ac6);
+
+  color: var(--chat-foreground);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  font-feature-settings: "ss06", "ss07";
+  font-synthesis: none;
+  text-rendering: auto;
+  letter-spacing: normal;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.markdown.transcript-markdown h1 {
+  font-size: 1.75em;
+  font-weight: 700;
+  margin: 1.8em 0 0.7em;
+  padding-bottom: 0.4em;
+  border-bottom: 2px solid var(--divider);
+}
+.markdown.transcript-markdown h2 {
+  font-weight: 700;
+  margin: 1.5em 0 0.6em;
+}
+.markdown.transcript-markdown h3 {
+  margin: 1.4em 0 0.5em;
+}
+.markdown.transcript-markdown h4 {
+  font-size: 1.15em;
+  font-weight: 600;
+  line-height: 1.2;
+  margin: 1.2em 0 0.4em;
+}
+.markdown.transcript-markdown ul,
+.markdown.transcript-markdown ol {
+  margin: 0.5em 0;
+}
+.markdown.transcript-markdown ul {
+  list-style-type: disc;
+}
+.markdown.transcript-markdown ol {
+  list-style-type: decimal;
+}
+.markdown.transcript-markdown li:has(> input[type="checkbox"]) {
+  list-style: none;
+}
+.markdown.transcript-markdown blockquote {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: inherit;
+}
+.markdown.transcript-markdown strong {
+  font-weight: 700;
+}
+.markdown.transcript-markdown a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.markdown.transcript-markdown a:hover {
+  text-decoration: none;
+}
+.markdown.transcript-markdown code {
+  font-family: var(--markdown-mono);
+  font-feature-settings: normal;
+  background: var(--muted);
+}
+.markdown.transcript-markdown .transcript-code-block {
+  position: relative;
+  margin: 1.1em 0;
+}
+.markdown.transcript-markdown pre {
+  font: 12.5px / 1.375 var(--markdown-mono);
+  padding: 8px 36px 8px 12px;
+  background: color-mix(in oklab, var(--chat-foreground) 5%, transparent);
+  outline: 1px solid
+    color-mix(in oklab, var(--chat-foreground) 10%, transparent);
+  white-space: pre;
+  overflow-wrap: normal;
+}
+.markdown.transcript-markdown pre code {
+  display: block;
+  width: min-content;
+  min-width: 100%;
+  font: inherit;
+  background: transparent;
+  line-height: 1;
+  font-variant-ligatures: none;
+  letter-spacing: 0;
+}
+.markdown.transcript-markdown .markdown-diagram pre {
+  padding-block: 16px;
+  background: color-mix(in srgb, var(--chat-foreground) 3%, var(--background));
+}
+.markdown.transcript-markdown .markdown-diagram code {
+  line-height: 1.25;
+}
+.diagram-structure {
+  color: color-mix(in srgb, var(--chat-foreground) 42%, transparent);
+}
+.diagram-accent {
+  color: var(--markdown-keyword);
+  text-shadow: 0 0 0.8rem
+    color-mix(in srgb, var(--markdown-keyword) 25%, transparent);
+}
+.markdown.transcript-markdown [data-wrap] pre code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  width: auto;
+}
+.markdown.transcript-markdown .transcript-table {
+  position: relative;
+  display: grid;
+  grid-template-rows: 30px minmax(0, auto);
+  margin: 0.75em 0;
+  overflow: visible;
+}
+.markdown-table-scroll {
+  grid-row: 2;
+  overflow-x: auto;
+  padding: 1px;
+}
+.markdown.transcript-markdown table {
+  width: 100%;
+  min-width: 100%;
+  font-size: 0.93em;
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px var(--divider);
+}
+.markdown.transcript-markdown th,
+.markdown.transcript-markdown td {
+  overflow-wrap: normal;
+}
+.markdown.transcript-markdown thead {
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+}
+.markdown.transcript-markdown tbody tr:last-child td {
+  border-bottom: 0;
+}
+.markdown.transcript-markdown .transcript-copy,
+.markdown-wrap {
+  position: absolute;
+  z-index: 1;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted-foreground);
+  background: var(--background);
+  cursor: pointer;
+  opacity: 0;
+}
+.markdown-wrap {
+  top: 34px;
+}
+.markdown.transcript-markdown .transcript-table > .transcript-copy {
+  position: static;
+  grid-row: 1;
+  justify-self: end;
+}
+.markdown-wrap svg {
+  width: 14px;
+  height: 14px;
+}
+.markdown.transcript-markdown .transcript-code-block:hover > button,
+.markdown.transcript-markdown .transcript-code-block:focus-within > button,
+.markdown.transcript-markdown .transcript-table:hover > button,
+.markdown.transcript-markdown .transcript-table:focus-within > button {
+  opacity: 1;
+}
+.markdown.transcript-markdown .hljs-keyword,
+.markdown.transcript-markdown .hljs-selector-tag {
+  color: var(--markdown-keyword);
+}
+.markdown.transcript-markdown .hljs-string,
+.markdown.transcript-markdown .hljs-attr {
+  color: light-dark(#556b19, #e6db74);
+}
+.markdown.transcript-markdown .hljs-number,
+.markdown.transcript-markdown .hljs-literal {
+  color: light-dark(#6e40aa, #bd93f9);
+}
+.markdown.transcript-markdown .hljs-comment {
+  color: var(--muted-foreground);
+}
+.markdown.transcript-markdown .hljs-title,
+.markdown.transcript-markdown .hljs-built_in {
+  color: light-dark(#087b85, #8be9fd);
+}
+.markdown.transcript-markdown > :first-child {
+  margin-top: 0;
+}
+.markdown.transcript-markdown > :last-child {
+  margin-bottom: 0;
+}
+@media (pointer: coarse) {
+  .markdown.transcript-markdown .transcript-copy,
+  .markdown-wrap {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 767px) {
+  .transcript-preview .agent-transcript {
+    padding-inline: 16px;
+  }
+}

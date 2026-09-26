@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "rootDir": "../.."
+  },
+  "include": [
+    "../../src/raw-assets.d.ts",
+    "src/**/*.ts",
+    "lifecycle.test.ts",
+    "flue.config.ts",
+    "vite.config.ts"
+  ]
+}

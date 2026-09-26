@@ -1,0 +1,67 @@
+.dx-brand-mark {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: min(72vw, 640px);
+  aspect-ratio: 1.55;
+  color: #f6fff5;
+  isolation: isolate;
+  container-type: inline-size;
+}
+
+.dx-brand-mark[data-state="loading"] {
+  color: #b8f5d6;
+}
+.dx-brand-mark[data-state="thinking"] {
+  color: #b89cff;
+}
+.dx-brand-mark[data-state="working"] {
+  color: #f6833b;
+}
+.dx-brand-mark[data-state="complete"] {
+  color: #63db8c;
+}
+.dx-brand-mark[data-state="error"] {
+  color: #ff4738;
+}
+
+.dx-brand-mark-fallback,
+.dx-brand-mark canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.dx-brand-mark-fallback {
+  display: grid;
+  place-items: center;
+  padding-right: 0.145em;
+  color: currentcolor;
+  font:
+    italic 700 34cqw / 1 "DM Sans",
+    system-ui,
+    sans-serif;
+  letter-spacing: -0.145em;
+}
+
+.dx-brand-mark:has(canvas[data-ready="true"]) .dx-brand-mark-fallback {
+  visibility: hidden;
+}
+
+.dx-brand-wordmark {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.dx-brand-wordmark-glyph {
+  font:
+    italic 700 30px / 1 "DM Sans",
+    system-ui,
+    sans-serif;
+  letter-spacing: -0.145em;
+  padding-right: 0.145em;
+}

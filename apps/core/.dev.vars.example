@@ -1,0 +1,39 @@
+BETTER_AUTH_SECRET="replace-with-at-least-32-random-characters"
+# Generate an independent 32-byte key with `openssl rand -base64 32` and insert
+# it below. Never derive this key from BETTER_AUTH_SECRET or E2B_API_KEY.
+DX_CONFIG_ENCRYPTION_KEYS='{"activeVersion":1,"keys":{"1":"replace-with-base64-32-byte-key"}}'
+# Comma-separated HTTPS origins admitted for explicit model discovery checks.
+DX_MODEL_ENDPOINT_ALLOWLIST=""
+# Comma-separated bundled Pi provider IDs whose deployment credentials are configured.
+DX_MODEL_DEPLOYMENT_PROVIDERS=""
+DX_AUTH_URL="http://localhost:3000"
+DX_AUTH_TRUSTED_ORIGINS="http://localhost:3000"
+DX_WORKLOAD_IDENTITY_ISSUER="http://localhost:5173/api/workload-identity"
+DX_WORKLOAD_IDENTITY_AUDIENCE_POLICIES='{"version":1,"policies":[]}'
+# The setup script replaces this placeholder with a dedicated local RS256 key.
+DX_WORKLOAD_IDENTITY_SIGNING_KEYS='replace-with-workload-identity-keyring'
+# Optional local-only UI fixture. Core ignores it unless DX_ENV is exactly local.
+# DX_EXPERIMENTAL_FEATURE_FIXTURE="capability"
+# Self-host only: "true" enables public email/password sign-up. Ignored by
+# hosted deployments (magic-link + waitlist + Turnstile) and locally, where
+# email/password sign-up is always enabled.
+# DX_SIGNUP_ENABLED="true"
+# The setup script replaces this strict Worker-only GitHub App configuration
+# with local-only generated credentials. It never authorizes a real GitHub App.
+DX_INTEGRATION_GITHUB_APP='{"version":1,"appId":"1","appSlug":"dx-local","clientId":"local-client-id","clientSecret":"replace-with-github-app-client-secret","privateKeyPem":"replace-with-github-app-private-key-pem","webhookSecret":"replace-with-github-app-webhook-secret","callbackUrl":"http://localhost:3000/v1/integrations/github/oauth/callback","setupUrl":"http://localhost:3000/v1/integrations/github/setup","webhookUrl":"http://localhost:3000/v1/integrations/github/webhooks","expiringUserTokens":true,"permissionManifestVersion":1,"repositoryPermissions":{"actions":"write","checks":"read","contents":"write","issues":"write","metadata":"read","pull_requests":"write","statuses":"read","workflows":"write"},"organizationPermissions":{"projects":"write"},"events":["repository"]}'
+# DX_INTEGRATION_GITLAB_OAUTH='{"clientId":"replace-with-gitlab-client-id","clientSecret":"replace-with-gitlab-client-secret","callbackUrl":"http://localhost:3000/v1/settings/personal/integrations/oauth/callback/gitlab","baseUrl":"https://gitlab.com"}'
+# Forgejo OAuth is intentionally unavailable because Forgejo OAuth tokens are
+# unscoped/full-user tokens. Scoped application tokens are not an OAuth flow.
+# Required only to exercise real Flue model and sandbox traffic.
+DX_E2B_TEMPLATE="base"
+DX_E2B_TIMEOUT_MS="120000"
+E2B_API_KEY="replace-with-your-e2b-api-key"
+# Required when exercising local Thread Files, which always use resident dxd.
+# This callback is installation transport, not a Files route toggle. Its edge
+# must pass the daemon's Bearer credential through to Core; authenticated
+# development proxies may not.
+# DX_DXD_PUBLIC_URL="https://replace-with-public-core-callback.example/"
+# Local-only: "policy" routes threads through the real routing policy and BYOK
+# connections instead of the deterministic model fixture. Billable upstream
+# calls happen only when you set this and add real keys.
+# DX_LOCAL_MODEL_SEAM="policy"

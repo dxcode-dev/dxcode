@@ -1,0 +1,9 @@
+engine biome(1.0)
+language js(typescript, jsx)
+
+or {
+  `React.useEffect($callback, $dependencies)` as $match,
+  `useEffect($callback, $dependencies)` as $match
+} where {
+  register_diagnostic(span=$match, message="Do not call useEffect directly in a React component. Derive during render, handle the originating event, use useSyncExternalStore, or isolate a necessary external-system synchronization in a custom hook under shared/hooks.", severity="error")
+}

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>dx Ghostty Web proof</title>
+    <style>
+      html, body { margin: 0; background: #111; }
+      #terminal { width: 640px; height: 320px; }
+    </style>
+  </head>
+  <body>
+    <main id="terminal" aria-describedby="terminal-boundary"></main>
+    <p id="terminal-boundary" role="status" aria-live="polite">Loading terminal…</p>
+    <script type="module" src="/src/features/terminal/ghostty-proof.ts"></script>
+  </body>
+</html>

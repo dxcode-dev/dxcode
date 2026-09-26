@@ -1,0 +1,40 @@
+---
+title: dx documentation
+description: Deploy a coding-agent workspace to infrastructure you control.
+template: splash
+hero:
+  title: Your coding agent, on your infrastructure.
+  tagline: Deploy dx to Cloudflare and run isolated agent workspaces in E2B. Keep projects, model credentials, and operational control in your account.
+  actions:
+    - text: Deploy dx
+      link: /docs/get-started/install/
+      icon: right-arrow
+      variant: primary
+    - text: Deployment guide
+      link: /docs/deployment/configuration/
+      icon: open-book
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+<CardGrid>
+  <Card title="One deployment command" icon="rocket">
+    Configure Cloudflare and E2B. The deployment workflow creates and verifies
+    the application resources.
+  </Card>
+  <Card title="Isolated workspaces" icon="seti:shell">
+    Each agent runs in an E2B sandbox with a resident `dxd` process for files,
+    changes, and terminal sessions.
+  </Card>
+  <Card title="Bring your model access" icon="puzzle">
+    Route models through deployment credentials, personal keys, workspace keys,
+    subscriptions, or compatible custom endpoints.
+  </Card>
+  <Card title="Built for recovery" icon="approve-check-circle">
+    Re-run the same release, rotate supplied secrets, reset the administrator,
+    or destroy the deployment through explicit operator actions.
+  </Card>
+</CardGrid>
+
+dxcode is source-available under the
+[Functional Source License 1.1, Apache 2.0 Future License](https://fsl.software/).

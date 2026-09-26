@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+target/
+*.tsbuildinfo
+.env*
+!.env.example
+.alchemy/
+.wrangler/
+.dev.vars
+.cache/
+.turbo/
+.dx/
+deploy.selfhost.json

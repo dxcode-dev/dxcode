@@ -1,0 +1,55 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "files": {
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/coverage",
+      "!**/node_modules",
+      "!**/.alchemy",
+      "!**/.dx",
+      "!**/.wrangler",
+      "!**/.astro"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space"
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended"
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["apps/core/src/**/*.ts", "!apps/core/src/**/*.test.ts"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noConsole": "error"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "apps/*/src/**/*.ts",
+        "packages/*/src/**/*.ts",
+        "scripts/fixtures/biome/*.ts",
+        "!**/*.test.ts"
+      ],
+      "plugins": ["./scripts/biome/no-manual-effect-error-tag.grit"]
+    },
+    {
+      "includes": ["apps/web/src/**/*.tsx", "scripts/fixtures/biome/*.tsx"],
+      "plugins": ["./scripts/biome/no-direct-react-use-effect.grit"]
+    }
+  ]
+}

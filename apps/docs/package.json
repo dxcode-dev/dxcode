@@ -1,0 +1,22 @@
+{
+  "name": "@dx/docs",
+  "private": true,
+  "version": "0.1.0",
+  "license": "FSL-1.1-ALv2",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm check && astro build && pnpm scan:built",
+    "check": "astro sync && tsc --noEmit && node scripts/check-content.mjs",
+    "dev": "astro dev",
+    "preview": "astro preview",
+    "scan:built": "node scripts/check-content.mjs --built"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.42.3",
+    "astro": "7.3.5",
+    "sharp": "0.35.4"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3"
+  }
+}

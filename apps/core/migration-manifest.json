@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "d1Directory": "migrations",
+  "previousAcceptedD1Migration": "0000_baseline_v0.1.0.sql",
+  "acceptedDestructiveD1Migrations": [],
+  "d1": [
+    {
+      "filename": "0000_baseline_v0.1.0.sql",
+      "sha256": "7847f65a9b20b366a60d52d19ca3cd6bdd1bb09b8cb506659a270f27a21d8877",
+      "classification": "non-destructive"
+    }
+  ],
+  "durableObjects": [
+    {
+      "tag": "v1-flue-dx-agent",
+      "newSqliteClasses": ["FlueDxAgentAgent"],
+      "sha256": "161b9a522850eb40ebc26a5587365606cbe19624e9a35d048da39fcc7abea984",
+      "classification": "non-destructive"
+    },
+    {
+      "tag": "v2-plugin-trigger-delivery",
+      "newSqliteClasses": ["PluginTriggerDeliveryObject"],
+      "sha256": "2ffc51ac4201f860b8ae3aef971b02b269501d9c53bb4a619e101361a6123e16",
+      "classification": "non-destructive"
+    },
+    {
+      "tag": "v3-thread-execution",
+      "newSqliteClasses": ["ThreadExecutionObject"],
+      "sha256": "d7145e2a69e18435f32e53704a806e0d76985b070ba04da93ff21e07398676cd",
+      "classification": "non-destructive"
+    },
+    {
+      "tag": "v4-subscription-credential-coordinator",
+      "newSqliteClasses": ["SubscriptionCredentialCoordinatorObject"],
+      "sha256": "c4da0ffd5095118576bc14a742533ffb5128631a8fbde5f616316bbf6002105b",
+      "classification": "non-destructive"
+    },
+    {
+      "tag": "v5-realtime-hub",
+      "newSqliteClasses": ["RealtimeHub"],
+      "sha256": "88befee4c91b1ca1bc8a0d591ceb634cb75f9afb538782cef683a68ddb838892",
+      "classification": "non-destructive"
+    },
+    {
+      "tag": "v5-byok-credential-coordinator",
+      "newSqliteClasses": ["ByokCredentialCoordinatorObject"],
+      "sha256": "fa936915c9e281025de4ed08db0362e831b23ece5baf9196f290be87d7945fab",
+      "classification": "non-destructive"
+    }
+  ]
+}

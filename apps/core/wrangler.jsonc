@@ -1,0 +1,92 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "dx-core",
+  "compatibility_date": "2026-08-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "secrets": {
+    "required": [
+      "BETTER_AUTH_SECRET",
+      "DX_CONFIG_ENCRYPTION_KEYS",
+      "DX_WORKLOAD_IDENTITY_SIGNING_KEYS",
+      "E2B_API_KEY"
+    ]
+  },
+  "vars": {
+    "DX_ENV": "local",
+    "DX_RUNTIME_MODE": "deployed",
+    "DX_RUNNER_PROFILE_CATALOG": "{\"version\":1,\"defaultProfileId\":\"e2b-default\",\"profiles\":[{\"id\":\"e2b-default\",\"label\":\"Standard workspace\",\"adapter\":\"e2b\",\"template\":\"base\",\"resources\":{\"cpuCores\":2,\"memoryMb\":4096,\"diskGb\":20},\"isolation\":\"sandbox\",\"availability\":\"available\",\"costLabel\":\"Deployment managed\",\"capabilities\":[\"git\",\"environment-variables\",\"internet-access\",\"persistent-workspace\",\"pause-resume\"]}]}",
+    "DX_WORKLOAD_IDENTITY_ISSUER": "http://localhost:5173/api/workload-identity",
+    "DX_WORKLOAD_IDENTITY_AUDIENCE_POLICIES": "{\"version\":1,\"policies\":[]}"
+  },
+  "triggers": {
+    "crons": ["17 3 * * *"]
+  },
+  "ai": {
+    "binding": "AI",
+    "remote": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "dx-product-store",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "DX_STORAGE",
+      "bucket_name": "dx-staging"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PLUGIN_TRIGGER_DELIVERY",
+        "class_name": "PluginTriggerDeliveryObject"
+      },
+      {
+        "name": "THREAD_EXECUTION",
+        "class_name": "ThreadExecutionObject"
+      },
+      {
+        "name": "SUBSCRIPTION_CREDENTIAL_COORDINATOR",
+        "class_name": "SubscriptionCredentialCoordinatorObject"
+      },
+      {
+        "name": "REALTIME_HUB",
+        "class_name": "RealtimeHub"
+      },
+      {
+        "name": "BYOK_CREDENTIAL_COORDINATOR",
+        "class_name": "ByokCredentialCoordinatorObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1-flue-dx-agent",
+      "new_sqlite_classes": ["FlueDxAgentAgent"]
+    },
+    {
+      "tag": "v2-plugin-trigger-delivery",
+      "new_sqlite_classes": ["PluginTriggerDeliveryObject"]
+    },
+    {
+      "tag": "v3-thread-execution",
+      "new_sqlite_classes": ["ThreadExecutionObject"]
+    },
+    {
+      "tag": "v4-subscription-credential-coordinator",
+      "new_sqlite_classes": ["SubscriptionCredentialCoordinatorObject"]
+    },
+    {
+      "tag": "v5-realtime-hub",
+      "new_sqlite_classes": ["RealtimeHub"]
+    },
+    {
+      "tag": "v5-byok-credential-coordinator",
+      "new_sqlite_classes": ["ByokCredentialCoordinatorObject"]
+    }
+  ]
+}

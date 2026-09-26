@@ -1,0 +1,28 @@
+{
+  "$schema": "../../../../node_modules/wrangler/config-schema.json",
+  "name": "dx-flue-lifecycle-fixture",
+  "compatibility_date": "2026-08-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "DX_ENV": "local",
+    "DX_RUNTIME_MODE": "local",
+    "DX_AUTH_URL": "http://127.0.0.1",
+    "DX_AUTH_TRUSTED_ORIGINS": "http://127.0.0.1",
+    "DX_RUNNER_PROFILE_CATALOG": "{\"version\":1,\"defaultProfileId\":\"e2b-default\",\"profiles\":[{\"id\":\"e2b-default\",\"label\":\"Lifecycle fixture\",\"adapter\":\"e2b\",\"template\":\"base\",\"resources\":{\"cpuCores\":2,\"memoryMb\":4096,\"diskGb\":20},\"isolation\":\"sandbox\",\"availability\":\"available\",\"costLabel\":\"Fixture only\",\"capabilities\":[\"git\",\"environment-variables\",\"internet-access\",\"persistent-workspace\",\"pause-resume\"]}]}",
+    "BETTER_AUTH_SECRET": "fixture-auth-secret-000000000000000000"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "dx-lifecycle-fixture",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "../../migrations"
+    }
+  ],
+  "migrations": [
+    {
+      "tag": "v1-flue-fixture-lifecycle-agent",
+      "new_sqlite_classes": ["FlueFixtureLifecycleAgentAgent"]
+    }
+  ]
+}

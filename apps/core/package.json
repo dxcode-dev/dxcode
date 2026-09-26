@@ -1,0 +1,56 @@
+{
+  "name": "@dx/core",
+  "private": true,
+  "version": "0.1.0",
+  "license": "FSL-1.1-ALv2",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite dev",
+    "preview": "vite preview",
+    "reference:lifecycle": "tsx scripts/reference-lifecycle.mjs",
+    "test:lifecycle": "node scripts/test-reference-lifecycle.mjs",
+    "test:worker": "vitest run --config vitest.worker.config.ts",
+    "validate:cloudflare": "node scripts/validate-cloudflare-build.mjs && wrangler deploy --dry-run"
+  },
+  "dependencies": {
+    "@better-auth/api-key": "1.7.1",
+    "@better-auth/core": "1.7.1",
+    "@better-auth/utils": "0.4.2",
+    "@dx/api": "workspace:^",
+    "@dx/domain": "workspace:^",
+    "@effect/sql-d1": "4.0.0-rc.110",
+    "@flue/runtime": "file:../../third-party/flue/runtime-b67b036c10210b11d1adf1e984f956388f976e75.tgz",
+    "@logtape/logtape": "2.3.1",
+    "@modelcontextprotocol/client": "2.0.0",
+    "@opentelemetry/api": "1.9.0",
+    "better-auth": "1.7.1",
+    "e2b": "2.44.0",
+    "effect": "4.0.0-rc.110",
+    "hono": "4.12.32",
+    "jose": "6.2.3",
+    "sarvamai": "1.1.10",
+    "valibot": "1.4.2",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.53.0",
+    "@cloudflare/vitest-plugin": "1.0.0",
+    "@cloudflare/workers-types": "5.20260820.1",
+    "@earendil-works/pi-ai": "0.85.1",
+    "@flue/sdk": "file:../../third-party/flue/sdk-b67b036c10210b11d1adf1e984f956388f976e75.tgz",
+    "@flue/vite": "file:../../third-party/flue/vite-b67b036c10210b11d1adf1e984f956388f976e75.tgz",
+    "@msw/cloudflare": "^0.0.1",
+    "@types/ws": "8.18.1",
+    "google-auth-library": "10.9.1",
+    "playwright-core": "1.55.0",
+    "tsx": "4.23.12",
+    "vite": "8.2.2",
+    "wrangler": "4.124.0",
+    "ws": "8.21.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dxcode-dev/dxcode.git"
+  }
+}
