@@ -1,8 +1,9 @@
-import type {
-  StoredModelConnection,
-  ThinkingLevel,
-  ThreadModelSelection,
-  UserId,
+import {
+  normalizeCustomModelBaseUrl,
+  type StoredModelConnection,
+  type ThinkingLevel,
+  type ThreadModelSelection,
+  type UserId,
 } from "@dx/domain";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { Bindings } from "../../http/types.js";
@@ -18,6 +19,7 @@ import {
   loadSubscriptionModelIds,
   loadThreadRoute,
 } from "./connection-store-d1.js";
+import { effectiveContextWindow } from "./context-window.js";
 import { copilotModelForCanonical } from "./copilot-mapping.js";
 import { DEFAULT_PROFILE } from "./defaults.js";
 import {
@@ -81,8 +83,39 @@ export interface SubmissionRoute {
   readonly thinking: ThinkingLevel;
 }
 
+/**
+ * Catalog compat describes the provider's own endpoint. A custom URL promises
+ * only the standard API format, so drop features that need Anthropic's
+ * first-party transport: effort-only mid-conversation messages with thinking
+ * binding controls, server-side fallback, and client tool references. Model
+ * traits such as adaptive thinking or no temperature still apply.
+ */
+const customEndpointCompat = (compat: Model<Api>["compat"]) => {
+  const {
+    supportsMidConvoEffort: _midConversationEffort,
+    allowedFallbackModels: _serverSideFallback,
+    ...traits
+  } = (compat ?? {}) as Record<string, unknown>;
+  return { ...traits, supportsToolReferences: false };
+};
+
 /** One descriptor drives both serialization and credential forwarding. */
 export const connectionModel = (
+  connection: StoredModelConnection,
+  canonical: string,
+): Model<Api> =>
+  withEffectiveContextWindow(servingModel(connection, canonical));
+
+/** Applies dx's context policy, including to routes pinned before it. */
+export const withEffectiveContextWindow = (model: Model<Api>): Model<Api> => ({
+  ...model,
+  contextWindow: effectiveContextWindow(
+    `${model.provider}/${model.id}`,
+    model.contextWindow,
+  ),
+});
+
+const servingModel = (
   connection: StoredModelConnection,
   canonical: string,
 ): Model<Api> => {
@@ -116,7 +149,10 @@ export const connectionModel = (
         provider,
         name: copilot.name,
         api: connection.format,
-        baseUrl: connection.baseUrl,
+        baseUrl: normalizeCustomModelBaseUrl(
+          connection.format,
+          connection.baseUrl,
+        ),
         reasoning: copilot.capabilities.reasoning,
         input: copilot.capabilities.vision ? ["text", "image"] : ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -141,7 +177,12 @@ export const connectionModel = (
       ...entry,
       provider,
       api: connection.format,
-      baseUrl: connection.baseUrl,
+      // Normalized on read too, so connections saved before normalization work.
+      baseUrl: normalizeCustomModelBaseUrl(
+        connection.format,
+        connection.baseUrl,
+      ),
+      compat: customEndpointCompat(entry.compat),
     } as Model<Api>;
   }
   let baseUrl = entry.baseUrl;

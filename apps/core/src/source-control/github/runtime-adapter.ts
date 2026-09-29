@@ -48,6 +48,23 @@ const minimumPermissions = {
 export const githubPermissionsForOperation = (operation: SourceOperationType) =>
   minimumPermissions[operation];
 
+/** Least permission set covering every requested operation. */
+export const githubPermissionsForOperations = (
+  operations: ReadonlyArray<SourceOperationType>,
+): GitHubRuntimePermissions => {
+  const permissions: Partial<
+    Record<keyof typeof GITHUB_APP_REPOSITORY_PERMISSIONS, "read" | "write">
+  > = {};
+  for (const operation of operations)
+    for (const [name, level] of Object.entries(
+      minimumPermissions[operation],
+    ) as Array<
+      [keyof typeof GITHUB_APP_REPOSITORY_PERMISSIONS, "read" | "write"]
+    >)
+      if (permissions[name] !== "write") permissions[name] = level;
+  return permissions;
+};
+
 export const GITHUB_CONFIG_DIRECTORY = "/home/user/.config/dx/gh";
 
 const gitConfiguration = [
@@ -136,7 +153,7 @@ interface GitHubRuntimeCredential {
 export interface GitHubRuntimeAdapterShape {
   readonly acquire: (
     authority: RuntimeSourceAuthority,
-    operation: SourceOperationType,
+    operations: ReadonlyArray<SourceOperationType>,
     lifecycle?: {
       readonly issued: () => void;
       readonly revokeFailed: () => void;
@@ -203,7 +220,7 @@ export const GitHubRuntimeAdapterLive = (input: {
       const clock = input.clock ?? (() => new Date());
       const provider = createGitHubProvider(config, input.fetcher, clock);
       return GitHubRuntimeAdapter.of({
-        acquire: (authority, operation, lifecycle) =>
+        acquire: (authority, operations, lifecycle) =>
           Effect.tryPromise({
             try: async () => {
               const appJwt = await createGitHubAppJwt({
@@ -240,7 +257,7 @@ export const GitHubRuntimeAdapterLive = (input: {
                 authority.installationId,
                 {
                   repositoryId: authority.providerRepositoryId,
-                  permissions: githubPermissionsForOperation(operation),
+                  permissions: githubPermissionsForOperations(operations),
                 },
               );
               lifecycle?.issued();

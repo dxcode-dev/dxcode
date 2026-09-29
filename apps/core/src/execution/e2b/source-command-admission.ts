@@ -4,18 +4,8 @@ import type {
   SourceWorkspaceRecord,
 } from "@dx/domain";
 import type { Sandbox, SandboxFactory } from "@flue/runtime";
-import {
-  GITHUB_CONFIG_DIRECTORY,
-  githubCommandEnvironment,
-} from "../../source-control/github/runtime-adapter.js";
-
-export type SourceCommandClassification =
-  | { readonly kind: "none" }
-  | { readonly kind: "denied"; readonly reason: string }
-  | {
-      readonly kind: "read";
-      readonly request: SourceOperationRequestType;
-    };
+import { GITHUB_CONFIG_DIRECTORY } from "../../source-control/github/runtime-adapter.js";
+import { DX_GIT_CONFIG_GLOBAL } from "../../source-control/workspace-assets.js";
 
 interface TrustedSourceCommand {
   readonly kind: "source";
@@ -57,153 +47,21 @@ export const executeTrustedSourceCommand = async (
   );
 };
 
-const unsafeShell = /[\n\r;&|`$()<>\\]/;
+const nativeGitCommand = /^\s*(?:command\s+)?git(?:\s|$)/;
 
-const words = (command: string): ReadonlyArray<string> | undefined => {
-  const trimmed = command.trim();
-  if (
-    trimmed.length === 0 ||
-    trimmed.length > 2_048 ||
-    unsafeShell.test(trimmed)
-  )
-    return undefined;
-  const values = trimmed.split(/\s+/);
-  return values.every((value) => /^[A-Za-z0-9_./:@=,+-]+$/.test(value))
-    ? values
-    : undefined;
-};
-
-const forbiddenRepositorySelection = (values: ReadonlyArray<string>) =>
-  values.some(
-    (value, index) =>
-      value === "-R" ||
-      value === "--repo" ||
-      value.startsWith("--repo=") ||
-      ((values[index - 1] === "-R" || values[index - 1] === "--repo") &&
-        value !== undefined),
-  );
-
-const read = (
-  operation: SourceOperationRequestType["operation"],
-): SourceCommandClassification => ({
-  kind: "read",
-  request: { operation, invocationSource: "agent-command" },
+/**
+ * Agent Bash runs like the terminal: native Git and the dx `gh` wrapper
+ * authenticate through the dxd-owned Git credential helper, so dx neither
+ * parses nor replaces commands. Agent Bash is not a login shell and does not
+ * source the terminal profile, so it receives the same Git configuration and
+ * PATH explicitly, with prompts disabled because it has no interactive user.
+ */
+export const nativeCommandEnvironment = Object.freeze({
+  PATH: "/home/user/.local/bin:/usr/local/bin:/usr/bin:/bin",
+  GIT_CONFIG_GLOBAL: DX_GIT_CONFIG_GLOBAL,
+  GIT_TERMINAL_PROMPT: "0",
+  GH_PROMPT_DISABLED: "1",
 });
-
-const isPositiveInteger = (value: string | undefined) =>
-  value !== undefined && /^[1-9]\d*$/.test(value);
-
-const exactGhRead = (
-  values: ReadonlyArray<string>,
-): SourceCommandClassification | undefined => {
-  const group = values[1];
-  const action = values[2];
-  const argument = values[3];
-  if (group === "repo" && values.length <= 3 && action === "view")
-    return read("repository-read");
-  if (group === "pr") {
-    if (
-      ((action === "list" || action === "status") && values.length === 3) ||
-      ((action === "view" || action === "checks") &&
-        values.length === 4 &&
-        isPositiveInteger(argument))
-    )
-      return read(
-        action === "checks" ? "checks-status-read" : "pull-request-read",
-      );
-  }
-  if (group === "issue") {
-    if (
-      ((action === "list" || action === "status") && values.length === 3) ||
-      (action === "view" && values.length === 4 && isPositiveInteger(argument))
-    )
-      return read("issue-read");
-  }
-  if (group === "run") {
-    if (
-      (action === "list" && values.length === 3) ||
-      ((action === "view" || action === "watch") &&
-        values.length === 4 &&
-        isPositiveInteger(argument))
-    )
-      return read("actions-read");
-  }
-  if (group === "workflow") {
-    if (
-      (action === "list" && values.length === 3) ||
-      (action === "view" &&
-        values.length === 4 &&
-        argument !== undefined &&
-        /^[A-Za-z0-9_.-]+$/.test(argument))
-    )
-      return read("actions-read");
-  }
-  return undefined;
-};
-
-const gitWords = (command: string) => {
-  const values = words(command);
-  if (values?.[0] === "git") return values;
-  return values?.[0] === "command" && values[1] === "git"
-    ? values.slice(1)
-    : undefined;
-};
-
-export const classifySourceCommand = (
-  command: string,
-): SourceCommandClassification => {
-  // Git owns its command language. Git's configured signing and credential
-  // helpers are its only DX integration points; Bash admission never parses
-  // or replaces a Git invocation.
-  if (/^\s*(?:command\s+)?git(?:\s|$)/.test(command)) return { kind: "none" };
-  const git = gitWords(command);
-  if (git !== undefined) {
-    if (git.some((value) => value.includes("://") || value.startsWith("git@")))
-      return { kind: "denied", reason: "arbitrary-repository" };
-    return ["fetch", "pull", "push", "ls-remote"].includes(git[1] ?? "")
-      ? read("contents-push")
-      : { kind: "none" };
-  }
-  const values = words(command);
-  if (values === undefined) {
-    return /(^|\s)(git|gh)(\s|$)/.test(command)
-      ? { kind: "denied", reason: "ambiguous-command" }
-      : { kind: "none" };
-  }
-  if (values[0] !== "gh") return { kind: "none" };
-  if (values.some((value) => value.includes("://")))
-    return { kind: "denied", reason: "arbitrary-repository" };
-  if (
-    values.some(
-      (value) => value === "--hostname" || value.startsWith("--hostname="),
-    ) &&
-    values[1] !== "auth"
-  )
-    return { kind: "denied", reason: "arbitrary-host" };
-  if (forbiddenRepositorySelection(values))
-    return { kind: "denied", reason: "arbitrary-repository" };
-  const group = values[1];
-  const action = values[2];
-  if (group === "api") return { kind: "denied", reason: "raw-api-disabled" };
-  if (group === "auth") {
-    if (action === "login" || action === "setup-git")
-      return { kind: "denied", reason: "persistent-auth-disabled" };
-    const permitted =
-      values.length === 3 ||
-      (values.length === 4 && values[3] === "--hostname=github.com") ||
-      (values.length === 5 &&
-        values[3] === "--hostname" &&
-        values[4] === "github.com");
-    return action === "status" && permitted
-      ? read("provider-auth-read")
-      : { kind: "denied", reason: "unsupported-auth-command" };
-  }
-  const boundedRead = exactGhRead(values);
-  if (boundedRead !== undefined) return boundedRead;
-  if (["repo", "pr", "issue", "run", "workflow"].includes(group ?? ""))
-    return { kind: "denied", reason: "use-semantic-source-tool" };
-  return { kind: "denied", reason: "unsupported-gh-command" };
-};
 
 const protectedUnauthenticatedEnvironment = Object.freeze({
   PATH: "/usr/local/bin:/usr/bin:/bin",
@@ -285,30 +143,6 @@ const assertNoAuthenticationResidue = async (sandbox: Sandbox) => {
     throw new Error("GitHub CLI authentication residue was detected.");
 };
 
-const assertExpectedGitOrigin = async (
-  sandbox: Sandbox,
-  source: SourceWorkspaceRecord,
-  cwd: string,
-) => {
-  const snapshot = source.snapshot;
-  if (snapshot === undefined)
-    throw new Error("Source snapshot is unavailable.");
-  const environment =
-    snapshot.provider === "github"
-      ? githubCommandEnvironment("", snapshot.repositoryName)
-      : {};
-  const result = await sandbox.exec("git remote get-url origin", {
-    cwd,
-    env: {
-      ...protectedUnauthenticatedEnvironment,
-      ...environment,
-    },
-    timeoutMs: 5_000,
-  });
-  if (result.exitCode !== 0 || result.stdout.trim() !== snapshot.cloneUrl)
-    throw new Error("Source command denied: repository origin changed.");
-};
-
 const decorate = (
   sandbox: Sandbox,
   _threadId: string,
@@ -322,70 +156,25 @@ const decorate = (
   const decorated: Sandbox = {
     ...sandbox,
     exec: async (command, options) => {
-      // Git is native on every surface. Do this before resolving source
-      // authority so local reads and commits stay offline-capable and use the
-      // terminal's dxd-owned config/helpers without a model-only environment.
-      if (/^\s*(?:command\s+)?git(?:\s|$)/.test(command))
-        return sandbox.exec(command, {
-          ...options,
-          // Agent Bash is not a login shell, so it does not source the
-          // terminal profile. Point it at the same dxd-owned configuration;
-          // Git still owns all command and transport semantics.
-          env: {
-            ...options?.env,
-            GIT_CONFIG_GLOBAL: "/home/user/.local/state/dx-terminal/gitconfig",
-          },
-        });
-      const source = await resolveSource();
       const trusted = trustedCommand.getStore();
       if (trusted !== undefined && trusted.command !== command)
         throw new Error("Trusted source command changed before execution.");
-      if (trusted?.kind === "local")
+      if (trusted === undefined || nativeGitCommand.test(command))
+        return sandbox.exec(command, {
+          ...options,
+          env: { ...options?.env, ...nativeCommandEnvironment },
+        });
+      if (trusted.kind === "local")
         return sandbox.exec(command, {
           ...options,
           env: { ...options?.env, ...protectedUnauthenticatedEnvironment },
         });
-      const classification =
-        trusted === undefined
-          ? classifySourceCommand(command)
-          : ({ kind: "read", request: trusted.request } as const);
-      if (source.snapshot === undefined) {
-        if (classification.kind === "denied")
-          throw new Error(`Source command denied: ${classification.reason}.`);
-        if (classification.kind === "read")
-          throw new Error(
-            "Source command denied: source authority unavailable.",
-          );
-        return sandbox.exec(command, {
-          ...options,
-          env: { ...options?.env, ...protectedUnauthenticatedEnvironment },
-        });
-      }
-      if (
-        source.snapshot.provider === "bitbucket" &&
-        words(command)?.[0] === "gh"
-      )
-        throw new Error(
-          "Source command denied: unsupported-provider-cli-command.",
-        );
-      if (classification.kind === "denied")
-        throw new Error(`Source command denied: ${classification.reason}.`);
-      if (classification.kind === "none")
-        return sandbox.exec(command, {
-          ...options,
-          env: { ...options?.env, ...protectedUnauthenticatedEnvironment },
-        });
-      const gitCommand = gitWords(command) !== undefined;
-      const cwd = options?.cwd ?? sandbox.cwd;
-      if (gitCommand) await assertExpectedGitOrigin(sandbox, source, cwd);
-      return withLease(source, classification.request, async (lease) => {
-        const hardenedLease =
-          gitCommand && source.snapshot?.provider === "github"
-            ? githubCommandEnvironment(
-                lease.GH_TOKEN ?? "",
-                source.snapshot?.repositoryName ?? "",
-              )
-            : lease;
+      // Semantic source tools run their provider CLI calls with an
+      // operation-scoped, callback-bounded lease.
+      const source = await resolveSource();
+      if (source.snapshot === undefined)
+        throw new Error("Source command denied: source authority unavailable.");
+      return withLease(source, trusted.request, async (lease) => {
         const secrets = Object.entries(lease)
           .filter(([key, value]) => key.includes("TOKEN") && value.length > 0)
           .map(([, value]) => value);
@@ -394,11 +183,11 @@ const decorate = (
         try {
           const unsafeResult = await sandbox.exec(command, {
             ...options,
-            cwd,
+            cwd: options?.cwd ?? sandbox.cwd,
             env: {
               ...options?.env,
               ...protectedUnauthenticatedEnvironment,
-              ...hardenedLease,
+              ...lease,
             },
           });
           result = {

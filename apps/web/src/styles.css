@@ -957,7 +957,7 @@ a {
   max-width: 42rem;
   min-height: 100%;
   margin: 0 auto;
-  padding: 24px 24px 148px;
+  padding: 24px 24px calc(var(--agent-composer-dock-height, 132px) + 16px);
   color: var(--chat-foreground);
   font-size: 13px;
   line-height: 20px;
@@ -1485,6 +1485,42 @@ a {
 .transcript-activity-row[open] > summary .transcript-activity-chevron {
   transform: rotate(90deg);
 }
+.transcript-activity-open {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-self: center;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0;
+}
+.transcript-activity-open svg {
+  width: 12px;
+  height: 12px;
+}
+.transcript-activity-row:hover .transcript-activity-open,
+.transcript-activity-open:focus-visible {
+  opacity: 1;
+}
+.transcript-activity-open:hover {
+  color: var(--chat-foreground);
+  background: var(--accent);
+}
+@media (hover: none) {
+  .transcript-activity-open {
+    opacity: 1;
+  }
+}
+.markdown-file-link {
+  cursor: pointer;
+}
 .transcript-activity-children {
   display: flex;
   flex-direction: column;
@@ -1687,6 +1723,61 @@ a {
   pointer-events: none;
   background: linear-gradient(to bottom, transparent, var(--surface) 32px);
 }
+.thread-error-row {
+  display: flex;
+  width: 100%;
+  max-width: 41rem;
+  margin: 0 auto 8px;
+  padding-right: 64px;
+}
+.thread-error-card {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 24px;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 8px 10px 12px;
+  pointer-events: auto;
+  color: var(--muted-foreground);
+  border: 1px solid color-mix(in srgb, var(--warning) 22%, var(--border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--background) 94%, var(--warning) 6%);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(8px);
+}
+.thread-error-card > svg {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  color: var(--warning);
+}
+.thread-error-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  font-size: 11px;
+  line-height: 16px;
+}
+.thread-error-copy strong {
+  color: var(--foreground);
+  font-weight: 650;
+}
+.thread-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-top: 4px;
+  margin-left: -8px;
+}
+.thread-error-actions > button {
+  height: 24px;
+  color: var(--foreground);
+}
+.thread-error-dismiss {
+  color: var(--muted-foreground);
+  border-radius: 50%;
+}
 .agent-composer {
   width: 100%;
   max-width: 41rem;
@@ -1712,7 +1803,7 @@ a {
   display: block;
   width: 100%;
   min-height: 60px;
-  max-height: min(40vh, 600px);
+  max-height: 104px;
   field-sizing: content;
   overflow-x: hidden;
   overflow-y: auto;
@@ -1756,6 +1847,13 @@ a {
 .dictation-controls.is-recording .dictation-action,
 .dictation-controls.is-processing .dictation-action {
   background: var(--muted);
+}
+.dictation-controls.is-recoverable .dictation-action {
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 10%, transparent);
+}
+.dictation-download {
+  color: var(--destructive);
 }
 .dictation-waveform {
   flex: 1;
@@ -1953,8 +2051,8 @@ a {
 .transcript-controls {
   position: absolute;
   z-index: 5;
-  right: max(12px, calc((100% - 42rem) / 2 - 32px));
-  bottom: 126px;
+  right: max(8px, calc((100% - 41rem) / 2 + 8px));
+  bottom: calc(var(--agent-composer-height, 94px) + 16px);
   display: flex;
   gap: 0;
   overflow: hidden;
@@ -5920,11 +6018,10 @@ a {
   width: 20px;
   height: 20px;
 }
+.attachment-menu-positioner {
+  z-index: 112;
+}
 .attachment-menu {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
-  z-index: 5;
   display: grid;
   width: 210px;
   padding: 4px;
@@ -7512,11 +7609,11 @@ a {
   display: none;
 }
 .mobile-pane-content .agent-transcript {
-  padding: 16px 16px 178px;
+  padding: 16px 16px calc(var(--agent-composer-dock-height, 162px) + 16px);
   font-size: 13px;
 }
 .mobile-pane-content .transcript-controls {
-  bottom: 134px;
+  bottom: calc(var(--agent-composer-height, 92px) + 16px);
 }
 .mobile-pane-content .agent-panel-stack[data-archived] .agent-transcript {
   padding-bottom: 16px;
@@ -7533,8 +7630,13 @@ a {
   border-radius: 16px;
 }
 .mobile-pane-content .agent-composer textarea {
+  max-height: 124px;
+  overflow-y: auto;
   font-size: 13px;
   line-height: 20px;
+}
+.mobile-pane-content .thread-error-row {
+  padding-right: 64px;
 }
 .fatal-state {
   display: flex;

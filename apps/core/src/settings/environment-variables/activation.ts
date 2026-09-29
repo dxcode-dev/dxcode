@@ -1,5 +1,6 @@
 import { isReservedEnvironmentVariableName } from "@dx/domain";
 import { Redacted, Schema } from "effect";
+import { encodeBase64Url } from "../../encoding/base64.js";
 import {
   DXD_ENVIRONMENT_MAX_ENTRIES,
   DXD_ENVIRONMENT_MAX_TOTAL_VALUE_BYTES,
@@ -14,16 +15,6 @@ export const MAX_EFFECTIVE_ENVIRONMENT_VALUE_BYTES =
   DXD_ENVIRONMENT_MAX_VALUE_BYTES;
 export const MAX_EFFECTIVE_ENVIRONMENT_TOTAL_BYTES =
   DXD_ENVIRONMENT_MAX_TOTAL_VALUE_BYTES;
-
-const base64Url = (bytes: Uint8Array) => {
-  let binary = "";
-  for (let offset = 0; offset < bytes.byteLength; offset += 1)
-    binary += String.fromCharCode(bytes[offset] as number);
-  return btoa(binary)
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/, "");
-};
 
 export const environmentActivationOperation = (
   snapshot: ExecutionEnvironmentSnapshot,
@@ -52,7 +43,7 @@ export const environmentActivationOperation = (
         totalBytes > MAX_EFFECTIVE_ENVIRONMENT_TOTAL_BYTES
       )
         throw new Error("Environment snapshot exceeds its bounds.");
-      return { name, valueBase64Url: base64Url(bytes) };
+      return { name, valueBase64Url: encodeBase64Url(bytes) };
     });
   if (entries.length > MAX_EFFECTIVE_ENVIRONMENT_ENTRIES)
     throw new Error("Environment snapshot exceeds its bounds.");

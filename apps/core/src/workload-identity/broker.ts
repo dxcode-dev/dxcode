@@ -15,6 +15,7 @@ import {
 } from "@dx/domain";
 import { Schema } from "effect";
 import { importJWK, importPKCS8, jwtVerify, SignJWT } from "jose";
+import { encodeBase64Url } from "../encoding/base64.js";
 import type { Bindings } from "../http/types.js";
 import { workloadIdentityLogger } from "../logging.js";
 
@@ -264,17 +265,8 @@ const string = (value: unknown) =>
     ? value
     : undefined;
 
-const base64url = (bytes: Uint8Array) => {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary)
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replaceAll("=", "");
-};
-
 const digest = async (value: string) =>
-  base64url(
+  encodeBase64Url(
     new Uint8Array(
       await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)),
     ),
@@ -652,7 +644,7 @@ export const makeWorkloadIdentityBroker = (
           .setSubject(await subjectFor(authority))
           .setIssuedAt(issuedAt)
           .setExpirationTime(expiresAt)
-          .setJti(base64url(jti))
+          .setJti(encodeBase64Url(jti))
           .sign(active.privateKey);
       } catch {
         throw new WorkloadIdentityUnavailable();

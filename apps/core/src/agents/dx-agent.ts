@@ -6,6 +6,7 @@ import {
   type DeliveredMessage,
   InputTooLargeError,
   type ModelResolutionContext,
+  type ToolDefinition,
   useAgentFinish,
   useAgentStart,
   useInitialData,
@@ -20,6 +21,7 @@ import {
   agentRuntimeComposition,
   type DxPromptData,
 } from "../runtime/agent-composition.js";
+import { AGENT_RUN_LIMIT_MS } from "../runtime/agent-run-limit.js";
 import {
   createAuthorizedMcpFetch,
   resolveMcpCredential,
@@ -27,7 +29,6 @@ import {
 import { invokePluginLive } from "../settings/plugins/execution.js";
 import { createPluginTool } from "../settings/plugins/flue.js";
 import { createSkillResourceTool } from "../settings/skills/execution.js";
-import { sourceControlTools } from "../source-control/tools.js";
 import {
   type DxAgentInitialData,
   DxAgentInitialDataSchema,
@@ -37,6 +38,26 @@ import { composeDxAgentPrompt } from "./dx-agent-prompt.js";
 const localModelPreviewPrompt = `You are dx, a coding assistant running in a local UI preview.
 This preview intentionally has no sandbox, filesystem, shell, source-control, MCP, skill, or plugin tools.
 Answer from the conversation context only. State plainly when a request would require workspace access.`;
+
+/**
+ * The model receives a failed tool's `error.message` as the tool result. dx's
+ * tagged errors have an empty message, so name the failure instead.
+ */
+const withToolFailureMessage = <T extends ToolDefinition>(tool: T): T =>
+  ({
+    ...tool,
+    run: async (context: never) => {
+      try {
+        return await tool.run(context);
+      } catch (error) {
+        if (error instanceof Error && error.message.trim() === "")
+          throw new Error(`${tool.name} failed: ${error.name}.`, {
+            cause: error,
+          });
+        throw error;
+      }
+    },
+  }) as T;
 
 export function DxAgent(props: AgentProps) {
   const initialData = useInitialData<DxAgentInitialData | undefined>();
@@ -50,7 +71,6 @@ export function DxAgent(props: AgentProps) {
   const plugins = initialData?.plugins ?? [];
   if (agentRuntimeComposition.capabilities === "workspace") {
     useSandbox(agentRuntimeComposition.execution);
-    for (const tool of sourceControlTools(props.id)) useTool(tool);
     for (const connection of initialData?.mcpConnections ?? []) {
       useMcpConnection({
         name: connection.name,
@@ -73,17 +93,19 @@ export function DxAgent(props: AgentProps) {
       });
     }
     if (skills.some((skill) => skill.resources.length > 0)) {
-      useTool(createSkillResourceTool(props.id));
+      useTool(withToolFailureMessage(createSkillResourceTool(props.id)));
     }
     for (const plugin of plugins) {
       for (const tool of plugin.tools) {
         useTool(
-          createPluginTool(props.id, {
-            id: plugin.id as never,
-            version: plugin.version,
-            name: tool.name as never,
-            description: tool.description,
-          }),
+          withToolFailureMessage(
+            createPluginTool(props.id, {
+              id: plugin.id as never,
+              version: plugin.version,
+              name: tool.name as never,
+              description: tool.description,
+            }),
+          ),
         );
       }
     }
@@ -138,6 +160,7 @@ export function DxAgent(props: AgentProps) {
 }
 
 DxAgent.agentName = "dx-agent";
+DxAgent.durability = { timeoutMs: AGENT_RUN_LIMIT_MS };
 DxAgent.initialData = DxAgentInitialDataSchema;
 DxAgent.resolvePromptData = (
   _initialData: unknown,

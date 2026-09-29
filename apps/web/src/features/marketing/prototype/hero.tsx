@@ -1,3 +1,4 @@
+import { ArrowIcon } from "./arrow-icon.js";
 import { WaitlistForm } from "./waitlist-form.js";
 
 const workshop = new URL("./workshop.png", import.meta.url).href;
@@ -25,7 +26,10 @@ export function Hero() {
       </p>
       <WaitlistForm id="hero-email" hero />
       <a className="hero-selfhost" href="#selfhost">
-        Prefer to run it yourself? <span aria-hidden="true">↓</span>
+        Prefer to run it yourself?{" "}
+        <span aria-hidden="true">
+          <ArrowIcon direction="down" />
+        </span>
       </a>
       <div className="hero-art hero-scene">
         <img

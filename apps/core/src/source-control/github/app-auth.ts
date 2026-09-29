@@ -1,12 +1,13 @@
 import type { GITHUB_APP_REPOSITORY_PERMISSIONS } from "@dx/domain";
 import { importPKCS8, SignJWT } from "jose";
+import { decodeBase64, encodeBase64 } from "../../encoding/base64.js";
 
 const bytesFromPem = (pem: string) => {
   const base64 = pem
     .split(/\r?\n/)
     .filter((line) => !line.startsWith("-----"))
     .join("");
-  return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+  return decodeBase64(base64);
 };
 
 const derLength = (length: number): Uint8Array => {
@@ -47,7 +48,7 @@ const pkcs8Pem = (pem: string) => {
     algorithm,
     octetString,
   );
-  const base64 = btoa(String.fromCharCode(...wrapped));
+  const base64 = encodeBase64(wrapped);
   const lines = base64.match(/.{1,64}/g)?.join("\n") ?? base64;
   return `-----BEGIN PRIVATE KEY-----\n${lines}\n-----END PRIVATE KEY-----\n`;
 };

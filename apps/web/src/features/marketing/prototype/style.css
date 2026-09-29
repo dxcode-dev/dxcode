@@ -150,6 +150,14 @@
     justify-content: space-between;
     gap: 24px;
   }
+  /* Beat the scoped svg reset so the icon tracks the surrounding text size. */
+  .arrow-icon {
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    flex: none;
+    vertical-align: -0.125em;
+  }
   .a .hero {
     padding: 76px 0 56px;
     min-height: 760px;
@@ -1047,13 +1055,16 @@
     min-height: 44px;
     display: inline-flex;
     align-items: center;
+    gap: 0.3em;
     border-bottom: 0;
     padding: 0;
+    white-space: nowrap;
   }
+  /* Underline text and icon together; text-decoration skips inline SVG. */
   .a .nav nav button {
-    text-decoration: underline;
-    text-underline-offset: 8px;
-    text-decoration-thickness: 1px;
+    background:
+      linear-gradient(currentColor, currentColor) no-repeat 0 calc(50% + 0.95em)
+      / 100% 1px;
   }
   .a .hero {
     padding-top: 48px;
@@ -1062,6 +1073,15 @@
   @media (max-width: 760px) {
     .a .nav {
       height: 60px;
+      gap: 16px;
+    }
+    .a .nav nav {
+      gap: 20px;
+      font-size: 13px;
+    }
+    /* Section anchors are one scroll away on phones; keep the bar on one line. */
+    .a .nav .nav-section-link {
+      display: none;
     }
     .a .hero {
       padding-top: 34px;

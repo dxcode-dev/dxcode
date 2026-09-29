@@ -12,6 +12,7 @@ import { createFlueClient, type FlueClient } from "@flue/sdk";
 import { type QueryClient, QueryObserver } from "@tanstack/react-query";
 import { sameOriginFetch } from "../../shared/same-origin-fetch.js";
 import { projectQueryOptions } from "../projects/project-queries.js";
+import { DictationRecoverySession } from "./dictation/dictation-session.js";
 import { existingAgentUid } from "./existing-agent-uid.js";
 import {
   createPendingImageCollection,
@@ -58,6 +59,7 @@ export interface RetainedThread {
   readonly projectId: ProjectId;
   readonly client: FlueClient;
   readonly session: FlueAgentSession;
+  readonly dictation: DictationRecoverySession;
   readonly presentation: Map<string, unknown>;
   readonly presentationListeners: Set<() => void>;
   readonly images: ReturnType<typeof createPendingImageCollection>;
@@ -233,6 +235,7 @@ export class ThreadSessionRegistry {
       projectId,
       client,
       session: createFlueAgentSession({ client, live: "sse", promptLimit: 2 }),
+      dictation: new DictationRecoverySession(),
       presentation: new Map(),
       presentationListeners: new Set(),
       images: createPendingImageCollection(),
@@ -293,6 +296,7 @@ export class ThreadSessionRegistry {
     for (const listener of entry.presentationListeners) listener();
     entry.presentationListeners.clear();
     entry.presentation.clear();
+    entry.dictation.clear();
     entry.session.dispose();
     entry.images.dispose();
     disposeImages(entry.pendingSubmissionImages ?? []);

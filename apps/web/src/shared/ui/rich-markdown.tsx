@@ -6,12 +6,19 @@ import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
-import { MarkdownFileLinkContext } from "./markdown-file-link-context.js";
+import { FileContextMenu } from "./file-context-menu.js";
+import {
+  MarkdownFileLinkContext,
+  type MarkdownFileLinkResolver,
+} from "./markdown-file-link-context.js";
 
 const accessibleName = (value: string | undefined, fallback: string) =>
   value?.trim() || fallback;
 
 const safeUrl = (url: string) => defaultUrlTransform(url);
+// `README.md:12` looks like a URL scheme to react-markdown; keep file:line
+// references whose "scheme" contains a dot and whose suffix is a line number.
+const fileLineReference = /^[\w-]+\.[\w.-]+:\d+(?::\d+)?(?:-\d+(?::\d+)?)?$/;
 
 const nodeText = (node: React.ReactNode): string =>
   React.Children.toArray(node)
@@ -184,8 +191,77 @@ function MarkdownTable({ content }: { readonly content: React.ReactNode }) {
   );
 }
 
+// Hrefs with a non-file scheme, a host, or only a fragment are web links.
+const externalHref = (href: string) => {
+  if (href.startsWith("#") || href.startsWith("//")) return true;
+  if (fileLineReference.test(href)) return false;
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(href)?.[1]?.toLowerCase();
+  return scheme !== undefined && scheme !== "file";
+};
+
+function MarkdownLink({
+  href,
+  resolveFile,
+  children,
+}: {
+  readonly href: string | undefined;
+  readonly resolveFile: MarkdownFileLinkResolver | undefined;
+  readonly children: React.ReactNode;
+}) {
+  if (href === undefined || href === "" || externalHref(href))
+    return (
+      <a
+        href={href}
+        target={href?.startsWith("#") ? undefined : "_blank"}
+        rel="noopener noreferrer"
+      >
+        {children}
+      </a>
+    );
+  const file = resolveFile?.(href);
+  // A file path must never become a same-origin navigation that reloads dx.
+  if (file === undefined)
+    return (
+      <span
+        className="markdown-file-link-unavailable"
+        title={
+          resolveFile === undefined
+            ? "File links are available in the thread workspace"
+            : "This file cannot be opened"
+        }
+      >
+        {children}
+      </span>
+    );
+  return (
+    <FileContextMenu
+      trigger={
+        <a
+          className="markdown-file-link"
+          href={href}
+          onClick={(event) => {
+            event.preventDefault();
+            file.open();
+          }}
+          onAuxClick={(event) => {
+            if (event.button !== 1) return;
+            event.preventDefault();
+            file.open();
+          }}
+        />
+      }
+      onOpen={file.open}
+      {...(file.downloadUrl === undefined
+        ? {}
+        : { downloadUrl: file.downloadUrl })}
+    >
+      {children}
+    </FileContextMenu>
+  );
+}
+
 export function RichMarkdown({ children }: { readonly children: string }) {
-  const openFile = React.useContext(MarkdownFileLinkContext);
+  const resolveFile = React.useContext(MarkdownFileLinkContext);
   return (
     <div className="markdown transcript-markdown">
       <ReactMarkdown
@@ -195,35 +271,16 @@ export function RichMarkdown({ children }: { readonly children: string }) {
         ]}
         skipHtml
         urlTransform={(url) =>
-          url.startsWith("file:///") ? url : safeUrl(url)
+          url.startsWith("file:///") || fileLineReference.test(url)
+            ? url
+            : safeUrl(url)
         }
         components={{
-          a: ({ children: content, href }) =>
-            href?.startsWith("file:///") ? (
-              openFile ? (
-                <a
-                  href={href}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    openFile(href);
-                  }}
-                >
-                  {content}
-                </a>
-              ) : (
-                <span title="File links are available in the thread workspace">
-                  {content}
-                </span>
-              )
-            ) : (
-              <a
-                href={href}
-                target={href?.startsWith("#") ? undefined : "_blank"}
-                rel="noopener noreferrer"
-              >
-                {content}
-              </a>
-            ),
+          a: ({ children: content, href }) => (
+            <MarkdownLink href={href} resolveFile={resolveFile}>
+              {content}
+            </MarkdownLink>
+          ),
           img: ({ alt, src, title }) => (
             <img
               src={src}

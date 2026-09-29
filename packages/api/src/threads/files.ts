@@ -11,10 +11,12 @@ const NonNegativeInt = Schema.Int.check(
   Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
 );
 const utf8 = new TextEncoder();
+// Matches dxd's Rust `char::is_control` (Unicode Cc: C0, DEL, and C1), so a
+// path the API accepts is never rejected by the daemon.
 const hasControlCharacter = (value: string) =>
   [...value].some((character) => {
     const code = character.codePointAt(0) ?? 0;
-    return code <= 31 || code === 127;
+    return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
   });
 
 const isFilesPath = (value: string) =>
@@ -39,6 +41,53 @@ export const ThreadFilesPath = Schema.String.check(
   Schema.makeFilter(isFilesPath),
 ).pipe(Schema.brand("@dx/ThreadFilesPath"));
 export type ThreadFilesPath = typeof ThreadFilesPath.Type;
+
+/** Raw bytes per sandbox read chunk (dxd `MAX_CHUNK_BYTES`). */
+export const THREAD_SANDBOX_FILE_MAX_CHUNK_BYTES = 4 * 1_024 * 1_024;
+/** Files above this size are offered as a download instead of a preview. */
+export const THREAD_SANDBOX_FILE_MAX_PREVIEW_BYTES = 100 * 1_024 * 1_024;
+/** Where every Thread's repository lives inside its sandbox. */
+export const THREAD_SANDBOX_WORKSPACE_ROOT = "/home/user/workspace/repo";
+
+const deniedSandboxPrefixes = [
+  "/proc",
+  "/sys",
+  "/dev",
+  "/run",
+  "/home/user/.local/state/dxd",
+  "/home/user/.local/state/dx-terminal",
+];
+
+const isSandboxFilePath = (value: string) =>
+  value.length > 1 &&
+  value.length <= THREAD_FILES_MAX_PATH_LENGTH &&
+  value.startsWith("/") &&
+  !value.endsWith("/") &&
+  !value.includes("\\") &&
+  !hasControlCharacter(value) &&
+  !deniedSandboxPrefixes.some(
+    (prefix) => value === prefix || value.startsWith(`${prefix}/`),
+  ) &&
+  value
+    .slice(1)
+    .split("/")
+    .every(
+      (segment) =>
+        segment.length > 0 &&
+        segment !== "." &&
+        segment !== ".." &&
+        segment !== ".git" &&
+        !segment.startsWith(".dx-files-"),
+    );
+
+/**
+ * An absolute, normalized path to a regular file anywhere in the Thread
+ * sandbox. Read-only: only repository-relative `ThreadFilesPath` is editable.
+ */
+export const ThreadSandboxFilePath = Schema.String.check(
+  Schema.makeFilter(isSandboxFilePath),
+).pipe(Schema.brand("@dx/ThreadSandboxFilePath"));
+export type ThreadSandboxFilePath = typeof ThreadSandboxFilePath.Type;
 
 export const ThreadFilesWorktreeId = ThreadChangesWorktreeId;
 export type ThreadFilesWorktreeId = typeof ThreadFilesWorktreeId.Type;
@@ -159,6 +208,10 @@ export const ThreadFilesEntryNotFoundResponseSchema = errorResponse(
 export const ThreadFilesConflictResponseSchema = errorResponse(
   "THREAD_FILES_CONFLICT",
   "The file changed before the operation completed.",
+);
+export const ThreadSandboxFilePreviewTooLargeResponseSchema = errorResponse(
+  "THREAD_SANDBOX_FILE_PREVIEW_TOO_LARGE",
+  "This file is too large to preview. Download it instead.",
 );
 export const ThreadFilesUnavailableResponseSchema = errorResponse(
   "THREAD_FILES_UNAVAILABLE",

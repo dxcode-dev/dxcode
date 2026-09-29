@@ -20,10 +20,13 @@ const mcp = vi.hoisted(() => ({
   resolveMcpCredential: vi.fn(),
 }));
 const skills = vi.hoisted(() => ({
-  createSkillResourceTool: vi.fn(() => ({ name: "read_dx_skill_resource" })),
+  createSkillResourceTool: vi.fn(() => ({
+    name: "read_dx_skill_resource",
+    run: vi.fn(),
+  })),
 }));
 const plugins = vi.hoisted(() => ({
-  createPluginTool: vi.fn((_threadId, { name }) => ({ name })),
+  createPluginTool: vi.fn((_threadId, { name }) => ({ name, run: vi.fn() })),
   invokePluginLive: vi.fn(),
 }));
 const runtime = vi.hoisted(() => ({
@@ -42,11 +45,6 @@ vi.mock("../runtime/agent-composition.js", () => ({
     model: { select: runtime.selectModel },
   },
 }));
-vi.mock("../source-control/tools.js", () => ({
-  sourceControlTools: vi.fn((threadId: string) => [
-    { name: "pull_request", threadId },
-  ]),
-}));
 vi.mock("../settings/mcp-servers/execution.js", () => mcp);
 vi.mock("../settings/skills/execution.js", () => skills);
 vi.mock("../settings/plugins/execution.js", () => ({
@@ -56,7 +54,6 @@ vi.mock("../settings/plugins/flue.js", () => ({
   createPluginTool: plugins.createPluginTool,
 }));
 
-import { sourceControlTools } from "../source-control/tools.js";
 import { DxAgent } from "./dx-agent.js";
 import { DxAgentInitialDataSchema } from "./dx-agent-initial-data.js";
 import { dxAgentPrompt } from "./dx-agent-prompt.js";
@@ -101,11 +98,7 @@ describe("DxAgent", () => {
     expect(hooks.useSandbox).toHaveBeenCalledOnce();
     expect(hooks.useSandbox).toHaveBeenCalledWith(runtime.execution);
     expect(hooks.useAgentStart).toHaveBeenCalledOnce();
-    expect(sourceControlTools).toHaveBeenCalledWith(props.id);
-    expect(hooks.useTool).toHaveBeenCalledWith({
-      name: "pull_request",
-      threadId: props.id,
-    });
+    expect(hooks.useTool).not.toHaveBeenCalled();
   });
 
   it("injects the resolved personal content exactly once at the top-level prompt boundary", () => {
@@ -131,6 +124,10 @@ describe("DxAgent", () => {
 
   it("pins the durable identity", () => {
     expect(DxAgent.agentName).toBe("dx-agent");
+  });
+
+  it("lets Flue run a submission for seven days", () => {
+    expect(DxAgent.durability).toEqual({ timeoutMs: 604_800_000 });
   });
 
   it("registers only Workers AI in the local model preview", () => {
@@ -252,10 +249,10 @@ describe("DxAgent", () => {
     expect(skills.createSkillResourceTool).toHaveBeenCalledWith(
       "thr_00000000-0000-4000-8000-000000000044",
     );
-    expect(hooks.useTool).toHaveBeenCalledTimes(2);
-    expect(hooks.useTool).toHaveBeenCalledWith({
-      name: "read_dx_skill_resource",
-    });
+    expect(hooks.useTool).toHaveBeenCalledOnce();
+    expect(hooks.useTool).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "read_dx_skill_resource" }),
+    );
   });
 
   it("mounts trusted plugin tools and dispatches lifecycle hooks through the isolated runtime", async () => {
@@ -285,7 +282,9 @@ describe("DxAgent", () => {
       name: "summarize",
       description: "Summarize input.",
     });
-    expect(hooks.useTool).toHaveBeenCalledWith({ name: "summarize" });
+    expect(hooks.useTool).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "summarize" }),
+    );
     expect(hooks.useAgentStart).toHaveBeenCalledOnce();
     expect(hooks.useAgentFinish).toHaveBeenCalledOnce();
 
@@ -317,6 +316,56 @@ describe("DxAgent", () => {
       null,
       sandbox,
     );
+  });
+
+  it("names tool failures whose error has no message", async () => {
+    class PluginExecutionLimited extends Error {
+      override name = "PluginExecutionLimited";
+    }
+    const described = new Error("Plugin input is too large.");
+    plugins.createPluginTool
+      .mockReturnValueOnce({
+        name: "silent",
+        run: vi.fn(async () => {
+          throw new PluginExecutionLimited();
+        }),
+      })
+      .mockReturnValueOnce({
+        name: "described",
+        run: vi.fn(async () => {
+          throw described;
+        }),
+      });
+    hooks.useInitialData.mockReturnValue({
+      personalInstructions: "",
+      settingsRevision: 0,
+      settingsVersion: 1,
+      plugins: [
+        {
+          id: "plg_00000000-0000-4000-8000-000000000046",
+          version: "1.0.0",
+          name: "limits",
+          scope: "personal",
+          integrity: "a".repeat(64),
+          displayName: "Limits",
+          description: "Limits.",
+          tools: [
+            { name: "silent", description: "Fails silently." },
+            { name: "described", description: "Fails with a message." },
+          ],
+          lifecycle: [],
+        },
+      ],
+    });
+    DxAgent({ id: "thr_00000000-0000-4000-8000-000000000046" });
+
+    const [silent, withMessage] = hooks.useTool.mock.calls.map(
+      ([tool]) => tool as { run: (context: unknown) => Promise<unknown> },
+    );
+    await expect(silent?.run({})).rejects.toThrow(
+      "silent failed: PluginExecutionLimited.",
+    );
+    await expect(withMessage?.run({})).rejects.toBe(described);
   });
 
   it("requires bounded immutable creation data for new Flue instances", () => {

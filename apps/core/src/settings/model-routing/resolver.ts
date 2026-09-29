@@ -14,6 +14,7 @@ import {
 } from "@dx/domain";
 import { Context, Effect, Layer, type Schema } from "effect";
 import { catalogModelExists, findCatalogModel } from "./catalog.js";
+import { effectiveContextWindow } from "./context-window.js";
 import { COPILOT_SERVED_MODELS } from "./copilot-mapping.js";
 import { DEFAULT_PROFILE } from "./defaults.js";
 
@@ -35,16 +36,28 @@ export const canonicalCapabilities = (
   subscription = false,
 ) => {
   const copilot = COPILOT_SERVED_MODELS.get(canonical);
-  if (subscription && copilot !== undefined) return copilot.capabilities;
   const { provider, model } = canonicalParts(canonical);
-  const entry = findCatalogModel(provider, model);
-  return entry === undefined
-    ? copilot?.capabilities
+  const entry =
+    subscription && copilot !== undefined
+      ? undefined
+      : findCatalogModel(provider, model);
+  const capabilities =
+    entry === undefined
+      ? copilot?.capabilities
+      : {
+          contextWindow: entry.contextWindow,
+          maxOutputTokens: entry.maxTokens,
+          reasoning: entry.reasoning,
+          vision: entry.input.includes("image"),
+        };
+  return capabilities === undefined
+    ? undefined
     : {
-        contextWindow: entry.contextWindow,
-        maxOutputTokens: entry.maxTokens,
-        reasoning: entry.reasoning,
-        vision: entry.input.includes("image"),
+        ...capabilities,
+        contextWindow: effectiveContextWindow(
+          canonical,
+          capabilities.contextWindow,
+        ),
       };
 };
 

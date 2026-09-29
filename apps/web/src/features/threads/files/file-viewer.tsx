@@ -6,6 +6,7 @@ import type {
 import * as React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { type FileReveal, resolveReveal } from "../transcript-file-link.js";
 import type { FileEditorHandle } from "./file-editor.js";
 import { ThreadFileEditor } from "./file-editor.js";
 
@@ -45,8 +46,12 @@ export const ThreadFileViewer = ({
   onReload,
   onPreserveLocal,
   onDirtyChange,
+  reveal,
+  revealSequence,
 }: {
   readonly file: ThreadFileData;
+  readonly reveal?: FileReveal;
+  readonly revealSequence?: number;
   readonly saving: boolean;
   readonly conflict: boolean;
   readonly connectionError?: boolean;
@@ -99,7 +104,18 @@ export const ThreadFileViewer = ({
     accepted !== null &&
     (!file.editable || file.contentVersion !== accepted.contentVersion);
   const markdown = file.mediaType === "text/markdown";
-  const viewMode = mode ?? (markdown ? "preview" : "source");
+  const revealLines = resolveReveal(displayedContent, reveal);
+  // A new reveal on an already-open Markdown tab shows the source again, even
+  // if the user switched this tab to Preview; ordinary reopening keeps it.
+  const [revealedSequence, setRevealedSequence] =
+    React.useState(revealSequence);
+  if (revealSequence !== revealedSequence) {
+    setRevealedSequence(revealSequence);
+    if (revealLines !== undefined) setMode("source");
+  }
+  // A highlighted range is only visible in source; show it there by default.
+  const viewMode =
+    mode ?? (markdown && revealLines === undefined ? "preview" : "source");
   const change = React.useCallback(
     (next: string) => {
       const currentAccepted =
@@ -303,6 +319,8 @@ export const ThreadFileViewer = ({
               onChange={change}
               onReadyChange={setEditorReady}
               ref={editor}
+              {...(revealLines === undefined ? {} : { revealLines })}
+              {...(revealSequence === undefined ? {} : { revealSequence })}
             />
           </div>
         </>

@@ -44,6 +44,15 @@ describe("PersonalAccountService", () => {
         updates.push({ userId, input });
         return Effect.succeed({ ...account, ...input });
       },
+      findComposerDefaultsOwnedByUser: () =>
+        Effect.succeed({
+          project: null,
+          mode: null,
+          model: null,
+          runnerProfileId: null,
+        }),
+      updateComposerDefaultsOwnedByUser: () =>
+        Effect.die("composer defaults are not part of this test"),
     });
     const audit = SettingsAudit.of({
       record: (event) => Effect.sync(() => events.push(event)),

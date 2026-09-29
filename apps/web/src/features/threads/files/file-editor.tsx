@@ -2,6 +2,8 @@ import { Editor } from "@pierre/diffs/edit";
 import { type EditorFactory, EditProvider, File } from "@pierre/diffs/react";
 import * as React from "react";
 import { useTheme } from "../../../shared/theme/theme-provider.js";
+import type { FileLineRange } from "../transcript-file-link.js";
+import { RevealLine } from "./reveal-line.js";
 
 const createEditor: EditorFactory<undefined, undefined> = (
   type,
@@ -21,9 +23,21 @@ export const ThreadFileEditor = React.forwardRef<
     readonly wrap: boolean;
     readonly onChange: (content: string) => void;
     readonly onReadyChange?: (ready: boolean) => void;
+    /** Lines to highlight, such as the chunk an agent edit wrote. */
+    readonly revealLines?: FileLineRange;
+    /** Changes whenever the same file is opened again to scroll once more. */
+    readonly revealSequence?: number;
   }
 >(function ThreadFileEditor(
-  { path, content, wrap, onChange, onReadyChange },
+  {
+    path,
+    content,
+    wrap,
+    onChange,
+    onReadyChange,
+    revealLines,
+    revealSequence = 0,
+  },
   forwardedRef,
 ) {
   const { resolvedAppearance } = useTheme();
@@ -62,6 +76,11 @@ export const ThreadFileEditor = React.forwardRef<
         <File
           file={file}
           edit
+          selectedLines={
+            revealLines === undefined
+              ? null
+              : { start: revealLines.start, end: revealLines.end }
+          }
           options={{
             disableFileHeader: true,
             theme:
@@ -77,6 +96,13 @@ export const ThreadFileEditor = React.forwardRef<
           onEditChange={(event) => onChange(event.file.contents)}
         />
       </EditProvider>
+      {revealLines === undefined ? null : (
+        <RevealLine
+          host={host}
+          key={`${revealSequence}:${revealLines.start}`}
+          line={revealLines.start}
+        />
+      )}
     </div>
   );
 });

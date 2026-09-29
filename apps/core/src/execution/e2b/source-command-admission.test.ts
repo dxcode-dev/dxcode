@@ -1,9 +1,14 @@
 import { runInNewContext } from "node:vm";
-import type { SourceWorkspaceRecord } from "@dx/domain";
+import type {
+  SourceOperationRequestType,
+  SourceWorkspaceRecord,
+} from "@dx/domain";
 import type { Sandbox, SandboxFactory } from "@flue/runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
-  classifySourceCommand,
+  executeTrustedLocalCommand,
+  executeTrustedSourceCommand,
+  nativeCommandEnvironment,
   withSourceCommandAdmission,
 } from "./source-command-admission.js";
 
@@ -21,6 +26,10 @@ const projectlessSource = {
   ...source,
   snapshot: undefined,
 } as SourceWorkspaceRecord;
+const repositoryRead: SourceOperationRequestType = {
+  operation: "repository-read",
+  invocationSource: "agent-command",
+};
 
 const factory = (exec: Sandbox["exec"]): SandboxFactory => ({
   createSandbox: async () =>
@@ -61,232 +70,11 @@ describe("source command admission", () => {
       async () => source,
       async (_thread, _source, _request, callback) => callback({}),
     ).createSandbox({ id: "thread-117" });
-    await sandbox.exec("gh repo view");
+    await executeTrustedSourceCommand(sandbox, "gh repo view", repositoryRead);
     expect(checked).toBe(true);
   });
 
-  it("leaves all Git grammar to Git and admits bounded gh reads", () => {
-    for (const command of [
-      "git fetch --prune origin",
-      "command git fetch origin",
-      "command git commit -m signed",
-      "git fetch https://attacker.invalid/repo",
-      "git ls-remote origin refs/heads/main",
-      "git fetch origin; env",
-      "git commit -m 'signed change'",
-      "git commit -am 'bypass staging'",
-      "git -c user.name=attacker commit -m bypass",
-      "git push -u origin feature",
-      "git push --force origin main",
-    ])
-      expect(classifySourceCommand(command)).toEqual({ kind: "none" });
-    expect(classifySourceCommand("gh pr checks 12")).toMatchObject({
-      kind: "read",
-      request: { operation: "checks-status-read" },
-    });
-    expect(classifySourceCommand("gh auth status")).toMatchObject({
-      kind: "read",
-      request: { operation: "provider-auth-read" },
-    });
-    expect(classifySourceCommand("gh auth login")).toEqual({
-      kind: "denied",
-      reason: "persistent-auth-disabled",
-    });
-    expect(
-      classifySourceCommand("gh auth status --hostname=evil.test"),
-    ).toEqual({
-      kind: "denied",
-      reason: "unsupported-auth-command",
-    });
-    for (const command of [
-      "gh auth status --show-token",
-      "gh auth status -t",
-      "gh auth status --show-token --json hosts --template token",
-    ])
-      expect(classifySourceCommand(command)).toEqual({
-        kind: "denied",
-        reason: "unsupported-auth-command",
-      });
-    expect(classifySourceCommand("gh repo view owner/other-repo")).toEqual({
-      kind: "denied",
-      reason: "use-semantic-source-tool",
-    });
-    for (const command of [
-      "gh pr view owner/other-repo",
-      "gh issue view owner/other-repo",
-      "gh run view owner/other-repo",
-    ])
-      expect(classifySourceCommand(command)).toEqual({
-        kind: "denied",
-        reason: "use-semantic-source-tool",
-      });
-    expect(
-      classifySourceCommand("gh pr view https://github.com/other/repo/pull/1"),
-    ).toEqual({ kind: "denied", reason: "arbitrary-repository" });
-    expect(classifySourceCommand("gh pr view 1 --hostname=evil.test")).toEqual({
-      kind: "denied",
-      reason: "arbitrary-host",
-    });
-    expect(classifySourceCommand("gh api graphql")).toEqual({
-      kind: "denied",
-      reason: "raw-api-disabled",
-    });
-    expect(classifySourceCommand("gh pr create")).toEqual({
-      kind: "denied",
-      reason: "use-semantic-source-tool",
-    });
-  });
-
-  it("runs a model Git commit as a native Bash command", async () => {
-    const exec = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
-    const admitted = withSourceCommandAdmission(
-      factory(exec),
-      async () => source,
-      async (_thread, _source, _request, callback) => callback({}),
-    );
-    const activityWrapped: SandboxFactory = {
-      async createSandbox(request) {
-        const sandbox = await admitted.createSandbox(request);
-        return {
-          ...sandbox,
-          exec: async (command, options) =>
-            Promise.resolve().then(() => sandbox.exec(command, options)),
-        };
-      },
-    };
-    const sandbox = await activityWrapped.createSandbox({ id: "thread-117" });
-    await expect(
-      sandbox.exec("git commit -m 'exact message'"),
-    ).resolves.toMatchObject({ exitCode: 0 });
-    expect(exec).toHaveBeenCalledWith("git commit -m 'exact message'", {
-      env: {
-        GIT_CONFIG_GLOBAL: "/home/user/.local/state/dx-terminal/gitconfig",
-      },
-    });
-  });
-
-  it("runs projectless Git commits natively while denying provider commands", async () => {
-    const exec = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
-    const sandbox = await withSourceCommandAdmission(
-      factory(exec),
-      async () => projectlessSource,
-      async (_thread, _source, _request, callback) => callback({}),
-    ).createSandbox({ id: "thread-117" });
-
-    await expect(
-      sandbox.exec("git commit -m 'signed change'"),
-    ).resolves.toMatchObject({ exitCode: 0 });
-    await expect(sandbox.exec("gh repo view")).rejects.toThrow(
-      "source authority unavailable",
-    );
-    expect(exec).toHaveBeenCalledOnce();
-  });
-
-  it("merges protected lease variables after caller environment", async () => {
-    const exec = vi.fn(async () => ({ stdout: "{}", stderr: "", exitCode: 0 }));
-    const withLease = vi.fn(async (_thread, _source, _request, callback) =>
-      callback({
-        GH_TOKEN: "lease-token",
-        GITHUB_TOKEN: "",
-        GH_ENTERPRISE_TOKEN: "",
-        GITHUB_ENTERPRISE_TOKEN: "",
-        GH_DEBUG: "",
-        GH_HOST: "github.com",
-        GH_REPO: "owner/repository",
-        GIT_CONFIG_PARAMETERS: "",
-        GIT_PROXY_COMMAND: "",
-        GIT_TRACE_CURL: "",
-        GIT_CURL_VERBOSE: "",
-        GIT_TRACE_REDACT: "1",
-      }),
-    );
-    const sandbox = await withSourceCommandAdmission(
-      factory(exec),
-      async () => source,
-      withLease,
-    ).createSandbox({ id: "thread-117" });
-
-    await sandbox.exec("gh repo view", {
-      env: {
-        GH_TOKEN: "configured-token",
-        GH_HOST: "attacker.invalid",
-        GH_REPO: "other/repository",
-        GITHUB_TOKEN: "fallback-token",
-        GH_ENTERPRISE_TOKEN: "enterprise-token",
-        GITHUB_ENTERPRISE_TOKEN: "enterprise-fallback-token",
-        GH_DEBUG: "api",
-        GIT_CONFIG_PARAMETERS: "'http.extraHeader=token'",
-        GIT_PROXY_COMMAND: "exfiltrate",
-        GIT_EXEC_PATH: "/tmp/fake-git-core",
-        HTTPS_PROXY: "http://attacker.invalid",
-        GIT_TRACE_CURL: "1",
-        GIT_TRACE2_EVENT: "/tmp/git-trace",
-        GIT_CURL_VERBOSE: "1",
-      },
-    });
-
-    expect(exec).toHaveBeenNthCalledWith(
-      1,
-      "gh repo view",
-      expect.objectContaining({
-        env: expect.objectContaining({
-          GH_TOKEN: "lease-token",
-          GH_HOST: "github.com",
-          GH_REPO: "owner/repository",
-          GITHUB_TOKEN: "",
-          GH_ENTERPRISE_TOKEN: "",
-          GITHUB_ENTERPRISE_TOKEN: "",
-          GH_DEBUG: "",
-          GIT_CONFIG_PARAMETERS: "",
-          GIT_PROXY_COMMAND: "",
-          GIT_EXEC_PATH: "",
-          HTTPS_PROXY: "",
-          GIT_TRACE_CURL: "",
-          GIT_TRACE2_EVENT: "",
-          GIT_CURL_VERBOSE: "",
-          GIT_TRACE_REDACT: "1",
-        }),
-      }),
-    );
-    expect(withLease).toHaveBeenCalledOnce();
-  });
-
-  it("keeps ordinary local Git commands writable without source authority or a lease", async () => {
-    const exec = vi.fn(async () => ({
-      stdout: " M README.md\n",
-      stderr: "",
-      exitCode: 0,
-    }));
-    const withLease = vi.fn();
-    const sandbox = await withSourceCommandAdmission(
-      factory(exec),
-      async () => ({ ...source, authority: undefined }),
-      withLease,
-    ).createSandbox({ id: "thread-117" });
-
-    for (const command of [
-      "git status --short",
-      "git diff",
-      "git add README.md",
-      "git branch feature",
-    ])
-      await expect(sandbox.exec(command)).resolves.toMatchObject({
-        stdout: " M README.md\n",
-        exitCode: 0,
-      });
-    expect(withLease).not.toHaveBeenCalled();
-    expect(exec).toHaveBeenCalledTimes(4);
-    for (const [, options] of exec.mock.calls as unknown as Parameters<
-      Sandbox["exec"]
-    >[])
-      expect(options).toEqual({
-        env: {
-          GIT_CONFIG_GLOBAL: "/home/user/.local/state/dx-terminal/gitconfig",
-        },
-      });
-  });
-
-  it("preserves the terminal Git config for model Bash without resolving authority", async () => {
+  it("runs every agent command natively without parsing, authority, or a lease", async () => {
     const exec = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
     const resolveSource = vi.fn(async () => source);
     const withLease = vi.fn();
@@ -296,43 +84,195 @@ describe("source command admission", () => {
       withLease,
     ).createSandbox({ id: "thread-117" });
 
-    const options = {
-      cwd: "/home/user/workspace/repo",
-      env: {
-        GIT_CONFIG_GLOBAL: "/home/user/.local/state/dx-terminal/gitconfig",
-      },
-    };
-    await sandbox.exec("git push origin topic", options);
-    expect(exec).toHaveBeenCalledWith("git push origin topic", {
-      ...options,
-      env: {
-        GIT_CONFIG_GLOBAL: "/home/user/.local/state/dx-terminal/gitconfig",
-      },
+    const commands = [
+      "git push -u origin feature",
+      "command git fetch origin",
+      "cd /home/user/workspace/repo && git push origin topic",
+      "gh pr create --fill",
+      "gh api repos/owner/repository",
+      "gh auth status",
+      "npm run release",
+    ];
+    for (const command of commands)
+      await expect(sandbox.exec(command)).resolves.toMatchObject({
+        exitCode: 0,
+      });
+    expect(exec.mock.calls).toEqual(
+      commands.map((command) => [command, { env: nativeCommandEnvironment }]),
+    );
+    expect(nativeCommandEnvironment).toEqual({
+      PATH: "/home/user/.local/bin:/usr/local/bin:/usr/bin:/bin",
+      GIT_CONFIG_GLOBAL: "/home/user/.local/state/dx-terminal/gitconfig",
+      GIT_TERMINAL_PROMPT: "0",
+      GH_PROMPT_DISABLED: "1",
     });
     expect(resolveSource).not.toHaveBeenCalled();
     expect(withLease).not.toHaveBeenCalled();
   });
 
+  it("keeps the caller environment and applies only the dx Git configuration after it", async () => {
+    const exec = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+    const sandbox = await withSourceCommandAdmission(
+      factory(exec),
+      async () => projectlessSource,
+      vi.fn(),
+    ).createSandbox({ id: "thread-117" });
+    const options = {
+      cwd: "/home/user/workspace/repo",
+      env: {
+        GH_TOKEN: "user-configured-token",
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "url.https://user:token@git.example/.insteadOf",
+        GIT_CONFIG_VALUE_0: "https://git.example/",
+        GIT_CONFIG_GLOBAL: "/tmp/other",
+        GIT_TERMINAL_PROMPT: "1",
+      },
+    };
+
+    await sandbox.exec("git push origin topic", options);
+    expect(exec).toHaveBeenCalledWith("git push origin topic", {
+      ...options,
+      env: { ...options.env, ...nativeCommandEnvironment },
+    });
+  });
+
+  it("runs trusted local commands without authority or a native credential", async () => {
+    const exec = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+    const withLease = vi.fn();
+    const sandbox = await withSourceCommandAdmission(
+      factory(exec),
+      async () => source,
+      withLease,
+    ).createSandbox({ id: "thread-117" });
+
+    await executeTrustedLocalCommand(sandbox, "git rev-parse HEAD");
+    await executeTrustedLocalCommand(sandbox, "test -d .git");
+    expect(exec).toHaveBeenNthCalledWith(1, "git rev-parse HEAD", {
+      env: nativeCommandEnvironment,
+    });
+    expect(exec).toHaveBeenNthCalledWith(
+      2,
+      "test -d .git",
+      expect.objectContaining({
+        env: expect.objectContaining({
+          GH_TOKEN: "",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+        }),
+      }),
+    );
+    expect(withLease).not.toHaveBeenCalled();
+  });
+
+  it("denies a trusted provider command without source authority", async () => {
+    const exec = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+    const sandbox = await withSourceCommandAdmission(
+      factory(exec),
+      async () => projectlessSource,
+      vi.fn(),
+    ).createSandbox({ id: "thread-117" });
+
+    await expect(
+      executeTrustedSourceCommand(sandbox, "gh repo view", repositoryRead),
+    ).rejects.toThrow("source authority unavailable");
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("merges protected lease variables after caller environment for trusted provider commands", async () => {
+    const exec = vi.fn(async () => ({ stdout: "{}", stderr: "", exitCode: 0 }));
+    const withLease = vi.fn(async (_thread, _source, request, callback) => {
+      expect(request).toEqual(repositoryRead);
+      return callback({
+        GH_TOKEN: "lease-token",
+        GH_HOST: "github.com",
+        GH_REPO: "owner/repository",
+      });
+    });
+    const sandbox = await withSourceCommandAdmission(
+      factory(exec),
+      async () => source,
+      withLease,
+    ).createSandbox({ id: "thread-117" });
+
+    await executeTrustedSourceCommand(sandbox, "gh repo view", repositoryRead, {
+      env: {
+        GH_TOKEN: "configured-token",
+        GH_HOST: "attacker.invalid",
+        GH_REPO: "other/repository",
+        GITHUB_TOKEN: "fallback-token",
+        GH_DEBUG: "api",
+        GIT_CONFIG_PARAMETERS: "'http.extraHeader=token'",
+        HTTPS_PROXY: "http://attacker.invalid",
+        GIT_TRACE_CURL: "1",
+      },
+    });
+
+    expect(exec).toHaveBeenNthCalledWith(
+      1,
+      "gh repo view",
+      expect.objectContaining({
+        env: expect.objectContaining({
+          PATH: "/usr/local/bin:/usr/bin:/bin",
+          GH_TOKEN: "lease-token",
+          GH_HOST: "github.com",
+          GH_REPO: "owner/repository",
+          GITHUB_TOKEN: "",
+          GH_DEBUG: "",
+          GIT_CONFIG_PARAMETERS: "",
+          HTTPS_PROXY: "",
+          GIT_TRACE_CURL: "",
+          GIT_TRACE_REDACT: "1",
+        }),
+      }),
+    );
+    expect(withLease).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a trusted command that changed before execution", async () => {
+    const exec = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+    const inner = await withSourceCommandAdmission(
+      factory(exec),
+      async () => source,
+      vi.fn(),
+    ).createSandbox({ id: "thread-117" });
+    const rewriting = {
+      ...inner,
+      exec: (command: string, options?: Parameters<Sandbox["exec"]>[1]) =>
+        inner.exec(`${command} --repo other/repository`, options),
+    } as Sandbox;
+
+    await expect(
+      executeTrustedSourceCommand(rewriting, "gh repo view", repositoryRead),
+    ).rejects.toThrow("Trusted source command changed before execution.");
+    expect(exec).not.toHaveBeenCalled();
+  });
+
   it("redacts the callback credential from results and failures and always finalizes", async () => {
     const token = "lease-token-echoed-by-process";
-    const successExec = vi.fn(async (command: string) =>
-      command.startsWith("node -e")
-        ? { stdout: "", stderr: "", exitCode: 0 }
-        : { stdout: `out:${token}`, stderr: `err:${token}`, exitCode: 0 },
-    );
     const lease = async <A>(
       _thread: string,
       _source: SourceWorkspaceRecord,
       _request: unknown,
       callback: (environment: Readonly<Record<string, string>>) => Promise<A>,
     ) => callback({ GH_TOKEN: token });
-    const successful = await withSourceCommandAdmission(
-      factory(successExec),
-      async () => source,
-      lease,
-    ).createSandbox({ id: "thread-117" });
+    const admitted = async (exec: Sandbox["exec"]) =>
+      withSourceCommandAdmission(
+        factory(exec),
+        async () => source,
+        lease,
+      ).createSandbox({ id: "thread-117" });
 
-    await expect(successful.exec("gh repo view")).resolves.toEqual({
+    const successExec = vi.fn(async (command: string) =>
+      command.startsWith("node -e")
+        ? { stdout: "", stderr: "", exitCode: 0 }
+        : { stdout: `out:${token}`, stderr: `err:${token}`, exitCode: 0 },
+    );
+    await expect(
+      executeTrustedSourceCommand(
+        await admitted(successExec),
+        "gh repo view",
+        repositoryRead,
+      ),
+    ).resolves.toEqual({
       stdout: "out:[REDACTED]",
       stderr: "err:[REDACTED]",
       exitCode: 0,
@@ -344,12 +284,13 @@ describe("source command admission", () => {
         ? { stdout: "", stderr: "", exitCode: 0 }
         : { stdout: "", stderr: `failed:${token}`, exitCode: 1 },
     );
-    const nonzero = await withSourceCommandAdmission(
-      factory(nonzeroExec),
-      async () => source,
-      lease,
-    ).createSandbox({ id: "thread-117" });
-    await expect(nonzero.exec("gh repo view")).resolves.toEqual({
+    await expect(
+      executeTrustedSourceCommand(
+        await admitted(nonzeroExec),
+        "gh repo view",
+        repositoryRead,
+      ),
+    ).resolves.toEqual({
       stdout: "",
       stderr: "failed:[REDACTED]",
       exitCode: 1,
@@ -361,61 +302,13 @@ describe("source command admission", () => {
         return { stdout: "", stderr: "", exitCode: 0 };
       throw new Error(`transport failed with ${token}`);
     });
-    const failing = await withSourceCommandAdmission(
-      factory(failureExec),
-      async () => source,
-      lease,
-    ).createSandbox({ id: "thread-117" });
-    const failure = await failing.exec("gh repo view").catch((cause) => cause);
+    const failure = await executeTrustedSourceCommand(
+      await admitted(failureExec),
+      "gh repo view",
+      repositoryRead,
+    ).catch((cause) => cause);
     expect(String(failure)).toContain("[REDACTED]");
     expect(String(failure)).not.toContain(token);
     expect(failureExec).toHaveBeenCalledTimes(2);
-  });
-
-  it("removes configured GitHub credentials from unsupported commands", async () => {
-    const exec = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
-    const sandbox = await withSourceCommandAdmission(
-      factory(exec),
-      async () => source,
-      vi.fn(),
-    ).createSandbox({ id: "thread-117" });
-
-    await sandbox.exec("env", {
-      env: {
-        GH_TOKEN: "configured-token",
-        GITHUB_TOKEN: "fallback-token",
-        GH_ENTERPRISE_TOKEN: "enterprise-token",
-        GITHUB_ENTERPRISE_TOKEN: "enterprise-fallback-token",
-        GH_DEBUG: "api",
-        GIT_CONFIG_PARAMETERS: "'http.extraHeader=token'",
-        GIT_PROXY_COMMAND: "exfiltrate",
-        GIT_EXEC_PATH: "/tmp/fake-git-core",
-        HTTPS_PROXY: "http://attacker.invalid",
-        GIT_TRACE_CURL: "1",
-        GIT_TRACE2_EVENT: "/tmp/git-trace",
-        GIT_CURL_VERBOSE: "1",
-      },
-    });
-
-    expect(exec).toHaveBeenCalledWith(
-      "env",
-      expect.objectContaining({
-        env: expect.objectContaining({
-          GH_TOKEN: "",
-          GITHUB_TOKEN: "",
-          GH_ENTERPRISE_TOKEN: "",
-          GITHUB_ENTERPRISE_TOKEN: "",
-          GH_DEBUG: "",
-          GIT_CONFIG_PARAMETERS: "",
-          GIT_PROXY_COMMAND: "",
-          GIT_EXEC_PATH: "",
-          HTTPS_PROXY: "",
-          GIT_TRACE_CURL: "",
-          GIT_TRACE2_EVENT: "",
-          GIT_CURL_VERBOSE: "",
-          GIT_TRACE_REDACT: "1",
-        }),
-      }),
-    );
   });
 });

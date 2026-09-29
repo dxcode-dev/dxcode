@@ -4,6 +4,7 @@ import {
   PersonalAccountNotFound,
   PersonalAccountRepository,
   PersonalAccountUsernameUnavailable,
+  PersonalComposerDefaults,
   type UserId,
 } from "@dx/domain";
 import { Effect, Layer, Schema } from "effect";
@@ -24,6 +25,13 @@ const PersonalAccountRow = Schema.Struct({
 });
 
 const UpdatedRow = Schema.Struct({ user_id: Schema.String });
+
+const ComposerDefaultsRow = Schema.Struct({
+  composer_project: Schema.NullOr(Schema.String),
+  composer_mode: Schema.NullOr(Schema.String),
+  composer_model: Schema.NullOr(Schema.String),
+  composer_runner_profile_id: Schema.NullOr(Schema.String),
+});
 
 export const PersonalAccountRepositoryD1 = Layer.effect(
   PersonalAccountRepository,
@@ -92,8 +100,81 @@ export const PersonalAccountRepositoryD1 = Layer.effect(
       },
     );
 
+    const decodeComposerDefaults = Effect.fn(
+      "PersonalAccountRepository.decodeComposerDefaults",
+    )(function* (rows: unknown) {
+      const decoded = yield* Schema.decodeUnknownEffect(
+        Schema.Array(ComposerDefaultsRow),
+      )(rows);
+      const row = decoded[0];
+      if (row === undefined) return yield* new PersonalAccountNotFound();
+      return yield* Schema.decodeUnknownEffect(PersonalComposerDefaults)({
+        project: row.composer_project,
+        mode: row.composer_mode,
+        model: row.composer_model,
+        runnerProfileId: row.composer_runner_profile_id,
+      });
+    });
+
     return PersonalAccountRepository.of({
       findOwnedByUser: find,
+      findComposerDefaultsOwnedByUser: Effect.fn(
+        "PersonalAccountRepository.findComposerDefaultsOwnedByUser",
+      )(function* (userId) {
+        const rows = yield* sql`
+          SELECT
+            composer_project,
+            composer_mode,
+            composer_model,
+            composer_runner_profile_id
+          FROM personal_account
+          WHERE user_id = ${userId}
+        `.pipe(
+          Effect.catchTag("SqlError", (cause) =>
+            Effect.fail(
+              unavailable(
+                "settings.personalAccount.findComposerDefaultsOwnedByUser",
+              )(cause),
+            ),
+          ),
+        );
+        return yield* decodeComposerDefaults(rows);
+      }),
+      updateComposerDefaultsOwnedByUser: Effect.fn(
+        "PersonalAccountRepository.updateComposerDefaultsOwnedByUser",
+      )(function* (userId, input) {
+        const setsModel = input.model === undefined ? 0 : 1;
+        const rows = yield* sql`
+          UPDATE personal_account
+          SET
+            composer_project = COALESCE(${input.project ?? null}, composer_project),
+            composer_mode = COALESCE(${input.mode ?? null}, composer_mode),
+            composer_model = CASE
+              WHEN ${setsModel} = 1 THEN ${input.model ?? null}
+              ELSE composer_model
+            END,
+            composer_runner_profile_id = COALESCE(
+              ${input.runnerProfileId ?? null},
+              composer_runner_profile_id
+            ),
+            updated_at = datetime('now')
+          WHERE user_id = ${userId}
+          RETURNING
+            composer_project,
+            composer_mode,
+            composer_model,
+            composer_runner_profile_id
+        `.pipe(
+          Effect.catchTag("SqlError", (cause) =>
+            Effect.fail(
+              unavailable(
+                "settings.personalAccount.updateComposerDefaultsOwnedByUser",
+              )(cause),
+            ),
+          ),
+        );
+        return yield* decodeComposerDefaults(rows);
+      }),
       updateOwnedByUser: Effect.fn(
         "PersonalAccountRepository.updateOwnedByUser",
       )(function* (userId, input) {

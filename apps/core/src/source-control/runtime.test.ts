@@ -1,4 +1,5 @@
 import {
+  GITHUB_APP_REPOSITORY_PERMISSIONS,
   SourceControlAccessDenied,
   SourceControlLeaseFailure,
 } from "@dx/domain";
@@ -10,8 +11,10 @@ import {
   githubCommandEnvironment,
   githubInstallationHasApprovedEnvelope,
   githubPermissionsForOperation,
+  githubPermissionsForOperations,
 } from "./github/runtime-adapter.js";
 import {
+  NATIVE_GITHUB_CREDENTIAL_CAPABILITIES,
   SourceAuthorizationPolicy,
   SourceAuthorizationPolicyLive,
   SourceRuntimeBroker,
@@ -171,6 +174,7 @@ const brokerLayer = (input?: {
   readonly acquire?: (permissions: unknown) => void;
   readonly revoke?: () => void;
   readonly resolveFailure?: SourceControlAccessDenied;
+  readonly auditFailure?: boolean;
 }) => {
   let reads = 0;
   const records = input?.records ?? [];
@@ -223,9 +227,16 @@ const brokerLayer = (input?: {
       SourceAudit,
       SourceAudit.of({
         record: (record) =>
-          Effect.sync(() => {
-            records.push(record);
-          }),
+          input?.auditFailure
+            ? Effect.fail(
+                new SourceControlLeaseFailure({
+                  reason: "audit-unavailable",
+                  retryable: true,
+                }),
+              )
+            : Effect.sync(() => {
+                records.push(record);
+              }),
       }),
     ),
   );
@@ -297,7 +308,7 @@ describe("SourceRuntimeBroker", () => {
       ).sort(),
     );
     expect(result.tokenValues).toEqual(["synthetic-secret-115"]);
-    expect(acquire).toHaveBeenCalledWith("issue-write");
+    expect(acquire).toHaveBeenCalledWith(["issue-write"]);
     expect(revoke).toHaveBeenCalledOnce();
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({
@@ -363,6 +374,61 @@ describe("SourceRuntimeBroker", () => {
       outcome: "callback-failed",
       reason: "callback-failed+token-revoke-failed",
     });
+  });
+
+  const nativeCredential = (layer: ReturnType<typeof brokerLayer>) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* (yield* SourceRuntimeBroker).withCommandEnvironment(
+          authority.threadId,
+          authority.actorUserId,
+          { operation: "workflow-write", invocationSource: "git-helper" },
+          (environment) => Effect.succeed(environment.GH_TOKEN),
+        );
+      }).pipe(Effect.provide(layer)),
+    );
+
+  it("issues one native credential with the complete repository envelope", async () => {
+    const records: SourceAuditRecord[] = [];
+    const acquire = vi.fn();
+    const revoke = vi.fn();
+    await expect(
+      nativeCredential(brokerLayer({ records, acquire, revoke })),
+    ).resolves.toBe("synthetic-secret-115");
+    expect(acquire).toHaveBeenCalledWith(NATIVE_GITHUB_CREDENTIAL_CAPABILITIES);
+    expect(
+      githubPermissionsForOperations(NATIVE_GITHUB_CREDENTIAL_CAPABILITIES),
+    ).toEqual(GITHUB_APP_REPOSITORY_PERMISSIONS);
+    expect(revoke).not.toHaveBeenCalled();
+    expect(records[0]).toMatchObject({
+      invocationSource: "git-helper",
+      outcome: "success",
+      requestedCapabilities: NATIVE_GITHUB_CREDENTIAL_CAPABILITIES,
+    });
+  });
+
+  it("revokes a native credential when its audit cannot be recorded", async () => {
+    const revoke = vi.fn();
+    await expect(
+      nativeCredential(brokerLayer({ revoke, auditFailure: true })),
+    ).rejects.toMatchObject({ reason: "audit-unavailable" });
+    expect(revoke).toHaveBeenCalledOnce();
+  });
+
+  it("revokes a native credential after post-mint authority drift", async () => {
+    const revoke = vi.fn();
+    await expect(
+      nativeCredential(
+        brokerLayer({
+          revoke,
+          authorities: [
+            authority,
+            { ...authority, fingerprint: "disconnected-during-mint" },
+          ],
+        }),
+      ),
+    ).rejects.toMatchObject({ reason: "provider-authority-changed" });
+    expect(revoke).toHaveBeenCalledOnce();
   });
 
   it("revokes and audits interruption without claiming provider cancellation", async () => {

@@ -27,6 +27,7 @@ import {
   connectionModel,
   resolveThreadSubmission,
   type SubmissionRoute,
+  withEffectiveContextWindow,
 } from "../model-routing/submission.js";
 import {
   CopilotError,
@@ -39,6 +40,11 @@ import {
   readSubmissionUsageAttribution,
   storeSubmissionUsageAttribution,
 } from "../usage/submission-attribution.js";
+import {
+  decodeProxyEnvelope,
+  PROXY_ENVELOPE_HEADER,
+  type ProxyEnvelope,
+} from "./proxy-envelope.js";
 
 /**
  * Credential coordinator (decision 22): the only component that touches
@@ -50,8 +56,6 @@ import {
  * refuse custom fetch (Google, Bedrock) inside the DO and relays events.
  * `/check` performs the Check Access probe.
  */
-
-const MAX_BODY_BYTES = 24 * 1_048_576;
 
 /**
  * Injectable upstream fetch — the coordinator always dials through this
@@ -92,55 +96,10 @@ const STRIPPED_HEADER_NAMES = new Set([
 const jsonResponse = (body: unknown, status: number) =>
   Response.json(body, { status, headers: { "cache-control": "no-store" } });
 
-const readBoundedBody = async (
-  request: Request,
-): Promise<Uint8Array | undefined> => {
-  if (request.body === null) return new Uint8Array();
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      length += value.byteLength;
-      if (length > MAX_BODY_BYTES) {
-        await reader.cancel("REQUEST_TOO_LARGE").catch(() => undefined);
-        return undefined;
-      }
-      chunks.push(value);
-    }
-  } catch {
-    return new Uint8Array();
-  }
-  const body = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return body;
-};
-
-const base64ToBytes = (encoded: string): Uint8Array => {
-  const binary = atob(encoded);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1)
-    bytes[index] = binary.charCodeAt(index);
-  return bytes;
-};
-
-interface ProxyEnvelope {
-  readonly threadId: string;
-  readonly submissionId?: string;
-  readonly canonical: string;
-  readonly request: {
-    readonly url: string;
-    readonly method: string;
-    readonly headers: Record<string, string>;
-    readonly body: string;
-  };
-}
+type ModelEnvelope = Pick<
+  ProxyEnvelope,
+  "threadId" | "submissionId" | "canonical"
+>;
 
 interface StreamEnvelope {
   readonly threadId: string;
@@ -181,6 +140,8 @@ type PinnedSubmission = SubmissionRoute & {
 
 type StoredPinnedSubmission = PinnedSubmission & { readonly expiresAt: number };
 const SUBMISSION_ROUTE_PREFIX = "submission-route:";
+// Idle retention. A pin in use is renewed, so a submission that keeps making
+// model calls keeps its route for as long as Flue lets it run.
 const SUBMISSION_ROUTE_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const MAX_PINNED_SUBMISSION_ROUTES = 512;
 const submissionRouteKey = (submissionId: string) =>
@@ -199,6 +160,19 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       return undefined;
     }
     return pin;
+  }
+
+  async #renewPin(submissionId: string, expiresAt: number) {
+    if (expiresAt - Date.now() >= SUBMISSION_ROUTE_RETENTION_MS / 2) return;
+    await this.ctx.blockConcurrencyWhile(async () => {
+      // Re-read so a concurrent credential removal is never overwritten.
+      const current = await this.#readPin(submissionId);
+      if (current === undefined) return;
+      await this.ctx.storage.put(submissionRouteKey(submissionId), {
+        ...current,
+        expiresAt: Date.now() + SUBMISSION_ROUTE_RETENTION_MS,
+      });
+    });
   }
 
   async #prunePins(now = Date.now()) {
@@ -395,10 +369,15 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       throw new Error("CONNECTION_REMOVED");
     }
     this.#validateEndpoint(pin.connection);
+    await this.#renewPin(submissionId, pin.expiresAt);
     return pin;
   }
 
-  async #handleProxy(envelope: ProxyEnvelope, signal: AbortSignal) {
+  async #handleProxy(
+    envelope: ProxyEnvelope,
+    request: Request,
+    signal: AbortSignal,
+  ) {
     const routingStarted = performance.now();
     const pin = await this.#resolve(
       envelope.threadId,
@@ -448,9 +427,7 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
             catalogRevision: row.catalogRevision,
             observedAt: Date.parse(row.observedAt),
           },
-          payload: JSON.parse(
-            new TextDecoder().decode(base64ToBytes(envelope.request.body)),
-          ) as Record<string, unknown>,
+          payload: JSON.parse(await request.text()) as Record<string, unknown>,
           threadId: envelope.threadId,
           signal,
         });
@@ -535,9 +512,7 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       headers.set("authorization", `Bearer ${apiKey}`);
     }
 
-    const body = JSON.parse(
-      new TextDecoder().decode(base64ToBytes(envelope.request.body)),
-    ) as Record<string, unknown>;
+    const body = JSON.parse(await request.text()) as Record<string, unknown>;
     body.model = pin.upstreamModel;
 
     settingsPersistenceLogger.info("Model request authorized.", {
@@ -592,6 +567,54 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
         state: "healthy",
         code: "CONNECTED",
       });
+    }
+    if (upstream.status >= 400 && upstream.status < 500) {
+      // Otherwise the provider's reason is visible only in the Thread. Read a
+      // bounded prefix beside the forwarded body, so a large or endless error
+      // body is neither buffered nor able to delay the response.
+      const reader = upstream.clone().body?.getReader();
+      // Custom headers can carry credentials too, and a JSON body may echo any
+      // of them escaped, so redact every secret in both spellings, longest
+      // first so a secret containing another is never partly revealed.
+      const secrets = [
+        ...new Set(
+          // Redact every non-empty secret regardless of length: over-redacting
+          // a log line is harmless, while skipping a short key would leak it.
+          [apiKey, ...connection.headers.map(({ value }) => value)]
+            .filter((value) => value.length > 0)
+            .flatMap((value) => [value, JSON.stringify(value).slice(1, -1)]),
+        ),
+      ].sort((left, right) => right.length - left.length);
+      const limit = 2_000 + (secrets[0]?.length ?? 0);
+      void (async () => {
+        const decoder = new TextDecoder();
+        let detail = "";
+        try {
+          while (reader !== undefined && detail.length < limit) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            detail += decoder.decode(value, { stream: true });
+          }
+        } catch {
+          // Log whatever arrived before the body failed.
+        } finally {
+          void reader?.cancel().catch(() => undefined);
+        }
+        settingsPersistenceLogger.warn("Model provider rejected the request.", {
+          event: "model_upstream_rejected",
+          threadId: pin.threadId,
+          submissionId: pin.submissionId,
+          connectionId: connection.id,
+          model: envelope.canonical,
+          status: upstream.status,
+          body: secrets
+            .reduce(
+              (redacted, secret) => redacted.replaceAll(secret, "[REDACTED]"),
+              detail,
+            )
+            .slice(0, 2_000),
+        });
+      })();
     }
     return new Response(upstream.body, {
       status: upstream.status,
@@ -883,29 +906,18 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       return jsonResponse({ code: "NOT_FOUND" }, 404);
     }
     const pathname = new URL(request.url).pathname;
-    const declared = request.headers.get("content-length");
-    if (
-      declared !== null &&
-      (!/^\d+$/.test(declared) || Number(declared) > MAX_BODY_BYTES)
-    ) {
-      return jsonResponse({ code: "REQUEST_TOO_LARGE" }, 413);
-    }
-    const bytes = await readBoundedBody(request);
-    if (bytes === undefined) {
-      return jsonResponse({ code: "REQUEST_TOO_LARGE" }, 413);
-    }
-    const envelope = (() => {
-      try {
-        return JSON.parse(new TextDecoder().decode(bytes));
-      } catch {
-        return undefined;
-      }
-    })() as
-      | ProxyEnvelope
-      | StreamEnvelope
-      | CheckEnvelope
-      | ResolveEnvelope
-      | undefined;
+    const envelope =
+      pathname === "/proxy"
+        ? decodeProxyEnvelope(request.headers.get(PROXY_ENVELOPE_HEADER))
+        : ((await request
+            .text()
+            .then((text) => JSON.parse(text))
+            .catch(() => undefined)) as
+            | StreamEnvelope
+            | CheckEnvelope
+            | ResolveEnvelope
+            | ModelEnvelope
+            | undefined);
     if (envelope === undefined) {
       return jsonResponse({ code: "INVALID_REQUEST" }, 400);
     }
@@ -936,18 +948,19 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
         }
         case "/model": {
           const { threadId, submissionId, canonical } =
-            envelope as ProxyEnvelope;
+            envelope as ModelEnvelope;
           if (!submissionId) throw new Error("SUBMISSION_ROUTE_UNAVAILABLE");
           const pin = await this.#readPin(submissionId);
           if (pin?.threadId !== threadId || pin.submissionId !== submissionId)
             throw new Error("SUBMISSION_ROUTE_UNAVAILABLE");
           if (`${pin.model.provider}/${pin.model.id}` !== canonical)
             throw new Error("SUBMISSION_MODEL_MISMATCH");
-          return jsonResponse(pin.model, 200);
+          return jsonResponse(withEffectiveContextWindow(pin.model), 200);
         }
         case "/proxy":
           return await this.#handleProxy(
             envelope as ProxyEnvelope,
+            request,
             request.signal,
           );
         case "/stream":

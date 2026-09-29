@@ -479,6 +479,28 @@ it.each([401, 403, 404])(
   },
 );
 
+it("retains dictation per Thread and clears it with the owning session", () => {
+  const registry = new ThreadSessionRegistry(new QueryClient(), userId);
+  const a = registry.prepare("A" as ThreadId, projectId, "A");
+  const b = registry.prepare("B" as ThreadId, projectId, "B");
+  registry.activate(a);
+  const audio = new Blob([new Uint8Array([1, 2, 3])], { type: "audio/wav" });
+  a.dictation.retain(audio, "insert", "Retry this recording.");
+  registry.activate(b);
+
+  expect(
+    registry.prepare("A" as ThreadId, projectId, "A").dictation.getSnapshot(),
+  ).toMatchObject({
+    state: "retained",
+    audio,
+  });
+  expect(b.dictation.getSnapshot()).toEqual({ state: "empty" });
+
+  registry.remove(a.id);
+  expect(a.dictation.getSnapshot()).toEqual({ state: "empty" });
+  registry.clear();
+});
+
 it("keeps image URLs on switches and releases them on eviction and clear", async () => {
   const client = new QueryClient();
   const registry = new ThreadSessionRegistry(client, userId);

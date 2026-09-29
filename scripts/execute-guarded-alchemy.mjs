@@ -75,6 +75,12 @@ const selection = {
   origin: required("DX_DEPLOYMENT_ORIGIN"),
   packageDirectory: required("DX_DEPLOYMENT_PACKAGE_DIR"),
   revision: required("DX_DEPLOYMENT_REVISION"),
+  workerTraces: (() => {
+    const value = process.env.DX_DEPLOYMENT_WORKER_TRACES;
+    if (value === undefined || value === "false") return false;
+    if (value === "true") return true;
+    throw new Error("DX_DEPLOYMENT_WORKER_TRACES must be true or false.");
+  })(),
 };
 
 const program = Effect.gen(function* () {

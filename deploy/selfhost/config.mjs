@@ -11,6 +11,7 @@ const CONFIG_KEYS = new Set([
   "adminEmail",
   "allowSignup",
   "workersAi",
+  "workerTraces",
   "githubCopilotClientId",
   "modelDeploymentProviders",
   "modelEndpointAllowlist",
@@ -89,7 +90,7 @@ export const validateSelfhostConfig = (input) => {
     throw new Error(
       "authEmailFrom must be an email address inside the deployment zone.",
     );
-  for (const key of ["allowSignup", "workersAi"])
+  for (const key of ["allowSignup", "workersAi", "workerTraces"])
     if (input[key] !== undefined && typeof input[key] !== "boolean")
       throw new Error(`${key} must be true or false.`);
   const integrations = input.integrations ?? [];
@@ -114,6 +115,10 @@ export const validateSelfhostConfig = (input) => {
       : { authEmailFrom: authEmailFrom.toLowerCase() }),
     allowSignup: input.allowSignup === true,
     workersAi: input.workersAi !== false,
+    // Absent means the operator was never asked; the installer asks once.
+    ...(input.workerTraces === undefined
+      ? {}
+      : { workerTraces: input.workerTraces }),
     integrations: [...integrations].sort(),
     ...Object.fromEntries(
       [

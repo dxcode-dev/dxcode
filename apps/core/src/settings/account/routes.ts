@@ -1,5 +1,6 @@
 import {
   GetPersonalAccountResponseSchema,
+  GetPersonalComposerDefaultsResponseSchema,
   PersonalAccountForbiddenResponseSchema,
   PersonalAccountInvalidRequestResponseSchema,
   PersonalAccountNotFoundResponseSchema,
@@ -10,13 +11,15 @@ import {
   UpdatePersonalAccountResponseSchema,
   UpdatePersonalAppearanceRequestSchema,
   UpdatePersonalAppearanceResponseSchema,
+  UpdatePersonalComposerDefaultsRequestSchema,
+  UpdatePersonalComposerDefaultsResponseSchema,
 } from "@dx/api";
 import {
   normalizePersonalAccountDisplayName,
   normalizePersonalAccountUsername,
-  PersonalAppearance,
   PersonalAccountDisplayName,
   PersonalAccountUsername,
+  PersonalAppearance,
   PersonalPalette,
   PersonalTerminalTheme,
   type UpdatePersonalAccountInput,
@@ -422,6 +425,118 @@ personalAccountRoutes.patch("/", async (context) => {
             },
           }),
           409,
+        ),
+      SettingsScopeForbidden: () => forbidden(context),
+      PersonalAccountNotFound: () => notFound(context),
+      PersistenceUnavailable: () => unavailable(context),
+      SettingsMembershipInvariantViolation: (error) => {
+        throw error;
+      },
+      D1BindingUnavailable: (error) => {
+        throw error;
+      },
+      ConfigError: (error) => {
+        throw error;
+      },
+      SchemaError: (error) => {
+        throw error;
+      },
+    }),
+    Match.exhaustive,
+  );
+});
+
+const invalidComposerDefaultsRequest = () =>
+  new InvalidPersonalAccountRequest({
+    fieldErrors: [
+      {
+        field: "request",
+        message: "Choose a supported Project, mode, model, and Orb.",
+      },
+    ],
+  });
+
+personalAccountRoutes.get("/composer", async (context) => {
+  const operation = Effect.gen(function* () {
+    const db = yield* decodeD1Binding(context.env.DB);
+    return yield* Effect.gen(function* () {
+      const settings = yield* SettingsService;
+      yield* settings.personal(context.get("principal"));
+      const accounts = yield* PersonalAccountService;
+      const defaults = yield* accounts.getComposerDefaults(
+        context.get("principal"),
+      );
+      return yield* Schema.encodeUnknownEffect(
+        GetPersonalComposerDefaultsResponseSchema,
+      )({ status: "success", data: defaults });
+    }).pipe(Effect.provide(servicesFor(db)));
+  });
+
+  const result = await Effect.runPromise(Effect.result(operation));
+  if (Result.isSuccess(result)) return context.json(result.success, 200);
+  return Match.value(result.failure).pipe(
+    Match.tags({
+      SettingsScopeForbidden: () => forbidden(context),
+      PersonalAccountNotFound: () => notFound(context),
+      PersistenceUnavailable: () => unavailable(context),
+      SettingsMembershipInvariantViolation: (error) => {
+        throw error;
+      },
+      D1BindingUnavailable: (error) => {
+        throw error;
+      },
+      ConfigError: (error) => {
+        throw error;
+      },
+      SchemaError: (error) => {
+        throw error;
+      },
+    }),
+    Match.exhaustive,
+  );
+});
+
+personalAccountRoutes.patch("/composer", async (context) => {
+  const requestId = context.get("requestId");
+  const operation = Effect.gen(function* () {
+    const input = yield* decodeJsonBody(
+      context.req,
+      UpdatePersonalComposerDefaultsRequestSchema,
+      invalidComposerDefaultsRequest,
+    );
+    const db = yield* decodeD1Binding(context.env.DB);
+    return yield* Effect.gen(function* () {
+      const settings = yield* SettingsService;
+      yield* settings.personal(context.get("principal"));
+      const accounts = yield* PersonalAccountService;
+      const defaults = yield* accounts.updateComposerDefaults(
+        context.get("principal"),
+        input,
+      );
+      return yield* Schema.encodeUnknownEffect(
+        UpdatePersonalComposerDefaultsResponseSchema,
+      )({ status: "success", data: defaults });
+    }).pipe(Effect.provide(servicesFor(db)));
+  });
+
+  const result = await Effect.runPromise(Effect.result(operation));
+  if (Result.isSuccess(result)) return context.json(result.success, 200);
+  return Match.value(result.failure).pipe(
+    Match.tags({
+      InvalidPersonalAccountRequest: (error) =>
+        context.json(
+          Schema.encodeUnknownSync(PersonalAccountInvalidRequestResponseSchema)(
+            {
+              status: "error",
+              data: {
+                code: "INVALID_ACCOUNT_PROFILE",
+                message: "Account profile validation failed.",
+                requestId,
+                fieldErrors: error.fieldErrors,
+              },
+            },
+          ),
+          400,
         ),
       SettingsScopeForbidden: () => forbidden(context),
       PersonalAccountNotFound: () => notFound(context),

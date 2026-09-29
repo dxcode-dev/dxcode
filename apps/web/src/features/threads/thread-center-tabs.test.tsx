@@ -1,6 +1,10 @@
 // @vitest-environment happy-dom
 
-import type { ThreadFilesPath } from "@dx/api";
+import type {
+  ThreadFilesPath,
+  ThreadFilesWorktreeId,
+  ThreadSandboxFilePath,
+} from "@dx/api";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +20,12 @@ afterEach(() => {
 describe("Thread center file tabs", () => {
   it("requires an explicit decision before closing a dirty file", async () => {
     const path = "src/index.ts" as ThreadFilesPath;
+    const file = {
+      kind: "workspace" as const,
+      worktree: "primary" as ThreadFilesWorktreeId,
+      path,
+      dirty: true,
+    };
     const onClose = vi.fn();
     const confirm = vi.fn(() => false);
     Object.defineProperty(window, "confirm", {
@@ -27,8 +37,8 @@ describe("Thread center file tabs", () => {
     await React.act(() =>
       root.render(
         <ThreadCenterTabs
-          activeFile={path}
-          files={[{ path, dirty: true }]}
+          activeFile={`primary:${path}`}
+          files={[file]}
           onClose={onClose}
           onSelect={vi.fn()}
         />,
@@ -45,7 +55,7 @@ describe("Thread center file tabs", () => {
     await React.act(() =>
       close?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
     );
-    expect(onClose).toHaveBeenCalledWith({ path, dirty: true });
+    expect(onClose).toHaveBeenCalledWith(file);
     await React.act(() => root.unmount());
   });
 
@@ -57,8 +67,20 @@ describe("Thread center file tabs", () => {
       root.render(
         <ThreadCenterTabs
           files={[
-            { path, worktreeLabel: "dx", dirty: false },
-            { path, worktreeLabel: "feature-worktree", dirty: false },
+            {
+              kind: "workspace",
+              worktree: "primary" as ThreadFilesWorktreeId,
+              path,
+              worktreeLabel: "dx",
+              dirty: false,
+            },
+            {
+              kind: "workspace",
+              worktree: "wt_0123456789abcdef" as ThreadFilesWorktreeId,
+              path,
+              worktreeLabel: "feature-worktree",
+              dirty: false,
+            },
           ]}
           onClose={vi.fn()}
           onSelect={vi.fn()}
@@ -72,6 +94,29 @@ describe("Thread center file tabs", () => {
       ),
     ).toContain("index.ts — dx");
     expect(container.textContent).toContain("feature-worktree");
+    await React.act(() => root.unmount());
+  });
+
+  it("labels read-only sandbox files and keys them by absolute path", async () => {
+    const path = "/home/user/notes/todo.md" as ThreadSandboxFilePath;
+    const container = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(container);
+    const onSelect = vi.fn();
+    await React.act(() =>
+      root.render(
+        <ThreadCenterTabs
+          files={[{ kind: "sandbox", path, dirty: false }]}
+          onClose={vi.fn()}
+          onSelect={onSelect}
+        />,
+      ),
+    );
+    const tab = container.querySelector<HTMLButtonElement>(
+      '[aria-label="todo.md — Sandbox"]',
+    );
+    expect(tab?.title).toBe(path);
+    await React.act(() => tab?.click());
+    expect(onSelect).toHaveBeenCalledWith(`sandbox:${path}`);
     await React.act(() => root.unmount());
   });
 });

@@ -8,6 +8,7 @@ import type {
 } from "@dx/api";
 import type { Profile } from "@dx/domain";
 import {
+  customModelBaseUrlForFormatChange,
   EnvironmentVariableId,
   EnvironmentVariablePlaintext,
   MAX_CONNECTION_HEADERS,
@@ -39,6 +40,7 @@ import {
   loadRoutableConnections,
   loadSubscriptionModelIds,
 } from "./connection-store-d1.js";
+import { effectiveContextWindow } from "./context-window.js";
 import { COPILOT_SERVED_MODELS } from "./copilot-mapping.js";
 import { DEFAULT_PROFILE } from "./defaults.js";
 import { validateAllowedModelEndpoint } from "./endpoint-policy.js";
@@ -607,7 +609,13 @@ export class ModelRoutingService {
     const timestamp = new Date().toISOString();
     const endpointResult =
       input.baseUrl === undefined
-        ? current.baseUrl
+        ? current.kind === "custom" &&
+          current.baseUrl !== undefined &&
+          current.format !== undefined &&
+          merged.format !== undefined &&
+          merged.format !== current.format
+          ? customModelBaseUrlForFormatChange(current.format, current.baseUrl)
+          : current.baseUrl
         : input.baseUrl === null
           ? undefined
           : normalizedEndpoint(input.baseUrl, this.endpointAllowlist);
@@ -798,7 +806,10 @@ export class ModelRoutingService {
           models: catalogProviderModels(spec.id).map((model) => ({
             id: `${spec.id}/${model.id}`,
             name: model.name,
-            contextWindow: model.contextWindow,
+            contextWindow: effectiveContextWindow(
+              `${spec.id}/${model.id}`,
+              model.contextWindow,
+            ),
             maxOutputTokens: model.maxTokens,
             reasoning: model.reasoning,
             vision: model.input.includes("image"),

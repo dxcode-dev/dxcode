@@ -10,6 +10,8 @@ import {
   mintThreadDaemonApiKey,
   revokeThreadDaemonApiKey,
 } from "../auth/daemon-api-key.js";
+import { decodeBase64Url, encodeBase64Url } from "../encoding/base64.js";
+import { utf8ByteLength, utf8ExceedsBytes } from "../encoding/utf8.js";
 import {
   type DaemonGeneration,
   DaemonGeneration as DaemonGenerationSchema,
@@ -24,6 +26,7 @@ import {
   DXD_MAX_WORKLOAD_IDENTITY_FRAME_BYTES,
   DXD_PROTOCOL_MAJOR,
   DXD_RELEASE,
+  DXD_SANDBOX_CHUNK_HEADER,
   DXD_TERMINAL_MAX_FRAME_BYTES,
   DXD_TERMINAL_SEND_BUFFER_BYTES,
   DXD_TERMINAL_VERSION,
@@ -42,6 +45,8 @@ import {
   type DxdTerminalHeartbeat,
   type DxdWorkloadIdentityRequest,
   DxdWorkloadIdentityRequestMessage,
+  decodeDxdSandboxChunkFrame,
+  isDxdSandboxChunkFrame,
 } from "../execution/dxd/protocol.js";
 import {
   ExecutionWorkspaces,
@@ -277,15 +282,8 @@ interface PendingDaemonRequest {
   dispatched: boolean;
 }
 
-const randomBase64Url = (byteLength: number) => {
-  const bytes = crypto.getRandomValues(new Uint8Array(byteLength));
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary)
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/, "");
-};
+const randomBase64Url = (byteLength: number) =>
+  encodeBase64Url(crypto.getRandomValues(new Uint8Array(byteLength)));
 
 const boundedTimestamp = (value: string | null) => {
   if (value === null || !/^\d{13}$/.test(value)) return undefined;
@@ -1312,9 +1310,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       throw new Error("daemon unavailable");
     }
     const encoded = JSON.stringify(control);
-    if (
-      new TextEncoder().encode(encoded).byteLength > DXD_MAX_CONTROL_FRAME_BYTES
-    )
+    if (utf8ExceedsBytes(encoded, DXD_MAX_CONTROL_FRAME_BYTES))
       throw new Error("terminal control too large");
     try {
       socket.send(encoded);
@@ -1432,10 +1428,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           const socket = this.#currentDaemonSocket();
           if (socket === undefined || !this.#isReady()) return false;
           const encoded = JSON.stringify(refresh);
-          if (
-            new TextEncoder().encode(encoded).byteLength >
-            DXD_MAX_CONTROL_FRAME_BYTES
-          )
+          if (utf8ExceedsBytes(encoded, DXD_MAX_CONTROL_FRAME_BYTES))
             return false;
           socket.send(encoded);
           return true;
@@ -1459,9 +1452,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     let operation: typeof DxdFilesOperation.Type;
     try {
       const body = await request.text();
-      if (
-        new TextEncoder().encode(body).byteLength > DXD_MAX_REQUEST_FRAME_BYTES
-      )
+      if (utf8ExceedsBytes(body, DXD_MAX_REQUEST_FRAME_BYTES))
         return new Response(null, { status: 400 });
       operation = Schema.decodeUnknownSync(DxdFilesOperation)(
         JSON.parse(body),
@@ -1474,7 +1465,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     }
     const readOnly =
       operation.operation === "files.list" ||
-      operation.operation === "files.read";
+      operation.operation === "files.read" ||
+      operation.operation === "files.readSandbox";
     const available = readOnly
       ? await this.#activateForFilesRead(threadId.value)
       : (await this.#activateWithRetry(threadId.value)).ok;
@@ -1512,7 +1504,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       requestId,
       operation,
     });
-    if (new TextEncoder().encode(frame).byteLength > maximumBytes)
+    if (utf8ExceedsBytes(frame, maximumBytes))
       return Promise.resolve(new Response(null, { status: 400 }));
     return new Promise<Response>((resolve) => {
       const deadline = Date.now() + timeoutMs;
@@ -1535,7 +1527,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         resumable:
           operation.operation === "environment.activate" ||
           operation.operation === "files.list" ||
-          operation.operation === "files.read",
+          operation.operation === "files.read" ||
+          operation.operation === "files.readSandbox",
         deadline,
         timeout,
         resolve,
@@ -1565,6 +1558,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         (pending.operation.operation !== "environment.activate" &&
           pending.operation.operation !== "files.list" &&
           pending.operation.operation !== "files.read" &&
+          pending.operation.operation !== "files.readSandbox" &&
           !this.#isReady())
       )
         continue;
@@ -1574,7 +1568,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         requestId,
         operation: pending.operation,
       });
-      if (new TextEncoder().encode(frame).byteLength > pending.maximumBytes) {
+      if (utf8ExceedsBytes(frame, pending.maximumBytes)) {
         this.#settlePending(requestId, new Response(null, { status: 400 }));
         continue;
       }
@@ -1998,14 +1992,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       this.#pendingWorkloadIdentityRequests.add(message.requestId);
       try {
         if ("kind" in message.request && message.request.kind === "git-sign") {
-          const payload = Uint8Array.from(
-            atob(
-              message.request.payloadBase64
-                .replaceAll("-", "+")
-                .replaceAll("_", "/"),
-            ),
-            (character) => character.charCodeAt(0),
-          );
+          // The schema already restricts the payload to base64url.
+          const payload = decodeBase64Url(message.request.payloadBase64);
           const text = new TextDecoder("utf-8", { fatal: true }).decode(
             payload,
           );
@@ -2040,7 +2028,21 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           const credential = await this.#issueNativeGitCredential(
             authority.threadId,
             message.request,
-          );
+          ).catch((cause: unknown) => {
+            const reason = (cause as { readonly reason?: unknown } | undefined)
+              ?.reason;
+            threadDaemonLogger.warn("Native Git credential unavailable.", {
+              event: "native_git_credential",
+              threadId: authority.threadId,
+              failure:
+                typeof reason === "string"
+                  ? reason
+                  : cause instanceof Error
+                    ? cause.name
+                    : "unknown",
+            });
+            throw cause;
+          });
           result =
             credential === undefined
               ? { kind: "unavailable" }
@@ -2076,10 +2078,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       requestId: message.requestId,
       result,
     });
-    if (
-      new TextEncoder().encode(encoded).byteLength >
-      DXD_MAX_WORKLOAD_IDENTITY_FRAME_BYTES
-    ) {
+    if (utf8ExceedsBytes(encoded, DXD_MAX_WORKLOAD_IDENTITY_FRAME_BYTES)) {
       encoded = JSON.stringify({
         type: "workload-identity.response",
         generation: authority.generation,
@@ -2126,7 +2125,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     )
       return new Response(null, { status: 503 });
     const body = await request.text();
-    if (new TextEncoder().encode(body).byteLength > DXD_MAX_CONTROL_FRAME_BYTES)
+    if (utf8ExceedsBytes(body, DXD_MAX_CONTROL_FRAME_BYTES))
       return new Response(null, { status: 400 });
     let decoded: unknown;
     try {
@@ -2147,9 +2146,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
 
   async webSocketMessage(socket: WebSocket, frame: string | ArrayBuffer) {
     const frameBytes =
-      typeof frame === "string"
-        ? new TextEncoder().encode(frame).byteLength
-        : frame.byteLength;
+      typeof frame === "string" ? utf8ByteLength(frame) : frame.byteLength;
     const authority = this.#authority;
     const attachment = socket.deserializeAttachment() as
       | SocketAttachment
@@ -2178,6 +2175,14 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         return;
       }
       if (!current) return;
+      if (
+        isDxdSandboxChunkFrame(
+          new Uint8Array(frame, 0, Math.min(8, frameBytes)),
+        )
+      ) {
+        this.#settleSandboxChunk(socket, authority, frame);
+        return;
+      }
       if (frameBytes > DXD_TERMINAL_MAX_FRAME_BYTES) {
         socket.close(1009, "");
         return;
@@ -2593,6 +2598,55 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         socket.close(1008, "Daemon connection superseded.");
       }
     }
+  }
+
+  /**
+   * Hand a binary `DXF1` chunk to its waiting sandbox read as the response
+   * body. The bytes are never parsed, re-encoded, or copied here.
+   */
+  #settleSandboxChunk(
+    socket: WebSocket,
+    authority: DaemonAuthority,
+    frame: ArrayBuffer,
+  ) {
+    let decoded: ReturnType<typeof decodeDxdSandboxChunkFrame>;
+    try {
+      decoded = decodeDxdSandboxChunkFrame(frame);
+    } catch {
+      socket.close(1008, "Invalid daemon message.");
+      return;
+    }
+    const { header, bytes } = decoded;
+    const pending = this.#pendingRequests.get(header.requestId);
+    if (
+      pending?.socket !== socket ||
+      header.generation !== authority.generation ||
+      pending.operation.operation !== "files.readSandbox"
+    )
+      return;
+    const requested = pending.operation;
+    if (
+      header.offset !== requested.offset ||
+      bytes.byteLength > requested.length ||
+      (header.offset + bytes.byteLength < header.sizeBytes &&
+        bytes.byteLength !== requested.length)
+    ) {
+      this.#settlePending(header.requestId, daemonFailureResponse("unknown"));
+      return;
+    }
+    this.#settlePending(
+      header.requestId,
+      new Response(bytes as Uint8Array<ArrayBuffer>, {
+        headers: {
+          "content-type": "application/octet-stream",
+          [DXD_SANDBOX_CHUNK_HEADER]: JSON.stringify({
+            version: header.version,
+            sizeBytes: header.sizeBytes,
+            offset: header.offset,
+          }),
+        },
+      }),
+    );
   }
 
   #settlePending(requestId: string, response: Response) {

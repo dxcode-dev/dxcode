@@ -52,19 +52,23 @@ export const SourceOperation = Schema.Literals([
 ]);
 export type SourceOperation = typeof SourceOperation.Type;
 
+export const SourceOperationInvocationSource = Schema.Literals([
+  "checkout",
+  "agent-command",
+  "git-helper",
+  "setup-hook",
+  "resume-hook",
+  "system",
+]);
+export type SourceOperationInvocationSource =
+  typeof SourceOperationInvocationSource.Type;
+
 export const SourceOperationRequest = Schema.Struct({
   operation: SourceOperation,
   targetBranch: Schema.optional(
     Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
   ),
-  invocationSource: Schema.Literals([
-    "checkout",
-    "agent-command",
-    "git-helper",
-    "setup-hook",
-    "resume-hook",
-    "system",
-  ]),
+  invocationSource: SourceOperationInvocationSource,
 });
 export type SourceOperationRequest = typeof SourceOperationRequest.Type;
 

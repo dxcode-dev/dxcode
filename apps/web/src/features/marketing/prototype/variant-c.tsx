@@ -1,5 +1,6 @@
 import { Access } from "./access.js";
 import { Actions } from "./actions.js";
+import { ArrowIcon } from "./arrow-icon.js";
 import { Beyond } from "./beyond.js";
 import { Footer } from "./footer.js";
 import { Nav } from "./nav.js";
@@ -27,7 +28,14 @@ export function VariantC() {
             <br />A browser is all you need to check in.
           </p>
           <Actions />
-          <div className="device-line">LAPTOP ↔ DESKTOP ↔ MOBILE</div>
+          <div
+            className="device-line"
+            role="img"
+            aria-label="Laptop, desktop, and mobile, all connected"
+          >
+            LAPTOP <ArrowIcon direction="left-right" /> DESKTOP{" "}
+            <ArrowIcon direction="left-right" /> MOBILE
+          </div>
         </div>
         <div className="mission-product">
           <span className="orbit-label">ONE WORKSPACE / MANY WAYS IN</span>

@@ -902,6 +902,43 @@ describe("pauseExecutionWorkspace", () => {
     expect(fake.create).not.toHaveBeenCalled();
   });
 
+  it("treats an already-paused sandbox as paused", async () => {
+    const fake = provider({ pause: async () => false });
+    const store = stateStore(initialized("idle-paused-sandbox"));
+
+    await expect(
+      Effect.runPromise(
+        makePauseExecutionWorkspace(fake.value)({
+          id: threadId,
+          requirements,
+          stateStore: store.value,
+        }),
+      ),
+    ).resolves.toBe(1);
+    expect(fake.pause).toHaveBeenCalledOnce();
+    expect(store.current()).toEqual(initialized("idle-paused-sandbox"));
+  });
+
+  it("still fails when E2B rejects the pause", async () => {
+    const fake = provider({
+      pause: async () => {
+        throw new Error("E2B unavailable");
+      },
+    });
+    const store = stateStore(initialized("running-sandbox"));
+
+    await expect(
+      Effect.runPromise(
+        makePauseExecutionWorkspace(fake.value)({
+          id: threadId,
+          requirements,
+          stateStore: store.value,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(ExecutionWorkspaceUnavailable);
+    expect(store.current()).toEqual(initialized("running-sandbox"));
+  });
+
   it("does nothing for a never-initialized Thread", async () => {
     const fake = provider();
     const store = stateStore(uninitialized);

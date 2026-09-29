@@ -62,6 +62,62 @@ export const CustomApiFormat = Schema.Literals([
 
 export type CustomApiFormat = typeof CustomApiFormat.Type;
 
+/**
+ * Path each custom format's SDK appends to the connection base URL. The
+ * OpenAI SDK adds no version segment; the Anthropic SDK adds its own `/v1`.
+ */
+const CUSTOM_ENDPOINT_PATHS: Readonly<Record<CustomApiFormat, string>> = {
+  "openai-completions": "/chat/completions",
+  "openai-responses": "/responses",
+  "anthropic-messages": "/v1/messages",
+};
+
+const trimTrailingSlashes = (value: string) => value.replace(/\/+$/, "");
+
+/**
+ * The base URL a custom format's SDK must receive, from whatever the user
+ * typed: an API root, a root ending in the SDK's own version segment, or a
+ * pasted full endpoint. Inference, health checks, and previews all use this
+ * one derivation.
+ */
+export const normalizeCustomModelBaseUrl = (
+  format: CustomApiFormat,
+  input: string,
+): string => {
+  let base = trimTrailingSlashes(input.trim());
+  const path = CUSTOM_ENDPOINT_PATHS[format];
+  if (base.toLowerCase().endsWith(path)) base = base.slice(0, -path.length);
+  if (format === "anthropic-messages" && base.toLowerCase().endsWith("/v1"))
+    base = base.slice(0, -"/v1".length);
+  return trimTrailingSlashes(base);
+};
+
+/**
+ * A saved URL to keep when only the format changes. A full endpoint pasted for
+ * the previous format loses that format's path (Anthropic keeps its `/v1`);
+ * any other URL, including proxy paths, is kept as typed.
+ */
+export const customModelBaseUrlForFormatChange = (
+  previous: CustomApiFormat,
+  input: string,
+): string => {
+  const base = trimTrailingSlashes(input.trim());
+  if (!base.toLowerCase().endsWith(CUSTOM_ENDPOINT_PATHS[previous]))
+    return input;
+  const path =
+    previous === "anthropic-messages"
+      ? "/messages"
+      : CUSTOM_ENDPOINT_PATHS[previous];
+  return base.slice(0, -path.length);
+};
+
+/** The exact inference endpoint dx will call for a custom connection. */
+export const customModelEndpoint = (
+  format: CustomApiFormat,
+  input: string,
+): string =>
+  `${normalizeCustomModelBaseUrl(format, input)}${CUSTOM_ENDPOINT_PATHS[format]}`;
+
 export const ModelConnectionId = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(128),

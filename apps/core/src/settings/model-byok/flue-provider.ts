@@ -1,6 +1,7 @@
 import {
   type Api,
   type AssistantMessageEvent,
+  type Context,
   createAssistantMessageEventStream,
   type Model,
   type Provider,
@@ -11,7 +12,12 @@ import type {
   ModelResolutionContext,
 } from "@flue/runtime";
 import type { FlueDurableObjectIdentity } from "@flue/runtime/cloudflare";
+import { AGENT_RUN_LIMIT_MS } from "../../runtime/agent-run-limit.js";
 import { catalogProviderModels, IN_DO_APIS } from "../model-routing/catalog.js";
+import {
+  encodeProxyEnvelope,
+  PROXY_ENVELOPE_HEADER,
+} from "./proxy-envelope.js";
 
 /**
  * Model routing v2 transport (decision 22): one dx `Provider` per pi-ai
@@ -26,12 +32,6 @@ import { catalogProviderModels, IN_DO_APIS } from "../model-routing/catalog.js";
  */
 
 export const BYOK_DO_URL_BASE = "https://dx-byok.invalid";
-
-const bytesToBase64 = (bytes: Uint8Array): string => {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-};
 
 export interface DxModelRoutingTransportDeps {
   readonly namespace: DurableObjectNamespace;
@@ -95,28 +95,63 @@ const submissionId = (
 const coordinatorStub = (deps: DxModelRoutingTransportDeps, threadId: string) =>
   deps.namespace.get(deps.namespace.idFromName(`byok-${threadId}`));
 
-/** Serialized upstream request → the coordinator `/proxy` endpoint. */
+/**
+ * Providers reject a failed tool result without text (Anthropic: "content
+ * cannot be empty if `is_error` is true"). Flue keeps that result in history,
+ * so every later turn and retry would fail; give it text before serialization.
+ */
+export const withNonEmptyToolErrors = (context: Context): Context => {
+  let changed = false;
+  const messages = context.messages.map((message) => {
+    if (
+      message.role !== "toolResult" ||
+      !message.isError ||
+      message.content.some(
+        (block) => block.type === "image" || block.text.trim() !== "",
+      )
+    )
+      return message;
+    changed = true;
+    return {
+      ...message,
+      content: [
+        {
+          type: "text" as const,
+          text: `Tool ${message.toolName} failed without an error message.`,
+        },
+      ],
+    };
+  });
+  return changed ? { ...context, messages } : context;
+};
+
+/**
+ * Serialized upstream request → the coordinator `/proxy` endpoint. The body
+ * streams through unchanged; only routing metadata travels in a header.
+ */
 const coordinatorFetch =
   (deps: DxModelRoutingTransportDeps, model: Model<Api>): typeof fetch =>
   async (input, init) => {
     const threadId = invocationThreadId(deps);
     const request = new Request(input, init);
-    const body = new Uint8Array(await request.arrayBuffer());
-    const envelope = {
+    const submission = submissionId(deps);
+    const envelope = encodeProxyEnvelope({
       threadId,
-      submissionId: submissionId(deps),
+      ...(submission === undefined ? {} : { submissionId: submission }),
       canonical: `${model.provider}/${model.id}`,
       request: {
         url: request.url,
         method: request.method,
         headers: Object.fromEntries(request.headers.entries()),
-        body: bytesToBase64(body),
       },
-    };
+    });
     return coordinatorStub(deps, threadId).fetch(`${BYOK_DO_URL_BASE}/proxy`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(envelope),
+      headers: {
+        "content-type": "application/octet-stream",
+        [PROXY_ENVELOPE_HEADER]: envelope,
+      },
+      body: request.body,
       signal: request.signal,
     });
   };
@@ -287,6 +322,9 @@ const streamViaAdapter = (
       for await (const event of adapter[method](model, context, {
         ...options,
         maxRetries: 0,
+        // Flue's submission deadline bounds the call; SDK defaults must not
+        // end it first (OpenAI/Anthropic 10 min to response, Mistral 60 s total).
+        timeoutMs: AGENT_RUN_LIMIT_MS,
         apiKey: "dx-placeholder",
         fetch: coordinatorFetch(deps, model),
       })) {
@@ -377,7 +415,8 @@ export const createDxModelRoutingProvider = (
       },
     },
     getModels: () => models,
-    stream: ((model: Model<Api>, context: unknown, options: never) => {
+    stream: ((model: Model<Api>, rawContext: Context, options: never) => {
+      const context = withNonEmptyToolErrors(rawContext);
       if (IN_DO_APIS.has(model.api) || model.api === "cloudflare-ai-binding")
         return streamViaCoordinator(deps, model, context, options);
       const loadAdapter = PROXY_STREAM[model.api];
@@ -392,7 +431,8 @@ export const createDxModelRoutingProvider = (
         options as Record<string, unknown>,
       );
     }) as Provider["stream"],
-    streamSimple: ((model: Model<Api>, context: unknown, options: never) => {
+    streamSimple: ((model: Model<Api>, rawContext: Context, options: never) => {
+      const context = withNonEmptyToolErrors(rawContext);
       if (IN_DO_APIS.has(model.api) || model.api === "cloudflare-ai-binding")
         return streamViaCoordinator(deps, model, context, options);
       const loadAdapter = PROXY_STREAM[model.api];

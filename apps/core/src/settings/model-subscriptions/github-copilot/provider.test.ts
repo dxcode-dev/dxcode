@@ -218,7 +218,31 @@ describe("GitHub Copilot provider", () => {
     },
   );
 
-  it("keeps the timeout active until the response stream ends", async () => {
+  it("forwards large requests and responses without a dx size cap", async () => {
+    const large = "x".repeat(6 * 1_048_576);
+    const fetcher = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(`data: ${large}\n\n`),
+    );
+    const provider = createGitHubCopilotProvider({
+      clientId: "dx-owned-client",
+      clock: () => 1_000_000,
+      fetch: fetcher,
+    });
+    const result = await provider.invoke({
+      modelId: "gpt-5-mini",
+      access,
+      entitlements: entitlements("gpt-5-mini"),
+      payload: { input: [{ role: "user", content: large }] },
+    });
+    await expect(result.text()).resolves.toHaveLength(large.length + 8);
+    const sent = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body)) as {
+      input: Array<{ content: string }>;
+    };
+    expect(sent.input[0]?.content).toHaveLength(large.length);
+  });
+
+  it("lets a model stream outlive the control-plane timeout", async () => {
     vi.useFakeTimers();
     try {
       const fetcher = vi.fn(
@@ -226,11 +250,19 @@ describe("GitHub Copilot provider", () => {
           new Response(
             new ReadableStream({
               start(controller) {
+                // Like real fetch, an aborted request errors its body.
                 init?.signal?.addEventListener(
                   "abort",
                   () => controller.error(new Error("upstream aborted")),
                   { once: true },
                 );
+                // Reasoning models can stay mid-stream far past 30 s.
+                setTimeout(() => {
+                  controller.enqueue(
+                    new TextEncoder().encode("data: late\n\n"),
+                  );
+                  controller.close();
+                }, 10_000);
               },
             }),
           ),
@@ -248,16 +280,90 @@ describe("GitHub Copilot provider", () => {
         payload: { input: [] },
       });
 
-      const body = result.text().then(
-        () => ({ code: "STREAM_COMPLETED" }),
+      const body = result.text();
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      await expect(body).resolves.toBe("data: late\n\n");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ends a model stream only when the caller's signal aborts", async () => {
+    const fetcher = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              init?.signal?.addEventListener(
+                "abort",
+                () => controller.error(new Error("upstream aborted")),
+                { once: true },
+              );
+            },
+          }),
+        ),
+    );
+    const provider = createGitHubCopilotProvider({
+      clientId: "dx-owned-client",
+      clock: () => 1_000_000,
+      fetch: fetcher,
+      timeoutMs: 100,
+    });
+    const caller = new AbortController();
+    const result = await provider.invoke({
+      modelId: "gpt-5-mini",
+      access,
+      entitlements: entitlements("gpt-5-mini"),
+      payload: { input: [] },
+      signal: caller.signal,
+    });
+    const body = result.text().then(
+      () => ({ code: "STREAM_COMPLETED" }),
+      (error: unknown) => error,
+    );
+    caller.abort();
+
+    await expect(body).resolves.toMatchObject({ code: "REQUEST_CANCELLED" });
+  });
+
+  it("keeps the control-plane timeout for non-model requests", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetcher = vi.fn(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => reject(new DOMException("aborted", "AbortError")),
+              { once: true },
+            );
+          }),
+      );
+      const provider = createGitHubCopilotProvider({
+        clientId: "dx-owned-client",
+        fetch: fetcher,
+        timeoutMs: 100,
+      });
+      const started = provider.startDeviceAuthorization().then(
+        () => ({ code: "RESOLVED" }),
         (error: unknown) => error,
       );
       await vi.advanceTimersByTimeAsync(100);
 
-      await expect(body).resolves.toMatchObject({ code: "TIMEOUT" });
+      await expect(started).resolves.toMatchObject({ code: "TIMEOUT" });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("reports its code in the error message", () => {
+    expect(new CopilotError({ code: "TIMEOUT" }).message).toBe(
+      "Copilot request failed: TIMEOUT",
+    );
+    expect(
+      new CopilotError({ code: "UPSTREAM_REJECTED", status: 502 }).message,
+    ).toBe("Copilot request failed: UPSTREAM_REJECTED (HTTP 502)");
   });
 
   it("blocks redirects and keeps errors secret-free", async () => {

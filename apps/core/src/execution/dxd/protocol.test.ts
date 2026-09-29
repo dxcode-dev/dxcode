@@ -1,6 +1,7 @@
 import {
   THREAD_FILES_MAX_EDITABLE_BYTES,
   THREAD_FILES_MAX_TREE_PAGE_SIZE,
+  THREAD_SANDBOX_FILE_MAX_CHUNK_BYTES,
 } from "@dx/api";
 import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
@@ -13,8 +14,10 @@ import {
   DxdFilesSaveOperation,
   DxdRequestMessage,
   DxdU64,
+  decodeDxdSandboxChunkFrame,
   decodeDxdTerminalFrame,
   encodeDxdTerminalFrame,
+  isDxdSandboxChunkFrame,
   TerminalGeneration,
 } from "./protocol.js";
 
@@ -328,4 +331,70 @@ describe("dxd Terminal protocol v1", () => {
     }
     expect(() => decodeDxdTerminalFrame(valid.subarray(0, 50))).toThrow();
   });
+});
+
+describe("dxd sandbox chunk frames", () => {
+  const header = {
+    generation: "gen_1",
+    requestId: "request_12345678",
+    version,
+    sizeBytes: 10,
+    offset: 4,
+  };
+  const frame = (
+    value: unknown,
+    payload: Uint8Array,
+    headerLength?: number,
+  ) => {
+    const encoded = new TextEncoder().encode(JSON.stringify(value));
+    const bytes = new Uint8Array(8 + encoded.byteLength + payload.byteLength);
+    bytes.set([0x44, 0x58, 0x46, 0x31]);
+    new DataView(bytes.buffer).setUint32(4, headerLength ?? encoded.byteLength);
+    bytes.set(encoded, 8);
+    bytes.set(payload, 8 + encoded.byteLength);
+    return bytes;
+  };
+
+  it("decodes raw bytes as a view without copying or base64", () => {
+    const source = frame(header, new Uint8Array([1, 2, 255]));
+    const decoded = decodeDxdSandboxChunkFrame(source);
+    expect(decoded.header).toEqual(header);
+    expect([...decoded.bytes]).toEqual([1, 2, 255]);
+    expect(decoded.bytes.buffer).toBe(source.buffer);
+  });
+
+  it("distinguishes DXF1 chunks from DXT1 terminal frames", () => {
+    expect(isDxdSandboxChunkFrame(frame(header, new Uint8Array()))).toBe(true);
+    expect(
+      isDxdSandboxChunkFrame(
+        new Uint8Array([0x44, 0x58, 0x54, 0x31, 0, 0, 0, 0]),
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["past the end of the file", frame(header, new Uint8Array(7))],
+    ["an oversized header length", frame(header, new Uint8Array(1), 1_000_000)],
+    [
+      "an extra header field",
+      frame({ ...header, extra: 1 }, new Uint8Array(1)),
+    ],
+    [
+      "a malformed version",
+      frame({ ...header, version: "v1" }, new Uint8Array(1)),
+    ],
+    [
+      "more than one chunk of bytes",
+      frame(
+        {
+          ...header,
+          offset: 0,
+          sizeBytes: THREAD_SANDBOX_FILE_MAX_CHUNK_BYTES + 1,
+        },
+        new Uint8Array(THREAD_SANDBOX_FILE_MAX_CHUNK_BYTES + 1),
+      ),
+    ],
+  ])("rejects a frame with %s", (_name, bytes) =>
+    expect(() => decodeDxdSandboxChunkFrame(bytes)).toThrow(),
+  );
 });

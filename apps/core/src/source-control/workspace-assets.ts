@@ -1,5 +1,8 @@
 export const GIT_CREDENTIAL_HELPER_PATH =
   "/home/user/.local/libexec/dx-git-credential";
+/** dxd-owned Git configuration: identity, signing, and credential helper. */
+export const DX_GIT_CONFIG_GLOBAL =
+  "/home/user/.local/state/dx-terminal/gitconfig";
 export const SOURCE_WORKSPACE_PROGRAM_PATH =
   "/home/user/.local/libexec/dx-source-workspace.mjs";
 

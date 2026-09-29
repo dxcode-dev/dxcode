@@ -16,6 +16,13 @@ describe("dx agent prompt v1", () => {
     expect(dxAgentPrompt).toContain(requirement);
   });
 
+  it("directs pull requests to gh and names no unregistered tool", () => {
+    expect(dxAgentPrompt).toContain(
+      "Use gh to read, create, or update a pull request",
+    );
+    expect(dxAgentPrompt).not.toContain("pull_request");
+  });
+
   it("is deterministic dx-authored text without volatile interpolation", () => {
     expect(dxAgentPrompt).not.toMatch(
       /Date\(|Date\.now|new Date|Math\.random|randomUUID|requestId|timestamp/i,

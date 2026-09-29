@@ -1,16 +1,26 @@
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, FileSymlink } from "lucide-react";
 import * as React from "react";
+import { FileContextMenu } from "../../shared/ui/file-context-menu.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
+import { ThreadFileNavigationContext } from "./thread-file-navigation.js";
 import { presentTool } from "./tool-presentation.js";
 import {
+  categoryForPart,
   projectTranscriptActivities,
   type ToolCategory,
   type ToolPart,
   toolPart,
   type WorkRow,
 } from "./transcript-activity-projection.js";
-import { TranscriptCodePreview } from "./transcript-code-preview.js";
-import { isPatchOutput } from "./transcript-code-preview-model.js";
+import {
+  TranscriptCodePreview,
+  TranscriptEditDiff,
+} from "./transcript-code-preview.js";
+import {
+  isPatchOutput,
+  transcriptEditSource,
+} from "./transcript-code-preview-model.js";
+import { resolveTranscriptFileLink } from "./transcript-file-link.js";
 import { TranscriptMarkdown } from "./transcript-markdown.js";
 import type { TranscriptRow } from "./transcript-view-model.js";
 
@@ -66,34 +76,68 @@ const isGuidance = (part: ToolPart) => {
   );
 };
 
-const exploreLabel = (rows: ReadonlyArray<WorkRow>) => {
-  let files = 0;
-  let guidance = 0;
-  let searches = 0;
+type SummaryKind =
+  | "command"
+  | "edit"
+  | "read"
+  | "guidance"
+  | "search"
+  | "check"
+  | "generic";
+
+const summaryKind = (category: ToolCategory, part: ToolPart): SummaryKind => {
+  if (category !== "explore") return category;
+  if (isSearch(part)) return "search";
+  return isGuidance(part) ? "guidance" : "read";
+};
+
+const summaryPhrase = (kind: SummaryKind, count: number) => {
+  switch (kind) {
+    case "command":
+      return `ran ${plural(count, "command")}`;
+    case "edit":
+      return `edited ${plural(count, "file")}`;
+    case "read":
+      return `read ${plural(count, "file")}`;
+    case "guidance":
+      return `read ${plural(count, "guidance file")}`;
+    case "search":
+      return `searched ${plural(count, "time")}`;
+    case "check":
+      return `checked on ${plural(count, "command")}`;
+    case "generic":
+      return `used ${plural(count, "tool")}`;
+  }
+};
+
+/**
+ * Summarize a run of tool calls by kind, in order of first appearance:
+ * "Ran 2 commands, edited 3 files". Edits and reads count distinct files.
+ */
+export const activitySummary = (rows: ReadonlyArray<WorkRow>) => {
+  const kinds = new Map<SummaryKind, Set<string>>();
   for (const row of rows) {
     const part = toolPart(row);
     if (part === undefined) continue;
-    if (isSearch(part)) searches += 1;
-    else if (isGuidance(part)) guidance += 1;
-    else files += 1;
+    const kind = summaryKind(categoryForPart(part), part);
+    const path = pathFor(part);
+    const identity =
+      (kind === "edit" || kind === "read" || kind === "guidance") &&
+      path !== undefined
+        ? `path:${path}`
+        : `call:${part.toolCallId}`;
+    const identities = kinds.get(kind) ?? new Set<string>();
+    identities.add(identity);
+    kinds.set(kind, identities);
   }
-  const counts = [
-    files > 0 ? plural(files, "file") : undefined,
-    guidance > 0 ? plural(guidance, "guidance file") : undefined,
-    searches > 0 ? plural(searches, "search", "searches") : undefined,
-  ].filter((value): value is string => value !== undefined);
-  return `Explored ${counts.join(", ") || plural(rows.length, "item")}`;
+  const label = [...kinds]
+    .map(([kind, identities]) => summaryPhrase(kind, identities.size))
+    .join(", ");
+  return label.charAt(0).toUpperCase() + label.slice(1);
 };
 
 const failureCount = (rows: ReadonlyArray<WorkRow>) =>
   rows.filter((row) => toolPart(row)?.state === "output-error").length;
-
-const commandGroupLabel = (rows: ReadonlyArray<WorkRow>) => {
-  return `Ran ${plural(rows.length, "command")}`;
-};
-
-const checkGroupLabel = (rows: ReadonlyArray<WorkRow>) =>
-  `Checked on ${plural(rows.length, "command")}`;
 
 const serialize = (value: unknown) => {
   if (typeof value === "string") return value;
@@ -250,6 +294,9 @@ function ToolOutput({
     );
   }
   if (category === "edit") {
+    const source = transcriptEditSource(part.toolName, part.input);
+    if (source !== undefined && part.state === "output-available")
+      return <TranscriptEditDiff source={source} />;
     const path = pathFor(part);
     if (path !== undefined && isPatchOutput(output)) {
       return (
@@ -271,6 +318,48 @@ function ToolOutput({
   return <pre className="transcript-read-output">{output}</pre>;
 }
 
+/**
+ * Open an edited file in the workspace with the chunk the agent wrote
+ * highlighted. Rendered beside the row summary so the diff stays expandable.
+ */
+function EditedFileOpener({ part }: { readonly part: ToolPart }) {
+  const navigation = React.useContext(ThreadFileNavigationContext);
+  const path = pathFor(part);
+  const resolved =
+    path === undefined ? undefined : resolveTranscriptFileLink(path);
+  if (navigation === undefined || resolved === undefined) return null;
+  const written = transcriptEditSource(part.toolName, part.input)?.after;
+  const open = () =>
+    navigation.open(
+      resolved.target,
+      written === undefined || written.length === 0
+        ? undefined
+        : { kind: "text", text: written },
+    );
+  const downloadUrl = navigation.downloadUrl(resolved.target);
+  return (
+    <FileContextMenu
+      trigger={
+        <button
+          aria-label={`Open ${path} at the edit`}
+          className="transcript-activity-open"
+          title="Open file at this edit"
+          type="button"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            open();
+          }}
+        />
+      }
+      onOpen={open}
+      {...(downloadUrl === undefined ? {} : { downloadUrl })}
+    >
+      <FileSymlink aria-hidden="true" />
+    </FileContextMenu>
+  );
+}
+
 function ToolActivityRow({
   category,
   row,
@@ -283,10 +372,15 @@ function ToolActivityRow({
   if (part === undefined) return null;
   const expandable = outputFor(part) !== undefined;
   const label = <ToolLabel category={category} part={part} />;
+  const opener =
+    category === "edit" && part.state === "output-available" ? (
+      <EditedFileOpener part={part} />
+    ) : null;
   if (!expandable) {
     return (
       <div className="transcript-activity-row" data-tool-category={category}>
         <span className="transcript-activity-label">{label}</span>
+        {opener}
       </div>
     );
   }
@@ -298,6 +392,7 @@ function ToolActivityRow({
     >
       <summary>
         <span className="transcript-activity-label">{label}</span>
+        {opener}
         <ChevronRight className="transcript-activity-chevron" />
       </summary>
       {expanded ? <ToolOutput category={category} part={part} /> : null}
@@ -305,31 +400,17 @@ function ToolActivityRow({
   );
 }
 
-function ActivityGroup({
-  category,
-  rows,
-}: {
-  readonly category: ToolCategory;
-  readonly rows: ReadonlyArray<WorkRow>;
-}) {
-  const grouped = category === "explore" || rows.length > 1;
-  if (!grouped)
-    return <ToolActivityRow category={category} row={rows[0] as WorkRow} />;
-  const label =
-    category === "explore"
-      ? exploreLabel(rows)
-      : category === "check"
-        ? checkGroupLabel(rows)
-        : commandGroupLabel(rows);
+function ActivityGroup({ rows }: { readonly rows: ReadonlyArray<WorkRow> }) {
+  const only = rows.length === 1 ? rows[0] : undefined;
+  const onlyPart = only === undefined ? undefined : toolPart(only);
+  if (only !== undefined && onlyPart !== undefined)
+    return <ToolActivityRow category={categoryForPart(onlyPart)} row={only} />;
   const failed = failureCount(rows);
   return (
-    <details
-      className="transcript-activity-group"
-      data-tool-category={category}
-    >
+    <details className="transcript-activity-group">
       <summary>
         <span>
-          {label}
+          {activitySummary(rows)}
           {failed > 0 ? (
             <>
               {", "}
@@ -340,9 +421,16 @@ function ActivityGroup({
         <ChevronRight className="transcript-activity-chevron" />
       </summary>
       <div className="transcript-activity-children">
-        {rows.map((row) => (
-          <ToolActivityRow category={category} key={row.id} row={row} />
-        ))}
+        {rows.map((row) => {
+          const part = toolPart(row);
+          return part === undefined ? null : (
+            <ToolActivityRow
+              category={categoryForPart(part)}
+              key={row.id}
+              row={row}
+            />
+          );
+        })}
       </div>
     </details>
   );
@@ -390,8 +478,7 @@ export function TranscriptActivityList({
           />
         ) : (
           <ActivityGroup
-            category={activity.category}
-            key={`${activity.category}:${activity.rows[0]?.id}`}
+            key={`tools:${activity.rows[0]?.id}`}
             rows={activity.rows}
           />
         ),

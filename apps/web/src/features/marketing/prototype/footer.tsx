@@ -1,5 +1,6 @@
 import { useId, useState } from "react";
 import { DxWordmark } from "../../../shared/brand/dx-wordmark.js";
+import { ArrowIcon } from "./arrow-icon.js";
 
 export function Footer() {
   const [licenseOpen, setLicenseOpen] = useState(false);
@@ -10,14 +11,14 @@ export function Footer() {
       <span>Cloud agents, on your terms.</span>
       <nav className="footer-links" aria-label="Footer">
         <a
-          href="https://github.com/dxcode-dev/dx-oss"
+          href="https://github.com/dxcode-dev/dxcode"
           target="_blank"
           rel="noreferrer"
         >
-          GitHub ↗
+          GitHub <ArrowIcon direction="up-right" />
         </a>
         <a href="https://x.com/dxcode_dev" target="_blank" rel="noreferrer">
-          X / Twitter ↗
+          X / Twitter <ArrowIcon direction="up-right" />
         </a>
         <fieldset
           className="license-note"
@@ -53,7 +54,7 @@ export function Footer() {
                 on full-time. An MIT license is something I may consider later.
               </p>
               <a href="https://fsl.software/" target="_blank" rel="noreferrer">
-                About FSL ↗
+                About FSL <ArrowIcon direction="up-right" />
               </a>
               <button
                 type="button"

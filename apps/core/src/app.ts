@@ -30,6 +30,7 @@ import {
 } from "./source-control/github/routes.js";
 import { threadChangesRoutes } from "./thread-changes/routes.js";
 import { threadFilesRoutes } from "./thread-files/routes.js";
+import { threadSandboxFileRoutes } from "./thread-files/sandbox.js";
 import { threadDaemonRoutes } from "./threads/daemon-route.js";
 import { threadRoutes } from "./threads/routes.js";
 import { threadTerminalRoutes } from "./threads/terminal-route.js";
@@ -68,6 +69,9 @@ app.use("/v1/threads/:threadId/files/*", authorizeThread);
 app.use("/v1/threads/:threadId/files", enforceThreadActive);
 app.use("/v1/threads/:threadId/files/*", enforceThreadActive);
 app.route("/v1/threads", threadFilesRoutes);
+app.use("/v1/threads/:threadId/files-sandbox", authorizeThread);
+app.use("/v1/threads/:threadId/files-sandbox", enforceThreadActive);
+app.route("/v1/threads", threadSandboxFileRoutes);
 app.use("/v1/threads/:threadId/terminal", authorizeThread);
 app.use("/v1/threads/:threadId/terminal", enforceThreadActive);
 app.route("/v1/threads", threadTerminalRoutes);

@@ -40,14 +40,7 @@ export type TranscriptRow =
       readonly kind: "attachment";
       readonly attachment: Extract<FlueConversationPart, { type: "file" }>;
     } & TranscriptRowBase &
-      SourcePart)
-  | ({
-      readonly kind: "failure";
-      readonly outcome: "failed" | "aborted";
-      readonly detail?: string;
-      readonly messageId?: string;
-      readonly partIndex?: number;
-    } & TranscriptRowBase);
+      SourcePart);
 
 interface TranscriptRowBase {
   readonly id: TranscriptRowId;
@@ -138,20 +131,6 @@ const turnIdFor = (
   currentTurnId: TranscriptTurnId | undefined,
 ): TranscriptTurnId =>
   `turn:${message.turnId ?? (message.role === "user" ? message.id : (currentTurnId?.slice(5) ?? message.submissionId ?? message.id))}`;
-
-const settlementDetail = (error: unknown): string | undefined => {
-  if (typeof error === "string") return error;
-  if (error instanceof Error) return error.message;
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof error.message === "string"
-  ) {
-    return error.message;
-  }
-  return undefined;
-};
 
 const isActivePart = (part: FlueConversationPart) =>
   (part.type === "text" && part.state === "streaming") ||
@@ -272,32 +251,6 @@ export const deriveTranscriptViewModel = ({
       rows.push(row);
       targetRows.push(row);
     }
-
-    if (message.settlement !== undefined) {
-      const outcome =
-        message.settlement.outcome === "failed" ? "failed" : "aborted";
-      const settlement = message.submissionId
-        ? settlementBySubmission.get(message.submissionId)
-        : undefined;
-      if (
-        settlement?.outcome === "aborted" &&
-        threadSettlementProvenance(settlement.error) === "user-stop"
-      ) {
-        continue;
-      }
-      const failure: TranscriptRow = {
-        id: rowId(message.id, `settlement:${outcome}`, 0),
-        turnId,
-        kind: "failure",
-        outcome,
-        detail:
-          settlementDetail(settlement?.error) ??
-          message.parts.find((part) => part.type === "text")?.text,
-        messageId: message.id,
-      };
-      rows.push(failure);
-      targetRows.push(failure);
-    }
   }
 
   const turns = turnOrder.map((id): TranscriptTurn => {
@@ -313,14 +266,16 @@ export const deriveTranscriptViewModel = ({
       settlement?.outcome === "aborted"
         ? threadSettlementProvenance(settlement.error)
         : "non-user";
-    const failure = turn.find((row) => row.kind === "failure");
-    const status = failure
-      ? failure.outcome
-      : settlement?.outcome === "failed"
+    const messageSettlement = messagesInTurn
+      .map((message) => message.settlement)
+      .findLast((value) => value !== undefined);
+    const outcome = settlement?.outcome ?? messageSettlement?.outcome;
+    const status =
+      outcome === "failed"
         ? "failed"
-        : settlement?.outcome === "aborted"
+        : outcome === "aborted"
           ? "aborted"
-          : settlement?.outcome === "completed"
+          : outcome === "completed"
             ? "completed"
             : "active";
     const answer = [...turn]
@@ -343,11 +298,7 @@ export const deriveTranscriptViewModel = ({
       rows[rowIndex] = finalAnswer;
     }
     const intermediateRowIds = turn.flatMap((row) =>
-      row.id === finalAnswerRowId ||
-      row.kind === "user-prompt" ||
-      row.kind === "failure"
-        ? []
-        : [row.id],
+      row.id === finalAnswerRowId || row.kind === "user-prompt" ? [] : [row.id],
     );
     const toolRows = turn.filter(isToolRow);
     const finalOutput = messagesInTurn

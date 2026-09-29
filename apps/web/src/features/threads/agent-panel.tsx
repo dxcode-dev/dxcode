@@ -1,10 +1,20 @@
-import type { ThreadAgentInitializationData } from "@dx/api";
+import {
+  type ThreadAgentInitializationData,
+  threadSettlementProvenance,
+} from "@dx/api";
 import {
   type FailedSend,
   isInputTooLargeError,
   type UseFlueAgentResult,
 } from "@flue/react";
-import { ArrowUp, Square } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowUp,
+  RotateCcw,
+  Settings2,
+  Square,
+  X,
+} from "lucide-react";
 import * as React from "react";
 import { Badge } from "../../shared/ui/badge.js";
 import { Button } from "../../shared/ui/button.js";
@@ -24,10 +34,7 @@ import type {
   PendingSubmissionControl,
   PendingSubmissionImageRetention,
 } from "./thread-session-registry.js";
-import {
-  ThreadTranscript,
-  type TranscriptRowFailure,
-} from "./thread-transcript.js";
+import { ThreadTranscript } from "./thread-transcript.js";
 import { TranscriptMarkdown } from "./transcript-markdown.js";
 import { deriveTranscriptViewModel } from "./transcript-view-model.js";
 
@@ -156,24 +163,12 @@ function AgentTranscriptHeader({
 }
 
 function AgentTranscriptFooter({
-  actionError,
-  agentError,
-  failedSendCount,
   statusMessage,
 }: {
-  readonly actionError?: string;
-  readonly agentError?: Error;
-  readonly failedSendCount: number;
   readonly statusMessage?: string;
 }) {
   return (
     <>
-      {agentError && failedSendCount === 0 ? (
-        <div className="notice error-notice">{agentError.message}</div>
-      ) : null}
-      {actionError ? (
-        <div className="notice error-notice">{actionError}</div>
-      ) : null}
       {statusMessage === undefined ? null : (
         <ProcessingIndicator
           accessibleLabel={statusMessage}
@@ -185,6 +180,302 @@ function AgentTranscriptFooter({
   );
 }
 
+type ThreadErrorPresentation = {
+  readonly id: string;
+  readonly title: string;
+  readonly message: string;
+  readonly action:
+    | "none"
+    | "refresh"
+    | "resume"
+    | "retry-send"
+    | "model-routing";
+  readonly failedSend?: FailedSend;
+};
+
+const errorSearchText = (error: unknown): string => {
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+  if (typeof error !== "object" || error === null) return "";
+  const record = error as Record<string, unknown>;
+  return [record.type, record.message, record.details, record.meta]
+    .map(errorSearchText)
+    .filter(Boolean)
+    .join(" ");
+};
+
+const modelRoutingErrorMessage = (error: unknown) => {
+  const text = errorSearchText(error);
+  const model = text.match(/MODEL_NOT_SERVED:\s*([\w./:-]+)/i)?.[1];
+  if (model !== undefined) {
+    return `Model ${model} is not currently served. Choose another model or update Model Routing.`;
+  }
+  if (text.toLowerCase().includes("no healthy deployments")) {
+    return "No healthy deployment is available for this model. Choose another model or update Model Routing.";
+  }
+  return "No deployment is available for this model. Choose another model or update Model Routing.";
+};
+
+const isModelRoutingError = (error: unknown) => {
+  const text = errorSearchText(error).toLowerCase();
+  return (
+    text.includes("model_not_served") ||
+    text.includes("model not served") ||
+    text.includes("no healthy deployments") ||
+    text.includes("no deployments for this model") ||
+    text.includes("available model group") ||
+    text.includes("add or enable a connection")
+  );
+};
+
+const threadErrorPresentation = (
+  agent: UseFlueAgentResult,
+  dismissed: ReadonlySet<string>,
+): ThreadErrorPresentation | undefined => {
+  const failedSend = agent.failedSends.findLast(
+    ({ id }) => !dismissed.has(`send:${id}`),
+  );
+  if (failedSend !== undefined) {
+    return {
+      id: `send:${failedSend.id}`,
+      title: "Message not sent",
+      message: "Check your connection.",
+      action: "retry-send",
+      failedSend,
+    };
+  }
+
+  if (agent.status === "submitted" || agent.status === "streaming") {
+    return undefined;
+  }
+
+  const latestSettlement = agent.settlements.at(-1);
+  const latestSettlementFailed = latestSettlement?.outcome === "failed";
+  const latestSettlementInterrupted =
+    latestSettlement?.outcome === "aborted" &&
+    threadSettlementProvenance(latestSettlement.error) !== "user-stop";
+  if (
+    (latestSettlementFailed || latestSettlementInterrupted) &&
+    !dismissed.has(`settlement:${latestSettlement.submissionId}`)
+  ) {
+    if (latestSettlementFailed && isModelRoutingError(latestSettlement.error)) {
+      return {
+        id: `settlement:${latestSettlement.submissionId}`,
+        title: "Model unavailable",
+        message: modelRoutingErrorMessage(latestSettlement.error),
+        action: "model-routing",
+      };
+    }
+    return {
+      id: `settlement:${latestSettlement.submissionId}`,
+      title: "Provider error",
+      message: "The provider could not complete this request.",
+      action: "resume",
+    };
+  }
+
+  const latestSettlementMessage =
+    latestSettlement === undefined
+      ? agent.messages.findLast((message) => message.settlement !== undefined)
+      : undefined;
+  const failedSettlementMessage =
+    latestSettlementMessage?.settlement?.outcome === "failed"
+      ? latestSettlementMessage
+      : undefined;
+  if (failedSettlementMessage !== undefined) {
+    const id = `settlement-message:${failedSettlementMessage.submissionId ?? failedSettlementMessage.id}`;
+    if (!dismissed.has(id)) {
+      return {
+        id,
+        title: "Provider error",
+        message: "The provider could not complete this request.",
+        action: "resume",
+      };
+    }
+  }
+
+  if (agent.error !== undefined) {
+    const id = `agent:${agent.error.name}:${agent.error.message}`;
+    if (dismissed.has(id)) return undefined;
+    return {
+      id,
+      title: "Connection error",
+      message: "The conversation could not refresh.",
+      action: "refresh",
+    };
+  }
+  return undefined;
+};
+
+function ThreadErrorCard({
+  error,
+  retrying,
+  onDismiss,
+  onOpenModelRouting,
+  onRetry,
+}: {
+  readonly error: ThreadErrorPresentation;
+  readonly retrying: boolean;
+  readonly onDismiss: () => void;
+  readonly onOpenModelRouting?: () => void;
+  readonly onRetry?: () => void;
+}) {
+  const settingsAction =
+    error.action === "model-routing" && onOpenModelRouting !== undefined;
+  const retryAction = onRetry !== undefined;
+  return (
+    <div className="thread-error-row">
+      <aside className="thread-error-card" role="alert">
+        <AlertCircle aria-hidden="true" />
+        <div className="thread-error-copy">
+          <strong>{error.title}</strong>
+          <span>{error.message}</span>
+          {retryAction || settingsAction ? (
+            <div className="thread-error-actions">
+              {retryAction ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  disabled={retrying}
+                  onClick={onRetry}
+                >
+                  <RotateCcw /> {retrying ? "Retrying…" : "Retry"}
+                </Button>
+              ) : null}
+              {settingsAction ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  disabled={retrying}
+                  onClick={() => onOpenModelRouting()}
+                >
+                  <Settings2 /> Open Model Routing
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          className="thread-error-dismiss"
+          aria-label="Dismiss error"
+          onClick={onDismiss}
+        >
+          <X />
+        </Button>
+      </aside>
+    </div>
+  );
+}
+
+function AgentThreadErrorCard({
+  agent,
+  actionError,
+  archived,
+  onActionErrorChange,
+  onOpenModelRouting,
+}: {
+  readonly agent: UseFlueAgentResult;
+  readonly actionError?: ThreadErrorPresentation;
+  readonly archived: boolean;
+  readonly onActionErrorChange: (
+    error: ThreadErrorPresentation | undefined,
+  ) => void;
+  readonly onOpenModelRouting?: () => void;
+}) {
+  const [dismissed, setDismissed] = React.useState(() => new Set<string>());
+  const [retrying, setRetrying] = React.useState(false);
+  const agentError = threadErrorPresentation(agent, dismissed);
+  // A send that Flue retained as a failed send carries its own Retry. The
+  // generic "Message not sent" from the rejected sendMessage would hide it,
+  // so the retryable card wins. Oversized input has no failed send to retry
+  // and keeps its specific message.
+  const error =
+    actionError?.id === "action:send" && agentError?.action === "retry-send"
+      ? agentError
+      : (actionError ?? agentError);
+  if (error === undefined) return null;
+
+  const dismiss = () => {
+    if (error === actionError) onActionErrorChange(undefined);
+    else {
+      // The shadowed generic send error must not reappear once the failed
+      // send is dismissed.
+      if (actionError?.id === "action:send") onActionErrorChange(undefined);
+      setDismissed((current) => new Set(current).add(error.id));
+    }
+  };
+  const retry = async () => {
+    onActionErrorChange(undefined);
+    setRetrying(true);
+    try {
+      if (error.action === "retry-send" && error.failedSend !== undefined) {
+        if (error.failedSend.retry === "resend") {
+          await agent.resendPrompt(error.failedSend.id);
+        } else {
+          await agent.retrySend(error.failedSend.id);
+        }
+      } else if (error.action === "refresh") {
+        agent.refresh();
+        return;
+      } else {
+        await agent.resume();
+      }
+      setDismissed((current) => new Set(current).add(error.id));
+    } catch {
+      onActionErrorChange({
+        id: "action:retry",
+        title: "Retry failed",
+        message: "Check your connection.",
+        action: "none",
+      });
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  return (
+    <ThreadErrorCard
+      error={error}
+      retrying={retrying}
+      onDismiss={dismiss}
+      onOpenModelRouting={archived ? undefined : onOpenModelRouting}
+      onRetry={
+        archived || error.action === "none" ? undefined : () => void retry()
+      }
+    />
+  );
+}
+
+const observeComposerDock = (node: HTMLDivElement) => {
+  const pane = node.closest<HTMLElement>(".agent-pane");
+  const composer = node.querySelector<HTMLElement>(".agent-composer");
+  if (pane === null || composer === null) return;
+  const updateHeight = () => {
+    pane.style.setProperty(
+      "--agent-composer-dock-height",
+      `${node.offsetHeight}px`,
+    );
+    pane.style.setProperty(
+      "--agent-composer-height",
+      `${composer.offsetHeight}px`,
+    );
+  };
+  updateHeight();
+  const observer = new ResizeObserver(updateHeight);
+  observer.observe(node);
+  observer.observe(composer);
+  return () => {
+    observer.disconnect();
+    pane.style.removeProperty("--agent-composer-dock-height");
+    pane.style.removeProperty("--agent-composer-height");
+  };
+};
+
 function AgentComposer({
   agentActive,
   stopAvailable,
@@ -192,6 +483,8 @@ function AgentComposer({
   draft,
   draftLocked,
   images,
+  errorCard,
+  dockRef,
   onAbort,
   onAddImages,
   onChangeDraft,
@@ -206,6 +499,8 @@ function AgentComposer({
   readonly draft: string;
   readonly draftLocked: boolean;
   readonly images: ReadonlyArray<PendingImage>;
+  readonly errorCard?: React.ReactNode;
+  readonly dockRef: React.RefCallback<HTMLDivElement>;
   readonly onAbort: () => void;
   readonly onAddImages: (files: ReadonlyArray<File>) => void;
   readonly onChangeDraft: (draft: string) => void;
@@ -227,7 +522,8 @@ function AgentComposer({
     if (!dictation.interceptSubmit()) onSubmit(draft);
   };
   return (
-    <div className="agent-composer-dock">
+    <div className="agent-composer-dock" ref={dockRef}>
+      {errorCard}
       <form className="agent-composer" onSubmit={submit} ref={ref}>
         <ImagePreviews
           images={images}
@@ -322,7 +618,8 @@ function useAgentSubmission({
   const submitInFlight = React.useRef(false);
   const submitGeneration = React.useRef(0);
   const composerMounted = React.useRef(false);
-  const [actionError, setActionError] = React.useState<string>();
+  const [actionError, setActionError] =
+    React.useState<ThreadErrorPresentation>();
   const finishAdmission = () => {
     submitInFlight.current = false;
     submissionControl.stopRequested = false;
@@ -332,12 +629,13 @@ function useAgentSubmission({
   const stopAgent = async () => {
     try {
       await agent.abort();
-    } catch (cause) {
-      setActionError(
-        cause instanceof Error
-          ? cause.message
-          : "The thread could not be stopped.",
-      );
+    } catch {
+      setActionError({
+        id: "action:stop",
+        title: "Could not stop",
+        message: "Check your connection.",
+        action: "none",
+      });
     }
   };
   const stop = async () => {
@@ -395,9 +693,14 @@ function useAgentSubmission({
           disposeImages(submittedImages);
         }
         if (!composerMounted.current) return;
-        setActionError(
-          cause instanceof Error ? cause.message : "Message could not be sent.",
-        );
+        setActionError({
+          id: "action:send",
+          title: "Message not sent",
+          message: isInputTooLargeError(cause)
+            ? "The message or attachments are too large."
+            : "Check your connection.",
+          action: "none",
+        });
       }
     };
     return runAdmission().finally(finishAdmission);
@@ -434,6 +737,7 @@ export function AgentPanel({
   workspaceStatus,
   optimisticCreation,
   onInitialSubmissionObserved,
+  onOpenModelRouting,
 }: {
   readonly agent: UseFlueAgentResult & {
     readonly hasMore?: boolean;
@@ -463,6 +767,7 @@ export function AgentPanel({
   readonly workspaceStatus?: string;
   readonly optimisticCreation?: OptimisticThreadCreation;
   readonly onInitialSubmissionObserved?: (submissionId: string) => void;
+  readonly onOpenModelRouting?: () => void;
 }) {
   const [localDraft, setLocalDraft] = React.useState("");
   const draft = controlledDraft ?? localDraft;
@@ -535,24 +840,18 @@ export function AgentPanel({
     [onInitialSubmissionObserved, optimisticCreation?.submissionId],
   );
 
-  const retry = (failedSend: FailedSend) => {
-    setActionError(undefined);
-    void agent.retrySend(failedSend.id).catch((cause: unknown) => {
-      setActionError(
-        cause instanceof Error ? cause.message : "Message could not be sent.",
-      );
-    });
-  };
-
   const addImages = async (files: ReadonlyArray<File>) => {
     if (files.length === 0) return;
     setActionError(undefined);
     try {
       setImages(await imageCollection.addFiles(files));
     } catch (cause) {
-      setActionError(
-        cause instanceof Error ? cause.message : "Image could not be attached.",
-      );
+      setActionError({
+        id: "action:attach-image",
+        title: "Image not attached",
+        message: cause instanceof Error ? cause.message : "Try another image.",
+        action: "none",
+      });
     }
   };
 
@@ -561,13 +860,23 @@ export function AgentPanel({
     try {
       setImages(await imageCollection.addGenerated(captureScreenshot));
     } catch (cause) {
-      setActionError(
-        cause instanceof Error
-          ? cause.message
-          : "The screenshot could not be captured.",
-      );
+      setActionError({
+        id: "action:screenshot",
+        title: "Screenshot not captured",
+        message:
+          cause instanceof Error
+            ? cause.message
+            : "The screenshot could not be captured.",
+        action: "none",
+      });
     }
   };
+
+  const composerDockRef = React.useCallback(
+    (node: HTMLDivElement | null) =>
+      node === null ? undefined : observeComposerDock(node),
+    [],
+  );
 
   const composerLifetimeRef = React.useCallback(
     (node: HTMLFormElement | null) => {
@@ -581,18 +890,15 @@ export function AgentPanel({
     },
     [composerMounted, imageCollection, retainedImageCollection],
   );
-
-  const failures = archived
-    ? new Map<string, TranscriptRowFailure>()
-    : new Map<string, TranscriptRowFailure>(
-        agent.failedSends.map((failedSend) => [
-          failedSend.id,
-          {
-            message: failedSend.error.message,
-            retry: () => retry(failedSend),
-          },
-        ]),
-      );
+  const errorCard = (
+    <AgentThreadErrorCard
+      agent={agent}
+      actionError={actionError}
+      archived={archived}
+      onActionErrorChange={setActionError}
+      onOpenModelRouting={onOpenModelRouting}
+    />
+  );
 
   return (
     <div
@@ -618,7 +924,6 @@ export function AgentPanel({
           loadingOlder={agent.loadingOlder}
           olderError={agent.olderError}
           loadOlder={agent.loadOlder}
-          failures={failures}
           showProcessingIndicator={!archived && statusMessage === undefined}
           header={
             <AgentTranscriptHeader
@@ -642,13 +947,10 @@ export function AgentPanel({
             )
           }
           footer={
-            archived ? null : (
-              <AgentTranscriptFooter
-                actionError={actionError}
-                agentError={agent.error}
-                failedSendCount={agent.failedSends.length}
-                statusMessage={statusMessage}
-              />
+            archived ? (
+              errorCard
+            ) : (
+              <AgentTranscriptFooter statusMessage={statusMessage} />
             )
           }
         />
@@ -661,6 +963,8 @@ export function AgentPanel({
             draft={draft}
             draftLocked={draftLocked}
             images={images}
+            dockRef={composerDockRef}
+            errorCard={errorCard}
             onAbort={() => void stop()}
             onAddImages={(files) => void addImages(files)}
             onChangeDraft={setDraft}

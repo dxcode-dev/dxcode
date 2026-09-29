@@ -1,6 +1,11 @@
 // @vitest-environment happy-dom
 
-import type { ProjectData, ThreadDetailData } from "@dx/api";
+import type {
+  ProjectData,
+  ThreadDetailData,
+  ThreadFilesPath,
+  ThreadFilesWorktreeId,
+} from "@dx/api";
 import type { ProjectId, ThreadId, UserId } from "@dx/domain";
 import { defaultThreadModelSelection } from "@dx/domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -15,10 +20,17 @@ const flue = vi.hoisted(() => {
   return { client, createClient: vi.fn(() => client) };
 });
 const viewport = vi.hoisted(() => ({ mobile: true }));
+const router = vi.hoisted(() => ({ navigate: vi.fn() }));
 
 vi.mock("@flue/react", () => ({ useFlueAgent: () => ({}) }));
 vi.mock("@flue/sdk", () => ({ createFlueClient: flue.createClient }));
 vi.mock("@tanstack/react-router", () => ({
+  useLocation: ({
+    select,
+  }: {
+    select: (location: { href: string }) => string;
+  }) => select({ href: "/threads/thread-1" }),
+  useNavigate: () => router.navigate,
   useParams: () => ({ threadId: "thread-1" }),
 }));
 vi.mock("../../shared/auth/auth-context.js", () => ({
@@ -51,6 +63,42 @@ vi.mock("./changes/changes-pane.js", () => ({
     </div>
   ),
 }));
+// Exercises the workspace-provided link resolver and file navigation exactly
+// as transcript Markdown links and Edited rows do.
+function TranscriptFileProbe() {
+  const resolve = React.useContext(MarkdownFileLinkContext);
+  const navigation = React.useContext(ThreadFileNavigationContext);
+  return (
+    <>
+      {["/home/user/notes/todo.md", "src/linked.ts:4"].map((href) => (
+        <button
+          key={href}
+          type="button"
+          data-download={resolve?.(href)?.downloadUrl}
+          onClick={() => resolve?.(href)?.open()}
+        >
+          {`Link ${href}`}
+        </button>
+      ))}
+      <button
+        type="button"
+        onClick={() =>
+          navigation?.open(
+            {
+              kind: "workspace",
+              worktree: "primary" as ThreadFilesWorktreeId,
+              path: "src/linked.ts" as ThreadFilesPath,
+            },
+            { kind: "text", text: "edited" },
+          )
+        }
+      >
+        Open edit
+      </button>
+    </>
+  );
+}
+
 vi.mock("./agent-panel.js", () => ({
   PendingAgentPanel: ({ creation }: { creation: { body: string } }) => (
     <section aria-label="Pending agent chat">
@@ -63,6 +111,7 @@ vi.mock("./agent-panel.js", () => ({
     renderHeader,
     draft = "",
     onDraftChange,
+    onOpenModelRouting,
     showArchivedNotice,
     workspaceStatus,
   }: {
@@ -78,6 +127,7 @@ vi.mock("./agent-panel.js", () => ({
     }) => React.ReactNode;
     draft?: string;
     onDraftChange?: (draft: string) => void;
+    onOpenModelRouting?: () => void;
     showArchivedNotice?: boolean;
     workspaceStatus?: string;
   }) => (
@@ -96,8 +146,14 @@ vi.mock("./agent-panel.js", () => ({
       ) : null}
       <section aria-label="Thread transcript">
         Existing chat remains visible
+        <TranscriptFileProbe />
       </section>
       {workspaceStatus ? <div role="status">{workspaceStatus}</div> : null}
+      {!archived && onOpenModelRouting !== undefined ? (
+        <button type="button" onClick={onOpenModelRouting}>
+          Open Model Routing
+        </button>
+      ) : null}
       {archived ? null : (
         <textarea
           aria-label="Thread composer"
@@ -109,8 +165,10 @@ vi.mock("./agent-panel.js", () => ({
   ),
 }));
 
+import { MarkdownFileLinkContext } from "../../shared/ui/markdown-file-link-context.js";
 import { projectKeys } from "../projects/project-queries.js";
 import { ThreadDesktopLayout } from "./thread-desktop-layout.js";
+import { ThreadFileNavigationContext } from "./thread-file-navigation.js";
 import { threadKeys } from "./thread-queries.js";
 import { ThreadSessionRegistryContext } from "./thread-session-context.js";
 import { ThreadSessionRegistry } from "./thread-session-registry.js";
@@ -152,6 +210,7 @@ const renderSession = async (
     readonly threadId: ThreadId;
     readonly onWorkspaceStatusChange?: (status?: string) => void;
   }>,
+  onOpenModelRouting?: (destination: string) => void,
 ) => {
   const container = document.createElement("div");
   document.body.append(container);
@@ -164,6 +223,7 @@ const renderSession = async (
       <ThreadSession
         thread={nextThread}
         project={nextProject}
+        onOpenModelRouting={onOpenModelRouting}
         Terminal={Terminal}
       />
     </QueryClientProvider>
@@ -533,6 +593,63 @@ describe("ThreadSession right pane", () => {
     await React.act(() => root.unmount());
   });
 
+  it("opens Model Routing without discarding the retained composer draft", async () => {
+    const openModelRouting = vi.fn();
+    const { container, root } = await renderSession(
+      thread,
+      undefined,
+      openModelRouting,
+    );
+    const composer = container.querySelector<HTMLTextAreaElement>(
+      '[aria-label="Thread composer"]',
+    );
+    await React.act(() => {
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(composer, "Keep this draft");
+      composer?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    await click(
+      [...container.querySelectorAll("button")].find(
+        (button) => button.textContent === "Open Model Routing",
+      ) ?? null,
+    );
+
+    expect(openModelRouting).toHaveBeenCalledExactlyOnceWith(
+      "/settings/model-routing",
+    );
+    expect(composer?.value).toBe("Keep this draft");
+    await React.act(() => root.unmount());
+  });
+
+  it("does not fall back to personal routing for an unresolved workspace", async () => {
+    const openModelRouting = vi.fn();
+    const { container, root, render } = await renderSession(
+      thread,
+      undefined,
+      openModelRouting,
+    );
+    await React.act(() =>
+      root.render(
+        render(thread, {
+          ...project,
+          workspaceId: "workspace-unavailable",
+        } as ProjectData),
+      ),
+    );
+
+    expect(
+      [...container.querySelectorAll("button")].find(
+        (button) => button.textContent === "Open Model Routing",
+      ),
+    ).toBeUndefined();
+    expect(openModelRouting).not.toHaveBeenCalled();
+    await React.act(() => root.unmount());
+  });
+
   it("opens a selected Changes file in the center editor navigation", async () => {
     viewport.mobile = false;
     vi.stubGlobal(
@@ -556,6 +673,50 @@ describe("ThreadSession right pane", () => {
       '[role="tab"][title="src/selected.ts"]',
     );
     expect(selected?.getAttribute("aria-selected")).toBe("true");
+    await React.act(() => root.unmount());
+  });
+
+  it("opens transcript file links and edits as center tabs without navigating", async () => {
+    viewport.mobile = false;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      width: 1000,
+    } as DOMRect);
+    const { container, root } = await renderSession();
+    const button = (label: string) =>
+      [...container.querySelectorAll("button")].find(
+        (candidate) => candidate.textContent === label,
+      ) ?? null;
+
+    const sandboxLink = button("Link /home/user/notes/todo.md");
+    expect(sandboxLink?.dataset.download).toContain(
+      "files-sandbox?path=%2Fhome%2Fuser%2Fnotes%2Ftodo.md&download=1",
+    );
+    await click(sandboxLink);
+    const sandboxTab = container.querySelector(
+      '[role="tab"][title="/home/user/notes/todo.md"]',
+    );
+    expect(sandboxTab?.getAttribute("aria-selected")).toBe("true");
+    expect(sandboxTab?.textContent).toContain("Sandbox");
+
+    await click(button("Link src/linked.ts:4"));
+    const repoTab = container.querySelector(
+      '[role="tab"][title="src/linked.ts"]',
+    );
+    expect(repoTab?.getAttribute("aria-selected")).toBe("true");
+
+    // Opening the same file from an Edited row reuses its tab.
+    await click(button("Open edit"));
+    expect(
+      container.querySelectorAll('[role="tab"][title="src/linked.ts"]'),
+    ).toHaveLength(1);
+    expect(router.navigate).not.toHaveBeenCalled();
     await React.act(() => root.unmount());
   });
 

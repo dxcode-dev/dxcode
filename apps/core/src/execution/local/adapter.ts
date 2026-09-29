@@ -7,6 +7,7 @@ import type {
 } from "@flue/runtime";
 import { sandboxFromDriver } from "@flue/runtime";
 import { Redacted } from "effect";
+import { decodeBase64, encodeBase64 } from "../../encoding/base64.js";
 import type { Bindings } from "../../http/types.js";
 
 const LOCAL_WORKSPACE_CWD = "/home/user/workspace/repo";
@@ -39,18 +40,10 @@ export const validateLocalRuntimeConfiguration = (bindings: Bindings): void => {
   requirements(bindings);
 };
 
-const encodeBytes = (value: string | Uint8Array) => {
-  const bytes =
-    typeof value === "string" ? new TextEncoder().encode(value) : value;
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-};
-
-const decodeBytes = (value: string) => {
-  const binary = atob(value);
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-};
+const encodeBytes = (value: string | Uint8Array) =>
+  encodeBase64(
+    typeof value === "string" ? new TextEncoder().encode(value) : value,
+  );
 
 class LocalSandboxDriver implements SandboxDriver {
   constructor(
@@ -100,7 +93,7 @@ class LocalSandboxDriver implements SandboxDriver {
     const result = await this.request<{ readonly contents: string }>("read", {
       path,
     });
-    return decodeBytes(result.contents);
+    return decodeBase64(result.contents);
   }
 
   writeFile(path: string, content: string | Uint8Array): Promise<void> {

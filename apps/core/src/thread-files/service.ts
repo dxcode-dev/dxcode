@@ -10,6 +10,7 @@ import {
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { Schema } from "effect";
+import { decodeBase64Url, encodeBase64Url } from "../encoding/base64.js";
 import type { DxdChangesRefresh } from "../execution/dxd/protocol.js";
 import type { Bindings } from "../http/types.js";
 import {
@@ -37,25 +38,12 @@ export class ThreadFilesUnavailable extends Schema.TaggedError<ThreadFilesUnavai
   {},
 ) {}
 
-const base64UrlEncode = (value: unknown) => {
-  const bytes = textEncoder.encode(JSON.stringify(value));
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary)
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/, "");
-};
+const base64UrlEncode = (value: unknown) =>
+  encodeBase64Url(textEncoder.encode(JSON.stringify(value)));
 
-const base64UrlDecode = (value: string): unknown => {
-  const normalized = value.replaceAll("-", "+").replaceAll("_", "/");
-  const binary = atob(
-    normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="),
-  );
-  return JSON.parse(
-    textDecoder.decode(Uint8Array.from(binary, (char) => char.charCodeAt(0))),
-  );
-};
+// The cursor pattern and payload schema reject anything malformed.
+const base64UrlDecode = (value: string): unknown =>
+  JSON.parse(textDecoder.decode(decodeBase64Url(value)));
 
 const CursorPayloadSchema = Schema.Struct({
   path: Schema.NullOr(ThreadFilesPath),

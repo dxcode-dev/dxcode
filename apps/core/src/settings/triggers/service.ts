@@ -15,6 +15,7 @@ import {
   type UserId,
 } from "@dx/domain";
 import { Context, DateTime, Effect, Layer, Schema } from "effect";
+import { encodeBase64Url } from "../../encoding/base64.js";
 import { SettingsAudit } from "../audit.js";
 import { WorkspacePolicyService } from "../workspace-policy/service.js";
 
@@ -74,22 +75,13 @@ interface PluginTriggerServiceShape {
   ) => Effect.Effect<void, unknown>;
 }
 
-const bytesToBase64Url = (bytes: Uint8Array): string => {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary)
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/, "");
-};
-
 const bytesToHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 export const generatePluginTriggerCapability =
   (): typeof PluginTriggerCapability.Type =>
     Schema.decodeUnknownSync(PluginTriggerCapability)(
-      `dxt_${bytesToBase64Url(crypto.getRandomValues(new Uint8Array(32)))}`,
+      `dxt_${encodeBase64Url(crypto.getRandomValues(new Uint8Array(32)))}`,
     );
 
 export const hashPluginTriggerCapability = Effect.fn(

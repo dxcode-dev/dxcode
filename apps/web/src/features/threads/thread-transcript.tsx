@@ -4,7 +4,7 @@ import {
   useVirtualizer,
   type VirtualItem,
 } from "@tanstack/react-virtual";
-import { ArrowDown, RotateCcw } from "lucide-react";
+import { ArrowDown } from "lucide-react";
 import * as React from "react";
 import { Button } from "../../shared/ui/button.js";
 import { TranscriptRowContent } from "./message-parts.js";
@@ -31,18 +31,10 @@ interface TranscriptPosition {
   anchor?: { key: VirtualItem["key"]; within: number };
 }
 
-export interface TranscriptRowFailure {
-  readonly message: string;
-  readonly retry: () => void;
-  readonly retryLabel?: string;
-}
-
 export function TranscriptRowShell({
-  failure,
   measureElement,
   row,
 }: {
-  readonly failure?: TranscriptRowFailure;
   readonly measureElement: (element: HTMLElement | null) => void;
   readonly row: TranscriptRow;
 }) {
@@ -59,19 +51,6 @@ export function TranscriptRowShell({
       <div className="message-content">
         <TranscriptRowContent row={row} />
       </div>
-      {failure ? (
-        <div className="failed-send">
-          <span>{failure.message}</span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            onClick={failure.retry}
-          >
-            <RotateCcw /> {failure.retryLabel ?? "Retry"}
-          </Button>
-        </div>
-      ) : null}
     </article>
   );
 }
@@ -310,7 +289,6 @@ function useTranscriptViewport({
   readonly active?: boolean;
   readonly defaultWorkExpanded?: boolean;
   readonly model: TranscriptViewModel;
-  readonly failures?: ReadonlyMap<string, TranscriptRowFailure>;
   readonly header?: React.ReactNode;
   readonly pinnedContent?: React.ReactNode;
   readonly footer?: React.ReactNode;
@@ -618,7 +596,6 @@ export function TranscriptViewport(
 ) {
   const {
     model,
-    failures = new Map(),
     header,
     pinnedContent,
     footer,
@@ -644,18 +621,6 @@ export function TranscriptViewport(
   const processingTurnId = model.turns.findLast(
     (turn) => turn.status === "active",
   )?.id;
-  const failureRowIdByMessage = new Map<string, TranscriptRowId>();
-  for (const row of model.rows) {
-    const messageId = "messageId" in row ? row.messageId : undefined;
-    if (messageId === undefined || !failures.has(messageId)) continue;
-    if (
-      row.kind === "user-prompt" ||
-      (row.kind === "attachment" && !failureRowIdByMessage.has(messageId))
-    ) {
-      failureRowIdByMessage.set(messageId, row.id);
-    }
-  }
-
   return (
     <>
       <section
@@ -719,23 +684,13 @@ export function TranscriptViewport(
                       processing={
                         showProcessingIndicator && turn.id === processingTurnId
                       }
-                      renderRow={(row) => {
-                        const messageId =
-                          "messageId" in row ? row.messageId : undefined;
-                        return (
-                          <TranscriptRowShell
-                            key={row.id}
-                            row={row}
-                            failure={
-                              messageId &&
-                              failureRowIdByMessage.get(messageId) === row.id
-                                ? failures.get(messageId)
-                                : undefined
-                            }
-                            measureElement={() => {}}
-                          />
-                        );
-                      }}
+                      renderRow={(row) => (
+                        <TranscriptRowShell
+                          key={row.id}
+                          row={row}
+                          measureElement={() => {}}
+                        />
+                      )}
                     />
                   </div>
                 </div>

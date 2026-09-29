@@ -22,11 +22,15 @@ vi.mock("./file-editor.js", async () => {
         onChange,
         wrap,
         onReadyChange,
+        revealLines,
+        revealSequence,
       }: {
         content: string;
         onChange: (value: string) => void;
         wrap: boolean;
         onReadyChange: (ready: boolean) => void;
+        revealLines?: { start: number; end: number };
+        revealSequence?: number;
       },
       ref,
     ) {
@@ -36,6 +40,11 @@ vi.mock("./file-editor.js", async () => {
           ref={(node) => onReadyChange(node !== null)}
           aria-label="Source editor"
           data-wrap={wrap}
+          data-reveal={
+            revealLines === undefined
+              ? undefined
+              : `${revealLines.start}-${revealLines.end}@${revealSequence ?? 0}`
+          }
           value={content}
           onChange={(event) => onChange(event.currentTarget.value)}
         />
@@ -63,6 +72,77 @@ const editable: ThreadFileData = {
 afterEach(() => document.body.replaceChildren());
 
 describe("Thread file viewer", () => {
+  it("switches a Markdown tab from Preview to source when a new line link arrives", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const file = { ...editable, content: "# Title\n\nFirst\nSecond\n" };
+    const render = (revealSequence?: number) =>
+      root.render(
+        <ThreadFileViewer
+          conflict={false}
+          file={file}
+          onDirtyChange={vi.fn()}
+          onPreserveLocal={vi.fn()}
+          onReload={vi.fn()}
+          onSave={vi.fn()}
+          {...(revealSequence === undefined
+            ? {}
+            : {
+                reveal: { kind: "lines" as const, lines: { start: 3, end: 3 } },
+                revealSequence,
+              })}
+          saving={false}
+        />,
+      );
+    await React.act(() => render());
+    const source = () =>
+      container.querySelector<HTMLElement>(".thread-file-source");
+    expect(source()?.hidden).toBe(true);
+    await React.act(() => render(1));
+    expect(source()?.hidden).toBe(false);
+    // The user chooses Preview again; the same reveal does not override it.
+    const preview = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Preview",
+    );
+    await React.act(() => preview?.click());
+    expect(source()?.hidden).toBe(true);
+    await React.act(() => render(1));
+    expect(source()?.hidden).toBe(true);
+    // A new link to the same file shows the source again.
+    await React.act(() => render(2));
+    expect(source()?.hidden).toBe(false);
+    expect(container.querySelector("textarea")?.dataset.reveal).toBe("3-3@2");
+    await React.act(() => root.unmount());
+  });
+
+  it("highlights the chunk an edit wrote and shows Markdown source for it", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    await React.act(() =>
+      root.render(
+        <ThreadFileViewer
+          conflict={false}
+          file={{ ...editable, content: "# Title\n\nFirst\nSecond\n" }}
+          onDirtyChange={vi.fn()}
+          onPreserveLocal={vi.fn()}
+          onReload={vi.fn()}
+          onSave={vi.fn()}
+          reveal={{ kind: "text", text: "First\nSecond" }}
+          revealSequence={2}
+          saving={false}
+        />,
+      ),
+    );
+    const editor = container.querySelector("textarea");
+    expect(editor?.dataset.reveal).toBe("3-4@2");
+    expect(
+      container.querySelector<HTMLElement>(".thread-file-source")?.hidden,
+    ).toBe(false);
+    await React.act(() => root.unmount());
+  });
+
   it("previews unsaved Markdown and saves the complete local buffer with its version", async () => {
     const onSave = vi.fn();
     const onDirtyChange = vi.fn();

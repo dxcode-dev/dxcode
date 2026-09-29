@@ -63,6 +63,7 @@ import {
   GetIntegrationDisconnectImpactResponseSchema,
   GetPersonalAccountResponseSchema,
   GetPersonalAgentInstructionsResponseSchema,
+  GetPersonalComposerDefaultsResponseSchema,
   GetPersonalExperimentalFeaturesResponseSchema,
   GetPersonalSecurityResponseSchema,
   GetPersonalUsageResponseSchema,
@@ -108,6 +109,7 @@ import {
   PersonalAgentInstructionsErrorResponseSchema,
   type PersonalApiTokenData,
   type PersonalApiTokenSecretData,
+  type PersonalComposerDefaultsData,
   type PersonalExperimentalFeaturesData,
   PersonalModelSubscriptionBrowserSessionRequiredResponseSchema,
   PersonalModelSubscriptionInUseResponseSchema,
@@ -179,6 +181,8 @@ import {
   UpdatePersonalAgentInstructionsResponseSchema,
   type UpdatePersonalAppearanceRequest,
   UpdatePersonalAppearanceResponseSchema,
+  type UpdatePersonalComposerDefaultsRequest,
+  UpdatePersonalComposerDefaultsResponseSchema,
   UpdatePersonalExperimentalFeatureResponseSchema,
   UpdatePluginStateResponseSchema,
   UpdatePluginTriggerStateResponseSchema,
@@ -1803,6 +1807,28 @@ export const updatePersonalAppearance = async (
     await request(
       "/v1/settings/personal/account/appearance",
       UpdatePersonalAppearanceResponseSchema,
+      { method: "PATCH", body: JSON.stringify(input) },
+    )
+  ).data;
+
+export const getPersonalComposerDefaults = async (
+  signal?: AbortSignal,
+): Promise<PersonalComposerDefaultsData> =>
+  (
+    await request(
+      "/v1/settings/personal/account/composer",
+      GetPersonalComposerDefaultsResponseSchema,
+      { signal },
+    )
+  ).data;
+
+export const updatePersonalComposerDefaults = async (
+  input: UpdatePersonalComposerDefaultsRequest,
+): Promise<PersonalComposerDefaultsData> =>
+  (
+    await request(
+      "/v1/settings/personal/account/composer",
+      UpdatePersonalComposerDefaultsResponseSchema,
       { method: "PATCH", body: JSON.stringify(input) },
     )
   ).data;

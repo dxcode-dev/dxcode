@@ -928,6 +928,20 @@ const validateWorkerProps = (
           ? ["17 3 * * *", "11 * * * *", "*/5 * * * *", "* * * * *"]
           : ["*/5 * * * *", "* * * * *"],
       );
+  const observability = props.observability;
+  const observabilityValid =
+    exactKeys(observability, ["enabled", "logs", "traces"]) &&
+    observability.enabled === true &&
+    JSON.stringify(observability.logs) ===
+      JSON.stringify({ enabled: true, invocationLogs: true }) &&
+    exactKeys(observability.traces, [
+      "enabled",
+      "headSamplingRate",
+      "persist",
+    ]) &&
+    typeof observability.traces.enabled === "boolean" &&
+    observability.traces.headSamplingRate === 1 &&
+    observability.traces.persist === true;
   const dxdReleaseUrl = props.env?.DX_DXD_RELEASE_URL;
   const dxdChecksum = props.env?.DX_DXD_RELEASE_SHA256;
   const dxdCurrent =
@@ -1080,7 +1094,22 @@ const validateWorkerProps = (
     }
   })();
   const issues = [
-    ["keys", !exactKeys(props, currentWorkerKeys) && !legacyRouterWorker],
+    [
+      "keys",
+      !exactKeys(props, [...currentWorkerKeys, "observability"]) &&
+        // State written before explicit observability has no such key.
+        !(!current && exactKeys(props, currentWorkerKeys)) &&
+        !legacyRouterWorker,
+    ],
+    [
+      "observability",
+      observability === undefined
+        ? current
+        : !observabilityValid ||
+          // The branch-controlled stack must honor the operator's traces choice.
+          (current &&
+            observability.traces.enabled !== (selection.workerTraces === true)),
+    ],
     [
       "name",
       current && representation === "desired" && selection.target === "selfhost"

@@ -581,6 +581,13 @@ const environment = {
           : "false",
       }
     : {}),
+  // Self-host config is authoritative; previews inherit the operator's env.
+  ...(selfhostConfig !== undefined
+    ? {
+        DX_DEPLOYMENT_WORKER_TRACES:
+          selfhostConfig.workerTraces === true ? "true" : "false",
+      }
+    : {}),
   DX_DEPLOYMENT_PACKAGE_DIR: packageDirectory,
   DX_DEPLOYMENT_ORIGIN: `https://${selection.domain}`,
   DX_DEPLOYMENT_REVISION: revision,

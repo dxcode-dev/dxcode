@@ -39,7 +39,14 @@ const fakes = vi.hoisted(() => {
   return {
     captures: [] as Capture[],
     Capture,
-    transcription: vi.fn<() => Promise<string>>(),
+    transcription:
+      vi.fn<
+        (input: {
+          audio: Blob;
+          id: string;
+          signal: AbortSignal;
+        }) => Promise<string>
+      >(),
     cancelJob: vi.fn(),
   };
 });
@@ -56,11 +63,13 @@ vi.mock("./dictation-capture.js", () => ({
 vi.mock("./dictation-api.js", () => ({
   cancelDictationJob: fakes.cancelJob,
   dictationMutationOptions: () => ({
-    mutationFn: () => fakes.transcription(),
+    mutationFn: (input: { audio: Blob; id: string; signal: AbortSignal }) =>
+      fakes.transcription(input),
     gcTime: 0,
   }),
 }));
 
+import { DictationRecoverySession } from "./dictation-session.js";
 import { useDictation } from "./use-dictation.js";
 
 Object.assign(globalThis, {
@@ -106,7 +115,11 @@ const setText = async (
   textarea.setSelectionRange(start, end);
 };
 
-const mount = async (initial = "", enabled = true): Promise<Mounted> => {
+const mount = async (
+  initial = "",
+  enabled = true,
+  session?: DictationRecoverySession,
+): Promise<Mounted> => {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -120,6 +133,7 @@ const mount = async (initial = "", enabled = true): Promise<Mounted> => {
     const dictation = useDictation({
       enabled,
       locked,
+      session,
       onChange: setDraft,
       onSend: submissions,
       textareaRef,
@@ -182,6 +196,8 @@ beforeEach(() => {
 
 afterEach(async () => {
   document.body.replaceChildren();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("useDictation lifecycle", () => {
@@ -247,7 +263,7 @@ describe("useDictation lifecycle", () => {
     expect(mounted.submissions).not.toHaveBeenCalled();
   });
 
-  it("does not insert a transcription that resolves after the composer locks", async () => {
+  it("does not insert a late transcription after locking and retains its audio", async () => {
     const result = deferred<string>();
     fakes.transcription.mockReturnValue(result.promise);
     const mounted = await mount("keep this draft");
@@ -262,12 +278,12 @@ describe("useDictation lifecycle", () => {
 
     expect(mounted.textarea.value).toBe("keep this draft");
     expect(
-      mounted.container.querySelector('[aria-label="Start dictation"]'),
+      mounted.container.querySelector('[aria-label="Retry dictation"]'),
     ).not.toBeNull();
     expect(mounted.submissions).not.toHaveBeenCalled();
   });
 
-  it("does not show an error when a locked transcription rejects after unlock", async () => {
+  it("keeps an aborted locked transcription recoverable after unlock", async () => {
     const result = deferred<string>();
     fakes.transcription.mockReturnValue(result.promise);
     const mounted = await mount("keep this draft");
@@ -283,7 +299,12 @@ describe("useDictation lifecycle", () => {
     );
 
     expect(mounted.textarea.value).toBe("keep this draft");
-    expect(mounted.container.querySelector('[role="alert"]')).toBeNull();
+    expect(mounted.container.querySelector('[role="alert"]')?.textContent).toBe(
+      "Dictation was saved after leaving the composer.",
+    );
+    expect(
+      mounted.container.querySelector('[aria-label="Retry dictation"]'),
+    ).not.toBeNull();
     expect(mounted.submissions).not.toHaveBeenCalled();
   });
 
@@ -319,6 +340,209 @@ describe("useDictation lifecycle", () => {
     );
     expect(fakes.cancelJob).toHaveBeenCalledOnce();
     expect(fakes.cancelJob).toHaveBeenCalledWith(expect.any(String));
+  });
+
+  it("retains failed audio and retries the same recording", async () => {
+    fakes.transcription
+      .mockRejectedValueOnce(new Error("Network unavailable."))
+      .mockResolvedValueOnce("recovered transcript");
+    const mounted = await mount();
+
+    await start(mounted);
+    await click(
+      mounted.container.querySelector('[aria-label="Stop dictation"]'),
+    );
+    await vi.waitFor(() =>
+      expect(
+        mounted.container.querySelector('[aria-label="Retry dictation"]'),
+      ).not.toBeNull(),
+    );
+    const retry = mounted.container.querySelector(
+      '[aria-label="Retry dictation"]',
+    );
+    expect(retry?.closest(".dictation-controls")?.classList).toContain(
+      "is-recoverable",
+    );
+    const firstAudio = fakes.transcription.mock.calls[0]?.[0].audio;
+
+    await click(
+      mounted.container.querySelector('[aria-label="Retry dictation"]'),
+    );
+    await vi.waitFor(() =>
+      expect(mounted.textarea.value).toBe("recovered transcript"),
+    );
+
+    expect(fakes.captures[0]?.start).toHaveBeenCalledTimes(1);
+    expect(fakes.transcription).toHaveBeenCalledTimes(2);
+    expect(fakes.transcription.mock.calls[1]?.[0].audio).toBe(firstAudio);
+    expect(
+      mounted.container.querySelector('[aria-label="Retry dictation"]'),
+    ).toBeNull();
+  });
+
+  it("offers download without removing retry after repeated failures", async () => {
+    fakes.transcription.mockRejectedValue(new Error("Network unavailable."));
+    const createObjectURL = vi.fn(() => "blob:saved-dictation");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+    const clickAnchor = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
+    const mounted = await mount();
+
+    await start(mounted);
+    await click(
+      mounted.container.querySelector('[aria-label="Stop dictation"]'),
+    );
+    await vi.waitFor(() =>
+      expect(
+        mounted.container.querySelector('[aria-label="Retry dictation"]'),
+      ).not.toBeNull(),
+    );
+    await click(
+      mounted.container.querySelector('[aria-label="Retry dictation"]'),
+    );
+    await vi.waitFor(() =>
+      expect(fakes.transcription).toHaveBeenCalledTimes(2),
+    );
+    await click(
+      mounted.container.querySelector(
+        '[aria-label="Download saved dictation"]',
+      ),
+    );
+
+    expect(createObjectURL).toHaveBeenCalledWith(
+      fakes.transcription.mock.calls[0]?.[0].audio,
+    );
+    expect(clickAnchor).toHaveBeenCalledOnce();
+    expect(
+      mounted.container.querySelector('[aria-label="Retry dictation"]'),
+    ).not.toBeNull();
+  });
+
+  it("only discards failed audio when the user explicitly records again", async () => {
+    fakes.transcription.mockRejectedValueOnce(
+      new Error("Dictation returned no speech."),
+    );
+    const mounted = await mount();
+
+    await start(mounted);
+    await click(
+      mounted.container.querySelector('[aria-label="Stop dictation"]'),
+    );
+    await vi.waitFor(() =>
+      expect(
+        mounted.container.querySelector('[aria-label="Retry dictation"]'),
+      ).not.toBeNull(),
+    );
+    await click(
+      mounted.container.querySelector(
+        '[aria-label="Discard saved dictation and record again"]',
+      ),
+    );
+
+    expect(fakes.captures[0]?.start).toHaveBeenCalledTimes(2);
+    expect(
+      mounted.container.querySelector('[aria-label="Stop dictation"]'),
+    ).not.toBeNull();
+    expect(
+      mounted.container.querySelector('[aria-label="Retry dictation"]'),
+    ).toBeNull();
+    expect(fakes.transcription).toHaveBeenCalledOnce();
+  });
+
+  it("does not offer replacement while another recording is active", async () => {
+    const session = new DictationRecoverySession();
+    const mounted = await mount("", true, session);
+    await start(mounted);
+
+    await React.act(() =>
+      session.retain(
+        new Blob([new Uint8Array(45)]),
+        "insert",
+        "Older recording saved.",
+      ),
+    );
+
+    expect(
+      mounted.container.querySelector('[aria-label="Stop dictation"]'),
+    ).not.toBeNull();
+    expect(
+      mounted.container.querySelector(
+        '[aria-label="Discard saved dictation and record again"]',
+      ),
+    ).toBeNull();
+    expect(fakes.captures[0]?.start).toHaveBeenCalledOnce();
+  });
+
+  it("does not overwrite an older saved clip when an active recording finishes", async () => {
+    fakes.transcription.mockResolvedValueOnce("new transcript");
+    const session = new DictationRecoverySession();
+    const mounted = await mount("", true, session);
+    await start(mounted);
+    const olderAudio = new Blob([new Uint8Array(45)]);
+    await React.act(() =>
+      session.retain(olderAudio, "insert", "Older recording saved."),
+    );
+
+    await click(
+      mounted.container.querySelector('[aria-label="Stop dictation"]'),
+    );
+    await vi.waitFor(() =>
+      expect(mounted.textarea.value).toBe("new transcript"),
+    );
+
+    expect(session.getSnapshot()).toMatchObject({
+      state: "retained",
+      audio: olderAudio,
+      error: "Older recording saved.",
+    });
+    expect(
+      mounted.container.querySelector('[aria-label="Retry dictation"]'),
+    ).not.toBeNull();
+  });
+
+  it("retains in-flight audio when its composer unmounts", async () => {
+    const result = deferred<string>();
+    fakes.transcription.mockReturnValue(result.promise);
+    const session = new DictationRecoverySession();
+    const mounted = await mount("", true, session);
+    await start(mounted);
+    await click(
+      mounted.container.querySelector('[aria-label="Stop dictation"]'),
+    );
+    await vi.waitFor(() => expect(fakes.transcription).toHaveBeenCalledOnce());
+
+    await React.act(() => mounted.root.unmount());
+    expect(session.getSnapshot()).toMatchObject({
+      state: "retained",
+      error: "Dictation was saved after leaving the composer.",
+    });
+    const restored = await mount("", true, session);
+
+    expect(
+      restored.container.querySelector('[aria-label="Retry dictation"]'),
+    ).not.toBeNull();
+  });
+
+  it("finishes and retains a recording when its composer unmounts", async () => {
+    const session = new DictationRecoverySession();
+    const mounted = await mount("", true, session);
+    await start(mounted);
+
+    await React.act(() => mounted.root.unmount());
+    await vi.waitFor(() =>
+      expect(session.getSnapshot()).toMatchObject({
+        state: "retained",
+        error: "Dictation was saved after leaving the composer.",
+      }),
+    );
+    const restored = await mount("", true, session);
+
+    expect(
+      restored.container.querySelector('[aria-label="Retry dictation"]'),
+    ).not.toBeNull();
+    expect(fakes.transcription).not.toHaveBeenCalled();
   });
 
   it("does not restore a deleted transcript during the next recording cycle", async () => {

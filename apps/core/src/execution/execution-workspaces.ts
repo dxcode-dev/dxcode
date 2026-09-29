@@ -35,6 +35,10 @@ import { WorkspacePolicyService } from "../settings/workspace-policy/service.js"
 import { SourceAuditD1 } from "../source-control/audit.js";
 import { bitbucketRuntimeBroker } from "../source-control/bitbucket/runtime.js";
 import { loadSourceWorkspaceConfiguration } from "../source-control/configuration.js";
+import {
+  GITHUB_CLI_WRAPPER_INSTALL_COMMAND,
+  githubCliWrapper,
+} from "../source-control/github/cli-wrapper.js";
 import { GitHubRuntimeAdapterLive } from "../source-control/github/runtime-adapter.js";
 import {
   SourceAuthorizationPolicyLive,
@@ -555,6 +559,59 @@ const activateSourceWorkspace = (
     ),
   );
 
+/**
+ * Installs the dx `gh` wrapper for a connected GitHub source. It runs on every
+ * E2B activation, including warm workspaces whose daemon is not reinstalled,
+ * and never blocks activation: without it `gh` is merely unauthenticated.
+ */
+const ensureGithubCliWrapper = async (
+  db: D1Database,
+  threadId: string,
+  sandbox: {
+    readonly commands: {
+      readonly run: (
+        command: string,
+        options: {
+          readonly envs: Record<string, string>;
+          readonly timeoutMs: number;
+        },
+      ) => Promise<{ readonly exitCode?: number }>;
+    };
+  },
+) => {
+  try {
+    const source = await db
+      .prepare(
+        `SELECT s.repository_full_name
+           FROM thread_source_snapshot s
+           JOIN thread_source_authority a ON a.thread_id = s.thread_id
+          WHERE s.thread_id = ? AND s.provider = 'github'
+          LIMIT 1`,
+      )
+      .bind(threadId)
+      .first<{ repository_full_name: string }>();
+    if (source === null) return;
+    const result = await sandbox.commands.run(
+      GITHUB_CLI_WRAPPER_INSTALL_COMMAND,
+      {
+        envs: { DX_GH_WRAPPER: githubCliWrapper(source.repository_full_name) },
+        timeoutMs: 10_000,
+      },
+    );
+    if ((result.exitCode ?? 0) !== 0)
+      throw new Error("GitHub CLI wrapper installation failed.");
+  } catch (error) {
+    executionWorkspaceLogger.warn("GitHub CLI wrapper installation failed.", {
+      event: "github_cli_wrapper",
+      threadId,
+      error: (error instanceof Error ? error.message : String(error)).slice(
+        0,
+        1_000,
+      ),
+    });
+  }
+};
+
 const localSourceRuntimeBroker = SourceRuntimeBroker.of({
   withCommandEnvironment: () =>
     Effect.fail(
@@ -659,6 +716,7 @@ const e2bSandboxFactory = {
           : sourcePreparationReporter(bindings, prepared.db, threadId),
         residency.value !== "running" || needsFirstReadiness,
       );
+      await ensureGithubCliWrapper(prepared.db, id, sandbox);
       void recordActiveSubmissionPhase(bindings, id, "source_activated");
       if (wakeStatusPublished)
         await publishRealtimeWorkspaceStatus(bindings, threadId, "ready");
@@ -980,6 +1038,7 @@ const ensureE2BDaemon = async (
       false,
     );
     throwIfAborted(input.signal);
+    await ensureGithubCliWrapper(prepared.db, input.threadId, sandbox);
     stage = "guest";
     let releaseLoadedAt: number | undefined;
     const installed = await ensureDaemonInGuest(sandbox, {

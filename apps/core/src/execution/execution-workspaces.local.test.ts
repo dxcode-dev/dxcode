@@ -172,6 +172,7 @@ vi.mock("../thread-changes/coordinator.js", () => ({
 }));
 
 import { env } from "cloudflare:workers";
+import { executeTrustedSourceCommand } from "./e2b/source-command-admission.js";
 import { ExecutionWorkspaces } from "./execution-workspaces.js";
 
 beforeEach(() => {
@@ -232,7 +233,12 @@ describe("local execution workspace source boundary", () => {
     );
 
     mocks.primitiveExec.mockClear();
-    await expect(sandbox.exec("gh repo view")).rejects.toMatchObject({
+    await expect(
+      executeTrustedSourceCommand(sandbox, "gh repo view", {
+        operation: "repository-read",
+        invocationSource: "agent-command",
+      }),
+    ).rejects.toMatchObject({
       _tag: "SourceControlProviderFailure",
       provider: "github",
       retryable: false,

@@ -62,8 +62,9 @@ the object at the hidden **Bitbucket OAuth JSON** prompt. Noninteractive runs se
 2. Choose **Connect** and authorize the consumer as the Bitbucket user whose
    repositories should be available.
 3. Create a project from a private Bitbucket repository.
-4. Verify checkout from the default branch and create or update a pull request
-   from an agent branch.
+4. Verify checkout from the default branch and that an agent can push a
+   branch. Open Bitbucket pull requests from the pushed branch in Bitbucket;
+   dx agents create pull requests only for GitHub repositories.
 
 dx refreshes expiring access tokens. **Refresh** rechecks the account and
 repository list. Disconnecting in dx deletes its stored authorization and stops

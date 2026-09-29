@@ -1,6 +1,7 @@
 import type { BetterAuthPlugin } from "@better-auth/core";
 import { createAuthMiddleware } from "better-auth/api";
 import { magicLink } from "better-auth/plugins";
+import { encodeBase64Url } from "../encoding/base64.js";
 
 export interface CloudflareMagicLinkOptions {
   readonly email: SendEmail;
@@ -9,13 +10,8 @@ export interface CloudflareMagicLinkOptions {
   readonly admitEmail?: (email: string) => Promise<boolean>;
 }
 
-const magicLinkToken = () => {
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  return btoa(String.fromCharCode(...bytes))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/, "");
-};
+const magicLinkToken = () =>
+  encodeBase64Url(crypto.getRandomValues(new Uint8Array(32)));
 
 export const cloudflareMagicLink = ({
   email,

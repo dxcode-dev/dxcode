@@ -4,6 +4,7 @@ import {
   SigningPublicKey,
 } from "@dx/domain";
 import { Effect, Schema } from "effect";
+import { decodeBase64, encodeBase64 } from "../../encoding/base64.js";
 
 const OPENSSH_MAGIC = new TextEncoder().encode("openssh-key-v1\0");
 const ED25519_PKCS8_PREFIX = new Uint8Array([
@@ -52,20 +53,8 @@ const sshString = (value: string | Uint8Array): Uint8Array => {
   return concat(uint32(bytes.byteLength), bytes);
 };
 
-const bytesToBase64 = (bytes: Uint8Array): string => {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-};
-
-const base64ToBytes = (value: string): Uint8Array => {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-};
+// Every caller re-encodes and compares, rejecting non-canonical input.
+const base64ToBytes = (value: string): Uint8Array => decodeBase64(value);
 
 const readSshString = (
   bytes: Uint8Array,
@@ -93,7 +82,7 @@ const decodePublicBlob = (encoded: string): Uint8Array => {
   } catch {
     throw new InvalidSshPublicKey();
   }
-  if (bytesToBase64(bytes) !== encoded) throw new InvalidSshPublicKey();
+  if (encodeBase64(bytes) !== encoded) throw new InvalidSshPublicKey();
   const algorithm = readSshString(bytes, 0);
   const key = readSshString(bytes, algorithm.offset);
   if (
@@ -122,14 +111,14 @@ export const canonicalizeSigningPublicKey = Effect.fn(
     catch: () => new InvalidSshPublicKey(),
   });
   const publicKey = yield* Schema.decodeUnknownEffect(SigningPublicKey)(
-    `ssh-ed25519 ${bytesToBase64(blob)}`,
+    `ssh-ed25519 ${encodeBase64(blob)}`,
   ).pipe(Effect.mapError(() => new InvalidSshPublicKey()));
   const digest = yield* Effect.tryPromise({
     try: () => crypto.subtle.digest("SHA-256", Uint8Array.from(blob)),
     catch: () => new InvalidSshPublicKey(),
   });
   const fingerprint = yield* Schema.decodeUnknownEffect(SigningKeyFingerprint)(
-    `SHA256:${bytesToBase64(new Uint8Array(digest)).replace(/=+$/, "")}`,
+    `SHA256:${encodeBase64(new Uint8Array(digest)).replace(/=+$/, "")}`,
   ).pipe(Effect.mapError(() => new InvalidSshPublicKey()));
   return { publicKey, fingerprint };
 });
@@ -153,7 +142,7 @@ const privatePem = (seed: Uint8Array, rawPublicKey: Uint8Array): string => {
     privateBlock,
     Uint8Array.from({ length: paddingLength }, (_, index) => index + 1),
   );
-  const encoded = bytesToBase64(
+  const encoded = encodeBase64(
     concat(
       OPENSSH_MAGIC,
       sshString("none"),
@@ -192,7 +181,7 @@ const privateSeed = (
     .replaceAll(/\s/g, "");
   const bytes = base64ToBytes(encoded);
   if (
-    bytesToBase64(bytes) !== encoded ||
+    encodeBase64(bytes) !== encoded ||
     !equalBytes(bytes.slice(0, OPENSSH_MAGIC.byteLength), OPENSSH_MAGIC)
   ) {
     throw new SigningOperationUnavailable();
@@ -303,7 +292,7 @@ export const signGitPayload = async (
       sshString("sha512"),
       sshString(concat(sshString("ssh-ed25519"), sshString(signature))),
     );
-    const lines = bytesToBase64(blob).match(/.{1,76}/g) ?? [];
+    const lines = encodeBase64(blob).match(/.{1,76}/g) ?? [];
     return `-----BEGIN SSH SIGNATURE-----\n${lines.join("\n")}\n-----END SSH SIGNATURE-----\n`;
   } catch {
     throw new SigningOperationUnavailable();
@@ -335,7 +324,7 @@ export const generateManagedSshKey = Effect.fn("generateManagedSshKey")(
         try {
           const canonical = await Effect.runPromise(
             canonicalizeSigningPublicKey(
-              `ssh-ed25519 ${bytesToBase64(publicBlob(rawPublicKey))}`,
+              `ssh-ed25519 ${encodeBase64(publicBlob(rawPublicKey))}`,
             ),
           );
           const privateKey = Schema.decodeUnknownSync(

@@ -10,6 +10,7 @@ import {
   ThreadChangesWorktreeSchema,
 } from "@dx/api";
 import { Schema } from "effect";
+import { utf8ExceedsBytes } from "../encoding/utf8.js";
 
 const NonNegativeInt = Schema.Int.check(
   Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
@@ -23,8 +24,7 @@ const ThreadChangesPatch = Schema.String.check(
   Schema.makeFilter(
     (value) =>
       !value.includes("\0") &&
-      new TextEncoder().encode(value).byteLength <=
-        THREAD_CHANGES_MAX_PATCH_BYTES,
+      !utf8ExceedsBytes(value, THREAD_CHANGES_MAX_PATCH_BYTES),
   ),
 );
 

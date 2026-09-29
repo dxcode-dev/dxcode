@@ -5,6 +5,7 @@ import type {
   CustomApiFormatData,
   PendingPersonalModelSubscriptionAuthorizationDataSchema,
 } from "@dx/api";
+import { customModelEndpoint } from "@dx/domain";
 import {
   ArrowDown,
   ArrowUp,
@@ -218,10 +219,19 @@ export const ConnectionRow = ({
               </dd>
             </div>
             {connection.baseUrl ? (
-              <div>
-                <dt>Base URL</dt>
-                <dd>{connection.baseUrl}</dd>
-              </div>
+              connection.kind === "custom" && connection.format ? (
+                <div>
+                  <dt>Endpoint</dt>
+                  <dd className="model-routing-connection-mono">
+                    {customModelEndpoint(connection.format, connection.baseUrl)}
+                  </dd>
+                </div>
+              ) : (
+                <div>
+                  <dt>Base URL</dt>
+                  <dd>{connection.baseUrl}</dd>
+                </div>
+              )
             ) : null}
             <div>
               <dt>Models</dt>
@@ -459,6 +469,10 @@ export const ConnectionDialog = ({
     ReadonlyArray<{ line: number; message: string }>
   >([]);
 
+  const endpointPreview =
+    custom && baseUrl.trim() !== ""
+      ? customModelEndpoint(format, baseUrl)
+      : undefined;
   const requiredFields =
     provider?.fields.filter((field) => field.required) ?? [];
   const advancedFields =
@@ -526,8 +540,11 @@ export const ConnectionDialog = ({
             <Input
               id="mr-base-url"
               autoFocus
-              placeholder="https://"
+              placeholder={custom ? "https://api.example.com/v1" : "https://"}
               value={baseUrl}
+              aria-describedby={
+                endpointPreview === undefined ? undefined : "mr-endpoint"
+              }
               onChange={(event) => setBaseUrl(event.target.value)}
             />
             {fieldErrors.baseUrl === undefined ? null : (
@@ -536,6 +553,35 @@ export const ConnectionDialog = ({
               </span>
             )}
           </label>
+          {custom ? (
+            <fieldset className="routing-format-options">
+              <legend>API format</legend>
+              {CUSTOM_API_FORMATS.map(([value, label]) => (
+                <label key={value} className="routing-format-option">
+                  <input
+                    type="radio"
+                    name="api-format"
+                    value={value}
+                    checked={format === value}
+                    onChange={() => setFormat(value as CustomApiFormat)}
+                  />
+                  {label}
+                </label>
+              ))}
+            </fieldset>
+          ) : null}
+          {endpointPreview === undefined ? null : (
+            <p
+              id="mr-endpoint"
+              className="routing-endpoint-preview"
+              aria-live="polite"
+            >
+              <span>Requests go to</span>
+              <code className="model-routing-connection-mono">
+                {endpointPreview}
+              </code>
+            </p>
+          )}
           <label htmlFor="mr-name">
             Name
             <Input
@@ -592,23 +638,6 @@ export const ConnectionDialog = ({
               )}
             </label>
           ))}
-          {custom ? (
-            <fieldset className="routing-format-options">
-              <legend>API format</legend>
-              {CUSTOM_API_FORMATS.map(([value, label]) => (
-                <label key={value} className="routing-format-option">
-                  <input
-                    type="radio"
-                    name="api-format"
-                    value={value}
-                    checked={format === value}
-                    onChange={() => setFormat(value as CustomApiFormat)}
-                  />
-                  {label}
-                </label>
-              ))}
-            </fieldset>
-          ) : null}
           {custom ? (
             <label htmlFor="mr-models">
               Models

@@ -39,3 +39,40 @@ export const parseTranscriptPatch = (patch: string, path: string) => {
 
 export const isPatchOutput = (output: string) =>
   /^(?:diff --git|--- |\+\+\+ |@@ )/m.test(output);
+
+export interface TranscriptEditSource {
+  readonly path: string;
+  readonly before: string;
+  readonly after: string;
+}
+
+const textField = (input: unknown, name: string) => {
+  if (typeof input !== "object" || input === null) return undefined;
+  const value = (input as Record<string, unknown>)[name];
+  return typeof value === "string" ? value : undefined;
+};
+
+/**
+ * Recover the edited region from an edit or write tool call's input. Flue's
+ * `edit` result carries no patch, so the diff is derived from the request.
+ */
+export const transcriptEditSource = (
+  toolName: string,
+  input: unknown,
+): TranscriptEditSource | undefined => {
+  const path = textField(input, "path");
+  if (path === undefined || path.length === 0) return undefined;
+  const name = toolName.toLowerCase();
+  if (name === "edit") {
+    const before = textField(input, "oldText");
+    const after = textField(input, "newText");
+    return before === undefined || after === undefined
+      ? undefined
+      : { path, before, after };
+  }
+  if (name === "write") {
+    const after = textField(input, "content");
+    return after === undefined ? undefined : { path, before: "", after };
+  }
+  return undefined;
+};

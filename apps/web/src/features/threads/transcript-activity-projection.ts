@@ -15,7 +15,7 @@ export type TranscriptActivity =
   | { readonly kind: "row"; readonly row: TranscriptRow }
   | {
       readonly kind: "tools";
-      readonly category: ToolCategory;
+      /** Consecutive tool calls in chronological order, across categories. */
       readonly rows: ReadonlyArray<WorkRow>;
     };
 
@@ -83,75 +83,34 @@ export const categoryForTool = (
   return "generic";
 };
 
-const categoryFor = (part: ToolPart): ToolCategory =>
-  categoryForTool(part.toolName, part.input);
-
 const workRow = (row: TranscriptRow): WorkRow | undefined =>
   row.kind === "active-work" || row.kind === "settled-work" ? row : undefined;
 
+export const categoryForPart = (part: ToolPart): ToolCategory =>
+  categoryForTool(part.toolName, part.input);
+
+/**
+ * Collapse each uninterrupted run of tool calls into one activity so the
+ * summary reflects every kind of work in the order it happened.
+ */
 export const projectTranscriptActivities = (
   rows: ReadonlyArray<TranscriptRow>,
 ): ReadonlyArray<TranscriptActivity> => {
   const activities: TranscriptActivity[] = [];
-  const visibleRows = rows.filter((row) => {
+  for (const row of rows) {
     const work = workRow(row);
-    return work?.part.type !== "reasoning";
-  });
-
-  const appendTools = (category: ToolCategory, groupedRows: WorkRow[]) => {
-    const previous = activities.at(-1);
-    const groupable =
-      category === "explore" || category === "command" || category === "check";
-    if (
-      groupable &&
-      previous?.kind === "tools" &&
-      previous.category === category
-    ) {
-      activities[activities.length - 1] = {
-        ...previous,
-        rows: [...previous.rows, ...groupedRows],
-      };
-      return;
-    }
-    activities.push({ kind: "tools", category, rows: groupedRows });
-  };
-
-  for (let index = 0; index < visibleRows.length; ) {
-    const row = visibleRows[index];
-    if (row === undefined) break;
-    const work = workRow(row);
-    const part = work === undefined ? undefined : toolPart(work);
-    if (work === undefined || part === undefined) {
+    if (work?.part.type === "reasoning") continue;
+    if (work === undefined || toolPart(work) === undefined) {
       activities.push({ kind: "row", row });
-      index += 1;
       continue;
     }
-
-    const messageRows: WorkRow[] = [];
-    let cursor = index;
-    while (cursor < visibleRows.length) {
-      const candidate = visibleRows[cursor];
-      if (candidate === undefined || candidate.messageId !== row.messageId)
-        break;
-      const candidateWork = workRow(candidate);
-      if (candidateWork === undefined || toolPart(candidateWork) === undefined)
-        break;
-      messageRows.push(candidateWork);
-      cursor += 1;
-    }
-
-    const buckets = new Map<ToolCategory, WorkRow[]>();
-    for (const messageRow of messageRows) {
-      const messagePart = toolPart(messageRow);
-      if (messagePart === undefined) continue;
-      const category = categoryFor(messagePart);
-      const bucket = buckets.get(category);
-      if (bucket === undefined) buckets.set(category, [messageRow]);
-      else bucket.push(messageRow);
-    }
-    for (const [category, groupedRows] of buckets)
-      appendTools(category, groupedRows);
-    index = cursor;
+    const previous = activities.at(-1);
+    if (previous?.kind === "tools")
+      activities[activities.length - 1] = {
+        kind: "tools",
+        rows: [...previous.rows, work],
+      };
+    else activities.push({ kind: "tools", rows: [work] });
   }
   return activities;
 };
@@ -175,7 +134,7 @@ export const terminalToolActivityRowIds = (
       if (terminalRows.length > 0) break;
       continue;
     }
-    const category = categoryFor(part);
+    const category = categoryForPart(part);
     if (terminalCategory === undefined) terminalCategory = category;
     if (category !== terminalCategory) break;
     terminalRows.unshift(work);

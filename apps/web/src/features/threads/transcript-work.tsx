@@ -1,4 +1,4 @@
-import { ChevronRight, OctagonX } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import type * as React from "react";
 import { TranscriptActivityList } from "./transcript-activities.js";
 import type {
@@ -36,9 +36,6 @@ export function TranscriptTurn({
   );
   const prompt = rows.filter((row) => row.kind === "user-prompt");
   const final = rows.filter((row) => row.id === turn.finalAnswerRowId);
-  const failures = rows.filter(
-    (row) => row.kind === "failure" && row.outcome === "failed",
-  );
   const attachments = rows.filter((row) => row.kind === "attachment");
   const intermediateIds = new Set(turn.intermediateRowIds);
   const intermediate = rows.filter(
@@ -105,16 +102,6 @@ export function TranscriptTurn({
       ) : (
         visibleIntermediate.map(renderRow)
       )}
-      {failures.map(renderRow)}
-      {(turn.status === "aborted" || turn.status === "interrupted") &&
-      turn.settlement?.provenance !== "user-stop" ? (
-        <div className="turn-settlement turn-aborted">
-          <OctagonX />
-          <span>
-            <strong>Agent interrupted</strong>
-          </span>
-        </div>
-      ) : null}
       {final.map(renderRow)}
     </section>
   );

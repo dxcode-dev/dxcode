@@ -89,7 +89,9 @@ describe("image attachment controls", () => {
         .querySelector<HTMLButtonElement>('[aria-label="Add Images & Files"]')
         ?.click(),
     );
-    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    const menu = document.querySelector('[role="menu"]');
+    expect(menu).not.toBeNull();
+    expect(container.contains(menu)).toBe(false);
     await React.act(() =>
       document
         .querySelector('[role="menu"]')

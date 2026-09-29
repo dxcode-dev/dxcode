@@ -255,6 +255,86 @@ describe("settings routes in workerd with real D1", () => {
     ).toBe("dark");
   });
 
+  it("remembers composer defaults per user and patches only sent fields", async () => {
+    const app = createSettingsApp(owner);
+    const patch = (body: unknown) =>
+      app.request(
+        "/settings/personal/account/composer",
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        },
+        { DB: env.DB },
+      );
+
+    const initial = await app.request(
+      "/settings/personal/account/composer",
+      {},
+      { DB: env.DB },
+    );
+    expect(initial.status).toBe(200);
+    await expect(initial.json()).resolves.toEqual({
+      status: "success",
+      data: { project: null, mode: null, model: null, runnerProfileId: null },
+    });
+
+    expect(
+      (await patch({ mode: "high", model: "openai/gpt-6-astra" })).status,
+    ).toBe(200);
+    expect((await patch({ runnerProfileId: "e2b-large" })).status).toBe(200);
+    const cleared = await patch({ project: "none", model: null });
+    expect(cleared.status).toBe(200);
+    await expect(cleared.json()).resolves.toEqual({
+      status: "success",
+      data: {
+        project: "none",
+        mode: "high",
+        model: null,
+        runnerProfileId: "e2b-large",
+      },
+    });
+
+    const reread = await createSettingsApp(owner).request(
+      "/settings/personal/account/composer",
+      {},
+      { DB: env.DB },
+    );
+    await expect(reread.json()).resolves.toMatchObject({
+      data: { project: "none", mode: "high", runnerProfileId: "e2b-large" },
+    });
+    const other = await createSettingsApp(outsider).request(
+      "/settings/personal/account/composer",
+      {},
+      { DB: env.DB },
+    );
+    await expect(other.json()).resolves.toMatchObject({
+      data: { project: null, mode: null, model: null, runnerProfileId: null },
+    });
+  });
+
+  it.each([
+    { mode: "extreme" },
+    { project: "not-a-project" },
+    { model: "no-slash" },
+    { runnerProfileId: "Bad Orb" },
+  ])("rejects invalid composer defaults %j", async (body) => {
+    const response = await createSettingsApp(owner).request(
+      "/settings/personal/account/composer",
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      { DB: env.DB },
+    );
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "error",
+      data: { code: "INVALID_ACCOUNT_PROFILE" },
+    });
+  });
+
   it.each([
     [JSON.stringify({ appearance: "sepia" }), "appearance"],
     [JSON.stringify({ palette: "neon" }), "palette"],

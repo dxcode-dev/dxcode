@@ -3,9 +3,11 @@ import {
   IssueWorkloadIdentityResultSchema,
   THREAD_FILES_MAX_EDITABLE_BYTES,
   THREAD_FILES_MAX_TREE_PAGE_SIZE,
+  THREAD_SANDBOX_FILE_MAX_CHUNK_BYTES,
   ThreadFilesPath,
   ThreadFilesWorktreeId,
   ThreadFileVersion,
+  ThreadSandboxFilePath,
   type ThreadTerminalDimensions,
   ThreadTerminalDimensionsSchema,
 } from "@dx/api";
@@ -14,13 +16,15 @@ import {
   isReservedEnvironmentVariableName,
 } from "@dx/domain";
 import { Schema } from "effect";
+import { decodeBase64Url, encodeBase64Url } from "../../encoding/base64.js";
+import { utf8ExceedsBytes } from "../../encoding/utf8.js";
 import {
   ThreadChangesCandidateContentSchema,
   ThreadChangesFingerprint,
 } from "../../thread-changes/candidate.js";
 
 export const DXD_PROTOCOL_MAJOR = 1;
-export const DXD_RELEASE = "0.7.5";
+export const DXD_RELEASE = "0.7.6";
 export const DXD_TERMINAL_VERSION = 1;
 export const DXD_WORKLOAD_IDENTITY_VERSION = 1;
 export const DXD_HEARTBEAT_INTERVAL_MS = 2_000;
@@ -48,27 +52,15 @@ export const DaemonGeneration = Schema.String.check(
 );
 export type DaemonGeneration = typeof DaemonGeneration.Type;
 
-const generationToBytes = (value: string): Uint8Array => {
-  const base64 = `${value.replaceAll("-", "+").replaceAll("_", "/")}==`;
-  const decoded = atob(base64);
-  return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
-};
-
-const bytesToGeneration = (bytes: Uint8Array): string => {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary)
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replaceAll("=", "");
-};
+// Callers re-encode and compare, so the lenient native decoder is exact.
+const generationToBytes = (value: string): Uint8Array => decodeBase64Url(value);
 
 const canonicalNonZeroGeneration = (value: string) => {
   try {
     const bytes = generationToBytes(value);
     return (
       bytes.byteLength === 16 &&
-      bytesToGeneration(bytes) === value &&
+      encodeBase64Url(bytes) === value &&
       bytes.some((byte) => byte !== 0)
     );
   } catch {
@@ -435,7 +427,7 @@ export const decodeDxdTerminalFrame = (
   if (view.getUint32(46) !== bytes.byteLength - DXD_TERMINAL_FRAME_HEADER_BYTES)
     throw new Error("Invalid DXT1 frame.");
   const residentGeneration = Schema.decodeUnknownSync(TerminalGeneration)(
-    bytesToGeneration(bytes.subarray(6, 22)),
+    encodeBase64Url(bytes.subarray(6, 22)),
   );
   const attachmentBytes = bytes.subarray(22, 38);
   const zeroAttachment = attachmentBytes.every((byte) => byte === 0);
@@ -444,7 +436,7 @@ export const decodeDxdTerminalFrame = (
   const attachmentGeneration = zeroAttachment
     ? undefined
     : Schema.decodeUnknownSync(TerminalGeneration)(
-        bytesToGeneration(attachmentBytes),
+        encodeBase64Url(attachmentBytes),
       );
   const sequence = Schema.decodeUnknownSync(DxdU64)(
     view.getBigUint64(38).toString(),
@@ -495,35 +487,48 @@ export const DxdFilesSaveOperation = Schema.Struct({
     Schema.makeFilter(
       (value) =>
         !value.includes("\0") &&
-        new TextEncoder().encode(value).byteLength <=
-          THREAD_FILES_MAX_EDITABLE_BYTES,
+        !utf8ExceedsBytes(value, THREAD_FILES_MAX_EDITABLE_BYTES),
     ),
   ),
   refresh: Schema.optional(DxdChangesRefreshMessage),
 });
 export type DxdFilesSaveOperation = typeof DxdFilesSaveOperation.Type;
 
+/** Read-only byte range of any regular file in the guest. */
+export const DxdFilesReadSandboxOperation = Schema.Struct({
+  operation: Schema.Literal("files.readSandbox"),
+  path: ThreadSandboxFilePath,
+  offset: Schema.Int.check(
+    Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  ),
+  length: Schema.Int.check(
+    Schema.isBetween({
+      minimum: 1,
+      maximum: THREAD_SANDBOX_FILE_MAX_CHUNK_BYTES,
+    }),
+  ),
+  expectedVersion: Schema.optional(ThreadFileVersion),
+});
+export type DxdFilesReadSandboxOperation =
+  typeof DxdFilesReadSandboxOperation.Type;
+
 export const DxdFilesOperation = Schema.Union([
   DxdFilesListOperation,
   DxdFilesReadOperation,
   DxdFilesSaveOperation,
+  DxdFilesReadSandboxOperation,
 ]);
 export type DxdFilesOperation = typeof DxdFilesOperation.Type;
 
 const canonicalEnvironmentValue = (value: string) => {
   try {
-    const padding = "=".repeat((4 - (value.length % 4)) % 4);
-    const decoded = atob(
-      `${value.replaceAll("-", "+").replaceAll("_", "/")}${padding}`,
-    );
-    const bytes = Uint8Array.from(decoded, (character) =>
-      character.charCodeAt(0),
-    );
+    // Native decode; the re-encode comparison below rejects non-canonical input.
+    const bytes = decodeBase64Url(value);
     const plaintext = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     return bytes.byteLength >= 1 &&
       bytes.byteLength <= DXD_ENVIRONMENT_MAX_VALUE_BYTES &&
       !plaintext.includes("\0") &&
-      bytesToGeneration(bytes) === value
+      encodeBase64Url(bytes) === value
       ? bytes.byteLength
       : undefined;
   } catch {
@@ -654,8 +659,7 @@ const DxdEditableResult = Schema.Struct({
     Schema.makeFilter(
       (value) =>
         !value.includes("\0") &&
-        new TextEncoder().encode(value).byteLength <=
-          THREAD_FILES_MAX_EDITABLE_BYTES,
+        !utf8ExceedsBytes(value, THREAD_FILES_MAX_EDITABLE_BYTES),
     ),
   ),
   sizeBytes: Schema.Int.check(
@@ -695,6 +699,90 @@ export const DxdFilesSaveResult = Schema.Union([
   DxdFailureResult,
 ]);
 export type DxdFilesSaveResult = typeof DxdFilesSaveResult.Type;
+
+const NonNegativeSafeInt = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+);
+
+/** JSON header of a binary `DXF1` sandbox chunk frame. */
+export const DxdSandboxChunkHeader = Schema.Struct({
+  generation: DaemonGeneration,
+  requestId: DxdRequestId,
+  version: ThreadFileVersion,
+  sizeBytes: NonNegativeSafeInt,
+  offset: NonNegativeSafeInt,
+});
+export type DxdSandboxChunkHeader = typeof DxdSandboxChunkHeader.Type;
+
+/**
+ * A successful sandbox read never crosses the socket as JSON: dxd sends its
+ * raw bytes in a binary `DXF1` frame. Only failures arrive as JSON results.
+ */
+export type DxdFilesReadSandboxResult =
+  | (Omit<DxdSandboxChunkHeader, "generation" | "requestId"> & {
+      readonly kind: "sandbox-chunk";
+      readonly bytes: Uint8Array;
+    })
+  | typeof DxdFailureResult.Type;
+
+export const DxdFilesReadSandboxFailure = DxdFailureResult;
+
+/** Internal header carrying chunk metadata from the Durable Object. */
+export const DXD_SANDBOX_CHUNK_HEADER = "x-dx-sandbox-chunk";
+
+/** `DXF1` magic that distinguishes sandbox chunks from `DXT1` terminal frames. */
+export const DXD_SANDBOX_CHUNK_MAGIC = [0x44, 0x58, 0x46, 0x31] as const;
+const DXD_SANDBOX_CHUNK_MAX_HEADER_BYTES = 4_096;
+export const DXD_SANDBOX_CHUNK_MAX_FRAME_BYTES =
+  8 + DXD_SANDBOX_CHUNK_MAX_HEADER_BYTES + THREAD_SANDBOX_FILE_MAX_CHUNK_BYTES;
+
+export const isDxdSandboxChunkFrame = (bytes: Uint8Array) =>
+  bytes.byteLength >= 8 &&
+  DXD_SANDBOX_CHUNK_MAGIC.every((byte, index) => bytes[index] === byte);
+
+/**
+ * Decode `DXF1 | u32 BE header length | JSON header | raw bytes`. The payload
+ * is a view into the frame, so the bytes are never copied or re-encoded.
+ */
+export const decodeDxdSandboxChunkFrame = (
+  source: ArrayBuffer | ArrayBufferView,
+): { readonly header: DxdSandboxChunkHeader; readonly bytes: Uint8Array } => {
+  const bytes =
+    source instanceof ArrayBuffer
+      ? new Uint8Array(source)
+      : new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+  if (
+    !isDxdSandboxChunkFrame(bytes) ||
+    bytes.byteLength > DXD_SANDBOX_CHUNK_MAX_FRAME_BYTES
+  )
+    throw new Error("Invalid DXF1 frame.");
+  const headerLength = new DataView(
+    bytes.buffer,
+    bytes.byteOffset,
+    bytes.byteLength,
+  ).getUint32(4);
+  if (
+    headerLength < 2 ||
+    headerLength > DXD_SANDBOX_CHUNK_MAX_HEADER_BYTES ||
+    8 + headerLength > bytes.byteLength
+  )
+    throw new Error("Invalid DXF1 frame.");
+  const header = Schema.decodeUnknownSync(DxdSandboxChunkHeader)(
+    JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(
+        bytes.subarray(8, 8 + headerLength),
+      ),
+    ),
+    { onExcessProperty: "error" },
+  );
+  const payload = bytes.subarray(8 + headerLength);
+  if (
+    payload.byteLength > THREAD_SANDBOX_FILE_MAX_CHUNK_BYTES ||
+    header.offset + payload.byteLength > header.sizeBytes
+  )
+    throw new Error("Invalid DXF1 frame.");
+  return { header, bytes: payload };
+};
 
 export const DxdFilesResult = Schema.Union([
   DxdTreeResult,

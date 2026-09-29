@@ -1,4 +1,5 @@
-import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
+import { createRemoteJWKSet, type JWTVerifyGetKey, jwtVerify } from "jose";
+import { encodeBase64Url } from "../encoding/base64.js";
 
 export interface AccessIdentity {
   readonly issuer: string;
@@ -91,9 +92,5 @@ export const accessUserId = async (
     `${issuer.length}:${issuer}${subject.length}:${subject}`,
   );
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", encoded));
-  const value = btoa(String.fromCharCode(...digest))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replaceAll("=", "");
-  return `usr_${value}`;
+  return `usr_${encodeBase64Url(digest)}`;
 };

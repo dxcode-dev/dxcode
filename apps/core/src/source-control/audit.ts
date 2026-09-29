@@ -1,5 +1,6 @@
 import {
   SourceControlLeaseFailure,
+  type SourceOperationInvocationSourceType,
   type SourceOperationType,
 } from "@dx/domain";
 import { Context, Effect, Layer } from "effect";
@@ -15,13 +16,7 @@ export interface SourceAuditRecord {
   readonly providerRepositoryId?: string;
   readonly requestedCapabilities: ReadonlyArray<SourceOperationType>;
   readonly credentialClass: "none" | "github-app-installation";
-  readonly invocationSource:
-    | "checkout"
-    | "agent-command"
-    | "git-helper"
-    | "setup-hook"
-    | "resume-hook"
-    | "system";
+  readonly invocationSource: SourceOperationInvocationSourceType;
   readonly outcome:
     | "success"
     | "denied"

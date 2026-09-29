@@ -217,6 +217,8 @@ export {
   ConnectionKind,
   ConnectionModel,
   CustomApiFormat,
+  customModelBaseUrlForFormatChange,
+  customModelEndpoint,
   DEFAULT_PROFILE_ID,
   defaultThreadModelSelection,
   MAX_CONNECTION_HEADERS,
@@ -238,6 +240,7 @@ export {
   ModelProviderId,
   ModeProfileOverride,
   ModeSlot,
+  normalizeCustomModelBaseUrl,
   PersonalModelConnectionTarget,
   Profile,
   ProfileId,
@@ -270,6 +273,7 @@ export {
   PersonalModelSubscriptionLifecycle,
 } from "./settings/model-subscriptions.js";
 export {
+  ComposerProjectChoice,
   normalizePersonalAccountDisplayName,
   normalizePersonalAccountUsername,
   PersonalAccount,
@@ -278,10 +282,12 @@ export {
   PersonalAccountIdentityAuthority,
   PersonalAccountUsername,
   PersonalAppearance,
+  PersonalComposerDefaults,
   PersonalPalette,
   PersonalTerminalTheme,
   UpdatePersonalAccountInput,
   UpdatePersonalAppearanceInput,
+  UpdatePersonalComposerDefaultsInput,
 } from "./settings/personal-account.js";
 export {
   PersonalAccountRepository,
@@ -602,6 +608,8 @@ export {
   SourceControlProviderUnavailable,
   SourceOperation,
   type SourceOperation as SourceOperationType,
+  SourceOperationInvocationSource,
+  type SourceOperationInvocationSource as SourceOperationInvocationSourceType,
   SourceOperationRequest,
   type SourceOperationRequest as SourceOperationRequestType,
   type SourceSubmoduleRepository,

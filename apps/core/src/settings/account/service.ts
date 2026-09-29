@@ -4,9 +4,11 @@ import {
   type PersonalAccountNotFound,
   PersonalAccountRepository,
   type PersonalAccountUsernameUnavailable,
+  type PersonalComposerDefaults,
   type Principal,
   type UpdatePersonalAccountInput,
   type UpdatePersonalAppearanceInput,
+  type UpdatePersonalComposerDefaultsInput,
 } from "@dx/domain";
 import { Context, Effect, Layer, type Schema } from "effect";
 import { SettingsAudit } from "../audit.js";
@@ -34,6 +36,14 @@ interface PersonalAccountServiceShape {
     input: UpdatePersonalAppearanceInput,
     requestId: string,
   ) => Effect.Effect<PersonalAccount, PersonalAccountReadError>;
+  readonly getComposerDefaults: (
+    principal: Principal,
+  ) => Effect.Effect<PersonalComposerDefaults, PersonalAccountReadError>;
+  /** Not audited: these are remembered UI choices, written on every change. */
+  readonly updateComposerDefaults: (
+    principal: Principal,
+    input: UpdatePersonalComposerDefaultsInput,
+  ) => Effect.Effect<PersonalComposerDefaults, PersonalAccountReadError>;
 }
 
 export class PersonalAccountService extends Context.Service<
@@ -49,6 +59,16 @@ export class PersonalAccountService extends Context.Service<
       return PersonalAccountService.of({
         get: Effect.fn("PersonalAccountService.get")((principal) =>
           accounts.findOwnedByUser(principal.userId),
+        ),
+        getComposerDefaults: Effect.fn(
+          "PersonalAccountService.getComposerDefaults",
+        )((principal) =>
+          accounts.findComposerDefaultsOwnedByUser(principal.userId),
+        ),
+        updateComposerDefaults: Effect.fn(
+          "PersonalAccountService.updateComposerDefaults",
+        )((principal, input) =>
+          accounts.updateComposerDefaultsOwnedByUser(principal.userId, input),
         ),
         update: Effect.fn("PersonalAccountService.update")(
           function* (principal, input, requestId) {

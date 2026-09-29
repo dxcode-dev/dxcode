@@ -1,14 +1,24 @@
-import type { ThreadFilesPath, ThreadFilesWorktreeId } from "@dx/api";
 import { X } from "lucide-react";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
-import { centerFileKey } from "./thread-file-key.js";
+import {
+  type FileReveal,
+  fileTargetKey,
+  type ThreadFileTarget,
+} from "./transcript-file-link.js";
 
-export interface CenterFileTab {
-  readonly worktree?: ThreadFilesWorktreeId;
-  readonly worktreeLabel?: string;
-  readonly path: ThreadFilesPath;
+/** An open file in the center pane: a repository or read-only sandbox file. */
+export type CenterFileTab = ThreadFileTarget & {
   readonly dirty: boolean;
-}
+  /** Lines to highlight; replaced each time the file is opened again. */
+  readonly reveal?: FileReveal;
+  /** Increments per open so the same reveal can scroll again. */
+  readonly revealSequence?: number;
+};
+
+export const centerTabKey = (file: ThreadFileTarget) => fileTargetKey(file);
+
+const worktreeLabel = (file: CenterFileTab) =>
+  file.kind === "workspace" ? file.worktreeLabel : "Sandbox";
 
 const filename = (path: string) => path.split("/").at(-1) ?? path;
 
@@ -49,14 +59,15 @@ export const ThreadCenterTabs = ({
           <OrbIcon aria-hidden="true" /> Agent
         </button>
         {files.map((file) => {
-          const key = centerFileKey(file);
+          const key = centerTabKey(file);
+          const tabWorktreeLabel = worktreeLabel(file);
           const label = `${filename(file.path)}${
-            file.worktreeLabel === undefined ? "" : ` — ${file.worktreeLabel}`
+            tabWorktreeLabel === undefined ? "" : ` — ${tabWorktreeLabel}`
           }`;
           const locationLabel =
-            file.worktreeLabel === undefined
+            tabWorktreeLabel === undefined || file.kind === "sandbox"
               ? file.path
-              : `${file.worktreeLabel}: ${file.path}`;
+              : `${tabWorktreeLabel}: ${file.path}`;
           return (
             <div
               className="thread-center-file-tab"
@@ -73,9 +84,9 @@ export const ThreadCenterTabs = ({
                 onClick={() => onSelect(key)}
               >
                 {filename(file.path)}
-                {file.worktreeLabel === undefined ? null : (
+                {tabWorktreeLabel === undefined ? null : (
                   <span className="thread-center-tab-worktree">
-                    {file.worktreeLabel}
+                    {tabWorktreeLabel}
                   </span>
                 )}
                 {file.dirty ? <span aria-hidden="true"> •</span> : null}

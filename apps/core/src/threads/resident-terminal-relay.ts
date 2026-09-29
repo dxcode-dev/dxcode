@@ -8,6 +8,8 @@ import {
   type ThreadTerminalServerPhase,
 } from "@dx/api";
 import { Option, Schema } from "effect";
+import { encodeBase64Url } from "../encoding/base64.js";
+import { utf8ByteLength } from "../encoding/utf8.js";
 import {
   type DxdClientTerminalControl,
   type DxdCoreTerminalControl,
@@ -96,11 +98,7 @@ const generation = () => {
   let bytes: Uint8Array;
   do bytes = crypto.getRandomValues(new Uint8Array(16));
   while (bytes.every((byte) => byte === 0));
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return Schema.decodeUnknownSync(TerminalGeneration)(
-    btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", ""),
-  );
+  return Schema.decodeUnknownSync(TerminalGeneration)(encodeBase64Url(bytes));
 };
 
 const dxdU64 = (value: bigint) =>
@@ -213,8 +211,7 @@ const decodeMetadata = (
   return metadata as ResidentTerminalMetadata;
 };
 
-const byteLength = (value: string) =>
-  new TextEncoder().encode(value).byteLength;
+const byteLength = utf8ByteLength;
 
 const sendSafely = (
   socket: ResidentTerminalSocket,

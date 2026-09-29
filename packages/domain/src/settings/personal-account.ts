@@ -1,5 +1,8 @@
 import { Schema } from "effect";
+import { ProjectId } from "../projects/project-id.js";
 import { UserId } from "../users/user-id.js";
+import { ModeId, ModelId } from "./model-routing.js";
+import { RunnerProfileId } from "./runner-profile.js";
 
 export const PersonalAccountDisplayName = Schema.String.check(
   Schema.isMinLength(1),
@@ -81,6 +84,38 @@ export const UpdatePersonalAppearanceInput = Schema.Struct({
 
 export type UpdatePersonalAppearanceInput =
   typeof UpdatePersonalAppearanceInput.Type;
+
+/** A remembered New Thread Project: a Project, or deliberately no Project. */
+export const ComposerProjectChoice = Schema.Union([
+  Schema.Literal("none"),
+  ProjectId,
+]);
+
+export type ComposerProjectChoice = typeof ComposerProjectChoice.Type;
+
+/**
+ * The last New Thread composer choices for one user. `null` means the user has
+ * not chosen that value yet, or (for `model`) chose a mode instead of a model.
+ */
+export const PersonalComposerDefaults = Schema.Struct({
+  project: Schema.NullOr(ComposerProjectChoice),
+  mode: Schema.NullOr(ModeId),
+  model: Schema.NullOr(ModelId),
+  runnerProfileId: Schema.NullOr(RunnerProfileId),
+});
+
+export type PersonalComposerDefaults = typeof PersonalComposerDefaults.Type;
+
+/** Absent fields stay unchanged; `model: null` clears a remembered model. */
+export const UpdatePersonalComposerDefaultsInput = Schema.Struct({
+  project: Schema.optional(ComposerProjectChoice),
+  mode: Schema.optional(ModeId),
+  model: Schema.optional(Schema.NullOr(ModelId)),
+  runnerProfileId: Schema.optional(RunnerProfileId),
+});
+
+export type UpdatePersonalComposerDefaultsInput =
+  typeof UpdatePersonalComposerDefaultsInput.Type;
 
 export const normalizePersonalAccountDisplayName = (value: string): string =>
   value.trim();

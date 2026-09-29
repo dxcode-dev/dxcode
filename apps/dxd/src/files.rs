@@ -1,4 +1,5 @@
 use crate::changes::{RefreshRequest, SourceContext};
+use crate::files_sandbox::{self, SandboxReadResult, SandboxRoots};
 use crate::worktrees::{self, PRIMARY_WORKTREE};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -57,6 +58,15 @@ pub enum FilesOperation {
         #[serde(default)]
         refresh: Option<SaveRefresh>,
     },
+    /// Read-only byte range of any regular file in the guest, by absolute path.
+    #[serde(rename = "files.readSandbox")]
+    ReadSandbox {
+        path: String,
+        offset: u64,
+        length: u64,
+        #[serde(rename = "expectedVersion", default)]
+        expected_version: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -89,7 +99,10 @@ impl FilesOperation {
                     expected_fingerprint: refresh.expected_fingerprint.clone(),
                 })
             }
-            Self::List { .. } | Self::Read { .. } | Self::Save { refresh: None, .. } => None,
+            Self::List { .. }
+            | Self::Read { .. }
+            | Self::ReadSandbox { .. }
+            | Self::Save { refresh: None, .. } => None,
         }
     }
 }
@@ -147,6 +160,8 @@ pub enum FilesResult {
     Missing,
     Conflict,
     Unavailable,
+    #[serde(untagged)]
+    Sandbox(SandboxReadResult),
 }
 
 enum FilesError {
@@ -172,6 +187,7 @@ pub struct CompletedOperation {
 pub fn start_worker(
     root: &File,
     workspace_root: &Path,
+    sandbox: SandboxRoots,
 ) -> io::Result<(SyncSender<WorkerRequest>, Receiver<CompletedOperation>)> {
     let root = root.try_clone()?;
     let workspace_root = workspace_root.to_owned();
@@ -182,7 +198,21 @@ pub fn start_worker(
             if completed
                 .send(CompletedOperation {
                     request_id: request.request_id,
-                    result: execute_workspace(&root, &workspace_root, request.operation),
+                    result: match request.operation {
+                        FilesOperation::ReadSandbox {
+                            path,
+                            offset,
+                            length,
+                            expected_version,
+                        } => FilesResult::Sandbox(files_sandbox::read(
+                            &sandbox,
+                            &path,
+                            offset,
+                            length,
+                            expected_version.as_deref(),
+                        )),
+                        operation => execute_workspace(&root, &workspace_root, operation),
+                    },
                 })
                 .is_err()
             {
@@ -217,6 +247,7 @@ pub fn execute(root: &File, operation: FilesOperation) -> FilesResult {
             content,
             ..
         } => save(root, &path, &expected_version, content.as_bytes()),
+        FilesOperation::ReadSandbox { .. } => Err(FilesError::Invalid),
     };
     match result {
         Ok(result) => result,
@@ -232,6 +263,7 @@ fn operation_worktree(operation: &FilesOperation) -> Option<&str> {
         FilesOperation::List { worktree, .. }
         | FilesOperation::Read { worktree, .. }
         | FilesOperation::Save { worktree, .. } => worktree.as_deref(),
+        FilesOperation::ReadSandbox { .. } => None,
     }
 }
 
@@ -900,7 +932,7 @@ mod tests {
     #[test]
     fn completes_files_work_on_the_bounded_worker_with_its_request_id() {
         let (workspace, root) = root();
-        let (worker, results) = start_worker(&root, workspace.path()).unwrap();
+        let (worker, results) = start_worker(&root, workspace.path(), SandboxRoots::Guest).unwrap();
         try_submit(
             &worker,
             WorkerRequest {
@@ -915,6 +947,51 @@ mod tests {
         let completed = results.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(completed.request_id, "files-request-01");
         assert!(matches!(completed.result, FilesResult::Tree { .. }));
+    }
+
+    #[test]
+    fn serves_sandbox_reads_on_the_worker_with_the_sandbox_wire_shape() {
+        let (workspace, root) = root();
+        let home = TempDir::new().unwrap();
+        std::fs::write(home.path().join("notes.txt"), "hello").unwrap();
+        let (worker, results) = start_worker(
+            &root,
+            workspace.path(),
+            SandboxRoots::Local {
+                home: home.path().to_owned(),
+            },
+        )
+        .unwrap();
+        try_submit(
+            &worker,
+            WorkerRequest {
+                request_id: "files-request-02".into(),
+                operation: operation(serde_json::json!({
+                    "operation": "files.readSandbox",
+                    "path": "/home/user/notes.txt",
+                    "offset": 0,
+                    "length": 1024
+                })),
+            },
+        )
+        .unwrap();
+        let completed = results.recv_timeout(Duration::from_secs(1)).unwrap();
+        let FilesResult::Sandbox(SandboxReadResult::SandboxChunk {
+            version,
+            size_bytes,
+            offset,
+            bytes,
+        }) = completed.result
+        else {
+            panic!("expected a sandbox chunk");
+        };
+        assert_eq!((size_bytes, offset), (5, 0));
+        assert_eq!(bytes, b"hello");
+        assert!(version.starts_with("sha256:"));
+        assert_eq!(
+            json(FilesResult::Sandbox(SandboxReadResult::Missing)),
+            serde_json::json!({"kind":"missing"})
+        );
     }
 
     #[test]
@@ -1012,7 +1089,7 @@ mod tests {
     #[test]
     fn preserves_submission_order_across_the_files_worker() {
         let (workspace, root) = root();
-        let (worker, results) = start_worker(&root, workspace.path()).unwrap();
+        let (worker, results) = start_worker(&root, workspace.path(), SandboxRoots::Guest).unwrap();
         for index in 0..WORK_QUEUE_CAPACITY {
             try_submit(
                 &worker,

@@ -2,14 +2,16 @@ import { Context, type Effect, type Schema } from "effect";
 import type { PersistenceUnavailable } from "../persistence/errors.js";
 import type { UserId } from "../users/user-id.js";
 import type {
-  PersonalAccount,
-  UpdatePersonalAccountInput,
-  UpdatePersonalAppearanceInput,
-} from "./personal-account.js";
-import type {
   PersonalAccountNotFound,
   PersonalAccountUsernameUnavailable,
 } from "./errors.js";
+import type {
+  PersonalAccount,
+  PersonalComposerDefaults,
+  UpdatePersonalAccountInput,
+  UpdatePersonalAppearanceInput,
+  UpdatePersonalComposerDefaultsInput,
+} from "./personal-account.js";
 
 export interface PersonalAccountRepositoryShape {
   readonly findOwnedByUser: (
@@ -33,6 +35,19 @@ export interface PersonalAccountRepositoryShape {
     input: UpdatePersonalAppearanceInput,
   ) => Effect.Effect<
     PersonalAccount,
+    Schema.SchemaError | PersistenceUnavailable | PersonalAccountNotFound
+  >;
+  readonly findComposerDefaultsOwnedByUser: (
+    userId: UserId,
+  ) => Effect.Effect<
+    PersonalComposerDefaults,
+    Schema.SchemaError | PersistenceUnavailable | PersonalAccountNotFound
+  >;
+  readonly updateComposerDefaultsOwnedByUser: (
+    userId: UserId,
+    input: UpdatePersonalComposerDefaultsInput,
+  ) => Effect.Effect<
+    PersonalComposerDefaults,
     Schema.SchemaError | PersistenceUnavailable | PersonalAccountNotFound
   >;
 }

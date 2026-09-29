@@ -1,17 +1,21 @@
 import { useMutation } from "@tanstack/react-query";
-import { Mic, Square } from "lucide-react";
+import { Download, Mic, RotateCcw, Square } from "lucide-react";
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
 import { Button } from "../../../shared/ui/button.js";
 import { Waveform } from "../../../shared/ui/waveform.js";
+import { ThreadPresentationContext } from "../thread-session-context.js";
 import {
   cancelDictationJob,
   dictationMutationOptions,
 } from "./dictation-api.js";
 import { DictationCapture } from "./dictation-capture.js";
-
-type Intent = "insert" | "send";
+import {
+  type DictationIntent,
+  DictationRecoverySession,
+  downloadDictation,
+} from "./dictation-session.js";
 
 const CaretMarker = ({
   textarea,
@@ -114,16 +118,28 @@ export const useDictation = ({
   locked = false,
   onChange,
   onSend,
+  session,
   textareaRef,
 }: {
   readonly enabled?: boolean;
   readonly locked?: boolean;
   readonly onChange: (value: string) => void;
+  readonly session?: DictationRecoverySession;
   readonly onSend: (value: string) => void;
   readonly textareaRef: React.RefObject<HTMLTextAreaElement | null>;
 }) => {
   const send = React.useRef(onSend);
   const lockedRef = React.useRef(false);
+  const thread = React.useContext(ThreadPresentationContext);
+  const [fallbackRecovery] = React.useState(
+    () => new DictationRecoverySession(),
+  );
+  const recovery = session ?? thread?.dictation ?? fallbackRecovery;
+  const recoverySnapshot = React.useSyncExternalStore(
+    recovery.subscribe,
+    recovery.getSnapshot,
+    recovery.getServerSnapshot,
+  );
   const [capture] = React.useState(() => new DictationCapture());
   const snapshot = React.useSyncExternalStore(
     capture.subscribe,
@@ -131,34 +147,16 @@ export const useDictation = ({
     capture.getServerSnapshot,
   );
   const mutation = useMutation(dictationMutationOptions());
-  const [processingIntent, setProcessingIntent] = React.useState<Intent>();
+  const [processingIntent, setProcessingIntent] =
+    React.useState<DictationIntent>();
   const generation = React.useRef(0);
   const abort = React.useRef<AbortController | undefined>(undefined);
   const jobId = React.useRef<string | undefined>(undefined);
   const finishing = React.useRef(false);
-  const sendRef = React.useCallback(
-    (node: HTMLButtonElement | null) => {
-      if (node === null) return;
-      send.current = onSend;
-      if (locked && !lockedRef.current) {
-        generation.current += 1;
-        mutation.reset();
-        abort.current?.abort();
-        if (jobId.current) void cancelDictationJob(jobId.current);
-        jobId.current = undefined;
-        finishing.current = false;
-        setProcessingIntent(undefined);
-        void capture.cancel();
-      }
-      lockedRef.current = locked;
-    },
-    [capture, locked, mutation, onSend],
-  );
-
-  const insert = (text: string, intent: Intent) => {
-    if (lockedRef.current) return;
+  const insert = (text: string, intent: DictationIntent) => {
+    if (lockedRef.current) return false;
     const textarea = textareaRef.current;
-    if (textarea === null) return;
+    if (textarea === null) return false;
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
     const next = `${textarea.value.slice(0, start)}${text}${textarea.value.slice(end)}`;
@@ -169,37 +167,43 @@ export const useDictation = ({
       textarea.focus();
       textarea.setSelectionRange(caret, caret);
     });
-    if (intent === "send") {
-      send.current(next);
-    }
+    if (intent === "send") send.current(next);
+    return true;
   };
 
-  const finish = async (intent: Intent) => {
-    if (capture.getSnapshot().state !== "recording" || finishing.current)
-      return;
-    finishing.current = true;
-    setProcessingIntent(intent);
-    const ownGeneration = generation.current;
-    const audio = await capture.finish();
-    if (ownGeneration !== generation.current || audio.size <= 44) {
-      finishing.current = false;
-      if (ownGeneration === generation.current) setProcessingIntent(undefined);
-      return;
-    }
+  const transcribe = (
+    audio: Blob,
+    intent: DictationIntent,
+    ownGeneration: number,
+  ) => {
     const id = crypto.randomUUID();
     const controller = new AbortController();
     abort.current = controller;
     jobId.current = id;
+    setProcessingIntent(intent);
     mutation.mutate(
       { audio, id, signal: controller.signal },
       {
         onSuccess: (text) => {
-          if (generation.current === ownGeneration && text.trim()) {
-            insert(text, intent);
+          if (
+            generation.current === ownGeneration &&
+            text.trim() &&
+            insert(text, intent)
+          ) {
+            recovery.release(audio);
             mutation.reset();
           }
         },
-        onError: () => void cancelDictationJob(id),
+        onError: (cause) => {
+          if (generation.current === ownGeneration)
+            recovery.fail(
+              audio,
+              cause instanceof Error
+                ? cause.message
+                : "Dictation could not be completed.",
+            );
+          void cancelDictationJob(id);
+        },
         onSettled: () => {
           if (generation.current === ownGeneration) {
             finishing.current = false;
@@ -211,20 +215,81 @@ export const useDictation = ({
     );
   };
 
+  const finish = async (intent: DictationIntent) => {
+    if (capture.getSnapshot().state !== "recording" || finishing.current)
+      return;
+    finishing.current = true;
+    setProcessingIntent(intent);
+    const ownGeneration = generation.current;
+    const audio = await capture.finish();
+    if (audio.size > 44) recovery.retain(audio, intent);
+    if (ownGeneration !== generation.current || audio.size <= 44) {
+      finishing.current = false;
+      if (audio.size > 44)
+        recovery.fail(audio, "Dictation was saved after leaving the composer.");
+      if (ownGeneration === generation.current) setProcessingIntent(undefined);
+      return;
+    }
+    transcribe(audio, intent, ownGeneration);
+  };
+
+  const preserveOnExit = React.useCallback(
+    (deferPublication = false) => {
+      generation.current += 1;
+      abort.current?.abort();
+      if (jobId.current) void cancelDictationJob(jobId.current);
+      jobId.current = undefined;
+      const retained = recovery.getSnapshot();
+      if (retained.state === "retained") {
+        const fail = () =>
+          recovery.fail(
+            retained.audio,
+            "Dictation was saved after leaving the composer.",
+          );
+        if (deferPublication) queueMicrotask(fail);
+        else fail();
+      }
+      if (capture.getSnapshot().state === "recording" && !finishing.current) {
+        finishing.current = true;
+        void capture.finish().then((audio) => {
+          if (audio.size > 44)
+            recovery.retain(
+              audio,
+              "insert",
+              "Dictation was saved after leaving the composer.",
+            );
+        });
+        return;
+      }
+      if (!finishing.current) void capture.cancel();
+    },
+    [capture, recovery],
+  );
+
+  const sendRef = React.useCallback(
+    (node: HTMLButtonElement | null) => {
+      if (node === null) return;
+      send.current = onSend;
+      if (locked && !lockedRef.current) {
+        preserveOnExit();
+        mutation.reset();
+        finishing.current = false;
+        setProcessingIntent(undefined);
+      }
+      lockedRef.current = locked;
+    },
+    [locked, mutation, onSend, preserveOnExit],
+  );
+
   const lifetimeRef = React.useCallback(
     (node: HTMLSpanElement | null) => {
       if (node === null) return;
-      return () => {
-        generation.current += 1;
-        abort.current?.abort();
-        if (jobId.current) void cancelDictationJob(jobId.current);
-        void capture.cancel();
-      };
+      return () => preserveOnExit(true);
     },
-    [capture],
+    [preserveOnExit],
   );
   const start = () => {
-    if (!enabled) return;
+    if (!enabled || locked) return;
     if (
       processingIntent !== undefined ||
       finishing.current ||
@@ -235,7 +300,32 @@ export const useDictation = ({
       void finish("insert");
       return;
     }
-    if (locked) return;
+    if (recoverySnapshot.state === "retained") {
+      const ownGeneration = ++generation.current;
+      mutation.reset();
+      transcribe(
+        recoverySnapshot.audio,
+        recoverySnapshot.intent,
+        ownGeneration,
+      );
+      return;
+    }
+    generation.current += 1;
+    mutation.reset();
+    void capture.start(() => void finish("insert"));
+  };
+  const recordNew = () => {
+    if (
+      !enabled ||
+      locked ||
+      processingIntent !== undefined ||
+      finishing.current ||
+      capture.getSnapshot().state === "permission" ||
+      capture.getSnapshot().state === "recording"
+    )
+      return;
+    if (recoverySnapshot.state !== "retained") return;
+    recovery.release(recoverySnapshot.audio);
     generation.current += 1;
     mutation.reset();
     void capture.start(() => void finish("insert"));
@@ -267,13 +357,20 @@ export const useDictation = ({
           ? "Recording dictation"
           : snapshot.state === "error"
             ? snapshot.error
-            : mutation.error instanceof Error
-              ? mutation.error.message
-              : undefined;
+            : recoverySnapshot.state === "retained" && recoverySnapshot.error
+              ? recoverySnapshot.error
+              : mutation.error instanceof Error
+                ? mutation.error.message
+                : undefined;
+  const recoverable =
+    recoverySnapshot.state === "retained" &&
+    processingIntent === undefined &&
+    snapshot.state !== "permission" &&
+    snapshot.state !== "recording";
 
   const controls = enabled ? (
     <span
-      className={`dictation-controls ${snapshot.state === "recording" && processingIntent === undefined ? "is-recording" : processingIntent !== undefined ? "is-processing" : ""}`}
+      className={`dictation-controls ${snapshot.state === "recording" && processingIntent === undefined ? "is-recording" : processingIntent !== undefined ? "is-processing" : recoverable ? "is-recoverable" : ""}`}
       ref={lifetimeRef}
     >
       {snapshot.state === "recording" && processingIntent === undefined ? (
@@ -294,14 +391,18 @@ export const useDictation = ({
             ? "Transcribing dictation"
             : snapshot.state === "recording"
               ? "Stop dictation"
-              : "Start dictation"
+              : recoverable
+                ? "Retry dictation"
+                : "Start dictation"
         }
         title={
           processingIntent !== undefined
             ? "Transcribing dictation"
             : snapshot.state === "recording"
               ? "Stop dictation"
-              : "Dictate"
+              : recoverable
+                ? "Retry saved dictation"
+                : "Dictate"
         }
         disabled={
           processingIntent !== undefined ||
@@ -319,15 +420,44 @@ export const useDictation = ({
           <Mic />
         )}
       </Button>
+      {recoverable ? (
+        <>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Discard saved dictation and record again"
+            title="Discard saved dictation and record again"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={recordNew}
+          >
+            <RotateCcw />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className="dictation-download"
+            aria-label="Download saved dictation"
+            title="Download saved dictation"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => downloadDictation(recoverySnapshot.audio)}
+          >
+            <Download />
+          </Button>
+        </>
+      ) : null}
       {status ? (
         <span
           className={
-            snapshot.state === "error" || mutation.isError
+            snapshot.state === "error" || mutation.isError || recoverable
               ? "dictation-status dictation-error"
               : "visually-hidden"
           }
           role={
-            snapshot.state === "error" || mutation.isError ? "alert" : "status"
+            snapshot.state === "error" || mutation.isError || recoverable
+              ? "alert"
+              : "status"
           }
         >
           {status}

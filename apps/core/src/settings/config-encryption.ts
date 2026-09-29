@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect";
+import { decodeBase64, encodeBase64 } from "../encoding/base64.js";
 import type { Bindings } from "../http/types.js";
 
 const AES_GCM_NONCE_BYTES = 12;
@@ -28,30 +29,16 @@ export type ConfigEncryptionContext = Readonly<
   Record<string, string | number | boolean>
 >;
 
-const bytesToBase64 = (bytes: Uint8Array): string => {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-};
-
-const base64ToBytes = (value: string): Uint8Array<ArrayBuffer> => {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-};
+// Keys are pattern-checked and re-encoded; ciphertext is AES-GCM authenticated.
+const base64ToBytes = (value: string): Uint8Array<ArrayBuffer> =>
+  decodeBase64(value) as Uint8Array<ArrayBuffer>;
 
 const decodeMasterKey = (value: unknown): Uint8Array<ArrayBuffer> => {
   if (typeof value !== "string" || !/^[A-Za-z0-9+/]{43}=$/.test(value)) {
     throw new ConfigEncryptionUnavailable();
   }
   const bytes = base64ToBytes(value);
-  if (
-    bytes.byteLength !== AES_256_KEY_BYTES ||
-    bytesToBase64(bytes) !== value
-  ) {
+  if (bytes.byteLength !== AES_256_KEY_BYTES || encodeBase64(bytes) !== value) {
     throw new ConfigEncryptionUnavailable();
   }
   return bytes;
@@ -175,10 +162,10 @@ export const encryptConfigValue = Effect.fn("encryptConfigValue")(function* (
         return {
           version: 1,
           keyVersion: keyring.activeVersion,
-          valueNonce: bytesToBase64(valueNonce),
-          ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
-          wrappedKeyNonce: bytesToBase64(wrappedKeyNonce),
-          wrappedKey: bytesToBase64(new Uint8Array(wrappedKey)),
+          valueNonce: encodeBase64(valueNonce),
+          ciphertext: encodeBase64(new Uint8Array(ciphertext)),
+          wrappedKeyNonce: encodeBase64(wrappedKeyNonce),
+          wrappedKey: encodeBase64(new Uint8Array(wrappedKey)),
         } satisfies ConfigValueEnvelope;
       } finally {
         rawDataKey.fill(0);

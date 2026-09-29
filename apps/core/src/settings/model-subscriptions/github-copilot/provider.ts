@@ -52,8 +52,7 @@ export interface ProviderOptions {
   readonly fetch?: Fetch;
   readonly clock?: () => number;
   readonly allowedApiOrigins?: ReadonlyArray<string>;
-  readonly maxJsonBytes?: number;
-  readonly maxStreamBytes?: number;
+  /** Control-plane request limit (device flow, refresh, identity, discovery). Model streams never use it. */
   readonly timeoutMs?: number;
 }
 
@@ -108,8 +107,7 @@ export const parseActiveModels = (
   catalog = GITHUB_COPILOT_CATALOG,
 ): Entitlements["enabledModelIds"] => {
   const data = record(raw).data;
-  if (!Array.isArray(data) || data.length > 1_000)
-    throw new CopilotError({ code: "INVALID_MODELS" });
+  if (!Array.isArray(data)) throw new CopilotError({ code: "INVALID_MODELS" });
   const reviewed = new Map(catalog.map((m) => [m.id, m]));
   const active: string[] = [];
   for (const value of data) {
@@ -170,21 +168,23 @@ export const createGitHubCopilotProvider = (options: ProviderOptions) => {
     throw new CopilotError({ code: "INVALID_CLIENT_ID" });
   const fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
   const now = options.clock ?? Date.now;
-  const jsonLimit = options.maxJsonBytes ?? 1_048_576;
-  const streamLimit = options.maxStreamBytes ?? 8_388_608;
   const timeout = options.timeoutMs ?? 30_000;
   const origins = new Set(
     [...DEFAULT_ORIGINS, ...(options.allowedApiOrigins ?? [])].map(
       normalizeOrigin,
     ),
   );
-  const request = async (url: string, init: RequestInit, limit = jsonLimit) => {
+  const request = async (
+    url: string,
+    init: RequestInit,
+    timeoutMs: number | null = timeout,
+  ) => {
     const controller = new AbortController();
     const signal = init.signal;
     const abort = () => controller.abort();
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) controller.abort();
-    const timer = setTimeout(abort, timeout);
+    const timer = timeoutMs === null ? undefined : setTimeout(abort, timeoutMs);
     let disposed = false;
     const dispose = () => {
       if (disposed) return;
@@ -210,9 +210,6 @@ export const createGitHubCopilotProvider = (options: ProviderOptions) => {
                   : "UPSTREAM_REJECTED",
           status: response.status,
         });
-      const length = Number(response.headers.get("content-length"));
-      if (Number.isFinite(length) && length > limit)
-        throw new CopilotError({ code: "RESPONSE_TOO_LARGE" });
       return {
         response,
         signal: controller.signal,
@@ -234,8 +231,6 @@ export const createGitHubCopilotProvider = (options: ProviderOptions) => {
     let bytes: Uint8Array;
     try {
       bytes = new Uint8Array(await guarded.response.arrayBuffer());
-      if (bytes.byteLength > jsonLimit)
-        throw new CopilotError({ code: "RESPONSE_TOO_LARGE" });
     } catch (cause) {
       if (cause instanceof CopilotError) throw cause;
       if (init.signal?.aborted)
@@ -459,8 +454,6 @@ export const createGitHubCopilotProvider = (options: ProviderOptions) => {
       stream: true,
       ...(model.protocol === "openai-responses" ? { store: false } : {}),
     });
-    if (new TextEncoder().encode(body).byteLength > 4_194_304)
-      throw new CopilotError({ code: "REQUEST_TOO_LARGE" });
     const guarded = await request(
       `${input.access.apiOrigin}${model.endpoint}`,
       {
@@ -487,7 +480,8 @@ export const createGitHubCopilotProvider = (options: ProviderOptions) => {
         body,
         signal: input.signal,
       },
-      streamLimit,
+      // Model streams follow Flue's submission deadline through `input.signal`.
+      null,
     );
     const response = guarded.response;
     if (!response.body) {
@@ -495,26 +489,18 @@ export const createGitHubCopilotProvider = (options: ProviderOptions) => {
       throw new CopilotError({ code: "EMPTY_STREAM" });
     }
     const reader = response.body.getReader();
-    let total = 0;
     const cancel = async (reason?: unknown) => {
       guarded.abort();
       guarded.dispose();
       await reader.cancel(reason).catch(() => undefined);
     };
-    const bounded = new ReadableStream<Uint8Array>({
+    const relayed = new ReadableStream<Uint8Array>({
       async pull(controller) {
         try {
           const chunk = await reader.read();
           if (chunk.done) {
             guarded.dispose();
             controller.close();
-            return;
-          }
-          total += chunk.value.byteLength;
-          if (total > streamLimit) {
-            const error = new CopilotError({ code: "STREAM_TOO_LARGE" });
-            await cancel(error);
-            controller.error(error);
             return;
           }
           controller.enqueue(chunk.value);
@@ -535,7 +521,7 @@ export const createGitHubCopilotProvider = (options: ProviderOptions) => {
       },
       cancel,
     });
-    return new Response(bounded, {
+    return new Response(relayed, {
       status: response.status,
       headers: response.headers,
     });

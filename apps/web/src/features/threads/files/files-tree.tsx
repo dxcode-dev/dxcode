@@ -12,7 +12,9 @@ import type {
 } from "@pierre/trees";
 import { FileTree, useFileTree } from "@pierre/trees/react";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
+import { Download, FileText } from "lucide-react";
 import * as React from "react";
+import { downloadFromUrl } from "../../../shared/ui/file-context-menu.js";
 import type { ThreadFilesApi } from "./files-api.js";
 import { threadFilesKeys, threadFileTreeOptions } from "./files-queries.js";
 
@@ -173,6 +175,9 @@ const treeOptions = (
     paths: toTreePaths(entries),
     gitStatus,
     unsafeCSS,
+    composition: {
+      contextMenu: { enabled: true, triggerMode: "right-click" },
+    },
     onSelectionChange: (paths) => {
       const selected = paths.at(-1);
       if (selected === undefined) return;
@@ -190,6 +195,7 @@ const TreeView = ({
   selectedPath,
   onExpandedChange,
   onOpenFile,
+  downloadUrlFor,
 }: {
   readonly entries: readonly ThreadFileTreeEntry[];
   readonly expanded: readonly string[];
@@ -198,6 +204,7 @@ const TreeView = ({
   readonly selectedPath?: ThreadFilesPath;
   readonly onExpandedChange: (paths: readonly string[]) => void;
   readonly onOpenFile: (path: ThreadFilesPath) => void;
+  readonly downloadUrlFor?: (path: ThreadFilesPath) => string | undefined;
 }) => {
   const statusEntries = React.useMemo(
     () => toTreeGitStatus(gitStatus),
@@ -266,6 +273,45 @@ const TreeView = ({
         aria-busy={loadingPaths.length > 0 ? "true" : "false"}
         aria-label="Workspace files"
         model={model}
+        renderContextMenu={(item, context) => {
+          if (item.kind !== "file") {
+            // Directories have no file actions; dismiss instead of an empty menu.
+            queueMicrotask(() => context.close());
+            return null;
+          }
+          const path = plainPath(item.path) as ThreadFilesPath;
+          const downloadUrl = downloadUrlFor?.(path);
+          const act = (action: () => void) => {
+            context.close();
+            action();
+          };
+          return (
+            <div
+              aria-label={`Actions for ${item.name}`}
+              className="thread-context-menu thread-files-tree-menu"
+              role="menu"
+            >
+              <button
+                className="thread-context-item"
+                onClick={() => act(() => onOpenFile(path))}
+                role="menuitem"
+                type="button"
+              >
+                <FileText aria-hidden="true" /> Open file
+              </button>
+              {downloadUrl === undefined ? null : (
+                <button
+                  className="thread-context-item"
+                  onClick={() => act(() => downloadFromUrl(downloadUrl))}
+                  role="menuitem"
+                  type="button"
+                >
+                  <Download aria-hidden="true" /> Download file
+                </button>
+              )}
+            </div>
+          );
+        }}
         style={{ colorScheme: "inherit" }}
       />
     </div>
@@ -286,6 +332,7 @@ const ChildQueries = ({
   selectedPath,
   onExpandedChange,
   onOpenFile,
+  downloadUrlFor,
 }: {
   readonly api: ThreadFilesApi;
   readonly active: boolean;
@@ -300,6 +347,7 @@ const ChildQueries = ({
   readonly selectedPath?: ThreadFilesPath;
   readonly onExpandedChange: (paths: readonly string[]) => void;
   readonly onOpenFile: (path: ThreadFilesPath) => void;
+  readonly downloadUrlFor?: (path: ThreadFilesPath) => string | undefined;
 }) => {
   const path = plainPath(expanded[index] ?? "") as ThreadFilesPath;
   const query = useInfiniteQuery(
@@ -330,6 +378,7 @@ const ChildQueries = ({
           loadingPaths={loadingPaths}
           onExpandedChange={onExpandedChange}
           onOpenFile={onOpenFile}
+          {...(downloadUrlFor === undefined ? {} : { downloadUrlFor })}
           rootEntries={rootEntries}
           selectedPath={selectedPath}
           threadId={threadId}
@@ -351,6 +400,7 @@ const ChildQueries = ({
         loadingPaths={loadingPaths}
         onExpandedChange={onExpandedChange}
         onOpenFile={onOpenFile}
+        {...(downloadUrlFor === undefined ? {} : { downloadUrlFor })}
         selectedPath={selectedPath}
       />
       {more}
@@ -367,6 +417,7 @@ export const ThreadFilesTree = ({
   gitStatus,
   selectedPath,
   onOpenFile,
+  downloadUrlFor,
 }: {
   readonly api: ThreadFilesApi;
   readonly active?: boolean;
@@ -376,6 +427,8 @@ export const ThreadFilesTree = ({
   readonly gitStatus: ReadonlyMap<string, ThreadChangedFile["status"]>;
   readonly selectedPath?: ThreadFilesPath;
   readonly onOpenFile: (path: ThreadFilesPath) => void;
+  /** Download URL for a file, when this worktree's files can be downloaded. */
+  readonly downloadUrlFor?: (path: ThreadFilesPath) => string | undefined;
 }) => {
   const [expanded, setExpanded] = React.useState<readonly string[]>([]);
   const loadingPaths = useLoadingPaths(threadId, worktree, expanded);
@@ -390,6 +443,7 @@ export const ThreadFilesTree = ({
           loadingPaths={loadingPaths}
           onExpandedChange={setExpanded}
           onOpenFile={onOpenFile}
+          {...(downloadUrlFor === undefined ? {} : { downloadUrlFor })}
           selectedPath={selectedPath}
         />
       ) : (
@@ -403,6 +457,7 @@ export const ThreadFilesTree = ({
           loadingPaths={loadingPaths}
           onExpandedChange={setExpanded}
           onOpenFile={onOpenFile}
+          {...(downloadUrlFor === undefined ? {} : { downloadUrlFor })}
           rootEntries={entries}
           selectedPath={selectedPath}
           threadId={threadId}

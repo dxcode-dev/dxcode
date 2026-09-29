@@ -44,7 +44,6 @@ const exportRow = (row: TranscriptRow): ExportRow | undefined => {
     return { type: "assistant", text: row.text };
   if (row.kind === "final-answer")
     return { type: "final-answer", text: row.text };
-  if (row.kind === "failure") return { type: "failure", status: row.outcome };
   if (row.kind === "attachment") {
     const { filename, mediaType, size } = row.attachment;
     return {
@@ -70,20 +69,32 @@ const exportRow = (row: TranscriptRow): ExportRow | undefined => {
   return undefined;
 };
 
+const failureEntry = (turn: TranscriptTurn): ExportRow | undefined =>
+  turn.status === "failed" ||
+  (turn.status === "aborted" && turn.settlement?.provenance !== "user-stop")
+    ? { type: "failure", status: turn.status }
+    : undefined;
+
 const exportTurn = (
   turn: TranscriptTurn,
   rows: ReadonlyMap<string, TranscriptRow>,
-) => ({
-  status: turn.status,
-  ...(finiteDuration(turn.durationMs) !== undefined
-    ? { durationMs: turn.durationMs }
-    : {}),
-  entries: turn.rowIds.flatMap((id) => {
-    const row = rows.get(id);
-    const entry = row && exportRow(row);
-    return entry ? [entry] : [];
-  }),
-});
+) => {
+  const failure = failureEntry(turn);
+  return {
+    status: turn.status,
+    ...(finiteDuration(turn.durationMs) !== undefined
+      ? { durationMs: turn.durationMs }
+      : {}),
+    entries: [
+      ...turn.rowIds.flatMap((id) => {
+        const row = rows.get(id);
+        const entry = row && exportRow(row);
+        return entry ? [entry] : [];
+      }),
+      ...(failure === undefined ? [] : [failure]),
+    ],
+  };
+};
 
 export const serializeThreadJson = ({
   thread,
@@ -160,6 +171,8 @@ export const serializeThreadMarkdown = ({
         );
       else lines.push("", `- Turn ${entry.status}`);
     }
+    const failure = failureEntry(turn);
+    if (failure !== undefined) lines.push("", `- Turn ${failure.status}`);
   }
   return `${lines.join("\n")}\n`;
 };

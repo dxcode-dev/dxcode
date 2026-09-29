@@ -4,6 +4,7 @@ import {
   type ProviderRepositoryId,
 } from "@dx/domain";
 import { Redacted, Schema } from "effect";
+import { encodeBase64Url } from "../../encoding/base64.js";
 import type { Bindings } from "../../http/types.js";
 import {
   type GitHubAppConfiguration,
@@ -99,15 +100,6 @@ export interface IntegrationProviderRegistration {
 const bytes = (length: number): Uint8Array<ArrayBuffer> =>
   crypto.getRandomValues(new Uint8Array(length));
 
-const base64Url = (value: Uint8Array): string => {
-  let binary = "";
-  for (const byte of value) binary += String.fromCharCode(byte);
-  return btoa(binary)
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/, "");
-};
-
 const sha256 = async (value: string): Promise<Uint8Array<ArrayBuffer>> =>
   new Uint8Array(
     await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)),
@@ -119,12 +111,12 @@ export const createOAuthProof = async (
     readonly verifierBytes?: Uint8Array<ArrayBuffer>;
   } = {},
 ) => {
-  const state = base64Url(input.stateBytes ?? bytes(32));
-  const codeVerifier = base64Url(input.verifierBytes ?? bytes(64));
+  const state = encodeBase64Url(input.stateBytes ?? bytes(32));
+  const codeVerifier = encodeBase64Url(input.verifierBytes ?? bytes(64));
   return {
     state,
     codeVerifier,
-    codeChallenge: base64Url(await sha256(codeVerifier)),
+    codeChallenge: encodeBase64Url(await sha256(codeVerifier)),
   };
 };
 

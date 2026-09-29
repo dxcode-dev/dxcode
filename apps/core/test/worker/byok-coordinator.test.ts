@@ -2,6 +2,7 @@ import { env, evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { createModels } from "@earendil-works/pi-ai";
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { settingsPersistenceLogger } from "../../src/logging.js";
 import { loadConfigEncryptionKeyring } from "../../src/settings/config-encryption.js";
 import { createDxModelRoutingProvider } from "../../src/settings/model-byok/flue-provider.js";
 import {
@@ -9,6 +10,11 @@ import {
   upstreamDns,
   upstreamFetch,
 } from "../../src/settings/model-byok/invocation.js";
+import {
+  encodeProxyEnvelope,
+  PROXY_ENVELOPE_HEADER,
+  type ProxyEnvelope,
+} from "../../src/settings/model-byok/proxy-envelope.js";
 import { loadRoutableConnections } from "../../src/settings/model-routing/connection-store-d1.js";
 import { connectionApiKey } from "../../src/settings/model-routing/credential-access.js";
 import { encryptModelCredential } from "../../src/settings/model-routing/model-credential-encryption.js";
@@ -32,16 +38,31 @@ const THREAD = "coord-thread";
 const CONNECTION = "mcon_coord";
 const CREDENTIAL = "mcred_coord";
 const UPSTREAM = "https://upstream.test";
-const MAX_BODY_BYTES = 24 * 1_048_576;
 
 const now = "2026-09-01T00:00:00.000Z";
 
-const b64 = (value: unknown): string =>
-  btoa(
-    new TextDecoder().decode(new TextEncoder().encode(JSON.stringify(value))),
-  );
+type TestProxyEnvelope = ProxyEnvelope & {
+  readonly request: ProxyEnvelope["request"] & { readonly body: unknown };
+};
 
-const seed = async () => {
+/** The `/proxy` wire shape: routing envelope header plus the raw body. */
+const proxyInit = (envelope: Record<string, unknown>): RequestInit => {
+  const { request, ...route } = envelope as unknown as TestProxyEnvelope;
+  const { body, ...metadata } = request;
+  return {
+    method: "POST",
+    headers: {
+      "content-type": "application/octet-stream",
+      [PROXY_ENVELOPE_HEADER]: encodeProxyEnvelope({
+        ...route,
+        request: metadata,
+      }),
+    },
+    body: JSON.stringify(body),
+  };
+};
+
+const seed = async (apiKey = "sk-litellm-real") => {
   await runInDurableObject(stub(), async (_instance, state) =>
     state.storage.deleteAll(),
   );
@@ -56,7 +77,7 @@ const seed = async () => {
         target: { scope: "personal", id: OWNER as never },
         name: "litellm-key",
       },
-      "sk-litellm-real" as never,
+      apiKey as never,
     ),
   );
   await env.DB.batch([
@@ -124,7 +145,7 @@ const proxyEnvelope = (overrides: Record<string, unknown> = {}) => ({
       host: "upstream.test",
       "content-length": "10",
     },
-    body: b64({ model: "dx-placeholder", messages: [] }),
+    body: { model: "dx-placeholder", messages: [] },
   },
   ...overrides,
 });
@@ -134,13 +155,7 @@ const drained = async (response: Response) =>
   new Response(await response.arrayBuffer(), response);
 
 const callProxy = (envelope: Record<string, unknown>) =>
-  stub()
-    .fetch("https://coordinator/proxy", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(envelope),
-    })
-    .then(drained);
+  stub().fetch("https://coordinator/proxy", proxyInit(envelope)).then(drained);
 
 const prepare = (submissionId = "sub-1", recovery = false) =>
   stub()
@@ -199,6 +214,36 @@ describe("ByokCredentialCoordinatorObject", () => {
     );
     expect(routes.size).toBe(512);
     expect(routes.has("submission-route:sub-1")).toBe(true);
+  });
+
+  it("renews a submission route while model calls keep using it", async () => {
+    await seed();
+    const nearExpiry = await runInDurableObject(
+      stub(),
+      async (_instance, state) => {
+        const pin = await state.storage.get<{ expiresAt: number }>(
+          "submission-route:sub-1",
+        );
+        if (pin === undefined) throw new Error("Missing pin");
+        const expiresAt = Date.now() + 60_000;
+        await state.storage.put("submission-route:sub-1", {
+          ...pin,
+          expiresAt,
+        });
+        return expiresAt;
+      },
+    );
+    stubFetch(async () => Response.json({ ok: true }));
+    expect((await callProxy(proxyEnvelope())).status).toBe(200);
+    const renewed = await runInDurableObject(stub(), (_instance, state) =>
+      state.storage.get<{ expiresAt: number; credential?: unknown }>(
+        "submission-route:sub-1",
+      ),
+    );
+    expect(renewed?.expiresAt).toBeGreaterThan(
+      nearExpiry + 23 * 60 * 60 * 1_000,
+    );
+    expect(renewed?.credential).toBeDefined();
   });
 
   it("retains safe immutable attribution after the next submission and prunes expired entries in batches", async () => {
@@ -373,10 +418,10 @@ describe("ByokCredentialCoordinatorObject", () => {
         } as never);
         return drained(
           await coordinator.fetch(
-            new Request("https://coordinator/proxy", {
-              method: "POST",
-              body: JSON.stringify(proxyEnvelope()),
-            }),
+            new Request(
+              "https://coordinator/proxy",
+              proxyInit(proxyEnvelope()),
+            ),
           ),
         );
       },
@@ -415,19 +460,16 @@ describe("ByokCredentialCoordinatorObject", () => {
     ).toBe(200);
   });
 
-  it("rejects oversized bodies without trusting Content-Length", async () => {
-    const oversized = JSON.stringify({ payload: "x".repeat(MAX_BODY_BYTES) });
-    for (const headers of [
-      { "content-type": "application/json" },
-      { "content-type": "application/json", "content-length": "1" },
-    ]) {
-      const response = await stub().fetch("https://coordinator/resolve", {
+  it("rejects a /proxy call without a well-formed routing envelope", async () => {
+    for (const header of [undefined, "not base64!", "e30"]) {
+      const response = await stub().fetch("https://coordinator/proxy", {
         method: "POST",
-        headers,
-        body: oversized,
+        headers:
+          header === undefined ? {} : { [PROXY_ENVELOPE_HEADER]: header },
+        body: "{}",
       });
-      expect(response.status).toBe(413);
-      expect(await response.json()).toEqual({ code: "REQUEST_TOO_LARGE" });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ code: "INVALID_REQUEST" });
     }
   });
 
@@ -445,11 +487,10 @@ describe("ByokCredentialCoordinatorObject", () => {
     upstreamDns.current = async () => ["8.8.8.8", "10.0.0.1"];
     const transport = vi.fn(() => new Response("must not be called"));
     stubFetch(transport);
-    const response = await stub().fetch("https://dx-byok.invalid/proxy", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(proxyEnvelope()),
-    });
+    const response = await stub().fetch(
+      "https://dx-byok.invalid/proxy",
+      proxyInit(proxyEnvelope()),
+    );
     expect(response.status).toBe(403);
     await response.text();
     expect(transport).not.toHaveBeenCalled();
@@ -509,6 +550,30 @@ describe("ByokCredentialCoordinatorObject", () => {
     expect(parsed.model).toBe("astra-litellm");
   });
 
+  it("forwards a multi-megabyte body unchanged apart from the model rename", async () => {
+    await seed();
+    const content = "x".repeat(6 * 1_048_576);
+    let upstream: { model?: string; messages?: Array<{ content: string }> } =
+      {};
+    stubFetch(async (request) => {
+      upstream = (await request.json()) as typeof upstream;
+      return Response.json({ ok: true });
+    });
+    const response = await callProxy(
+      proxyEnvelope({
+        request: {
+          url: `${UPSTREAM}/chat/completions`,
+          method: "POST",
+          headers: { authorization: "Bearer dx-placeholder" },
+          body: { model: "dx-placeholder", messages: [{ content }] },
+        },
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(upstream.model).toBe("astra-litellm");
+    expect(upstream.messages?.[0]?.content).toHaveLength(content.length);
+  });
+
   it("refuses cross-origin request urls", async () => {
     await seed();
     const response = await callProxy(
@@ -517,7 +582,7 @@ describe("ByokCredentialCoordinatorObject", () => {
           url: "https://evil.example/chat/completions",
           method: "POST",
           headers: { authorization: "Bearer dx-placeholder" },
-          body: b64({ model: "x" }),
+          body: { model: "x" },
         },
       }),
     );
@@ -587,6 +652,130 @@ describe("ByokCredentialCoordinatorObject", () => {
     const response = await callProxy(proxyEnvelope());
     expect(response.status).toBe(200);
     expect(await response.text()).toContain("[DONE]");
+  });
+
+  it("logs a provider rejection body without the credential and forwards it unchanged", async () => {
+    await seed();
+    const rejection = JSON.stringify({
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        message:
+          "messages.4.content.0.tool_result: content cannot be empty if `is_error` is true (key sk-litellm-real)",
+      },
+    });
+    stubFetch(
+      async () =>
+        new Response(rejection, {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const warn = vi.spyOn(settingsPersistenceLogger, "warn");
+    const response = await callProxy(proxyEnvelope());
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe(rejection);
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(
+        "Model provider rejected the request.",
+        {
+          event: "model_upstream_rejected",
+          threadId: THREAD,
+          submissionId: "sub-1",
+          connectionId: CONNECTION,
+          model: expect.any(String),
+          status: 400,
+          body: rejection.replace("sk-litellm-real", "[REDACTED]"),
+        },
+      ),
+    );
+  });
+
+  it("redacts a credential the provider echoes JSON-escaped", async () => {
+    const apiKey = 'sk-"quoted\\key';
+    await seed(apiKey);
+    const rejection = JSON.stringify({
+      error: { message: `bad key ${apiKey}` },
+    });
+    expect(rejection).not.toContain(apiKey);
+    stubFetch(async () => new Response(rejection, { status: 401 }));
+    const warn = vi.spyOn(settingsPersistenceLogger, "warn");
+    const response = await callProxy(proxyEnvelope());
+    expect(response.status).toBe(401);
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(
+        "Model provider rejected the request.",
+        expect.objectContaining({
+          body: '{"error":{"message":"bad key [REDACTED]"}}',
+        }),
+      ),
+    );
+  });
+
+  it("redacts a short API key the provider echoes", async () => {
+    await seed("k9");
+    const rejection = JSON.stringify({ error: { message: "bad key k9" } });
+    stubFetch(async () => new Response(rejection, { status: 401 }));
+    const warn = vi.spyOn(settingsPersistenceLogger, "warn");
+    const response = await callProxy(proxyEnvelope());
+    expect(response.status).toBe(401);
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(
+        "Model provider rejected the request.",
+        expect.objectContaining({
+          body: '{"error":{"message":"bad key [REDACTED]"}}',
+        }),
+      ),
+    );
+  });
+
+  it("redacts custom header values the provider echoes", async () => {
+    await seed();
+    const rejection = JSON.stringify({
+      error: { message: "tenant tenant-1 rejected key sk-litellm-real" },
+    });
+    stubFetch(async () => new Response(rejection, { status: 403 }));
+    const warn = vi.spyOn(settingsPersistenceLogger, "warn");
+    const response = await callProxy(proxyEnvelope());
+    expect(response.status).toBe(403);
+    expect(await response.text()).toBe(rejection);
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(
+        "Model provider rejected the request.",
+        expect.objectContaining({
+          body: '{"error":{"message":"tenant [REDACTED] rejected key [REDACTED]"}}',
+        }),
+      ),
+    );
+  });
+
+  it("forwards an endless provider rejection while logging a bounded prefix", async () => {
+    await seed();
+    const chunk = new TextEncoder().encode("x".repeat(1_024));
+    stubFetch(
+      async () =>
+        new Response(
+          new ReadableStream({
+            pull: (controller) => controller.enqueue(chunk),
+          }),
+          { status: 413 },
+        ),
+    );
+    const warn = vi.spyOn(settingsPersistenceLogger, "warn");
+    const response = await stub().fetch(
+      "https://coordinator/proxy",
+      proxyInit(proxyEnvelope()),
+    );
+    expect(response.status).toBe(413);
+    const reader = response.body?.getReader();
+    expect((await reader?.read())?.done).toBe(false);
+    await reader?.cancel();
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(
+        "Model provider rejected the request.",
+        expect.objectContaining({ status: 413, body: "x".repeat(2_000) }),
+      ),
+    );
   });
 
   it("fails closed when no connection serves the model", async () => {
@@ -704,6 +893,66 @@ describe("ByokCredentialCoordinatorObject", () => {
     });
   });
 
+  it("delivers a 9 MB conversation through the real adapter and coordinator", async () => {
+    await seed();
+    const { provider, options } = createDxModelRoutingProvider("openai", {
+      namespace: env.BYOK_CREDENTIAL_COORDINATOR,
+      identity: () => ({ name: THREAD }) as never,
+      invocation: () =>
+        ({ scope: { kind: "prompt", submissionId: "sub-1" } }) as never,
+    });
+    const model = await options.resolveModel!(
+      { providerId: "openai", modelId: "gpt-6-astra" },
+      {
+        instanceId: THREAD,
+        agentName: "dx-agent",
+        recovery: false,
+        scope: { kind: "prompt", submissionId: "sub-1" },
+        signal: new AbortController().signal,
+      },
+    );
+    if (!model) throw new Error("Missing resolved model");
+    // Larger than the failing thread's 3.1 MB request and the former caps.
+    const turns = Array.from({ length: 1_000 }, (_, index) => ({
+      role: "user" as const,
+      content: `turn ${index}: ${"const value = compute(input);\n".repeat(300)}`,
+      timestamp: 0,
+    }));
+    let upstreamBytes = 0;
+    let upstream: { model?: string; messages?: Array<{ content: unknown }> } =
+      {};
+    stubFetch(async (request) => {
+      const text = await request.text();
+      upstreamBytes = text.length;
+      upstream = JSON.parse(text) as typeof upstream;
+      return new Response(
+        `data: ${JSON.stringify({
+          id: "chat-test",
+          object: "chat.completion.chunk",
+          created: 0,
+          model: "astra-litellm",
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant", content: "ok" },
+              finish_reason: "stop",
+            },
+          ],
+        })}\n\ndata: [DONE]\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    const models = createModels();
+    models.setProvider(provider);
+    const result = await models
+      .streamSimple(model, { messages: turns }, { reasoning: "low" })
+      .result();
+    expect(result.stopReason).toBe("stop");
+    expect(upstreamBytes).toBeGreaterThan(9_000_000);
+    expect(upstream.model).toBe("astra-litellm");
+    expect(upstream.messages?.at(-1)?.content).toBe(turns.at(-1)?.content);
+  });
+
   it("streams through real pi-ai auth, adapter, coordinator and upstream rename", async () => {
     await seed();
     const { provider, options } = createDxModelRoutingProvider("openai", {
@@ -723,6 +972,8 @@ describe("ByokCredentialCoordinatorObject", () => {
       },
     );
     if (!model) throw new Error("Missing resolved model");
+    // Flue compacts against dx's effective window, not the native 1.05M.
+    expect(model.contextWindow).toBe(270_000);
     const calls: {
       url: string;
       authorization: string | null;
@@ -786,6 +1037,117 @@ describe("ByokCredentialCoordinatorObject", () => {
       authorization: "Bearer sk-litellm-real",
       body: { model: "astra-litellm" },
     });
+  });
+
+  it("sends an Anthropic custom endpoint saved with /v1 to one /v1/messages and probes the same base", async () => {
+    await seed();
+    await env.DB.prepare(
+      "UPDATE model_connection SET base_url = ?, format = 'anthropic-messages' WHERE id = ?",
+    )
+      .bind(`${UPSTREAM}/v1`, CONNECTION)
+      .run();
+    expect((await prepare("sub-anthropic")).status).toBe(200);
+    const { provider, options } = createDxModelRoutingProvider("openai", {
+      namespace: env.BYOK_CREDENTIAL_COORDINATOR,
+      identity: () => ({ name: THREAD }) as never,
+      invocation: () =>
+        ({ scope: { kind: "prompt", submissionId: "sub-anthropic" } }) as never,
+    });
+    const model = await options.resolveModel!(
+      { providerId: "openai", modelId: "gpt-6-astra" },
+      {
+        instanceId: THREAD,
+        agentName: "dx-agent",
+        recovery: false,
+        scope: { kind: "prompt", submissionId: "sub-anthropic" },
+        signal: new AbortController().signal,
+      },
+    );
+    if (!model) throw new Error("Missing resolved model");
+    expect(model).toMatchObject({
+      api: "anthropic-messages",
+      baseUrl: UPSTREAM,
+    });
+    const calls: { url: string; apiKey: string | null; body: unknown }[] = [];
+    stubFetch(async (request) => {
+      if (request.method === "GET") {
+        calls.push({ url: request.url, apiKey: null, body: null });
+        return Response.json({ data: [] });
+      }
+      calls.push({
+        url: request.url,
+        apiKey: request.headers.get("x-api-key"),
+        body: await request.json(),
+      });
+      const events = [
+        {
+          type: "message_start",
+          message: {
+            id: "msg_test",
+            type: "message",
+            role: "assistant",
+            model: "astra-litellm",
+            content: [],
+            stop_reason: null,
+            usage: { input_tokens: 3, output_tokens: 0 },
+          },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "anthropic route verified" },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { output_tokens: 4 },
+        },
+        { type: "message_stop" },
+      ];
+      return new Response(
+        events
+          .map(
+            (event) =>
+              `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+          )
+          .join(""),
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    const models = createModels();
+    models.setProvider(provider);
+    const result = await models
+      .streamSimple(model, {
+        messages: [{ role: "user", content: "Say it", timestamp: 0 }],
+      })
+      .result();
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toContainEqual({
+      type: "text",
+      text: "anthropic route verified",
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      url: `${UPSTREAM}/v1/messages?beta=true`,
+      apiKey: "sk-litellm-real",
+      body: { model: "astra-litellm" },
+    });
+
+    const check = await stub().fetch("https://coordinator/check", {
+      method: "POST",
+      body: JSON.stringify({
+        target: { scope: "personal", id: OWNER },
+        connectionId: CONNECTION,
+      }),
+    });
+    expect(await check.json()).toMatchObject({ health: { state: "healthy" } });
+    expect(calls[1]?.url).toBe(`${UPSTREAM}/v1/models`);
   });
 
   it("checks access at the configured base path with custom headers", async () => {

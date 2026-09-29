@@ -4,17 +4,12 @@ import {
   ExternalApiApplicationSecretHash,
 } from "@dx/domain";
 import { Context, Effect, Layer, Schema } from "effect";
-
-const base64Url = (bytes: Uint8Array) =>
-  btoa(String.fromCharCode(...bytes))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replaceAll("=", "");
+import { encodeBase64Url } from "../../encoding/base64.js";
 
 const random = (bytes: number): string => {
   const value = new Uint8Array(bytes);
   crypto.getRandomValues(value);
-  return base64Url(value);
+  return encodeBase64Url(value);
 };
 
 export const hashExternalApiApplicationSecret = Effect.fn(

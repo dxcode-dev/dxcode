@@ -19,6 +19,11 @@ import {
 } from "../changes/changes-api.js";
 import { changesQueryOptions } from "../changes/changes-queries.js";
 import {
+  absolutePathFor,
+  type FileReveal,
+  sandboxFileUrl,
+} from "../transcript-file-link.js";
+import {
   createThreadFilesApi,
   type ThreadFilesApi,
   ThreadFilesApiError,
@@ -131,6 +136,16 @@ function FilesWorktreeRoot({
               path,
             })
           }
+          downloadUrlFor={(path) => {
+            const absolute = absolutePathFor({
+              kind: "workspace",
+              worktree: worktree.id,
+              path,
+            });
+            return absolute === undefined
+              ? undefined
+              : sandboxFileUrl(threadId, absolute, true);
+          }}
           selectedPath={selectedPath}
           threadId={threadId}
           worktree={worktree.id}
@@ -251,6 +266,8 @@ export const ThreadFilePane = ({
   worktree = PRIMARY_WORKTREE,
   path,
   onDirtyChange,
+  reveal,
+  revealSequence,
   transport = api,
 }: {
   readonly active?: boolean;
@@ -258,6 +275,8 @@ export const ThreadFilePane = ({
   readonly worktree?: ThreadFilesWorktreeId;
   readonly path: ThreadFilesPath;
   readonly onDirtyChange: (dirty: boolean) => void;
+  readonly reveal?: FileReveal;
+  readonly revealSequence?: number;
   readonly transport?: ThreadFilesApi;
 }) => {
   const queryClient = useQueryClient();
@@ -327,6 +346,8 @@ export const ThreadFilePane = ({
           });
         }}
         onSave={(input, callbacks) => mutation.mutate(input, callbacks)}
+        {...(reveal === undefined ? {} : { reveal })}
+        {...(revealSequence === undefined ? {} : { revealSequence })}
         saveError={
           mutation.error !== null ? message(mutation.error) : undefined
         }

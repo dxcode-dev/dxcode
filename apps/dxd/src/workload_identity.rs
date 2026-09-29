@@ -506,15 +506,36 @@ pub fn git_sign(arguments: &[String]) -> Result<(), ()> {
 }
 
 pub fn git_credential(arguments: &[String]) -> Result<(), ()> {
-    if arguments.len() != 2 || arguments[1] != "get" {
+    // This helper never stores credentials. Git calls `store` after a
+    // successful request and `erase` after a rejected one; both are no-ops.
+    let operation = arguments.get(1).map(String::as_str);
+    if arguments.len() != 2 || !matches!(operation, Some("get" | "store" | "erase")) {
         return Err(());
     }
     let mut input = String::new();
     std::io::stdin()
-        .take(4_097)
+        .take(16_385)
         .read_to_string(&mut input)
         .map_err(|_| ())?;
-    if input.len() > 4_096 || !input.is_ascii() {
+    if operation != Some("get") {
+        return Ok(());
+    }
+    let result = parse_git_credential_request(&input).and_then(request_helper);
+    let Ok(WorkloadIdentityResult::Credential { username, password }) = result else {
+        eprintln!(
+            "dx: Git credentials for this repository are unavailable. Reconnect the repository in dx Settings → Integrations if this persists."
+        );
+        return Err(());
+    };
+    println!("username={username}\npassword={password}\n");
+    Ok(())
+}
+
+/// Reads Git's credential description. Only the protocol, host, and path
+/// select authority and must be unique; Git's optional attributes such as
+/// `username`, `wwwauth[]`, and `capability[]` are accepted and ignored.
+fn parse_git_credential_request(input: &str) -> Result<WorkloadIdentityRequest, ()> {
+    if input.len() > 16_384 || !input.is_ascii() {
         return Err(());
     }
     let mut protocol = None;
@@ -529,13 +550,13 @@ pub fn git_credential(arguments: &[String]) -> Result<(), ()> {
             "protocol" => &mut protocol,
             "host" => &mut host,
             "path" => &mut path,
-            _ => return Err(()),
+            _ => continue,
         };
         if slot.replace(value.to_owned()).is_some() {
             return Err(());
         }
     }
-    let result = request_helper(WorkloadIdentityRequest {
+    Ok(WorkloadIdentityRequest {
         audience: None,
         ttl_seconds: None,
         kind: Some("git-credential".into()),
@@ -543,12 +564,7 @@ pub fn git_credential(arguments: &[String]) -> Result<(), ()> {
         protocol,
         host,
         path,
-    })?;
-    let WorkloadIdentityResult::Credential { username, password } = result else {
-        return Err(());
-    };
-    println!("username={username}\npassword={password}\n");
-    Ok(())
+    })
 }
 
 const GCP_ID_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:id_token";
@@ -769,6 +785,31 @@ mod tests {
                 ..credential
             }
             .valid()
+        );
+    }
+
+    #[test]
+    fn git_credential_requests_ignore_optional_git_attributes() {
+        let request = parse_git_credential_request(
+            "capability[]=authtype\nprotocol=https\nhost=github.com\npath=owner/repository.git\nusername=x-access-token\nwwwauth[]=Basic realm=\"GitHub\"\nwwwauth[]=Bearer\n\n",
+        )
+        .unwrap();
+        assert_eq!(request.kind.as_deref(), Some("git-credential"));
+        assert_eq!(request.protocol.as_deref(), Some("https"));
+        assert_eq!(request.host.as_deref(), Some("github.com"));
+        assert_eq!(request.path.as_deref(), Some("owner/repository.git"));
+        assert!(request.valid());
+        for invalid in [
+            "protocol=https\nprotocol=http\nhost=github.com\npath=a/b.git\n",
+            "protocol=https\nhost=github.com\nnot-an-attribute\n",
+            "protocol=https\nhost=gïthub.com\npath=a/b.git\n",
+        ] {
+            assert!(parse_git_credential_request(invalid).is_err());
+        }
+        assert!(
+            !parse_git_credential_request("protocol=https\nhost=github.com\n")
+                .unwrap()
+                .valid()
         );
     }
 

@@ -3,7 +3,6 @@ import {
   type ThreadChangesPath,
   type ThreadDetailData,
   ThreadFilesPath,
-  type ThreadFilesWorktreeId,
 } from "@dx/api";
 import type { ProjectId, ThreadId } from "@dx/domain";
 import {
@@ -12,13 +11,14 @@ import {
   useFlueAgentSession,
 } from "@flue/react";
 import { useQuery } from "@tanstack/react-query";
-import { useParams } from "@tanstack/react-router";
+import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { Schema } from "effect";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { DxLoading } from "../../shared/brand/dx-loading.js";
 import { wakingExecutionEnvironmentMessage } from "../../shared/execution-environment-copy.js";
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
+import { settingsNavigationState } from "../../shared/navigation/settings-return.js";
 import { Button } from "../../shared/ui/button.js";
 import { MarkdownFileLinkContext } from "../../shared/ui/markdown-file-link-context.js";
 import { useMobile } from "../../shared/use-mobile.js";
@@ -26,9 +26,9 @@ import { projectQueryOptions } from "../projects/project-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { AgentPanel, PendingAgentPanel } from "./agent-panel.js";
 import { ChangesPane } from "./changes/changes-pane.js";
+import { CenterFilePane } from "./files/center-file-pane.js";
 import {
   type ThreadFileLocation,
-  ThreadFilePane,
   ThreadFilesPanel,
 } from "./files/files-panel.js";
 import type { PendingImage } from "./image-attachments.js";
@@ -36,9 +36,16 @@ import {
   useThreadPresence,
   useThreadWorkspaceStatus,
 } from "./realtime/realtime-provider.js";
-import { type CenterFileTab, ThreadCenterTabs } from "./thread-center-tabs.js";
+import {
+  type CenterFileTab,
+  centerTabKey,
+  ThreadCenterTabs,
+} from "./thread-center-tabs.js";
 import { ThreadDesktopLayout } from "./thread-desktop-layout.js";
-import { centerFileKey } from "./thread-file-key.js";
+import {
+  type ThreadFileNavigation,
+  ThreadFileNavigationContext,
+} from "./thread-file-navigation.js";
 import { PendingThreadHeader, ThreadHeader } from "./thread-header.js";
 import { threadQueryOptions } from "./thread-queries.js";
 import {
@@ -53,7 +60,13 @@ import {
   retainSubmissionImages,
   type ThreadSessionRegistry,
 } from "./thread-session-registry.js";
-import { transcriptFilePath } from "./transcript-file-link.js";
+import {
+  absolutePathFor,
+  type FileReveal,
+  resolveTranscriptFileLink,
+  sandboxFileUrl,
+  type ThreadFileTarget,
+} from "./transcript-file-link.js";
 import { useThreadPresentation } from "./use-thread-presentation.js";
 
 const filesPath = (path: ThreadChangesPath) => {
@@ -63,7 +76,6 @@ const filesPath = (path: ThreadChangesPath) => {
     return undefined;
   }
 };
-const PRIMARY_WORKTREE = "primary" as ThreadFilesWorktreeId;
 
 const useOptimisticThreadCreation = (
   registry: ThreadSessionRegistry | undefined,
@@ -91,6 +103,8 @@ export function ThreadWorkspace({
   }>;
 }) {
   const { threadId } = useParams({ from: "/_product/threads/$threadId" });
+  const navigate = useNavigate();
+  const returnTo = useLocation({ select: (location) => location.href });
   const { identity } = useAuthenticatedIdentity();
   const registry = React.useContext(ThreadSessionRegistryContext);
   const id = threadId as ThreadId;
@@ -177,6 +191,12 @@ export function ThreadWorkspace({
           ? wakingExecutionEnvironmentMessage
           : undefined
       }
+      onOpenModelRouting={(destination) =>
+        void navigate({
+          href: destination,
+          state: settingsNavigationState(returnTo),
+        })
+      }
       Terminal={Terminal}
     />
   );
@@ -217,9 +237,7 @@ function OpenThreadFilePane({
     (dirty: boolean) =>
       setFiles((current) =>
         current.map((item) =>
-          centerFileKey(item) === centerFileKey(file)
-            ? { ...item, dirty }
-            : item,
+          centerTabKey(item) === centerTabKey(file) ? { ...item, dirty } : item,
         ),
       ),
     [file, setFiles],
@@ -230,11 +248,10 @@ function OpenThreadFilePane({
       hidden={!active}
       aria-label={`File ${file.path}`}
     >
-      <ThreadFilePane
+      <CenterFilePane
         active={active}
-        path={file.path}
+        file={file}
         threadId={threadId}
-        worktree={file.worktree ?? PRIMARY_WORKTREE}
         onDirtyChange={onDirtyChange}
       />
     </section>
@@ -249,6 +266,7 @@ type ThreadSessionProps = {
   readonly optimisticCreation?: OptimisticThreadCreation;
   readonly onInitialSubmissionObserved?: (submissionId: string) => void;
   readonly workspaceStatus?: string;
+  readonly onOpenModelRouting?: (destination: string) => void;
   readonly Terminal?: React.ComponentType<{
     readonly active?: boolean;
     readonly threadId: ThreadId;
@@ -329,6 +347,7 @@ function ThreadSessionContent({
   optimisticCreation,
   onInitialSubmissionObserved,
   workspaceStatus: realtimeWorkspaceStatus,
+  onOpenModelRouting,
   Terminal,
   agent,
 }: ThreadSessionProps & {
@@ -339,6 +358,17 @@ function ThreadSessionContent({
   const archived = thread.lifecycleState === "archived";
   const settingsQuery = useQuery(settingsContextQueryOptions(identity.id));
   const dictationAvailable = settingsQuery.data?.dictationAvailable === true;
+  const workspace = settingsQuery.data?.workspace;
+  const modelRoutingDestination =
+    project.workspaceId === undefined
+      ? "/settings/model-routing"
+      : workspace?.id === project.workspaceId
+        ? `/workspaces/${workspace.shortName}/settings/model-routing`
+        : undefined;
+  const openModelRouting =
+    modelRoutingDestination === undefined
+      ? undefined
+      : () => onOpenModelRouting?.(modelRoutingDestination);
   const retainedThread = React.useContext(ThreadPresentationContext);
   const [draft, setDraft] = useThreadPresentation("draft", "");
   const [images, setImages] = useThreadPresentation<
@@ -383,30 +413,73 @@ function ThreadSessionContent({
     () => setRightPaneCollapsed((collapsed) => !collapsed),
     [],
   );
-  const openFile = (location: ThreadFileLocation) => {
-    const key = centerFileKey(location);
-    setFiles((current) =>
-      current.some((file) => centerFileKey(file) === key)
-        ? current
-        : [...current, { ...location, dirty: false }],
-    );
+  const openTarget = (target: ThreadFileTarget, reveal?: FileReveal) => {
+    const key = centerTabKey(target);
+    setFiles((current) => {
+      const existing = current.find((file) => centerTabKey(file) === key);
+      if (existing === undefined)
+        return [
+          ...current,
+          {
+            ...target,
+            dirty: false,
+            ...(reveal === undefined ? {} : { reveal, revealSequence: 1 }),
+          },
+        ];
+      // Reopening an open tab keeps its draft and moves the highlight.
+      if (reveal === undefined) return current;
+      return current.map((file) =>
+        centerTabKey(file) === key
+          ? {
+              ...file,
+              reveal,
+              revealSequence: (file.revealSequence ?? 0) + 1,
+            }
+          : file,
+      );
+    });
     setActiveFile(key);
   };
+  const openFile = (location: ThreadFileLocation) =>
+    openTarget({ kind: "workspace", ...location });
   const closeFile = (file: CenterFileTab) => {
-    const key = centerFileKey(file);
-    const index = files.findIndex((item) => centerFileKey(item) === key);
-    const next = files.filter((item) => centerFileKey(item) !== key);
+    const key = centerTabKey(file);
+    const index = files.findIndex((item) => centerTabKey(item) === key);
+    const next = files.filter((item) => centerTabKey(item) !== key);
     setFiles(next);
     if (activeFile === key)
       setActiveFile(
         next[Math.min(index, next.length - 1)] === undefined
           ? undefined
-          : centerFileKey(next[Math.min(index, next.length - 1)]),
+          : centerTabKey(
+              next[Math.min(index, next.length - 1)] as CenterFileTab,
+            ),
       );
   };
-  const handleFileLink = (href: string) => {
-    const path = transcriptFilePath(href);
-    if (path !== undefined) openFile({ worktree: PRIMARY_WORKTREE, path });
+  const fileDownloadUrl = (target: ThreadFileTarget) => {
+    const absolute = absolutePathFor(target);
+    return absolute === undefined
+      ? undefined
+      : sandboxFileUrl(thread.id, absolute, true);
+  };
+  const fileNavigation: ThreadFileNavigation = {
+    open: openTarget,
+    downloadUrl: fileDownloadUrl,
+  };
+  const resolveFileLink = (href: string) => {
+    const resolved = resolveTranscriptFileLink(href);
+    if (resolved === undefined) return undefined;
+    const downloadUrl = fileDownloadUrl(resolved.target);
+    return {
+      open: () =>
+        openTarget(
+          resolved.target,
+          resolved.lines === undefined
+            ? undefined
+            : { kind: "lines", lines: resolved.lines },
+        ),
+      ...(downloadUrl === undefined ? {} : { downloadUrl }),
+    };
   };
 
   if (mobile) {
@@ -418,6 +491,7 @@ function ThreadSessionContent({
             {...retainedImageProps}
             agent={agent}
             agentInitialization={thread.agentInitialization}
+            onOpenModelRouting={openModelRouting}
             archived={archived}
             dictationAvailable={dictationAvailable}
             showArchivedNotice={archived}
@@ -469,6 +543,7 @@ function ThreadSessionContent({
             {...retainedImageProps}
             agent={agent}
             agentInitialization={thread.agentInitialization}
+            onOpenModelRouting={openModelRouting}
             dictationAvailable={dictationAvailable}
             draft={draft}
             onDraftChange={setDraft}
@@ -535,12 +610,12 @@ function ThreadSessionContent({
             projectName={project.name}
             selectedFile={(() => {
               const file = files.find(
-                (candidate) => centerFileKey(candidate) === activeFile,
+                (candidate) => centerTabKey(candidate) === activeFile,
               );
-              return file === undefined
+              return file === undefined || file.kind !== "workspace"
                 ? undefined
                 : {
-                    worktree: file.worktree ?? PRIMARY_WORKTREE,
+                    worktree: file.worktree,
                     path: file.path,
                   };
             })()}
@@ -548,47 +623,50 @@ function ThreadSessionContent({
           />
         )}
         main={
-          <MarkdownFileLinkContext value={handleFileLink}>
-            <AgentPanel
-              {...retainedImageProps}
-              agent={agent}
-              agentInitialization={thread.agentInitialization}
-              dictationAvailable={dictationAvailable}
-              active={activeFile === undefined}
-              additionalPanels={files.map((file) => (
-                <OpenThreadFilePane
-                  active={activeFile === centerFileKey(file)}
-                  file={file}
-                  key={centerFileKey(file)}
-                  setFiles={setFiles}
-                  threadId={thread.id}
-                />
-              ))}
-              draft={draft}
-              onDraftChange={setDraft}
-              workspaceReady={thread.executionWorkspace.ready}
-              workspaceStatus={workspaceStatus}
-              optimisticCreation={optimisticCreation}
-              onInitialSubmissionObserved={onInitialSubmissionObserved}
-              renderHeader={(model) => (
-                <>
-                  <ThreadHeader
-                    thread={thread}
-                    project={project}
-                    model={model}
-                    rightPaneCollapsed={rightPaneCollapsed}
-                    onToggleRightPane={toggleRightPane}
+          <ThreadFileNavigationContext value={fileNavigation}>
+            <MarkdownFileLinkContext value={resolveFileLink}>
+              <AgentPanel
+                {...retainedImageProps}
+                agent={agent}
+                agentInitialization={thread.agentInitialization}
+                onOpenModelRouting={openModelRouting}
+                dictationAvailable={dictationAvailable}
+                active={activeFile === undefined}
+                additionalPanels={files.map((file) => (
+                  <OpenThreadFilePane
+                    active={activeFile === centerTabKey(file)}
+                    file={file}
+                    key={centerTabKey(file)}
+                    setFiles={setFiles}
+                    threadId={thread.id}
                   />
-                  <ThreadCenterTabs
-                    activeFile={activeFile}
-                    files={files}
-                    onClose={closeFile}
-                    onSelect={setActiveFile}
-                  />
-                </>
-              )}
-            />
-          </MarkdownFileLinkContext>
+                ))}
+                draft={draft}
+                onDraftChange={setDraft}
+                workspaceReady={thread.executionWorkspace.ready}
+                workspaceStatus={workspaceStatus}
+                optimisticCreation={optimisticCreation}
+                onInitialSubmissionObserved={onInitialSubmissionObserved}
+                renderHeader={(model) => (
+                  <>
+                    <ThreadHeader
+                      thread={thread}
+                      project={project}
+                      model={model}
+                      rightPaneCollapsed={rightPaneCollapsed}
+                      onToggleRightPane={toggleRightPane}
+                    />
+                    <ThreadCenterTabs
+                      activeFile={activeFile}
+                      files={files}
+                      onClose={closeFile}
+                      onSelect={setActiveFile}
+                    />
+                  </>
+                )}
+              />
+            </MarkdownFileLinkContext>
+          </ThreadFileNavigationContext>
         }
       />
     </div>

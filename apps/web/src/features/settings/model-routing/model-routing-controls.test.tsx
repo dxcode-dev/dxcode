@@ -172,3 +172,64 @@ describe("connection dialog base URL override", () => {
     }
   });
 });
+
+describe("connection dialog endpoint preview", () => {
+  const preview = () =>
+    document.querySelector("#mr-endpoint code")?.textContent ?? null;
+  const chooseFormat = (value: string) =>
+    React.act(() =>
+      document
+        .querySelector<HTMLInputElement>(
+          `input[name="api-format"][value="${value}"]`,
+        )
+        ?.click(),
+    );
+
+  it("shows the exact endpoint for each format as the user types", async () => {
+    const { container, root } = await renderDialog(vi.fn(), {});
+    try {
+      const baseUrl = document.querySelector<HTMLInputElement>("#mr-base-url");
+      expect(preview()).toBeNull();
+      await React.act(() => {
+        if (baseUrl !== null) setValue(baseUrl, "https://ai.example.com/v1/");
+      });
+      expect(preview()).toBe("https://ai.example.com/v1/chat/completions");
+      expect(baseUrl?.getAttribute("aria-describedby")).toBe("mr-endpoint");
+
+      await chooseFormat("openai-responses");
+      expect(preview()).toBe("https://ai.example.com/v1/responses");
+
+      await chooseFormat("anthropic-messages");
+      expect(preview()).toBe("https://ai.example.com/v1/messages");
+      // The typed value is left as entered; only the derived endpoint changes.
+      expect(baseUrl?.value).toBe("https://ai.example.com/v1/");
+    } finally {
+      await React.act(() => root.unmount());
+      container.remove();
+    }
+  });
+
+  it("shows no preview for a catalog provider override", async () => {
+    const provider = {
+      id: "openai",
+      name: "OpenAI",
+      description: "OpenAI",
+      connectionKind: "provider",
+      transport: "proxy",
+      fields: [],
+      models: [],
+    } as CatalogProviderData;
+    const { container, root } = await renderDialog(vi.fn(), { provider });
+    try {
+      const baseUrl = document.querySelector<HTMLInputElement>("#mr-base-url");
+      await React.act(() => {
+        if (baseUrl !== null) setValue(baseUrl, "https://proxy.example.com/v1");
+      });
+      expect(preview()).toBeNull();
+      expect(document.querySelector('input[name="api-format"]')).toBeNull();
+    } finally {
+      await React.act(() => root.unmount());
+      container.remove();
+    }
+  });
+});

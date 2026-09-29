@@ -20,6 +20,9 @@ import {
 import { validateSelfhostConfig } from "../deploy/selfhost/config.mjs";
 import { createHiddenPrompt } from "./hidden-prompt.mjs";
 
+export const WORKER_TRACES_PROMPT =
+  "Enable Cloudflare Worker traces (records request URLs and Durable Object names)";
+
 export const collectDeploymentConfig = async ({
   answer,
   yes,
@@ -69,6 +72,7 @@ export const collectDeploymentConfig = async ({
     ? await answer("GitHub Copilot OAuth client ID")
     : undefined;
   const workersAi = await yes("Enable Workers AI", true);
+  const workerTraces = await yes(WORKER_TRACES_PROMPT, false);
   const modelDeploymentProviders = (await yes(
     "Configure other deployment model integrations",
   ))
@@ -83,6 +87,7 @@ export const collectDeploymentConfig = async ({
     integrations,
     githubCopilotClientId,
     workersAi,
+    workerTraces,
     modelDeploymentProviders,
     allowSignup: hostedAuthentication
       ? false
@@ -203,6 +208,12 @@ export const runDxDeploy = async ({
         environment[variable] = await secret(`New ${integration} secret`);
     }
   }
+  // Deployments created before tracing was configurable were never asked.
+  if (config.workerTraces === undefined)
+    config = validateSelfhostConfig({
+      ...config,
+      workerTraces: await yes(WORKER_TRACES_PROMPT, false),
+    });
   if (flags.has("--reset-admin")) {
     if (config.authEmailFrom !== undefined)
       throw new Error(

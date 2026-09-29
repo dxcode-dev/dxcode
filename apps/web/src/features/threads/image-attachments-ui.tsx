@@ -1,4 +1,5 @@
 import { Dialog } from "@base-ui/react/dialog";
+import { Menu } from "@base-ui/react/menu";
 import { Eye, Monitor, Paperclip, X } from "lucide-react";
 import * as React from "react";
 import { Button } from "../../shared/ui/button.js";
@@ -134,50 +135,49 @@ export function AttachmentMenu({
           if (files.length > 0) onFiles(files);
         }}
       />
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        className="attachment-trigger"
-        aria-label="Add Images & Files"
-        aria-expanded={open && !disabled}
-        aria-haspopup="menu"
-        disabled={disabled}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <Paperclip />
-      </Button>
-      {open && !disabled ? (
-        <div
-          className="attachment-menu"
-          role="menu"
-          onKeyDown={(event) => {
-            if (event.key === "Escape") setOpen(false);
-          }}
+      <Menu.Root open={open && !disabled} onOpenChange={setOpen}>
+        <Menu.Trigger
+          nativeButton
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="attachment-trigger"
+              aria-label="Add Images & Files"
+              disabled={disabled}
+            />
+          }
         >
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setOpen(false);
-              inputRef.current?.click();
-            }}
+          <Paperclip />
+        </Menu.Trigger>
+        <Menu.Portal>
+          <Menu.Positioner
+            className="attachment-menu-positioner"
+            side="top"
+            align="start"
+            sideOffset={6}
           >
-            <Paperclip /> <span>Add Images &amp; Files</span>
-            <kbd>⌘U</kbd>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setOpen(false);
-              onScreenshot();
-            }}
-          >
-            <Monitor /> <span>Take Screenshot</span>
-          </button>
-        </div>
-      ) : null}
+            <Menu.Popup className="attachment-menu">
+              <Menu.Item
+                nativeButton
+                render={<button type="button" />}
+                onClick={() => inputRef.current?.click()}
+              >
+                <Paperclip /> <span>Add Images &amp; Files</span>
+                <kbd>⌘U</kbd>
+              </Menu.Item>
+              <Menu.Item
+                nativeButton
+                render={<button type="button" />}
+                onClick={onScreenshot}
+              >
+                <Monitor /> <span>Take Screenshot</span>
+              </Menu.Item>
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+      </Menu.Root>
     </span>
   );
 }

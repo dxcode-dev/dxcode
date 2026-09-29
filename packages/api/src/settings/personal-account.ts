@@ -4,8 +4,10 @@ import {
   PersonalAccountIdentityAuthority,
   PersonalAccountUsername,
   PersonalAppearance,
+  PersonalComposerDefaults,
   PersonalPalette,
   PersonalTerminalTheme,
+  UpdatePersonalComposerDefaultsInput,
 } from "@dx/domain";
 import { Schema } from "effect";
 import { errorResponse, successResponse } from "../http/response.js";
@@ -44,6 +46,19 @@ export const UpdatePersonalAppearanceRequestSchema = Schema.Struct({
 
 export const UpdatePersonalAppearanceResponseSchema = successResponse(
   PersonalAccountDataSchema,
+);
+
+export const PersonalComposerDefaultsDataSchema = PersonalComposerDefaults;
+
+export const GetPersonalComposerDefaultsResponseSchema = successResponse(
+  PersonalComposerDefaultsDataSchema,
+);
+
+export const UpdatePersonalComposerDefaultsRequestSchema =
+  UpdatePersonalComposerDefaultsInput;
+
+export const UpdatePersonalComposerDefaultsResponseSchema = successResponse(
+  PersonalComposerDefaultsDataSchema,
 );
 
 export const PersonalAccountInvalidRequestResponseSchema = Schema.Struct({
@@ -95,6 +110,10 @@ export type UpdatePersonalAccountRequest =
   typeof UpdatePersonalAccountRequestSchema.Type;
 export type UpdatePersonalAppearanceRequest =
   typeof UpdatePersonalAppearanceRequestSchema.Type;
+export type PersonalComposerDefaultsData =
+  typeof PersonalComposerDefaultsDataSchema.Type;
+export type UpdatePersonalComposerDefaultsRequest =
+  typeof UpdatePersonalComposerDefaultsRequestSchema.Type;
 export type GetPersonalAccountResponse =
   typeof GetPersonalAccountResponseSchema.Encoded;
 export type UpdatePersonalAccountResponse =

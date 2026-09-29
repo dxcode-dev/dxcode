@@ -2,7 +2,11 @@ import { ThreadId } from "@dx/domain";
 import type { Sandbox, SandboxFactory } from "@flue/runtime";
 import { Effect, Redacted, Schema } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { threadDaemonLogger } from "../logging.js";
+import { executionWorkspaceLogger, threadDaemonLogger } from "../logging.js";
+import {
+  GITHUB_CLI_WRAPPER_INSTALL_COMMAND,
+  githubCliWrapper,
+} from "../source-control/github/cli-wrapper.js";
 import type { WorkspaceActivity } from "./activity.js";
 
 class TestWorkspaceError extends Schema.TaggedError<TestWorkspaceError>()(
@@ -56,16 +60,21 @@ const mocks = vi.hoisted(() => {
     policy_revision: null,
     private_submodule_repository_ids_json: null,
   }));
+  const firstGithubSource = vi.fn(
+    async (): Promise<{ repository_full_name: string } | null> => null,
+  );
   const prepareThreadLifecycle = vi.fn((sql: string) =>
     sql.includes("SELECT ready_at, preparation_status")
       ? {
           bind: vi.fn(() => ({ first: firstWorkspaceReadiness })),
         }
-      : sql.includes("thread_source_snapshot")
-        ? {
-            bind: vi.fn(() => ({ first: firstSourceWorkspace })),
-          }
-        : { bind: bindThreadLifecycle },
+      : sql.includes("JOIN thread_source_authority a")
+        ? { bind: vi.fn(() => ({ first: firstGithubSource })) }
+        : sql.includes("thread_source_snapshot")
+          ? {
+              bind: vi.fn(() => ({ first: firstSourceWorkspace })),
+            }
+          : { bind: bindThreadLifecycle },
   );
   const db = { prepare: prepareThreadLifecycle } as unknown as D1Database;
   const workerEnv = { DB: db, DX_RUNTIME_MODE: "deployed" };
@@ -90,6 +99,7 @@ const mocks = vi.hoisted(() => {
     firstThreadLifecycle,
     firstWorkspaceReadiness,
     firstSourceWorkspace,
+    firstGithubSource,
     bindThreadLifecycle,
     runThreadLifecycle,
     prepareThreadLifecycle,
@@ -514,6 +524,9 @@ describe("execution workspace admission", () => {
       ready_at: null,
       preparation_status: "Preparing source…",
     });
+    mocks.firstGithubSource.mockResolvedValueOnce({
+      repository_full_name: "owner/repository",
+    });
     mocks.resolveWorkspace.mockImplementationOnce((options) => {
       options.observeResidency?.("running");
       return Effect.succeed(providerSandbox) as never;
@@ -528,6 +541,11 @@ describe("execution workspace admission", () => {
       "mkdir -p -- /home/user/workspace/repo && git -C /home/user/workspace/repo init && git -C /home/user/workspace/repo hash-object -w -t tree --stdin </dev/null",
       expect.objectContaining({ cwd: "/home/user" }),
     );
+    // Warm (running) workspaces refresh the gh wrapper on every activation.
+    expect(sourceRun).toHaveBeenCalledWith(GITHUB_CLI_WRAPPER_INSTALL_COMMAND, {
+      envs: { DX_GH_WRAPPER: githubCliWrapper("owner/repository") },
+      timeoutMs: 10_000,
+    });
     expect(
       mocks.prepareThreadLifecycle.mock.calls.some(([sql]) =>
         (sql as string).includes("UPDATE execution_workspace"),
@@ -549,6 +567,9 @@ describe("execution workspace admission", () => {
     mocks.connectWorkspace.mockReturnValueOnce(
       Effect.succeed(providerSandbox) as never,
     );
+    mocks.firstGithubSource.mockResolvedValueOnce({
+      repository_full_name: "owner/repository",
+    });
 
     await ExecutionWorkspaces.ensureDaemon({
       threadId,
@@ -580,10 +601,52 @@ describe("execution workspace admission", () => {
         loadBinary: expect.any(Function),
       }),
     );
+    expect(sourceRun).toHaveBeenCalledWith(GITHUB_CLI_WRAPPER_INSTALL_COMMAND, {
+      envs: { DX_GH_WRAPPER: githubCliWrapper("owner/repository") },
+      timeoutMs: 10_000,
+    });
     expect(sourceRun.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.ensureDaemonInGuest.mock.invocationCallOrder[0] as number,
     );
     expect(mocks.firstThreadLifecycle).toHaveBeenCalled();
+  });
+
+  it("reports a failed gh wrapper installation without failing activation", async () => {
+    const threadId = thread("thr_00000000-0000-4000-8000-000000000294");
+    const warn = vi
+      .spyOn(executionWorkspaceLogger, "warn")
+      .mockImplementation(() => {});
+    // E2B rejects a nonzero exit with the command's stderr in the message.
+    const exitError =
+      "Command exited with code 1 and error:\nmkdir: cannot create directory '/home/user/.local/bin': Permission denied";
+    const sourceRun = vi.fn(async (command: string) => {
+      if (command === GITHUB_CLI_WRAPPER_INSTALL_COMMAND)
+        throw new Error(exitError);
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    mocks.connectWorkspace.mockReturnValueOnce(
+      Effect.succeed({
+        commands: { run: sourceRun },
+        files: { write: vi.fn(async () => undefined) },
+      }) as never,
+    );
+    mocks.firstGithubSource.mockResolvedValueOnce({
+      repository_full_name: "owner/repository",
+    });
+
+    await ExecutionWorkspaces.ensureDaemon({
+      threadId,
+      generation: "generation_1",
+      apiKey: Redacted.make("dxd_test-api-key-value"),
+      endpoint: "https://daemon.test",
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      "GitHub CLI wrapper installation failed.",
+      { event: "github_cli_wrapper", threadId, error: exitError },
+    );
+    expect(mocks.ensureDaemonInGuest).toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it("attributes parallel release metadata failures to the release stage", async () => {

@@ -3,14 +3,19 @@ import { Data, Option, Schema } from "effect";
 import {
   DXD_PROTOCOL_MAJOR,
   DXD_RELEASE,
+  DXD_SANDBOX_CHUNK_HEADER,
   type DxdChangesRefresh,
   type DxdFilesListOperation,
   DxdFilesListResult,
   DxdFilesOperation,
   type DxdFilesReadOperation,
   DxdFilesReadResult,
+  DxdFilesReadSandboxFailure,
+  type DxdFilesReadSandboxOperation,
+  type DxdFilesReadSandboxResult,
   type DxdFilesSaveOperation,
   DxdFilesSaveResult,
+  DxdSandboxChunkHeader,
 } from "../execution/dxd/protocol.js";
 import type { Bindings } from "../http/types.js";
 
@@ -173,6 +178,30 @@ export const queueThreadChangesRefresh = async (
   }
 };
 
+const SandboxChunkMetadata = DxdSandboxChunkHeader.mapFields(
+  ({ generation: _generation, requestId: _requestId, ...fields }) => fields,
+);
+
+/** Chunk bytes arrive as the body; failures arrive as JSON. */
+const sandboxReadResult = async (
+  response: Response,
+): Promise<DxdFilesReadSandboxResult> => {
+  const metadata = response.headers.get(DXD_SANDBOX_CHUNK_HEADER);
+  if (metadata === null)
+    return Schema.decodeUnknownSync(DxdFilesReadSandboxFailure)(
+      await response.json(),
+    );
+  const header = Schema.decodeUnknownSync(SandboxChunkMetadata)(
+    JSON.parse(metadata),
+    { onExcessProperty: "error" },
+  );
+  return {
+    kind: "sandbox-chunk",
+    ...header,
+    bytes: new Uint8Array(await response.arrayBuffer()),
+  };
+};
+
 export function requestThreadDaemon(
   bindings: Pick<Bindings, "THREAD_EXECUTION">,
   threadId: ThreadId,
@@ -188,13 +217,19 @@ export function requestThreadDaemon(
   threadId: ThreadId,
   operation: DxdFilesSaveOperation,
 ): Promise<typeof DxdFilesSaveResult.Type>;
+export function requestThreadDaemon(
+  bindings: Pick<Bindings, "THREAD_EXECUTION">,
+  threadId: ThreadId,
+  operation: DxdFilesReadSandboxOperation,
+): Promise<DxdFilesReadSandboxResult>;
 export async function requestThreadDaemon(
   bindings: Pick<Bindings, "THREAD_EXECUTION">,
   threadId: ThreadId,
   operation:
     | DxdFilesListOperation
     | DxdFilesReadOperation
-    | DxdFilesSaveOperation,
+    | DxdFilesSaveOperation
+    | DxdFilesReadSandboxOperation,
 ) {
   let body: string;
   try {
@@ -226,6 +261,8 @@ export async function requestThreadDaemon(
         ? unavailable(failure.value.outcome)
         : unavailable("unknown");
     }
+    if (operation.operation === "files.readSandbox")
+      return await sandboxReadResult(response);
     const result = await response.json();
     switch (operation.operation) {
       case "files.list":

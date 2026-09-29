@@ -71,6 +71,7 @@ The wizard writes this nonsecret JSON file:
   "zone": "example.com",
   "allowSignup": false,
   "workersAi": true,
+  "workerTraces": false,
   "githubCopilotClientId": "optional-oauth-app-client-id",
   "modelDeploymentProviders": "optional,comma-separated,ids",
   "modelEndpointAllowlist": "optional,comma-separated,origins",
@@ -88,6 +89,13 @@ fallback instead of downloading the release asset.
 able to sign in. Setting it to `true` exposes Better Auth's direct
 email/password account creation. It does not enable hosted magic links, a
 waitlist, or an approved-email gate.
+
+`workerTraces` turns on Cloudflare Workers traces for the dx Worker. Logs are
+always on. Traces record request URLs and Durable Object names, so they default
+to off. The wizard asks on first deploy, and asks once when upgrading a
+deployment whose file has no `workerTraces` key. The answer is saved in this
+file, so later reruns do not ask again. Edit the value and rerun
+`pnpm dx:deploy` to change it.
 
 Wizard and noninteractive runs produce the same fail-closed plan. Same-version
 reruns reuse unchanged resources and do not require the administrator password.

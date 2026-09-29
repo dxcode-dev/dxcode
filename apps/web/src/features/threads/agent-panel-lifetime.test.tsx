@@ -21,7 +21,9 @@ vi.mock("./thread-transcript.js", () => ({
     readonly model: {
       readonly rows: ReadonlyArray<{
         readonly id: string;
+        readonly kind: string;
         readonly text?: string;
+        readonly detail?: string;
       }>;
     };
     readonly header?: React.ReactNode;
@@ -37,7 +39,7 @@ vi.mock("./thread-transcript.js", () => ({
       {header}
       {pinnedContent}
       {model.rows.map((row) => (
-        <span key={row.id}>{row.text}</span>
+        <span key={row.id}>{row.text ?? row.detail}</span>
       ))}
       {[...(failures?.values() ?? [])].map((failure) => (
         <button key={failure.message} type="button" onClick={failure.retry}>
@@ -64,6 +66,8 @@ const agent = {
   settlements: [],
   abort: vi.fn(),
   refresh: vi.fn(),
+  resendPrompt: vi.fn(),
+  resume: vi.fn(),
   retrySend: vi.fn(),
   sendMessage: vi.fn(),
   status: "ready",
@@ -517,6 +521,69 @@ describe("thread composer ownership", () => {
     await React.act(() => replacement.root.unmount());
   });
 
+  it("offers Retry immediately when Flue retained the failed send", async () => {
+    const failedSend = {
+      id: "local:rejected-message",
+      message: "Retry me",
+      error: new Error("send failed"),
+      retry: "transport" as const,
+    };
+    const retrySend = vi.fn().mockResolvedValue(undefined);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const queryClient = new QueryClient();
+    const render = (override: Partial<UseFlueAgentResult>) =>
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <AgentPanel
+            agent={{ ...agent, ...override } as UseFlueAgentResult}
+            agentInitialization={agentInitialization}
+            archived={false}
+          />
+        </QueryClientProvider>,
+      );
+    // Flue rejects sendMessage and records the attempt as a failed send.
+    const sendMessage = vi.fn(async () => {
+      render({ sendMessage, failedSends: [failedSend], retrySend });
+      throw new Error("send failed");
+    });
+    await React.act(() => render({ sendMessage, retrySend }));
+    const textarea = container.querySelector<HTMLTextAreaElement>(
+      '[aria-label="Message"]',
+    );
+    const form = container.querySelector("form");
+    if (textarea === null || form === null)
+      throw new Error("Expected thread composer form.");
+    await React.act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )?.set?.call(textarea, "Retry me");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      form.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      );
+      await Promise.resolve();
+    });
+
+    const retry = await vi.waitFor(() => {
+      const button = [
+        ...container.querySelectorAll<HTMLButtonElement>(
+          ".thread-error-card button",
+        ),
+      ].find((candidate) => candidate.textContent?.includes("Retry"));
+      if (button === undefined) throw new Error("Retry is not offered yet.");
+      return button;
+    });
+    await React.act(async () => {
+      retry.click();
+      await Promise.resolve();
+    });
+    expect(retrySend).toHaveBeenCalledExactlyOnceWith(failedSend.id);
+    await React.act(() => root.unmount());
+  });
+
   it("unlocks after failed steering admission without re-sending it", async () => {
     const sendMessage = vi
       .fn()
@@ -543,10 +610,14 @@ describe("thread composer ownership", () => {
     });
 
     await vi.waitFor(() =>
-      expect(mounted.container.textContent).toContain(
-        "Steering admission failed",
-      ),
+      expect(
+        mounted.container.querySelector(".thread-error-card")?.textContent,
+      ).toContain("Message not sentCheck your connection."),
     );
+    expect(mounted.container.textContent).not.toContain(
+      "Steering admission failed",
+    );
+    expect(mounted.container.querySelector(".error-notice")).toBeNull();
     expect(textarea.disabled).toBe(false);
     expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
       "Failed steering prompt",
@@ -902,6 +973,425 @@ describe("thread composer ownership", () => {
     await React.act(() => root.unmount());
   });
 
+  it("moves a model failure out of the transcript and resumes without a new prompt", async () => {
+    const resume = vi.fn().mockResolvedValue(undefined);
+    const panel = await mountPanel({
+      messages: [
+        {
+          id: "model-failure-advisory",
+          role: "system",
+          purpose: "advisory",
+          display: "visible",
+          turnId: "turn:model-failure",
+          submissionId: "submission:model-failure",
+          settlement: { outcome: "failed" },
+          parts: [
+            {
+              type: "text",
+              text: "Submission exceeded maximum recovery attempts (10/10).",
+              state: "done",
+            },
+          ],
+        },
+      ],
+      settlements: [],
+      resume,
+    });
+
+    const card =
+      panel.container.querySelector<HTMLElement>(".thread-error-card");
+    expect(card?.textContent).toContain("Provider error");
+    expect(card?.textContent).toContain(
+      "The provider could not complete this request.",
+    );
+    expect(card?.textContent).toContain("Retry");
+    expect(panel.container.textContent).not.toContain(
+      "maximum recovery attempts",
+    );
+    expect(panel.container.textContent).not.toContain(
+      "Agent stopped with an error",
+    );
+
+    const retry = Array.from(card?.querySelectorAll("button") ?? []).find(
+      (button) => button.textContent?.includes("Retry"),
+    );
+    await React.act(async () => {
+      retry?.click();
+      await Promise.resolve();
+    });
+
+    expect(resume).toHaveBeenCalledExactlyOnceWith();
+    await React.act(() => panel.root.unmount());
+  });
+
+  it("shows archived settlement failures only in a non-actionable card", async () => {
+    const panel = await mountPanel(
+      {
+        messages: [
+          {
+            id: "archived-failure-advisory",
+            role: "system",
+            purpose: "advisory",
+            display: "visible",
+            turnId: "turn:archived-failure",
+            submissionId: "submission:archived-failure",
+            settlement: { outcome: "failed" },
+            parts: [
+              {
+                type: "text",
+                text: "sensitive provider failure",
+                state: "done",
+              },
+            ],
+          },
+        ],
+        settlements: [
+          {
+            submissionId: "submission:archived-failure",
+            outcome: "failed",
+            error: new Error("sensitive provider failure"),
+          },
+        ],
+      },
+      true,
+    );
+
+    const card = panel.container.querySelector(".thread-error-card");
+    expect(card?.textContent).toContain("Provider error");
+    expect(card?.textContent).not.toContain("sensitive provider failure");
+    expect(card?.textContent).not.toContain("Retry");
+    expect(panel.container.textContent).not.toContain(
+      "Agent stopped with an error",
+    );
+    await React.act(() => panel.root.unmount());
+  });
+
+  it("suppresses Model Routing actions on archived cards", async () => {
+    const panel = await mountPanel(
+      {
+        settlements: [
+          {
+            submissionId: "archived-routing-failure",
+            outcome: "failed",
+            error: new Error("There are no healthy deployments for this model"),
+          },
+        ],
+      },
+      true,
+      {},
+      { onOpenModelRouting: vi.fn() },
+    );
+
+    expect(panel.container.textContent).toContain("Model unavailable");
+    expect(panel.container.textContent).not.toContain("Open Model Routing");
+    await React.act(() => panel.root.unmount());
+  });
+
+  it("hides historical settlement failures while new work is active", async () => {
+    const panel = await mountPanel({
+      status: "streaming",
+      settlements: [
+        {
+          submissionId: "submission:old-failure",
+          outcome: "failed",
+          error: new Error("old failure"),
+        },
+      ],
+    });
+
+    expect(panel.container.querySelector(".thread-error-card")).toBeNull();
+    await React.act(() => panel.root.unmount());
+  });
+
+  it("keeps failed-send recovery available during unrelated active work", async () => {
+    const panel = await mountPanel({
+      status: "streaming",
+      failedSends: [
+        {
+          id: "failed-during-stream",
+          message: "First message",
+          error: new Error("send failed"),
+          retry: "transport",
+        },
+      ],
+    });
+
+    expect(
+      panel.container.querySelector(".thread-error-card")?.textContent,
+    ).toContain("Message not sent");
+    await React.act(() => panel.root.unmount());
+  });
+
+  it("shows provider interruptions in the card but ignores user Stop", async () => {
+    const provider = await mountPanel({
+      settlements: [
+        {
+          submissionId: "provider-abort",
+          outcome: "aborted",
+          error: { type: "submission_interrupted" },
+        },
+      ],
+    });
+    expect(
+      provider.container.querySelector(".thread-error-card")?.textContent,
+    ).toContain("Provider error");
+    expect(provider.container.textContent).not.toContain("Agent interrupted");
+    await React.act(() => provider.root.unmount());
+
+    const stopped = await mountPanel({
+      settlements: [
+        {
+          submissionId: "user-stop",
+          outcome: "aborted",
+          error: {
+            type: "submission_aborted",
+            meta: {
+              dxExecutionFailure: {
+                version: 1,
+                code: "cancelled",
+                abortSource: "user",
+              },
+            },
+          },
+        },
+      ],
+    });
+    expect(stopped.container.querySelector(".thread-error-card")).toBeNull();
+    await React.act(() => stopped.root.unmount());
+  });
+
+  it("refreshes observation failures instead of resuming execution", async () => {
+    const refresh = vi.fn();
+    const resume = vi.fn();
+    const panel = await mountPanel({
+      error: new Error("observation failed"),
+      refresh,
+      resume,
+    });
+
+    expect(
+      panel.container.querySelector(".thread-error-card")?.textContent,
+    ).toContain("Connection error");
+    const retry = [...panel.container.querySelectorAll("button")].find(
+      (button) => button.textContent?.includes("Retry"),
+    );
+    await React.act(() => retry?.click());
+
+    expect(refresh).toHaveBeenCalledExactlyOnceWith();
+    expect(resume).not.toHaveBeenCalled();
+    await React.act(() => panel.root.unmount());
+  });
+
+  it("explains unavailable models and offers Retry with Model Routing", async () => {
+    const openModelRouting = vi.fn();
+    const resume = vi.fn().mockResolvedValue(undefined);
+    const panel = await mountPanel(
+      {
+        messages: [
+          {
+            id: "routing-failure-advisory",
+            role: "system",
+            purpose: "advisory",
+            display: "visible",
+            turnId: "turn:routing-failure",
+            submissionId: "submission:routing-failure",
+            settlement: { outcome: "failed" },
+            parts: [],
+          },
+        ],
+        settlements: [
+          {
+            submissionId: "submission:routing-failure",
+            outcome: "failed",
+            error: {
+              type: "operation_failed",
+              message:
+                "There are no healthy deployments for this model. Available Model Group Fallbacks=None",
+            },
+          },
+        ],
+        resume,
+      },
+      false,
+      {},
+      { onOpenModelRouting: openModelRouting },
+    );
+
+    const card =
+      panel.container.querySelector<HTMLElement>(".thread-error-card");
+    expect(card?.textContent).toContain("Model unavailable");
+    expect(card?.textContent).toContain(
+      "No healthy deployment is available for this model.",
+    );
+    expect(card?.textContent).toContain("Retry");
+    expect(card?.textContent).toContain("Open Model Routing");
+    expect(card?.textContent).not.toContain("Available Model Group");
+
+    const buttons = Array.from(card?.querySelectorAll("button") ?? []);
+    const retry = buttons.find((button) =>
+      button.textContent?.includes("Retry"),
+    );
+    const settings = buttons.find((button) =>
+      button.textContent?.includes("Open Model Routing"),
+    );
+    await React.act(() => settings?.click());
+    await React.act(async () => {
+      retry?.click();
+      await Promise.resolve();
+    });
+
+    expect(resume).toHaveBeenCalledExactlyOnceWith();
+    expect(openModelRouting).toHaveBeenCalledExactlyOnceWith();
+    await React.act(() => panel.root.unmount());
+  });
+
+  it("still offers Retry while a Model Routing destination is unavailable", async () => {
+    const resume = vi.fn();
+    const panel = await mountPanel({
+      settlements: [
+        {
+          submissionId: "routing-destination-pending",
+          outcome: "failed",
+          error: new Error("MODEL_NOT_SERVED: anthropic/claude"),
+        },
+      ],
+      resume,
+    });
+
+    const card = panel.container.querySelector(".thread-error-card");
+    expect(card?.textContent).toContain("Model unavailable");
+    expect(card?.textContent).toContain("Retry");
+    expect(card?.textContent).not.toContain("Open Model Routing");
+    await React.act(async () => {
+      [...(card?.querySelectorAll("button") ?? [])]
+        .find((button) => button.textContent?.includes("Retry"))
+        ?.click();
+      await Promise.resolve();
+    });
+    expect(resume).toHaveBeenCalledExactlyOnceWith();
+    await React.act(() => panel.root.unmount());
+  });
+
+  it("retries temporary routing outages instead of opening settings", async () => {
+    const panel = await mountPanel(
+      {
+        settlements: [
+          {
+            submissionId: "routing-outage",
+            outcome: "failed",
+            error: new Error(
+              "Model routing unavailable: PERSISTENCE_UNAVAILABLE",
+            ),
+          },
+        ],
+      },
+      false,
+      {},
+      { onOpenModelRouting: vi.fn() },
+    );
+
+    const card = panel.container.querySelector(".thread-error-card");
+    expect(card?.textContent).toContain("Provider error");
+    expect(card?.textContent).toContain("Retry");
+    expect(card?.textContent).not.toContain("Open Model Routing");
+    await React.act(() => panel.root.unmount());
+  });
+
+  it("does not promote a tool failure from the transcript", async () => {
+    const panel = await mountPanel({
+      messages: [
+        {
+          id: "tool-failure",
+          role: "assistant",
+          purpose: "assistant",
+          display: "visible",
+          turnId: "turn:tool-failure",
+          parts: [
+            {
+              type: "dynamic-tool",
+              toolName: "bash",
+              toolCallId: "tool-call:failure",
+              state: "output-error",
+              input: { command: "false" },
+              errorText: "Command failed",
+            },
+          ],
+        },
+      ],
+      settlements: [],
+    });
+
+    expect(panel.container.querySelector(".thread-error-card")).toBeNull();
+    await React.act(() => panel.root.unmount());
+  });
+
+  it("reveals older failed sends after the latest card is dismissed", async () => {
+    const retrySend = vi.fn().mockResolvedValue(undefined);
+    const panel = await mountPanel({
+      failedSends: [
+        {
+          id: "older-send",
+          message: "Older message",
+          error: new Error("send failed"),
+          retry: "transport",
+        },
+        {
+          id: "latest-send",
+          message: "Latest message",
+          error: new Error("send failed"),
+          retry: "transport",
+        },
+      ],
+      retrySend,
+    });
+
+    await React.act(() =>
+      panel.container
+        .querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')
+        ?.click(),
+    );
+    const retry = [...panel.container.querySelectorAll("button")].find(
+      (button) => button.textContent?.includes("Retry"),
+    );
+    await React.act(async () => {
+      retry?.click();
+      await Promise.resolve();
+    });
+
+    expect(retrySend).toHaveBeenCalledExactlyOnceWith("older-send");
+    await React.act(() => panel.root.unmount());
+  });
+
+  it("resends a terminal failed-send candidate through fresh admission", async () => {
+    const resendPrompt = vi.fn().mockResolvedValue(undefined);
+    const retrySend = vi.fn();
+    const panel = await mountPanel({
+      failedSends: [
+        {
+          id: "local:terminal-message",
+          message: "Retry this prompt",
+          error: new Error("send failed"),
+          retry: "resend",
+        },
+      ],
+      resendPrompt,
+      retrySend,
+    });
+    const retry = [...panel.container.querySelectorAll("button")].find(
+      (button) => button.textContent?.includes("Retry"),
+    );
+    await React.act(async () => {
+      retry?.click();
+      await Promise.resolve();
+    });
+
+    expect(resendPrompt).toHaveBeenCalledExactlyOnceWith(
+      "local:terminal-message",
+    );
+    expect(retrySend).not.toHaveBeenCalled();
+    await React.act(() => panel.root.unmount());
+  });
+
   it("keeps a failed Flue candidate visible and retries its retained identity", async () => {
     const retrySend = vi.fn().mockResolvedValue(undefined);
     const panel = await mountPanel({
@@ -931,10 +1421,16 @@ describe("thread composer ownership", () => {
       ],
       retrySend,
     });
+    expect(
+      panel.container.querySelector(".thread-error-card")?.textContent,
+    ).toContain("Message not sentCheck your connection.");
     const retry = panel.container.querySelector<HTMLButtonElement>("button");
     if (retry === null) throw new Error("Expected failed-send retry.");
 
-    await React.act(() => retry.click());
+    await React.act(async () => {
+      retry.click();
+      await Promise.resolve();
+    });
 
     expect(retrySend).toHaveBeenCalledExactlyOnceWith("local:failed-message");
     await React.act(() => panel.root.unmount());

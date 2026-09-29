@@ -1,3 +1,4 @@
+import { ArrowIcon } from "./arrow-icon.js";
 import { VariantA } from "./variant-a.js";
 import { VariantB } from "./variant-b.js";
 import { VariantC } from "./variant-c.js";
@@ -44,7 +45,7 @@ export function Prototype({
             aria-label="Previous concept"
             onClick={() => change(variant - 1)}
           >
-            ←
+            <ArrowIcon direction="left" />
           </button>
           <strong>
             {variant} / {names[variant - 1]}
@@ -54,7 +55,7 @@ export function Prototype({
             aria-label="Next concept"
             onClick={() => change(variant + 1)}
           >
-            →
+            <ArrowIcon direction="right" />
           </button>
         </div>
       )}

@@ -353,7 +353,9 @@ export const makePauseExecutionWorkspace = (api: E2BResolverApi) =>
             record.providerSandboxId === null
           )
             return yield* unavailable();
-          const paused = yield* Effect.tryPromise({
+          // E2B returns false (HTTP 409) for a sandbox that is already
+          // paused, e.g. by its idle timeout; that is the requested state.
+          yield* Effect.tryPromise({
             try: () =>
               api.pause(record.providerSandboxId as string, {
                 apiKey,
@@ -368,10 +370,19 @@ export const makePauseExecutionWorkspace = (api: E2BResolverApi) =>
                     ...record,
                     state: "lost",
                   }).pipe(Effect.andThen(Effect.fail(unavailable(cause))))
-                : Effect.fail(unavailable(cause)),
+                : Effect.sync(() =>
+                    executionWorkspaceLogger.warn(
+                      "E2B workspace pause failed.",
+                      {
+                        event: "execution_workspace_pause_failed",
+                        threadId,
+                        error:
+                          cause instanceof Error ? cause.name : typeof cause,
+                      },
+                    ),
+                  ).pipe(Effect.andThen(Effect.fail(unavailable(cause)))),
             ),
           );
-          if (!paused) return yield* unavailable();
           return 1;
         }),
       ),

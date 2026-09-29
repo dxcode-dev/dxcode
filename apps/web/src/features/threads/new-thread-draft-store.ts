@@ -1,5 +1,6 @@
 import type { UserId, WorkspaceId } from "@dx/domain";
 import { Schema } from "effect";
+import { DictationRecoverySession } from "./dictation/dictation-session.js";
 
 export const NEW_THREAD_DRAFT_MAX_BYTES = 64 * 1024;
 export const NEW_THREAD_DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -22,6 +23,7 @@ export interface NewThreadDraftSnapshot {
   readonly warning?: "too-large" | "storage-unavailable";
 }
 export interface NewThreadDraftStore {
+  readonly dictation: DictationRecoverySession;
   readonly subscribe: (listener: () => void) => () => void;
   readonly getSnapshot: () => NewThreadDraftSnapshot;
   readonly getServerSnapshot: () => NewThreadDraftSnapshot;
@@ -169,6 +171,7 @@ export const createNewThreadDraftStore = ({
   };
 
   return {
+    dictation: new DictationRecoverySession(),
     subscribe: (listener) => {
       listeners.add(listener);
       if (listeners.size === 1) {
@@ -288,6 +291,7 @@ export const clearNewThreadDraftsForUser = (userId: UserId) => {
     for (const [key, store] of browserStores)
       if (key.startsWith(prefix)) {
         try {
+          store.dictation.clear();
           store.clear();
         } catch {
           // A cached adapter must not make sign-out cleanup partial or throwing.

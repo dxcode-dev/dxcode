@@ -3,7 +3,7 @@ import {
   accessRequestNotice,
   useAccessRequest,
 } from "../../authentication/authentication-mutations.js";
-
+import { ArrowIcon } from "./arrow-icon.js";
 import { LiveAccessContext } from "./live-access-context.js";
 
 export function WaitlistForm(props: {
@@ -67,7 +67,9 @@ function LiveWaitlistForm({
         />
         <button className="primary" type="submit" disabled={request.isPending}>
           {request.isPending ? "Please wait…" : "Get early access"}{" "}
-          <span aria-hidden="true">↗</span>
+          <span aria-hidden="true">
+            <ArrowIcon direction="up-right" />
+          </span>
         </button>
       </div>
       <div ref={challenge} />
@@ -130,7 +132,10 @@ function PreviewWaitlistForm({
             if (hero) setSubmitted(false);
           }}
         >
-          Get early access <span aria-hidden="true">↗</span>
+          Get early access{" "}
+          <span aria-hidden="true">
+            <ArrowIcon direction="up-right" />
+          </span>
         </button>
       </div>
       {!hero && submitted && (

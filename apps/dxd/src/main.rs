@@ -1,6 +1,7 @@
 mod changes;
 mod environment;
 mod files;
+mod files_sandbox;
 mod observer;
 mod protocol;
 mod terminal;
@@ -33,7 +34,7 @@ use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 use url::Url;
 
-const RELEASE: &str = "0.7.5";
+const RELEASE: &str = "0.7.6";
 const PROTOCOL_MAJOR: u8 = 1;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(2);
 const HEARTBEAT_LEASE: Duration = Duration::from_secs(15);
@@ -163,7 +164,11 @@ fn run() -> Result<(), SessionExit> {
         .first()
         .is_some_and(|argument| argument == "git-credential")
     {
-        return workload_identity::git_credential(&arguments).map_err(|()| SessionExit::Command);
+        // The helper prints its own one-line diagnostic for Git's output.
+        if workload_identity::git_credential(&arguments).is_err() {
+            std::process::exit(1);
+        }
+        return Ok(());
     }
     let config_path = match arguments.as_slice() {
         [] => CONFIG_PATH,
@@ -447,9 +452,17 @@ fn session(
     send_json(&mut socket, &ClientMessage::ChangesDirty)?;
     let (changes_worker, changes_results) =
         changes::start_worker(Path::new(&config.workspace_root));
-    let (files_worker, files_results) =
-        files::start_worker(workspace, Path::new(&config.workspace_root))
-            .map_err(|_| SessionExit::Files("worker failed to start"))?;
+    let (files_worker, files_results) = files::start_worker(
+        workspace,
+        Path::new(&config.workspace_root),
+        match &config.local_runtime {
+            Some(local) => files_sandbox::SandboxRoots::Local {
+                home: PathBuf::from(&local.home_directory),
+            },
+            None => files_sandbox::SandboxRoots::Guest,
+        },
+    )
+    .map_err(|_| SessionExit::Files("worker failed to start"))?;
     let mut changes_scheduler = ChangesScheduler::new();
     let mut pending_file_refreshes = HashMap::new();
     let mut pending_workload_identity = PendingWorkloadIdentity::default();
@@ -464,14 +477,39 @@ fn session(
                 .remove(&completed.request_id)
                 .flatten();
             let saved = matches!(&completed.result, files::FilesResult::Saved { .. });
-            send_json(
-                &mut socket,
-                &ClientMessage::Response {
-                    generation: &config.generation,
-                    request_id: &completed.request_id,
-                    result: OperationResult::Files(completed.result),
-                },
-            )?;
+            match completed.result {
+                // File bytes travel as a binary frame, not base64 inside JSON.
+                files::FilesResult::Sandbox(files_sandbox::SandboxReadResult::SandboxChunk {
+                    version,
+                    size_bytes,
+                    offset,
+                    bytes,
+                }) => {
+                    let frame = files_sandbox::chunk_frame(
+                        &config.generation,
+                        &completed.request_id,
+                        &version,
+                        size_bytes,
+                        offset,
+                        &bytes,
+                    )
+                    .map_err(SessionExit::Encode)?;
+                    if frame.len() > MAX_CLIENT_FRAME_BYTES {
+                        return Err(SessionExit::Protocol("file chunk frame too large"));
+                    }
+                    socket
+                        .send(Message::Binary(frame.into()))
+                        .map_err(SessionExit::Socket)?;
+                }
+                result => send_json(
+                    &mut socket,
+                    &ClientMessage::Response {
+                        generation: &config.generation,
+                        request_id: &completed.request_id,
+                        result: OperationResult::Files(result),
+                    },
+                )?,
+            }
             if saved {
                 if let Some(refresh) = refresh {
                     changes_scheduler.enqueue(refresh, Instant::now());
@@ -1120,7 +1158,7 @@ mod tests {
                 .unwrap();
         assert_eq!(
             text,
-            r#"{"release":"0.7.5","protocolMajor":1,"generation":"gen_1","connected":true}"#
+            r#"{"release":"0.7.6","protocolMajor":1,"generation":"gen_1","connected":true}"#
         );
         assert!(!text.contains(&c.api_key));
         assert!(!text.contains(&c.endpoint));
@@ -1175,7 +1213,7 @@ mod tests {
                 capabilities: Capabilities::current(),
             })
             .unwrap(),
-            r#"{"type":"register","generation":"gen_1","protocolMajor":1,"release":"0.7.5","capabilities":{"terminal":{"version":1},"workloadIdentity":{"version":1}}}"#
+            r#"{"type":"register","generation":"gen_1","protocolMajor":1,"release":"0.7.6","capabilities":{"terminal":{"version":1},"workloadIdentity":{"version":1}}}"#
         );
         assert_eq!(
             serde_json::to_string(&ClientMessage::Heartbeat {

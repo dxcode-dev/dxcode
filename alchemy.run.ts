@@ -286,6 +286,10 @@ export default Alchemy.Stack(
         Config.boolean("DX_MODEL_WORKERS_AI_ENABLED"),
         true,
       ),
+      workerTraces: Config.withDefault(
+        Config.boolean("DX_DEPLOYMENT_WORKER_TRACES"),
+        false,
+      ),
     });
 
     const hostedAuthentication = Option.isSome(configuration.authEmailFrom);
@@ -644,6 +648,16 @@ export default Alchemy.Stack(
         runWorkerFirst: ["/api/*", "/v1", "/v1/*", "/healthz", "/readyz"],
       },
       env: deployedWorkerBindings,
+      // Logs match Alchemy's default; traces are an explicit operator opt-in.
+      observability: {
+        enabled: true,
+        logs: { enabled: true, invocationLogs: true },
+        traces: {
+          enabled: configuration.workerTraces,
+          headSamplingRate: 1,
+          persist: true,
+        },
+      },
       crons: configuration.environment === "staging" ? ["17 3 * * *"] : [],
       workersDev: !Option.isSome(configuration.deploymentZone),
       ...(Option.isSome(configuration.deploymentZone)

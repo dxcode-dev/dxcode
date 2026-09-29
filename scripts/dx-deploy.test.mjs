@@ -1,9 +1,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { validateSelfhostConfig } from "../deploy/selfhost/config.mjs";
 import {
   assertInstallerDefaults,
   collectDeploymentConfig,
   provisionalDeploymentConfigPath,
+  WORKER_TRACES_PROMPT,
 } from "./dx-deploy.mjs";
 
 describe("common deployment installer", () => {
@@ -100,8 +102,10 @@ describe("common deployment installer", () => {
       adminEmail: "owner@example.com",
       integrations: [],
       workersAi: true,
+      workerTraces: false,
       allowSignup: false,
     });
+    expect(yes).toHaveBeenCalledWith(WORKER_TRACES_PROMPT, false);
     expect(environment).toEqual({ E2B_API_KEY: "fixture-e2b-key" });
     expect(answer).not.toHaveBeenCalledWith(
       "Deployment name",
@@ -109,5 +113,52 @@ describe("common deployment installer", () => {
     );
     expect(yes).not.toHaveBeenCalledWith("Use a custom domain");
     expect(yes).not.toHaveBeenCalledWith("Allow public account creation");
+  });
+
+  it("records a new deployment's traces answer", async () => {
+    const yes = vi.fn(async (label, fallback = false) =>
+      label === WORKER_TRACES_PROMPT ? true : fallback,
+    );
+    await expect(
+      collectDeploymentConfig({
+        answer: vi.fn(async () => "owner@example.com"),
+        yes,
+        secret: vi.fn(async () => "fixture-secret"),
+        environment: {},
+        defaults: {
+          name: "hosted",
+          cloudflareAccountId: "a".repeat(32),
+          domain: "app.example.com",
+          zone: "example.com",
+          hostedAuthentication: true,
+          authEmailFrom: "sign-in@example.com",
+        },
+      }),
+    ).resolves.toMatchObject({ workerTraces: true });
+  });
+
+  it("asks an upgraded deployment about traces once and keeps the answer", () => {
+    const source = readFileSync(
+      new URL("./dx-deploy.mjs", import.meta.url),
+      "utf8",
+    );
+    const runner = source.slice(source.indexOf("export const runDxDeploy"));
+    const ask = runner.indexOf("config.workerTraces === undefined");
+    expect(ask).toBeGreaterThan(
+      runner.indexOf("config = await collectDeploymentConfig"),
+    );
+    expect(ask).toBeLessThan(runner.indexOf("Deployment review"));
+    expect(ask).toBeLessThan(
+      runner.indexOf("writeFileSync(deploymentConfigPath"),
+    );
+
+    const legacy = { name: "hosted", adminEmail: "owner@example.com" };
+    expect(validateSelfhostConfig(legacy)).not.toHaveProperty("workerTraces");
+    expect(
+      validateSelfhostConfig({ ...legacy, workerTraces: false }),
+    ).toMatchObject({ workerTraces: false });
+    expect(() =>
+      validateSelfhostConfig({ ...legacy, workerTraces: "yes" }),
+    ).toThrow("workerTraces must be true or false.");
   });
 });

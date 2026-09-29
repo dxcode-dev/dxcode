@@ -8,6 +8,11 @@
       "filename": "0000_baseline_v0.1.0.sql",
       "sha256": "7847f65a9b20b366a60d52d19ca3cd6bdd1bb09b8cb506659a270f27a21d8877",
       "classification": "non-destructive"
+    },
+    {
+      "filename": "0001_release_v0.1.1.sql",
+      "sha256": "2e4fa92cfedebf3ccefaef8637a175a578318df91f3c0e7ef6d52faaa8f4ab78",
+      "classification": "non-destructive"
     }
   ],
   "durableObjects": [

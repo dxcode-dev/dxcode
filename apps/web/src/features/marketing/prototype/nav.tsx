@@ -1,5 +1,6 @@
 import { useContext } from "react";
 import { DxWordmark } from "../../../shared/brand/dx-wordmark.js";
+import { ArrowIcon } from "./arrow-icon.js";
 import { LiveAccessContext } from "./live-access-context.js";
 
 export function Nav({
@@ -16,17 +17,23 @@ export function Nav({
       <span className="nav-note">{tagline}</span>
       <nav>
         {live && <a href="/new">Sign in</a>}
-        <a href="#work">How it works</a>
-        <a href="#beyond">What's next</a>
+        <a className="nav-section-link" href="#work">
+          How it works
+        </a>
+        <a className="nav-section-link" href="#beyond">
+          What's next
+        </a>
         {earlyAccessInputId ? (
           <button
             type="button"
             onClick={() => document.getElementById(earlyAccessInputId)?.focus()}
           >
-            Early access ↗
+            Early access <ArrowIcon direction="up-right" />
           </button>
         ) : (
-          <a href="#access">Early access ↗</a>
+          <a href="#access">
+            Early access <ArrowIcon direction="up-right" />
+          </a>
         )}
       </nav>
     </header>
