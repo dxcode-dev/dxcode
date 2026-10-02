@@ -159,6 +159,68 @@ describe("workspace activity coordinator", () => {
     }
   });
 
+  it("publishes the deadline again after a reconnect replaced it while retained", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const onIdle = vi.fn();
+      const provider = host();
+      const activity = createWorkspaceActivity(
+        { ...provider, onIdle },
+        undefined,
+        60_000,
+      );
+      // Idle resident Terminal: attached, then typed into once.
+      let detach = activity.attachTerminal(async () => false);
+      await vi.runAllTicks();
+      activity.recordTerminalInput();
+      await vi.runAllTicks();
+      const published = provider.setDeadline.mock.calls.length;
+      // The daemon socket drops within the input's retention window, so the
+      // coordinator survives; the wake's E2B connect then replaces the
+      // provider deadline and the daemon attaches again.
+      await vi.advanceTimersByTimeAsync(20_000);
+      detach();
+      expect(onIdle).not.toHaveBeenCalled();
+      activity.deadlineReplaced();
+      detach = activity.attachTerminal(async () => false);
+      await vi.runAllTicks();
+      expect(provider.setDeadline.mock.calls.slice(published)).toEqual([
+        [60_000],
+      ]);
+      detach();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("publishes a replaced deadline on a fresh coordinator but not while a lease renews", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = host();
+      const activity = createWorkspaceActivity(provider, undefined, 60_000);
+      // A Files-only wake: the connect set the E2B timeout and no Terminal
+      // attaches, so nothing else would publish the 60 s deadline.
+      activity.deadlineReplaced();
+      await vi.runAllTicks();
+      expect(provider.setDeadline.mock.calls).toEqual([[60_000]]);
+      // An attaching Terminal does not publish it a second time.
+      const detach = activity.attachTerminal(async () => false);
+      await vi.runAllTicks();
+      expect(provider.setDeadline).toHaveBeenCalledOnce();
+      detach();
+      const command = activity.acquireCommand(10_000);
+      await vi.runAllTicks();
+      const calls = provider.setDeadline.mock.calls.length;
+      activity.deadlineReplaced();
+      await vi.runAllTicks();
+      expect(provider.setDeadline).toHaveBeenCalledTimes(calls);
+      command.release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("lets renewing command activity own the final deadline after terminal input", async () => {
     vi.useFakeTimers();
     try {

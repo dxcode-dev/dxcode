@@ -29,6 +29,7 @@ import {
   assertDxdChecksum,
   assertPostApplyVerification,
   configureHostedDeploymentPolicy,
+  daemonIngressWorkerName,
   deploymentBitbucketOAuth,
   deploymentGitHubApp,
   deploymentGitStatusArguments,
@@ -48,6 +49,7 @@ import {
   writeDeploymentAlchemyProfile,
 } from "./alchemy-deployment.mjs";
 import { alchemyStage } from "./alchemy-stage.mjs";
+import { buildTarget, GUEST_TARGET } from "./build-dxd.mjs";
 import { loadMigrationManifest } from "./migration-manifest.mjs";
 
 const workspaceRoot = resolve(import.meta.dirname, "..");
@@ -197,6 +199,25 @@ const cloudflare = async (path) => {
   return body.result;
 };
 
+// The dxd ingress Worker is served on the account's workers.dev subdomain;
+// without one, Core keeps serving daemon ingress itself.
+const workersDevSubdomain = await (async () => {
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/subdomain`,
+    { headers: cloudflareHeaders },
+  );
+  if (response.status === 404) return "";
+  const body = await response.json();
+  if (!response.ok || body.success !== true)
+    throw new Error(
+      `Cloudflare workers.dev preflight read failed (${response.status}).`,
+    );
+  const subdomain = body.result?.subdomain ?? "";
+  if (subdomain !== "" && !/^[a-z0-9][a-z0-9-]{0,62}$/.test(subdomain))
+    throw new Error("Cloudflare workers.dev subdomain is invalid.");
+  return subdomain;
+})();
+
 // A self-host deployment resolves its origin before selection: either a
 // caller-supplied hostname under an active account zone, or the worker's
 // workers.dev hostname under the account subdomain.
@@ -286,37 +307,17 @@ if (operation === "deploy") {
     dxdBinary = resolve(releaseDirectory, release.asset);
     writeFileSync(dxdBinary, bytes, { mode: 0o700 });
   } else {
-    if (process.platform !== "linux" || process.arch !== "x64")
-      throw new Error(
-        "Deployment dxd packaging requires Linux x64 (or `dxdBinary` in deploy.selfhost.json).",
-      );
+    // The same build path as the published release asset: a static musl
+    // binary linked through zig (scripts/build-dxd.mjs), from any host.
     const targetDirectory = resolve(
       workspaceRoot,
       `.dx/alchemy/${stage}/dxd-target`,
     );
     rmSync(targetDirectory, { recursive: true, force: true });
-    const build = spawnSync(
-      "cargo",
-      [
-        "build",
-        "--release",
-        "--locked",
-        "--manifest-path",
-        "apps/dxd/Cargo.toml",
-      ],
-      {
-        cwd: workspaceRoot,
-        env: {
-          ...deploymentBuildEnvironment,
-          CARGO_TARGET_DIR: targetDirectory,
-        },
-        stdio: "inherit",
-      },
-    );
-    if (build.error) throw build.error;
-    if (build.status !== 0)
-      throw new Error("The locked deployment dxd build failed.");
-    dxdBinary = resolve(targetDirectory, "release/dxd");
+    dxdBinary = buildTarget(GUEST_TARGET, {
+      targetDirectory,
+      environment: deploymentBuildEnvironment,
+    }).binary;
   }
   dxdChecksum = createHash("sha256")
     .update(readFileSync(dxdBinary))
@@ -550,6 +551,8 @@ const environment = {
         : "preview",
   DX_DEPLOYMENT_DOMAIN: selection.domain,
   DX_DEPLOYMENT_ZONE: selection.zone ?? "",
+  DX_DEPLOYMENT_WORKERS_DEV_SUBDOMAIN: workersDevSubdomain,
+  DX_DEPLOYMENT_DAEMON_INGRESS_NAME: daemonIngressWorkerName(stage),
   DX_DEPLOYMENT_NAME: selfhostConfig?.name ?? "",
   ...(selfhostConfig !== undefined
     ? { DX_ADMIN_EMAIL: selfhostConfig.environment.DX_ADMIN_EMAIL }

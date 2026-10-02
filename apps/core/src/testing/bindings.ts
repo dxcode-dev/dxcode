@@ -158,7 +158,7 @@ export const createTestBindings = (
   BETTER_AUTH_SECRET: TEST_AUTH_SECRET,
   DX_E2B_TEMPLATE: "base",
   DX_E2B_TEMPLATE_BUILD_ID: "test-template-build",
-  DX_E2B_TIMEOUT_MS: "600000",
+  DX_E2B_TIMEOUT_MS: "300000",
   DX_DEPLOYMENT_REVISION: "a".repeat(40),
   DX_DXD_PUBLIC_URL: "https://dx.test/",
   DX_DXD_RELEASE_URL: "https://releases.test/dxd",

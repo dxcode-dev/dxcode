@@ -1,7 +1,7 @@
 import { ThreadId } from "@dx/domain";
 import { Schema } from "effect";
 import { describe, expect, it, vi } from "vitest";
-import { DXD_RELEASE } from "../execution/dxd/protocol.js";
+import { DXD_PROTOCOL_MAJOR, DXD_RELEASE } from "../execution/dxd/protocol.js";
 import {
   activateThreadDaemon,
   DaemonUnavailable,
@@ -63,7 +63,7 @@ describe("activateThreadDaemon", () => {
         ready: true,
         activationId: "activation-1",
         release: DXD_RELEASE,
-        protocolMajor: 1,
+        protocolMajor: DXD_PROTOCOL_MAJOR,
       }),
     );
     await expect(
@@ -72,7 +72,7 @@ describe("activateThreadDaemon", () => {
       ready: true,
       activationId: "activation-1",
       release: DXD_RELEASE,
-      protocolMajor: 1,
+      protocolMajor: DXD_PROTOCOL_MAJOR,
     });
     expect(fixture.fetch).toHaveBeenCalledWith(
       "https://thread.internal/daemon/activate",
@@ -86,7 +86,7 @@ describe("activateThreadDaemon", () => {
         ready: true,
         activationId: "activation-2",
         release: DXD_RELEASE,
-        protocolMajor: 1,
+        protocolMajor: DXD_PROTOCOL_MAJOR,
         activationMilestones: {
           releaseLoadedAt: 1_000,
           installedAt: 2_000,
@@ -236,16 +236,16 @@ describe("residentThreadDaemonEndpoint", () => {
   it("allows insecure daemon transport only on concrete loopback hosts", () => {
     expect(
       residentThreadDaemonEndpoint("http://127.0.0.1:5173/", threadId),
-    ).toBe(`ws://127.0.0.1:5173/v1/threads/${threadId}/dxd`);
+    ).toBe(`ws://127.0.0.1:5173/v1/dxd/${threadId}`);
     expect(
       residentThreadDaemonEndpoint("http://localhost:5173/", threadId),
-    ).toBe(`ws://localhost:5173/v1/threads/${threadId}/dxd`);
+    ).toBe(`ws://localhost:5173/v1/dxd/${threadId}`);
     expect(
       residentThreadDaemonEndpoint("http://deployed.test/", threadId),
     ).toBeUndefined();
     expect(
       residentThreadDaemonEndpoint("https://deployed.test/", threadId),
-    ).toBe(`wss://deployed.test/v1/threads/${threadId}/dxd`);
+    ).toBe(`wss://deployed.test/v1/dxd/${threadId}`);
   });
 });
 

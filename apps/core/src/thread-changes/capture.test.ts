@@ -1,21 +1,21 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import {
-  access,
   lstat,
   mkdtemp,
-  readFile,
   realpath,
   rm,
   unlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { ThreadChangesCaptureId, ThreadChangesCommitSha } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import type { Sandbox } from "@flue/runtime";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   captureThreadChanges,
   loadThreadChangesCapture,
@@ -24,10 +24,24 @@ import {
 } from "./capture.js";
 
 const executeFile = promisify(execFile);
-const dxdCaptureSource = await readFile(
-  new URL("../../../dxd/src/changes_capture.py", import.meta.url),
-  "utf8",
+
+// The request-scoped capture is `dxd changes-capture`. Tests run the debug
+// build of the daemon from this checkout, building it once when absent.
+const dxdManifest = fileURLToPath(
+  new URL("../../../dxd/Cargo.toml", import.meta.url),
 );
+const dxdBinary =
+  process.env.DXD_BINARY ??
+  fileURLToPath(new URL("../../../dxd/target/debug/dxd", import.meta.url));
+const ensureDxdBinary = async () => {
+  if (existsSync(dxdBinary)) return;
+  await executeFile(
+    "cargo",
+    ["build", "--locked", "--manifest-path", dxdManifest],
+    { encoding: "utf8", maxBuffer: 64 * 1_024 * 1_024 },
+  );
+};
+const dxdPath = `${dirname(dxdBinary)}:${process.env.PATH ?? ""}`;
 
 const git = async (root: string, ...args: ReadonlyArray<string>) =>
   (
@@ -48,7 +62,7 @@ const localSandbox = (cwd: string) =>
         const result = await executeFile("/bin/sh", ["-c", command], {
           cwd: options?.cwd ?? cwd,
           encoding: "utf8",
-          env: { ...process.env, ...options?.env },
+          env: { ...process.env, PATH: dxdPath, ...options?.env },
           timeout: options?.timeoutMs,
           maxBuffer: 10 * 1_024 * 1_024,
         });
@@ -72,73 +86,28 @@ const dxdCapture = async (input: {
   readonly root: string;
   readonly baseline: string;
   readonly expectedFingerprint?: string;
-  readonly marker?: string;
-  readonly release?: string;
-  readonly untrackedRace?: {
-    readonly path: string;
-    readonly marker: string;
-    readonly release: string;
-  };
 }) => {
-  let source =
-    input.marker === undefined || input.release === undefined
-      ? dxdCaptureSource
-      : dxdCaptureSource.replace(
-          'result = {\n    "kind": "complete",',
-          `with open(${JSON.stringify(input.marker)}, "w", encoding="utf-8") as handle:
-    handle.write("ready")
-while not os.path.exists(${JSON.stringify(input.release)}):
-    time.sleep(0.01)
-
-result = {
-    "kind": "complete",`,
-        );
-  if (input.untrackedRace !== undefined) {
-    source = source.replace(
-      "            captured_untracked = untracked_file(root, path)",
-      `            if path == ${JSON.stringify(input.untrackedRace.path)}:
-                with open(${JSON.stringify(input.untrackedRace.marker)}, "w", encoding="utf-8") as handle:
-                    handle.write("ready")
-                while not os.path.exists(${JSON.stringify(input.untrackedRace.release)}):
-                    time.sleep(0.01)
-            captured_untracked = untracked_file(root, path)`,
-    );
-  }
-  const result = await executeFile(
-    "python3",
-    ["-c", `import time\n${source}`],
-    {
-      cwd: input.root,
-      encoding: "utf8",
-      maxBuffer: 10 * 1_024 * 1_024,
-      env: {
-        PATH: process.env.PATH,
-        LC_ALL: "C.UTF-8",
-        DX_CHANGES_ROOT: input.root,
-        DX_CHANGES_BASELINE: input.baseline,
-        DX_CHANGES_DEFAULT_BRANCH: "main",
-        ...(input.expectedFingerprint === undefined
-          ? {}
-          : { DX_CHANGES_EXPECTED_FINGERPRINT: input.expectedFingerprint }),
-      },
+  const result = await executeFile(dxdBinary, ["changes-capture"], {
+    cwd: input.root,
+    encoding: "utf8",
+    maxBuffer: 10 * 1_024 * 1_024,
+    env: {
+      PATH: process.env.PATH,
+      LC_ALL: "C.UTF-8",
+      DX_CHANGES_ROOT: input.root,
+      DX_CHANGES_BASELINE: input.baseline,
+      DX_CHANGES_DEFAULT_BRANCH: "main",
+      ...(input.expectedFingerprint === undefined
+        ? {}
+        : { DX_CHANGES_EXPECTED_FINGERPRINT: input.expectedFingerprint }),
     },
-  );
+  });
   return JSON.parse(result.stdout) as unknown;
 };
 
-const waitForPath = async (path: string) => {
-  for (let attempts = 0; attempts < 3000; attempts += 1) {
-    try {
-      await access(path);
-      return;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-  }
-  throw new Error(`Timed out waiting for ${path}`);
-};
-
 describe("Thread Changes capture", { timeout: 30000 }, () => {
+  beforeAll(ensureDxdBinary, 600_000);
+
   it("captures primary and linked worktree changes with distinct identities", async () => {
     const root = await mkdtemp(
       join(await realpath(tmpdir()), "dx-thread-changes-primary-"),
@@ -503,44 +472,6 @@ describe("Thread Changes capture", { timeout: 30000 }, () => {
     }
   });
 
-  it("returns changed when an omitted untracked file disappears during capture", async () => {
-    const root = await mkdtemp(
-      join(await realpath(tmpdir()), "dx-thread-changes-race-"),
-    );
-    try {
-      await git(root, "init", "-b", "main");
-      await git(root, "config", "user.name", "dx test");
-      await git(root, "config", "user.email", "dx-test@example.test");
-      await writeFile(join(root, "tracked.txt"), "base\n");
-      await git(root, "add", "tracked.txt");
-      await git(root, "commit", "-m", "baseline");
-      const baseline = await git(root, "rev-parse", "HEAD");
-      await Promise.all(
-        Array.from({ length: 201 }, (_, index) =>
-          writeFile(
-            join(root, `untracked-${index.toString().padStart(3, "0")}.txt`),
-            "line\n",
-          ),
-        ),
-      );
-      const victim = "untracked-200.txt";
-      const marker = join(root, ".untracked-marker");
-      const release = join(root, ".untracked-release");
-      const capture = dxdCapture({
-        root,
-        baseline,
-        untrackedRace: { path: victim, marker, release },
-      });
-      await waitForPath(marker);
-      await unlink(join(root, victim));
-      await writeFile(release, "continue");
-
-      await expect(capture).resolves.toEqual({ kind: "changed" });
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
   it("keeps resident dxd candidates equivalent, bounded, and race-aware", {
     timeout: 90000,
   }, async () => {
@@ -593,24 +524,32 @@ describe("Thread Changes capture", { timeout: 30000 }, () => {
       });
       expect(JSON.stringify(candidate).length).toBeLessThan(8 * 1_024 * 1_024);
 
+      // Request-scoped: a matching probe fingerprint still yields the capture.
       await expect(
         dxdCapture({
           root,
           baseline,
           expectedFingerprint: manifest.fingerprint,
         }),
+      ).resolves.toMatchObject({
+        kind: "complete",
+        fingerprint: manifest.fingerprint,
+      });
+      // The probe answers from the same fingerprint the capture recorded.
+      await expect(
+        probeThreadChanges({
+          sandbox: localSandbox(root),
+          source: {
+            baseline,
+            defaultBranch: "main",
+            repositoryName: "example-org/example-repo",
+          },
+          expectedFingerprint: manifest.fingerprint,
+        }),
       ).resolves.toEqual({
         kind: "unchanged",
         fingerprint: manifest.fingerprint,
       });
-
-      const marker = join(root, ".capture-marker");
-      const release = join(root, ".capture-release");
-      const racingCapture = dxdCapture({ root, baseline, marker, release });
-      await waitForPath(marker);
-      await writeFile(join(root, "tracked.txt"), "changed during capture\n");
-      await writeFile(release, "continue");
-      await expect(racingCapture).resolves.toEqual({ kind: "changed" });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

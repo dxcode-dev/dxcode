@@ -1,7 +1,7 @@
 {
   "name": "dx",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "license": "FSL-1.1-ALv2",
   "packageManager": "pnpm@9.15.0",
   "engines": {
@@ -22,7 +22,7 @@
   "scripts": {
     "build": "pnpm --filter @dx/web build && pnpm --filter @dx/core build && pnpm --filter @dx/docs build",
     "build:production": "node scripts/build-production-package.mjs",
-    "build:dxd": "cargo build --release --locked --manifest-path apps/dxd/Cargo.toml",
+    "build:dxd": "node scripts/build-dxd.mjs",
     "format": "biome format . --write",
     "format:check": "biome format .",
     "lint": "biome lint . && node scripts/check-web-architecture.mjs",
@@ -48,7 +48,7 @@
     "dx:deploy": "node scripts/dx-deploy.mjs",
     "deploy:selfhost:destroy": "node scripts/run-alchemy-deployment.mjs destroy selfhost",
     "deploy:selfhost:template": "node deploy/e2b/build.mjs",
-    "deploy:selfhost:dxd": "node scripts/build-dxd-linux.mjs",
+    "deploy:selfhost:dxd": "node scripts/build-dxd.mjs --target x86_64-unknown-linux-musl",
     "typecheck:alchemy": "tsc -p tsconfig.alchemy.json --pretty false"
   },
   "devDependencies": {

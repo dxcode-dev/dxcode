@@ -50,6 +50,8 @@ export const ThreadDataSchema = Schema.Struct({
   activityStatus: ThreadActivityStatus,
   lifecycleState: ThreadLifecycleState,
   pinnedAt: Schema.optional(Timestamp),
+  /** True while DxTitleAgent may still replace `title`; show a loading state. */
+  titlePending: Schema.optional(Schema.Boolean),
   agentUrl: ThreadAgentUrlSchema,
 }).check(
   Schema.makeFilter((thread) =>
@@ -171,6 +173,7 @@ export const ThreadDetailDataSchema = Schema.Struct({
   lastActivityAt: Timestamp,
   activityStatus: ThreadActivityStatus,
   lifecycleState: ThreadLifecycleState,
+  titlePending: Schema.optional(Schema.Boolean),
   agentUrl: ThreadAgentUrlSchema,
   agentInitialization: ThreadAgentInitializationDataSchema,
   executionWorkspace: ThreadExecutionWorkspaceDataSchema,

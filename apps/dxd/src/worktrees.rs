@@ -17,6 +17,7 @@ pub fn selected(workspace_root: &Path) -> io::Result<Vec<PathBuf>> {
         .arg("-C")
         .arg(&primary)
         .args(["worktree", "list", "--porcelain"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .output()?;
     if !output.status.success() {
         return Err(io::ErrorKind::Other.into());
@@ -49,6 +50,7 @@ pub fn selected(workspace_root: &Path) -> io::Result<Vec<PathBuf>> {
             .arg("-C")
             .arg(&path)
             .args(["rev-parse", "--show-toplevel"])
+            .env("GIT_OPTIONAL_LOCKS", "0")
             .output()
             .ok()?;
         if !output.status.success() {

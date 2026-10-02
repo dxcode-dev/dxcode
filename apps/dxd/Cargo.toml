@@ -1,23 +1,32 @@
 [package]
 name = "dxd"
-version = "0.7.6"
+version = "0.8.0"
 edition = "2024"
 
 [dependencies]
 base64 = "0.22"
+bytes = "1"
+cap-std = "3"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 libc = "0.2"
 rand = "0.9"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["raw_value"] }
+serde_json = "1"
 sha2 = "0.10"
-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
-url = "2"
+tokio = { version = "1", features = ["rt", "macros", "net", "sync", "time", "signal"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread"] }
 
+# Size-optimized: -20% binary size with no measurable latency or CPU cost on
+# the Files, Changes and Terminal paths (tests/footprint.rs); `z` costs ~15%
+# more CPU per Files listing. ring's assembly is unaffected.
 [profile.release]
+opt-level = "s"
 strip = true
 lto = true
 codegen-units = 1

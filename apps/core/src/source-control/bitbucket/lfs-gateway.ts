@@ -139,6 +139,7 @@ export const handleBitbucketLfs = async (input: {
   suffix: string;
   gatewayRepositoryUrl: string;
   lease: BitbucketGitLease;
+  repositoryName: string;
   leaseToken: string;
   accessToken: string;
   db: D1Database;
@@ -175,6 +176,12 @@ export const handleBitbucketLfs = async (input: {
     const keyring = await Effect.runPromise(
       loadConfigEncryptionKeyring(input.bindings),
     );
+    // A missing key is a configuration failure, not an access decision.
+    if (!keyring.keys.has(envelope.keyVersion))
+      throw new BitbucketProviderError({ category: "unavailable" });
+    // The repository is bound into the ciphertext: one lease can cover many
+    // repositories, and an action only runs under the repository it was issued
+    // for. With the key present, a failed decrypt means another repository.
     const plaintext = await Effect.runPromise(
       decryptConfigValue(
         keyring,
@@ -182,10 +189,13 @@ export const handleBitbucketLfs = async (input: {
           purpose: "bitbucket-lfs-action",
           id,
           leaseIdHash: input.lease.id_hash,
+          repositoryName: input.repositoryName,
         },
         envelope,
       ),
-    );
+    ).catch(() => {
+      throw deny();
+    });
     let action: StoredAction;
     try {
       action = JSON.parse(plaintext) as StoredAction;
@@ -274,7 +284,7 @@ export const handleBitbucketLfs = async (input: {
   let upstream: Response;
   try {
     upstream = await fetcher(
-      `https://bitbucket.org/${input.lease.repository_name}.git/info/lfs/objects/batch`,
+      `https://bitbucket.org/${input.repositoryName}.git/info/lfs/objects/batch`,
       {
         method: "POST",
         redirect: "manual",
@@ -390,6 +400,7 @@ export const handleBitbucketLfs = async (input: {
               purpose: "bitbucket-lfs-action",
               id,
               leaseIdHash: input.lease.id_hash,
+              repositoryName: input.repositoryName,
             },
             JSON.stringify(action),
           ),

@@ -5,10 +5,14 @@ import {
   type ThreadTerminalServerPhase,
 } from "@dx/api";
 import { ThreadId, WorkloadIdentityUnauthorized } from "@dx/domain";
-import { Effect, Option, Schema } from "effect";
+import { Effect, Option, Redacted, Schema } from "effect";
 import {
+  confirmThreadDaemonApiKey,
   mintThreadDaemonApiKey,
   revokeThreadDaemonApiKey,
+  threadDaemonApiKeyHash,
+  threadDaemonBearer,
+  verifyThreadDaemonApiKey,
 } from "../auth/daemon-api-key.js";
 import { decodeBase64Url, encodeBase64Url } from "../encoding/base64.js";
 import { utf8ByteLength, utf8ExceedsBytes } from "../encoding/utf8.js";
@@ -43,15 +47,15 @@ import {
   type DxdOperation,
   DxdResponseEnvelope,
   type DxdTerminalHeartbeat,
+  DxdUpdateMessage,
   type DxdWorkloadIdentityRequest,
   DxdWorkloadIdentityRequestMessage,
   decodeDxdSandboxChunkFrame,
+  environmentActivationDigest,
   isDxdSandboxChunkFrame,
 } from "../execution/dxd/protocol.js";
-import {
-  ExecutionWorkspaces,
-  sourceWorkspaceLayer,
-} from "../execution/execution-workspaces.js";
+import { loadDaemonReleaseMetadata } from "../execution/e2b/daemon-release.js";
+import { ExecutionWorkspaces } from "../execution/execution-workspaces.js";
 import type { Bindings } from "../http/types.js";
 import { threadDaemonLogger } from "../logging.js";
 import {
@@ -75,13 +79,20 @@ import {
 } from "../settings/environment-variables/execution.js";
 import { resolveExecutionSigningPlan } from "../settings/keys/execution.js";
 import { signGitPayload } from "../settings/keys/ssh-ed25519.js";
-import { SourceRuntimeBroker } from "../source-control/runtime.js";
 import {
-  makeResidentThreadChangesTerminalObserver,
-  runResidentThreadChangesMutation,
-  type ThreadChangesTerminalObserver,
+  BITBUCKET_GIT_PATH,
+  bitbucketRuntimeBroker,
+} from "../source-control/bitbucket/runtime.js";
+import { readGitHubUserAccessToken } from "../source-control/github/control-plane.js";
+import {
+  markResidentThreadChangesDirty,
+  usableResidentCapture,
 } from "../thread-changes/coordinator.js";
-import { makeThreadChangesRepository } from "../thread-changes/repository-d1.js";
+import {
+  makeThreadChangesRepository,
+  type ThreadChangesCaptureLease,
+  type ThreadChangesSource,
+} from "../thread-changes/repository-d1.js";
 import { publishThreadChangesResidentCandidate } from "../thread-changes/resident-publisher.js";
 import { workloadIdentityBroker } from "../workload-identity/broker.js";
 import {
@@ -102,7 +113,17 @@ export const DAEMON_ACTIVATION_DEADLINE_MS = 90_000;
 export const DAEMON_ACTIVATION_GRACE_MS = 90_000;
 const DAEMON_REQUEST_TIMEOUT_MS = 5_000;
 const READINESS_PROBE_TIMEOUT_MS = 1_000;
+/** How late a heartbeat may be before a browser's liveness miss is probed. */
+const TERMINAL_LIVENESS_GRACE_MS = 500;
+/**
+ * The probe after such a miss. The heartbeat is already late, so a paused
+ * guest is fenced about three seconds after its last heartbeat rather than
+ * the four a probe-free fence waits; a live daemon answers in tens of ms.
+ */
+const TERMINAL_LIVENESS_PROBE_TIMEOUT_MS = 500;
 const MAX_PENDING_DAEMON_REQUESTS = 32;
+/** How long an `applying` report keeps the next loss and registration quiet. */
+const PLANNED_HANDOFF_MS = 10_000;
 const gitCommitIdentity = /^(.+) <([^<>\r\n]+)> \d+ [+-]\d{4}$/;
 
 /**
@@ -235,6 +256,12 @@ interface DaemonAuthority {
   readonly threadId: string;
   readonly generation: DaemonGeneration;
   readonly apiKeyId: string;
+  /**
+   * SHA-256 of the key `apiKeyId` names. Every revocation goes through this
+   * object and replaces or drops the authority with it, so a registration is
+   * admitted by this hash without D1.
+   */
+  readonly apiKeyHash?: string;
   readonly release: typeof DXD_RELEASE;
   readonly protocolMajor: typeof DXD_PROTOCOL_MAJOR;
   readonly terminalVersion: typeof DXD_TERMINAL_VERSION;
@@ -243,10 +270,16 @@ interface DaemonAuthority {
   readonly runtimeAssurance: "dx_dxd_channel_v1" | "dx_provider_attested_v1";
   readonly attachmentNonce?: string;
   readonly lastSeen?: number;
+  /** Release the connected daemon reported; differs from `release` until it updates. */
+  readonly daemonRelease?: string;
+  /** The connected daemon waits for a `chunk-ack` per `DXF1` frame. */
+  readonly chunkAcks?: boolean;
 }
 
 interface DaemonAttachment {
   readonly kind: "daemon";
+  /** Admitted by stored hash; D1 has not confirmed the key yet. */
+  readonly confirming?: true;
   readonly generation?: DaemonGeneration;
   readonly nonce?: string;
   readonly terminal?: DxdTerminalHeartbeat;
@@ -280,7 +313,18 @@ interface PendingDaemonRequest {
   readonly resolve: (response: Response) => void;
   socket?: WebSocket;
   dispatched: boolean;
+  /** A sandbox chunk that dxd is still sending as consecutive `DXF1` frames. */
+  sandboxChunk?: SandboxChunkAssembly;
 }
+
+interface SandboxChunkAssembly {
+  readonly version: string;
+  readonly sizeBytes: number;
+  readonly bytes: Uint8Array<ArrayBuffer>;
+  received: number;
+}
+
+type ReadinessProbeResult = "ready" | "changed" | "timeout" | "drained";
 
 const randomBase64Url = (byteLength: number) =>
   encodeBase64Url(crypto.getRandomValues(new Uint8Array(byteLength)));
@@ -317,6 +361,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       result: "ready" | "changed" | "timeout" | "drained",
     ) => void;
   };
+  /** Outcome of the in-flight `#readinessProbe`, shared by concurrent callers. */
+  #readinessProbeResult?: Promise<ReadinessProbeResult>;
   #connectionRecovery?: Promise<void>;
   #connectionRecoveryWake?: (reason: "registered" | "activated") => void;
   #repair?: Promise<void>;
@@ -327,14 +373,37 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   #appliedEnvironment?: AppliedEnvironmentMarker;
   #terminalHeartbeat?: DxdTerminalHeartbeat;
   #lastPersistedHeartbeatAt?: number;
+  /**
+   * When this instance last heard the daemon itself. Unlike `lastSeen`, it is
+   * never restored after hibernation, so a paused guest cannot look live.
+   */
+  #lastHeartbeatAt?: number;
+  /** Pending D1 confirmations for daemons admitted by stored key hash. */
+  readonly #daemonConfirmations = new WeakMap<WebSocket, Promise<boolean>>();
+  /** When the scheduled alarm next checks the daemon heartbeat lease. */
+  #leaseCheckAt?: number;
   #terminalResetRequired = false;
+  /**
+   * Until when the daemon's own release swap (`update-status: applying`)
+   * explains a closed socket: attached browsers are reattached silently.
+   */
+  #plannedHandoffUntil?: number;
   readonly #readinessWaiters = new Set<() => void>();
   readonly #terminalWaiters = new Set<(state: DxdTerminalHeartbeat) => void>();
   readonly #pendingRequests = new Map<string, PendingDaemonRequest>();
   readonly #pendingWorkloadIdentityRequests = new Set<string>();
-  #residentChanges?: ThreadChangesTerminalObserver;
   #observingChanges?: Promise<void>;
   #changesObserved = false;
+  /** A Thread's Changes source is immutable once it exists. */
+  #changesSource?: ThreadChangesSource;
+  /** Last fingerprint seen in D1 or published here; `null` = no capture yet. */
+  #changesFingerprint?: string | null;
+  /** The latest resident dirty mark; publication must not overtake it. */
+  #changesMarked: Promise<void> = Promise.resolve();
+  /** The capture lease the next candidate publishes under. */
+  #heldCapture?: ThreadChangesCaptureLease;
+  /** Candidates publish one at a time, so they never contend for the lease. */
+  #publishingChanges: Promise<void> = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: Bindings) {
     super(ctx, env);
@@ -414,11 +483,36 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         this.#appliedEnvironment = undefined;
         await ctx.storage.delete(APPLIED_ENVIRONMENT_STORAGE_KEY);
       }
+      const daemonLive =
+        authority?.lastSeen !== undefined &&
+        daemonSocket !== undefined &&
+        Date.now() - authority.lastSeen <= DXD_HEARTBEAT_LEASE_MS;
+      let restoredWhilePaused = false;
       for (const socket of ctx.getWebSockets()) {
         const attachment = socket.deserializeAttachment() as
           | SocketAttachment
           | undefined;
         if (attachment?.kind !== "resident-browser") continue;
+        const transport = this.#residentTransport(
+          attachment.threadId,
+          () => {},
+          socket,
+        );
+        if (attachment.terminal.requested && !daemonLive) {
+          // Paused or gone: an immediate reconnect would make a retained,
+          // hidden Terminal wake the workspace. Wait for the daemon instead.
+          if (
+            this.#residentRelay.restore(
+              socket,
+              attachment.terminal,
+              transport,
+              true,
+            )
+          )
+            restoredWhilePaused = true;
+          else this.#closeResidentBrowserForPause(socket);
+          continue;
+        }
         const daemonConnected =
           authority !== undefined && daemonSocket !== undefined;
         const fenced =
@@ -438,14 +532,13 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
             daemonConnected);
         if (
           !fenced ||
-          !this.#residentRelay.restore(
-            socket,
-            attachment.terminal,
-            this.#residentTransport(attachment.threadId, () => {}, socket),
-          )
+          !this.#residentRelay.restore(socket, attachment.terminal, transport)
         )
           this.#closeResidentBrowserForReconnect(socket);
       }
+      // A lost connection is known: tell the restored attachments now.
+      if (restoredWhilePaused && authority?.attachmentNonce === undefined)
+        this.#residentRelay.workspacePaused();
     });
   }
 
@@ -559,28 +652,39 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   }
 
   async alarm() {
+    const now = Date.now();
+    this.#leaseCheckAt = undefined;
+    const expired = await this.#expiredDaemonSocket(now);
+    if (expired !== undefined) await this.#loseDaemonConnection(expired, true);
     const attempt = await this.#readDaemonActivationAttempt();
-    if (attempt === undefined) return;
-    if (Date.now() < attempt.deadlineAt) {
-      await this.ctx.storage.setAlarm(attempt.deadlineAt + 1_000);
-      return;
+    let attemptCheckAt: number | undefined;
+    if (attempt !== undefined) {
+      if (Date.now() < attempt.deadlineAt)
+        attemptCheckAt = attempt.deadlineAt + 1_000;
+      else if (
+        this.#activation !== undefined &&
+        this.#activation.id === attempt.activationId
+      )
+        attemptCheckAt = Date.now() + 30_000;
+      else {
+        await Promise.all(
+          attempt.submissions.map((observation) =>
+            this.#recordDaemonActivationFailure(attempt, observation),
+          ),
+        );
+        await this.ctx.storage.delete(ACTIVATION_ATTEMPT_STORAGE_KEY);
+      }
     }
-    if (
-      this.#activation !== undefined &&
-      this.#activation.id === attempt.activationId
-    ) {
-      await this.ctx.storage.setAlarm(Date.now() + 30_000);
-      return;
-    }
-    await Promise.all(
-      attempt.submissions.map((observation) =>
-        this.#recordDaemonActivationFailure(attempt, observation),
-      ),
-    );
-    await Promise.all([
-      this.ctx.storage.delete(ACTIVATION_ATTEMPT_STORAGE_KEY),
-      this.ctx.storage.deleteAlarm(),
-    ]);
+    if (attemptCheckAt === undefined && this.#leaseCheckAt === undefined)
+      await this.ctx.storage.deleteAlarm();
+    else
+      await this.ctx.storage.setAlarm(
+        Math.min(
+          ...[attemptCheckAt, this.#leaseCheckAt].filter(
+            (value): value is number => value !== undefined,
+          ),
+        ),
+      );
   }
 
   #acceptChangesObserver(request: Request): Response {
@@ -643,65 +747,132 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       return;
     const db = this.env.DB;
     this.#observingChanges = (async () => {
-      // Registration repairs the first durable capture. Do not advance its
-      // generation underneath it, then exhaust publication retries on its lease.
-      await this.#repair;
-      while (this.#changesObserved && this.#currentDaemonSocket() === socket) {
-        this.#changesObserved = false;
-        let refresh: DxdChangesRefresh | undefined;
-        await runResidentThreadChangesMutation({
-          db,
-          threadId,
-          allowMissingSource: true,
-          operation: async (value) => {
-            refresh = value;
-          },
-        });
-        if (refresh !== undefined && this.#currentDaemonSocket() === socket) {
-          this.#notifyChanges(threadId);
-          socket.send(JSON.stringify(refresh));
-        }
-      }
-    })()
-      .catch(() => {
-        threadDaemonLogger.warn(
-          "Changes observation could not request a capture.",
-          {
-            event: "thread_changes_observation_failed",
+      // Start after the assignment below, so the finally can clear it.
+      await undefined;
+      try {
+        while (
+          this.#changesObserved &&
+          this.#currentDaemonSocket() === socket
+        ) {
+          this.#changesObserved = false;
+          this.#changesSource ??=
+            await makeThreadChangesRepository(db).source(threadId);
+          // Source preparation has not finished: nothing to capture against yet.
+          if (this.#changesSource === undefined) return;
+          // With a known fingerprint the refresh goes out before the D1 mark, so
+          // the capture overlaps it; publication waits for the mark.
+          const token = crypto.randomUUID();
+          const expected = this.#changesFingerprint;
+          const early =
+            expected === undefined
+              ? undefined
+              : ({
+                  type: "changes-refresh",
+                  token,
+                  source: {
+                    baseline: this.#changesSource.baseline,
+                    defaultBranch: this.#changesSource.defaultBranch,
+                  },
+                  ...(expected === null
+                    ? {}
+                    : { expectedFingerprint: expected }),
+                } satisfies DxdChangesRefresh);
+          if (early !== undefined) socket.send(JSON.stringify(early));
+          const marking = markResidentThreadChangesDirty({
+            db,
             threadId,
-          },
-        );
-      })
-      .finally(() => {
+            source: this.#changesSource,
+            token,
+            ...(this.#heldCapture === undefined
+              ? {}
+              : { held: this.#heldCapture }),
+          });
+          this.#changesMarked = marking.then(
+            () => undefined,
+            () => undefined,
+          );
+          const { refresh, capture } = await marking;
+          this.#heldCapture = capture;
+          this.#changesFingerprint = refresh.expectedFingerprint ?? null;
+          if (this.#currentDaemonSocket() !== socket) return;
+          // Another publisher moved the fingerprint: ask again with D1's value
+          // (same token), so an unchanged capture can still be confirmed.
+          if (
+            early === undefined ||
+            early.expectedFingerprint !== refresh.expectedFingerprint
+          )
+            socket.send(JSON.stringify(refresh));
+          this.#notifyChanges(threadId);
+        }
+      } finally {
+        // Cleared in the same turn as the last flag check: a hint arriving
+        // after it starts a new loop instead of being lost.
         this.#observingChanges = undefined;
-      });
+      }
+    })().catch(() => {
+      threadDaemonLogger.warn(
+        "Changes observation could not request a capture.",
+        {
+          event: "thread_changes_observation_failed",
+          threadId,
+        },
+      );
+    });
     this.ctx.waitUntil(this.#observingChanges);
   }
 
-  async #publishChanges(
+  #publishChanges(
+    socket: WebSocket,
+    threadId: ThreadId,
+    candidate: DxdChangesCandidateEvent,
+  ) {
+    const published = this.#publishingChanges.then(async () => {
+      await this.#changesMarked;
+      await this.#publishCandidate(socket, threadId, candidate);
+    });
+    this.#publishingChanges = published.catch(() => undefined);
+    return published;
+  }
+
+  async #publishCandidate(
     socket: WebSocket,
     threadId: ThreadId,
     candidate: DxdChangesCandidateEvent,
   ) {
     if (this.env.DB === undefined || this.env.DX_STORAGE === undefined) return;
+    // The next candidate publishes under the lease the latest mark took. Its
+    // read decides: a candidate for another refresh (a Files save, an older
+    // hint) is superseded and asks again with the newest token.
+    const held = this.#heldCapture;
+    this.#heldCapture = undefined;
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      if (this.#currentDaemonSocket() !== socket) return;
+      if (this.#currentDaemonSocket() !== socket) {
+        await held?.release().catch(() => undefined);
+        return;
+      }
+      const capture =
+        attempt === 0 && usableResidentCapture(held) ? held : undefined;
+      if (attempt === 0 && held !== undefined && capture === undefined)
+        await held.release().catch(() => undefined);
       const outcome = await publishThreadChangesResidentCandidate({
         db: this.env.DB,
         bucket: this.env.DX_STORAGE,
         threadId,
         candidate,
-        onPublished: () =>
-          publishRealtimeInvalidation(
-            this.env,
-            threadId,
-            "changes.invalidated",
-          ),
+        ...(capture === undefined ? {} : { capture }),
+        onCommitted: (fingerprint) => {
+          this.#changesFingerprint = fingerprint;
+          this.#notifyChanges(threadId);
+          this.ctx.waitUntil(
+            publishRealtimeInvalidation(
+              this.env,
+              threadId,
+              "changes.invalidated",
+            ).catch(() => undefined),
+          );
+        },
       });
-      if (outcome === "published" || outcome === "unchanged") {
-        this.#notifyChanges(threadId);
-        return;
-      }
+      if (outcome === "published" || outcome === "unchanged") return;
       if (outcome === "superseded") {
         // Activation may supersede the observer's first token without queuing a
         // resident capture. Request fresh work, never replay the stale candidate.
@@ -853,11 +1024,31 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   }
 
   async #activateForFilesRead(threadId: ThreadId) {
+    // A ready daemon needs only the live round trip an activation would
+    // make; skipping the activation record keeps storage and D1 writes off
+    // every Files request.
+    if (
+      this.#authority?.threadId === threadId &&
+      this.#activation === undefined &&
+      this.#isReady()
+    ) {
+      const result = await this.#probeReadiness();
+      if (
+        result === "ready" &&
+        this.#authority?.threadId === threadId &&
+        this.#isTransportReady()
+      )
+        return true;
+    }
     const activation = this.#activateWithRetry(threadId);
     let removeWaiter: () => void = () => undefined;
     const transport = new Promise<boolean>((resolve) => {
       const ready = () => {
-        if (this.#authority?.threadId !== threadId || !this.#isTransportReady())
+        if (
+          this.#authority?.threadId !== threadId ||
+          !this.#isTransportReady() ||
+          !this.#isHeartbeatFresh()
+        )
           return;
         this.#readinessWaiters.delete(ready);
         resolve(true);
@@ -895,11 +1086,10 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     this.#activationId = undefined;
     await activation.persistence;
     const stored = await this.#readDaemonActivationAttempt();
-    if (stored?.activationId === activation.id)
-      await Promise.all([
-        this.ctx.storage.delete(ACTIVATION_ATTEMPT_STORAGE_KEY),
-        this.ctx.storage.deleteAlarm(),
-      ]);
+    if (stored?.activationId === activation.id) {
+      await this.ctx.storage.delete(ACTIVATION_ATTEMPT_STORAGE_KEY);
+      await this.#scheduleAlarm();
+    }
   }
 
   async #readDaemonActivationAttempt(): Promise<
@@ -937,7 +1127,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           submissions: [...activation.observations.values()],
         });
         await this.ctx.storage.put(ACTIVATION_ATTEMPT_STORAGE_KEY, attempt);
-        await this.ctx.storage.setAlarm(attempt.deadlineAt + 1_000);
+        await this.#scheduleAlarm(attempt.deadlineAt + 1_000);
       });
     return activation.persistence;
   }
@@ -1115,21 +1305,40 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     return this.#runActivationBeforeDeadline(threadId, epoch, signal);
   }
 
-  async #probeReadiness() {
+  /** `overdueTimeoutMs`: the caller already saw a heartbeat arrive late. */
+  async #probeReadiness(overdueTimeoutMs?: number) {
     const socket = this.#currentDaemonSocket();
     const authority = this.#authority;
     if (socket === undefined || authority?.attachmentNonce === undefined)
       return "changed" as const;
     const nonce = authority.attachmentNonce;
-    // dxd processes Files synchronously. Give work already ahead of the ping
-    // its normal request budget rather than fencing a healthy, busy daemon.
+    // Silent for two heartbeat intervals, as the browser's liveness check
+    // sees it: the guest is paused or gone, and a probe would only add its
+    // timeout to the wake.
+    if (
+      this.#lastHeartbeatAt !== undefined &&
+      Date.now() - this.#lastHeartbeatAt >= 2 * DXD_HEARTBEAT_INTERVAL_MS
+    ) {
+      await this.#loseDaemonConnection(socket, true);
+      return "timeout" as const;
+    }
+    // Concurrent callers share one round trip on the same connection.
+    const inFlight = this.#readinessProbe;
+    if (
+      inFlight?.socket === socket &&
+      inFlight.nonce === nonce &&
+      this.#readinessProbeResult !== undefined
+    )
+      return this.#readinessProbeResult;
+    // A busy daemon still heartbeats on its control lane, so only a daemon
+    // heard recently gets the normal request budget for work ahead of the
+    // ping; a silent one (a paused guest) is fenced after the short probe.
     const timeoutMs =
-      this.#pendingRequests.size === 0
+      overdueTimeoutMs ??
+      (this.#pendingRequests.size === 0 || !this.#isHeartbeatFresh()
         ? READINESS_PROBE_TIMEOUT_MS
-        : DAEMON_REQUEST_TIMEOUT_MS;
-    const result = await new Promise<
-      "ready" | "changed" | "timeout" | "drained"
-    >((resolve) => {
+        : DAEMON_REQUEST_TIMEOUT_MS);
+    const settled = new Promise<ReadinessProbeResult>((resolve) => {
       const timeout = setTimeout(() => probe.settle("timeout"), timeoutMs);
       const probe = {
         socket,
@@ -1156,6 +1365,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         probe.settle("timeout");
       }
     });
+    this.#readinessProbeResult = settled;
+    const result = await settled;
     // A heartbeat lease can outlive a paused guest. Prove a live round trip
     // before dispatch, without ever replaying a feature operation to wake it.
     if (
@@ -1180,47 +1391,82 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     let stage: "credential" | "install" | "registration" | "environment" =
       "credential";
     try {
-      const previousKeyId = this.#authority?.apiKeyId;
       const runtime = Effect.runSync(loadRuntimeConfiguration(this.env));
-      const credential = await mintThreadDaemonApiKey(this.env, threadId);
-      if (signal.aborted || epoch !== this.#drainEpoch) {
-        await revokeThreadDaemonApiKey(this.env, credential.id);
-        throw new Error("activation deadline exceeded");
+      const existing = this.#authority;
+      let credential:
+        | { id: string; key: Redacted.Redacted<string> }
+        | undefined;
+      let authority: DaemonAuthority;
+      if (existing?.threadId === threadId) {
+        // One key and one generation per Thread for its whole life. Only
+        // Core's own expected versions are refreshed here.
+        authority = {
+          ...existing,
+          release: DXD_RELEASE,
+          protocolMajor: DXD_PROTOCOL_MAJOR,
+          terminalVersion: DXD_TERMINAL_VERSION,
+          workloadIdentityVersion: DXD_WORKLOAD_IDENTITY_VERSION,
+          runtimeProvider: runtime.executionAdapter,
+        };
+        if (authority !== existing) {
+          this.#authority = authority;
+          await this.ctx.storage.put(AUTHORITY_STORAGE_KEY, authority);
+        }
+      } else {
+        credential = await mintThreadDaemonApiKey(this.env, threadId);
+        if (signal.aborted || epoch !== this.#drainEpoch) {
+          await revokeThreadDaemonApiKey(this.env, credential.id);
+          throw new Error("activation deadline exceeded");
+        }
+        authority = {
+          threadId,
+          generation: Schema.decodeUnknownSync(DaemonGenerationSchema)(
+            randomBase64Url(24),
+          ),
+          apiKeyId: credential.id,
+          apiKeyHash: threadDaemonApiKeyHash(Redacted.value(credential.key)),
+          release: DXD_RELEASE,
+          protocolMajor: DXD_PROTOCOL_MAJOR,
+          terminalVersion: DXD_TERMINAL_VERSION,
+          workloadIdentityVersion: DXD_WORKLOAD_IDENTITY_VERSION,
+          runtimeProvider: runtime.executionAdapter,
+          runtimeAssurance: "dx_dxd_channel_v1",
+        };
+        this.#authority = authority;
+        await this.ctx.storage.put(AUTHORITY_STORAGE_KEY, authority);
+        this.#failAllPending();
+        this.#fenceDaemonSockets();
+        if (existing !== undefined)
+          await revokeThreadDaemonApiKey(this.env, existing.apiKeyId);
       }
-      const authority: DaemonAuthority = {
-        threadId,
-        generation: Schema.decodeUnknownSync(DaemonGenerationSchema)(
-          randomBase64Url(24),
-        ),
-        apiKeyId: credential.id,
-        release: DXD_RELEASE,
-        protocolMajor: DXD_PROTOCOL_MAJOR,
-        terminalVersion: DXD_TERMINAL_VERSION,
-        workloadIdentityVersion: DXD_WORKLOAD_IDENTITY_VERSION,
-        runtimeProvider: runtime.executionAdapter,
-        runtimeAssurance: "dx_dxd_channel_v1",
-      };
-      this.#authority = authority;
-      await this.ctx.storage.put(AUTHORITY_STORAGE_KEY, authority);
-      this.#failAllPending();
-      this.#fenceDaemonSockets();
-      await revokeThreadDaemonApiKey(this.env, previousKeyId);
-      if (signal.aborted || epoch !== this.#drainEpoch) {
-        await revokeThreadDaemonApiKey(this.env, credential.id);
+      if (signal.aborted || epoch !== this.#drainEpoch)
         throw new Error("activation deadline exceeded");
-      }
       stage = "install";
       const installation = await ExecutionWorkspaces.ensureDaemon({
         threadId,
-        generation: authority.generation,
-        apiKey: credential.key,
         endpoint,
         signal,
+        credential,
+        mintCredential: async () => {
+          const minted = await mintThreadDaemonApiKey(this.env, threadId);
+          const apiKeyHash = threadDaemonApiKeyHash(Redacted.value(minted.key));
+          const current = this.#authority;
+          if (current?.threadId === threadId) {
+            const previousKeyId = current.apiKeyId;
+            this.#authority = { ...current, apiKeyId: minted.id, apiKeyHash };
+            await this.ctx.storage.put(AUTHORITY_STORAGE_KEY, this.#authority);
+            if (previousKeyId !== minted.id)
+              await revokeThreadDaemonApiKey(this.env, previousKeyId);
+          }
+          return minted;
+        },
+        // A resumed guest still runs its daemon, which reconnects on its own
+        // within a few hundred milliseconds. Give it that chance before any
+        // guest command touches the installation.
+        awaitRegistration: (timeoutMs) => this.#awaitTransport(timeoutMs),
       });
-      if (epoch !== this.#drainEpoch) {
-        await revokeThreadDaemonApiKey(this.env, credential.id);
+      if (epoch !== this.#drainEpoch)
         throw new Error("activation cancelled by drain");
-      }
       stage = "registration";
       if (!this.#isTransportReady()) {
         await new Promise<void>((resolve, reject) => {
@@ -1267,6 +1513,24 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       });
       return new Response(null, { status: 503 });
     }
+  }
+
+  /** Resolve true once a daemon registers, or false after `timeoutMs`. */
+  #awaitTransport(timeoutMs: number): Promise<boolean> {
+    if (this.#isTransportReady()) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      let timeout: ReturnType<typeof setTimeout>;
+      const ready = () => {
+        clearTimeout(timeout);
+        this.#readinessWaiters.delete(ready);
+        resolve(true);
+      };
+      this.#readinessWaiters.add(ready);
+      timeout = setTimeout(() => {
+        this.#readinessWaiters.delete(ready);
+        resolve(false);
+      }, timeoutMs);
+    });
   }
 
   #readyResponse(activationMilestones?: DaemonActivationMilestones) {
@@ -1369,10 +1633,24 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         if (!response.ok) throw new Error("resident daemon unavailable");
         return this.#awaitTerminalHeartbeat();
       },
+      exitedTerminal: async (stop) => {
+        while (!stop()) {
+          const state =
+            this.#currentDaemonSocket() === undefined
+              ? undefined
+              : this.#terminalHeartbeat;
+          if (state?.state === "exited") return state;
+          await new Promise<void>((resolve) =>
+            this.#terminalWaiters.add(() => resolve()),
+          );
+        }
+        return new Promise<DxdTerminalHeartbeat>(() => undefined);
+      },
       refreshEnvironment: async () => {
         await this.#activateEnvironment(threadId);
         return this.#awaitTerminalHeartbeat();
       },
+      checkLiveness: () => this.#checkTerminalLiveness(threadId),
       sendControl: (control) => this.#sendTerminalControl(control),
       sendBinary: (frame) => this.#sendTerminalBinary(frame),
       canSendBinary: (frameBytes) => this.#canSendTerminalBinary(frameBytes),
@@ -1397,6 +1675,44 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     };
   }
 
+  /**
+   * A present browser's Terminal missed a heartbeat. The daemon heard within
+   * one interval (plus grace) is live and only the browser leg was late;
+   * otherwise one readiness round trip decides, and a silent daemon is fenced
+   * here, on the browser's existing socket, instead of after the browser
+   * reconnects through a cold Worker.
+   */
+  async #checkTerminalLiveness(threadId: ThreadId) {
+    const startedAt = Date.now();
+    const silentMs =
+      this.#lastHeartbeatAt === undefined
+        ? undefined
+        : startedAt - this.#lastHeartbeatAt;
+    let outcome: "fresh" | "ready" | "fenced";
+    if (
+      silentMs !== undefined &&
+      silentMs < DXD_HEARTBEAT_INTERVAL_MS + TERMINAL_LIVENESS_GRACE_MS
+    )
+      outcome = "fresh";
+    else if (this.#currentDaemonSocket() === undefined) {
+      await this.#expireCurrentDaemonConnection();
+      outcome = "fenced";
+    } else
+      outcome =
+        (await this.#probeReadiness(TERMINAL_LIVENESS_PROBE_TIMEOUT_MS)) ===
+        "ready"
+          ? "ready"
+          : "fenced";
+    threadDaemonLogger.info("Thread Terminal liveness check.", {
+      event: "thread_daemon_liveness_check",
+      threadId,
+      outcome,
+      silentMs,
+      checkMs: Date.now() - startedAt,
+    });
+    return outcome !== "fenced";
+  }
+
   #closeResidentBrowserForReconnect(socket: WebSocket) {
     try {
       socket.send(
@@ -1413,28 +1729,31 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     }
   }
 
+  #closeResidentBrowserForPause(socket: WebSocket) {
+    try {
+      socket.send(
+        JSON.stringify({
+          v: 1,
+          type: "error",
+          code: "workspace-paused",
+          retry: "on-focus",
+        }),
+      );
+      socket.close(1000, "");
+    } catch {
+      // A hibernated peer may already have disconnected.
+    }
+  }
+
   async #beforeResidentInput(threadId: ThreadId) {
     if (this.#currentDaemonSocket() === undefined) {
       void this.#expireCurrentDaemonConnection();
       throw new Error("resident daemon unavailable");
     }
     if (!this.#environmentReady) await this.#activateEnvironment(threadId);
+    // Terminal input holds no Changes lease: dxd's filesystem observer
+    // reports every mutation it causes, so captures stay complete.
     await ExecutionWorkspaces.recordResidentTerminalInput(threadId);
-    if (this.#residentChanges === undefined && this.env.DB !== undefined)
-      this.#residentChanges = makeResidentThreadChangesTerminalObserver({
-        db: this.env.DB,
-        threadId,
-        residentRefresh: async (refresh) => {
-          const socket = this.#currentDaemonSocket();
-          if (socket === undefined || !this.#isReady()) return false;
-          const encoded = JSON.stringify(refresh);
-          if (utf8ExceedsBytes(encoded, DXD_MAX_CONTROL_FRAME_BYTES))
-            return false;
-          socket.send(encoded);
-          return true;
-        },
-      });
-    await this.#residentChanges?.beforeInput();
   }
 
   async #requestDaemon(request: Request): Promise<Response> {
@@ -1526,6 +1845,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         maximumBytes,
         resumable:
           operation.operation === "environment.activate" ||
+          operation.operation === "environment.check" ||
           operation.operation === "files.list" ||
           operation.operation === "files.read" ||
           operation.operation === "files.readSandbox",
@@ -1556,6 +1876,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         !this.#sameDaemonAuthority(pending.authority) ||
         Date.now() >= pending.deadline ||
         (pending.operation.operation !== "environment.activate" &&
+          pending.operation.operation !== "environment.check" &&
           pending.operation.operation !== "files.list" &&
           pending.operation.operation !== "files.read" &&
           pending.operation.operation !== "files.readSandbox" &&
@@ -1654,27 +1975,27 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       ENVIRONMENT_GENERATION_STORAGE_KEY,
       nextGeneration,
     );
-    const snapshot = await Effect.runPromise(
-      resolveExecutionEnvironment(this.env, threadId),
-    );
-    const signing = await Effect.runPromise(
-      resolveExecutionSigningPlan(this.env, threadId),
-    );
+    // Independent D1 reads: a wake waits for the slowest, not their sum.
     const db = await Effect.runPromise(decodeD1Binding(this.env.DB));
-    const source = await db
-      .prepare(
-        "SELECT provider, repository_full_name FROM thread_source_snapshot WHERE thread_id = ? LIMIT 1",
-      )
-      .bind(threadId)
-      .first<{ provider: string; repository_full_name: string }>();
-    let bitbucketGateway:
-      | { readonly origin: string; readonly repository: string }
-      | undefined;
-    if (source?.provider === "bitbucket") {
-      const origin = new URL(this.env.DX_AUTH_URL as string).origin;
-      if (origin.startsWith("https://"))
-        bitbucketGateway = { origin, repository: source.repository_full_name };
-    }
+    // Every bitbucket.org remote routes through the dx gateway while the
+    // Thread owner has an active Bitbucket connection.
+    const [snapshot, signing, bitbucketConnection] = await Promise.all([
+      Effect.runPromise(resolveExecutionEnvironment(this.env, threadId)),
+      Effect.runPromise(resolveExecutionSigningPlan(this.env, threadId)),
+      db
+        .prepare(
+          `SELECT 1 AS connected FROM threads t
+             JOIN bitbucket_connection c ON c.user_id = t.owner_user_id
+            WHERE t.id = ? AND c.status = 'active' LIMIT 1`,
+        )
+        .bind(threadId)
+        .first<{ connected: number }>(),
+    ]);
+    const gatewayOrigin = new URL(this.env.DX_AUTH_URL as string).origin;
+    const bitbucketGateway =
+      bitbucketConnection !== null && gatewayOrigin.startsWith("https://")
+        ? { origin: gatewayOrigin }
+        : undefined;
     const legacyDefaultAuthor =
       signing.author.name === "dx" &&
       signing.author.email === "noreply@dx.local";
@@ -1690,23 +2011,47 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       signingEnabled: signing.policy === "required" || "credential" in signing,
       ...(bitbucketGateway === undefined ? {} : { bitbucketGateway }),
     });
-    const response = await this.#dispatchDaemonOperation(
+    // Digest first: a daemon that already holds this exact environment
+    // answers a 4 KiB control frame instead of receiving up to 14 MiB again.
+    const digest = await environmentActivationDigest(operation);
+    const checked = await this.#dispatchDaemonOperation(
       authority,
-      operation,
-      DXD_MAX_ENVIRONMENT_REQUEST_FRAME_BYTES,
+      { operation: "environment.check", generation, digest },
+      DXD_MAX_REQUEST_FRAME_BYTES,
       ACTIVATION_TIMEOUT_MS,
     );
-    if (!response.ok) throw new Error("environment unavailable");
-    const result = Schema.decodeUnknownSync(DxdEnvironmentActivateResult)(
-      await response.json(),
+    if (!checked.ok) throw new Error("environment unavailable");
+    let result = Schema.decodeUnknownSync(DxdEnvironmentActivateResult)(
+      await checked.json(),
       { onExcessProperty: "error" },
     );
+    if (result.generation !== generation || result.kind === "superseded")
+      throw new Error("environment unavailable");
+    if (result.kind !== "unchanged") {
+      const response = await this.#dispatchDaemonOperation(
+        authority,
+        operation,
+        DXD_MAX_ENVIRONMENT_REQUEST_FRAME_BYTES,
+        ACTIVATION_TIMEOUT_MS,
+      );
+      if (!response.ok) throw new Error("environment unavailable");
+      result = Schema.decodeUnknownSync(DxdEnvironmentActivateResult)(
+        await response.json(),
+        { onExcessProperty: "error" },
+      );
+    }
     if (
       result.generation !== generation ||
       result.kind === "unavailable" ||
-      result.kind === "superseded"
+      result.kind === "superseded" ||
+      result.kind === "missing"
     )
       throw new Error("environment unavailable");
+    if (result.kind === "resume-timeout")
+      threadDaemonLogger.warn("Thread resume hook exceeded its time bound.", {
+        event: "thread_resume_timeout",
+        threadId,
+      });
     if (result.shell === "restart-required") {
       const heartbeat = this.#terminalHeartbeat;
       if (heartbeat !== undefined && heartbeat.state !== "absent")
@@ -1781,7 +2126,6 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       return new Response(null, { status: 404 });
     this.#drainEpoch += 1;
     this.#readinessProbe?.settle("drained");
-    await this.#residentChanges?.beforeSuspend();
     const retry =
       reason === "thread-archived"
         ? "after-unarchive"
@@ -1817,6 +2161,13 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     return new Response(null, { status: 204 });
   }
 
+  #inPlannedHandoff() {
+    return (
+      this.#plannedHandoffUntil !== undefined &&
+      Date.now() < this.#plannedHandoffUntil
+    );
+  }
+
   #isTransportReady(now = Date.now()) {
     const authority = this.#authority;
     return (
@@ -1838,6 +2189,95 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         );
       })
     );
+  }
+
+  /**
+   * The daemon was heard within two heartbeat intervals. A paused guest's
+   * socket can stay open for the whole lease; dispatching to it would wait
+   * out a request timeout, so a stale transport is probed first instead.
+   */
+  #isHeartbeatFresh(now = Date.now()) {
+    return (
+      this.#lastHeartbeatAt !== undefined &&
+      now - this.#lastHeartbeatAt <= 2 * DXD_HEARTBEAT_INTERVAL_MS + 1_000
+    );
+  }
+
+  /**
+   * Act on an expired heartbeat lease instead of waiting for the next
+   * request: a paused guest's socket stays open, and an attached Terminal
+   * that is not in view relies on this object to learn the daemon is gone.
+   * The check is a storage alarm, which survives hibernation and resets; an
+   * in-memory timer does not. Heartbeats only move the in-memory time, so a
+   * live daemon costs one alarm write per lease.
+   */
+  #armDaemonLease() {
+    if (this.#leaseCheckAt !== undefined && this.#leaseCheckAt > Date.now())
+      return;
+    this.#leaseCheckAt = Date.now() + DXD_HEARTBEAT_LEASE_MS;
+    void this.#scheduleAlarm().catch(() => undefined);
+  }
+
+  /** Point the single alarm at the earliest lease check or activation deadline. */
+  async #scheduleAlarm(attemptCheckAt?: number) {
+    const attempt =
+      attemptCheckAt === undefined
+        ? await this.#readDaemonActivationAttempt()
+        : undefined;
+    const next = [
+      attemptCheckAt ??
+        (attempt === undefined ? undefined : attempt.deadlineAt + 1_000),
+      this.#leaseCheckAt,
+    ].filter((value): value is number => value !== undefined);
+    if (next.length === 0) await this.ctx.storage.deleteAlarm();
+    else await this.ctx.storage.setAlarm(Math.min(...next));
+  }
+
+  /** Returns the daemon socket to drop when the lease expired, if any. */
+  async #expiredDaemonSocket(now: number) {
+    const authority = this.#authority;
+    if (authority?.attachmentNonce === undefined) return undefined;
+    const socket = this.ctx.getWebSockets().find((candidate) => {
+      const attachment = candidate.deserializeAttachment() as
+        | DaemonAttachment
+        | undefined;
+      return (
+        attachment?.kind === "daemon" &&
+        attachment.generation === authority.generation &&
+        attachment.nonce === authority.attachmentNonce
+      );
+    });
+    if (socket === undefined) return undefined;
+    // A fresh instance has not heard the daemon itself; the persisted time
+    // lags the last heartbeat by at most one persistence interval.
+    let deadline: number | undefined =
+      this.#lastHeartbeatAt === undefined
+        ? undefined
+        : this.#lastHeartbeatAt + DXD_HEARTBEAT_LEASE_MS;
+    if (deadline === undefined) {
+      const stored = (await this.ctx.storage.get(AUTHORITY_STORAGE_KEY)) as
+        | { readonly lastSeen?: number }
+        | undefined;
+      if (stored?.lastSeen !== undefined)
+        deadline =
+          stored.lastSeen +
+          DXD_HEARTBEAT_LEASE_MS +
+          HEARTBEAT_PERSIST_INTERVAL_MS;
+    }
+    if (deadline !== undefined && now < deadline) {
+      this.#leaseCheckAt = deadline;
+      return undefined;
+    }
+    threadDaemonLogger.info("Thread daemon heartbeat lease expired.", {
+      event: "thread_daemon_lease_expired",
+      threadId: authority.threadId,
+      silentMs:
+        this.#lastHeartbeatAt === undefined
+          ? undefined
+          : now - this.#lastHeartbeatAt,
+      browserSessions: this.#residentRelay.sessionCount,
+    });
+    return socket;
   }
 
   #isReady(now = Date.now()) {
@@ -1889,6 +2329,12 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     );
   }
 
+  /**
+   * Native Git credentials follow the Thread owner, not the Thread's source:
+   * github.com receives the owner's GitHub App user token, and the dx
+   * Bitbucket gateway receives a short-lived lease for the owner's Bitbucket
+   * connection. Provider access decides which repositories either reaches.
+   */
   async #issueNativeGitCredential(
     threadId: string,
     request: Extract<
@@ -1897,65 +2343,44 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     >,
   ) {
     const db = await Effect.runPromise(decodeD1Binding(this.env.DB));
-    const source = await db
+    const thread = await db
       .prepare(
-        `SELECT t.owner_user_id, s.provider, s.repository_full_name
-         FROM threads t JOIN thread_source_snapshot s ON s.thread_id = t.id
-         WHERE t.id = ? LIMIT 1`,
+        "SELECT owner_user_id FROM threads WHERE id = ? AND lifecycle_state = 'active' LIMIT 1",
       )
       .bind(threadId)
-      .first<{
-        owner_user_id: string;
-        provider: "github" | "bitbucket";
-        repository_full_name: string;
-      }>();
-    const normalized = request.path
-      .replace(/^\/+/, "")
-      .replace(/\/info\/lfs(?:\/.*)?$/, "")
-      .replace(/\.git$/, "")
-      .toLowerCase();
-    if (source === null) return undefined;
-    const expectedBitbucketPath =
-      `api/source/bitbucket/git/${source.repository_full_name}`.toLowerCase();
-    const bitbucketOrigin = new URL(this.env.DX_AUTH_URL as string);
-    const valid =
-      (source.provider === "github" &&
-        request.host.toLowerCase() === "github.com" &&
-        normalized === source.repository_full_name.toLowerCase()) ||
-      (source.provider === "bitbucket" &&
-        request.host.toLowerCase() === bitbucketOrigin.host.toLowerCase() &&
-        normalized === expectedBitbucketPath);
-    if (!valid) return undefined;
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const broker = yield* SourceRuntimeBroker;
-        const environment = yield* broker.withCommandEnvironment(
-          threadId,
-          source.owner_user_id,
-          {
-            // Git credential `get` cannot reveal whether this request will
-            // fetch, push, or update a workflow. Mint one repository-scoped
-            // token with the complete truthful native-Git write envelope.
-            operation:
-              source.provider === "bitbucket"
-                ? "contents-push"
-                : "workflow-write",
-            invocationSource: "git-helper",
-          },
-          (value) => Effect.succeed(value),
-        );
-        if (source.provider === "github") {
-          const password = environment.GH_TOKEN;
-          return password === undefined
-            ? undefined
-            : { username: "x-access-token", password };
-        }
-        const password = environment.DX_BITBUCKET_GIT_TOKEN;
-        return password === undefined
-          ? undefined
-          : { username: "dx", password };
-      }).pipe(Effect.provide(sourceWorkspaceLayer(this.env, db).runtime)),
+      .first<{ owner_user_id: string }>();
+    if (thread === null) return undefined;
+    const host = request.host.toLowerCase();
+    if (host === "github.com") {
+      const password = await readGitHubUserAccessToken(
+        this.env,
+        db,
+        thread.owner_user_id,
+      );
+      threadDaemonLogger.info("Native GitHub credential issued.", {
+        event: "native_git_credential",
+        threadId,
+        actorUserId: thread.owner_user_id,
+        provider: "github",
+      });
+      return { username: "x-access-token", password };
+    }
+    const gateway = new URL(this.env.DX_AUTH_URL as string);
+    if (
+      host !== gateway.host.toLowerCase() ||
+      !`/${request.path ?? ""}`.startsWith(`${BITBUCKET_GIT_PATH}/`)
+    )
+      return undefined;
+    const environment = await Effect.runPromise(
+      bitbucketRuntimeBroker(db, this.env).withCommandEnvironment(
+        threadId,
+        thread.owner_user_id,
+        { operation: "contents-push", invocationSource: "git-helper" },
+        (value) => Effect.succeed(value),
+      ),
     );
+    const password = environment.DX_BITBUCKET_GIT_TOKEN;
+    return password === undefined ? undefined : { username: "dx", password };
   }
 
   async #issueWorkloadIdentity(
@@ -2094,13 +2519,59 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     }
   }
 
-  #acceptDaemon(request: Request) {
+  /**
+   * Name the release this Core pins after every registration. The daemon
+   * compares its digest with the image it runs; when they differ it
+   * downloads and verifies in the background and swaps at a quiet moment,
+   * keeping its shell. A missing release configuration (local mode) leaves
+   * the daemon as it is.
+   */
+  async #requestDaemonUpdate(
+    socket: WebSocket,
+    authority: DaemonAuthority,
+    daemonRelease: string,
+  ) {
+    let release: { url: string; sha256: string };
+    try {
+      release = await loadDaemonReleaseMetadata(this.env);
+    } catch {
+      return;
+    }
+    const message = Schema.decodeUnknownOption(DxdUpdateMessage)({
+      type: "update",
+      generation: authority.generation,
+      url: release.url,
+      sha256: release.sha256,
+      release: DXD_RELEASE,
+    });
+    if (Option.isNone(message)) return;
+    if (daemonRelease !== DXD_RELEASE)
+      threadDaemonLogger.info("Thread daemon update requested.", {
+        event: "thread_daemon_update_requested",
+        threadId: authority.threadId,
+        from: daemonRelease,
+        to: DXD_RELEASE,
+      });
+    try {
+      socket.send(JSON.stringify(message.value));
+    } catch {
+      // The socket closes on its own; the next registration retries.
+    }
+  }
+
+  /**
+   * Admit a daemon by the hash of the Thread's one key. An authority from
+   * before hashes were kept proves the key once through D1 and learns its
+   * hash. D1 then confirms the key row, owner and active lifecycle behind the
+   * admission; a failed confirmation closes the socket and forgets the hash.
+   */
+  async #acceptDaemon(request: Request) {
     const authority = this.#authority;
+    const key = threadDaemonBearer(request.headers.get("authorization"));
     if (
       request.headers.get("x-dx-daemon-ingress") !== "1" ||
       request.headers.get("upgrade")?.toLowerCase() !== "websocket" ||
-      authority === undefined ||
-      request.headers.get("x-dx-daemon-key-id") !== authority.apiKeyId
+      authority === undefined
     )
       return new Response(null, { status: 404 });
     const threadId = Schema.decodeUnknownOption(ThreadId)(
@@ -2108,12 +2579,90 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     );
     if (Option.isNone(threadId) || threadId.value !== authority.threadId)
       return new Response(null, { status: 404 });
+    if (key === undefined) return new Response(null, { status: 401 });
+    const hash = threadDaemonApiKeyHash(key);
+    let learned = false;
+    if (authority.apiKeyHash === undefined) {
+      const verified = await verifyThreadDaemonApiKey(
+        this.env,
+        threadId.value,
+        request.headers.get("authorization"),
+      );
+      if (verified?.keyId !== authority.apiKeyId)
+        return new Response(null, { status: 401 });
+      learned = true;
+    } else if (hash !== authority.apiKeyHash)
+      return new Response(null, { status: 401 });
+    // The authority may have been replaced while this request waited.
+    const current = this.#authority;
+    if (
+      current?.threadId !== authority.threadId ||
+      current.apiKeyId !== authority.apiKeyId
+    )
+      return new Response(null, { status: 401 });
+    if (learned && current.apiKeyHash === undefined) {
+      this.#authority = { ...current, apiKeyHash: hash };
+      await this.ctx.storage.put(AUTHORITY_STORAGE_KEY, this.#authority);
+    }
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
-    server.serializeAttachment({ kind: "daemon" } satisfies DaemonAttachment);
+    server.serializeAttachment({
+      kind: "daemon",
+      ...(learned ? {} : { confirming: true }),
+    } satisfies DaemonAttachment);
     this.ctx.acceptWebSocket(server);
+    if (!learned) {
+      // The upgrade does not wait for D1, but no daemon message is handled
+      // until D1 confirms the key: a revoked key fails closed.
+      const confirmation = this.#confirmDaemonKey(
+        server,
+        threadId.value,
+        authority.apiKeyId,
+      );
+      this.#daemonConfirmations.set(server, confirmation);
+      this.ctx.waitUntil(confirmation);
+    }
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async #confirmDaemonKey(
+    socket: WebSocket,
+    threadId: ThreadId,
+    keyId: string,
+  ): Promise<boolean> {
+    let confirmed: boolean;
+    try {
+      confirmed = await confirmThreadDaemonApiKey(this.env, threadId, keyId);
+    } catch {
+      confirmed = false;
+    }
+    if (confirmed) {
+      socket.serializeAttachment({ kind: "daemon" } satisfies DaemonAttachment);
+      this.#daemonConfirmations.delete(socket);
+      return true;
+    }
+    threadDaemonLogger.warn("Thread daemon key confirmation failed.", {
+      event: "thread_daemon_key_unconfirmed",
+      threadId,
+    });
+    const current = this.#authority;
+    if (current?.apiKeyId === keyId && current.apiKeyHash !== undefined) {
+      // The next registration proves the key through D1 again.
+      const { apiKeyHash: _, ...withoutHash } = current;
+      this.#authority = withoutHash;
+      await this.ctx.storage.put(AUTHORITY_STORAGE_KEY, withoutHash);
+    }
+    if (this.#currentDaemonSocket() === socket)
+      await this.#loseDaemonConnection(socket, true);
+    else
+      try {
+        socket.close(1008, "Daemon key rejected.");
+      } catch {
+        // Already closed.
+      }
+    this.#daemonConfirmations.delete(socket);
+    return false;
   }
 
   async #queueChangesRefresh(request: Request) {
@@ -2144,7 +2693,28 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     return new Response(null, { status: 202 });
   }
 
-  async webSocketMessage(socket: WebSocket, frame: string | ArrayBuffer) {
+  async webSocketMessage(
+    socket: WebSocket,
+    frame: string | ArrayBuffer,
+  ): Promise<void> {
+    const admission = socket.deserializeAttachment() as
+      | SocketAttachment
+      | undefined;
+    if (admission?.kind === "daemon" && admission.confirming === true) {
+      // Hold the daemon's messages until D1 confirms its key. A confirmation
+      // lost to an object restart cannot be awaited: fail closed.
+      const confirmation = this.#daemonConfirmations.get(socket);
+      if (confirmation === undefined) {
+        try {
+          socket.close(1008, "Daemon key unconfirmed.");
+        } catch {
+          // Already closed.
+        }
+        return;
+      }
+      if (await confirmation) return this.webSocketMessage(socket, frame);
+      return;
+    }
     const frameBytes =
       typeof frame === "string" ? utf8ByteLength(frame) : frame.byteLength;
     const authority = this.#authority;
@@ -2180,6 +2750,9 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           new Uint8Array(frame, 0, Math.min(8, frameBytes)),
         )
       ) {
+        // The daemon holds its next chunk frames until this one is counted.
+        if (authority.chunkAcks === true)
+          socket.send(JSON.stringify({ type: "chunk-ack" }));
         this.#settleSandboxChunk(socket, authority, frame);
         return;
       }
@@ -2252,10 +2825,11 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       return;
     }
     if (Option.isSome(control) && control.value.type === "register") {
+      // The daemon carries no generation: this object assigns one per
+      // authority and the daemon echoes it. An older release is admitted when
+      // its protocol matches and is then asked to update itself in place.
       if (
         authority === undefined ||
-        control.value.generation !== authority.generation ||
-        control.value.release !== authority.release ||
         control.value.protocolMajor !== authority.protocolMajor ||
         control.value.capabilities.terminal.version !==
           authority.terminalVersion ||
@@ -2266,18 +2840,23 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         return;
       }
       const nonce = randomBase64Url(18);
-      const next = {
+      const next: DaemonAuthority = {
         ...authority,
         attachmentNonce: nonce,
         lastSeen: Date.now(),
+        daemonRelease: control.value.release,
+        chunkAcks: control.value.capabilities.files !== undefined,
       };
       this.#authority = next;
       this.#lastPersistedHeartbeatAt = next.lastSeen;
+      this.#lastHeartbeatAt = next.lastSeen;
+      this.#armDaemonLease();
       this.#terminalHeartbeat = undefined;
       this.#environmentReady = false;
       this.#appliedEnvironment = undefined;
       this.#terminalResetRequired = true;
-      this.#residentRelay.daemonConnectionReset();
+      this.#residentRelay.daemonConnectionReset(this.#inPlannedHandoff());
+      this.#plannedHandoffUntil = undefined;
       this.#fenceDaemonSockets(socket);
       await Promise.all([
         this.ctx.storage.put(AUTHORITY_STORAGE_KEY, next),
@@ -2296,6 +2875,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           heartbeatLeaseMs: DXD_HEARTBEAT_LEASE_MS,
         }),
       );
+      await this.#requestDaemonUpdate(socket, next, control.value.release);
       this.#resumePendingRequests();
       this.#startRepair(Schema.decodeUnknownSync(ThreadId)(authority.threadId));
       this.#readinessProbe?.settle("changed");
@@ -2315,6 +2895,22 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       );
       return;
     }
+    if (Option.isSome(control) && control.value.type === "update-status") {
+      // The daemon hands its PTY and replay to the new image and registers
+      // again within a second: a planned swap, not a loss.
+      if (control.value.status === "applying")
+        this.#plannedHandoffUntil = Date.now() + PLANNED_HANDOFF_MS;
+      threadDaemonLogger[control.value.status === "failed" ? "warn" : "info"](
+        "Thread daemon update status.",
+        {
+          event: "thread_daemon_update_status",
+          threadId: authority.threadId,
+          release: control.value.release,
+          status: control.value.status,
+        },
+      );
+      return;
+    }
     if (Option.isSome(control) && control.value.type === "readiness-pong") {
       const probe = this.#readinessProbe;
       if (
@@ -2327,6 +2923,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         Date.now() < probe.deadline
       ) {
         this.#authority = { ...authority, lastSeen: Date.now() };
+        this.#lastHeartbeatAt = this.#authority.lastSeen;
         probe.settle("ready");
       }
       return;
@@ -2384,11 +2981,6 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     if (Option.isNone(control)) return;
     if (isTerminalControl(control.value)) {
       if (control.value.type === "terminal.resident-state") {
-        if (
-          control.value.state === "exited" ||
-          control.value.state === "failed"
-        )
-          await this.#residentChanges?.beforeSuspend();
         this.#publishTerminalHeartbeat({
           terminalVersion: DXD_TERMINAL_VERSION,
           terminal: "default",
@@ -2438,6 +3030,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     const now = Date.now();
     const next = { ...authority, lastSeen: now };
     this.#authority = next;
+    this.#lastHeartbeatAt = now;
+    this.#armDaemonLease();
     socket.serializeAttachment({
       kind: "daemon",
       generation: authority.generation,
@@ -2511,6 +3105,9 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       threadId: authority.threadId,
       generation: authority.generation,
       apiKeyId: authority.apiKeyId,
+      ...(authority.apiKeyHash === undefined
+        ? {}
+        : { apiKeyHash: authority.apiKeyHash }),
       release: authority.release,
       protocolMajor: authority.protocolMajor,
       terminalVersion: authority.terminalVersion,
@@ -2523,16 +3120,15 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     this.#environmentReady = false;
     this.#appliedEnvironment = undefined;
     this.#disconnectPendingForSocket(socket, true);
-    this.#residentRelay.daemonUnavailable();
-    try {
-      await this.#residentChanges?.beforeSuspend();
-    } catch (cause) {
-      threadDaemonLogger.warn("Thread Changes disconnect flush failed.", {
-        event: "thread_changes_disconnect_flush_failed",
-        threadId: authority.threadId,
-        cause,
-      });
-    }
+    const notifiedBrowsers = this.#residentRelay.daemonUnavailable(
+      this.#inPlannedHandoff(),
+    );
+    threadDaemonLogger.info("Thread daemon connection lost.", {
+      event: "thread_daemon_connection_lost",
+      threadId: authority.threadId,
+      close,
+      notifiedBrowsers,
+    });
     const threadId = Schema.decodeUnknownSync(ThreadId)(authority.threadId);
     ExecutionWorkspaces.recordResidentTerminalHeartbeat(threadId, undefined);
     if (close)
@@ -2568,12 +3164,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       },
     )
       .then(async (reason) => {
-        if (reason !== "timeout") return;
-        this.#residentRelay.closeForLifecycle(
-          "workspace-paused",
-          "on-focus",
-          1000,
-        );
+        if (reason === "timeout") this.#residentRelay.workspacePaused();
       })
       .finally(() => {
         if (this.#connectionRecovery === recovery)
@@ -2601,8 +3192,9 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   }
 
   /**
-   * Hand a binary `DXF1` chunk to its waiting sandbox read as the response
-   * body. The bytes are never parsed, re-encoded, or copied here.
+   * Hand a sandbox chunk to its waiting read as the response body. dxd sends
+   * a chunk as one or more `DXF1` frames with consecutive offsets so other
+   * traffic interleaves; a single-frame chunk is passed through uncopied.
    */
   #settleSandboxChunk(
     socket: WebSocket,
@@ -2625,24 +3217,46 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     )
       return;
     const requested = pending.operation;
+    const assembly = pending.sandboxChunk;
+    const received = (assembly?.received ?? 0) + bytes.byteLength;
+    const total = Math.min(
+      requested.length,
+      header.sizeBytes - requested.offset,
+    );
     if (
-      header.offset !== requested.offset ||
-      bytes.byteLength > requested.length ||
-      (header.offset + bytes.byteLength < header.sizeBytes &&
-        bytes.byteLength !== requested.length)
+      header.offset !== requested.offset + (assembly?.received ?? 0) ||
+      received > total ||
+      (bytes.byteLength === 0 && total !== 0) ||
+      (assembly !== undefined &&
+        (header.version !== assembly.version ||
+          header.sizeBytes !== assembly.sizeBytes))
     ) {
       this.#settlePending(header.requestId, daemonFailureResponse("unknown"));
       return;
     }
+    let body = bytes as Uint8Array<ArrayBuffer>;
+    if (assembly !== undefined || received < total) {
+      const next = assembly ?? {
+        version: header.version,
+        sizeBytes: header.sizeBytes,
+        bytes: new Uint8Array(total),
+        received: 0,
+      };
+      next.bytes.set(bytes, next.received);
+      next.received = received;
+      pending.sandboxChunk = next;
+      if (received < total) return;
+      body = next.bytes;
+    }
     this.#settlePending(
       header.requestId,
-      new Response(bytes as Uint8Array<ArrayBuffer>, {
+      new Response(body, {
         headers: {
           "content-type": "application/octet-stream",
           [DXD_SANDBOX_CHUNK_HEADER]: JSON.stringify({
             version: header.version,
             sizeBytes: header.sizeBytes,
-            offset: header.offset,
+            offset: requested.offset,
           }),
         },
       }),
@@ -2667,6 +3281,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         Date.now() < pending.deadline
       ) {
         pending.socket = undefined;
+        pending.sandboxChunk = undefined;
         continue;
       }
       this.#settlePending(requestId, daemonFailureResponse("unknown"));
@@ -2681,19 +3296,26 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       );
   }
 
+  /**
+   * Activate the environment of a newly registered transport. Files save and
+   * Terminal wait for it. The reconnect Changes repair is not part of it: the
+   * daemon reports `changes-dirty` on every registration, and the resident
+   * observer marks the projection dirty and answers with a `changes-refresh`
+   * over this same channel, so a wake runs no guest command for Changes.
+   */
   #startRepair(threadId: ThreadId) {
+    const startedAt = Date.now();
     let repair: Promise<void>;
     repair = (
       this.#environmentActivation ?? this.#activateEnvironment(threadId)
     )
-      .then(() =>
-        ExecutionWorkspaces.repairChanges(threadId).catch(() => {
-          threadDaemonLogger.warn("Thread Changes reconnect repair failed.", {
-            event: "thread_changes_reconnect_repair_failed",
-            threadId,
-          });
-        }),
-      )
+      .then(() => {
+        threadDaemonLogger.info("Thread daemon repair timing.", {
+          event: "thread_daemon_repair_timing",
+          threadId,
+          environmentMs: Date.now() - startedAt,
+        });
+      })
       .catch((cause) => {
         this.#environmentReady = false;
         this.#residentRelay.close("environment-unavailable", "manual", 1012);

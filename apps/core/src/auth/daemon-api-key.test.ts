@@ -22,6 +22,7 @@ vi.mock("./requirements.js", () => ({
 }));
 
 import {
+  confirmThreadDaemonApiKey,
   mintThreadDaemonApiKey,
   revokeThreadDaemonApiKey,
   verifyThreadDaemonApiKey,
@@ -109,6 +110,23 @@ describe("Thread daemon API key", () => {
       ),
     ).resolves.toBeUndefined();
     expect(mocks.verifyApiKey).toHaveBeenCalledOnce();
+  });
+
+  it("confirms a key row for the active Thread owner in one read", async () => {
+    const db = database();
+    await expect(
+      confirmThreadDaemonApiKey({ DB: db.binding }, threadId, "daemon-key-id"),
+    ).resolves.toBe(true);
+    expect(db.calls).toHaveLength(1);
+    expect(db.calls[0]?.values).toEqual([
+      "daemon-key-id",
+      "daemon-keys",
+      threadId,
+    ]);
+    expect(db.calls[0]?.sql).toContain("threads.lifecycle_state = 'active'");
+    expect(db.calls[0]?.sql).toContain(
+      "threads.owner_user_id = apikey.referenceId",
+    );
   });
 
   it("revokes only a daemon key by its opaque ID", async () => {

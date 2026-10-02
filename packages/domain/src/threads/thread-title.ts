@@ -2,6 +2,8 @@ import { Schema } from "effect";
 
 export const THREAD_TITLE_MAX_LENGTH = 80;
 export const UNTITLED_THREAD_TITLE = "Untitled thread";
+/** Longest a generated title may show as loading; the fallback applies after. */
+export const THREAD_TITLE_PENDING_MS = 40_000;
 
 export const ThreadTitle = Schema.String.check(
   Schema.isMinLength(1),

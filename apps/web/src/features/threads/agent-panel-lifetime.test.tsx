@@ -57,6 +57,7 @@ vi.mock("./thread-transcript.js", () => ({
 import { AgentPanel, PendingAgentPanel } from "./agent-panel.js";
 import { createPendingImageCollection } from "./image-attachments.js";
 import type { OptimisticThreadCreation } from "./thread-session-registry.js";
+import { createPresentationValue } from "./use-thread-presentation.js";
 
 const agent = {
   error: undefined,
@@ -740,6 +741,69 @@ describe("thread composer ownership", () => {
     );
   });
 
+  it("attaches an image dropped on the existing-thread prompt and sends it", async () => {
+    vi.mocked(agent.sendMessage).mockResolvedValue(undefined);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:dropped-preview");
+    const mounted = await mountPanel();
+    const textarea = mounted.container.querySelector("textarea");
+    const form = mounted.container.querySelector("form");
+    if (textarea === null || form === null)
+      throw new Error("Expected composer controls.");
+    const file = new File(
+      [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+      "dropped.png",
+      { type: "image/png" },
+    );
+    const drag = (type: string) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "dataTransfer", {
+        value: { types: ["Files"], files: [file], dropEffect: "none" },
+      });
+      textarea.dispatchEvent(event);
+      return event;
+    };
+
+    await React.act(() => {
+      drag("dragenter");
+      drag("dragover");
+    });
+    expect(form.dataset.fileDropActive).toBe("true");
+    let drop: Event | undefined;
+    await React.act(async () => {
+      drop = drag("drop");
+      await Promise.resolve();
+    });
+    expect(drop?.defaultPrevented).toBe(true);
+    expect(form.dataset.fileDropActive).toBeUndefined();
+    await vi.waitFor(() =>
+      expect(
+        mounted.container.querySelector(
+          'button[aria-label="Remove dropped.png"]',
+        ),
+      ).not.toBeNull(),
+    );
+
+    await React.act(async () => {
+      form.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      );
+      await Promise.resolve();
+    });
+    await vi.waitFor(() =>
+      expect(agent.sendMessage).toHaveBeenCalledExactlyOnceWith("", {
+        images: [
+          {
+            type: "image",
+            data: "iVBORw0KGgo=",
+            mimeType: "image/png",
+            filename: "dropped.png",
+          },
+        ],
+      }),
+    );
+    await React.act(() => mounted.root.unmount());
+  });
+
   it("disposes previews created by attachment work that settles after unmount", async () => {
     let resolveRead: ((value: ArrayBuffer) => void) | undefined;
     const read = new Promise<ArrayBuffer>((resolve) => {
@@ -831,6 +895,14 @@ describe("thread composer ownership", () => {
     const imageCollection = createPendingImageCollection();
     const restore = vi.spyOn(imageCollection, "restore");
     const onDraftChange = vi.fn();
+    const retainedDraft = createPresentationValue("Retry with this image");
+    const draft = {
+      ...retainedDraft,
+      set: (next: string) => {
+        onDraftChange(next);
+        retainedDraft.set(next);
+      },
+    };
     let retainedImages: ReturnType<typeof imageCollection.take> | undefined;
     const submissionImageRetention = {
       retain: (images: ReturnType<typeof imageCollection.take>) => {
@@ -859,8 +931,7 @@ describe("thread composer ownership", () => {
       false,
       {},
       {
-        draft: "Retry with this image",
-        onDraftChange,
+        draft,
         imageCollection,
         submissionImageRetention,
       },

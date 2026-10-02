@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ghostty = vi.hoisted(() => ({
   customKeyHandler: undefined as
     | undefined
     | ((event: KeyboardEvent) => boolean),
+  fit: vi.fn(),
   load: vi.fn(),
   options: vi.fn(),
   textarea: undefined as HTMLTextAreaElement | undefined,
@@ -38,8 +39,7 @@ vi.mock("ghostty-web", () => ({
     dispose() {}
   },
   FitAddon: class {
-    observeResize() {}
-    fit() {}
+    fit = ghostty.fit;
     dispose() {}
   },
 }));
@@ -50,8 +50,27 @@ vi.mock("ghostty-web/ghostty-vt.wasm?url", () => ({
 
 import { mountBrowserTerminal } from "./ghostty-browser-emulator.js";
 
+let resized: (() => void) | undefined;
+const disconnect = vi.fn();
+
 beforeEach(() => {
   vi.clearAllMocks();
+  resized = undefined;
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: () => void) {
+        resized = callback;
+      }
+      observe() {}
+      disconnect = disconnect;
+    },
+  );
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("Ghostty browser emulator initialization", () => {
@@ -97,5 +116,34 @@ describe("Ghostty browser emulator initialization", () => {
     await vi.waitFor(() =>
       expect(writeText).toHaveBeenCalledWith("selected terminal output"),
     );
+  });
+
+  it("fits the emulator only while its Terminal is visible", async () => {
+    ghostty.load.mockResolvedValue({});
+    vi.useFakeTimers();
+    let visible = false;
+    const emulator = await mountBrowserTerminal(
+      document.createElement("div"),
+      vi.fn(),
+      {},
+      () => visible,
+    );
+    // Neither the mount nor a resize fits a hidden Terminal: a collapsed pane
+    // would shrink it, and its shell, to a few columns.
+    resized?.();
+    vi.advanceTimersByTime(100);
+    expect(ghostty.fit).not.toHaveBeenCalled();
+
+    visible = true;
+    resized?.();
+    vi.advanceTimersByTime(50);
+    resized?.();
+    vi.advanceTimersByTime(99);
+    expect(ghostty.fit).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(ghostty.fit).toHaveBeenCalledOnce();
+
+    emulator.dispose();
+    expect(disconnect).toHaveBeenCalledOnce();
   });
 });

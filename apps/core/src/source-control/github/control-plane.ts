@@ -3,15 +3,26 @@ import {
   integrationCredentialReferenceFor,
 } from "@dx/domain";
 import { Effect, Redacted, Schema } from "effect";
+import type { Bindings } from "../../http/types.js";
 import { sourceControlLogger } from "../../logging.js";
-import type { ConfigEncryptionKeyring } from "../../settings/environment-variables/encryption.js";
-import type { IntegrationCredentialVaultShape } from "../../settings/integrations/credential-vault.js";
+import {
+  type ConfigEncryptionKeyring,
+  loadConfigEncryptionKeyring,
+} from "../../settings/environment-variables/encryption.js";
+import {
+  IntegrationCredentialVault,
+  IntegrationCredentialVaultD1,
+  type IntegrationCredentialVaultShape,
+} from "../../settings/integrations/credential-vault.js";
 import {
   createOAuthProof,
   hashOAuthState,
 } from "../../settings/integrations/provider-registry.js";
 import { createGitHubAppJwt } from "./app-auth.js";
-import type { GitHubAppConfiguration } from "./configuration.js";
+import {
+  type GitHubAppConfiguration,
+  loadGitHubAppConfiguration,
+} from "./configuration.js";
 import {
   createGitHubProvider,
   type GitHubInstallation,
@@ -20,6 +31,7 @@ import {
 } from "./provider-http.js";
 
 const CEREMONY_TTL_MS = 10 * 60 * 1_000;
+const USER_TOKEN_REFRESH_MARGIN_MS = 60 * 60 * 1_000;
 
 export class GitHubControlPlaneInvalid extends Schema.TaggedError<GitHubControlPlaneInvalid>()(
   "GitHubControlPlaneInvalid",
@@ -1141,6 +1153,53 @@ export const createGitHubControlPlane = (input: {
     ]);
   };
 
+  /**
+   * The user's current GitHub App user access token for native Git and `gh`.
+   * GitHub disables the previous token when a refresh token is used, so
+   * refresh early. A concurrent refresh may rotate the pair and remove the
+   * reference this request read; follow the current reference instead.
+   */
+  const userAccessToken = async (actorUserId: string) => {
+    const unexpired = (authorization: AuthorizationRow, marginMs: number) =>
+      authorization.expires_at === null ||
+      Date.parse(authorization.expires_at) > Date.now() + marginMs;
+    let authorization = await activeAuthorization(db, actorUserId);
+    if (!unexpired(authorization, USER_TOKEN_REFRESH_MARGIN_MS)) {
+      try {
+        await refresh(actorUserId);
+      } catch (cause) {
+        const current = await activeAuthorization(db, actorUserId);
+        // Unless another request rotated the pair, keep serving the current
+        // token until it actually expires, for example during an outage.
+        if (
+          current.access_token_reference_id ===
+            authorization.access_token_reference_id &&
+          !unexpired(current, 30_000)
+        )
+          throw cause;
+      }
+      authorization = await activeAuthorization(db, actorUserId);
+    }
+    const read = (row: AuthorizationRow) =>
+      readAccessToken(
+        vault,
+        keyring,
+        actorUserId,
+        row.access_token_reference_id,
+      );
+    try {
+      return await read(authorization);
+    } catch (cause) {
+      const current = await activeAuthorization(db, actorUserId);
+      if (
+        current.access_token_reference_id ===
+        authorization.access_token_reference_id
+      )
+        throw cause;
+      return read(current);
+    }
+  };
+
   const revokeAuthorization = async (actorUserId: string) => {
     const authorization = await activeAuthorization(db, actorUserId);
     const owner = personalOwner(actorUserId);
@@ -1331,10 +1390,34 @@ export const createGitHubControlPlane = (input: {
     completeInstallation,
     reconcile,
     refresh,
+    userAccessToken,
     revokeAuthorization,
     disconnect,
     provider,
   };
+};
+
+/** The user's current GitHub user access token; see `userAccessToken`. */
+export const readGitHubUserAccessToken = async (
+  bindings: Bindings,
+  db: D1Database,
+  userId: string,
+) => {
+  const config = await Effect.runPromise(loadGitHubAppConfiguration(bindings));
+  const keyring = await Effect.runPromise(
+    loadConfigEncryptionKeyring(bindings),
+  );
+  const vault = await Effect.runPromise(
+    Effect.gen(function* () {
+      return yield* IntegrationCredentialVault;
+    }).pipe(Effect.provide(IntegrationCredentialVaultD1(db))),
+  );
+  return createGitHubControlPlane({
+    db,
+    config,
+    keyring,
+    vault,
+  }).userAccessToken(userId);
 };
 
 export const listGitHubGrants = async (db: D1Database, owner: GitHubOwner) => {

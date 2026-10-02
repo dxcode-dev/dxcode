@@ -18,6 +18,7 @@ import {
   loadRoutableConnections,
   loadSubscriptionModelIds,
   loadThreadRoute,
+  type ThreadRoute,
 } from "./connection-store-d1.js";
 import { effectiveContextWindow } from "./context-window.js";
 import { copilotModelForCanonical } from "./copilot-mapping.js";
@@ -209,6 +210,21 @@ export const resolveThreadSubmission = async (
   if (db === undefined) throw new Error("Model routing is not configured.");
   const thread = await loadThreadRoute(db, threadId);
   if (thread === undefined) throw new Error("THREAD_ROUTE_NOT_FOUND");
+  return resolveRouteSubmission(bindings, thread, submissionId);
+};
+
+/**
+ * The same resolution for a route not yet persisted: DxTitleAgent starts while
+ * its Thread is still being created, from the owner and requested selection.
+ */
+export const resolveRouteSubmission = async (
+  bindings: Bindings,
+  thread: ThreadRoute,
+  submissionId: string,
+): Promise<SubmissionRoute> => {
+  const db = bindings.DB;
+  if (db === undefined) throw new Error("Model routing is not configured.");
+  const threadId = thread.threadId;
   const [stored, overrides] = await Promise.all([
     loadRoutableConnections(db, thread.ownerUserId),
     loadModeProfileOverrides(db, thread.ownerUserId),

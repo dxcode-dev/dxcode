@@ -60,16 +60,16 @@ const mocks = vi.hoisted(() => {
     policy_revision: null,
     private_submodule_repository_ids_json: null,
   }));
-  const firstGithubSource = vi.fn(
-    async (): Promise<{ repository_full_name: string } | null> => null,
+  const firstGithubConnection = vi.fn(
+    async (): Promise<{ connected: number } | null> => null,
   );
   const prepareThreadLifecycle = vi.fn((sql: string) =>
     sql.includes("SELECT ready_at, preparation_status")
       ? {
           bind: vi.fn(() => ({ first: firstWorkspaceReadiness })),
         }
-      : sql.includes("JOIN thread_source_authority a")
-        ? { bind: vi.fn(() => ({ first: firstGithubSource })) }
+      : sql.includes("JOIN github_user_authorization a")
+        ? { bind: vi.fn(() => ({ first: firstGithubConnection })) }
         : sql.includes("thread_source_snapshot")
           ? {
               bind: vi.fn(() => ({ first: firstSourceWorkspace })),
@@ -99,7 +99,7 @@ const mocks = vi.hoisted(() => {
     firstThreadLifecycle,
     firstWorkspaceReadiness,
     firstSourceWorkspace,
-    firstGithubSource,
+    firstGithubConnection,
     bindThreadLifecycle,
     runThreadLifecycle,
     prepareThreadLifecycle,
@@ -159,13 +159,7 @@ const mocks = vi.hoisted(() => {
       url: "https://release.test/dxd",
       sha256: "a".repeat(64),
     })),
-    ensureDaemonInGuest: vi.fn(
-      async (_sandbox: unknown, input: { readonly generation: string }) => ({
-        release: "0.7.0" as const,
-        protocolMajor: 1 as const,
-        generation: input.generation,
-      }),
-    ),
+    ensureDaemonInGuest: vi.fn(async () => undefined),
   };
 });
 
@@ -253,6 +247,11 @@ it("forwards the four-tool inventory through deployed workspace factories", () =
       .tools?.(sandbox, options)
       .map(({ name }) => name),
   ).toEqual(["read", "write", "edit", "bash"]);
+});
+
+const mintCredential = async () => ({
+  id: "key_minted",
+  key: Redacted.make("dxd_minted-key-value"),
 });
 
 describe("Thread Changes sandbox activation", () => {
@@ -524,9 +523,7 @@ describe("execution workspace admission", () => {
       ready_at: null,
       preparation_status: "Preparing source…",
     });
-    mocks.firstGithubSource.mockResolvedValueOnce({
-      repository_full_name: "owner/repository",
-    });
+    mocks.firstGithubConnection.mockResolvedValueOnce({ connected: 1 });
     mocks.resolveWorkspace.mockImplementationOnce((options) => {
       options.observeResidency?.("running");
       return Effect.succeed(providerSandbox) as never;
@@ -543,7 +540,7 @@ describe("execution workspace admission", () => {
     );
     // Warm (running) workspaces refresh the gh wrapper on every activation.
     expect(sourceRun).toHaveBeenCalledWith(GITHUB_CLI_WRAPPER_INSTALL_COMMAND, {
-      envs: { DX_GH_WRAPPER: githubCliWrapper("owner/repository") },
+      envs: { DX_GH_WRAPPER: githubCliWrapper() },
       timeoutMs: 10_000,
     });
     expect(
@@ -567,15 +564,17 @@ describe("execution workspace admission", () => {
     mocks.connectWorkspace.mockReturnValueOnce(
       Effect.succeed(providerSandbox) as never,
     );
-    mocks.firstGithubSource.mockResolvedValueOnce({
-      repository_full_name: "owner/repository",
-    });
+    mocks.firstGithubConnection.mockResolvedValueOnce({ connected: 1 });
 
     await ExecutionWorkspaces.ensureDaemon({
       threadId,
-      generation: "generation_1",
-      apiKey: Redacted.make("dxd_test-api-key-value"),
       endpoint: "https://daemon.test",
+      credential: {
+        id: "key_1",
+        key: Redacted.make("dxd_test-api-key-value"),
+      },
+      mintCredential,
+      awaitRegistration: async () => false,
     });
 
     expect(mocks.resolveProfile).toHaveBeenCalledWith(
@@ -596,19 +595,159 @@ describe("execution workspace admission", () => {
       providerSandbox,
       expect.objectContaining({
         threadId,
-        generation: "generation_1",
         sha256: "a".repeat(64),
+        releaseUrl: expect.any(String),
         loadBinary: expect.any(Function),
+        mintCredential,
       }),
     );
     expect(sourceRun).toHaveBeenCalledWith(GITHUB_CLI_WRAPPER_INSTALL_COMMAND, {
-      envs: { DX_GH_WRAPPER: githubCliWrapper("owner/repository") },
+      envs: { DX_GH_WRAPPER: githubCliWrapper() },
       timeoutMs: 10_000,
     });
     expect(sourceRun.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.ensureDaemonInGuest.mock.invocationCallOrder[0] as number,
     );
     expect(mocks.firstThreadLifecycle).toHaveBeenCalled();
+  });
+
+  it("wakes a self-registering daemon without any guest command", async () => {
+    const threadId = thread("thr_00000000-0000-4000-8000-000000000295");
+    const run = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+    const setTimeout = vi.fn(async (_durationMs: number) => undefined);
+    mocks.connectWorkspace.mockReturnValueOnce(
+      Effect.succeed({
+        commands: { run },
+        files: { write: vi.fn(async () => undefined) },
+        setTimeout,
+      }) as never,
+    );
+    const awaitRegistration = vi.fn(async () => true);
+
+    await expect(
+      ExecutionWorkspaces.ensureDaemon({
+        threadId,
+        endpoint: "https://daemon.test",
+        mintCredential,
+        awaitRegistration,
+      }),
+    ).resolves.toEqual({ bootstrapped: false });
+
+    expect(mocks.connectWorkspace).toHaveBeenCalledOnce();
+    expect(awaitRegistration).toHaveBeenCalledWith(3_000);
+    expect(run).not.toHaveBeenCalled();
+    expect(mocks.ensureDaemonInGuest).not.toHaveBeenCalled();
+    // The connect set the E2B timeout; the wake replaces it with the
+    // inactivity deadline even though no Terminal is attached.
+    expect(setTimeout.mock.calls).toEqual([[75_000]]);
+  });
+
+  it("does not wait for a registration a newly minted key cannot produce", async () => {
+    const awaitRegistration = vi.fn(async () => true);
+    mocks.connectWorkspace.mockReturnValueOnce(
+      Effect.succeed({
+        commands: { run: vi.fn(async () => ({ exitCode: 0 })) },
+        files: { write: vi.fn(async () => undefined) },
+      }) as never,
+    );
+
+    await ExecutionWorkspaces.ensureDaemon({
+      threadId: thread("thr_00000000-0000-4000-8000-000000000296"),
+      endpoint: "https://daemon.test",
+      credential: {
+        id: "key_1",
+        key: Redacted.make("dxd_test-api-key-value"),
+      },
+      mintCredential,
+      awaitRegistration,
+    });
+
+    expect(awaitRegistration).not.toHaveBeenCalled();
+    expect(mocks.ensureDaemonInGuest).toHaveBeenCalledOnce();
+  });
+
+  it("renews the sandbox deadline while source preparation outlasts a poll", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const threadId = thread("thr_00000000-0000-4000-8000-000000000297");
+      const setTimeout = vi.fn(async (_durationMs: number) => undefined);
+      const deadlinesDuringPreparation: number[][] = [];
+      const providerSandbox = {
+        commands: {
+          run: vi.fn(async () => {
+            if (deadlinesDuringPreparation.length === 0) {
+              deadlinesDuringPreparation.push(
+                setTimeout.mock.calls.map(([durationMs]) => durationMs),
+              );
+              // The activity coordinator polls every 30 s while it renews.
+              await vi.advanceTimersByTimeAsync(30_000);
+              deadlinesDuringPreparation.push(
+                setTimeout.mock.calls.map(([durationMs]) => durationMs),
+              );
+            }
+            return { stdout: "", stderr: "", exitCode: 0 };
+          }),
+        },
+        files: { write: vi.fn(async () => undefined) },
+        setTimeout,
+      };
+      mocks.resolveWorkspace.mockImplementationOnce((options) => {
+        options.observeResidency?.("paused");
+        return Effect.succeed(providerSandbox) as never;
+      });
+
+      await expect(
+        ExecutionWorkspaces.sandboxFactory.createSandbox({ id: threadId }),
+      ).resolves.toBeDefined();
+
+      // The test requirements' inactivity deadline is 75 s.
+      expect(deadlinesDuringPreparation).toEqual([[75_000], [75_000, 75_000]]);
+      // Releasing the preparation lease publishes the final deadline once,
+      // and nothing renews it afterwards.
+      expect(setTimeout.mock.calls).toEqual([[75_000], [75_000], [75_000]]);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(setTimeout).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("renews the sandbox deadline while a daemon bootstrap runs", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const setTimeout = vi.fn(async (_durationMs: number) => undefined);
+      mocks.connectWorkspace.mockReturnValueOnce(
+        Effect.succeed({
+          commands: {
+            run: vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 })),
+          },
+          files: { write: vi.fn(async () => undefined) },
+          setTimeout,
+        }) as never,
+      );
+      let deadlinesDuringInstall: number[] = [];
+      mocks.ensureDaemonInGuest.mockImplementationOnce(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+        deadlinesDuringInstall = setTimeout.mock.calls.map(
+          ([durationMs]) => durationMs,
+        );
+      });
+
+      await ExecutionWorkspaces.ensureDaemon({
+        threadId: thread("thr_00000000-0000-4000-8000-000000000298"),
+        endpoint: "https://daemon.test",
+        mintCredential,
+        awaitRegistration: async () => false,
+      });
+
+      // The connect's replacement, the lease, and one 30 s renewal.
+      expect(deadlinesDuringInstall).toEqual([75_000, 75_000, 75_000]);
+      expect(setTimeout).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(setTimeout).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reports a failed gh wrapper installation without failing activation", async () => {
@@ -630,15 +769,17 @@ describe("execution workspace admission", () => {
         files: { write: vi.fn(async () => undefined) },
       }) as never,
     );
-    mocks.firstGithubSource.mockResolvedValueOnce({
-      repository_full_name: "owner/repository",
-    });
+    mocks.firstGithubConnection.mockResolvedValueOnce({ connected: 1 });
 
     await ExecutionWorkspaces.ensureDaemon({
       threadId,
-      generation: "generation_1",
-      apiKey: Redacted.make("dxd_test-api-key-value"),
       endpoint: "https://daemon.test",
+      credential: {
+        id: "key_1",
+        key: Redacted.make("dxd_test-api-key-value"),
+      },
+      mintCredential,
+      awaitRegistration: async () => false,
     });
 
     expect(warn).toHaveBeenCalledWith(
@@ -666,9 +807,9 @@ describe("execution workspace admission", () => {
     await expect(
       ExecutionWorkspaces.ensureDaemon({
         threadId,
-        generation: "generation_1",
-        apiKey: Redacted.make("dxd_test-api-key-value"),
         endpoint: "https://daemon.test",
+        mintCredential,
+        awaitRegistration: async () => false,
       }),
     ).rejects.toBe(failure);
 

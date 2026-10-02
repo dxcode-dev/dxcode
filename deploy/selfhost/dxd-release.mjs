@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 export const loadDxdRelease = (root = process.cwd()) => {
@@ -10,6 +10,8 @@ export const loadDxdRelease = (root = process.cwd()) => {
     release?.version !== 1 ||
     typeof release.release !== "string" ||
     !/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(release.release) ||
+    typeof release.dxd !== "string" ||
+    !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(release.dxd) ||
     release.platform !== "linux-x64" ||
     release.asset !== "dxd-linux-x64" ||
     typeof release.url !== "string" ||
@@ -18,6 +20,17 @@ export const loadDxdRelease = (root = process.cwd()) => {
   )
     throw new Error(
       "deploy/RELEASE.json does not describe one exact Linux x64 dxd asset.",
+    );
+  // Core pins the dxd version it was built with; a guest must never get an
+  // older daemon than the Core that manages it. `release` is the product
+  // release tag that carries the asset; `dxd` is the daemon version inside it.
+  const manifest = resolve(root, "apps/dxd/Cargo.toml");
+  const built = existsSync(manifest)
+    ? readFileSync(manifest, "utf8").match(/^version = "([^"]+)"$/m)?.[1]
+    : undefined;
+  if (built !== undefined && release.dxd !== built)
+    throw new Error(
+      `deploy/RELEASE.json names dxd ${release.dxd}, but this revision is dxd ${built}. Publish a release asset built from dxd ${built} and record it in deploy/RELEASE.json first. No deployment changes were made.`,
     );
   return Object.freeze(release);
 };

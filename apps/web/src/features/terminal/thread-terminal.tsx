@@ -21,8 +21,13 @@ const terminalUrl = (threadId: ThreadId) => {
 const terminalDimension = (value: number) =>
   Math.min(1_000, Math.max(1, Math.round(value)));
 
-const reconnectDelays = [250, 1_000, 2_500] as const;
-const terminalHeartbeatTimeoutMs = 5_000;
+// dxd heartbeats every 2 s. Half an interval late, a present Terminal asks
+// Core over its open socket to prove the daemon live; Core answers with a
+// heartbeat, or fences the silent daemon and wakes the workspace on this same
+// socket. Without any answer the socket itself is gone and is replaced.
+const reconnectDelays = [0, 1_000, 2_500] as const;
+const terminalHeartbeatTimeoutMs = 2_500;
+const recoveryAnswerTimeoutMs = 2_500;
 
 const decodeControl = (data: unknown) => {
   if (typeof data !== "string") return Option.none();
@@ -236,6 +241,8 @@ const useTerminalConnection = ({
           let reconnecting = false;
           let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
           let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
+          let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+          let socketUnanswered = false;
           const browserPresent = () =>
             activeRef.current &&
             document.visibilityState === "visible" &&
@@ -243,6 +250,10 @@ const useTerminalConnection = ({
           const clearHeartbeat = () => {
             if (heartbeatTimer !== undefined) clearTimeout(heartbeatTimer);
             heartbeatTimer = undefined;
+          };
+          const clearRecovery = () => {
+            if (recoveryTimer !== undefined) clearTimeout(recoveryTimer);
+            recoveryTimer = undefined;
           };
           const reconnect = () => {
             if (
@@ -266,16 +277,41 @@ const useTerminalConnection = ({
             unavailableObserved = true;
             ready = false;
             clearHeartbeat();
+            clearRecovery();
             setStatus(disconnected);
             const delay = reconnectDelays[automaticReconnectAttempt.current];
-            if (delay !== undefined && browserPresent())
+            if (delay === 0) reconnect();
+            else if (delay !== undefined && browserPresent())
               reconnectTimer = setTimeout(reconnect, delay);
+          };
+          const replaceSocket = () => {
+            if (unavailableObserved) reconnect();
+            else startReconnect();
+          };
+          // Recovery stays on this socket while it is open: Core checks the
+          // daemon, or wakes a waiting attachment, and answers here.
+          const requestRecovery = () => {
+            if (recoveryTimer !== undefined) return;
+            if (
+              !attachSent ||
+              socketUnanswered ||
+              socket.readyState !== WebSocket.OPEN
+            ) {
+              replaceSocket();
+              return;
+            }
+            socket.send(JSON.stringify({ v: 1, type: "recover" }));
+            recoveryTimer = setTimeout(() => {
+              recoveryTimer = undefined;
+              socketUnanswered = true;
+              replaceSocket();
+            }, recoveryAnswerTimeoutMs);
           };
           const expectHeartbeat = () => {
             clearHeartbeat();
             if (!ready || !browserPresent()) return;
             heartbeatTimer = setTimeout(
-              startReconnect,
+              requestRecovery,
               terminalHeartbeatTimeoutMs,
             );
           };
@@ -284,7 +320,7 @@ const useTerminalConnection = ({
               clearHeartbeat();
               return;
             }
-            if (unavailableObserved) reconnect();
+            if (unavailableObserved) requestRecovery();
             else expectHeartbeat();
           };
           recoverDisconnected.current = resumeOnUserPresence;
@@ -338,6 +374,8 @@ const useTerminalConnection = ({
                 socket.send(new TextEncoder().encode(data));
             },
             terminalTheme,
+            // A hidden Terminal keeps its size, so its scrollback survives.
+            () => activeRef.current,
           ).catch(() => {
             listeners.abort();
             socket.close();
@@ -373,16 +411,25 @@ const useTerminalConnection = ({
               const decoded = decodeControl(event.data);
               if (Option.isNone(decoded)) return;
               const control = decoded.value;
+              // Any control answers a pending recovery request.
+              clearRecovery();
+              socketUnanswered = false;
               if (control.type === "heartbeat") {
                 if (ready) expectHeartbeat();
                 return;
               }
               if (
-                ready &&
                 control.type === "progress" &&
                 control.phase === "resident-restarting"
               ) {
-                startReconnect();
+                // Core lost the daemon and keeps this socket waiting: a
+                // present Terminal asks it to recover here; a retained hidden
+                // one waits for presence or for anything else to wake it.
+                ready = false;
+                clearHeartbeat();
+                unavailableObserved = true;
+                setStatus(control);
+                if (browserPresent()) requestRecovery();
                 return;
               }
               if (control.type === "progress" && control.phase === "waking") {
@@ -394,26 +441,37 @@ const useTerminalConnection = ({
               }
               if (control.type === "replay-start") {
                 ready = false;
+                unavailableObserved = false;
                 emulator.terminal.reset();
               } else if (control.type === "ready") {
+                // The same socket can recover: a retained Terminal told the
+                // workspace paused becomes ready when anything else wakes it.
                 ready = true;
+                unavailableObserved = false;
+                safeCloseAnnounced = false;
                 expectHeartbeat();
                 setRestartRequired(control.restartRequired);
                 immediateReconnectAvailable.current = true;
                 automaticReconnectAttempt.current = 0;
-              } else if (control.type === "progress") ready = false;
-              else if (control.type === "restart-required")
+              } else if (control.type === "progress") {
+                // Core is already recovering this attachment.
+                ready = false;
+                unavailableObserved = false;
+              } else if (control.type === "restart-required")
                 setRestartRequired(true);
               else if (control.type === "error") {
                 ready = false;
                 safeCloseAnnounced = true;
+                // A paused workspace keeps this socket open; Terminal
+                // activation or user presence is the intent to wake it.
+                if (control.retry === "on-focus") unavailableObserved = true;
                 if (
                   control.retry === "on-focus" &&
                   document.hasFocus() &&
                   element.contains(document.activeElement)
                 ) {
                   nextRestartResident.current = false;
-                  setAttempt((value) => value + 1);
+                  requestRecovery();
                 } else if (
                   control.retry === "immediate-once" &&
                   document.visibilityState === "visible" &&
@@ -442,9 +500,18 @@ const useTerminalConnection = ({
             onWorkspaceStatusChange?.(undefined);
           };
           const unavailable = () => {
-            if (abort.signal.aborted || safeCloseAnnounced) return;
+            if (abort.signal.aborted || reconnecting) return;
+            // A socket that closes under a recovery request never answers it.
+            const recovering = recoveryTimer !== undefined;
+            clearRecovery();
+            if (safeCloseAnnounced && !recovering) return;
             clearWorkspaceWake();
-            startReconnect();
+            if (!unavailableObserved) {
+              startReconnect();
+              return;
+            }
+            setStatus(disconnected);
+            if (recovering) reconnect();
           };
           socket.addEventListener("close", unavailable, {
             signal: listeners.signal,
@@ -456,6 +523,7 @@ const useTerminalConnection = ({
             listeners.abort();
             if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
             clearHeartbeat();
+            clearRecovery();
             clearWorkspaceWake();
             resize.dispose();
             emulator.dispose();
@@ -520,11 +588,12 @@ function ThreadTerminalSession(props: ThreadTerminalSessionProps) {
     [activeRef, recoverDisconnected, setActivity],
   );
   const wakeOnFocus = () => {
-    if (status === disconnected) recoverDisconnected.current();
-    else if (
-      status.type === "error" &&
-      (status.retry === "on-focus" || status.retry === "after-unarchive")
+    if (
+      status === disconnected ||
+      (status.type === "error" && status.retry === "on-focus")
     )
+      recoverDisconnected.current();
+    else if (status.type === "error" && status.retry === "after-unarchive")
       retry(false);
   };
   const loading = terminalLoading(status);

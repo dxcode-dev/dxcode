@@ -6,9 +6,9 @@ import {
 } from "@dx/api";
 import type { ProjectId, ThreadId } from "@dx/domain";
 import {
+  type FlueAgentSession,
   type UseFlueAgentResult,
   useFlueAgent,
-  useFlueAgentSession,
 } from "@flue/react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
@@ -67,7 +67,11 @@ import {
   sandboxFileUrl,
   type ThreadFileTarget,
 } from "./transcript-file-link.js";
-import { useThreadPresentation } from "./use-thread-presentation.js";
+import { useFrameCoalescedAgentSession } from "./use-frame-coalesced-agent-session.js";
+import {
+  useThreadPresentation,
+  useThreadPresentationValue,
+} from "./use-thread-presentation.js";
 
 const filesPath = (path: ThreadChangesPath) => {
   try {
@@ -290,7 +294,7 @@ function RouteScopedThreadSession(props: ThreadSessionProps) {
     [props.thread.agentInitialization, props.thread.agentUrl],
   );
   const agent = useFlueAgent({ client, live: "sse" });
-  return <ThreadSessionContent {...props} agent={agent} />;
+  return <ThreadSessionContent {...props} agentSource={{ agent }} />;
 }
 
 function RetainedThreadSession({
@@ -335,8 +339,40 @@ function RetainedThreadSessionContent(props: ThreadSessionProps) {
   const entry = React.useContext(ThreadPresentationContext);
   if (entry === undefined)
     throw new Error("Missing retained Thread capability.");
-  const agent = useFlueAgentSession(entry.session);
-  return <ThreadSessionContent {...props} agent={agent} />;
+  return (
+    <ThreadSessionContent {...props} agentSource={{ session: entry.session }} />
+  );
+}
+
+/**
+ * The retained session is subscribed here, below the page, so Flue stream
+ * chunks re-render only the agent panel, not the layout, Changes, or Files,
+ * and at most once per frame however many chunks a network batch delivers.
+ */
+type ThreadAgentSource =
+  | { readonly session: FlueAgentSession }
+  | { readonly agent: UseFlueAgentResult };
+type ThreadAgentPanelProps = Omit<
+  React.ComponentProps<typeof AgentPanel>,
+  "agent"
+> & { readonly source: ThreadAgentSource };
+
+function ThreadAgentPanel({ source, ...props }: ThreadAgentPanelProps) {
+  return "session" in source ? (
+    <SessionAgentPanel session={source.session} {...props} />
+  ) : (
+    <AgentPanel agent={source.agent} {...props} />
+  );
+}
+
+function SessionAgentPanel({
+  session,
+  ...props
+}: Omit<ThreadAgentPanelProps, "source"> & {
+  readonly session: FlueAgentSession;
+}) {
+  const agent = useFrameCoalescedAgentSession(session);
+  return <AgentPanel agent={agent} {...props} />;
 }
 
 function ThreadSessionContent({
@@ -349,9 +385,9 @@ function ThreadSessionContent({
   workspaceStatus: realtimeWorkspaceStatus,
   onOpenModelRouting,
   Terminal,
-  agent,
+  agentSource,
 }: ThreadSessionProps & {
-  readonly agent: UseFlueAgentResult;
+  readonly agentSource: ThreadAgentSource;
 }) {
   const { identity } = useAuthenticatedIdentity();
   const mobile = useMobile();
@@ -370,7 +406,8 @@ function ThreadSessionContent({
       ? undefined
       : () => onOpenModelRouting?.(modelRoutingDestination);
   const retainedThread = React.useContext(ThreadPresentationContext);
-  const [draft, setDraft] = useThreadPresentation("draft", "");
+  // Passed down without subscribing: only the composer renders the draft.
+  const draft = useThreadPresentationValue("draft", "");
   const [images, setImages] = useThreadPresentation<
     ReadonlyArray<PendingImage>
   >("pending-images", () => []);
@@ -413,33 +450,36 @@ function ThreadSessionContent({
     () => setRightPaneCollapsed((collapsed) => !collapsed),
     [],
   );
-  const openTarget = (target: ThreadFileTarget, reveal?: FileReveal) => {
-    const key = centerTabKey(target);
-    setFiles((current) => {
-      const existing = current.find((file) => centerTabKey(file) === key);
-      if (existing === undefined)
-        return [
-          ...current,
-          {
-            ...target,
-            dirty: false,
-            ...(reveal === undefined ? {} : { reveal, revealSequence: 1 }),
-          },
-        ];
-      // Reopening an open tab keeps its draft and moves the highlight.
-      if (reveal === undefined) return current;
-      return current.map((file) =>
-        centerTabKey(file) === key
-          ? {
-              ...file,
-              reveal,
-              revealSequence: (file.revealSequence ?? 0) + 1,
-            }
-          : file,
-      );
-    });
-    setActiveFile(key);
-  };
+  const openTarget = React.useCallback(
+    (target: ThreadFileTarget, reveal?: FileReveal) => {
+      const key = centerTabKey(target);
+      setFiles((current) => {
+        const existing = current.find((file) => centerTabKey(file) === key);
+        if (existing === undefined)
+          return [
+            ...current,
+            {
+              ...target,
+              dirty: false,
+              ...(reveal === undefined ? {} : { reveal, revealSequence: 1 }),
+            },
+          ];
+        // Reopening an open tab keeps its draft and moves the highlight.
+        if (reveal === undefined) return current;
+        return current.map((file) =>
+          centerTabKey(file) === key
+            ? {
+                ...file,
+                reveal,
+                revealSequence: (file.revealSequence ?? 0) + 1,
+              }
+            : file,
+        );
+      });
+      setActiveFile(key);
+    },
+    [],
+  );
   const openFile = (location: ThreadFileLocation) =>
     openTarget({ kind: "workspace", ...location });
   const closeFile = (file: CenterFileTab) => {
@@ -456,47 +496,54 @@ function ThreadSessionContent({
             ),
       );
   };
-  const fileDownloadUrl = (target: ThreadFileTarget) => {
-    const absolute = absolutePathFor(target);
-    return absolute === undefined
-      ? undefined
-      : sandboxFileUrl(thread.id, absolute, true);
-  };
-  const fileNavigation: ThreadFileNavigation = {
-    open: openTarget,
-    downloadUrl: fileDownloadUrl,
-  };
-  const resolveFileLink = (href: string) => {
-    const resolved = resolveTranscriptFileLink(href);
-    if (resolved === undefined) return undefined;
-    const downloadUrl = fileDownloadUrl(resolved.target);
-    return {
-      open: () =>
-        openTarget(
-          resolved.target,
-          resolved.lines === undefined
-            ? undefined
-            : { kind: "lines", lines: resolved.lines },
-        ),
-      ...(downloadUrl === undefined ? {} : { downloadUrl }),
-    };
-  };
+  // Context values must stay stable: a new value re-renders every transcript
+  // Markdown consumer, bypassing their memoization.
+  const fileDownloadUrl = React.useCallback(
+    (target: ThreadFileTarget) => {
+      const absolute = absolutePathFor(target);
+      return absolute === undefined
+        ? undefined
+        : sandboxFileUrl(thread.id, absolute, true);
+    },
+    [thread.id],
+  );
+  const fileNavigation = React.useMemo<ThreadFileNavigation>(
+    () => ({ open: openTarget, downloadUrl: fileDownloadUrl }),
+    [openTarget, fileDownloadUrl],
+  );
+  const resolveFileLink = React.useCallback(
+    (href: string) => {
+      const resolved = resolveTranscriptFileLink(href);
+      if (resolved === undefined) return undefined;
+      const downloadUrl = fileDownloadUrl(resolved.target);
+      return {
+        open: () =>
+          openTarget(
+            resolved.target,
+            resolved.lines === undefined
+              ? undefined
+              : { kind: "lines", lines: resolved.lines },
+          ),
+        ...(downloadUrl === undefined ? {} : { downloadUrl }),
+      };
+    },
+    [openTarget, fileDownloadUrl],
+  );
 
   if (mobile) {
     return (
       <div className="mobile-thread-region">
         <ThreadRefreshError message={refreshError} onRetry={onRefreshRetry} />
         <main className="mobile-pane-content">
-          <AgentPanel
+          <ThreadAgentPanel
             {...retainedImageProps}
-            agent={agent}
+            source={agentSource}
             agentInitialization={thread.agentInitialization}
             onOpenModelRouting={openModelRouting}
             archived={archived}
             dictationAvailable={dictationAvailable}
             showArchivedNotice={archived}
             draft={draft}
-            onDraftChange={setDraft}
             workspaceReady={thread.executionWorkspace.ready}
             workspaceStatus={workspaceStatus}
             optimisticCreation={optimisticCreation}
@@ -515,9 +562,9 @@ function ThreadSessionContent({
       <div className="thread-region">
         <ThreadRefreshError message={refreshError} onRetry={onRefreshRetry} />
         <section className="thread-main-panel">
-          <AgentPanel
+          <ThreadAgentPanel
             {...retainedImageProps}
-            agent={agent}
+            source={agentSource}
             agentInitialization={thread.agentInitialization}
             archived
             dictationAvailable={dictationAvailable}
@@ -539,14 +586,13 @@ function ThreadSessionContent({
       <div className="thread-region">
         <ThreadRefreshError message={refreshError} onRetry={onRefreshRetry} />
         <section className="thread-main-panel">
-          <AgentPanel
+          <ThreadAgentPanel
             {...retainedImageProps}
-            agent={agent}
+            source={agentSource}
             agentInitialization={thread.agentInitialization}
             onOpenModelRouting={openModelRouting}
             dictationAvailable={dictationAvailable}
             draft={draft}
-            onDraftChange={setDraft}
             workspaceReady={thread.executionWorkspace.ready}
             workspaceStatus={workspaceStatus}
             optimisticCreation={optimisticCreation}
@@ -586,7 +632,7 @@ function ThreadSessionContent({
             <ChangesPane
               threadId={thread.id}
               projectName={project.name}
-              onReviewPrompt={setDraft}
+              onReviewPrompt={draft.set}
               onOpenFile={(worktree, path, worktreeLabel) => {
                 const validated = filesPath(path);
                 if (validated === undefined) {
@@ -625,9 +671,9 @@ function ThreadSessionContent({
         main={
           <ThreadFileNavigationContext value={fileNavigation}>
             <MarkdownFileLinkContext value={resolveFileLink}>
-              <AgentPanel
+              <ThreadAgentPanel
                 {...retainedImageProps}
-                agent={agent}
+                source={agentSource}
                 agentInitialization={thread.agentInitialization}
                 onOpenModelRouting={openModelRouting}
                 dictationAvailable={dictationAvailable}
@@ -642,7 +688,6 @@ function ThreadSessionContent({
                   />
                 ))}
                 draft={draft}
-                onDraftChange={setDraft}
                 workspaceReady={thread.executionWorkspace.ready}
                 workspaceStatus={workspaceStatus}
                 optimisticCreation={optimisticCreation}

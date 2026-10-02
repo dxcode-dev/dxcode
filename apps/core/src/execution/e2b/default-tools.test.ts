@@ -2,30 +2,13 @@ import {
   fauxAssistantMessage,
   fauxProvider,
 } from "@earendil-works/pi-ai/providers/faux";
-import {
-  type AgentProps,
-  defineTool,
-  init,
-  useModel,
-  useSandbox,
-  useTool,
-} from "@flue/runtime";
+import { type AgentProps, init, useModel, useSandbox } from "@flue/runtime";
 import { start } from "@flue/runtime/node";
 import type { Sandbox as E2BSandbox } from "e2b";
-import * as v from "valibot";
 import { expect, it, vi } from "vitest";
 import { e2b } from "./adapter.js";
 
-const pullRequest = defineTool({
-  name: "pull_request",
-  description: "Provider-authorized pull request operation.",
-  input: v.object({}),
-  async run() {
-    return { output: {} };
-  },
-});
-
-it("exposes only DX's four coding tools and pull_request to the model", async () => {
+it("exposes only DX's four coding tools to the model", async () => {
   const provider = fauxProvider();
   let toolNames: string[] = [];
   provider.setResponses([
@@ -46,15 +29,8 @@ it("exposes only DX's four coding tools and pull_request to the model", async ()
     },
     commands: {
       run: vi.fn(async () => ({
-        stdout: JSON.stringify({
-          kind: "snapshot",
-          version: 1,
-          snapshot: {
-            instructionFiles: {},
-            skillFiles: [],
-            directoryListing: [],
-          },
-        }),
+        // An empty workspace: no records, then the end marker.
+        stdout: btoa("E\0"),
         stderr: "",
         exitCode: 0,
       })),
@@ -66,7 +42,6 @@ it("exposes only DX's four coding tools and pull_request to the model", async ()
   function HarnessAgent(_props: AgentProps) {
     useModel("faux/faux-1");
     useSandbox(factory);
-    useTool(pullRequest);
     return "Use the workspace tools when needed.";
   }
   HarnessAgent.agentName = "e2b-default-tools-test";
@@ -79,5 +54,5 @@ it("exposes only DX's four coding tools and pull_request to the model", async ()
   const receipt = await handle.dispatch("Inspect the workspace.");
 
   await expect(handle.read(receipt)).resolves.toMatchObject({ text: "done" });
-  expect(toolNames).toEqual(["read", "write", "edit", "bash", "pull_request"]);
+  expect(toolNames).toEqual(["read", "write", "edit", "bash"]);
 });

@@ -53,6 +53,18 @@ describe("ThreadHeader", () => {
     return container;
   };
 
+  it("shows the loading title instead of the fallback while it is generated", async () => {
+    const container = await render(
+      <ThreadHeader thread={{ ...thread, titlePending: true }} />,
+    );
+    const title = container.querySelector(".thread-title");
+    expect(
+      title?.querySelector('[role="status"]')?.getAttribute("aria-label"),
+    ).toBe("Generating thread title");
+    expect(title?.textContent).toBe("");
+    expect(title?.getAttribute("title")).toBeNull();
+  });
+
   it("presents authoritative metadata and the defined no-project state", async () => {
     const container = await render(<ThreadHeader thread={thread} />);
     const titleBar = container.querySelector(".thread-title-bar");
@@ -75,7 +87,7 @@ describe("ThreadHeader", () => {
     ).toBe("true");
   });
 
-  it("animates only a working active Orb and stops when it becomes idle or archived", async () => {
+  it("passes working and idle activity to the Orb and keeps archived Orbs idle", async () => {
     const container = document.createElement("div");
     document.body.append(container);
     const root = createRoot(container);
@@ -90,8 +102,8 @@ describe("ThreadHeader", () => {
     expect(
       container
         .querySelector('[aria-label="Orb working"]')
-        ?.getAttribute("data-working-animation"),
-    ).toBe("inner-arc");
+        ?.getAttribute("data-activity-status"),
+    ).toBe("working");
 
     await React.act(() =>
       root.render(
@@ -103,8 +115,8 @@ describe("ThreadHeader", () => {
     expect(
       container
         .querySelector('[aria-label="Orb idle"]')
-        ?.getAttribute("data-working-animation"),
-    ).toBeNull();
+        ?.getAttribute("data-activity-status"),
+    ).toBe("idle");
 
     await React.act(() =>
       root.render(
@@ -120,8 +132,8 @@ describe("ThreadHeader", () => {
     expect(
       container
         .querySelector('[aria-label="Orb paused"]')
-        ?.getAttribute("data-working-animation"),
-    ).toBeNull();
+        ?.getAttribute("data-activity-status"),
+    ).toBe("idle");
     await React.act(() => root.unmount());
   });
 

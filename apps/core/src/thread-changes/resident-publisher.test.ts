@@ -15,7 +15,16 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./repository-d1.js", () => ({
   makeThreadChangesRepository: () => ({
-    acquireCapture: mocks.acquireCapture,
+    acquireCapture: async (threadId: unknown, durationMs: unknown) => {
+      // The real lease reads state and source in the same transaction.
+      const lease = await mocks.acquireCapture(threadId, durationMs);
+      if (lease === undefined) return undefined;
+      const [state, source] = await Promise.all([
+        mocks.read(threadId),
+        mocks.source(threadId),
+      ]);
+      return { ...lease, state, source };
+    },
     read: mocks.read,
     source: mocks.source,
     publish: mocks.publish,
@@ -128,46 +137,55 @@ describe("resident Thread Changes publication", () => {
     );
   });
 
-  it("emits invalidation only after the pointer commit and isolates emitter failure", async () => {
-    const onPublished = vi.fn(async () => {
+  it("notifies as soon as the pointer commits, before cleanup and lease release", async () => {
+    const deleteObject = vi.fn(async () => undefined);
+    const release = vi.fn(async () => undefined);
+    mocks.acquireCapture.mockResolvedValueOnce({ release });
+    const onCommitted = vi.fn(() => {
       expect(mocks.publish).toHaveBeenCalledOnce();
-      throw new Error("hub unavailable");
+      expect(deleteObject).not.toHaveBeenCalled();
+      expect(release).not.toHaveBeenCalled();
     });
 
     await expect(
       publishThreadChangesResidentCandidate({
         db: {} as D1Database,
-        bucket: { delete: vi.fn(async () => undefined) } as unknown as R2Bucket,
+        bucket: { delete: deleteObject } as unknown as R2Bucket,
         threadId,
         candidate: event({ kind: "complete", capture: content }),
-        onPublished,
+        onCommitted,
       }),
     ).resolves.toBe("published");
-    expect(onPublished).toHaveBeenCalledOnce();
+    expect(onCommitted).toHaveBeenCalledOnce();
+    expect(deleteObject).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
 
     mocks.publish.mockResolvedValue(false);
-    onPublished.mockClear();
+    onCommitted.mockClear();
     await expect(
       publishThreadChangesResidentCandidate({
         db: {} as D1Database,
         bucket: { delete: vi.fn(async () => undefined) } as unknown as R2Bucket,
         threadId,
         candidate: event({ kind: "complete", capture: content }),
-        onPublished,
+        onCommitted,
       }),
     ).resolves.toBe("raced");
-    expect(onPublished).not.toHaveBeenCalled();
+    expect(onCommitted).not.toHaveBeenCalled();
   });
 
   it("confirms unchanged only against the current generation, prior capture, and fingerprint", async () => {
+    const onCommitted = vi.fn();
     await expect(
       publishThreadChangesResidentCandidate({
         db: {} as D1Database,
         bucket: {} as R2Bucket,
         threadId,
         candidate: event({ kind: "unchanged", fingerprint }),
+        onCommitted,
       }),
     ).resolves.toBe("unchanged");
+    expect(onCommitted).toHaveBeenCalledOnce();
 
     expect(mocks.confirmUnchanged).toHaveBeenCalledExactlyOnceWith({
       threadId,
@@ -184,9 +202,11 @@ describe("resident Thread Changes publication", () => {
         bucket: {} as R2Bucket,
         threadId,
         candidate: event({ kind: "unchanged", fingerprint: "c".repeat(64) }),
+        onCommitted,
       }),
     ).resolves.toBe("raced");
     expect(mocks.confirmUnchanged).not.toHaveBeenCalled();
+    expect(onCommitted).toHaveBeenCalledOnce();
   });
 
   it("deletes the orphan and preserves the prior pointer when publication CAS loses", async () => {

@@ -7,6 +7,7 @@ import rehypeHighlight from "rehype-highlight";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { FileContextMenu } from "./file-context-menu.js";
+import { settledMarkdownBlocks } from "./markdown-blocks.js";
 import {
   MarkdownFileLinkContext,
   type MarkdownFileLinkResolver,
@@ -260,47 +261,95 @@ function MarkdownLink({
   );
 }
 
-export function RichMarkdown({ children }: { readonly children: string }) {
+// Stable across renders so react-markdown does not rebuild its processor
+// configuration on every parse.
+const remarkPlugins = [remarkGfm, remarkBreaks];
+const rehypePlugins: React.ComponentProps<
+  typeof ReactMarkdown
+>["rehypePlugins"] = [
+  [rehypeHighlight, { detect: false, ignoreMissing: true }],
+];
+const urlTransform = (url: string) =>
+  url.startsWith("file:///") || fileLineReference.test(url)
+    ? url
+    : safeUrl(url);
+
+const markdownComponents = (
+  resolveFile: MarkdownFileLinkResolver | undefined,
+): React.ComponentProps<typeof ReactMarkdown>["components"] => ({
+  a: ({ children: content, href }) => (
+    <MarkdownLink href={href} resolveFile={resolveFile}>
+      {content}
+    </MarkdownLink>
+  ),
+  img: ({ alt, src, title }) => (
+    <img
+      src={src}
+      alt={accessibleName(alt, "Markdown image")}
+      title={title}
+      loading="lazy"
+    />
+  ),
+  input: ({ node: _node, ...props }) => (
+    <input
+      {...props}
+      aria-label={props.checked ? "Completed task" : "Incomplete task"}
+    />
+  ),
+  pre: ({ children: content }) => <CodeBlock content={content} />,
+  table: ({ children: content }) => <MarkdownTable content={content} />,
+});
+
+/** One parsed Markdown document; memoized on its source text. */
+const MarkdownDocument = React.memo(function MarkdownDocument({
+  children,
+}: {
+  readonly children: string;
+}) {
   const resolveFile = React.useContext(MarkdownFileLinkContext);
+  const components = React.useMemo(
+    () => markdownComponents(resolveFile),
+    [resolveFile],
+  );
+  return (
+    <ReactMarkdown
+      remarkPlugins={remarkPlugins}
+      rehypePlugins={rehypePlugins}
+      skipHtml
+      urlTransform={urlTransform}
+      components={components}
+    >
+      {children}
+    </ReactMarkdown>
+  );
+});
+
+/**
+ * Parsing and highlighting is the dominant transcript cost. Memoize on the
+ * source text so a re-rendering parent never re-parses unchanged Markdown.
+ * While text is still streaming, parse only its unsettled tail: settled
+ * blocks keep their parsed output. Settled text renders as one document.
+ */
+export const RichMarkdown = React.memo(function RichMarkdown({
+  children,
+  streaming = false,
+}: {
+  readonly children: string;
+  readonly streaming?: boolean;
+}) {
+  const blocks = streaming ? settledMarkdownBlocks(children) : [children];
+  // Key each block by its source offset: settled blocks never move.
+  let offset = 0;
+  const keyed = blocks.map((block) => {
+    const start = offset;
+    offset += block.length + 1;
+    return { start, block };
+  });
   return (
     <div className="markdown transcript-markdown">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkBreaks]}
-        rehypePlugins={[
-          [rehypeHighlight, { detect: false, ignoreMissing: true }],
-        ]}
-        skipHtml
-        urlTransform={(url) =>
-          url.startsWith("file:///") || fileLineReference.test(url)
-            ? url
-            : safeUrl(url)
-        }
-        components={{
-          a: ({ children: content, href }) => (
-            <MarkdownLink href={href} resolveFile={resolveFile}>
-              {content}
-            </MarkdownLink>
-          ),
-          img: ({ alt, src, title }) => (
-            <img
-              src={src}
-              alt={accessibleName(alt, "Markdown image")}
-              title={title}
-              loading="lazy"
-            />
-          ),
-          input: ({ node: _node, ...props }) => (
-            <input
-              {...props}
-              aria-label={props.checked ? "Completed task" : "Incomplete task"}
-            />
-          ),
-          pre: ({ children: content }) => <CodeBlock content={content} />,
-          table: ({ children: content }) => <MarkdownTable content={content} />,
-        }}
-      >
-        {children}
-      </ReactMarkdown>
+      {keyed.map(({ start, block }) => (
+        <MarkdownDocument key={start}>{block}</MarkdownDocument>
+      ))}
     </div>
   );
-}
+});

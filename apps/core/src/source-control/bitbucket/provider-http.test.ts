@@ -1,6 +1,5 @@
 import { Redacted } from "effect";
 import { describe, expect, it, vi } from "vitest";
-import { SourceMutationRejected } from "../operations.js";
 import {
   BitbucketProviderError,
   createBitbucketProvider,
@@ -32,18 +31,6 @@ const repository = (suffix = "repo") => ({
     ],
   },
 });
-const pullRequest = (id = 7) => ({
-  id,
-  state: "OPEN",
-  title: `PR ${id}`,
-  description: "body",
-  links: {
-    html: { href: `https://bitbucket.org/space/repo/pull-requests/${id}` },
-  },
-  source: { branch: { name: "feature" } },
-  destination: { branch: { name: "main" } },
-});
-
 describe("Bitbucket provider HTTP boundary", () => {
   it("accepts mixed-case repository links with normalized identity", async () => {
     const data = repository("Repo");
@@ -117,14 +104,13 @@ describe("Bitbucket provider HTTP boundary", () => {
     ).rejects.toEqual(new BitbucketProviderError({ category: "unavailable" }));
   });
 
-  it("normalizes users, repositories, source commits, and pull requests", async () => {
+  it("normalizes users, repositories, and source commits", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(response({ uuid: workspaceId, nickname: "octo" }))
       .mockResolvedValueOnce(response(repository()))
       .mockResolvedValueOnce(response(repository()))
-      .mockResolvedValueOnce(response({ values: [{ hash: "a".repeat(40) }] }))
-      .mockResolvedValueOnce(response(pullRequest()));
+      .mockResolvedValueOnce(response({ values: [{ hash: "a".repeat(40) }] }));
     const provider = createBitbucketProvider(config, fetcher);
     expect(await provider.getUser("token")).toEqual({
       id: workspaceId,
@@ -142,17 +128,6 @@ describe("Bitbucket provider HTTP boundary", () => {
       (await provider.resolveRepositorySource("token", "space", "repo"))
         .commitSha,
     ).toBe("a".repeat(40));
-    expect(await provider.readPullRequest("token", "space", "repo", 7)).toEqual(
-      {
-        number: 7,
-        state: "OPEN",
-        title: "PR 7",
-        body: "body",
-        url: "https://bitbucket.org/space/repo/pull-requests/7",
-        head: "feature",
-        base: "main",
-      },
-    );
     expect(
       fetcher.mock.calls.every(
         ([, init]) =>
@@ -161,7 +136,7 @@ describe("Bitbucket provider HTTP boundary", () => {
     ).toBe(true);
   });
 
-  it("fully paginates permission repositories and pull requests while deduplicating", async () => {
+  it("fully paginates permission repositories while deduplicating", async () => {
     const secondRepository = {
       ...repository("two"),
       uuid: "{33333333-3333-4333-8333-333333333333}",
@@ -225,16 +200,7 @@ describe("Bitbucket provider HTTP boundary", () => {
       )
       .mockResolvedValueOnce(new Response("", { status: 403 }))
       .mockResolvedValueOnce(response(repository()))
-      .mockResolvedValueOnce(response(secondRepository))
-      .mockResolvedValueOnce(
-        response({
-          values: [pullRequest(1)],
-          next: "https://api.bitbucket.org/2.0/repositories/space/repo/pullrequests?page=2",
-        }),
-      )
-      .mockResolvedValueOnce(
-        response({ values: [pullRequest(1), pullRequest(2)] }),
-      );
+      .mockResolvedValueOnce(response(secondRepository));
     const provider = createBitbucketProvider(config, fetcher);
     expect(
       (await provider.listRepositories("token")).map((item) => item.fullName),
@@ -242,11 +208,6 @@ describe("Bitbucket provider HTTP boundary", () => {
     expect(fetcher.mock.calls[4]?.[0]).toBe(
       `https://api.bitbucket.org/2.0/repositories/${encodeURIComponent(workspaceId)}/${encodeURIComponent(repositoryId)}`,
     );
-    expect(
-      (await provider.listPullRequests("token", "space", "repo")).map(
-        (item) => item.number,
-      ),
-    ).toEqual([1, 2]);
   });
 
   it("hydrates repositories four at a time and preserves discovery order", async () => {
@@ -550,105 +511,5 @@ describe("Bitbucket provider HTTP boundary", () => {
         ),
       ).listRepositories("token"),
     ).rejects.toMatchObject({ category: "invalid-response" });
-  });
-
-  it("sends exact create and update payloads once", async () => {
-    const fetcher = vi
-      .fn<typeof fetch>()
-      .mockImplementation(async () => response(pullRequest()));
-    const provider = createBitbucketProvider(config, fetcher);
-    await provider.createPullRequest("token", "space", "repo", {
-      head: "feature",
-      base: "main",
-      title: "Title",
-      body: "Body",
-    });
-    await provider.updatePullRequest("token", "space", "repo", 7, {
-      title: "Changed",
-    });
-    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
-      title: "Title",
-      description: "Body",
-      source: { branch: { name: "feature" } },
-      destination: { branch: { name: "main" } },
-    });
-    expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toEqual({
-      title: "Changed",
-    });
-    expect(fetcher).toHaveBeenCalledTimes(2);
-  });
-
-  it.each(["create", "update"] as const)(
-    "rejects a one-over-limit outbound body before a %s request",
-    (action) => {
-      const providerLimit = 8_192;
-      const body = "😀".repeat(providerLimit + 1);
-      const fetcher = vi.fn<typeof fetch>();
-      const provider = createBitbucketProvider(config, fetcher);
-      expect([...body]).toHaveLength(8_193);
-      expect(body.length).toBe(16_386);
-
-      const write = () =>
-        action === "create"
-          ? provider.createPullRequest("token", "space", "repo", {
-              head: "feature",
-              base: "main",
-              title: "Title",
-              body,
-            })
-          : provider.updatePullRequest("token", "space", "repo", 7, {
-              body,
-            });
-
-      expect(write).toThrow(SourceMutationRejected);
-      expect(write).not.toThrow(BitbucketProviderError);
-      expect(fetcher).not.toHaveBeenCalled();
-    },
-  );
-
-  it("accepts exactly 8,192 Unicode code points rather than UTF-16 units or UTF-8 bytes", async () => {
-    const providerLimit = 8_192;
-    const body = "😀".repeat(providerLimit);
-    const fetcher = vi
-      .fn<typeof fetch>()
-      .mockImplementation(async () =>
-        response({ ...pullRequest(), description: body }),
-      );
-    const provider = createBitbucketProvider(config, fetcher);
-    expect([...body]).toHaveLength(8_192);
-    expect(body.length).toBe(16_384);
-    expect(new TextEncoder().encode(body).byteLength).toBe(32_768);
-
-    await expect(
-      provider.createPullRequest("token", "space", "repo", {
-        head: "feature",
-        base: "main",
-        title: "Title",
-        body,
-      }),
-    ).resolves.toMatchObject({ body });
-    expect(fetcher).toHaveBeenCalledOnce();
-    expect(
-      JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body)).description,
-    ).toBe(body);
-  });
-
-  it("keeps over-limit inbound descriptions classified as malformed provider responses", async () => {
-    const providerLimit = 8_192;
-    const body = "😀".repeat(providerLimit + 1);
-    expect([...body]).toHaveLength(8_193);
-    expect(body.length).toBe(16_386);
-    const provider = createBitbucketProvider(
-      config,
-      vi
-        .fn<typeof fetch>()
-        .mockResolvedValue(response({ ...pullRequest(), description: body })),
-    );
-
-    await expect(
-      provider.readPullRequest("token", "space", "repo", 7),
-    ).rejects.toEqual(
-      new BitbucketProviderError({ category: "invalid-response" }),
-    );
   });
 });

@@ -14,8 +14,9 @@ workspaces run in your E2B account. You need both accounts before deployment.
   Durable Objects. Workers AI is optional.
 - An E2B account and API key. E2B is mandatory for v0.1.0 agent workspaces.
 - Git, Node.js 22.19 or newer, and pnpm 9.15.
-- Docker only when the release cannot supply a compatible Linux x64 `dxd`
-  binary for your machine's deployment path.
+- Rust, zig (`pip install ziglang`), and `cargo install --locked
+  cargo-zigbuild` only when you build `dxd` locally instead of using the
+  release asset. No Docker is needed.
 
 Install the repository dependencies from a clean checkout:
 

@@ -1,4 +1,5 @@
 import { Dialog } from "@base-ui/react/dialog";
+import type { ThreadId } from "@dx/domain";
 import {
   useInfiniteQuery,
   useMutation,
@@ -102,6 +103,16 @@ export function ProductShell() {
     }
   }, [mobile, sidebarCollapsed, sidebarRef]);
 
+  // Stable: memoized sidebar rows receive these handlers.
+  const closeMobileSidebar = React.useCallback(
+    () => setMobileSidebarOpen(false),
+    [],
+  );
+  const pinThread = pinMutation.mutate;
+  const setThreadPinned = React.useCallback(
+    (threadId: ThreadId, pinned: boolean) => pinThread({ threadId, pinned }),
+    [pinThread],
+  );
   const sidebar = (
     <AppSidebar
       userId={identity.id}
@@ -112,7 +123,7 @@ export function ProductShell() {
       settingsContext={settingsQuery.data}
       onCollapse={toggleSidebar}
       collapseLabel={mobile ? "Close sidebar" : "Collapse sidebar"}
-      onNavigate={() => setMobileSidebarOpen(false)}
+      onNavigate={closeMobileSidebar}
       onOpenSearch={() => setThreadSearchOpen(true)}
       searchTriggerRef={sidebarSearchTriggerRef}
       onLoadMore={() => void threadsQuery.fetchNextPage()}
@@ -127,9 +138,7 @@ export function ProductShell() {
           ? threadsQuery.error.message
           : undefined
       }
-      onSetPinned={(threadId, pinned) =>
-        pinMutation.mutate({ threadId, pinned })
-      }
+      onSetPinned={setThreadPinned}
       pinningThreadId={
         pinMutation.isPending ? pinMutation.variables.threadId : undefined
       }

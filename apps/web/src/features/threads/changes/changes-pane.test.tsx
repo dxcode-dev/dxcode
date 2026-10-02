@@ -601,12 +601,17 @@ describe("Changes pane", () => {
     );
     await settle();
 
-    expect(container.textContent).toContain("Showing last saved capture");
+    expect(container.textContent).not.toContain("Showing last saved capture");
+    expect(
+      container.querySelector(
+        'button[aria-label="Updating changes"] .changes-spin',
+      ),
+    ).not.toBeNull();
     expect(buttonNamed(container, "Push")?.hasAttribute("disabled")).toBe(true);
     await React.act(() => root.unmount());
   });
 
-  it("rejects a diff from another capture and refreshes the list", async () => {
+  it("shows the newest capture's diff and refreshes the list behind it", async () => {
     const otherCaptureId =
       "chg_00000000-0000-4000-8000-000000000251" as ThreadChangesCaptureId;
     const transport: ChangesTransport = {
@@ -623,7 +628,7 @@ describe("Changes pane", () => {
           capturedAt: "2026-08-29T12:00:00.000Z",
           range,
           file,
-          patch: "+wrong capture\n",
+          patch: "+newer capture\n",
         };
       }),
       push: vi.fn<ChangesTransport["push"]>(),
@@ -649,11 +654,20 @@ describe("Changes pane", () => {
     await click(container.querySelector(".changes-file-trigger"));
     await settle();
 
-    expect(container.textContent).toContain(
-      "This diff belongs to a different Changes capture.",
-    );
-    expect(container.querySelector('[data-testid="code-view"]')).toBeNull();
+    expect(container.textContent).not.toContain("different Changes capture");
+    expect(container.querySelector('[data-testid="code-view"]')).not.toBeNull();
     expect(transport.getChanges).toHaveBeenCalledTimes(2);
+    expect(
+      queryClient.getQueryData([
+        "thread-changes",
+        threadId,
+        "diff",
+        { kind: "all" },
+        "primary",
+        "src/example.ts",
+        otherCaptureId,
+      ]),
+    ).toMatchObject({ patch: "+newer capture\n" });
     await React.act(() => root.unmount());
   });
 });

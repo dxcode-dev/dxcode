@@ -23,8 +23,8 @@ import {
   ThreadChangesFingerprint,
 } from "../../thread-changes/candidate.js";
 
-export const DXD_PROTOCOL_MAJOR = 1;
-export const DXD_RELEASE = "0.7.6";
+export const DXD_PROTOCOL_MAJOR = 2;
+export const DXD_RELEASE = "0.8.0";
 export const DXD_TERMINAL_VERSION = 1;
 export const DXD_WORKLOAD_IDENTITY_VERSION = 1;
 export const DXD_HEARTBEAT_INTERVAL_MS = 2_000;
@@ -88,6 +88,11 @@ export const DxdTerminalCapability = Schema.Struct({
   workloadIdentity: Schema.Struct({
     version: Schema.Literal(DXD_WORKLOAD_IDENTITY_VERSION),
   }),
+  /**
+   * Version 1: dxd sends a sandbox chunk as several `DXF1` frames and keeps
+   * only a few unacknowledged, so Core answers each frame with `chunk-ack`.
+   */
+  files: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
 });
 
 export const DxdTerminalHeartbeat = Schema.Union([
@@ -161,13 +166,49 @@ export const DxdChangesDirtyMessage = Schema.Struct({
   type: Schema.Literal("changes-dirty"),
 });
 
+/** A release the daemon reports; Core compares it with `DXD_RELEASE`. */
+export const DxdReleaseVersion = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(32),
+  Schema.isPattern(/^[A-Za-z0-9.-]+$/),
+);
+export type DxdReleaseVersion = typeof DxdReleaseVersion.Type;
+
+/**
+ * Registration carries no generation: the Durable Object assigns one in
+ * `registered`. A daemon on an older release is accepted when its protocol
+ * matches and is then told to update itself.
+ */
 export const DxdRegisterMessage = Schema.Struct({
   type: Schema.Literal("register"),
-  generation: DaemonGeneration,
   protocolMajor: Schema.Literal(DXD_PROTOCOL_MAJOR),
-  release: Schema.Literal(DXD_RELEASE),
+  release: DxdReleaseVersion,
   capabilities: DxdTerminalCapability,
 });
+
+export const DxdUpdateStatusMessage = Schema.Struct({
+  type: Schema.Literal("update-status"),
+  generation: DaemonGeneration,
+  release: DxdReleaseVersion,
+  status: Schema.Literals(["applying", "failed"]),
+});
+
+export const DxdUpdateMessage = Schema.Struct({
+  type: Schema.Literal("update"),
+  generation: DaemonGeneration,
+  url: Schema.String.check(
+    Schema.isMinLength(9),
+    Schema.isMaxLength(2_048),
+    Schema.isPattern(/^https:\/\//),
+  ),
+  sha256: Schema.String.check(
+    Schema.isMinLength(64),
+    Schema.isMaxLength(64),
+    Schema.isPattern(/^[0-9a-f]{64}$/),
+  ),
+  release: DxdReleaseVersion,
+});
+export type DxdUpdateMessage = typeof DxdUpdateMessage.Type;
 
 export const DxdHeartbeatMessage = Schema.Struct({
   type: Schema.Literal("heartbeat"),
@@ -585,11 +626,6 @@ export const DxdEnvironmentActivateOperation = Schema.Struct({
           Schema.isMaxLength(255),
           Schema.isPattern(/^https:\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?$/),
         ),
-        repository: Schema.String.check(
-          Schema.isMinLength(3),
-          Schema.isMaxLength(255),
-          Schema.isPattern(/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/),
-        ),
       }),
     ),
   }),
@@ -611,8 +647,57 @@ export const DxdEnvironmentActivateOperation = Schema.Struct({
 export type DxdEnvironmentActivateOperation =
   typeof DxdEnvironmentActivateOperation.Type;
 
+/**
+ * Digest-first activation: Core asks whether the daemon already applied this
+ * exact environment (entries and Git configuration) before sending it.
+ */
+export const DxdEnvironmentCheckOperation = Schema.Struct({
+  operation: Schema.Literal("environment.check"),
+  generation: Schema.Int.check(
+    Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  ),
+  digest: Schema.String.check(
+    Schema.isMinLength(64),
+    Schema.isMaxLength(64),
+    Schema.isPattern(/^[0-9a-f]{64}$/),
+  ),
+});
+export type DxdEnvironmentCheckOperation =
+  typeof DxdEnvironmentCheckOperation.Type;
+
+/** Must match `activation_digest` in `apps/dxd/src/environment.rs`. */
+export const environmentActivationDigest = async (
+  operation: Omit<DxdEnvironmentActivateOperation, "operation" | "generation">,
+): Promise<string> => {
+  let text = "dxd-environment-digest-v1\n";
+  for (const entry of operation.entries)
+    text += `${entry.name}=${entry.valueBase64Url}\n`;
+  text += `git.authorName=${operation.git.authorName}\n`;
+  text += `git.authorEmail=${operation.git.authorEmail}\n`;
+  text += `git.threadUrl=${operation.git.threadUrl}\n`;
+  text += `git.signingEnabled=${operation.git.signingEnabled ? "true" : "false"}\n`;
+  text += "git.bitbucketGateway=";
+  if (operation.git.bitbucketGateway !== undefined)
+    text += operation.git.bitbucketGateway.origin;
+  text += "\n";
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(text),
+  );
+  return [...new Uint8Array(digest)]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+};
+
 export const DxdEnvironmentActivateResult = Schema.Struct({
-  kind: Schema.Literals(["applied", "unchanged", "superseded", "unavailable"]),
+  kind: Schema.Literals([
+    "applied",
+    "unchanged",
+    "superseded",
+    "unavailable",
+    "missing",
+    "resume-timeout",
+  ]),
   generation: Schema.Int.check(
     Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
   ),
@@ -624,6 +709,7 @@ export type DxdEnvironmentActivateResult =
 export const DxdOperation = Schema.Union([
   DxdFilesOperation,
   DxdEnvironmentActivateOperation,
+  DxdEnvironmentCheckOperation,
 ]);
 export type DxdOperation = typeof DxdOperation.Type;
 
@@ -716,7 +802,8 @@ export type DxdSandboxChunkHeader = typeof DxdSandboxChunkHeader.Type;
 
 /**
  * A successful sandbox read never crosses the socket as JSON: dxd sends its
- * raw bytes in a binary `DXF1` frame. Only failures arrive as JSON results.
+ * raw bytes as one or more binary `DXF1` frames with consecutive offsets, and
+ * the Durable Object joins them. Only failures arrive as JSON results.
  */
 export type DxdFilesReadSandboxResult =
   | (Omit<DxdSandboxChunkHeader, "generation" | "requestId"> & {
@@ -828,10 +915,12 @@ export const DxdWorkloadIdentityRequestMessage = Schema.Struct({
         Schema.isMaxLength(255),
         Schema.isPattern(/^[A-Za-z0-9.-]+(?::[0-9]{1,5})?$/),
       ),
-      path: Schema.String.check(
-        Schema.isMinLength(1),
-        Schema.isMaxLength(512),
-        Schema.isPattern(/^[A-Za-z0-9._/-]+$/),
+      path: Schema.optional(
+        Schema.String.check(
+          Schema.isMinLength(1),
+          Schema.isMaxLength(512),
+          Schema.isPattern(/^[A-Za-z0-9._/-]+$/),
+        ),
       ),
     }),
   ]),
@@ -860,6 +949,7 @@ export const DxdClientControlMessage = Schema.Union([
   DxdRegisterMessage,
   DxdHeartbeatMessage,
   DxdChangesDirtyMessage,
+  DxdUpdateStatusMessage,
   Schema.Struct({
     type: Schema.Literal("readiness-pong"),
     generation: DaemonGeneration,
@@ -887,6 +977,11 @@ export const DxdHeartbeatAcknowledgedMessage = Schema.Struct({
   generation: DaemonGeneration,
 });
 
+/** Core received one `DXF1` frame from a daemon with `files` version 1. */
+export const DxdChunkAcknowledgedMessage = Schema.Struct({
+  type: Schema.Literal("chunk-ack"),
+});
+
 export const DxdRequestMessage = Schema.Struct({
   type: Schema.Literal("request"),
   generation: DaemonGeneration,
@@ -897,6 +992,7 @@ export const DxdRequestMessage = Schema.Struct({
 export const DxdServerMessage = Schema.Union([
   DxdRegisteredMessage,
   DxdHeartbeatAcknowledgedMessage,
+  DxdChunkAcknowledgedMessage,
   Schema.Struct({
     type: Schema.Literal("readiness-ping"),
     generation: DaemonGeneration,
@@ -905,16 +1001,19 @@ export const DxdServerMessage = Schema.Union([
   DxdChangesRefreshMessage,
   DxdRequestMessage,
   DxdWorkloadIdentityResponseMessage,
+  DxdUpdateMessage,
   DxdCoreTerminalControl,
 ]);
 
+/**
+ * The static daemon configuration installed in the guest once. It carries no
+ * generation, release, or protocol: those are negotiated on `register`, so
+ * Core never rewrites the file or restarts the daemon.
+ */
 export interface DxdRuntimeConfiguration {
-  readonly version: 1;
+  readonly version: 2;
   readonly endpoint: string;
   readonly threadId: string;
-  readonly generation: DaemonGeneration;
   readonly apiKey: string;
-  readonly release: typeof DXD_RELEASE;
-  readonly protocolMajor: typeof DXD_PROTOCOL_MAJOR;
   readonly workspaceRoot: string;
 }

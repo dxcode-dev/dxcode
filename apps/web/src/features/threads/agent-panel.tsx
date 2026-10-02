@@ -28,6 +28,7 @@ import {
   type PendingImageCollection,
 } from "./image-attachments.js";
 import { AttachmentMenu, ImagePreviews } from "./image-attachments-ui.js";
+import { useImageDropTarget } from "./image-drop-target.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
 import type {
   OptimisticThreadCreation,
@@ -37,6 +38,11 @@ import type {
 import { ThreadTranscript } from "./thread-transcript.js";
 import { TranscriptMarkdown } from "./transcript-markdown.js";
 import { deriveTranscriptViewModel } from "./transcript-view-model.js";
+import {
+  type PresentationValue,
+  usePresentationValue,
+  useThreadPresentationValue,
+} from "./use-thread-presentation.js";
 
 const emptyTranscript = deriveTranscriptViewModel({
   messages: [],
@@ -480,14 +486,13 @@ function AgentComposer({
   agentActive,
   stopAvailable,
   dictationAvailable,
-  draft,
+  draftValue,
   draftLocked,
   images,
   errorCard,
   dockRef,
   onAbort,
   onAddImages,
-  onChangeDraft,
   onRemoveImage,
   onSubmit,
   onTakeScreenshot,
@@ -496,26 +501,32 @@ function AgentComposer({
   readonly agentActive: boolean;
   readonly stopAvailable: boolean;
   readonly dictationAvailable: boolean;
-  readonly draft: string;
+  /** Only the composer subscribes, so typing never re-renders the transcript. */
+  readonly draftValue: PresentationValue<string>;
   readonly draftLocked: boolean;
   readonly images: ReadonlyArray<PendingImage>;
   readonly errorCard?: React.ReactNode;
   readonly dockRef: React.RefCallback<HTMLDivElement>;
   readonly onAbort: () => void;
   readonly onAddImages: (files: ReadonlyArray<File>) => void;
-  readonly onChangeDraft: (draft: string) => void;
   readonly onRemoveImage: (image: PendingImage) => void;
   readonly onSubmit: (draft: string) => void;
   readonly onTakeScreenshot: () => void;
   readonly ref: React.RefCallback<HTMLFormElement>;
 }) {
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const draft = usePresentationValue(draftValue);
+  const onChangeDraft = draftValue.set;
   const dictation = useDictation({
     enabled: dictationAvailable,
     locked: draftLocked,
     onChange: onChangeDraft,
     onSend: onSubmit,
     textareaRef,
+  });
+  const dropTarget = useImageDropTarget({
+    disabled: draftLocked,
+    onFiles: onAddImages,
   });
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -524,7 +535,12 @@ function AgentComposer({
   return (
     <div className="agent-composer-dock" ref={dockRef}>
       {errorCard}
-      <form className="agent-composer" onSubmit={submit} ref={ref}>
+      <form
+        className="agent-composer"
+        onSubmit={submit}
+        ref={ref}
+        {...dropTarget}
+      >
         <ImagePreviews
           images={images}
           onRemove={onRemoveImage}
@@ -593,7 +609,6 @@ function AgentComposer({
 
 function useAgentSubmission({
   agent,
-  draft,
   setDraft,
   images,
   setImages,
@@ -604,7 +619,6 @@ function useAgentSubmission({
   onSubmissionPendingChange,
 }: {
   readonly agent: UseFlueAgentResult;
-  readonly draft: string;
   readonly setDraft: (draft: string) => void;
   readonly images: ReadonlyArray<PendingImage>;
   readonly setImages: (images: ReadonlyArray<PendingImage>) => void;
@@ -644,7 +658,7 @@ function useAgentSubmission({
       submissionControl.stopRequested = true;
     await stopAgent();
   };
-  const submit = async (submittedDraft = draft) => {
+  const submit = async (submittedDraft: string) => {
     const message = submittedDraft.trim();
     if (
       submitInFlight.current ||
@@ -723,8 +737,7 @@ export function AgentPanel({
   active = true,
   additionalPanels,
   renderHeader,
-  draft: controlledDraft,
-  onDraftChange,
+  draft: ownerDraft,
   images: controlledImages,
   onImagesChange,
   imageCollection: retainedImageCollection,
@@ -753,8 +766,8 @@ export function AgentPanel({
   readonly renderHeader?: (
     model: ReturnType<typeof deriveTranscriptViewModel>,
   ) => React.ReactNode;
-  readonly draft?: string;
-  readonly onDraftChange?: (draft: string) => void;
+  /** The owner's draft; defaults to this Thread's retained composer draft. */
+  readonly draft?: PresentationValue<string>;
   readonly images?: ReadonlyArray<PendingImage>;
   readonly onImagesChange?: (images: ReadonlyArray<PendingImage>) => void;
   readonly imageCollection?: PendingImageCollection;
@@ -769,9 +782,8 @@ export function AgentPanel({
   readonly onInitialSubmissionObserved?: (submissionId: string) => void;
   readonly onOpenModelRouting?: () => void;
 }) {
-  const [localDraft, setLocalDraft] = React.useState("");
-  const draft = controlledDraft ?? localDraft;
-  const setDraft = onDraftChange ?? setLocalDraft;
+  const retainedDraft = useThreadPresentationValue("draft", "");
+  const draftValue = ownerDraft ?? retainedDraft;
   const [localImages, setLocalImages] = React.useState<
     ReadonlyArray<PendingImage>
   >([]);
@@ -795,8 +807,7 @@ export function AgentPanel({
     submit,
   } = useAgentSubmission({
     agent,
-    draft,
-    setDraft,
+    setDraft: draftValue.set,
     images,
     setImages,
     imageCollection,
@@ -809,11 +820,12 @@ export function AgentPanel({
     agent.status === "submitted" || agent.status === "streaming";
   const draftLocked = admissionPending || submissionPending;
   const stopAvailable = agentActive || admissionPending;
-  const model = deriveTranscriptViewModel({
-    messages: agent.messages,
-    settlements: agent.settlements,
-    finalOutputs: agent.finalOutputs,
-  });
+  // Derive only when Flue history changes, not on composer or layout state.
+  const { messages, settlements, finalOutputs } = agent;
+  const model = React.useMemo(
+    () => deriveTranscriptViewModel({ messages, settlements, finalOutputs }),
+    [messages, settlements, finalOutputs],
+  );
   const statusMessage =
     workspaceStatus ??
     (agent.status === "submitted" && !workspaceReady
@@ -960,14 +972,13 @@ export function AgentPanel({
             agentActive={agentActive}
             stopAvailable={stopAvailable}
             dictationAvailable={dictationAvailable}
-            draft={draft}
+            draftValue={draftValue}
             draftLocked={draftLocked}
             images={images}
             dockRef={composerDockRef}
             errorCard={errorCard}
             onAbort={() => void stop()}
             onAddImages={(files) => void addImages(files)}
-            onChangeDraft={setDraft}
             onRemoveImage={(image) => {
               setImages(imageCollection.remove(image.id));
             }}

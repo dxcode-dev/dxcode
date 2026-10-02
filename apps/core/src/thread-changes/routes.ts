@@ -303,11 +303,8 @@ threadChangesRoutes.get("/:threadId/changes/diff", async (context) => {
       capture.manifest === undefined
     )
       return error(context, "invalid");
-    if (
-      expectedCaptureId !== undefined &&
-      expectedCaptureId !== capture.manifest.captureId
-    )
-      return error(context, "conflict");
+    // A diff follows the newest capture, since publication retires older
+    // objects. The response names its capture so the client can see the move.
     const selected = capture.manifest.ranges.find((candidate) =>
       sameRange(candidate.range, range),
     );
@@ -316,7 +313,14 @@ threadChangesRoutes.get("/:threadId/changes/diff", async (context) => {
         candidate.path === path &&
         (candidate.worktree ?? "primary") === worktree,
     );
-    if (file === undefined) return error(context, "invalid");
+    if (file === undefined)
+      return error(
+        context,
+        expectedCaptureId !== undefined &&
+          expectedCaptureId !== capture.manifest.captureId
+          ? "conflict"
+          : "invalid",
+      );
     const { patch: _reference, ...fileMetadata } = file;
     const metadata = { ...fileMetadata, worktree };
     let patch: string;

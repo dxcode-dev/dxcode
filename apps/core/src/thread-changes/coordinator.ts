@@ -10,20 +10,16 @@ import {
 } from "./capture.js";
 import {
   makeThreadChangesRepository,
+  type ThreadChangesCaptureLease,
   type ThreadChangesMutationLease,
   ThreadChangesPersistenceUnavailable,
+  type ThreadChangesSource,
 } from "./repository-d1.js";
 
 const MUTATION_LEASE_MS = 2 * 60_000;
 const MUTATION_HEARTBEAT_MS = 30_000;
 const CAPTURE_LEASE_MS = 90_000;
 const BEST_EFFORT_RACE_ATTEMPTS = 2;
-
-export interface ThreadChangesTerminalObserver {
-  readonly beforeInput: () => Promise<void>;
-  readonly beforeSuspend: () => Promise<void>;
-  readonly close: () => void;
-}
 
 export interface ThreadChangesCoordinator {
   readonly sync: () => Promise<void>;
@@ -34,7 +30,6 @@ export interface ThreadChangesCoordinator {
     operation: () => Promise<A>,
     options?: { readonly detectUnchanged?: boolean },
   ) => Promise<A>;
-  readonly terminalObserver: () => ThreadChangesTerminalObserver;
 }
 
 type ThreadChangesRepository = ReturnType<typeof makeThreadChangesRepository>;
@@ -91,77 +86,60 @@ const refreshFor = async (
   };
 };
 
-const terminalObserverFor = (input: {
-  readonly repository: ThreadChangesRepository;
-  readonly threadId: ThreadId;
-  readonly afterRelease: (lease: ThreadChangesMutationLease) => Promise<void>;
-}): ThreadChangesTerminalObserver => {
-  let lease: ThreadChangesMutationLease | undefined;
-  let stopMaintainingLease: (() => Promise<void>) | undefined;
-  let tail = Promise.resolve();
-  const serialize = (operation: () => Promise<void>) => {
-    const next = tail.then(operation);
-    tail = next.catch(() => undefined);
-    return next;
-  };
-  const release = (settle: boolean) =>
-    serialize(async () => {
-      const current = lease;
-      const stopMaintaining = stopMaintainingLease;
-      lease = undefined;
-      stopMaintainingLease = undefined;
-      if (current === undefined) return;
-      await stopMaintaining?.().catch((cause) =>
-        logFailure(input.threadId, "terminal-mutation-stop", cause),
-      );
-      await current
-        .release()
-        .catch((cause) =>
-          logFailure(input.threadId, "terminal-mutation-release", cause),
-        );
-      if (settle) await input.afterRelease(current);
-    });
-  return {
-    beforeInput: () =>
-      serialize(async () => {
-        if (lease === undefined) {
-          lease = await input.repository.beginMutation(
-            input.threadId,
-            MUTATION_LEASE_MS,
-          );
-          stopMaintainingLease = maintainMutationLease(input.threadId, lease);
-        }
-      }).catch((cause) => logFailure(input.threadId, "terminal-input", cause)),
-    beforeSuspend: () =>
-      release(true).catch((cause) =>
-        logFailure(input.threadId, "terminal-suspend", cause),
-      ),
-    close() {
-      void release(false).catch((cause) =>
-        logFailure(input.threadId, "terminal-close", cause),
-      );
-    },
-  };
-};
+/** How long a resident hint may hold the capture lease for its candidate. */
+const RESIDENT_CAPTURE_HOLD_MS = 15_000;
+/** A held lease closer than this to expiry is not trusted for a publication. */
+const RESIDENT_CAPTURE_MARGIN_MS = 5_000;
 
-export const makeResidentThreadChangesTerminalObserver = (input: {
+/** A capture lease still safe to validate and publish under. */
+export const usableResidentCapture = (
+  capture: ThreadChangesCaptureLease | undefined,
+) =>
+  capture !== undefined &&
+  capture.expiresAt - Date.now() > RESIDENT_CAPTURE_MARGIN_MS;
+
+/**
+ * Answer a resident filesystem hint in one D1 batch: mark the projection
+ * dirty, mint (or record) the refresh token, and take or renew the capture
+ * lease with a state read taken after the mark. The candidate is validated
+ * against that read under the same lease before any R2 write; every later
+ * mutation bumps the generation the publication CAS checks. No mutation lease
+ * is held.
+ */
+export const markResidentThreadChangesDirty = async (input: {
   readonly db: D1Database;
   readonly threadId: ThreadId;
-  readonly residentRefresh: (refresh: DxdChangesRefresh) => Promise<boolean>;
-}) => {
-  const repository = makeThreadChangesRepository(input.db);
-  return terminalObserverFor({
-    repository,
-    threadId: input.threadId,
-    afterRelease: async (lease) => {
-      try {
-        const refresh = await refreshFor(repository, input.threadId, lease);
-        await input.residentRefresh(refresh);
-      } catch (cause) {
-        logFailure(input.threadId, "resident-refresh", cause);
-      }
+  readonly source: ThreadChangesSource;
+  /** A token the caller already sent; minted here when absent. */
+  readonly token?: string;
+  /** The lease an earlier hint still holds; renewed rather than replaced. */
+  readonly held?: ThreadChangesCaptureLease;
+}): Promise<{
+  readonly refresh: DxdChangesRefresh;
+  readonly capture?: ThreadChangesCaptureLease;
+}> => {
+  const marked = await makeThreadChangesRepository(input.db).markDirty(
+    input.threadId,
+    input.token,
+    {
+      holdCaptureMs: RESIDENT_CAPTURE_HOLD_MS,
+      ...(usableResidentCapture(input.held) ? { held: input.held } : {}),
     },
-  });
+  );
+  return {
+    refresh: {
+      type: "changes-refresh",
+      token: marked.refreshToken,
+      source: {
+        baseline: input.source.baseline,
+        defaultBranch: input.source.defaultBranch,
+      },
+      ...(marked.latestFingerprint === undefined
+        ? {}
+        : { expectedFingerprint: marked.latestFingerprint }),
+    },
+    ...(marked.capture === undefined ? {} : { capture: marked.capture }),
+  };
 };
 
 export const runResidentThreadChangesMutation = async <A>(input: {
@@ -220,10 +198,7 @@ export const makeThreadChangesCoordinator = (input: {
     );
     if (captureLease === undefined) return "busy" as const;
     try {
-      const [state, source] = await Promise.all([
-        repository.read(input.threadId),
-        repository.source(input.threadId),
-      ]);
+      const { state, source } = captureLease;
       if (source === undefined) return "missing" as const;
       if (state === undefined || state.activeMutations > 0)
         return "busy" as const;
@@ -379,14 +354,5 @@ export const makeThreadChangesCoordinator = (input: {
   const sync = () =>
     coordinateMutation(async () => undefined, { detectUnchanged: true }, true);
 
-  const terminalObserver = () =>
-    terminalObserverFor({
-      repository,
-      threadId: input.threadId,
-      afterRelease: async (lease) => {
-        if (!(await queueResidentRefresh(lease))) await flushBestEffort();
-      },
-    });
-
-  return { sync, flush, runMutation, terminalObserver };
+  return { sync, flush, runMutation };
 };

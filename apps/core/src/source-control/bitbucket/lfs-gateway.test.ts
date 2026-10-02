@@ -20,13 +20,8 @@ const lease = (
   thread_id: "thread",
   actor_user_id: "user",
   connection_id: "connection",
-  repository_id: "repository",
-  workspace_id: "workspace",
-  repository_name: "space/repo",
   authorization_epoch: 1,
-  binding_revision: 1,
   operation: "fetch",
-  target_branch: null,
   ...overrides,
 });
 
@@ -70,6 +65,7 @@ const invoke = (options: {
   request: Request;
   suffix?: string;
   currentLease?: BitbucketGitLease;
+  repositoryName?: string;
   db: D1Database;
   fetcher: typeof fetch;
 }) =>
@@ -78,6 +74,7 @@ const invoke = (options: {
     suffix: options.suffix ?? "/info/lfs/objects/batch",
     gatewayRepositoryUrl: gateway,
     lease: options.currentLease ?? lease(),
+    repositoryName: options.repositoryName ?? "space/repo",
     leaseToken,
     accessToken: token,
     db: options.db,
@@ -131,13 +128,24 @@ describe("Bitbucket LFS gateway", () => {
     );
     expect([...rows.values()][0]?.envelope_json).not.toContain("signed-secret");
 
+    const suffix = new URL(action.href).pathname.slice(
+      new URL(gateway).pathname.length,
+    );
+    // The same lease cannot replay the action under another repository.
+    await expect(
+      invoke({
+        db,
+        fetcher,
+        repositoryName: "space/other",
+        request: new Request(action.href),
+        suffix,
+      }),
+    ).rejects.toBeDefined();
     const objectResponse = await invoke({
       db,
       fetcher,
       request: new Request(action.href),
-      suffix: new URL(action.href).pathname.slice(
-        new URL(gateway).pathname.length,
-      ),
+      suffix,
     });
     expect(await objectResponse.text()).toBe("abc");
     expect(fetcher.mock.calls[1]?.[0]).toBe(
@@ -150,10 +158,7 @@ describe("Bitbucket LFS gateway", () => {
 
   it("proxies bounded upload and verify actions without forwarding browser headers", async () => {
     const { db } = database();
-    const push = lease({
-      operation: "contents-push",
-      target_branch: "feature",
-    });
+    const push = lease({ operation: "contents-push" });
     const fetcher = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -268,10 +273,7 @@ describe("Bitbucket LFS gateway", () => {
       invoke({
         db,
         fetcher,
-        currentLease: lease({
-          operation: "contents-push",
-          target_branch: "feature",
-        }),
+        currentLease: lease({ operation: "contents-push" }),
         request: batchRequest({
           operation: "upload",
           ref: { name: "refs/heads/main" },

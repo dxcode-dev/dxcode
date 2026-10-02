@@ -11,9 +11,9 @@ import {
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
+import type { ResolvedAppearance } from "../../../shared/theme/theme-store.js";
 import { threadKeys } from "../thread-queries.js";
 import type { ChangesTransport } from "./changes-api.js";
-import type { ResolvedAppearance } from "../../../shared/theme/theme-store.js";
 
 // FileDiff must mount after its bundled language and theme are ready.
 export const changesHighlightQueryOptions = (
@@ -103,10 +103,15 @@ export const changesDiffQueryOptions = (
           worktree,
         );
         if (diff.captureId !== captureId) {
-          await queryClient.invalidateQueries({
+          // The route follows the newest capture. Keep its diff for the
+          // list's next capture and refresh the list behind it.
+          queryClient.setQueryData(
+            changesKeys.diff(threadId, range, path, worktree, diff.captureId),
+            diff,
+          );
+          void queryClient.invalidateQueries({
             queryKey: changesKeys.range(threadId, range),
           });
-          throw new Error("This diff belongs to a different Changes capture.");
         }
         return diff;
       } catch (cause) {

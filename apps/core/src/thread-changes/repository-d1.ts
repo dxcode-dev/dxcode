@@ -63,6 +63,11 @@ export interface ThreadChangesMutationLease {
 }
 
 export interface ThreadChangesCaptureLease {
+  readonly token: string;
+  readonly expiresAt: number;
+  /** State and source read in the same transaction that took the lease. */
+  readonly state?: ThreadChangesState;
+  readonly source?: ThreadChangesSource;
   readonly release: () => Promise<void>;
 }
 
@@ -81,66 +86,104 @@ const ensureStateStatement = (
     )
     .bind(threadId, now);
 
+const decodeState = (raw: unknown): ThreadChangesState | undefined => {
+  if (raw === undefined || raw === null) return undefined;
+  const row = Schema.decodeUnknownSync(StateRowSchema)(raw);
+  return {
+    threadId: row.thread_id as ThreadId,
+    mutationGeneration: row.mutation_generation,
+    ...(row.latest_capture_id === null
+      ? {}
+      : {
+          latestCaptureId: row.latest_capture_id as ThreadChangesCaptureId,
+        }),
+    ...(row.latest_capture_generation === null
+      ? {}
+      : { latestCaptureGeneration: row.latest_capture_generation }),
+    ...(row.latest_fingerprint === null
+      ? {}
+      : { latestFingerprint: row.latest_fingerprint }),
+    ...(row.latest_captured_at === null
+      ? {}
+      : { latestCapturedAt: row.latest_captured_at }),
+    ...(row.dirty_since === null ? {} : { dirtySince: row.dirty_since }),
+    ...(row.summary_additions == null ||
+    row.summary_deletions == null ||
+    row.summary_files == null
+      ? {}
+      : {
+          summary: {
+            additions: row.summary_additions,
+            deletions: row.summary_deletions,
+            files: row.summary_files,
+          },
+        }),
+    ...(row.shadow_refresh_token === null
+      ? {}
+      : { refreshToken: row.shadow_refresh_token }),
+    activeMutations: row.active_mutations,
+  };
+};
+
+const decodeSource = (raw: unknown): ThreadChangesSource | undefined => {
+  if (raw === undefined || raw === null) return undefined;
+  const row = Schema.decodeUnknownSync(SourceRowSchema)(raw);
+  return {
+    baseline: row.initial_commit_sha,
+    defaultBranch: row.default_branch,
+    repositoryName: row.repository_full_name,
+  };
+};
+
 export const makeThreadChangesRepository = (db: D1Database) => {
+  const stateStatements = (threadId: ThreadId, now: number) => [
+    db
+      .prepare(
+        "DELETE FROM thread_changes_mutation_lease WHERE thread_id = ? AND expires_at <= ?",
+      )
+      .bind(threadId, now),
+    db
+      .prepare(
+        `SELECT state.*,
+                (SELECT count(*) FROM thread_changes_mutation_lease AS lease
+                  WHERE lease.thread_id = state.thread_id
+                    AND lease.expires_at > ?) AS active_mutations
+           FROM thread_changes_state AS state
+          WHERE state.thread_id = ?
+          LIMIT 1`,
+      )
+      .bind(now, threadId),
+  ];
+
+  const sourceStatement = (threadId: ThreadId) =>
+    db
+      .prepare(
+        `SELECT initial_commit_sha, default_branch, repository_full_name
+           FROM thread_source_snapshot
+          WHERE thread_id = ?
+          UNION ALL
+         SELECT ?, 'main', project.name
+           FROM threads AS thread
+           JOIN projects AS project ON project.id = thread.project_id
+          WHERE thread.id = ?
+            AND NOT EXISTS (
+              SELECT 1 FROM project_repository WHERE project_id = project.id
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM thread_source_snapshot WHERE thread_id = thread.id
+            )
+          LIMIT 1`,
+      )
+      .bind(threadId, EMPTY_TREE_SHA, threadId);
+
   const read = async (
     threadId: ThreadId,
   ): Promise<ThreadChangesState | undefined> => {
     try {
-      const now = Date.now();
-      await db
-        .prepare(
-          "DELETE FROM thread_changes_mutation_lease WHERE thread_id = ? AND expires_at <= ?",
-        )
-        .bind(threadId, now)
-        .run();
-      const raw = await db
-        .prepare(
-          `SELECT state.*,
-                  (SELECT count(*) FROM thread_changes_mutation_lease AS lease
-                    WHERE lease.thread_id = state.thread_id
-                      AND lease.expires_at > ?) AS active_mutations
-             FROM thread_changes_state AS state
-            WHERE state.thread_id = ?
-            LIMIT 1`,
-        )
-        .bind(now, threadId)
-        .first();
-      if (raw === null) return undefined;
-      const row = Schema.decodeUnknownSync(StateRowSchema)(raw);
-      return {
-        threadId: row.thread_id as ThreadId,
-        mutationGeneration: row.mutation_generation,
-        ...(row.latest_capture_id === null
-          ? {}
-          : {
-              latestCaptureId: row.latest_capture_id as ThreadChangesCaptureId,
-            }),
-        ...(row.latest_capture_generation === null
-          ? {}
-          : { latestCaptureGeneration: row.latest_capture_generation }),
-        ...(row.latest_fingerprint === null
-          ? {}
-          : { latestFingerprint: row.latest_fingerprint }),
-        ...(row.latest_captured_at === null
-          ? {}
-          : { latestCapturedAt: row.latest_captured_at }),
-        ...(row.dirty_since === null ? {} : { dirtySince: row.dirty_since }),
-        ...(row.summary_additions == null ||
-        row.summary_deletions == null ||
-        row.summary_files == null
-          ? {}
-          : {
-              summary: {
-                additions: row.summary_additions,
-                deletions: row.summary_deletions,
-                files: row.summary_files,
-              },
-            }),
-        ...(row.shadow_refresh_token === null
-          ? {}
-          : { refreshToken: row.shadow_refresh_token }),
-        activeMutations: row.active_mutations,
-      };
+      const [, selected] = await db.batch(
+        stateStatements(threadId, Date.now()),
+      );
+      return decodeState(selected?.results[0]);
     } catch (cause) {
       throw unavailable("thread-changes.state.read", cause);
     }
@@ -150,35 +193,82 @@ export const makeThreadChangesRepository = (db: D1Database) => {
     threadId: ThreadId,
   ): Promise<ThreadChangesSource | undefined> => {
     try {
-      const raw = await db
-        .prepare(
-          `SELECT initial_commit_sha, default_branch, repository_full_name
-             FROM thread_source_snapshot
-            WHERE thread_id = ?
-            UNION ALL
-           SELECT ?, 'main', project.name
-             FROM threads AS thread
-             JOIN projects AS project ON project.id = thread.project_id
-            WHERE thread.id = ?
-              AND NOT EXISTS (
-                SELECT 1 FROM project_repository WHERE project_id = project.id
-              )
-              AND NOT EXISTS (
-                SELECT 1 FROM thread_source_snapshot WHERE thread_id = thread.id
-              )
-            LIMIT 1`,
-        )
-        .bind(threadId, EMPTY_TREE_SHA, threadId)
-        .first();
-      if (raw === null) return undefined;
-      const row = Schema.decodeUnknownSync(SourceRowSchema)(raw);
-      return {
-        baseline: row.initial_commit_sha,
-        defaultBranch: row.default_branch,
-        repositoryName: row.repository_full_name,
-      };
+      return decodeSource(await sourceStatement(threadId).first());
     } catch (cause) {
       throw unavailable("thread-changes.source.read", cause);
+    }
+  };
+
+  /**
+   * Record a resident filesystem hint in one round trip: bump the generation,
+   * keep the oldest dirty time, and mint the only token a candidate may carry.
+   * No mutation lease is held, so the capture it requests can publish as
+   * complete once nothing else is mutating. With `holdCaptureMs` the same
+   * batch also takes (or renews `held`) the capture lease and reads the state
+   * after the mark, so the candidate can be validated without another trip.
+   */
+  const markDirty = async (
+    threadId: ThreadId,
+    refreshToken: string = crypto.randomUUID(),
+    hold?: {
+      readonly holdCaptureMs: number;
+      readonly held?: ThreadChangesCaptureLease;
+    },
+  ): Promise<{
+    readonly refreshToken: string;
+    readonly latestFingerprint?: string;
+    readonly capture?: ThreadChangesCaptureLease;
+  }> => {
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
+    const leaseToken = hold?.held?.token ?? crypto.randomUUID();
+    const expiresAt = nowMs + Math.max(1_000, hold?.holdCaptureMs ?? 0);
+    try {
+      const [, marked, leased, , state, source] = await db.batch([
+        ensureStateStatement(db, threadId, now),
+        db
+          .prepare(
+            `UPDATE thread_changes_state
+                SET mutation_generation = mutation_generation + 1,
+                    dirty_since = COALESCE(dirty_since, ?),
+                    shadow_refresh_token = ?,
+                    updated_at = ?
+              WHERE thread_id = ?
+          RETURNING latest_fingerprint`,
+          )
+          .bind(now, refreshToken, now, threadId),
+        ...(hold === undefined
+          ? []
+          : [
+              captureLeaseStatement(threadId, leaseToken, expiresAt, nowMs),
+              ...stateStatements(threadId, nowMs),
+              sourceStatement(threadId),
+            ]),
+      ]);
+      const row = marked?.results[0] as
+        | { readonly latest_fingerprint: string | null }
+        | undefined;
+      if (row === undefined) throw unavailable("thread-changes.mark-dirty");
+      return {
+        refreshToken,
+        ...(row.latest_fingerprint === null
+          ? {}
+          : { latestFingerprint: row.latest_fingerprint }),
+        ...(leased?.meta.changes === 1
+          ? {
+              capture: captureLease(
+                threadId,
+                leaseToken,
+                expiresAt,
+                state?.results[0],
+                source?.results[0],
+              ),
+            }
+          : {}),
+      };
+    } catch (cause) {
+      if (cause instanceof ThreadChangesPersistenceUnavailable) throw cause;
+      throw unavailable("thread-changes.mark-dirty", cause);
     }
   };
 
@@ -278,49 +368,81 @@ export const makeThreadChangesRepository = (db: D1Database) => {
     }
   };
 
+  const captureLeaseStatement = (
+    threadId: ThreadId,
+    token: string,
+    expiresAt: number,
+    now: number,
+  ) =>
+    db
+      .prepare(
+        `INSERT INTO thread_changes_capture_lease (
+           thread_id, lease_token, expires_at
+         ) VALUES (?, ?, ?)
+         ON CONFLICT(thread_id) DO UPDATE SET
+           lease_token = excluded.lease_token,
+           expires_at = excluded.expires_at
+         WHERE thread_changes_capture_lease.expires_at <= ?
+            OR thread_changes_capture_lease.lease_token = excluded.lease_token`,
+      )
+      .bind(threadId, token, expiresAt, now);
+
+  const captureLease = (
+    threadId: ThreadId,
+    token: string,
+    expiresAt: number,
+    state: unknown,
+    source: unknown,
+  ): ThreadChangesCaptureLease => {
+    let released = false;
+    const leased = decodeState(state);
+    const leasedSource = decodeSource(source);
+    return {
+      token,
+      expiresAt,
+      ...(leased === undefined ? {} : { state: leased }),
+      ...(leasedSource === undefined ? {} : { source: leasedSource }),
+      release: async () => {
+        if (released) return;
+        try {
+          await db
+            .prepare(
+              `DELETE FROM thread_changes_capture_lease
+                WHERE thread_id = ? AND lease_token = ?`,
+            )
+            .bind(threadId, token)
+            .run();
+          released = true;
+        } catch (cause) {
+          throw unavailable("thread-changes.capture.release", cause);
+        }
+      },
+    };
+  };
+
   const acquireCapture = async (
     threadId: ThreadId,
     durationMs: number,
   ): Promise<ThreadChangesCaptureLease | undefined> => {
     const token = crypto.randomUUID();
     const now = Date.now();
+    const expiresAt = now + Math.max(1_000, durationMs);
     try {
-      await ensureStateStatement(
-        db,
+      // One round trip: take the lease and read what the holder validates.
+      const [, result, , state, source] = await db.batch([
+        ensureStateStatement(db, threadId, new Date(now).toISOString()),
+        captureLeaseStatement(threadId, token, expiresAt, now),
+        ...stateStatements(threadId, now),
+        sourceStatement(threadId),
+      ]);
+      if (result?.meta.changes !== 1) return undefined;
+      return captureLease(
         threadId,
-        new Date(now).toISOString(),
-      ).run();
-      const result = await db
-        .prepare(
-          `INSERT INTO thread_changes_capture_lease (
-             thread_id, lease_token, expires_at
-           ) VALUES (?, ?, ?)
-           ON CONFLICT(thread_id) DO UPDATE SET
-             lease_token = excluded.lease_token,
-             expires_at = excluded.expires_at
-           WHERE thread_changes_capture_lease.expires_at <= ?`,
-        )
-        .bind(threadId, token, now + Math.max(1_000, durationMs), now)
-        .run();
-      if (result.meta.changes !== 1) return undefined;
-      let released = false;
-      return {
-        release: async () => {
-          if (released) return;
-          try {
-            await db
-              .prepare(
-                `DELETE FROM thread_changes_capture_lease
-                  WHERE thread_id = ? AND lease_token = ?`,
-              )
-              .bind(threadId, token)
-              .run();
-            released = true;
-          } catch (cause) {
-            throw unavailable("thread-changes.capture.release", cause);
-          }
-        },
-      };
+        token,
+        expiresAt,
+        state?.results[0],
+        source?.results[0],
+      );
     } catch (cause) {
       throw unavailable("thread-changes.capture.acquire", cause);
     }
@@ -423,6 +545,7 @@ export const makeThreadChangesRepository = (db: D1Database) => {
   return {
     read,
     source,
+    markDirty,
     beginMutation,
     acquireCapture,
     publish,

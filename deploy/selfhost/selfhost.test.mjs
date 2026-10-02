@@ -6,7 +6,14 @@ import {
   preflightCloudflareDeployment,
 } from "./cloudflare-auth.mjs";
 import { validateSelfhostConfig } from "./config.mjs";
-import { downloadDxdRelease, verifyDxdBytes } from "./dxd-release.mjs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  downloadDxdRelease,
+  loadDxdRelease,
+  verifyDxdBytes,
+} from "./dxd-release.mjs";
 import { hashE2BRecipe, reconcileE2BProfiles } from "./e2b.mjs";
 
 describe("exportable self-host configuration", () => {
@@ -349,6 +356,42 @@ describe("E2B profile reconciliation", () => {
 });
 
 describe("dxd release integrity", () => {
+  it("refuses a recorded dxd older than the revision's dxd", () => {
+    const root = mkdtempSync(join(tmpdir(), "dxd-release-"));
+    mkdirSync(join(root, "deploy"));
+    mkdirSync(join(root, "apps/dxd"), { recursive: true });
+    const record = (dxd) =>
+      writeFileSync(
+        join(root, "deploy/RELEASE.json"),
+        JSON.stringify({
+          version: 1,
+          release: "v0.1.2",
+          dxd,
+          platform: "linux-x64",
+          asset: "dxd-linux-x64",
+          url: "https://github.com/o/r/releases/download/v0.1.2/dxd-linux-x64",
+          sha256: "a".repeat(64),
+        }),
+      );
+    writeFileSync(
+      join(root, "apps/dxd/Cargo.toml"),
+      '[package]\nname = "dxd"\nversion = "0.8.0"\n',
+    );
+    record(undefined);
+    expect(() => loadDxdRelease(root)).toThrow(
+      "does not describe one exact Linux x64 dxd asset",
+    );
+    record("0.7.6");
+    expect(() => loadDxdRelease(root)).toThrow(
+      "names dxd 0.7.6, but this revision is dxd 0.8.0",
+    );
+    record("0.8.0");
+    expect(loadDxdRelease(root)).toMatchObject({
+      release: "v0.1.2",
+      dxd: "0.8.0",
+    });
+  });
+
   it("downloads public assets anonymously", async () => {
     const fetcher = vi.fn(async () => new Response("public-dxd"));
     await expect(

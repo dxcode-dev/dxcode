@@ -73,6 +73,12 @@ export const ThreadTerminalBrowserControlSchema = Schema.Union([
   }),
   Schema.Struct({ v: Schema.Literal(1), type: Schema.Literal("restart") }),
   Schema.Struct({ v: Schema.Literal(1), type: Schema.Literal("detach") }),
+  /**
+   * A present browser missed the daemon's liveness, or wants a waiting
+   * attachment back. Core proves the daemon live (answering `heartbeat`) or
+   * fences it and wakes the workspace on this same socket.
+   */
+  Schema.Struct({ v: Schema.Literal(1), type: Schema.Literal("recover") }),
 ]);
 export type ThreadTerminalBrowserControl =
   typeof ThreadTerminalBrowserControlSchema.Type;

@@ -35,6 +35,12 @@ export const bitbucketCommandEnvironment = (
   });
 };
 
+/**
+ * Leases authorize the Thread owner's Bitbucket connection. The gateway takes
+ * the repository from each request path and Bitbucket decides access, so a
+ * native Git lease reaches every repository the owner can reach. Trusted dx
+ * commands still recheck the Thread source before operating on it.
+ */
 export const bitbucketRuntimeBroker = (
   db: D1Database,
   bindings: Bindings,
@@ -55,21 +61,35 @@ export const bitbucketRuntimeBroker = (
             )
           )
             throw sourceAccessDenied("unsupported-capability", "reconfigure");
-          const authority = await readBitbucketThreadAuthority(
-            db,
-            threadId,
-            actorUserId,
-          );
+          const origin = new URL(bindings.DX_AUTH_URL as string).origin;
+          if (!origin.startsWith("https://"))
+            throw sourceAccessDenied("provider-disabled", "reconfigure");
+          const native = request.invocationSource === "git-helper";
+          const authority = native
+            ? undefined
+            : await readBitbucketThreadAuthority(db, threadId, actorUserId);
           if (
+            authority !== undefined &&
             targetRepositoryId !== undefined &&
             targetRepositoryId !== authority.providerRepositoryId
           )
             throw sourceAccessDenied("repository-not-selected", "rebind");
+          if (
+            native &&
+            (await db
+              .prepare(
+                "SELECT 1 AS live FROM threads WHERE id = ? AND owner_user_id = ? AND lifecycle_state = 'active'",
+              )
+              .bind(threadId, actorUserId)
+              .first()) === null
+          )
+            throw sourceAccessDenied("source-not-found", "retry");
           const service = await bitbucketControlPlaneFor(db, bindings);
-          await service.withConnection(
+          const connection = await service.withConnection(
             actorUserId,
-            authority.grantId,
+            authority?.grantId,
             async (token, row, provider) => {
+              if (authority === undefined) return row;
               if (row.authorization_epoch !== authority.authorizationEpoch)
                 throw sourceAccessDenied("stale-authorization-epoch", "retry");
               const repository = await provider.getRepository(
@@ -82,14 +102,15 @@ export const bitbucketRuntimeBroker = (
                 repository.fullName !== authority.repositoryName
               )
                 throw sourceAccessDenied("stale-binding", "rebind");
+              return row;
             },
           );
-          const after = await readBitbucketThreadAuthority(
-            db,
-            threadId,
-            actorUserId,
-          );
-          if (JSON.stringify(after) !== JSON.stringify(authority))
+          if (
+            authority !== undefined &&
+            JSON.stringify(
+              await readBitbucketThreadAuthority(db, threadId, actorUserId),
+            ) !== JSON.stringify(authority)
+          )
             throw sourceAccessDenied("stale-authorization-epoch", "retry");
           const token = crypto.randomUUID() + crypto.randomUUID();
           const id = await hashOAuthState(token);
@@ -98,34 +119,32 @@ export const bitbucketRuntimeBroker = (
               .prepare("DELETE FROM bitbucket_git_lease WHERE expires_at <= ?")
               .bind(new Date().toISOString()),
             db
-              .prepare(`INSERT INTO bitbucket_git_lease (id_hash,thread_id,actor_user_id,connection_id,repository_id,workspace_id,repository_name,authorization_epoch,binding_revision,operation,target_branch,expires_at,created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+              .prepare(`INSERT INTO bitbucket_git_lease (id_hash,thread_id,actor_user_id,connection_id,authorization_epoch,operation,expires_at,created_at)
+            VALUES (?,?,?,?,?,?,?,?)`)
               .bind(
                 id,
                 threadId,
                 actorUserId,
-                authority.grantId,
-                authority.providerRepositoryId,
-                authority.providerWorkspaceId,
-                authority.repositoryName,
-                authority.authorizationEpoch,
-                authority.bindingRevision,
+                connection.id,
+                connection.authorization_epoch,
                 request.operation,
-                request.targetBranch ?? null,
                 new Date(Date.now() + 180_000).toISOString(),
                 new Date().toISOString(),
               ),
           ]);
-          const origin = new URL(bindings.DX_AUTH_URL as string).origin;
-          if (!origin.startsWith("https://"))
-            throw sourceAccessDenied("provider-disabled", "reconfigure");
           return {
             id,
-            environment: bitbucketCommandEnvironment(
-              origin,
-              token,
-              authority.repositoryName,
-            ),
+            environment:
+              authority === undefined
+                ? Object.freeze({
+                    DX_SOURCE_PROVIDER: "bitbucket",
+                    DX_BITBUCKET_GIT_TOKEN: token,
+                  })
+                : bitbucketCommandEnvironment(
+                    origin,
+                    token,
+                    authority.repositoryName,
+                  ),
           };
         },
         catch: mapBitbucketSourceError,

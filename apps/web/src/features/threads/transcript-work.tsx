@@ -1,9 +1,11 @@
 import { ChevronRight } from "lucide-react";
-import type * as React from "react";
+import * as React from "react";
 import { TranscriptActivityList } from "./transcript-activities.js";
-import type {
-  TranscriptRow,
-  TranscriptTurn as TranscriptTurnModel,
+import {
+  sameTranscriptRows,
+  sameTranscriptTurn,
+  type TranscriptRow,
+  type TranscriptTurn as TranscriptTurnModel,
 } from "./transcript-view-model.js";
 import { useThreadPresentation } from "./use-thread-presentation.js";
 
@@ -17,19 +19,36 @@ const formatDuration = (durationMs: number | undefined) => {
   return `${minutes} minute${minutes === 1 ? "" : "s"}`;
 };
 
-export function TranscriptTurn({
-  turn,
-  rows,
-  renderRow,
-  processing = turn.status === "active",
-  defaultWorkExpanded = false,
-}: {
+interface TranscriptTurnProps {
   readonly turn: TranscriptTurnModel;
   readonly rows: ReadonlyArray<TranscriptRow>;
   readonly renderRow: (row: TranscriptRow) => React.ReactNode;
   readonly processing?: boolean;
   readonly defaultWorkExpanded?: boolean;
-}) {
+}
+
+/**
+ * A settled turn renders identically across stream chunks, scrolling, typing,
+ * and layout changes. Compare its content, not the identity of a fresh
+ * derivation, so only the turn that actually changed re-renders.
+ */
+export const TranscriptTurn = React.memo(
+  TranscriptTurnContent,
+  (previous: TranscriptTurnProps, next: TranscriptTurnProps) =>
+    previous.renderRow === next.renderRow &&
+    previous.processing === next.processing &&
+    previous.defaultWorkExpanded === next.defaultWorkExpanded &&
+    sameTranscriptTurn(previous.turn, next.turn) &&
+    sameTranscriptRows(previous.rows, next.rows),
+);
+
+function TranscriptTurnContent({
+  turn,
+  rows,
+  renderRow,
+  processing = turn.status === "active",
+  defaultWorkExpanded = false,
+}: TranscriptTurnProps) {
   const [workExpanded, setWorkExpanded] = useThreadPresentation(
     `work:${turn.id}`,
     defaultWorkExpanded,

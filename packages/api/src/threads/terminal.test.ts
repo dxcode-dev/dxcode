@@ -19,7 +19,7 @@ describe("Thread Terminal browser protocol v1", () => {
     expect(THREAD_TERMINAL_ATTACHMENT_LIMIT).toBe(8);
   });
 
-  it("accepts the attach, resize, and detach subset", () => {
+  it("accepts the attach, resize, detach, and recover subset", () => {
     for (const control of [
       {
         v: 1,
@@ -36,6 +36,7 @@ describe("Thread Terminal browser protocol v1", () => {
       },
       { v: 1, type: "resize", dimensions: { columns: 1_000, rows: 1 } },
       { v: 1, type: "detach" },
+      { v: 1, type: "recover" },
     ])
       expect(
         Schema.decodeUnknownSync(ThreadTerminalBrowserControlSchema)(

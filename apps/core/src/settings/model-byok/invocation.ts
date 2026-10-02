@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
-import type { StoredModelConnection } from "@dx/domain";
-import { Effect } from "effect";
+import { type StoredModelConnection, ThreadModelSelection } from "@dx/domain";
+import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
+import { Effect, Schema } from "effect";
 import {
   isPublicIpAddress,
   parseIpv4,
@@ -25,6 +26,7 @@ import {
 import { validateAllowedModelEndpoint } from "../model-routing/endpoint-policy.js";
 import {
   connectionModel,
+  resolveRouteSubmission,
   resolveThreadSubmission,
   type SubmissionRoute,
   withEffectiveContextWindow,
@@ -40,6 +42,7 @@ import {
   readSubmissionUsageAttribution,
   storeSubmissionUsageAttribution,
 } from "../usage/submission-attribution.js";
+import { PROXY_STREAM } from "./flue-provider.js";
 import {
   decodeProxyEnvelope,
   PROXY_ENVELOPE_HEADER,
@@ -114,6 +117,60 @@ interface CheckEnvelope {
   readonly connectionId: string;
 }
 
+/**
+ * Unpinned one-shot completion, e.g. the thread title. It may run before the
+ * Thread row exists, so the Worker supplies the authenticated owner and the
+ * requested model selection.
+ */
+interface CompleteEnvelope {
+  readonly threadId: string;
+  readonly ownerUserId: string;
+  readonly selection: ThreadModelSelection;
+  readonly systemPrompt: string;
+  readonly message: string;
+  readonly maxTokens: number;
+}
+
+const isCompleteEnvelope = (value: unknown): value is CompleteEnvelope => {
+  const envelope = value as Partial<CompleteEnvelope> | null;
+  return (
+    typeof envelope?.threadId === "string" &&
+    envelope.threadId !== "" &&
+    typeof envelope.ownerUserId === "string" &&
+    envelope.ownerUserId !== "" &&
+    Schema.is(ThreadModelSelection)(envelope.selection) &&
+    typeof envelope.systemPrompt === "string" &&
+    typeof envelope.message === "string" &&
+    envelope.message !== "" &&
+    Number.isInteger(envelope.maxTokens) &&
+    (envelope.maxTokens ?? 0) > 0
+  );
+};
+
+const COMPLETE_TIMEOUT_MS = 25_000;
+
+const completionRequest = (envelope: CompleteEnvelope) =>
+  JSON.stringify([
+    envelope.ownerUserId,
+    envelope.selection,
+    envelope.systemPrompt,
+    envelope.message,
+    envelope.maxTokens,
+  ]);
+
+/** Final assistant message from the adapter NDJSON relayed by `/stream`. */
+const finalStreamEvent = async (
+  response: Response,
+): Promise<AssistantMessageEvent | undefined> => {
+  let final: AssistantMessageEvent | undefined;
+  for (const line of (await response.text()).split("\n")) {
+    if (line.trim() === "") continue;
+    const event = JSON.parse(line) as AssistantMessageEvent;
+    if (event.type === "done" || event.type === "error") final = event;
+  }
+  return final;
+};
+
 const canonicalParts = (canonical: string) => {
   const slash = canonical.indexOf("/");
   return {
@@ -151,6 +208,20 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
   #runtime: Promise<CopilotRuntime> | undefined;
   #keyring: Promise<ConfigEncryptionKeyring> | undefined;
   #refresh: Promise<void> | undefined;
+  /**
+   * One title completion per Thread; concurrent creations share this DO. Only
+   * an identical request (a double-submitted creation) joins the call.
+   */
+  readonly #completing = new Map<
+    string,
+    {
+      readonly request: string;
+      readonly result: Promise<{
+        readonly status: number;
+        readonly body: unknown;
+      }>;
+    }
+  >();
   /** DO storage caches reads and preserves the snapshot on eviction. */
   async #readPin(submissionId: string) {
     const key = submissionRouteKey(submissionId);
@@ -384,6 +455,16 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       envelope.submissionId,
       envelope.canonical,
     );
+    return this.#proxyWithPin(pin, envelope, request, signal, routingStarted);
+  }
+
+  async #proxyWithPin(
+    pin: PinnedSubmission,
+    envelope: ProxyEnvelope,
+    request: Request,
+    signal: AbortSignal,
+    routingStarted: number,
+  ) {
     const { connection } = pin;
 
     if (connection.kind === "subscription") {
@@ -628,6 +709,14 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       envelope.submissionId,
       envelope.canonical,
     );
+    return this.#streamWithPin(pin, envelope, signal);
+  }
+
+  async #streamWithPin(
+    pin: PinnedSubmission,
+    envelope: StreamEnvelope,
+    signal: AbortSignal,
+  ) {
     const { connection } = pin;
     if (connection.kind !== "provider" && connection.kind !== "deployment") {
       return jsonResponse({ code: "UNSUPPORTED_IN_DO_CONNECTION" }, 400);
@@ -742,6 +831,174 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       status: 200,
       headers: { "content-type": "application/x-ndjson" },
     });
+  }
+
+  /**
+   * One-shot, tool-free completion for background thread metadata (the
+   * title). It resolves the owner's route like a new submission,
+   * then reuses the pinned transports without storing a pin or usage
+   * attribution and without `blockConcurrencyWhile`, so it never delays the
+   * agent's own `/resolve`. Thinking effort is low for every model.
+   */
+  async #handleComplete(
+    envelope: CompleteEnvelope,
+    requestSignal: AbortSignal,
+  ) {
+    const joined = await this.#joinCompletion(envelope);
+    if (joined !== undefined) return joined;
+    // The row may not exist yet; once it does, only its owner may title it.
+    const owner = await this.#db()
+      .prepare("SELECT owner_user_id FROM threads WHERE id = ?")
+      .bind(envelope.threadId)
+      .first<string>("owner_user_id");
+    if (owner !== null && owner !== envelope.ownerUserId)
+      return jsonResponse({ code: "THREAD_OWNER_MISMATCH" }, 403);
+    const rejoined = await this.#joinCompletion(envelope);
+    if (rejoined !== undefined) return rejoined;
+    const result = this.#complete(envelope, requestSignal).then(
+      async (response) => ({
+        status: response.status,
+        body: await response
+          .json()
+          .catch(() => ({ code: "COMPLETION_FAILED" })),
+      }),
+    );
+    this.#completing.set(envelope.threadId, {
+      request: completionRequest(envelope),
+      result,
+    });
+    try {
+      const { status, body } = await result;
+      return jsonResponse(body, status);
+    } finally {
+      this.#completing.delete(envelope.threadId);
+    }
+  }
+
+  async #joinCompletion(envelope: CompleteEnvelope) {
+    const inFlight = this.#completing.get(envelope.threadId);
+    if (inFlight === undefined) return undefined;
+    if (inFlight.request !== completionRequest(envelope))
+      return jsonResponse({ code: "COMPLETION_IN_FLIGHT" }, 409);
+    const { status, body } = await inFlight.result;
+    return jsonResponse(body, status);
+  }
+
+  async #complete(envelope: CompleteEnvelope, requestSignal: AbortSignal) {
+    const started = performance.now();
+    const signal = AbortSignal.any([
+      requestSignal,
+      AbortSignal.timeout(COMPLETE_TIMEOUT_MS),
+    ]);
+    const route = await resolveRouteSubmission(
+      this.env,
+      {
+        threadId: envelope.threadId,
+        ownerUserId: envelope.ownerUserId,
+        selection: envelope.selection,
+      },
+      `complete:${crypto.randomUUID()}`,
+    );
+    this.#validateEndpoint(route.connection);
+    const credential = await loadConnectionCredential(
+      this.#db(),
+      route.connection,
+    );
+    if (route.connection.credentialId !== undefined && credential === undefined)
+      throw new Error("CREDENTIAL_UNAVAILABLE");
+    const pin: PinnedSubmission = { ...route, credential };
+    const canonical = `${route.model.provider}/${route.model.id}`;
+    // Low effort is supported across the catalog, unlike "off" (GLM 5.3 Flash).
+    const reasoning = "low";
+    const context = {
+      systemPrompt: envelope.systemPrompt,
+      messages: [
+        { role: "user", content: envelope.message, timestamp: Date.now() },
+      ],
+      tools: [],
+    };
+    let final: AssistantMessageEvent | undefined;
+    if (
+      IN_DO_APIS.has(route.model.api) ||
+      route.connection.kind === "deployment"
+    ) {
+      const response = await this.#streamWithPin(
+        pin,
+        {
+          threadId: pin.threadId,
+          submissionId: pin.submissionId,
+          canonical,
+          context,
+          options: { maxTokens: envelope.maxTokens, reasoning },
+        },
+        signal,
+      );
+      if (!response.ok) return response;
+      final = await finalStreamEvent(response);
+    } else {
+      const loadAdapter = PROXY_STREAM[route.model.api];
+      if (loadAdapter === undefined)
+        return jsonResponse({ code: "UNSUPPORTED_WIRE_API" }, 400);
+      const adapter = await loadAdapter();
+      const proxyFetch: typeof fetch = async (input, init) => {
+        const request = new Request(input, init);
+        return this.#proxyWithPin(
+          pin,
+          {
+            threadId: pin.threadId,
+            submissionId: pin.submissionId,
+            canonical,
+            request: {
+              url: request.url,
+              method: request.method,
+              headers: Object.fromEntries(request.headers.entries()),
+            },
+          },
+          request,
+          signal,
+          performance.now(),
+        );
+      };
+      for await (const event of adapter.streamSimple(route.model, context, {
+        maxTokens: envelope.maxTokens,
+        reasoning,
+        maxRetries: 0,
+        timeoutMs: COMPLETE_TIMEOUT_MS,
+        apiKey: "dx-placeholder",
+        signal,
+        fetch: proxyFetch,
+      })) {
+        if (event.type === "done" || event.type === "error") final = event;
+      }
+    }
+    if (final?.type !== "done") {
+      settingsPersistenceLogger.warn("One-shot completion failed.", {
+        event: "model_one_shot_failed",
+        threadId: pin.threadId,
+        connectionId: pin.connection.id,
+        model: canonical,
+        error: final?.type === "error" ? final.error.errorMessage : undefined,
+      });
+      return jsonResponse({ code: "COMPLETION_FAILED" }, 502);
+    }
+    // Not recorded in the usage ledger; this log is its only accounting.
+    settingsPersistenceLogger.info("One-shot completion finished.", {
+      event: "model_one_shot_completed",
+      threadId: pin.threadId,
+      connectionId: pin.connection.id,
+      model: canonical,
+      inputTokens: final.message.usage.input,
+      outputTokens: final.message.usage.output,
+      durationMs: Math.round(performance.now() - started),
+    });
+    return jsonResponse(
+      {
+        text: final.message.content
+          .flatMap((block) => (block.type === "text" ? [block.text] : []))
+          .join(""),
+      },
+      200,
+    );
   }
 
   async #handleCheck(envelope: CheckEnvelope) {
@@ -970,6 +1227,10 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
           );
         case "/check":
           return await this.#handleCheck(envelope as CheckEnvelope);
+        case "/complete":
+          return isCompleteEnvelope(envelope)
+            ? await this.#handleComplete(envelope, request.signal)
+            : jsonResponse({ code: "INVALID_REQUEST" }, 400);
         default:
           return jsonResponse({ code: "NOT_FOUND" }, 404);
       }

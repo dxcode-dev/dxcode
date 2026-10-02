@@ -32,6 +32,7 @@ describe("request logging middleware", () => {
       route: "/items/:id",
       status: 200,
       durationMs: expect.any(Number),
+      isolateRequest: expect.any(Number),
     });
     expect(JSON.stringify(info.mock.calls)).not.toContain("sensitive-value");
     expect(JSON.stringify(info.mock.calls)).not.toContain("Bearer secret");

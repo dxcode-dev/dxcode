@@ -9,7 +9,10 @@ import {
   putThreadChangesCapture,
   ThreadChangesManifestSchema,
 } from "./capture.js";
-import { makeThreadChangesRepository } from "./repository-d1.js";
+import {
+  makeThreadChangesRepository,
+  type ThreadChangesCaptureLease,
+} from "./repository-d1.js";
 
 const CAPTURE_LEASE_MS = 90_000;
 
@@ -28,6 +31,7 @@ const recordPublication = (
   publication: ThreadChangesResidentPublication,
   candidateKind: DxdChangesCandidateEvent["outcome"]["kind"] | "invalid",
   generation?: number,
+  timingMs?: Readonly<Record<string, number>>,
 ) => {
   threadChangesLogger.info("Thread Changes resident candidate settled.", {
     event: "thread_changes_resident_candidate_settled",
@@ -35,6 +39,7 @@ const recordPublication = (
     generation,
     candidateKind,
     outcome: publication,
+    ...(timingMs === undefined ? {} : { timingMs }),
   });
   return publication;
 };
@@ -51,30 +56,45 @@ export const publishThreadChangesResidentCandidate = async (input: {
   readonly bucket: R2Bucket;
   readonly threadId: ThreadId;
   readonly candidate: unknown;
-  readonly onPublished?: () => Promise<void>;
+  /**
+   * A capture lease already held for this candidate's token, with its state
+   * read after that token's mark. Released here like an acquired one.
+   */
+  readonly capture?: ThreadChangesCaptureLease;
+  /**
+   * Runs with the committed fingerprint as soon as D1 holds the outcome,
+   * before cleanup and lease release.
+   */
+  readonly onCommitted?: (fingerprint: string) => void;
 }): Promise<ThreadChangesResidentPublication> => {
   const decoded = Schema.decodeUnknownOption(DxdChangesCandidateMessage)(
     input.candidate,
     { onExcessProperty: "error" },
   );
-  if (Option.isNone(decoded))
+  if (Option.isNone(decoded)) {
+    await input.capture
+      ?.release()
+      .catch(() => logDeleteFailure(input.threadId, "capture-lease-release"));
     return recordPublication(input.threadId, "invalid", "invalid");
+  }
   const candidate: DxdChangesCandidateEvent = decoded.value;
   const repository = makeThreadChangesRepository(input.db);
-  const captureLease = await repository.acquireCapture(
-    input.threadId,
-    CAPTURE_LEASE_MS,
-  );
+  const startedAt = Date.now();
+  const timingMs: Record<string, number> = {};
+  const mark = (stage: string) => {
+    timingMs[stage] = Date.now() - startedAt;
+  };
+  const captureLease =
+    input.capture ??
+    (await repository.acquireCapture(input.threadId, CAPTURE_LEASE_MS));
   if (captureLease === undefined)
     return recordPublication(input.threadId, "busy", candidate.outcome.kind);
 
+  mark("lease");
   let generation: number | undefined;
   let publication: ThreadChangesResidentPublication;
   try {
-    const [state, source] = await Promise.all([
-      repository.read(input.threadId),
-      repository.source(input.threadId),
-    ]);
+    const { state, source } = captureLease;
     generation = state?.mutationGeneration;
     if (
       state === undefined ||
@@ -99,6 +119,8 @@ export const publishThreadChangesResidentCandidate = async (input: {
           })))
           ? "unchanged"
           : "raced";
+      if (publication === "unchanged")
+        input.onCommitted?.(candidate.outcome.fingerprint);
     } else if (source === undefined) {
       publication = "source-missing";
     } else if (candidate.outcome.capture.baseline !== source.baseline) {
@@ -133,6 +155,7 @@ export const publishThreadChangesResidentCandidate = async (input: {
       });
       try {
         await putThreadChangesCapture(input.bucket, manifest);
+        mark("store");
       } catch {
         publication = "unavailable";
         return recordPublication(
@@ -174,7 +197,8 @@ export const publishThreadChangesResidentCandidate = async (input: {
           .catch(() => logDeleteFailure(input.threadId, "orphan-delete"));
         publication = "raced";
       } else {
-        await input.onPublished?.().catch(() => undefined);
+        mark("publish");
+        input.onCommitted?.(manifest.fingerprint);
         if (
           state.latestCaptureId !== undefined &&
           state.latestCaptureId !== manifest.captureId
@@ -196,5 +220,6 @@ export const publishThreadChangesResidentCandidate = async (input: {
     publication,
     candidate.outcome.kind,
     generation,
+    timingMs,
   );
 };

@@ -5,6 +5,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { Schema } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { changesKeys } from "../changes/changes-queries.js";
+import { threadFilesKeys } from "../files/files-queries.js";
 import { threadKeys } from "../thread-queries.js";
 import { RealtimeClient } from "./realtime-client.js";
 
@@ -76,6 +77,10 @@ describe("RealtimeClient", () => {
     });
     expect(invalidate).toHaveBeenCalledWith(
       { queryKey: changesKeys.ranges(threadId) },
+      { cancelRefetch: false },
+    );
+    expect(invalidate).toHaveBeenCalledWith(
+      { queryKey: [...threadFilesKeys.all(threadId), "tree"] },
       { cancelRefetch: false },
     );
     client.stop();

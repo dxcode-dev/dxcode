@@ -1,5 +1,5 @@
 use crate::changes::{CandidateOutcome, SourceContext};
-use crate::environment::{EnvironmentActivate, EnvironmentResult};
+use crate::environment::{EnvironmentActivate, EnvironmentCheck, EnvironmentResult};
 use crate::files::{FilesOperation, FilesResult};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -120,11 +120,19 @@ pub struct WorkloadIdentityCapability {
     pub version: u8,
 }
 
+/// Version 1: sandbox chunks cross as several `DXF1` frames, and Core
+/// answers every frame with `chunk-ack` so dxd bounds the bytes in flight.
+#[derive(Serialize)]
+pub struct FilesCapability {
+    pub version: u8,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capabilities {
     pub terminal: TerminalCapability,
     pub workload_identity: WorkloadIdentityCapability,
+    pub files: FilesCapability,
 }
 
 impl Capabilities {
@@ -134,6 +142,7 @@ impl Capabilities {
                 version: TERMINAL_VERSION,
             },
             workload_identity: WorkloadIdentityCapability { version: 1 },
+            files: FilesCapability { version: 1 },
         }
     }
 }
@@ -204,7 +213,7 @@ impl WorkloadIdentityRequest {
                                     && port.bytes().all(|byte| byte.is_ascii_digit())
                             })
                     })
-                    && self.path.as_ref().is_some_and(|path| {
+                    && self.path.as_ref().is_none_or(|path| {
                         !path.is_empty()
                             && path.len() <= 512
                             && path.bytes().all(|byte| {
@@ -326,11 +335,16 @@ pub enum TerminalHeartbeat {
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ClientMessage<'a> {
     Register {
-        generation: &'a str,
         #[serde(rename = "protocolMajor")]
         protocol_major: u8,
         release: &'static str,
         capabilities: Capabilities,
+    },
+    #[serde(rename = "update-status")]
+    UpdateStatus {
+        generation: &'a str,
+        release: &'a str,
+        status: UpdateStatus,
     },
     Heartbeat {
         generation: &'a str,
@@ -361,6 +375,13 @@ pub enum ClientMessage<'a> {
     },
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum UpdateStatus {
+    Applying,
+    Failed,
+}
+
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum OperationResult {
@@ -380,6 +401,8 @@ pub enum RequestOperation {
 pub enum EnvironmentOperation {
     #[serde(rename = "environment.activate")]
     Activate(EnvironmentActivate),
+    #[serde(rename = "environment.check")]
+    Check(EnvironmentCheck),
 }
 
 impl RequestOperation {
@@ -404,11 +427,21 @@ pub enum ServerMessage {
     },
     #[serde(rename = "heartbeat-ack")]
     HeartbeatAck { generation: String },
+    /// Core received one `DXF1` frame; see [`FilesCapability`].
+    #[serde(rename = "chunk-ack")]
+    ChunkAck {},
     #[serde(rename = "readiness-ping")]
     ReadinessPing {
         generation: String,
         #[serde(rename = "requestId")]
         request_id: String,
+    },
+    #[serde(rename = "update")]
+    Update {
+        generation: String,
+        url: String,
+        sha256: String,
+        release: String,
     },
     #[serde(rename = "changes-refresh")]
     ChangesRefresh {
@@ -498,13 +531,6 @@ pub enum ServerMessage {
 }
 
 impl ServerMessage {
-    pub fn request_operation(&self) -> Option<&RequestOperation> {
-        match self {
-            Self::Request { operation, .. } => Some(operation),
-            _ => None,
-        }
-    }
-
     pub fn has_valid_conditional_fields(&self) -> bool {
         match self {
             Self::TerminalOpen {
@@ -516,6 +542,30 @@ impl ServerMessage {
                 "restart-exited" => expected_resident_generation.is_some(),
                 _ => false,
             },
+            Self::Update {
+                url,
+                sha256,
+                release,
+                ..
+            } => {
+                // Loopback http serves local development and tests; anything
+                // remote must be https.
+                let scheme_ok = url.starts_with("https://")
+                    || url.starts_with("http://127.0.0.1")
+                    || url.starts_with("http://localhost")
+                    || url.starts_with("http://[::1]");
+                url.len() <= 2_048
+                    && scheme_ok
+                    && sha256.len() == 64
+                    && sha256
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    && !release.is_empty()
+                    && release.len() <= 32
+                    && release
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+            }
             _ => true,
         }
     }

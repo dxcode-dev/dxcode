@@ -75,6 +75,16 @@ const selection = {
   origin: required("DX_DEPLOYMENT_ORIGIN"),
   packageDirectory: required("DX_DEPLOYMENT_PACKAGE_DIR"),
   revision: required("DX_DEPLOYMENT_REVISION"),
+  workersDevSubdomain:
+    process.env.DX_DEPLOYMENT_WORKERS_DEV_SUBDOMAIN?.trim() || undefined,
+  turnstileTestKeys: (() => {
+    const value = process.env.DX_DEPLOYMENT_TURNSTILE_TEST_KEYS;
+    if (value === undefined || value === "false") return false;
+    if (value === "true" && target === "branch") return true;
+    throw new Error(
+      "DX_DEPLOYMENT_TURNSTILE_TEST_KEYS must be true (branch only) or false.",
+    );
+  })(),
   workerTraces: (() => {
     const value = process.env.DX_DEPLOYMENT_WORKER_TRACES;
     if (value === undefined || value === "false") return false;

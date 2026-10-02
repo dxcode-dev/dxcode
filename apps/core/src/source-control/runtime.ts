@@ -43,21 +43,6 @@ const writeOperations = new Set<SourceOperationRequestType["operation"]>([
   "workflow-write",
 ]);
 
-/**
- * Native Git credential `get` cannot reveal whether Git will fetch, push, or
- * update a workflow, and the dx `gh` wrapper reuses the same credential. A
- * native request therefore receives the complete approved repository envelope
- * for its one bound repository, and audits every operation it covers.
- */
-export const NATIVE_GITHUB_CREDENTIAL_CAPABILITIES = [
-  "contents-push",
-  "workflow-write",
-  "pull-request-write",
-  "issue-write",
-  "actions-write",
-  "checks-status-read",
-] as const satisfies ReadonlyArray<SourceOperationType>;
-
 export const SourceAuthorizationPolicyLive = Layer.effect(
   SourceAuthorizationPolicy,
   Effect.gen(function* () {
@@ -82,11 +67,7 @@ export const SourceAuthorizationPolicyLive = Layer.effect(
             );
           return {
             access,
-            requestedCapabilities:
-              request.invocationSource === "git-helper" &&
-              authority.provider === "github"
-                ? NATIVE_GITHUB_CREDENTIAL_CAPABILITIES
-                : [request.operation],
+            requestedCapabilities: [request.operation],
           };
         }),
     });
@@ -142,9 +123,6 @@ export const SourceRuntimeBrokerLive = (input?: {
             let authority: RuntimeSourceAuthority | undefined;
             let decision: SourcePolicyDecision | undefined;
             let credentialIssued = false;
-            let retainedRevoke:
-              | Effect.Effect<void, SourceControlLeaseFailure>
-              | undefined;
             let revokeFailed = false;
             let outcome:
               | "success"
@@ -203,19 +181,13 @@ export const SourceRuntimeBrokerLive = (input?: {
                     );
                   }),
                 (credential) =>
-                  request.invocationSource === "git-helper"
-                    ? Effect.sync(() => {
-                        // Native Git receives this credential only after the
-                        // complete issuance, including audit, succeeds.
-                        retainedRevoke = credential.revoke;
-                      })
-                    : credential.revoke.pipe(
-                        Effect.catch(() =>
-                          Effect.sync(() => {
-                            revokeFailed = true;
-                          }),
-                        ),
-                      ),
+                  credential.revoke.pipe(
+                    Effect.catch(() =>
+                      Effect.sync(() => {
+                        revokeFailed = true;
+                      }),
+                    ),
+                  ),
               );
             }).pipe(
               Effect.tapError((error) =>
@@ -294,23 +266,6 @@ export const SourceRuntimeBrokerLive = (input?: {
                 });
                 return audit.record(record);
               }),
-              // A retained native credential that is never delivered, because
-              // authority, the callback, interruption, or audit failed, is
-              // revoked instead of waiting for provider expiry.
-              Effect.onError(() =>
-                retainedRevoke === undefined
-                  ? Effect.void
-                  : retainedRevoke.pipe(
-                      Effect.catch(() =>
-                        Effect.sync(() =>
-                          sourceControlLogger.warn(
-                            "Undelivered native credential revoke failed.",
-                            { operationId, threadId },
-                          ),
-                        ),
-                      ),
-                    ),
-              ),
             );
           }),
       });

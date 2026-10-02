@@ -36,6 +36,7 @@ const ThreadRow = Schema.Struct({
   activity_status: Schema.String,
   lifecycle_state: Schema.String,
   pinned_at: Schema.NullOr(Schema.String),
+  title_pending_until: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 type ThreadRow = typeof ThreadRow.Type;
@@ -101,6 +102,10 @@ const decodeThreadRows = (rows: ReadonlyArray<unknown>) =>
               activityStatus: row.activity_status,
               lifecycleState: row.lifecycle_state,
               pinnedAt: row.pinned_at ?? undefined,
+              ...(row.title_pending_until === null ||
+              row.title_pending_until === undefined
+                ? {}
+                : { titlePendingUntil: row.title_pending_until }),
             });
           }),
         ),
@@ -190,6 +195,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   skill_snapshot_json,
                   visibility,
                   lifecycle_state,
+                  title_pending_until,
                   created_at,
                   updated_at
                 )
@@ -204,6 +210,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   ${JSON.stringify(encoded.skills)},
                   ${encoded.visibility ?? "private"},
                   ${encoded.lifecycleState},
+                  ${encoded.titlePendingUntil ?? null},
                   ${encoded.createdAt}, ${encoded.updatedAt}
                 )
               `;
@@ -392,7 +399,8 @@ export const ThreadRepositoryD1 = Layer.effect(
               last_activity_at,
               activity_status,
               lifecycle_state,
-              pinned_at
+              pinned_at,
+              title_pending_until
             FROM threads
             WHERE id = ${threadId}
               AND owner_user_id = ${ownerUserId}
@@ -436,7 +444,8 @@ export const ThreadRepositoryD1 = Layer.effect(
                 agent_instructions_revision, agent_instructions_version,
                 model_selection, runner_profile_id, plugin_snapshot_json, skill_snapshot_json,
                 visibility, created_at, updated_at,
-                last_activity_at, activity_status, lifecycle_state, pinned_at
+                last_activity_at, activity_status, lifecycle_state, pinned_at,
+                title_pending_until
               FROM threads
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
@@ -477,7 +486,8 @@ export const ThreadRepositoryD1 = Layer.effect(
                 agent_instructions_revision, agent_instructions_version,
                 model_selection, runner_profile_id, plugin_snapshot_json, skill_snapshot_json,
                 visibility, created_at, updated_at,
-                last_activity_at, activity_status, lifecycle_state, pinned_at
+                last_activity_at, activity_status, lifecycle_state, pinned_at,
+                title_pending_until
             `.pipe(
               Effect.catchTag("SqlError", (cause) =>
                 Effect.fail(
@@ -567,7 +577,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.id, thread.title, thread.project_id, thread.owner_user_id,
                       thread.agent_instructions, thread.agent_instructions_revision,
                       thread.agent_instructions_version, thread.model_selection,
-                      thread.runner_profile_id,
+                      thread.runner_profile_id, thread.title_pending_until,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
                       thread.updated_at, activity.last_activity_at,
@@ -610,7 +620,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.id, thread.title, thread.project_id, thread.owner_user_id,
                       thread.agent_instructions, thread.agent_instructions_revision,
                       thread.agent_instructions_version, thread.model_selection,
-                      thread.runner_profile_id,
+                      thread.runner_profile_id, thread.title_pending_until,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
                       thread.updated_at, activity.last_activity_at,
@@ -660,7 +670,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.id, thread.title, thread.project_id, thread.owner_user_id,
                       thread.agent_instructions, thread.agent_instructions_revision,
                       thread.agent_instructions_version, thread.model_selection,
-                      thread.runner_profile_id,
+                      thread.runner_profile_id, thread.title_pending_until,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
                       thread.updated_at, activity.last_activity_at,
@@ -694,7 +704,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.id, thread.title, thread.project_id, thread.owner_user_id,
                       thread.agent_instructions, thread.agent_instructions_revision,
                       thread.agent_instructions_version, thread.model_selection,
-                      thread.runner_profile_id,
+                      thread.runner_profile_id, thread.title_pending_until,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
                       thread.updated_at, activity.last_activity_at,
@@ -735,7 +745,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.id, thread.title, thread.project_id, thread.owner_user_id,
                       thread.agent_instructions, thread.agent_instructions_revision,
                       thread.agent_instructions_version, thread.model_selection,
-                      thread.runner_profile_id,
+                      thread.runner_profile_id, thread.title_pending_until,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
                       thread.updated_at, activity.last_activity_at,
@@ -783,7 +793,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.id, thread.title, thread.project_id, thread.owner_user_id,
                       thread.agent_instructions, thread.agent_instructions_revision,
                       thread.agent_instructions_version, thread.model_selection,
-                      thread.runner_profile_id,
+                      thread.runner_profile_id, thread.title_pending_until,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
                       thread.updated_at, activity.last_activity_at,

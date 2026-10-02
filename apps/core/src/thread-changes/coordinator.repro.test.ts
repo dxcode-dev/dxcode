@@ -16,7 +16,16 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./repository-d1.js", () => ({
   makeThreadChangesRepository: () => ({
-    acquireCapture: mocks.acquireCapture,
+    acquireCapture: async (threadId: unknown, durationMs: unknown) => {
+      // The real lease reads state and source in the same transaction.
+      const lease = await mocks.acquireCapture(threadId, durationMs);
+      if (lease === undefined) return undefined;
+      const [state, source] = await Promise.all([
+        mocks.read(threadId),
+        mocks.source(threadId),
+      ]);
+      return { ...lease, state, source };
+    },
     read: mocks.read,
     source: mocks.source,
     beginMutation: mocks.beginMutation,

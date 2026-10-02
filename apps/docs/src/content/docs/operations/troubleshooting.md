@@ -44,6 +44,10 @@ release asset is reachable and matches `deploy/RELEASE.json`. The local fallback
 is `pnpm deploy:selfhost:dxd` with `dxdBinary` set in
 `deploy.selfhost.json`.
 
+`deploy/RELEASE.json names dxd X, but this revision is dxd Y` means the checkout
+and its release record disagree. Deploy from an unmodified release tag, whose
+record names the `dxd` version in `apps/dxd/Cargo.toml`.
+
 ## Provider errors
 
 **Not configured** means routing has no usable credential. Configure a route.

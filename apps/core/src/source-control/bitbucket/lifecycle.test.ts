@@ -795,7 +795,7 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
     );
     expect(response.status).toBe(403);
   });
-  it("proxies bounded Git reads and writes and rechecks lost workspace access", async () => {
+  it("proxies bounded Git reads and writes and leaves repository access to Bitbucket", async () => {
     const f = await fixture();
     const row = await f.connect();
     seedThread(f.sqlite, row.id);
@@ -803,7 +803,8 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
     let allowed = true;
     const upstream: Array<{ url: string; body: string; headers: Headers }> = [];
     f.fetcher.mockImplementation(async (url, init) => {
-      if (String(url).startsWith("https://bitbucket.org/space/repo.git/")) {
+      if (String(url).startsWith("https://bitbucket.org/")) {
+        if (!allowed) return new Response("removed", { status: 404 });
         upstream.push({
           url: String(url),
           body: init?.body ? await new Response(init.body).text() : "",
@@ -816,8 +817,6 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
           },
         });
       }
-      if (!allowed && String(url).includes("/repositories/"))
-        return new Response("removed", { status: 404 });
       return original(url, init);
     });
     vi.stubGlobal("fetch", f.fetcher);
@@ -882,6 +881,33 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
             expect(
               (await request("info/refs?service=git-upload-pack")).status,
             ).toBe(403);
+          }),
+      ),
+    );
+    // A native Git lease follows the owner's connection to any repository.
+    await Effect.runPromise(
+      bitbucketRuntimeBroker(f.db, {
+        ...bindings,
+        DB: f.db,
+      }).withCommandEnvironment(
+        threadId,
+        userId,
+        { operation: "contents-push", invocationSource: "git-helper" },
+        (environment) =>
+          Effect.promise(async () => {
+            const response = await app.request(
+              "https://dx.example/api/source/bitbucket/git/elsewhere/other/info/refs?service=git-receive-pack",
+              {
+                headers: {
+                  authorization: `Basic ${btoa(`dx:${environment.DX_BITBUCKET_GIT_TOKEN}`)}`,
+                },
+              },
+              { ...bindings, DB: f.db },
+            );
+            expect(response.status).toBe(200);
+            expect(upstream.at(-1)?.url).toBe(
+              "https://bitbucket.org/elsewhere/other.git/info/refs?service=git-receive-pack",
+            );
           }),
       ),
     );

@@ -449,7 +449,9 @@ function ActivityRow({
   ) {
     return (
       <div className="transcript-reasoning-prose" data-row-id={row.id}>
-        <TranscriptMarkdown>{row.part.text}</TranscriptMarkdown>
+        <TranscriptMarkdown streaming={row.part.state === "streaming"}>
+          {row.part.text}
+        </TranscriptMarkdown>
       </div>
     );
   }

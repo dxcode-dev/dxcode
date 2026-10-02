@@ -103,6 +103,37 @@ describe("thread mutation cache ownership", () => {
     ).toEqual([{ ...created, mode: "medium" }]);
   });
 
+  it("keeps a title that settled before the pending creation response", async () => {
+    const queryClient = new QueryClient();
+    const listKey = threadKeys.list(userId);
+    const settled = {
+      ...created,
+      title: "OAuth refresh retries",
+    } as ThreadDetailData;
+    queryClient.setQueryData(threadKeys.detail(userId, created.id), settled);
+    queryClient.setQueryData(listKey, {
+      pages: [{ items: [{ ...settled, mode: "medium" }] }],
+      pageParams: [undefined],
+    });
+
+    await cacheCreatedThread(queryClient, userId, {
+      ...created,
+      title: "Fix OAuth callback retries…",
+      titlePending: true,
+    } as ThreadDetailData);
+
+    const detail = queryClient.getQueryData<ThreadDetailData>(
+      threadKeys.detail(userId, created.id),
+    );
+    expect(detail?.title).toBe("OAuth refresh retries");
+    expect(detail?.titlePending).toBeUndefined();
+    expect(
+      queryClient.getQueryData<{
+        pages: Array<{ items: ThreadDetailData[] }>;
+      }>(listKey)?.pages[0]?.items,
+    ).toEqual([{ ...settled, mode: "medium" }]);
+  });
+
   it("does not fabricate a successful first page for an unloaded list", async () => {
     const queryClient = new QueryClient();
     const listKey = threadKeys.list(userId);

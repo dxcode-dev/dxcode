@@ -1,48 +1,36 @@
-import { ThreadId } from "@dx/domain";
-import { Option, Schema } from "effect";
-import { Hono } from "hono";
-import { verifyThreadDaemonApiKey } from "../auth/daemon-api-key.js";
+import { type Context, Hono } from "hono";
+import { isolateRequestOrdinal } from "../http/request-logging.js";
 import type { AppEnv } from "../http/types.js";
+import { threadDaemonLogger } from "../logging.js";
+import { forwardDaemonUpgrade } from "./daemon-ingress.js";
 
-const forwardedWebSocketHeaders = [
-  "connection",
-  "sec-websocket-extensions",
-  "sec-websocket-key",
-  "sec-websocket-protocol",
-  "sec-websocket-version",
-] as const;
-
-export const threadDaemonRoutes = new Hono<AppEnv>().get(
-  "/:threadId/dxd",
-  async (context) => {
-    const request = context.req.raw;
-    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
-      return context.notFound();
-    const threadId = Schema.decodeUnknownOption(ThreadId)(
-      context.req.param("threadId"),
-    );
-    const namespace = context.env.THREAD_EXECUTION;
-    if (Option.isNone(threadId) || namespace === undefined)
-      return context.notFound();
-    const verified = await verifyThreadDaemonApiKey(
-      context.env,
-      threadId.value,
-      request.headers.get("authorization"),
-    );
-    if (verified === undefined) return new Response(null, { status: 401 });
-
-    const headers = new Headers({
-      upgrade: "websocket",
-      "x-dx-daemon-ingress": "1",
-      "x-dx-daemon-key-id": verified.keyId,
-      "x-dx-thread-id": threadId.value,
+/**
+ * Daemon ingress on the Core Worker. Deployed stages route `/v1/dxd/*` to the
+ * dedicated ingress Worker instead; this serves local mode and guests whose
+ * static configuration names the older `/v1/threads/:threadId/dxd` endpoint.
+ * Neither path touches D1: the Thread execution object checks the key.
+ */
+const ingress = async (context: Context<AppEnv>) => {
+  const startedAt = performance.now();
+  const isolateRequest = isolateRequestOrdinal();
+  const threadId = context.req.param("threadId") as string | undefined;
+  const response = await forwardDaemonUpgrade(
+    context.req.raw,
+    context.env.THREAD_EXECUTION,
+    threadId,
+  );
+  if (response.status !== 404)
+    threadDaemonLogger.info("Thread daemon ingress.", {
+      event: "thread_daemon_ingress",
+      threadId,
+      status: response.status,
+      isolateRequest,
+      colo: (context.req.raw as { cf?: { colo?: unknown } }).cf?.colo,
+      acceptMs: Math.round(performance.now() - startedAt),
     });
-    for (const name of forwardedWebSocketHeaders) {
-      const value = request.headers.get(name);
-      if (value !== null) headers.set(name, value);
-    }
-    return namespace
-      .get(namespace.idFromName(threadId.value))
-      .fetch(new Request("https://thread.internal/daemon/socket", { headers }));
-  },
-);
+  return response;
+};
+
+export const threadDaemonRoutes = new Hono<AppEnv>()
+  .get("/dxd/:threadId", ingress)
+  .get("/threads/:threadId/dxd", ingress);

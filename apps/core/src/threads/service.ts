@@ -56,6 +56,7 @@ interface ThreadServiceShape {
     source?: ThreadSourceDraft,
     threadId?: ThreadId,
     runnerProfileId?: RunnerProfileId,
+    titlePending?: boolean,
   ) => Effect.Effect<
     Thread,
     | Schema.SchemaError
@@ -120,6 +121,7 @@ export class ThreadService extends Context.Service<
             source,
             threadId,
             runnerProfileId,
+            titlePending,
           ) {
             const projectId =
               project.kind === "project"
@@ -154,6 +156,7 @@ export class ThreadService extends Context.Service<
               },
               selection: selection ?? defaultThreadModelSelection(),
               ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
+              ...(titlePending === true ? { titlePending } : {}),
               plugins: yield* plugins.resolveForThread(principal, projectId),
               skills: yield* skills.resolveForThread(principal, projectId),
             });

@@ -28,10 +28,19 @@ const copyText = async (text: string) => {
   textarea.remove();
 };
 
+// Matches the Ghostty FitAddon debounce, which settles after a pane transition.
+const FIT_DEBOUNCE_MS = 100;
+
+/**
+ * `visible` gates fitting: a hidden Terminal keeps its size. Fitting a
+ * collapsed pane would shrink the emulator and the shell's PTY to two
+ * columns, and the shell's redraws at that width and back erase its output.
+ */
 export async function mountBrowserTerminal(
   element: HTMLElement,
   onData: (data: string) => void,
   theme: ITheme,
+  visible: () => boolean = () => true,
 ): Promise<BrowserTerminalEmulator> {
   if (initialization === undefined)
     initialization = Ghostty.load(ghosttyWasmUrl);
@@ -74,8 +83,16 @@ export async function mountBrowserTerminal(
   });
   element.setAttribute("role", "application");
   element.setAttribute("aria-label", "Terminal");
-  fit.observeResize();
-  fit.fit();
+  const fitVisible = () => {
+    if (visible()) fit.fit();
+  };
+  let fitTimer: ReturnType<typeof setTimeout> | undefined;
+  const resizeObserver = new ResizeObserver(() => {
+    clearTimeout(fitTimer);
+    fitTimer = setTimeout(fitVisible, FIT_DEBOUNCE_MS);
+  });
+  resizeObserver.observe(element);
+  fitVisible();
 
   let disposed = false;
   return {
@@ -84,6 +101,8 @@ export async function mountBrowserTerminal(
     dispose() {
       if (disposed) return;
       disposed = true;
+      resizeObserver.disconnect();
+      clearTimeout(fitTimer);
       dataSubscription.dispose();
       fit.dispose();
       terminal.dispose();

@@ -257,6 +257,10 @@ export default Alchemy.Stack(
       workspaceInactivityMs: Config.option(
         Config.number("DX_DEPLOYMENT_WORKSPACE_INACTIVITY_MS"),
       ),
+      turnstileTestKeys: Config.withDefault(
+        Config.boolean("DX_DEPLOYMENT_TURNSTILE_TEST_KEYS"),
+        false,
+      ),
       e2bApiKey: Config.option(Config.redacted("E2B_API_KEY")),
       githubApp: Config.option(Config.redacted("DX_INTEGRATION_GITHUB_APP")),
       sarvamApiKey: Config.option(Config.redacted("SARVAM_API_KEY")),
@@ -268,6 +272,13 @@ export default Alchemy.Stack(
       ),
       deploymentZone: Config.option(
         Config.nonEmptyString("DX_DEPLOYMENT_ZONE"),
+      ),
+      workersDevSubdomain: Config.option(
+        Config.nonEmptyString("DX_DEPLOYMENT_WORKERS_DEV_SUBDOMAIN"),
+      ),
+      daemonIngressName: Config.withDefault(
+        Config.nonEmptyString("DX_DEPLOYMENT_DAEMON_INGRESS_NAME"),
+        "dx-dxd",
       ),
       signupEnabled: Config.withDefault(
         Config.boolean("DX_SIGNUP_ENABLED"),
@@ -357,6 +368,14 @@ export default Alchemy.Stack(
         } as never)
       : undefined;
 
+    if (
+      configuration.turnstileTestKeys &&
+      configuration.environment !== "preview"
+    )
+      return yield* Effect.die(
+        "DX_DEPLOYMENT_TURNSTILE_TEST_KEYS is restricted to previews.",
+      );
+
     if (Option.isSome(configuration.workspaceInactivityMs)) {
       const inactivityMs = configuration.workspaceInactivityMs.value;
       if (configuration.environment !== "preview")
@@ -390,6 +409,15 @@ export default Alchemy.Stack(
     }
 
     const deploymentHostname = new URL(configuration.origin).hostname;
+    // A resumed guest's daemon reconnects through a dependency-free Worker on
+    // the account's workers.dev subdomain. Its isolate starts in milliseconds,
+    // where the Core bundle's cold start (about a second) otherwise sits on
+    // every wake. Without a workers.dev subdomain Core serves ingress itself.
+    const daemonIngressName = configuration.daemonIngressName;
+    const daemonIngressOrigin = Option.map(
+      configuration.workersDevSubdomain,
+      (subdomain) => `https://${daemonIngressName}.${subdomain}.workers.dev/`,
+    );
     const database = yield* Cloudflare.D1.Database("Database", {
       name: configuration.databaseName,
       migrations: `apps/core/${migrationManifest.d1Directory}`,
@@ -398,13 +426,20 @@ export default Alchemy.Stack(
       name: configuration.bucketName,
       forceDestroy: false,
     });
-    const turnstile = hostedAuthentication
-      ? yield* Cloudflare.Turnstile.Widget("AccessTurnstile", {
-          name: `dx access · ${deploymentHostname}`,
-          domains: [deploymentHostname],
-          mode: "managed",
-        })
-      : undefined;
+    // Previews may use Cloudflare's published always-pass test keys instead of
+    // creating a widget, because the account caps widgets at 20.
+    const turnstile = !hostedAuthentication
+      ? undefined
+      : configuration.turnstileTestKeys
+        ? {
+            sitekey: "1x00000000000000000000AA",
+            secret: "1x0000000000000000000000000000000AA",
+          }
+        : yield* Cloudflare.Turnstile.Widget("AccessTurnstile", {
+            name: `dx access · ${deploymentHostname}`,
+            domains: [deploymentHostname],
+            mode: "managed",
+          });
     const email = hostedAuthentication
       ? yield* Cloudflare.Email.SendEmail("MagicLinkEmail", {
           allowedSenderAddresses: [
@@ -465,7 +500,7 @@ export default Alchemy.Stack(
           `${configuration.e2bTemplate}-${defaultE2BOrbProfile.templateSuffix}`,
         DX_E2B_TEMPLATE_BUILD_ID:
           selfhostProfiles?.defaultBuildId ?? configuration.e2bTemplateBuildId,
-        DX_E2B_TIMEOUT_MS: "600000",
+        DX_E2B_TIMEOUT_MS: "300000",
         ...(Option.isSome(configuration.workspaceInactivityMs)
           ? {
               DX_WORKSPACE_INACTIVITY_MS: String(
@@ -474,7 +509,10 @@ export default Alchemy.Stack(
             }
           : {}),
         DX_DEPLOYMENT_REVISION: configuration.revision,
-        DX_DXD_PUBLIC_URL: configuration.origin,
+        DX_DXD_PUBLIC_URL: Option.getOrElse(
+          daemonIngressOrigin,
+          () => configuration.origin,
+        ),
         DX_DXD_RELEASE_URL: configuration.dxdReleaseUrl,
         DX_DXD_RELEASE_SHA256: configuration.dxdChecksum,
         DX_MIGRATION_MANIFEST_VERSION: String(migrationManifest.version),
@@ -669,6 +707,25 @@ export default Alchemy.Stack(
           }
         : {}),
     });
+
+    // The Thread execution object checks the key; this Worker only forwards.
+    if (Option.isSome(daemonIngressOrigin))
+      yield* Cloudflare.Worker("DaemonIngress", {
+        name: daemonIngressName,
+        main: "apps/core/src/threads/daemon-ingress.ts",
+        compatibility: { date: "2026-08-20" },
+        env: {
+          THREAD_EXECUTION: Cloudflare.DurableObject("THREAD_EXECUTION", {
+            className: "ThreadExecutionObject",
+            scriptName: worker.workerName,
+          }),
+        },
+        workersDev: true,
+        observability: {
+          enabled: true,
+          logs: { enabled: true, invocationLogs: true },
+        },
+      });
 
     if (!selfhost)
       yield* Command.Exec("Verify", {

@@ -33,269 +33,213 @@ const WORKSPACE_CONTEXT_FILE_LIMIT_BYTES = 64 * 1024;
 const WORKSPACE_CONTEXT_MANIFEST_LIMIT_BYTES = 4 * 1024 * 1024;
 const WORKSPACE_CONTEXT_SKILL_LIMIT = 256;
 const WORKSPACE_CONTEXT_DIRECTORY_LIMIT = 256;
+// Base64 of the file contents (bounded by the manifest limit) plus at most
+// 512 names of 255 bytes in the record headers.
+const WORKSPACE_CONTEXT_OUTPUT_LIMIT_BYTES =
+  Math.ceil((WORKSPACE_CONTEXT_MANIFEST_LIMIT_BYTES + 512 * 1024) / 3) * 4;
 const utf8 = new TextEncoder();
+const strictUtf8 = new TextDecoder("utf-8", { fatal: true });
 
-const workspaceContextGuestSource = `
-import json, os, stat, sys
-
-FILE_LIMIT = ${WORKSPACE_CONTEXT_FILE_LIMIT_BYTES}
-MANIFEST_LIMIT = ${WORKSPACE_CONTEXT_MANIFEST_LIMIT_BYTES}
-SKILL_LIMIT = ${WORKSPACE_CONTEXT_SKILL_LIMIT}
-DIRECTORY_LIMIT = ${WORKSPACE_CONTEXT_DIRECTORY_LIMIT}
-NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
-DIRECTORY = getattr(os, "O_DIRECTORY", 0)
-READ_ERROR = object()
-
-class Declined(Exception):
-    pass
-
-def open_root(path):
-    if not path.startswith("/") or os.path.normpath(path) != path:
-        raise Declined()
-    current = os.open("/", os.O_RDONLY | DIRECTORY)
-    try:
-        for component in [part for part in path.split("/") if part]:
-            next_fd = os.open(component, os.O_RDONLY | DIRECTORY | NOFOLLOW, dir_fd=current)
-            os.close(current)
-            current = next_fd
-        return current
-    except Exception:
-        os.close(current)
-        raise Declined()
-
-def entries(directory_fd, limit):
-    result = []
-    with os.scandir(directory_fd) as iterator:
-        for entry in iterator:
-            result.append(entry.name)
-            if len(result) > limit:
-                raise Declined()
-    return result
-
-def open_directory(parent_fd, name, missing=False, omit_non_directory=False):
-    try:
-        return os.open(name, os.O_RDONLY | DIRECTORY | NOFOLLOW, dir_fd=parent_fd)
-    except FileNotFoundError:
-        if missing:
-            return None
-        raise Declined()
-    except NotADirectoryError:
-        try:
-            info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        except OSError:
-            raise Declined()
-        if stat.S_ISLNK(info.st_mode):
-            raise Declined()
-        if omit_non_directory:
-            return None
-        raise Declined()
-    except OSError:
-        raise Declined()
-
-def read_regular(parent_fd, name, missing=False, read_error=False):
-    try:
-        descriptor = os.open(name, os.O_RDONLY | NOFOLLOW, dir_fd=parent_fd)
-    except FileNotFoundError:
-        if missing:
-            return None
-        raise Declined()
-    except PermissionError:
-        if read_error:
-            return READ_ERROR
-        raise Declined()
-    except OSError:
-        raise Declined()
-    try:
-        try:
-            before = os.fstat(descriptor)
-        except OSError:
-            if read_error:
-                return READ_ERROR
-            raise Declined()
-        if not stat.S_ISREG(before.st_mode):
-            raise Declined()
-        raw = b""
-        while len(raw) <= FILE_LIMIT:
-            try:
-                chunk = os.read(descriptor, min(8192, FILE_LIMIT + 1 - len(raw)))
-            except OSError:
-                if read_error:
-                    return READ_ERROR
-                raise Declined()
-            if not chunk:
-                break
-            raw += chunk
-        try:
-            after = os.fstat(descriptor)
-        except OSError:
-            if read_error:
-                return READ_ERROR
-            raise Declined()
-        if len(raw) > FILE_LIMIT:
-            raise Declined()
-        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
-            raise Declined()
-        try:
-            return raw.decode("utf-8", "strict")
-        except UnicodeDecodeError:
-            raise Declined()
-    finally:
-        os.close(descriptor)
-
-def snapshot(root):
-    root_fd = open_root(root)
-    agents_fd = None
-    skills_fd = None
-    try:
-        instructions = {}
-        for filename in ("AGENTS.md", "CLAUDE.md"):
-            content = read_regular(root_fd, filename, missing=True)
-            if content is not None:
-                instructions[filename] = content
-
-        skill_files = []
-        agents_fd = open_directory(root_fd, ".agents", missing=True)
-        if agents_fd is not None:
-            skills_fd = open_directory(agents_fd, "skills", missing=True)
-        if skills_fd is not None:
-            for directory_name in entries(skills_fd, SKILL_LIMIT):
-                skill_fd = open_directory(skills_fd, directory_name, omit_non_directory=True)
-                if skill_fd is None:
-                    continue
-                try:
-                    content = read_regular(skill_fd, "SKILL.md", missing=True, read_error=True)
-                finally:
-                    os.close(skill_fd)
-                if content is None:
-                    continue
-                if content is READ_ERROR:
-                    skill_files.append({"kind": "read-error", "directoryName": directory_name, "errorMessage": "workspace SKILL.md could not be read"})
-                else:
-                    skill_files.append({"kind": "file", "directoryName": directory_name, "content": content})
-
-        result = {"kind": "snapshot", "version": 1, "snapshot": {"instructionFiles": instructions, "skillFiles": skill_files}}
-        try:
-            result["snapshot"]["directoryListing"] = entries(root_fd, DIRECTORY_LIMIT)
-        except OSError:
-            pass
-        encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        if len(encoded) > MANIFEST_LIMIT:
-            raise Declined()
-        return encoded
-    finally:
-        if skills_fd is not None:
-            os.close(skills_fd)
-        if agents_fd is not None:
-            os.close(agents_fd)
-        os.close(root_fd)
-
-try:
-    output = snapshot(os.environ["FLUE_WORKSPACE_CONTEXT_ROOT"])
-except (Declined, KeyError):
-    output = b'{"kind":"declined","version":1}'
-sys.stdout.buffer.write(output)
+/**
+ * Guest side of the workspace-context snapshot: bash and coreutils only (no
+ * Python), one command. It walks the root without following symlinks, checks
+ * every bound, and prints base64 of NUL-separated records:
+ *
+ *   D                     declined (Flue falls back to primitive reads)
+ *   L <name>              one root directory entry
+ *   I <filename> <size>   AGENTS.md or CLAUDE.md with content
+ *   S <directory> <size>  a skill's SKILL.md with content
+ *   R <directory>         a skill's SKILL.md that could not be read
+ *   E                     end of records; the contents of every I and S
+ *                         record follow in record order
+ *
+ * Core decodes UTF-8 strictly and declines when the contents' total length
+ * does not match the sizes (a file changed between `stat` and `cat`).
+ */
+const workspaceContextGuestScript = `
+shopt -s nullglob dotglob
+decline() { printf "D\\0" | base64 -w0; exit 0; }
+root=\${FLUE_WORKSPACE_CONTEXT_ROOT-}
+case $root in /*) ;; *) decline ;; esac
+case $root in */|*//*|*/./*|*/../*|*/.|*/..) [[ $root == / ]] || decline ;; esac
+rest=\${root#/}
+path=
+while [[ -n $rest ]]; do
+  path=$path/\${rest%%/*}
+  [[ -d $path && ! -L $path ]] || decline
+  [[ $rest == */* ]] && rest=\${rest#*/} || rest=
+done
+cd -- "$root" 2>/dev/null || decline
+tags=(); names=(); files=()
+for name in AGENTS.md CLAUDE.md; do
+  [[ -L $name ]] && decline
+  [[ -e $name ]] || continue
+  [[ -f $name && -r $name ]] || decline
+  tags+=(I); names+=("$name"); files+=("$name")
+done
+for directory in .agents .agents/skills; do
+  [[ -L $directory ]] && decline
+  [[ -e $directory ]] || break
+  [[ -d $directory && -r $directory && -x $directory ]] || decline
+  [[ $directory == .agents ]] && continue
+  skills=(.agents/skills/*)
+  (( \${#skills[@]} <= ${WORKSPACE_CONTEXT_SKILL_LIMIT} )) || decline
+  for skill in "\${skills[@]}"; do
+    [[ -L $skill ]] && decline
+    [[ -d $skill ]] || continue
+    [[ -r $skill && -x $skill ]] || decline
+    file=$skill/SKILL.md
+    [[ -L $file ]] && decline
+    [[ -e $file ]] || continue
+    [[ -f $file ]] || decline
+    names+=("\${skill##*/}")
+    if [[ -r $file ]]; then tags+=(S); files+=("$file"); else tags+=(R); fi
+  done
+done
+listing=()
+if [[ -r . ]]; then
+  listing=(*)
+  (( \${#listing[@]} <= ${WORKSPACE_CONTEXT_DIRECTORY_LIMIT} )) || decline
+fi
+sizes=()
+if (( \${#files[@]} )); then
+  mapfile -t sizes < <(stat -c %s -- "\${files[@]}" 2>/dev/null)
+  (( \${#sizes[@]} == \${#files[@]} )) || decline
+fi
+total=0
+for size in "\${sizes[@]}"; do
+  (( size <= ${WORKSPACE_CONTEXT_FILE_LIMIT_BYTES} )) || decline
+  total=$((total + size))
+done
+(( total <= ${WORKSPACE_CONTEXT_MANIFEST_LIMIT_BYTES} )) || decline
+{
+  for name in "\${listing[@]}"; do printf "L\\0%s\\0" "$name"; done
+  next=0
+  for index in "\${!tags[@]}"; do
+    if [[ \${tags[index]} == R ]]; then
+      printf "R\\0%s\\0" "\${names[index]}"
+    else
+      printf "%s\\0%s\\0%s\\0" "\${tags[index]}" "\${names[index]}" "\${sizes[next]}"
+      next=$((next + 1))
+    fi
+  done
+  printf "E\\0"
+  (( \${#files[@]} )) && cat -- "\${files[@]}"
+} | base64 -w0
 `;
 
-const workspaceContextCommand = `python3 -c 'import base64;exec(base64.b64decode("${btoa(
-  workspaceContextGuestSource,
-)}"))'`;
+if (workspaceContextGuestScript.includes("'"))
+  throw new Error("The workspace-context script must not contain quotes.");
+const workspaceContextCommand = `bash -c '${workspaceContextGuestScript}'`;
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const boundedString = (value: unknown): value is string =>
-  typeof value === "string" &&
-  utf8.encode(value).byteLength <= WORKSPACE_CONTEXT_FILE_LIMIT_BYTES;
-
-const validDirectoryName = (value: unknown): value is string =>
-  typeof value === "string" &&
+const validDirectoryName = (value: string) =>
   value.length > 0 &&
   value !== "." &&
   value !== ".." &&
   !value.includes("/") &&
   !value.includes("\0");
 
+const protocolError = (detail: string) =>
+  new Error(`E2B workspace-context protocol ${detail}.`);
+
 const decodeWorkspaceContextSnapshot = (
   stdout: string,
 ): WorkspaceContextSnapshotResult => {
-  if (utf8.encode(stdout).byteLength > WORKSPACE_CONTEXT_MANIFEST_LIMIT_BYTES)
-    throw new Error("E2B workspace-context protocol exceeded its size limit.");
-  let decoded: unknown;
+  if (stdout.length > WORKSPACE_CONTEXT_OUTPUT_LIMIT_BYTES)
+    throw protocolError("exceeded its size limit");
+  let bytes: Uint8Array;
   try {
-    decoded = JSON.parse(stdout);
+    bytes = Uint8Array.from(atob(stdout.trim()), (character) =>
+      character.charCodeAt(0),
+    );
   } catch {
-    throw new Error("E2B workspace-context protocol returned invalid JSON.");
+    throw protocolError("returned invalid base64");
   }
-  if (!isRecord(decoded) || decoded.version !== 1)
-    throw new Error(
-      "E2B workspace-context protocol returned an unknown version.",
-    );
-  if (decoded.kind === "declined") return { kind: "declined" };
-  if (decoded.kind !== "snapshot" || !isRecord(decoded.snapshot))
-    throw new Error(
-      "E2B workspace-context protocol returned an invalid result.",
-    );
-  const value = decoded.snapshot;
-  if (!isRecord(value.instructionFiles) || !Array.isArray(value.skillFiles))
-    throw new Error(
-      "E2B workspace-context protocol returned an invalid snapshot.",
-    );
-  const instructionFiles: {
-    "AGENTS.md"?: string;
-    "CLAUDE.md"?: string;
-  } = {};
-  for (const filename of ["AGENTS.md", "CLAUDE.md"] as const) {
-    const content = value.instructionFiles[filename];
-    if (content !== undefined && !boundedString(content))
-      throw new Error(
-        "E2B workspace-context protocol returned an invalid file.",
-      );
-    if (content !== undefined) instructionFiles[filename] = content;
+  let offset = 0;
+  const field = () => {
+    const end = bytes.indexOf(0, offset);
+    if (end < 0) throw protocolError("returned a truncated record");
+    const value = bytes.subarray(offset, end);
+    offset = end + 1;
+    return value;
+  };
+  const text = (value: Uint8Array) => strictUtf8.decode(value);
+  const declined = { kind: "declined" } as const;
+  const directoryListing: string[] = [];
+  const records: Array<{
+    readonly tag: string;
+    readonly name: string;
+    readonly size?: number;
+  }> = [];
+  let tag = text(field());
+  if (tag === "D") return declined;
+  let contentBytes = 0;
+  for (; tag !== "E"; tag = text(field())) {
+    let name: string;
+    try {
+      name = text(field());
+    } catch {
+      return declined;
+    }
+    if (tag === "L" || tag === "R") {
+      if (!validDirectoryName(name))
+        throw protocolError("returned an invalid name");
+      if (tag === "L") directoryListing.push(name);
+      else records.push({ tag, name });
+      continue;
+    }
+    if (tag !== "I" && tag !== "S")
+      throw protocolError("returned an unknown record");
+    const size = Number(text(field()));
+    if (
+      !Number.isSafeInteger(size) ||
+      size < 0 ||
+      size > WORKSPACE_CONTEXT_FILE_LIMIT_BYTES ||
+      (tag === "I"
+        ? name !== "AGENTS.md" && name !== "CLAUDE.md"
+        : !validDirectoryName(name))
+    )
+      throw protocolError("returned an invalid file record");
+    records.push({ tag, name, size });
+    contentBytes += size;
   }
-  if (value.skillFiles.length > WORKSPACE_CONTEXT_SKILL_LIMIT)
-    throw new Error("E2B workspace-context protocol returned too many skills.");
+  if (bytes.length - offset !== contentBytes) return declined;
+  if (
+    directoryListing.length > WORKSPACE_CONTEXT_DIRECTORY_LIMIT ||
+    records.filter((record) => record.tag !== "I").length >
+      WORKSPACE_CONTEXT_SKILL_LIMIT
+  )
+    throw protocolError("returned too many entries");
+  const instructionFiles: { "AGENTS.md"?: string; "CLAUDE.md"?: string } = {};
   const skillFiles: WorkspaceContextSnapshot["skillFiles"][number][] = [];
-  for (const file of value.skillFiles) {
-    if (!isRecord(file) || !validDirectoryName(file.directoryName))
-      throw new Error(
-        "E2B workspace-context protocol returned an invalid skill.",
-      );
-    if (file.kind === "file" && boundedString(file.content)) {
-      skillFiles.push({
-        kind: "file",
-        directoryName: file.directoryName,
-        content: file.content,
-      });
-    } else if (
-      file.kind === "read-error" &&
-      typeof file.errorMessage === "string"
-    ) {
+  for (const record of records) {
+    if (record.tag === "R") {
       skillFiles.push({
         kind: "read-error",
-        directoryName: file.directoryName,
-        errorMessage: file.errorMessage,
+        directoryName: record.name,
+        errorMessage: "workspace SKILL.md could not be read",
       });
-    } else {
-      throw new Error(
-        "E2B workspace-context protocol returned an invalid skill.",
-      );
+      continue;
     }
+    const size = record.size ?? 0;
+    let content: string;
+    try {
+      content = text(bytes.subarray(offset, offset + size));
+    } catch {
+      return declined;
+    }
+    offset += size;
+    if (record.tag === "I")
+      instructionFiles[record.name as "AGENTS.md" | "CLAUDE.md"] = content;
+    else skillFiles.push({ kind: "file", directoryName: record.name, content });
   }
-  const directoryListing = value.directoryListing;
+  const snapshot = { instructionFiles, skillFiles, directoryListing };
   if (
-    directoryListing !== undefined &&
-    (!Array.isArray(directoryListing) ||
-      directoryListing.length > WORKSPACE_CONTEXT_DIRECTORY_LIMIT ||
-      !directoryListing.every(validDirectoryName))
+    utf8.encode(JSON.stringify(snapshot)).byteLength >
+    WORKSPACE_CONTEXT_MANIFEST_LIMIT_BYTES
   )
-    throw new Error(
-      "E2B workspace-context protocol returned an invalid listing.",
-    );
-  return {
-    instructionFiles,
-    skillFiles,
-    ...(directoryListing === undefined ? {} : { directoryListing }),
-  };
+    return declined;
+  return snapshot;
 };
 
 /** Implements SandboxDriver by wrapping the E2B v2 TypeScript SDK. */

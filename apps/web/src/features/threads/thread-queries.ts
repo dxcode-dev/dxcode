@@ -86,7 +86,11 @@ export const threadQueryOptions = (userId: UserId, threadId: ThreadId) =>
     queryFn: async ({ client, queryKey, signal }) => {
       const current =
         client.getQueryData<Awaited<ReturnType<typeof getThread>>>(queryKey);
-      if (current?.executionWorkspace.ready === false) {
+      // A pending title settles only through the full detail payload.
+      if (
+        current?.executionWorkspace.ready === false &&
+        current.titlePending !== true
+      ) {
         const executionWorkspace = await getThreadReadiness(threadId, signal);
         // Readiness polling deliberately avoids the larger detail payload, but the
         // transition is also the point where workspace-derived detail becomes
@@ -99,7 +103,8 @@ export const threadQueryOptions = (userId: UserId, threadId: ThreadId) =>
     staleTime,
     gcTime,
     refetchInterval: (query) =>
-      query.state.data?.executionWorkspace.ready === false
+      query.state.data?.executionWorkspace.ready === false ||
+      query.state.data?.titlePending === true
         ? READINESS_FALLBACK_INTERVAL_MS
         : false,
     refetchIntervalInBackground: false,

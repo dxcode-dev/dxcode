@@ -93,7 +93,7 @@ export const residentThreadDaemonEndpoint = (
     )
       endpoint.protocol = "ws:";
     else return undefined;
-    endpoint.pathname = `/v1/threads/${encodeURIComponent(threadId)}/dxd`;
+    endpoint.pathname = `/v1/dxd/${encodeURIComponent(threadId)}`;
     return endpoint.toString();
   } catch {
     return undefined;

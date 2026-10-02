@@ -29,8 +29,8 @@ import {
   WrapText,
 } from "lucide-react";
 import * as React from "react";
-import { useTheme } from "../../../shared/theme/theme-provider.js";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
+import { useTheme } from "../../../shared/theme/theme-provider.js";
 import {
   type ChangesTransport,
   defaultChangesTransport,
@@ -200,16 +200,13 @@ export function ChangesPane({
         expandedCount={expanded.size}
         onCollapseAll={() => setExpanded(new Set())}
         refreshing={changesQuery.isFetching}
+        // The agent edits continuously, so a capture is often briefly behind.
+        // Show that quietly on the refresh control instead of a banner.
+        updating={changes?.freshness === "stale"}
+        capturedAt={changes?.capturedAt}
         onRefresh={() => void changesQuery.refetch()}
       />
 
-      {changes?.freshness === "stale" ? (
-        <div className="changes-stale-notice" role="status">
-          Showing last saved capture from{" "}
-          {formatCaptureTime(changes.capturedAt)}. Newer workspace changes may
-          not be captured yet.
-        </div>
-      ) : null}
       {changes?.truncated ? (
         <div className="changes-stale-notice" role="status">
           This capture exceeds the display limit; the shown file list is
@@ -580,6 +577,8 @@ function ChangesToolbar({
   expandedCount,
   onCollapseAll,
   refreshing,
+  updating,
+  capturedAt,
   onRefresh,
 }: {
   readonly changes: ThreadChangesData | undefined;
@@ -597,6 +596,8 @@ function ChangesToolbar({
   readonly expandedCount: number;
   readonly onCollapseAll: () => void;
   readonly refreshing: boolean;
+  readonly updating: boolean;
+  readonly capturedAt?: Parameters<typeof formatCaptureTime>[0];
   readonly onRefresh: () => void;
 }) {
   return (
@@ -677,14 +678,18 @@ function ChangesToolbar({
       <button
         type="button"
         className="changes-refresh"
-        title="Refresh changes"
-        aria-label="Refresh changes"
+        title={
+          updating && capturedAt !== undefined
+            ? `Updating changes · last captured ${formatCaptureTime(capturedAt)}`
+            : "Refresh changes"
+        }
+        aria-label={updating ? "Updating changes" : "Refresh changes"}
         disabled={refreshing}
         onClick={onRefresh}
       >
         <RefreshCw
           aria-hidden="true"
-          className={refreshing ? "changes-spin" : undefined}
+          className={refreshing || updating ? "changes-spin" : undefined}
         />
       </button>
     </div>

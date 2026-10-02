@@ -99,6 +99,26 @@ function TranscriptFileProbe() {
   );
 }
 
+// Subscribes like the real composer: the session owner passes the draft value.
+function MockComposer({
+  draft,
+}: {
+  draft: {
+    get: () => string;
+    set: (draft: string) => void;
+    subscribe: (listener: () => void) => () => void;
+  };
+}) {
+  const value = React.useSyncExternalStore(draft.subscribe, draft.get);
+  return (
+    <textarea
+      aria-label="Thread composer"
+      value={value}
+      onChange={(event) => draft.set(event.target.value)}
+    />
+  );
+}
+
 vi.mock("./agent-panel.js", () => ({
   PendingAgentPanel: ({ creation }: { creation: { body: string } }) => (
     <section aria-label="Pending agent chat">
@@ -109,8 +129,7 @@ vi.mock("./agent-panel.js", () => ({
   AgentPanel: ({
     archived,
     renderHeader,
-    draft = "",
-    onDraftChange,
+    draft,
     onOpenModelRouting,
     showArchivedNotice,
     workspaceStatus,
@@ -125,8 +144,11 @@ vi.mock("./agent-panel.js", () => ({
         subagents: { available: false };
       };
     }) => React.ReactNode;
-    draft?: string;
-    onDraftChange?: (draft: string) => void;
+    draft?: {
+      get: () => string;
+      set: (draft: string) => void;
+      subscribe: (listener: () => void) => () => void;
+    };
     onOpenModelRouting?: () => void;
     showArchivedNotice?: boolean;
     workspaceStatus?: string;
@@ -154,13 +176,7 @@ vi.mock("./agent-panel.js", () => ({
           Open Model Routing
         </button>
       ) : null}
-      {archived ? null : (
-        <textarea
-          aria-label="Thread composer"
-          value={draft}
-          onChange={(event) => onDraftChange?.(event.target.value)}
-        />
-      )}
+      {archived || draft === undefined ? null : <MockComposer draft={draft} />}
     </>
   ),
 }));

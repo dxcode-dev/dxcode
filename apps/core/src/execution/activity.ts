@@ -21,6 +21,12 @@ export interface WorkspaceActivity {
     inspectForeground: () => Promise<boolean>,
   ) => () => void;
   readonly recordTerminalInput: () => void;
+  /**
+   * The provider's deadline was replaced from outside this coordinator: an
+   * E2B connect extends a running sandbox to the connect timeout. Publish the
+   * inactivity deadline unless a lease is renewing it.
+   */
+  readonly deadlineReplaced: () => void;
   readonly isActive: () => Promise<boolean>;
 }
 
@@ -205,6 +211,15 @@ export const createWorkspaceActivity = (
         setDeadline();
       }
       schedule();
+    },
+    deadlineReplaced() {
+      // A renewing lease republishes on release. Otherwise the connect
+      // timeout must not outlive the inactivity deadline, even on a fresh
+      // coordinator that nothing else would make publish (a Files-only wake).
+      if (renewing()) return;
+      wasActive = false;
+      finalDeadlineSet = true;
+      setDeadline();
     },
     isActive: inspectActive,
   };

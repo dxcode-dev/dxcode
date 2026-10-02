@@ -158,6 +158,25 @@ const createdThreadListItem = (thread: ThreadDetailData): ThreadListItem => ({
       : thread.agentInitialization.selection.model,
 });
 
+/**
+ * A title that settled while creation was in flight is newer than the
+ * creation response's pending snapshot; keep it.
+ */
+const withSettledTitle = <Cached extends ThreadData>(
+  created: Cached,
+  cached: ThreadData | undefined,
+): Cached => {
+  if (
+    created.titlePending !== true ||
+    cached === undefined ||
+    isOptimisticThread(cached) ||
+    cached.titlePending === true
+  )
+    return created;
+  const { titlePending: _pending, ...settled } = created;
+  return { ...settled, title: cached.title } as Cached;
+};
+
 export const cacheCreatedThread = (
   queryClient: QueryClient,
   userId: UserId,
@@ -170,7 +189,10 @@ export const cacheCreatedThread = (
     }),
     queryClient.cancelQueries({ queryKey: threadKeys.lists(userId) }),
   ]).then(() => {
-    queryClient.setQueryData(threadKeys.detail(userId, thread.id), thread);
+    queryClient.setQueryData<ThreadDetailData>(
+      threadKeys.detail(userId, thread.id),
+      (cached) => withSettledTitle(thread, cached),
+    );
     const listItem = createdThreadListItem(thread);
     for (const query of queryClient.getQueryCache().findAll({
       queryKey: threadKeys.lists(userId),
@@ -189,7 +211,9 @@ export const cacheCreatedThread = (
               ? {
                   ...page,
                   items: page.items.map((item) =>
-                    item.id === thread.id ? listItem : item,
+                    item.id === thread.id
+                      ? withSettledTitle(listItem, item)
+                      : item,
                   ),
                 }
               : index === 0 && !present

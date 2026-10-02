@@ -373,6 +373,10 @@ describe("readiness requirements", () => {
   it.each([
     ["public URL", { DX_DXD_PUBLIC_URL: "https://other.test/" }],
     [
+      "workers.dev public URL path",
+      { DX_DXD_PUBLIC_URL: "https://dx-app-dxd.example.workers.dev/v1/" },
+    ],
+    [
       "public URL credentials",
       { DX_DXD_PUBLIC_URL: "https://user:pass@dx.test/" },
     ],

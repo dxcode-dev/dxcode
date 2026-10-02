@@ -386,6 +386,32 @@ describe("SettingsPage workspace lifetime", () => {
     recording.remove();
   });
 
+  it("re-renders the page only when a section's dirty state changes", async () => {
+    await act(() => root.render(page(workspaceA)));
+    const draft = container.querySelector<HTMLInputElement>(
+      '[aria-label="Sensitive workspace draft"]',
+    );
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    const type = (value: string) =>
+      act(() => {
+        setter?.call(draft, value);
+        draft?.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    // Every settings page render renders its navigation links.
+    const shellRenders = () => linkStates.values.length;
+    const before = shellRenders();
+    await type("a");
+    const afterDirty = shellRenders();
+    await type("ab");
+    await type("abc");
+    expect(afterDirty).toBeGreaterThan(before);
+    expect(shellRenders()).toBe(afterDirty);
+    expect(container.textContent).toContain("Unsaved changes");
+  });
+
   it("remounts a cached section when its workspace changes", async () => {
     await act(() => root.render(page(workspaceA)));
     const draft = container.querySelector<HTMLInputElement>(

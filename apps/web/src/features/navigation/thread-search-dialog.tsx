@@ -4,6 +4,7 @@ import * as React from "react";
 import { shortThreadName } from "../../shared/thread-label.js";
 import { Button } from "../../shared/ui/button.js";
 import { CommandSurfaceDialog } from "../../shared/ui/command-surface-dialog.js";
+import { ThreadTitleText } from "../../shared/ui/thread-title.js";
 
 export interface ThreadSearchResultRow {
   readonly projectName: string;
@@ -45,7 +46,9 @@ function ThreadSearchResult({
       onPointerMove={onPointerMove}
     >
       <span className="thread-search-result-copy">
-        <strong>{shortThreadName(row.thread)}</strong>
+        <strong>
+          <ThreadTitleText thread={row.thread} />
+        </strong>
         <small>
           {row.projectName}
           <span aria-hidden="true"> · </span>

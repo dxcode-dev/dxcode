@@ -3,6 +3,10 @@ import { FolderGit2, LockKeyhole, PanelRight, Users } from "lucide-react";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
 import { Button } from "../../shared/ui/button.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
+import {
+  PendingThreadTitle,
+  ThreadTitleText,
+} from "../../shared/ui/thread-title.js";
 import { ThreadMenu } from "./thread-menu.js";
 import type { OptimisticThreadCreation } from "./thread-session-registry.js";
 import type { TranscriptViewModel } from "./transcript-view-model.js";
@@ -15,15 +19,7 @@ export function PendingThreadHeader({
   return (
     <header className="thread-title-bar">
       <strong className="thread-title">
-        <span
-          className="thread-title-pending"
-          role="status"
-          aria-label="Generating thread title"
-        >
-          <i aria-hidden="true" />
-          <i aria-hidden="true" />
-          <i aria-hidden="true" />
-        </span>
+        <PendingThreadTitle />
       </strong>
       <span className="thread-header-metadata">
         <span title={creation.project?.name ?? "No project"}>
@@ -88,8 +84,11 @@ export function ThreadHeader({
           aria-label={`${EXECUTION_ENVIRONMENT_DISPLAY_NAME} ${environmentState}`}
         />
       </span>
-      <strong className="thread-title" title={thread.title}>
-        {thread.title}
+      <strong
+        className="thread-title"
+        title={thread.titlePending === true ? undefined : thread.title}
+      >
+        <ThreadTitleText thread={thread} />
       </strong>
       {archived ? (
         <span className="thread-archived-badge">Archived thread</span>

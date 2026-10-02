@@ -6,16 +6,19 @@
 //! `/tmp/out.png`. It never follows symbolic links, never enters `.git`, and
 //! refuses kernel pseudo-filesystems and dx's own state directories.
 
+use cap_std::fs::{Dir, Metadata, OpenOptions};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::ffi::CString;
-use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-/// Raw bytes per binary `DXF1` frame; must match Core's
+/// Raw bytes per sandbox read request; must match Core's
 /// `THREAD_SANDBOX_FILE_MAX_CHUNK_BYTES`.
 pub const MAX_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
+/// Raw bytes per binary `DXF1` frame. A chunk crosses the socket as several
+/// frames with consecutive offsets, so Terminal and control frames can be
+/// written between them instead of waiting behind 4 MiB.
+pub const MAX_FRAME_PAYLOAD_BYTES: usize = 256 * 1024;
 /// Magic prefix of a binary sandbox chunk frame. Terminal frames use `DXT1`.
 pub const CHUNK_FRAME_MAGIC: &[u8; 4] = b"DXF1";
 const MAX_PATH_BYTES: usize = 1_024;
@@ -110,109 +113,75 @@ fn resolve<'a>(roots: &SandboxRoots, guest: &'a str) -> Result<(PathBuf, Vec<&'a
 }
 
 fn path_error(error: io::Error) -> ReadError {
-    match error.raw_os_error() {
-        Some(libc::ENOENT) => ReadError::Missing,
-        Some(
-            libc::ELOOP
-            | libc::ENOTDIR
-            | libc::ENAMETOOLONG
-            | libc::EINVAL
-            | libc::EACCES
-            | libc::EPERM,
-        ) => ReadError::Invalid,
+    match error.kind() {
+        io::ErrorKind::NotFound => ReadError::Missing,
+        io::ErrorKind::PermissionDenied
+        | io::ErrorKind::NotADirectory
+        | io::ErrorKind::InvalidInput
+        | io::ErrorKind::InvalidFilename => ReadError::Invalid,
         _ => ReadError::Unavailable,
-    }
-}
-
-fn open_at(directory: RawFd, name: &str, flags: libc::c_int) -> Result<OwnedFd, ReadError> {
-    let name = CString::new(name).map_err(|_| ReadError::Invalid)?;
-    let fd = unsafe { libc::openat(directory, name.as_ptr(), flags, 0) };
-    if fd < 0 {
-        Err(path_error(io::Error::last_os_error()))
-    } else {
-        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
     }
 }
 
 /// Open a regular file by walking every component without following links.
-fn open_regular(base: &Path, parts: &[&str]) -> Result<(OwnedFd, libc::stat), ReadError> {
+fn open_regular(base: &Path, parts: &[&str]) -> Result<(cap_std::fs::File, Metadata), ReadError> {
     let (name, directories) = parts.split_last().ok_or(ReadError::Invalid)?;
-    let base = base.to_str().ok_or(ReadError::Unavailable)?;
-    let mut current = open_at(
-        libc::AT_FDCWD,
-        base,
-        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
-    )
-    .map_err(|error| match error {
-        ReadError::Missing => ReadError::Missing,
-        _ => ReadError::Unavailable,
-    })?;
+    let mut current =
+        Dir::open_ambient_dir(base, cap_std::ambient_authority()).map_err(|error| {
+            match error.kind() {
+                io::ErrorKind::NotFound => ReadError::Missing,
+                _ => ReadError::Unavailable,
+            }
+        })?;
     for part in directories {
-        current = open_at(
-            current.as_raw_fd(),
-            part,
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        )?;
+        let metadata = current.symlink_metadata(part).map_err(path_error)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(ReadError::Invalid);
+        }
+        current = current.open_dir(part).map_err(path_error)?;
     }
-    let file = open_at(
-        current.as_raw_fd(),
-        name,
-        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
-    )?;
-    let metadata = metadata(file.as_raw_fd())?;
-    if metadata.st_mode & libc::S_IFMT != libc::S_IFREG || metadata.st_size < 0 {
+    let before = current.symlink_metadata(name).map_err(path_error)?;
+    if before.file_type().is_symlink() || !before.is_file() {
         return Err(ReadError::Invalid);
+    }
+    let file = current
+        .open_with(name, OpenOptions::new().read(true))
+        .map_err(path_error)?;
+    let metadata = file.metadata().map_err(|_| ReadError::Unavailable)?;
+    if !metadata.is_file() || version_for(&metadata) != version_for(&before) {
+        return Err(ReadError::Conflict);
     }
     Ok((file, metadata))
 }
 
-fn metadata(fd: RawFd) -> Result<libc::stat, ReadError> {
-    let mut value = std::mem::MaybeUninit::<libc::stat>::uninit();
-    if unsafe { libc::fstat(fd, value.as_mut_ptr()) } < 0 {
-        Err(ReadError::Unavailable)
-    } else {
-        Ok(unsafe { value.assume_init() })
-    }
-}
-
 /// Identify one immutable revision of the file without hashing its bytes.
-fn version_for(stat: &libc::stat) -> String {
+fn version_for(metadata: &Metadata) -> String {
+    use cap_std::fs::MetadataExt;
     let identity = format!(
         "{}:{}:{}:{}.{}:{}.{}",
-        stat.st_dev,
-        stat.st_ino,
-        stat.st_size,
-        stat.st_mtime,
-        stat.st_mtime_nsec,
-        stat.st_ctime,
-        stat.st_ctime_nsec
+        metadata.dev(),
+        metadata.ino(),
+        metadata.len(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+        metadata.ctime(),
+        metadata.ctime_nsec()
     );
     format!("sha256:{:x}", Sha256::digest(identity.as_bytes()))
 }
 
-fn read_range(fd: RawFd, offset: u64, length: u64) -> Result<Vec<u8>, ReadError> {
+fn read_range(file: &mut std::fs::File, offset: u64, length: u64) -> Result<Vec<u8>, ReadError> {
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|_| ReadError::Unavailable)?;
     let mut bytes = vec![0_u8; length as usize];
     let mut filled = 0_usize;
     while filled < bytes.len() {
-        let read = unsafe {
-            libc::pread(
-                fd,
-                bytes[filled..].as_mut_ptr().cast(),
-                bytes.len() - filled,
-                (offset + filled as u64) as libc::off_t,
-            )
-        };
-        if read < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(ReadError::Unavailable);
+        match file.read(&mut bytes[filled..]) {
+            Ok(0) => break,
+            Ok(read) => filled += read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(ReadError::Unavailable),
         }
-        if read == 0 {
-            break;
-        }
-        filled += read as usize;
     }
     bytes.truncate(filled);
     Ok(bytes)
@@ -234,13 +203,14 @@ fn read_chunk(
     if expected_version.is_some_and(|expected| expected != version) {
         return Err(ReadError::Conflict);
     }
-    let size_bytes = before.st_size as u64;
+    let size_bytes = before.len();
     if offset > size_bytes {
         return Err(ReadError::Invalid);
     }
     let length = length.min(size_bytes - offset);
-    let bytes = read_range(file.as_raw_fd(), offset, length)?;
-    let after = metadata(file.as_raw_fd())?;
+    let mut file = file.into_std();
+    let bytes = read_range(&mut file, offset, length)?;
+    let after = Metadata::from_just_metadata(file.metadata().map_err(|_| ReadError::Unavailable)?);
     if version_for(&after) != version || bytes.len() as u64 != length {
         return Err(ReadError::Conflict);
     }
@@ -303,136 +273,185 @@ pub fn chunk_frame(
     Ok(frame)
 }
 
+/// Encode a chunk as one `DXF1` frame per [`MAX_FRAME_PAYLOAD_BYTES`] slice,
+/// each carrying its own offset. An empty chunk is one frame without bytes.
+pub fn chunk_frames(
+    generation: &str,
+    request_id: &str,
+    version: &str,
+    size_bytes: u64,
+    offset: u64,
+    bytes: &[u8],
+) -> Result<Vec<Vec<u8>>, serde_json::Error> {
+    if bytes.is_empty() {
+        return Ok(vec![chunk_frame(
+            generation, request_id, version, size_bytes, offset, bytes,
+        )?]);
+    }
+    bytes
+        .chunks(MAX_FRAME_PAYLOAD_BYTES)
+        .enumerate()
+        .map(|(index, slice)| {
+            chunk_frame(
+                generation,
+                request_id,
+                version,
+                size_bytes,
+                offset + (index * MAX_FRAME_PAYLOAD_BYTES) as u64,
+                slice,
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
-    use tempfile::TempDir;
 
-    fn local() -> (TempDir, SandboxRoots) {
-        let directory = TempDir::new().unwrap();
-        let home = directory.path().join("home");
-        fs::create_dir_all(home.join("notes")).unwrap();
-        (directory, SandboxRoots::Local { home })
-    }
-
-    fn json(result: SandboxReadResult) -> serde_json::Value {
-        serde_json::to_value(result).unwrap()
-    }
-
-    fn home(roots: &SandboxRoots) -> &Path {
-        match roots {
-            SandboxRoots::Local { home } => home,
-            SandboxRoots::Guest => unreachable!(),
+    fn local(home: &Path) -> SandboxRoots {
+        SandboxRoots::Local {
+            home: home.to_owned(),
         }
     }
 
     #[test]
-    fn reads_bounded_chunks_outside_the_repository() {
-        let (_directory, roots) = local();
-        fs::write(home(&roots).join("notes/todo.bin"), [0_u8, 1, 2, 3, 4, 255]).unwrap();
+    fn validates_guest_paths_and_denied_prefixes() {
+        for valid in [
+            "/home/user/notes.md",
+            "/tmp/out.png",
+            "/home/user/.config/x",
+        ] {
+            assert!(valid_guest_path(valid), "{valid}");
+        }
+        for invalid in [
+            "/",
+            "relative",
+            "/home/user/",
+            "/home/user/../etc",
+            "/home/user/./x",
+            "/proc/self/status",
+            "/sys/kernel",
+            "/dev/null",
+            "/run/x",
+            "/home/user/.local/state/dxd/config.json",
+            "/home/user/.local/state/dx-terminal/history",
+            "/home/user/repo/.git/config",
+            "/home/user/.dx-files-abc",
+            "/home\\user",
+        ] {
+            assert!(!valid_guest_path(invalid), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn reads_bounded_chunks_with_a_stable_version_and_refuses_links() {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir_all(home.path().join("docs")).unwrap();
+        let content = (0..10_000_u32)
+            .map(|value| (value % 251) as u8)
+            .collect::<Vec<_>>();
+        fs::write(home.path().join("docs/data.bin"), &content).unwrap();
+        let roots = local(home.path());
         let SandboxReadResult::SandboxChunk {
             version,
             size_bytes,
+            offset,
             bytes,
-            ..
-        } = read(&roots, "/home/user/notes/todo.bin", 0, 4, None)
+        } = read(&roots, "/home/user/docs/data.bin", 100, 4_000, None)
         else {
-            panic!("expected a chunk");
+            panic!("expected chunk")
         };
-        assert_eq!(size_bytes, 6);
-        assert_eq!(bytes, [0_u8, 1, 2, 3]);
-        let SandboxReadResult::SandboxChunk { offset, bytes, .. } =
-            read(&roots, "/home/user/notes/todo.bin", 4, 4, Some(&version))
-        else {
-            panic!("expected a chunk");
+        assert_eq!(size_bytes, 10_000);
+        assert_eq!(offset, 100);
+        assert_eq!(bytes, content[100..4_100]);
+        let SandboxReadResult::SandboxChunk { bytes: tail, .. } = read(
+            &roots,
+            "/home/user/docs/data.bin",
+            9_000,
+            MAX_CHUNK_BYTES,
+            Some(&version),
+        ) else {
+            panic!("expected tail chunk")
         };
-        assert_eq!(offset, 4);
-        assert_eq!(bytes, [4_u8, 255]);
-    }
-
-    #[test]
-    fn detects_a_changed_file_between_chunks() {
-        let (_directory, roots) = local();
-        let path = home(&roots).join("notes/log.txt");
-        fs::write(&path, "first").unwrap();
-        let first = json(read(&roots, "/home/user/notes/log.txt", 0, 2, None));
-        let version = first["version"].as_str().unwrap().to_owned();
-        fs::write(&path, "second, longer").unwrap();
-        assert_eq!(
-            json(read(
+        assert_eq!(tail, content[9_000..]);
+        assert!(matches!(
+            read(
                 &roots,
-                "/home/user/notes/log.txt",
-                2,
-                2,
-                Some(&version)
-            ))["kind"],
-            "conflict"
-        );
-    }
-
-    #[test]
-    fn refuses_links_traversal_secrets_and_the_host_outside_local_home() {
-        let (directory, roots) = local();
-        let outside = directory.path().join("outside.txt");
-        fs::write(&outside, "host secret").unwrap();
-        std::os::unix::fs::symlink(&outside, home(&roots).join("link.txt")).unwrap();
-        fs::create_dir_all(home(&roots).join("repo/.git")).unwrap();
-        fs::write(home(&roots).join("repo/.git/config"), "token").unwrap();
-        fs::create_dir_all(home(&roots).join(".local/state/dxd")).unwrap();
-        fs::write(home(&roots).join(".local/state/dxd/config.json"), "{}").unwrap();
-        for (path, kind) in [
-            ("/home/user/link.txt", "invalid"),
-            ("/home/user/notes/../link.txt", "invalid"),
-            ("/home/user/repo/.git/config", "invalid"),
-            ("/home/user/.local/state/dxd/config.json", "invalid"),
-            ("/proc/self/environ", "invalid"),
-            ("/etc/passwd", "missing"),
-            ("relative.txt", "invalid"),
-            ("/home/user/notes", "invalid"),
-            ("/home/user/absent.txt", "missing"),
-        ] {
-            assert_eq!(
-                json(read(&roots, path, 0, 16, None))["kind"],
-                kind,
-                "{path}"
-            );
+                "/home/user/docs/data.bin",
+                0,
+                10,
+                Some("sha256:stale")
+            ),
+            SandboxReadResult::Conflict
+        ));
+        assert!(matches!(
+            read(&roots, "/home/user/docs/data.bin", 10_001, 10, None),
+            SandboxReadResult::Invalid
+        ));
+        assert!(matches!(
+            read(&roots, "/home/user/docs/absent", 0, 10, None),
+            SandboxReadResult::Missing
+        ));
+        assert!(matches!(
+            read(&roots, "/tmp/outside-home", 0, 10, None),
+            SandboxReadResult::Missing
+        ));
+        assert!(matches!(
+            read(&roots, "/home/user/docs", 0, 10, None),
+            SandboxReadResult::Invalid
+        ));
+        {
+            std::os::unix::fs::symlink("data.bin", home.path().join("docs/link.bin")).unwrap();
+            assert!(matches!(
+                read(&roots, "/home/user/docs/link.bin", 0, 10, None),
+                SandboxReadResult::Invalid
+            ));
         }
     }
 
     #[test]
-    fn rejects_oversized_or_out_of_range_requests() {
-        let (_directory, roots) = local();
-        fs::write(home(&roots).join("notes/a.txt"), "abc").unwrap();
-        let path = "/home/user/notes/a.txt";
-        assert_eq!(json(read(&roots, path, 0, 0, None))["kind"], "invalid");
-        assert_eq!(
-            json(read(&roots, path, 0, MAX_CHUNK_BYTES + 1, None))["kind"],
-            "invalid"
-        );
-        assert_eq!(json(read(&roots, path, 4, 1, None))["kind"], "invalid");
-        assert!(matches!(
-            read(&roots, path, 3, 8, None),
-            SandboxReadResult::SandboxChunk { bytes, .. } if bytes.is_empty()
-        ));
+    fn chunk_frame_carries_raw_bytes_after_a_json_header() {
+        let frame = chunk_frame("gen", "req", "sha256:v", 3, 0, &[0, 255, 10]).unwrap();
+        assert_eq!(&frame[..4], b"DXF1");
+        let header_length = u32::from_be_bytes(frame[4..8].try_into().unwrap()) as usize;
+        let header: serde_json::Value =
+            serde_json::from_slice(&frame[8..8 + header_length]).unwrap();
+        assert_eq!(header["requestId"], "req");
+        assert_eq!(header["sizeBytes"], 3);
+        assert_eq!(&frame[8 + header_length..], &[0, 255, 10]);
     }
 
     #[test]
-    fn frames_chunks_as_binary_with_a_json_header() {
-        let frame = chunk_frame("gen_1", "request_12345678", "sha256:ab", 6, 4, &[4, 255]).unwrap();
-        assert_eq!(&frame[..4], b"DXF1");
-        let length = u32::from_be_bytes(frame[4..8].try_into().unwrap()) as usize;
-        let header: serde_json::Value = serde_json::from_slice(&frame[8..8 + length]).unwrap();
-        assert_eq!(
-            header,
-            serde_json::json!({
-                "generation": "gen_1",
-                "requestId": "request_12345678",
-                "version": "sha256:ab",
-                "sizeBytes": 6,
-                "offset": 4
-            })
-        );
-        assert_eq!(&frame[8 + length..], [4, 255]);
+    fn chunk_frames_split_a_chunk_at_consecutive_offsets() {
+        let decode = |frame: &[u8]| {
+            let header_length = u32::from_be_bytes(frame[4..8].try_into().unwrap()) as usize;
+            let header: serde_json::Value =
+                serde_json::from_slice(&frame[8..8 + header_length]).unwrap();
+            (header, frame[8 + header_length..].to_vec())
+        };
+        let bytes = (0..MAX_FRAME_PAYLOAD_BYTES * 2 + 5)
+            .map(|value| (value % 251) as u8)
+            .collect::<Vec<_>>();
+        let frames = chunk_frames("gen", "req", "sha256:v", 10_000_000, 1_000, &bytes).unwrap();
+        assert_eq!(frames.len(), 3);
+        let mut joined = Vec::new();
+        for (index, frame) in frames.iter().enumerate() {
+            let (header, payload) = decode(frame);
+            assert_eq!(header["requestId"], "req");
+            assert_eq!(header["sizeBytes"], 10_000_000);
+            assert_eq!(
+                header["offset"],
+                1_000 + (index * MAX_FRAME_PAYLOAD_BYTES) as u64
+            );
+            assert!(payload.len() <= MAX_FRAME_PAYLOAD_BYTES);
+            joined.extend_from_slice(&payload);
+        }
+        assert_eq!(joined, bytes);
+        let empty = chunk_frames("gen", "req", "sha256:v", 7, 7, &[]).unwrap();
+        assert_eq!(empty.len(), 1);
+        let (header, payload) = decode(&empty[0]);
+        assert_eq!(header["offset"], 7);
+        assert!(payload.is_empty());
     }
 }

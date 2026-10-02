@@ -484,6 +484,72 @@ describe("resident Terminal tracer relay", () => {
     }
   });
 
+  it("keeps a paused attachment open, never starts it, and reattaches it on the next registration", async () => {
+    const relay = new ResidentTerminalRelay();
+    const socket = new SocketFake();
+    let persisted: ResidentTerminalMetadata | undefined;
+    const fixture = transportFixture(
+      {
+        terminalVersion: 1,
+        terminal: "default",
+        state: "ready",
+        residentGeneration: resident,
+        foregroundCommand: false,
+        restartRequired: false,
+      },
+      undefined,
+      (metadata) => {
+        persisted = metadata;
+      },
+    );
+    await readyAttachment(relay, socket, fixture);
+    // Hibernated before the loss was noticed: persisted as ready.
+    const persistedReady = persisted;
+    expect(persistedReady?.phase).toBe("ready");
+    relay.daemonConnectionReset();
+    relay.workspacePaused();
+
+    expect(controlsSent(socket).slice(-2)).toEqual([
+      { v: 1, type: "progress", phase: "resident-restarting" },
+      { v: 1, type: "error", code: "workspace-paused", retry: "on-focus" },
+    ]);
+    expect(socket.closes).toEqual([]);
+
+    // Hibernation while paused: the attachment is restored waiting and does
+    // not activate, so it cannot wake the workspace.
+    const restored = new ResidentTerminalRelay();
+    const restoredSocket = new SocketFake();
+    const restoredFixture = transportFixture({
+      terminalVersion: 1,
+      terminal: "default",
+      state: "ready",
+      residentGeneration: resident,
+      foregroundCommand: false,
+      restartRequired: false,
+    });
+    expect(
+      restored.restore(
+        restoredSocket,
+        persistedReady,
+        restoredFixture.transport,
+        true,
+      ),
+    ).toBe(true);
+    await settle();
+    expect(restoredFixture.transport.activate).not.toHaveBeenCalled();
+    restored.workspacePaused();
+    expect(controlsSent(restoredSocket)).toEqual([
+      { v: 1, type: "error", code: "workspace-paused", retry: "on-focus" },
+    ]);
+
+    // A wake from anywhere re-registers the daemon and reattaches it.
+    restored.attachmentsReset();
+    await settle();
+    expect(restoredFixture.transport.activate).toHaveBeenCalledOnce();
+    expect(restoredFixture.controls.at(-1)?.type).toBe("terminal.attach");
+    expect(restoredSocket.closes).toEqual([]);
+  });
+
   it("serializes concurrent attach dimensions before later resizes", async () => {
     const relay = new ResidentTerminalRelay();
     let releaseFirst!: (state: DxdTerminalHeartbeat) => void;
@@ -583,6 +649,43 @@ describe("resident Terminal tracer relay", () => {
     });
   });
 
+  it("reports a shell lost with a restarted daemon before activation finishes", async () => {
+    const relay = new ResidentTerminalRelay();
+    const socket = new SocketFake();
+    const exited: DxdTerminalHeartbeat = {
+      terminalVersion: 1,
+      terminal: "default",
+      state: "exited",
+      residentGeneration: resident,
+      foregroundCommand: false,
+      restartRequired: false,
+    };
+    const fixture = transportFixture(exited);
+    // Activation (environment, Changes repair) is still running.
+    const transport = {
+      ...fixture.transport,
+      activate: vi.fn(() => new Promise<DxdTerminalHeartbeat>(() => undefined)),
+      exitedTerminal: async () => exited,
+    };
+    relay.attach(socket, transport);
+    socket.emit(
+      "message",
+      JSON.stringify({
+        v: 1,
+        type: "attach",
+        terminal: "default",
+        dimensions: { columns: 80, rows: 20 },
+      }),
+    );
+    await settle();
+
+    expect(fixture.controls).toHaveLength(0);
+    expect(controlsSent(socket).at(-1)).toMatchObject({
+      code: "terminal-exited",
+      retry: "manual",
+    });
+  });
+
   it("forwards daemon liveness only to ready browser attachments", async () => {
     const relay = new ResidentTerminalRelay();
     const readySocket = new SocketFake();
@@ -607,6 +710,82 @@ describe("resident Terminal tracer relay", () => {
     expect(controlsSent(waitingSocket)).toEqual([
       { v: 1, type: "progress", phase: "starting" },
     ]);
+  });
+
+  it("answers a present browser's liveness miss on its own socket", async () => {
+    const readyState: DxdTerminalHeartbeat = {
+      terminalVersion: 1,
+      terminal: "default",
+      state: "ready",
+      residentGeneration: resident,
+      foregroundCommand: false,
+      restartRequired: false,
+    };
+    const recover = JSON.stringify({ v: 1, type: "recover" });
+
+    // A live daemon: one heartbeat back, no activation, no reattach.
+    const liveRelay = new ResidentTerminalRelay();
+    const liveSocket = new SocketFake();
+    const live = transportFixture(readyState);
+    const liveCheck = vi.fn(async () => true);
+    await readyAttachment(liveRelay, liveSocket, {
+      ...live,
+      transport: { ...live.transport, checkLiveness: liveCheck },
+    });
+    const liveControls = live.controls.length;
+    liveSocket.emit("message", recover);
+    await settle();
+    expect(liveCheck).toHaveBeenCalledOnce();
+    expect(controlsSent(liveSocket).at(-1)).toEqual({
+      v: 1,
+      type: "heartbeat",
+    });
+    expect(live.transport.activate).toHaveBeenCalledOnce();
+    expect(live.controls).toHaveLength(liveControls);
+    expect(liveSocket.closes).toEqual([]);
+
+    // A silent daemon is fenced (every attachment waits) and this socket is
+    // woken and reattached in place.
+    const relay = new ResidentTerminalRelay();
+    const socket = new SocketFake();
+    const hiddenSocket = new SocketFake();
+    const fixture = transportFixture(readyState);
+    const transport: ResidentTerminalTransport = {
+      ...fixture.transport,
+      checkLiveness: vi.fn(async () => {
+        relay.daemonUnavailable();
+        return false;
+      }),
+    };
+    await readyAttachment(relay, socket, { ...fixture, transport });
+    await readyAttachment(relay, hiddenSocket, { ...fixture, transport });
+    expect(fixture.transport.activate).toHaveBeenCalledTimes(2);
+    socket.emit("message", recover);
+    await settle();
+    expect(controlsSent(socket)).toContainEqual({
+      v: 1,
+      type: "progress",
+      phase: "resident-restarting",
+    });
+    expect(fixture.transport.activate).toHaveBeenCalledTimes(3);
+    expect(fixture.controls.at(-1)?.type).toBe("terminal.attach");
+    expect(socket.closes).toEqual([]);
+    // The other attachment was told, but only the present browser woke it.
+    expect(controlsSent(hiddenSocket).at(-1)).toEqual({
+      v: 1,
+      type: "progress",
+      phase: "resident-restarting",
+    });
+
+    // A waiting attachment wakes on recovery intent; one already on its way
+    // to ready ignores it.
+    hiddenSocket.emit("message", recover);
+    await settle();
+    expect(fixture.transport.activate).toHaveBeenCalledTimes(4);
+    hiddenSocket.emit("message", recover);
+    await settle();
+    expect(fixture.transport.activate).toHaveBeenCalledTimes(4);
+    expect(hiddenSocket.closes).toEqual([]);
   });
 
   it("maps oversized browser controls and input to close 1009", async () => {

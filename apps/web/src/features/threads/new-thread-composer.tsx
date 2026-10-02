@@ -8,6 +8,7 @@ import type {
 import type * as React from "react";
 import type { PendingImage } from "./image-attachments.js";
 import { AttachmentMenu, ImagePreviews } from "./image-attachments-ui.js";
+import { useImageDropTarget } from "./image-drop-target.js";
 import { NewThreadConfigurationStrip } from "./new-thread-configuration-strip.js";
 
 export function NewThreadComposer({
@@ -75,12 +76,18 @@ export function NewThreadComposer({
   readonly dictationHideSubmit: boolean;
   readonly footer: React.ReactNode;
 }) {
+  const dropTarget = useImageDropTarget({
+    disabled: submitting,
+    onFiles,
+  });
   return (
     <form
+      className="new-thread-composer"
       onSubmit={(event) => {
         event.preventDefault();
         onSubmit();
       }}
+      {...dropTarget}
     >
       <div className="new-thread-composer-body">
         <textarea

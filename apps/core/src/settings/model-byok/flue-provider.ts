@@ -52,7 +52,7 @@ type ProxyAdapter = {
   ) => AsyncIterable<AssistantMessageEvent>;
 };
 
-const PROXY_STREAM: Record<string, () => Promise<ProxyAdapter>> = {
+export const PROXY_STREAM: Record<string, () => Promise<ProxyAdapter>> = {
   "openai-completions": () =>
     import(
       "@earendil-works/pi-ai/api/openai-completions"

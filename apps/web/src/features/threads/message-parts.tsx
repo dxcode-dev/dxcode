@@ -74,7 +74,11 @@ export function TranscriptRowContent({ row }: { readonly row: TranscriptRow }) {
   ) {
     return (
       <div className="message-text">
-        <TranscriptMarkdown>{row.text}</TranscriptMarkdown>
+        <TranscriptMarkdown
+          streaming={row.kind === "assistant-prose" && row.streaming}
+        >
+          {row.text}
+        </TranscriptMarkdown>
       </div>
     );
   }
@@ -85,7 +89,9 @@ export function TranscriptRowContent({ row }: { readonly row: TranscriptRow }) {
     return (
       <div className="work-reasoning">
         <span>Reasoning</span>
-        <TranscriptMarkdown>{row.part.text}</TranscriptMarkdown>
+        <TranscriptMarkdown streaming={row.part.state === "streaming"}>
+          {row.part.text}
+        </TranscriptMarkdown>
       </div>
     );
   }

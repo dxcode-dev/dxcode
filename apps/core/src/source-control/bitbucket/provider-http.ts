@@ -1,13 +1,11 @@
 import { canonicalBitbucketRepositoryLocator } from "@dx/domain";
 import { Effect, Redacted, Schema } from "effect";
-import { SourceMutationRejected } from "../operations.js";
 
 const API_ORIGIN = "https://api.bitbucket.org";
 const WEB_ORIGIN = "https://bitbucket.org";
 const TOKEN_URL = `${WEB_ORIGIN}/site/oauth2/access_token`;
 const MAX_TEXT = 2 * 1024 * 1024;
-export const BITBUCKET_PULL_REQUEST_BODY_MAX_LENGTH = 8_192;
-const MAX_VALUE = BITBUCKET_PULL_REQUEST_BODY_MAX_LENGTH;
+const MAX_VALUE = 8_192;
 const MAX_PAGES = 1_000;
 const MAX_ITEMS = 100_000;
 const MAX_DISCOVERY_REQUESTS = 1_000;
@@ -62,32 +60,10 @@ export interface BitbucketRepository {
   readonly archived: boolean;
 }
 
-export interface BitbucketPullRequest {
-  readonly number: number;
-  readonly state: string;
-  readonly title: string;
-  readonly body: string;
-  readonly url: string;
-  readonly head: string;
-  readonly base: string;
-}
-
-export const isBitbucketPullRequestBodyWithinLimit = (value: string) => {
-  let length = 0;
-  for (const _character of value) {
-    length += 1;
-    if (length > BITBUCKET_PULL_REQUEST_BODY_MAX_LENGTH) return false;
-  }
-  return true;
-};
-
 const runtimeFetch: typeof fetch = (input, init) =>
   globalThis.fetch(input, init);
 const invalid = (): never => {
   throw new BitbucketProviderError({ category: "invalid-response" });
-};
-const rejected = (): never => {
-  throw new SourceMutationRejected();
 };
 const string = (value: unknown, maximum = MAX_VALUE, empty = false) =>
   typeof value === "string" &&
@@ -136,8 +112,6 @@ export const createBitbucketProvider = (
   const secret = Redacted.value(config.clientSecret);
   const checked = (value: string) => string(value) ?? invalid();
   const pathPart = (value: string) => encodeURIComponent(checked(value));
-  const checkedBody = (value: string) =>
-    isBitbucketPullRequestBodyWithinLimit(value) ? value : rejected();
   const readText = async (response: Response) => {
     const declared = response.headers.get("content-length");
     if (
@@ -336,48 +310,6 @@ export const createBitbucketProvider = (
       archived: item.is_archived === true,
     };
   };
-  const pullRequest = (value: unknown): BitbucketPullRequest => {
-    const item = value as Record<string, unknown>;
-    const links = item?.links as Record<string, unknown>,
-      html = links?.html as Record<string, unknown>;
-    const source = item?.source as Record<string, unknown>,
-      destination = item?.destination as Record<string, unknown>;
-    const sourceBranch = source?.branch as Record<string, unknown>,
-      destinationBranch = destination?.branch as Record<string, unknown>;
-    const number = item?.id,
-      state = string(item?.state, 64),
-      title = string(item?.title, 1024);
-    const description = item?.description,
-      body =
-        typeof description === "string" &&
-        isBitbucketPullRequestBodyWithinLimit(description)
-          ? description
-          : undefined,
-      url = safeUrl(html?.href, WEB_ORIGIN);
-    const head = string(sourceBranch?.name, 256),
-      base = string(destinationBranch?.name, 256);
-    if (
-      typeof number !== "number" ||
-      !Number.isSafeInteger(number) ||
-      number <= 0 ||
-      state === undefined ||
-      title === undefined ||
-      body === undefined ||
-      url === undefined ||
-      head === undefined ||
-      base === undefined
-    )
-      invalid();
-    return {
-      number: number as number,
-      state: state as string,
-      title: title as string,
-      body: body as string,
-      url: url as string,
-      head: head as string,
-      base: base as string,
-    };
-  };
   const paged = async <T>(
     first: string,
     accessToken: string,
@@ -431,25 +363,6 @@ export const createBitbucketProvider = (
       throw new BitbucketProviderError({ category: "forbidden" });
     return result;
   };
-  const prPath = (workspaceId: string, repositoryId: string) =>
-    `${repoPath(workspaceId, repositoryId)}/pullrequests`;
-  const writePr = async (
-    url: string,
-    accessToken: string,
-    method: "POST" | "PUT",
-    body: unknown,
-  ) =>
-    pullRequest(
-      await json(url, {
-        method,
-        headers: {
-          ...headers(accessToken),
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(body),
-      }),
-    );
-
   return {
     exchangeCode: (code: string) =>
       token({
@@ -626,69 +539,6 @@ export const createBitbucketProvider = (
       if (commitSha === undefined || !/^[0-9a-f]{40}$/i.test(commitSha))
         invalid();
       return { repository: resolved, commitSha };
-    },
-    readPullRequest: async (
-      accessToken: string,
-      workspaceId: string,
-      repositoryId: string,
-      number: number,
-    ) => {
-      if (!Number.isSafeInteger(number) || number <= 0) invalid();
-      return pullRequest(
-        await json(`${prPath(workspaceId, repositoryId)}/${number}`, {
-          headers: headers(accessToken),
-        }),
-      );
-    },
-    listPullRequests: (
-      accessToken: string,
-      workspaceId: string,
-      repositoryId: string,
-    ) =>
-      paged(
-        `${prPath(workspaceId, repositoryId)}?pagelen=50&state=OPEN&state=MERGED&state=DECLINED&state=SUPERSEDED`,
-        accessToken,
-        pullRequest,
-        (pr) => pr.number,
-        (url) =>
-          url.pathname === new URL(prPath(workspaceId, repositoryId)).pathname,
-      ),
-    createPullRequest: (
-      accessToken: string,
-      workspaceId: string,
-      repositoryId: string,
-      input: { head: string; base: string; title: string; body: string },
-    ) =>
-      writePr(prPath(workspaceId, repositoryId), accessToken, "POST", {
-        title: checked(input.title),
-        description: checkedBody(input.body),
-        source: { branch: { name: checked(input.head) } },
-        destination: { branch: { name: checked(input.base) } },
-      }),
-    updatePullRequest: (
-      accessToken: string,
-      workspaceId: string,
-      repositoryId: string,
-      number: number,
-      input: { title?: string; body?: string },
-    ) => {
-      if (
-        !Number.isSafeInteger(number) ||
-        number <= 0 ||
-        (input.title === undefined && input.body === undefined)
-      )
-        invalid();
-      return writePr(
-        `${prPath(workspaceId, repositoryId)}/${number}`,
-        accessToken,
-        "PUT",
-        {
-          ...(input.title === undefined ? {} : { title: checked(input.title) }),
-          ...(input.body === undefined
-            ? {}
-            : { description: checkedBody(input.body) }),
-        },
-      );
     },
   };
 };

@@ -340,8 +340,11 @@ export function SettingsPage(props: SettingsPageProps) {
   const dirtyGeneration = dirtyState.generation;
   const setDirty = (nextDirty: boolean) =>
     setDirtyState((current) =>
+      // Forms report dirty on every keystroke; keep the same state object when
+      // it does not change so the whole settings page does not re-render.
       current.sectionKey === sectionKey &&
-      current.generation === dirtyGeneration
+      current.generation === dirtyGeneration &&
+      current.dirty !== nextDirty
         ? { ...current, dirty: nextDirty }
         : current,
     );

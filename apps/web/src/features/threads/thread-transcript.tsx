@@ -10,10 +10,12 @@ import { Button } from "../../shared/ui/button.js";
 import { TranscriptRowContent } from "./message-parts.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
 import { TranscriptOutline } from "./transcript-outline.js";
-import type {
-  TranscriptRow,
-  TranscriptRowId,
-  TranscriptViewModel,
+import {
+  sameTranscriptRow,
+  type TranscriptRow,
+  type TranscriptRowId,
+  type TranscriptViewModel,
+  transcriptRowsByTurn,
 } from "./transcript-view-model.js";
 import { TranscriptTurn } from "./transcript-work.js";
 import { useThreadPresentation } from "./use-thread-presentation.js";
@@ -31,13 +33,30 @@ interface TranscriptPosition {
   anchor?: { key: VirtualItem["key"]; within: number };
 }
 
-export function TranscriptRowShell({
-  measureElement,
-  row,
-}: {
+interface TranscriptRowShellProps {
   readonly measureElement: (element: HTMLElement | null) => void;
   readonly row: TranscriptRow;
-}) {
+}
+
+/** Unchanged rows of a re-rendering turn skip render (and Markdown parsing). */
+export const TranscriptRowShell = React.memo(
+  TranscriptRowShellContent,
+  (previous: TranscriptRowShellProps, next: TranscriptRowShellProps) =>
+    previous.measureElement === next.measureElement &&
+    sameTranscriptRow(previous.row, next.row),
+);
+
+// Turns are measured as a whole; rows need no measurement callback.
+const measureNothing = () => {};
+// Module-level so memoized turns can compare it by identity.
+const renderTranscriptRow = (row: TranscriptRow) => (
+  <TranscriptRowShell key={row.id} row={row} measureElement={measureNothing} />
+);
+
+function TranscriptRowShellContent({
+  measureElement,
+  row,
+}: TranscriptRowShellProps) {
   const user = row.kind === "user-prompt";
   return (
     <article
@@ -621,6 +640,7 @@ export function TranscriptViewport(
   const processingTurnId = model.turns.findLast(
     (turn) => turn.status === "active",
   )?.id;
+  const rowsByTurn = React.useMemo(() => transcriptRowsByTurn(model), [model]);
   return (
     <>
       <section
@@ -662,10 +682,7 @@ export function TranscriptViewport(
             {virtualizer.getVirtualItems().map((item) => {
               const turn = model.turns[item.index];
               if (turn === undefined) return null;
-              const rows = turn.rowIds.flatMap((id) => {
-                const row = model.rows.find((candidate) => candidate.id === id);
-                return row === undefined ? [] : [row];
-              });
+              const rows = rowsByTurn.get(turn.id) ?? [];
               return (
                 <div
                   className="transcript-virtual-item"
@@ -684,13 +701,7 @@ export function TranscriptViewport(
                       processing={
                         showProcessingIndicator && turn.id === processingTurnId
                       }
-                      renderRow={(row) => (
-                        <TranscriptRowShell
-                          key={row.id}
-                          row={row}
-                          measureElement={() => {}}
-                        />
-                      )}
+                      renderRow={renderTranscriptRow}
                     />
                   </div>
                 </div>

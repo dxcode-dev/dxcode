@@ -1,21 +1,44 @@
 import type { ThreadId } from "@dx/domain";
-import { Redacted, Schema } from "effect";
-import ProfileHook from "../../../../dxd/assets/dx-terminal-profile.sh?raw";
+import { Redacted } from "effect";
+import ProfileStub from "../../../../dxd/assets/dx-terminal-stub.sh?raw";
 import { SOURCE_WORKSPACE_CWD } from "../../source-control/source-workspace.js";
 import {
-  type DaemonGeneration,
   DXD_PROTOCOL_MAJOR,
-  DXD_RELEASE,
+  type DxdRuntimeConfiguration,
 } from "../dxd/protocol.js";
 
+/**
+ * Bootstrap of the resident daemon in an E2B guest.
+ *
+ * This runs only when no daemon registered on its own. Its first command
+ * inspects the guest and, when a current-protocol daemon is installed and
+ * configured, only nudges it (SIGHUP, or a start when it is down): one guest
+ * command. The release itself is the daemon's business: Core names it after
+ * every registration and the daemon swaps in place, keeping its shell.
+ *
+ * Everything else gets the full install: a brand-new sandbox, a lost
+ * configuration, or a guest from before protocol 2 (`main`: config version
+ * 1, a root-owned `/usr/local/bin/dxd`, and a tmux-hosted shell). A running
+ * daemon is restarted only when its binary cannot speak this protocol, once.
+ * The binary and configuration are owned by the `user` account so the daemon
+ * can update itself; the systemd unit and the static login hook are the only
+ * root-owned pieces. The login hook is a stub that sources the shell profile
+ * dxd writes and versions itself, so no release depends on a root-owned file
+ * changing.
+ */
+
 const STATE_DIRECTORY = "/home/user/.local/state/dxd";
-const HEALTH_SOCKET = `${STATE_DIRECTORY}/health.sock`;
-const MAX_OBSERVATION_BYTES = 64 * 1024;
-const HEALTH_GENERATION_ATTEMPTS = 10;
-const HEALTH_GENERATION_RETRY_MS = 250;
-const PROFILE_HOOK_PATH = "/etc/profile.d/dx-terminal.sh";
+const BINARY_PATH = `${STATE_DIRECTORY}/bin/dxd`;
+const CONFIG_PATH = `${STATE_DIRECTORY}/config.json`;
+const PROFILE_STUB_PATH = "/etc/profile.d/dx-terminal.sh";
+// An earlier installer left an upgrade notice here for the next shell to
+// print; the inspection removes both so no shell shows it.
+const LEGACY_NOTICE_HOOK_PATH = "/etc/profile.d/dx-terminal-notice.sh";
+const LEGACY_NOTICE_PATH = `${STATE_DIRECTORY}/terminal-notice`;
+const UNIT_PATH = "/etc/systemd/system/dxd.service";
 const BASH_PROFILE_PATH = "/home/user/.bash_profile";
 const BASHRC_PATH = "/home/user/.bashrc";
+const MAX_OBSERVATION_BYTES = 64 * 1024;
 
 export interface DaemonGuest {
   readonly files: {
@@ -31,14 +54,24 @@ export interface DaemonGuest {
 
 export interface EnsureDaemonGuestInput {
   readonly threadId: ThreadId;
-  readonly generation: DaemonGeneration;
-  readonly apiKey: Redacted.Redacted<string>;
   readonly endpoint: string;
   readonly sha256: string;
+  readonly releaseUrl: string;
+  /** Fallback when the guest cannot download the release itself. */
   readonly loadBinary: () => Promise<Uint8Array>;
+  readonly credential?: {
+    readonly id: string;
+    readonly key: Redacted.Redacted<string>;
+  };
+  readonly mintCredential: () => Promise<{
+    readonly id: string;
+    readonly key: Redacted.Redacted<string>;
+  }>;
   readonly signal?: AbortSignal;
 }
 
+// RestartSec is short because a restarted dxd is what tells the browser that
+// the shell died with the old process (Terminal "exited" with Restart).
 const Unit = `[Unit]
 Description=dx daemon
 After=network-online.target
@@ -49,9 +82,9 @@ StartLimitBurst=5
 Type=simple
 User=user
 Group=user
-ExecStart=/usr/local/bin/dxd
+ExecStart=${BINARY_PATH}
 Restart=always
-RestartSec=2
+RestartSec=500ms
 UMask=0077
 
 [Install]
@@ -68,12 +101,18 @@ const Bashrc = `case $- in
 esac
 `;
 
-const Health = Schema.Struct({
-  release: Schema.Literal(DXD_RELEASE),
-  protocolMajor: Schema.Literal(DXD_PROTOCOL_MAJOR),
-  generation: Schema.String,
-  connected: Schema.Boolean,
-});
+// The executable the running daemon was started from; empty when it is down.
+// systemctl needs sudo here: the guest user has no systemd bus.
+const RunningDaemon = `pid=$(sudo systemctl show dxd.service -p MainPID --value 2>/dev/null || echo 0)
+running=$(test "$pid" -gt 0 2>/dev/null && readlink /proc/$pid/exe 2>/dev/null || true)`;
+
+const hex = (bytes: ArrayBuffer) =>
+  [...new Uint8Array(bytes)]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+
+const sha256 = async (text: string) =>
+  hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
 
 const boundedRandomPath = (name: string) =>
   `${STATE_DIRECTORY}/.${name}-${crypto.randomUUID()}`;
@@ -84,58 +123,134 @@ const arrayBuffer = (bytes: Uint8Array) =>
     bytes.byteOffset + bytes.byteLength,
   ) as ArrayBuffer;
 
+/** What a guest bootstrap did. */
+export type DaemonGuestOutcome =
+  /** A current daemon was only nudged: one guest command. */
+  | "nudged"
+  /** Installed or repaired without replacing a running daemon. */
+  | "installed"
+  /** A running pre-protocol-2 daemon was replaced; its shell ended. */
+  | "upgraded";
+
+interface GuestState {
+  readonly binaryCurrent: boolean;
+  /** A version-2 configuration; older documents are replaced. */
+  readonly configPresent: boolean;
+}
+
+/**
+ * One command: report the installation, and nudge the daemon when nothing
+ * needs installing. Returns `undefined` after a nudge.
+ */
+const inspectGuest = async (
+  guest: DaemonGuest,
+  sha256Hex: string,
+  nudge: boolean,
+): Promise<GuestState | undefined> => {
+  const [unitSha, stubSha] = await Promise.all([
+    sha256(Unit),
+    sha256(ProfileStub),
+  ]);
+  const inspected = await guest.commands.run(
+    `install -d -m 0700 ${STATE_DIRECTORY} ${STATE_DIRECTORY}/bin
+rm -f ${LEGACY_NOTICE_PATH}
+if test -e ${LEGACY_NOTICE_HOOK_PATH}; then sudo rm -f ${LEGACY_NOTICE_HOOK_PATH}; fi
+binary=none; protocol=none; config=no-config
+if test -f ${BINARY_PATH}; then binary=$(sha256sum ${BINARY_PATH} | cut -d' ' -f1); fi
+if test -x ${BINARY_PATH}; then protocol=$(${BINARY_PATH} --version 2>/dev/null | sed -n 's/^dxd [^ ]* protocol //p'); fi
+if test -f ${CONFIG_PATH} && grep -q '"version":2' ${CONFIG_PATH}; then config=config; fi
+${RunningDaemon}
+${
+  nudge
+    ? `if test "$running" = ${BINARY_PATH} && test "$protocol" = ${DXD_PROTOCOL_MAJOR} && test "$config" = config && test "$(sha256sum ${UNIT_PATH} 2>/dev/null | cut -d' ' -f1)" = ${unitSha} && test "$(sha256sum ${PROFILE_STUB_PATH} 2>/dev/null | cut -d' ' -f1)" = ${stubSha}; then
+  sudo systemctl kill --signal=SIGHUP --kill-whom=main dxd.service
+  echo nudged; exit 0
+fi`
+    : ""
+}
+echo "$binary"; echo "$config"`,
+    { timeoutMs: 10_000 },
+  );
+  if (
+    inspected.exitCode !== 0 ||
+    new TextEncoder().encode(inspected.stdout).byteLength >
+      MAX_OBSERVATION_BYTES
+  )
+    throw new Error("Daemon guest inspection failed.");
+  const lines = inspected.stdout.trim().split("\n");
+  if (lines[0] === "nudged") return undefined;
+  return {
+    binaryCurrent: lines[0] === sha256Hex,
+    configPresent: lines[1] === "config",
+  };
+};
+
 export const ensureDaemonInGuest = async (
   guest: DaemonGuest,
   input: EnsureDaemonGuestInput,
-): Promise<{
-  release: typeof DXD_RELEASE;
-  protocolMajor: typeof DXD_PROTOCOL_MAJOR;
-  generation: DaemonGeneration;
-}> => {
-  const binaryTemp = boundedRandomPath("binary");
-  const configTemp = boundedRandomPath("config");
+): Promise<DaemonGuestOutcome> => {
+  // A new credential must reach the configuration, so it never just nudges.
+  const state = await inspectGuest(
+    guest,
+    input.sha256,
+    input.credential === undefined,
+  );
+  if (state === undefined) return "nudged";
+  if (input.signal?.aborted) throw new Error("Daemon installation aborted.");
+
+  const credential =
+    input.credential ??
+    (state.configPresent ? undefined : await input.mintCredential());
+  const configTemp =
+    credential === undefined ? undefined : boundedRandomPath("config");
+  if (configTemp !== undefined && credential !== undefined) {
+    const configuration: DxdRuntimeConfiguration = {
+      version: 2,
+      endpoint: input.endpoint,
+      threadId: input.threadId,
+      apiKey: Redacted.value(credential.key),
+      workspaceRoot: SOURCE_WORKSPACE_CWD,
+    };
+    await guest.files.write(configTemp, JSON.stringify(configuration));
+  }
+
+  const binaryTemp = state.binaryCurrent
+    ? undefined
+    : boundedRandomPath("binary");
+  if (binaryTemp !== undefined) {
+    // The guest fetches the release directly; the Worker only streams the
+    // bytes itself when the guest cannot reach the release host. The E2B SDK
+    // rejects a non-zero exit instead of returning it, so both count as failed.
+    const fetched = await guest.commands
+      .run(
+        `curl -fsSL --max-time 120 --retry 5 --retry-delay 1 --retry-all-errors -o ${binaryTemp} '${input.releaseUrl}' && printf '%s  %s\n' '${input.sha256}' '${binaryTemp}' | sha256sum -c - >/dev/null && echo ok`,
+        { timeoutMs: 150_000 },
+      )
+      .catch(() => undefined);
+    if (fetched?.exitCode !== 0 || fetched.stdout.trim() !== "ok") {
+      if (input.signal?.aborted)
+        throw new Error("Daemon installation aborted.");
+      const binary = await input.loadBinary();
+      await guest.files.write(binaryTemp, arrayBuffer(binary));
+    }
+  }
+
   const unitTemp = boundedRandomPath("unit");
-  const profileHookTemp = boundedRandomPath("profile-hook");
+  const profileStubTemp = boundedRandomPath("profile-stub");
   const bashProfileTemp = boundedRandomPath("bash-profile");
   const bashrcTemp = boundedRandomPath("bashrc");
-  const configuration = JSON.stringify({
-    version: 1,
-    endpoint: input.endpoint,
-    threadId: input.threadId,
-    generation: input.generation,
-    apiKey: Redacted.value(input.apiKey),
-    release: DXD_RELEASE,
-    protocolMajor: DXD_PROTOCOL_MAJOR,
-    workspaceRoot: SOURCE_WORKSPACE_CWD,
-  });
-
-  const installed = await guest.commands.run(
-    `install -d -m 0700 -o user -g user ${STATE_DIRECTORY}
-if test -f /usr/local/bin/dxd; then sha256sum /usr/local/bin/dxd; fi`,
-    { timeoutMs: 10_000 },
-  );
-  const binaryCurrent =
-    installed.stdout.trim() === `${input.sha256}  /usr/local/bin/dxd`;
-  if (input.signal?.aborted) throw new Error("Daemon installation aborted.");
-  const binary = binaryCurrent ? undefined : await input.loadBinary();
-  if (input.signal?.aborted) throw new Error("Daemon installation aborted.");
   await Promise.all([
-    ...(binary === undefined
-      ? []
-      : [guest.files.write(binaryTemp, arrayBuffer(binary))]),
-    guest.files.write(configTemp, configuration),
     guest.files.write(unitTemp, Unit),
-    guest.files.write(profileHookTemp, ProfileHook),
+    guest.files.write(profileStubTemp, ProfileStub),
     guest.files.write(bashProfileTemp, BashProfile),
     guest.files.write(bashrcTemp, Bashrc),
   ]);
+  if (input.signal?.aborted) throw new Error("Daemon installation aborted.");
 
   // Values enter the guest only through files.write. This command contains
   // bounded random paths and public release metadata, never runtime config.
-  if (input.signal?.aborted) throw new Error("Daemon installation aborted.");
-  try {
-    const install = await guest.commands.run(
-      `lockdir=${STATE_DIRECTORY}/install.lock.d
+  const install = await guest.commands.run(
+    `lockdir=${STATE_DIRECTORY}/install.lock.d
 while ! mkdir "$lockdir" 2>/dev/null; do
   holder=$(cat "$lockdir/pid" 2>/dev/null || true)
   if test -n "$holder" && ! kill -0 "$holder" 2>/dev/null; then
@@ -150,78 +265,52 @@ done
 echo $$ >"$lockdir/pid"
 trap 'rm -rf -- "$lockdir"' EXIT
 set -eu
-chmod 0600 ${configTemp}
-chmod 0644 ${unitTemp}
-chmod 0644 ${profileHookTemp} ${bashProfileTemp} ${bashrcTemp}
-chown user:user ${configTemp}
-binary_changed=0; config_changed=0; unit_changed=0
-profile_changed=0
+chmod 0644 ${unitTemp} ${profileStubTemp} ${bashProfileTemp} ${bashrcTemp}
+# Only a daemon from before protocol ${DXD_PROTOCOL_MAJOR} (running from another path) is
+# replaced while it runs. A current one keeps its process and shell and swaps
+# releases itself, even when its file was replaced ("… (deleted)").
+${RunningDaemon}
+restart=0
+case "$running" in ""|${BINARY_PATH}*) ;; *) restart=1 ;; esac
 ${
-  binaryCurrent
-    ? `printf '%s  %s\n' '${input.sha256}' '/usr/local/bin/dxd' | sha256sum -c - >/dev/null`
-    : `trap 'rm -f -- ${binaryTemp}; rm -rf -- "$lockdir"' EXIT
-chmod 0755 ${binaryTemp}
+  binaryTemp === undefined
+    ? ""
+    : `chmod 0755 ${binaryTemp}
 printf '%s  %s\n' '${input.sha256}' '${binaryTemp}' | sha256sum -c - >/dev/null
-if ! test -f /usr/local/bin/dxd || ! cmp -s ${binaryTemp} /usr/local/bin/dxd; then sudo install -o root -g root -m 0755 ${binaryTemp} /usr/local/bin/dxd; binary_changed=1; fi
-rm -f ${binaryTemp}`
+mv -f ${binaryTemp} ${BINARY_PATH}`
 }
-if ! test -f ${STATE_DIRECTORY}/config.json || ! cmp -s ${configTemp} ${STATE_DIRECTORY}/config.json; then mv -f ${configTemp} ${STATE_DIRECTORY}/config.json; config_changed=1; else rm -f ${configTemp}; fi
-if ! test -f /etc/systemd/system/dxd.service || ! cmp -s ${unitTemp} /etc/systemd/system/dxd.service; then sudo install -o root -g root -m 0644 ${unitTemp} /etc/systemd/system/dxd.service; unit_changed=1; fi
+${
+  configTemp === undefined
+    ? ""
+    : `chmod 0600 ${configTemp}
+mv -f ${configTemp} ${CONFIG_PATH}`
+}
+if ! test -f ${UNIT_PATH} || ! cmp -s ${unitTemp} ${UNIT_PATH}; then sudo install -o root -g root -m 0644 ${unitTemp} ${UNIT_PATH}; sudo systemctl daemon-reload; fi
 rm -f ${unitTemp}
-if ! test -f ${PROFILE_HOOK_PATH} || ! cmp -s ${profileHookTemp} ${PROFILE_HOOK_PATH}; then sudo install -o root -g root -m 0644 ${profileHookTemp} ${PROFILE_HOOK_PATH}; profile_changed=1; fi
-rm -f ${profileHookTemp}
+if ! test -f ${PROFILE_STUB_PATH} || ! cmp -s ${profileStubTemp} ${PROFILE_STUB_PATH}; then sudo install -o root -g root -m 0644 ${profileStubTemp} ${PROFILE_STUB_PATH}; fi
+rm -f ${profileStubTemp}
 if ! test -e ${BASH_PROFILE_PATH} && ! test -L ${BASH_PROFILE_PATH}; then mv ${bashProfileTemp} ${BASH_PROFILE_PATH}; else rm -f ${bashProfileTemp}; fi
 if ! test -e ${BASHRC_PATH} && ! test -L ${BASHRC_PATH}; then mv ${bashrcTemp} ${BASHRC_PATH}; else rm -f ${bashrcTemp}; fi
-if test "$unit_changed" = 1; then sudo systemctl daemon-reload; fi
+if test "$(readlink /usr/local/bin/dxd 2>/dev/null)" != "${BINARY_PATH}"; then sudo ln -sfn ${BINARY_PATH} /usr/local/bin/dxd; fi
 sudo systemctl enable dxd.service >/dev/null
-if test "$binary_changed$config_changed$unit_changed$profile_changed" != 0000; then sudo systemctl restart dxd.service; else sudo systemctl start dxd.service; fi`,
-      { timeoutMs: 30_000 },
-    );
-    if (install.exitCode !== 0) throw new Error("Daemon installation failed.");
-  } catch {
-    // systemd can report a transient command failure while a resumed guest is
-    // already completing the requested restart. The exact-generation health
-    // check below is the authority; partial installs cannot satisfy it.
-  }
-
-  for (let attempt = 0; attempt < HEALTH_GENERATION_ATTEMPTS; attempt += 1) {
-    const healthResult = await guest.commands.run(
-      `curl --silent --show-error --max-time 5 --retry 5 --retry-delay 1 --retry-all-errors --unix-socket ${HEALTH_SOCKET} http://localhost/health`,
-      { timeoutMs: 10_000 },
-    );
-    if (
-      healthResult.exitCode !== 0 ||
-      new TextEncoder().encode(healthResult.stdout).byteLength >
-        MAX_OBSERVATION_BYTES
-    )
-      throw new Error("Daemon health check failed.");
-    let raw: unknown;
-    try {
-      raw = JSON.parse(healthResult.stdout);
-    } catch {
-      throw new Error("Daemon health check returned invalid JSON.");
-    }
-    if (
-      typeof raw !== "object" ||
-      raw === null ||
-      Array.isArray(raw) ||
-      Object.keys(raw).sort().join(",") !==
-        "connected,generation,protocolMajor,release"
-    )
-      throw new Error("Daemon health check returned an invalid result.");
-    const health = Schema.decodeUnknownSync(Health)(raw);
-    if (health.generation === input.generation)
-      return { ...health, generation: input.generation };
-    if (input.signal?.aborted) throw new Error("Daemon installation aborted.");
-    if (attempt + 1 < HEALTH_GENERATION_ATTEMPTS)
-      await new Promise((resolve) =>
-        setTimeout(resolve, HEALTH_GENERATION_RETRY_MS),
-      );
-  }
-  throw new Error("Daemon health check did not match requested generation.");
+# A running daemon owns the Terminal shell. It re-reads its configuration and
+# reconnects on SIGHUP; only an incompatible one is replaced, once.
+if test -z "$running"; then
+  sudo systemctl start dxd.service; echo installed
+elif test "$restart" = 1; then
+  sudo systemctl restart dxd.service; echo upgraded
+else
+  sudo systemctl kill --signal=SIGHUP --kill-whom=main dxd.service; echo installed
+fi`,
+    { timeoutMs: 30_000 },
+  );
+  if (install.exitCode !== 0) throw new Error("Daemon installation failed.");
+  return install.stdout.trim().endsWith("upgraded") ? "upgraded" : "installed";
 };
 
 export const DXD_SYSTEMD_UNIT = Unit;
-export const DXD_PROFILE_HOOK = ProfileHook;
+export const DXD_PROFILE_STUB = ProfileStub;
 export const DXD_DEFAULT_BASH_PROFILE = BashProfile;
 export const DXD_DEFAULT_BASHRC = Bashrc;
+export const DXD_GUEST_BINARY_PATH = BINARY_PATH;
+export const DXD_GUEST_CONFIG_PATH = CONFIG_PATH;

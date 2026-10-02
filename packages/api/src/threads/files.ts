@@ -4,7 +4,8 @@ import { errorResponse, successResponse } from "../http/response.js";
 import { ThreadChangesWorktreeId } from "./changes.js";
 
 export const THREAD_FILES_MAX_PATH_LENGTH = 1_024;
-export const THREAD_FILES_MAX_TREE_PAGE_SIZE = 100;
+// dxd serves a whole directory in one response; this is the entry ceiling.
+export const THREAD_FILES_MAX_TREE_PAGE_SIZE = 10_000;
 export const THREAD_FILES_MAX_EDITABLE_BYTES = 256 * 1_024;
 
 const NonNegativeInt = Schema.Int.check(

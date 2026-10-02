@@ -3,7 +3,7 @@ import {
   type ThreadListItem,
   threadAgentUrl,
 } from "@dx/api";
-import type { Thread, ThreadId } from "@dx/domain";
+import { isThreadTitlePending, type Thread, type ThreadId } from "@dx/domain";
 import { Schema } from "effect";
 
 const SummaryRowSchema = Schema.Struct({
@@ -42,6 +42,7 @@ export const threadListItem = (
   activityStatus: thread.activityStatus,
   lifecycleState: thread.lifecycleState,
   pinnedAt: thread.pinnedAt,
+  ...(isThreadTitlePending(thread) ? { titlePending: true } : {}),
   agentUrl: threadAgentUrl(thread.id),
   mode:
     thread.selection.kind === "mode"

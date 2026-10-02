@@ -25,6 +25,7 @@ import {
   pruneSubmissionUsageAttributions,
   storeSubmissionUsageAttribution,
 } from "../../src/settings/usage/submission-attribution.js";
+import { runDxTitleAgent } from "../../src/threads/dx-title-agent.js";
 
 /**
  * Coordinator DO transport tests. DOs run in the same isolate as the test
@@ -1258,6 +1259,287 @@ describe("ByokCredentialCoordinatorObject", () => {
       .result();
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("503");
+    expect(calls).toHaveBeenCalledOnce();
+  });
+});
+
+describe("ByokCredentialCoordinatorObject /complete", () => {
+  const complete = (body: Record<string, unknown>) =>
+    stub()
+      .fetch("https://coordinator/complete", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          threadId: THREAD,
+          ownerUserId: OWNER,
+          selection: { kind: "model", model: "openai/gpt-6-astra" },
+          systemPrompt: "Title the message.",
+          message: "<user_message>\nFix OAuth retries\n</user_message>",
+          maxTokens: 2_048,
+          ...body,
+        }),
+      })
+      .then(drained);
+
+  const storageKeys = () =>
+    runInDurableObject(stub(), async (_instance, state) => [
+      ...(await state.storage.list()).keys(),
+    ]);
+
+  it("completes on the thread's current route at low effort without pinning or attributing", async () => {
+    await seed();
+    const before = await storageKeys();
+    const calls: {
+      authorization: string | null;
+      body: Record<string, unknown>;
+    }[] = [];
+    stubFetch(async (request) => {
+      calls.push({
+        authorization: request.headers.get("authorization"),
+        body: (await request.json()) as Record<string, unknown>,
+      });
+      return new Response(
+        `data: ${JSON.stringify({
+          id: "chat-title",
+          object: "chat.completion.chunk",
+          created: 0,
+          model: "astra-litellm",
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant", content: "OAuth refresh retries" },
+              finish_reason: "stop",
+            },
+          ],
+        })}\n\ndata: [DONE]\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+
+    const response = await complete({});
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      text: "OAuth refresh retries",
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.authorization).toBe("Bearer sk-litellm-real");
+    expect(calls[0]?.body).toMatchObject({
+      model: "astra-litellm",
+      messages: [
+        { role: "developer", content: "Title the message." },
+        {
+          role: "user",
+          content: "<user_message>\nFix OAuth retries\n</user_message>",
+        },
+      ],
+    });
+    expect(calls[0]?.body).not.toHaveProperty("tools");
+    expect(calls[0]?.body).toMatchObject({ reasoning_effort: "low" });
+    expect(await storageKeys()).toEqual(before);
+  });
+
+  it("lets DxTitleAgent settle only a pending title", async () => {
+    await seed();
+    stubFetch(
+      async () =>
+        new Response(
+          `data: ${JSON.stringify({
+            id: "chat-title",
+            object: "chat.completion.chunk",
+            created: 0,
+            model: "astra-litellm",
+            choices: [
+              {
+                index: 0,
+                delta: { role: "assistant", content: "OAuth refresh retries" },
+                finish_reason: "stop",
+              },
+            ],
+          })}\n\ndata: [DONE]\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+    );
+    const row = () =>
+      env.DB.prepare(
+        "SELECT title, title_pending_until FROM threads WHERE id = ?",
+      )
+        .bind(THREAD)
+        .first<{ title: string; title_pending_until: string | null }>();
+    const job = {
+      threadId: THREAD as never,
+      ownerUserId: OWNER as never,
+      selection: {
+        kind: "model" as const,
+        model: "openai/gpt-6-astra" as never,
+      },
+      message: "Fix OAuth callback retries when refresh tokens expire",
+      persisted: Promise.resolve(true),
+    };
+
+    await runDxTitleAgent(env as never, job);
+    expect(await row()).toEqual({
+      title: "Untitled thread",
+      title_pending_until: null,
+    });
+
+    await env.DB.prepare(
+      "UPDATE threads SET title_pending_until = ? WHERE id = ?",
+    )
+      .bind(new Date(Date.now() + 40_000).toISOString(), THREAD)
+      .run();
+    await runDxTitleAgent(env as never, job);
+    expect(await row()).toEqual({
+      title: "OAuth refresh retries",
+      title_pending_until: null,
+    });
+  });
+
+  it("asks Workers AI GLM 5.3 Flash for low thinking", async () => {
+    await seed();
+    const payloads: Record<string, unknown>[] = [];
+    const ai = {
+      run: vi.fn(async (_model: string, payload: Record<string, unknown>) => {
+        payloads.push(payload);
+        return new Response(
+          `data: ${JSON.stringify({
+            choices: [
+              {
+                index: 0,
+                delta: { content: "BUG: iOS paste" },
+                finish_reason: "stop",
+              },
+            ],
+          })}\n\ndata: [DONE]\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      }),
+    };
+    const coordinatorEnv = () =>
+      runInDurableObject(
+        stub(),
+        (instance) =>
+          (instance as unknown as { env: Record<string, unknown> }).env,
+      );
+    (await coordinatorEnv()).AI = ai;
+    try {
+      const response = await complete({
+        selection: {
+          kind: "model",
+          model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+        },
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        text: "BUG: iOS paste",
+      });
+      expect(ai.run).toHaveBeenCalledOnce();
+      expect(ai.run.mock.calls[0]?.[0]).toBe("@cf/zai-org/glm-5.3-flash");
+      expect(payloads[0]).toMatchObject({
+        reasoning_effort: "low",
+        max_completion_tokens: 2_048,
+      });
+      expect(payloads[0]).not.toHaveProperty("tools");
+    } finally {
+      delete (await coordinatorEnv()).AI;
+    }
+  });
+
+  it("reports an upstream failure without retrying", async () => {
+    await seed();
+    const calls = vi.fn(async () =>
+      Response.json({ error: { message: "Unavailable" } }, { status: 503 }),
+    );
+    stubFetch(calls);
+
+    const response = await complete({});
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      code: "COMPLETION_FAILED",
+    });
+    expect(calls).toHaveBeenCalledOnce();
+  });
+
+  it("routes by the supplied owner before any Thread row exists", async () => {
+    await seed();
+    const calls = vi.fn(async () => Response.json({}));
+    stubFetch(calls);
+    expect((await complete({ message: "" })).status).toBe(400);
+    expect((await complete({ selection: { kind: "nope" } })).status).toBe(400);
+
+    const response = await complete({
+      threadId: "thr_00000000-0000-4000-8000-00000000c0de",
+      ownerUserId: "someone-else",
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "MODEL_NOT_SERVED: openai/gpt-6-astra",
+    });
+
+    // Once the row exists, only its owner may title it.
+    const foreign = await complete({ ownerUserId: "someone-else" });
+    expect(foreign.status).toBe(403);
+    await expect(foreign.json()).resolves.toEqual({
+      code: "THREAD_OWNER_MISMATCH",
+    });
+    expect(calls).not.toHaveBeenCalled();
+  });
+
+  it("runs one title completion per Thread, joined only by an identical request", async () => {
+    await seed();
+    let release: () => void = () => {};
+    const upstreamHeld = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls = vi.fn(async () => {
+      await upstreamHeld;
+      return new Response(
+        `data: ${JSON.stringify({
+          id: "chat-title",
+          object: "chat.completion.chunk",
+          created: 0,
+          model: "astra-litellm",
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant", content: "OAuth refresh retries" },
+              finish_reason: "stop",
+            },
+          ],
+        })}\n\ndata: [DONE]\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    stubFetch(calls);
+
+    const first = complete({});
+    await vi.waitFor(() => expect(calls).toHaveBeenCalledOnce(), {
+      timeout: 10_000,
+    });
+    // A double-submitted creation joins the in-flight call.
+    const duplicate = complete({});
+    const otherModel = await complete({
+      selection: { kind: "mode", profileId: "default", mode: "low" },
+    });
+    expect(otherModel.status).toBe(409);
+    const second = await complete({
+      message: "<user_message>\nFix billing\n</user_message>",
+    });
+    release();
+
+    expect(second.status).toBe(409);
+    await expect(second.json()).resolves.toEqual({
+      code: "COMPLETION_IN_FLIGHT",
+    });
+    for (const response of [await first, await duplicate]) {
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        text: "OAuth refresh retries",
+      });
+    }
     expect(calls).toHaveBeenCalledOnce();
   });
 });

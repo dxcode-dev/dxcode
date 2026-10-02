@@ -8,7 +8,7 @@ const bindings = (overrides: Partial<Bindings> = {}): Bindings =>
   ({
     E2B_API_KEY: "e2b-secret",
     DX_E2B_TEMPLATE: "dx-workspace",
-    DX_E2B_TIMEOUT_MS: "600000",
+    DX_E2B_TIMEOUT_MS: "300000",
     DX_ENV: "test",
     ...overrides,
   }) as Bindings;
@@ -23,7 +23,7 @@ describe("loadE2BRequirements", () => {
     expect(result).toEqual({
       apiKey: result.apiKey,
       template: "dx-workspace",
-      timeoutMs: 600_000,
+      timeoutMs: 300_000,
       inactivityMs: 300_000,
       dxEnv: "test",
     });
@@ -36,6 +36,13 @@ describe("loadE2BRequirements", () => {
     ]);
     expect(Redacted.value(result.apiKey)).toBe("e2b-secret");
     expect(String(result.apiKey)).not.toContain("e2b-secret");
+  });
+
+  it("defaults the E2B timeout to the five-minute inactivity deadline", async () => {
+    const result = await load({ DX_E2B_TIMEOUT_MS: undefined });
+
+    expect(result.timeoutMs).toBe(300_000);
+    expect(result.timeoutMs).toBe(result.inactivityMs);
   });
 
   it("uses the selected runner profile template", async () => {

@@ -1,5 +1,5 @@
 import type { Sandbox } from "@flue/runtime";
-import { Effect } from "effect";
+import { Effect, Redacted } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -113,7 +113,6 @@ const mocks = vi.hoisted(() => {
     e2b: vi.fn(() => {
       throw new Error("E2B adapter must not run in local mode.");
     }),
-    changesSync: vi.fn(async () => undefined),
   };
 });
 
@@ -166,12 +165,11 @@ vi.mock("./e2b/adapter.js", () => ({
 }));
 vi.mock("../thread-changes/coordinator.js", () => ({
   makeThreadChangesCoordinator: vi.fn(() => ({
-    sync: mocks.changesSync,
+    sync: vi.fn(async () => undefined),
     runMutation: (operation: () => Promise<unknown>) => operation(),
   })),
 }));
 
-import { env } from "cloudflare:workers";
 import { executeTrustedSourceCommand } from "./e2b/source-command-admission.js";
 import { ExecutionWorkspaces } from "./execution-workspaces.js";
 
@@ -188,7 +186,6 @@ beforeEach(() => {
   mocks.resolveWorkspace.mockClear();
   mocks.connectWorkspace.mockClear();
   mocks.e2b.mockClear();
-  mocks.changesSync.mockClear();
 });
 
 describe("local execution workspace source boundary", () => {
@@ -199,21 +196,55 @@ describe("local execution workspace source boundary", () => {
     );
   });
 
-  it("repairs changes against the primitive existing sandbox", async () => {
-    const bindings = env as { DX_STORAGE?: R2Bucket };
-    bindings.DX_STORAGE = {} as R2Bucket;
+  it("reuses a self-registered daemon without any source command", async () => {
+    const awaitRegistration = vi.fn(async () => true);
+    const mintCredential = vi.fn();
+
+    await expect(
+      ExecutionWorkspaces.ensureDaemon({
+        threadId: mocks.threadId as never,
+        endpoint: "https://local-dx.example.test/daemon",
+        mintCredential,
+        awaitRegistration,
+      }),
+    ).resolves.toEqual({ bootstrapped: false });
+
+    expect(awaitRegistration).toHaveBeenCalledOnce();
+    expect(mocks.primitiveExec).not.toHaveBeenCalled();
+    expect(mocks.firstSource).not.toHaveBeenCalled();
+    expect(mintCredential).not.toHaveBeenCalled();
+  });
+
+  it("does not wait for a registration a newly minted key cannot produce", async () => {
+    const awaitRegistration = vi.fn(async () => true);
+    mocks.requestLocalRuntime.mockImplementation((async (
+      _bindings: unknown,
+      _threadId: unknown,
+      action: string,
+    ) =>
+      action === "daemon"
+        ? { status: "running" }
+        : {
+            root: "/tmp/dx-local/workspace/repo",
+            home: "/tmp/dx-local",
+            helper: "/tmp/dx-local/dx-git-credential",
+            fixtureRemote: "/tmp/dx-local/source-fixture.git",
+          }) as never);
     try {
-      await ExecutionWorkspaces.repairChanges(mocks.threadId as never);
+      await expect(
+        ExecutionWorkspaces.ensureDaemon({
+          threadId: mocks.threadId as never,
+          endpoint: "https://local-dx.example.test/daemon",
+          credential: { id: "key", key: Redacted.make("dxd_minted") },
+          mintCredential: vi.fn(),
+          awaitRegistration,
+        }),
+      ).resolves.toMatchObject({ bootstrapped: true });
     } finally {
-      delete bindings.DX_STORAGE;
+      mocks.requestLocalRuntime.mockReset();
     }
 
-    expect(mocks.localCreateSandbox).toHaveBeenCalledExactlyOnceWith({
-      id: mocks.threadId,
-    });
-    expect(mocks.changesSync).toHaveBeenCalledOnce();
-    expect(mocks.firstSource).not.toHaveBeenCalled();
-    expect(mocks.resolveEnvironment).not.toHaveBeenCalled();
+    expect(awaitRegistration).not.toHaveBeenCalled();
   });
 
   it("fails source-provider admission before any GitHub, E2B, or command callback", async () => {

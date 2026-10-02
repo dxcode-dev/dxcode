@@ -32,6 +32,7 @@ interface PreviewState {
 // A first preview requires a 500 ms dwell (trailing only; never flushed).
 // Leaving cancels it. Once primed, switching rows stays immediate.
 const PREVIEW_OPEN_INTENT_MS = 500;
+const noop = () => undefined;
 // 160 ms bridges the pointer gap from a row to its preview (trailing only;
 // never flushed). Re-entry and unmount cancel the pending close.
 const PREVIEW_CLOSE_GRACE_MS = 160;
@@ -76,34 +77,31 @@ const useThreadPreviewIntent = () => {
     },
     [cancelPreviewIntent],
   );
-  const openPreview = (
-    thread: ThreadData,
-    projectName: string,
-    element: HTMLElement,
-  ) => {
-    hoveredThreadId.current = thread.id;
-    closePreviewAfterGrace.cancel();
-    openPreviewAfterIntent.cancel();
-    if (suppressedThreadId.current === thread.id) return;
-    suppressedThreadId.current = undefined;
-    const bounds = element.getBoundingClientRect();
-    const nextPreview = {
-      anchor: { right: bounds.right, top: bounds.top },
-      projectName,
-      thread,
-    };
-    if (previewPrimed.current) {
-      previewPrimed.current = true;
-      setPreview(nextPreview);
-      return;
-    }
-    openPreviewAfterIntent.maybeExecute(nextPreview);
-  };
-
-  return {
-    preview,
-    openPreview,
-    leaveThreadRow: (threadId: ThreadData["id"]) => {
+  // Stable: memoized sidebar rows receive these handlers.
+  const openPreview = React.useCallback(
+    (thread: ThreadData, projectName: string, element: HTMLElement) => {
+      hoveredThreadId.current = thread.id;
+      closePreviewAfterGrace.cancel();
+      openPreviewAfterIntent.cancel();
+      if (suppressedThreadId.current === thread.id) return;
+      suppressedThreadId.current = undefined;
+      const bounds = element.getBoundingClientRect();
+      const nextPreview = {
+        anchor: { right: bounds.right, top: bounds.top },
+        projectName,
+        thread,
+      };
+      if (previewPrimed.current) {
+        previewPrimed.current = true;
+        setPreview(nextPreview);
+        return;
+      }
+      openPreviewAfterIntent.maybeExecute(nextPreview);
+    },
+    [closePreviewAfterGrace, openPreviewAfterIntent],
+  );
+  const leaveThreadRow = React.useCallback(
+    (threadId: ThreadData["id"]) => {
       if (hoveredThreadId.current === threadId)
         hoveredThreadId.current = undefined;
       if (suppressedThreadId.current === threadId)
@@ -111,7 +109,10 @@ const useThreadPreviewIntent = () => {
       openPreviewAfterIntent.cancel();
       closePreviewAfterGrace.maybeExecute();
     },
-    dismissPreviewForNavigation: (threadId: ThreadData["id"]) => {
+    [closePreviewAfterGrace, openPreviewAfterIntent],
+  );
+  const dismissPreviewForNavigation = React.useCallback(
+    (threadId: ThreadData["id"]) => {
       openPreviewAfterIntent.cancel();
       closePreviewAfterGrace.cancel();
       previewPrimed.current = false;
@@ -119,6 +120,14 @@ const useThreadPreviewIntent = () => {
         hoveredThreadId.current === threadId ? threadId : undefined;
       setPreview(undefined);
     },
+    [closePreviewAfterGrace, openPreviewAfterIntent],
+  );
+
+  return {
+    preview,
+    openPreview,
+    leaveThreadRow,
+    dismissPreviewForNavigation,
     schedulePreviewClose: () => {
       openPreviewAfterIntent.cancel();
       closePreviewAfterGrace.maybeExecute();
@@ -155,13 +164,13 @@ export function AppSidebar({
   onCollapse,
   collapseLabel = "Collapse sidebar",
   onNavigate,
-  onOpenSearch = () => undefined,
+  onOpenSearch = noop,
   searchTriggerRef,
   onLoadMore,
   loadingMore,
   hasMore,
   loadMoreError,
-  onSetPinned = () => undefined,
+  onSetPinned = noop,
   pinningThreadId,
   extensionRegion,
 }: {
@@ -210,6 +219,13 @@ export function AppSidebar({
   const projectNames = React.useMemo(
     () => new Map(projects.map((project) => [project.id, project.name])),
     [projects],
+  );
+  const onThreadNavigate = React.useCallback(
+    (threadId: ThreadData["id"]) => {
+      dismissPreviewForNavigation(threadId);
+      onNavigate();
+    },
+    [dismissPreviewForNavigation, onNavigate],
   );
   const sections = buildThreadSections(
     projects,
@@ -287,10 +303,7 @@ export function AppSidebar({
               userId={userId}
               activeThreadId={activeThreadId}
               projectNames={projectNames}
-              onThreadNavigate={(threadId) => {
-                dismissPreviewForNavigation(threadId);
-                onNavigate();
-              }}
+              onThreadNavigate={onThreadNavigate}
               onThreadPointerEnter={openPreview}
               onThreadPointerLeave={leaveThreadRow}
               onSetArchived={archive.setArchived}
@@ -312,10 +325,7 @@ export function AppSidebar({
         visibleThreadCount={threads.length}
         onLoadMore={onLoadMore}
         onNavigate={onNavigate}
-        onThreadNavigate={(threadId) => {
-          dismissPreviewForNavigation(threadId);
-          onNavigate();
-        }}
+        onThreadNavigate={onThreadNavigate}
         onThreadPointerEnter={openPreview}
         onThreadPointerLeave={leaveThreadRow}
         onToggleGroup={toggleGroup}

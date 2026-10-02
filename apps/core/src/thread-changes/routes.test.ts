@@ -123,15 +123,36 @@ afterEach(() => {
 });
 
 describe("Thread Changes routes", () => {
-  it("rejects obsolete capture diffs without reading another version's patch", async () => {
+  it("serves an obsolete capture's diff from the newest capture and names it", async () => {
     mocks.read.mockResolvedValueOnce(state());
     mocks.load.mockResolvedValueOnce(manifest);
     const response = await request(
       `/v1/threads/${threadId}/changes/diff?path=${path}&captureId=chg_obsolete`,
     );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      data: { kind: "diff", captureId, patch: expect.stringContaining("+new") },
+    });
+    expect(mocks.patch).toHaveBeenCalledWith(
+      bindings.DX_STORAGE,
+      threadId,
+      captureId,
+      { kind: "all" },
+      path,
+      "primary",
+      manifest,
+    );
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("rejects an obsolete capture's diff for a file the newest capture dropped", async () => {
+    mocks.read.mockResolvedValueOnce(state());
+    mocks.load.mockResolvedValueOnce(manifest);
+    const response = await request(
+      `/v1/threads/${threadId}/changes/diff?path=src/reverted.ts&captureId=chg_obsolete`,
+    );
     expect(response.status).toBe(409);
     expect(mocks.patch).not.toHaveBeenCalled();
-    expect(mocks.createSandbox).not.toHaveBeenCalled();
   });
 
   it("routes a same-origin observer without accessing an execution workspace", async () => {

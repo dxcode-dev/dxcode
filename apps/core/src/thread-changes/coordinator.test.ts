@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   read: vi.fn(),
   source: vi.fn(),
   beginMutation: vi.fn(),
+  markDirty: vi.fn(),
   publish: vi.fn(),
   confirmUnchanged: vi.fn(),
   probe: vi.fn(),
@@ -18,10 +19,20 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./repository-d1.js", () => ({
   makeThreadChangesRepository: () => ({
-    acquireCapture: mocks.acquireCapture,
+    acquireCapture: async (threadId: unknown, durationMs: unknown) => {
+      // The real lease reads state and source in the same transaction.
+      const lease = await mocks.acquireCapture(threadId, durationMs);
+      if (lease === undefined) return undefined;
+      const [state, source] = await Promise.all([
+        mocks.read(threadId),
+        mocks.source(threadId),
+      ]);
+      return { ...lease, state, source };
+    },
     read: mocks.read,
     source: mocks.source,
     beginMutation: mocks.beginMutation,
+    markDirty: mocks.markDirty,
     publish: mocks.publish,
     confirmUnchanged: mocks.confirmUnchanged,
   }),
@@ -38,8 +49,8 @@ vi.mock("../logging.js", () => ({
 }));
 
 import {
-  makeResidentThreadChangesTerminalObserver,
   makeThreadChangesCoordinator,
+  markResidentThreadChangesDirty,
   runResidentThreadChangesMutation,
 } from "./coordinator.js";
 import { publishThreadChangesResidentCandidate } from "./resident-publisher.js";
@@ -52,53 +63,60 @@ afterEach(() => {
 });
 
 describe("Thread Changes mutation coordination", () => {
-  it("retains one resident Terminal lease across inputs and refreshes only after suspend", async () => {
-    const release = vi.fn(async () => undefined);
-    mocks.beginMutation.mockResolvedValue({
-      generation: 7,
+  it("answers a resident hint with one mark and no mutation lease", async () => {
+    const capture = {
+      token: "capture-lease-token",
+      expiresAt: Date.now() + 15_000,
+      release: vi.fn(async () => undefined),
+    };
+    mocks.markDirty.mockResolvedValue({
       refreshToken: "opaque-refresh-token",
-      renew: vi.fn(async () => undefined),
-      release,
+      latestFingerprint: "c".repeat(64),
+      capture,
     });
-    mocks.read.mockResolvedValue({
+    const hint = (held?: typeof capture) =>
+      markResidentThreadChangesDirty({
+        db: {} as D1Database,
+        threadId,
+        source: {
+          baseline: "a".repeat(40),
+          defaultBranch: "main",
+          repositoryName: "example-org/example-repo",
+        },
+        token: "opaque-refresh-token",
+        ...(held === undefined ? {} : { held }),
+      });
+
+    await expect(hint()).resolves.toEqual({
+      refresh: {
+        type: "changes-refresh",
+        token: "opaque-refresh-token",
+        source: { baseline: "a".repeat(40), defaultBranch: "main" },
+        expectedFingerprint: "c".repeat(64),
+      },
+      capture,
+    });
+    expect(mocks.markDirty).toHaveBeenLastCalledWith(
       threadId,
-      mutationGeneration: 7,
-      latestFingerprint: "b".repeat(64),
-      activeMutations: 1,
-    });
-    mocks.source.mockResolvedValue({
-      baseline: "a".repeat(40),
-      defaultBranch: "main",
-      repositoryName: "example-org/example-repo",
-    });
-    const residentRefresh = vi.fn(async () => true);
-    const observer = makeResidentThreadChangesTerminalObserver({
-      db: {} as D1Database,
-      threadId,
-      residentRefresh,
-    });
-
-    await observer.beforeInput();
-    await observer.beforeInput();
-
-    expect(mocks.beginMutation).toHaveBeenCalledOnce();
-    expect(release).not.toHaveBeenCalled();
-    expect(residentRefresh).not.toHaveBeenCalled();
-
-    await observer.beforeSuspend();
-
-    expect(release).toHaveBeenCalledOnce();
-    expect(residentRefresh).toHaveBeenCalledExactlyOnceWith({
-      type: "changes-refresh",
-      token: "opaque-refresh-token",
-      source: { baseline: "a".repeat(40), defaultBranch: "main" },
-      expectedFingerprint: "b".repeat(64),
-    });
-    expect(release.mock.invocationCallOrder[0]).toBeLessThan(
-      residentRefresh.mock.invocationCallOrder[0] ?? 0,
+      "opaque-refresh-token",
+      { holdCaptureMs: 15_000 },
     );
-    expect(mocks.acquireCapture).not.toHaveBeenCalled();
-    expect(mocks.capture).not.toHaveBeenCalled();
+    expect(mocks.beginMutation).not.toHaveBeenCalled();
+    expect(mocks.read).not.toHaveBeenCalled();
+
+    // A held lease is renewed only while it is safely inside its expiry.
+    await hint(capture);
+    expect(mocks.markDirty).toHaveBeenLastCalledWith(
+      threadId,
+      "opaque-refresh-token",
+      { holdCaptureMs: 15_000, held: capture },
+    );
+    await hint({ ...capture, expiresAt: Date.now() + 1_000 });
+    expect(mocks.markDirty).toHaveBeenLastCalledWith(
+      threadId,
+      "opaque-refresh-token",
+      { holdCaptureMs: 15_000 },
+    );
   });
 
   it("dirties before dispatch, then queues resident capture after settlement without request capture", async () => {
@@ -718,135 +736,5 @@ describe("Thread Changes mutation coordination", () => {
     });
     expect(mocks.confirmUnchanged).not.toHaveBeenCalled();
     expect(releaseCapture).toHaveBeenCalledOnce();
-  });
-});
-
-describe("Thread Changes terminal coordination", () => {
-  it("contains mutation persistence failures within terminal hooks", async () => {
-    mocks.beginMutation.mockRejectedValueOnce(new Error("D1 unavailable"));
-    mocks.acquireCapture.mockResolvedValue(undefined);
-    const coordinator = makeThreadChangesCoordinator({
-      db: {} as D1Database,
-      bucket: {} as R2Bucket,
-      threadId,
-      sandbox: { cwd: "/repo" } as Sandbox,
-    });
-    const terminal = coordinator.terminalObserver();
-
-    await expect(terminal.beforeInput()).resolves.toBeUndefined();
-    await expect(terminal.beforeSuspend()).resolves.toBeUndefined();
-  });
-
-  it("still attempts suspension capture when mutation release fails", async () => {
-    mocks.beginMutation.mockResolvedValue({
-      generation: 1,
-      renew: vi.fn(async () => undefined),
-      release: vi.fn(async () => {
-        throw new Error("D1 unavailable");
-      }),
-    });
-    mocks.acquireCapture.mockResolvedValue(undefined);
-    const coordinator = makeThreadChangesCoordinator({
-      db: {} as D1Database,
-      bucket: {} as R2Bucket,
-      threadId,
-      sandbox: { cwd: "/repo" } as Sandbox,
-    });
-    const terminal = coordinator.terminalObserver();
-
-    await terminal.beforeInput();
-    await expect(terminal.beforeSuspend()).resolves.toBeUndefined();
-    expect(mocks.acquireCapture).toHaveBeenCalledOnce();
-  });
-
-  it("renews the terminal mutation lease without further input", async () => {
-    vi.useFakeTimers();
-    const renew = vi.fn(async () => undefined);
-    const release = vi.fn(async () => undefined);
-    mocks.beginMutation.mockResolvedValue({ generation: 1, renew, release });
-    const coordinator = makeThreadChangesCoordinator({
-      db: {} as D1Database,
-      bucket: {} as R2Bucket,
-      threadId,
-      sandbox: { cwd: "/repo" } as Sandbox,
-    });
-    const terminal = coordinator.terminalObserver();
-
-    await terminal.beforeInput();
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(renew).toHaveBeenCalledOnce();
-
-    terminal.close();
-    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(renew).toHaveBeenCalledOnce();
-  });
-
-  it("keeps the projection dirty on disconnect because tmux may still mutate", async () => {
-    const release = vi.fn(async () => undefined);
-    mocks.beginMutation.mockResolvedValue({
-      generation: 1,
-      renew: vi.fn(async () => undefined),
-      release,
-    });
-    const coordinator = makeThreadChangesCoordinator({
-      db: {} as D1Database,
-      bucket: {} as R2Bucket,
-      threadId,
-      sandbox: { cwd: "/repo" } as Sandbox,
-    });
-    const terminal = coordinator.terminalObserver();
-
-    await terminal.beforeInput();
-    terminal.close();
-    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
-
-    expect(mocks.acquireCapture).not.toHaveBeenCalled();
-    expect(mocks.capture).not.toHaveBeenCalled();
-    expect(mocks.put).not.toHaveBeenCalled();
-    expect(mocks.publish).not.toHaveBeenCalled();
-  });
-
-  it("queues resident refresh after the terminal lease is released for suspension", async () => {
-    const releaseMutation = vi.fn(async () => undefined);
-    const residentRefresh = vi.fn(async () => true);
-    const head = "a".repeat(40) as ThreadChangesCommitSha;
-    mocks.beginMutation.mockResolvedValue({
-      generation: 1,
-      refreshToken: "opaque-refresh-token",
-      renew: vi.fn(async () => undefined),
-      release: releaseMutation,
-    });
-    mocks.read.mockResolvedValue({
-      threadId,
-      mutationGeneration: 1,
-      activeMutations: 0,
-    });
-    mocks.source.mockResolvedValue({
-      baseline: head,
-      defaultBranch: "main",
-      repositoryName: "example-org/example-repo",
-    });
-    const coordinator = makeThreadChangesCoordinator({
-      db: {} as D1Database,
-      bucket: { delete: vi.fn() } as unknown as R2Bucket,
-      threadId,
-      sandbox: { cwd: "/repo" } as Sandbox,
-      residentRefresh,
-    });
-    const terminal = coordinator.terminalObserver();
-
-    await terminal.beforeInput();
-    expect(residentRefresh).not.toHaveBeenCalled();
-    await terminal.beforeSuspend();
-
-    expect(releaseMutation).toHaveBeenCalledOnce();
-    expect(residentRefresh).toHaveBeenCalledOnce();
-    expect(releaseMutation.mock.invocationCallOrder[0]).toBeLessThan(
-      residentRefresh.mock.invocationCallOrder[0] ?? 0,
-    );
-    expect(mocks.acquireCapture).not.toHaveBeenCalled();
-    expect(mocks.capture).not.toHaveBeenCalled();
-    expect(mocks.publish).not.toHaveBeenCalled();
   });
 });

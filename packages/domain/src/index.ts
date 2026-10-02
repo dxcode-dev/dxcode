@@ -629,6 +629,7 @@ export {
 export {
   CreateThreadInput,
   createThread,
+  isThreadTitlePending,
   Thread,
   ThreadActivityStatus,
   ThreadLifecycleState,
@@ -638,6 +639,7 @@ export { newThreadId, ThreadId } from "./threads/thread-id.js";
 export {
   generateThreadTitle,
   THREAD_TITLE_MAX_LENGTH,
+  THREAD_TITLE_PENDING_MS,
   ThreadTitle,
   type ThreadTitle as ThreadTitleType,
   UNTITLED_THREAD_TITLE,

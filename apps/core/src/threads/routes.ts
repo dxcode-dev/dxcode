@@ -44,6 +44,7 @@ import {
 } from "@dx/api";
 import {
   defaultThreadModelSelection,
+  isThreadTitlePending,
   ModelNotServed,
   PersistenceUnavailable,
   SourceControlAccessDenied,
@@ -103,6 +104,11 @@ import { WorkspacePolicyRepositoryD1 } from "../settings/workspace-policy/reposi
 import { WorkspacePolicyService } from "../settings/workspace-policy/service.js";
 import { authorizeProjectSource } from "../source-control/admission.js";
 import {
+  type DxTitleAgentRunner,
+  dxTitleAgentApplies,
+  runDxTitleAgent,
+} from "./dx-title-agent.js";
+import {
   readThreadListProjection,
   threadListItem,
 } from "./list-projection-d1.js";
@@ -135,6 +141,7 @@ const threadData = (thread: Thread): ThreadData => ({
   activityStatus: thread.activityStatus,
   lifecycleState: thread.lifecycleState,
   pinnedAt: thread.pinnedAt,
+  ...(isThreadTitlePending(thread) ? { titlePending: true } : {}),
   agentUrl: threadAgentUrl(thread.id),
 });
 
@@ -281,6 +288,7 @@ export const resolveCreationResponseDetail = <
 
 export const createThreadRoutes = (
   dispatchInitialMessage: InitialThreadDispatcher = dispatchInitialThreadMessage,
+  titleAgent: DxTitleAgentRunner = runDxTitleAgent,
 ) => {
   const threadRoutes = new Hono<AppEnv>();
 
@@ -290,6 +298,8 @@ export const createThreadRoutes = (
     let requestAdmittedAt = startedAt;
     let sourceAuthorizedAt = startedAt;
     let threadPersistedAt = startedAt;
+    let settleTitlePersisted: ((persisted: boolean) => void) | undefined;
+    let recoveredConcurrentCreation = false;
     const operation = Effect.gen(function* () {
       const input = yield* decodeJsonBody(
         context.req,
@@ -304,6 +314,14 @@ export const createThreadRoutes = (
       const serviceLayer = threadServiceLayer(db);
       const principal = context.get("principal");
       const requestedThreadId = input.threadId;
+      // DxTitleAgent needs an execution context to outlive the response.
+      const titleExecution = (() => {
+        try {
+          return context.executionCtx;
+        } catch {
+          return undefined;
+        }
+      })();
       const existingThread =
         requestedThreadId === undefined
           ? undefined
@@ -317,6 +335,29 @@ export const createThreadRoutes = (
                   ),
                 );
             }).pipe(Effect.provide(serviceLayer));
+      // DxTitleAgent starts as soon as creation of a new Thread begins, beside
+      // model resolution, persistence, and dispatch. It waits for the row only
+      // to store the title, and keeps it even if the first message is not
+      // admitted; a retry reuses this Thread and its title.
+      const titleMessage = input.initialMessage?.body;
+      const titlePending =
+        existingThread === undefined &&
+        requestedThreadId !== undefined &&
+        titleExecution !== undefined &&
+        titleMessage !== undefined &&
+        dxTitleAgentApplies(context.env, titleMessage);
+      if (titlePending)
+        titleExecution.waitUntil(
+          titleAgent(context.env, {
+            threadId: requestedThreadId,
+            ownerUserId: principal.userId,
+            selection: input.selection ?? defaultThreadModelSelection(),
+            message: titleMessage,
+            persisted: new Promise<boolean>((resolve) => {
+              settleTitlePersisted = resolve;
+            }),
+          }),
+        );
       const thread =
         existingThread ??
         (yield* Effect.gen(function* () {
@@ -460,22 +501,29 @@ export const createThreadRoutes = (
               source,
               requestedThreadId,
               runnerProfileId,
+              titlePending,
             )
             .pipe(
               Effect.catchTag("PersistenceUnavailable", (failure) =>
                 requestedThreadId === undefined
                   ? Effect.fail(failure)
-                  : service
-                      .get(principal, requestedThreadId)
-                      .pipe(
-                        Effect.catchTag("ThreadNotFound", () =>
-                          Effect.fail(failure),
-                        ),
+                  : service.get(principal, requestedThreadId).pipe(
+                      // A concurrent request created this row; its own
+                      // title job owns the title.
+                      Effect.tap(() =>
+                        Effect.sync(() => {
+                          recoveredConcurrentCreation = true;
+                        }),
                       ),
+                      Effect.catchTag("ThreadNotFound", () =>
+                        Effect.fail(failure),
+                      ),
+                    ),
               ),
             );
         }).pipe(Effect.provide(serviceLayer)));
       threadPersistedAt = Date.now();
+      settleTitlePersisted?.(!recoveredConcurrentCreation);
       const initialMessage = input.initialMessage;
       const detail = yield* resolveCreationResponseDetail(
         threadDetailData(context.env.DB, db, thread),
@@ -530,6 +578,8 @@ export const createThreadRoutes = (
     });
 
     const result = await Effect.runPromise(Effect.result(operation));
+    // A creation that failed before persisting leaves no row to title.
+    settleTitlePersisted?.(false);
     if (Result.isSuccess(result)) {
       await scheduleRealtimeInvalidation(
         () => context.executionCtx,

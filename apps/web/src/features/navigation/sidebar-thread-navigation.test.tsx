@@ -295,8 +295,8 @@ describe("sidebar archive hover actions", () => {
     expect(
       container
         .querySelector('[aria-label="Orb paused"]')
-        ?.getAttribute("data-working-animation"),
-    ).toBeNull();
+        ?.getAttribute("data-activity-status"),
+    ).toBe("idle");
 
     await React.act(() =>
       archive?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
@@ -339,11 +339,9 @@ describe("sidebar Orb activity", () => {
 
     const idleOrb = container.querySelector('[aria-label="Orb idle"]');
     const workingOrb = container.querySelector('[aria-label="Orb working"]');
-    expect(idleOrb?.getAttribute("data-working-animation")).toBeNull();
-    expect(workingOrb?.getAttribute("data-working-animation")).toBe(
-      "inner-arc",
-    );
-    expect(workingOrb?.querySelector(".activity-inner-arc")).not.toBeNull();
+    expect(idleOrb?.getAttribute("data-activity-status")).toBe("idle");
+    expect(workingOrb?.getAttribute("data-activity-status")).toBe("working");
+    expect(workingOrb?.querySelector("[data-activity-artwork]")).not.toBeNull();
 
     await React.act(() => root.unmount());
   });

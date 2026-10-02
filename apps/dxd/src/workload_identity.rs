@@ -10,9 +10,10 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
+use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread;
 use std::time::Duration;
+use tokio::sync::mpsc::{Receiver, Sender, channel, error::TrySendError};
 
 pub const SOCKET_NAME: &str = "workload-identity.sock";
 const DEFAULT_SOCKET_PATH: &str = "/home/user/.local/state/dxd/workload-identity.sock";
@@ -42,8 +43,12 @@ pub struct Relay {
 }
 
 impl Relay {
-    pub fn try_request(&self) -> Result<LocalRequest, TryRecvError> {
-        self.requests.try_recv()
+    /// Resolve with the next helper request; pending forever once closed.
+    pub async fn next(&mut self) -> LocalRequest {
+        match self.requests.recv().await {
+            Some(request) => request,
+            None => std::future::pending().await,
+        }
     }
 }
 
@@ -77,11 +82,25 @@ pub fn start(
     {
         return Err(io::ErrorKind::PermissionDenied.into());
     }
-    let (sender, requests) = sync_channel(MAX_CONCURRENT_REQUESTS);
+    let (sender, requests) = channel(MAX_CONCURRENT_REQUESTS);
     let active = Arc::new(AtomicUsize::new(0));
-    thread::spawn(move || {
-        for incoming in listener.incoming() {
-            let Ok(stream) = incoming else { continue };
+    listener.set_nonblocking(true)?;
+    let listener = tokio::net::UnixListener::from_std(listener)?;
+    // Accepting is readiness on the daemon loop's thread; each admitted
+    // request is served on its own short-lived thread.
+    tokio::spawn(async move {
+        loop {
+            let stream = match listener.accept().await {
+                Ok((stream, _)) => stream.into_std(),
+                Err(error) => Err(error),
+            };
+            let Ok(stream) = stream.and_then(|stream| {
+                stream.set_nonblocking(false)?;
+                Ok(stream)
+            }) else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            };
             let admitted = active
                 .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                     (current < MAX_CONCURRENT_REQUESTS).then_some(current + 1)
@@ -119,7 +138,7 @@ fn validate_socket_directory(path: &Path) -> io::Result<()> {
 
 fn handle_stream(
     mut stream: UnixStream,
-    sender: &SyncSender<LocalRequest>,
+    sender: &Sender<LocalRequest>,
     connected: &AtomicBool,
     epoch: &AtomicU64,
 ) -> io::Result<()> {
@@ -145,7 +164,7 @@ fn handle_stream(
     };
     match sender.try_send(local) {
         Ok(()) => {}
-        Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+        Err(TrySendError::Full(_)) | Err(TrySendError::Closed(_)) => {
             return write_error(&mut stream, 503, "unavailable");
         }
     }
@@ -806,8 +825,9 @@ mod tests {
         ] {
             assert!(parse_git_credential_request(invalid).is_err());
         }
+        // Host-only requests (the dx `gh` wrapper) carry no path.
         assert!(
-            !parse_git_credential_request("protocol=https\nhost=github.com\n")
+            parse_git_credential_request("protocol=https\nhost=github.com\n")
                 .unwrap()
                 .valid()
         );
@@ -855,8 +875,15 @@ mod tests {
         assert!(read_request(&mut server).is_err());
     }
 
-    #[test]
-    fn start_requires_a_private_state_directory_and_creates_a_private_socket() {
+    /// One helper request from a client thread, as `dxd id-token` sends it.
+    async fn client(socket: PathBuf) -> Vec<u8> {
+        tokio::task::spawn_blocking(move || exchange(&socket, &request_bytes("", VALID_BODY)))
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn start_requires_a_private_state_directory_and_creates_a_private_socket() {
         let state = secure_state_directory();
         let socket = state.path().join(SOCKET_NAME);
         let _relay = start(
@@ -882,8 +909,8 @@ mod tests {
         assert!(!unsafe_state.path().join(SOCKET_NAME).exists());
     }
 
-    #[test]
-    fn disconnected_requests_are_uncacheable_and_unavailable() {
+    #[tokio::test]
+    async fn disconnected_requests_are_uncacheable_and_unavailable() {
         let state = secure_state_directory();
         let socket = state.path().join(SOCKET_NAME);
         let _relay = start(
@@ -892,29 +919,23 @@ mod tests {
             Arc::new(AtomicU64::new(0)),
         )
         .unwrap();
-        let response = exchange(&socket, &request_bytes("", VALID_BODY));
+        let response = client(socket).await;
         let response = response_text(&response);
         assert!(response.starts_with("HTTP/1.1 503 Service Unavailable\r\n"));
         assert!(response.contains("\r\nCache-Control: no-store\r\n"));
         assert!(response.contains("\r\nPragma: no-cache\r\n"));
     }
 
-    #[test]
-    fn connected_requests_traverse_the_relay_and_map_issued_responses() {
+    #[tokio::test]
+    async fn connected_requests_traverse_the_relay_and_map_issued_responses() {
         let state = secure_state_directory();
         let connected = Arc::new(AtomicBool::new(true));
         let epoch = Arc::new(AtomicU64::new(41));
         let socket = state.path().join(SOCKET_NAME);
-        let relay = start(&socket, connected, epoch).unwrap();
-        let client = thread::spawn(move || exchange(&socket, &request_bytes("", VALID_BODY)));
+        let mut relay = start(&socket, connected, epoch).unwrap();
+        let client = tokio::spawn(client(socket));
 
-        let local = loop {
-            match relay.try_request() {
-                Ok(request) => break request,
-                Err(TryRecvError::Empty) => thread::yield_now(),
-                Err(error) => panic!("relay disconnected: {error}"),
-            }
-        };
+        let local = relay.next().await;
         assert_eq!(local.epoch, 41);
         assert_eq!(local.request.audience.as_deref(), Some("sts.amazonaws.com"));
         assert!(!local.request_id.is_empty());
@@ -923,33 +944,28 @@ mod tests {
             expires_at: 123,
         });
 
-        let response = client.join().unwrap();
+        let response = client.await.unwrap();
         let response = response_text(&response);
         assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(response.ends_with(r#"{"token":"abc.def.ghi","expiresAt":123}"#));
     }
 
-    #[test]
-    fn response_from_a_stale_epoch_is_fenced() {
+    #[tokio::test]
+    async fn response_from_a_stale_epoch_is_fenced() {
         let state = secure_state_directory();
         let connected = Arc::new(AtomicBool::new(true));
         let epoch = Arc::new(AtomicU64::new(7));
         let socket = state.path().join(SOCKET_NAME);
-        let relay = start(&socket, Arc::clone(&connected), Arc::clone(&epoch)).unwrap();
-        let client = thread::spawn(move || exchange(&socket, &request_bytes("", VALID_BODY)));
-        let local = loop {
-            if let Ok(request) = relay.try_request() {
-                break request;
-            }
-            thread::yield_now();
-        };
+        let mut relay = start(&socket, Arc::clone(&connected), Arc::clone(&epoch)).unwrap();
+        let client = tokio::spawn(client(socket));
+        let local = relay.next().await;
         epoch.store(8, Ordering::Release);
         local.respond(WorkloadIdentityResult::Issued {
             token: "stale.token.value".into(),
             expires_at: 123,
         });
 
-        let response = client.join().unwrap();
+        let response = client.await.unwrap();
         assert!(response_text(&response).starts_with("HTTP/1.1 503 Service Unavailable\r\n"));
     }
 

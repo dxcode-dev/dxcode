@@ -67,13 +67,11 @@ import {
   startThreadDaemonActivation,
 } from "../threads/daemon-client.js";
 import { createWorkspaceActivity, type WorkspaceActivity } from "./activity.js";
-import {
-  type DaemonGeneration,
-  DXD_PROTOCOL_MAJOR,
-  DXD_RELEASE,
-} from "./dxd/protocol.js";
 import { dxSandboxTools, e2b } from "./e2b/adapter.js";
-import { ensureDaemonInGuest } from "./e2b/daemon-installer.js";
+import {
+  type DaemonGuestOutcome,
+  ensureDaemonInGuest,
+} from "./e2b/daemon-installer.js";
 import {
   loadDaemonRelease,
   loadDaemonReleaseMetadata,
@@ -296,20 +294,31 @@ export const withThreadChangesIfSourced = async (
 
 type SandboxRequest = Parameters<SandboxFactory["createSandbox"]>[0];
 type FlueSandbox = Awaited<ReturnType<SandboxFactory["createSandbox"]>>;
+export interface DaemonCredential {
+  readonly id: string;
+  readonly key: Redacted.Redacted<string>;
+}
+
 interface EnsureDaemonInput {
   readonly threadId: ThreadId;
-  readonly generation: DaemonGeneration;
-  readonly apiKey: Redacted.Redacted<string>;
   readonly endpoint: string;
   readonly signal?: AbortSignal;
+  /** A key minted for this activation, present only when none existed. */
+  readonly credential?: DaemonCredential;
+  /** Mint a key when the guest lost its configuration. */
+  readonly mintCredential: () => Promise<DaemonCredential>;
+  /**
+   * Wait for the resident daemon to register on its own before any guest
+   * command touches the installation. Returns true when it did.
+   */
+  readonly awaitRegistration: (timeoutMs: number) => Promise<boolean>;
 }
 
 interface DaemonInstallation {
-  readonly release: typeof DXD_RELEASE;
-  readonly protocolMajor: typeof DXD_PROTOCOL_MAJOR;
-  readonly generation: DaemonGeneration;
   readonly releaseLoadedAt?: number;
   readonly installedAt?: number;
+  /** Set when the guest was bootstrapped or reconfigured. */
+  readonly bootstrapped: boolean;
 }
 
 const abortError = () => new Error("Daemon activation aborted.");
@@ -560,9 +569,11 @@ const activateSourceWorkspace = (
   );
 
 /**
- * Installs the dx `gh` wrapper for a connected GitHub source. It runs on every
- * E2B activation, including warm workspaces whose daemon is not reinstalled,
- * and never blocks activation: without it `gh` is merely unauthenticated.
+ * Installs the dx `gh` wrapper when the Thread owner has connected GitHub,
+ * whatever the Thread's source. It runs on every agent activation and on a
+ * daemon bootstrap, never on a resident wake (the wrapper is already in that
+ * immutable workspace), and never blocks activation: without it `gh` is
+ * merely unauthenticated.
  */
 const ensureGithubCliWrapper = async (
   db: D1Database,
@@ -580,21 +591,22 @@ const ensureGithubCliWrapper = async (
   },
 ) => {
   try {
-    const source = await db
+    const connected = await db
       .prepare(
-        `SELECT s.repository_full_name
-           FROM thread_source_snapshot s
-           JOIN thread_source_authority a ON a.thread_id = s.thread_id
-          WHERE s.thread_id = ? AND s.provider = 'github'
+        `SELECT 1 AS connected
+           FROM threads t
+           JOIN github_user_authorization a ON a.user_id = t.owner_user_id
+          WHERE t.id = ? AND a.status = 'active'
+            AND a.access_token_reference_id IS NOT NULL
           LIMIT 1`,
       )
       .bind(threadId)
-      .first<{ repository_full_name: string }>();
-    if (source === null) return;
+      .first<{ connected: number }>();
+    if (connected === null) return;
     const result = await sandbox.commands.run(
       GITHUB_CLI_WRAPPER_INSTALL_COMMAND,
       {
-        envs: { DX_GH_WRAPPER: githubCliWrapper(source.repository_full_name) },
+        envs: { DX_GH_WRAPPER: githubCliWrapper() },
         timeoutMs: 10_000,
       },
     );
@@ -704,19 +716,33 @@ const e2bSandboxFactory = {
           threadId,
           "Preparing source…",
         );
-      const sourceCwd = await activateSourceWorkspace(
-        bindings,
-        prepared.db,
-        id,
-        sandbox,
-        true,
-        undefined,
-        needsFirstReadiness
-          ? undefined
-          : sourcePreparationReporter(bindings, prepared.db, threadId),
-        residency.value !== "running" || needsFirstReadiness,
-      );
-      await ensureGithubCliWrapper(prepared.db, id, sandbox);
+      // Source preparation runs on the raw sandbox, outside the agent's
+      // command leases, and its setup and resume hooks can outlast the E2B
+      // timeout that create/connect just set. Hold the Thread's activity
+      // lease so the inactivity deadline keeps renewing until it ends.
+      const preparation = activityFor(
+        threadId,
+        (durationMs) => sandbox.setTimeout(durationMs),
+        prepared.requirements.inactivityMs,
+      ).retain();
+      let sourceCwd: string;
+      try {
+        sourceCwd = await activateSourceWorkspace(
+          bindings,
+          prepared.db,
+          id,
+          sandbox,
+          true,
+          undefined,
+          needsFirstReadiness
+            ? undefined
+            : sourcePreparationReporter(bindings, prepared.db, threadId),
+          residency.value !== "running" || needsFirstReadiness,
+        );
+        await ensureGithubCliWrapper(prepared.db, id, sandbox);
+      } finally {
+        preparation.release();
+      }
       void recordActiveSubmissionPhase(bindings, id, "source_activated");
       if (wakeStatusPublished)
         await publishRealtimeWorkspaceStatus(bindings, threadId, "ready");
@@ -981,6 +1007,9 @@ class DaemonInstallationStageError extends Error {
   }
 }
 
+/** How long a resumed guest's daemon gets to reconnect before bootstrap. */
+const DAEMON_SELF_REGISTRATION_WAIT_MS = 3_000;
+
 const atDaemonInstallationStage = async <Value>(
   stage: DaemonInstallationStage,
   operation: Promise<Value>,
@@ -997,7 +1026,28 @@ const ensureE2BDaemon = async (
   profile: E2BRunnerProfileConfiguration,
 ): Promise<DaemonInstallation> => {
   const bindings = env as Bindings;
+  const startedAt = Date.now();
+  const timing: Record<string, number> = {};
+  let markedAt = startedAt;
+  const mark = (name: string) => {
+    const now = Date.now();
+    timing[`${name}Ms`] = now - markedAt;
+    markedAt = now;
+  };
+  const logTiming = (
+    outcome: "registered" | "bootstrapped",
+    guest?: DaemonGuestOutcome,
+  ) =>
+    threadDaemonLogger.info("Thread daemon installation timing.", {
+      event: "thread_daemon_installation_timing",
+      threadId: input.threadId,
+      outcome,
+      ...(guest === undefined ? {} : { guest }),
+      totalMs: Date.now() - startedAt,
+      ...timing,
+    });
   const prepared = await prepareE2BRunner(bindings, input.threadId, profile);
+  mark("prepare");
   let stage: DaemonInstallationStage = "workspace";
   try {
     throwIfAborted(input.signal);
@@ -1024,38 +1074,76 @@ const ensureE2BDaemon = async (
       ),
     ]);
     throwIfAborted(input.signal);
-    activityFor(
-      input.threadId,
-      (durationMs) => sandbox.setTimeout(durationMs),
-      prepared.requirements.inactivityMs,
-    );
-    stage = "source";
-    await activateSourceWorkspace(
-      bindings,
-      prepared.db,
-      input.threadId,
-      sandbox,
-      false,
-    );
+    mark("workspace");
+    // The connect above set the sandbox's timeout to the connect timeout; a
+    // wake runs no guest command that would publish the inactivity deadline
+    // again, so an idle workspace would otherwise stay up for that timeout.
+    const activity = () =>
+      activityFor(
+        input.threadId,
+        (durationMs) => sandbox.setTimeout(durationMs),
+        prepared.requirements.inactivityMs,
+      );
+    activity().deadlineReplaced();
+    // The E2B resume above is what a paused guest was waiting for: its daemon
+    // sees the clock step and re-registers within one round trip. A daemon
+    // that registers proves this immutable workspace was already bootstrapped
+    // (and its source verified), so a wake runs no guest command at all. A
+    // key minted for this activation cannot be in any guest yet: skip the wait.
+    const registered =
+      input.credential === undefined &&
+      (await input.awaitRegistration(DAEMON_SELF_REGISTRATION_WAIT_MS));
+    mark("registrationWait");
+    if (registered) {
+      logTiming("registered");
+      return { bootstrapped: false };
+    }
     throwIfAborted(input.signal);
-    await ensureGithubCliWrapper(prepared.db, input.threadId, sandbox);
-    stage = "guest";
+    // A bootstrap prepares source and installs dxd on the raw sandbox; hold
+    // the activity lease so that work cannot outlast the connect timeout.
+    const preparation = activity().retain();
     let releaseLoadedAt: number | undefined;
-    const installed = await ensureDaemonInGuest(sandbox, {
-      ...input,
-      sha256: release.sha256,
-      loadBinary: async () => {
-        stage = "release";
-        const loaded = await loadDaemonRelease(bindings);
-        releaseLoadedAt = Date.now();
-        stage = "guest";
-        return loaded.binary;
-      },
-    });
+    let guest: DaemonGuestOutcome;
+    try {
+      stage = "source";
+      await activateSourceWorkspace(
+        bindings,
+        prepared.db,
+        input.threadId,
+        sandbox,
+        false,
+      );
+      throwIfAborted(input.signal);
+      mark("source");
+      await ensureGithubCliWrapper(prepared.db, input.threadId, sandbox);
+      mark("githubCli");
+      throwIfAborted(input.signal);
+      stage = "guest";
+      guest = await ensureDaemonInGuest(sandbox, {
+        threadId: input.threadId,
+        endpoint: input.endpoint,
+        sha256: release.sha256,
+        releaseUrl: release.url,
+        credential: input.credential,
+        mintCredential: input.mintCredential,
+        loadBinary: async () => {
+          stage = "release";
+          const loaded = await loadDaemonRelease(bindings);
+          releaseLoadedAt = Date.now();
+          stage = "guest";
+          return loaded.binary;
+        },
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      });
+    } finally {
+      preparation.release();
+    }
+    mark("install");
+    logTiming("bootstrapped", guest);
     return {
-      ...installed,
       ...(releaseLoadedAt === undefined ? {} : { releaseLoadedAt }),
       installedAt: Date.now(),
+      bootstrapped: true,
     };
   } catch (cause) {
     const failureStage =
@@ -1126,61 +1214,6 @@ const existingSandboxFactory: SandboxFactory = {
     ).existingSandboxFactory.createSandbox(request, profile);
   },
   tools: dxSandboxTools,
-};
-
-const withChangesRepairWorkspace = async <Value>(
-  threadId: ThreadId,
-  use: (sandbox: Sandbox) => Promise<Value>,
-) => {
-  const bindings = env as Bindings;
-  const profile = e2bProfile(
-    await Effect.runPromise(resolveExecutionRunnerProfile(bindings, threadId)),
-  );
-  const prepared = await prepareE2BRunner(bindings, threadId, profile);
-  const providerSandbox = await Effect.runPromise(
-    connectExistingExecutionWorkspace({
-      id: threadId,
-      requirements: prepared.requirements,
-      stateStore: makeD1ExecutionWorkspaceStateStore(prepared.db),
-      coordination: makeD1ExecutionWorkspaceCoordinator(prepared.db),
-      authorizeResolution: () => assertThreadActive(prepared.db, threadId),
-      observeResolution: observeE2BResolution(
-        bindings,
-        threadId,
-        prepared.profile,
-        prepared.requirements,
-      ),
-    }),
-  );
-  const cwd = await activateSourceWorkspace(
-    bindings,
-    prepared.db,
-    threadId,
-    providerSandbox,
-    false,
-  );
-  if (cwd !== SOURCE_WORKSPACE_CWD)
-    throw new Error(
-      "Thread Changes repair requires an activated source workspace.",
-    );
-  const sandbox = await e2b(providerSandbox, cwd).createSandbox({
-    id: threadId,
-  });
-  return use(sandbox);
-};
-
-const repairChanges = async (threadId: ThreadId) => {
-  const bindings = env as Bindings;
-  if (bindings.DX_STORAGE === undefined) return;
-  const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
-  await withChangesRepairWorkspace(threadId, (sandbox) =>
-    makeThreadChangesCoordinator({
-      db,
-      bucket: bindings.DX_STORAGE as R2Bucket,
-      threadId,
-      sandbox,
-    }).sync(),
-  );
 };
 
 const pause = async (threadId: ThreadId) => {
@@ -1285,27 +1318,11 @@ const deployedExecutionWorkspaces = Object.freeze({
     _bindings: Bindings,
     _threadId: string,
   ): Promise<SourceWorkspaceLayerOptions | undefined> => undefined,
-  repairChanges,
   pause,
   ensureDaemon,
   recordResidentTerminalInput,
   recordResidentTerminalHeartbeat,
 });
-
-const localRepairChanges = async (threadId: ThreadId) => {
-  const bindings = env as Bindings;
-  if (bindings.DX_STORAGE === undefined) return;
-  const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
-  const sandbox = await localSandboxFactory(bindings, true).createSandbox({
-    id: threadId,
-  });
-  await makeThreadChangesCoordinator({
-    db,
-    bucket: bindings.DX_STORAGE,
-    threadId,
-    sandbox,
-  }).sync();
-};
 
 const localPause = async (threadId: ThreadId) => {
   const bindings = env as Bindings;
@@ -1324,6 +1341,12 @@ const ensureLocalDaemon = async (
   const sandbox = await localSandboxFactory(bindings, true).createSandbox({
     id: input.threadId,
   });
+  if (
+    input.credential === undefined &&
+    (await input.awaitRegistration(DAEMON_SELF_REGISTRATION_WAIT_MS))
+  )
+    return { bootstrapped: false };
+  throwIfAborted(input.signal);
   const sourceOptions = await localSourceWorkspaceOptions(
     bindings,
     input.threadId,
@@ -1337,18 +1360,25 @@ const ensureLocalDaemon = async (
     sourceOptions,
   );
   throwIfAborted(input.signal);
-  return requestLocalRuntime<{
-    readonly release: typeof DXD_RELEASE;
-    readonly protocolMajor: typeof DXD_PROTOCOL_MAJOR;
-    readonly generation: DaemonGeneration;
-  }>(bindings, input.threadId, "daemon", {
-    existingOnly: true,
-    endpoint: input.endpoint,
-    generation: input.generation,
-    apiKey: Redacted.value(input.apiKey),
-    release: DXD_RELEASE,
-    protocolMajor: DXD_PROTOCOL_MAJOR,
-  });
+  const request = (credential: DaemonCredential | undefined) =>
+    requestLocalRuntime<{ readonly status: "running" | "credential-required" }>(
+      bindings,
+      input.threadId,
+      "daemon",
+      {
+        existingOnly: true,
+        endpoint: input.endpoint,
+        ...(credential === undefined
+          ? {}
+          : { apiKey: Redacted.value(credential.key) }),
+      },
+    );
+  let result = await request(input.credential);
+  if (result.status === "credential-required")
+    result = await request(await input.mintCredential());
+  if (result.status !== "running")
+    throw new Error("Local daemon is unavailable.");
+  return { bootstrapped: true, installedAt: Date.now() };
 };
 
 const ensureLocalActivity = async (threadId: ThreadId) => {
@@ -1374,7 +1404,6 @@ const localExecutionWorkspaces = Object.freeze({
   sandboxFactory: localAgentSandboxFactory,
   existingSandboxFactory: localExistingSandboxFactory,
   sourceWorkspaceOptions: localSourceWorkspaceOptions,
-  repairChanges: localRepairChanges,
   pause: localPause,
   ensureDaemon: ensureLocalDaemon,
   recordResidentTerminalInput: recordLocalTerminalInput,

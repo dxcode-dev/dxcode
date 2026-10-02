@@ -510,23 +510,6 @@ a {
   width: 14px;
   height: 14px;
 }
-.activity-inner-arc {
-  transform-box: view-box;
-  transform-origin: 12px 12px;
-}
-[data-working-animation="inner-arc"] .activity-inner-arc {
-  animation: orb-inner-spin 1.05s linear infinite;
-}
-@keyframes orb-inner-spin {
-  to {
-    rotate: 360deg;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  [data-working-animation="inner-arc"] .activity-inner-arc {
-    animation: none;
-  }
-}
 .thread-archived-badge {
   flex: none;
   padding: 2px 7px;
@@ -1798,6 +1781,10 @@ a {
 .agent-composer:focus-within {
   border-color: color-mix(in srgb, var(--foreground) 22%, transparent);
   background: var(--background);
+}
+.agent-composer[data-file-drop-active] {
+  border-color: var(--ring);
+  background: color-mix(in srgb, var(--ring) 8%, var(--background));
 }
 .agent-composer textarea {
   display: block;
@@ -5952,6 +5939,12 @@ a {
   display: flex;
   flex-direction: column;
   padding: 0;
+}
+.new-thread-composer[data-file-drop-active] {
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--ring) 8%, transparent);
+  outline: 2px dashed var(--ring);
+  outline-offset: -4px;
 }
 .new-thread-composer-body {
   box-sizing: border-box;

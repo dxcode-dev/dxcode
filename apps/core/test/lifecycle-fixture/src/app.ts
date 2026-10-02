@@ -73,13 +73,17 @@ const fixtureDb = (bindings: AppEnv["Bindings"]) => {
   return bindings.DB;
 };
 const fixtureAi = { run: async () => ({}) } as unknown as Ai;
-const threadRoutes = createThreadRoutes((request) => {
-  if (rejectNextInitialDispatch) {
-    rejectNextInitialDispatch = false;
-    return Promise.reject(new Error("Fixture rejected initial admission."));
-  }
-  return dispatch(FixtureLifecycleAgent, request);
-});
+const threadRoutes = createThreadRoutes(
+  (request) => {
+    if (rejectNextInitialDispatch) {
+      rejectNextInitialDispatch = false;
+      return Promise.reject(new Error("Fixture rejected initial admission."));
+    }
+    return dispatch(FixtureLifecycleAgent, request);
+  },
+  // The reference lifecycle makes no model calls beyond its faux provider.
+  async () => undefined,
+);
 const app = new Hono<AppEnv>();
 app.use("*", async (context, next) => {
   (context.env as { AI?: Ai }).AI ??= fixtureAi;

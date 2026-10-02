@@ -29,6 +29,19 @@ export const threadFilesKeys = {
   ) => [...threadFilesKeys.all(threadId), "file", worktree, path] as const,
 };
 
+/**
+ * A published Changes capture means the workspace changed (a rename, a new
+ * file); refetch the visible Files trees so they follow it.
+ */
+export const invalidateThreadFileTrees = (
+  client: QueryClient,
+  threadId: ThreadId,
+) =>
+  client.invalidateQueries(
+    { queryKey: [...threadFilesKeys.all(threadId), "tree"] },
+    { cancelRefetch: false },
+  );
+
 export const threadFileTreeOptions = (
   api: ThreadFilesApi,
   threadId: ThreadId,

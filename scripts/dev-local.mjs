@@ -95,8 +95,10 @@ const runtimeToken = modelPreview
   : createLocalRuntimeToken();
 mkdirSync(localStateRoot, { recursive: true, mode: 0o700 });
 if (!modelPreview && !uiOnly) {
-  if (process.platform !== "linux" || process.arch !== "x64") {
-    console.error("Local dxd requires a Linux x64 host.");
+  if (process.platform !== "linux") {
+    console.error(
+      "Local dxd runs on Linux only. Use `pnpm dev -- --ui-only`, or run pnpm dev in a Linux VM or orb.",
+    );
     process.exit(1);
   }
   const manifest = resolve(workspaceRoot, "apps/dxd/Cargo.toml");

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>dx thread page stress</title>
+    <script>
+      // Minimal React DevTools hook: counts components whose render function
+      // ran in each commit (PerformedWork flag), keyed by component name.
+      (() => {
+        const counts = new Map();
+        let recording = false;
+        const nameOf = (fiber) => {
+          let type = fiber.type;
+          if (type && typeof type === "object" && type.type) type = type.type;
+          if (type && typeof type === "object" && type.render)
+            type = type.render;
+          return typeof type === "function"
+            ? type.displayName || type.name || "(anonymous)"
+            : undefined;
+        };
+        const walk = (fiber) => {
+          // Descend only where React reconciled children in this commit;
+          // untouched subtrees keep stale flags from earlier commits.
+          const stack = [fiber];
+          while (stack.length) {
+            const node = stack.pop();
+            if (!node) continue;
+            if (node.flags & 1) {
+              const name = nameOf(node);
+              if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+            }
+            if (node.sibling) stack.push(node.sibling);
+            if (
+              node.child &&
+              (node.alternate === null || node.child !== node.alternate.child)
+            )
+              stack.push(node.child);
+          }
+        };
+        let commits = 0;
+        window.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+          supportsFiber: true,
+          renderers: new Map(),
+          inject(renderer) {
+            const id = this.renderers.size + 1;
+            this.renderers.set(id, renderer);
+            return id;
+          },
+          checkDCE() {},
+          onScheduleFiberRoot() {},
+          onCommitFiberUnmount() {},
+          onPostCommitFiberRoot() {},
+          onCommitFiberRoot(_id, root) {
+            if (!recording) return;
+            commits += 1;
+            walk(root.current.child);
+          },
+        };
+        window.dxRenders = {
+          start() {
+            counts.clear();
+            commits = 0;
+            recording = true;
+          },
+          stop() {
+            recording = false;
+            return { commits, counts: Object.fromEntries(counts) };
+          },
+        };
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/testing/thread-page-stress-entry.tsx"></script>
+  </body>
+</html>

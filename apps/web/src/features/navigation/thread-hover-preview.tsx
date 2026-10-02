@@ -3,6 +3,7 @@ import { FolderGit2 } from "lucide-react";
 import { createPortal } from "react-dom";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
+import { ThreadTitleText } from "../../shared/ui/thread-title.js";
 import { formatRelativeTime } from "../../shared/utils.js";
 
 export interface ThreadPreviewAnchor {
@@ -72,7 +73,9 @@ export function ThreadHoverPreview({
     >
       <header className="thread-preview-header">
         <div>
-          <strong>{currentThread.title}</strong>
+          <strong>
+            <ThreadTitleText thread={currentThread} />
+          </strong>
           <span>
             Created {formatRelativeTime(currentThread.createdAt)}, updated{" "}
             {formatRelativeTime(currentThread.updatedAt)}

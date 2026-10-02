@@ -43,6 +43,7 @@ class FakeSocket extends EventTarget {
   }
   emit(type: string, data?: unknown) {
     if (type === "open") this.readyState = FakeSocket.OPEN;
+    if (type === "close") this.readyState = 3;
     this.dispatchEvent(
       type === "message" ? new MessageEvent(type, { data }) : new Event(type),
     );
@@ -138,6 +139,8 @@ const ready = JSON.stringify({
   replayTruncated: false,
   restartRequired: false,
 });
+const recover = JSON.stringify({ v: 1, type: "recover" });
+const heartbeat = JSON.stringify({ v: 1, type: "heartbeat" });
 
 describe("ThreadTerminal browser protocol v1", () => {
   it("selects Terminal into loading, then connects after a paused wake", async () => {
@@ -260,6 +263,68 @@ describe("ThreadTerminal browser protocol v1", () => {
     await React.act(() => root.unmount());
   });
 
+  it("keeps the same emulator, size, and socket while the right pane is hidden", async () => {
+    emulator.mount.mockImplementation(async (_element, input) => {
+      emulator.input = input;
+      return browserTerminal();
+    });
+    vi.stubGlobal("WebSocket", FakeSocket);
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const container = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(container);
+    const layout = (rightPaneCollapsed: boolean) => (
+      <ThreadDesktopLayout
+        changes={<div>Changes</div>}
+        main={<div>Agent</div>}
+        rightPaneCollapsed={rightPaneCollapsed}
+        terminal={(active) => (
+          <ThreadTerminal
+            active={active}
+            threadId={"thr_00000000-0000-4000-8000-000000000183" as ThreadId}
+          />
+        )}
+      />
+    );
+    await React.act(() => root.render(layout(false)));
+    await React.act(() =>
+      container
+        .querySelector<HTMLButtonElement>("#thread-workspace-tab-terminal")
+        ?.click(),
+    );
+    await React.act(async () => {});
+    const socket = FakeSocket.instances[0] as FakeSocket;
+    socket.emit("open");
+    await React.act(() => socket.emit("message", ready));
+    socket.emit("message", Uint8Array.of(7).buffer);
+    const visible = emulator.mount.mock.calls[0]?.[3] as () => boolean;
+    expect(visible()).toBe(true);
+    const sent = socket.sent.length;
+
+    // Hidden, the emulator must not be fitted to the closed pane: shrinking
+    // it and the shell to a few columns is what erased the scrollback.
+    await React.act(() => root.render(layout(true)));
+    expect(visible()).toBe(false);
+    await React.act(() => root.render(layout(false)));
+    expect(visible()).toBe(true);
+
+    expect(emulator.mount).toHaveBeenCalledOnce();
+    expect(emulator.dispose).not.toHaveBeenCalled();
+    expect(emulator.reset).not.toHaveBeenCalled();
+    expect(emulator.write.mock.calls.map(([bytes]) => [...bytes])).toEqual([
+      [7],
+    ]);
+    expect(FakeSocket.instances).toEqual([socket]);
+    expect(socket.sent).toHaveLength(sent);
+    expect(container.textContent).toContain("Terminal ready");
+    await React.act(() => root.unmount());
+  });
+
   it("projects wake progress into the main-pane status owner", async () => {
     const onWorkspaceStatusChange = vi.fn();
     const { root, socket } = await render(
@@ -340,7 +405,8 @@ describe("ThreadTerminal browser protocol v1", () => {
     await React.act(() => root.unmount());
   });
 
-  it("reattaches on explicit retry and on focused pause policy", async () => {
+  it("asks Core to wake a focused paused Terminal on its open socket", async () => {
+    vi.useFakeTimers();
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     const { container, root, socket } = await render();
     socket.emit("open");
@@ -359,7 +425,13 @@ describe("ThreadTerminal browser protocol v1", () => {
         }),
       ),
     );
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(socket.sent.at(-1)).toBe(recover);
+
+    // A socket that closes under the request is replaced at once.
+    await React.act(() => socket.emit("close"));
     expect(FakeSocket.instances).toHaveLength(2);
+    expect(container.textContent).toContain("Waking terminal…");
     await React.act(() => root.unmount());
   });
 
@@ -563,25 +635,20 @@ describe("ThreadTerminal browser protocol v1", () => {
   });
 
   it.each(["close", "error"])(
-    "shows an unannounced socket %s as disconnected and retries while visible",
+    "retries an unannounced socket %s at once while visible",
     async (event) => {
       vi.useFakeTimers();
       const { container, root, socket } = await render();
       socket.emit("open");
       await React.act(() => socket.emit("message", ready));
       await React.act(() => socket.emit(event));
-      expect(container.textContent).toContain("Terminal disconnected.");
-      expect(container.querySelector("button")?.textContent).toBe(
-        "Retry terminal",
-      );
-      await React.act(() => vi.advanceTimersByTimeAsync(250));
       expect(FakeSocket.instances).toHaveLength(2);
       expect(container.textContent).toContain("Waking terminal…");
       await React.act(() => root.unmount());
     },
   );
 
-  it("reattaches promptly when the resident connection disappears", async () => {
+  it("asks Core to recover in place when the resident connection disappears", async () => {
     vi.useFakeTimers();
     const { container, root, socket } = await render();
     socket.emit("open");
@@ -597,22 +664,68 @@ describe("ThreadTerminal browser protocol v1", () => {
       ),
     );
 
-    expect(container.textContent).toContain("Terminal disconnected.");
-    await React.act(() => vi.advanceTimersByTimeAsync(250));
-    expect(FakeSocket.instances).toHaveLength(2);
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(socket.sent.at(-1)).toBe(recover);
+    expect(container.textContent).toContain("Starting terminal…");
+    // Input is not sent while Core recovers the attachment.
+    emulator.input?.("x");
+    expect(socket.sent.at(-1)).toBe(recover);
+
+    await React.act(() =>
+      socket.emit(
+        "message",
+        JSON.stringify({ v: 1, type: "progress", phase: "waking" }),
+      ),
+    );
+    await React.act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(FakeSocket.instances).toHaveLength(1);
     expect(container.textContent).toContain("Waking terminal…");
+    await React.act(() =>
+      socket.emit(
+        "message",
+        JSON.stringify({ v: 1, type: "replay-start", reset: true }),
+      ),
+    );
+    await React.act(() => socket.emit("message", ready));
+    expect(container.textContent).toContain("Terminal ready");
+    expect(FakeSocket.instances).toHaveLength(1);
     await React.act(() => root.unmount());
   });
 
-  it("recovers an active terminal when daemon heartbeats stop without closing the socket", async () => {
+  it("asks Core to check a daemon whose heartbeat is late, on the same socket", async () => {
     vi.useFakeTimers();
     const { container, root, socket } = await render();
     socket.emit("open");
     await React.act(() => socket.emit("message", ready));
 
-    await React.act(() => vi.advanceTimersByTimeAsync(5_000));
-    expect(container.textContent).toContain("Terminal disconnected.");
-    await React.act(() => vi.advanceTimersByTimeAsync(250));
+    await React.act(() => vi.advanceTimersByTimeAsync(2_499));
+    expect(socket.sent).not.toContain(recover);
+    await React.act(() => vi.advanceTimersByTimeAsync(1));
+    expect(socket.sent.at(-1)).toBe(recover);
+    // Unconfirmed: the Terminal stays ready and usable.
+    expect(container.textContent).toContain("Terminal ready");
+    emulator.input?.("x");
+    expect(socket.sent.at(-1)).toBeInstanceOf(Uint8Array);
+
+    // A live daemon: Core answers with a heartbeat and nothing changes.
+    await React.act(() => socket.emit("message", heartbeat));
+    await React.act(() => vi.advanceTimersByTimeAsync(2_499));
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(socket.sent.filter((value) => value === recover)).toHaveLength(1);
+    await React.act(() => root.unmount());
+  });
+
+  it("replaces a socket that never answers a liveness request", async () => {
+    vi.useFakeTimers();
+    const { container, root, socket } = await render();
+    socket.emit("open");
+    await React.act(() => socket.emit("message", ready));
+
+    await React.act(() => vi.advanceTimersByTimeAsync(2_500));
+    expect(socket.sent.at(-1)).toBe(recover);
+    await React.act(() => vi.advanceTimersByTimeAsync(2_499));
+    expect(FakeSocket.instances).toHaveLength(1);
+    await React.act(() => vi.advanceTimersByTimeAsync(1));
     expect(FakeSocket.instances).toHaveLength(2);
     expect(container.textContent).toContain("Waking terminal…");
     await React.act(() => root.unmount());
@@ -686,6 +799,160 @@ describe("ThreadTerminal browser protocol v1", () => {
     await React.act(() => terminalTab?.click());
     expect(FakeSocket.instances).toHaveLength(2);
     expect(container.textContent).toContain("Waking terminal…");
+    await React.act(() => root.unmount());
+  });
+
+  it("shows a retained Terminal ready again when something else wakes its paused workspace", async () => {
+    vi.useFakeTimers();
+    emulator.mount.mockImplementation(async (_element, input) => {
+      emulator.input = input;
+      return browserTerminal();
+    });
+    vi.stubGlobal("WebSocket", FakeSocket);
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const container = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(container);
+    await React.act(() =>
+      root.render(
+        <ThreadDesktopLayout
+          changes={<div>Changes</div>}
+          main={<div>Agent</div>}
+          rightPaneCollapsed={false}
+          terminal={(active) => (
+            <ThreadTerminal
+              active={active}
+              threadId={"thr_00000000-0000-4000-8000-000000000183" as ThreadId}
+            />
+          )}
+        />,
+      ),
+    );
+    const terminalTab = container.querySelector<HTMLButtonElement>(
+      "#thread-workspace-tab-terminal",
+    );
+    const changesTab = container.querySelector<HTMLButtonElement>(
+      "#thread-workspace-tab-changes",
+    );
+    await React.act(() => terminalTab?.click());
+    await React.act(async () => {});
+    const socket = FakeSocket.instances[0] as FakeSocket;
+    socket.emit("open");
+    await React.act(() => socket.emit("message", ready));
+    await React.act(() => changesTab?.click());
+
+    await React.act(() =>
+      socket.emit(
+        "message",
+        JSON.stringify({
+          v: 1,
+          type: "progress",
+          phase: "resident-restarting",
+        }),
+      ),
+    );
+    await React.act(() =>
+      socket.emit(
+        "message",
+        JSON.stringify({
+          v: 1,
+          type: "error",
+          code: "workspace-paused",
+          retry: "on-focus",
+        }),
+      ),
+    );
+    await React.act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(container.textContent).toContain("Terminal workspace is paused.");
+    expect(FakeSocket.instances).toHaveLength(1);
+    // A retained hidden Terminal never asks Core to wake the workspace.
+    expect(socket.sent).not.toContain(recover);
+
+    // Files wakes the workspace; Core reattaches the open socket.
+    await React.act(() =>
+      socket.emit(
+        "message",
+        JSON.stringify({ v: 1, type: "replay-start", reset: true }),
+      ),
+    );
+    await React.act(() => socket.emit("message", ready));
+    expect(container.textContent).toContain("Terminal ready");
+    expect(FakeSocket.instances).toHaveLength(1);
+
+    // The recovered socket still detects a later loss once in view.
+    await React.act(() => terminalTab?.click());
+    await React.act(() => vi.advanceTimersByTimeAsync(2_499));
+    expect(socket.sent).not.toContain(recover);
+    await React.act(() => vi.advanceTimersByTimeAsync(1));
+    expect(socket.sent.at(-1)).toBe(recover);
+    expect(FakeSocket.instances).toHaveLength(1);
+    await React.act(() => root.unmount());
+  });
+
+  it("wakes a paused retained Terminal on its open socket when it is shown", async () => {
+    vi.useFakeTimers();
+    emulator.mount.mockImplementation(async (_element, input) => {
+      emulator.input = input;
+      return browserTerminal();
+    });
+    vi.stubGlobal("WebSocket", FakeSocket);
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const container = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(container);
+    await React.act(() =>
+      root.render(
+        <ThreadDesktopLayout
+          changes={<div>Changes</div>}
+          main={<div>Agent</div>}
+          rightPaneCollapsed={false}
+          terminal={(active) => (
+            <ThreadTerminal
+              active={active}
+              threadId={"thr_00000000-0000-4000-8000-000000000183" as ThreadId}
+            />
+          )}
+        />,
+      ),
+    );
+    const terminalTab = container.querySelector<HTMLButtonElement>(
+      "#thread-workspace-tab-terminal",
+    );
+    const changesTab = container.querySelector<HTMLButtonElement>(
+      "#thread-workspace-tab-changes",
+    );
+    await React.act(() => terminalTab?.click());
+    await React.act(async () => {});
+    const socket = FakeSocket.instances[0] as FakeSocket;
+    socket.emit("open");
+    await React.act(() => socket.emit("message", ready));
+    await React.act(() => changesTab?.click());
+    await React.act(() =>
+      socket.emit(
+        "message",
+        JSON.stringify({
+          v: 1,
+          type: "progress",
+          phase: "resident-restarting",
+        }),
+      ),
+    );
+    await React.act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(socket.sent).not.toContain(recover);
+
+    await React.act(() => terminalTab?.click());
+    expect(socket.sent.at(-1)).toBe(recover);
+    expect(FakeSocket.instances).toHaveLength(1);
     await React.act(() => root.unmount());
   });
 
@@ -763,7 +1030,7 @@ describe("ThreadTerminal browser protocol v1", () => {
     vi.spyOn(document, "visibilityState", "get").mockImplementation(
       () => visibility,
     );
-    const { container, root, socket } = await render();
+    const { root, socket } = await render();
     socket.emit("open");
     await React.act(() => socket.emit("message", ready));
 
@@ -776,13 +1043,12 @@ describe("ThreadTerminal browser protocol v1", () => {
     await React.act(() =>
       document.dispatchEvent(new Event("visibilitychange")),
     );
-    await React.act(() => vi.advanceTimersByTimeAsync(4_999));
-    expect(FakeSocket.instances).toHaveLength(1);
+    await React.act(() => vi.advanceTimersByTimeAsync(2_499));
+    expect(socket.sent).not.toContain(recover);
     await React.act(() => vi.advanceTimersByTimeAsync(1));
 
-    expect(container.textContent).toContain("Terminal disconnected.");
-    await React.act(() => vi.advanceTimersByTimeAsync(250));
-    expect(FakeSocket.instances).toHaveLength(2);
+    expect(socket.sent.at(-1)).toBe(recover);
+    expect(FakeSocket.instances).toHaveLength(1);
     await React.act(() => root.unmount());
   });
 

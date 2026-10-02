@@ -8,7 +8,7 @@ import { RunnerProfileId } from "../settings/runner-profile.js";
 import { ResolvedSkillSnapshots } from "../settings/skill.js";
 import { UserId } from "../users/user-id.js";
 import { newThreadId, ThreadId } from "./thread-id.js";
-import { ThreadTitle } from "./thread-title.js";
+import { THREAD_TITLE_PENDING_MS, ThreadTitle } from "./thread-title.js";
 
 export const ThreadVisibility = Schema.Literals(["private", "workspace"]);
 
@@ -39,9 +39,16 @@ export const Thread = Schema.Struct({
   activityStatus: ThreadActivityStatus,
   lifecycleState: ThreadLifecycleState,
   pinnedAt: Schema.optional(Timestamp),
+  /** Until this time clients show a loading title while one is generated. */
+  titlePendingUntil: Schema.optional(Timestamp),
 });
 
 export type Thread = typeof Thread.Type;
+
+/** Whether clients should still show the title as loading. */
+export const isThreadTitlePending = (thread: Thread, now = Date.now()) =>
+  thread.titlePendingUntil !== undefined &&
+  DateTime.toEpochMillis(thread.titlePendingUntil) > now;
 
 export const CreateThreadInput = Schema.Struct({
   id: Schema.optional(ThreadId),
@@ -54,6 +61,7 @@ export const CreateThreadInput = Schema.Struct({
   plugins: ResolvedPluginSnapshots,
   skills: ResolvedSkillSnapshots,
   visibility: Schema.optional(ThreadVisibility),
+  titlePending: Schema.optional(Schema.Boolean),
 });
 
 export type CreateThreadInput = typeof CreateThreadInput.Type;
@@ -62,11 +70,18 @@ export const createThread = Effect.fn("createThread")(function* (
   input: CreateThreadInput,
 ) {
   const now = yield* DateTime.now;
-  const { id = newThreadId(), ...threadInput } = input;
+  const { id = newThreadId(), titlePending, ...threadInput } = input;
 
   return yield* Schema.decodeUnknownEffect(Schema.toType(Thread))({
     id,
     ...threadInput,
+    ...(titlePending === true
+      ? {
+          titlePendingUntil: DateTime.add(now, {
+            milliseconds: THREAD_TITLE_PENDING_MS,
+          }),
+        }
+      : {}),
     createdAt: now,
     updatedAt: now,
     lastActivityAt: now,

@@ -373,7 +373,9 @@ export const loadReadinessRequirements = Effect.fn("loadReadinessRequirements")(
         const releaseUrl = new URL(deploymentConfig.dxdReleaseUrl);
         if (
           publicUrl.protocol !== "https:" ||
-          publicUrl.origin !== authOrigin ||
+          // Core itself, or the dedicated dxd ingress Worker on workers.dev.
+          (publicUrl.origin !== authOrigin &&
+            !publicUrl.hostname.endsWith(".workers.dev")) ||
           publicUrl.pathname !== "/" ||
           publicUrl.username !== "" ||
           publicUrl.password !== "" ||

@@ -1,27 +1,57 @@
+//! Filesystem observation for Changes: a content-free `changes-dirty` hint
+//! after coalesced mutations in the checkout and its linked worktrees.
+//!
+//! Each directory is watched individually with inotify, so Git-ignored trees
+//! such as `node_modules` never consume watches. Only mutations are
+//! subscribed: opens and reads (every `git status`, every `rg`) never wake
+//! the observer.
+//!
+//! Git's own bookkeeping is not a mutation: `*.lock` files under `.git`, and
+//! index rewrites that keep the same number of entries (the stat refresh of
+//! any `git status`, or staging already-tracked content). Neither can change a
+//! manifest, and treating them as mutations lets any Git reader, including a
+//! capture without `GIT_OPTIONAL_LOCKS=0`, schedule the next capture forever.
+//!
+//! When the watch budget or the kernel's watch limit is exhausted, parts of
+//! the tree go unwatched. That fallback compares the Changes fingerprint
+//! every few seconds and hints only when it moved.
+
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::fs;
 use std::io::{self, Read};
-use std::os::fd::RawFd;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::os::unix::process::CommandExt;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc::{Receiver, Sender, channel};
 
-const QUIET_PERIOD: Duration = Duration::from_millis(250);
+/// A single save arrives as a few events within a millisecond or two; the
+/// quiet period only has to cover that. Continuous writes are bounded by
+/// `MAX_WAIT`, and Core coalesces hints that arrive during a capture.
+const QUIET_PERIOD: Duration = Duration::from_millis(50);
 const MAX_WAIT: Duration = Duration::from_secs(1);
+/// Fallback cadence: at least this, and at most 5% of the time spent
+/// computing the fingerprint.
 const FALLBACK_PERIOD: Duration = Duration::from_secs(5);
+const FALLBACK_COST_FACTOR: u32 = 20;
+/// How often a capped watch set is rebuilt, in case limits changed.
+const FALLBACK_REBUILD: Duration = Duration::from_secs(60);
 const MAX_WATCHES: usize = 8192;
-const EVENT_BUFFER_BYTES: usize = 64 * 1024;
 const GIT_IGNORE_TIMEOUT: Duration = Duration::from_millis(250);
 const MAX_GIT_IGNORE_BYTES: usize = 4 * 1024 * 1024;
-
-#[cfg(test)]
-static GIT_IGNORE_INVOCATIONS: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, usize>>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+const WATCH_MASK: u32 = libc::IN_ATTRIB
+    | libc::IN_CREATE
+    | libc::IN_DELETE
+    | libc::IN_CLOSE_WRITE
+    | libc::IN_MODIFY
+    | libc::IN_MOVED_FROM
+    | libc::IN_MOVED_TO
+    | libc::IN_DELETE_SELF
+    | libc::IN_MOVE_SELF
+    | libc::IN_ONLYDIR;
 
 pub struct Observer {
     dirty: Receiver<()>,
@@ -29,18 +59,24 @@ pub struct Observer {
 
 impl Observer {
     pub fn start(root: &Path) -> Self {
+        Self::start_with(root, MAX_WATCHES, FALLBACK_PERIOD)
+    }
+
+    fn start_with(root: &Path, budget: usize, fallback_period: Duration) -> Self {
         let root = root.to_owned();
-        let (sender, dirty) = mpsc::sync_channel(1);
-        thread::spawn(move || observe(root, sender));
+        let (sender, dirty) = channel(1);
+        thread::Builder::new()
+            .name("dxd-observer".into())
+            .spawn(move || observe(root, sender, budget, fallback_period))
+            .expect("observer thread");
         Self { dirty }
     }
 
-    pub fn take_dirty(&self) -> bool {
-        let mut dirty = false;
-        while self.dirty.try_recv().is_ok() {
-            dirty = true;
+    /// Resolve when the checkout changed since the last call.
+    pub async fn dirty(&mut self) {
+        if self.dirty.recv().await.is_none() {
+            std::future::pending::<()>().await;
         }
-        dirty
     }
 }
 
@@ -56,12 +92,10 @@ impl Coalescer {
         self.latest = Some(now);
     }
 
-    fn ready(&self, now: Instant) -> bool {
-        self.first
-            .is_some_and(|first| now.duration_since(first) >= MAX_WAIT)
-            || self
-                .latest
-                .is_some_and(|latest| now.duration_since(latest) >= QUIET_PERIOD)
+    fn ready_at(&self) -> Option<Instant> {
+        let first = self.first?;
+        let latest = self.latest?;
+        Some((first + MAX_WAIT).min(latest + QUIET_PERIOD))
     }
 
     fn clear(&mut self) {
@@ -70,191 +104,162 @@ impl Coalescer {
     }
 }
 
-fn observe(root: PathBuf, sender: SyncSender<()>) {
-    let mut setup = build_watch_sets(&root).ok();
-    let mut fallback = setup
-        .as_ref()
-        .is_none_or(|sets| sets.iter().any(|(_, set)| set.capped));
-    let mut next_fallback = Instant::now() + FALLBACK_PERIOD;
-    let mut coalescer = Coalescer::default();
-    let mut buffer = vec![0_u8; EVENT_BUFFER_BYTES];
+/// One inotify instance; non-blocking, read after `poll` reports it ready.
+struct Inotify(OwnedFd);
 
-    loop {
-        let now = Instant::now();
-        let mut reconcile = false;
-        let mut failed = false;
-        if let Some(sets) = setup.as_mut() {
-            for (checkout, watches) in sets {
-                loop {
-                    let read = unsafe {
-                        libc::read(
-                            watches.fd,
-                            buffer.as_mut_ptr().cast(),
-                            buffer.len() as libc::size_t,
-                        )
-                    };
-                    if read < 0 {
-                        let error = io::Error::last_os_error();
-                        if error.kind() != io::ErrorKind::WouldBlock {
-                            failed = true;
-                        }
-                        break;
-                    }
-                    if read == 0 {
-                        break;
-                    }
-                    let mut offset = 0;
-                    while offset + size_of::<libc::inotify_event>() <= read as usize {
-                        let event = unsafe {
-                            std::ptr::read_unaligned(
-                                buffer.as_ptr().add(offset).cast::<libc::inotify_event>(),
-                            )
-                        };
-                        let event_size = size_of::<libc::inotify_event>() + event.len as usize;
-                        if offset + event_size > read as usize {
-                            reconcile = true;
-                            break;
-                        }
-                        let path = watches.event_path(
-                            event.wd,
-                            &buffer[offset + size_of::<libc::inotify_event>()..offset + event_size],
-                        );
-                        offset += event_size;
-                        if event.mask & libc::IN_Q_OVERFLOW != 0 {
-                            reconcile = true;
-                            coalescer.mutation(now);
-                        }
-                        if event.mask & mutation_mask() != 0 {
-                            let ignore_definition = path
-                                .as_ref()
-                                .is_some_and(|path| is_ignore_definition(checkout, path));
-                            if ignore_definition {
-                                reconcile = true;
-                            }
-                            if ignore_definition
-                                || !path.as_ref().is_some_and(|path| {
-                                    watches.ignores_event(checkout, path, event.mask)
-                                })
-                            {
-                                coalescer.mutation(now);
-                            }
-                        }
-                        if event.mask & (libc::IN_DELETE_SELF | libc::IN_MOVE_SELF) != 0 {
-                            reconcile = true;
-                        }
-                        if event.mask & libc::IN_ISDIR != 0
-                            && event.mask
-                                & (libc::IN_CREATE
-                                    | libc::IN_MOVED_TO
-                                    | libc::IN_MOVED_FROM
-                                    | libc::IN_DELETE)
-                                != 0
-                        {
-                            reconcile = true;
-                        }
-                    }
-                }
-            }
-        }
-        if failed {
-            setup = None;
-            fallback = true;
-        }
-        if reconcile {
-            setup = build_watch_sets(&root).ok();
-            fallback = setup
-                .as_ref()
-                .is_none_or(|sets| sets.iter().any(|(_, set)| set.capped));
-            if fallback {
-                next_fallback = now + FALLBACK_PERIOD;
-            }
-        }
-        if fallback && now >= next_fallback {
-            coalescer.mutation(now);
-            next_fallback = now + FALLBACK_PERIOD;
-            // Limits can change while dxd remains resident.
-            setup = build_watch_sets(&root).ok();
-            fallback = setup
-                .as_ref()
-                .is_none_or(|sets| sets.iter().any(|(_, set)| set.capped));
-        }
-        if coalescer.ready(now) {
-            let _ = sender.try_send(());
-            coalescer.clear();
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
-}
-
-fn build_watch_sets(primary: &Path) -> io::Result<Vec<(PathBuf, WatchSet)>> {
-    let roots = crate::worktrees::selected(primary).unwrap_or_else(|_| vec![primary.to_owned()]);
-    let mut remaining = MAX_WATCHES;
-    let mut sets = Vec::with_capacity(roots.len());
-    for root in roots {
-        let set = WatchSet::build_with_limit(&root, remaining)?;
-        remaining = remaining.saturating_sub(set.count);
-        sets.push((root, set));
-    }
-    Ok(sets)
-}
-
-struct WatchSet {
-    fd: RawFd,
-    capped: bool,
-    count: usize,
-    paths: HashMap<i32, PathBuf>,
-    ignored: Option<IgnoredPaths>,
-}
-
-impl WatchSet {
-    fn build(root: &Path) -> io::Result<Self> {
-        Self::build_with_limit(root, MAX_WATCHES)
-    }
-
-    fn build_with_limit(root: &Path, limit: usize) -> io::Result<Self> {
+impl Inotify {
+    fn new() -> io::Result<Self> {
+        // SAFETY: plain syscall; the descriptor is owned below.
         let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
-        let mut result = Self {
-            fd,
+        // SAFETY: `fd` is a new descriptor nothing else owns.
+        Ok(Self(unsafe { OwnedFd::from_raw_fd(fd) }))
+    }
+
+    fn add(&self, path: &Path) -> io::Result<i32> {
+        let path = CString::new(path.as_os_str().as_bytes())?;
+        // SAFETY: valid descriptor and NUL-terminated path.
+        let wd = unsafe { libc::inotify_add_watch(self.0.as_raw_fd(), path.as_ptr(), WATCH_MASK) };
+        if wd < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(wd)
+        }
+    }
+
+    fn remove(&self, wd: i32) {
+        // SAFETY: valid descriptor; an unknown watch only fails with EINVAL.
+        unsafe {
+            libc::inotify_rm_watch(self.0.as_raw_fd(), wd);
+        }
+    }
+
+    /// Every queued event as (watch, mask, name).
+    fn read(&self, events: &mut Vec<(i32, u32, PathBuf)>) -> io::Result<()> {
+        // Aligned for `inotify_event`; one read returns whole events only.
+        let mut buffer = [0_u64; 8192];
+        loop {
+            // SAFETY: reads at most the buffer's length into it.
+            let read = unsafe {
+                libc::read(
+                    self.0.as_raw_fd(),
+                    buffer.as_mut_ptr().cast(),
+                    std::mem::size_of_val(&buffer),
+                )
+            };
+            if read < 0 {
+                let error = io::Error::last_os_error();
+                return match error.kind() {
+                    io::ErrorKind::WouldBlock => Ok(()),
+                    io::ErrorKind::Interrupted => continue,
+                    _ => Err(error),
+                };
+            }
+            let bytes = &buffer_bytes(&buffer)[..read as usize];
+            let header = std::mem::size_of::<libc::inotify_event>();
+            let mut offset = 0;
+            while offset + header <= bytes.len() {
+                // SAFETY: the kernel wrote a complete event header here; the
+                // unaligned read copies it out.
+                let event = unsafe {
+                    std::ptr::read_unaligned(bytes[offset..].as_ptr().cast::<libc::inotify_event>())
+                };
+                let name_start = offset + header;
+                let name_end = (name_start + event.len as usize).min(bytes.len());
+                let name = &bytes[name_start..name_end];
+                let name = &name[..name
+                    .iter()
+                    .position(|byte| *byte == 0)
+                    .unwrap_or(name.len())];
+                events.push((
+                    event.wd,
+                    event.mask,
+                    PathBuf::from(std::ffi::OsStr::from_bytes(name)),
+                ));
+                offset = name_end;
+            }
+        }
+    }
+}
+
+fn buffer_bytes(buffer: &[u64]) -> &[u8] {
+    // SAFETY: any initialized u64 buffer is a valid byte buffer.
+    unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast(), std::mem::size_of_val(buffer)) }
+}
+
+/// A checkout's filesystem event: the affected path and its inotify mask.
+struct Event {
+    path: PathBuf,
+    mask: u32,
+}
+
+struct WatchSet {
+    root: PathBuf,
+    inotify: Inotify,
+    /// Watched directories by path and by watch descriptor.
+    watched: HashMap<PathBuf, i32>,
+    directories: HashMap<i32, PathBuf>,
+    capped: bool,
+    ignored: Option<IgnoredPaths>,
+    /// Last seen entry count of each Git index under this root.
+    index_entries: HashMap<PathBuf, Option<u32>>,
+}
+
+impl WatchSet {
+    fn build(root: PathBuf, budget: usize) -> io::Result<Self> {
+        let mut set = Self {
+            root,
+            inotify: Inotify::new()?,
+            watched: HashMap::new(),
+            directories: HashMap::new(),
             capped: false,
-            count: 0,
-            paths: HashMap::new(),
-            // If Git is absent, slow, or returns too much output, retain the
-            // legacy traversal rather than risking missed Changes hints.
-            ignored: IgnoredPaths::load(root).ok(),
+            ignored: None,
+            index_entries: HashMap::new(),
         };
-        if result.ignored.is_none() {
-            // This contains no workspace path or file content. It is useful
-            // when diagnosing why a checkout retained legacy traversal.
+        let git_directory = set.root.join(".git");
+        let worktree_indexes = fs::read_dir(git_directory.join("worktrees"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path().join("index"));
+        for index in std::iter::once(git_directory.join("index")).chain(worktree_indexes) {
+            let entries = index_entries(&index);
+            set.index_entries.insert(index, entries);
+        }
+        set.ignored = IgnoredPaths::load(&set.root).ok();
+        if set.ignored.is_none() {
             eprintln!("dxd observer: ignore discovery unavailable; using legacy traversal");
         }
-        let mut pending = vec![root.to_owned()];
+        set.add_tree(&set.root.clone(), budget);
+        Ok(set)
+    }
+
+    /// Watch `directory` and every non-ignored directory beneath it.
+    fn add_tree(&mut self, directory: &Path, budget: usize) {
+        let mut pending = vec![directory.to_owned()];
         while let Some(directory) = pending.pop() {
-            if result.count == limit {
-                result.capped = true;
-                break;
+            if self.watched.len() >= budget {
+                self.capped = true;
+                return;
             }
-            let path = CString::new(directory.as_os_str().as_bytes())
-                .map_err(|_| io::ErrorKind::InvalidInput)?;
-            let watch = unsafe { libc::inotify_add_watch(fd, path.as_ptr(), mutation_mask()) };
-            if watch < 0 {
-                result.capped = true;
+            if self.watched.contains_key(&directory) {
                 continue;
             }
-            result.count += 1;
-            result.paths.insert(watch, directory.clone());
-            let entries = match fs::read_dir(&directory) {
-                Ok(entries) => entries,
-                Err(_) => {
-                    result.capped = true;
-                    continue;
-                }
+            let Ok(wd) = self.inotify.add(&directory) else {
+                self.capped = true;
+                continue;
+            };
+            self.watched.insert(directory.clone(), wd);
+            self.directories.insert(wd, directory.clone());
+            let Ok(entries) = fs::read_dir(&directory) else {
+                self.capped = true;
+                continue;
             };
             for entry in entries.flatten() {
                 let path = entry.path();
-                if result.excludes_from_traversal(root, &path) {
+                if self.excludes_from_traversal(&path) {
                     continue;
                 }
                 if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
@@ -262,55 +267,280 @@ impl WatchSet {
                 }
             }
         }
-        Ok(result)
     }
 
-    fn event_path(&self, watch: i32, name: &[u8]) -> Option<PathBuf> {
-        let directory = self.paths.get(&watch)?;
-        let name = name.split(|byte| *byte == 0).next().unwrap_or_default();
-        if name.is_empty() {
-            Some(directory.clone())
-        } else {
-            Some(directory.join(std::ffi::OsString::from_vec(name.to_vec())))
+    fn remove_tree(&mut self, directory: &Path) {
+        let removed = self
+            .watched
+            .keys()
+            .filter(|watched| watched.starts_with(directory))
+            .cloned()
+            .collect::<Vec<_>>();
+        for path in removed {
+            if let Some(wd) = self.watched.remove(&path) {
+                self.inotify.remove(wd);
+                self.directories.remove(&wd);
+            }
         }
     }
 
-    fn excludes_from_traversal(&self, root: &Path, path: &Path) -> bool {
+    /// Drain the kernel queue into checkout events.
+    fn events(&mut self) -> io::Result<Vec<Event>> {
+        let mut raw = Vec::new();
+        self.inotify.read(&mut raw)?;
+        let mut events = Vec::with_capacity(raw.len());
+        for (wd, mask, name) in raw {
+            if mask & libc::IN_Q_OVERFLOW != 0 {
+                events.push(Event {
+                    path: self.root.clone(),
+                    mask,
+                });
+                continue;
+            }
+            if mask & libc::IN_IGNORED != 0 {
+                // The kernel dropped this watch (directory gone or unwatched).
+                if let Some(path) = self.directories.remove(&wd) {
+                    self.watched.remove(&path);
+                }
+                continue;
+            }
+            let Some(directory) = self.directories.get(&wd) else {
+                continue;
+            };
+            let path = if name.as_os_str().is_empty() {
+                directory.clone()
+            } else {
+                directory.join(name)
+            };
+            events.push(Event { path, mask });
+        }
+        Ok(events)
+    }
+
+    fn excludes_from_traversal(&self, path: &Path) -> bool {
         self.ignored
             .as_ref()
-            .is_some_and(|ignored| ignored.contains(root, path))
-            || legacy_excluded(root, path)
+            .is_some_and(|ignored| ignored.contains(&self.root, path))
+            || legacy_excluded(&self.root, path)
     }
 
-    fn ignores_event(&mut self, root: &Path, path: &Path, mask: u32) -> bool {
-        if self.excludes_from_traversal(root, path) {
-            return true;
-        }
-        if mask & (libc::IN_CREATE | libc::IN_MOVED_TO) == 0 {
+    /// Git bookkeeping that cannot change a manifest (see the module docs).
+    fn git_bookkeeping(&mut self, path: &Path) -> bool {
+        let Ok(relative) = path.strip_prefix(&self.root) else {
+            return false;
+        };
+        if !in_git_directory(relative) {
             return false;
         }
-        self.ignored
-            .as_mut()
-            .is_some_and(|ignored| ignored.classify_created(root, path, mask).unwrap_or(false))
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "lock")
+        {
+            return true;
+        }
+        if !is_index(relative) {
+            return false;
+        }
+        let entries = index_entries(path);
+        self.index_entries.insert(path.to_owned(), entries) == Some(entries)
+    }
+
+    fn ignores_event(&mut self, path: &Path, created: bool, directory: bool) -> bool {
+        if self.excludes_from_traversal(path) {
+            return true;
+        }
+        // Ignore rules never apply inside `.git`; skip the `check-ignore`.
+        if !created || path.strip_prefix(&self.root).is_ok_and(in_git_directory) {
+            return false;
+        }
+        self.ignored.as_mut().is_some_and(|ignored| {
+            ignored
+                .classify_created(&self.root, path, directory)
+                .unwrap_or(false)
+        })
     }
 }
 
-impl Drop for WatchSet {
-    fn drop(&mut self) {
-        unsafe { libc::close(self.fd) };
-    }
+enum Outcome {
+    Mutation,
+    Reconcile,
 }
 
-fn mutation_mask() -> u32 {
-    libc::IN_MODIFY
-        | libc::IN_ATTRIB
-        | libc::IN_CLOSE_WRITE
-        | libc::IN_CREATE
-        | libc::IN_DELETE
-        | libc::IN_MOVED_FROM
-        | libc::IN_MOVED_TO
-        | libc::IN_DELETE_SELF
-        | libc::IN_MOVE_SELF
+fn classify(set: &mut WatchSet, event: &Event, budget: usize) -> Vec<Outcome> {
+    let mut outcomes = Vec::new();
+    if event.mask & libc::IN_Q_OVERFLOW != 0 {
+        outcomes.push(Outcome::Reconcile);
+        outcomes.push(Outcome::Mutation);
+        return outcomes;
+    }
+    let path = &event.path;
+    let arrived = event.mask & (libc::IN_CREATE | libc::IN_MOVED_TO) != 0;
+    let renamed = event.mask & (libc::IN_MOVED_FROM | libc::IN_MOVED_TO) != 0;
+    let removed = event.mask
+        & (libc::IN_DELETE | libc::IN_MOVED_FROM | libc::IN_DELETE_SELF | libc::IN_MOVE_SELF)
+        != 0;
+    let is_directory = event.mask & libc::IN_ISDIR != 0;
+    if set.git_bookkeeping(path) {
+        return outcomes;
+    }
+    if is_ignore_definition(&set.root, path) {
+        outcomes.push(Outcome::Reconcile);
+        outcomes.push(Outcome::Mutation);
+        return outcomes;
+    }
+    if removed {
+        set.remove_tree(path);
+        if *path == set.root {
+            // The checkout itself moved or vanished: start over.
+            outcomes.push(Outcome::Reconcile);
+        }
+    }
+    if arrived && is_directory && !set.excludes_from_traversal(path) {
+        set.add_tree(path, budget);
+    }
+    if !set.ignores_event(path, arrived || renamed, is_directory) {
+        outcomes.push(Outcome::Mutation);
+    }
+    outcomes
+}
+
+fn build_watch_sets(primary: &Path, budget: usize) -> io::Result<Vec<WatchSet>> {
+    let roots = crate::worktrees::selected(primary).unwrap_or_else(|_| vec![primary.to_owned()]);
+    let mut remaining = budget;
+    let mut sets = Vec::with_capacity(roots.len());
+    for root in roots {
+        let set = WatchSet::build(root, remaining)?;
+        remaining = remaining.saturating_sub(set.watched.len());
+        sets.push(set);
+    }
+    Ok(sets)
+}
+
+fn capped(sets: &Option<Vec<WatchSet>>) -> bool {
+    sets.as_ref()
+        .is_none_or(|sets| sets.iter().any(|set| set.capped))
+}
+
+/// Wait until one of `sets` has events or `wait` passes; returns the indexes
+/// of the ready sets.
+fn poll_sets(sets: &[WatchSet], wait: Duration) -> io::Result<Vec<usize>> {
+    let mut polls = sets
+        .iter()
+        .map(|set| libc::pollfd {
+            fd: set.inotify.0.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        })
+        .collect::<Vec<_>>();
+    let milliseconds = wait.as_millis().min(i32::MAX as u128) as i32;
+    // SAFETY: `polls` is a valid array of `polls.len()` entries. With no sets
+    // this is a plain sleep.
+    let ready = unsafe { libc::poll(polls.as_mut_ptr(), polls.len() as _, milliseconds) };
+    if ready < 0 {
+        let error = io::Error::last_os_error();
+        return if error.kind() == io::ErrorKind::Interrupted {
+            Ok(Vec::new())
+        } else {
+            Err(error)
+        };
+    }
+    Ok(polls
+        .iter()
+        .enumerate()
+        .filter(|(_, poll)| poll.revents != 0)
+        .map(|(index, _)| index)
+        .collect())
+}
+
+/// Fallback probe: the Changes fingerprint, and how long it took. `HEAD` as
+/// the default branch makes `origin/HEAD` the upstream candidate, which is
+/// the remote's default branch; the value is only compared with itself.
+fn fallback_fingerprint(root: &Path) -> (Option<String>, Duration) {
+    let started = Instant::now();
+    let fingerprint = crate::changes::fingerprint_only(root, "HEAD");
+    (fingerprint, started.elapsed())
+}
+
+fn observe(root: PathBuf, sender: Sender<()>, budget: usize, fallback_period: Duration) {
+    let mut sets = build_watch_sets(&root, budget).ok();
+    let mut fallback = capped(&sets);
+    let mut next_fallback = Instant::now() + fallback_period;
+    let mut next_rebuild = Instant::now() + FALLBACK_REBUILD;
+    let mut fingerprint: Option<String> = None;
+    let mut coalescer = Coalescer::default();
+
+    loop {
+        let now = Instant::now();
+        let mut deadline = coalescer.ready_at();
+        if fallback {
+            deadline = Some(deadline.map_or(next_fallback, |ready| ready.min(next_fallback)));
+        }
+        let wait = deadline.map_or(Duration::from_secs(3600), |deadline| {
+            deadline.saturating_duration_since(now)
+        });
+        let mut reconcile = false;
+        let ready = poll_sets(sets.as_deref().unwrap_or_default(), wait);
+        let now = Instant::now();
+        match ready {
+            Ok(ready) => {
+                for index in ready {
+                    let set = &mut sets.as_mut().expect("ready sets exist")[index];
+                    match set.events() {
+                        Ok(events) => {
+                            for event in events {
+                                // Worktrees can nest; each set classifies its own paths.
+                                for set in sets.as_mut().expect("ready sets exist").iter_mut() {
+                                    if !event.path.starts_with(&set.root) {
+                                        continue;
+                                    }
+                                    for outcome in classify(set, &event, budget) {
+                                        match outcome {
+                                            Outcome::Mutation => coalescer.mutation(now),
+                                            Outcome::Reconcile => reconcile = true,
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            reconcile = true;
+                            coalescer.mutation(now);
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                reconcile = true;
+                coalescer.mutation(now);
+                thread::sleep(QUIET_PERIOD);
+            }
+        }
+        if reconcile {
+            sets = build_watch_sets(&root, budget).ok();
+            fallback = capped(&sets);
+            next_rebuild = now + FALLBACK_REBUILD;
+        }
+        if fallback && now >= next_fallback {
+            // Limits can change while dxd remains resident.
+            if now >= next_rebuild {
+                sets = build_watch_sets(&root, budget).ok();
+                fallback = capped(&sets);
+                next_rebuild = now + FALLBACK_REBUILD;
+            }
+            let (current, cost) = fallback_fingerprint(&root);
+            if fingerprint.is_some() && current != fingerprint {
+                coalescer.mutation(now);
+            }
+            fingerprint = current;
+            next_fallback = Instant::now() + fallback_period.max(cost * FALLBACK_COST_FACTOR);
+        }
+        if coalescer.ready_at().is_some_and(|ready| now >= ready) {
+            if sender.try_send(()).is_err() && sender.is_closed() {
+                return;
+            }
+            coalescer.clear();
+        }
+    }
 }
 
 fn legacy_excluded(root: &Path, path: &Path) -> bool {
@@ -339,7 +569,7 @@ impl IgnoredPaths {
     fn load(root: &Path) -> io::Result<Self> {
         let output = git_ignore_output(
             root,
-            [
+            &[
                 "-c",
                 "core.excludesFile=/dev/null",
                 "ls-files",
@@ -364,7 +594,7 @@ impl IgnoredPaths {
             } else {
                 path
             };
-            let path = PathBuf::from(std::ffi::OsString::from_vec(path.to_vec()));
+            let path = PathBuf::from(String::from_utf8_lossy(path).into_owned());
             if !is_checkout_relative(&path) {
                 return Err(io::ErrorKind::InvalidData.into());
             }
@@ -377,18 +607,18 @@ impl IgnoredPaths {
         Ok(Self { directories, files })
     }
 
-    fn classify_created(&mut self, root: &Path, path: &Path, mask: u32) -> io::Result<bool> {
+    fn classify_created(&mut self, root: &Path, path: &Path, directory: bool) -> io::Result<bool> {
         let relative = path
             .strip_prefix(root)
             .map_err(|_| io::ErrorKind::InvalidInput)?;
         if !is_checkout_relative(relative) {
             return Err(io::ErrorKind::InvalidInput.into());
         }
-        let mut input = relative.as_os_str().as_bytes().to_vec();
+        let mut input = relative.to_string_lossy().into_owned().into_bytes();
         input.push(0);
         let output = git_ignore_output(
             root,
-            [
+            &[
                 "-c",
                 "core.excludesFile=/dev/null",
                 "check-ignore",
@@ -405,7 +635,7 @@ impl IgnoredPaths {
         if output != input {
             return Err(io::ErrorKind::InvalidData.into());
         }
-        if mask & libc::IN_ISDIR != 0 {
+        if directory {
             self.directories.insert(relative.to_owned());
         } else {
             self.files.insert(relative.to_owned());
@@ -434,98 +664,25 @@ fn is_checkout_relative(path: &Path) -> bool {
         })
 }
 
-fn git_ignore_output<const N: usize>(
+fn git_ignore_output(
     root: &Path,
-    arguments: [&str; N],
+    arguments: &[&str],
     input: &[u8],
     no_match_is_ok: bool,
 ) -> io::Result<Vec<u8>> {
-    #[cfg(test)]
-    {
-        *GIT_IGNORE_INVOCATIONS
-            .lock()
-            .unwrap()
-            .entry(root.to_owned())
-            .or_default() += 1;
-    }
     let mut command = Command::new("git");
     command
         .args(arguments)
         .current_dir(root)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    // SAFETY: this child only creates a process group before exec so timeout
-    // cleanup also closes output inherited by Git helpers.
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setpgid(0, 0) == 0 {
-                Ok(())
-            } else {
-                Err(io::Error::last_os_error())
-            }
-        });
-    }
-    let mut child = command.spawn()?;
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
-        if let Err(error) = stdin.write_all(input) {
-            stop_git(&mut child);
-            return Err(error);
-        }
-    }
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| io::Error::other("git stdout was not piped"))?;
-    let reader = thread::spawn(move || read_git_ignore_output(stdout));
-    let deadline = Instant::now() + GIT_IGNORE_TIMEOUT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Ok(status),
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
-            Ok(None) => {
-                stop_git(&mut child);
-                break Err(io::ErrorKind::TimedOut.into());
-            }
-            Err(error) => {
-                stop_git(&mut child);
-                break Err(error);
-            }
-        }
-    };
-    let output = reader
-        .join()
-        .map_err(|_| io::Error::other("git output reader panicked"))??;
-    let status = status?;
+        .env("GIT_OPTIONAL_LOCKS", "0");
+    let (status, output) = crate::child::run(
+        &mut command,
+        input,
+        MAX_GIT_IGNORE_BYTES,
+        GIT_IGNORE_TIMEOUT,
+    )?;
     if !status.success() && !(no_match_is_ok && status.code() == Some(1)) {
         return Err(io::ErrorKind::Other.into());
-    }
-    Ok(output)
-}
-
-fn stop_git(child: &mut std::process::Child) {
-    let process_group = -(child.id() as i32);
-    unsafe {
-        libc::kill(process_group, libc::SIGKILL);
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-fn read_git_ignore_output(mut reader: impl Read) -> io::Result<Vec<u8>> {
-    let mut output = Vec::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let read = reader.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        if output.len() + read > MAX_GIT_IGNORE_BYTES {
-            return Err(io::ErrorKind::FileTooLarge.into());
-        }
-        output.extend_from_slice(&buffer[..read]);
     }
     Ok(output)
 }
@@ -539,399 +696,212 @@ fn is_ignore_definition(root: &Path, path: &Path) -> bool {
     };
     relative == Path::new(".git/info/exclude")
         || relative == Path::new(".git/config")
-        || relative == Path::new(".git/index")
+        || is_index(relative)
+}
+
+fn in_git_directory(relative: &Path) -> bool {
+    relative
+        .components()
+        .next()
+        .is_some_and(|component| component.as_os_str() == ".git")
+}
+
+/// `.git/index`, or a linked worktree's `.git/worktrees/<name>/index`.
+fn is_index(relative: &Path) -> bool {
+    let parts = relative.components().collect::<Vec<_>>();
+    let name = |index: usize| parts[index].as_os_str();
+    match parts.len() {
+        2 => name(0) == ".git" && name(1) == "index",
+        4 => name(0) == ".git" && name(1) == "worktrees" && name(3) == "index",
+        _ => false,
+    }
+}
+
+/// Entry count from an index header (`DIRC`, version, count), or `None` when
+/// the file is missing or not an index.
+fn index_entries(path: &Path) -> Option<u32> {
+    let mut header = [0_u8; 12];
+    fs::File::open(path).ok()?.read_exact(&mut header).ok()?;
+    (header[..4] == *b"DIRC")
+        .then(|| u32::from_be_bytes([header[8], header[9], header[10], header[11]]))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
-    use std::process::Command;
 
-    fn git_ignore_invocations(root: &Path) -> usize {
-        GIT_IGNORE_INVOCATIONS
-            .lock()
-            .unwrap()
-            .get(root)
-            .copied()
-            .unwrap_or_default()
-    }
-
-    fn wait_dirty(observer: &Observer) {
-        let _ = wait_dirty_after(observer, Instant::now());
-    }
-
-    fn wait_dirty_after(observer: &Observer, started_at: Instant) -> Duration {
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while Instant::now() < deadline {
-            if observer.take_dirty() {
-                return started_at.elapsed();
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-        panic!("observer did not report mutation");
-    }
-
-    fn initialize_git(checkout: &Path) {
+    fn git(root: &Path, arguments: &[&str]) {
         assert!(
             Command::new("git")
-                .args(["init", "--quiet"])
-                .current_dir(checkout)
-                .status()
-                .unwrap()
-                .success()
-        );
-    }
-
-    fn git(checkout: &Path, arguments: &[&str]) {
-        assert!(
-            Command::new("git")
-                .args(["-c", "commit.gpgsign=false"])
+                .arg("-C")
+                .arg(root)
                 .args(arguments)
-                .current_dir(checkout)
-                .status()
+                .output()
                 .unwrap()
+                .status
                 .success()
         );
     }
 
-    fn stage(checkout: &Path, path: &str) {
-        assert!(
-            Command::new("git")
-                .args(["add", "--force", path])
-                .current_dir(checkout)
-                .status()
-                .unwrap()
-                .success()
-        );
+    async fn wait_dirty(observer: &mut Observer) -> bool {
+        tokio::time::timeout(Duration::from_secs(4), observer.dirty())
+            .await
+            .is_ok()
     }
 
-    fn assert_no_dirty(observer: &Observer) {
-        thread::sleep(QUIET_PERIOD + Duration::from_millis(150));
+    async fn expect_quiet(observer: &mut Observer) {
         assert!(
-            !observer.take_dirty(),
-            "ignored-only mutation emitted a Changes hint"
+            tokio::time::timeout(Duration::from_millis(1500), observer.dirty())
+                .await
+                .is_err(),
+            "observer reported an ignored mutation"
         );
-    }
-
-    fn summarize_millis(samples: &[Duration]) -> (u128, u128, u128, u128) {
-        let mut values = samples.iter().map(Duration::as_millis).collect::<Vec<_>>();
-        values.sort_unstable();
-        (
-            values[0],
-            values[(values.len() / 2) - 1],
-            values[(values.len() * 95).div_ceil(100) - 1],
-            values[values.len() - 1],
-        )
     }
 
     #[test]
-    fn observes_checkout_mutations_but_not_reads() {
-        let checkout = tempfile::tempdir().unwrap();
-        fs::create_dir(checkout.path().join(".git")).unwrap();
-        let watches = WatchSet::build(checkout.path()).unwrap();
-        assert!(
-            watches.ignored.is_none(),
-            "non-Git checkouts must retain legacy watch traversal"
-        );
-        drop(watches);
-        let observer = Observer::start(checkout.path());
-        thread::sleep(Duration::from_millis(100));
-
-        fs::write(checkout.path().join("untracked"), b"one").unwrap();
-        wait_dirty(&observer);
-        fs::write(checkout.path().join("replacement.tmp"), b"two").unwrap();
-        fs::rename(
-            checkout.path().join("replacement.tmp"),
-            checkout.path().join("untracked"),
-        )
-        .unwrap();
-        wait_dirty(&observer);
-        fs::create_dir(checkout.path().join("nested")).unwrap();
-        fs::create_dir(checkout.path().join("nested/deeper")).unwrap();
-        fs::write(checkout.path().join("nested/deeper/file"), b"three").unwrap();
-        wait_dirty(&observer);
-        fs::remove_dir_all(checkout.path().join("nested")).unwrap();
-        wait_dirty(&observer);
-
-        let mut contents = Vec::new();
-        fs::File::open(checkout.path().join("untracked"))
-            .unwrap()
-            .read_to_end(&mut contents)
-            .unwrap();
-        thread::sleep(QUIET_PERIOD + Duration::from_millis(100));
-        assert!(!observer.take_dirty(), "file reads must not produce hints");
-    }
-
-    #[test]
-    fn observes_linked_worktrees_added_before_and_after_start() {
-        let checkout = tempfile::tempdir().unwrap();
-        let linked_parent = tempfile::tempdir().unwrap();
-        initialize_git(checkout.path());
-        git(checkout.path(), &["config", "user.name", "dx test"]);
-        git(
-            checkout.path(),
-            &["config", "user.email", "dx-test@example.test"],
-        );
-        fs::write(checkout.path().join("tracked"), b"base").unwrap();
-        git(checkout.path(), &["add", "tracked"]);
-        git(checkout.path(), &["commit", "-m", "baseline"]);
-        let first = linked_parent.path().join("first");
-        git(
-            checkout.path(),
-            &["worktree", "add", "-b", "first", first.to_str().unwrap()],
-        );
-        let observer = Observer::start(checkout.path());
-        thread::sleep(Duration::from_millis(100));
-
-        fs::write(first.join("first-change"), b"one").unwrap();
-        wait_dirty(&observer);
-
-        let second = linked_parent.path().join("second");
-        git(
-            checkout.path(),
-            &["worktree", "add", "-b", "second", second.to_str().unwrap()],
-        );
-        wait_dirty(&observer);
-        thread::sleep(QUIET_PERIOD + Duration::from_millis(100));
-        while observer.take_dirty() {}
-        fs::write(second.join("second-change"), b"two").unwrap();
-        wait_dirty(&observer);
-    }
-
-    #[test]
-    fn ongoing_writes_are_bounded_by_max_wait() {
-        let start = Instant::now();
+    fn coalescer_waits_for_quiet_but_never_beyond_max_wait() {
         let mut coalescer = Coalescer::default();
-        for step in 0..=10 {
-            coalescer.mutation(start + Duration::from_millis(step * 100));
-            if step < 10 {
-                assert!(!coalescer.ready(start + Duration::from_millis(step * 100)));
-            }
-        }
-        assert!(coalescer.ready(start + MAX_WAIT));
+        let start = Instant::now();
+        assert!(coalescer.ready_at().is_none());
+        coalescer.mutation(start);
+        assert_eq!(coalescer.ready_at(), Some(start + QUIET_PERIOD));
+        coalescer.mutation(start + MAX_WAIT - QUIET_PERIOD / 2);
+        assert_eq!(coalescer.ready_at(), Some(start + MAX_WAIT));
+        coalescer.clear();
+        assert!(coalescer.ready_at().is_none());
     }
 
-    #[test]
-    fn skips_wholly_ignored_directories_without_losing_negated_or_tracked_changes() {
-        const IGNORED_DIRECTORIES: usize = 9_001;
-        const EDIT_SAMPLES: usize = 20;
-        const WRITES_PER_SAMPLE: usize = 500;
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reports_checkout_mutations_and_skips_ignored_and_git_object_writes() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        git(&root, &["init", "-q"]);
+        fs::write(root.join(".gitignore"), "ignored/\n*.log\n").unwrap();
+        fs::create_dir_all(root.join("ignored")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        let mut observer = Observer::start(&root);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let _ = tokio::time::timeout(Duration::from_millis(1200), observer.dirty()).await;
 
-        let checkout = tempfile::tempdir().unwrap();
-        initialize_git(checkout.path());
-        fs::create_dir_all(checkout.path().join("ignored/negated")).unwrap();
-        fs::create_dir_all(checkout.path().join("ignored/tracked")).unwrap();
-        for index in 0..IGNORED_DIRECTORIES {
-            fs::create_dir(
-                checkout
-                    .path()
-                    .join(format!("ignored/directory-{index:05}")),
-            )
-            .unwrap();
-        }
-        fs::write(
-            checkout.path().join(".gitignore"),
-            b"ignored/*\n!ignored/negated/\n!ignored/negated/**\n",
-        )
-        .unwrap();
-        fs::write(checkout.path().join("ignored/negated/visible"), b"one").unwrap();
-        fs::write(checkout.path().join("ignored/tracked/visible"), b"one").unwrap();
-        stage(checkout.path(), ".gitignore");
-        stage(checkout.path(), "ignored/tracked/visible");
-
-        let build_started_at = Instant::now();
-        let watches = WatchSet::build(checkout.path()).unwrap();
-        let build_duration = build_started_at.elapsed();
-        let watch_count = watches.count;
-        assert!(watches.ignored.is_some(), "Git ignores were not loaded");
-        assert!(!watches.capped, "ignored directories exhausted watches");
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
         assert!(
-            watches.count < 64,
-            "watch count included ignored directories: {}",
-            watches.count
-        );
-        assert!(
-            build_duration < Duration::from_millis(500),
-            "watch build exceeded the px0 target: {build_duration:?}"
-        );
-        assert!(
-            build_duration < Duration::from_secs(2),
-            "watch build exceeded the rejection ceiling: {build_duration:?}"
-        );
-        assert!(watches.excludes_from_traversal(
-            checkout.path(),
-            &checkout.path().join("ignored/directory-00000")
-        ));
-        assert!(
-            !watches
-                .excludes_from_traversal(checkout.path(), &checkout.path().join("ignored/negated"))
-        );
-        assert!(
-            !watches
-                .excludes_from_traversal(checkout.path(), &checkout.path().join("ignored/tracked"))
-        );
-        drop(watches);
-
-        let observer = Observer::start(checkout.path());
-        thread::sleep(Duration::from_millis(100));
-        fs::write(
-            checkout.path().join("ignored/directory-00000/only-ignored"),
-            b"one",
-        )
-        .unwrap();
-        assert_no_dirty(&observer);
-
-        let git_after_build = git_ignore_invocations(checkout.path());
-        let mut latencies = Vec::with_capacity(EDIT_SAMPLES);
-        for sample in 0..EDIT_SAMPLES {
-            let started_at = Instant::now();
-            for write in 0..WRITES_PER_SAMPLE {
-                fs::write(
-                    checkout.path().join("ignored/negated/visible"),
-                    format!("{sample}:{write}"),
-                )
-                .unwrap();
-            }
-            latencies.push(wait_dirty_after(&observer, started_at));
-        }
-        assert_eq!(
-            git_ignore_invocations(checkout.path()),
-            git_after_build,
-            "normal writes after WatchSet construction must not run Git"
-        );
-        let (minimum, p50, p95, maximum) = summarize_millis(&latencies);
-        println!(
-            "px0 observer: ignored_directories={IGNORED_DIRECTORIES} watches={} build_ms={} edit_hint_n={EDIT_SAMPLES} edit_hint_ms=min:{minimum},p50:{p50},p95:{p95},max:{maximum}",
-            watch_count,
-            build_duration.as_millis(),
-        );
-        assert!(
-            p95 <= 1_500,
-            "non-ignored edit-to-hint p95 exceeded 1.5 seconds: {p95} ms"
+            wait_dirty(&mut observer).await,
+            "tracked-tree write was not observed"
         );
 
-        fs::write(checkout.path().join("ignored/tracked/visible"), b"two").unwrap();
-        wait_dirty(&observer);
+        fs::write(root.join("ignored/cache.bin"), "x").unwrap();
+        fs::write(root.join("build.log"), "x").unwrap();
+        fs::create_dir_all(root.join(".git/objects/aa")).unwrap();
+        fs::write(root.join(".git/objects/aa/bb"), "x").unwrap();
+        expect_quiet(&mut observer).await;
 
-        fs::create_dir(checkout.path().join("dynamic")).unwrap();
-        wait_dirty(&observer);
-        fs::write(
-            checkout.path().join(".gitignore"),
-            b"ignored/*\n!ignored/negated/\n!ignored/negated/**\ndynamic/\n",
-        )
-        .unwrap();
-        wait_dirty(&observer);
-        // The definition notification is observable before its replacement
-        // watch set is installed. Give the observer one reconciliation turn
-        // before verifying the newly ignored directory.
-        thread::sleep(Duration::from_millis(100));
-        let rebuilt = WatchSet::build(checkout.path()).unwrap();
+        fs::create_dir_all(root.join("src/nested")).unwrap();
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        let _ = tokio::time::timeout(Duration::from_millis(1200), observer.dirty()).await;
+        fs::write(root.join("src/nested/deep.rs"), "deep").unwrap();
         assert!(
-            rebuilt.excludes_from_traversal(checkout.path(), &checkout.path().join("dynamic")),
-            "reconciliation did not discover the new ignored directory"
+            wait_dirty(&mut observer).await,
+            "new directory was not watched incrementally"
         );
-        drop(rebuilt);
-        fs::write(checkout.path().join("dynamic/only-ignored"), b"one").unwrap();
-        assert_no_dirty(&observer);
     }
 
-    #[test]
-    fn newly_created_ignored_files_stay_quiet() {
-        let checkout = tempfile::tempdir().unwrap();
-        initialize_git(checkout.path());
-        fs::write(checkout.path().join(".gitignore"), b"*.log\n").unwrap();
-        stage(checkout.path(), ".gitignore");
-        let observer = Observer::start(checkout.path());
-        thread::sleep(Duration::from_millis(100));
+    /// Beyond the watch budget, unwatched directories are covered by the
+    /// fingerprint fallback: a hint when the tree moved, silence when not.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn capped_watches_hint_only_when_the_fingerprint_moves() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        git(&root, &["init", "-q", "-b", "main"]);
+        fs::create_dir_all(root.join("a/b")).unwrap();
+        fs::write(root.join("a/b/file.txt"), "one\n").unwrap();
+        // Only the root is watched.
+        let mut observer = Observer::start_with(&root, 1, Duration::from_millis(200));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        expect_quiet(&mut observer).await;
 
-        fs::write(checkout.path().join("generated.log"), b"one").unwrap();
-        assert_no_dirty(&observer);
-        fs::write(checkout.path().join("generated.log"), b"two").unwrap();
-        assert_no_dirty(&observer);
-    }
-
-    #[test]
-    fn force_added_ignored_file_becomes_observable() {
-        let checkout = tempfile::tempdir().unwrap();
-        initialize_git(checkout.path());
-        fs::write(checkout.path().join(".gitignore"), b"*.log\n").unwrap();
-        stage(checkout.path(), ".gitignore");
-        fs::write(checkout.path().join("generated.log"), b"one").unwrap();
-        let observer = Observer::start(checkout.path());
-        thread::sleep(Duration::from_millis(100));
-
-        stage(checkout.path(), "generated.log");
-        wait_dirty(&observer);
-        // The index notification is observable before its replacement watch
-        // set is installed. Give the observer one reconciliation turn.
-        thread::sleep(Duration::from_millis(100));
-        fs::write(checkout.path().join("generated.log"), b"two").unwrap();
-        wait_dirty(&observer);
-    }
-
-    #[test]
-    fn global_excludes_never_remove_checkout_watches() {
-        let checkout = tempfile::tempdir().unwrap();
-        let global = tempfile::NamedTempFile::new().unwrap();
-        fs::write(global.path(), b"generated/\n").unwrap();
-        initialize_git(checkout.path());
-        fs::create_dir(checkout.path().join("generated")).unwrap();
+        fs::write(root.join("a/b/file.txt"), "two\n").unwrap();
         assert!(
+            wait_dirty(&mut observer).await,
+            "a write in an unwatched directory was not observed"
+        );
+        expect_quiet(&mut observer).await;
+    }
+
+    /// Regression for the capture loop: a capture, or any Git reader that
+    /// rewrites the index, must not schedule the next capture.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn git_bookkeeping_is_quiet_but_tracking_changes_are_not() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        git(&root, &["init", "-q", "-b", "main"]);
+        git(&root, &["config", "user.email", "a@b.c"]);
+        git(&root, &["config", "user.name", "a"]);
+        fs::write(root.join("tracked.txt"), "tracked\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-q", "-m", "init"]);
+        let baseline = String::from_utf8(
             Command::new("git")
-                .args(["config", "core.excludesFile"])
-                .arg(global.path())
-                .current_dir(checkout.path())
-                .status()
+                .arg("-C")
+                .arg(&root)
+                .args(["rev-parse", "HEAD"])
+                .output()
                 .unwrap()
-                .success()
-        );
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_owned();
+        fs::write(root.join("dirty.txt"), "untracked\n").unwrap();
+        // Stale stat data: the next `git status` that may take the index lock
+        // rewrites the index with the same entries.
+        let stale = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        fs::File::options()
+            .write(true)
+            .open(root.join("tracked.txt"))
+            .unwrap()
+            .set_modified(stale)
+            .unwrap();
+        let index = root.join(".git/index");
+        let before = fs::metadata(&index).unwrap().modified().unwrap();
 
-        let watches = WatchSet::build(checkout.path()).unwrap();
+        let mut observer = Observer::start(&root);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let _ = tokio::time::timeout(Duration::from_millis(1200), observer.dirty()).await;
 
-        assert!(
-            !watches.excludes_from_traversal(checkout.path(), &checkout.path().join("generated"))
-        );
-    }
-
-    #[test]
-    #[ignore = "px0 records an exact 120-second idle observation window"]
-    fn ignored_checkout_stays_quiet_for_120_seconds() {
-        let checkout = tempfile::tempdir().unwrap();
-        initialize_git(checkout.path());
-        fs::create_dir(checkout.path().join("ignored")).unwrap();
-        fs::write(checkout.path().join("ignored/only-ignored"), b"one").unwrap();
-        fs::write(checkout.path().join(".gitignore"), b"ignored/\n").unwrap();
-        stage(checkout.path(), ".gitignore");
-
-        let observer = Observer::start(checkout.path());
-        thread::sleep(Duration::from_millis(100));
-        assert!(
-            !observer.take_dirty(),
-            "observer was not idle before sampling"
-        );
-        let deadline = Instant::now() + Duration::from_secs(120);
-        let mut events = 0;
-        while Instant::now() < deadline {
-            events += usize::from(observer.take_dirty());
-            thread::sleep(Duration::from_millis(20));
+        let request = crate::changes::RefreshRequest {
+            token: "token-0123456789abcdef".into(),
+            source: crate::changes::SourceContext {
+                baseline,
+                default_branch: "main".into(),
+            },
+            expected_fingerprint: None,
+        };
+        let cache = crate::changes::CaptureCache::default();
+        for _ in 0..3 {
+            assert!(matches!(
+                crate::changes::capture(&root, &request, &cache),
+                crate::changes::CandidateOutcome::Complete { .. }
+            ));
+            // A shell prompt or editor running Git with optional locks on.
+            git(&root, &["status", "--porcelain"]);
         }
-        events += usize::from(observer.take_dirty());
-        println!("px0 observer: idle_window_ms=120000 idle_changes_events={events}");
-        assert!(
-            events <= 1,
-            "idle Changes hints exceeded one per 120 seconds"
+        fs::write(root.join(".git/HEAD.lock"), "").unwrap();
+        fs::remove_file(root.join(".git/HEAD.lock")).unwrap();
+        assert_ne!(
+            fs::metadata(&index).unwrap().modified().unwrap(),
+            before,
+            "git status did not rewrite the index; the test proves nothing"
         );
-    }
+        expect_quiet(&mut observer).await;
 
-    #[test]
-    fn rejects_oversized_git_ignore_output() {
-        let bytes = vec![b'x'; MAX_GIT_IGNORE_BYTES + 1];
-        assert_eq!(
-            read_git_ignore_output(std::io::Cursor::new(bytes))
-                .unwrap_err()
-                .kind(),
-            io::ErrorKind::FileTooLarge
+        // Tracking a new file changes the index entry count.
+        git(&root, &["add", "dirty.txt"]);
+        assert!(wait_dirty(&mut observer).await, "git add was not observed");
+        let _ = tokio::time::timeout(Duration::from_millis(500), observer.dirty()).await;
+        git(&root, &["commit", "-q", "-m", "second"]);
+        assert!(
+            wait_dirty(&mut observer).await,
+            "git commit was not observed"
         );
     }
 }

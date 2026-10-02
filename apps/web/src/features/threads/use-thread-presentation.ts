@@ -52,3 +52,71 @@ export function useThreadPresentation<T>(
   );
   return [retainedValue, update];
 }
+
+/** A presentation value that owners can pass without subscribing to it. */
+export interface PresentationValue<T> {
+  readonly get: () => T;
+  readonly set: (next: T) => void;
+  readonly subscribe: (listener: () => void) => () => void;
+}
+
+/** A component-lifetime value for owners without a retained Thread. */
+export const createPresentationValue = <T>(
+  initial: T,
+): PresentationValue<T> => {
+  let current = initial;
+  const listeners = new Set<() => void>();
+  return {
+    get: () => current,
+    set: (next) => {
+      if (Object.is(current, next)) return;
+      current = next;
+      for (const listener of listeners) listener();
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+};
+
+/**
+ * Returns a stable handle to one retained presentation value without
+ * subscribing the caller. Only components that render the value should read it
+ * through {@link usePresentationValue}, so an owner can pass it down (for
+ * example a composer draft) without re-rendering on every change.
+ */
+export function useThreadPresentationValue<T>(
+  key: string,
+  initial: T,
+): PresentationValue<T> {
+  const entry = React.useContext(ThreadPresentationContext);
+  // `initial` seeds only the first read, like useState.
+  const [seed] = React.useState(() => ({
+    initial,
+    local: entry === undefined ? createPresentationValue(initial) : undefined,
+  }));
+  return React.useMemo(() => {
+    if (entry === undefined)
+      return seed.local ?? createPresentationValue(seed.initial);
+    if (!entry.presentation.has(key)) entry.presentation.set(key, seed.initial);
+    return {
+      get: () =>
+        entry.disposed ? seed.initial : (entry.presentation.get(key) as T),
+      set: (next) => {
+        if (entry.disposed || Object.is(entry.presentation.get(key), next))
+          return;
+        entry.presentation.set(key, next);
+        for (const listener of entry.presentationListeners) listener();
+      },
+      subscribe: (listener) => {
+        entry.presentationListeners.add(listener);
+        return () => entry.presentationListeners.delete(listener);
+      },
+    };
+  }, [entry, key, seed]);
+}
+
+/** Subscribes the calling component to a presentation value. */
+export const usePresentationValue = <T>(value: PresentationValue<T>): T =>
+  React.useSyncExternalStore(value.subscribe, value.get, value.get);

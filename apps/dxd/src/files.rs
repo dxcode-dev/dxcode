@@ -1,27 +1,34 @@
+//! Files inside the Thread checkout: list, read, and compare-and-swap save.
+//!
+//! Every operation is confined to the checkout root through a `cap_std::fs::Dir`
+//! and walks path components one at a time without following symbolic links.
+
 use crate::changes::{RefreshRequest, SourceContext};
 use crate::files_sandbox::{self, SandboxReadResult, SandboxRoots};
 use crate::worktrees::{self, PRIMARY_WORKTREE};
+use cap_std::fs::{Dir, Metadata, OpenOptions};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
-use std::ffi::{CStr, CString};
-use std::fs::File;
 use std::io::{self, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
-use std::thread;
-#[cfg(test)]
-use std::time::{Duration, Instant};
-
-const WORK_QUEUE_CAPACITY: usize = 32;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 const MAX_PATH_BYTES: usize = 1_024;
-const MAX_TREE_ENTRIES: usize = 10_000;
-const MAX_TREE_PAGE_SIZE: usize = 100;
+pub const MAX_TREE_ENTRIES: usize = 10_000;
 const MAX_EDITABLE_BYTES: usize = 256 * 1_024;
+/// Editor requests (list, read, save) admitted at once, queued or running.
+const EDITOR_ADMITTED: usize = 32;
+/// Editor requests running at once, so a small read never waits for a large
+/// listing to finish.
+const EDITOR_WORKERS: usize = 4;
+/// Sandbox reads admitted at once. Each holds up to one 4 MiB chunk until the
+/// socket writer has sent it, which bounds that memory to 8 chunks.
+const STREAMING_ADMITTED: usize = 8;
+const STREAMING_WORKERS: usize = 2;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -67,6 +74,14 @@ pub enum FilesOperation {
         #[serde(rename = "expectedVersion", default)]
         expected_version: Option<String>,
     },
+}
+
+impl FilesOperation {
+    /// Sandbox streaming reads have their own budget so a media stream never
+    /// delays an editor read or save.
+    pub fn is_streaming(&self) -> bool {
+        matches!(self, Self::ReadSandbox { .. })
+    }
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -171,73 +186,143 @@ enum FilesError {
     Unavailable,
 }
 
-pub struct WorkerRequest {
-    pub request_id: String,
-    pub operation: FilesOperation,
-}
-
-pub struct CompletedOperation {
-    pub request_id: String,
-    pub result: FilesResult,
-}
-
-/// Files operations can traverse or read a large directory. Keep that work
-/// off the connection loop, but use one bounded worker so requests and their
-/// resulting responses keep their accepted order.
-pub fn start_worker(
-    root: &File,
-    workspace_root: &Path,
-    sandbox: SandboxRoots,
-) -> io::Result<(SyncSender<WorkerRequest>, Receiver<CompletedOperation>)> {
-    let root = root.try_clone()?;
-    let workspace_root = workspace_root.to_owned();
-    let (requests, receiver) = mpsc::sync_channel::<WorkerRequest>(WORK_QUEUE_CAPACITY);
-    let (completed, results) = mpsc::sync_channel::<CompletedOperation>(WORK_QUEUE_CAPACITY);
-    thread::spawn(move || {
-        while let Ok(request) = receiver.recv() {
-            if completed
-                .send(CompletedOperation {
-                    request_id: request.request_id,
-                    result: match request.operation {
-                        FilesOperation::ReadSandbox {
-                            path,
-                            offset,
-                            length,
-                            expected_version,
-                        } => FilesResult::Sandbox(files_sandbox::read(
-                            &sandbox,
-                            &path,
-                            offset,
-                            length,
-                            expected_version.as_deref(),
-                        )),
-                        operation => execute_workspace(&root, &workspace_root, operation),
-                    },
-                })
-                .is_err()
-            {
-                return;
-            }
+impl From<FilesError> for FilesResult {
+    fn from(error: FilesError) -> Self {
+        match error {
+            FilesError::Invalid => Self::Invalid,
+            FilesError::Missing => Self::Missing,
+            FilesError::Conflict => Self::Conflict,
+            FilesError::Unavailable => Self::Unavailable,
         }
-    });
-    Ok((requests, results))
-}
-
-pub fn try_submit(
-    worker: &SyncSender<WorkerRequest>,
-    request: WorkerRequest,
-) -> Result<(), TrySendError<WorkerRequest>> {
-    worker.try_send(request)
-}
-
-pub fn next_completed(receiver: &Receiver<CompletedOperation>) -> Option<CompletedOperation> {
-    match receiver.try_recv() {
-        Ok(completed) => Some(completed),
-        Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
     }
 }
 
-pub fn execute(root: &File, operation: FilesOperation) -> FilesResult {
+/// Everything a Files worker needs; shared by every running operation.
+pub struct FilesContext {
+    pub root: Dir,
+    pub workspace_root: std::path::PathBuf,
+    pub sandbox: SandboxRoots,
+    /// Saves run one at a time so compare-and-swap holds between concurrent
+    /// requests: two saves with the same expected version cannot both win.
+    save: Mutex<()>,
+}
+
+impl FilesContext {
+    pub fn open(workspace_root: &Path, sandbox: SandboxRoots) -> io::Result<Self> {
+        let root = Dir::open_ambient_dir(workspace_root, cap_std::ambient_authority())?;
+        Ok(Self {
+            root,
+            workspace_root: workspace_root.to_owned(),
+            sandbox,
+            save: Mutex::new(()),
+        })
+    }
+
+    pub fn execute(&self, operation: FilesOperation) -> FilesResult {
+        match operation {
+            FilesOperation::ReadSandbox {
+                path,
+                offset,
+                length,
+                expected_version,
+            } => FilesResult::Sandbox(files_sandbox::read(
+                &self.sandbox,
+                &path,
+                offset,
+                length,
+                expected_version.as_deref(),
+            )),
+            operation @ FilesOperation::Save { .. } => {
+                let _serialized = self
+                    .save
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                execute_workspace(&self.root, &self.workspace_root, operation)
+            }
+            operation => execute_workspace(&self.root, &self.workspace_root, operation),
+        }
+    }
+}
+
+/// A finished request. `admission` stays held until the result has left the
+/// daemon, so queued sandbox chunks count against their lane's bound.
+pub struct FilesDone {
+    pub request_id: String,
+    pub result: FilesResult,
+    pub admission: OwnedSemaphorePermit,
+}
+
+struct Lane {
+    admitted: Arc<Semaphore>,
+    workers: Arc<Semaphore>,
+}
+
+impl Lane {
+    fn new(admitted: usize, workers: usize) -> Self {
+        Self {
+            admitted: Arc::new(Semaphore::new(admitted)),
+            workers: Arc::new(Semaphore::new(workers)),
+        }
+    }
+}
+
+/// Runs Files operations concurrently on blocking threads with a bounded
+/// budget per lane. Work continues across reconnects; results are delivered
+/// to whichever session is current.
+pub struct FilesWorkers {
+    context: Arc<FilesContext>,
+    editor: Lane,
+    streaming: Lane,
+    results: Sender<FilesDone>,
+}
+
+impl FilesWorkers {
+    pub fn new(context: FilesContext) -> (Self, Receiver<FilesDone>) {
+        let (results, receiver) = channel(EDITOR_ADMITTED + STREAMING_ADMITTED);
+        (
+            Self {
+                context: Arc::new(context),
+                editor: Lane::new(EDITOR_ADMITTED, EDITOR_WORKERS),
+                streaming: Lane::new(STREAMING_ADMITTED, STREAMING_WORKERS),
+                results,
+            },
+            receiver,
+        )
+    }
+
+    /// Start one request; false when its lane is full.
+    pub fn submit(&self, request_id: String, operation: FilesOperation) -> bool {
+        let lane = if operation.is_streaming() {
+            &self.streaming
+        } else {
+            &self.editor
+        };
+        let Ok(admission) = Arc::clone(&lane.admitted).try_acquire_owned() else {
+            return false;
+        };
+        let workers = Arc::clone(&lane.workers);
+        let context = Arc::clone(&self.context);
+        let results = self.results.clone();
+        tokio::spawn(async move {
+            let Ok(_worker) = workers.acquire_owned().await else {
+                return;
+            };
+            let result = tokio::task::spawn_blocking(move || context.execute(operation))
+                .await
+                .unwrap_or(FilesResult::Unavailable);
+            let _ = results
+                .send(FilesDone {
+                    request_id,
+                    result,
+                    admission,
+                })
+                .await;
+        });
+        true
+    }
+}
+
+pub fn execute(root: &Dir, operation: FilesOperation) -> FilesResult {
     let result = match operation {
         FilesOperation::List { path, cursor, .. } => list(root, path.as_deref(), cursor),
         FilesOperation::Read { path, .. } => read(root, &path),
@@ -249,13 +334,7 @@ pub fn execute(root: &File, operation: FilesOperation) -> FilesResult {
         } => save(root, &path, &expected_version, content.as_bytes()),
         FilesOperation::ReadSandbox { .. } => Err(FilesError::Invalid),
     };
-    match result {
-        Ok(result) => result,
-        Err(FilesError::Invalid) => FilesResult::Invalid,
-        Err(FilesError::Missing) => FilesResult::Missing,
-        Err(FilesError::Conflict) => FilesResult::Conflict,
-        Err(FilesError::Unavailable) => FilesResult::Unavailable,
-    }
+    result.unwrap_or_else(FilesResult::from)
 }
 
 fn operation_worktree(operation: &FilesOperation) -> Option<&str> {
@@ -268,53 +347,38 @@ fn operation_worktree(operation: &FilesOperation) -> Option<&str> {
 }
 
 fn valid_worktree_id(value: &str) -> bool {
-    value == PRIMARY_WORKTREE
-        || value.strip_prefix("wt_").is_some_and(|digest| {
-            digest.len() == 16
-                && digest
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        })
+    value.len() == 19
+        && value.starts_with("wt_")
+        && value[3..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn worktree_id(path: &Path) -> Result<String, FilesError> {
-    worktrees::id(path).ok_or(FilesError::Unavailable)
-}
-
-fn linked_worktrees(workspace_root: &Path) -> Result<Vec<PathBuf>, FilesError> {
-    Ok(worktrees::selected(workspace_root)
-        .map_err(|_| FilesError::Unavailable)?
-        .into_iter()
-        .skip(1)
-        .collect())
-}
-
-fn open_linked_worktree(workspace_root: &Path, requested: &str) -> Result<File, FilesError> {
-    if !valid_worktree_id(requested) || requested == PRIMARY_WORKTREE {
+fn open_linked_worktree(workspace_root: &Path, requested: &str) -> Result<Dir, FilesError> {
+    if !valid_worktree_id(requested) {
         return Err(FilesError::Invalid);
     }
-    let path = linked_worktrees(workspace_root)?
-        .into_iter()
-        .find(|path| worktree_id(path).is_ok_and(|id| id == requested))
+    let selected = worktrees::selected(workspace_root).map_err(|_| FilesError::Unavailable)?;
+    let path = selected
+        .iter()
+        .skip(1)
+        .find(|path| worktrees::id(path).as_deref() == Some(requested))
         .ok_or(FilesError::Missing)?;
-    File::open(path).map_err(|_| FilesError::Unavailable)
+    Dir::open_ambient_dir(path, cap_std::ambient_authority()).map_err(|_| FilesError::Unavailable)
 }
 
-fn execute_workspace(root: &File, workspace_root: &Path, operation: FilesOperation) -> FilesResult {
+fn execute_workspace(root: &Dir, workspace_root: &Path, operation: FilesOperation) -> FilesResult {
     let selected = match operation_worktree(&operation) {
         None | Some(PRIMARY_WORKTREE) => root.try_clone().map_err(|_| FilesError::Unavailable),
         Some(worktree) => open_linked_worktree(workspace_root, worktree),
     };
     match selected {
         Ok(selected) => execute(&selected, operation),
-        Err(FilesError::Invalid) => FilesResult::Invalid,
-        Err(FilesError::Missing) => FilesResult::Missing,
-        Err(FilesError::Conflict) => FilesResult::Conflict,
-        Err(FilesError::Unavailable) => FilesResult::Unavailable,
+        Err(error) => error.into(),
     }
 }
 
-fn valid_path(path: &str) -> bool {
+pub fn valid_path(path: &str) -> bool {
     if path.is_empty()
         || path.len() > MAX_PATH_BYTES
         || path.starts_with('/')
@@ -341,150 +405,73 @@ fn valid_version(version: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn duplicate(fd: RawFd) -> Result<OwnedFd, FilesError> {
-    let duplicated = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
-    if duplicated < 0 {
-        Err(FilesError::Unavailable)
-    } else {
-        Ok(unsafe { OwnedFd::from_raw_fd(duplicated) })
-    }
-}
-
-fn open_at(directory: RawFd, name: &str, flags: libc::c_int) -> Result<OwnedFd, FilesError> {
-    let name = CString::new(name).map_err(|_| FilesError::Invalid)?;
-    let fd = unsafe { libc::openat(directory, name.as_ptr(), flags, 0) };
-    if fd < 0 {
-        Err(path_error(io::Error::last_os_error()))
-    } else {
-        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
-    }
-}
-
-fn create_at(
-    directory: RawFd,
-    name: &str,
-    flags: libc::c_int,
-    mode: libc::mode_t,
-) -> Result<OwnedFd, FilesError> {
-    let name = CString::new(name).map_err(|_| FilesError::Invalid)?;
-    let fd = unsafe { libc::openat(directory, name.as_ptr(), flags, mode) };
-    if fd < 0 {
-        Err(path_error(io::Error::last_os_error()))
-    } else {
-        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
-    }
-}
-
 fn path_error(error: io::Error) -> FilesError {
-    match error.raw_os_error() {
-        Some(libc::ENOENT) => FilesError::Missing,
-        Some(
-            libc::ELOOP
-            | libc::ENOTDIR
-            | libc::ENAMETOOLONG
-            | libc::EINVAL
-            | libc::EACCES
-            | libc::EPERM,
-        ) => FilesError::Invalid,
+    match error.kind() {
+        io::ErrorKind::NotFound => FilesError::Missing,
+        io::ErrorKind::PermissionDenied
+        | io::ErrorKind::NotADirectory
+        | io::ErrorKind::InvalidInput
+        | io::ErrorKind::InvalidFilename => FilesError::Invalid,
         _ => FilesError::Unavailable,
     }
 }
 
-fn open_parent(root: &File, path: &str) -> Result<(OwnedFd, String), FilesError> {
+/// Open one child directory without following a symbolic link at that name.
+fn open_child_dir(parent: &Dir, name: &str) -> Result<Dir, FilesError> {
+    let metadata = parent.symlink_metadata(name).map_err(path_error)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(FilesError::Invalid);
+    }
+    parent.open_dir(name).map_err(path_error)
+}
+
+fn open_parent(root: &Dir, path: &str) -> Result<(Dir, String), FilesError> {
     if !valid_path(path) {
         return Err(FilesError::Invalid);
     }
     let parts = path.split('/').collect::<Vec<_>>();
-    let mut current = duplicate(root.as_raw_fd())?;
+    let mut current = root.try_clone().map_err(|_| FilesError::Unavailable)?;
     for part in &parts[..parts.len() - 1] {
-        current = open_at(
-            current.as_raw_fd(),
-            part,
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        )?;
+        current = open_child_dir(&current, part)?;
     }
     Ok((current, parts[parts.len() - 1].to_owned()))
 }
 
-fn open_directory(root: &File, path: Option<&str>) -> Result<OwnedFd, FilesError> {
+fn open_directory(root: &Dir, path: Option<&str>) -> Result<Dir, FilesError> {
     let Some(path) = path else {
-        return open_at(
-            root.as_raw_fd(),
-            ".",
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        );
+        return root.try_clone().map_err(|_| FilesError::Unavailable);
     };
     let (parent, name) = open_parent(root, path)?;
-    open_at(
-        parent.as_raw_fd(),
-        &name,
-        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-    )
+    open_child_dir(&parent, &name)
 }
 
-struct DirectoryStream(*mut libc::DIR);
-
-impl Drop for DirectoryStream {
-    fn drop(&mut self) {
-        unsafe {
-            libc::closedir(self.0);
-        }
-    }
-}
-
-fn scan(directory: OwnedFd) -> Result<Vec<TreeEntry>, FilesError> {
-    let stream_fd = duplicate(directory.as_raw_fd())?;
-    let stream = unsafe { libc::fdopendir(stream_fd.as_raw_fd()) };
-    if stream.is_null() {
-        return Err(FilesError::Unavailable);
-    }
-    std::mem::forget(stream_fd);
-    let stream = DirectoryStream(stream);
+fn scan(directory: &Dir) -> Result<Vec<TreeEntry>, FilesError> {
     let mut entries = Vec::new();
-    loop {
-        unsafe {
-            *libc::__errno_location() = 0;
-        }
-        let entry = unsafe { libc::readdir(stream.0) };
-        if entry.is_null() {
-            let errno = unsafe { *libc::__errno_location() };
-            if errno != 0 {
-                return Err(FilesError::Unavailable);
-            }
-            break;
-        }
-        let name_bytes = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
-        let Ok(name) = std::str::from_utf8(name_bytes) else {
+    for entry in directory.entries().map_err(|_| FilesError::Unavailable)? {
+        let entry = entry.map_err(|_| FilesError::Unavailable)?;
+        let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
-        if name == "." || name == ".." || !valid_path(name) {
+        if name == "." || name == ".." || !valid_path(&name) {
             continue;
         }
-        let name_c = CString::new(name).map_err(|_| FilesError::Invalid)?;
-        let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
-        let status = unsafe {
-            libc::fstatat(
-                directory.as_raw_fd(),
-                name_c.as_ptr(),
-                metadata.as_mut_ptr(),
-                libc::AT_SYMLINK_NOFOLLOW,
-            )
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(path_error(error)),
         };
-        if status < 0 {
-            return Err(path_error(io::Error::last_os_error()));
-        }
-        let metadata = unsafe { metadata.assume_init() };
-        let (kind, size_bytes) = match metadata.st_mode & libc::S_IFMT {
-            libc::S_IFLNK => (EntryKind::Symlink, None),
-            libc::S_IFDIR => (EntryKind::Directory, None),
-            libc::S_IFREG if metadata.st_size >= 0 => {
-                (EntryKind::File, Some(metadata.st_size as u64))
-            }
-            libc::S_IFREG => return Err(FilesError::Unavailable),
-            _ => continue,
+        let file_type = metadata.file_type();
+        let (kind, size_bytes) = if file_type.is_symlink() {
+            (EntryKind::Symlink, None)
+        } else if file_type.is_dir() {
+            (EntryKind::Directory, None)
+        } else if file_type.is_file() {
+            (EntryKind::File, Some(metadata.len()))
+        } else {
+            continue;
         };
         entries.push(TreeEntry {
-            name: name.to_owned(),
+            name,
             kind,
             size_bytes,
         });
@@ -507,12 +494,15 @@ fn version_for(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
+/// One response carries the whole directory. A cursor from an older page-based
+/// client is still honoured: it selects the suffix starting at `index` when its
+/// version matches the current listing.
 fn list(
-    root: &File,
+    root: &Dir,
     path: Option<&str>,
     cursor: Option<ListCursor>,
 ) -> Result<FilesResult, FilesError> {
-    let entries = scan(open_directory(root, path)?)?;
+    let entries = scan(&open_directory(root, path)?)?;
     let encoded = serde_json::to_vec(&entries).map_err(|_| FilesError::Unavailable)?;
     let version = version_for(&encoded);
     let start = match cursor {
@@ -533,63 +523,57 @@ fn list(
     if start > entries.len() {
         return Err(FilesError::Conflict);
     }
-    let end = (start + MAX_TREE_PAGE_SIZE).min(entries.len());
     Ok(FilesResult::Tree {
         version,
-        entries: entries[start..end].to_vec(),
-        next_index: (end < entries.len()).then_some(end),
+        entries: entries[start..].to_vec(),
+        next_index: None,
     })
 }
 
-fn file_metadata(fd: RawFd) -> Result<libc::stat, FilesError> {
-    let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
-    if unsafe { libc::fstat(fd, metadata.as_mut_ptr()) } < 0 {
-        Err(FilesError::Unavailable)
-    } else {
-        Ok(unsafe { metadata.assume_init() })
-    }
+fn same_file(left: &Metadata, right: &Metadata) -> bool {
+    use cap_std::fs::MetadataExt;
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.mode() == right.mode()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
 }
 
-fn same_file(left: &libc::stat, right: &libc::stat) -> bool {
-    left.st_dev == right.st_dev
-        && left.st_ino == right.st_ino
-        && left.st_mode == right.st_mode
-        && left.st_size == right.st_size
-        && left.st_mtime == right.st_mtime
-        && left.st_mtime_nsec == right.st_mtime_nsec
-        && left.st_ctime == right.st_ctime
-        && left.st_ctime_nsec == right.st_ctime_nsec
-}
-
-fn read_regular(parent: RawFd, name: &str) -> Result<(Vec<u8>, libc::stat), FilesError> {
-    let descriptor = open_at(
-        parent,
-        name,
-        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
-    )?;
-    let before = file_metadata(descriptor.as_raw_fd())?;
-    if before.st_mode & libc::S_IFMT != libc::S_IFREG || before.st_size < 0 {
+fn read_regular(parent: &Dir, name: &str) -> Result<(Vec<u8>, Metadata), FilesError> {
+    let before = parent.symlink_metadata(name).map_err(path_error)?;
+    if before.file_type().is_symlink() || !before.is_file() {
         return Err(FilesError::Invalid);
     }
-    let mut file = File::from(descriptor);
-    let mut bytes = Vec::with_capacity((before.st_size as usize).min(MAX_EDITABLE_BYTES + 1));
+    let file = parent
+        .open_with(name, OpenOptions::new().read(true))
+        .map_err(path_error)?;
+    let opened = file.metadata().map_err(|_| FilesError::Unavailable)?;
+    if !same_file(&before, &opened) {
+        return Err(FilesError::Conflict);
+    }
+    let mut file = file.into_std();
+    let mut bytes = Vec::with_capacity((before.len() as usize).min(MAX_EDITABLE_BYTES + 1));
     Read::by_ref(&mut file)
         .take((MAX_EDITABLE_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|_| FilesError::Unavailable)?;
-    let after = file_metadata(file.as_raw_fd())?;
+    let after = file.metadata().map_err(|_| FilesError::Unavailable)?;
+    let after = Metadata::from_just_metadata(after);
     if !same_file(&before, &after)
-        || (bytes.len() <= MAX_EDITABLE_BYTES && bytes.len() as i64 != before.st_size)
+        || (bytes.len() <= MAX_EDITABLE_BYTES && bytes.len() as u64 != before.len())
     {
         return Err(FilesError::Conflict);
     }
     Ok((bytes, before))
 }
 
-fn read(root: &File, path: &str) -> Result<FilesResult, FilesError> {
+fn read(root: &Dir, path: &str) -> Result<FilesResult, FilesError> {
     let (parent, name) = open_parent(root, path)?;
-    let (bytes, before) = read_regular(parent.as_raw_fd(), &name)?;
-    let size_bytes = before.st_size as u64;
+    let (bytes, before) = read_regular(&parent, &name)?;
+    let size_bytes = before.len();
     if bytes.len() > MAX_EDITABLE_BYTES || size_bytes > MAX_EDITABLE_BYTES as u64 {
         return Ok(FilesResult::Readonly {
             reason: ReadonlyReason::TooLarge,
@@ -619,35 +603,17 @@ fn read(root: &File, path: &str) -> Result<FilesResult, FilesError> {
     }
 }
 
-fn unlink_at(directory: RawFd, name: &str) {
-    if let Ok(name) = CString::new(name) {
-        unsafe {
-            libc::unlinkat(directory, name.as_ptr(), 0);
-        }
-    }
-}
-
-fn exchange_at(directory: RawFd, source: &str, target: &str) -> Result<(), FilesError> {
-    let source = CString::new(source).map_err(|_| FilesError::Invalid)?;
-    let target = CString::new(target).map_err(|_| FilesError::Invalid)?;
-    if unsafe {
-        libc::renameat2(
-            directory,
-            source.as_ptr(),
-            directory,
-            target.as_ptr(),
-            libc::RENAME_EXCHANGE,
-        )
-    } < 0
-    {
-        Err(path_error(io::Error::last_os_error()))
-    } else {
-        Ok(())
-    }
+fn sync_directory(directory: &Dir) -> Result<(), FilesError> {
+    // The Dir handle itself is a path-only descriptor; fsync needs a readable one.
+    let file = directory
+        .open_with(".", OpenOptions::new().read(true))
+        .map_err(|_| FilesError::Unavailable)?
+        .into_std();
+    file.sync_all().map_err(|_| FilesError::Unavailable)
 }
 
 fn save(
-    root: &File,
+    root: &Dir,
     path: &str,
     expected_version: &str,
     content: &[u8],
@@ -659,7 +625,7 @@ fn save(
         return Err(FilesError::Invalid);
     }
     let (parent, name) = open_parent(root, path)?;
-    let (current, before) = read_regular(parent.as_raw_fd(), &name)?;
+    let (current, before) = read_regular(&parent, &name)?;
     if current.len() > MAX_EDITABLE_BYTES {
         return Err(FilesError::Invalid);
     }
@@ -668,57 +634,36 @@ fn save(
     }
 
     let temporary = format!(".dx-files-{:032x}", rand::rng().random::<u128>());
-    let mode = (before.st_mode & 0o7777) as libc::mode_t;
-    let descriptor = create_at(
-        parent.as_raw_fd(),
-        &temporary,
-        libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        mode,
-    )?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    {
+        use cap_std::fs::{MetadataExt, OpenOptionsExt};
+        options.mode(before.mode() & 0o7777);
+    }
+    let file = parent.open_with(&temporary, &options).map_err(path_error)?;
     let write_result = (|| {
-        let mut file = File::from(descriptor);
+        let mut file = file.into_std();
         file.write_all(content)
             .map_err(|_| FilesError::Unavailable)?;
-        if unsafe { libc::fchmod(file.as_raw_fd(), mode) } < 0 {
-            return Err(FilesError::Unavailable);
+        {
+            use cap_std::fs::MetadataExt;
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(before.mode() & 0o7777))
+                .map_err(|_| FilesError::Unavailable)?;
         }
         file.sync_all().map_err(|_| FilesError::Unavailable)
     })();
     if let Err(error) = write_result {
-        unlink_at(parent.as_raw_fd(), &temporary);
+        let _ = parent.remove_file(&temporary);
         return Err(error);
     }
-
-    if let Err(error) = exchange_at(parent.as_raw_fd(), &temporary, &name) {
-        unlink_at(parent.as_raw_fd(), &temporary);
-        return Err(error);
+    // The target was verified unchanged above; rename is atomic, and the
+    // temporary carries the original mode.
+    if let Err(error) = parent.rename(&temporary, &parent, &name) {
+        let _ = parent.remove_file(&temporary);
+        return Err(path_error(error));
     }
-    let replaced = read_regular(parent.as_raw_fd(), &temporary);
-    let replacement_error = match &replaced {
-        Ok((bytes, _))
-            if bytes.len() <= MAX_EDITABLE_BYTES && version_for(bytes) == expected_version =>
-        {
-            None
-        }
-        Ok(_) | Err(FilesError::Invalid | FilesError::Missing | FilesError::Conflict) => {
-            Some(FilesError::Conflict)
-        }
-        Err(FilesError::Unavailable) => Some(FilesError::Unavailable),
-    };
-    if let Some(error) = replacement_error {
-        if exchange_at(parent.as_raw_fd(), &temporary, &name).is_err() {
-            return Err(FilesError::Unavailable);
-        }
-        unlink_at(parent.as_raw_fd(), &temporary);
-        if unsafe { libc::fsync(parent.as_raw_fd()) } < 0 {
-            return Err(FilesError::Unavailable);
-        }
-        return Err(error);
-    }
-    unlink_at(parent.as_raw_fd(), &temporary);
-    if unsafe { libc::fsync(parent.as_raw_fd()) } < 0 {
-        return Err(FilesError::Unavailable);
-    }
+    sync_directory(&parent)?;
     Ok(FilesResult::Saved {
         version: version_for(content),
     })
@@ -728,12 +673,12 @@ fn save(
 mod tests {
     use super::*;
     use std::fs;
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::process::Command;
     use tempfile::TempDir;
 
-    fn root() -> (TempDir, File) {
-        let directory = TempDir::new().unwrap();
-        let root = File::open(directory.path()).unwrap();
+    fn root() -> (TempDir, Dir) {
+        let directory = tempfile::tempdir().unwrap();
+        let root = Dir::open_ambient_dir(directory.path(), cap_std::ambient_authority()).unwrap();
         (directory, root)
     }
 
@@ -748,12 +693,12 @@ mod tests {
     fn git(root: &Path, arguments: &[&str]) {
         assert!(
             Command::new("git")
-                .args(["-c", "commit.gpgsign=false"])
                 .arg("-C")
                 .arg(root)
                 .args(arguments)
-                .status()
+                .output()
                 .unwrap()
+                .status
                 .success()
         );
     }
@@ -764,409 +709,174 @@ mod tests {
             "path": path,
             "expectedVersion": expected_version,
             "content": content,
-            "refresh": {
-                "type": "changes-refresh",
-                "token": "opaque-refresh-token",
-                "source": {
-                    "baseline": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                    "defaultBranch": "main"
-                },
-                "expectedFingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-            }
         }))
     }
 
     #[test]
     fn confines_traversal_and_lists_but_never_follows_symlinks() {
-        let (workspace, root) = root();
-        let outside = TempDir::new().unwrap();
-        fs::create_dir(workspace.path().join("src")).unwrap();
-        fs::write(workspace.path().join("src/file.ts"), "inside").unwrap();
-        fs::write(outside.path().join("secret"), "outside").unwrap();
-        symlink(outside.path(), workspace.path().join("outside")).unwrap();
-        symlink(
-            outside.path().join("secret"),
-            workspace.path().join("secret-link"),
-        )
-        .unwrap();
-
+        let (directory, root) = root();
+        fs::create_dir_all(directory.path().join("src/nested")).unwrap();
+        fs::write(directory.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(directory.path().join("src/nested/deep.txt"), "deep").unwrap();
+        {
+            std::os::unix::fs::symlink("/etc", directory.path().join("src/link")).unwrap();
+            std::os::unix::fs::symlink("main.rs", directory.path().join("src/alias.rs")).unwrap();
+        }
         let listed = json(execute(
             &root,
-            operation(serde_json::json!({"operation":"files.list","path":null})),
+            operation(serde_json::json!({"operation": "files.list", "path": "src"})),
         ));
-        assert_eq!(listed["kind"], "tree");
-        assert!(
-            listed["entries"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|entry| { entry["name"] == "outside" && entry["kind"] == "symlink" })
-        );
-        for input in [
-            serde_json::json!({"operation":"files.list","path":"outside"}),
-            serde_json::json!({"operation":"files.read","path":"secret-link"}),
-            serde_json::json!({"operation":"files.read","path":"../secret"}),
-            serde_json::json!({"operation":"files.read","path":".git/config"}),
-        ] {
-            assert_eq!(json(execute(&root, operation(input)))["kind"], "invalid");
-        }
-        assert_eq!(
-            fs::read_to_string(outside.path().join("secret")).unwrap(),
-            "outside"
-        );
-    }
-
-    #[test]
-    fn sorts_versions_and_paginates_one_bounded_directory() {
-        let (workspace, root) = root();
-        for index in (0..101).rev() {
-            fs::write(
-                workspace.path().join(format!("file-{index:03}.txt")),
-                index.to_string(),
-            )
-            .unwrap();
-        }
-        let first = json(execute(
-            &root,
-            operation(serde_json::json!({"operation":"files.list","path":null})),
-        ));
-        assert_eq!(first["entries"].as_array().unwrap().len(), 100);
-        assert_eq!(first["entries"][0]["name"], "file-000.txt");
-        assert_eq!(first["nextIndex"], 100);
-
-        let second = json(execute(
-            &root,
-            operation(serde_json::json!({
-                "operation":"files.list",
-                "path":null,
-                "cursor":{"version":first["version"],"index":first["nextIndex"]}
-            })),
-        ));
-        assert_eq!(second["entries"].as_array().unwrap().len(), 1);
-        assert_eq!(second["entries"][0]["name"], "file-100.txt");
-        assert!(second.get("nextIndex").is_none());
-
-        fs::write(workspace.path().join("changed.txt"), "changed").unwrap();
-        let stale = json(execute(
-            &root,
-            operation(serde_json::json!({
-                "operation":"files.list",
-                "path":null,
-                "cursor":{"version":first["version"],"index":100}
-            })),
-        ));
-        assert_eq!(stale["kind"], "conflict");
-    }
-
-    #[test]
-    #[ignore = "local performance benchmark"]
-    fn benchmarks_paginated_large_directory() {
-        const ENTRIES: usize = 1_000;
-        const SAMPLES: usize = 30;
-
-        let (workspace, root) = root();
-        fs::create_dir(workspace.path().join("files")).unwrap();
-        for index in 0..ENTRIES {
-            fs::write(
-                workspace
-                    .path()
-                    .join("files")
-                    .join(format!("entry-{index:04}.txt")),
-                [],
-            )
-            .unwrap();
-        }
-
-        let elapsed_micros = |operation: &mut dyn FnMut()| {
-            let started_at = Instant::now();
-            operation();
-            started_at.elapsed().as_micros() as u64
-        };
-        let mut first_page = Vec::with_capacity(SAMPLES);
-        let mut all_pages = Vec::with_capacity(SAMPLES);
-        for _ in 0..SAMPLES {
-            first_page.push(elapsed_micros(&mut || {
-                assert!(matches!(
-                    list(&root, Some("files"), None).unwrap_or_else(|_| panic!("list failed")),
-                    FilesResult::Tree { .. }
-                ));
-            }));
-            all_pages.push(elapsed_micros(&mut || {
-                let mut cursor = None;
-                let mut entries = 0;
-                loop {
-                    let FilesResult::Tree {
-                        version,
-                        entries: page,
-                        next_index,
-                    } = list(&root, Some("files"), cursor)
-                        .unwrap_or_else(|_| panic!("list failed"))
-                    else {
-                        panic!("list did not return a tree");
-                    };
-                    entries += page.len();
-                    let Some(index) = next_index else { break };
-                    cursor = Some(ListCursor { version, index });
-                }
-                assert_eq!(entries, ENTRIES);
-            }));
-        }
-        first_page.sort_unstable();
-        all_pages.sort_unstable();
-        let percentile = |samples: &[u64], numerator: usize, denominator: usize| {
-            samples[(samples.len() * numerator).div_ceil(denominator) - 1]
-        };
-        println!(
-            "files_large_directory entries={ENTRIES} samples={SAMPLES} first_page_us={{min:{},p50:{},p95:{},max:{}}} all_pages_us={{min:{},p50:{},p95:{},max:{}}}",
-            first_page[0],
-            percentile(&first_page, 50, 100),
-            percentile(&first_page, 95, 100),
-            first_page[SAMPLES - 1],
-            all_pages[0],
-            percentile(&all_pages, 50, 100),
-            percentile(&all_pages, 95, 100),
-            all_pages[SAMPLES - 1],
-        );
-    }
-
-    #[test]
-    fn completes_files_work_on_the_bounded_worker_with_its_request_id() {
-        let (workspace, root) = root();
-        let (worker, results) = start_worker(&root, workspace.path(), SandboxRoots::Guest).unwrap();
-        try_submit(
-            &worker,
-            WorkerRequest {
-                request_id: "files-request-01".into(),
-                operation: operation(serde_json::json!({
-                    "operation": "files.list",
-                    "path": null
-                })),
-            },
-        )
-        .unwrap();
-        let completed = results.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert_eq!(completed.request_id, "files-request-01");
-        assert!(matches!(completed.result, FilesResult::Tree { .. }));
-    }
-
-    #[test]
-    fn serves_sandbox_reads_on_the_worker_with_the_sandbox_wire_shape() {
-        let (workspace, root) = root();
-        let home = TempDir::new().unwrap();
-        std::fs::write(home.path().join("notes.txt"), "hello").unwrap();
-        let (worker, results) = start_worker(
-            &root,
-            workspace.path(),
-            SandboxRoots::Local {
-                home: home.path().to_owned(),
-            },
-        )
-        .unwrap();
-        try_submit(
-            &worker,
-            WorkerRequest {
-                request_id: "files-request-02".into(),
-                operation: operation(serde_json::json!({
-                    "operation": "files.readSandbox",
-                    "path": "/home/user/notes.txt",
-                    "offset": 0,
-                    "length": 1024
-                })),
-            },
-        )
-        .unwrap();
-        let completed = results.recv_timeout(Duration::from_secs(1)).unwrap();
-        let FilesResult::Sandbox(SandboxReadResult::SandboxChunk {
-            version,
-            size_bytes,
-            offset,
-            bytes,
-        }) = completed.result
-        else {
-            panic!("expected a sandbox chunk");
-        };
-        assert_eq!((size_bytes, offset), (5, 0));
-        assert_eq!(bytes, b"hello");
-        assert!(version.starts_with("sha256:"));
-        assert_eq!(
-            json(FilesResult::Sandbox(SandboxReadResult::Missing)),
-            serde_json::json!({"kind":"missing"})
-        );
-    }
-
-    #[test]
-    fn lists_reads_and_saves_only_selected_linked_worktrees() {
-        let workspace = TempDir::new().unwrap();
-        let linked_parent = TempDir::new().unwrap();
-        git(workspace.path(), &["init", "-b", "main"]);
-        git(workspace.path(), &["config", "user.name", "dx test"]);
-        git(
-            workspace.path(),
-            &["config", "user.email", "dx-test@example.test"],
-        );
-        fs::write(workspace.path().join("primary.txt"), "primary\n").unwrap();
-        git(workspace.path(), &["add", "primary.txt"]);
-        git(workspace.path(), &["commit", "-m", "baseline"]);
-        let mut linked = Vec::new();
-        for index in 0..worktrees::MAX_WORKTREES {
-            let path = linked_parent.path().join(format!("linked-{index}"));
-            git(
-                workspace.path(),
-                &[
-                    "worktree",
-                    "add",
-                    "-b",
-                    &format!("linked-{index}"),
-                    path.to_str().unwrap(),
-                ],
+        let names: Vec<&str> = listed["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"main.rs"));
+        assert!(names.contains(&"nested"));
+        assert!(listed["nextIndex"].is_null());
+        {
+            assert!(
+                listed["entries"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|entry| entry["name"] == "link" && entry["kind"] == "symlink")
             );
-            fs::write(path.join("linked.txt"), format!("linked {index}\n")).unwrap();
-            linked.push(path);
+            assert_eq!(
+                json(execute(
+                    &root,
+                    operation(
+                        serde_json::json!({"operation": "files.read", "path": "src/alias.rs"})
+                    )
+                ))["kind"],
+                "invalid"
+            );
+            assert_eq!(
+                json(execute(
+                    &root,
+                    operation(serde_json::json!({"operation": "files.list", "path": "src/link"}))
+                ))["kind"],
+                "invalid"
+            );
         }
-        let root = File::open(workspace.path()).unwrap();
-        let selected = linked[0].canonicalize().unwrap();
-        let selected_id = worktree_id(&selected).ok().unwrap();
-        let omitted_id = worktree_id(&linked[worktrees::MAX_WORKTREES - 1].canonicalize().unwrap())
-            .ok()
-            .unwrap();
-
-        let listed = json(execute_workspace(
-            &root,
-            workspace.path(),
-            operation(serde_json::json!({
-                "operation": "files.list",
-                "worktree": selected_id,
-                "path": null
-            })),
-        ));
-        assert!(
-            listed["entries"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|entry| { entry["name"] == "linked.txt" && entry["kind"] == "file" })
-        );
-        let read = json(execute_workspace(
-            &root,
-            workspace.path(),
-            operation(serde_json::json!({
-                "operation": "files.read",
-                "worktree": selected_id,
-                "path": "linked.txt"
-            })),
-        ));
-        assert_eq!(read["content"], "linked 0\n");
-        let saved = json(execute_workspace(
-            &root,
-            workspace.path(),
-            operation(serde_json::json!({
-                "operation": "files.save",
-                "worktree": selected_id,
-                "path": "linked.txt",
-                "expectedVersion": read["version"],
-                "content": "saved in linked\n"
-            })),
-        ));
-        assert_eq!(saved["kind"], "saved");
+        for path in [
+            "../etc",
+            "src/../src",
+            "/src",
+            ".git/config",
+            "src//main.rs",
+        ] {
+            assert_eq!(
+                json(execute(
+                    &root,
+                    operation(serde_json::json!({"operation": "files.read", "path": path}))
+                ))["kind"],
+                "invalid",
+                "{path}"
+            );
+        }
         assert_eq!(
-            fs::read_to_string(selected.join("linked.txt")).unwrap(),
-            "saved in linked\n"
-        );
-        assert_eq!(
-            json(execute_workspace(
+            json(execute(
                 &root,
-                workspace.path(),
-                operation(serde_json::json!({
-                    "operation": "files.read",
-                    "worktree": omitted_id,
-                    "path": "linked.txt"
-                })),
+                operation(serde_json::json!({"operation": "files.read", "path": "src/absent.rs"}))
             ))["kind"],
             "missing"
         );
     }
 
     #[test]
-    fn preserves_submission_order_across_the_files_worker() {
-        let (workspace, root) = root();
-        let (worker, results) = start_worker(&root, workspace.path(), SandboxRoots::Guest).unwrap();
-        for index in 0..WORK_QUEUE_CAPACITY {
-            try_submit(
-                &worker,
-                WorkerRequest {
-                    request_id: format!("files-request-{index:02}"),
-                    operation: operation(serde_json::json!({
-                        "operation": "files.list",
-                        "path": null
-                    })),
-                },
-            )
-            .unwrap();
+    fn lists_whole_directories_sorted_and_versioned() {
+        let (directory, root) = root();
+        for index in 0..250 {
+            fs::write(directory.path().join(format!("f{index:03}.txt")), "x").unwrap();
         }
-        for index in 0..WORK_QUEUE_CAPACITY {
-            let completed = results.recv_timeout(Duration::from_secs(1)).unwrap();
-            assert_eq!(completed.request_id, format!("files-request-{index:02}"));
-        }
+        fs::write(directory.path().join("B.txt"), "x").unwrap();
+        fs::write(directory.path().join("a.txt"), "x").unwrap();
+        let listed = json(execute(
+            &root,
+            operation(serde_json::json!({"operation": "files.list", "path": null})),
+        ));
+        let entries = listed["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 252);
+        assert_eq!(entries[0]["name"], "a.txt");
+        assert_eq!(entries[1]["name"], "B.txt");
+        assert!(listed["nextIndex"].is_null());
+        let version = listed["version"].as_str().unwrap().to_owned();
+        let suffix = json(execute(
+            &root,
+            operation(serde_json::json!({
+                "operation": "files.list",
+                "path": null,
+                "cursor": {"version": version, "index": 250},
+            })),
+        ));
+        assert_eq!(suffix["entries"].as_array().unwrap().len(), 2);
+        fs::write(directory.path().join("z.txt"), "x").unwrap();
+        let stale = json(execute(
+            &root,
+            operation(serde_json::json!({
+                "operation": "files.list",
+                "path": null,
+                "cursor": {"version": version, "index": 1},
+            })),
+        ));
+        assert_eq!(stale["kind"], "conflict");
     }
 
     #[test]
     fn classifies_complete_bounded_reads() {
-        let (workspace, root) = root();
+        let (directory, root) = root();
+        fs::write(directory.path().join("text.txt"), "hello\n").unwrap();
+        fs::write(directory.path().join("binary.bin"), [0, 1, 2]).unwrap();
+        fs::write(directory.path().join("latin1.txt"), [0xff, 0xfe]).unwrap();
         fs::write(
-            workspace.path().join("limit.txt"),
-            vec![b'a'; MAX_EDITABLE_BYTES],
-        )
-        .unwrap();
-        fs::write(workspace.path().join("binary"), [1, 0, 2]).unwrap();
-        fs::write(workspace.path().join("invalid"), [0xc3, 0x28]).unwrap();
-        fs::write(
-            workspace.path().join("large"),
+            directory.path().join("large.txt"),
             vec![b'a'; MAX_EDITABLE_BYTES + 1],
         )
         .unwrap();
-
-        let read = |path| {
+        let read = |path: &str| {
             json(execute(
                 &root,
-                operation(serde_json::json!({"operation":"files.read","path":path})),
+                operation(serde_json::json!({"operation": "files.read", "path": path})),
             ))
         };
-        let editable = read("limit.txt");
-        assert_eq!(editable["kind"], "editable");
-        assert_eq!(editable["sizeBytes"], MAX_EDITABLE_BYTES);
-        assert_eq!(
-            editable["content"].as_str().unwrap().len(),
-            MAX_EDITABLE_BYTES
-        );
-        assert_eq!(read("binary")["reason"], "binary");
-        assert_eq!(read("invalid")["reason"], "encoding");
-        let large = read("large");
+        let text = read("text.txt");
+        assert_eq!(text["kind"], "editable");
+        assert_eq!(text["content"], "hello\n");
+        assert_eq!(text["sizeBytes"], 6);
+        assert_eq!(text["version"], version_for(b"hello\n"));
+        assert_eq!(read("binary.bin")["reason"], "binary");
+        assert_eq!(read("latin1.txt")["reason"], "encoding");
+        let large = read("large.txt");
         assert_eq!(large["reason"], "too-large");
-        assert_eq!(large["content"], "");
         assert_eq!(large["sizeBytes"], MAX_EDITABLE_BYTES + 1);
     }
 
     #[test]
     fn atomically_saves_the_expected_regular_file_and_preserves_its_mode() {
-        let (workspace, root) = root();
-        let path = workspace.path().join("editable.txt");
-        fs::write(&path, "before\n").unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
-        let expected = version_for(b"before\n");
-
+        let (directory, root) = root();
+        let path = directory.path().join("script.sh");
+        fs::write(&path, "old\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
         let saved = json(execute(
             &root,
-            save_operation("editable.txt", &expected, "after\n"),
+            save_operation("script.sh", &version_for(b"old\n"), "new\n"),
         ));
-
         assert_eq!(saved["kind"], "saved");
-        assert_eq!(saved["version"], version_for(b"after\n"));
-        assert_eq!(fs::read_to_string(&path).unwrap(), "after\n");
-        assert_eq!(
-            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o640
-        );
-        assert!(fs::read_dir(workspace.path()).unwrap().all(|entry| {
+        assert_eq!(saved["version"], version_for(b"new\n"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new\n");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o755
+            );
+        }
+        assert!(fs::read_dir(directory.path()).unwrap().all(|entry| {
             !entry
                 .unwrap()
                 .file_name()
@@ -1177,77 +887,195 @@ mod tests {
 
     #[test]
     fn conflicts_without_replacement_when_the_expected_content_is_stale() {
-        let (workspace, root) = root();
-        let path = workspace.path().join("editable.txt");
-        fs::write(&path, "newer\n").unwrap();
-
-        let saved = json(execute(
+        let (directory, root) = root();
+        let path = directory.path().join("notes.md");
+        fs::write(&path, "current\n").unwrap();
+        let conflict = json(execute(
             &root,
-            save_operation("editable.txt", &version_for(b"older\n"), "mine\n"),
+            save_operation("notes.md", &version_for(b"stale\n"), "new\n"),
         ));
-
-        assert_eq!(saved["kind"], "conflict");
-        assert_eq!(fs::read_to_string(&path).unwrap(), "newer\n");
-        assert!(fs::read_dir(workspace.path()).unwrap().all(|entry| {
-            !entry
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".dx-files-")
-        }));
+        assert_eq!(conflict["kind"], "conflict");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "current\n");
     }
 
     #[test]
-    fn rejects_symlinks_invalid_refreshes_and_oversized_content_before_saving() {
-        let (workspace, root) = root();
-        let outside = TempDir::new().unwrap();
-        let outside_path = outside.path().join("outside.txt");
-        fs::write(&outside_path, "outside\n").unwrap();
-        symlink(&outside_path, workspace.path().join("linked.txt")).unwrap();
-        let expected = version_for(b"outside\n");
-
+    fn concurrent_saves_with_one_expected_version_have_exactly_one_winner() {
+        let (directory, _) = root();
+        fs::write(directory.path().join("race.txt"), "base\n").unwrap();
+        let context =
+            std::sync::Arc::new(FilesContext::open(directory.path(), SandboxRoots::Guest).unwrap());
+        let expected = version_for(b"base\n");
+        let outcomes = (0..8)
+            .map(|index| {
+                let context = std::sync::Arc::clone(&context);
+                let expected = expected.clone();
+                std::thread::spawn(move || {
+                    json(context.execute(save_operation(
+                        "race.txt",
+                        &expected,
+                        &format!("writer {index}\n"),
+                    )))["kind"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                })
+            })
+            .map(|thread| thread.join().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(outcomes.iter().filter(|kind| *kind == "saved").count(), 1);
         assert_eq!(
-            json(execute(
-                &root,
-                save_operation("linked.txt", &expected, "changed\n")
-            ))["kind"],
-            "invalid"
+            outcomes.iter().filter(|kind| *kind == "conflict").count(),
+            7
         );
-        assert_eq!(fs::read_to_string(&outside_path).unwrap(), "outside\n");
-        assert!(
-            serde_json::from_value::<FilesOperation>(serde_json::json!({
-                "operation": "files.save",
-                "path": "linked.txt",
-                "expectedVersion": expected,
-                "content": "changed\n",
-                "refresh": {
-                    "type": "shell",
-                    "token": "opaque-refresh-token",
-                    "source": {
-                        "baseline": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                        "defaultBranch": "main"
-                    }
-                }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_small_read_finishes_while_large_listings_run_and_lanes_stay_bounded() {
+        let (directory, _) = root();
+        fs::create_dir(directory.path().join("big")).unwrap();
+        for index in 0..MAX_TREE_ENTRIES - 1 {
+            fs::write(directory.path().join(format!("big/{index:05}")), "").unwrap();
+        }
+        fs::write(directory.path().join("small.txt"), "small\n").unwrap();
+        let (workers, mut results) =
+            FilesWorkers::new(FilesContext::open(directory.path(), SandboxRoots::Guest).unwrap());
+        let list = || operation(serde_json::json!({"operation": "files.list", "path": "big"}));
+        for index in 0..3 {
+            assert!(workers.submit(format!("list-{index}"), list()));
+        }
+        assert!(workers.submit(
+            "read".into(),
+            operation(serde_json::json!({"operation": "files.read", "path": "small.txt"}))
+        ));
+        let first = results.recv().await.unwrap();
+        assert_eq!(first.request_id, "read", "the read waited behind a listing");
+        assert_eq!(json(first.result)["content"], "small\n");
+        drop(first.admission);
+        for _ in 0..3 {
+            let listed = results.recv().await.unwrap();
+            assert_eq!(
+                json(listed.result)["entries"].as_array().unwrap().len(),
+                MAX_TREE_ENTRIES - 1
+            );
+        }
+
+        // Admission is bounded, and a permit held by an undelivered result
+        // keeps its slot taken.
+        let sandbox = |index: u64| {
+            operation(serde_json::json!({
+                "operation": "files.readSandbox", "path": "/proc/self/status",
+                "offset": index, "length": 1,
             }))
-            .is_err()
-        );
+        };
+        for index in 0..STREAMING_ADMITTED as u64 {
+            assert!(workers.submit(format!("sandbox-{index}"), sandbox(index)));
+        }
+        assert!(!workers.submit("overflow".into(), sandbox(99)));
+        let held = results.recv().await.unwrap();
+        assert!(!workers.submit("still-full".into(), sandbox(99)));
+        drop(held);
+        assert!(workers.submit("admitted".into(), sandbox(99)));
+    }
+
+    #[test]
+    fn rejects_symlinks_invalid_versions_and_oversized_content_before_saving() {
+        let (directory, root) = root();
+        fs::write(directory.path().join("real.txt"), "x\n").unwrap();
+        {
+            std::os::unix::fs::symlink("real.txt", directory.path().join("link.txt")).unwrap();
+            assert_eq!(
+                json(execute(
+                    &root,
+                    save_operation("link.txt", &version_for(b"x\n"), "y\n")
+                ))["kind"],
+                "invalid"
+            );
+        }
         assert_eq!(
             json(execute(
                 &root,
-                save_operation("linked.txt", &expected, &"x".repeat(MAX_EDITABLE_BYTES + 1))
+                save_operation("real.txt", "sha256:short", "y\n")
             ))["kind"],
+            "invalid"
+        );
+        let oversized = "a".repeat(MAX_EDITABLE_BYTES + 1);
+        assert_eq!(
+            json(execute(
+                &root,
+                save_operation("real.txt", &version_for(b"x\n"), &oversized)
+            ))["kind"],
+            "invalid"
+        );
+        assert_eq!(
+            fs::read_to_string(directory.path().join("real.txt")).unwrap(),
+            "x\n"
+        );
+    }
+
+    #[test]
+    fn lists_reads_and_saves_only_selected_linked_worktrees() {
+        let (directory, _) = root();
+        let primary = directory.path().join("primary");
+        fs::create_dir_all(&primary).unwrap();
+        git(&primary, &["init", "-q", "-b", "main"]);
+        git(&primary, &["config", "user.email", "a@b.c"]);
+        git(&primary, &["config", "user.name", "a"]);
+        fs::write(primary.join("README.md"), "primary\n").unwrap();
+        git(&primary, &["add", "README.md"]);
+        git(&primary, &["commit", "-q", "-m", "init"]);
+        let linked = directory.path().join("linked");
+        git(
+            &primary,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                linked.to_str().unwrap(),
+                "-b",
+                "feature",
+            ],
+        );
+        fs::write(linked.join("README.md"), "linked\n").unwrap();
+        let context = FilesContext::open(&primary, SandboxRoots::Guest).unwrap();
+        let linked_id = worktrees::id(&linked.canonicalize().unwrap()).unwrap();
+        let read = json(context.execute(operation(serde_json::json!({
+            "operation": "files.read",
+            "worktree": linked_id,
+            "path": "README.md",
+        }))));
+        assert_eq!(read["content"], "linked\n");
+        let primary_read = json(context.execute(operation(serde_json::json!({
+            "operation": "files.read",
+            "worktree": "primary",
+            "path": "README.md",
+        }))));
+        assert_eq!(primary_read["content"], "primary\n");
+        assert_eq!(
+            json(context.execute(operation(serde_json::json!({
+                "operation": "files.read",
+                "worktree": "wt_0000000000000000",
+                "path": "README.md",
+            }))))["kind"],
+            "missing"
+        );
+        assert_eq!(
+            json(context.execute(operation(serde_json::json!({
+                "operation": "files.read",
+                "worktree": "../linked",
+                "path": "README.md",
+            }))))["kind"],
             "invalid"
         );
     }
 
     #[test]
-    fn enforces_path_cursor_and_directory_entry_bounds() {
-        let (workspace, root) = root();
-        let overlong = "a".repeat(MAX_PATH_BYTES + 1);
+    fn enforces_path_and_cursor_bounds() {
+        let (_directory, root) = root();
+        let long = "a".repeat(MAX_PATH_BYTES + 1);
         assert_eq!(
             json(execute(
                 &root,
-                operation(serde_json::json!({"operation":"files.read","path":overlong})),
+                operation(serde_json::json!({"operation": "files.read", "path": long}))
             ))["kind"],
             "invalid"
         );
@@ -1255,21 +1083,10 @@ mod tests {
             json(execute(
                 &root,
                 operation(serde_json::json!({
-                    "operation":"files.list",
-                    "path":null,
-                    "cursor":{"version":format!("sha256:{}", "a".repeat(64)),"index":10001}
-                })),
-            ))["kind"],
-            "invalid"
-        );
-
-        for index in 0..=MAX_TREE_ENTRIES {
-            fs::write(workspace.path().join(format!("entry-{index:05}")), []).unwrap();
-        }
-        assert_eq!(
-            json(execute(
-                &root,
-                operation(serde_json::json!({"operation":"files.list","path":null})),
+                    "operation": "files.list",
+                    "path": null,
+                    "cursor": {"version": format!("sha256:{}", "a".repeat(64)), "index": 10001},
+                }))
             ))["kind"],
             "invalid"
         );

@@ -6,6 +6,7 @@ import {
   invalidateAllChanges,
   invalidateChangesRanges,
 } from "../changes/changes-queries.js";
+import { invalidateThreadFileTrees } from "../files/files-queries.js";
 import {
   invalidateAllThreadQueries,
   invalidateReadinessQuery,
@@ -179,6 +180,7 @@ export class RealtimeClient {
       );
     } else if (event.type === "changes.invalidated") {
       void invalidateChangesRanges(this.#queryClient, event.threadId);
+      void invalidateThreadFileTrees(this.#queryClient, event.threadId);
       void invalidateThreadLists(this.#queryClient, this.#userId);
     } else if (event.type === "workspace.status") {
       if (event.status === "waking")

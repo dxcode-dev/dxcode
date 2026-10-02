@@ -3,7 +3,10 @@ import type { Bindings } from "../../http/types.js";
 import { DEFAULT_WORKSPACE_INACTIVITY_MS } from "../activity.js";
 
 export const DEFAULT_E2B_TEMPLATE = "base";
-export const DEFAULT_E2B_TIMEOUT_MS = 600_000;
+// E2B pauses a sandbox this long after create or connect unless Core renews
+// it. It matches the default inactivity deadline, so a workspace that nothing
+// renews pauses five minutes after its last activity.
+export const DEFAULT_E2B_TIMEOUT_MS = 300_000;
 export const MIN_E2B_TIMEOUT_MS = 60_000;
 export const MAX_E2B_TIMEOUT_MS = 3_600_000;
 

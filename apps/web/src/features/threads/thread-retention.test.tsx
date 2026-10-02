@@ -88,6 +88,13 @@ vi.mock("@flue/react", () => ({
         disposed = true;
         network.disposed++;
       },
+      sendMessage: async () => undefined,
+      resume: async () => undefined,
+      abort: async () => undefined,
+      retrySend: async () => undefined,
+      resendPrompt: async () => undefined,
+      refresh: () => undefined,
+      loadOlder: async () => undefined,
     };
   },
   useFlueAgentSession: (session: {

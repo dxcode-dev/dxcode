@@ -108,7 +108,8 @@ const localDaemonEndpoint = (value, threadId) => {
     !["127.0.0.1", "localhost", "[::1]"].includes(endpoint.hostname) ||
     endpoint.username !== "" ||
     endpoint.password !== "" ||
-    endpoint.pathname !== `/v1/threads/${threadId}/dxd` ||
+    (endpoint.pathname !== `/v1/dxd/${threadId}` &&
+      endpoint.pathname !== `/v1/threads/${threadId}/dxd`) ||
     endpoint.search !== "" ||
     endpoint.hash !== ""
   )
@@ -292,14 +293,22 @@ const translateCommand = (paths, command) => {
   return command.replaceAll(GUEST_HOME, paths.home);
 };
 
+// Commands in the local workspace see the daemon binary on PATH, as the guest
+// does, so `dxd changes-capture` and the Git helpers resolve identically.
+let daemonBinaryDirectory;
+
 const commandEnvironment = (paths, supplied = {}) => {
+  const inheritedPath = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
   const environment = {
     HOME: paths.home,
     USER: process.env.USER ?? "user",
     LOGNAME: process.env.LOGNAME ?? process.env.USER ?? "user",
     SHELL: "/bin/bash",
     LANG: process.env.LANG ?? "C.UTF-8",
-    PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+    PATH:
+      daemonBinaryDirectory === undefined
+        ? inheritedPath
+        : `${daemonBinaryDirectory}:${inheritedPath}`,
     TERM: "xterm-256color",
   };
   for (const [name, value] of Object.entries(supplied)) {
@@ -450,12 +459,13 @@ export const createLocalRuntimeServer = ({
 }) => {
   const exactStateRoot = assertLocalStateRoot(workspaceRoot, stateRoot);
   mkdirSync(exactStateRoot, { recursive: true, mode: 0o700 });
+  daemonBinaryDirectory = dirname(dxdBinary);
   const sourceFixtureRemote = ensureLocalSourceFixture(
     workspaceRoot,
     exactStateRoot,
   );
   const daemons = new Map();
-  const launchDaemon = (threadId, paths, configPath, generation) => {
+  const launchDaemon = (threadId, paths, configPath) => {
     const workloadIdentitySocket = localWorkloadIdentitySocketPath(
       workspaceRoot,
       threadId,
@@ -484,7 +494,7 @@ export const createLocalRuntimeServer = ({
       },
       stdio: ["ignore", "ignore", "inherit"],
     });
-    const daemon = { generation, process: daemonProcess };
+    const daemon = { process: daemonProcess };
     daemons.set(threadId, daemon);
     daemonProcess.once("error", () => {
       if (daemons.get(threadId) === daemon) daemons.delete(threadId);
@@ -508,16 +518,15 @@ export const createLocalRuntimeServer = ({
           continue;
         const config = JSON.parse(readFileSync(configPath, "utf8"));
         if (
-          config.version !== 1 ||
+          config.version !== 2 ||
           config.threadId !== threadId ||
           localDaemonEndpoint(config.endpoint, threadId) !== config.endpoint ||
           config.workspaceRoot !== paths.workspace ||
           config.localRuntime?.homeDirectory !== paths.home ||
-          config.localRuntime?.stateDirectory !== join(paths.root, "runtime") ||
-          typeof config.generation !== "string"
+          config.localRuntime?.stateDirectory !== join(paths.root, "runtime")
         )
           continue;
-        launchDaemon(threadId, paths, configPath, config.generation);
+        launchDaemon(threadId, paths, configPath);
       } catch {
         // Stale or invalid local daemon state fails closed and is not restored.
       }
@@ -620,36 +629,50 @@ export const createLocalRuntimeServer = ({
             throw new Error("Local dxd binary is unavailable.");
           mkdirSync(paths.daemon, { recursive: true, mode: 0o700 });
           const configPath = join(paths.daemon, "config.json");
-          const config = {
-            version: 1,
-            endpoint: localDaemonEndpoint(input.endpoint, match[1]),
-            threadId: match[1],
-            generation: input.generation,
-            apiKey: input.apiKey,
-            release: input.release,
-            protocolMajor: input.protocolMajor,
-            workspaceRoot: paths.workspace,
-            localRuntime: {
-              homeDirectory: paths.home,
-              stateDirectory: join(paths.root, "runtime"),
-            },
-          };
-          writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
-          chmodSync(configPath, 0o600);
-          const current = daemons.get(match[1]);
-          if (current?.generation !== input.generation)
-            current?.process.kill("SIGTERM");
-          if (
-            current?.generation !== input.generation ||
-            current.process.exitCode !== null
-          ) {
-            launchDaemon(match[1], paths, configPath, input.generation);
+          const endpoint = localDaemonEndpoint(input.endpoint, match[1]);
+          let existing;
+          try {
+            existing = JSON.parse(readFileSync(configPath, "utf8"));
+          } catch {
+            existing = undefined;
           }
-          result = {
-            release: input.release,
-            protocolMajor: input.protocolMajor,
-            generation: input.generation,
-          };
+          const usable =
+            existing?.version === 2 &&
+            existing.threadId === match[1] &&
+            existing.endpoint === endpoint &&
+            existing.workspaceRoot === paths.workspace;
+          if (typeof input.apiKey !== "string" && !usable) {
+            // The configuration is static and holds the Thread's one key;
+            // without it Core must mint one before the daemon can start.
+            result = { status: "credential-required" };
+            break;
+          }
+          if (typeof input.apiKey === "string") {
+            const config = {
+              version: 2,
+              endpoint,
+              threadId: match[1],
+              apiKey: input.apiKey,
+              workspaceRoot: paths.workspace,
+              localRuntime: {
+                homeDirectory: paths.home,
+                stateDirectory: join(paths.root, "runtime"),
+              },
+            };
+            writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
+            chmodSync(configPath, 0o600);
+          }
+          const current = daemons.get(match[1]);
+          const configChanged = typeof input.apiKey === "string" && !usable;
+          if (
+            current === undefined ||
+            current.process.exitCode !== null ||
+            configChanged
+          ) {
+            current?.process.kill("SIGTERM");
+            launchDaemon(match[1], paths, configPath);
+          }
+          result = { status: "running" };
           break;
         }
         default:

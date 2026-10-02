@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { ThreadId, UserId } from "@dx/domain";
 import { Effect, Option, Redacted, Schema } from "effect";
 import type { Bindings } from "../http/types.js";
@@ -11,10 +12,18 @@ const DaemonKeyMetadata = Schema.Struct({
   threadId: ThreadId,
 });
 
-const bearer = (header: string | null) => {
+export const threadDaemonBearer = (header: string | null) => {
   const match = /^Bearer (dxd_[A-Za-z0-9._~-]{16,1016})$/.exec(header ?? "");
   return match?.[1];
 };
+const bearer = threadDaemonBearer;
+
+/**
+ * SHA-256 of a daemon key, hex. The Thread execution object keeps it with the
+ * authority so a registration is checked without D1.
+ */
+export const threadDaemonApiKeyHash = (key: string) =>
+  createHash("sha256").update(key).digest("hex");
 
 const database = (bindings: Bindings) => {
   if (bindings.DB === undefined) throw new Error("D1 database is unavailable.");
@@ -90,6 +99,34 @@ export const verifyThreadDaemonApiKey = async (
     .bind(threadId, verified.key.referenceId)
     .first<{ readonly owned: number }>();
   return owner?.owned === 1 ? { keyId: verified.key.id } : undefined;
+};
+
+/**
+ * One read that confirms what `verifyThreadDaemonApiKey` would: the key row
+ * still exists (not revoked), is enabled and unexpired, and belongs to the
+ * owner of this active Thread. It runs behind a registration the Thread
+ * execution object already admitted by the key's hash.
+ */
+export const confirmThreadDaemonApiKey = async (
+  bindings: Bindings,
+  threadId: ThreadId,
+  keyId: string,
+) => {
+  const row = await database(bindings)
+    .prepare(
+      `SELECT 1 AS owned
+         FROM apikey
+         JOIN threads ON threads.owner_user_id = apikey.referenceId
+        WHERE apikey.id = ?
+          AND apikey.configId = ?
+          AND (apikey.enabled IS NULL OR apikey.enabled = 1)
+          AND apikey.expiresAt IS NULL
+          AND threads.id = ?
+          AND threads.lifecycle_state = 'active'`,
+    )
+    .bind(keyId, DAEMON_KEY_CONFIG, threadId)
+    .first<{ readonly owned: number }>();
+  return row?.owned === 1;
 };
 
 export const revokeThreadDaemonApiKey = async (

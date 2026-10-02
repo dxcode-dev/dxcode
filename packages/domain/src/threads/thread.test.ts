@@ -7,7 +7,7 @@ import {
 } from "../settings/model-routing.js";
 import { PersonalAgentInstructionsSnapshot } from "../settings/personal-agent-instructions.js";
 import { UserId } from "../users/user-id.js";
-import { createThread, Thread } from "./thread.js";
+import { createThread, isThreadTitlePending, Thread } from "./thread.js";
 import { ThreadId } from "./thread-id.js";
 
 const ownerUserId = Schema.decodeUnknownSync(UserId)("user-1");
@@ -49,6 +49,30 @@ describe("Thread domain", () => {
     expect(DateTime.formatIso(first.createdAt)).toBe(
       DateTime.formatIso(first.updatedAt),
     );
+  });
+
+  it("marks a generated title as pending only until its deadline", async () => {
+    const input = {
+      title: "Fix OAuth retries",
+      ownerUserId,
+      projectId,
+      agentInstructions,
+      selection,
+      plugins: [],
+      skills: [],
+    };
+    const [settled, pending] = await Effect.runPromise(
+      Effect.all([
+        createThread(input),
+        createThread({ ...input, titlePending: true }),
+      ]),
+    );
+    const createdAt = DateTime.toEpochMillis(pending.createdAt);
+
+    expect(settled.titlePendingUntil).toBeUndefined();
+    expect(isThreadTitlePending(settled)).toBe(false);
+    expect(isThreadTitlePending(pending, createdAt)).toBe(true);
+    expect(isThreadTitlePending(pending, createdAt + 40_000)).toBe(false);
   });
 
   it("encodes the stored model selection without runtime history", async () => {

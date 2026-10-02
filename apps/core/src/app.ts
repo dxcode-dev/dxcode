@@ -51,7 +51,7 @@ app.route("/api/workload-identity", workloadIdentityRoutes);
 app.route("/api/triggers", pluginTriggerIngressRoutes);
 app.route("/api/source/bitbucket/git", bitbucketGitGatewayRoutes);
 app.route("/v1/integrations/github", githubWebhookRoutes);
-app.route("/v1/threads", threadDaemonRoutes);
+app.route("/v1", threadDaemonRoutes);
 app.use("/v1/*", authenticate);
 app.use("/v1/*", authorizeApiTokenScope);
 app.route("/v1/dictation", dictationRoutes);

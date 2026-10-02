@@ -140,10 +140,21 @@ const commonDeploymentResourceTypes = new Map([
   ["Verify", "Command.Exec"],
   ["Worker", "Cloudflare.Worker"],
 ]);
-const deploymentResourceTypes = (target, integrations = []) =>
+const deploymentResourceTypes = (
+  target,
+  integrations = [],
+  turnstileTestKeys = false,
+  workersDevSubdomain = undefined,
+) =>
   new Map([
+    // The dxd ingress Worker is served on the account's workers.dev subdomain.
+    ...(workersDevSubdomain === undefined
+      ? []
+      : [["DaemonIngress", "Cloudflare.Worker"]]),
     ...[...commonDeploymentResourceTypes].filter(
-      ([id]) => target !== "selfhost" || id !== "AccessTurnstile",
+      ([id]) =>
+        (target !== "selfhost" && !turnstileTestKeys) ||
+        id !== "AccessTurnstile",
     ),
     ...(target === "branch" || target === "selfhost"
       ? [["WorkloadIdentitySigningKey", "Dx.WorkloadIdentitySigningKey"]]
@@ -177,7 +188,12 @@ const retiredWorkerBindings = new Map([
   ["EXA_API_KEY", "secret_text"],
   ["MODEL_EGRESS_COORDINATOR", "durable_object_namespace"],
 ]);
-const cloudflareResourceIds = new Set(["Database", "Storage", "Worker"]);
+const cloudflareResourceIds = new Set([
+  "DaemonIngress",
+  "Database",
+  "Storage",
+  "Worker",
+]);
 const dictationMigrationAlias = Object.freeze({
   legacyName: "0079_dictation_jobs.sql",
   currentName: "0045_dictation_jobs.sql",
@@ -1211,6 +1227,78 @@ const validateWorkerProps = (
     );
 };
 
+// workers.dev previews cap script names at 54 characters.
+export const daemonIngressWorkerName = (stage) =>
+  resourceName("dxd", stage, 54);
+
+// The dxd ingress Worker: dependency-free source, one cross-script binding to
+// the Core Worker's Thread execution namespace, served on workers.dev only.
+// Nothing else may change.
+const validateDaemonIngressProps = (props, selection, representation) => {
+  const binding = props?.env?.THREAD_EXECUTION;
+  const scriptName = binding?.scriptName;
+  const issues = [
+    exactKeys(props, [
+      "compatibility",
+      "env",
+      "isExternal",
+      "main",
+      "name",
+      "observability",
+      "workersDev",
+    ]) && props.isExternal === true
+      ? undefined
+      : `keys[${Object.keys(props ?? {})
+          .sort()
+          .join("|")}]`,
+    props?.name === daemonIngressWorkerName(selection.stage)
+      ? undefined
+      : "name",
+    props?.main === "apps/core/src/threads/daemon-ingress.ts"
+      ? undefined
+      : "main",
+    JSON.stringify(props?.compatibility) ===
+    JSON.stringify({ date: "2026-08-20" })
+      ? undefined
+      : "compatibility",
+    props?.workersDev === true ? undefined : "workersDev",
+    JSON.stringify(props?.observability) ===
+    JSON.stringify({
+      enabled: true,
+      logs: { enabled: true, invocationLogs: true },
+    })
+      ? undefined
+      : "observability",
+    exactKeys(props?.env, ["THREAD_EXECUTION"]) &&
+    binding?.className === "ThreadExecutionObject" &&
+    (scriptName === selection.workerName ||
+      // On a new stage the Worker is created in the same plan, so even the
+      // evaluated binding still references it.
+      (["desired", "evaluated"].includes(representation) &&
+        dependsExactlyOn(scriptName, "Worker", "workerName")))
+      ? undefined
+      : `env[${Object.keys(binding ?? {})
+          .sort()
+          .join("|")}]`,
+  ].filter((issue) => issue !== undefined);
+  if (issues.length > 0)
+    throw new Error(
+      `DaemonIngress ${representation} plan identity is outside the exact allowlist (${issues.join(", ")}).`,
+    );
+};
+
+const assertExactDaemonIngressIdentity = (node, operation, selection) => {
+  if (operation === "deploy") {
+    validateDaemonIngressProps(node.resource?.Props, selection, "desired");
+    if (node.props !== undefined)
+      validateDaemonIngressProps(node.props, selection, "evaluated");
+  }
+  if (node.state?.props !== undefined)
+    validateDaemonIngressProps(node.state.props, selection, "persisted");
+  if (node.state?.old?.props !== undefined)
+    validateDaemonIngressProps(node.state.old.props, selection, "prior");
+};
+
 const assertInterruptedWorkerAttr = (attr, selection) => {
   const durableObjectNamespaces = attr?.durableObjectNamespaces;
   const expectedDurableObjectClasses = workerDurableObjectBindings
@@ -1470,7 +1558,14 @@ const assertExactTurnstileIdentity = (node, selection) => {
       );
   }
   const attr = node.state?.attr ?? node.state?.old?.attr;
-  if (node.state && node.action !== "create" && !attr)
+  // A failed create (for example at the account widget cap) leaves state
+  // without attributes; destroying that never-created widget is safe.
+  if (
+    node.state &&
+    node.action !== "create" &&
+    node.action !== "delete" &&
+    !attr
+  )
     throw new Error("Persisted AccessTurnstile identity is incomplete.");
   if (
     attr &&
@@ -1850,9 +1945,12 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
     !id ||
     fqn !== id ||
     nodeFqn !== id ||
-    deploymentResourceTypes(selection.target, selection.integrations).get(
-      id,
-    ) !== type
+    deploymentResourceTypes(
+      selection.target,
+      selection.integrations,
+      selection.turnstileTestKeys,
+      selection.workersDevSubdomain,
+    ).get(id) !== type
   )
     throw new Error(`Alchemy plan selected an unapproved resource: ${id}.`);
   if (cloudflareResourceIds.has(id) && node.mode !== "live")
@@ -1883,6 +1981,8 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
   assertCompletePropRepresentations(node, operation, id);
 
   if (id === "Worker") assertExactWorkerIdentity(node, operation, selection);
+  if (id === "DaemonIngress")
+    assertExactDaemonIngressIdentity(node, operation, selection);
   if (
     id === "BetterAuthSecret" ||
     id === "ConfigEncryptionKey" ||
@@ -1910,7 +2010,12 @@ export const validateAlchemyPlan = (plan, operation, selection) => {
     throw new Error("Unknown Alchemy operation; no write is safe.");
   const deployResourceIds = Object.keys(plan.resources).sort();
   const expectedDeployResourceIds = [
-    ...deploymentResourceTypes(selection.target, selection.integrations).keys(),
+    ...deploymentResourceTypes(
+      selection.target,
+      selection.integrations,
+      selection.turnstileTestKeys,
+      selection.workersDevSubdomain,
+    ).keys(),
   ].sort();
   const deletionIds = Object.keys(plan.deletions);
   const onlyRetiredRandomDeletions = deletionIds.every((id) =>

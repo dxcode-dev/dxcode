@@ -85,7 +85,21 @@ interface ResidentSession {
 
 export interface ResidentTerminalTransport {
   readonly activate: () => Promise<DxdTerminalHeartbeat>;
+  /**
+   * Resolves once a connected daemon reports the resident exited; polling
+   * stops when `stop` returns true. A restarted dxd reports the shell it
+   * lost this way, which needs no activation to show.
+   */
+  readonly exitedTerminal?: (
+    stop: () => boolean,
+  ) => Promise<DxdTerminalHeartbeat>;
   readonly refreshEnvironment: () => Promise<DxdTerminalHeartbeat>;
+  /**
+   * A present browser missed the daemon's liveness. Resolves true when the
+   * daemon is proven live; otherwise the silent daemon has been fenced, which
+   * moves every attachment to `waiting`.
+   */
+  readonly checkLiveness?: () => Promise<boolean>;
   readonly sendControl: (control: DxdCoreTerminalControl) => void;
   readonly sendBinary: (frame: Uint8Array) => void;
   readonly canSendBinary?: (frameBytes: number) => boolean;
@@ -213,6 +227,18 @@ const decodeMetadata = (
 
 const byteLength = utf8ByteLength;
 
+const isRecoverControl = (value: string) => {
+  if (value.length > THREAD_TERMINAL_CONTROL_MAX_BYTES) return false;
+  try {
+    const decoded = Schema.decodeUnknownOption(
+      ThreadTerminalBrowserControlSchema,
+    )(JSON.parse(value), { onExcessProperty: "error" });
+    return Option.isSome(decoded) && decoded.value.type === "recover";
+  } catch {
+    return false;
+  }
+};
+
 const sendSafely = (
   socket: ResidentTerminalSocket,
   value: string | ArrayBuffer | ArrayBufferView,
@@ -312,29 +338,64 @@ export class ResidentTerminalRelay {
       } else if (control?.type === "detach") {
         this.#dispose(session, true);
         closeSafely(session.socket, 1000);
+      } else if (control?.type === "recover") {
+        // The present browser's intent to wake a waiting attachment; an
+        // attachment already on its way to ready needs nothing more.
+        if (session.phase === "waiting") void this.#start(session);
       } else if (control !== undefined) this.#invalid(session);
+      return;
+    }
+    // Liveness is checked beside the input queue, so input sent after it is
+    // never held behind a probe of a daemon that may be paused.
+    if (typeof data === "string" && isRecoverControl(data)) {
+      void this.#checkLiveness(session);
       return;
     }
     return this.#enqueueReadyFrame(session, data);
   }
 
-  daemonConnectionReset() {
+  async #checkLiveness(session: ResidentSession) {
+    let live: boolean;
+    try {
+      live = (await session.transport.checkLiveness?.()) ?? true;
+    } catch {
+      live = false;
+    }
+    if (!this.#current(session)) return;
+    if (session.phase === "ready") {
+      if (live) this.#sendControl(session, { v: 1, type: "heartbeat" });
+      return;
+    }
+    // The daemon was fenced: this browser is present, so wake it here.
+    if (session.phase === "waiting") void this.#start(session);
+  }
+
+  /**
+   * Returns how many requested browser attachments were told. A planned
+   * release swap (`quiet`) keeps them uninformed: the next registration
+   * reattaches them with a replay, so the browser never sees a disconnect.
+   */
+  daemonConnectionReset(quiet = false) {
     this.#residentOpenDispatched = false;
+    let notified = 0;
     for (const session of this.#sessions.values()) {
       if (!session.requested) continue;
+      notified += 1;
       session.phase = "waiting";
       session.attachmentGeneration = undefined;
       session.expectedOutputSequence = undefined;
       session.replayThrough = undefined;
       session.replayBytes = undefined;
       session.replayReceived = 0;
-      this.#sendControl(session, {
-        v: 1,
-        type: "progress",
-        phase: "resident-restarting",
-      });
+      if (!quiet)
+        this.#sendControl(session, {
+          v: 1,
+          type: "progress",
+          phase: "resident-restarting",
+        });
       this.#persist(session);
     }
+    return notified;
   }
 
   attachmentsReset() {
@@ -345,8 +406,13 @@ export class ResidentTerminalRelay {
       if (session.requested && !session.disposed) void this.#start(session);
   }
 
-  daemonUnavailable() {
-    this.daemonConnectionReset();
+  daemonUnavailable(quiet = false) {
+    return this.daemonConnectionReset(quiet);
+  }
+
+  /** Browser attachments this object holds, for content-free diagnostics. */
+  get sessionCount() {
+    return this.#sessions.size;
   }
 
   daemonHeartbeat() {
@@ -362,6 +428,24 @@ export class ResidentTerminalRelay {
         v: 1,
         type: "progress",
         phase: "waking",
+      });
+    }
+  }
+
+  /**
+   * The daemon stayed away past connection recovery. Tell waiting attachments
+   * the workspace is paused, but keep them open: a retained Terminal never
+   * wakes the workspace, yet shows ready again when anything else wakes it.
+   */
+  workspacePaused() {
+    for (const session of this.#sessions.values()) {
+      if (!session.requested || session.disposed || session.phase !== "waiting")
+        continue;
+      this.#sendControl(session, {
+        v: 1,
+        type: "error",
+        code: "workspace-paused",
+        retry: "on-focus",
       });
     }
   }
@@ -403,10 +487,16 @@ export class ResidentTerminalRelay {
     if (session !== undefined) this.#dispose(session, true);
   }
 
+  /**
+   * Restore a hibernated attachment. With `paused`, the daemon is gone: the
+   * attachment waits without starting, so it can never wake the workspace,
+   * and reattaches when a wake from anywhere re-registers the daemon.
+   */
   restore(
     socket: ResidentTerminalSocket,
     source: unknown,
     transport: ResidentTerminalTransport,
+    paused = false,
   ) {
     const metadata = decodeMetadata(source);
     if (
@@ -453,9 +543,21 @@ export class ResidentTerminalRelay {
       pendingBrowserBytes: 0,
       disposed: false,
     };
+    if (paused && session.requested) {
+      session.phase = "waiting";
+      session.attachmentGeneration = undefined;
+      session.expectedOutputSequence = undefined;
+      session.replayThrough = undefined;
+      session.replayBytes = undefined;
+      session.replayReceived = 0;
+    }
     this.#sessions.set(socket, session);
     this.#persist(session);
-    if (session.requested && ["starting", "waiting"].includes(session.phase))
+    if (
+      !paused &&
+      session.requested &&
+      ["starting", "waiting"].includes(session.phase)
+    )
       void this.#start(session);
     return true;
   }
@@ -566,7 +668,23 @@ export class ResidentTerminalRelay {
     if (!this.#current(session)) return;
     let state: DxdTerminalHeartbeat;
     try {
-      state = await session.transport.activate();
+      // A daemon that restarted reports the shell it lost as exited. Show it
+      // as soon as it is known: activation (environment, Changes repair)
+      // only matters for opening a shell, which needs the owner's Restart.
+      let settled = false;
+      const activation = session.transport.activate().finally(() => {
+        settled = true;
+      });
+      const exited =
+        session.restartResident ||
+        session.transport.exitedTerminal === undefined
+          ? undefined
+          : session.transport.exitedTerminal(() => settled);
+      if (exited !== undefined) activation.catch(() => undefined);
+      state = await (exited === undefined
+        ? activation
+        : Promise.race([activation, exited]));
+      settled = true;
     } catch {
       if (this.#current(session))
         this.close("resident-unavailable", "immediate-once", 1012);

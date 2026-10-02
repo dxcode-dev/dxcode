@@ -1,29 +1,30 @@
-use crate::environment::{
-    EnvironmentShell, MAX_ENVIRONMENT_ENTRIES, MAX_VALUE_BYTES, base_environment_for,
-    runtime_environment_at, valid_name,
-};
+//! Resident terminal: one login shell on a daemon-owned PTY, a bounded replay
+//! ring, up to eight browser attachments, and FIFO input.
+//!
+//! dxd owns the PTY directly (`openpty`, a session-leading login shell).
+//! Output volume never ends the session: when the outbound path is slow the
+//! bounded channel blocks the reader thread and the kernel PTY buffer blocks
+//! the shell, which is ordinary terminal back-pressure.
+
+use crate::environment::base_environment_for;
 use crate::protocol::{
     Dimensions, TERMINAL_HEADER_BYTES, TERMINAL_MAX_PAYLOAD_BYTES, TERMINAL_VERSION,
     TerminalClientMessage, TerminalFrame, TerminalGeneration, TerminalHeartbeat, U64String,
     decode_terminal_frame, encode_terminal_frame,
 };
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
-use std::fs::File;
+use bytes::Bytes;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{self, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
-use std::sync::{Arc, Mutex};
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc::{Receiver, Sender, channel, error::TryRecvError};
 
 const OUTPUT_CHANNEL_CAPACITY: usize = 64;
 const OUTPUT_CHUNK_BYTES: usize = 16 * 1_024;
-const OUTPUT_QUEUE_BYTE_LIMIT: usize = 1_024 * 1_024;
-const OUTPUT_QUEUE_LINE_LIMIT: usize = 10_000;
 const REPLAY_BYTE_LIMIT: usize = 65_536;
 const REPLAY_LINE_LIMIT: usize = 10_000;
 const ATTACHMENT_LIMIT: usize = 8;
@@ -31,32 +32,89 @@ const INPUT_ATTACHMENT_BYTE_LIMIT: usize = 256 * 1_024;
 const INPUT_TOTAL_BYTE_LIMIT: usize = 2 * 1_024 * 1_024;
 const INPUT_FRAME_LIMIT: usize = 32;
 const FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(10);
+const SHELL_HANGUP_GRACE: Duration = Duration::from_millis(250);
+/// State-directory file naming the current resident. It outlives the daemon
+/// process, the shell does not.
+const RESIDENT_RECORD: &str = "terminal-resident";
 
 #[derive(Debug)]
-enum ReaderEvent {
-    Output(Vec<u8>, usize),
+pub enum ReaderEvent {
+    Output(Bytes, usize),
     Closed,
-}
-
-#[derive(Default)]
-struct OutputQueueUsage {
-    bytes: usize,
-    lines: usize,
 }
 
 #[derive(Clone, Debug)]
 struct OutputChunk {
     sequence: u64,
-    payload: Vec<u8>,
+    payload: Bytes,
     lines: usize,
 }
 
-struct ResidentProcess {
-    child: Option<Child>,
-    writer: File,
+pub struct ResidentProcess {
+    /// The PTY master; absent only in tests without a terminal.
+    master: Option<OwnedFd>,
+    /// The login shell: spawned here, or inherited across a self-update exec.
+    shell: Option<Shell>,
+    writer: Box<dyn Write + Send>,
     output: Receiver<ReaderEvent>,
-    overflowed: Arc<AtomicBool>,
-    output_usage: Arc<Mutex<OutputQueueUsage>>,
+}
+
+impl ResidentProcess {
+    fn master_fd(&self) -> Option<RawFd> {
+        self.master.as_ref().map(AsRawFd::as_raw_fd)
+    }
+
+    fn resize(&self, dimensions: Dimensions) -> io::Result<()> {
+        let Some(fd) = self.master_fd() else {
+            return Ok(());
+        };
+        // SAFETY: fd is the live PTY master and the winsize is valid.
+        if unsafe { libc::ioctl(fd, libc::TIOCSWINSZ, &window_size(dimensions)) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+/// A shell that is a child of this process and not yet reaped.
+#[derive(Debug)]
+struct Shell {
+    pid: i32,
+}
+
+impl Shell {
+    fn try_wait(&mut self) -> io::Result<Option<i32>> {
+        let mut status = 0;
+        // SAFETY: waitpid on an owned child with WNOHANG.
+        match unsafe { libc::waitpid(self.pid, &mut status, libc::WNOHANG) } {
+            0 => Ok(None),
+            pid if pid == self.pid => Ok(Some(status)),
+            _ => Err(io::Error::last_os_error()),
+        }
+    }
+
+    /// Hang up as a closed terminal window does: SIGHUP (the shell saves
+    /// history and hangs up its jobs), SIGKILL after a grace, then reap.
+    fn hang_up(mut self) {
+        if !matches!(self.try_wait(), Ok(None)) {
+            // Already reaped: the pid may belong to someone else by now.
+            return;
+        }
+        // SAFETY: signalling a child this process has not reaped.
+        unsafe { libc::kill(self.pid, libc::SIGHUP) };
+        let deadline = Instant::now() + SHELL_HANGUP_GRACE;
+        while Instant::now() < deadline {
+            if !matches!(self.try_wait(), Ok(None)) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        // SAFETY: as above; the child is still running.
+        unsafe { libc::kill(self.pid, libc::SIGKILL) };
+        let mut status = 0;
+        // SAFETY: blocking waitpid on an owned child.
+        unsafe { libc::waitpid(self.pid, &mut status, 0) };
+    }
 }
 
 struct QueuedInput {
@@ -79,9 +137,17 @@ pub enum TerminalOutbound {
     Binary(Vec<u8>),
 }
 
+/// Which shell the resident runs and how it is configured.
+#[derive(Clone)]
+pub struct ShellProfile {
+    pub home: PathBuf,
+    pub user: String,
+    /// Local development sources this rc file instead of the login profile.
+    pub rcfile: Option<PathBuf>,
+}
+
 pub struct TerminalRuntime {
     pub(crate) root: PathBuf,
-    session_name: String,
     state: ResidentState,
     generation: Option<TerminalGeneration>,
     process: Option<ResidentProcess>,
@@ -102,21 +168,19 @@ pub struct TerminalRuntime {
     applied_environment_generation: u64,
     shell_environment_generation: Option<u64>,
     restart_required: bool,
-    pub(crate) environment_home: PathBuf,
-    home: PathBuf,
-    user: String,
-    profile: Option<PathBuf>,
+    environment_values: BTreeMap<String, String>,
+    profile: ShellProfile,
+    record: Option<PathBuf>,
     #[cfg(test)]
-    resize_observer: Option<SyncSender<Dimensions>>,
+    resize_observer: Option<std::sync::mpsc::SyncSender<Dimensions>>,
     #[cfg(test)]
     foreground_observer: Option<bool>,
 }
 
 impl TerminalRuntime {
-    pub fn new(root: PathBuf, thread_id: &str) -> Self {
+    pub fn new(root: PathBuf, profile: ShellProfile) -> Self {
         Self {
             root,
-            session_name: format!("dx-{thread_id}"),
             state: ResidentState::Absent,
             generation: None,
             process: None,
@@ -137,10 +201,9 @@ impl TerminalRuntime {
             applied_environment_generation: 0,
             shell_environment_generation: None,
             restart_required: false,
-            environment_home: PathBuf::from("/home/user"),
-            home: PathBuf::from("/home/user"),
-            user: "user".into(),
-            profile: None,
+            environment_values: BTreeMap::new(),
+            profile,
+            record: None,
             #[cfg(test)]
             resize_observer: None,
             #[cfg(test)]
@@ -148,17 +211,63 @@ impl TerminalRuntime {
         }
     }
 
-    pub fn local(root: PathBuf, thread_id: &str, home: PathBuf, state_root: PathBuf) -> Self {
-        let mut runtime = Self::new(root, thread_id);
-        runtime.environment_home = home.clone();
-        runtime.profile = Some(state_root.join("dx-terminal/profile"));
-        runtime.user = std::env::var("USER").unwrap_or_else(|_| "user".into());
-        runtime.home = home;
-        runtime
+    pub fn guest(root: PathBuf, state_root: &Path) -> Self {
+        Self::new(
+            root,
+            ShellProfile {
+                home: PathBuf::from("/home/user"),
+                user: "user".into(),
+                rcfile: None,
+            },
+        )
+        .recorded_in(state_root)
     }
 
-    fn base_environment(&self, values: &BTreeMap<String, String>) -> BTreeMap<String, String> {
-        base_environment_for(values, &self.home, &self.user)
+    pub fn local(root: PathBuf, home: PathBuf, state_root: PathBuf) -> Self {
+        Self::new(
+            root,
+            ShellProfile {
+                home,
+                user: std::env::var("USER")
+                    .or_else(|_| std::env::var("USERNAME"))
+                    .unwrap_or_else(|_| "user".into()),
+                rcfile: Some(state_root.join("dx-terminal/profile")),
+            },
+        )
+        .recorded_in(&state_root)
+    }
+
+    /// Recover the resident a previous daemon process recorded. The shell
+    /// died with that process (crash, `kill -9`, panic abort, or a restart),
+    /// so it is reported as exited: the browser offers Restart instead of
+    /// Core silently opening a new shell that looks like the old one. A
+    /// successful self-update handoff replaces this with the live shell.
+    fn recorded_in(mut self, state_root: &Path) -> Self {
+        let path = state_root.join(RESIDENT_RECORD);
+        if let Some(generation) = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<TerminalGeneration>(&bytes).ok())
+        {
+            self.generation = Some(generation);
+            self.state = ResidentState::Exited;
+        }
+        self.record = Some(path);
+        self
+    }
+
+    /// Write the current resident generation before its shell starts.
+    fn record_resident(&self) {
+        let (Some(path), Some(generation)) = (self.record.as_ref(), self.generation) else {
+            return;
+        };
+        let temporary = path.with_extension("tmp");
+        let written = serde_json::to_vec(&generation)
+            .map_err(io::Error::from)
+            .and_then(|bytes| std::fs::write(&temporary, bytes))
+            .and_then(|()| std::fs::rename(&temporary, path));
+        if let Err(error) = written {
+            eprintln!("dxd could not record the terminal resident: {error}");
+        }
     }
 
     pub fn heartbeat(&self) -> TerminalHeartbeat {
@@ -274,6 +383,7 @@ impl TerminalRuntime {
         let generation = TerminalGeneration::random();
         self.generation = Some(generation);
         self.state = ResidentState::Starting;
+        self.record_resident();
         self.dimensions = dimensions;
         if self.applied_environment_generation == 0 {
             self.state = ResidentState::Failed;
@@ -281,15 +391,11 @@ impl TerminalRuntime {
                 self.resident_state().expect("failed resident has state"),
             )]);
         }
-        self.process = match spawn_tmux_process(
+        self.process = match spawn_shell(
             &self.root,
-            &self.session_name,
             dimensions,
-            self.applied_environment_generation,
-            &self.environment_home,
-            &self.home,
-            &self.user,
-            self.profile.as_deref(),
+            &self.environment_values,
+            &self.profile,
         ) {
             Ok(process) => Some(process),
             Err(_) => {
@@ -324,34 +430,6 @@ impl TerminalRuntime {
                 .collect());
         }
         self.stop_process();
-        flush_history_best_effort(&self.root, &self.session_name);
-        let root = self
-            .root
-            .to_str()
-            .ok_or_else(|| io::Error::other("invalid root"))?;
-        let target = format!("{}:0.0", self.session_name);
-        let mut arguments = vec!["respawn-pane", "-k", "-c", root, "-t", &target];
-        let profile;
-        if let Some(path) = &self.profile {
-            profile = path
-                .to_str()
-                .ok_or_else(|| io::Error::other("invalid profile"))?;
-            arguments.extend(["/bin/bash", "--rcfile", profile, "-i"]);
-        } else {
-            arguments.extend(["/bin/bash", "--login", "-i"]);
-        }
-        if !run_tmux(&self.root, &self.session_name, &arguments)? {
-            self.state = ResidentState::Failed;
-            return Ok(vec![TerminalOutbound::Control(
-                self.resident_state().expect("failed resident has state"),
-            )]);
-        }
-        set_tmux_option(
-            &self.root,
-            &self.session_name,
-            "@dx-environment-shell-generation",
-            &self.applied_environment_generation.to_string(),
-        )?;
         self.reset_resident_state();
         self.shell_environment_generation = Some(self.applied_environment_generation);
         self.restart_required = false;
@@ -364,7 +442,8 @@ impl TerminalRuntime {
         )
     }
 
-    pub fn environment_shell(&self) -> EnvironmentShell {
+    pub fn environment_shell(&self) -> crate::environment::EnvironmentShell {
+        use crate::environment::EnvironmentShell;
         if self.shell_environment_generation.is_none() {
             EnvironmentShell::NoShell
         } else if self.restart_required {
@@ -374,212 +453,36 @@ impl TerminalRuntime {
         }
     }
 
-    pub fn previous_managed_names(
-        &self,
-        fallback: &BTreeSet<String>,
-    ) -> io::Result<BTreeSet<String>> {
-        if !run_tmux(
-            &self.root,
-            &self.session_name,
-            &["has-session", "-t", &self.session_name],
-        )? {
-            return Ok(fallback.clone());
-        }
-        let encoded = tmux_option(
-            &self.root,
-            &self.session_name,
-            "@dx-environment-managed-names",
-        )?
-        .ok_or_else(|| io::Error::other("terminal environment state unavailable"))?;
-        let names: BTreeSet<String> = if encoded.is_empty() {
-            BTreeSet::new()
-        } else {
-            encoded.split(' ').map(str::to_owned).collect()
-        };
-        if names.len() > MAX_ENVIRONMENT_ENTRIES
-            || names.iter().any(|name| !valid_name(name))
-            || names.iter().cloned().collect::<Vec<_>>().join(" ") != encoded
-        {
-            return Err(io::Error::other("terminal environment state unavailable"));
-        }
-        let candidates = names
-            .into_iter()
-            .chain(fallback.iter().cloned())
-            .collect::<BTreeSet<_>>();
-        if candidates.len() > MAX_ENVIRONMENT_ENTRIES * 2 {
-            return Err(io::Error::other("terminal environment state unavailable"));
-        }
-        tmux_present_names(&self.root, &self.session_name, &candidates)
-    }
-
+    /// Record a newly applied environment. Future shells receive it directly;
+    /// a running shell keeps its values until the owner confirms a restart.
     pub fn refresh_environment(
         &mut self,
         values: &BTreeMap<String, String>,
-        previous_names: &BTreeSet<String>,
         generation: u64,
         changed: bool,
-    ) -> io::Result<()> {
-        let exists = run_tmux(
-            &self.root,
-            &self.session_name,
-            &["has-session", "-t", &self.session_name],
-        )?;
-        if !exists {
-            self.stop_process();
-            self.reset_resident_state();
+    ) {
+        self.environment_values = values.clone();
+        let shell_running = self.process.is_some()
+            && matches!(self.state, ResidentState::Starting | ResidentState::Ready);
+        if !shell_running {
             self.applied_environment_generation = generation;
             self.shell_environment_generation = None;
             self.restart_required = false;
-            return Ok(());
+            return;
         }
-        let environment_changed = changed;
-        let prior_applied = tmux_option(
-            &self.root,
-            &self.session_name,
-            "@dx-environment-applied-generation",
-        )?
-        .and_then(|value| value.parse::<u64>().ok());
-        let prior_shell = tmux_option(
-            &self.root,
-            &self.session_name,
-            "@dx-environment-shell-generation",
-        )?
-        .and_then(|value| value.parse::<u64>().ok());
-        let prior_managed = tmux_option(
-            &self.root,
-            &self.session_name,
-            "@dx-environment-managed-names",
-        )?;
-        if self.applied_environment_generation == 0
-            && (prior_applied.is_none() || prior_shell.is_none() || prior_managed.is_none())
-        {
-            return Err(io::Error::other("terminal environment state unavailable"));
-        }
-        let update_names = previous_names
-            .iter()
-            .chain(values.keys())
-            .cloned()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>()
-            .join(" ");
-        let managed_value = values.keys().cloned().collect::<Vec<_>>().join(" ");
-        let update_succeeded = if update_names.is_empty() {
-            run_tmux(
-                &self.root,
-                &self.session_name,
-                &[
-                    "set-option",
-                    "-g",
-                    "@dx-environment-applied-generation",
-                    &generation.to_string(),
-                ],
-            )?
-        } else {
-            run_tmux(
-                &self.root,
-                &self.session_name,
-                &[
-                    "set-option",
-                    "-t",
-                    &self.session_name,
-                    "update-environment",
-                    &update_names,
-                    ";",
-                    "set-option",
-                    "-g",
-                    "@dx-environment-applied-generation",
-                    &generation.to_string(),
-                ],
-            )?
-        };
-        if !update_succeeded {
-            return Err(io::Error::other("terminal environment refresh failed"));
-        }
-        let refresh_succeeded = if update_names.is_empty() {
-            true
-        } else {
-            let mut refresh = Command::new("tmux");
-            refresh
-                .args([
-                    "-L",
-                    &self.session_name,
-                    "-C",
-                    "attach-session",
-                    "-t",
-                    &self.session_name,
-                ])
-                .current_dir(&self.root)
-                .env_clear()
-                .envs(self.base_environment(values))
-                .stdin(Stdio::piped())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
-            let mut client = refresh.spawn()?;
-            let mut refreshed = false;
-            for _ in 0..100 {
-                if matches!(
-                    tmux_environment_matches(
-                        &self.root,
-                        &self.session_name,
-                        values,
-                        previous_names,
-                    ),
-                    Ok(true)
-                ) {
-                    refreshed = true;
-                    break;
-                }
-                if !matches!(client.try_wait(), Ok(None)) {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(10));
-            }
-            if !refreshed {
-                refreshed = matches!(
-                    tmux_environment_matches(
-                        &self.root,
-                        &self.session_name,
-                        values,
-                        previous_names,
-                    ),
-                    Ok(true)
-                );
-            }
-            let _ = client.kill();
-            let _ = client.wait();
-            refreshed
-        };
-        if !refresh_succeeded
-            || !run_tmux(
-                &self.root,
-                &self.session_name,
-                &[
-                    "set-option",
-                    "-g",
-                    "@dx-environment-managed-names",
-                    &managed_value,
-                ],
-            )?
-        {
-            return Err(io::Error::other("terminal environment refresh failed"));
-        }
-        let shell_was_current = prior_applied.is_some() && prior_applied == prior_shell;
+        let shell_was_current =
+            self.shell_environment_generation == Some(self.applied_environment_generation);
         self.applied_environment_generation = generation;
-        if !environment_changed && shell_was_current {
+        if self.state == ResidentState::Starting {
+            // Ready promotion records the generation the shell started with.
+            return;
+        }
+        if !changed && shell_was_current {
             self.shell_environment_generation = Some(generation);
             self.restart_required = false;
-            set_tmux_option(
-                &self.root,
-                &self.session_name,
-                "@dx-environment-shell-generation",
-                &generation.to_string(),
-            )?;
         } else {
-            self.shell_environment_generation = prior_shell;
             self.restart_required = self.shell_environment_generation.is_some();
         }
-        Ok(())
     }
 
     pub fn attach(
@@ -663,7 +566,7 @@ impl TerminalRuntime {
                     resident_generation,
                     attachment_generation: Some(attachment_generation),
                     sequence: chunk.sequence,
-                    payload: chunk.payload.clone(),
+                    payload: chunk.payload.to_vec(),
                 })
                 .map_err(|_| io::Error::other("invalid replay frame"))?,
             ));
@@ -773,36 +676,28 @@ impl TerminalRuntime {
     pub fn input(&mut self, encoded: &[u8]) -> io::Result<Vec<TerminalOutbound>> {
         let frame = decode_terminal_frame(encoded)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid terminal frame"))?;
-        if frame.kind != 1 || frame.attachment_generation.is_none() {
+        let (1, Some(attachment_generation)) = (frame.kind, frame.attachment_generation) else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "invalid input frame",
             ));
-        }
+        };
         if self.generation != Some(frame.resident_generation)
-            || !frame
-                .attachment_generation
-                .is_some_and(|attachment| self.attachments.contains(&attachment))
+            || !self.attachments.contains(&attachment_generation)
         {
             return Ok(Vec::new());
         }
         if frame.sequence != self.next_input_sequence {
-            let attachment_generation = frame
-                .attachment_generation
-                .expect("input frames require an attachment");
             self.attachments.remove(&attachment_generation);
             self.remove_queued_input(attachment_generation);
             return Ok(vec![
-                self.error(frame.attachment_generation, "invalid-attachment"),
+                self.error(Some(attachment_generation), "invalid-attachment"),
             ]);
         }
         let Some(next_input_sequence) = self.next_input_sequence.checked_add(1) else {
             return self.fail_resident("terminal-unavailable");
         };
         self.next_input_sequence = next_input_sequence;
-        let attachment_generation = frame
-            .attachment_generation
-            .expect("input frames require an attachment");
         let attachment_bytes = self
             .attachment_input_bytes
             .get(&attachment_generation)
@@ -830,23 +725,57 @@ impl TerminalRuntime {
         Ok(Vec::new())
     }
 
+    /// Write every queued input frame to the PTY in acceptance order.
     pub fn drain_input(&mut self) -> io::Result<Vec<TerminalOutbound>> {
-        let Some(input) = self.input_queue.pop_front() else {
-            return Ok(Vec::new());
-        };
-        self.release_input_usage(input.attachment_generation, input.frame_bytes);
-        let Some(process) = self.process.as_mut() else {
-            return self.fail_resident("terminal-unavailable");
-        };
-        if process.writer.write_all(&input.payload).is_err() {
-            return self.fail_resident("terminal-unavailable");
+        while let Some(input) = self.input_queue.pop_front() {
+            self.release_input_usage(input.attachment_generation, input.frame_bytes);
+            let Some(process) = self.process.as_mut() else {
+                return self.fail_resident("terminal-unavailable");
+            };
+            if process.writer.write_all(&input.payload).is_err() {
+                return self.fail_resident("terminal-unavailable");
+            }
+        }
+        if let Some(process) = self.process.as_mut() {
+            let _ = process.writer.flush();
         }
         Ok(Vec::new())
     }
 
+    #[cfg(test)]
+    pub fn has_queued_input(&self) -> bool {
+        !self.input_queue.is_empty()
+    }
+
+    /// Resolve when the PTY reader produced an event. Pending forever without
+    /// a process so it can sit in a `select!`.
+    pub async fn wait_output(&mut self) -> Option<ReaderEvent> {
+        match self.process.as_mut() {
+            Some(process) => process.output.recv().await.or(Some(ReaderEvent::Closed)),
+            None => std::future::pending().await,
+        }
+    }
+
+    /// Wake when the first-output deadline of a starting shell passes.
+    pub fn first_output_deadline(&self) -> Option<Instant> {
+        if self.state == ResidentState::Starting {
+            self.first_output_deadline
+        } else {
+            None
+        }
+    }
+
+    /// Apply one reader event plus everything else already queued.
     pub fn drain_output(&mut self) -> io::Result<Vec<TerminalOutbound>> {
-        let mut received: Vec<(Vec<u8>, usize)> = Vec::new();
-        let Some(process) = self.process.as_ref() else {
+        self.drain_output_with(None)
+    }
+
+    pub fn drain_output_with(
+        &mut self,
+        first: Option<ReaderEvent>,
+    ) -> io::Result<Vec<TerminalOutbound>> {
+        let mut received: Vec<(Bytes, usize)> = Vec::new();
+        let Some(process) = self.process.as_mut() else {
             return Ok(Vec::new());
         };
         if self.state == ResidentState::Starting
@@ -856,30 +785,37 @@ impl TerminalRuntime {
         {
             return self.fail_resident("terminal-unavailable");
         }
-        if process.overflowed.load(Ordering::Acquire) {
-            return self.fail_resident("terminal-overflow");
-        }
+        let mut closed = false;
+        let mut pending = first;
         loop {
-            match process.output.try_recv() {
-                Ok(ReaderEvent::Output(payload, lines)) => received.push((payload, lines)),
-                Ok(ReaderEvent::Closed) => {
-                    self.state = ResidentState::Exited;
-                    break;
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    self.state = ResidentState::Exited;
+            let event = match pending.take() {
+                Some(event) => event,
+                None => match process.output.try_recv() {
+                    Ok(event) => event,
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        closed = true;
+                        break;
+                    }
+                },
+            };
+            match event {
+                ReaderEvent::Output(payload, lines) => received.push((payload, lines)),
+                ReaderEvent::Closed => {
+                    closed = true;
                     break;
                 }
             }
+        }
+        if closed {
+            // Output that arrived with the close never promotes a starting
+            // shell to ready; it only enters replay for the exited resident.
+            self.state = ResidentState::Exited;
         }
         let mut outbound = Vec::new();
         for (payload, lines) in received {
-            if self.release_output_usage(payload.len(), lines).is_err() {
-                return self.fail_resident("terminal-unavailable");
-            }
             let sequence = self.next_output_sequence;
-            if self.accept_output(payload.clone()).is_err() {
+            if self.accept_output(payload.clone(), lines).is_err() {
                 return self.fail_resident("terminal-unavailable");
             }
             if self.state == ResidentState::Starting {
@@ -902,13 +838,33 @@ impl TerminalRuntime {
                         resident_generation,
                         attachment_generation: None,
                         sequence,
-                        payload,
+                        payload: payload.to_vec(),
                     })
                     .map_err(|_| io::Error::other("invalid live frame"))?,
                 ));
             }
         }
-        if self.state == ResidentState::Exited {
+        if closed {
+            outbound.extend(self.fail_resident("terminal-exited")?);
+        }
+        Ok(outbound)
+    }
+
+    /// End a resident whose shell exited while a job it left behind (`sleep
+    /// 600 & exit`) still holds the PTY open, so no end-of-file arrives. The
+    /// connection loop calls this on its heartbeat tick.
+    pub fn reap_exited(&mut self) -> io::Result<Vec<TerminalOutbound>> {
+        let exited = matches!(self.state, ResidentState::Starting | ResidentState::Ready)
+            && self
+                .process
+                .as_mut()
+                .and_then(|process| process.shell.as_mut())
+                .is_some_and(|shell| matches!(shell.try_wait(), Ok(Some(_))));
+        if !exited {
+            return Ok(Vec::new());
+        }
+        let mut outbound = self.drain_output()?;
+        if self.process.is_some() {
             outbound.extend(self.fail_resident("terminal-exited")?);
         }
         Ok(outbound)
@@ -935,51 +891,26 @@ impl TerminalRuntime {
         Ok(outbound)
     }
 
-    fn release_output_usage(&self, bytes: usize, lines: usize) -> io::Result<()> {
-        let process = self
-            .process
-            .as_ref()
-            .ok_or_else(|| io::Error::other("resident process unavailable"))?;
-        let mut usage = process
-            .output_usage
-            .lock()
-            .map_err(|_| io::Error::other("terminal output accounting failed"))?;
-        usage.bytes = usage
-            .bytes
-            .checked_sub(bytes)
-            .ok_or_else(|| io::Error::other("terminal output accounting failed"))?;
-        usage.lines = usage
-            .lines
-            .checked_sub(lines)
-            .ok_or_else(|| io::Error::other("terminal output accounting failed"))?;
-        Ok(())
-    }
-
     fn release_input_usage(&mut self, attachment: TerminalGeneration, bytes: usize) {
-        self.input_bytes -= bytes;
-        let remaining = self
-            .attachment_input_bytes
-            .get(&attachment)
-            .copied()
-            .expect("queued input has attachment accounting")
-            - bytes;
-        if remaining == 0 {
-            self.attachment_input_bytes.remove(&attachment);
-        } else {
-            self.attachment_input_bytes.insert(attachment, remaining);
+        self.input_bytes = self.input_bytes.saturating_sub(bytes);
+        if let Some(usage) = self.attachment_input_bytes.get_mut(&attachment) {
+            *usage = usage.saturating_sub(bytes);
+            if *usage == 0 {
+                self.attachment_input_bytes.remove(&attachment);
+            }
         }
     }
 
     fn remove_queued_input(&mut self, attachment: TerminalGeneration) {
-        let removed = self
-            .input_queue
-            .iter()
-            .filter(|input| input.attachment_generation == attachment)
-            .map(|input| input.frame_bytes)
-            .sum::<usize>();
-        self.input_queue
-            .retain(|input| input.attachment_generation != attachment);
-        self.input_bytes -= removed;
+        let mut retained = VecDeque::with_capacity(self.input_queue.len());
+        for input in self.input_queue.drain(..) {
+            if input.attachment_generation == attachment {
+                self.input_bytes = self.input_bytes.saturating_sub(input.frame_bytes);
+            } else {
+                retained.push_back(input);
+            }
+        }
+        self.input_queue = retained;
         self.attachment_input_bytes.remove(&attachment);
     }
 
@@ -990,18 +921,25 @@ impl TerminalRuntime {
     }
 
     fn stop_process(&mut self) {
-        self.first_output_deadline = None;
-        if let Some(mut process) = self.process.take()
-            && let Some(mut child) = process.child.take()
-        {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        let Some(mut process) = self.process.take() else {
+            return;
+        };
+        let Some(shell) = process.shell.take() else {
+            return;
+        };
+        // The PTY closes only after the hangup, so the shell sees SIGHUP
+        // rather than a closed terminal. The wait runs on its own thread: the
+        // connection loop never waits for a shell, even one stuck in the
+        // kernel.
+        run_detached("dxd-hangup", move || {
+            shell.hang_up();
+            drop(process);
+        });
     }
 
     fn reset_resident_state(&mut self) {
-        self.generation = None;
         self.state = ResidentState::Absent;
+        self.generation = None;
         self.first_output_deadline = None;
         self.dimensions = Dimensions::INITIAL;
         self.dimensions_revision = 0;
@@ -1014,9 +952,6 @@ impl TerminalRuntime {
         self.replay_bytes = 0;
         self.replay_lines = 0;
         self.replay_truncated = false;
-        self.restart_required = self
-            .shell_environment_generation
-            .is_some_and(|shell| shell != self.applied_environment_generation);
     }
 
     fn foreground_command(&self) -> bool {
@@ -1027,29 +962,10 @@ impl TerminalRuntime {
         if let Some(foreground) = self.foreground_observer {
             return foreground;
         }
-        let output = match Command::new("tmux")
-            .args([
-                "-L",
-                &self.session_name,
-                "display-message",
-                "-p",
-                "-t",
-                &format!("{}:0.0", self.session_name),
-                "#{pane_current_command}",
-            ])
-            .current_dir(&self.root)
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-        {
-            Ok(output) if output.status.success() && output.stdout.len() <= 64 => output.stdout,
-            _ => return false,
-        };
-        let Ok(command) = std::str::from_utf8(&output) else {
+        let Some(process) = self.process.as_ref() else {
             return false;
         };
-        let command = command.trim();
-        !command.is_empty() && !matches!(command, "bash" | "-bash")
+        foreground_differs_from_shell(process)
     }
 
     fn validate_common(
@@ -1094,36 +1010,7 @@ impl TerminalRuntime {
                 .ok_or_else(|| io::Error::other("dimensions revision overflow"))?;
             return Ok(());
         }
-        let window = libc::winsize {
-            ws_row: dimensions.rows,
-            ws_col: dimensions.columns,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        // SAFETY: writer owns the live PTY master and window points to a valid winsize.
-        if unsafe { libc::ioctl(process.writer.as_raw_fd(), libc::TIOCSWINSZ, &window) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let status = Command::new("tmux")
-            .args([
-                "-L",
-                &self.session_name,
-                "resize-window",
-                "-x",
-                &dimensions.columns.to_string(),
-                "-y",
-                &dimensions.rows.to_string(),
-                "-t",
-                &format!("{}:0", self.session_name),
-            ])
-            .current_dir(&self.root)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()?;
-        if !status.success() {
-            return Err(io::Error::other("terminal resize failed"));
-        }
+        process.resize(dimensions)?;
         self.dimensions = dimensions;
         self.dimensions_revision = self
             .dimensions_revision
@@ -1132,12 +1019,8 @@ impl TerminalRuntime {
         Ok(())
     }
 
-    fn accept_output(&mut self, payload: Vec<u8>) -> io::Result<()> {
+    fn accept_output(&mut self, payload: Bytes, lines: usize) -> io::Result<()> {
         if payload.is_empty() || payload.len() > TERMINAL_MAX_PAYLOAD_BYTES {
-            return Err(io::Error::other("invalid terminal output"));
-        }
-        let lines = payload.iter().filter(|byte| **byte == b'\n').count();
-        if lines > OUTPUT_QUEUE_LINE_LIMIT {
             return Err(io::Error::other("invalid terminal output"));
         }
         let sequence = self.next_output_sequence;
@@ -1173,7 +1056,7 @@ impl TerminalRuntime {
             terminal_version: TERMINAL_VERSION,
             resident_generation: self
                 .generation
-                .expect("terminal errors require a resident generation"),
+                .expect("errors are reported for an existing resident"),
             attachment_generation,
             code,
         })
@@ -1186,535 +1069,350 @@ impl Drop for TerminalRuntime {
     }
 }
 
+/// Run `work` on its own thread, or inline when no thread can be spawned (see
+/// `spawn_reader`): late is better than never for a hangup.
+fn run_detached(name: &str, work: impl FnOnce() + Send + 'static) {
+    let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(work)));
+    let take =
+        |slot: &std::sync::Mutex<Option<_>>| slot.lock().ok().and_then(|mut work| work.take());
+    let remote = std::sync::Arc::clone(&slot);
+    let spawned = thread::Builder::new().name(name.into()).spawn(move || {
+        if let Some(work) = take(&remote) {
+            work();
+        }
+    });
+    if spawned.is_err()
+        && let Some(work) = take(&slot)
+    {
+        work();
+    }
+}
+
 fn invalid_control() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, "invalid terminal control")
 }
 
-fn run_tmux(root: &Path, session_name: &str, arguments: &[&str]) -> io::Result<bool> {
-    Ok(Command::new("tmux")
-        .args(["-L", session_name])
-        .args(arguments)
-        .current_dir(root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?
-        .success())
-}
-
-fn flush_history_best_effort(root: &Path, session_name: &str) {
-    let target = format!("{session_name}:0.0");
-    let current = Command::new("tmux")
-        .args([
-            "-L",
-            session_name,
-            "display-message",
-            "-p",
-            "-t",
-            &target,
-            "#{pane_current_command}",
-        ])
-        .current_dir(root)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output();
-    if !matches!(
-        current,
-        Ok(output)
-            if output.status.success()
-                && matches!(String::from_utf8_lossy(&output.stdout).trim(), "bash" | "-bash")
-    ) {
-        return;
-    }
-    if matches!(
-        run_tmux(
-            root,
-            session_name,
-            &[
-                "send-keys",
-                "-t",
-                &target,
-                "builtin history -d -1; builtin history -w",
-                "Enter",
-            ],
-        ),
-        Ok(true)
-    ) {
-        thread::sleep(Duration::from_millis(25));
-    }
-}
-
-fn tmux_option(root: &Path, session_name: &str, name: &str) -> io::Result<Option<String>> {
-    let output = Command::new("tmux")
-        .args(["-L", session_name, "show-options", "-gv", name])
-        .current_dir(root)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    let value = String::from_utf8(output.stdout)
-        .map_err(|_| io::Error::other("invalid terminal option"))?;
-    Ok(Some(value.trim_end_matches(['\r', '\n']).to_owned()))
-}
-
-fn tmux_environment_matches(
-    root: &Path,
-    session_name: &str,
-    values: &BTreeMap<String, String>,
-    previous_names: &BTreeSet<String>,
-) -> io::Result<bool> {
-    for name in previous_names.iter().chain(values.keys()) {
-        let output = Command::new("tmux")
-            .args([
-                "-L",
-                session_name,
-                "show-environment",
-                "-t",
-                session_name,
-                name,
-            ])
-            .current_dir(root)
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()?;
-        let Some(value) = values.get(name) else {
-            if output.status.success() && output.stdout != format!("-{name}\n").as_bytes() {
-                return Ok(false);
-            }
-            continue;
-        };
-        if !output.status.success() || output.stdout.len() > name.len() + MAX_VALUE_BYTES + 2 {
-            return Ok(false);
-        }
-        let mut expected = Vec::with_capacity(name.len() + value.len() + 2);
-        expected.extend_from_slice(name.as_bytes());
-        expected.push(b'=');
-        expected.extend_from_slice(value.as_bytes());
-        expected.push(b'\n');
-        if output.stdout != expected {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-fn tmux_present_names(
-    root: &Path,
-    session_name: &str,
-    candidates: &BTreeSet<String>,
-) -> io::Result<BTreeSet<String>> {
-    let mut present = BTreeSet::new();
-    for name in candidates {
-        let output = Command::new("tmux")
-            .args([
-                "-L",
-                session_name,
-                "show-environment",
-                "-t",
-                session_name,
-                name,
-            ])
-            .current_dir(root)
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()?;
-        if !output.status.success() || output.stdout == format!("-{name}\n").as_bytes() {
-            continue;
-        }
-        let prefix = format!("{name}=");
-        if output.stdout.len() > name.len() + MAX_VALUE_BYTES + 2
-            || !output.stdout.starts_with(prefix.as_bytes())
-            || !output.stdout.ends_with(b"\n")
-        {
-            return Err(io::Error::other("terminal environment state unavailable"));
-        }
-        present.insert(name.clone());
-    }
-    if present.len() > MAX_ENVIRONMENT_ENTRIES {
-        return Err(io::Error::other("terminal environment state unavailable"));
-    }
-    Ok(present)
-}
-
-fn set_tmux_option(root: &Path, session_name: &str, name: &str, value: &str) -> io::Result<()> {
-    if run_tmux(root, session_name, &["set-option", "-g", name, value])? {
-        Ok(())
-    } else {
-        Err(io::Error::other("terminal option unavailable"))
-    }
-}
-
-fn ensure_tmux(
-    root: &Path,
-    session_name: &str,
-    environment_generation: u64,
-    environment_home: &Path,
-    home: &Path,
-    user: &str,
-    profile: Option<&Path>,
-) -> io::Result<()> {
-    if !run_tmux(root, session_name, &["has-session", "-t", session_name])? {
-        let values = runtime_environment_at(environment_home)?;
-        let managed = values.keys().cloned().collect::<Vec<_>>().join(" ");
-        let mut command = Command::new("tmux");
-        command.args([
-            "-L",
-            session_name,
-            "start-server",
-            ";",
-            "set-option",
-            "-g",
-            "history-limit",
-            "10000",
-            ";",
-            "set-option",
-            "-g",
-            "exit-unattached",
-            "off",
-            ";",
-            "set-option",
-            "-g",
-            "exit-empty",
-            "on",
-            ";",
-            "set-option",
-            "-g",
-            "remain-on-exit",
-            "off",
-            ";",
-            "set-option",
-            "-g",
-            "@dx-environment-managed-names",
-            &managed,
-            ";",
-            "set-option",
-            "-g",
-            "@dx-environment-applied-generation",
-            &environment_generation.to_string(),
-            ";",
-            "set-option",
-            "-g",
-            "@dx-environment-shell-generation",
-            &environment_generation.to_string(),
-            ";",
-            "new-session",
-            "-d",
-            "-s",
-            session_name,
-            "-c",
-            root.to_str()
-                .ok_or_else(|| io::Error::other("invalid root"))?,
-        ]);
-        if let Some(profile) = profile {
-            command.args(["/bin/bash", "--rcfile"]);
-            command.arg(profile);
-            command.arg("-i");
-        } else {
-            command.args(["/bin/bash", "--login", "-i"]);
-        }
-        command
-            .current_dir(root)
-            .env_clear()
-            .envs(base_environment_for(&values, home, user))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        if !command.status()?.success() {
-            return Err(io::Error::other("terminal session unavailable"));
-        }
-    } else if !run_tmux(
-        root,
-        session_name,
-        &["set-option", "-g", "history-limit", "10000"],
-    )? {
-        return Err(io::Error::other("terminal history unavailable"));
-    }
-    if !run_tmux(
-        root,
-        session_name,
-        &[
-            "set-option",
-            "-g",
-            "status",
-            "off",
-            ";",
-            "set-option",
-            "-g",
-            "terminal-overrides[99]",
-            "*:smcup@:rmcup@",
-        ],
-    )? {
-        return Err(io::Error::other("terminal display unavailable"));
-    }
-    Ok(())
-}
-
-fn spawn_tmux_process(
-    root: &Path,
-    session_name: &str,
-    dimensions: Dimensions,
-    environment_generation: u64,
-    environment_home: &Path,
-    home: &Path,
-    user: &str,
-    profile: Option<&Path>,
-) -> io::Result<ResidentProcess> {
-    ensure_tmux(
-        root,
-        session_name,
-        environment_generation,
-        environment_home,
-        home,
-        user,
-        profile,
-    )?;
-    let window = libc::winsize {
+fn window_size(dimensions: Dimensions) -> libc::winsize {
+    libc::winsize {
         ws_row: dimensions.rows,
         ws_col: dimensions.columns,
         ws_xpixel: 0,
         ws_ypixel: 0,
-    };
-    let mut master_fd = -1;
-    let mut slave_fd = -1;
-    // SAFETY: openpty initializes both file descriptors and reads a valid winsize.
-    if unsafe {
-        libc::openpty(
-            &mut master_fd,
-            &mut slave_fd,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            &window,
-        )
-    } != 0
-    {
-        return Err(io::Error::last_os_error());
     }
-    // SAFETY: openpty returned newly owned descriptors.
-    let master = unsafe { File::from_raw_fd(master_fd) };
-    // SAFETY: openpty returned newly owned descriptors.
-    let slave = unsafe { File::from_raw_fd(slave_fd) };
-    let mut command = Command::new("tmux");
+}
+
+fn foreground_differs_from_shell(process: &ResidentProcess) -> bool {
+    let (Some(fd), Some(shell)) = (process.master_fd(), process.shell.as_ref()) else {
+        return false;
+    };
+    // SAFETY: fd is the live PTY master owned by this process.
+    let foreground = unsafe { libc::tcgetpgrp(fd) };
+    foreground > 0 && foreground != shell.pid
+}
+
+fn shell_command(
+    root: &Path,
+    values: &BTreeMap<String, String>,
+    profile: &ShellProfile,
+) -> Command {
+    let mut command = Command::new("/bin/bash");
+    match &profile.rcfile {
+        Some(rcfile) => command.arg("--rcfile").arg(rcfile).arg("-i"),
+        None => command.args(["--login", "-i"]),
+    };
     command
-        .args([
-            "-L",
-            session_name,
-            "attach-session",
-            "-E",
-            "-t",
-            session_name,
-        ])
         .current_dir(root)
         .env_clear()
-        .envs(base_environment_for(&BTreeMap::new(), home, user))
-        .env("TERM", "xterm-256color")
+        .envs(base_environment_for(values, &profile.home, &profile.user))
+        .env("TERM", "xterm-256color");
+    command
+}
+
+/// A new PTY pair, both ends close-on-exec.
+fn open_pty(dimensions: Dimensions) -> io::Result<(OwnedFd, OwnedFd)> {
+    let (mut master, mut slave) = (-1, -1);
+    // SAFETY: out-pointers to locals and a valid winsize; no name buffer.
+    let opened = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            &window_size(dimensions),
+        )
+    };
+    if opened != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: both descriptors were just opened and nothing else owns them.
+    let pair = unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
+    for fd in [&pair.0, &pair.1] {
+        // SAFETY: valid descriptor.
+        if unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(pair)
+}
+
+fn spawn_shell(
+    root: &Path,
+    dimensions: Dimensions,
+    values: &BTreeMap<String, String>,
+    profile: &ShellProfile,
+) -> io::Result<ResidentProcess> {
+    let (master, slave) = open_pty(dimensions)?;
+    // Everything that can fail happens before the shell exists, so a failure
+    // never leaves an unowned shell behind.
+    let reader = std::fs::File::from(master.try_clone()?);
+    let writer = std::fs::File::from(master.try_clone()?);
+    let (sender, output) = channel(OUTPUT_CHANNEL_CAPACITY);
+    spawn_reader(Box::new(reader), sender)?;
+    let mut command = shell_command(root, values, profile);
+    command
         .stdin(Stdio::from(slave.try_clone()?))
         .stdout(Stdio::from(slave.try_clone()?))
-        .stderr(Stdio::from(slave.try_clone()?));
-    // SAFETY: the callback executes after fork, calls only async-signal-safe libc functions,
-    // and uses the still-open PTY slave descriptor.
+        .stderr(Stdio::from(slave));
+    // SAFETY: only async-signal-safe calls between fork and exec.
     unsafe {
-        command.pre_exec(move || {
-            if libc::setsid() == -1 || libc::ioctl(slave_fd, libc::TIOCSCTTY, 0) == -1 {
+        command.pre_exec(|| {
+            // Default dispositions and an empty mask, whatever this process
+            // installed; then lead a new session with the PTY as its
+            // controlling terminal, so job control and SIGWINCH work.
+            for signal in [
+                libc::SIGCHLD,
+                libc::SIGHUP,
+                libc::SIGINT,
+                libc::SIGQUIT,
+                libc::SIGTERM,
+                libc::SIGALRM,
+            ] {
+                libc::signal(signal, libc::SIG_DFL);
+            }
+            let empty: libc::sigset_t = std::mem::zeroed();
+            libc::sigprocmask(libc::SIG_SETMASK, &empty, std::ptr::null_mut());
+            if libc::setsid() == -1 || libc::ioctl(0, libc::TIOCSCTTY, 0) == -1 {
                 return Err(io::Error::last_os_error());
             }
             Ok(())
         });
     }
     let child = command.spawn()?;
-    drop(slave);
-    let reader = master.try_clone()?;
-    let (sender, output) = sync_channel(OUTPUT_CHANNEL_CAPACITY);
-    let overflowed = Arc::new(AtomicBool::new(false));
-    let output_usage = Arc::new(Mutex::new(OutputQueueUsage::default()));
-    spawn_reader(
-        reader,
-        sender,
-        Arc::clone(&overflowed),
-        Arc::clone(&output_usage),
-    );
     Ok(ResidentProcess {
-        child: Some(child),
-        writer: master,
+        master: Some(master),
+        shell: Some(Shell {
+            pid: child.id() as i32,
+        }),
+        writer: Box::new(writer),
         output,
-        overflowed,
-        output_usage,
     })
 }
 
-fn spawn_reader(
-    mut reader: File,
-    sender: SyncSender<ReaderEvent>,
-    overflowed: Arc<AtomicBool>,
-    output_usage: Arc<Mutex<OutputQueueUsage>>,
-) {
-    thread::spawn(move || {
-        loop {
-            let mut buffer = vec![0_u8; OUTPUT_CHUNK_BYTES];
-            match reader.read(&mut buffer) {
-                Ok(0) => {
-                    let _ = sender.try_send(ReaderEvent::Closed);
-                    break;
-                }
-                Ok(length) => {
-                    buffer.truncate(length);
-                    let mut start = 0;
-                    let mut lines = 0;
-                    for index in 0..buffer.len() {
-                        if buffer[index] == b'\n' {
-                            lines += 1;
-                        }
-                        if lines == OUTPUT_QUEUE_LINE_LIMIT {
-                            if !queue_output(
-                                &sender,
-                                &overflowed,
-                                &output_usage,
-                                buffer[start..=index].to_vec(),
-                                lines,
-                            ) {
-                                return;
-                            }
-                            start = index + 1;
-                            lines = 0;
-                        }
-                    }
-                    if start < buffer.len()
-                        && !queue_output(
-                            &sender,
-                            &overflowed,
-                            &output_usage,
-                            buffer[start..].to_vec(),
-                            lines,
-                        )
-                    {
-                        return;
-                    }
-                }
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(_) => {
-                    let _ = sender.try_send(ReaderEvent::Closed);
-                    break;
-                }
-            }
-        }
-    });
+/// State that survives a self-update re-exec: the PTY master (kept
+/// open across `exec`) and the identity the browser already knows.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct Handoff {
+    fd: i32,
+    shell_pid: u32,
+    generation: TerminalGeneration,
+    next_output_sequence: u64,
+    dimensions: Dimensions,
+    applied_environment_generation: u64,
+    shell_environment_generation: Option<u64>,
+    restart_required: bool,
+    /// The replay ring's bytes (base64), so a browser that reattaches after
+    /// the swap redraws the same screen. Absent from older images.
+    #[serde(default)]
+    replay: String,
 }
 
-fn queue_output(
-    sender: &SyncSender<ReaderEvent>,
-    overflowed: &AtomicBool,
-    output_usage: &Mutex<OutputQueueUsage>,
-    payload: Vec<u8>,
-    lines: usize,
-) -> bool {
-    let mut usage = match output_usage.lock() {
-        Ok(usage) => usage,
-        Err(_) => {
-            overflowed.store(true, Ordering::Release);
-            return false;
+pub const HANDOFF_VARIABLE: &str = "DXD_TERMINAL_HANDOFF";
+
+impl TerminalRuntime {
+    /// Duplicate the PTY master without `CLOEXEC` and describe the resident so
+    /// the next image can adopt it. Returns `None` when no shell is running.
+    pub fn prepare_handoff(&self) -> Option<String> {
+        if !matches!(self.state, ResidentState::Ready | ResidentState::Starting) {
+            return None;
         }
-    };
-    if usage.bytes + payload.len() > OUTPUT_QUEUE_BYTE_LIMIT
-        || usage.lines + lines > OUTPUT_QUEUE_LINE_LIMIT
-    {
-        overflowed.store(true, Ordering::Release);
-        return false;
+        let process = self.process.as_ref()?;
+        let fd = process.master_fd()?;
+        let shell_pid = process.shell.as_ref()?.pid as u32;
+        // SAFETY: dup of a live descriptor; the copy has no CLOEXEC flag.
+        let duplicated = unsafe { libc::dup(fd) };
+        if duplicated < 0 {
+            return None;
+        }
+        let handoff = Handoff {
+            fd: duplicated,
+            shell_pid,
+            generation: self.generation?,
+            next_output_sequence: self.next_output_sequence,
+            dimensions: self.dimensions,
+            applied_environment_generation: self.applied_environment_generation,
+            shell_environment_generation: self.shell_environment_generation,
+            restart_required: self.restart_required,
+            replay: {
+                use base64::Engine as _;
+                let bytes = self
+                    .replay
+                    .iter()
+                    .flat_map(|chunk| chunk.payload.iter().copied())
+                    .collect::<Vec<_>>();
+                base64::engine::general_purpose::STANDARD.encode(bytes)
+            },
+        };
+        serde_json::to_string(&handoff).ok()
     }
-    usage.bytes += payload.len();
-    usage.lines += lines;
-    drop(usage);
-    if let Err(error) = sender.try_send(ReaderEvent::Output(payload, lines)) {
-        if let Ok(mut usage) = output_usage.lock() {
-            match error {
-                TrySendError::Full(ReaderEvent::Output(payload, lines))
-                | TrySendError::Disconnected(ReaderEvent::Output(payload, lines)) => {
-                    usage.bytes -= payload.len();
-                    usage.lines -= lines;
+
+    /// Adopt a shell from the previous image. The carried replay bytes become
+    /// the newest output sequences, marked truncated; the browser
+    /// resynchronizes from `resident-state`.
+    pub fn adopt(&mut self, encoded: &str) -> io::Result<()> {
+        use std::io::IsTerminal;
+        use std::os::fd::BorrowedFd;
+        let handoff: Handoff =
+            serde_json::from_str(encoded).map_err(|_| io::Error::other("invalid handoff"))?;
+        if handoff.fd < 3 {
+            return Err(io::Error::other("invalid handoff descriptor"));
+        }
+        // SAFETY: borrowed only to duplicate it; a descriptor that is not open
+        // fails the duplication with EBADF.
+        let master = unsafe { BorrowedFd::borrow_raw(handoff.fd) }
+            .try_clone_to_owned()
+            .map_err(|_| io::Error::other("handoff descriptor is not open"))?;
+        // The copy is close-on-exec; release the inherited original. SAFETY:
+        // it is open (the duplication succeeded) and nothing else owns it.
+        drop(unsafe { OwnedFd::from_raw_fd(handoff.fd) });
+        if !master.is_terminal() {
+            return Err(io::Error::other("handoff descriptor is not a terminal"));
+        }
+        // Zero, one, or a negative pid would address a process group or init.
+        let pid = i32::try_from(handoff.shell_pid)
+            .ok()
+            .filter(|pid| *pid > 1)
+            .ok_or_else(|| io::Error::other("invalid handoff shell"))?;
+        let mut shell = Shell { pid };
+        if !matches!(shell.try_wait(), Ok(None)) {
+            return Err(io::Error::other("handed-off shell is gone"));
+        }
+        let reader: std::fs::File = master.try_clone()?.into();
+        let writer: std::fs::File = master.try_clone()?.into();
+        let (sender, output) = channel(OUTPUT_CHANNEL_CAPACITY);
+        spawn_reader(Box::new(reader), sender)?;
+        self.reset_resident_state();
+        self.process = Some(ResidentProcess {
+            master: Some(master),
+            shell: Some(shell),
+            writer: Box::new(writer),
+            output,
+        });
+        self.state = ResidentState::Ready;
+        self.generation = Some(handoff.generation);
+        self.next_output_sequence = handoff.next_output_sequence.max(1);
+        self.dimensions = handoff.dimensions;
+        self.replay_truncated = self.next_output_sequence > 1;
+        self.restore_replay(&handoff.replay);
+        self.applied_environment_generation = handoff.applied_environment_generation;
+        self.shell_environment_generation = handoff.shell_environment_generation;
+        self.restart_required = handoff.restart_required;
+        Ok(())
+    }
+}
+
+impl TerminalRuntime {
+    /// Refill the replay ring from handed-off bytes. They end at the last
+    /// sequence the previous image emitted, so chunk sequences count back
+    /// from there; anything that does not fit the bounds is dropped.
+    fn restore_replay(&mut self, encoded: &str) {
+        use base64::Engine as _;
+        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) else {
+            return;
+        };
+        let mut bytes = &bytes[bytes.len().saturating_sub(REPLAY_BYTE_LIMIT)..];
+        let excess_lines = bytes
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count()
+            .saturating_sub(REPLAY_LINE_LIMIT);
+        if excess_lines > 0 {
+            let cut = bytes
+                .iter()
+                .enumerate()
+                .filter(|(_, byte)| **byte == b'\n')
+                .nth(excess_lines - 1)
+                .map_or(0, |(index, _)| index + 1);
+            bytes = &bytes[cut..];
+        }
+        let chunks = bytes.chunks(TERMINAL_MAX_PAYLOAD_BYTES).collect::<Vec<_>>();
+        let Some(first) = self.next_output_sequence.checked_sub(chunks.len() as u64) else {
+            return;
+        };
+        if first < 1 {
+            return;
+        }
+        for (index, payload) in chunks.into_iter().enumerate() {
+            let lines = payload.iter().filter(|byte| **byte == b'\n').count();
+            self.replay_bytes += payload.len();
+            self.replay_lines += lines;
+            self.replay.push_back(OutputChunk {
+                sequence: first + index as u64,
+                payload: Bytes::copy_from_slice(payload),
+                lines,
+            });
+        }
+    }
+}
+
+/// Read PTY output on a dedicated thread. `blocking_send` on the bounded
+/// channel is the back-pressure point: a slow consumer stops this thread, the
+/// kernel PTY buffer fills, and the shell blocks on write.
+///
+/// Threads are spawned fallibly: the shell runs as the same user as dxd, so a
+/// runaway shell can exhaust the thread limit, and that must fail the
+/// resident, not abort the daemon.
+pub fn spawn_reader(
+    mut reader: Box<dyn Read + Send>,
+    sender: Sender<ReaderEvent>,
+) -> io::Result<()> {
+    thread::Builder::new()
+        .name("dxd-pty".into())
+        .spawn(move || {
+            let mut buffer = vec![0_u8; OUTPUT_CHUNK_BYTES];
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) => {
+                        let _ = sender.blocking_send(ReaderEvent::Closed);
+                        break;
+                    }
+                    Ok(length) => {
+                        let chunk = &buffer[..length];
+                        let lines = chunk.iter().filter(|byte| **byte == b'\n').count();
+                        if sender
+                            .blocking_send(ReaderEvent::Output(
+                                Bytes::copy_from_slice(chunk),
+                                lines,
+                            ))
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(_) => {
+                        let _ = sender.blocking_send(ReaderEvent::Closed);
+                        break;
+                    }
                 }
-                TrySendError::Full(ReaderEvent::Closed)
-                | TrySendError::Disconnected(ReaderEvent::Closed) => {}
             }
-        }
-        overflowed.store(true, Ordering::Release);
-        return false;
-    }
-    true
+        })?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::environment::{
-        EnvironmentActivate, EnvironmentEntry, EnvironmentOutcome, EnvironmentRuntime,
-    };
-    use base64::Engine;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use std::fs;
-    use std::os::fd::OwnedFd;
-    use std::os::unix::fs::PermissionsExt;
-    use std::os::unix::net::UnixStream;
-    use std::time::Instant;
-    use tempfile::tempdir;
-
-    struct TmuxCleanup {
-        root: PathBuf,
-        session_name: String,
-    }
-
-    impl Drop for TmuxCleanup {
-        fn drop(&mut self) {
-            let _ = run_tmux(&self.root, &self.session_name, &["kill-server"]);
-        }
-    }
-
-    fn tmux_text(root: &Path, session_name: &str, arguments: &[&str]) -> String {
-        let output = Command::new("tmux")
-            .args(["-L", session_name])
-            .args(arguments)
-            .current_dir(root)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "tmux {arguments:?} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout)
-            .unwrap()
-            .trim_end_matches(['\r', '\n'])
-            .to_owned()
-    }
-
-    fn shell_probe(root: &Path, session_name: &str, target: &str, destination: &Path) -> String {
-        let quoted_destination =
-            format!("'{}'", destination.to_string_lossy().replace('\'', "'\\''"));
-        let command = format!(
-            "printf '%s\\n' \"${{OLD_VALUE-unset}}\" \"${{NEW_VALUE-unset}}\" \"$PWD\" \"$PATH\" \"$HOME\" \"$USER\" \"$LOGNAME\" \"$SHELL\" > {quoted_destination}"
-        );
-        assert!(
-            run_tmux(
-                root,
-                session_name,
-                &["send-keys", "-t", target, &command, "Enter"]
-            )
-            .unwrap()
-        );
-        wait_for_file_lines(destination, 8)
-    }
-
-    fn wait_for_file_lines(destination: &Path, expected_lines: usize) -> String {
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while Instant::now() < deadline {
-            if let Ok(contents) = fs::read_to_string(destination) {
-                if contents.lines().count() == expected_lines {
-                    return contents;
-                }
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-        panic!("shell probe did not complete")
-    }
+    use std::sync::mpsc::{Receiver as StdReceiver, SyncSender, sync_channel};
 
     fn control_types(outbound: &[TerminalOutbound]) -> Vec<&'static str> {
         outbound
@@ -1737,43 +1435,67 @@ mod tests {
             .collect()
     }
 
+    struct PipeWriter(std::sync::mpsc::Sender<Vec<u8>>);
+
+    impl Write for PipeWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0
+                .send(buf.to_vec())
+                .map_err(|_| io::Error::other("closed"))?;
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn profile() -> ShellProfile {
+        ShellProfile {
+            home: PathBuf::from("/home/user"),
+            user: "user".into(),
+            rcfile: None,
+        }
+    }
+
     fn fake_ready() -> (
         TerminalRuntime,
-        UnixStream,
-        SyncSender<ReaderEvent>,
-        Receiver<Dimensions>,
+        StdReceiver<Vec<u8>>,
+        Sender<ReaderEvent>,
+        StdReceiver<Dimensions>,
         TerminalGeneration,
     ) {
-        let (writer, peer) = UnixStream::pair().unwrap();
-        let writer = File::from(OwnedFd::from(writer));
-        let (output_sender, output) = sync_channel(OUTPUT_CHANNEL_CAPACITY);
-        let (resize_sender, resize_receiver) = sync_channel(4);
+        let (writer, written) = std::sync::mpsc::channel();
+        let (output_sender, output) = channel(OUTPUT_CHANNEL_CAPACITY);
+        let (resize_sender, resize_receiver): (SyncSender<Dimensions>, _) = sync_channel(4);
         let generation = TerminalGeneration::random();
-        let mut runtime = TerminalRuntime::new(PathBuf::from("/workspace/repo"), "thread-id");
+        let mut runtime = TerminalRuntime::new(PathBuf::from("/workspace/repo"), profile());
         runtime.state = ResidentState::Ready;
         runtime.generation = Some(generation);
+        runtime.applied_environment_generation = 1;
+        runtime.shell_environment_generation = Some(1);
         runtime.process = Some(ResidentProcess {
-            child: None,
-            writer,
+            master: None,
+            shell: None,
+            writer: Box::new(PipeWriter(writer)),
             output,
-            overflowed: Arc::new(AtomicBool::new(false)),
-            output_usage: Arc::new(Mutex::new(OutputQueueUsage::default())),
         });
         runtime.resize_observer = Some(resize_sender);
-        runtime.accept_output(b"first\n".to_vec()).unwrap();
-        (runtime, peer, output_sender, resize_receiver, generation)
+        runtime
+            .accept_output(Bytes::from_static(b"first\n"), 1)
+            .unwrap();
+        (runtime, written, output_sender, resize_receiver, generation)
     }
 
     fn fake_starting() -> (
         TerminalRuntime,
-        UnixStream,
-        SyncSender<ReaderEvent>,
-        Receiver<Dimensions>,
+        StdReceiver<Vec<u8>>,
+        Sender<ReaderEvent>,
+        StdReceiver<Dimensions>,
         TerminalGeneration,
     ) {
         let (mut runtime, peer, output, resize, generation) = fake_ready();
         runtime.state = ResidentState::Starting;
-        runtime.applied_environment_generation = 1;
         runtime.shell_environment_generation = None;
         runtime.restart_required = false;
         runtime.next_output_sequence = 1;
@@ -1785,29 +1507,34 @@ mod tests {
         (runtime, peer, output, resize, generation)
     }
 
-    fn wait_for_ready(runtime: &mut TerminalRuntime) {
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while !matches!(runtime.heartbeat(), TerminalHeartbeat::Ready { .. }) {
-            runtime.drain_output().unwrap();
-            assert!(Instant::now() < deadline, "resident did not become ready");
-            thread::sleep(Duration::from_millis(10));
-        }
+    fn output(sender: &Sender<ReaderEvent>, bytes: &[u8]) {
+        let lines = bytes.iter().filter(|byte| **byte == b'\n').count();
+        sender
+            .try_send(ReaderEvent::Output(Bytes::copy_from_slice(bytes), lines))
+            .unwrap();
+    }
+
+    fn input_frame(
+        resident: TerminalGeneration,
+        attachment: TerminalGeneration,
+        sequence: u64,
+        payload: &[u8],
+    ) -> Vec<u8> {
+        encode_terminal_frame(&TerminalFrame {
+            kind: 1,
+            resident_generation: resident,
+            attachment_generation: Some(attachment),
+            sequence,
+            payload: payload.to_vec(),
+        })
+        .unwrap()
     }
 
     #[test]
     fn first_drained_output_promotes_starting_and_replays_identical_bytes() {
-        let (mut runtime, _, output, _, generation) = fake_starting();
-        let first = b"first output\n".to_vec();
-        {
-            let process = runtime.process.as_ref().unwrap();
-            let mut usage = process.output_usage.lock().unwrap();
-            usage.bytes = first.len();
-            usage.lines = 1;
-        }
-        output.send(ReaderEvent::Output(first.clone(), 1)).unwrap();
-
+        let (mut runtime, _, sender, _, generation) = fake_starting();
+        output(&sender, b"first output\n");
         let promoted = runtime.drain_output().unwrap();
-
         assert!(matches!(
             promoted.as_slice(),
             [TerminalOutbound::Control(TerminalClientMessage::ResidentState {
@@ -1821,6 +1548,7 @@ mod tests {
             runtime.heartbeat(),
             TerminalHeartbeat::Ready { .. }
         ));
+        assert_eq!(runtime.shell_environment_generation, Some(1));
         let attachment = TerminalGeneration::random();
         let replay = runtime
             .attach(1, "default", generation, attachment, 1, Dimensions::INITIAL)
@@ -1834,24 +1562,15 @@ mod tests {
             .expect("first output was replayed");
         assert_eq!(frame.kind, 2);
         assert_eq!(frame.sequence, 1);
-        assert_eq!(frame.payload, first);
+        assert_eq!(frame.payload, b"first output\n");
     }
 
     #[test]
     fn first_output_cannot_revive_an_already_closed_terminal() {
-        let (mut runtime, _, output, _, _) = fake_starting();
-        let first = b"final output\n".to_vec();
-        {
-            let process = runtime.process.as_ref().unwrap();
-            let mut usage = process.output_usage.lock().unwrap();
-            usage.bytes = first.len();
-            usage.lines = 1;
-        }
-        output.send(ReaderEvent::Output(first, 1)).unwrap();
-        output.send(ReaderEvent::Closed).unwrap();
-
+        let (mut runtime, _, sender, _, _) = fake_starting();
+        output(&sender, b"final output\n");
+        sender.try_send(ReaderEvent::Closed).unwrap();
         let outbound = runtime.drain_output().unwrap();
-
         assert_eq!(runtime.state, ResidentState::Exited);
         assert!(runtime.process.is_none());
         assert!(!outbound.iter().any(|message| matches!(
@@ -1869,14 +1588,10 @@ mod tests {
 
     #[test]
     fn first_output_deadline_rejects_a_queued_first_output() {
-        let (mut runtime, _peer, output, _resize, _) = fake_starting();
-        output
-            .send(ReaderEvent::Output(b"late output\n".to_vec(), 1))
-            .unwrap();
+        let (mut runtime, _, sender, _, _) = fake_starting();
+        output(&sender, b"late output\n");
         runtime.first_output_deadline = Some(Instant::now() - Duration::from_millis(1));
-
         let outbound = runtime.drain_output().unwrap();
-
         assert_eq!(runtime.state, ResidentState::Failed);
         assert!(runtime.process.is_none());
         assert!(matches!(
@@ -1901,14 +1616,6 @@ mod tests {
                 ..
             }
         ));
-        assert!(matches!(
-            runtime.resident_state(),
-            Some(TerminalClientMessage::ResidentState {
-                foreground_command: true,
-                ..
-            })
-        ));
-
         runtime.state = ResidentState::Exited;
         assert!(matches!(
             runtime.heartbeat(),
@@ -1946,8 +1653,8 @@ mod tests {
     }
 
     #[test]
-    fn vertical_attach_input_resize_detach_and_warm_reattach_are_ordered() {
-        let (mut runtime, mut input_peer, output_sender, resize_receiver, resident) = fake_ready();
+    fn attach_input_resize_detach_and_warm_reattach_are_ordered() {
+        let (mut runtime, written, sender, resize_receiver, resident) = fake_ready();
         let first_attachment = TerminalGeneration::random();
         let first = runtime
             .attach(
@@ -1965,1088 +1672,485 @@ mod tests {
         );
         assert!(matches!(first[2], TerminalOutbound::Binary(_)));
 
-        let input = encode_terminal_frame(&TerminalFrame {
-            kind: 1,
-            resident_generation: resident,
-            attachment_generation: Some(first_attachment),
-            sequence: 1,
-            payload: b"input\n".to_vec(),
-        })
-        .unwrap();
-        runtime.input(&input).unwrap();
+        runtime
+            .input(&input_frame(resident, first_attachment, 1, b"ls\n"))
+            .unwrap();
+        runtime
+            .input(&input_frame(resident, first_attachment, 2, b"pwd\n"))
+            .unwrap();
         runtime.drain_input().unwrap();
-        let mut observed = [0_u8; 6];
-        input_peer.read_exact(&mut observed).unwrap();
-        assert_eq!(&observed, b"input\n");
+        assert_eq!(written.try_recv().unwrap(), b"ls\n");
+        assert_eq!(written.try_recv().unwrap(), b"pwd\n");
+        assert!(!runtime.has_queued_input());
 
-        let dimensions = Dimensions {
-            columns: 100,
-            rows: 30,
+        output(&sender, b"live\n");
+        let live = runtime.drain_output().unwrap();
+        let frame = match &live[0] {
+            TerminalOutbound::Binary(frame) => decode_terminal_frame(frame).unwrap(),
+            TerminalOutbound::Control(_) => panic!("expected live frame"),
         };
+        assert_eq!(frame.kind, 3);
+        assert_eq!(frame.sequence, 2);
+
         let resized = runtime
-            .resize(1, "default", resident, first_attachment, 2, dimensions)
+            .resize(
+                1,
+                "default",
+                resident,
+                first_attachment,
+                2,
+                Dimensions {
+                    columns: 120,
+                    rows: 40,
+                },
+            )
             .unwrap();
         assert_eq!(control_types(&resized), ["dimensions"]);
-        assert_eq!(resize_receiver.recv().unwrap(), dimensions);
+        assert_eq!(resize_receiver.try_recv().unwrap().columns, 120);
 
         let detached = runtime
             .detach(1, "default", resident, first_attachment, "browser-detached")
             .unwrap();
         assert_eq!(control_types(&detached), ["detached"]);
-        {
-            let mut usage = runtime
-                .process
-                .as_ref()
-                .unwrap()
-                .output_usage
-                .lock()
-                .unwrap();
-            usage.bytes = 5;
-            usage.lines = 1;
-        }
-        output_sender
-            .send(ReaderEvent::Output(b"warm\n".to_vec(), 1))
-            .unwrap();
-        assert!(runtime.drain_output().unwrap().is_empty());
+        assert!(runtime.attachments.is_empty());
 
+        // Output while nobody is attached only enters replay.
+        output(&sender, b"unattended\n");
+        assert!(runtime.drain_output().unwrap().is_empty());
         let second_attachment = TerminalGeneration::random();
         let second = runtime
-            .attach(1, "default", resident, second_attachment, 3, dimensions)
-            .unwrap();
-        assert_eq!(
-            control_types(&second),
-            ["dimensions", "replay-start", "ready"]
-        );
-        let replay_sequences = second
-            .iter()
-            .filter_map(|message| match message {
-                TerminalOutbound::Binary(encoded) => {
-                    Some(decode_terminal_frame(encoded).unwrap().sequence)
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(replay_sequences, [1, 2]);
-        assert_eq!(runtime.generation, Some(resident));
-        assert_eq!(runtime.root, PathBuf::from("/workspace/repo"));
-    }
-
-    #[test]
-    fn replay_high_water_hands_off_to_the_next_live_sequence_without_a_gap() {
-        let (mut runtime, _, output_sender, _, resident) = fake_ready();
-        runtime.accept_output(b"before-gate".to_vec()).unwrap();
-        let attachment = TerminalGeneration::random();
-        let replay = runtime
-            .attach(1, "default", resident, attachment, 1, Dimensions::INITIAL)
-            .unwrap();
-        let replay_sequences = replay
-            .iter()
-            .filter_map(|message| match message {
-                TerminalOutbound::Binary(encoded) => {
-                    let frame = decode_terminal_frame(encoded).unwrap();
-                    (frame.kind == 2).then_some(frame.sequence)
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(replay_sequences, [1, 2]);
-        assert!(replay.iter().any(|message| matches!(
-            message,
-            TerminalOutbound::Control(TerminalClientMessage::AttachmentReady {
-                through_output_sequence: U64String(2),
-                ..
-            })
-        )));
-
-        {
-            let process = runtime.process.as_ref().unwrap();
-            let mut usage = process.output_usage.lock().unwrap();
-            usage.bytes = 10;
-        }
-        output_sender
-            .send(ReaderEvent::Output(b"after-gate".to_vec(), 0))
-            .unwrap();
-        let live = runtime.drain_output().unwrap();
-        let live_sequences = live
-            .iter()
-            .filter_map(|message| match message {
-                TerminalOutbound::Binary(encoded) => {
-                    let frame = decode_terminal_frame(encoded).unwrap();
-                    (frame.kind == 3).then_some(frame.sequence)
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(live_sequences, [3]);
-    }
-
-    #[test]
-    fn stale_identity_is_ignored_and_input_is_never_replayed() {
-        let (mut runtime, mut input_peer, _, _, resident) = fake_ready();
-        input_peer.set_nonblocking(true).unwrap();
-        let attachment = TerminalGeneration::random();
-        runtime
-            .attach(1, "default", resident, attachment, 1, Dimensions::INITIAL)
-            .unwrap();
-        let stale = encode_terminal_frame(&TerminalFrame {
-            kind: 1,
-            resident_generation: TerminalGeneration::random(),
-            attachment_generation: Some(attachment),
-            sequence: 1,
-            payload: b"secret".to_vec(),
-        })
-        .unwrap();
-        assert!(runtime.input(&stale).unwrap().is_empty());
-        let mut observed = [0_u8; 6];
-        assert_eq!(
-            input_peer.read(&mut observed).unwrap_err().kind(),
-            io::ErrorKind::WouldBlock
-        );
-    }
-
-    #[test]
-    fn admits_eight_attachments_and_serializes_complete_input_frames() {
-        let (mut runtime, mut input_peer, _, _, resident) = fake_ready();
-        let attachments = (1..=ATTACHMENT_LIMIT)
-            .map(|ordinal| {
-                let attachment = TerminalGeneration::random();
-                let output = runtime
-                    .attach(
-                        1,
-                        "default",
-                        resident,
-                        attachment,
-                        ordinal as u64,
-                        Dimensions::INITIAL,
-                    )
-                    .unwrap();
-                assert!(output.iter().any(|message| matches!(
-                    message,
-                    TerminalOutbound::Control(TerminalClientMessage::AttachmentReady { .. })
-                )));
-                attachment
-            })
-            .collect::<Vec<_>>();
-        let rejected = TerminalGeneration::random();
-        let output = runtime
-            .attach(1, "default", resident, rejected, 9, Dimensions::INITIAL)
-            .unwrap();
-        assert!(output.iter().any(|message| matches!(
-            message,
-            TerminalOutbound::Control(TerminalClientMessage::Error {
-                code: "attachment-limit",
-                ..
-            })
-        )));
-
-        for (sequence, attachment, payload) in [
-            (1, attachments[0], b"first".as_slice()),
-            (2, attachments[1], b"second".as_slice()),
-        ] {
-            let frame = encode_terminal_frame(&TerminalFrame {
-                kind: 1,
-                resident_generation: resident,
-                attachment_generation: Some(attachment),
-                sequence,
-                payload: payload.to_vec(),
-            })
-            .unwrap();
-            assert!(runtime.input(&frame).unwrap().is_empty());
-        }
-        runtime.drain_input().unwrap();
-        runtime.drain_input().unwrap();
-        let mut observed = [0_u8; 11];
-        input_peer.read_exact(&mut observed).unwrap();
-        assert_eq!(&observed, b"firstsecond");
-    }
-
-    #[test]
-    fn input_overflow_detaches_only_its_source_and_preserves_prior_fifo_frames() {
-        let (mut runtime, mut input_peer, _, _, resident) = fake_ready();
-        let first = TerminalGeneration::random();
-        let overflow = TerminalGeneration::random();
-        runtime
-            .attach(1, "default", resident, first, 1, Dimensions::INITIAL)
-            .unwrap();
-        runtime
-            .attach(1, "default", resident, overflow, 2, Dimensions::INITIAL)
-            .unwrap();
-        for sequence in 1..=INPUT_FRAME_LIMIT as u64 {
-            let frame = encode_terminal_frame(&TerminalFrame {
-                kind: 1,
-                resident_generation: resident,
-                attachment_generation: Some(first),
-                sequence,
-                payload: vec![sequence as u8],
-            })
-            .unwrap();
-            runtime.input(&frame).unwrap();
-        }
-        let rejected = encode_terminal_frame(&TerminalFrame {
-            kind: 1,
-            resident_generation: resident,
-            attachment_generation: Some(overflow),
-            sequence: 33,
-            payload: vec![99],
-        })
-        .unwrap();
-        let output = runtime.input(&rejected).unwrap();
-        assert!(output.iter().any(|message| matches!(
-            message,
-            TerminalOutbound::Control(TerminalClientMessage::Error {
-                attachment_generation: Some(value),
-                code: "input-overflow",
-                ..
-            }) if *value == overflow
-        )));
-        assert!(!runtime.attachments.contains(&overflow));
-        assert_eq!(runtime.input_queue.len(), INPUT_FRAME_LIMIT);
-
-        for _ in 0..INPUT_FRAME_LIMIT {
-            runtime.drain_input().unwrap();
-        }
-        let mut observed = [0_u8; INPUT_FRAME_LIMIT];
-        input_peer.read_exact(&mut observed).unwrap();
-        assert_eq!(observed, std::array::from_fn(|index| (index + 1) as u8));
-    }
-
-    #[test]
-    fn input_accounting_uses_complete_frames_at_attachment_and_total_bounds() {
-        let (mut runtime, _, _, _, resident) = fake_ready();
-        let attachments = (1..=ATTACHMENT_LIMIT)
-            .map(|ordinal| {
-                let attachment = TerminalGeneration::random();
-                runtime
-                    .attach(
-                        1,
-                        "default",
-                        resident,
-                        attachment,
-                        ordinal as u64,
-                        Dimensions::INITIAL,
-                    )
-                    .unwrap();
-                attachment
-            })
-            .collect::<Vec<_>>();
-        for sequence in 1..=4 {
-            let frame = encode_terminal_frame(&TerminalFrame {
-                kind: 1,
-                resident_generation: resident,
-                attachment_generation: Some(attachments[0]),
-                sequence,
-                payload: vec![1; TERMINAL_MAX_PAYLOAD_BYTES],
-            })
-            .unwrap();
-            runtime.input(&frame).unwrap();
-        }
-        assert_eq!(
-            runtime.attachment_input_bytes[&attachments[0]],
-            INPUT_ATTACHMENT_BYTE_LIMIT
-        );
-        assert_eq!(runtime.input_bytes, INPUT_ATTACHMENT_BYTE_LIMIT);
-        let overflow = encode_terminal_frame(&TerminalFrame {
-            kind: 1,
-            resident_generation: resident,
-            attachment_generation: Some(attachments[0]),
-            sequence: 5,
-            payload: vec![1],
-        })
-        .unwrap();
-        assert!(
-            runtime
-                .input(&overflow)
-                .unwrap()
-                .iter()
-                .any(|message| matches!(
-                    message,
-                    TerminalOutbound::Control(TerminalClientMessage::Error {
-                        code: "input-overflow",
-                        ..
-                    })
-                ))
-        );
-        assert_eq!(runtime.input_bytes, 0);
-        assert_eq!(runtime.input_queue.len(), 0);
-
-        let (mut runtime, _, _, _, resident) = fake_ready();
-        let attachments = (1..=ATTACHMENT_LIMIT)
-            .map(|ordinal| {
-                let attachment = TerminalGeneration::random();
-                runtime
-                    .attach(
-                        1,
-                        "default",
-                        resident,
-                        attachment,
-                        ordinal as u64,
-                        Dimensions::INITIAL,
-                    )
-                    .unwrap();
-                attachment
-            })
-            .collect::<Vec<_>>();
-        for (attachment_index, attachment) in attachments.iter().enumerate() {
-            for frame_index in 0..4 {
-                let sequence = (attachment_index * 4 + frame_index + 1) as u64;
-                let frame = encode_terminal_frame(&TerminalFrame {
-                    kind: 1,
-                    resident_generation: resident,
-                    attachment_generation: Some(*attachment),
-                    sequence,
-                    payload: vec![1; TERMINAL_MAX_PAYLOAD_BYTES],
-                })
-                .unwrap();
-                runtime.input(&frame).unwrap();
-            }
-        }
-        assert_eq!(runtime.input_queue.len(), INPUT_FRAME_LIMIT);
-        assert_eq!(runtime.input_bytes, INPUT_TOTAL_BYTE_LIMIT);
-        let rejected_source = attachments[7];
-        let rejected = encode_terminal_frame(&TerminalFrame {
-            kind: 1,
-            resident_generation: resident,
-            attachment_generation: Some(rejected_source),
-            sequence: 33,
-            payload: vec![1],
-        })
-        .unwrap();
-        runtime.input(&rejected).unwrap();
-        assert_eq!(runtime.input_queue.len(), INPUT_FRAME_LIMIT - 4);
-        assert_eq!(
-            runtime.input_bytes,
-            INPUT_TOTAL_BYTE_LIMIT - 4 * (TERMINAL_HEADER_BYTES + TERMINAL_MAX_PAYLOAD_BYTES)
-        );
-        assert!(!runtime.attachments.contains(&rejected_source));
-    }
-
-    #[test]
-    fn resize_bounds_and_revision_follow_acceptance_order() {
-        let (mut runtime, _, _, resize_receiver, resident) = fake_ready();
-        let attachment = TerminalGeneration::random();
-        runtime
-            .attach(1, "default", resident, attachment, 1, Dimensions::INITIAL)
-            .unwrap();
-        assert_eq!(runtime.dimensions_revision, 0);
-        let minimum = Dimensions {
-            columns: 1,
-            rows: 1,
-        };
-        runtime
-            .resize(1, "default", resident, attachment, 2, minimum)
-            .unwrap();
-        assert_eq!(resize_receiver.recv().unwrap(), minimum);
-        assert_eq!(runtime.dimensions_revision, 1);
-        runtime
-            .resize(1, "default", resident, attachment, 3, minimum)
-            .unwrap();
-        assert!(resize_receiver.try_recv().is_err());
-        assert_eq!(runtime.dimensions_revision, 1);
-        let maximum = Dimensions {
-            columns: 1_000,
-            rows: 1_000,
-        };
-        runtime
-            .resize(1, "default", resident, attachment, 4, maximum)
-            .unwrap();
-        assert_eq!(resize_receiver.recv().unwrap(), maximum);
-        assert_eq!(runtime.dimensions, maximum);
-        assert_eq!(runtime.dimensions_revision, 2);
-        for invalid in [
-            Dimensions {
-                columns: 0,
-                rows: 1,
-            },
-            Dimensions {
-                columns: 1_001,
-                rows: 1,
-            },
-        ] {
-            assert!(
-                runtime
-                    .resize(1, "default", resident, attachment, 5, invalid)
-                    .is_err()
-            );
-            assert_eq!(runtime.dimensions, maximum);
-            assert_eq!(runtime.next_resize_ordinal, 5);
-        }
-    }
-
-    #[test]
-    fn invalid_open_shapes_do_not_create_or_replace_a_resident() {
-        let mut runtime = TerminalRuntime::new(PathBuf::from("/workspace/repo"), "thread-id");
-        let expected = TerminalGeneration::random();
-        assert!(
-            runtime
-                .open(
-                    1,
-                    "default",
-                    "open-if-absent",
-                    Some(expected),
-                    Dimensions::INITIAL,
-                )
-                .is_err()
-        );
-        assert!(
-            runtime
-                .open(1, "default", "restart-exited", None, Dimensions::INITIAL,)
-                .is_err()
-        );
-        assert_eq!(runtime.state, ResidentState::Absent);
-        assert_eq!(runtime.generation, None);
-        assert!(runtime.process.is_none());
-    }
-
-    #[test]
-    fn replay_eviction_is_complete_and_truncation_stays_set() {
-        let (mut runtime, _, _, _, _) = fake_ready();
-        runtime.replay.clear();
-        runtime.replay_bytes = 0;
-        runtime.replay_lines = 0;
-        runtime.next_output_sequence = 1;
-        runtime.accept_output(vec![b'a'; 40_000]).unwrap();
-        runtime.accept_output(vec![b'b'; 40_000]).unwrap();
-        assert_eq!(runtime.replay.len(), 1);
-        assert_eq!(runtime.replay.front().unwrap().sequence, 2);
-        assert_eq!(runtime.replay_bytes, 40_000);
-        assert!(runtime.replay_truncated);
-        runtime.accept_output(b"tail".to_vec()).unwrap();
-        assert!(runtime.replay_truncated);
-
-        runtime.replay.clear();
-        runtime.replay_bytes = 0;
-        runtime.replay_lines = 0;
-        runtime.replay_truncated = false;
-        runtime.accept_output(vec![b'\n'; 6_000]).unwrap();
-        runtime.accept_output(vec![b'\n'; 6_000]).unwrap();
-        assert_eq!(runtime.replay.len(), 1);
-        assert_eq!(runtime.replay_lines, 6_000);
-        assert!(runtime.replay_truncated);
-    }
-
-    #[test]
-    fn output_queue_fails_instead_of_dropping_at_each_bound() {
-        let (sender, _receiver) = sync_channel(OUTPUT_CHANNEL_CAPACITY);
-        let overflowed = AtomicBool::new(false);
-        let usage = Mutex::new(OutputQueueUsage::default());
-        for _ in 0..OUTPUT_CHANNEL_CAPACITY {
-            assert!(queue_output(
-                &sender,
-                &overflowed,
-                &usage,
-                vec![1; OUTPUT_CHUNK_BYTES],
-                0,
-            ));
-        }
-        assert_eq!(usage.lock().unwrap().bytes, OUTPUT_QUEUE_BYTE_LIMIT);
-        assert!(!queue_output(&sender, &overflowed, &usage, vec![1], 0,));
-        assert!(overflowed.load(Ordering::Acquire));
-
-        let (line_sender, _receiver) = sync_channel(OUTPUT_CHANNEL_CAPACITY);
-        let line_overflowed = AtomicBool::new(false);
-        let line_usage = Mutex::new(OutputQueueUsage::default());
-        assert!(queue_output(
-            &line_sender,
-            &line_overflowed,
-            &line_usage,
-            vec![b'\n'; OUTPUT_QUEUE_LINE_LIMIT],
-            OUTPUT_QUEUE_LINE_LIMIT,
-        ));
-        assert!(!queue_output(
-            &line_sender,
-            &line_overflowed,
-            &line_usage,
-            vec![b'\n'],
-            1,
-        ));
-        assert!(line_overflowed.load(Ordering::Acquire));
-    }
-
-    #[test]
-    fn output_overflow_stops_and_fails_the_resident() {
-        let (mut runtime, _, _, _, resident) = fake_ready();
-        let attachment = TerminalGeneration::random();
-        runtime
-            .attach(1, "default", resident, attachment, 1, Dimensions::INITIAL)
-            .unwrap();
-        runtime
-            .process
-            .as_ref()
-            .unwrap()
-            .overflowed
-            .store(true, Ordering::Release);
-
-        let outbound = runtime.drain_output().unwrap();
-
-        assert_eq!(runtime.state, ResidentState::Failed);
-        assert!(runtime.process.is_none());
-        assert!(runtime.attachments.is_empty());
-        assert!(outbound.iter().any(|message| matches!(
-            message,
-            TerminalOutbound::Control(TerminalClientMessage::Error {
-                code: "terminal-overflow",
-                ..
-            })
-        )));
-        assert!(outbound.iter().any(|message| matches!(
-            message,
-            TerminalOutbound::Control(TerminalClientMessage::ResidentState {
-                state: "failed",
-                ..
-            })
-        )));
-    }
-
-    #[test]
-    fn local_pty_uses_the_existing_logical_tmux_session_across_warm_detach() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("dxd is nested under the repository")
-            .to_path_buf();
-        let thread_id = format!("resident-local-{}", std::process::id());
-        let session_name = format!("dx-{thread_id}");
-        let _cleanup = TmuxCleanup {
-            root: root.clone(),
-            session_name,
-        };
-        let environment = tempdir().unwrap();
-        fs::set_permissions(environment.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let fragment = environment.path().join(".env");
-        fs::write(&fragment, super::super::environment::ENVIRONMENT_HEADER).unwrap();
-        fs::set_permissions(&fragment, fs::Permissions::from_mode(0o600)).unwrap();
-        let mut runtime = TerminalRuntime::new(root.clone(), &thread_id);
-        runtime.applied_environment_generation = 1;
-        runtime.environment_home = environment.path().to_path_buf();
-        runtime
-            .open(1, "default", "open-if-absent", None, Dimensions::INITIAL)
-            .unwrap();
-        wait_for_ready(&mut runtime);
-        let resident = match runtime.heartbeat() {
-            TerminalHeartbeat::Ready {
-                resident_generation,
-                ..
-            } => resident_generation,
-            _ => panic!("resident did not become ready"),
-        };
-        let first_attachment = TerminalGeneration::random();
-        let attached = runtime
             .attach(
                 1,
                 "default",
                 resident,
-                first_attachment,
-                1,
+                second_attachment,
+                3,
                 Dimensions::INITIAL,
             )
             .unwrap();
-        let through = attached
+        let replayed = second
             .iter()
-            .find_map(|message| match message {
-                TerminalOutbound::Control(TerminalClientMessage::AttachmentReady {
-                    through_output_sequence,
-                    ..
-                }) => Some(through_output_sequence.0),
-                _ => None,
-            })
-            .expect("attach completed");
-        let input = encode_terminal_frame(&TerminalFrame {
-            kind: 1,
-            resident_generation: resident,
-            attachment_generation: Some(first_attachment),
-            sequence: 1,
-            payload: b"printf x\n".to_vec(),
-        })
-        .unwrap();
-        runtime.input(&input).unwrap();
-        runtime.drain_input().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(3);
-        let mut newest = through;
-        while newest == through && Instant::now() < deadline {
-            for message in runtime.drain_output().unwrap() {
-                if let TerminalOutbound::Binary(encoded) = message {
-                    newest = newest.max(decode_terminal_frame(&encoded).unwrap().sequence);
-                }
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
+            .filter(|message| matches!(message, TerminalOutbound::Binary(_)))
+            .count();
+        assert_eq!(replayed, 3);
+    }
+
+    #[test]
+    fn stale_identity_is_ignored_and_input_is_never_replayed() {
+        let (mut runtime, written, _, _, resident) = fake_ready();
+        let attachment = TerminalGeneration::random();
+        runtime
+            .attach(1, "default", resident, attachment, 1, Dimensions::INITIAL)
+            .unwrap();
+        let stranger = TerminalGeneration::random();
         assert!(
-            newest > through,
-            "accepted input produced no ordered PTY output"
+            runtime
+                .input(&input_frame(resident, stranger, 1, b"x"))
+                .unwrap()
+                .is_empty()
         );
-        let sleep = encode_terminal_frame(&TerminalFrame {
-            kind: 1,
-            resident_generation: resident,
-            attachment_generation: Some(first_attachment),
-            sequence: 2,
-            payload: b"sleep 2\n".to_vec(),
-        })
-        .unwrap();
-        runtime.input(&sleep).unwrap();
+        let wrong_sequence = runtime
+            .input(&input_frame(resident, attachment, 5, b"x"))
+            .unwrap();
+        assert!(matches!(
+            wrong_sequence.as_slice(),
+            [TerminalOutbound::Control(TerminalClientMessage::Error {
+                code: "invalid-attachment",
+                ..
+            })]
+        ));
         runtime.drain_input().unwrap();
-        let foreground_deadline = Instant::now() + Duration::from_secs(1);
-        let mut observed_foreground = false;
-        while !observed_foreground && Instant::now() < foreground_deadline {
-            observed_foreground = matches!(
-                runtime.heartbeat(),
-                TerminalHeartbeat::Ready {
-                    foreground_command: true,
-                    ..
-                }
+        assert!(written.try_recv().is_err());
+    }
+
+    #[test]
+    fn admits_eight_attachments_and_bounds_input() {
+        let (mut runtime, _, _, _, resident) = fake_ready();
+        let mut attachments = Vec::new();
+        for ordinal in 1..=8 {
+            let attachment = TerminalGeneration::random();
+            let outbound = runtime
+                .attach(
+                    1,
+                    "default",
+                    resident,
+                    attachment,
+                    ordinal,
+                    Dimensions::INITIAL,
+                )
+                .unwrap();
+            assert_eq!(
+                control_types(&outbound),
+                ["dimensions", "replay-start", "ready"]
             );
-            thread::sleep(Duration::from_millis(10));
+            attachments.push(attachment);
         }
-        assert!(
-            observed_foreground,
-            "tmux foreground command was not reflected in health"
-        );
-
-        let dimensions = Dimensions {
-            columns: 100,
-            rows: 30,
-        };
-        runtime
-            .resize(1, "default", resident, first_attachment, 2, dimensions)
-            .unwrap();
-        runtime
-            .detach(1, "default", resident, first_attachment, "browser-detached")
-            .unwrap();
-        let second_attachment = TerminalGeneration::random();
-        let warm = runtime
-            .attach(1, "default", resident, second_attachment, 3, dimensions)
-            .unwrap();
-        assert!(warm.iter().any(|message| {
-            matches!(
-                message,
-                TerminalOutbound::Binary(encoded)
-                    if decode_terminal_frame(encoded).is_ok_and(|frame| frame.sequence == newest)
-            )
-        }));
-        assert_eq!(runtime.root, root);
-        assert_eq!(runtime.generation, Some(resident));
-
-        runtime.state = ResidentState::Exited;
-        runtime
-            .open(
+        let ninth = runtime
+            .attach(
                 1,
                 "default",
-                "restart-exited",
-                Some(resident),
+                resident,
+                TerminalGeneration::random(),
+                9,
                 Dimensions::INITIAL,
             )
             .unwrap();
-        wait_for_ready(&mut runtime);
-        assert_ne!(runtime.generation, Some(resident));
-        assert_eq!(runtime.state, ResidentState::Ready);
-    }
-
-    #[test]
-    fn refresh_resets_a_resident_whose_tmux_session_disappeared() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("dxd is nested under the repository")
-            .to_path_buf();
-        let thread_id = format!("resident-missing-tmux-{}", std::process::id());
-        let session_name = format!("dx-{thread_id}");
-        let _cleanup = TmuxCleanup {
-            root: root.clone(),
-            session_name: session_name.clone(),
-        };
-        let environment = tempdir().unwrap();
-        fs::set_permissions(environment.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let fragment = environment.path().join(".env");
-        fs::write(&fragment, super::super::environment::ENVIRONMENT_HEADER).unwrap();
-        fs::set_permissions(&fragment, fs::Permissions::from_mode(0o600)).unwrap();
-        let mut runtime = TerminalRuntime::new(root.clone(), &thread_id);
-        runtime.applied_environment_generation = 1;
-        runtime.environment_home = environment.path().to_path_buf();
-        runtime
-            .open(1, "default", "open-if-absent", None, Dimensions::INITIAL)
-            .unwrap();
-        wait_for_ready(&mut runtime);
         assert!(matches!(
-            runtime.heartbeat(),
-            TerminalHeartbeat::Ready { .. }
+            ninth.as_slice(),
+            [TerminalOutbound::Control(TerminalClientMessage::Error {
+                code: "attachment-limit",
+                ..
+            })]
         ));
-        assert!(
-            run_tmux(&root, &session_name, &["kill-server"]).unwrap(),
-            "tmux server was not running"
-        );
-
-        runtime
-            .refresh_environment(&BTreeMap::new(), &BTreeSet::new(), 2, false)
+        let payload = vec![b'a'; INPUT_ATTACHMENT_BYTE_LIMIT];
+        let overflow = runtime
+            .input(&input_frame(
+                resident,
+                attachments[0],
+                1,
+                &payload[..TERMINAL_MAX_PAYLOAD_BYTES],
+            ))
             .unwrap();
-
-        assert!(matches!(
-            runtime.heartbeat(),
-            TerminalHeartbeat::Absent {
-                terminal_version: TERMINAL_VERSION,
-                terminal: "default",
+        assert!(overflow.is_empty());
+        let mut sequence = 2;
+        let mut last = Vec::new();
+        for _ in 0..8 {
+            last = runtime
+                .input(&input_frame(
+                    resident,
+                    attachments[0],
+                    sequence,
+                    &payload[..TERMINAL_MAX_PAYLOAD_BYTES],
+                ))
+                .unwrap();
+            sequence += 1;
+            if !last.is_empty() {
+                break;
             }
-        ));
-    }
-
-    #[test]
-    fn local_tmux_refreshes_only_future_login_shells_and_confirmed_restart() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("dxd is nested under the repository")
-            .to_path_buf();
-        let thread_id = format!("resident-environment-local-{}", std::process::id());
-        let session_name = format!("dx-{thread_id}");
-        let _cleanup = TmuxCleanup {
-            root: root.clone(),
-            session_name: session_name.clone(),
-        };
-        let environment = tempdir().unwrap();
-        fs::set_permissions(environment.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let fragment = environment.path().join(".env");
-        fs::write(
-            &fragment,
-            [
-                super::super::environment::ENVIRONMENT_HEADER,
-                b"OLD_VALUE='before'\n",
-            ]
-            .concat(),
-        )
-        .unwrap();
-        fs::set_permissions(&fragment, fs::Permissions::from_mode(0o600)).unwrap();
-        let history = environment.path().join("history");
-        fs::write(&history, []).unwrap();
-        fs::set_permissions(&history, fs::Permissions::from_mode(0o600)).unwrap();
-
-        let mut runtime = TerminalRuntime::new(root.clone(), &thread_id);
-        runtime.applied_environment_generation = 1;
-        runtime.environment_home = environment.path().to_path_buf();
-        runtime
-            .open(1, "default", "open-if-absent", None, Dimensions::INITIAL)
-            .unwrap();
-        wait_for_ready(&mut runtime);
-        let first_resident = runtime.generation.unwrap();
-        assert_eq!(
-            tmux_text(
-                &root,
-                &session_name,
-                &[
-                    "display-message",
-                    "-p",
-                    "-t",
-                    &format!("{session_name}:0.0"),
-                    "#{pane_start_command}",
-                ],
-            ),
-            "/bin/bash --login -i"
-        );
-        assert_eq!(
-            tmux_text(
-                &root,
-                &session_name,
-                &["show-options", "-gv", "history-limit"],
-            ),
-            "10000"
-        );
-        for expected in [
-            "PATH=/home/user/.local/bin:/usr/local/bin:/usr/bin:/bin",
-            "HOME=/home/user",
-            "USER=user",
-            "LOGNAME=user",
-            "SHELL=/bin/bash",
-            "LANG=C.UTF-8",
-        ] {
-            assert_eq!(
-                tmux_text(
-                    &root,
-                    &session_name,
-                    &[
-                        "show-environment",
-                        "-g",
-                        expected.split('=').next().unwrap()
-                    ],
-                ),
-                expected
-            );
         }
-        let current = shell_probe(
-            &root,
-            &session_name,
-            &format!("{session_name}:0.0"),
-            &environment.path().join("current-before"),
-        );
-        let current = current.lines().collect::<Vec<_>>();
-        assert_eq!(&current[..3], ["before", "unset", root.to_str().unwrap()]);
-        // A host login profile may refine PATH and HOME after the canonical tmux
-        // base asserted above; identity and shell fields remain runtime-owned.
-        assert_eq!(&current[5..], ["user", "user", "/bin/bash"]);
-        let first_pane_pid = tmux_text(
-            &root,
-            &session_name,
-            &[
-                "display-message",
-                "-p",
-                "-t",
-                &format!("{session_name}:0.0"),
-                "#{pane_pid}",
-            ],
-        );
-
-        fs::write(
-            &fragment,
-            [
-                super::super::environment::ENVIRONMENT_HEADER,
-                b"NEW_VALUE='after'\n",
-            ]
-            .concat(),
-        )
-        .unwrap();
-        fs::set_permissions(&fragment, fs::Permissions::from_mode(0o600)).unwrap();
-        runtime
-            .refresh_environment(
-                &BTreeMap::from([("NEW_VALUE".to_owned(), "after".to_owned())]),
-                &BTreeSet::from(["OLD_VALUE".to_owned()]),
-                2,
-                true,
-            )
-            .unwrap();
         assert!(matches!(
-            runtime.environment_shell(),
-            EnvironmentShell::RestartRequired
+            last.as_slice(),
+            [TerminalOutbound::Control(TerminalClientMessage::Error {
+                code: "input-overflow",
+                ..
+            })]
         ));
-        assert_eq!(
-            shell_probe(
-                &root,
-                &session_name,
-                &format!("{session_name}:0.0"),
-                &environment.path().join("current-after"),
-            )
-            .lines()
-            .take(2)
-            .collect::<Vec<_>>(),
-            ["before", "unset"]
-        );
+        assert!(!runtime.attachments.contains(&attachments[0]));
+        assert_eq!(runtime.attachments.len(), 7);
+    }
 
-        assert!(
-            run_tmux(
-                &root,
-                &session_name,
-                &[
-                    "new-window",
-                    "-d",
-                    "-t",
-                    &session_name,
-                    "-c",
-                    root.to_str().unwrap(),
-                    "/bin/bash",
-                    "--login",
-                    "-i",
-                ],
-            )
-            .unwrap()
-        );
+    #[test]
+    fn replay_eviction_is_complete_and_truncation_stays_set() {
+        let (mut runtime, _, sender, _, _) = fake_ready();
+        for _ in 0..8 {
+            output(&sender, &vec![b'x'; 16_000]);
+        }
+        runtime.drain_output().unwrap();
+        assert!(runtime.replay_bytes <= REPLAY_BYTE_LIMIT);
+        assert!(runtime.replay_truncated);
         assert_eq!(
-            shell_probe(
-                &root,
-                &session_name,
-                &format!("{session_name}:1.0"),
-                &environment.path().join("future"),
-            )
-            .lines()
-            .take(2)
-            .collect::<Vec<_>>(),
-            ["unset", "after"]
-        );
-        assert!(
-            run_tmux(
-                &root,
-                &session_name,
-                &["kill-window", "-t", &format!("{session_name}:1")],
-            )
-            .unwrap()
-        );
-
-        runtime
-            .restart(1, "default", first_resident, Dimensions::INITIAL)
-            .unwrap();
-        wait_for_ready(&mut runtime);
-        assert_ne!(runtime.generation, Some(first_resident));
-        assert!(matches!(
-            runtime.environment_shell(),
-            EnvironmentShell::Current
-        ));
-        assert_eq!(
-            tmux_text(
-                &root,
-                &session_name,
-                &["show-environment", "-t", &session_name, "OLD_VALUE"],
-            ),
-            "-OLD_VALUE"
-        );
-        assert_eq!(
-            tmux_text(
-                &root,
-                &session_name,
-                &["show-environment", "-t", &session_name, "NEW_VALUE"],
-            ),
-            "NEW_VALUE=after"
-        );
-        assert_ne!(
-            tmux_text(
-                &root,
-                &session_name,
-                &[
-                    "display-message",
-                    "-p",
-                    "-t",
-                    &format!("{session_name}:0.0"),
-                    "#{pane_pid}",
-                ],
-            ),
-            first_pane_pid
-        );
-        assert_eq!(
-            shell_probe(
-                &root,
-                &session_name,
-                &format!("{session_name}:0.0"),
-                &environment.path().join("restarted"),
-            )
-            .lines()
-            .take(2)
-            .collect::<Vec<_>>(),
-            ["unset", "after"]
-        );
-        assert_eq!(
-            fs::metadata(history).unwrap().permissions().mode() & 0o777,
-            0o600
+            runtime.replay_bytes,
+            runtime
+                .replay
+                .iter()
+                .map(|chunk| chunk.payload.len())
+                .sum::<usize>()
         );
     }
 
     #[test]
-    fn local_restart_reuses_profile_and_persistent_history() {
-        let local = tempdir().unwrap();
-        let root = local.path().join("workspace");
-        let home = local.path().join("home");
-        let state = local.path().join("state");
-        fs::create_dir_all(&root).unwrap();
-        fs::create_dir_all(&home).unwrap();
-        fs::create_dir_all(&state).unwrap();
-        fs::set_permissions(&state, fs::Permissions::from_mode(0o700)).unwrap();
-        let thread_id = format!("resident-local-profile-{}", std::process::id());
-        let session_name = format!("dx-{thread_id}");
-        let _cleanup = TmuxCleanup {
-            root: root.clone(),
-            session_name: session_name.clone(),
-        };
-        let mut terminal =
-            TerminalRuntime::local(root.clone(), &thread_id, home.clone(), state.clone());
-        let mut environment = EnvironmentRuntime::local(home, state.clone());
-        let activation = |generation, value: &str| EnvironmentActivate {
-            generation,
-            entries: vec![EnvironmentEntry {
-                name: "LOCAL_PROFILE_PROOF".into(),
-                value_base64_url: URL_SAFE_NO_PAD.encode(value),
-            }],
-            git: crate::environment::GitConfiguration {
-                author_name: "dx".into(),
-                author_email: "dx@example.invalid".into(),
-                thread_url:
-                    "https://dx.example.test/threads/thr_00000000-0000-4000-8000-000000000000"
-                        .into(),
-                signing_enabled: true,
-                bitbucket_gateway: None,
-            },
-        };
-
+    fn environment_refresh_tracks_shell_currency_without_a_multiplexer() {
+        let (mut runtime, _, _, _, _) = fake_ready();
+        let values = BTreeMap::from([("A".to_owned(), "1".to_owned())]);
+        runtime.refresh_environment(&values, 2, false);
+        assert_eq!(runtime.applied_environment_generation, 2);
+        assert_eq!(runtime.shell_environment_generation, Some(2));
+        assert!(!runtime.restart_required);
+        runtime.refresh_environment(&values, 3, true);
+        assert_eq!(runtime.applied_environment_generation, 3);
+        assert_eq!(runtime.shell_environment_generation, Some(2));
+        assert!(runtime.restart_required);
         assert!(matches!(
-            environment
-                .activate(activation(1, "before"), &mut terminal)
-                .kind,
-            EnvironmentOutcome::Applied
+            runtime.environment_shell(),
+            crate::environment::EnvironmentShell::RestartRequired
         ));
-        terminal
+        runtime.stop_process();
+        runtime.state = ResidentState::Exited;
+        runtime.refresh_environment(&values, 4, false);
+        assert_eq!(runtime.shell_environment_generation, None);
+        assert!(!runtime.restart_required);
+    }
+
+    fn real_ready_shell(home: &Path, root: &Path) -> (TerminalRuntime, TerminalGeneration) {
+        let rcfile = home.join("rc");
+        std::fs::write(&rcfile, "PS1='> '\n").unwrap();
+        let mut runtime = TerminalRuntime::new(
+            root.to_owned(),
+            ShellProfile {
+                home: home.to_owned(),
+                user: "user".into(),
+                rcfile: Some(rcfile),
+            },
+        )
+        .recorded_in(home);
+        runtime.refresh_environment(&BTreeMap::new(), 1, true);
+        runtime
             .open(1, "default", "open-if-absent", None, Dimensions::INITIAL)
             .unwrap();
-        wait_for_ready(&mut terminal);
-        let first_resident = terminal.generation.unwrap();
-        let profile = state.join("dx-terminal/profile");
-        let expected_command = format!("/bin/bash --rcfile {} -i", profile.display());
-        assert_eq!(
-            tmux_text(
-                &root,
-                &session_name,
-                &[
-                    "display-message",
-                    "-p",
-                    "-t",
-                    &format!("{session_name}:0.0"),
-                    "#{pane_start_command}",
-                ],
-            ),
-            expected_command
-        );
-        assert!(
-            run_tmux(
-                &root,
-                &session_name,
-                &[
-                    "send-keys",
-                    "-t",
-                    &format!("{session_name}:0.0"),
-                    "echo local-history-proof >/dev/null",
-                    "Enter",
-                ],
-            )
-            .unwrap()
-        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while runtime.state == ResidentState::Starting {
+            assert!(Instant::now() < deadline, "shell produced no output");
+            runtime.drain_output().unwrap();
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(runtime.state, ResidentState::Ready);
+        let resident = runtime.generation.unwrap();
+        (runtime, resident)
+    }
 
-        assert!(matches!(
-            environment
-                .activate(activation(2, "after"), &mut terminal)
-                .kind,
-            EnvironmentOutcome::Applied
-        ));
-        terminal
-            .restart(1, "default", first_resident, Dimensions::INITIAL)
+    fn type_until(
+        runtime: &mut TerminalRuntime,
+        resident: TerminalGeneration,
+        attachment: TerminalGeneration,
+        sequence: u64,
+        input: &str,
+        expected: &str,
+    ) -> String {
+        runtime
+            .input(&input_frame(
+                resident,
+                attachment,
+                sequence,
+                input.as_bytes(),
+            ))
             .unwrap();
-        wait_for_ready(&mut terminal);
-        assert_eq!(
-            tmux_text(
-                &root,
-                &session_name,
-                &[
-                    "display-message",
-                    "-p",
-                    "-t",
-                    &format!("{session_name}:0.0"),
-                    "#{pane_start_command}",
-                ],
-            ),
-            expected_command
-        );
-        let probe = state.join("restart-profile-proof");
-        let quoted_probe = format!("'{}'", probe.to_string_lossy().replace('\'', "'\\''"));
-        let command =
-            format!("printf '%s\\n' \"$LOCAL_PROFILE_PROOF\" \"$HISTFILE\" > {quoted_probe}");
-        assert!(
-            run_tmux(
-                &root,
-                &session_name,
-                &[
-                    "send-keys",
-                    "-t",
-                    &format!("{session_name}:0.0"),
-                    &command,
-                    "Enter",
-                ],
-            )
+        runtime.drain_input().unwrap();
+        let mut seen = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let text = String::from_utf8_lossy(&seen).into_owned();
+            if let Some(line) = text.lines().find(|line| line.starts_with(expected)) {
+                return line.to_owned();
+            }
+            assert!(Instant::now() < deadline, "no {expected:?} in {text:?}");
+            for message in runtime.drain_output().unwrap() {
+                if let TerminalOutbound::Binary(frame) = message {
+                    seen.extend(decode_terminal_frame(&frame).unwrap().payload);
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn process_alive(pid: &str) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", pid])
+            .stderr(std::process::Stdio::null())
+            .status()
             .unwrap()
+            .success()
+    }
+
+    /// Stopping the resident is a hangup, as when a terminal window closes:
+    /// the shell's jobs end with it, and the connection loop is not held for
+    /// the shell's exit.
+    #[test]
+    fn stopping_a_resident_hangs_up_its_jobs_without_blocking() {
+        let root = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let (mut runtime, resident) = real_ready_shell(home.path(), root.path());
+        let attachment = TerminalGeneration::random();
+        runtime
+            .attach(1, "default", resident, attachment, 1, Dimensions::INITIAL)
+            .unwrap();
+        let line = type_until(
+            &mut runtime,
+            resident,
+            attachment,
+            1,
+            "sleep 600 & echo job=$!\n",
+            "job=",
         );
-        assert_eq!(
-            wait_for_file_lines(&probe, 2).lines().collect::<Vec<_>>(),
-            ["after", state.join("dx-terminal/history").to_str().unwrap(),]
+        let pid = line.trim_start_matches("job=").trim().to_owned();
+        assert!(process_alive(&pid));
+        // A foreground command that ignores EOF keeps the shell busy.
+        runtime
+            .input(&input_frame(resident, attachment, 2, b"sleep 600\n"))
+            .unwrap();
+        runtime.drain_input().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !runtime.foreground_command() {
+            assert!(Instant::now() < deadline);
+            runtime.drain_output().unwrap();
+            thread::sleep(Duration::from_millis(20));
+        }
+        let started = Instant::now();
+        runtime.stop_process();
+        let stop = started.elapsed();
+        assert!(stop < Duration::from_millis(20), "stop took {stop:?}");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while process_alive(&pid) {
+            assert!(Instant::now() < deadline, "background job {pid} survived");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// The shell exiting ends the resident even while a background job it
+    /// left behind still holds the PTY open, so the Terminal never stays
+    /// ready on a dead shell.
+    #[test]
+    fn shell_exit_is_reported_while_an_orphaned_job_holds_the_pty() {
+        let root = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let (mut runtime, resident) = real_ready_shell(home.path(), root.path());
+        let attachment = TerminalGeneration::random();
+        runtime
+            .attach(1, "default", resident, attachment, 1, Dimensions::INITIAL)
+            .unwrap();
+        let line = type_until(
+            &mut runtime,
+            resident,
+            attachment,
+            1,
+            "sleep 600 & echo job=$!\n",
+            "job=",
         );
-        let history = fs::read_to_string(state.join("dx-terminal/history")).unwrap();
-        assert!(history.contains("local-history-proof"));
+        let pid = line.trim_start_matches("job=").trim().to_owned();
+        runtime
+            .input(&input_frame(resident, attachment, 2, b"exit\n"))
+            .unwrap();
+        runtime.drain_input().unwrap();
+        let started = Instant::now();
+        let mut outbound = Vec::new();
+        while runtime.state == ResidentState::Ready {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "the exited shell was still reported ready"
+            );
+            outbound.extend(runtime.drain_output().unwrap());
+            outbound.extend(runtime.reap_exited().unwrap());
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(runtime.state, ResidentState::Exited);
+        assert!(outbound.iter().any(|message| matches!(
+            message,
+            TerminalOutbound::Control(TerminalClientMessage::ResidentState {
+                state: "exited",
+                ..
+            })
+        )));
+        let _ = std::process::Command::new("kill").arg(&pid).status();
+    }
+
+    /// The resident is recorded in the state directory before its shell
+    /// starts; the next daemon process reports that shell as exited.
+    #[test]
+    fn a_new_daemon_reports_the_recorded_resident_as_exited() {
+        let root = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let (mut runtime, resident) = real_ready_shell(home.path(), root.path());
+        runtime.stop_process();
+        let next = TerminalRuntime::new(root.path().to_owned(), profile()).recorded_in(home.path());
+        assert_eq!(next.state, ResidentState::Exited);
+        assert_eq!(next.generation, Some(resident));
+        assert!(next.process.is_none());
+        assert!(matches!(next.heartbeat(), TerminalHeartbeat::Exited { .. }));
+        let fresh =
+            TerminalRuntime::new(root.path().to_owned(), profile()).recorded_in(root.path());
+        assert!(matches!(
+            fresh.heartbeat(),
+            TerminalHeartbeat::Absent { .. }
+        ));
+    }
+
+    #[test]
+    fn real_shell_on_a_daemon_owned_pty_echoes_and_reports_foreground_commands() {
+        let root = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let rcfile = home.path().join("rc");
+        std::fs::write(&rcfile, "PS1='> '\n").unwrap();
+        let mut runtime = TerminalRuntime::new(
+            root.path().to_owned(),
+            ShellProfile {
+                home: home.path().to_owned(),
+                user: "user".into(),
+                rcfile: Some(rcfile),
+            },
+        );
+        runtime.refresh_environment(&BTreeMap::new(), 1, true);
+        let opened = runtime
+            .open(1, "default", "open-if-absent", None, Dimensions::INITIAL)
+            .unwrap();
+        assert!(matches!(
+            opened.as_slice(),
+            [TerminalOutbound::Control(
+                TerminalClientMessage::ResidentState {
+                    state: "starting",
+                    ..
+                }
+            )]
+        ));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while runtime.state == ResidentState::Starting {
+            assert!(Instant::now() < deadline, "shell produced no output");
+            runtime.drain_output().unwrap();
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(runtime.state, ResidentState::Ready);
+        let resident = runtime.generation.unwrap();
+        let attachment = TerminalGeneration::random();
+        runtime
+            .attach(1, "default", resident, attachment, 1, Dimensions::INITIAL)
+            .unwrap();
+        runtime
+            .input(&input_frame(
+                resident,
+                attachment,
+                1,
+                b"echo dx-$((20+22))\n",
+            ))
+            .unwrap();
+        runtime.drain_input().unwrap();
+        let mut seen = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !String::from_utf8_lossy(&seen).contains("dx-42") {
+            assert!(Instant::now() < deadline, "shell did not echo");
+            for message in runtime.drain_output().unwrap() {
+                if let TerminalOutbound::Binary(frame) = message {
+                    seen.extend(decode_terminal_frame(&frame).unwrap().payload);
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!runtime.foreground_command());
+        runtime
+            .input(&input_frame(resident, attachment, 2, b"sleep 5\n"))
+            .unwrap();
+        runtime.drain_input().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !runtime.foreground_command() {
+            assert!(
+                Instant::now() < deadline,
+                "sleep was not observed in the foreground"
+            );
+            runtime.drain_output().unwrap();
+            thread::sleep(Duration::from_millis(20));
+        }
+        let resized = runtime
+            .resize(
+                1,
+                "default",
+                resident,
+                attachment,
+                2,
+                Dimensions {
+                    columns: 100,
+                    rows: 30,
+                },
+            )
+            .unwrap();
+        assert_eq!(control_types(&resized), ["dimensions"]);
+        runtime.stop_process();
+        assert!(runtime.process.is_none());
     }
 }

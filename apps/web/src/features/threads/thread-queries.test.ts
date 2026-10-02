@@ -94,6 +94,65 @@ describe("thread query contracts", () => {
     );
   });
 
+  it("fetches full detail while a title is pending, even before readiness", async () => {
+    const pendingDetail = {
+      id: threadId,
+      title: "Fallback title",
+      titlePending: true,
+      projectId,
+      visibility: "private",
+      lifecycleState: "active",
+      createdAt: "2026-08-25T00:00:00.000Z",
+      updatedAt: "2026-08-25T00:00:00.000Z",
+      lastActivityAt: "2026-08-25T00:00:00.000Z",
+      activityStatus: "idle",
+      agentUrl: `/v1/agents/dx/${threadId}`,
+      executionWorkspace: { ready: false, preparationStatus: null },
+      agentInitialization: {
+        personalInstructions: "",
+        settingsRevision: 0,
+        settingsVersion: 1,
+        selection: defaultThreadModelSelection(),
+        mcpConnections: [],
+        plugins: [],
+        skills: [],
+      },
+    } as unknown as ThreadDetailData;
+    const { titlePending: _pending, ...settled } = pendingDetail;
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+      Response.json({
+        status: "success",
+        data: { ...settled, title: "OAuth refresh retries" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const client = new QueryClient();
+    client.setQueryData(threadKeys.detail(userId, threadId), pendingDetail);
+    const options = threadQueryOptions(userId, threadId);
+
+    const result = await client.fetchQuery({ ...options, staleTime: 0 });
+
+    expect(result.title).toBe("OAuth refresh retries");
+    expect(result.titlePending).toBeUndefined();
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      `/v1/threads/${threadId}`,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    const refetchInterval = options.refetchInterval as (query: {
+      state: { data: ThreadDetailData };
+    }) => number | false;
+    expect(
+      refetchInterval({
+        state: {
+          data: {
+            ...pendingDetail,
+            executionWorkspace: { ready: true, preparationStatus: null },
+          },
+        },
+      }),
+    ).toBeGreaterThan(0);
+  });
+
   it("refreshes the full detail when readiness crosses to ready", async () => {
     const staleDetail = {
       id: threadId,

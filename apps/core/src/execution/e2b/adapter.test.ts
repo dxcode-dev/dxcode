@@ -19,6 +19,7 @@ import { describe, expect, it, vi } from "vitest";
 import { e2b } from "./adapter.js";
 
 const execute = promisify(executeCommand);
+const utf8 = new TextEncoder();
 
 type CommandOptions = {
   cwd?: string;
@@ -110,8 +111,18 @@ describe("Flue E2B 2.0.7 blueprint adapter", () => {
       ],
       directoryListing: ["z-last", "a-first"],
     };
+    const content = snapshot.skillFiles[0];
+    if (content?.kind !== "file") throw new Error("Expected a skill file.");
+    const records = [
+      "L\0z-last\0L\0a-first\0",
+      `I\0AGENTS.md\0${"instructions".length}\0`,
+      `S\0review\0${utf8.encode(content.content).byteLength}\0`,
+      "E\0",
+      "instructions",
+      content.content,
+    ].join("");
     fake.commands.run.mockResolvedValueOnce({
-      stdout: JSON.stringify({ kind: "snapshot", version: 1, snapshot }),
+      stdout: btoa(records),
       stderr: "",
       exitCode: 0,
     });
@@ -128,9 +139,10 @@ describe("Flue E2B 2.0.7 blueprint adapter", () => {
       envs: { FLUE_WORKSPACE_CONTEXT_ROOT: "/home/user/workspace/repo" },
       timeoutMs: 30_000,
     });
-    expect(fake.commands.run.mock.calls[0]?.[0]).not.toContain(
-      "/home/user/workspace/repo",
-    );
+    const command = fake.commands.run.mock.calls[0]?.[0];
+    expect(command).not.toContain("/home/user/workspace/repo");
+    expect(command).toMatch(/^bash -c '/);
+    expect(command).not.toMatch(/python/);
     expect(fake.files.read).not.toHaveBeenCalled();
     expect(fake.files.list).not.toHaveBeenCalled();
     expect((sandbox satisfies FlueSandbox).snapshotWorkspaceContext).toBeTypeOf(
@@ -196,6 +208,46 @@ describe("Flue E2B 2.0.7 blueprint adapter", () => {
       );
       await expect(sandbox.snapshotWorkspaceContext?.(root)).resolves.toEqual({
         kind: "declined",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps unreadable skills as read errors and multibyte content intact", async () => {
+    const root = await realpath(
+      await mkdtemp(join(tmpdir(), "dx-context-read-error-")),
+    );
+    try {
+      await writeFile(join(root, "AGENTS.md"), "ünïcødé ✓\n");
+      await mkdir(join(root, ".agents", "skills", "locked"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(root, ".agents", "skills", "locked", "SKILL.md"),
+        "x",
+        {
+          mode: 0o000,
+        },
+      );
+      await mkdir(join(root, ".agents", "skills", "no-skill-file"));
+      await writeFile(join(root, ".agents", "skills", "loose-file"), "");
+      const fake = makeE2B();
+      fake.commands.run.mockImplementation(runGuestCommand);
+      const sandbox = await e2b(fake.value, root).createSandbox({ id: "test" });
+
+      const snapshot = await sandbox.snapshotWorkspaceContext?.(root);
+      if (process.getuid?.() === 0) return;
+      expect(snapshot).toEqual({
+        instructionFiles: { "AGENTS.md": "ünïcødé ✓\n" },
+        skillFiles: [
+          {
+            kind: "read-error",
+            directoryName: "locked",
+            errorMessage: "workspace SKILL.md could not be read",
+          },
+        ],
+        directoryListing: expect.arrayContaining(["AGENTS.md", ".agents"]),
       });
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -339,6 +391,20 @@ describe("Flue E2B 2.0.7 blueprint adapter", () => {
       name: "a non-regular instruction file",
       arrange: (root: string) => mkdir(join(root, "AGENTS.md")),
     },
+    {
+      name: "a symlinked instruction file",
+      arrange: async (root: string) => {
+        await writeFile(join(root, "target.md"), "elsewhere\n");
+        await symlink(join(root, "target.md"), join(root, "AGENTS.md"));
+      },
+    },
+    {
+      name: "a symlinked .agents directory",
+      arrange: async (root: string) => {
+        await mkdir(join(root, "elsewhere", "skills"), { recursive: true });
+        await symlink(join(root, "elsewhere"), join(root, ".agents"));
+      },
+    },
   ])(
     "declines $name without returning a partial snapshot",
     async ({ arrange }) => {
@@ -379,7 +445,7 @@ describe("Flue E2B 2.0.7 blueprint adapter", () => {
 
     const malformed = makeE2B();
     malformed.commands.run.mockResolvedValueOnce({
-      stdout: "not json",
+      stdout: "not base64!",
       stderr: "private provider detail",
       exitCode: 0,
     });
@@ -388,7 +454,7 @@ describe("Flue E2B 2.0.7 blueprint adapter", () => {
     });
     await expect(
       malformedSandbox.snapshotWorkspaceContext?.(malformedSandbox.cwd),
-    ).rejects.toThrow("returned invalid JSON");
+    ).rejects.toThrow("returned invalid base64");
     expect(malformed.files.read).not.toHaveBeenCalled();
     expect(malformed.files.list).not.toHaveBeenCalled();
   });

@@ -177,6 +177,7 @@ export const deriveTranscriptViewModel = ({
     settlements.map((settlement) => [settlement.submissionId, settlement]),
   );
   const rows: TranscriptRow[] = [];
+  const rowIndexById = new Map<TranscriptRowId, number>();
   const turnOrder: TranscriptTurnId[] = [];
   const turnRows = new Map<TranscriptTurnId, TranscriptRow[]>();
   const turnMessages = new Map<TranscriptTurnId, FlueConversationMessage[]>();
@@ -248,6 +249,7 @@ export const deriveTranscriptViewModel = ({
             : {}),
         };
       }
+      rowIndexById.set(row.id, rows.length);
       rows.push(row);
       targetRows.push(row);
     }
@@ -293,9 +295,9 @@ export const deriveTranscriptViewModel = ({
     if (answer?.kind === "assistant-prose" && finalAnswerRowId) {
       const finalAnswer: TranscriptRow = { ...answer, kind: "final-answer" };
       const turnIndex = turn.findIndex((row) => row.id === finalAnswerRowId);
-      const rowIndex = rows.findIndex((row) => row.id === finalAnswerRowId);
+      const rowIndex = rowIndexById.get(finalAnswerRowId);
       turn[turnIndex] = finalAnswer;
-      rows[rowIndex] = finalAnswer;
+      if (rowIndex !== undefined) rows[rowIndex] = finalAnswer;
     }
     const intermediateRowIds = turn.flatMap((row) =>
       row.id === finalAnswerRowId || row.kind === "user-prompt" ? [] : [row.id],
@@ -384,3 +386,80 @@ export const deriveTranscriptViewModel = ({
 
   return { rows, turns, outline, capabilities };
 };
+
+/** Groups rows by turn once per model instead of searching rows per render. */
+export const transcriptRowsByTurn = (
+  model: TranscriptViewModel,
+): ReadonlyMap<TranscriptTurnId, ReadonlyArray<TranscriptRow>> => {
+  const byId = new Map(model.rows.map((row) => [row.id, row]));
+  return new Map(
+    model.turns.map((turn) => [
+      turn.id,
+      turn.rowIds.flatMap((id) => {
+        const row = byId.get(id);
+        return row === undefined ? [] : [row];
+      }),
+    ]),
+  );
+};
+
+const sameIds = (
+  a: ReadonlyArray<string> | undefined,
+  b: ReadonlyArray<string> | undefined,
+) =>
+  a === b ||
+  (a !== undefined &&
+    b !== undefined &&
+    a.length === b.length &&
+    a.every((id, index) => id === b[index]));
+
+/**
+ * Whether two derivations of a row render identically. Every derivation
+ * creates new row objects, but Flue keeps unchanged parts and strings by
+ * identity, so this comparison is cheap and lets unchanged rows skip render.
+ */
+export const sameTranscriptRow = (a: TranscriptRow, b: TranscriptRow) => {
+  if (a === b) return true;
+  if (a.id !== b.id || a.kind !== b.kind || a.turnId !== b.turnId) return false;
+  if ("text" in a && "text" in b) {
+    if (a.text !== b.text) return false;
+    if ("streaming" in a || "streaming" in b)
+      return (
+        "streaming" in a && "streaming" in b && a.streaming === b.streaming
+      );
+    return true;
+  }
+  if ("part" in a && "part" in b) return a.part === b.part;
+  if ("attachment" in a && "attachment" in b)
+    return a.attachment === b.attachment;
+  return false;
+};
+
+export const sameTranscriptRows = (
+  a: ReadonlyArray<TranscriptRow>,
+  b: ReadonlyArray<TranscriptRow>,
+) =>
+  a === b ||
+  (a.length === b.length &&
+    a.every((row, index) => sameTranscriptRow(row, b[index] as TranscriptRow)));
+
+/** Whether two derivations of a turn render identically (see rows above). */
+export const sameTranscriptTurn = (a: TranscriptTurn, b: TranscriptTurn) =>
+  a === b ||
+  (a.id === b.id &&
+    a.status === b.status &&
+    a.durationMs === b.durationMs &&
+    a.finalAnswerRowId === b.finalAnswerRowId &&
+    a.settlement?.outcome === b.settlement?.outcome &&
+    a.settlement?.provenance === b.settlement?.provenance &&
+    sameIds(a.rowIds, b.rowIds) &&
+    sameIds(a.intermediateRowIds, b.intermediateRowIds) &&
+    a.workDisclosure?.kind === b.workDisclosure?.kind &&
+    sameIds(
+      a.workDisclosure?.collapsedRowIds,
+      b.workDisclosure?.collapsedRowIds,
+    ) &&
+    sameIds(
+      a.workDisclosure?.retainedRowIds,
+      b.workDisclosure?.retainedRowIds,
+    ));

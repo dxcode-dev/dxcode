@@ -35,10 +35,7 @@ const workspace = (password: string | undefined) => {
   const systemDirectory = join(root, "usr-bin");
   mkdirSync(wrapperDirectory);
   mkdirSync(systemDirectory);
-  executable(
-    join(wrapperDirectory, "gh"),
-    githubCliWrapper("owner/repository"),
-  );
+  executable(join(wrapperDirectory, "gh"), githubCliWrapper());
   executable(
     join(systemDirectory, "git"),
     `#!/bin/sh
@@ -67,7 +64,7 @@ printf 'token=%s args=%s\\n' "\${GH_TOKEN-}" "$*"
 };
 
 describe("GitHub CLI wrapper", () => {
-  it("authenticates the real gh with the helper credential for the bound repository", () => {
+  it("authenticates the real gh with the owner credential for any repository", () => {
     const { root, run } = workspace("ghs_synthetic");
     const result = run(["pr", "create", "--fill"]);
     expect(result.status).toBe(0);
@@ -76,7 +73,7 @@ describe("GitHub CLI wrapper", () => {
       spawnSync("cat", [join(root, "credential-request")], {
         encoding: "utf8",
       }).stdout,
-    ).toBe("protocol=https\nhost=github.com\npath=owner/repository.git");
+    ).toBe("protocol=https\nhost=github.com");
     expect(
       spawnSync("cat", [join(root, "git-environment")], { encoding: "utf8" })
         .stdout,
@@ -107,7 +104,7 @@ describe("GitHub CLI wrapper", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("token= args=auth status\n");
     expect(result.stderr).toBe(
-      "dx: GitHub credentials for owner/repository are unavailable; gh is not authenticated.\n",
+      "dx: GitHub credentials are unavailable; gh is not authenticated. Connect GitHub in dx Settings → Integrations.\n",
     );
   });
 
@@ -122,7 +119,7 @@ describe("GitHub CLI wrapper", () => {
   });
 
   it("installs idempotently and never replaces a user's gh", () => {
-    const install = (existing: string | undefined, repository: string) => {
+    const install = (existing: string | undefined) => {
       const root = mkdtempSync(join(tmpdir(), "dx-gh-install-"));
       directories.push(root);
       const target = join(root, "bin", "gh");
@@ -145,7 +142,7 @@ describe("GitHub CLI wrapper", () => {
           encoding: "utf8",
           env: {
             PATH: "/usr/bin:/bin",
-            DX_GH_WRAPPER: githubCliWrapper(repository),
+            DX_GH_WRAPPER: githubCliWrapper(),
           },
         },
       );
@@ -158,27 +155,18 @@ describe("GitHub CLI wrapper", () => {
         executable: spawnSync("test", ["-x", target]).status === 0,
       };
     };
-    const current = githubCliWrapper("owner/repository");
-    expect(install(undefined, "owner/repository")).toEqual({
-      content: current,
-      executable: true,
-    });
+    const current = githubCliWrapper();
+    expect(install(undefined)).toEqual({ content: current, executable: true });
+    // An earlier dx-generated wrapper is refreshed.
     expect(
-      install(githubCliWrapper("owner/previous"), "owner/repository").content,
+      install(`#!/bin/sh\n${GITHUB_CLI_WRAPPER_MARKER}\nrepository='a/b'\n`)
+        .content,
     ).toBe(current);
-    expect(install(current, "owner/repository").content).toBe(current);
+    expect(install(current).content).toBe(current);
     // A current but nonexecutable wrapper is repaired.
-    expect(install(current, "owner/repository").executable).toBe(true);
-    expect(install("#!/bin/sh\necho mine\n", "owner/repository").content).toBe(
+    expect(install(current).executable).toBe(true);
+    expect(install("#!/bin/sh\necho mine\n").content).toBe(
       "#!/bin/sh\necho mine\n",
     );
-  });
-
-  it("marks the generated file and rejects unsafe repository names", () => {
-    expect(githubCliWrapper("owner/repository").split("\n")[1]).toBe(
-      GITHUB_CLI_WRAPPER_MARKER,
-    );
-    for (const repository of ["owner/repo'; id; '", "owner", "a/b/c"])
-      expect(() => githubCliWrapper(repository)).toThrow("invalid");
   });
 });

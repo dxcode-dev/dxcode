@@ -1,11 +1,9 @@
 import type { Sandbox } from "@flue/runtime";
 import { describe, expect, it, vi } from "vitest";
-import { SourceMutationRejected } from "./operations.js";
 
 vi.mock("cloudflare:workers", () => ({ env: {} }));
 
 import {
-  sourceControlTools as createTools,
   executeSourcePush as executePush,
   SourcePushHeadChanged,
   SourcePushRemoteHeadChanged,
@@ -16,76 +14,7 @@ const sha = (value: string) => value.repeat(40);
 const sandbox = (exec: Sandbox["exec"]): Sandbox =>
   ({ cwd: "/home/user/workspace/repo", exec }) as Sandbox;
 
-const sourceControlTools = (
-  dependencies: Parameters<typeof createTools>[1] = {},
-) =>
-  createTools("thread-117", {
-    providerForThread: async () => "github",
-    ...dependencies,
-  });
-
-const invoke = async (
-  data: unknown,
-  dependencies: Parameters<typeof createTools>[1] = {},
-) => {
-  const tool = sourceControlTools(dependencies)[0];
-  if (tool === undefined) throw new Error("Missing pull_request tool.");
-  return (tool.run as (context: unknown) => Promise<unknown>)({
-    data,
-    harness: {
-      sandbox: sandbox(async () => ({ stdout: "", stderr: "", exitCode: 0 })),
-    },
-  });
-};
-
-describe("source-control agent tools", () => {
-  it("exposes only the provider-neutral pull_request operation", () => {
-    expect(sourceControlTools().map(({ name }) => name)).toEqual([
-      "pull_request",
-    ]);
-  });
-
-  it("keeps pull-request provider authority durable and bounded", async () => {
-    const execute = vi.fn(async (_sandbox, command) => ({
-      stdout: command.startsWith("gh pr create")
-        ? "https://github.com/owner/repository/pull/7\n"
-        : "[]",
-      stderr: "",
-      exitCode: 0,
-    }));
-    const performMutationCalls = vi.fn();
-    const performMutation = async <A>(input: SourceToolMutationInput<A>) => {
-      performMutationCalls();
-      return (await input.execute()).value;
-    };
-
-    await expect(
-      invoke(
-        {
-          action: "create",
-          head: "feature",
-          base: "main",
-          title: "Bounded PR",
-          body: "A provider-authorized pull request.",
-          idempotencyKey: "pull-request-operation-117",
-        },
-        { execute, performMutation },
-      ),
-    ).resolves.toMatchObject({
-      output: {
-        status: "applied",
-        reference: "https://github.com/owner/repository/pull/7",
-      },
-    });
-    expect(execute).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.stringContaining("gh pr create"),
-      expect.objectContaining({ operation: "pull-request-write" }),
-      expect.anything(),
-    );
-    expect(performMutationCalls).toHaveBeenCalledOnce();
-  });
-
+describe("executeSourcePush", () => {
   it("rejects a resumed workspace whose local HEAD changed before push", async () => {
     const execute = vi.fn();
     const performMutation = vi.fn();
@@ -291,27 +220,6 @@ describe("source-control agent tools", () => {
         { execute, performMutation, providerForThread: async () => "github" },
       ),
     ).rejects.toThrow("Workflow permission proof failed");
-    expect(performMutation).not.toHaveBeenCalled();
-  });
-
-  it("rejects over-limit Bitbucket pull-request bodies before recording a mutation", async () => {
-    const performMutation = vi.fn();
-    await expect(
-      invoke(
-        {
-          action: "create",
-          head: "feature",
-          base: "main",
-          title: "Change",
-          body: "x".repeat(16_000),
-          idempotencyKey: "bitbucket-body-limit-117",
-        },
-        {
-          providerForThread: async () => "bitbucket",
-          performMutation,
-        },
-      ),
-    ).rejects.toBeInstanceOf(SourceMutationRejected);
     expect(performMutation).not.toHaveBeenCalled();
   });
 });
