@@ -3,6 +3,7 @@ import type {
   PersonalComposerDefaultsData,
   ProjectData,
   SettingsWorkspaceData,
+  UpdatePersonalComposerDefaultsRequest,
 } from "@dx/api";
 import {
   type ModeId,
@@ -46,6 +47,7 @@ import {
   modelRoutingChoicesQueryOptions,
   modelRoutingGraphQueryOptions,
 } from "../settings/model-routing/model-routing-queries.js";
+import { orbProvidersQueryOptions } from "../settings/orb-providers/orb-providers-queries.js";
 import { projectDefaultsQueryOptions } from "../settings/project-defaults/project-defaults-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import {
@@ -345,6 +347,166 @@ const updatePendingImages = async (
   }
 };
 
+/** The first failure's message, in the order the composer reports them. */
+const firstErrorMessage = (errors: ReadonlyArray<unknown>) =>
+  errors.find((cause): cause is Error => cause instanceof Error)?.message;
+
+/**
+ * The composer's Projects: the loaded pages, plus the starting and remembered
+ * Projects when they are not in the first page.
+ */
+function useComposerProjects(
+  userId: UserId,
+  initialProjectId: ProjectId | undefined,
+  rememberedProject: ProjectData | undefined,
+) {
+  const projectsQuery = useInfiniteQuery(projectsQueryOptions(userId));
+  const listedProjects: ReadonlyArray<ProjectData> =
+    projectsQuery.data?.pages.flatMap((page) => page.items) ?? [];
+  const listedSelectedProject = listedProjects.find(
+    ({ id }) => id === initialProjectId,
+  );
+  const selectedProjectQuery = useQuery({
+    ...projectQueryOptions(userId, initialProjectId as ProjectId),
+    enabled:
+      initialProjectId !== undefined && listedSelectedProject === undefined,
+  });
+  const withSelected =
+    listedSelectedProject !== undefined ||
+    selectedProjectQuery.data === undefined
+      ? listedProjects
+      : [selectedProjectQuery.data, ...listedProjects];
+  const projects =
+    rememberedProject === undefined ||
+    withSelected.some(({ id }) => id === rememberedProject.id)
+      ? withSelected
+      : [rememberedProject, ...withSelected];
+  return { projectsQuery, selectedProjectQuery, projects };
+}
+
+/**
+ * Mode and model choices made in this composer. `undefined` means "not
+ * chosen yet", so the remembered value (or default) is derived during render.
+ */
+function useComposerModeSelection(
+  userId: UserId,
+  recovery: { readonly profile: ModeId; readonly model?: string } | undefined,
+  remembered: PersonalComposerDefaultsData,
+  rememberComposer: (input: UpdatePersonalComposerDefaultsRequest) => void,
+) {
+  const [chosenProfile, setChosenProfile] = React.useState<ModeId | undefined>(
+    recovery?.profile,
+  );
+  const [chosenModel, setChosenModel] = React.useState<
+    { readonly value: string | undefined } | undefined
+  >(recovery === undefined ? undefined : { value: recovery.model });
+  // Last mode/model selection sent from this composer. Deduping against it
+  // (not the query cache, which updates asynchronously) keeps rapid changes
+  // from dropping the final choice.
+  const lastSentSelection = React.useRef<string | undefined>(undefined);
+  const rememberSelection = (
+    key: string,
+    input: UpdatePersonalComposerDefaultsRequest,
+  ) => {
+    if (lastSentSelection.current === key) return;
+    lastSentSelection.current = key;
+    rememberComposer(input);
+  };
+  const choicesQuery = useQuery(modelRoutingChoicesQueryOptions(userId));
+  const profile = chosenProfile ?? startingMode(remembered.mode);
+  const model =
+    chosenModel === undefined
+      ? startingModel(
+          remembered.model,
+          choicesQuery.data?.models.map(({ canonical }) => canonical),
+        )
+      : chosenModel.value;
+  const chooseProfile = (nextProfile: ModeId) => {
+    setChosenProfile(nextProfile);
+    // Choosing a mode replaces any pinned model, including one that is
+    // remembered but hidden because it is not currently offered.
+    setChosenModel({ value: undefined });
+    rememberSelection(`mode:${nextProfile}`, {
+      mode: nextProfile,
+      model: null,
+    });
+  };
+  const chooseModel = (nextModel: string | undefined) => {
+    setChosenModel({ value: nextModel });
+    // Clearing the model only happens alongside a mode choice, which
+    // saves both together.
+    if (nextModel === undefined) return;
+    const modelId = Schema.decodeUnknownOption(ModelId)(nextModel);
+    if (Option.isSome(modelId))
+      rememberSelection(`model:${modelId.value}`, {
+        model: modelId.value,
+      });
+  };
+  return { choicesQuery, profile, model, chooseProfile, chooseModel };
+}
+
+/**
+ * The selected Project's Orb options: its defaults (size catalog and
+ * restrictions), the providers its Threads can start on with whose key pays
+ * (bring-your-own keys; polls while a key's template builds), and the size a
+ * new Thread starts with.
+ */
+function useComposerOrb({
+  userId,
+  project,
+  projectId,
+  workspace,
+  remembered,
+  override,
+}: {
+  readonly userId: UserId;
+  readonly project: ProjectData | undefined;
+  readonly projectId: ProjectId | "";
+  readonly workspace: SettingsWorkspaceData | undefined;
+  readonly remembered: PersonalComposerDefaultsData["runnerProfileId"];
+  readonly override: RunnerProfileId | undefined;
+}) {
+  const defaultsTarget =
+    project === undefined
+      ? workspace === undefined
+        ? { scope: "personal" as const }
+        : { scope: "workspace" as const, workspaceSlug: workspace.shortName }
+      : project.workspaceId === undefined
+        ? { scope: "personal" as const }
+        : workspace?.id === project.workspaceId
+          ? { scope: "workspace" as const, workspaceSlug: workspace.shortName }
+          : undefined;
+  const defaultsQuery = useQuery({
+    ...projectDefaultsQueryOptions(
+      userId,
+      defaultsTarget ?? { scope: "personal" },
+    ),
+    enabled: defaultsTarget !== undefined,
+  });
+  const orbProvidersQuery = useQuery(
+    orbProvidersQueryOptions(
+      userId,
+      { scope: "personal" },
+      projectId === "" ? undefined : projectId,
+    ),
+  );
+  const effectiveRunnerProfileId = resolveRunnerProfileId({
+    override,
+    projectSelected: projectId !== "",
+    projectRunnerProfileId: project?.configuration.runnerProfileId,
+    remembered,
+    catalog: defaultsQuery.data?.catalog.profiles,
+    allowed: defaultsQuery.data?.restrictions.allowedRunnerProfileIds,
+    fallback: defaultsQuery.data?.resolved.runnerProfileId.value,
+  });
+  return {
+    defaultsTarget,
+    defaultsQuery,
+    orbProvidersQuery,
+    effectiveRunnerProfileId,
+  };
+}
+
 function ScopedNewThreadModal({
   initialProjectId,
   finalFocus,
@@ -377,27 +539,11 @@ function ScopedNewThreadModal({
   const [recovery] = React.useState(() =>
     routeScoped ? registry?.claimFailedCreation() : undefined,
   );
-  const projectsQuery = useInfiniteQuery(projectsQueryOptions(identity.id));
-  const listedProjects: ReadonlyArray<ProjectData> =
-    projectsQuery.data?.pages.flatMap((page) => page.items) ?? [];
-  const listedSelectedProject = listedProjects.find(
-    ({ id }) => id === initialProjectId,
+  const { projectsQuery, selectedProjectQuery, projects } = useComposerProjects(
+    identity.id,
+    initialProjectId,
+    rememberedProject,
   );
-  const selectedProjectQuery = useQuery({
-    ...projectQueryOptions(identity.id, initialProjectId as ProjectId),
-    enabled:
-      initialProjectId !== undefined && listedSelectedProject === undefined,
-  });
-  const withSelected =
-    listedSelectedProject !== undefined ||
-    selectedProjectQuery.data === undefined
-      ? listedProjects
-      : [selectedProjectQuery.data, ...listedProjects];
-  const projects =
-    rememberedProject === undefined ||
-    withSelected.some(({ id }) => id === rememberedProject.id)
-      ? withSelected
-      : [rememberedProject, ...withSelected];
   const createThreadMutation = useMutation(
     createThreadMutationOptions(queryClient, identity.id),
   );
@@ -418,35 +564,13 @@ function ScopedNewThreadModal({
       listedProjectIds: projects.map(({ id }) => id),
     }),
   );
-  // Mode and model choices made in this composer. `undefined` means "not
-  // chosen yet", so the remembered value (or default) is derived during render.
-  const [chosenProfile, setChosenProfile] = React.useState<ModeId | undefined>(
-    recovery?.profile,
-  );
-  const [chosenModel, setChosenModel] = React.useState<
-    { readonly value: string | undefined } | undefined
-  >(recovery === undefined ? undefined : { value: recovery.model });
-  // Last mode/model selection sent from this composer. Deduping against it
-  // (not the query cache, which updates asynchronously) keeps rapid changes
-  // from dropping the final choice.
-  const lastSentSelection = React.useRef<string | undefined>(undefined);
-  const rememberSelection = (
-    key: string,
-    input: Parameters<typeof rememberComposer>[0],
-  ) => {
-    if (lastSentSelection.current === key) return;
-    lastSentSelection.current = key;
-    rememberComposer(input);
-  };
-  const choicesQuery = useQuery(modelRoutingChoicesQueryOptions(identity.id));
-  const profile = chosenProfile ?? startingMode(remembered.mode);
-  const model =
-    chosenModel === undefined
-      ? startingModel(
-          remembered.model,
-          choicesQuery.data?.models.map(({ canonical }) => canonical),
-        )
-      : chosenModel.value;
+  const { choicesQuery, profile, model, chooseProfile, chooseModel } =
+    useComposerModeSelection(
+      identity.id,
+      recovery,
+      remembered,
+      rememberComposer,
+    );
   const routingGraphQuery = useQuery(
     modelRoutingGraphQueryOptions({ scope: "personal" }, identity.id),
   );
@@ -491,48 +615,28 @@ function ScopedNewThreadModal({
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
   const effectiveProjectId = selectedProjectId;
-  const selectedProject = projects.find(({ id }) => id === effectiveProjectId);
-  const defaultsTarget =
-    selectedProject === undefined
-      ? workspace === undefined
-        ? { scope: "personal" as const }
-        : { scope: "workspace" as const, workspaceSlug: workspace.shortName }
-      : selectedProject.workspaceId === undefined
-        ? { scope: "personal" as const }
-        : workspace?.id === selectedProject.workspaceId
-          ? { scope: "workspace" as const, workspaceSlug: workspace.shortName }
-          : undefined;
-  const defaultsQuery = useQuery({
-    ...projectDefaultsQueryOptions(
-      identity.id,
-      defaultsTarget ?? { scope: "personal" },
-    ),
-    enabled: defaultsTarget !== undefined,
-  });
-  const effectiveRunnerProfileId = resolveRunnerProfileId({
-    override: runnerProfileOverride,
-    projectSelected: effectiveProjectId !== "",
-    projectRunnerProfileId: selectedProject?.configuration.runnerProfileId,
+  const {
+    defaultsTarget,
+    defaultsQuery,
+    orbProvidersQuery,
+    effectiveRunnerProfileId,
+  } = useComposerOrb({
+    userId: identity.id,
+    project: projects.find(({ id }) => id === effectiveProjectId),
+    projectId: effectiveProjectId,
+    workspace,
     remembered: remembered.runnerProfileId,
-    catalog: defaultsQuery.data?.catalog.profiles,
-    allowed: defaultsQuery.data?.restrictions.allowedRunnerProfileIds,
-    fallback: defaultsQuery.data?.resolved.runnerProfileId.value,
+    override: runnerProfileOverride,
   });
   const submitting = sending || createThreadMutation.isPending;
   const visibleError =
     error ??
-    (createThreadMutation.error instanceof Error
-      ? createThreadMutation.error.message
-      : undefined) ??
-    (projectsQuery.error instanceof Error
-      ? projectsQuery.error.message
-      : undefined) ??
-    (selectedProjectQuery.error instanceof Error
-      ? selectedProjectQuery.error.message
-      : undefined) ??
-    (defaultsQuery.error instanceof Error
-      ? defaultsQuery.error.message
-      : undefined);
+    firstErrorMessage([
+      createThreadMutation.error,
+      projectsQuery.error,
+      selectedProjectQuery.error,
+      defaultsQuery.error,
+    ]);
 
   const submit = async (submittedPrompt = prompt) => {
     if (
@@ -648,6 +752,8 @@ function ScopedNewThreadModal({
             });
           }}
           runnerProfiles={defaultsQuery.data?.catalog.profiles}
+          runnerProviders={defaultsQuery.data?.catalog.providers}
+          runnerOrbs={orbProvidersQuery.data?.resolved}
           runnerProfileId={effectiveRunnerProfileId}
           runnerProfileLoading={
             defaultsQuery.isFetching && defaultsQuery.data === undefined
@@ -664,27 +770,8 @@ function ScopedNewThreadModal({
               ? undefined
               : () => void defaultsQuery.refetch()
           }
-          onProfileChange={(nextProfile) => {
-            setChosenProfile(nextProfile);
-            // Choosing a mode replaces any pinned model, including one that is
-            // remembered but hidden because it is not currently offered.
-            setChosenModel({ value: undefined });
-            rememberSelection(`mode:${nextProfile}`, {
-              mode: nextProfile,
-              model: null,
-            });
-          }}
-          onModelChange={(nextModel) => {
-            setChosenModel({ value: nextModel });
-            // Clearing the model only happens alongside a mode choice, which
-            // saves both together.
-            if (nextModel === undefined) return;
-            const modelId = Schema.decodeUnknownOption(ModelId)(nextModel);
-            if (Option.isSome(modelId))
-              rememberSelection(`model:${modelId.value}`, {
-                model: modelId.value,
-              });
-          }}
+          onProfileChange={chooseProfile}
+          onModelChange={chooseModel}
           dictationControls={dictation.controls}
           dictationActive={dictation.active}
           dictationHideSubmit={dictation.hideSubmit}

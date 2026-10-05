@@ -39,13 +39,28 @@ describe("settings context API schemas", () => {
     ).toThrow();
   });
 
-  it("exposes whether Sarvam dictation is configured without exposing its credential", () => {
+  it("exposes the resolved Speech provider for dictation without its credential", () => {
+    const dictation = {
+      providerId: "sarvam",
+      displayName: "Sarvam",
+      scope: "personal",
+    };
     expect(
       Schema.decodeUnknownSync(GetSettingsContextResponseSchema)({
         status: "success",
-        data: { activeScope: "personal", dictationAvailable: true },
+        data: { activeScope: "personal", dictationAvailable: true, dictation },
       }).data,
-    ).toMatchObject({ dictationAvailable: true });
+    ).toMatchObject({ dictationAvailable: true, dictation });
+    expect(() =>
+      Schema.decodeUnknownSync(GetSettingsContextResponseSchema)({
+        status: "success",
+        data: {
+          activeScope: "personal",
+          dictationAvailable: true,
+          dictation: { ...dictation, scope: "everyone" },
+        },
+      }),
+    ).toThrow();
     expect(
       Schema.decodeUnknownSync(GetSettingsContextResponseSchema)({
         status: "success",

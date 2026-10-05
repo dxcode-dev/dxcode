@@ -140,13 +140,38 @@ const commonDeploymentResourceTypes = new Map([
   ["Verify", "Command.Exec"],
   ["Worker", "Cloudflare.Worker"],
 ]);
+/** The Cloudflare Containers Orb Worker; see deploy/orb/containers.mjs. */
+export const orbWorkerName = (stage) => resourceName("orb", stage, 54);
+const ORB_PROVIDER_IDS = new Set(["e2b", "cloudflare"]);
+/** Default Orb size a new deployment's first project uses. */
+const defaultOrbProfileId = (orbProviders = ["e2b"]) =>
+  orbProviders.includes("e2b") ? "a1.medium" : "cf.standard-2";
+const bootstrapRunnerProfileIds = new Set(["a1.medium", "cf.standard-2"]);
+
+export const parseOrbProviders = (value = "e2b") => {
+  const providers = value.split(",").filter(Boolean);
+  if (
+    providers.length === 0 ||
+    providers.some((provider) => !ORB_PROVIDER_IDS.has(provider)) ||
+    new Set(providers).size !== providers.length
+  )
+    throw new Error(
+      "Orb providers must name e2b, cloudflare, or both, once each.",
+    );
+  return [...providers].sort();
+};
+
 const deploymentResourceTypes = (
   target,
   integrations = [],
   turnstileTestKeys = false,
   workersDevSubdomain = undefined,
+  orbProviders = ["e2b"],
 ) =>
   new Map([
+    ...(orbProviders.includes("cloudflare")
+      ? [["OrbContainers", "Dx.OrbContainers"]]
+      : []),
     // The dxd ingress Worker is served on the account's workers.dev subdomain.
     ...(workersDevSubdomain === undefined
       ? []
@@ -162,8 +187,12 @@ const deploymentResourceTypes = (
     ...(target === "selfhost"
       ? [
           ["AdminPassword", "Dx.HeldSecret"],
-          ["E2BApiKey", "Dx.HeldSecret"],
-          ["E2BProfiles", "Dx.E2BProfiles"],
+          ...(orbProviders.includes("e2b")
+            ? [
+                ["E2BApiKey", "Dx.HeldSecret"],
+                ["E2BProfiles", "Dx.E2BProfiles"],
+              ]
+            : []),
           ...(integrations.includes("github")
             ? [["GitHubAppSecret", "Dx.HeldSecret"]]
             : []),
@@ -172,6 +201,9 @@ const deploymentResourceTypes = (
             : []),
           ...(integrations.includes("sarvam")
             ? [["SarvamApiKey", "Dx.HeldSecret"]]
+            : []),
+          ...(integrations.includes("exa")
+            ? [["ExaApiKey", "Dx.HeldSecret"]]
             : []),
         ]
       : []),
@@ -185,7 +217,6 @@ const retiredWorkerBindings = new Map([
   ["DX_MODEL_INVOCATION_HMAC_KEYS", "secret_text"],
   ["DX_MODEL_REPLAY_SEAL_KEYS", "secret_text"],
   ["DX_WEB_PROVIDER", "plain_text"],
-  ["EXA_API_KEY", "secret_text"],
   ["MODEL_EGRESS_COORDINATOR", "durable_object_namespace"],
 ]);
 const cloudflareResourceIds = new Set([
@@ -231,6 +262,38 @@ export const resolveCloudflareDatabaseId = (databases, databaseName) => {
   if (!databaseId || typeof databaseId !== "string")
     throw new Error("Cloudflare returned an incomplete exact D1 identity.");
   return databaseId;
+};
+
+// R2 refuses to delete a bucket that still holds objects, and the plan guard
+// pins the bucket's `forceDestroy: false`. A branch preview's bucket is
+// disposable, so its destroy empties it once the exact destroy plan has been
+// validated and before apply. Staging and self-host buckets are never emptied.
+export const emptyBranchPreviewBucket = async ({
+  operation,
+  target,
+  accountId,
+  bucketName,
+  request,
+}) => {
+  if (operation !== "destroy" || target !== "branch") return 0;
+  const path = `/accounts/${accountId}/r2/buckets/${encodeURIComponent(bucketName)}/objects`;
+  let deleted = 0;
+  let previousFirstKey;
+  for (;;) {
+    const objects = await request("GET", `${path}?per_page=1000`);
+    if (objects === undefined) return deleted;
+    if (!Array.isArray(objects))
+      throw new Error("Cloudflare returned an invalid R2 object listing.");
+    const keys = objects.map((object) => object?.key);
+    if (keys.some((key) => typeof key !== "string" || key === ""))
+      throw new Error("Cloudflare returned an invalid R2 object key.");
+    if (keys.length === 0) return deleted;
+    if (keys[0] === previousFirstKey)
+      throw new Error("R2 objects survived deletion; the bucket is not empty.");
+    previousFirstKey = keys[0];
+    await request("DELETE", path, keys);
+    deleted += keys.length;
+  }
 };
 
 export const reconcileDeploymentMigrationAliases = async ({
@@ -753,6 +816,11 @@ export const loadSelfhostConfig = ({ environment, workspaceRoot }) => {
           integrations: environment.DX_DEPLOYMENT_INTEGRATIONS.split(","),
         }
       : {}),
+    ...(environment.DX_DEPLOYMENT_PLUGINS !== undefined
+      ? {
+          plugins: environment.DX_DEPLOYMENT_PLUGINS.split(",").filter(Boolean),
+        }
+      : {}),
   });
   const accountId = environment.CLOUDFLARE_ACCOUNT_ID?.trim();
   if (!accountId || !/^[a-f0-9]{32}$/.test(accountId))
@@ -1008,12 +1076,16 @@ const validateWorkerProps = (
   const extraEnvironmentNames = environmentNames.filter(
     (name) => !workerBindingNames.includes(name),
   );
+  // Workers from before Cloudflare Containers have no ORB_CONTAINER.
+  const missingBeforeContainers = missingEnvironmentNames.filter(
+    (name) => name !== "ORB_CONTAINER",
+  );
   const destroyWorkerBindingOmissionsMatch =
     allowDestroyWorkerBindingOmissions &&
     !current &&
     (representation === "desired" || representation === "persisted") &&
-    missingEnvironmentNames.length === destroyWorkerBindingOmissions.size &&
-    missingEnvironmentNames.every((name) =>
+    missingBeforeContainers.length === destroyWorkerBindingOmissions.size &&
+    missingBeforeContainers.every((name) =>
       destroyWorkerBindingOmissions.has(name),
     );
   // Admit the complete pre-workload-identity shape only as historical state.
@@ -1201,6 +1273,24 @@ const validateWorkerProps = (
     ],
     ["dxd", current ? !dxdCurrent : !dxdPersisted],
     [
+      "orb-e2b",
+      current &&
+        representation !== "persisted" &&
+        representation !== "prior" &&
+        E2B_WORKER_BINDINGS.some(
+          (name) =>
+            (props.env?.[name] !== undefined) !==
+            (selection.orbProviders ?? ["e2b"]).includes("e2b"),
+        ),
+    ],
+    [
+      "orb-cloudflare",
+      !validOrbContainerBinding(props.env?.ORB_CONTAINER, selection, {
+        current,
+        representation,
+      }),
+    ],
+    [
       "crons",
       JSON.stringify(props.crons) !==
         JSON.stringify(
@@ -1225,6 +1315,53 @@ const validateWorkerProps = (
     throw new Error(
       `Worker ${representation} plan identity is outside the exact allowlist (${issues.join(", ")}).`,
     );
+};
+
+const E2B_WORKER_BINDINGS = [
+  "DX_E2B_TEMPLATE",
+  "DX_E2B_TEMPLATE_BUILD_ID",
+  "DX_E2B_TIMEOUT_MS",
+  "E2B_API_KEY",
+];
+
+// Core's cross-script binding to the Orb Worker's container object
+// namespace: present exactly when Cloudflare Containers is installed.
+const validOrbContainerBinding = (
+  binding,
+  selection,
+  { current, representation },
+) => {
+  const installed = (selection.orbProviders ?? ["e2b"]).includes("cloudflare");
+  if (binding === undefined) return !current || !installed;
+  if (current && !installed) return false;
+  const scriptName = binding?.scriptName;
+  return (
+    binding !== null &&
+    typeof binding === "object" &&
+    binding.className === "OrbContainerObject" &&
+    (scriptName === orbWorkerName(selection.stage) ||
+      (["desired", "evaluated"].includes(representation) &&
+        dependsExactlyOn(scriptName, "OrbContainers", "workerName")))
+  );
+};
+
+const assertExactOrbContainersIdentity = (node, operation, selection) => {
+  const representations =
+    operation === "deploy"
+      ? [
+          node.resource?.Props,
+          node.props,
+          node.state?.props,
+          node.state?.old?.props,
+        ]
+      : [node.resource?.Props, node.state?.props, node.state?.old?.props];
+  for (const props of representations.filter((value) => value !== undefined))
+    if (
+      !exactKeys(props, ["recipeHash", "workerName"]) ||
+      props.workerName !== orbWorkerName(selection.stage) ||
+      !/^[a-f0-9]{64}$/.test(props.recipeHash ?? "")
+    )
+      throw new Error("OrbContainers plan is outside the exact allowlist.");
 };
 
 // workers.dev previews cap script names at 54 characters.
@@ -1669,7 +1806,8 @@ const assertBootstrapCommand = (props, role, selection, context) => {
       props.env.DX_BOOTSTRAP_ADMIN_EMAIL !== selection.adminEmail ||
       (props.env.DX_BOOTSTRAP_ADMIN_PASSWORD_RESET !== "false" &&
         props.env.DX_BOOTSTRAP_ADMIN_PASSWORD_RESET !== "true") ||
-      props.env.DX_BOOTSTRAP_RUNNER_PROFILE_ID !== "a1.medium" ||
+      props.env.DX_BOOTSTRAP_RUNNER_PROFILE_ID !==
+        defaultOrbProfileId(selection.orbProviders) ||
       props.env.DX_BOOTSTRAP_STAGE !== selection.stage ||
       (role === "desired" && !dependsOnlyOn(password, "AdminPassword")) ||
       (!creating &&
@@ -1694,7 +1832,10 @@ const assertBootstrapCommand = (props, role, selection, context) => {
       ];
   const hasAcceptedBootstrapEnvironment =
     exactKeys(props.env, bootstrapEnvKeys) ||
-    (runnerProfileId === "a1.medium" &&
+    (bootstrapRunnerProfileIds.has(runnerProfileId) &&
+      (role === "persisted" ||
+        role === "prior" ||
+        runnerProfileId === defaultOrbProfileId(selection.orbProviders)) &&
       exactKeys(props.env, [
         ...bootstrapEnvKeys,
         "DX_BOOTSTRAP_RUNNER_PROFILE_ID",
@@ -1950,6 +2091,7 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
       selection.integrations,
       selection.turnstileTestKeys,
       selection.workersDevSubdomain,
+      selection.orbProviders,
     ).get(id) !== type
   )
     throw new Error(`Alchemy plan selected an unapproved resource: ${id}.`);
@@ -1998,6 +2140,8 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
   )
     assertExactHeldSecretIdentity(node, operation, id);
   if (id === "E2BProfiles") assertExactE2BProfilesIdentity(node, operation);
+  if (id === "OrbContainers")
+    assertExactOrbContainersIdentity(node, operation, selection);
   if (id === "Database" || id === "Storage")
     assertExactStorageIdentity(node, selection, id);
   if (id === "AccessTurnstile") assertExactTurnstileIdentity(node, selection);
@@ -2015,6 +2159,7 @@ export const validateAlchemyPlan = (plan, operation, selection) => {
       selection.integrations,
       selection.turnstileTestKeys,
       selection.workersDevSubdomain,
+      selection.orbProviders,
     ).keys(),
   ].sort();
   const deletionIds = Object.keys(plan.deletions);
@@ -2127,6 +2272,7 @@ export const isolatedAlchemyEnvironment = (inherited, deployment) => ({
           "E2B_API_KEY",
           "HOME",
           "SARVAM_API_KEY",
+          "EXA_API_KEY",
           "USERPROFILE",
           "XDG_CONFIG_HOME",
         ]).has(name),

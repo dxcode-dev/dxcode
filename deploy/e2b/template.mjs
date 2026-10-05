@@ -1,31 +1,26 @@
 import { readFileSync } from "node:fs";
-import { Template } from "e2b";
+import { fileURLToPath } from "node:url";
+import { Template, waitForFile } from "e2b";
 
-// The static root login hook. It only sources the shell profile dxd writes
-// and versions itself, so no dxd release needs to change it. Core's
-// installer writes the same file for guests built before it was baked in.
-const profileStub = readFileSync(
-  new URL("../../apps/dxd/assets/dx-terminal-stub.sh", import.meta.url),
+// The dx workspace template is the standard Orb image
+// (deploy/orb/Dockerfile), built by E2B from the same Dockerfile, so E2B and
+// Cloudflare Containers run the same filesystem. E2B does not use the image
+// ENTRYPOINT (tini is for containers without an init); its start command
+// runs the same entrypoint script once at build time, and the template
+// snapshot keeps it running in every sandbox. The build waits until the
+// entrypoint has written its PID file.
+const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
+const dockerfile = readFileSync(
+  new URL("../orb/Dockerfile", import.meta.url),
+  "utf8",
 );
-export const installProfileStub = `printf '%s' '${profileStub.toString("base64")}' | base64 -d >/etc/profile.d/dx-terminal.sh && chmod 0644 /etc/profile.d/dx-terminal.sh`;
 
-// The dx workspace image. E2B sandboxes boot systemd as init, so the
-// daemon installer's `sudo systemctl` calls work against a live manager.
-// Every binary asserted below is invoked by
-// apps/core/src/execution/e2b/daemon-installer.ts or by dxd itself.
-export const dxWorkspaceTemplate = Template()
-  .fromBaseImage()
-  .aptInstall(["systemd", "sudo", "ripgrep", "jq", "ca-certificates"])
-  .runCmd(
-    [
-      "set -euxo pipefail",
-      "for bin in systemctl sudo curl sha256sum install cmp git bash; do",
-      '  command -v "$bin" >/dev/null || { echo "missing required binary: $bin"; exit 1; }',
-      "done",
-      "git --version",
-    ].join("\n"),
-  )
-  .runCmd(installProfileStub, { user: "root" });
+export const dxWorkspaceTemplate = Template({ fileContextPath: repositoryRoot })
+  .fromDockerfile(dockerfile)
+  .setStartCmd(
+    "/usr/local/bin/dx-orb-init",
+    waitForFile("/home/user/.local/state/dxd/supervisor.pid"),
+  );
 
 // Runner-size aliases retain the exact prepared dx template. Resource limits
 // are selected only when each alias is built by the deployment wrapper.

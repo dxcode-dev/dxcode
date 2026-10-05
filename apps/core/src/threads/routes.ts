@@ -9,6 +9,7 @@ import {
   CreateThreadInitialAdmissionUnavailableResponseSchema,
   CreateThreadInvalidRequestResponseSchema,
   CreateThreadModelRouteUnavailableResponseSchema,
+  CreateThreadOrbUnavailableResponseSchema,
   CreateThreadPersistenceUnavailableResponseSchema,
   CreateThreadPolicyDeniedResponseSchema,
   CreateThreadProjectlessForbiddenResponseSchema,
@@ -60,6 +61,7 @@ import { dispatch } from "@flue/runtime";
 import { Effect, Layer, Match, Option, Result, Schema } from "effect";
 import { Hono } from "hono";
 import { DxAgent } from "../agents/dx-agent.js";
+import { currentOrbTemplateRecipe } from "../execution/e2b/team-templates.js";
 import { ExecutionWorkspaces } from "../execution/execution-workspaces.js";
 import {
   loadRunnerProfileCatalog,
@@ -81,6 +83,10 @@ import {
 } from "../observability/startup-runtime.js";
 import { submissionStartupObservations } from "../observability/submission-startup.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
+import {
+  OrbUnavailable,
+  resolveThreadExecutionPin,
+} from "../plugins/execution/orb-providers.js";
 import { ProjectRepositoryD1 } from "../projects/repository-d1.js";
 import { scheduleRealtimeInvalidation } from "../realtime/publication.js";
 import { PersonalAgentInstructionsRepositoryD1 } from "../settings/agent-instructions/repository-d1.js";
@@ -491,6 +497,33 @@ export const createThreadRoutes = (
                       privateSubmoduleRepositoryIds: [],
                     },
                   };
+          // The Thread pins its Orb (provider, size, and whose key pays)
+          // in the same write; the provider set resolves only here.
+          const executionPin = yield* Effect.tryPromise({
+            try: async () =>
+              resolveThreadExecutionPin({
+                db,
+                bindings: context.env,
+                userId: principal.userId,
+                projectId:
+                  project.kind === "project" ? project.projectId : null,
+                runnerProfileId,
+                ...(project.kind === "projectless"
+                  ? {
+                      projectlessRunnerProfileId:
+                        project.snapshot.configuration.runnerProfileId,
+                    }
+                  : {}),
+                recipe: await currentOrbTemplateRecipe(),
+              }),
+            catch: (cause) =>
+              cause instanceof OrbUnavailable
+                ? cause
+                : PersistenceUnavailable.new(
+                    { operation: "thread.resolveOrb" },
+                    cause,
+                  ),
+          });
           const service = yield* ThreadService;
           return yield* service
             .create(
@@ -502,6 +535,7 @@ export const createThreadRoutes = (
               requestedThreadId,
               runnerProfileId,
               titlePending,
+              executionPin,
             )
             .pipe(
               Effect.catchTag("PersistenceUnavailable", (failure) =>
@@ -731,6 +765,19 @@ export const createThreadRoutes = (
               },
             }),
             403,
+          ),
+        OrbUnavailable: (failure: OrbUnavailable) =>
+          context.json(
+            Schema.encodeUnknownSync(CreateThreadOrbUnavailableResponseSchema)({
+              status: "error",
+              data: {
+                code: "ORB_UNAVAILABLE",
+                message: "The selected Orb is not available.",
+                requestId,
+                reason: failure.reason,
+              },
+            }),
+            409,
           ),
         RunnerProfileUnavailable: () =>
           context.json(
@@ -1044,7 +1091,7 @@ export const createThreadRoutes = (
       );
       if (body.archived) {
         yield* Effect.tryPromise({
-          try: () => ExecutionWorkspaces.pause(thread.id),
+          try: () => ExecutionWorkspaces.archive(thread.id),
           catch: () => new ThreadArchiveExecutionUnavailable(),
         });
       }

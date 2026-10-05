@@ -25,5 +25,8 @@ actions when their sibling branches converge:
 - Future Thread visibility mutation: `thread.set-visibility`.
 
 Current adapters already wired on this branch are Thread creation, native agent
-admission, runner execution admission, project creation/default selection, and
-personal/project secret mutation and execution resolution.
+admission, runner execution admission, project creation/default selection,
+personal/project secret mutation and execution resolution, and first-party
+plugin resolution, personal configuration mutation, and call-time admission
+(`plugin.use-personal-override`, in `apps/core/src/plugins/resolution.ts` and
+`apps/core/src/plugins/routes.ts`).

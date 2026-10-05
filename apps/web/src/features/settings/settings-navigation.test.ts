@@ -15,7 +15,9 @@ describe("settings navigation", () => {
       "Secrets & Env Vars",
       "Model Routing",
       "Mode Dial",
-      "Integrations",
+      "MCP & Integrations",
+      "Plugins",
+      "Orb Providers",
       "Advanced",
       "Appearance",
       "Keyboard Shortcuts",
@@ -26,7 +28,13 @@ describe("settings navigation", () => {
         "workspace",
         settingsManifest.workspace,
       ).map(({ label }) => label),
-    ).toEqual(["Workspace", "Secrets & Env Vars"]);
+    ).toEqual([
+      "Workspace",
+      "Secrets & Env Vars",
+      "MCP & Integrations",
+      "Plugins",
+      "Orb Providers",
+    ]);
   });
 
   it("keeps Usage but does not register Billing or Budgets", () => {

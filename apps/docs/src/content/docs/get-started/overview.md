@@ -6,17 +6,21 @@ sidebar:
 ---
 
 dx runs its web application and durable state in your Cloudflare account. Agent
-workspaces run in your E2B account. You need both accounts before deployment.
+workspaces (Orbs) run on E2B, on Cloudflare Containers in the same Cloudflare
+account, or both.
 
 ## Prerequisites
 
 - A Cloudflare account that can create Workers, D1 databases, R2 buckets, and
   Durable Objects. Workers AI is optional.
-- An E2B account and API key. E2B is mandatory for v0.1.0 agent workspaces.
+- At least one Orb provider:
+  - E2B: an E2B account and API key.
+  - Cloudflare Containers: the Workers Paid plan, and a running Docker daemon
+    with buildx on the deploying machine to build the Orb image.
 - Git, Node.js 22.19 or newer, and pnpm 9.15.
 - Rust, zig (`pip install ziglang`), and `cargo install --locked
   cargo-zigbuild` only when you build `dxd` locally instead of using the
-  release asset. No Docker is needed.
+  release asset.
 
 Install the repository dependencies from a clean checkout:
 
@@ -26,7 +30,8 @@ pnpm install --frozen-lockfile
 
 ## Know what can cost money
 
-Cloudflare and E2B bill your accounts under their current plans. Model providers
+Cloudflare and E2B bill your accounts under their current plans. Cloudflare
+Containers run and are billed in your Cloudflare account. Model providers
 may charge separately. A deployment can incur charges while no browser is open
 because stored data and running or paused workspaces follow provider billing
 rules.

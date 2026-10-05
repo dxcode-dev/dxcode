@@ -1,4 +1,8 @@
-import { E2B_ORB_PROFILES, RunnerProfileId } from "@dx/domain";
+import {
+  CLOUDFLARE_ORB_PROFILES,
+  E2B_ORB_PROFILES,
+  RunnerProfileId,
+} from "@dx/domain";
 import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
@@ -81,13 +85,93 @@ describe("runner profile catalog", () => {
       ],
       adapterStates: [
         { kind: "e2b", state: "available" },
+        { kind: "cloudflare", state: "unavailable" },
         { kind: "local", state: "unavailable" },
         { kind: "container", state: "unavailable" },
         { kind: "kubernetes", state: "unavailable" },
         { kind: "remote", state: "unavailable" },
       ],
+      providers: [
+        {
+          adapter: "e2b",
+          displayName: "E2B",
+          shortName: "E2B",
+          pauseResume: "processes",
+        },
+      ],
     });
     expect(JSON.stringify(loaded.publicCatalog)).not.toContain("dx-standard");
+  });
+
+  it("publishes Cloudflare Containers sizes as instance types without the instance", async () => {
+    const loaded = await Effect.runPromise(
+      decodeRunnerProfileCatalog(
+        catalog({
+          profiles: [
+            profile,
+            ...CLOUDFLARE_ORB_PROFILES.map((size) => ({
+              ...size,
+              adapter: "cloudflare",
+              isolation: "container",
+              availability: "available",
+              capabilities: profile.capabilities,
+            })),
+          ],
+        }),
+      ),
+    );
+    expect(
+      loaded.publicCatalog.profiles
+        .filter(({ adapter }) => adapter === "cloudflare")
+        .map(({ id, label, resources }) => ({ id, label, resources })),
+    ).toEqual(
+      CLOUDFLARE_ORB_PROFILES.map(({ id, label, resources }) => ({
+        id,
+        label,
+        resources,
+      })),
+    );
+    expect(JSON.stringify(loaded.publicCatalog)).not.toContain('"instance"');
+    expect(loaded.publicCatalog.adapterStates).toContainEqual({
+      kind: "cloudflare",
+      state: "available",
+    });
+    // Containers keeps only the filesystem across a pause.
+    // The picker shows the short name; settings pages keep the long one.
+    expect(loaded.publicCatalog.providers).toEqual([
+      {
+        adapter: "e2b",
+        displayName: "E2B",
+        shortName: "E2B",
+        pauseResume: "processes",
+      },
+      {
+        adapter: "cloudflare",
+        displayName: "Cloudflare Containers",
+        shortName: "Cloudflare",
+        pauseResume: "filesystem",
+      },
+    ]);
+    // A Cloudflare size is a container, never a sandbox, and keeps every
+    // workspace trait an E2B size has.
+    await expect(
+      Effect.runPromise(
+        decodeRunnerProfileCatalog(
+          catalog({
+            profiles: [
+              profile,
+              {
+                ...CLOUDFLARE_ORB_PROFILES[0],
+                adapter: "cloudflare",
+                isolation: "sandbox",
+                availability: "available",
+                capabilities: profile.capabilities,
+              },
+            ],
+          }),
+        ),
+      ),
+    ).rejects.toMatchObject({ _tag: "RunnerProfileConfigurationUnavailable" });
   });
 
   it.each([

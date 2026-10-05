@@ -65,6 +65,11 @@ import { SettingsService } from "../service.js";
 import { WorkspaceRepositoryD1 } from "../workspace/repository-d1.js";
 import { WorkspacePolicyRepositoryD1 } from "../workspace-policy/repository-d1.js";
 import { WorkspacePolicyService } from "../workspace-policy/service.js";
+import {
+  putMcpServerCredential,
+  readMcpServerCredential,
+  removeMcpServerCredential,
+} from "./credential.js";
 import { McpServerRepositoryD1 } from "./repository-d1.js";
 import {
   enforcePersonalMcpOverride,
@@ -179,6 +184,7 @@ const data = ({ server, tools }: McpServerWithTools): McpServerData => ({
   endpoint: server.endpoint,
   transport: server.transport,
   authReference: server.authReference,
+  hasStoredToken: server.hasStoredCredential === true,
   timeoutMs: server.timeoutMs,
   enabled: server.enabled,
   projectIds: server.projectIds,
@@ -277,6 +283,12 @@ const validateGrants = Effect.fn("validateMcpGrants")(function* (
   return { projectIds: projects, roles: roleGrants };
 });
 
+const credentialEffect = <A>(operation: string, run: () => Promise<A>) =>
+  Effect.tryPromise({
+    try: run,
+    catch: (cause) => PersistenceUnavailable.new({ operation }, cause),
+  });
+
 const credentialFor = Effect.fn("mcpCredentialForDiscovery")(function* (
   context: Context<AppEnv>,
   db: D1Database,
@@ -287,6 +299,12 @@ const credentialFor = Effect.fn("mcpCredentialForDiscovery")(function* (
     const repository = yield* McpServerRepository;
     return yield* repository.find(target, serverId);
   }).pipe(Effect.provide(layers(db)));
+  if (found.server.hasStoredCredential === true) {
+    const keyring = yield* loadConfigEncryptionKeyring(context.env);
+    return yield* credentialEffect("settings.mcpServers.readCredential", () =>
+      readMcpServerCredential(db, keyring, found.server),
+    );
+  }
   const reference = found.server.authReference;
   if (reference === undefined) return undefined;
   const variable = yield* Effect.gen(function* () {
@@ -501,12 +519,24 @@ const registerRoutes = (
       const name = yield* validateName(body.name);
       const endpoint = yield* validateEndpoint(body.endpoint);
       const timeoutMs = yield* validateTimeout(body.timeoutMs);
+      if (body.authToken !== undefined && body.authReference !== undefined) {
+        return yield* invalid(
+          fieldError(
+            "authToken",
+            "Use a token or a secret reference, not both.",
+          ),
+        );
+      }
       const grants = yield* validateGrants(
         body.projectIds,
         body.roles,
         context.get("principal"),
       ).pipe(Effect.provide(layers(db)));
-      const server = yield* withService(
+      const keyring =
+        body.authToken === undefined
+          ? undefined
+          : yield* loadConfigEncryptionKeyring(context.env);
+      const created = yield* withService(
         db,
         Effect.gen(function* () {
           const service = yield* McpServerService;
@@ -523,6 +553,34 @@ const registerRoutes = (
           );
         }),
       );
+      const authToken = body.authToken;
+      if (authToken !== undefined && keyring !== undefined) {
+        // A server whose token could not be stored is removed again rather
+        // than left calling its endpoint unauthenticated.
+        yield* credentialEffect("settings.mcpServers.putCredential", () =>
+          putMcpServerCredential(
+            db,
+            keyring,
+            created,
+            authToken,
+            new Date().toISOString(),
+          ),
+        ).pipe(
+          Effect.tapError(() =>
+            withService(
+              db,
+              Effect.gen(function* () {
+                const repository = yield* McpServerRepository;
+                yield* repository.remove(authorized.target, created.id);
+              }),
+            ).pipe(Effect.ignore),
+          ),
+        );
+      }
+      const server = {
+        ...created,
+        ...(authToken === undefined ? {} : { hasStoredCredential: true }),
+      };
       return yield* Schema.encodeUnknownEffect(CreateMcpServerResponseSchema)({
         status: "success",
         data: data({ server, tools: [] }),
@@ -594,8 +652,20 @@ const registerRoutes = (
         body.timeoutMs === undefined
           ? undefined
           : yield* validateTimeout(body.timeoutMs);
+      if (body.authToken !== undefined && body.authReference !== undefined) {
+        return yield* invalid(
+          fieldError(
+            "authToken",
+            "Use a token or a secret reference, not both.",
+          ),
+        );
+      }
+      const authChanging =
+        body.authToken !== undefined || body.authReference !== undefined;
       const current =
-        body.projectIds === undefined && body.roles === undefined
+        body.projectIds === undefined &&
+        body.roles === undefined &&
+        !authChanging
           ? undefined
           : yield* withService(
               db,
@@ -612,6 +682,27 @@ const registerRoutes = (
               body.roles ?? current?.server.roles,
               context.get("principal"),
             ).pipe(Effect.provide(layers(db)));
+      const hadToken = current?.server.hasStoredCredential === true;
+      const authToken = body.authToken;
+      if (authToken !== undefined) {
+        // Store the new token before dropping any secret reference, so the
+        // server never switches to an unauthenticated state in between.
+        const keyring = yield* loadConfigEncryptionKeyring(context.env);
+        yield* credentialEffect("settings.mcpServers.putCredential", () =>
+          putMcpServerCredential(
+            db,
+            keyring,
+            { id, target: authorized.target },
+            authToken,
+            new Date().toISOString(),
+          ),
+        );
+      } else if (body.authReference !== undefined && hadToken) {
+        // `null` clears all auth; a secret reference replaces the token.
+        yield* credentialEffect("settings.mcpServers.removeCredential", () =>
+          removeMcpServerCredential(db, { id, target: authorized.target }),
+        );
+      }
       const server = yield* withService(
         db,
         Effect.gen(function* () {
@@ -625,11 +716,21 @@ const registerRoutes = (
               ...(timeoutMs === undefined ? {} : { timeoutMs }),
               ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
               ...(grants ?? {}),
-              ...(body.authReference === undefined
-                ? {}
-                : body.authReference === null
-                  ? { clearAuthReference: true }
-                  : { authReference: body.authReference }),
+              ...(authToken !== undefined
+                ? {
+                    ...(current?.server.authReference === undefined
+                      ? {}
+                      : { clearAuthReference: true }),
+                    authModeChanged: !hadToken,
+                  }
+                : body.authReference === undefined
+                  ? {}
+                  : body.authReference === null
+                    ? { clearAuthReference: true, authModeChanged: hadToken }
+                    : {
+                        authReference: body.authReference,
+                        authModeChanged: hadToken,
+                      }),
             },
             audit(context),
           );

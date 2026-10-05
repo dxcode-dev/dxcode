@@ -198,20 +198,37 @@ describe("routing presentation preserves dx authority", () => {
       },
     ]);
   });
-  it("only adds Sarvam and dx when transcription is available", () => {
-    for (const dictationAvailable of [false, true]) {
+  it("adds the resolved Speech provider only when dictation is available", () => {
+    const absent = routingPresentation({ graph: graphFixture });
+    expect(
+      absent.groups
+        .flatMap((g) => g.rows)
+        .some((r) => r.id === "speech:transcription"),
+    ).toBe(false);
+    expect(absent.destinations.some((d) => d.detail === "Transcription")).toBe(
+      false,
+    );
+    for (const [scope, destination] of [
+      ["deployment", { id: "dx-transcription", name: "dx" }],
+      ["workspace", { id: "workspace-transcription", name: "Workspace key" }],
+      ["personal", { id: "personal-transcription", name: "Your key" }],
+    ] as const) {
       const result = routingPresentation({
         graph: graphFixture,
-        dictationAvailable,
+        dictation: { providerId: "sarvam", displayName: "Sarvam", scope },
       });
       expect(
         result.groups
           .flatMap((g) => g.rows)
-          .some((r) => r.id === "sarvam:transcription"),
-      ).toBe(dictationAvailable);
-      expect(result.destinations.some((d) => d.id === "dx-transcription")).toBe(
-        dictationAvailable,
-      );
+          .find((r) => r.id === "speech:transcription"),
+      ).toMatchObject({
+        name: "Sarvam",
+        label: "Transcription",
+        destination: destination.id,
+      });
+      expect(
+        result.destinations.find((d) => d.id === destination.id),
+      ).toMatchObject({ name: destination.name, detail: "Transcription" });
     }
   });
   it("highlights main-agent slots, individual routes, and incoming provider routes", () => {

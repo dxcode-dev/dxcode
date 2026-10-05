@@ -18,9 +18,16 @@ import {
   E2BProfiles,
   e2bRecipeHash,
   HeldSecret,
+  OrbContainers,
+  orbRecipeHash,
   selfhostProviders,
 } from "./deploy/selfhost/alchemy-resources.ts";
-import { E2B_ORB_PROFILES } from "./packages/domain/src/settings/runner-profile.ts";
+import CLOUDFLARE_ORB_PROFILES from "./packages/domain/cloudflare-orb-profiles.json" with {
+  type: "json",
+};
+import E2B_ORB_PROFILES from "./packages/domain/e2b-orb-profiles.json" with {
+  type: "json",
+};
 import { decodeGitHubAppDeploymentConfiguration } from "./packages/domain/src/source-control/github-app-configuration.ts";
 
 type RecordValue<T> = T extends Record<string, infer Value> ? Value : never;
@@ -81,6 +88,28 @@ const defaultE2BOrbProfile = E2B_ORB_PROFILES.find(
 );
 if (defaultE2BOrbProfile === undefined)
   throw new Error("The default E2B Orb profile is missing from the catalog.");
+const defaultCloudflareOrbProfile = CLOUDFLARE_ORB_PROFILES.find(
+  ({ id }) => id === "cf.standard-2",
+);
+if (defaultCloudflareOrbProfile === undefined)
+  throw new Error(
+    "The default Cloudflare Orb profile is missing from the catalog.",
+  );
+/** What every deployed Orb size offers; see RunnerProfileCatalogConfiguration. */
+const deployedOrbCapabilities = [
+  "git",
+  "environment-variables",
+  "internet-access",
+  "persistent-workspace",
+  "pause-resume",
+] as const;
+const cloudflareOrbProfiles = CLOUDFLARE_ORB_PROFILES.map((profile) => ({
+  ...profile,
+  adapter: "cloudflare",
+  isolation: "container",
+  availability: "available",
+  capabilities: deployedOrbCapabilities,
+}));
 
 const productionWorkerBindings = <
   Groups extends Record<string, Record<string, unknown>>,
@@ -264,6 +293,16 @@ export default Alchemy.Stack(
       e2bApiKey: Config.option(Config.redacted("E2B_API_KEY")),
       githubApp: Config.option(Config.redacted("DX_INTEGRATION_GITHUB_APP")),
       sarvamApiKey: Config.option(Config.redacted("SARVAM_API_KEY")),
+      exaApiKey: Config.option(Config.redacted("EXA_API_KEY")),
+      plugins: Config.withDefault(Config.string("DX_DEPLOYMENT_PLUGINS"), ""),
+      // Orb providers the deployment installs: e2b, cloudflare, or both.
+      orbProviders: Config.withDefault(
+        Config.string("DX_DEPLOYMENT_ORB_PROVIDERS"),
+        "e2b",
+      ),
+      orbWorkerName: Config.option(
+        Config.nonEmptyString("DX_DEPLOYMENT_ORB_WORKER_NAME"),
+      ),
       workloadIdentitySigningKeys: Config.option(
         Config.redacted("DX_WORKLOAD_IDENTITY_SIGNING_KEYS"),
       ),
@@ -323,13 +362,29 @@ export default Alchemy.Stack(
     const integrations = new Set(
       configuration.integrations.split(",").filter(Boolean),
     );
-    const e2bApiKey = selfhost
-      ? (yield* HeldSecret("E2BApiKey", {
-          value: Option.getOrUndefined(configuration.e2bApiKey),
-        })).value
-      : Option.isSome(configuration.e2bApiKey)
-        ? configuration.e2bApiKey.value
-        : yield* Effect.die("E2B_API_KEY is required.");
+    const orbProviders = new Set(
+      configuration.orbProviders.split(",").filter(Boolean),
+    );
+    if (
+      orbProviders.size === 0 ||
+      [...orbProviders].some(
+        (provider) => provider !== "e2b" && provider !== "cloudflare",
+      )
+    )
+      return yield* Effect.die(
+        "DX_DEPLOYMENT_ORB_PROVIDERS must name e2b, cloudflare, or both.",
+      );
+    const e2bInstalled = orbProviders.has("e2b");
+    const cloudflareInstalled = orbProviders.has("cloudflare");
+    const e2bApiKey = !e2bInstalled
+      ? undefined
+      : selfhost
+        ? (yield* HeldSecret("E2BApiKey", {
+            value: Option.getOrUndefined(configuration.e2bApiKey),
+          })).value
+        : Option.isSome(configuration.e2bApiKey)
+          ? configuration.e2bApiKey.value
+          : yield* Effect.die("E2B_API_KEY is required.");
     const githubApp = selfhost
       ? integrations.has("github")
         ? (yield* HeldSecret("GitHubAppSecret", {
@@ -351,22 +406,59 @@ export default Alchemy.Stack(
             value: Option.getOrUndefined(configuration.bitbucketOAuth),
           })).value
         : Option.getOrUndefined(configuration.bitbucketOAuth);
+    // The Speech plugin's deployment-scope Sarvam key. The self-host
+    // integration keeps its `sarvam` name and HeldSecret ID.
     const sarvamApiKey =
       selfhost && integrations.has("sarvam")
         ? (yield* HeldSecret("SarvamApiKey", {
             value: Option.getOrUndefined(configuration.sarvamApiKey),
           })).value
         : Option.getOrUndefined(configuration.sarvamApiKey);
-    const selfhostProfiles = selfhost
-      ? yield* E2BProfiles("E2BProfiles", {
-          apiKey: e2bApiKey,
-          deploymentName: Option.getOrElse(
-            configuration.deploymentName,
-            () => "",
-          ),
-          recipeHash: yield* Effect.promise(() => e2bRecipeHash()),
-        } as never)
-      : undefined;
+    // Plugin installation is deployment scope. Hosted targets install every
+    // first-party plugin; self-host installs what `pnpm dx:deploy` recorded.
+    const installedPlugins = selfhost ? configuration.plugins : "search,speech";
+    const exaApiKey = selfhost
+      ? integrations.has("exa")
+        ? (yield* HeldSecret("ExaApiKey", {
+            value: Option.getOrUndefined(configuration.exaApiKey),
+          })).value
+        : undefined
+      : Option.getOrUndefined(configuration.exaApiKey);
+    const selfhostProfiles =
+      selfhost && e2bApiKey !== undefined
+        ? yield* E2BProfiles("E2BProfiles", {
+            apiKey: e2bApiKey,
+            deploymentName: Option.getOrElse(
+              configuration.deploymentName,
+              () => "",
+            ),
+            recipeHash: yield* Effect.promise(() => e2bRecipeHash()),
+          } as never)
+        : undefined;
+    // Cloudflare Containers runs in this account: the Orb Worker owns one
+    // container per Thread, and Core binds its namespace across scripts.
+    const orbContainers = !cloudflareInstalled
+      ? undefined
+      : Option.isSome(configuration.orbWorkerName)
+        ? yield* OrbContainers("OrbContainers", {
+            workerName: configuration.orbWorkerName.value,
+            recipeHash: orbRecipeHash(import.meta.dirname),
+          })
+        : yield* Effect.die(
+            "DX_DEPLOYMENT_ORB_WORKER_NAME is required for Cloudflare Containers.",
+          );
+    const defaultOrbProfileId = e2bInstalled
+      ? defaultE2BOrbProfile.id
+      : defaultCloudflareOrbProfile.id;
+    const runnerProfileCatalog = (e2bProfiles: ReadonlyArray<unknown>) =>
+      JSON.stringify({
+        version: 1,
+        defaultProfileId: defaultOrbProfileId,
+        profiles: [
+          ...e2bProfiles,
+          ...(cloudflareInstalled ? cloudflareOrbProfiles : []),
+        ],
+      });
 
     if (
       configuration.turnstileTestKeys &&
@@ -495,12 +587,17 @@ export default Alchemy.Stack(
           : {}),
         DX_AUTH_URL: configuration.origin,
         DX_AUTH_TRUSTED_ORIGINS: configuration.origin,
-        DX_E2B_TEMPLATE:
-          selfhostProfiles?.defaultTemplate ??
-          `${configuration.e2bTemplate}-${defaultE2BOrbProfile.templateSuffix}`,
-        DX_E2B_TEMPLATE_BUILD_ID:
-          selfhostProfiles?.defaultBuildId ?? configuration.e2bTemplateBuildId,
-        DX_E2B_TIMEOUT_MS: "300000",
+        ...(e2bInstalled
+          ? {
+              DX_E2B_TEMPLATE:
+                selfhostProfiles?.defaultTemplate ??
+                `${configuration.e2bTemplate}-${defaultE2BOrbProfile.templateSuffix}`,
+              DX_E2B_TEMPLATE_BUILD_ID:
+                selfhostProfiles?.defaultBuildId ??
+                configuration.e2bTemplateBuildId,
+              DX_E2B_TIMEOUT_MS: "300000",
+            }
+          : {}),
         ...(Option.isSome(configuration.workspaceInactivityMs)
           ? {
               DX_WORKSPACE_INACTIVITY_MS: String(
@@ -518,50 +615,39 @@ export default Alchemy.Stack(
         DX_MIGRATION_MANIFEST_VERSION: String(migrationManifest.version),
         DX_RUNNER_PROFILE_CATALOG:
           selfhostProfiles === undefined
-            ? JSON.stringify({
-                version: 1,
-                defaultProfileId: defaultE2BOrbProfile.id,
-                profiles: E2B_ORB_PROFILES.map((profile) => ({
-                  ...profile,
-                  adapter: "e2b",
-                  template: `${configuration.e2bTemplate}-${profile.templateSuffix}`,
-                  isolation: "sandbox",
-                  availability: "available",
-                  capabilities: [
-                    "git",
-                    "environment-variables",
-                    "internet-access",
-                    "persistent-workspace",
-                    "pause-resume",
-                  ],
-                })),
-              })
+            ? runnerProfileCatalog(
+                e2bInstalled
+                  ? E2B_ORB_PROFILES.map((profile) => ({
+                      ...profile,
+                      adapter: "e2b",
+                      template: `${configuration.e2bTemplate}-${profile.templateSuffix}`,
+                      isolation: "sandbox",
+                      availability: "available",
+                      capabilities: deployedOrbCapabilities,
+                    }))
+                  : [],
+              )
             : Output.map(selfhostProfiles.profilesJson, (profilesJson) =>
-                JSON.stringify({
-                  version: 1,
-                  defaultProfileId: defaultE2BOrbProfile.id,
-                  profiles: JSON.parse(profilesJson).map(
+                runnerProfileCatalog(
+                  JSON.parse(profilesJson).map(
                     (profile: Record<string, unknown>) => ({
                       ...profile,
                       adapter: "e2b",
                       isolation: "sandbox",
                       availability: "available",
-                      capabilities: [
-                        "git",
-                        "environment-variables",
-                        "internet-access",
-                        "persistent-workspace",
-                        "pause-resume",
-                      ],
+                      capabilities: deployedOrbCapabilities,
                     }),
                   ),
-                }),
+                ),
               ),
         DX_SOURCE_CONTROL_SCHEMA_VERSION: sourceControlSchemaVersion,
         DX_SOURCE_SHALLOW_CLONE: configuration.sourceShallowClone
           ? "true"
           : "false",
         DX_MANAGED_SSH_SIGNING_ENABLED: "true",
+        ...(installedPlugins === ""
+          ? {}
+          : { DX_INSTALLED_PLUGINS: installedPlugins }),
         ...(configuration.signupEnabled ? { DX_SIGNUP_ENABLED: "true" } : {}),
         ...(Option.isSome(configuration.githubCopilotClientId)
           ? {
@@ -603,8 +689,9 @@ export default Alchemy.Stack(
         DX_CONFIG_ENCRYPTION_KEYS: encryptionKeyring,
         DX_INTEGRATION_GITHUB_APP: githubApp,
         DX_WORKLOAD_IDENTITY_SIGNING_KEYS: workloadIdentitySigningKeys,
-        E2B_API_KEY: e2bApiKey,
+        ...(e2bApiKey === undefined ? {} : { E2B_API_KEY: e2bApiKey }),
         ...(sarvamApiKey !== undefined ? { SARVAM_API_KEY: sarvamApiKey } : {}),
+        ...(exaApiKey !== undefined ? { EXA_API_KEY: exaApiKey } : {}),
         ...(bitbucketOAuth !== undefined
           ? {
               DX_INTEGRATION_BITBUCKET_OAUTH: bitbucketOAuth,
@@ -619,7 +706,17 @@ export default Alchemy.Stack(
       "workers-ai": {
         [aiBinding.name]: Cloudflare.Workers.AI(aiBinding.name),
       },
-      "durable-object": durableObjectBindings,
+      "durable-object": {
+        ...durableObjectBindings,
+        ...(orbContainers === undefined
+          ? {}
+          : {
+              ORB_CONTAINER: Cloudflare.DurableObject("ORB_CONTAINER", {
+                className: "OrbContainerObject",
+                scriptName: orbContainers.workerName,
+              }),
+            }),
+      },
     });
 
     const bootstrap = yield* Command.Exec("Bootstrap", {
@@ -651,7 +748,7 @@ export default Alchemy.Stack(
                 DX_BOOTSTRAP_REPOSITORY: configuration.bootstrapRepository,
               }),
         DX_BOOTSTRAP_DATABASE_ID: database.databaseId,
-        DX_BOOTSTRAP_RUNNER_PROFILE_ID: defaultE2BOrbProfile.id,
+        DX_BOOTSTRAP_RUNNER_PROFILE_ID: defaultOrbProfileId,
       },
       memo: false,
       timeout: "3 minutes",

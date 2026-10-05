@@ -4,9 +4,9 @@ import { IntegrationsSettings } from "./integrations-settings.js";
 
 const common = {
   slug: "integrations",
-  label: "Integrations",
-  title: "Integrations",
-  description: "Connect and manage GitHub source control.",
+  label: "MCP & Integrations",
+  title: "MCP & Integrations",
+  description: "Connect source control and MCP servers.",
   icon: PlugZap,
   component: IntegrationsSettings,
 } as const;
@@ -15,4 +15,10 @@ export const personalIntegrationsSettingsSection = {
   ...common,
   id: "personal-integrations",
   scope: "personal",
+} satisfies SettingsSectionRegistration;
+
+export const workspaceIntegrationsSettingsSection = {
+  ...common,
+  id: "workspace-integrations",
+  scope: "workspace",
 } satisfies SettingsSectionRegistration;

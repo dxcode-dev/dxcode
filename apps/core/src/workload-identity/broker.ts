@@ -331,8 +331,8 @@ const resolveAuthority = async (
             AND (
               (? = 'local' AND execution.ready_at IS NOT NULL)
               OR (
-                ? = 'e2b'
-                AND execution.provider = 'e2b'
+                -- The Thread's pinned provider (e2b or cloudflare).
+                execution.provider = ?
                 AND execution.state = 'initialized'
                 AND execution.provider_sandbox_id IS NOT NULL
               )
@@ -449,8 +449,8 @@ const recordIssued = async (
                 AND execution.ready_at IS NOT NULL
                 AND thread.id = ?)
               OR (
-                ? = 'e2b'
-                AND execution.provider = 'e2b'
+                -- The Thread's pinned provider (e2b or cloudflare).
+                execution.provider = ?
                 AND execution.state = 'initialized'
                 AND execution.provider_sandbox_id = ?
               )

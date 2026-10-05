@@ -12,6 +12,7 @@ import {
   type RunnerProfileId,
   type SettingsMembershipInvariantViolation,
   type Thread,
+  type ThreadExecutionPin,
   type ThreadId,
   type ThreadListRequest,
   type ThreadModelSelection,
@@ -57,6 +58,7 @@ interface ThreadServiceShape {
     threadId?: ThreadId,
     runnerProfileId?: RunnerProfileId,
     titlePending?: boolean,
+    executionPin?: ThreadExecutionPin,
   ) => Effect.Effect<
     Thread,
     | Schema.SchemaError
@@ -122,6 +124,7 @@ export class ThreadService extends Context.Service<
             threadId,
             runnerProfileId,
             titlePending,
+            executionPin,
           ) {
             const projectId =
               project.kind === "project"
@@ -187,7 +190,7 @@ export class ThreadService extends Context.Service<
                 )({ ...source.authority, threadId: thread.id }),
               };
             }
-            yield* threads.insert(thread, admission);
+            yield* threads.insert(thread, admission, executionPin);
             return thread;
           },
         ),

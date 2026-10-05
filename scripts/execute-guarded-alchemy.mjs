@@ -23,6 +23,8 @@ import {
   applyValidatedAlchemyPlan,
   configureHostedDeploymentPolicy,
   deploymentSelection,
+  emptyBranchPreviewBucket,
+  parseOrbProviders,
 } from "./alchemy-deployment.mjs";
 
 const required = (name) => {
@@ -77,6 +79,7 @@ const selection = {
   revision: required("DX_DEPLOYMENT_REVISION"),
   workersDevSubdomain:
     process.env.DX_DEPLOYMENT_WORKERS_DEV_SUBDOMAIN?.trim() || undefined,
+  orbProviders: parseOrbProviders(process.env.DX_DEPLOYMENT_ORB_PROVIDERS),
   turnstileTestKeys: (() => {
     const value = process.env.DX_DEPLOYMENT_TURNSTILE_TEST_KEYS;
     if (value === undefined || value === "false") return false;
@@ -91,6 +94,23 @@ const selection = {
     if (value === "true") return true;
     throw new Error("DX_DEPLOYMENT_WORKER_TRACES must be true or false.");
   })(),
+};
+
+// Returns the response's `result`, or undefined when the bucket is absent.
+const cloudflareR2Request = async (method, path, body) => {
+  const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${required("CLOUDFLARE_API_TOKEN")}`,
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  if (method === "GET" && response.status === 404) return undefined;
+  const result = await response.json();
+  if (!response.ok || result.success !== true)
+    throw new Error(`Cloudflare R2 ${method} failed (${response.status}).`);
+  return result.result;
 };
 
 const program = Effect.gen(function* () {
@@ -134,7 +154,27 @@ const program = Effect.gen(function* () {
         apply: (validatedPlan) =>
           Effect.sync(() =>
             writeFileSync(applyStartedFile, "validated\n"),
-          ).pipe(Effect.andThen(apply(validatedPlan))),
+          ).pipe(
+            Effect.andThen(
+              Effect.tryPromise(() =>
+                emptyBranchPreviewBucket({
+                  operation,
+                  target,
+                  accountId: required("CLOUDFLARE_ACCOUNT_ID"),
+                  bucketName: selection.bucketName,
+                  request: cloudflareR2Request,
+                }),
+              ),
+            ),
+            Effect.tap((deleted) =>
+              deleted > 0
+                ? Console.log(
+                    `Emptied ${deleted} objects from ${selection.bucketName}.`,
+                  )
+                : Effect.void,
+            ),
+            Effect.andThen(apply(validatedPlan)),
+          ),
       });
       if (outputs !== undefined) yield* Console.log(outputs);
     }).pipe(Effect.provide(stack.services));

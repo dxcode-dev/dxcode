@@ -21,4 +21,14 @@ export const DictationJobSchema = Schema.Union([
 export type DictationJob = typeof DictationJobSchema.Type;
 
 export const DictationErrorSchema = Schema.Struct({ error: Schema.String });
+
+/**
+ * Speech is not installed, is disabled for this user, or resolves no
+ * provider. Dictation fails closed; the composer hides its microphone.
+ */
+export const DictationUnavailableSchema = Schema.Struct({
+  code: Schema.Literal("DICTATION_UNAVAILABLE"),
+  error: Schema.Literal("Dictation is not available."),
+});
+export type DictationUnavailable = typeof DictationUnavailableSchema.Type;
 export type DictationError = typeof DictationErrorSchema.Type;

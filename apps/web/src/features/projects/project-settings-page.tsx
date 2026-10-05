@@ -1,14 +1,20 @@
-import type { ProjectData, SettingsContextData } from "@dx/api";
+import { Accordion } from "@base-ui/react/accordion";
+import type {
+  OrbResolvedProvider,
+  ProjectData,
+  SettingsContextData,
+} from "@dx/api";
 import {
   PROJECT_NAME_HELP,
   type ProjectId,
   type ProviderRepositoryId,
+  type RunnerProfileCatalog,
   type RunnerProfileId,
   type UserId,
 } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useParams } from "@tanstack/react-router";
-import { FolderCog, KeyRound, X } from "lucide-react";
+import { ChevronRight, FolderCog, KeyRound, X } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
@@ -27,6 +33,7 @@ import {
   bitbucketConnectionQueryOptions,
   bitbucketRepositoriesQueryOptions,
 } from "../settings/integrations/bitbucket-queries.js";
+import { orbProvidersQueryOptions } from "../settings/orb-providers/orb-providers-queries.js";
 import {
   type ProjectDefaultsTarget,
   projectDefaultsQueryOptions,
@@ -516,6 +523,35 @@ function ProjectSourceSettings({
   );
 }
 
+/**
+ * The Orb sizes this person can choose for the project, grouped by provider in
+ * catalog order: only providers in the resolved set (the same set the
+ * new-Thread picker offers). A saved default on a provider outside that set
+ * keeps a section holding just that size, marked unavailable, so it is not
+ * silently lost.
+ */
+const orbSizeSections = (
+  catalog: RunnerProfileCatalog,
+  resolved: ReadonlyArray<OrbResolvedProvider>,
+  savedProfileId: RunnerProfileId,
+) =>
+  [...new Set(catalog.profiles.map(({ adapter }) => adapter))].flatMap(
+    (adapter) => {
+      const name =
+        catalog.providers?.find((provider) => provider.adapter === adapter)
+          ?.displayName ?? adapter;
+      const profiles = catalog.profiles.filter(
+        (profile) => profile.adapter === adapter,
+      );
+      if (resolved.some(({ providerId }) => providerId === adapter))
+        return [{ adapter, name, available: true, profiles }];
+      const saved = profiles.filter(({ id }) => id === savedProfileId);
+      return saved.length === 0
+        ? []
+        : [{ adapter, name, available: false, profiles: saved }];
+    },
+  );
+
 function OrbProjectSettings({
   project,
   workspace,
@@ -564,6 +600,10 @@ function ResolvedOrbProjectSettings({
   const defaults = useQuery(
     projectDefaultsQueryOptions(userId, defaultsTarget),
   );
+  // The providers this person's Threads in the project can start on.
+  const orbProviders = useQuery(
+    orbProvidersQueryOptions(userId, { scope: "personal" }, project.id),
+  );
   const updateMutation = useMutation(
     updateProjectMutationOptions(queryClient, userId, project.id),
   );
@@ -571,12 +611,17 @@ function ResolvedOrbProjectSettings({
   const [runnerProfileId, setRunnerProfileId] = React.useState<RunnerProfileId>(
     project.configuration.runnerProfileId,
   );
+  // The provider sections the person opened; until then, the saved default's.
+  const [openSections, setOpenSections] = React.useState<Array<string>>();
   const allowedRunnerProfileIds = React.useMemo(() => {
     const ids = defaults.data?.restrictions.allowedRunnerProfileIds;
     return ids == null ? undefined : new Set(ids);
   }, [defaults.data?.restrictions.allowedRunnerProfileIds]);
   const saving = updateMutation.isPending;
   const dirty = runnerProfileId !== baseline.configuration.runnerProfileId;
+  const savedSection = defaults.data?.catalog.profiles.find(
+    ({ id }) => id === baseline.configuration.runnerProfileId,
+  )?.adapter;
   if (baseline.revision < project.revision && !dirty && !saving) {
     setBaseline(project);
     setRunnerProfileId(project.configuration.runnerProfileId);
@@ -600,32 +645,75 @@ function ResolvedOrbProjectSettings({
       <SettingsCard
         className="project-orb-size-card"
         title={`${EXECUTION_ENVIRONMENT_DISPLAY_NAME} Size`}
-        description={`Choose the ${EXECUTION_ENVIRONMENT_DISPLAY_NAME} size for this project.`}
         variant="outline"
       >
-        <div
-          className="runner-profile-grid"
-          role="radiogroup"
-          aria-label="Project runner profile"
-        >
-          {(defaults.data?.catalog.profiles ?? []).map((profile) => (
-            <RunnerProfileCard
-              key={profile.id}
-              profile={profile}
-              presentation="orb-size"
-              selected={runnerProfileId === profile.id}
-              disabled={
-                saving ||
-                profile.availability !== "available" ||
-                (allowedRunnerProfileIds !== undefined &&
-                  !allowedRunnerProfileIds.has(profile.id))
-              }
-              onSelect={() => setRunnerProfileId(profile.id)}
-            />
-          ))}
-        </div>
+        {defaults.data === undefined ||
+        orbProviders.data === undefined ? null : (
+          <Accordion.Root
+            className="orb-size-accordion"
+            value={
+              openSections ?? (savedSection === undefined ? [] : [savedSection])
+            }
+            onValueChange={setOpenSections}
+          >
+            {orbSizeSections(
+              defaults.data.catalog,
+              orbProviders.data.resolved,
+              baseline.configuration.runnerProfileId,
+            ).map((section) => (
+              <Accordion.Item
+                key={section.adapter}
+                value={section.adapter}
+                className="orb-size-section"
+              >
+                <Accordion.Header className="orb-size-section-header">
+                  <Accordion.Trigger className="orb-size-section-trigger">
+                    <span className="orb-size-section-name">
+                      {section.name}
+                      {section.available ? null : (
+                        <small className="orb-size-section-hint">
+                          Not available
+                        </small>
+                      )}
+                    </span>
+                    <ChevronRight aria-hidden="true" />
+                  </Accordion.Trigger>
+                </Accordion.Header>
+                <Accordion.Panel className="orb-size-section-panel">
+                  <div
+                    className="runner-profile-grid"
+                    role="radiogroup"
+                    aria-label={`${section.name} sizes`}
+                  >
+                    {section.profiles.map((profile) => (
+                      <RunnerProfileCard
+                        key={profile.id}
+                        profile={profile}
+                        presentation="orb-size"
+                        selected={runnerProfileId === profile.id}
+                        disabled={
+                          saving ||
+                          !section.available ||
+                          profile.availability !== "available" ||
+                          (allowedRunnerProfileIds !== undefined &&
+                            !allowedRunnerProfileIds.has(profile.id))
+                        }
+                        onSelect={() => setRunnerProfileId(profile.id)}
+                      />
+                    ))}
+                  </div>
+                </Accordion.Panel>
+              </Accordion.Item>
+            ))}
+          </Accordion.Root>
+        )}
         {defaults.error ? (
           <p role="alert">Runner profiles could not be loaded.</p>
+        ) : null}
+        {orbProviders.error ? (
+          <p role="alert">
+            {EXECUTION_ENVIRONMENT_DISPLAY_NAME} providers could not be loaded.
+          </p>
         ) : null}
         <SettingsFormActions
           dirty={dirty}

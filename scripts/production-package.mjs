@@ -143,14 +143,18 @@ export const loadProductionBindingContract = () => {
     new Set(names).size !== names.length ||
     JSON.stringify(names) !== JSON.stringify([...names].sort()) ||
     contract.bindings.some(
-      ({ name, type, provenance }) =>
+      ({ name, type, provenance, crossScript }) =>
         typeof name !== "string" ||
         !allowedTypes.has(type) ||
         !allowedProvenance.has(provenance) ||
         (provenance === "alchemy" &&
           type !== "text" &&
           type !== "secret" &&
-          type !== "send-email"),
+          type !== "send-email" &&
+          // A Durable Object namespace another Worker owns (the Orb Worker).
+          !(type === "durable-object" && crossScript === true)) ||
+        (crossScript !== undefined &&
+          (crossScript !== true || provenance !== "alchemy")),
     ) ||
     generatedBindings.length !== 1 ||
     generatedBindings[0].type !== "durable-object"
@@ -198,12 +202,15 @@ export const validateProductionBindingConfiguration = ({
   generatedConfig,
 }) => {
   const contract = loadProductionBindingContract();
-  const authoredExpected = contract.bindings.filter(
-    ({ provenance }) => provenance === "authored-wrangler",
-  );
-  const generatedExpected = contract.bindings.filter(
-    ({ provenance }) => provenance !== "alchemy",
-  );
+  // Wrangler knows names, types, and provenance; whether Alchemy may omit a
+  // binding (`optional`) is the deployment's business.
+  const identity = ({ name, type, provenance }) => ({ name, type, provenance });
+  const authoredExpected = contract.bindings
+    .filter(({ provenance }) => provenance === "authored-wrangler")
+    .map(identity);
+  const generatedExpected = contract.bindings
+    .filter(({ provenance }) => provenance !== "alchemy")
+    .map(identity);
   const authoredNames = new Set(authoredExpected.map(({ name }) => name));
   if (
     JSON.stringify(bindingsFromWrangler(authoredConfig)) !==
@@ -222,8 +229,10 @@ export const deriveDurableObjectBindings = ({
   bindingContract,
   migrationManifest,
 }) => {
+  // A cross-script namespace (the Orb Worker's) belongs to another Worker.
   const contractBindings = bindingContract.bindings.filter(
-    ({ type }) => type === "durable-object",
+    ({ type, crossScript }) =>
+      type === "durable-object" && crossScript !== true,
   );
   const authoredBindings = authoredConfig.durable_objects?.bindings ?? [];
   const authoredContractNames = contractBindings

@@ -1,6 +1,7 @@
 import { Context, type DateTime, type Effect, type Schema } from "effect";
 import type { PageCursor } from "../pagination/cursor.js";
 import type { PersistenceUnavailable } from "../persistence/errors.js";
+import type { PluginScope } from "../plugins/plugin.js";
 import type { ProjectId } from "../projects/project-id.js";
 import type { ModelProviderId } from "../settings/model-routing.js";
 import type { WorkspaceId } from "../settings/workspace.js";
@@ -126,6 +127,36 @@ export interface UsagePriceSourceSummary {
   readonly estimated: true;
 }
 
+/**
+ * Metered plugin calls grouped by plugin, provider, capability, credential
+ * scope, and unit. IDs are ledger strings rather than catalog literals so rows
+ * for a plugin added or removed later still aggregate. Credential scope is the
+ * billing dimension: personal and workspace keys were paid by the user;
+ * deployment keys were paid by whoever operates the deployment. Plugins have
+ * no pricing table yet, so there is no cost field.
+ */
+export interface PluginUsageAggregate {
+  readonly pluginId: string;
+  readonly pluginName: string;
+  readonly providerId: string;
+  readonly providerName: string;
+  readonly capability: string;
+  readonly credentialScope: PluginScope;
+  readonly unit: string;
+  readonly units: number;
+  readonly events: number;
+  readonly outcomes: {
+    readonly success: number;
+    readonly error: number;
+  };
+}
+
+/** One member's plugin usage, attributed like {@link UsageUserAggregate}. */
+export interface PluginUsageUserAggregate extends PluginUsageAggregate {
+  readonly userId: UserId;
+  readonly userName: string;
+}
+
 export interface UsageDashboard {
   readonly range: {
     readonly from: string;
@@ -143,6 +174,7 @@ export interface UsageDashboard {
   readonly daily: ReadonlyArray<UsageDailyTrend>;
   readonly threads: ReadonlyArray<UsageThreadAggregate>;
   readonly runners: ReadonlyArray<UsageRunnerAggregate>;
+  readonly plugins: ReadonlyArray<PluginUsageAggregate>;
   readonly priceSources: ReadonlyArray<UsagePriceSourceSummary>;
   readonly nextCursor?: PageCursor;
 }
@@ -168,6 +200,8 @@ export interface WorkspaceUsageDashboard {
   readonly daily: ReadonlyArray<UsageDailyTrend>;
   readonly ranking: WorkspaceUsageRankingPage;
   readonly runners: ReadonlyArray<UsageRunnerAggregate>;
+  readonly plugins: ReadonlyArray<PluginUsageAggregate>;
+  readonly pluginUsers: ReadonlyArray<PluginUsageUserAggregate>;
   readonly priceSources: ReadonlyArray<UsagePriceSourceSummary>;
 }
 

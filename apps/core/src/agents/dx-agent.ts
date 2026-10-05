@@ -1,6 +1,7 @@
 "use agent";
 
 import { MAX_IMAGES_PER_MESSAGE } from "@dx/api";
+import type { PluginToolSet } from "@dx/domain";
 import {
   type AgentProps,
   type DeliveredMessage,
@@ -10,7 +11,6 @@ import {
   useAgentFinish,
   useAgentStart,
   useInitialData,
-  useMcpConnection,
   useModel,
   usePromptData,
   useResponseStart,
@@ -18,14 +18,15 @@ import {
   useTool,
 } from "@flue/runtime";
 import {
+  agentPluginHostContext,
+  resolveAgentPluginTools,
+} from "../plugins/agent-context.js";
+import { firstPartyPluginTools } from "../plugins/tools.js";
+import {
   agentRuntimeComposition,
   type DxPromptData,
 } from "../runtime/agent-composition.js";
 import { AGENT_RUN_LIMIT_MS } from "../runtime/agent-run-limit.js";
-import {
-  createAuthorizedMcpFetch,
-  resolveMcpCredential,
-} from "../settings/mcp-servers/execution.js";
 import { invokePluginLive } from "../settings/plugins/execution.js";
 import { createPluginTool } from "../settings/plugins/flue.js";
 import { createSkillResourceTool } from "../settings/skills/execution.js";
@@ -34,6 +35,15 @@ import {
   DxAgentInitialDataSchema,
 } from "./dx-agent-initial-data.js";
 import { composeDxAgentPrompt } from "./dx-agent-prompt.js";
+
+/** Per-submission data from `resolvePromptData`. */
+interface DxAgentPromptData {
+  readonly route?: DxPromptData;
+  readonly plugins?: {
+    readonly submissionId: string;
+    readonly tools: PluginToolSet;
+  };
+}
 
 const localModelPreviewPrompt = `You are dx, a coding assistant running in a local UI preview.
 This preview intentionally has no sandbox, filesystem, shell, source-control, MCP, skill, or plugin tools.
@@ -61,8 +71,8 @@ const withToolFailureMessage = <T extends ToolDefinition>(tool: T): T =>
 
 export function DxAgent(props: AgentProps) {
   const initialData = useInitialData<DxAgentInitialData | undefined>();
-  const promptData = usePromptData<DxPromptData | undefined>();
-  const model = agentRuntimeComposition.model.select(promptData);
+  const promptData = usePromptData<DxAgentPromptData | undefined>();
+  const model = agentRuntimeComposition.model.select(promptData?.route);
   useModel(model.model, model.options);
   useResponseStart(() => ({
     dxResponseStartedAt: new Date().toISOString(),
@@ -71,29 +81,23 @@ export function DxAgent(props: AgentProps) {
   const plugins = initialData?.plugins ?? [];
   if (agentRuntimeComposition.capabilities === "workspace") {
     useSandbox(agentRuntimeComposition.execution);
-    for (const connection of initialData?.mcpConnections ?? []) {
-      useMcpConnection({
-        name: connection.name,
-        url: connection.endpoint,
-        transport: "streamable-http",
-        tools: [...connection.tools],
-        timeoutMs: connection.timeoutMs,
-        optional: true,
-        fetch: createAuthorizedMcpFetch(
-          props.id,
-          connection.id,
-          connection.endpoint,
-          connection.timeoutMs,
-        ),
-        ...(connection.authenticated
-          ? {
-              auth: () => resolveMcpCredential(props.id, connection.id),
-            }
-          : {}),
-      });
-    }
+    // MCP servers are never mounted directly; the Code plugin exposes them as
+    // modules for code_exec and tool_search.
     if (skills.some((skill) => skill.resources.length > 0)) {
       useTool(withToolFailureMessage(createSkillResourceTool(props.id)));
+    }
+    // Plugin tools come from this submission's resolved set, never from
+    // Thread creation data; providers and keys resolve again on every call.
+    const pluginTools = promptData?.plugins;
+    if (pluginTools !== undefined) {
+      for (const tool of firstPartyPluginTools(
+        { threadId: props.id, submissionId: pluginTools.submissionId },
+        pluginTools.tools,
+        agentPluginHostContext,
+        initialData?.mcpConnections ?? [],
+      )) {
+        useTool(withToolFailureMessage(tool));
+      }
     }
     for (const plugin of plugins) {
       for (const tool of plugin.tools) {
@@ -162,10 +166,30 @@ export function DxAgent(props: AgentProps) {
 DxAgent.agentName = "dx-agent";
 DxAgent.durability = { timeoutMs: AGENT_RUN_LIMIT_MS };
 DxAgent.initialData = DxAgentInitialDataSchema;
-DxAgent.resolvePromptData = (
+/**
+ * Runs once per submission before rendering. The model route and the plugin
+ * tool set are both resolved here from current settings and recorded for the
+ * submission, so retries and recovery reuse them and the next submission sees
+ * changes. A resolution failure fails the submission visibly.
+ */
+DxAgent.resolvePromptData = async (
   _initialData: unknown,
   context: ModelResolutionContext,
-) => agentRuntimeComposition.model.resolvePromptData(context);
+): Promise<DxAgentPromptData | undefined> => {
+  const scope = context.scope;
+  const [route, plugins] = await Promise.all([
+    agentRuntimeComposition.model.resolvePromptData(context),
+    agentRuntimeComposition.capabilities === "workspace" &&
+    scope?.kind === "prompt"
+      ? resolveAgentPluginTools(context.instanceId, scope.submissionId)
+      : Promise.resolve(undefined),
+  ]);
+  if (route === undefined && plugins === undefined) return undefined;
+  return {
+    ...(route === undefined ? {} : { route }),
+    ...(plugins === undefined ? {} : { plugins }),
+  };
+};
 DxAgent.validateInput = (message: Readonly<DeliveredMessage>) => {
   if (
     message.kind === "user" &&

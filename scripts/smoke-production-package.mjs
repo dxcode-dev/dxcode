@@ -104,6 +104,7 @@ export const smokeProductionPackage = async (packageRoot) => {
     DX_INTEGRATION_GITHUB_APP: "{}",
     DX_MANAGED_SSH_SIGNING_ENABLED: "true",
     DX_GITHUB_COPILOT_CLIENT_ID: "",
+    DX_INSTALLED_PLUGINS: "",
     DX_MODEL_DEPLOYMENT_PROVIDERS: "",
     DX_MODEL_ENDPOINT_ALLOWLIST: "",
     DX_MODEL_WORKERS_AI_ENABLED: "",
@@ -145,6 +146,7 @@ export const smokeProductionPackage = async (packageRoot) => {
     DX_WORKSPACE_INACTIVITY_MS: "300000",
     E2B_API_KEY: "package-smoke-not-a-provider-key",
     SARVAM_API_KEY: "",
+    EXA_API_KEY: "",
     DX_TURNSTILE_SITE_KEY: "package-smoke-not-a-site-key",
     DX_TURNSTILE_SECRET_KEY: "package-smoke-not-a-secret",
   };
@@ -184,6 +186,11 @@ export const smokeProductionPackage = async (packageRoot) => {
     ai.name,
     email.name,
     ...durableObjects.map(({ name }) => name),
+    // Another Worker's namespace (the Orb Worker's), bound only when that
+    // provider is installed; the smoke runs without it.
+    ...manifest.bindings
+      .filter(({ crossScript }) => crossScript === true)
+      .map(({ name }) => name),
   ]);
   if (
     accountedBindings.size !== manifest.bindings.length ||

@@ -70,17 +70,20 @@
     {
       "name": "DX_E2B_TEMPLATE",
       "type": "text",
-      "provenance": "alchemy"
+      "provenance": "alchemy",
+      "optional": true
     },
     {
       "name": "DX_E2B_TEMPLATE_BUILD_ID",
       "type": "text",
-      "provenance": "alchemy"
+      "provenance": "alchemy",
+      "optional": true
     },
     {
       "name": "DX_E2B_TIMEOUT_MS",
       "type": "text",
-      "provenance": "alchemy"
+      "provenance": "alchemy",
+      "optional": true
     },
     {
       "name": "DX_ENV",
@@ -89,6 +92,12 @@
     },
     {
       "name": "DX_GITHUB_COPILOT_CLIENT_ID",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_INSTALLED_PLUGINS",
       "type": "text",
       "provenance": "alchemy",
       "optional": true
@@ -199,7 +208,8 @@
     {
       "name": "E2B_API_KEY",
       "type": "secret",
-      "provenance": "authored-wrangler"
+      "provenance": "authored-wrangler",
+      "optional": true
     },
     {
       "name": "EMAIL",
@@ -208,9 +218,22 @@
       "optional": true
     },
     {
+      "name": "EXA_API_KEY",
+      "type": "secret",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
       "name": "FLUE_DX_AGENT_AGENT",
       "type": "durable-object",
       "provenance": "generated-flue"
+    },
+    {
+      "name": "ORB_CONTAINER",
+      "type": "durable-object",
+      "provenance": "alchemy",
+      "optional": true,
+      "crossScript": true
     },
     {
       "name": "PLUGIN_TRIGGER_DELIVERY",

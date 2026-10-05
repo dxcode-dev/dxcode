@@ -9,6 +9,7 @@ import {
   type ExecutionWorkspaceStateStore,
   ExecutionWorkspaceUnavailable,
   makeConnectExistingExecutionWorkspace,
+  makeDestroyExecutionWorkspace,
   makePauseExecutionWorkspace,
   makeResolveExecutionWorkspace,
 } from "./resolver.js";
@@ -985,5 +986,70 @@ describe("pauseExecutionWorkspace", () => {
       ...initialized("deleted"),
       state: "lost",
     });
+  });
+});
+
+describe("destroyExecutionWorkspace", () => {
+  const destroy = (
+    fake: ReturnType<typeof provider>,
+    store: ReturnType<typeof stateStore>,
+  ) =>
+    Effect.runPromise(
+      makeDestroyExecutionWorkspace(fake.value)({
+        id: threadId,
+        requirements,
+        stateStore: store.value,
+      }),
+    );
+
+  it("kills an initialized sandbox with the context key and records it lost", async () => {
+    const fake = provider();
+    const store = stateStore(initialized("to-destroy"));
+    await expect(destroy(fake, store)).resolves.toBe(1);
+    expect(fake.kill).toHaveBeenCalledWith("to-destroy", {
+      apiKey: "e2b-test-credential",
+      requestTimeoutMs: expect.any(Number),
+    });
+    expect(store.current().state).toBe("lost");
+  });
+
+  it("treats a sandbox E2B no longer has as destroyed", async () => {
+    const fake = provider({
+      kill: async () => {
+        throw notFound;
+      },
+    });
+    const store = stateStore(initialized("already-gone"));
+    await expect(destroy(fake, store)).resolves.toBe(1);
+    expect(store.current().state).toBe("lost");
+  });
+
+  it("does nothing for a workspace that never existed", async () => {
+    const fake = provider();
+    await expect(destroy(fake, stateStore(uninitialized))).resolves.toBe(0);
+    expect(fake.kill).not.toHaveBeenCalled();
+  });
+
+  it("fails closed while provisioning, keeping the record", async () => {
+    const fake = provider();
+    const store = stateStore(provisioning("in-flight"));
+    await expect(destroy(fake, store)).rejects.toBeInstanceOf(
+      ExecutionWorkspaceUnavailable,
+    );
+    expect(fake.kill).not.toHaveBeenCalled();
+    expect(store.current().state).toBe("provisioning");
+  });
+
+  it("fails closed when E2B refuses the kill, keeping the record", async () => {
+    const fake = provider({
+      kill: async () => {
+        throw new Error("provider unavailable");
+      },
+    });
+    const store = stateStore(initialized("still-there"));
+    await expect(destroy(fake, store)).rejects.toBeInstanceOf(
+      ExecutionWorkspaceUnavailable,
+    );
+    expect(store.current().state).toBe("initialized");
   });
 });

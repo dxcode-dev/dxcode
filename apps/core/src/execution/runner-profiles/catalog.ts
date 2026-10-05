@@ -7,6 +7,7 @@ import {
 } from "@dx/domain";
 import { Effect, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
+import { findPlugin, findProvider } from "../../plugins/registry.js";
 
 const unavailableAdapterStates = [
   { kind: "container", state: "unavailable" },
@@ -53,6 +54,7 @@ export const decodeRunnerProfileCatalog = Effect.fn(
   const configuredAdapters = new Set(
     configuration.profiles.map(({ adapter }) => adapter),
   );
+  const execution = findPlugin("execution");
   return {
     configuration,
     publicCatalog: {
@@ -65,11 +67,32 @@ export const decodeRunnerProfileCatalog = Effect.fn(
           state: configuredAdapters.has("e2b") ? "available" : "unavailable",
         },
         {
+          kind: "cloudflare",
+          state: configuredAdapters.has("cloudflare")
+            ? "available"
+            : "unavailable",
+        },
+        {
           kind: "local",
           state: configuredAdapters.has("local") ? "available" : "unavailable",
         },
         ...unavailableAdapterStates,
       ],
+      // The Orb picker groups sizes by provider and shows what a pause keeps.
+      providers: [...configuredAdapters].map((adapter) => {
+        const provider =
+          execution === undefined
+            ? undefined
+            : findProvider(execution, adapter);
+        return {
+          adapter,
+          displayName: provider?.displayName ?? adapter,
+          shortName: provider?.shortName ?? provider?.displayName ?? adapter,
+          pauseResume: provider?.capabilities.includes("execution.pause-resume")
+            ? (provider.pauseResumePreserves ?? null)
+            : null,
+        };
+      }),
     },
   } satisfies LoadedRunnerProfileCatalog;
 });

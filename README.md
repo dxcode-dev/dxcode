@@ -6,8 +6,9 @@ accounts you control.
 
 ## Deploy
 
-Node.js 22.19 or newer, pnpm 9, a Cloudflare account, and an E2B API key are
-required.
+Node.js 22.19 or newer, pnpm 9, a Cloudflare account, and at least one Orb
+provider are required: an E2B API key, or Cloudflare Containers (Workers Paid
+plan and Docker on the deploying machine).
 
 ```sh
 pnpm install --frozen-lockfile

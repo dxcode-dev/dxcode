@@ -17,7 +17,18 @@ const CONFIG_KEYS = new Set([
   "modelEndpointAllowlist",
   "dxdBinary",
   "integrations",
+  "plugins",
+  "offeredPlugins",
+  "orbProviders",
 ]);
+
+/**
+ * Orb (Execution) providers a deployment may install; at least one. E2B needs
+ * an API key. Cloudflare Containers needs no key but runs, and is billed, in
+ * the deployment's own Cloudflare account (Workers Paid plan), and deploying
+ * it builds the Orb image with Docker.
+ */
+export const ORB_PROVIDER_IDS = Object.freeze(["e2b", "cloudflare"]);
 
 export const DEPLOYMENT_SECRET_NAMES = Object.freeze([
   "DX_ADMIN_PASSWORD",
@@ -25,7 +36,29 @@ export const DEPLOYMENT_SECRET_NAMES = Object.freeze([
   "DX_INTEGRATION_GITHUB_APP",
   "DX_INTEGRATION_BITBUCKET_OAUTH",
   "SARVAM_API_KEY",
+  "EXA_API_KEY",
 ]);
+
+/**
+ * First-party plugins an installer may choose; hosted dx installs all. Code is
+ * always installed and is not a choice.
+ */
+export const FIRST_PARTY_PLUGIN_IDS = Object.freeze(["search", "speech"]);
+
+/** Each optional provider key belongs to one plugin's deployment scope. */
+const PLUGIN_INTEGRATIONS = Object.freeze({ exa: "search", sarvam: "speech" });
+
+const pluginList = (value, label) => {
+  if (
+    !Array.isArray(value) ||
+    value.some((id) => !FIRST_PARTY_PLUGIN_IDS.includes(id)) ||
+    new Set(value).size !== value.length
+  )
+    throw new Error(
+      `${label} may contain ${FIRST_PARTY_PLUGIN_IDS.join(", ")} once each.`,
+    );
+  return value;
+};
 
 const optionalString = (value, label) => {
   if (value === undefined) return undefined;
@@ -97,13 +130,50 @@ export const validateSelfhostConfig = (input) => {
   if (
     !Array.isArray(integrations) ||
     integrations.some(
-      (value) => !new Set(["github", "bitbucket", "sarvam"]).has(value),
+      (value) => !new Set(["github", "bitbucket", "sarvam", "exa"]).has(value),
     ) ||
     new Set(integrations).size !== integrations.length
   )
     throw new Error(
-      "integrations may contain github, bitbucket, and sarvam once each.",
+      "integrations may contain github, bitbucket, sarvam, and exa once each.",
     );
+  // Configs written before Containers existed installed E2B.
+  const orbProviders = input.orbProviders ?? ["e2b"];
+  if (
+    !Array.isArray(orbProviders) ||
+    orbProviders.length === 0 ||
+    orbProviders.some((value) => !ORB_PROVIDER_IDS.includes(value)) ||
+    new Set(orbProviders).size !== orbProviders.length
+  )
+    throw new Error(
+      "orbProviders must contain e2b, cloudflare, or both, once each.",
+    );
+  let plugins = [...pluginList(input.plugins ?? [], "plugins")];
+  // Plugins the installer has asked about; an installed plugin was asked
+  // about. Configs written before this key existed were asked about Search
+  // only, and only if they record `plugins`.
+  let offered = [
+    ...new Set([
+      ...pluginList(
+        input.offeredPlugins ?? (input.plugins === undefined ? [] : ["search"]),
+        "offeredPlugins",
+      ),
+      ...plugins,
+    ]),
+  ];
+  // Before Speech was a plugin, the `sarvam` integration alone turned on
+  // dictation. Such deployments keep it: Speech is installed and counts as
+  // asked, so the installer does not ask again.
+  if (!offered.includes("speech") && integrations.includes("sarvam")) {
+    if (!plugins.includes("speech")) plugins = [...plugins, "speech"];
+    offered = [...offered, "speech"];
+  }
+  // Each provider key is its plugin's deployment-scope configuration.
+  for (const [integration, plugin] of Object.entries(PLUGIN_INTEGRATIONS))
+    if (integrations.includes(integration) && !plugins.includes(plugin))
+      throw new Error(
+        `The ${integration} integration requires the ${plugin} plugin.`,
+      );
   return Object.freeze({
     version: 1,
     name,
@@ -120,6 +190,15 @@ export const validateSelfhostConfig = (input) => {
       ? {}
       : { workerTraces: input.workerTraces }),
     integrations: [...integrations].sort(),
+    orbProviders: [...orbProviders].sort(),
+    // Absent means the operator was never asked; the installer asks once
+    // about each plugin not yet offered.
+    ...(offered.length === 0
+      ? {}
+      : {
+          plugins: [...plugins].sort(),
+          offeredPlugins: [...offered].sort(),
+        }),
     ...Object.fromEntries(
       [
         "githubCopilotClientId",

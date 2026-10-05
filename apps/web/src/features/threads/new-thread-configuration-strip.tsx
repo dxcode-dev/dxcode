@@ -1,12 +1,19 @@
+import { Menu } from "@base-ui/react/menu";
 import { Select } from "@base-ui/react/select";
-import type { ChoicesData, GraphData, ProjectData } from "@dx/api";
+import type {
+  ChoicesData,
+  GraphData,
+  OrbResolvedProvider,
+  ProjectData,
+} from "@dx/api";
 import type {
   ModeId,
   ProjectId,
   RunnerProfile,
   RunnerProfileId,
+  RunnerProviderPresentation,
 } from "@dx/domain";
-import { ArrowRight, Check, Folder } from "lucide-react";
+import { ArrowRight, Check, ChevronRight, Folder } from "lucide-react";
 import type { ReactNode } from "react";
 import * as React from "react";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
@@ -611,6 +618,180 @@ function ProjectPicker({
   );
 }
 
+/** What a pause keeps: the tooltip on a provider's row in the Orb picker. */
+const pauseResumeNote = (
+  preserves: RunnerProviderPresentation["pauseResume"],
+) =>
+  preserves === "processes"
+    ? "Pause keeps running processes"
+    : preserves === "filesystem"
+      ? "Pause keeps files; processes restart"
+      : "No pause and resume";
+
+/**
+ * Orb sizes grouped by provider, in catalog order. With the resolved set
+ * (bring-your-own keys), only its providers are offered, each with the key
+ * it runs on.
+ */
+const runnerProfileGroups = (
+  profiles: ReadonlyArray<RunnerProfile>,
+  providers: ReadonlyArray<RunnerProviderPresentation>,
+  orbs: ReadonlyArray<OrbResolvedProvider> | undefined,
+) =>
+  [...new Set(profiles.map(({ adapter }) => adapter))].flatMap((adapter) => {
+    const orb = orbs?.find(({ providerId }) => providerId === adapter);
+    if (orbs !== undefined && orb === undefined) return [];
+    return [
+      {
+        adapter,
+        orb,
+        provider: providers.find((provider) => provider.adapter === adapter),
+        profiles: profiles.filter((profile) => profile.adapter === adapter),
+      },
+    ];
+  });
+
+/** A person's or workspace's own key; the deployment's needs no words. */
+const orbKeyOwner = (scope: OrbResolvedProvider["scope"]) =>
+  scope === "personal"
+    ? "Your key"
+    : scope === "workspace"
+      ? "Workspace key"
+      : undefined;
+
+/**
+ * The quiet hint after a provider's name: why it cannot start yet, else whose
+ * key it runs on. Absent for a ready deployment provider.
+ */
+const orbProviderHint = (orb: OrbResolvedProvider | undefined) =>
+  orb?.status === "building"
+    ? "Building template…"
+    : orb?.status === "failed"
+      ? "Template failed"
+      : orb === undefined
+        ? undefined
+        : orbKeyOwner(orb.scope);
+
+/** The picker's compact provider name ("Cloudflare"); settings keep the long one. */
+const orbProviderName = (provider: RunnerProviderPresentation) =>
+  provider.shortName ?? provider.displayName;
+
+const formatOrbResources = ({ resources }: RunnerProfile) =>
+  `${resources.cpuCores} CPU · ${Number((resources.memoryMb / 1024).toFixed(1))} GB`;
+
+/**
+ * The new-Thread Orb picker: one row per provider in the resolved set, each
+ * opening a submenu of its sizes. A dot marks the selected size.
+ */
+function OrbPicker({
+  groups,
+  selectedProfile,
+  selectedProvider,
+  selectedName,
+  disabled,
+  isProfileAllowed,
+  onSelect,
+}: {
+  readonly groups: ReturnType<typeof runnerProfileGroups>;
+  readonly selectedProfile: RunnerProfile;
+  readonly selectedProvider: RunnerProviderPresentation | undefined;
+  readonly selectedName: string;
+  readonly disabled: boolean;
+  readonly isProfileAllowed: (profile: RunnerProfile) => boolean;
+  readonly onSelect: (runnerProfileId: RunnerProfileId) => void;
+}) {
+  return (
+    <Menu.Root disabled={disabled}>
+      <Menu.Trigger
+        className="new-thread-config-pill new-thread-orb-size"
+        aria-label={selectedName}
+        title={selectedName}
+      >
+        <OrbIcon aria-hidden="true" />
+        <span>
+          {selectedProvider === undefined
+            ? selectedProfile.label
+            : `${orbProviderName(selectedProvider)} · ${selectedProfile.label}`}
+        </span>
+      </Menu.Trigger>
+      <Menu.Portal>
+        <Menu.Positioner
+          className="thread-context-positioner"
+          side="bottom"
+          align="start"
+          sideOffset={8}
+          collisionPadding={12}
+        >
+          <Menu.Popup className="thread-menu-popup orb-picker-popup">
+            {groups.map((group) => {
+              const hint = orbProviderHint(group.orb);
+              return (
+                <Menu.SubmenuRoot key={group.adapter}>
+                  <Menu.SubmenuTrigger
+                    className="thread-menu-item orb-picker-provider"
+                    title={pauseResumeNote(group.provider?.pauseResume ?? null)}
+                  >
+                    <OrbIcon aria-hidden="true" />
+                    <span className="orb-picker-provider-name">
+                      {group.provider === undefined
+                        ? group.adapter
+                        : orbProviderName(group.provider)}
+                    </span>
+                    {hint === undefined ? null : (
+                      <small className="orb-picker-provider-hint">{hint}</small>
+                    )}
+                    <ChevronRight aria-hidden="true" />
+                  </Menu.SubmenuTrigger>
+                  <Menu.Portal>
+                    <Menu.Positioner
+                      className="thread-context-positioner"
+                      sideOffset={6}
+                      collisionPadding={12}
+                    >
+                      <Menu.Popup className="thread-menu-popup orb-picker-popup">
+                        <Menu.RadioGroup
+                          value={selectedProfile.id}
+                          onValueChange={(value: RunnerProfileId) =>
+                            onSelect(value)
+                          }
+                        >
+                          {group.profiles.map((runnerProfile) => (
+                            <Menu.RadioItem
+                              key={runnerProfile.id}
+                              value={runnerProfile.id}
+                              label={runnerProfile.label}
+                              closeOnClick
+                              className="thread-menu-item orb-picker-size"
+                              disabled={
+                                runnerProfile.availability !== "available" ||
+                                (group.orb !== undefined &&
+                                  group.orb.status !== "ready") ||
+                                !isProfileAllowed(runnerProfile)
+                              }
+                            >
+                              <span className="orb-picker-size-details">
+                                <span>{runnerProfile.label}</span>
+                                <small>
+                                  {formatOrbResources(runnerProfile)}
+                                </small>
+                              </span>
+                              <Menu.RadioItemIndicator className="orb-picker-dot" />
+                            </Menu.RadioItem>
+                          ))}
+                        </Menu.RadioGroup>
+                      </Menu.Popup>
+                    </Menu.Positioner>
+                  </Menu.Portal>
+                </Menu.SubmenuRoot>
+              );
+            })}
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
+  );
+}
+
 export function NewThreadConfigurationStrip({
   projects,
   projectId,
@@ -627,6 +808,8 @@ export function NewThreadConfigurationStrip({
   onLoadMoreProjects = () => undefined,
   onProjectChange,
   runnerProfiles = [],
+  runnerProviders = [],
+  runnerOrbs,
   runnerProfileId,
   runnerProfileLoading = false,
   allowedRunnerProfileIds,
@@ -653,6 +836,9 @@ export function NewThreadConfigurationStrip({
   readonly onLoadMoreProjects?: () => void;
   readonly onProjectChange: (projectId: ProjectId | "") => void;
   readonly runnerProfiles?: ReadonlyArray<RunnerProfile>;
+  readonly runnerProviders?: ReadonlyArray<RunnerProviderPresentation>;
+  /** The providers a new Thread can start on, with whose key pays. */
+  readonly runnerOrbs?: ReadonlyArray<OrbResolvedProvider>;
   readonly runnerProfileId?: RunnerProfileId;
   readonly runnerProfileLoading?: boolean;
   readonly allowedRunnerProfileIds?: ReadonlyArray<RunnerProfileId> | null;
@@ -705,6 +891,24 @@ export function NewThreadConfigurationStrip({
   const selectedRunnerProfile = runnerProfiles.find(
     ({ id }) => id === runnerProfileId,
   );
+  const selectedRunnerProvider = runnerProviders.find(
+    ({ adapter }) => adapter === selectedRunnerProfile?.adapter,
+  );
+  const runnerGroups = runnerProfileGroups(
+    runnerProfiles,
+    runnerProviders,
+    runnerOrbs,
+  );
+  const selectedOrbOwner = (() => {
+    const scope = runnerOrbs?.find(
+      ({ providerId }) => providerId === selectedRunnerProfile?.adapter,
+    )?.scope;
+    return scope === undefined ? undefined : orbKeyOwner(scope);
+  })();
+  const selectedOrbName =
+    selectedRunnerProfile === undefined
+      ? ""
+      : `Orb: ${selectedRunnerProvider === undefined ? "" : `${orbProviderName(selectedRunnerProvider)} `}${selectedRunnerProfile.label}${selectedOrbOwner === undefined ? "" : `, ${selectedOrbOwner.toLowerCase()}`}`;
   const canRetryRunnerProfiles = onRunnerProfileRetry !== undefined;
   const allowedRunnerProfileIdSet = React.useMemo(
     () =>
@@ -741,60 +945,18 @@ export function NewThreadConfigurationStrip({
           <span>Orb</span>
         </button>
       ) : (
-        <Select.Root
-          value={selectedRunnerProfile.id}
+        <OrbPicker
+          groups={runnerGroups}
+          selectedProfile={selectedRunnerProfile}
+          selectedProvider={selectedRunnerProvider}
+          selectedName={selectedOrbName}
           disabled={locked || onRunnerProfileChange === undefined}
-          onValueChange={(value) =>
-            onRunnerProfileChange?.(value as RunnerProfileId)
+          isProfileAllowed={(runnerProfile) =>
+            allowedRunnerProfileIdSet === undefined ||
+            allowedRunnerProfileIdSet.has(runnerProfile.id)
           }
-        >
-          <Select.Trigger
-            className="new-thread-config-pill new-thread-orb-size"
-            aria-label={`Orb: ${selectedRunnerProfile.label}`}
-            title={`Orb: ${selectedRunnerProfile.label}`}
-          >
-            <OrbIcon aria-hidden="true" />
-            <span>{selectedRunnerProfile.label}</span>
-          </Select.Trigger>
-          <Select.Portal>
-            <Select.Positioner
-              className="thread-context-positioner"
-              side="bottom"
-              align="start"
-              sideOffset={8}
-              alignItemWithTrigger={false}
-            >
-              <Select.Popup className="thread-context-popup">
-                <Select.List className="thread-context-list">
-                  {runnerProfiles.map((runnerProfile) => (
-                    <Select.Item
-                      key={runnerProfile.id}
-                      value={runnerProfile.id}
-                      className="thread-context-option"
-                      disabled={
-                        runnerProfile.availability !== "available" ||
-                        (allowedRunnerProfileIdSet !== undefined &&
-                          !allowedRunnerProfileIdSet.has(runnerProfile.id))
-                      }
-                    >
-                      <OrbIcon aria-hidden="true" />
-                      <span className="thread-context-orb-details">
-                        <Select.ItemText>{runnerProfile.label}</Select.ItemText>
-                        <small>
-                          {runnerProfile.resources.cpuCores} CPU ·{" "}
-                          {runnerProfile.resources.memoryMb / 1024} GB
-                        </small>
-                      </span>
-                      <Select.ItemIndicator className="orb-picker-check">
-                        <Check />
-                      </Select.ItemIndicator>
-                    </Select.Item>
-                  ))}
-                </Select.List>
-              </Select.Popup>
-            </Select.Positioner>
-          </Select.Portal>
-        </Select.Root>
+          onSelect={(value) => onRunnerProfileChange?.(value)}
+        />
       )}
       <ProjectPicker
         projects={projects}

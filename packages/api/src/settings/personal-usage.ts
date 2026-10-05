@@ -1,6 +1,7 @@
 import {
   ModelProviderId,
   PageCursor,
+  PluginScope,
   ProjectId,
   ThreadId,
   UsageCurrency,
@@ -115,6 +116,38 @@ export const UsageRunnerDataSchema = Schema.Struct({
 
 export type UsageRunnerData = typeof UsageRunnerDataSchema.Type;
 
+/** Ledger IDs, bounded like `plugin_usage_event`; not catalog literals, so history outlives the catalog. */
+const PluginUsageLedgerId = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(64),
+);
+
+/**
+ * Metered plugin calls for one plugin, provider, capability, credential scope,
+ * and unit. Credential scope says who paid the provider: `personal` and
+ * `workspace` are the user's own keys; `deployment` is the deployment's key.
+ * `events` counts calls and `outcomes` splits them; `units` is in `unit`.
+ * Plugins have no pricing table yet: add an estimated-cost field here, beside
+ * `units`, when one exists rather than deriving prices elsewhere.
+ */
+export const PluginUsageDataSchema = Schema.Struct({
+  pluginId: PluginUsageLedgerId,
+  pluginName: Schema.String,
+  providerId: PluginUsageLedgerId,
+  providerName: Schema.String,
+  capability: PluginUsageLedgerId,
+  credentialScope: PluginScope,
+  unit: PluginUsageLedgerId,
+  units: Schema.Int,
+  events: Schema.Int,
+  outcomes: Schema.Struct({
+    success: Schema.Int,
+    error: Schema.Int,
+  }),
+});
+
+export type PluginUsageData = typeof PluginUsageDataSchema.Type;
+
 export const UsagePriceSourceDataSchema = Schema.Struct({
   source: UsagePriceSource,
   sourceVersion: Schema.String,
@@ -142,6 +175,7 @@ export const PersonalUsageDataSchema = Schema.Struct({
   daily: Schema.Array(UsageDailyTrendDataSchema),
   threads: Schema.Array(UsageThreadDataSchema),
   runners: Schema.Array(UsageRunnerDataSchema),
+  plugins: Schema.Array(PluginUsageDataSchema),
   priceSources: Schema.Array(UsagePriceSourceDataSchema),
   nextCursor: Schema.optional(PageCursor),
 });

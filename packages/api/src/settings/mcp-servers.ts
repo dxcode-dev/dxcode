@@ -48,6 +48,8 @@ export const McpServerDataSchema = Schema.Struct({
   endpoint: McpServerEndpoint,
   transport: McpServerTransport,
   authReference: Schema.optional(EnvironmentVariableConfigReference),
+  /** A bearer token is stored on the server; its value is never returned. */
+  hasStoredToken: Schema.Boolean,
   timeoutMs: McpServerTimeoutMs,
   enabled: Schema.Boolean,
   projectIds: McpServerProjectGrants,
@@ -70,10 +72,17 @@ export const ListMcpServersResponseSchema = successResponse(
   }),
 );
 
+/** Write-only bearer token, stored encrypted on the server. */
+const McpAuthTokenInput = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(8_192),
+);
+
 export const CreateMcpServerRequestSchema = Schema.Struct({
   name: McpNameInput,
   endpoint: McpEndpointInput,
   authReference: Schema.optional(EnvironmentVariableConfigReference),
+  authToken: Schema.optional(McpAuthTokenInput),
   timeoutMs: Schema.Finite,
   projectIds: Schema.optional(McpProjectGrantInputs),
   roles: Schema.optional(McpRoleGrantInputs),
@@ -89,9 +98,12 @@ export const McpServerParamsSchema = Schema.Struct({
 export const UpdateMcpServerRequestSchema = Schema.Struct({
   name: Schema.optional(McpNameInput),
   endpoint: Schema.optional(McpEndpointInput),
+  /** `null` removes any auth: a stored token or a secret reference. */
   authReference: Schema.optional(
     Schema.NullOr(EnvironmentVariableConfigReference),
   ),
+  /** Sets or rotates the stored token and drops any secret reference. */
+  authToken: Schema.optional(McpAuthTokenInput),
   timeoutMs: Schema.optional(Schema.Finite),
   enabled: Schema.optional(Schema.Boolean),
   projectIds: Schema.optional(McpProjectGrantInputs),

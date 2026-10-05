@@ -86,6 +86,7 @@ const data = Schema.decodeUnknownSync(PersonalUsageDataSchema)({
       unknownResourceEvents: 1,
     },
   ],
+  plugins: [],
   priceSources: [
     {
       source: "catalog",

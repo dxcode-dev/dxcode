@@ -22,6 +22,7 @@ export const stableTranscriptPreviewVersion = (value: string) => {
 };
 
 export const parseTranscriptPatch = (patch: string, path: string) => {
+  patch = /```diff\r?\n([\s\S]*?)```/.exec(patch)?.[1] ?? patch;
   const normalized =
     patch.includes("--- ") || patch.includes("diff --git")
       ? patch
@@ -63,14 +64,20 @@ export const transcriptEditSource = (
   const path = textField(input, "path");
   if (path === undefined || path.length === 0) return undefined;
   const name = toolName.toLowerCase();
-  if (name === "edit") {
-    const before = textField(input, "oldText");
-    const after = textField(input, "newText");
+  if (name === "edit" || name === "edit_file") {
+    const before = textField(
+      input,
+      name === "edit_file" ? "old_str" : "oldText",
+    );
+    const after = textField(
+      input,
+      name === "edit_file" ? "new_str" : "newText",
+    );
     return before === undefined || after === undefined
       ? undefined
       : { path, before, after };
   }
-  if (name === "write") {
+  if (name === "write" || name === "create_file") {
     const after = textField(input, "content");
     return after === undefined ? undefined : { path, before: "", after };
   }

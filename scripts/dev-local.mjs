@@ -149,6 +149,9 @@ const generatedBindings = {
   DX_LOCAL_RUNTIME_URL: localRuntimeOrigin,
   DX_LOCAL_RUNTIME_TOKEN: runtimeToken,
   DX_WORKLOAD_IDENTITY_ISSUER: `${coreOrigin}/api/workload-identity`,
+  // Every first-party plugin is installed locally; local runtime substitutes
+  // fixtures for external providers; built-in providers need no credit.
+  DX_INSTALLED_PLUGINS: "search,speech",
 };
 for (const [name, value] of Object.entries(generatedBindings)) {
   const line = `${name}=${localDevVarValue(value)}`;
@@ -170,6 +173,7 @@ for (const name of [
   "DX_DXD_RELEASE_SHA256",
   "DX_MODEL_ENDPOINT_ALLOWLIST",
   "DX_MODEL_DEPLOYMENT_PROVIDERS",
+  "EXA_API_KEY",
 ]) {
   devVars = devVars.replace(new RegExp(`^${name}=.*\n?`, "m"), "");
 }

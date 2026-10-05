@@ -2,11 +2,13 @@ import { Blocks } from "lucide-react";
 import type { SettingsSectionRegistration } from "../settings-registration.js";
 import { PluginsSettings } from "./plugins-settings.js";
 
+// First-party plugins (Search, Speech, …) driven by the Core registry.
 const common = {
   slug: "plugins",
   label: "Plugins",
   title: "Plugins",
-  description: "Review, trust, and manage bounded first-party plugin bundles.",
+  description:
+    "Turn first-party plugins on or off and choose their provider keys.",
   icon: Blocks,
   component: PluginsSettings,
 } as const;

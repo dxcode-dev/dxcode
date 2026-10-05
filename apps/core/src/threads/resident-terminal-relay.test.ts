@@ -686,6 +686,84 @@ describe("resident Terminal tracer relay", () => {
     });
   });
 
+  it("opens a new shell when a provider wake restarted the workspace's processes", async () => {
+    const relay = new ResidentTerminalRelay();
+    const socket = new SocketFake();
+    const exited: DxdTerminalHeartbeat = {
+      terminalVersion: 1,
+      terminal: "default",
+      state: "exited",
+      residentGeneration: resident,
+      foregroundCommand: false,
+      restartRequired: false,
+    };
+    const fixture = transportFixture(exited);
+    const restartedWithWorkspace = vi.fn(() => true);
+    relay.attach(socket, {
+      ...fixture.transport,
+      exitedTerminal: async () => exited,
+      restartedWithWorkspace,
+    });
+    socket.emit(
+      "message",
+      JSON.stringify({
+        v: 1,
+        type: "attach",
+        terminal: "default",
+        dimensions: { columns: 80, rows: 20 },
+      }),
+    );
+    await settle();
+
+    expect(restartedWithWorkspace).toHaveBeenCalledWith(resident);
+    expect(fixture.controls).toContainEqual(
+      expect.objectContaining({
+        type: "terminal.open",
+        mode: "restart-exited",
+        expectedResidentGeneration: resident,
+      }),
+    );
+    expect(controlsSent(socket)).not.toContainEqual(
+      expect.objectContaining({ code: "terminal-exited" }),
+    );
+  });
+
+  it("still offers Restart for a shell that exited while the workspace ran", async () => {
+    const relay = new ResidentTerminalRelay();
+    const socket = new SocketFake();
+    const exited: DxdTerminalHeartbeat = {
+      terminalVersion: 1,
+      terminal: "default",
+      state: "exited",
+      residentGeneration: resident,
+      foregroundCommand: false,
+      restartRequired: false,
+    };
+    const fixture = transportFixture(exited);
+    relay.attach(socket, {
+      ...fixture.transport,
+      restartedWithWorkspace: () => false,
+    });
+    socket.emit(
+      "message",
+      JSON.stringify({
+        v: 1,
+        type: "attach",
+        terminal: "default",
+        dimensions: { columns: 80, rows: 20 },
+      }),
+    );
+    await settle();
+
+    expect(
+      fixture.controls.filter(({ type }) => type === "terminal.open"),
+    ).toHaveLength(0);
+    expect(controlsSent(socket).at(-1)).toMatchObject({
+      code: "terminal-exited",
+      retry: "manual",
+    });
+  });
+
   it("forwards daemon liveness only to ready browser attachments", async () => {
     const relay = new ResidentTerminalRelay();
     const readySocket = new SocketFake();

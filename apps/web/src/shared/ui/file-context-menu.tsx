@@ -1,18 +1,7 @@
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Download, FileText } from "lucide-react";
 import type { ReactElement, ReactNode } from "react";
-
-/** Start a same-origin download without navigating away from dx. */
-export const downloadFromUrl = (url: string) => {
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = "";
-  anchor.rel = "noopener";
-  anchor.style.display = "none";
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-};
+import { downloadFromUrl } from "../download-from-url.js";
 
 /**
  * Right-click menu for a file reference: "Open file" and, when the file can

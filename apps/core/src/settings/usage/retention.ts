@@ -1,5 +1,7 @@
 import { settingsPersistenceLogger } from "../../logging.js";
 import { purgeStartupPhasesBefore } from "../../observability/startup-phase-retention.js";
+import { purgeExpiredPluginUsageEvents } from "../../plugins/metering.js";
+import { purgeExpiredSubmissionPluginTools } from "../../plugins/submission-tools.js";
 
 export const purgeExpiredUsageEvents = (
   db: D1Database,
@@ -50,15 +52,27 @@ export const scheduleUsageRetention = (
       purgeExpiredUsageEvents(bindings.DB, before),
       purgeExpiredWorkspaceUsageAudit(bindings.DB, before),
       purgeStartupPhasesBefore(bindings.DB, before),
+      purgeExpiredPluginUsageEvents(bindings.DB, before),
+      purgeExpiredSubmissionPluginTools(bindings.DB, before),
     ])
-      .then(([usageResult, auditResult, startupResult]) => {
-        settingsPersistenceLogger.info("Usage retention completed.", {
-          event: "usage_retention_completed",
-          deletedEvents: usageResult.meta.changes,
-          deletedAuditEvents: auditResult.meta.changes,
-          deletedStartupPhases: startupResult.meta.changes,
-        });
-      })
+      .then(
+        ([
+          usageResult,
+          auditResult,
+          startupResult,
+          pluginResult,
+          toolsResult,
+        ]) => {
+          settingsPersistenceLogger.info("Usage retention completed.", {
+            event: "usage_retention_completed",
+            deletedEvents: usageResult.meta.changes,
+            deletedAuditEvents: auditResult.meta.changes,
+            deletedStartupPhases: startupResult.meta.changes,
+            deletedPluginUsageEvents: pluginResult.meta.changes,
+            deletedSubmissionPluginTools: toolsResult.meta.changes,
+          });
+        },
+      )
       .catch(() => {
         settingsPersistenceLogger.error("Usage retention failed.", {
           event: "usage_retention_failed",

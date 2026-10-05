@@ -18,6 +18,7 @@ export type WorkloadIdentityTtlSeconds = typeof WorkloadIdentityTtlSeconds.Type;
 export const WorkloadIdentityRuntimeProvider = Schema.Literals([
   "local",
   "e2b",
+  "cloudflare",
 ]);
 export type WorkloadIdentityRuntimeProvider =
   typeof WorkloadIdentityRuntimeProvider.Type;

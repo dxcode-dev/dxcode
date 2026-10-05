@@ -149,6 +149,25 @@ export const preflightCloudflareDeployment = async ({
     );
 };
 
+/**
+ * Cloudflare Containers is the deployer's own: it needs the Workers Paid
+ * plan, which enables the Containers API for the account.
+ */
+export const preflightCloudflareContainers = async ({
+  auth,
+  fetch = globalThis.fetch,
+}) => {
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${auth.accountId}/containers/me`,
+    { headers: auth.headers },
+  );
+  const body = await response.json().catch(() => undefined);
+  if (!response.ok || body?.success !== true)
+    throw new Error(
+      `Cloudflare Containers is not available to this account or token (${response.status}). It requires the Workers Paid plan and a token that can manage Containers.`,
+    );
+};
+
 export const loadAlchemyCloudflareAuth = ({
   profile = "dx-selfhost",
   environment = process.env,

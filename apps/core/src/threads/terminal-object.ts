@@ -188,6 +188,14 @@ const AUTHORITY_STORAGE_KEY = "daemon-authority";
 const ACTIVATION_ATTEMPT_STORAGE_KEY = "daemon-activation-attempt";
 const ENVIRONMENT_GENERATION_STORAGE_KEY = "environment-next-generation";
 const APPLIED_ENVIRONMENT_STORAGE_KEY = "environment-applied";
+const RESIDENT_READY_STORAGE_KEY = "terminal-resident-ready";
+
+/** When Core first saw a Terminal resident generation ready. */
+const ResidentReadyMarker = Schema.Struct({
+  residentGeneration: Schema.String,
+  at: Schema.Number,
+});
+type ResidentReadyMarker = typeof ResidentReadyMarker.Type;
 
 const EnvironmentRevision = Schema.Struct({
   personal: Schema.Struct({
@@ -266,7 +274,7 @@ interface DaemonAuthority {
   readonly protocolMajor: typeof DXD_PROTOCOL_MAJOR;
   readonly terminalVersion: typeof DXD_TERMINAL_VERSION;
   readonly workloadIdentityVersion: typeof DXD_WORKLOAD_IDENTITY_VERSION;
-  readonly runtimeProvider: "local" | "e2b";
+  readonly runtimeProvider: "local" | "e2b" | "cloudflare";
   readonly runtimeAssurance: "dx_dxd_channel_v1" | "dx_provider_attested_v1";
   readonly attachmentNonce?: string;
   readonly lastSeen?: number;
@@ -404,6 +412,13 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   #heldCapture?: ThreadChangesCaptureLease;
   /** Candidates publish one at a time, so they never contend for the lease. */
   #publishingChanges: Promise<void> = Promise.resolve();
+  /** The resident Core last saw become ready, and when. */
+  #residentReady?: ResidentReadyMarker;
+  /**
+   * When the workspace's processes last started, from the latest daemon
+   * activation; only providers whose pause restarts processes report it.
+   */
+  #processesStartedAt?: number;
 
   constructor(ctx: DurableObjectState, env: Bindings) {
     super(ctx, env);
@@ -425,6 +440,12 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       )(await ctx.storage.get(APPLIED_ENVIRONMENT_STORAGE_KEY));
       this.#appliedEnvironment = Option.isSome(storedAppliedEnvironment)
         ? storedAppliedEnvironment.value
+        : undefined;
+      const storedResidentReady = Schema.decodeUnknownOption(
+        ResidentReadyMarker,
+      )(await ctx.storage.get(RESIDENT_READY_STORAGE_KEY));
+      this.#residentReady = Option.isSome(storedResidentReady)
+        ? storedResidentReady.value
         : undefined;
       let authority = this.#authority;
       const expectedAuthority = authority;
@@ -1406,7 +1427,13 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           protocolMajor: DXD_PROTOCOL_MAJOR,
           terminalVersion: DXD_TERMINAL_VERSION,
           workloadIdentityVersion: DXD_WORKLOAD_IDENTITY_VERSION,
-          runtimeProvider: runtime.executionAdapter,
+          // Deployed: the pinned provider, corrected after installation.
+          runtimeProvider:
+            runtime.executionAdapter === "local"
+              ? "local"
+              : existing.runtimeProvider === "local"
+                ? runtime.executionAdapter
+                : existing.runtimeProvider,
         };
         if (authority !== existing) {
           this.#authority = authority;
@@ -1467,6 +1494,21 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       });
       if (epoch !== this.#drainEpoch)
         throw new Error("activation cancelled by drain");
+      this.#processesStartedAt = installation.processesStartedAt;
+      // A deployment may run several Orb providers; workload identity names
+      // the one this Thread's workspace is pinned to.
+      const pinned = this.#authority;
+      if (
+        installation.provider !== undefined &&
+        pinned?.threadId === threadId &&
+        pinned.runtimeProvider !== installation.provider
+      ) {
+        this.#authority = {
+          ...pinned,
+          runtimeProvider: installation.provider,
+        };
+        await this.ctx.storage.put(AUTHORITY_STORAGE_KEY, this.#authority);
+      }
       stage = "registration";
       if (!this.#isTransportReady()) {
         await new Promise<void>((resolve, reject) => {
@@ -1563,6 +1605,18 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
 
   #publishTerminalHeartbeat(state: DxdTerminalHeartbeat) {
     this.#terminalHeartbeat = state;
+    if (
+      state.state === "ready" &&
+      this.#residentReady?.residentGeneration !== state.residentGeneration
+    ) {
+      this.#residentReady = {
+        residentGeneration: state.residentGeneration,
+        at: Date.now(),
+      };
+      void this.ctx.storage
+        .put(RESIDENT_READY_STORAGE_KEY, this.#residentReady)
+        .catch(() => undefined);
+    }
     for (const resolve of this.#terminalWaiters) resolve(state);
     this.#terminalWaiters.clear();
   }
@@ -1650,6 +1704,13 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         await this.#activateEnvironment(threadId);
         return this.#awaitTerminalHeartbeat();
       },
+      // The resident's shell was ready before the workspace's processes last
+      // started, so it died with a provider wake that restarts processes
+      // (Containers), not on its own: open a new one, as the user would.
+      restartedWithWorkspace: (residentGeneration) =>
+        this.#processesStartedAt !== undefined &&
+        this.#residentReady?.residentGeneration === residentGeneration &&
+        this.#residentReady.at < this.#processesStartedAt,
       checkLiveness: () => this.#checkTerminalLiveness(threadId),
       sendControl: (control) => this.#sendTerminalControl(control),
       sendBinary: (frame) => this.#sendTerminalBinary(frame),

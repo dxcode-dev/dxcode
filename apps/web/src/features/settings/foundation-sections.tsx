@@ -3,22 +3,29 @@ import { personalAdvancedSettingsSection } from "./advanced/registration.js";
 import { appearanceSettingsSection } from "./appearance/registration.js";
 import { workspaceApplicationsSettingsSection } from "./applications/registration.js";
 import {
+  personalCustomPluginsSettingsSection,
+  workspaceCustomPluginsSettingsSection,
+} from "./custom-plugins/registration.js";
+import {
   personalEnvironmentVariablesSettingsSection,
   workspaceEnvironmentVariablesSettingsSection,
 } from "./environment-variables/registration.js";
 import { personalExperimentalFeaturesSettingsSection } from "./experimental-features/registration.js";
-import { personalIntegrationsSettingsSection } from "./integrations/registration.js";
+import {
+  personalIntegrationsSettingsSection,
+  workspaceIntegrationsSettingsSection,
+} from "./integrations/registration.js";
 import { keyboardShortcutsSettingsSection } from "./keyboard-shortcuts/registration.js";
 import { personalSigningKeysSettingsSection } from "./keys/registration.js";
-import {
-  personalMcpServersSettingsSection,
-  workspaceMcpServersSettingsSection,
-} from "./mcp-servers/registration.js";
 import { personalModeDialSettingsSection } from "./mode-dial/registration.js";
 import {
   personalModelRoutingSettingsSection,
   workspaceModelRoutingSettingsSection,
 } from "./model-routing/registration.js";
+import {
+  personalOrbProvidersSettingsSection,
+  workspaceOrbProvidersSettingsSection,
+} from "./orb-providers/registration.js";
 import {
   personalPluginsSettingsSection,
   workspacePluginsSettingsSection,
@@ -38,7 +45,9 @@ import {
 } from "./skills/registration.js";
 import { personalPluginTriggersSettingsSection } from "./triggers/registration.js";
 import {
+  personalPluginUsageSettingsSection,
   personalUsageSettingsSection,
+  workspacePluginUsageSettingsSection,
   workspaceUsageSettingsSection,
 } from "./usage/registration.js";
 import { workspaceProfileSettingsSection } from "./workspace/registration.js";
@@ -47,15 +56,17 @@ export const foundationSettingsSections: ReadonlyArray<SettingsSectionRegistrati
   [
     personalAccountSettingsSection,
     personalUsageSettingsSection,
+    personalPluginUsageSettingsSection,
     personalEnvironmentVariablesSettingsSection,
     personalModelRoutingSettingsSection,
     personalModeDialSettingsSection,
-    personalMcpServersSettingsSection,
+    personalIntegrationsSettingsSection,
     personalSecuritySettingsSection,
     personalPluginsSettingsSection,
+    personalOrbProvidersSettingsSection,
+    personalCustomPluginsSettingsSection,
     personalPluginTriggersSettingsSection,
     personalSkillsSettingsSection,
-    personalIntegrationsSettingsSection,
     personalAdvancedSettingsSection,
     appearanceSettingsSection,
     personalExperimentalFeaturesSettingsSection,
@@ -64,13 +75,16 @@ export const foundationSettingsSections: ReadonlyArray<SettingsSectionRegistrati
     personalProjectDefaultsSettingsSection,
     workspaceProfileSettingsSection,
     workspaceUsageSettingsSection,
+    workspacePluginUsageSettingsSection,
     workspaceProjectDefaultsSettingsSection,
     workspaceEnvironmentVariablesSettingsSection,
     workspaceApplicationsSettingsSection,
     workspaceModelRoutingSettingsSection,
-    workspaceMcpServersSettingsSection,
+    workspaceIntegrationsSettingsSection,
     workspaceSkillsSettingsSection,
     workspacePluginsSettingsSection,
+    workspaceOrbProvidersSettingsSection,
+    workspaceCustomPluginsSettingsSection,
   ];
 
 export const settingsManifest = createSettingsManifest(

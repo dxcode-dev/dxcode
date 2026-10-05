@@ -12,16 +12,101 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
+import { assertDockerAvailable } from "../deploy/orb/containers.mjs";
 import { collectAdminPassword } from "../deploy/selfhost/admin-credentials.mjs";
 import {
   loadAlchemyCloudflareAuth,
+  preflightCloudflareContainers,
   preflightCloudflareDeployment,
 } from "../deploy/selfhost/cloudflare-auth.mjs";
-import { validateSelfhostConfig } from "../deploy/selfhost/config.mjs";
+import {
+  FIRST_PARTY_PLUGIN_IDS,
+  validateSelfhostConfig,
+} from "../deploy/selfhost/config.mjs";
 import { createHiddenPrompt } from "./hidden-prompt.mjs";
 
 export const WORKER_TRACES_PROMPT =
   "Enable Cloudflare Worker traces (records request URLs and Durable Object names)";
+
+/**
+ * First-party plugins are installed at deploy time. Each may also take a
+ * deployment-scope provider key; without one, people and workspaces add
+ * their own in Settings → Plugins. The installer asks once about each plugin
+ * not yet in `offered` and records what it asked.
+ */
+const PLUGIN_QUESTIONS = Object.freeze([
+  {
+    id: "search",
+    install:
+      "Install the Web search plugin (agent web search and page reading)",
+    key: "Configure a deployment Exa API key for Search (people and workspaces can also add their own)",
+    integration: "exa",
+    variable: "EXA_API_KEY",
+    secret: "Exa API key",
+  },
+  {
+    id: "speech",
+    install: "Install the Speech plugin (composer dictation)",
+    key: "Configure a deployment Sarvam API key for Speech (people and workspaces can also add their own)",
+    integration: "sarvam",
+    variable: "SARVAM_API_KEY",
+    secret: "Sarvam API key",
+  },
+]);
+
+export const collectPluginChoices = async ({
+  yes,
+  secret,
+  environment,
+  integrations,
+  plugins = [],
+  offered = [],
+}) => {
+  const installed = [...plugins];
+  const asked = [...offered];
+  for (const question of PLUGIN_QUESTIONS) {
+    if (asked.includes(question.id)) continue;
+    asked.push(question.id);
+    if (!(await yes(question.install))) continue;
+    installed.push(question.id);
+    if (await yes(question.key)) {
+      integrations.push(question.integration);
+      environment[question.variable] = await secret(question.secret);
+    }
+  }
+  return { plugins: installed, offeredPlugins: asked, integrations };
+};
+
+export const E2B_ORB_PROMPT =
+  "Install E2B as an Orb provider (sandboxes on E2B; needs an E2B API key)";
+export const CLOUDFLARE_ORB_PROMPT =
+  "Install Cloudflare Containers as an Orb provider (containers run and are billed in this Cloudflare account; requires the Workers Paid plan and Docker on this machine)";
+
+/**
+ * Every deployment installs at least one Orb provider (where each Thread's
+ * workspace runs). Containers needs no key, but must be an explicit choice
+ * because it requires the Workers Paid plan.
+ */
+export const collectOrbProviders = async ({
+  yes,
+  secret,
+  environment,
+  log,
+}) => {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const providers = [];
+    if (await yes(E2B_ORB_PROMPT, true)) {
+      providers.push("e2b");
+      environment.E2B_API_KEY = await secret("E2B API key");
+    }
+    if (await yes(CLOUDFLARE_ORB_PROMPT, false)) providers.push("cloudflare");
+    if (providers.length > 0) return providers;
+    log(
+      "Install at least one Orb provider: E2B, Cloudflare Containers, or both.\n",
+    );
+  }
+  throw new Error("A deployment must install at least one Orb provider.");
+};
 
 export const collectDeploymentConfig = async ({
   answer,
@@ -52,7 +137,12 @@ export const collectDeploymentConfig = async ({
     environment.DX_ADMIN_PASSWORD = await collectAdminPassword({
       readSecret: secret,
     });
-  environment.E2B_API_KEY = await secret("E2B API key");
+  const orbProviders = await collectOrbProviders({
+    yes,
+    secret,
+    environment,
+    log: (message) => stdout.write(message),
+  });
   const integrations = [];
   if (await yes("Configure a GitHub App")) {
     integrations.push("github");
@@ -64,10 +154,12 @@ export const collectDeploymentConfig = async ({
       "Bitbucket OAuth JSON",
     );
   }
-  if (await yes("Configure Sarvam dictation")) {
-    integrations.push("sarvam");
-    environment.SARVAM_API_KEY = await secret("Sarvam API key");
-  }
+  const { plugins, offeredPlugins } = await collectPluginChoices({
+    yes,
+    secret,
+    environment,
+    integrations,
+  });
   const githubCopilotClientId = (await yes("Configure GitHub Copilot sign-in"))
     ? await answer("GitHub Copilot OAuth client ID")
     : undefined;
@@ -85,6 +177,9 @@ export const collectDeploymentConfig = async ({
     ...(domain ? { domain, zone } : {}),
     ...(authEmailFrom ? { authEmailFrom } : {}),
     integrations,
+    orbProviders,
+    plugins,
+    offeredPlugins,
     githubCopilotClientId,
     workersAi,
     workerTraces,
@@ -195,25 +290,49 @@ export const runDxDeploy = async ({
       authEmailFrom,
     });
   else if (flags.has("--rotate")) {
-    environment.E2B_API_KEY = await secret(
-      "New E2B API key, or Ctrl-C to cancel",
-    );
+    if (config.orbProviders.includes("e2b"))
+      environment.E2B_API_KEY = await secret(
+        "New E2B API key, or Ctrl-C to cancel",
+      );
     for (const integration of config.integrations) {
       const variable = {
         github: "DX_INTEGRATION_GITHUB_APP",
         bitbucket: "DX_INTEGRATION_BITBUCKET_OAUTH",
         sarvam: "SARVAM_API_KEY",
+        exa: "EXA_API_KEY",
       }[integration];
       if (await yes(`Rotate ${integration}`))
         environment[variable] = await secret(`New ${integration} secret`);
     }
   }
+  // Deployments created before a plugin existed were never asked about it.
+  if (
+    FIRST_PARTY_PLUGIN_IDS.some(
+      (id) => !(config.offeredPlugins ?? []).includes(id),
+    )
+  )
+    config = validateSelfhostConfig({
+      ...config,
+      ...(await collectPluginChoices({
+        yes,
+        secret,
+        environment,
+        integrations: [...config.integrations],
+        plugins: config.plugins ?? [],
+        offered: config.offeredPlugins ?? [],
+      })),
+    });
   // Deployments created before tracing was configurable were never asked.
   if (config.workerTraces === undefined)
     config = validateSelfhostConfig({
       ...config,
       workerTraces: await yes(WORKER_TRACES_PROMPT, false),
     });
+  if (config.orbProviders.includes("cloudflare")) {
+    await preflightCloudflareContainers({ auth: cloudflareAuth });
+    assertDockerAvailable(environment);
+    stdout.write("Cloudflare Containers prerequisites passed.\n");
+  }
   if (flags.has("--reset-admin")) {
     if (config.authEmailFrom !== undefined)
       throw new Error(
@@ -239,6 +358,7 @@ export const runDxDeploy = async ({
           "DX_INTEGRATION_GITHUB_APP",
           "DX_INTEGRATION_BITBUCKET_OAUTH",
           "SARVAM_API_KEY",
+          "EXA_API_KEY",
         ]).has(name),
       )
       .sort()

@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import * as Redacted from "effect/Redacted";
 import { describe, expect, it, vi } from "vitest";
 import { reconcileHeldSecret } from "./alchemy-resources.ts";
@@ -6,9 +9,6 @@ import {
   preflightCloudflareDeployment,
 } from "./cloudflare-auth.mjs";
 import { validateSelfhostConfig } from "./config.mjs";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import {
   downloadDxdRelease,
   loadDxdRelease,
@@ -60,6 +60,23 @@ describe("exportable self-host configuration", () => {
         adminEmail: "me@example.com",
       }),
     ).toThrow("32-character account ID");
+  });
+
+  it("records the installed Orb providers, E2B for configs written before Containers", () => {
+    const base = { name: "mine", adminEmail: "me@example.com" };
+    expect(validateSelfhostConfig(base).orbProviders).toEqual(["e2b"]);
+    expect(
+      validateSelfhostConfig({ ...base, orbProviders: ["e2b", "cloudflare"] })
+        .orbProviders,
+    ).toEqual(["cloudflare", "e2b"]);
+    expect(
+      validateSelfhostConfig({ ...base, orbProviders: ["cloudflare"] })
+        .orbProviders,
+    ).toEqual(["cloudflare"]);
+    for (const orbProviders of [[], ["other"], ["e2b", "e2b"], "e2b"])
+      expect(() => validateSelfhostConfig({ ...base, orbProviders })).toThrow(
+        "orbProviders",
+      );
   });
 
   it("enables generic hosted authentication only with a sender in the deployment zone", () => {

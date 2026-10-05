@@ -1,35 +1,36 @@
+import { env } from "cloudflare:workers";
 import {
-  flueMcpServerName,
   EnvironmentVariableRepository,
+  flueMcpServerName,
   McpServerId,
   McpServerRepository,
-  ThreadId,
   type ProjectId,
   type StoredMcpServer,
   type StoredMcpTool,
+  ThreadId,
   type UserId,
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
-import { env } from "cloudflare:workers";
 import { Effect, Layer, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
+import { SettingsAudit } from "../audit.js";
 import {
   decryptEnvironmentVariable,
   loadConfigEncryptionKeyring,
 } from "../environment-variables/encryption.js";
 import { EnvironmentVariableRepositoryD1 } from "../environment-variables/repository-d1.js";
-import { SettingsAudit } from "../audit.js";
 import { SettingsService } from "../service.js";
 import { WorkspaceRepositoryD1 } from "../workspace/repository-d1.js";
 import { WorkspacePolicyRepositoryD1 } from "../workspace-policy/repository-d1.js";
 import { WorkspacePolicyService } from "../workspace-policy/service.js";
+import { readMcpServerCredential } from "./credential.js";
 import { McpServerRepositoryD1 } from "./repository-d1.js";
 import { filterMcpExecutionConnections } from "./service.js";
 import {
   createMcpNetworkFetch,
-  mcpToolContractHash,
   McpNetworkRejected,
+  mcpToolContractHash,
 } from "./transport.js";
 
 const ExecutionThreadRow = Schema.Struct({
@@ -50,6 +51,12 @@ export class McpExecutionUnavailable extends Schema.TaggedError<McpExecutionUnav
 export interface McpAgentConnectionData {
   readonly id: string;
   readonly name: string;
+  readonly displayName?: string;
+  readonly toolDefinitions?: ReadonlyArray<{
+    readonly name: string;
+    readonly description: string;
+    readonly inputSchemaJson: string;
+  }>;
   readonly endpoint: string;
   readonly timeoutMs: number;
   readonly authenticated: boolean;
@@ -143,9 +150,17 @@ export const resolveMcpAgentConnections = Effect.fn(
     .map(({ server, tools }) => ({
       id: server.id,
       name: flueMcpServerName(server.id),
+      displayName: server.name,
+      toolDefinitions: tools.map(({ name, description, inputSchemaJson }) => ({
+        name,
+        description,
+        inputSchemaJson,
+      })),
       endpoint: server.endpoint,
       timeoutMs: server.timeoutMs,
-      authenticated: server.authReference !== undefined,
+      authenticated:
+        server.authReference !== undefined ||
+        server.hasStoredCredential === true,
       tools: tools.map(({ name }) => name),
     })) satisfies ReadonlyArray<McpAgentConnectionData>;
 });
@@ -174,6 +189,18 @@ const resolveAuthorizedConnection = Effect.fn("resolveAuthorizedMcpConnection")(
     const connection = connections.find(({ server }) => server.id === serverId);
     if (connection === undefined || connection.tools.length === 0) {
       return yield* new McpInvocationForbidden();
+    }
+    if (connection.server.hasStoredCredential === true) {
+      const keyring = yield* loadConfigEncryptionKeyring(bindings).pipe(
+        Effect.mapError(() => new McpExecutionUnavailable()),
+      );
+      const credential = yield* Effect.tryPromise({
+        try: () => readMcpServerCredential(db, keyring, connection.server),
+        catch: () => new McpExecutionUnavailable(),
+      });
+      // The row vanished between listing and reading: fail closed.
+      if (credential === undefined) return yield* new McpInvocationForbidden();
+      return { db, ...connection, credential } satisfies AuthorizedConnection;
     }
     if (connection.server.authReference === undefined) {
       return {
@@ -283,6 +310,8 @@ const validateToolListing = async (
   response: Response,
   body: Uint8Array,
 ) => {
+  // Servers acknowledge client notifications with an empty body (202).
+  if (body.byteLength === 0) return;
   let messages: ReadonlyArray<JsonRpcMessage>;
   try {
     messages = parseMessages(body, response.headers.get("content-type"));

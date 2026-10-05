@@ -3,7 +3,7 @@ import type { CatalogProviderData, ConnectionData } from "@dx/api";
 import { workspaceRoleHasPermission } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useState, type PointerEvent } from "react";
+import { type PointerEvent, useState } from "react";
 import type { ModelRoutingTarget } from "../../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { settingsContextQueryOptions } from "../settings-context-queries.js";
@@ -360,7 +360,11 @@ export const ModelRoutingSettings = ({
           catalog={catalog.data}
           choices={personal ? choices.data : undefined}
           connections={rows}
-          dictationAvailable={settingsContext.data?.dictationAvailable === true}
+          dictation={
+            settingsContext.data?.activeScope === "personal"
+              ? settingsContext.data.dictation
+              : undefined
+          }
           onConnectionClick={(id) => {
             void navigate({ hash: id, replace: true, resetScroll: false });
             setExpanded((current) =>

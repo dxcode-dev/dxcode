@@ -95,6 +95,15 @@ export interface ResidentTerminalTransport {
   ) => Promise<DxdTerminalHeartbeat>;
   readonly refreshEnvironment: () => Promise<DxdTerminalHeartbeat>;
   /**
+   * Whether an exited resident died because the provider restarted the
+   * workspace's processes (a Containers wake: `preserves: "filesystem"`).
+   * Known once activation has run; such a shell is replaced without the
+   * user's Restart. A shell that exits while the workspace runs is not.
+   */
+  readonly restartedWithWorkspace?: (
+    residentGeneration: TerminalGenerationType,
+  ) => boolean;
+  /**
    * A present browser missed the daemon's liveness. Resolves true when the
    * daemon is proven live; otherwise the silent daemon has been fenced, which
    * moves every attachment to `waiting`.
@@ -685,6 +694,24 @@ export class ResidentTerminalRelay {
         ? activation
         : Promise.race([activation, exited]));
       settled = true;
+      // An exit the provider's wake caused is only known after activation
+      // (it reports when the workspace's processes started); wait for it
+      // and replace the shell instead of offering Restart.
+      const restartedWithWorkspace = session.transport.restartedWithWorkspace;
+      if (
+        state.state === "exited" &&
+        !session.restartResident &&
+        restartedWithWorkspace !== undefined
+      ) {
+        const current = await activation.catch(() => state);
+        if (
+          current.state === "exited" &&
+          restartedWithWorkspace(current.residentGeneration)
+        ) {
+          state = current;
+          session.restartResident = true;
+        }
+      }
     } catch {
       if (this.#current(session))
         this.close("resident-unavailable", "immediate-once", 1012);

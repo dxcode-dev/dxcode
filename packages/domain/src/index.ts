@@ -18,6 +18,42 @@ export {
 } from "./persistence/errors.js";
 export { Timestamp } from "./persistence/timestamp.js";
 export {
+  EXECUTION_CAPABILITY_IDS,
+  ExecutionCapabilityId,
+  ExecutionPauseResumePreserves,
+  executionCapabilitiesForRunnerProfile,
+} from "./plugins/execution.js";
+export {
+  FirstPartyPluginId,
+  MAX_PLUGIN_CREDENTIAL_LENGTH,
+  MeteredPluginCall,
+  PluginCapabilityId,
+  PluginCredential,
+  PluginEnablement,
+  PluginMeteringUnit,
+  PluginProviderId,
+  PluginResolution,
+  PluginScope,
+  PluginToolSet,
+  ResolvedPluginProvider,
+} from "./plugins/plugin.js";
+export {
+  type SpeechJobCheckpoints,
+  type SpeechProvider,
+  SpeechProviderError,
+  SpeechTranscriptionStatus,
+} from "./plugins/speech.js";
+export {
+  ReadWebPageInput,
+  ReadWebPageOutput,
+  type WebProvider,
+  WebSearchInput,
+  WebSearchOutput,
+  WebSearchResult,
+  WebToolError,
+  WebToolErrorCode,
+} from "./plugins/web.js";
+export {
   CreateProjectInput,
   createProject,
   isValidProjectName,
@@ -438,6 +474,10 @@ export {
   WorkspaceProjectPolicy,
 } from "./settings/project-defaults.js";
 export {
+  CLOUDFLARE_ORB_PROFILES,
+  CloudflareContainerInstance,
+  CloudflareOrbProfile,
+  CloudflareRunnerProfileConfiguration,
   E2B_ORB_PROFILES,
   E2BOrbProfile,
   E2BRunnerProfileConfiguration,
@@ -451,6 +491,7 @@ export {
   RunnerProfileCatalog,
   RunnerProfileCatalogConfiguration,
   RunnerProfileId,
+  RunnerProviderPresentation,
   RunnerResources,
 } from "./settings/runner-profile.js";
 export {
@@ -622,6 +663,7 @@ export {
   ThreadSourceSnapshot,
 } from "./source-control/source-control.js";
 export {
+  type ThreadExecutionPin,
   type ThreadListRequest,
   ThreadRepository,
   type ThreadRepositoryShape,
@@ -645,6 +687,8 @@ export {
   UNTITLED_THREAD_TITLE,
 } from "./threads/thread-title.js";
 export {
+  type PluginUsageAggregate,
+  type PluginUsageUserAggregate,
   type UsageDailyTrend,
   type UsageDashboard,
   type UsagePriceSourceSummary,

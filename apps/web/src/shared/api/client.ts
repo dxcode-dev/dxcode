@@ -37,6 +37,7 @@ import {
   CreateThreadInitialAdmissionUnavailableResponseSchema,
   CreateThreadInvalidRequestResponseSchema,
   CreateThreadModelRouteUnavailableResponseSchema,
+  CreateThreadOrbUnavailableResponseSchema,
   CreateThreadPersistenceUnavailableResponseSchema,
   CreateThreadPolicyDeniedResponseSchema,
   CreateThreadProjectlessForbiddenResponseSchema,
@@ -60,6 +61,8 @@ import {
   type ExternalApiApplicationAuditEventData,
   type ExternalApiApplicationData,
   ExternalApiApplicationsErrorResponseSchema,
+  FirstPartyPluginErrorResponseSchema,
+  FirstPartyPluginListResponseSchema,
   GetIntegrationDisconnectImpactResponseSchema,
   GetPersonalAccountResponseSchema,
   GetPersonalAgentInstructionsResponseSchema,
@@ -103,6 +106,9 @@ import {
   type McpServerData,
   McpServersErrorResponseSchema,
   ModelRoutingErrorResponseSchema,
+  OrbProviderErrorResponseSchema,
+  type OrbProviderId,
+  OrbProviderListResponseSchema,
   type PersonalAccountData,
   PersonalAccountErrorResponseSchema,
   type PersonalAgentInstructionsData,
@@ -158,6 +164,7 @@ import {
   SelectIntegrationRepositoriesResponseSchema,
   type SetConnectionEnabledRequestSchema,
   SetExternalApiApplicationStatusResponseSchema,
+  type SetFirstPartyPluginConfigurationRequest,
   type SettingsContextData,
   type SettingsFieldError,
   type SigningKeySetupGuidance,
@@ -307,6 +314,8 @@ export const request = async <
         McpServersErrorResponseSchema,
         SkillsErrorResponseSchema,
         PluginsErrorResponseSchema,
+        FirstPartyPluginErrorResponseSchema,
+        OrbProviderErrorResponseSchema,
         ExperimentalFeaturesErrorResponseSchema,
         ProjectDefaultsErrorResponseSchema,
         SigningKeysErrorResponseSchema,
@@ -324,6 +333,7 @@ export const request = async <
         CreateThreadProjectNotFoundResponseSchema,
         CreateThreadPersistenceUnavailableResponseSchema,
         CreateThreadModelRouteUnavailableResponseSchema,
+        CreateThreadOrbUnavailableResponseSchema,
         CreateThreadPolicyDeniedResponseSchema,
         CreateThreadProjectlessForbiddenResponseSchema,
         CreateThreadRunnerUnavailableResponseSchema,
@@ -636,6 +646,135 @@ const pluginsBase = (target: PluginsTarget) =>
     ? "/v1/settings/personal/plugins"
     : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/plugins`;
 
+/** First-party plugins (Search, …): enablement, provider, and credential per scope. */
+const firstPartyPluginsBase = (target: PluginsTarget) =>
+  target.scope === "personal"
+    ? "/v1/settings/personal/first-party-plugins"
+    : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/first-party-plugins`;
+
+export const listFirstPartyPlugins = async (
+  target: PluginsTarget,
+  signal?: AbortSignal,
+) =>
+  (
+    await request(
+      firstPartyPluginsBase(target),
+      FirstPartyPluginListResponseSchema,
+      { signal },
+    )
+  ).data;
+
+export const setFirstPartyPluginEnablement = async (
+  target: PluginsTarget,
+  pluginId: string,
+  enablement: "enabled" | "disabled" | null,
+) =>
+  (
+    await request(
+      `${firstPartyPluginsBase(target)}/${encodeURIComponent(pluginId)}/enablement`,
+      FirstPartyPluginListResponseSchema,
+      { method: "PUT", body: JSON.stringify({ enablement }) },
+    )
+  ).data;
+
+export const setFirstPartyPluginConfiguration = async (
+  target: PluginsTarget,
+  pluginId: string,
+  input: SetFirstPartyPluginConfigurationRequest,
+) =>
+  (
+    await request(
+      `${firstPartyPluginsBase(target)}/${encodeURIComponent(pluginId)}/configuration`,
+      FirstPartyPluginListResponseSchema,
+      { method: "PUT", body: JSON.stringify(input) },
+    )
+  ).data;
+
+export const deleteFirstPartyPluginConfiguration = async (
+  target: PluginsTarget,
+  pluginId: string,
+) =>
+  (
+    await request(
+      `${firstPartyPluginsBase(target)}/${encodeURIComponent(pluginId)}/configuration`,
+      FirstPartyPluginListResponseSchema,
+      { method: "DELETE" },
+    )
+  ).data;
+
+export const setFirstPartyPluginWorkspacePolicy = async (
+  workspaceSlug: WorkspaceSlug,
+  allowPersonalOverrides: boolean,
+) =>
+  (
+    await request(
+      `${firstPartyPluginsBase({ scope: "workspace", workspaceSlug })}/policy`,
+      FirstPartyPluginListResponseSchema,
+      { method: "PUT", body: JSON.stringify({ allowPersonalOverrides }) },
+    )
+  ).data;
+
+/** Orb providers: bring-your-own keys for key-based providers per scope. */
+const orbProvidersBase = (target: PluginsTarget) =>
+  target.scope === "personal"
+    ? "/v1/settings/personal/orb-providers"
+    : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/orb-providers`;
+
+export const listOrbProviders = async (
+  target: PluginsTarget,
+  projectId?: ProjectId,
+  signal?: AbortSignal,
+) =>
+  (
+    await request(
+      projectId === undefined
+        ? orbProvidersBase(target)
+        : `${orbProvidersBase(target)}?projectId=${encodeURIComponent(projectId)}`,
+      OrbProviderListResponseSchema,
+      { signal },
+    )
+  ).data;
+
+export const setOrbProviderKey = async (
+  target: PluginsTarget,
+  providerId: OrbProviderId,
+  credential: string,
+) =>
+  (
+    await request(
+      `${orbProvidersBase(target)}/${encodeURIComponent(providerId)}/key`,
+      OrbProviderListResponseSchema,
+      { method: "PUT", body: JSON.stringify({ credential }) },
+    )
+  ).data;
+
+export const deleteOrbProviderKey = async (
+  target: PluginsTarget,
+  providerId: OrbProviderId,
+) =>
+  (
+    await request(
+      `${orbProvidersBase(target)}/${encodeURIComponent(providerId)}/key`,
+      OrbProviderListResponseSchema,
+      { method: "DELETE" },
+    )
+  ).data;
+
+export const setOrbProviderWorkspacePolicy = async (
+  workspaceSlug: WorkspaceSlug,
+  allowPersonalKeysOnWorkspaceProjects: boolean,
+) =>
+  (
+    await request(
+      `${orbProvidersBase({ scope: "workspace", workspaceSlug })}/policy`,
+      OrbProviderListResponseSchema,
+      {
+        method: "PUT",
+        body: JSON.stringify({ allowPersonalKeysOnWorkspaceProjects }),
+      },
+    )
+  ).data;
+
 export const listPlugins = async (
   target: PluginsTarget,
   signal?: AbortSignal,
@@ -802,9 +941,13 @@ export interface McpServerInput {
   readonly name: string;
   readonly endpoint: string;
   readonly authReference?: EnvironmentVariableConfigReference;
+  /** Write-only bearer token, stored encrypted on the server. */
+  readonly authToken?: string;
   readonly timeoutMs: number;
-  readonly projectIds: ReadonlyArray<string>;
-  readonly roles: ReadonlyArray<string>;
+  /** Omitted: the server is available to all projects (API default). */
+  readonly projectIds?: ReadonlyArray<string>;
+  /** Omitted: all workspace roles (API default). */
+  readonly roles?: ReadonlyArray<string>;
 }
 
 export const createMcpServer = async (

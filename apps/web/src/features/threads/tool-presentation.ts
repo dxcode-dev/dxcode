@@ -1,3 +1,5 @@
+import { shellCommandOperations } from "./shell-command-operation.js";
+
 const record = (input: unknown): Record<string, unknown> | undefined =>
   typeof input === "object" && input !== null
     ? (input as Record<string, unknown>)
@@ -28,6 +30,87 @@ export const presentTool = (
   const path = stringField(input, "path", "filePath", "file_path");
   const command = stringField(input, "command", "cmd");
 
+  if (name === "shell_command" && command) {
+    const operations = shellCommandOperations(command);
+    if (operations) {
+      const first = operations[0];
+      if (
+        first?.kind === "read" &&
+        operations.every((op) => op.kind === "read")
+      )
+        return {
+          title: `${running ? "Reading" : "Read"} ${operations.map((op) => basename(op.path ?? "")).join(", ")}`,
+          detail: first.range,
+        };
+      if (first?.kind === "search")
+        return {
+          title: running ? "Searching" : "Searched",
+          detail: first.pattern,
+        };
+      if (first?.kind === "list")
+        return {
+          title: running ? "Listing" : "Listed",
+          detail: first.path ?? ".",
+        };
+      return {
+        title: operations
+          .map((op) =>
+            op.kind === "read"
+              ? `${running ? "Reading" : "Read"} ${basename(op.path)}`
+              : op.kind === "search"
+                ? `${running ? "Searching" : "Searched"} ${op.pattern ?? ""}`
+                : `${running ? "Listing" : "Listed"} ${op.path ?? "."}`,
+          )
+          .join(", "),
+        detail: undefined,
+      };
+    }
+  }
+  if (name === "web_search")
+    return {
+      title: running ? "Searching the web" : "Searched the web",
+      detail: stringField(input, "objective"),
+    };
+  if (name === "read_web_page")
+    return {
+      title: running ? "Reading web page" : "Read web page",
+      detail: stringField(input, "url"),
+    };
+  if (name === "tool_search")
+    return {
+      title: stringField(input, "query")
+        ? running
+          ? "Searching tools"
+          : "Searched tools"
+        : running
+          ? "Listing tools"
+          : "Listed tools",
+      detail: stringField(input, "query"),
+    };
+  if (name === "code_exec")
+    return {
+      title: running ? "Executing code" : "Executed code",
+      detail: undefined,
+    };
+  if (name === "create_file" && path)
+    return {
+      title: `${running ? "Creating" : "Created"} ${basename(path)}`,
+      detail: path,
+    };
+  if (name === "shell_command_status" || name === "shell_command_kill") {
+    const pid = record(input)?.pid;
+    return {
+      title:
+        name === "shell_command_status"
+          ? running
+            ? "Checking command"
+            : "Checked command"
+          : running
+            ? "Stopping command"
+            : "Stopped command",
+      detail: typeof pid === "number" ? `pid ${pid}` : undefined,
+    };
+  }
   if (
     name.includes("search") ||
     name.includes("grep") ||

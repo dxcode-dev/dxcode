@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { FirstPartyPluginId } from "../plugins/plugin.js";
 import { RunnerAdapterKind, RunnerProfileId } from "./runner-profile.js";
 import { WorkspaceId } from "./workspace.js";
 
@@ -8,6 +9,14 @@ export const WorkspacePolicyRestrictions = Schema.Struct({
   allowPersonalProviderOverrides: Schema.Boolean,
   allowPersonalMcpOverrides: Schema.Boolean,
   allowPersonalSecretOverrides: Schema.Boolean,
+  allowPersonalPluginOverrides: Schema.Boolean,
+  /**
+   * Members' own Orb (Execution) keys on workspace projects. Defaults to
+   * false and applies only together with `allowPersonalPluginOverrides`:
+   * a personal Orb key would clone workspace repositories into a member's
+   * own provider account, so it needs the admin's explicit opt-in.
+   */
+  allowPersonalExecutionOverrides: Schema.Boolean,
 });
 
 export type WorkspacePolicyRestrictions =
@@ -38,6 +47,8 @@ export const defaultWorkspacePolicy = (
     allowPersonalProviderOverrides: true,
     allowPersonalMcpOverrides: true,
     allowPersonalSecretOverrides: true,
+    allowPersonalPluginOverrides: true,
+    allowPersonalExecutionOverrides: false,
   },
   revision: 0,
   updatedAt: Schema.decodeUnknownSync(Schema.DateTimeUtcFromString)(
@@ -59,6 +70,10 @@ export const WorkspacePolicyAction = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("provider.use-personal-override") }),
   Schema.Struct({ kind: Schema.Literal("mcp.use-personal-override") }),
   Schema.Struct({ kind: Schema.Literal("secret.use-personal-override") }),
+  Schema.Struct({
+    kind: Schema.Literal("plugin.use-personal-override"),
+    pluginId: FirstPartyPluginId,
+  }),
 ]);
 
 export type WorkspacePolicyAction = typeof WorkspacePolicyAction.Type;
@@ -69,6 +84,7 @@ export const WorkspacePolicyDenialReason = Schema.Literals([
   "personal-provider-overrides-disabled",
   "personal-mcp-overrides-disabled",
   "personal-secret-overrides-disabled",
+  "personal-plugin-overrides-disabled",
 ]);
 
 export type WorkspacePolicyDenialReason =

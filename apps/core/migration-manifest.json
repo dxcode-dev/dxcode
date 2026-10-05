@@ -2,7 +2,10 @@
   "version": 1,
   "d1Directory": "migrations",
   "previousAcceptedD1Migration": "0000_baseline_v0.1.0.sql",
-  "acceptedDestructiveD1Migrations": ["0002_release_v0.1.2.sql"],
+  "acceptedDestructiveD1Migrations": [
+    "0002_release_v0.1.2.sql",
+    "0003_release_v0.2.0.sql"
+  ],
   "d1": [
     {
       "filename": "0000_baseline_v0.1.0.sql",
@@ -17,6 +20,11 @@
     {
       "filename": "0002_release_v0.1.2.sql",
       "sha256": "cf1f518a05062a8c4204694833640c5c9f6b811bb1b020826fa2a0500a308c55",
+      "classification": "destructive"
+    },
+    {
+      "filename": "0003_release_v0.2.0.sql",
+      "sha256": "d6418d54cff30515745be2f50b114813bb9ad31e5125058b95cb4b8eb0720a4a",
       "classification": "destructive"
     }
   ],

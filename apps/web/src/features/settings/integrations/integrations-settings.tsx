@@ -24,6 +24,8 @@ import {
   githubDisconnectMutationOptions,
 } from "./integration-mutations.js";
 import { githubIntegrationQueryOptions } from "./integration-queries.js";
+import type { McpServersTarget } from "./mcp-queries.js";
+import { McpSection } from "./mcp-section.js";
 
 const errorMessage = (cause: unknown) =>
   cause instanceof Error ? cause.message : "Request failed.";
@@ -230,15 +232,39 @@ function DisconnectConfirmation({
 export function IntegrationsSettings({
   onDirtyChange,
   settingsReturnTo,
+  workspaceSlug,
 }: SettingsSectionProps) {
+  const [status, setStatus] = React.useState<string>();
+  const target = React.useMemo<McpServersTarget>(
+    () =>
+      workspaceSlug === undefined
+        ? { scope: "personal" }
+        : { scope: "workspace", workspaceSlug },
+    [workspaceSlug],
+  );
   return (
     <div className="integrations-settings">
-      <h1 className="integrations-title">Integrations</h1>
-      <GitHubIntegration
+      <header className="integrations-page-heading">
+        <h1>MCP &amp; Integrations</h1>
+        <span aria-live="polite">{status}</span>
+      </header>
+      {workspaceSlug === undefined ? (
+        <section aria-labelledby="integrations-section-title">
+          <header className="integrations-section-heading">
+            <h2 id="integrations-section-title">Integrations</h2>
+          </header>
+          <GitHubIntegration
+            onDirtyChange={onDirtyChange}
+            settingsReturnTo={settingsReturnTo}
+          />
+          <BitbucketIntegration />
+        </section>
+      ) : null}
+      <McpSection
+        target={target}
+        onStatus={setStatus}
         onDirtyChange={onDirtyChange}
-        settingsReturnTo={settingsReturnTo}
       />
-      <BitbucketIntegration />
     </div>
   );
 }

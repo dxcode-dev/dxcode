@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   GetPersonalUsageResponseSchema,
   PersonalUsageQuerySchema,
+  PluginUsageDataSchema,
 } from "./personal-usage.js";
 
 describe("personal usage API", () => {
@@ -55,11 +56,38 @@ describe("personal usage API", () => {
         daily: [],
         threads: [],
         runners: [],
+        plugins: [],
         priceSources: [],
       },
     });
     const encoded = JSON.stringify(response);
     expect(encoded).toContain('"reasoning":null');
     expect(encoded).not.toMatch(/prompt|response|message|payload|toolResult/i);
+  });
+
+  it("decodes plugin usage for any ledger plugin and unit, without prices", () => {
+    const row = {
+      pluginId: "speech",
+      pluginName: "Dictation",
+      providerId: "sarvam",
+      providerName: "Sarvam",
+      capability: "speech.transcribe",
+      credentialScope: "deployment",
+      unit: "audio_second",
+      units: 42,
+      events: 3,
+      outcomes: { success: 2, error: 1 },
+    };
+    expect(Schema.decodeUnknownSync(PluginUsageDataSchema)(row)).toEqual(row);
+    expect(Object.keys(row)).not.toContain("estimatedCost");
+    expect(() =>
+      Schema.decodeUnknownSync(PluginUsageDataSchema)({
+        ...row,
+        credentialScope: "operator",
+      }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(PluginUsageDataSchema)({ ...row, pluginId: "" }),
+    ).toThrow();
   });
 });

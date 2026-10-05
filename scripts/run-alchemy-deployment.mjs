@@ -10,6 +10,7 @@ import {
 import { resolve } from "node:path";
 import { ApiClient, ConnectionConfig, Template } from "e2b";
 import { dxOrbTemplate } from "../deploy/e2b/template.mjs";
+import { assertDockerAvailable } from "../deploy/orb/containers.mjs";
 import {
   adminCredentialPath,
   writeAdminCredentialFile,
@@ -37,7 +38,9 @@ import {
   isolatedAlchemyEnvironment,
   isolatedDeploymentBuildEnvironment,
   loadSelfhostConfig,
+  orbWorkerName,
   parseDeploymentRevisionArgument,
+  parseOrbProviders,
   prepareDeploymentCredentials,
   prepareDeploymentPackage,
   reconcileDeploymentMigrationAliases,
@@ -156,6 +159,21 @@ const sarvamApiKey =
   target !== "selfhost" || selfhostConfig.integrations.includes("sarvam")
     ? operatorEnvironment.SARVAM_API_KEY?.trim()
     : undefined;
+// Search's deployment-scope Exa key. Hosted targets install Search and use
+// the operator key when present; self-host only when the installer chose it.
+const exaApiKey =
+  target !== "selfhost" || selfhostConfig.integrations.includes("exa")
+    ? operatorEnvironment.EXA_API_KEY?.trim()
+    : undefined;
+// Orb providers: self-host records them; previews and staging read
+// DX_ORB_PROVIDERS (e2b, cloudflare, or both; E2B by default).
+const orbProviders =
+  target === "selfhost"
+    ? parseOrbProviders(selfhostConfig.orbProviders.join(","))
+    : parseOrbProviders(process.env.DX_ORB_PROVIDERS?.trim() || "e2b");
+const e2bInstalled = orbProviders.includes("e2b");
+const cloudflareInstalled = orbProviders.includes("cloudflare");
+if (operation === "deploy" && cloudflareInstalled) assertDockerAvailable();
 const deploymentLabel =
   target === "staging"
     ? `Staging · ${revision.slice(0, 12)}`
@@ -453,7 +471,13 @@ if (target === "staging" && operation === "destroy")
     activeKid: "destroy01",
     keys: [],
   });
-if (operation === "deploy") {
+if (operation === "deploy" && !e2bInstalled) {
+  e2bApiKey = "";
+  templateEvidence = { name: "not-installed", buildId: "not-installed" };
+  if (target === "staging")
+    workloadIdentitySigningKeys = required("DX_WORKLOAD_IDENTITY_SIGNING_KEYS");
+  assertDxdChecksum(dxdChecksum);
+} else if (operation === "deploy") {
   e2bApiKey =
     target === "selfhost"
       ? process.env.E2B_API_KEY?.trim() || ""
@@ -496,7 +520,8 @@ console.log(`Deployment target: ${target}`);
 console.log(`Alchemy stage: ${stage}`);
 console.log(`Worker: ${selection.workerName}`);
 console.log(`URL: https://${selection.domain}`);
-if (operation === "deploy")
+console.log(`Orb providers: ${orbProviders.join(", ")}`);
+if (operation === "deploy" && e2bInstalled)
   console.log(
     `E2B template: ${templateEvidence.name} (${templateEvidence.buildId})`,
   );
@@ -530,6 +555,7 @@ const environment = {
     ? {}
     : { DX_INTEGRATION_BITBUCKET_OAUTH: bitbucketOAuth }),
   ...(sarvamApiKey ? { SARVAM_API_KEY: sarvamApiKey } : {}),
+  ...(exaApiKey ? { EXA_API_KEY: exaApiKey } : {}),
   ...(process.env.DX_ADMIN_PASSWORD
     ? { DX_ADMIN_PASSWORD: process.env.DX_ADMIN_PASSWORD }
     : {}),
@@ -559,6 +585,9 @@ const environment = {
     : {}),
   ...(selfhostConfig !== undefined
     ? { DX_DEPLOYMENT_INTEGRATIONS: selfhostConfig.integrations.join(",") }
+    : {}),
+  ...(selfhostConfig !== undefined
+    ? { DX_DEPLOYMENT_PLUGINS: (selfhostConfig.plugins ?? []).join(",") }
     : {}),
   ...(process.env.DX_ADMIN_PASSWORD_RESET === "true"
     ? { DX_ADMIN_PASSWORD_RESET: "true" }
@@ -603,6 +632,8 @@ const environment = {
     target === "selfhost"
       ? ""
       : JSON.stringify(hostedPolicy.bootstrapRepository),
+  DX_DEPLOYMENT_ORB_PROVIDERS: orbProviders.join(","),
+  DX_DEPLOYMENT_ORB_WORKER_NAME: orbWorkerName(stage),
   DX_DEPLOYMENT_E2B_TEMPLATE: templateEvidence.name,
   DX_DEPLOYMENT_E2B_TEMPLATE_BUILD_ID: templateEvidence.buildId,
   DX_DEPLOYMENT_DXD_CHECKSUM: dxdChecksum,

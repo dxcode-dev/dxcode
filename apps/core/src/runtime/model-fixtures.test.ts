@@ -89,7 +89,7 @@ describe("local model fixtures", () => {
     });
   });
 
-  it("emits a write call and continues only after its matching tool result", async () => {
+  it("emits a create_file call and continues only after its matching tool result", async () => {
     const provider = createLocalModelFixtureProvider();
     const model = provider.getModels()[0];
     if (model === undefined) throw new Error("Fixture model is missing.");
@@ -110,7 +110,7 @@ describe("local model fixtures", () => {
           {
             type: "toolCall",
             id: "dx-local-fixture-write",
-            name: "write",
+            name: "create_file",
             arguments: {
               path: "/home/user/workspace/repo/.dx-glm-journey.txt",
               content: "synthetic-glm-tool-result",
@@ -128,7 +128,7 @@ describe("local model fixtures", () => {
         {
           role: "toolResult",
           toolCallId: "dx-local-fixture-write",
-          toolName: "write",
+          toolName: "create_file",
           content: [{ type: "text", text: "Successfully wrote 25 bytes" }],
           isError: false,
           timestamp: 0,
@@ -157,7 +157,7 @@ describe("local model fixtures", () => {
           {
             role: "toolResult",
             toolCallId: "dx-local-fixture-write",
-            toolName: "write",
+            toolName: "create_file",
             content: [{ type: "text", text: "write failed" }],
             isError: true,
             timestamp: 0,

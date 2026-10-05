@@ -16,6 +16,8 @@ const WorkspacePolicyRow = Schema.Struct({
   allow_personal_provider_overrides: Schema.Number,
   allow_personal_mcp_overrides: Schema.Number,
   allow_personal_secret_overrides: Schema.Number,
+  allow_personal_plugin_overrides: Schema.Number,
+  allow_personal_execution_overrides: Schema.Number,
   revision: Schema.Number,
   updated_at: Schema.DateTimeUtcFromString,
 });
@@ -27,6 +29,8 @@ const selectPolicy = `SELECT
   allow_personal_provider_overrides,
   allow_personal_mcp_overrides,
   allow_personal_secret_overrides,
+  allow_personal_plugin_overrides,
+  allow_personal_execution_overrides,
   revision,
   updated_at
 FROM workspace_policy`;
@@ -53,6 +57,9 @@ const decodePolicy = Effect.fn("WorkspacePolicyRepositoryD1.decodePolicy")(
           row.allow_personal_provider_overrides === 1,
         allowPersonalMcpOverrides: row.allow_personal_mcp_overrides === 1,
         allowPersonalSecretOverrides: row.allow_personal_secret_overrides === 1,
+        allowPersonalPluginOverrides: row.allow_personal_plugin_overrides === 1,
+        allowPersonalExecutionOverrides:
+          row.allow_personal_execution_overrides === 1,
       },
       revision: row.revision,
       updatedAt: row.updated_at,
@@ -130,6 +137,8 @@ export const WorkspacePolicyRepositoryD1 = (db: D1Database) => {
                 allow_personal_provider_overrides = ?,
                 allow_personal_mcp_overrides = ?,
                 allow_personal_secret_overrides = ?,
+                allow_personal_plugin_overrides = ?,
+                allow_personal_execution_overrides = ?,
                 revision = revision + 1,
                 updated_at = ?
               WHERE workspace_id = ? AND revision = ?`,
@@ -140,6 +149,8 @@ export const WorkspacePolicyRepositoryD1 = (db: D1Database) => {
                 input.restrictions.allowPersonalProviderOverrides ? 1 : 0,
                 input.restrictions.allowPersonalMcpOverrides ? 1 : 0,
                 input.restrictions.allowPersonalSecretOverrides ? 1 : 0,
+                input.restrictions.allowPersonalPluginOverrides ? 1 : 0,
+                input.restrictions.allowPersonalExecutionOverrides ? 1 : 0,
                 updatedAt,
                 workspaceId,
                 expectedRevision,

@@ -81,6 +81,36 @@ describe("workspace usage API", () => {
         daily: [],
         ranking: { kind: "users", items: [] },
         runners: [],
+        plugins: [
+          {
+            pluginId: "search",
+            pluginName: "Web search",
+            providerId: "exa",
+            providerName: "Exa",
+            capability: "web.search",
+            credentialScope: "deployment",
+            unit: "request",
+            units: 2,
+            events: 2,
+            outcomes: { success: 2, error: 0 },
+          },
+        ],
+        pluginUsers: [
+          {
+            userId: "workspace-usage-member",
+            userName: "Member",
+            pluginId: "search",
+            pluginName: "Web search",
+            providerId: "exa",
+            providerName: "Exa",
+            capability: "web.search",
+            credentialScope: "deployment",
+            unit: "request",
+            units: 2,
+            events: 2,
+            outcomes: { success: 2, error: 0 },
+          },
+        ],
         priceSources: [],
         privateInspection: {
           permitted: false,
@@ -94,6 +124,7 @@ describe("workspace usage API", () => {
     });
 
     expect(response.data).not.toHaveProperty("threads");
+    expect(response.data.pluginUsers[0]).not.toHaveProperty("threadId");
     expect(response.data).not.toHaveProperty("prompts");
     expect(response.data).not.toHaveProperty("responses");
     expect(response.data).not.toHaveProperty("messages");

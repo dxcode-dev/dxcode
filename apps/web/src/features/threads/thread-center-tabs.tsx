@@ -15,8 +15,6 @@ export type CenterFileTab = ThreadFileTarget & {
   readonly revealSequence?: number;
 };
 
-export const centerTabKey = (file: ThreadFileTarget) => fileTargetKey(file);
-
 const worktreeLabel = (file: CenterFileTab) =>
   file.kind === "workspace" ? file.worktreeLabel : "Sandbox";
 
@@ -59,7 +57,7 @@ export const ThreadCenterTabs = ({
           <OrbIcon aria-hidden="true" /> Agent
         </button>
         {files.map((file) => {
-          const key = centerTabKey(file);
+          const key = fileTargetKey(file);
           const tabWorktreeLabel = worktreeLabel(file);
           const label = `${filename(file.path)}${
             tabWorktreeLabel === undefined ? "" : ` — ${tabWorktreeLabel}`

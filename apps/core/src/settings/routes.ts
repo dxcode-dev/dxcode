@@ -1,4 +1,5 @@
 import {
+  type DictationProviderData,
   GetSettingsContextForbiddenResponseSchema,
   GetSettingsContextPersistenceUnavailableResponseSchema,
   GetSettingsContextResponseSchema,
@@ -7,8 +8,17 @@ import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Match, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import type { AppEnv } from "../http/types.js";
-import { authorizationLogger } from "../logging.js";
+import { authorizationLogger, dictationLogger } from "../logging.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
+import {
+  personalOrbProviderRoutes,
+  workspaceOrbProviderRoutes,
+} from "../plugins/execution/orb-provider-routes.js";
+import {
+  personalFirstPartyPluginRoutes,
+  workspaceFirstPartyPluginRoutes,
+} from "../plugins/routes.js";
+import { resolveDictation } from "../plugins/speech/transcription.js";
 import { personalAccountRoutes } from "./account/routes.js";
 import { personalAgentInstructionsRoutes } from "./agent-instructions/routes.js";
 import { workspaceApplicationRoutes } from "./applications/routes.js";
@@ -48,10 +58,11 @@ import { workspacePolicyRoutes } from "./workspace-policy/routes.js";
 
 const responseData = (
   access: SettingsAccessContext,
-  dictationAvailable: boolean,
+  dictation: DictationProviderData | undefined,
 ) => ({
   activeScope: access.activeScope,
-  dictationAvailable,
+  dictationAvailable: dictation !== undefined,
+  ...(dictation === undefined ? {} : { dictation }),
   workspace:
     access.workspace === undefined
       ? undefined
@@ -80,13 +91,24 @@ const handlePersonalSettingsContext = async (context: Context<AppEnv>) => {
         SettingsService.layer.pipe(Layer.provide(repositoryLayer)),
       ),
     );
+    // Dictation is the Speech plugin: available only when it resolves a
+    // provider for this user. A resolution failure hides the microphone
+    // rather than failing the settings context.
+    const dictation = yield* Effect.promise(() =>
+      resolveDictation(
+        { db, bindings: context.env },
+        context.get("principal").userId,
+      ).catch(() => {
+        dictationLogger.warn("Dictation availability could not be resolved.", {
+          event: "dictation_availability_failed",
+          requestId,
+        });
+        return undefined;
+      }),
+    );
     return yield* Schema.encodeUnknownEffect(GetSettingsContextResponseSchema)({
       status: "success",
-      data: responseData(
-        access,
-        context.env.DX_RUNTIME_MODE === "local" ||
-          Boolean(context.env.SARVAM_API_KEY),
-      ),
+      data: responseData(access, dictation),
     });
   });
 
@@ -162,6 +184,11 @@ settingsRoutes.route(
 );
 settingsRoutes.route("/personal/model-routing", personalModelRoutingRoutes);
 settingsRoutes.route("/personal/mcp-servers", personalMcpServerRoutes);
+settingsRoutes.route(
+  "/personal/first-party-plugins",
+  personalFirstPartyPluginRoutes,
+);
+settingsRoutes.route("/personal/orb-providers", personalOrbProviderRoutes);
 settingsRoutes.route("/personal/plugins", personalPluginRoutes);
 settingsRoutes.route("/personal/skills", personalSkillRoutes);
 settingsRoutes.route("/personal/usage", personalUsageRoutes);
@@ -184,6 +211,14 @@ settingsRoutes.route("/workspaces/:workspaceSlug/usage", workspaceUsageRoutes);
 settingsRoutes.route(
   "/workspaces/:workspaceSlug/mcp-servers",
   workspaceMcpServerRoutes,
+);
+settingsRoutes.route(
+  "/workspaces/:workspaceSlug/first-party-plugins",
+  workspaceFirstPartyPluginRoutes,
+);
+settingsRoutes.route(
+  "/workspaces/:workspaceSlug/orb-providers",
+  workspaceOrbProviderRoutes,
 );
 settingsRoutes.route(
   "/workspaces/:workspaceSlug/plugins",

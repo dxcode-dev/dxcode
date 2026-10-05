@@ -2,6 +2,10 @@ import { ChevronRight, FileSymlink } from "lucide-react";
 import * as React from "react";
 import { FileContextMenu } from "../../shared/ui/file-context-menu.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
+import {
+  parseShellResult,
+  shellCommandOperations,
+} from "./shell-command-operation.js";
 import { ThreadFileNavigationContext } from "./thread-file-navigation.js";
 import { presentTool } from "./tool-presentation.js";
 import {
@@ -13,6 +17,14 @@ import {
   type WorkRow,
 } from "./transcript-activity-projection.js";
 import {
+  activitySummary,
+  commandFor,
+  isSearch,
+  pathFor,
+  record,
+  stringField,
+} from "./transcript-activity-summary.js";
+import {
   TranscriptCodePreview,
   TranscriptEditDiff,
 } from "./transcript-code-preview.js";
@@ -23,20 +35,6 @@ import {
 import { resolveTranscriptFileLink } from "./transcript-file-link.js";
 import { TranscriptMarkdown } from "./transcript-markdown.js";
 import type { TranscriptRow } from "./transcript-view-model.js";
-
-const record = (value: unknown): Record<string, unknown> | undefined =>
-  typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : undefined;
-
-const stringField = (value: unknown, ...names: ReadonlyArray<string>) => {
-  const fields = record(value);
-  for (const name of names) {
-    const candidate = fields?.[name];
-    if (typeof candidate === "string" && candidate.length > 0) return candidate;
-  }
-  return undefined;
-};
 
 const numberField = (value: unknown, ...names: ReadonlyArray<string>) => {
   const fields = record(value);
@@ -50,91 +48,6 @@ const numberField = (value: unknown, ...names: ReadonlyArray<string>) => {
 };
 
 const basename = (path: string) => path.split(/[\\/]/).at(-1) ?? path;
-
-const plural = (count: number, singular: string, pluralForm = `${singular}s`) =>
-  `${count} ${count === 1 ? singular : pluralForm}`;
-
-const pathFor = (part: ToolPart) =>
-  stringField(part.input, "path", "filePath", "file_path");
-const commandFor = (part: ToolPart) =>
-  stringField(part.input, "command", "cmd");
-
-const isSearch = (part: ToolPart) => {
-  const name = part.toolName.toLowerCase();
-  return ["search", "grep", "find", "glob", "list"].some((token) =>
-    name.includes(token),
-  );
-};
-
-const isGuidance = (part: ToolPart) => {
-  const name = part.toolName.toLowerCase();
-  const path = pathFor(part)?.toLowerCase();
-  return (
-    name.includes("skill") ||
-    path?.endsWith("agents.md") === true ||
-    path?.endsWith("skill.md") === true
-  );
-};
-
-type SummaryKind =
-  | "command"
-  | "edit"
-  | "read"
-  | "guidance"
-  | "search"
-  | "check"
-  | "generic";
-
-const summaryKind = (category: ToolCategory, part: ToolPart): SummaryKind => {
-  if (category !== "explore") return category;
-  if (isSearch(part)) return "search";
-  return isGuidance(part) ? "guidance" : "read";
-};
-
-const summaryPhrase = (kind: SummaryKind, count: number) => {
-  switch (kind) {
-    case "command":
-      return `ran ${plural(count, "command")}`;
-    case "edit":
-      return `edited ${plural(count, "file")}`;
-    case "read":
-      return `read ${plural(count, "file")}`;
-    case "guidance":
-      return `read ${plural(count, "guidance file")}`;
-    case "search":
-      return `searched ${plural(count, "time")}`;
-    case "check":
-      return `checked on ${plural(count, "command")}`;
-    case "generic":
-      return `used ${plural(count, "tool")}`;
-  }
-};
-
-/**
- * Summarize a run of tool calls by kind, in order of first appearance:
- * "Ran 2 commands, edited 3 files". Edits and reads count distinct files.
- */
-export const activitySummary = (rows: ReadonlyArray<WorkRow>) => {
-  const kinds = new Map<SummaryKind, Set<string>>();
-  for (const row of rows) {
-    const part = toolPart(row);
-    if (part === undefined) continue;
-    const kind = summaryKind(categoryForPart(part), part);
-    const path = pathFor(part);
-    const identity =
-      (kind === "edit" || kind === "read" || kind === "guidance") &&
-      path !== undefined
-        ? `path:${path}`
-        : `call:${part.toolCallId}`;
-    const identities = kinds.get(kind) ?? new Set<string>();
-    identities.add(identity);
-    kinds.set(kind, identities);
-  }
-  const label = [...kinds]
-    .map(([kind, identities]) => summaryPhrase(kind, identities.size))
-    .join(", ");
-  return label.charAt(0).toUpperCase() + label.slice(1);
-};
 
 const failureCount = (rows: ReadonlyArray<WorkRow>) =>
   rows.filter((row) => toolPart(row)?.state === "output-error").length;
@@ -204,6 +117,45 @@ const diffStats = (part: ToolPart) => {
 
 function ExploreOperationLabel({ part }: { readonly part: ToolPart }) {
   const name = part.toolName.toLowerCase();
+  if (name === "web_search")
+    return <>Web search “{stringField(part.input, "objective")}”</>;
+  if (name === "read_web_page")
+    return (
+      <>Read {stringField(part.input, "url")?.replace(/^https?:\/\//, "")}</>
+    );
+  if (name === "tool_search")
+    return stringField(part.input, "query") ? (
+      <>Searched tools “{stringField(part.input, "query")}”</>
+    ) : (
+      <>Listed tools</>
+    );
+  const operations =
+    name === "shell_command"
+      ? shellCommandOperations(commandFor(part) ?? "")
+      : undefined;
+  if (operations)
+    return (
+      <>
+        {operations.map((op, index) => (
+          <React.Fragment key={JSON.stringify(operations.slice(0, index + 1))}>
+            {index ? ", " : ""}
+            {op.kind === "read" ? (
+              <>
+                {index && operations[index - 1]?.kind === "read" ? "" : "Read "}
+                {basename(op.path)}
+                {op.range ? <small>{op.range}</small> : null}
+              </>
+            ) : op.kind === "search" ? (
+              <>
+                Grep “{op.pattern}”{op.path ? ` ${op.path}` : ""}
+              </>
+            ) : (
+              <>List {op.path ?? "."}</>
+            )}
+          </React.Fragment>
+        ))}
+      </>
+    );
   const path = pathFor(part);
   const pattern = stringField(part.input, "query", "pattern");
   if (isSearch(part)) {
@@ -231,7 +183,9 @@ function ToolLabel({
   readonly category: ToolCategory;
   readonly part: ToolPart;
 }) {
-  const failed = part.state === "output-error";
+  const failed =
+    part.state === "output-error" ||
+    (parseShellResult(textualOutputFor(part) ?? "").exitCode ?? 0) !== 0;
   if (category === "explore") return <ExploreOperationLabel part={part} />;
   if (category === "command") {
     return (
@@ -249,7 +203,8 @@ function ToolLabel({
     const { added, removed } = diffStats(part);
     return (
       <>
-        Edited <strong>{path ? basename(path) : part.toolName}</strong>
+        {part.toolName === "create_file" ? "Created" : "Edited"}{" "}
+        <strong>{path ? basename(path) : part.toolName}</strong>
         {added === undefined ? null : (
           <span className="diff-added">+{added}</span>
         )}
@@ -275,13 +230,109 @@ function ToolOutput({
   readonly category: ToolCategory;
   readonly part: ToolPart;
 }) {
-  const output = outputFor(part);
+  const output =
+    part.toolName === "edit_file" || part.toolName.startsWith("shell_command")
+      ? (textualOutputFor(part) ?? outputFor(part))
+      : outputFor(part);
   if (output === undefined) return null;
+  if (part.toolName.startsWith("shell_command")) {
+    const result = parseShellResult(output);
+    const operations =
+      part.toolName === "shell_command"
+        ? shellCommandOperations(commandFor(part) ?? "")
+        : undefined;
+    const only = operations?.length === 1 ? operations[0] : undefined;
+    return (
+      <div className="transcript-command-output">
+        {category === "command" || category === "check" ? (
+          <div className="transcript-command-output-title">
+            $ {commandFor(part) ?? part.toolName}
+            {stringField(part.input, "workdir")
+              ? ` (${stringField(part.input, "workdir")})`
+              : ""}
+          </div>
+        ) : null}
+        {only?.kind === "read" ? (
+          <TranscriptCodePreview
+            path={only.path}
+            contents={result.output}
+            kind="file"
+          />
+        ) : (
+          <pre>{result.output}</pre>
+        )}
+        {result.exitCode ? (
+          <small className="is-failed">Exit code {result.exitCode}</small>
+        ) : null}
+        {result.running ? (
+          <small>still running (pid {result.pid})</small>
+        ) : null}
+      </div>
+    );
+  }
+  if (part.toolName === "read_web_page")
+    return (
+      <TranscriptMarkdown>
+        {textualOutputFor(part) ?? output}
+      </TranscriptMarkdown>
+    );
+  if (part.toolName === "code_exec")
+    return (
+      <>
+        <TranscriptCodePreview
+          path="code.js"
+          contents={stringField(part.input, "code") ?? ""}
+          kind="file"
+        />
+        <pre>{output}</pre>
+      </>
+    );
+  if (part.toolName === "web_search") {
+    let results: unknown =
+      part.state === "output-available" ? part.output : undefined;
+    if (typeof results === "string") {
+      try {
+        results = JSON.parse(results);
+      } catch {
+        /* Unknown outputs remain readable. */
+      }
+    }
+    if (
+      Array.isArray(results) &&
+      results.every(
+        (item) =>
+          typeof record(item)?.title === "string" &&
+          typeof record(item)?.url === "string" &&
+          Array.isArray(record(item)?.excerpts),
+      )
+    )
+      return (
+        <div>
+          {results.map((item) => {
+            const value = record(item);
+            return (
+              <div key={String(value?.url)}>
+                <a href={String(value?.url)} target="_blank" rel="noreferrer">
+                  {String(value?.title)}
+                </a>
+                <small>{String(value?.url)}</small>
+                {((value?.excerpts ?? []) as unknown[]).map((excerpt) => (
+                  <p key={String(excerpt)}>{String(excerpt)}</p>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      );
+  }
   if (category === "command" || category === "check") {
     return (
       <div className="transcript-command-output">
         <div className="transcript-command-output-title">
           $ {commandFor(part) ?? part.toolName}
+          {stringField(part.input, "workdir")
+            ? ` (${stringField(part.input, "workdir")})`
+            : ""}
         </div>
         <pre
           className={
@@ -295,6 +346,20 @@ function ToolOutput({
   }
   if (category === "edit") {
     const source = transcriptEditSource(part.toolName, part.input);
+    const resultPath = pathFor(part);
+    if (
+      part.toolName === "edit_file" &&
+      part.state === "output-available" &&
+      resultPath !== undefined &&
+      isPatchOutput(output)
+    )
+      return (
+        <TranscriptCodePreview
+          path={resultPath}
+          contents={output}
+          kind="patch"
+        />
+      );
     if (source !== undefined && part.state === "output-available")
       return <TranscriptEditDiff source={source} />;
     const path = pathFor(part);

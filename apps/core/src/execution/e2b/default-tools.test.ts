@@ -8,7 +8,7 @@ import type { Sandbox as E2BSandbox } from "e2b";
 import { expect, it, vi } from "vitest";
 import { e2b } from "./adapter.js";
 
-it("exposes only DX's four coding tools to the model", async () => {
+it("exposes only dx's workspace tools to the model", async () => {
   const provider = fauxProvider();
   let toolNames: string[] = [];
   provider.setResponses([
@@ -54,5 +54,11 @@ it("exposes only DX's four coding tools to the model", async () => {
   const receipt = await handle.dispatch("Inspect the workspace.");
 
   await expect(handle.read(receipt)).resolves.toMatchObject({ text: "done" });
-  expect(toolNames).toEqual(["read", "write", "edit", "bash"]);
+  expect(toolNames).toEqual([
+    "shell_command",
+    "shell_command_status",
+    "shell_command_kill",
+    "create_file",
+    "edit_file",
+  ]);
 });

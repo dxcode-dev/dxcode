@@ -226,16 +226,21 @@ describe("integrations settings", () => {
     }
   });
 
-  it("registers integrations only for personal settings", () => {
+  it("registers MCP & Integrations in both scopes and no separate MCP page", () => {
     expect(settingsPath({ scope: "personal", section: "integrations" })).toBe(
       "/settings/integrations",
     );
-    expect(
-      resolveSettingsSection(settingsManifest, "personal", "integrations"),
-    ).toMatchObject({ found: true });
-    expect(
-      resolveSettingsSection(settingsManifest, "workspace", "integrations"),
-    ).toMatchObject({ found: false });
+    for (const scope of ["personal", "workspace"] as const) {
+      expect(
+        resolveSettingsSection(settingsManifest, scope, "integrations"),
+      ).toMatchObject({
+        found: true,
+        registration: { label: "MCP & Integrations" },
+      });
+      expect(
+        resolveSettingsSection(settingsManifest, scope, "mcp-servers"),
+      ).toMatchObject({ found: false });
+    }
   });
 
   it("shows one GitHub row without a username while disconnected", () => {

@@ -155,6 +155,16 @@ export const workspacePolicyDenial = (
         : new WorkspacePolicyDenied({
             reason: "personal-secret-overrides-disabled",
           });
+    case "plugin.use-personal-override":
+      // Execution needs the explicit opt-in as well as the general flag,
+      // whose default is true.
+      return restrictions.allowPersonalPluginOverrides &&
+        (action.pluginId !== "execution" ||
+          restrictions.allowPersonalExecutionOverrides)
+        ? undefined
+        : new WorkspacePolicyDenied({
+            reason: "personal-plugin-overrides-disabled",
+          });
   }
 };
 

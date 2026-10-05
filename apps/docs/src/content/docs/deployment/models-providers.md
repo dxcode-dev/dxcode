@@ -3,8 +3,8 @@ title: Models and providers
 description: Configure model access for a deployment, workspace, or user.
 ---
 
-Model routing is separate from workspace execution. E2B is mandatory, but no
-particular model provider is.
+Model routing is separate from workspace execution. An Orb provider (E2B or
+Cloudflare Containers) is mandatory, but no particular model provider is.
 
 ## Configuration scopes
 
@@ -25,7 +25,7 @@ dx encrypts stored provider secrets and does not return their plaintext.
 | GitHub Copilot | Personal GitHub device authorization |
 | GitHub source access | GitHub App installation |
 | Bitbucket source access | OAuth consumer authorization |
-| Sarvam dictation | Optional deployment API key |
+| Sarvam dictation (Speech plugin) | Optional deployment API key; people and workspaces can add their own in Settings → Plugins |
 | Custom endpoint | HTTPS base URL, API format, model map, and credential |
 
 GitHub and Bitbucket connections grant repository access. GitHub Copilot grants

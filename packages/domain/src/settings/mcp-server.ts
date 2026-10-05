@@ -145,6 +145,11 @@ export const StoredMcpServer = Schema.Struct({
   endpoint: McpServerEndpoint,
   transport: McpServerTransport,
   authReference: Schema.optional(EnvironmentVariableConfigReference),
+  /**
+   * A bearer token stored on the server itself (mcp_server_credential),
+   * exclusive with `authReference` and never part of a sandbox environment.
+   */
+  hasStoredCredential: Schema.optional(Schema.Boolean),
   timeoutMs: McpServerTimeoutMs,
   enabled: Schema.Boolean,
   projectIds: McpServerProjectGrants,

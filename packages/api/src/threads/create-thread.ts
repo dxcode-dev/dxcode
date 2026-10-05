@@ -131,6 +131,20 @@ export const CreateThreadRunnerUnavailableResponseSchema = errorResponse(
   "The selected runner profile is unavailable.",
 );
 
+/**
+ * The Orb runs on the person's or workspace's own key, whose template is
+ * still building (or failed) in its account. Never retried on another key.
+ */
+export const CreateThreadOrbUnavailableResponseSchema = Schema.Struct({
+  status: Schema.Literal("error"),
+  data: Schema.Struct({
+    code: Schema.Literal("ORB_UNAVAILABLE"),
+    message: Schema.Literal("The selected Orb is not available."),
+    requestId: Schema.String,
+    reason: Schema.Literals(["template-building", "template-failed"]),
+  }),
+});
+
 export const CreateThreadPersistenceUnavailableResponseSchema = errorResponse(
   "PERSISTENCE_UNAVAILABLE",
   "Persistence is temporarily unavailable.",

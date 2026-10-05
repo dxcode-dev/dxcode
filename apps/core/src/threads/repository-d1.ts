@@ -174,7 +174,7 @@ export const ThreadRepositoryD1 = Layer.effect(
       PersistenceUnavailable.new({ operation }, cause);
 
     return ThreadRepository.of({
-      insert: (thread, source) =>
+      insert: (thread, source, executionPin) =>
         observe(
           "thread.insert",
           { threadId: thread.id },
@@ -214,8 +214,27 @@ export const ThreadRepositoryD1 = Layer.effect(
                   ${encoded.createdAt}, ${encoded.updatedAt}
                 )
               `;
+              // The Orb pin lands in the same batch as the Thread, on the
+              // execution workspace row the Thread's insert trigger creates.
+              const pin =
+                executionPin === undefined
+                  ? []
+                  : [
+                      sql`
+                        UPDATE execution_workspace
+                           SET provider = ${executionPin.provider},
+                               runner_profile_id = ${executionPin.runnerProfileId},
+                               account_scope = ${executionPin.credentialScope},
+                               account_owner_id = ${executionPin.credentialOwnerId},
+                               provider_account = ${executionPin.credentialAccount},
+                               provider_template = ${executionPin.providerTemplate}
+                         WHERE thread_id = ${encoded.id}
+                           AND state = 'uninitialized'
+                           AND account_scope IS NULL
+                      `,
+                    ];
               if (source === undefined)
-                return d1.batch([insertThread] as const).pipe(Effect.asVoid);
+                return d1.batch([insertThread, ...pin]).pipe(Effect.asVoid);
               if (source.kind === "pending")
                 return Schema.encodeEffect(ThreadSourceIntent)(
                   source.intent,
@@ -224,6 +243,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                     d1
                       .batch([
                         insertThread,
+                        ...pin,
                         sql`
                           INSERT INTO thread_source_intent (
                             thread_id, project_id, binding_revision, provider,
@@ -278,6 +298,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       d1
                         .batch([
                           insertThread,
+                          ...pin,
                           snapshotInsert,
                           sql`
                         INSERT INTO thread_source_authority (

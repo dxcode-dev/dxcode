@@ -15,6 +15,75 @@ const owner = Schema.decodeUnknownSync(UserId)("owner-a");
 const otherOwner = Schema.decodeUnknownSync(UserId)("owner-b");
 
 describe("ThreadRepository D1", () => {
+  it("pins the Thread's Orb in the same write, and only once", async () => {
+    const entity = project(
+      "prj_00000000-0000-4000-8000-0000000000b4",
+      owner,
+      "Orb pin",
+    );
+    const pinned = thread(
+      "thr_00000000-0000-4000-8000-0000000000b4",
+      entity.id,
+      owner,
+      "2026-10-04T12:00:00.000Z",
+    );
+    const invalid = thread(
+      "thr_00000000-0000-4000-8000-0000000000b5",
+      entity.id,
+      owner,
+      "2026-10-04T12:00:00.000Z",
+    );
+    await runRepositories(
+      Effect.gen(function* () {
+        const projects = yield* ProjectRepository;
+        const threads = yield* ThreadRepository;
+        yield* projects.insert(entity);
+        yield* threads.insert(pinned, undefined, {
+          provider: "e2b",
+          runnerProfileId: "a1.small",
+          credentialScope: "personal",
+          credentialOwnerId: owner,
+          credentialAccount: "team-a",
+          providerTemplate: "dx-orb-0123456789abcdef-a1-small",
+        });
+        // A personal pin without its account fails the whole write.
+        const failed = yield* Effect.flip(
+          threads.insert(invalid, undefined, {
+            provider: "e2b",
+            runnerProfileId: "a1.small",
+            credentialScope: "personal",
+            credentialOwnerId: owner,
+            credentialAccount: null,
+            providerTemplate: null,
+          }),
+        );
+        expect(failed._tag).toBe("PersistenceUnavailable");
+      }),
+    );
+    expect(
+      await env.DB.prepare(
+        `SELECT provider, state, runner_profile_id, account_scope,
+                account_owner_id, provider_account, provider_template
+           FROM execution_workspace WHERE thread_id = ?`,
+      )
+        .bind(pinned.id)
+        .first(),
+    ).toEqual({
+      provider: "e2b",
+      state: "uninitialized",
+      runner_profile_id: "a1.small",
+      account_scope: "personal",
+      account_owner_id: owner,
+      provider_account: "team-a",
+      provider_template: "dx-orb-0123456789abcdef-a1-small",
+    });
+    expect(
+      await env.DB.prepare("SELECT id FROM threads WHERE id = ?")
+        .bind(invalid.id)
+        .first(),
+    ).toBeNull();
+  });
+
   it("filters lifecycle before pagination for global and project lists", async () => {
     const entity = project(
       "prj_00000000-0000-4000-8000-000000000091",

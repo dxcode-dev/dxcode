@@ -1,0 +1,42 @@
+[
+  {
+    "id": "cf.standard-1",
+    "label": "standard-1",
+    "instance": "standard-1",
+    "resources": {
+      "cpuCores": 0.5,
+      "memoryMb": 4096,
+      "diskGb": 8
+    }
+  },
+  {
+    "id": "cf.standard-2",
+    "label": "standard-2",
+    "instance": "standard-2",
+    "resources": {
+      "cpuCores": 1,
+      "memoryMb": 6144,
+      "diskGb": 12
+    }
+  },
+  {
+    "id": "cf.standard-3",
+    "label": "standard-3",
+    "instance": "standard-3",
+    "resources": {
+      "cpuCores": 2,
+      "memoryMb": 8192,
+      "diskGb": 16
+    }
+  },
+  {
+    "id": "cf.standard-4",
+    "label": "standard-4",
+    "instance": "standard-4",
+    "resources": {
+      "cpuCores": 4,
+      "memoryMb": 12288,
+      "diskGb": 20
+    }
+  }
+]

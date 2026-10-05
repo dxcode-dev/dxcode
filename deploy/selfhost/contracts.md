@@ -49,6 +49,18 @@ Copilot, and deployment model integrations are optional. If omitted, their
 bindings are absent or carry the product's disabled sentinel. They do not block
 `/readyz`. User and workspace model keys remain product configuration.
 
+First-party plugins are chosen at install: `plugins: ["search", "speech"]`
+installs the Search and Speech plugins and becomes the `DX_INSTALLED_PLUGINS`
+binding. Each plugin has an optional deployment-scope provider key: the `exa`
+integration adds `EXA_API_KEY` for Search and the `sarvam` integration adds
+`SARVAM_API_KEY` for Speech (composer dictation). Without one, people and
+workspaces can still add their own keys in Settings → Plugins.
+`offeredPlugins` records which plugins the installer has asked about, so an
+existing deployment is asked once about a plugin added later. A config written
+before Speech was a plugin that has the `sarvam` integration keeps dictation:
+validation installs Speech and marks it asked. A deployment that omits a plugin
+shows no settings, tools, composer affordance, or readiness requirement for it.
+
 Apply starts only after account, zone, E2B, release checksum, and package
 preflight complete. Cancellation before the review confirmation does not mutate
 Cloudflare or E2B.

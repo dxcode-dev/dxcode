@@ -1,13 +1,13 @@
 {
-  "version": "0.1.2",
+  "version": "0.2.0",
   "license": "FSL-1.1-ALv2",
   "baselineSha256": "7847f65a9b20b366a60d52d19ca3cd6bdd1bb09b8cb506659a270f27a21d8877",
   "e2b": {
-    "recipeSha256": "8159896206584133aec265e481f4c915ed48b6736d6b24b7569712b4672bf5d6",
+    "recipeSha256": "761809ee2efa2b6c750451ace29283cbb8e55b6ce3b5b14c2bb4509df71df801",
     "profileSha256": "414dbecee2d47de36016ea05c736e2edff3a0deb298babf923887ea184a01c10"
   },
   "dxd": {
-    "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.1.2/dxd-linux-x64",
+    "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.0/dxd-linux-x64",
     "sha256": "810626730c00c4bbe3952566b2ebfdc92bf375fd87446fb61d6c0a8041e65bac"
   },
   "toolchain": {

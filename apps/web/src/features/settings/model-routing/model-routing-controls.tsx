@@ -414,6 +414,51 @@ const CustomHeaderEditor = ({
  * with a `key` of provider id or `custom` so a different target resets the
  * form.
  */
+const ConnectionFieldError = ({
+  message,
+}: {
+  readonly message: string | undefined;
+}) =>
+  message === undefined ? null : (
+    <span className="model-routing-field-error">{message}</span>
+  );
+
+/** A custom connection's models, one canonical model per line. */
+const CustomModelsField = ({
+  value,
+  onChange,
+  lineErrors,
+  error,
+}: {
+  readonly value: string;
+  readonly onChange: (value: string) => void;
+  readonly lineErrors: ReadonlyArray<{ line: number; message: string }>;
+  readonly error: string | undefined;
+}) => (
+  <label htmlFor="mr-models">
+    Models
+    <Textarea
+      id="mr-models"
+      rows={3}
+      placeholder={
+        "openai/gpt-6-astra -> astra-litellm\nanthropic/claude-fable-5-1"
+      }
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
+    <span className="routing-model-hint">
+      One canonical model per line. Add -&gt; upstream-id to map a different
+      provider name.
+    </span>
+    {lineErrors.map((lineError) => (
+      <span key={lineError.line} className="model-routing-field-error">
+        Line {lineError.line}: {lineError.message}
+      </span>
+    ))}
+    <ConnectionFieldError message={error} />
+  </label>
+);
+
 export const ConnectionDialog = ({
   open,
   provider,
@@ -547,11 +592,7 @@ export const ConnectionDialog = ({
               }
               onChange={(event) => setBaseUrl(event.target.value)}
             />
-            {fieldErrors.baseUrl === undefined ? null : (
-              <span className="model-routing-field-error">
-                {fieldErrors.baseUrl}
-              </span>
-            )}
+            <ConnectionFieldError message={fieldErrors.baseUrl} />
           </label>
           {custom ? (
             <fieldset className="routing-format-options">
@@ -590,11 +631,7 @@ export const ConnectionDialog = ({
               autoComplete="off"
               onChange={(event) => setName(event.target.value)}
             />
-            {fieldErrors.name === undefined ? null : (
-              <span className="model-routing-field-error">
-                {fieldErrors.name}
-              </span>
-            )}
+            <ConnectionFieldError message={fieldErrors.name} />
           </label>
           <label htmlFor="mr-key">
             API key
@@ -610,11 +647,7 @@ export const ConnectionDialog = ({
               value={apiKey}
               onChange={(event) => setApiKey(event.target.value)}
             />
-            {fieldErrors.apiKey === undefined ? null : (
-              <span className="model-routing-field-error">
-                {fieldErrors.apiKey}
-              </span>
-            )}
+            <ConnectionFieldError message={fieldErrors.apiKey} />
           </label>
           {requiredFields.map((field) => (
             <label key={field.key} htmlFor={`mr-field-${field.key}`}>
@@ -631,40 +664,18 @@ export const ConnectionDialog = ({
                   }))
                 }
               />
-              {fieldErrors[`fields.${field.key}`] === undefined ? null : (
-                <span className="model-routing-field-error">
-                  {fieldErrors[`fields.${field.key}`]}
-                </span>
-              )}
+              <ConnectionFieldError
+                message={fieldErrors[`fields.${field.key}`]}
+              />
             </label>
           ))}
           {custom ? (
-            <label htmlFor="mr-models">
-              Models
-              <Textarea
-                id="mr-models"
-                rows={3}
-                placeholder={
-                  "openai/gpt-6-astra -> astra-litellm\nanthropic/claude-fable-5-1"
-                }
-                value={modelsText}
-                onChange={(event) => setModelsText(event.target.value)}
-              />
-              <span className="routing-model-hint">
-                One canonical model per line. Add -&gt; upstream-id to map a
-                different provider name.
-              </span>
-              {modelErrors.map((error) => (
-                <span key={error.line} className="model-routing-field-error">
-                  Line {error.line}: {error.message}
-                </span>
-              ))}
-              {fieldErrors.models === undefined ? null : (
-                <span className="model-routing-field-error">
-                  {fieldErrors.models}
-                </span>
-              )}
-            </label>
+            <CustomModelsField
+              value={modelsText}
+              onChange={setModelsText}
+              lineErrors={modelErrors}
+              error={fieldErrors.models}
+            />
           ) : null}
           <button
             type="button"

@@ -77,7 +77,11 @@ const mocks = vi.hoisted(() => {
           : { bind: bindThreadLifecycle },
   );
   const db = { prepare: prepareThreadLifecycle } as unknown as D1Database;
-  const workerEnv = { DB: db, DX_RUNTIME_MODE: "deployed" };
+  const workerEnv = {
+    DB: db,
+    DX_RUNTIME_MODE: "deployed",
+    E2B_API_KEY: "test-e2b-key",
+  };
   const profile = {
     id: "e2b-test",
     label: "Test workspace",
@@ -166,6 +170,14 @@ const mocks = vi.hoisted(() => {
 vi.mock("cloudflare:workers", () => ({ env: mocks.workerEnv }));
 vi.mock("./runner-profiles/execution.js", () => ({
   resolveExecutionRunnerProfile: mocks.resolveProfile,
+  // Every Thread here runs on the deployment's key.
+  resolveExecutionTarget: (...args: Parameters<typeof mocks.resolveProfile>) =>
+    mocks.resolveProfile(...args).pipe(
+      Effect.map((profile) => ({
+        profile,
+        credential: { scope: "deployment" },
+      })),
+    ),
 }));
 vi.mock("./e2b/requirements.js", () => ({
   loadE2BRequirements: mocks.loadRequirements,
@@ -203,10 +215,16 @@ vi.mock("../source-control/tools.js", () => ({
   executeSourcePush: mocks.executeSourcePush,
 }));
 
+import { composeExecutionWorkspaces } from "../plugins/execution/provider.js";
+import { FIRST_PARTY_PLUGINS } from "../plugins/registry.js";
 import {
-  ExecutionWorkspaces,
+  makeExecutionActivation,
   withCommandActivity,
   withThreadChanges,
+} from "./activation.js";
+import {
+  ExecutionWorkspaces,
+  executionProviders,
 } from "./execution-workspaces.js";
 
 const thread = (value: string) => Schema.decodeUnknownSync(ThreadId)(value);
@@ -234,19 +252,46 @@ beforeEach(() => {
   mocks.ensureDaemonInGuest.mockClear();
 });
 
-it("forwards the four-tool inventory through deployed workspace factories", () => {
+it("implements exactly the resident daemon each registered Execution provider claims", () => {
+  const execution = FIRST_PARTY_PLUGINS.find(({ id }) => id === "execution");
+  for (const [providerId, implementation] of Object.entries(executionProviders))
+    expect(
+      execution?.providers
+        .find(({ id }) => id === providerId)
+        ?.capabilities.includes("execution.resident-daemon"),
+    ).toBe(implementation.residentDaemon !== undefined);
+  // Deployed runtime with an E2B key resolves E2B and every capability.
+  expect(ExecutionWorkspaces.providers[0]?.providerId).toBe("e2b");
+  expect(ExecutionWorkspaces.providers[0]?.capabilities).toContain(
+    "execution.pause-resume",
+  );
+});
+
+it("forwards the workspace tool inventory through deployed workspace factories", () => {
   const sandbox = {} as Sandbox;
   const options = { subagents: {} };
   expect(
     ExecutionWorkspaces.sandboxFactory
       .tools?.(sandbox, options)
       .map(({ name }) => name),
-  ).toEqual(["read", "write", "edit", "bash"]);
+  ).toEqual([
+    "shell_command",
+    "shell_command_status",
+    "shell_command_kill",
+    "create_file",
+    "edit_file",
+  ]);
   expect(
     ExecutionWorkspaces.existingSandboxFactory
       .tools?.(sandbox, options)
       .map(({ name }) => name),
-  ).toEqual(["read", "write", "edit", "bash"]);
+  ).toEqual([
+    "shell_command",
+    "shell_command_status",
+    "shell_command_kill",
+    "create_file",
+    "edit_file",
+  ]);
 });
 
 const mintCredential = async () => ({
@@ -580,6 +625,7 @@ describe("execution workspace admission", () => {
     expect(mocks.resolveProfile).toHaveBeenCalledWith(
       mocks.workerEnv,
       threadId,
+      { admission: true },
     );
     expect(mocks.connectWorkspace).toHaveBeenCalledOnce();
     expect(mocks.resolveWorkspace).not.toHaveBeenCalled();
@@ -631,7 +677,7 @@ describe("execution workspace admission", () => {
         mintCredential,
         awaitRegistration,
       }),
-    ).resolves.toEqual({ bootstrapped: false });
+    ).resolves.toEqual({ bootstrapped: false, provider: "e2b" });
 
     expect(mocks.connectWorkspace).toHaveBeenCalledOnce();
     expect(awaitRegistration).toHaveBeenCalledWith(3_000);
@@ -843,6 +889,53 @@ describe("execution workspace admission", () => {
     expect(mocks.loadRequirements).toHaveBeenCalledWith(
       mocks.workerEnv,
       "first-template",
+    );
+  });
+
+  it("runs the prepared hook between source preparation and first use", async () => {
+    const threadId = thread("thr_00000000-0000-4000-8000-000000000299");
+    const sourceRun = vi.fn(async () => ({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    }));
+    mocks.firstWorkspaceReadiness.mockResolvedValueOnce({
+      ready_at: null,
+      preparation_status: null,
+    });
+    mocks.resolveWorkspace.mockReturnValueOnce(
+      Effect.succeed({
+        commands: { run: sourceRun },
+        files: { write: vi.fn(async () => undefined) },
+        setTimeout: vi.fn(async () => undefined),
+      }) as never,
+    );
+    const prepared = vi.fn(async () => {
+      // Source is prepared; the workspace is not ready or in use yet.
+      expect(sourceRun).toHaveBeenCalled();
+      expect(
+        mocks.prepareThreadLifecycle.mock.calls.some(([sql]) =>
+          (sql as string).includes("ready_at = "),
+        ),
+      ).toBe(false);
+    });
+    const workspaces = composeExecutionWorkspaces(
+      mocks.workerEnv,
+      executionProviders,
+      makeExecutionActivation({ prepared }),
+    );
+
+    await expect(
+      workspaces.sandboxFactory.createSandbox({ id: threadId }),
+    ).resolves.toBeDefined();
+
+    expect(prepared).toHaveBeenCalledOnce();
+    expect(prepared).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId,
+        firstPreparation: true,
+        context: expect.objectContaining({ account: { scope: "deployment" } }),
+      }),
     );
   });
 });

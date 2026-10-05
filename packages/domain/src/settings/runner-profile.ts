@@ -1,5 +1,9 @@
 import { Schema } from "effect";
+import cloudflareOrbProfiles from "../../cloudflare-orb-profiles.json" with {
+  type: "json",
+};
 import e2bOrbProfiles from "../../e2b-orb-profiles.json" with { type: "json" };
+import { ExecutionPauseResumePreserves } from "../plugins/execution.js";
 
 export const RunnerProfileId = Schema.String.check(
   Schema.isMinLength(1),
@@ -11,6 +15,7 @@ export type RunnerProfileId = typeof RunnerProfileId.Type;
 
 export const RunnerAdapterKind = Schema.Literals([
   "e2b",
+  "cloudflare",
   "local",
   "container",
   "kubernetes",
@@ -127,6 +132,54 @@ export const E2B_ORB_PROFILES = Schema.decodeUnknownSync(
   Schema.Array(E2BOrbProfile),
 )(e2bOrbProfiles);
 
+/**
+ * Cloudflare Containers instance types a Thread may start with under the
+ * `durable_object` scheduling policy. `lite` (256 MiB, 2 GB disk) cannot
+ * hold the standard Orb image, and the runtime does not accept `basic` by
+ * name, so neither is offered.
+ */
+export const CloudflareContainerInstance = Schema.Literals([
+  "standard-1",
+  "standard-2",
+  "standard-3",
+  "standard-4",
+]);
+
+export type CloudflareContainerInstance =
+  typeof CloudflareContainerInstance.Type;
+
+/**
+ * A Cloudflare Containers Orb size. Unlike E2B, the size is chosen when the
+ * container starts (`ctx.container.start({ instance })`), so a profile names
+ * an instance type instead of a template; the Thread's container keeps the
+ * instance it was created with.
+ */
+export const CloudflareRunnerProfileConfiguration = Schema.Struct({
+  ...RunnerProfile.fields,
+  adapter: Schema.Literal("cloudflare"),
+  instance: CloudflareContainerInstance,
+});
+
+export type CloudflareRunnerProfileConfiguration =
+  typeof CloudflareRunnerProfileConfiguration.Type;
+
+/**
+ * Cloudflare Containers instance types as Orb sizes (instance types from
+ * developers.cloudflare.com, 2026-10-04).
+ */
+export const CloudflareOrbProfile = Schema.Struct({
+  id: RunnerProfileId,
+  label: RunnerProfileLabel,
+  instance: CloudflareContainerInstance,
+  resources: RunnerResources,
+});
+
+export type CloudflareOrbProfile = typeof CloudflareOrbProfile.Type;
+
+export const CLOUDFLARE_ORB_PROFILES = Schema.decodeUnknownSync(
+  Schema.Array(CloudflareOrbProfile),
+)(cloudflareOrbProfiles);
+
 export const LocalRunnerProfileConfiguration = Schema.Struct({
   ...RunnerProfile.fields,
   adapter: Schema.Literal("local"),
@@ -154,6 +207,7 @@ export const RunnerProfileCatalogConfiguration = Schema.Struct({
   profiles: Schema.Array(
     Schema.Union([
       E2BRunnerProfileConfiguration,
+      CloudflareRunnerProfileConfiguration,
       LocalRunnerProfileConfiguration,
     ]),
   ).check(Schema.isMinLength(1), Schema.isMaxLength(32)),
@@ -172,17 +226,30 @@ export const RunnerProfileCatalogConfiguration = Schema.Struct({
           capabilities.size === profile.capabilities.length &&
           !capabilities.has("commit-signing");
         if (!common) return false;
-        return profile.adapter === "e2b"
-          ? profile.isolation === "sandbox" &&
-              requiredE2BCapabilities.every((capability) =>
-                capabilities.has(capability),
-              )
-          : profile.isolation === "process" &&
-              requiredLocalCapabilities.every((capability) =>
-                capabilities.has(capability),
-              ) &&
-              !capabilities.has("internet-access") &&
-              !capabilities.has("pause-resume");
+        if (profile.adapter === "e2b")
+          return (
+            profile.isolation === "sandbox" &&
+            requiredE2BCapabilities.every((capability) =>
+              capabilities.has(capability),
+            )
+          );
+        // A Cloudflare container has the same workspace traits as an E2B
+        // sandbox; its pause-resume keeps the filesystem only.
+        if (profile.adapter === "cloudflare")
+          return (
+            profile.isolation === "container" &&
+            requiredE2BCapabilities.every((capability) =>
+              capabilities.has(capability),
+            )
+          );
+        return (
+          profile.isolation === "process" &&
+          requiredLocalCapabilities.every((capability) =>
+            capabilities.has(capability),
+          ) &&
+          !capabilities.has("internet-access") &&
+          !capabilities.has("pause-resume")
+        );
       })
     );
   }),
@@ -191,11 +258,31 @@ export const RunnerProfileCatalogConfiguration = Schema.Struct({
 export type RunnerProfileCatalogConfiguration =
   typeof RunnerProfileCatalogConfiguration.Type;
 
+/**
+ * How the Orb picker presents the provider behind an adapter: its display
+ * name, and what its `execution.pause-resume` keeps across a pause (null
+ * when the provider does not pause and resume).
+ */
+export const RunnerProviderPresentation = Schema.Struct({
+  adapter: RunnerAdapterKind,
+  displayName: Schema.String,
+  /**
+   * The compact name the Orb picker shows ("Cloudflare"); settings pages use
+   * `displayName`. Absent from a Core that predates it.
+   */
+  shortName: Schema.optional(Schema.String),
+  pauseResume: Schema.NullOr(ExecutionPauseResumePreserves),
+});
+
+export type RunnerProviderPresentation = typeof RunnerProviderPresentation.Type;
+
 export const RunnerProfileCatalog = Schema.Struct({
   version: Schema.Literal(1),
   defaultProfileId: RunnerProfileId,
   profiles: Schema.Array(RunnerProfile),
   adapterStates: Schema.Array(RunnerAdapterCapabilityState),
+  /** One entry per adapter that has a profile, in catalog order. */
+  providers: Schema.optional(Schema.Array(RunnerProviderPresentation)),
 });
 
 export type RunnerProfileCatalog = typeof RunnerProfileCatalog.Type;

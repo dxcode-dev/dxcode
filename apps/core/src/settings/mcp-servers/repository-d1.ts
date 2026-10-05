@@ -1,13 +1,13 @@
 import {
   configReferenceFor,
+  type McpServerId,
   McpServerNotFound,
   McpServerRepository,
+  type McpServerTarget,
   PersistenceUnavailable,
   StoredMcpServer,
   StoredMcpTool,
   Timestamp,
-  type McpServerId,
-  type McpServerTarget,
 } from "@dx/domain";
 import { Effect, Layer, Schema, SchemaTransformation } from "effect";
 import { settingsPersistenceLogger } from "../../logging.js";
@@ -29,6 +29,7 @@ const McpServerRow = Schema.Struct({
   health_error_code: Schema.NullOr(Schema.String),
   created_at: Schema.String,
   updated_at: Schema.String,
+  has_stored_credential: Schema.Finite,
 });
 
 const McpToolRow = Schema.Struct({
@@ -46,7 +47,11 @@ const columns = `
   id, scope, target_id, name, endpoint, transport,
   auth_environment_variable_id, timeout_ms, enabled,
   project_ids_json, roles_json, health_status, health_checked_at,
-  health_error_code, created_at, updated_at
+  health_error_code, created_at, updated_at,
+  EXISTS (
+    SELECT 1 FROM mcp_server_credential
+     WHERE mcp_server_credential.server_id = mcp_server.id
+  ) AS has_stored_credential
 `;
 
 const JsonString = Schema.String.pipe(
@@ -76,6 +81,9 @@ const decodeServers = (input: unknown) =>
                       row.auth_environment_variable_id as never,
                     ),
                   }),
+              ...(row.has_stored_credential === 1
+                ? { hasStoredCredential: true }
+                : {}),
               timeoutMs: row.timeout_ms,
               enabled: row.enabled === 1,
               projectIds,
@@ -300,17 +308,25 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
           if (result.meta.changes !== 1) return yield* new McpServerNotFound();
         }),
         remove: Effect.fn("McpServerRepository.remove")(function* (target, id) {
-          const result = yield* Effect.tryPromise({
+          // Delete the token explicitly too, independent of foreign-key cascade.
+          const [, result] = yield* Effect.tryPromise({
             try: () =>
-              db
-                .prepare(
-                  "DELETE FROM mcp_server WHERE scope = ? AND target_id = ? AND id = ?",
-                )
-                .bind(target.scope, target.id, id)
-                .run(),
+              db.batch([
+                db
+                  .prepare(
+                    "DELETE FROM mcp_server_credential WHERE server_id = ? AND scope = ? AND target_id = ?",
+                  )
+                  .bind(id, target.scope, target.id),
+                db
+                  .prepare(
+                    "DELETE FROM mcp_server WHERE scope = ? AND target_id = ? AND id = ?",
+                  )
+                  .bind(target.scope, target.id, id),
+              ]),
             catch: unavailable("settings.mcpServers.remove"),
           });
-          if (result.meta.changes === 0) return yield* new McpServerNotFound();
+          if ((result?.meta.changes ?? 0) === 0)
+            return yield* new McpServerNotFound();
         }),
         replaceDiscovery: Effect.fn("McpServerRepository.replaceDiscovery")(
           function* (id, tools) {

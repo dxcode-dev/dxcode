@@ -1,101 +1,75 @@
+import type { ConfigurablePluginProviderId } from "@dx/api";
 import type { UserId } from "@dx/domain";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 import {
-  previewPlugin,
-  publishPluginVersion,
-  removePlugin,
-  trustPlugin,
-  updatePluginState,
-  updatePluginWorkspacePolicy,
+  deleteFirstPartyPluginConfiguration,
+  setFirstPartyPluginConfiguration,
+  setFirstPartyPluginEnablement,
+  setFirstPartyPluginWorkspacePolicy,
 } from "../../../shared/api/client.js";
-import { type PluginsTarget, pluginKeys } from "./plugins-queries.js";
+import { settingsKeys } from "../settings-context-queries.js";
+import { firstPartyPluginKeys, type PluginsTarget } from "./plugins-queries.js";
 
-export type PluginsMutationAction =
+export type FirstPartyPluginAction =
   | {
-      readonly type: "trust";
-      readonly bundle: Parameters<typeof trustPlugin>[1];
-      readonly reviewedIntegrity: Parameters<typeof trustPlugin>[2];
-      readonly grants: Parameters<typeof trustPlugin>[3];
+      readonly type: "enablement";
+      readonly pluginId: string;
+      readonly enablement: "enabled" | "disabled" | null;
     }
   | {
-      readonly type: "publishVersion";
-      readonly pluginId: Parameters<typeof publishPluginVersion>[1];
-      readonly bundle: Parameters<typeof publishPluginVersion>[2];
-      readonly reviewedIntegrity: Parameters<typeof publishPluginVersion>[3];
-      readonly grants: Parameters<typeof publishPluginVersion>[4];
+      readonly type: "configure";
+      readonly pluginId: string;
+      readonly providerId: typeof ConfigurablePluginProviderId.Type;
+      readonly credential: string;
     }
-  | {
-      readonly type: "updateState";
-      readonly pluginId: Parameters<typeof updatePluginState>[1];
-      readonly input: Parameters<typeof updatePluginState>[2];
-    }
-  | {
-      readonly type: "remove";
-      readonly pluginId: Parameters<typeof removePlugin>[1];
-    }
-  | { readonly type: "updatePolicy"; readonly allowPersonalPlugins: boolean };
+  | { readonly type: "removeConfiguration"; readonly pluginId: string }
+  | { readonly type: "policy"; readonly allowPersonalOverrides: boolean };
 
-export type PluginPreview = Awaited<ReturnType<typeof previewPlugin>>;
-
-const mutatePlugins = async (
-  target: PluginsTarget,
-  action: PluginsMutationAction,
-) => {
+const mutate = (target: PluginsTarget, action: FirstPartyPluginAction) => {
   switch (action.type) {
-    case "trust":
-      return await trustPlugin(
-        target,
-        action.bundle,
-        action.reviewedIntegrity,
-        action.grants,
-      );
-    case "publishVersion":
-      return await publishPluginVersion(
+    case "enablement":
+      return setFirstPartyPluginEnablement(
         target,
         action.pluginId,
-        action.bundle,
-        action.reviewedIntegrity,
-        action.grants,
+        action.enablement,
       );
-    case "updateState":
-      return await updatePluginState(target, action.pluginId, action.input);
-    case "remove":
-      return await removePlugin(target, action.pluginId);
-    case "updatePolicy": {
+    case "configure":
+      return setFirstPartyPluginConfiguration(target, action.pluginId, {
+        providerId: action.providerId,
+        credential: action.credential,
+      });
+    case "removeConfiguration":
+      return deleteFirstPartyPluginConfiguration(target, action.pluginId);
+    case "policy":
       if (target.scope !== "workspace")
-        throw new Error("Plugin workspace policy requires a workspace target.");
-      return await updatePluginWorkspacePolicy(
-        target,
-        action.allowPersonalPlugins,
+        throw new Error("Plugin policy requires a workspace target.");
+      return setFirstPartyPluginWorkspacePolicy(
+        target.workspaceSlug,
+        action.allowPersonalOverrides,
       );
-    }
   }
 };
 
-export const pluginsMutationOptions = (
+export const firstPartyPluginsMutationOptions = (
   queryClient: QueryClient,
   userId: UserId,
   target: PluginsTarget,
 ) =>
   mutationOptions({
-    mutationKey: [...pluginKeys.list(userId, target), "mutate"],
+    mutationKey: [...firstPartyPluginKeys.list(userId, target), "mutate"],
     gcTime: 0,
-    mutationFn: (action: PluginsMutationAction) =>
-      mutatePlugins(target, action),
-    onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: pluginKeys.list(userId, target),
-      }),
-  });
-
-export const pluginPreviewMutationOptions = (
-  userId: UserId,
-  target: PluginsTarget,
-) =>
-  mutationOptions({
-    mutationKey: [...pluginKeys.list(userId, target), "preview"],
-    mutationFn: (bundle: Parameters<typeof previewPlugin>[1]) =>
-      previewPlugin(target, bundle),
-    gcTime: 0,
-    onSuccess: () => undefined,
+    mutationFn: (action: FirstPartyPluginAction) => mutate(target, action),
+    onSuccess: (data) => {
+      queryClient.setQueryData(firstPartyPluginKeys.list(userId, target), data);
+      // Personal and workspace views both derive from the same settings,
+      // and the settings context derives dictation from Speech resolution.
+      return Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: firstPartyPluginKeys.all(userId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: settingsKeys.contexts(userId),
+        }),
+      ]);
+    },
   });

@@ -6,9 +6,9 @@ const hiddenNavigationIds: Readonly<
 > = {
   personal: new Set([
     "personal-usage",
-    "personal-mcp-servers",
+    "personal-plugin-usage",
     "personal-security",
-    "personal-plugins",
+    "personal-custom-plugins",
     "personal-triggers",
     "personal-skills",
     "personal-experimental-features",
@@ -17,12 +17,12 @@ const hiddenNavigationIds: Readonly<
   ]),
   workspace: new Set([
     "workspace-usage",
+    "workspace-plugin-usage",
     "workspace-project-defaults",
     "workspace-applications",
     "workspace-model-routing",
-    "workspace-mcp-servers",
     "workspace-skills",
-    "workspace-plugins",
+    "workspace-custom-plugins",
   ]),
 };
 

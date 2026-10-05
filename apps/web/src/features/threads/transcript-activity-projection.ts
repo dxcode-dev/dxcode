@@ -1,4 +1,5 @@
 import type { FlueConversationPart } from "@flue/react";
+import { shellCommandOperations } from "./shell-command-operation.js";
 import type { TranscriptRow } from "./transcript-view-model.js";
 
 export type WorkRow = Extract<
@@ -40,7 +41,21 @@ export const categoryForTool = (
   input: unknown,
 ): ToolCategory => {
   const name = toolName.toLowerCase();
+  if (name === "code_exec") return "generic";
   if (
+    name === "web_search" ||
+    name === "read_web_page" ||
+    name === "tool_search"
+  )
+    return "explore";
+  if (
+    name === "shell_command" &&
+    typeof record(input)?.command === "string" &&
+    shellCommandOperations(record(input)?.command as string)
+  )
+    return "explore";
+  if (
+    name === "shell_command_kill" ||
     name.includes("poll") ||
     name.includes("check") ||
     name.includes("status") ||

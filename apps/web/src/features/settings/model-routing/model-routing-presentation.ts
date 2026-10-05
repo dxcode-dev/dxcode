@@ -2,6 +2,7 @@ import type {
   CatalogData,
   ChoicesData,
   ConnectionData,
+  DictationProviderData,
   GraphData,
 } from "@dx/api";
 
@@ -24,6 +25,17 @@ export interface RoutingDestination {
   readonly kind: string;
 }
 export const NOT_SERVED = "not-served";
+export const TRANSCRIPTION_SOURCE = "speech:transcription";
+/** Who pays for transcription: the credential scope Speech resolved. */
+const TRANSCRIPTION = {
+  deployment: { id: "dx-transcription", name: "dx", kind: "dx" },
+  workspace: {
+    id: "workspace-transcription",
+    name: "Workspace key",
+    kind: "dx",
+  },
+  personal: { id: "personal-transcription", name: "Your key", kind: "dx" },
+} as const;
 const MODE_NAMES: Record<string, string> = {
   low: "Low",
   medium: "Medium",
@@ -36,13 +48,14 @@ export function routingPresentation({
   catalog,
   choices,
   connections = [],
-  dictationAvailable = false,
+  dictation,
 }: {
   readonly graph: GraphData;
   readonly catalog?: CatalogData;
   readonly choices?: ChoicesData;
   readonly connections?: ReadonlyArray<ConnectionData>;
-  readonly dictationAvailable?: boolean;
+  /** The Speech provider dictation resolves to; absent hides the row. */
+  readonly dictation?: DictationProviderData;
 }) {
   const catalogModels = catalog?.providers.flatMap((p) => p.models) ?? [];
   const names = new Map(catalogModels.map((m) => [m.id, m.name]));
@@ -76,12 +89,14 @@ export function routingPresentation({
     }));
     if (rows.length) groups.push({ id: "other", rows });
   }
-  if (dictationAvailable) {
+  const transcription =
+    dictation === undefined ? undefined : TRANSCRIPTION[dictation.scope];
+  if (dictation !== undefined && transcription !== undefined) {
     const row = {
-      id: "sarvam:transcription",
-      name: "Sarvam",
+      id: TRANSCRIPTION_SOURCE,
+      name: dictation.displayName,
       label: "Transcription",
-      destination: "dx-transcription",
+      destination: transcription.id,
     };
     const other = groups.find((g) => g.id === "other");
     if (other)
@@ -121,13 +136,8 @@ export function routingPresentation({
         kind: "provider",
       });
   }
-  if (dictationAvailable)
-    destinations.push({
-      id: "dx-transcription",
-      name: "dx",
-      detail: "Transcription",
-      kind: "dx",
-    });
+  if (transcription !== undefined)
+    destinations.push({ ...transcription, detail: "Transcription" });
   if (used.has(NOT_SERVED))
     destinations.push({
       id: NOT_SERVED,

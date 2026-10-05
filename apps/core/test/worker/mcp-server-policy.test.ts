@@ -1,15 +1,20 @@
+import { env } from "cloudflare:test";
 import {
   McpServerRepository,
   ProjectId,
   UserId,
   WorkspaceId,
 } from "@dx/domain";
-import { env } from "cloudflare:test";
 import { Effect, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Bindings } from "../../src/http/types.js";
+import { loadConfigEncryptionKeyring } from "../../src/settings/config-encryption.js";
+import { putMcpServerCredential } from "../../src/settings/mcp-servers/credential.js";
 import {
   createAuthorizedMcpFetch,
   McpInvocationForbidden,
+  resolveMcpAgentConnections,
+  resolveMcpCredential,
 } from "../../src/settings/mcp-servers/execution.js";
 import { McpServerRepositoryD1 } from "../../src/settings/mcp-servers/repository-d1.js";
 import { mcpToolContractHash } from "../../src/settings/mcp-servers/transport.js";
@@ -249,6 +254,62 @@ describe("MCP current execution policy in D1", () => {
     ).rejects.toBeInstanceOf(McpInvocationForbidden);
   });
 
+  it("sends a server's stored token, and only that token, on Code's MCP requests", async () => {
+    const keyring = await Effect.runPromise(
+      loadConfigEncryptionKeyring(env as unknown as Bindings),
+    );
+    const server = {
+      id: serverId as never,
+      target: { scope: "personal", id: owner } as never,
+    };
+    await putMcpServerCredential(
+      env.DB,
+      keyring,
+      server,
+      "stored-token",
+      timestamp,
+    );
+    const [connection] = (
+      await Effect.runPromise(resolveMcpAgentConnections(env.DB, threadId))
+    ).filter(({ id }) => id === serverId);
+    expect(connection?.authenticated).toBe(true);
+    await expect(resolveMcpCredential(threadId, serverId)).resolves.toBe(
+      "stored-token",
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(
+          Response.json({ jsonrpc: "2.0", id: 2, result: {} }),
+        ),
+    );
+    const call = (authorization?: string) =>
+      createAuthorizedMcpFetch(
+        threadId,
+        serverId,
+        endpoint,
+        10_000,
+      )(endpoint, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(authorization === undefined ? {} : { authorization }),
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "read_status", arguments: {} },
+        }),
+      });
+    await expect(call("Bearer stored-token")).resolves.toBeInstanceOf(Response);
+    await expect(call()).rejects.toBeInstanceOf(McpInvocationForbidden);
+    await expect(call("Bearer other")).rejects.toBeInstanceOf(
+      McpInvocationForbidden,
+    );
+  });
+
   it("validates JSON tool listings after dispatch without rereading the outbound request", async () => {
     await authorizeStoredContract();
     vi.stubGlobal(
@@ -305,6 +366,24 @@ describe("MCP current execution policy in D1", () => {
     await expect(mismatched.text()).rejects.toMatchObject({
       code: "TOOL_REVIEW_REQUIRED",
     });
+  });
+
+  it("accepts an empty acknowledgement for a client notification", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(null, {
+          status: 202,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    const response = await authorizedRequest({
+      jsonrpc: "2.0",
+      method: "notifications/initialized",
+    });
+    expect(response.status).toBe(202);
   });
 
   it("executes an approved tool call without applying listing validation to its result", async () => {

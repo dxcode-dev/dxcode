@@ -1,4 +1,4 @@
-import { WorkspaceShortName } from "@dx/domain";
+import { PluginProviderId, PluginScope, WorkspaceShortName } from "@dx/domain";
 import { Schema } from "effect";
 import { errorResponse, successResponse } from "../http/response.js";
 
@@ -16,10 +16,21 @@ export const GetWorkspaceSettingsContextParamsSchema = Schema.Struct({
 
 export const SettingsWorkspaceDataSchema = WorkspaceProfileDataSchema;
 
+/** The Speech provider dictation resolves to for this user right now. */
+export const DictationProviderDataSchema = Schema.Struct({
+  providerId: PluginProviderId,
+  displayName: Schema.String,
+  scope: PluginScope,
+});
+
+export type DictationProviderData = typeof DictationProviderDataSchema.Type;
+
 export const PersonalSettingsContextDataSchema = Schema.Struct({
   activeScope: Schema.Literal("personal"),
   workspace: Schema.optional(SettingsWorkspaceDataSchema),
+  /** Derived from Speech plugin resolution; present with `dictation`. */
   dictationAvailable: Schema.optional(Schema.Boolean),
+  dictation: Schema.optional(DictationProviderDataSchema),
 });
 
 export const WorkspaceSettingsContextDataSchema = Schema.Struct({

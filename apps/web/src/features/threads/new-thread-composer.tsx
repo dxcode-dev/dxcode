@@ -1,9 +1,15 @@
-import type { ChoicesData, GraphData, ProjectData } from "@dx/api";
+import type {
+  ChoicesData,
+  GraphData,
+  OrbResolvedProvider,
+  ProjectData,
+} from "@dx/api";
 import type {
   ModeId,
   ProjectId,
   RunnerProfile,
   RunnerProfileId,
+  RunnerProviderPresentation,
 } from "@dx/domain";
 import type * as React from "react";
 import type { PendingImage } from "./image-attachments.js";
@@ -28,6 +34,8 @@ export function NewThreadComposer({
   loadingMoreProjects,
   onLoadMoreProjects,
   runnerProfiles,
+  runnerProviders,
+  runnerOrbs,
   runnerProfileId,
   runnerProfileLoading,
   allowedRunnerProfileIds,
@@ -60,6 +68,8 @@ export function NewThreadComposer({
   readonly loadingMoreProjects?: boolean;
   readonly onLoadMoreProjects: () => void;
   readonly runnerProfiles?: ReadonlyArray<RunnerProfile>;
+  readonly runnerProviders?: ReadonlyArray<RunnerProviderPresentation>;
+  readonly runnerOrbs?: ReadonlyArray<OrbResolvedProvider>;
   readonly runnerProfileId?: RunnerProfileId;
   readonly runnerProfileLoading: boolean;
   readonly allowedRunnerProfileIds?: ReadonlyArray<RunnerProfileId> | null;
@@ -137,6 +147,8 @@ export function NewThreadComposer({
         retrying={false}
         onProjectChange={onProjectChange}
         runnerProfiles={runnerProfiles}
+        runnerProviders={runnerProviders}
+        runnerOrbs={runnerOrbs}
         runnerProfileId={runnerProfileId}
         runnerProfileLoading={runnerProfileLoading}
         allowedRunnerProfileIds={allowedRunnerProfileIds}

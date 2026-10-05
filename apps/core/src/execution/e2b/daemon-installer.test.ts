@@ -44,6 +44,8 @@ type Inspection = {
   readonly nudged?: boolean;
   /** What the install script reports. */
   readonly installed?: "installed" | "upgraded";
+  /** The standard Orb image: its entrypoint supervises dxd. */
+  readonly orbInit?: boolean;
 };
 
 const guest = (inspection: Inspection, curlSucceeds = true) => {
@@ -59,7 +61,7 @@ const guest = (inspection: Inspection, curlSucceeds = true) => {
           return {
             stdout: inspection.nudged
               ? "nudged\n"
-              : `${inspection.binarySha ?? "none"}\n${inspection.config ? "config" : "no-config"}\n`,
+              : `${inspection.binarySha ?? "none"}\n${inspection.config ? "config" : "no-config"}\n${inspection.orbInit ? "orb-init" : "systemd"}\n`,
             stderr: "",
             exitCode: 0,
           };
@@ -404,6 +406,40 @@ describe("daemon guest bootstrap", () => {
     });
     await expect(ensureDaemonInGuest(target, input)).rejects.toThrow(
       "Daemon installation failed.",
+    );
+  });
+
+  it("lets the image entrypoint supervise dxd without systemd or root", async () => {
+    const fresh = guest({ config: false, orbInit: true });
+    await ensureDaemonInGuest(fresh, input);
+    const install = installScript(fresh);
+    expect(
+      fresh.files.write.mock.calls.some(
+        ([, data]) => data === DXD_SYSTEMD_UNIT,
+      ),
+    ).toBe(false);
+    expect(install).not.toContain("systemctl");
+    expect(install).not.toContain("dxd.service");
+    // A stopped daemon: wake the entrypoint, or start it if it is gone.
+    expect(install).toMatch(
+      /if test -z "\$running"; then\n[\s\S]*kill -s USR1 "\$spid"[\s\S]*setsid -f \/usr\/local\/bin\/dx-orb-init/,
+    );
+    // A running daemon re-reads its configuration on SIGHUP.
+    expect(install).toMatch(
+      /else\n {2}kill -s HUP "\$pid"; echo installed\nfi$/,
+    );
+    for (const [command] of fresh.commands.run.mock.calls) {
+      const checked = spawnSync("bash", ["-n"], { input: command });
+      expect(checked.status, String(checked.stderr)).toBe(0);
+    }
+
+    // The nudge asks the guest which supervisor runs dxd.
+    const [inspection] = fresh.commands.run.mock.calls[0] as [string];
+    expect(inspection).toContain(
+      "if test -x /usr/local/bin/dx-orb-init && ! test -e /etc/systemd/system/dxd.service; then supervisor=orb-init; else supervisor=systemd; fi",
+    );
+    expect(inspection).toContain(
+      'if test "$supervisor" = orb-init; then kill -s HUP "$pid"; else sudo systemctl kill --signal=SIGHUP --kill-whom=main dxd.service; fi',
     );
   });
 });

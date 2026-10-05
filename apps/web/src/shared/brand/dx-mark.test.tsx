@@ -19,4 +19,11 @@ describe("dx brand components", () => {
     expect(markup).toContain('href="/"');
     expect(markup).toContain("dx-brand-wordmark-glyph");
   });
+
+  it("offers a small inline wordmark for attribution", () => {
+    expect(renderToStaticMarkup(<DxWordmark size="small" />)).toContain(
+      'data-size="small"',
+    );
+    expect(renderToStaticMarkup(<DxWordmark />)).not.toContain("data-size");
+  });
 });

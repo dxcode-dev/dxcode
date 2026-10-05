@@ -14,7 +14,7 @@ import { FileTree, useFileTree } from "@pierre/trees/react";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, FileText } from "lucide-react";
 import * as React from "react";
-import { downloadFromUrl } from "../../../shared/ui/file-context-menu.js";
+import { downloadFromUrl } from "../../../shared/download-from-url.js";
 import type { ThreadFilesApi } from "./files-api.js";
 import { threadFilesKeys, threadFileTreeOptions } from "./files-queries.js";
 

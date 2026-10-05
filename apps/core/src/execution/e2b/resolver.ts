@@ -403,6 +403,72 @@ export const makePauseExecutionWorkspace = (api: E2BResolverApi) =>
 
 export const pauseExecutionWorkspace = makePauseExecutionWorkspace(liveE2BApi);
 
+export interface DestroyExecutionWorkspaceOptions {
+  readonly id: string;
+  readonly requirements: E2BRequirements;
+  readonly stateStore: ExecutionWorkspaceStateStore;
+  readonly coordination?: ExecutionWorkspaceCoordinator;
+}
+
+/**
+ * Kills the Thread's sandbox for good and records the workspace as lost, so
+ * nothing reconnects to it. A sandbox E2B no longer has is already gone.
+ * Returns 1 when an initialized workspace was destroyed, 0 when there was
+ * nothing to destroy.
+ */
+export const makeDestroyExecutionWorkspace = (api: E2BResolverApi) =>
+  Effect.fn("destroyExecutionWorkspace")(function* ({
+    id,
+    requirements,
+    stateStore,
+    coordination,
+  }: DestroyExecutionWorkspaceOptions) {
+    const threadId = yield* Schema.decodeEffect(ThreadId)(id).pipe(
+      Effect.mapError(unavailable),
+    );
+    const apiKey = Redacted.value(requirements.apiKey);
+    const destroy = Effect.gen(function* () {
+      const record = yield* readState(stateStore, threadId);
+      if (record.state === "uninitialized" || record.state === "lost") return 0;
+      // Only an initialized workspace may become lost; anything else
+      // (provisioning, conflict, legacy) fails closed for the caller.
+      if (record.state !== "initialized" || record.providerSandboxId === null)
+        return yield* unavailable();
+      yield* Effect.tryPromise({
+        try: () =>
+          api.kill(record.providerSandboxId as string, {
+            apiKey,
+            requestTimeoutMs: REQUEST_TIMEOUT_MS,
+          }),
+        catch: (cause) => cause,
+      }).pipe(
+        Effect.catch((cause) =>
+          api.isNotFound(cause) ? Effect.void : Effect.fail(unavailable(cause)),
+        ),
+      );
+      yield* transitionState(stateStore, threadId, record, {
+        ...record,
+        state: "lost",
+      });
+      return 1;
+    });
+    if (coordination === undefined) return yield* destroy;
+    const lease = yield* Effect.tryPromise({
+      try: () => coordination.acquire(`${requirements.dxEnv}:${threadId}`),
+      catch: unavailable,
+    });
+    return yield* Effect.ensuring(
+      destroy,
+      Effect.tryPromise({
+        try: () => lease.release(),
+        catch: () => undefined,
+      }).pipe(Effect.ignore),
+    );
+  });
+
+export const destroyExecutionWorkspace =
+  makeDestroyExecutionWorkspace(liveE2BApi);
+
 export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
   const listMatches = Effect.fn("listExecutionWorkspaces")(function* (
     metadata: Record<string, string>,

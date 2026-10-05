@@ -65,6 +65,8 @@ export const settingsPersistenceLogger = getLogger([
 export const settingsAuditLogger = getLogger(["dx", "settings", "audit"]);
 export const executionWorkspaceLogger = getLogger(["dx", "execution", "e2b"]);
 export const threadDaemonLogger = getLogger(["dx", "execution", "dxd"]);
+export const orbContainerLogger = getLogger(["dx", "execution", "cloudflare"]);
+export const orbProvidersLogger = getLogger(["dx", "execution", "providers"]);
 export const workloadIdentityLogger = getLogger([
   "dx",
   "workload-identity",

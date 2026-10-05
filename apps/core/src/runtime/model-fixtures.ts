@@ -25,7 +25,7 @@ export const LOCAL_MODEL_FIXTURE_PROMPTS = {
   textCompletion:
     "Reply with two short sentences confirming this synthetic model-stream check. Do not use tools.",
   toolContinuation:
-    "Use the write tool to create /home/user/workspace/repo/.dx-glm-journey.txt containing exactly synthetic-glm-tool-result. After the tool result, reply with one short confirmation sentence.",
+    "Use the create_file tool to create /home/user/workspace/repo/.dx-glm-journey.txt containing exactly synthetic-glm-tool-result. After the tool result, reply with one short confirmation sentence.",
 } as const;
 
 export const LOCAL_MODEL_FAILURE_FIXTURE_PROMPTS = {
@@ -98,7 +98,7 @@ const hasSuccessfulFixtureToolResult = (context: Context) => {
         (content) =>
           content.type === "toolCall" &&
           content.id === LOCAL_MODEL_FIXTURE_TOOL_CALL_ID &&
-          content.name === "write" &&
+          content.name === "create_file" &&
           JSON.stringify(content.arguments) ===
             JSON.stringify({
               path: "/home/user/workspace/repo/.dx-glm-journey.txt",
@@ -110,7 +110,7 @@ const hasSuccessfulFixtureToolResult = (context: Context) => {
     (message) =>
       message.role === "toolResult" &&
       message.toolCallId === LOCAL_MODEL_FIXTURE_TOOL_CALL_ID &&
-      message.toolName === "write",
+      message.toolName === "create_file",
   );
   if (toolCall === undefined && toolResult === undefined) return false;
   if (
@@ -205,7 +205,7 @@ export const createLocalModelFixtureProvider = () => {
               )
             : fauxAssistantMessage(
                 fauxToolCall(
-                  "write",
+                  "create_file",
                   {
                     path: "/home/user/workspace/repo/.dx-glm-journey.txt",
                     content: "synthetic-glm-tool-result",

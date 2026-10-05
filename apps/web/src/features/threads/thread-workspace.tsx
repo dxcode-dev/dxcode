@@ -36,11 +36,7 @@ import {
   useThreadPresence,
   useThreadWorkspaceStatus,
 } from "./realtime/realtime-provider.js";
-import {
-  type CenterFileTab,
-  centerTabKey,
-  ThreadCenterTabs,
-} from "./thread-center-tabs.js";
+import { type CenterFileTab, ThreadCenterTabs } from "./thread-center-tabs.js";
 import { ThreadDesktopLayout } from "./thread-desktop-layout.js";
 import {
   type ThreadFileNavigation,
@@ -63,6 +59,7 @@ import {
 import {
   absolutePathFor,
   type FileReveal,
+  fileTargetKey,
   resolveTranscriptFileLink,
   sandboxFileUrl,
   type ThreadFileTarget,
@@ -241,7 +238,9 @@ function OpenThreadFilePane({
     (dirty: boolean) =>
       setFiles((current) =>
         current.map((item) =>
-          centerTabKey(item) === centerTabKey(file) ? { ...item, dirty } : item,
+          fileTargetKey(item) === fileTargetKey(file)
+            ? { ...item, dirty }
+            : item,
         ),
       ),
     [file, setFiles],
@@ -375,6 +374,133 @@ function SessionAgentPanel({
   return <AgentPanel agent={agent} {...props} />;
 }
 
+/** A retained Thread's pending images and submission state, for its panel. */
+function useRetainedImageProps() {
+  const retainedThread = React.useContext(ThreadPresentationContext);
+  const [images, setImages] = useThreadPresentation<
+    ReadonlyArray<PendingImage>
+  >("pending-images", () => []);
+  const [submissionPending, setSubmissionPending] = useThreadPresentation(
+    "submission-pending",
+    false,
+  );
+  const [submissionControl] = useThreadPresentation<PendingSubmissionControl>(
+    "submission-control",
+    () => ({ stopRequested: false }),
+  );
+  return retainedThread === undefined
+    ? {}
+    : {
+        imageCollection: retainedThread.images,
+        images,
+        onImagesChange: setImages,
+        submissionPending,
+        submissionControl,
+        onSubmissionPendingChange: setSubmissionPending,
+        submissionImageRetention: retainSubmissionImages(
+          retainedThread,
+          setSubmissionPending,
+        ),
+      };
+}
+
+/**
+ * The center pane's open file tabs and the transcript's file links that open
+ * them. Context values stay stable: a new value re-renders every transcript
+ * Markdown consumer, bypassing their memoization.
+ */
+function useCenterFileTabs(threadId: ThreadId) {
+  const [files, setFiles] = React.useState<readonly CenterFileTab[]>([]);
+  const [activeFile, setActiveFile] = React.useState<string>();
+  const openTarget = React.useCallback(
+    (target: ThreadFileTarget, reveal?: FileReveal) => {
+      const key = fileTargetKey(target);
+      setFiles((current) => {
+        const existing = current.find((file) => fileTargetKey(file) === key);
+        if (existing === undefined)
+          return [
+            ...current,
+            {
+              ...target,
+              dirty: false,
+              ...(reveal === undefined ? {} : { reveal, revealSequence: 1 }),
+            },
+          ];
+        // Reopening an open tab keeps its draft and moves the highlight.
+        if (reveal === undefined) return current;
+        return current.map((file) =>
+          fileTargetKey(file) === key
+            ? {
+                ...file,
+                reveal,
+                revealSequence: (file.revealSequence ?? 0) + 1,
+              }
+            : file,
+        );
+      });
+      setActiveFile(key);
+    },
+    [],
+  );
+  const openFile = (location: ThreadFileLocation) =>
+    openTarget({ kind: "workspace", ...location });
+  const closeFile = (file: CenterFileTab) => {
+    const key = fileTargetKey(file);
+    const index = files.findIndex((item) => fileTargetKey(item) === key);
+    const next = files.filter((item) => fileTargetKey(item) !== key);
+    setFiles(next);
+    if (activeFile === key)
+      setActiveFile(
+        next[Math.min(index, next.length - 1)] === undefined
+          ? undefined
+          : fileTargetKey(
+              next[Math.min(index, next.length - 1)] as CenterFileTab,
+            ),
+      );
+  };
+  const fileDownloadUrl = React.useCallback(
+    (target: ThreadFileTarget) => {
+      const absolute = absolutePathFor(target);
+      return absolute === undefined
+        ? undefined
+        : sandboxFileUrl(threadId, absolute, true);
+    },
+    [threadId],
+  );
+  const fileNavigation = React.useMemo<ThreadFileNavigation>(
+    () => ({ open: openTarget, downloadUrl: fileDownloadUrl }),
+    [openTarget, fileDownloadUrl],
+  );
+  const resolveFileLink = React.useCallback(
+    (href: string) => {
+      const resolved = resolveTranscriptFileLink(href);
+      if (resolved === undefined) return undefined;
+      const downloadUrl = fileDownloadUrl(resolved.target);
+      return {
+        open: () =>
+          openTarget(
+            resolved.target,
+            resolved.lines === undefined
+              ? undefined
+              : { kind: "lines", lines: resolved.lines },
+          ),
+        ...(downloadUrl === undefined ? {} : { downloadUrl }),
+      };
+    },
+    [openTarget, fileDownloadUrl],
+  );
+  return {
+    files,
+    setFiles,
+    activeFile,
+    setActiveFile,
+    openFile,
+    closeFile,
+    fileNavigation,
+    resolveFileLink,
+  };
+}
+
 function ThreadSessionContent({
   thread,
   project,
@@ -405,37 +531,9 @@ function ThreadSessionContent({
     modelRoutingDestination === undefined
       ? undefined
       : () => onOpenModelRouting?.(modelRoutingDestination);
-  const retainedThread = React.useContext(ThreadPresentationContext);
   // Passed down without subscribing: only the composer renders the draft.
   const draft = useThreadPresentationValue("draft", "");
-  const [images, setImages] = useThreadPresentation<
-    ReadonlyArray<PendingImage>
-  >("pending-images", () => []);
-  const [submissionPending, setSubmissionPending] = useThreadPresentation(
-    "submission-pending",
-    false,
-  );
-  const [submissionControl] = useThreadPresentation<PendingSubmissionControl>(
-    "submission-control",
-    () => ({ stopRequested: false }),
-  );
-  const retainedImageProps =
-    retainedThread === undefined
-      ? {}
-      : {
-          imageCollection: retainedThread.images,
-          images,
-          onImagesChange: setImages,
-          submissionPending,
-          submissionControl,
-          onSubmissionPendingChange: setSubmissionPending,
-          submissionImageRetention: retainSubmissionImages(
-            retainedThread,
-            setSubmissionPending,
-          ),
-        };
-  const [files, setFiles] = React.useState<readonly CenterFileTab[]>([]);
-  const [activeFile, setActiveFile] = React.useState<string>();
+  const retainedImageProps = useRetainedImageProps();
   const [rightPaneCollapsed, setRightPaneCollapsed] = React.useState(true);
   const [liveWorkspaceStatus, setLiveWorkspaceStatus] =
     React.useState<string>();
@@ -450,86 +548,16 @@ function ThreadSessionContent({
     () => setRightPaneCollapsed((collapsed) => !collapsed),
     [],
   );
-  const openTarget = React.useCallback(
-    (target: ThreadFileTarget, reveal?: FileReveal) => {
-      const key = centerTabKey(target);
-      setFiles((current) => {
-        const existing = current.find((file) => centerTabKey(file) === key);
-        if (existing === undefined)
-          return [
-            ...current,
-            {
-              ...target,
-              dirty: false,
-              ...(reveal === undefined ? {} : { reveal, revealSequence: 1 }),
-            },
-          ];
-        // Reopening an open tab keeps its draft and moves the highlight.
-        if (reveal === undefined) return current;
-        return current.map((file) =>
-          centerTabKey(file) === key
-            ? {
-                ...file,
-                reveal,
-                revealSequence: (file.revealSequence ?? 0) + 1,
-              }
-            : file,
-        );
-      });
-      setActiveFile(key);
-    },
-    [],
-  );
-  const openFile = (location: ThreadFileLocation) =>
-    openTarget({ kind: "workspace", ...location });
-  const closeFile = (file: CenterFileTab) => {
-    const key = centerTabKey(file);
-    const index = files.findIndex((item) => centerTabKey(item) === key);
-    const next = files.filter((item) => centerTabKey(item) !== key);
-    setFiles(next);
-    if (activeFile === key)
-      setActiveFile(
-        next[Math.min(index, next.length - 1)] === undefined
-          ? undefined
-          : centerTabKey(
-              next[Math.min(index, next.length - 1)] as CenterFileTab,
-            ),
-      );
-  };
-  // Context values must stay stable: a new value re-renders every transcript
-  // Markdown consumer, bypassing their memoization.
-  const fileDownloadUrl = React.useCallback(
-    (target: ThreadFileTarget) => {
-      const absolute = absolutePathFor(target);
-      return absolute === undefined
-        ? undefined
-        : sandboxFileUrl(thread.id, absolute, true);
-    },
-    [thread.id],
-  );
-  const fileNavigation = React.useMemo<ThreadFileNavigation>(
-    () => ({ open: openTarget, downloadUrl: fileDownloadUrl }),
-    [openTarget, fileDownloadUrl],
-  );
-  const resolveFileLink = React.useCallback(
-    (href: string) => {
-      const resolved = resolveTranscriptFileLink(href);
-      if (resolved === undefined) return undefined;
-      const downloadUrl = fileDownloadUrl(resolved.target);
-      return {
-        open: () =>
-          openTarget(
-            resolved.target,
-            resolved.lines === undefined
-              ? undefined
-              : { kind: "lines", lines: resolved.lines },
-          ),
-        ...(downloadUrl === undefined ? {} : { downloadUrl }),
-      };
-    },
-    [openTarget, fileDownloadUrl],
-  );
-
+  const {
+    files,
+    setFiles,
+    activeFile,
+    setActiveFile,
+    openFile,
+    closeFile,
+    fileNavigation,
+    resolveFileLink,
+  } = useCenterFileTabs(thread.id);
   if (mobile) {
     return (
       <div className="mobile-thread-region">
@@ -656,7 +684,7 @@ function ThreadSessionContent({
             projectName={project.name}
             selectedFile={(() => {
               const file = files.find(
-                (candidate) => centerTabKey(candidate) === activeFile,
+                (candidate) => fileTargetKey(candidate) === activeFile,
               );
               return file === undefined || file.kind !== "workspace"
                 ? undefined
@@ -680,9 +708,9 @@ function ThreadSessionContent({
                 active={activeFile === undefined}
                 additionalPanels={files.map((file) => (
                   <OpenThreadFilePane
-                    active={activeFile === centerTabKey(file)}
+                    active={activeFile === fileTargetKey(file)}
                     file={file}
-                    key={centerTabKey(file)}
+                    key={fileTargetKey(file)}
                     setFiles={setFiles}
                     threadId={thread.id}
                   />

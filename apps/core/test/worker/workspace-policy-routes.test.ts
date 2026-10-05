@@ -57,6 +57,8 @@ const updateBody = (
     allowPersonalProviderOverrides: true,
     allowPersonalMcpOverrides: true,
     allowPersonalSecretOverrides: true,
+    allowPersonalPluginOverrides: true,
+    allowPersonalExecutionOverrides: false,
   },
 });
 

@@ -4,5 +4,6 @@
   "adminEmail": "me@example.com",
   "allowSignup": false,
   "workersAi": true,
-  "integrations": []
+  "integrations": [],
+  "plugins": ["search"]
 }

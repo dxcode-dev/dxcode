@@ -2,6 +2,7 @@ import type {
   CatalogData,
   ChoicesData,
   ConnectionData,
+  DictationProviderData,
   GraphData,
 } from "@dx/api";
 import { GitBranch, Mic, Unplug } from "lucide-react";
@@ -12,6 +13,7 @@ import {
   type RoutingGroup,
   type RoutingHighlight,
   routingPresentation,
+  TRANSCRIPTION_SOURCE,
 } from "./model-routing-presentation.js";
 
 interface MeasuredEdge {
@@ -71,8 +73,8 @@ function RoutingCard({
           data-active={(!full && active.has(row.id)) || undefined}
           title={
             row.model ??
-            (row.id === "sarvam:transcription"
-              ? "Transcription served by dx"
+            (row.id === TRANSCRIPTION_SOURCE
+              ? "Composer dictation"
               : "Oracle is unavailable")
           }
           aria-label={`${group.name ?? "Model"}${row.label ? ` ${row.label}` : ""}: ${row.name}`}
@@ -96,14 +98,14 @@ export function ModelRoutingGraph({
   catalog,
   choices,
   connections,
-  dictationAvailable,
+  dictation,
   onConnectionClick,
 }: {
   readonly graph: GraphData;
   readonly catalog?: CatalogData;
   readonly choices?: ChoicesData;
   readonly connections?: ReadonlyArray<ConnectionData>;
-  readonly dictationAvailable?: boolean;
+  readonly dictation?: DictationProviderData;
   readonly onConnectionClick?: (id: string) => void;
 }) {
   const { groups, destinations } = routingPresentation({
@@ -111,7 +113,7 @@ export function ModelRoutingGraph({
     catalog,
     choices,
     connections,
-    dictationAvailable,
+    dictation,
   });
   const [highlight, setHighlight] = useState<RoutingHighlight>();
   const [edges, setEdges] = useState<ReadonlyArray<MeasuredEdge>>([]);

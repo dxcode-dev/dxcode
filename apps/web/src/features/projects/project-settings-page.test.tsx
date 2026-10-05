@@ -1,6 +1,10 @@
 // @vitest-environment happy-dom
 
-import type { ProjectData, ProjectDefaultsData } from "@dx/api";
+import type {
+  OrbProviderListData,
+  ProjectData,
+  ProjectDefaultsData,
+} from "@dx/api";
 import type { ProjectId, RunnerProfileId, UserId } from "@dx/domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -39,6 +43,7 @@ vi.mock("../../shared/auth/auth-context.js", () => ({
 }));
 
 import { bitbucketKeys } from "../settings/integrations/bitbucket-queries.js";
+import { orbProviderKeys } from "../settings/orb-providers/orb-providers-queries.js";
 import {
   type ProjectDefaultsTarget,
   projectDefaultsKeys,
@@ -113,6 +118,63 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** The providers this person's Threads in the project can start on. */
+const seedResolvedOrbs = (
+  queryClient: QueryClient,
+  providerIds: ReadonlyArray<"e2b" | "cloudflare">,
+) =>
+  queryClient.setQueryData(
+    orbProviderKeys.list(userId, { scope: "personal" }, projectId),
+    {
+      scope: "personal",
+      canUpdate: true,
+      localRuntime: false,
+      providers: [],
+      personalKeysOnWorkspaceProjects: null,
+      resolved: providerIds.map((providerId) => ({
+        providerId,
+        scope: "deployment",
+        account: null,
+        status: "ready",
+      })),
+    } satisfies OrbProviderListData,
+  );
+
+const cloudflareProfile = (id: string, cpuCores: number) => ({
+  ...profile(id, id),
+  adapter: "cloudflare" as const,
+  isolation: "container" as const,
+  resources: { cpuCores, memoryMb: 4096, diskGb: 8 },
+});
+
+/** A catalog with E2B (standard, large) and Cloudflare (standard-1, -2). */
+const seedTwoProviderCatalog = (queryClient: QueryClient) =>
+  queryClient.setQueryData(projectDefaultsKeys.detail(userId, personalTarget), {
+    ...defaults,
+    catalog: {
+      ...defaults.catalog,
+      profiles: [
+        ...defaults.catalog.profiles,
+        cloudflareProfile("standard-1", 0.5),
+        cloudflareProfile("standard-2", 1),
+      ],
+      providers: [
+        { adapter: "e2b", displayName: "E2B", pauseResume: "processes" },
+        {
+          adapter: "cloudflare",
+          displayName: "Cloudflare Containers",
+          shortName: "Cloudflare",
+          pauseResume: "filesystem",
+        },
+      ],
+    },
+  });
+
+const sectionNames = (container: HTMLElement) =>
+  [...container.querySelectorAll(".orb-size-section-trigger")].map(
+    (trigger) => trigger.textContent,
+  );
+
 const renderSettings = async (
   section: "general" | "orb",
   initialProject: ProjectData,
@@ -136,6 +198,7 @@ const renderSettings = async (
     projectDefaultsKeys.detail(userId, personalTarget),
     defaults,
   );
+  seedResolvedOrbs(queryClient, ["e2b"]);
   seed?.(queryClient);
   const container = document.createElement("div");
   document.body.append(container);
@@ -331,6 +394,128 @@ describe("project settings workspace state", () => {
       large,
     );
     expect(large.checked).toBe(true);
+    await React.act(() => root.unmount());
+  });
+
+  it("groups Orb sizes by provider in an accordion opened at the saved default", async () => {
+    const fetch = vi.fn(() => new Promise<Response>(() => undefined));
+    vi.stubGlobal("fetch", fetch);
+    const consoleError = vi.spyOn(console, "error");
+    const { container, root } = await renderSettings(
+      "orb",
+      project(1, {
+        configuration: {
+          runnerProfileId: "standard-1" as RunnerProfileId,
+        } as ProjectData["configuration"],
+      }),
+      {},
+      (queryClient) => {
+        seedTwoProviderCatalog(queryClient);
+        seedResolvedOrbs(queryClient, ["e2b", "cloudflare"]);
+      },
+    );
+    const section = (name: string) =>
+      [
+        ...container.querySelectorAll<HTMLButtonElement>(
+          ".orb-size-section-trigger",
+        ),
+      ].find((trigger) => trigger.textContent === name);
+    const checked = () =>
+      [
+        ...container.querySelectorAll<HTMLInputElement>('input[type="radio"]'),
+      ].map((radio) => radio.checked);
+
+    // Settings keep the provider's long name.
+    expect(sectionNames(container)).toEqual(["E2B", "Cloudflare Containers"]);
+    expect(section("E2B")?.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      section("Cloudflare Containers")?.getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(
+      container
+        .querySelector('[role="radiogroup"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("Cloudflare Containers sizes");
+    expect(checked()).toEqual([true, false]);
+
+    // One section open at a time.
+    await React.act(() => section("E2B")?.click());
+    expect(section("E2B")?.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      section("Cloudflare Containers")?.getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(
+      container
+        .querySelector('[role="radiogroup"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("E2B sizes");
+    expect(checked()).toEqual([false, false]);
+
+    // Choosing a size in another section saves as the project default.
+    await React.act(() =>
+      container
+        .querySelectorAll<HTMLInputElement>('input[type="radio"]')
+        .item(1)
+        .click(),
+    );
+    expect(checked()).toEqual([false, true]);
+    expect(section("E2B")?.getAttribute("aria-expanded")).toBe("true");
+    expect(String(consoleError.mock.calls)).not.toContain("Accordion");
+    consoleError.mockRestore();
+    const save = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Save",
+    );
+    await React.act(() => save?.click());
+    const [, init] = fetch.mock.calls.at(-1) as unknown as [
+      string,
+      RequestInit,
+    ];
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      revision: 1,
+      runnerProfileId: "large",
+    });
+    await React.act(() => root.unmount());
+  });
+
+  it("lists only providers resolved for this person in the project", async () => {
+    const { container, root } = await renderSettings(
+      "orb",
+      project(),
+      {},
+      seedTwoProviderCatalog,
+    );
+    expect(sectionNames(container)).toEqual(["E2B"]);
+    await React.act(() => root.unmount());
+  });
+
+  it("keeps a saved default on a provider outside the set, marked not available", async () => {
+    const { container, root } = await renderSettings(
+      "orb",
+      project(1, {
+        configuration: {
+          runnerProfileId: "standard-2" as RunnerProfileId,
+        } as ProjectData["configuration"],
+      }),
+      {},
+      seedTwoProviderCatalog,
+    );
+    expect(sectionNames(container)).toEqual([
+      "E2B",
+      "Cloudflare ContainersNot available",
+    ]);
+    const unavailable = container.querySelectorAll<HTMLButtonElement>(
+      ".orb-size-section-trigger",
+    )[1];
+    expect(unavailable?.getAttribute("aria-expanded")).toBe("true");
+    // Only the saved size is shown, checked and not choosable.
+    const radios = [
+      ...container.querySelectorAll<HTMLInputElement>('input[type="radio"]'),
+    ];
+    expect(radios.map((radio) => radio.closest("label")?.textContent)).toEqual([
+      "standard-21 CPU4GB memory8GB disk",
+    ]);
+    expect(radios[0]?.checked).toBe(true);
+    expect(radios[0]?.disabled).toBe(true);
     await React.act(() => root.unmount());
   });
 });

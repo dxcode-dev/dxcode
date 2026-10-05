@@ -8,7 +8,7 @@ import {
 } from "../dxd/protocol.js";
 
 /**
- * Bootstrap of the resident daemon in an E2B guest.
+ * Bootstrap of the resident daemon in a guest.
  *
  * This runs only when no daemon registered on its own. Its first command
  * inspects the guest and, when a current-protocol daemon is installed and
@@ -21,10 +21,17 @@ import {
  * 1, a root-owned `/usr/local/bin/dxd`, and a tmux-hosted shell). A running
  * daemon is restarted only when its binary cannot speak this protocol, once.
  * The binary and configuration are owned by the `user` account so the daemon
- * can update itself; the systemd unit and the static login hook are the only
- * root-owned pieces. The login hook is a stub that sources the shell profile
+ * can update itself. The login hook is a stub that sources the shell profile
  * dxd writes and versions itself, so no release depends on a root-owned file
  * changing.
+ *
+ * Who runs dxd depends on the guest. The standard Orb image
+ * (deploy/orb/Dockerfile) starts `dx-orb-init` from its entrypoint, which
+ * runs dxd once its binary and configuration exist and restarts it when it
+ * exits; containers do not boot systemd. It already carries the login hook
+ * and the `/usr/local/bin/dxd` link, so its bootstrap needs no root. A guest
+ * without `dx-orb-init` (E2B templates built before the standard image) gets
+ * the root-owned systemd unit as before.
  */
 
 const STATE_DIRECTORY = "/home/user/.local/state/dxd";
@@ -36,6 +43,9 @@ const PROFILE_STUB_PATH = "/etc/profile.d/dx-terminal.sh";
 const LEGACY_NOTICE_HOOK_PATH = "/etc/profile.d/dx-terminal-notice.sh";
 const LEGACY_NOTICE_PATH = `${STATE_DIRECTORY}/terminal-notice`;
 const UNIT_PATH = "/etc/systemd/system/dxd.service";
+const ORB_INIT_PATH = "/usr/local/bin/dx-orb-init";
+const DAEMON_PID_PATH = `${STATE_DIRECTORY}/dxd.pid`;
+const ORB_INIT_PID_PATH = `${STATE_DIRECTORY}/supervisor.pid`;
 const BASH_PROFILE_PATH = "/home/user/.bash_profile";
 const BASHRC_PATH = "/home/user/.bashrc";
 const MAX_OBSERVATION_BYTES = 64 * 1024;
@@ -101,10 +111,52 @@ const Bashrc = `case $- in
 esac
 `;
 
+// Who supervises dxd: the image entrypoint, or systemd on older guests. A
+// unit an earlier Core installed keeps the guest on systemd, and the
+// entrypoint stands down while it exists.
+const Supervisor = `if test -x ${ORB_INIT_PATH} && ! test -e ${UNIT_PATH}; then supervisor=orb-init; else supervisor=systemd; fi`;
+
 // The executable the running daemon was started from; empty when it is down.
-// systemctl needs sudo here: the guest user has no systemd bus.
-const RunningDaemon = `pid=$(sudo systemctl show dxd.service -p MainPID --value 2>/dev/null || echo 0)
-running=$(test "$pid" -gt 0 2>/dev/null && readlink /proc/$pid/exe 2>/dev/null || true)`;
+// systemctl needs sudo here: the guest user has no systemd bus. The
+// entrypoint's PID file counts only while it names the installed binary.
+const runningDaemon = (supervisor?: "orb-init" | "systemd") => {
+  const orbInit = `pid=$(cat ${DAEMON_PID_PATH} 2>/dev/null || echo 0)`;
+  const systemd =
+    "pid=$(sudo systemctl show dxd.service -p MainPID --value 2>/dev/null || echo 0)";
+  const pid =
+    supervisor === "orb-init"
+      ? orbInit
+      : supervisor === "systemd"
+        ? systemd
+        : `if test "$supervisor" = orb-init; then ${orbInit}; else ${systemd}; fi`;
+  const stale = `case "$running" in ${BINARY_PATH}*) ;; *) running= ;; esac`;
+  return `${pid}
+running=$(test "$pid" -gt 0 2>/dev/null && readlink /proc/$pid/exe 2>/dev/null || true)
+${
+  supervisor === "orb-init"
+    ? stale
+    : supervisor === "systemd"
+      ? ""
+      : `if test "$supervisor" = orb-init; then ${stale}; fi`
+}`;
+};
+
+// Signals the running daemon: SIGHUP re-reads its configuration and
+// reconnects; SIGTERM makes its supervisor restart it. Without a known
+// supervisor the command asks the guest.
+const signalDaemon = (
+  signal: "SIGHUP" | "SIGTERM",
+  supervisor?: "orb-init" | "systemd",
+) => {
+  const orbInit = `kill -s ${signal.slice(3)} "$pid"`;
+  const systemd =
+    signal === "SIGHUP"
+      ? "sudo systemctl kill --signal=SIGHUP --kill-whom=main dxd.service"
+      : "sudo systemctl restart dxd.service";
+  if (supervisor === "orb-init") return orbInit;
+  if (supervisor === "systemd") return systemd;
+  return `if test "$supervisor" = orb-init; then ${orbInit}; else ${systemd}; fi`;
+};
 
 const hex = (bytes: ArrayBuffer) =>
   [...new Uint8Array(bytes)]
@@ -136,6 +188,8 @@ interface GuestState {
   readonly binaryCurrent: boolean;
   /** A version-2 configuration; older documents are replaced. */
   readonly configPresent: boolean;
+  /** The image entrypoint supervises dxd; no systemd unit is installed. */
+  readonly orbInit: boolean;
 }
 
 /**
@@ -159,16 +213,17 @@ binary=none; protocol=none; config=no-config
 if test -f ${BINARY_PATH}; then binary=$(sha256sum ${BINARY_PATH} | cut -d' ' -f1); fi
 if test -x ${BINARY_PATH}; then protocol=$(${BINARY_PATH} --version 2>/dev/null | sed -n 's/^dxd [^ ]* protocol //p'); fi
 if test -f ${CONFIG_PATH} && grep -q '"version":2' ${CONFIG_PATH}; then config=config; fi
-${RunningDaemon}
+${Supervisor}
+${runningDaemon()}
 ${
   nudge
-    ? `if test "$running" = ${BINARY_PATH} && test "$protocol" = ${DXD_PROTOCOL_MAJOR} && test "$config" = config && test "$(sha256sum ${UNIT_PATH} 2>/dev/null | cut -d' ' -f1)" = ${unitSha} && test "$(sha256sum ${PROFILE_STUB_PATH} 2>/dev/null | cut -d' ' -f1)" = ${stubSha}; then
-  sudo systemctl kill --signal=SIGHUP --kill-whom=main dxd.service
+    ? `if test "$running" = ${BINARY_PATH} && test "$protocol" = ${DXD_PROTOCOL_MAJOR} && test "$config" = config && { test "$supervisor" = orb-init || test "$(sha256sum ${UNIT_PATH} 2>/dev/null | cut -d' ' -f1)" = ${unitSha}; } && test "$(sha256sum ${PROFILE_STUB_PATH} 2>/dev/null | cut -d' ' -f1)" = ${stubSha}; then
+  ${signalDaemon("SIGHUP")}
   echo nudged; exit 0
 fi`
     : ""
 }
-echo "$binary"; echo "$config"`,
+echo "$binary"; echo "$config"; echo "$supervisor"`,
     { timeoutMs: 10_000 },
   );
   if (
@@ -182,6 +237,7 @@ echo "$binary"; echo "$config"`,
   return {
     binaryCurrent: lines[0] === sha256Hex,
     configPresent: lines[1] === "config",
+    orbInit: lines[2] === "orb-init",
   };
 };
 
@@ -235,12 +291,13 @@ export const ensureDaemonInGuest = async (
     }
   }
 
-  const unitTemp = boundedRandomPath("unit");
+  const supervisor = state.orbInit ? "orb-init" : "systemd";
+  const unitTemp = state.orbInit ? undefined : boundedRandomPath("unit");
   const profileStubTemp = boundedRandomPath("profile-stub");
   const bashProfileTemp = boundedRandomPath("bash-profile");
   const bashrcTemp = boundedRandomPath("bashrc");
   await Promise.all([
-    guest.files.write(unitTemp, Unit),
+    ...(unitTemp === undefined ? [] : [guest.files.write(unitTemp, Unit)]),
     guest.files.write(profileStubTemp, ProfileStub),
     guest.files.write(bashProfileTemp, BashProfile),
     guest.files.write(bashrcTemp, Bashrc),
@@ -265,11 +322,11 @@ done
 echo $$ >"$lockdir/pid"
 trap 'rm -rf -- "$lockdir"' EXIT
 set -eu
-chmod 0644 ${unitTemp} ${profileStubTemp} ${bashProfileTemp} ${bashrcTemp}
+chmod 0644 ${unitTemp ?? ""} ${profileStubTemp} ${bashProfileTemp} ${bashrcTemp}
 # Only a daemon from before protocol ${DXD_PROTOCOL_MAJOR} (running from another path) is
 # replaced while it runs. A current one keeps its process and shell and swaps
 # releases itself, even when its file was replaced ("… (deleted)").
-${RunningDaemon}
+${runningDaemon(supervisor)}
 restart=0
 case "$running" in ""|${BINARY_PATH}*) ;; *) restart=1 ;; esac
 ${
@@ -285,22 +342,32 @@ ${
     : `chmod 0600 ${configTemp}
 mv -f ${configTemp} ${CONFIG_PATH}`
 }
-if ! test -f ${UNIT_PATH} || ! cmp -s ${unitTemp} ${UNIT_PATH}; then sudo install -o root -g root -m 0644 ${unitTemp} ${UNIT_PATH}; sudo systemctl daemon-reload; fi
+${
+  unitTemp === undefined
+    ? ""
+    : `if ! test -f ${UNIT_PATH} || ! cmp -s ${unitTemp} ${UNIT_PATH}; then sudo install -o root -g root -m 0644 ${unitTemp} ${UNIT_PATH}; sudo systemctl daemon-reload; fi
 rm -f ${unitTemp}
-if ! test -f ${PROFILE_STUB_PATH} || ! cmp -s ${profileStubTemp} ${PROFILE_STUB_PATH}; then sudo install -o root -g root -m 0644 ${profileStubTemp} ${PROFILE_STUB_PATH}; fi
+`
+}if ! test -f ${PROFILE_STUB_PATH} || ! cmp -s ${profileStubTemp} ${PROFILE_STUB_PATH}; then sudo install -o root -g root -m 0644 ${profileStubTemp} ${PROFILE_STUB_PATH}; fi
 rm -f ${profileStubTemp}
 if ! test -e ${BASH_PROFILE_PATH} && ! test -L ${BASH_PROFILE_PATH}; then mv ${bashProfileTemp} ${BASH_PROFILE_PATH}; else rm -f ${bashProfileTemp}; fi
 if ! test -e ${BASHRC_PATH} && ! test -L ${BASHRC_PATH}; then mv ${bashrcTemp} ${BASHRC_PATH}; else rm -f ${bashrcTemp}; fi
 if test "$(readlink /usr/local/bin/dxd 2>/dev/null)" != "${BINARY_PATH}"; then sudo ln -sfn ${BINARY_PATH} /usr/local/bin/dxd; fi
-sudo systemctl enable dxd.service >/dev/null
-# A running daemon owns the Terminal shell. It re-reads its configuration and
+${unitTemp === undefined ? "" : "sudo systemctl enable dxd.service >/dev/null\n"}# A running daemon owns the Terminal shell. It re-reads its configuration and
 # reconnects on SIGHUP; only an incompatible one is replaced, once.
 if test -z "$running"; then
-  sudo systemctl start dxd.service; echo installed
+  ${
+    unitTemp === undefined
+      ? `# The entrypoint polls for the installation; SIGUSR1 starts dxd now. It
+  # is started here only if something stopped it.
+  spid=$(cat ${ORB_INIT_PID_PATH} 2>/dev/null || true)
+  if test -n "$spid" && grep -qa dx-orb-init /proc/$spid/cmdline 2>/dev/null && kill -s USR1 "$spid" 2>/dev/null; then :; else setsid -f ${ORB_INIT_PATH} >/dev/null 2>&1 </dev/null; fi`
+      : "sudo systemctl start dxd.service"
+  }; echo installed
 elif test "$restart" = 1; then
-  sudo systemctl restart dxd.service; echo upgraded
+  ${signalDaemon("SIGTERM", supervisor)}; echo upgraded
 else
-  sudo systemctl kill --signal=SIGHUP --kill-whom=main dxd.service; echo installed
+  ${signalDaemon("SIGHUP", supervisor)}; echo installed
 fi`,
     { timeoutMs: 30_000 },
   );

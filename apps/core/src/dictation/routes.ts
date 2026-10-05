@@ -1,4 +1,5 @@
-import type { DictationJob } from "@dx/api";
+import type { DictationJob, DictationUnavailable } from "@dx/api";
+import { SpeechProviderError } from "@dx/domain";
 import { Effect } from "effect";
 import { type Context, Hono } from "hono";
 import { createAuth } from "../auth/better-auth.js";
@@ -7,13 +8,16 @@ import {
   requireBrowserSession,
 } from "../auth/browser-session.js";
 import { loadAuthenticationRequirements } from "../auth/requirements.js";
-import type { AppEnv } from "../http/types.js";
+import type { AppEnv, Bindings } from "../http/types.js";
 import { dictationLogger } from "../logging.js";
+import type { AdmittedConfiguration } from "../plugins/host.js";
 import {
-  DictationProviderError,
-  dispatchSarvam,
-  pollSarvam,
-} from "./provider.js";
+  admitSpeech,
+  audioSeconds,
+  effectiveSpeechProviderId,
+  recordTranscription,
+  speechProviderFor,
+} from "../plugins/speech/transcription.js";
 import { InvalidDictationAudio, readCanonicalWav } from "./wav.js";
 
 const UUID =
@@ -22,13 +26,23 @@ const HOUR = 3_600_000;
 const STALE_AFTER = 120_000;
 const PROVIDER_IDLE_AFTER = 300_000;
 const genericError = "Dictation could not be completed.";
+const unavailableError = "Dictation is not available.";
 type Row = {
   id: string;
   state: string;
   provider_job_id: string | null;
+  provider_id: string | null;
+  credential_scope: string | null;
   local_reads: number;
   expires_at: number;
 };
+
+/** Speech resolves no provider for this user: fail closed. */
+const unavailable = (c: Context<AppEnv>) =>
+  c.json<DictationUnavailable>(
+    { code: "DICTATION_UNAVAILABLE", error: unavailableError },
+    409,
+  );
 
 const noStore = (c: { header(name: string, value: string): void }) =>
   c.header("Cache-Control", "no-store");
@@ -73,11 +87,11 @@ async function authorize(c: Context<AppEnv>) {
 
 async function dispatch(
   db: D1Database,
+  bindings: Bindings,
   id: string,
   owner: string,
   wav: Uint8Array,
-  secret: string | undefined,
-  local: boolean,
+  configuration: AdmittedConfiguration,
 ) {
   const claimed = await db
     .prepare(
@@ -86,48 +100,43 @@ async function dispatch(
     .bind(Date.now(), id, owner)
     .run();
   if (!claimed.meta.changes) return;
-  if (local) {
-    await db
-      .prepare(
-        "UPDATE dictation_job SET state='provider', provider_job_id='local-fixture', updated_at=? WHERE id=? AND state='dispatching'",
-      )
-      .bind(Date.now(), id)
-      .run();
-    return;
-  }
-  if (!secret) {
-    await db
-      .prepare(
-        "UPDATE dictation_job SET state='failed', updated_at=? WHERE id=? AND state='dispatching'",
-      )
-      .bind(Date.now(), id)
-      .run();
-    return;
-  }
+  let reached = false;
+  const startedAt = Date.now();
+  const meter = (outcome: "success" | "error") =>
+    reached
+      ? recordTranscription({ db, bindings }, owner, configuration, {
+          units: audioSeconds(wav),
+          outcome,
+          durationMs: Date.now() - startedAt,
+        })
+      : Promise.resolve();
   try {
-    await Effect.runPromise(
-      dispatchSarvam(
-        secret,
-        wav,
-        async (providerId) => {
+    const provider = speechProviderFor(configuration, bindings, () => {
+      reached = true;
+    });
+    await provider.startTranscription(
+      wav,
+      {
+        created: async (providerJobId) => {
           const persisted = await db
             .prepare(
               "UPDATE dictation_job SET provider_job_id=?,updated_at=? WHERE id=? AND owner_id=? AND state='dispatching' AND expires_at>?",
             )
-            .bind(providerId, Date.now(), id, owner, Date.now())
+            .bind(providerJobId, Date.now(), id, owner, Date.now())
             .run();
           return persisted.meta.changes === 1;
         },
-        async (providerId) => {
+        active: async (providerJobId) => {
           const active = await db
             .prepare(
               "SELECT 1 AS active FROM dictation_job WHERE id=? AND owner_id=? AND provider_job_id=? AND state='dispatching' AND expires_at>?",
             )
-            .bind(id, owner, providerId, Date.now())
+            .bind(id, owner, providerJobId, Date.now())
             .first<{ active: number }>();
           return active?.active === 1;
         },
-      ).pipe(Effect.timeout("90 seconds")),
+      },
+      AbortSignal.timeout(90_000),
     );
     await db
       .prepare(
@@ -135,6 +144,7 @@ async function dispatch(
       )
       .bind(Date.now(), id, owner, Date.now())
       .run();
+    await meter("success");
   } catch (error) {
     await db
       .prepare(
@@ -142,17 +152,19 @@ async function dispatch(
       )
       .bind(Date.now(), id, owner)
       .run();
+    await meter("error");
     dictationLogger.warn("Dictation dispatch failed.", {
       event: "dictation_dispatch_failed",
       id,
-      category:
-        error instanceof DictationProviderError ? "provider" : "internal",
+      providerId: effectiveSpeechProviderId(configuration, bindings),
+      credentialScope: configuration.scope,
+      category: error instanceof SpeechProviderError ? "provider" : "internal",
       reason:
-        error instanceof DictationProviderError
+        error instanceof SpeechProviderError
           ? error.reason
           : "Unexpected error",
       stage:
-        error instanceof DictationProviderError &&
+        error instanceof SpeechProviderError &&
         error.reason === "Dictation was canceled"
           ? "persistence"
           : "dispatch",
@@ -190,14 +202,27 @@ dictationRoutes.post("/:id", async (c) => {
     const id = c.req.param("id");
     if (!UUID.test(id)) return c.json({ error: "Invalid request." }, 400);
     const wav = await readCanonicalWav(c.req.raw);
+    const admission = await admitSpeech({ db, bindings: c.env }, owner);
+    if (!admission.admitted) return unavailable(c);
+    const { configuration } = admission;
     const now = Date.now();
     await retireOwnerJobs(db, owner, now);
     const result = await db
-      .prepare(`INSERT INTO dictation_job(id,owner_id,workspace_id,state,created_at,updated_at,expires_at)
-      SELECT ?,?,?,'reserved',?,?,? WHERE
+      .prepare(`INSERT INTO dictation_job(id,owner_id,workspace_id,state,provider_id,credential_scope,created_at,updated_at,expires_at)
+      SELECT ?,?,?,'reserved',?,?,?,?,? WHERE
       NOT EXISTS(SELECT 1 FROM dictation_job WHERE owner_id=? AND state IN ('reserved','dispatching','provider'))
       ON CONFLICT(id) DO NOTHING`)
-      .bind(id, owner, workspace, now, now, now + HOUR, owner)
+      .bind(
+        id,
+        owner,
+        workspace,
+        effectiveSpeechProviderId(configuration, c.env),
+        configuration.scope,
+        now,
+        now,
+        now + HOUR,
+        owner,
+      )
       .run();
     if (!result.meta.changes) {
       const existing = await db
@@ -212,14 +237,7 @@ dictationRoutes.post("/:id", async (c) => {
           : c.json<DictationJob>({ id, state: "processing" }, 202);
       return c.json({ error: "Dictation is temporarily unavailable." }, 429);
     }
-    await dispatch(
-      db,
-      id,
-      owner,
-      wav,
-      c.env.SARVAM_API_KEY,
-      c.env.DX_RUNTIME_MODE === "local",
-    );
+    await dispatch(db, c.env, id, owner, wav, configuration);
     return c.json<DictationJob>({ id, state: "processing" }, 202);
   } catch (error) {
     if (error instanceof InvalidDictationAudio)
@@ -240,7 +258,7 @@ dictationRoutes.get("/:id", async (c) => {
     await retireOwnerJobs(db, owner, now);
     const row = await db
       .prepare(
-        "SELECT id,state,provider_job_id,local_reads,expires_at FROM dictation_job WHERE id=? AND owner_id=? AND workspace_id=?",
+        "SELECT id,state,provider_job_id,provider_id,credential_scope,local_reads,expires_at FROM dictation_job WHERE id=? AND owner_id=? AND workspace_id=?",
       )
       .bind(id, owner, workspace)
       .first<Row>();
@@ -248,7 +266,31 @@ dictationRoutes.get("/:id", async (c) => {
       return c.json({ error: "Not found." }, 404);
     if (row.state === "failed")
       return c.json<DictationJob>({ id, state: "failed", error: genericError });
-    if (row.provider_job_id === "local-fixture") {
+    // Every poll resolves the user's current Speech configuration. A job
+    // dispatched with another provider or credential scope fails closed
+    // rather than reading its result with a different credential.
+    const admission = await admitSpeech({ db, bindings: c.env }, owner);
+    if (
+      !admission.admitted ||
+      row.provider_id !==
+        effectiveSpeechProviderId(admission.configuration, c.env) ||
+      row.credential_scope !== admission.configuration.scope
+    ) {
+      await db
+        .prepare(
+          "UPDATE dictation_job SET state='failed',updated_at=? WHERE id=? AND owner_id=? AND state<>'canceled'",
+        )
+        .bind(Date.now(), id, owner)
+        .run();
+      return c.json<DictationJob>({
+        id,
+        state: "failed",
+        error: unavailableError,
+      });
+    }
+    const provider = speechProviderFor(admission.configuration, c.env);
+    if (row.provider_id === "fixture" && row.provider_job_id !== null) {
+      // The fixture reports processing once so local runs exercise polling.
       if (row.local_reads === 0) {
         await db
           .prepare(
@@ -265,11 +307,10 @@ dictationRoutes.get("/:id", async (c) => {
         .bind(Date.now(), id, owner, Date.now())
         .run();
       if (!completed.meta.changes) return c.json({ error: "Not found." }, 404);
-      return c.json<DictationJob>({
-        id,
-        state: "completed",
-        text: "This is a local dictation fixture.",
-      });
+      const result = await provider.readTranscription(row.provider_job_id);
+      return typeof result === "object"
+        ? c.json<DictationJob>({ id, state: "completed", text: result.text })
+        : c.json<DictationJob>({ id, state: "failed", error: genericError });
     }
     if (!["provider", "completed"].includes(row.state) || !row.provider_job_id)
       return c.json<DictationJob>({ id, state: "processing" });
@@ -292,13 +333,10 @@ dictationRoutes.get("/:id", async (c) => {
       return c.json<DictationJob>({ id, state: "processing" });
     let result: "processing" | { text: string } | "failed";
     try {
-      result = c.env.SARVAM_API_KEY
-        ? await Effect.runPromise(
-            pollSarvam(c.env.SARVAM_API_KEY, row.provider_job_id).pipe(
-              Effect.timeout("30 seconds"),
-            ),
-          )
-        : "failed";
+      result = await provider.readTranscription(
+        row.provider_job_id,
+        AbortSignal.timeout(30_000),
+      );
     } catch {
       const released = await db
         .prepare(

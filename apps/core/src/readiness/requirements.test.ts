@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { CLOUDFLARE_ORB_PROFILES } from "@dx/domain";
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import type { Bindings } from "../http/types.js";
@@ -332,6 +333,121 @@ describe("readiness requirements", () => {
         }),
       ),
     ).resolves.toMatchObject({ _tag: "ReadinessError", category });
+  });
+
+  it("fails closed when no Execution provider resolves", async () => {
+    await expect(
+      failure(createTestBindings({ E2B_API_KEY: undefined })),
+    ).resolves.toMatchObject({
+      _tag: "ReadinessError",
+      category: "execution_provider_unavailable",
+    });
+    await expect(
+      failure(createTestBindings({ E2B_API_KEY: "  " })),
+    ).resolves.toMatchObject({ category: "execution_provider_unavailable" });
+  });
+
+  it("is ready with Cloudflare Containers as the only Orb provider", async () => {
+    const containers = (overrides: Partial<Bindings> = {}) =>
+      createTestBindings({
+        E2B_API_KEY: undefined,
+        DX_E2B_TEMPLATE: undefined,
+        DX_E2B_TEMPLATE_BUILD_ID: undefined,
+        DX_E2B_TIMEOUT_MS: undefined,
+        ORB_CONTAINER: validAgentBinding as never,
+        DX_RUNNER_PROFILE_CATALOG: JSON.stringify({
+          version: 1,
+          defaultProfileId: CLOUDFLARE_ORB_PROFILES[1].id,
+          profiles: CLOUDFLARE_ORB_PROFILES.map((size) => ({
+            ...size,
+            adapter: "cloudflare",
+            isolation: "container",
+            availability: "available",
+            capabilities: [
+              "git",
+              "environment-variables",
+              "internet-access",
+              "persistent-workspace",
+              "pause-resume",
+            ],
+          })),
+        }),
+        ...overrides,
+      });
+    await expect(
+      Effect.runPromise(loadReadinessRequirements(containers())),
+    ).resolves.toMatchObject({ e2bTemplateBuildId: "" });
+    // Neither provider configured: not ready.
+    await expect(
+      failure(containers({ ORB_CONTAINER: undefined })),
+    ).resolves.toMatchObject({ category: "execution_provider_unavailable" });
+    // An E2B size in the catalog without E2B installed is a broken catalog.
+    const e2bCatalog = JSON.parse(
+      createTestBindings().DX_RUNNER_PROFILE_CATALOG ?? "{}",
+    );
+    const cloudflareCatalog = JSON.parse(
+      containers().DX_RUNNER_PROFILE_CATALOG ?? "{}",
+    );
+    await expect(
+      failure(
+        containers({
+          DX_RUNNER_PROFILE_CATALOG: JSON.stringify({
+            ...cloudflareCatalog,
+            profiles: [...cloudflareCatalog.profiles, ...e2bCatalog.profiles],
+          }),
+        }),
+      ),
+    ).resolves.toMatchObject({ category: "runner_profile_configuration" });
+    // Both installed: the catalog may offer both, and either may be default.
+    await expect(
+      Effect.runPromise(
+        loadReadinessRequirements(
+          createTestBindings({
+            ORB_CONTAINER: validAgentBinding as never,
+            DX_RUNNER_PROFILE_CATALOG: JSON.stringify({
+              ...e2bCatalog,
+              profiles: [...e2bCatalog.profiles, ...cloudflareCatalog.profiles],
+            }),
+          }),
+        ),
+      ),
+    ).resolves.toBeDefined();
+    // E2B installed still needs its template build identity.
+    await expect(
+      failure(createTestBindings({ DX_E2B_TEMPLATE_BUILD_ID: undefined })),
+    ).resolves.toMatchObject({ category: "deployment_identity_configuration" });
+  });
+
+  it("requires the default runner profile to use the Execution provider", async () => {
+    const catalog = JSON.parse(
+      createTestBindings().DX_RUNNER_PROFILE_CATALOG ?? "{}",
+    );
+    await expect(
+      failure(
+        createTestBindings({
+          DX_RUNNER_PROFILE_CATALOG: JSON.stringify({
+            ...catalog,
+            defaultProfileId: "local-default",
+            profiles: [
+              ...catalog.profiles,
+              {
+                id: "local-default",
+                label: "Local workspace",
+                adapter: "local",
+                resources: { cpuCores: 2, memoryMb: 4096, diskGb: 20 },
+                isolation: "process",
+                availability: "available",
+                capabilities: [
+                  "git",
+                  "environment-variables",
+                  "persistent-workspace",
+                ],
+              },
+            ],
+          }),
+        }),
+      ),
+    ).resolves.toMatchObject({ category: "runner_profile_configuration" });
   });
 
   it("distinguishes runner template and source schema drift", async () => {

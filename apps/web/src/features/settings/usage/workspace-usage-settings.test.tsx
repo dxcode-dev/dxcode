@@ -121,6 +121,8 @@ const data = Schema.decodeUnknownSync(WorkspaceUsageDataSchema)({
       unknownResourceEvents: 1,
     },
   ],
+  plugins: [],
+  pluginUsers: [],
   priceSources: [],
   privateInspection: {
     permitted: false,

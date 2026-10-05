@@ -1,4 +1,5 @@
 import type { Principal, ThreadLifecycleState } from "@dx/domain";
+import type { OrbContainerObject } from "../execution/cloudflare/orb-container-object.js";
 
 export interface Bindings {
   readonly DX_ENV?: string;
@@ -41,6 +42,8 @@ export interface Bindings {
   readonly DX_INTEGRATION_GITLAB_OAUTH?: string;
   readonly DX_INTEGRATION_FORGEJO_OAUTH?: string;
   readonly SARVAM_API_KEY?: string;
+  readonly DX_INSTALLED_PLUGINS?: string;
+  readonly EXA_API_KEY?: string;
   readonly BETTER_AUTH_SECRET?: string;
   readonly E2B_API_KEY?: string;
   readonly FLUE_DX_AGENT_AGENT?: DurableObjectNamespace;
@@ -49,6 +52,12 @@ export interface Bindings {
   readonly SUBSCRIPTION_CREDENTIAL_COORDINATOR?: DurableObjectNamespace;
   readonly REALTIME_HUB?: DurableObjectNamespace;
   readonly BYOK_CREDENTIAL_COORDINATOR?: DurableObjectNamespace;
+  /**
+   * The Cloudflare Containers Orb provider: the Orb Worker's container
+   * object namespace, bound across scripts. Present only when the deployment
+   * installed the provider.
+   */
+  readonly ORB_CONTAINER?: DurableObjectNamespace<OrbContainerObject>;
   readonly AI?: Ai;
   readonly DB?: D1Database;
   readonly EMAIL?: SendEmail;

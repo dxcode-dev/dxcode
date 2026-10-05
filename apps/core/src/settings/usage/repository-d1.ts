@@ -23,6 +23,14 @@ import {
   type WorkspaceUsageRanking,
 } from "@dx/domain";
 import { Effect, Layer, Schema } from "effect";
+import {
+  decodePluginUsage,
+  decodePluginUsageUsers,
+  personalPluginUsageWhere,
+  pluginUsageStatement,
+  pluginUsageUsersStatement,
+  workspacePluginUsageWhere,
+} from "./plugin-usage-d1.js";
 
 type EncodedUsageEvent = typeof UsageEventInput.Encoded;
 type EncodedUsagePrice = typeof UsagePriceMetadata.Encoded;
@@ -141,7 +149,7 @@ const eventColumns = `
   runner_active_timeout_ms, runner_profile_id, runner_profile_version,
   runner_cpu_cores, runner_memory_mb, runner_disk_gb,
   estimated_cost_micros_snapshot, price_status, price_source,
-  price_source_version, price_fresh_until
+  price_source_version, price_fresh_until, runner_credential_scope
 `;
 
 const costSnapshot = (
@@ -229,6 +237,7 @@ const eventValues = (
     runner?.resources.memoryMb ?? null,
     runner?.resources.diskGb ?? null,
     ...costSnapshot(event, price),
+    runner?.credentialScope ?? null,
     event.threadId,
   ] as const;
 };
@@ -257,7 +266,7 @@ const eventInsert = (
          0,
          ?, ?, ?, ?, ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-         ?, ?, ?, ?, ?
+         ?, ?, ?, ?, ?, ?
        FROM threads AS thread
        WHERE thread.id = ?`,
     )
@@ -663,6 +672,10 @@ export const UsageRepositoryD1 = (db: D1Database) =>
                 ),
               db.prepare(runnerSql(where)).bind(...values),
               db.prepare(priceSourcesSql(where)).bind(...values),
+              pluginUsageStatement(
+                db,
+                personalPluginUsageWhere(ownerUserId, query),
+              ),
             ];
             const results = yield* run("usage.dashboard", () =>
               db.batch(statements),
@@ -687,6 +700,7 @@ export const UsageRepositoryD1 = (db: D1Database) =>
               PriceSourceRow,
               results[4]?.results ?? [],
             );
+            const plugins = yield* decodePluginUsage(results[5]?.results ?? []);
             const summary = summaryRows[0];
             if (summary === undefined) {
               return yield* unavailable(
@@ -765,6 +779,7 @@ export const UsageRepositoryD1 = (db: D1Database) =>
                 events: row.events,
                 unknownResourceEvents: row.unknown_resource_events,
               })),
+              plugins,
               priceSources: priceRows.map((row) => ({
                 source: row.source,
                 sourceVersion: row.source_version,
@@ -805,6 +820,7 @@ export const UsageRepositoryD1 = (db: D1Database) =>
             }
 
             const { where, values } = workspaceQueryParts(workspaceId, query);
+            const pluginWhere = workspacePluginUsageWhere(workspaceId, query);
             const cursor =
               query.cursor === undefined
                 ? undefined
@@ -835,6 +851,8 @@ export const UsageRepositoryD1 = (db: D1Database) =>
                   ),
                 db.prepare(runnerSql(where)).bind(...values),
                 db.prepare(priceSourcesSql(where)).bind(...values),
+                pluginUsageStatement(db, pluginWhere),
+                pluginUsageUsersStatement(db, pluginWhere),
               ]),
             );
             const summaryRows = yield* decodeRows(
@@ -852,6 +870,10 @@ export const UsageRepositoryD1 = (db: D1Database) =>
             const priceRows = yield* decodeRows(
               PriceSourceRow,
               results[4]?.results ?? [],
+            );
+            const plugins = yield* decodePluginUsage(results[5]?.results ?? []);
+            const pluginUsers = yield* decodePluginUsageUsers(
+              results[6]?.results ?? [],
             );
             const summary = summaryRows[0];
             if (summary === undefined) {
@@ -916,6 +938,8 @@ export const UsageRepositoryD1 = (db: D1Database) =>
               summary: summaryFrom(summary),
               daily,
               runners,
+              plugins,
+              pluginUsers,
               priceSources,
             };
 

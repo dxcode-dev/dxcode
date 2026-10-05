@@ -32,6 +32,25 @@ export const DxAgentInitialDataSchema = v.object({
         v.object({
           id: v.pipe(v.string(), v.minLength(1), v.maxLength(128)),
           name: v.pipe(v.string(), v.minLength(1), v.maxLength(160)),
+          displayName: v.optional(
+            v.pipe(v.string(), v.minLength(1), v.maxLength(80)),
+          ),
+          toolDefinitions: v.optional(
+            v.pipe(
+              v.array(
+                v.object({
+                  name: v.pipe(v.string(), v.minLength(1), v.maxLength(128)),
+                  description: v.pipe(v.string(), v.maxLength(4096)),
+                  inputSchemaJson: v.pipe(
+                    v.string(),
+                    v.minLength(2),
+                    v.maxLength(32768),
+                  ),
+                }),
+              ),
+              v.maxLength(64),
+            ),
+          ),
           endpoint: v.pipe(v.string(), v.url(), v.maxLength(2_048)),
           timeoutMs: v.pipe(
             v.number(),

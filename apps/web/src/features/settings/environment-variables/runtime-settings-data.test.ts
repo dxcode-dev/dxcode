@@ -33,19 +33,22 @@ vi.mock("../../../shared/api/client.js", async (importOriginal) => ({
 }));
 
 import {
-  type McpServersMutationAction,
-  mcpServersMutationOptions,
-} from "../mcp-servers/mcp-servers-mutations.js";
-import {
-  mcpServerKeys,
-  mcpServersQueryOptions,
-} from "../mcp-servers/mcp-servers-queries.js";
-import {
   type PluginsMutationAction,
   pluginPreviewMutationOptions,
   pluginsMutationOptions,
-} from "../plugins/plugins-mutations.js";
-import { pluginKeys, pluginsQueryOptions } from "../plugins/plugins-queries.js";
+} from "../custom-plugins/custom-plugins-mutations.js";
+import {
+  pluginKeys,
+  pluginsQueryOptions,
+} from "../custom-plugins/custom-plugins-queries.js";
+import {
+  type McpServersMutationAction,
+  mcpServersMutationOptions,
+} from "../integrations/mcp-mutations.js";
+import {
+  mcpServerKeys,
+  mcpServersQueryOptions,
+} from "../integrations/mcp-queries.js";
 import { projectDefaultsMutationOptions } from "../project-defaults/project-defaults-mutations.js";
 import {
   projectDefaultsKeys,

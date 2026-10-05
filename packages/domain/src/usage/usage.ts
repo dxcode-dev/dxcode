@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect";
 import { PageCursor } from "../pagination/cursor.js";
+import { PluginScope } from "../plugins/plugin.js";
 import { ProjectId } from "../projects/project-id.js";
 import { ModelProviderId } from "../settings/model-routing.js";
 import { ThreadId } from "../threads/thread-id.js";
@@ -135,6 +136,12 @@ export const RunnerUsageEventInput = Schema.Struct({
   template: Schema.String,
   activeTimeoutMs: NonNegativeInteger,
   resources: UsageRunnerResourceAttribution,
+  /**
+   * Whose provider account ran the workspace, and therefore who paid:
+   * `deployment` is dx-paid; `workspace` and `personal` keys are paid by
+   * their owner. Absent on rows from before bring-your-own keys.
+   */
+  credentialScope: Schema.optional(PluginScope),
 });
 
 export type RunnerUsageEventInput = typeof RunnerUsageEventInput.Type;

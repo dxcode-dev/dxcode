@@ -93,7 +93,15 @@ interface McpServerServiceShape {
         | "projectIds"
         | "roles"
       >
-    > & { readonly clearAuthReference?: boolean },
+    > & {
+      readonly clearAuthReference?: boolean;
+      /**
+       * The caller switched between no auth, a stored token, and a secret
+       * reference. Like an endpoint change, it clears discovery and approvals;
+       * rotating a stored token does not.
+       */
+      readonly authModeChanged?: boolean;
+    },
     audit: { readonly userId: UserId; readonly requestId: string },
   ) => Effect.Effect<StoredMcpServer, unknown>;
   readonly discover: (
@@ -227,6 +235,7 @@ export class McpServerService extends Context.Service<
               (input.endpoint !== undefined &&
                 input.endpoint !== current.endpoint) ||
               input.clearAuthReference === true ||
+              input.authModeChanged === true ||
               (input.authReference !== undefined &&
                 input.authReference.id !== current.authReference?.id);
             const server = yield* Schema.decodeEffect(

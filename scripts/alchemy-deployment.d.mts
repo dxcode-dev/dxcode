@@ -71,3 +71,24 @@ export function deploymentSelection(input: {
   readonly databaseName: string;
   readonly bucketName: string;
 };
+
+export function resourceName(
+  kind: string,
+  stage: string,
+  maximumLength?: number,
+): string;
+
+/** The Cloudflare Containers Orb Worker's script name for a stage. */
+export function orbWorkerName(stage: string): string;
+
+export function emptyBranchPreviewBucket(options: {
+  readonly operation: string;
+  readonly target: string;
+  readonly accountId: string;
+  readonly bucketName: string;
+  readonly request: (
+    method: "GET" | "DELETE",
+    path: string,
+    body?: readonly string[],
+  ) => Promise<unknown>;
+}): Promise<number>;

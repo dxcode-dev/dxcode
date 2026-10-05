@@ -16,6 +16,7 @@ const checkoutLocalVariableNames = [
   "DX_DXD_PUBLIC_URL",
   "DX_LOCAL_RUNTIME_URL",
   "DX_LOCAL_RUNTIME_TOKEN",
+  "DX_INSTALLED_PLUGINS",
 ] as const;
 
 const localCallbackHost = (() => {

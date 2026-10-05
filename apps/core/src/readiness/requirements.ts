@@ -8,6 +8,10 @@ import { validateLocalRuntimeConfiguration } from "../execution/local/adapter.js
 import { loadRunnerProfileCatalog } from "../execution/runner-profiles/catalog.js";
 import type { Bindings } from "../http/types.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
+import {
+  providerServesProfile,
+  resolveExecutionProviders,
+} from "../plugins/execution/provider.js";
 import { loadRuntimeConfiguration } from "../runtime/composition.js";
 import { loadConfigEncryptionKeyring } from "../settings/environment-variables/encryption.js";
 import { loadBitbucketConfiguration } from "../source-control/bitbucket/configuration.js";
@@ -111,6 +115,7 @@ export class ReadinessError extends Schema.TaggedError<ReadinessError>()(
       "github_app_event_drift",
       "github_app_expiring_token_drift",
       "bitbucket_oauth_configuration_malformed",
+      "execution_provider_unavailable",
       "execution_workspace_configuration",
       "local_workspace_configuration",
       "runner_profile_configuration",
@@ -147,7 +152,10 @@ const deploymentReadinessRequirements = Config.all({
   dxEnv: Config.nonEmptyString("DX_ENV"),
   runtimeMode: Config.nonEmptyString("DX_RUNTIME_MODE"),
   revision: Config.nonEmptyString("DX_DEPLOYMENT_REVISION"),
-  e2bTemplateBuildId: Config.nonEmptyString("DX_E2B_TEMPLATE_BUILD_ID"),
+  // Only an E2B deployment has a template build; see the E2B check below.
+  e2bTemplateBuildId: Config.string("DX_E2B_TEMPLATE_BUILD_ID").pipe(
+    Config.withDefault(""),
+  ),
   migrationManifestVersion: Config.nonEmptyString(
     "DX_MIGRATION_MANIFEST_VERSION",
   ),
@@ -402,6 +410,18 @@ export const loadReadinessRequirements = Effect.fn("loadReadinessRequirements")(
         });
       config = deploymentConfig;
     }
+    // Execution is a required slot: a deployment without at least one
+    // resolvable provider is not ready (any provider counts; owner decision
+    // 2026-10-03). Each runner profile is an Execution configuration: it must
+    // name a resolved provider and rely only on capabilities that provider
+    // claims, and the default profile is one of them.
+    const executionProviders = resolveExecutionProviders(bindings);
+    if (executionProviders.length === 0)
+      return yield* new ReadinessError({
+        category: "execution_provider_unavailable",
+      });
+    const resolvedProvider = (adapter: string) =>
+      executionProviders.find(({ providerId }) => providerId === adapter);
     const runnerCatalog = yield* loadRunnerProfileCatalog(bindings).pipe(
       Effect.mapError(
         () => new ReadinessError({ category: "runner_profile_configuration" }),
@@ -410,11 +430,19 @@ export const loadReadinessRequirements = Effect.fn("loadReadinessRequirements")(
     const defaultRunner = runnerCatalog.configuration.profiles.find(
       ({ id }) => id === runnerCatalog.configuration.defaultProfileId,
     );
-    if (runtime.mode === "local") {
-      if (defaultRunner?.adapter !== "local")
-        return yield* new ReadinessError({
-          category: "runner_profile_configuration",
-        });
+    if (
+      defaultRunner === undefined ||
+      runnerCatalog.configuration.profiles.some((profile) => {
+        const provider = resolvedProvider(profile.adapter);
+        return (
+          provider === undefined || !providerServesProfile(provider, profile)
+        );
+      })
+    )
+      return yield* new ReadinessError({
+        category: "runner_profile_configuration",
+      });
+    if (resolvedProvider("local") !== undefined)
       yield* Effect.try({
         try: () => {
           validateLocalRuntimeConfiguration(bindings);
@@ -423,7 +451,7 @@ export const loadReadinessRequirements = Effect.fn("loadReadinessRequirements")(
         catch: () =>
           new ReadinessError({ category: "local_workspace_configuration" }),
       });
-    } else {
+    if (resolvedProvider("e2b") !== undefined) {
       const e2bRequirements = yield* loadE2BRequirements(bindings).pipe(
         Effect.mapError(
           () =>
@@ -432,14 +460,25 @@ export const loadReadinessRequirements = Effect.fn("loadReadinessRequirements")(
             }),
         ),
       );
+      if ("e2bTemplateBuildId" in config && config.e2bTemplateBuildId === "")
+        return yield* new ReadinessError({
+          category: "deployment_identity_configuration",
+        });
       if (
-        defaultRunner?.adapter !== "e2b" ||
+        defaultRunner.adapter === "e2b" &&
         defaultRunner.template !== e2bRequirements.template
       )
         return yield* new ReadinessError({
           category: "runner_template_configuration",
         });
     }
+    if (
+      resolvedProvider("cloudflare") !== undefined &&
+      !isReadinessNamespace(bindings.ORB_CONTAINER)
+    )
+      return yield* new ReadinessError({
+        category: "execution_workspace_configuration",
+      });
     yield* loadConfigEncryptionKeyring(bindings).pipe(
       Effect.mapError(
         () =>

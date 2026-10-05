@@ -2950,6 +2950,18 @@ a {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.usage-table th[scope="rowgroup"] {
+  padding-top: 14px;
+  color: var(--foreground);
+  font-size: 9px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.usage-table th[scope="rowgroup"] small {
+  margin-left: 6px;
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
 .usage-meter {
   display: block;
   width: 92px;
@@ -4293,197 +4305,15 @@ a {
   width: 11px;
   height: 11px;
 }
-.mcp-servers-settings {
-  display: grid;
-  gap: 16px;
-}
-.mcp-servers-settings .settings-card + .settings-card {
-  margin-top: 0;
-}
-.mcp-server-form {
-  display: grid;
-  grid-template-columns: minmax(130px, 0.7fr) minmax(240px, 1.5fr);
-  gap: 12px;
-  padding: 14px;
-}
-.mcp-server-form > label,
-.mcp-servers-settings .dialog-popup form > label {
-  display: grid;
-  align-content: start;
-  gap: 6px;
-  color: var(--muted-foreground);
-  font-size: 10px;
-}
-.mcp-server-form .settings-select {
-  width: 100%;
-}
-.mcp-grants {
-  display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-.mcp-grants fieldset {
-  min-width: 0;
-  margin: 0;
-  padding: 10px;
-  border: 1px solid var(--divider);
-  border-radius: 6px;
-}
-.mcp-grants legend {
-  padding: 0 4px;
-  font-size: 10px;
-  font-weight: 600;
-}
-.mcp-grants p,
-.mcp-form-note {
-  margin: 0 0 8px;
-  color: var(--muted-foreground);
-  font-size: 9px;
-}
-.mcp-check-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px 12px;
-  max-height: 110px;
-  overflow: auto;
-}
-.mcp-check-list label {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10px;
-}
-.mcp-role-list {
-  max-height: none;
-}
-.mcp-server-form > button {
-  justify-self: start;
-}
-.mcp-form-note {
-  padding: 0 14px 14px;
-}
-.mcp-list-state {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-height: 96px;
-  padding: 16px;
-  color: var(--muted-foreground);
-  font-size: 10px;
-}
-.mcp-list-state > svg,
-.mcp-notice > svg,
-.mcp-error > svg {
-  width: 14px;
-  height: 14px;
-}
-.mcp-server + .mcp-server {
-  border-top: 1px solid var(--border);
-}
-.mcp-server-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 13px;
-}
-.mcp-server-header > div {
-  min-width: 0;
-}
-.mcp-server-title {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.mcp-server-title strong {
-  font-size: 12px;
-}
-.mcp-server-title .badge {
-  font-size: 8px;
-}
-.mcp-server-title [data-health="healthy"] {
-  color: var(--success-foreground);
-}
-.mcp-server-title [data-health="unhealthy"] {
-  color: var(--destructive);
-}
-.mcp-server-header code {
-  display: block;
-  overflow: hidden;
-  margin-top: 5px;
-  color: var(--muted-foreground);
-  font: 9px / 1.4 var(--font-mono-family);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.mcp-server-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px 14px;
-  padding: 0 13px 10px;
-  color: var(--muted-foreground);
-  font-size: 9px;
-}
-.mcp-server-actions,
 .mcp-dialog-actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
 }
-.mcp-server-actions {
-  padding: 0 13px 12px;
-}
-.mcp-server-actions svg,
 .mcp-dialog-actions svg {
   width: 12px;
   height: 12px;
-}
-.mcp-tools {
-  border-top: 1px solid var(--divider);
-  background: color-mix(in srgb, var(--muted) 18%, transparent);
-}
-.mcp-tools > p {
-  margin: 0;
-  padding: 13px;
-  color: var(--muted-foreground);
-  font-size: 10px;
-}
-.mcp-tools .settings-row {
-  min-height: 58px;
-}
-.mcp-tools .settings-row-title code {
-  overflow-wrap: anywhere;
-  font: 10px / 1.4 var(--font-mono-family);
-}
-.mcp-notice,
-.mcp-error {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  max-width: 760px;
-  width: 100%;
-  margin: 0 auto;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  font-size: 10px;
-}
-.mcp-notice {
-  color: var(--success-foreground);
-}
-.mcp-error {
-  color: var(--destructive);
-}
-.mcp-editor-dialog {
-  width: min(720px, calc(100vw - 30px));
-}
-.mcp-editor-dialog .mcp-server-form {
-  padding: 0;
 }
 .mcp-review-dialog {
   width: min(620px, calc(100vw - 30px));
@@ -6180,52 +6010,63 @@ a {
   font-size: 10px;
   line-height: 14px;
 }
-.thread-context-option {
-  display: grid;
-  grid-template-columns: 15px minmax(0, 1fr) 14px;
-  align-items: center;
-  gap: 7px;
-  min-height: 30px;
-  padding: 5px 8px;
-  border-radius: 6px;
-  outline: none;
+.new-thread-orb-size > span {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.orb-picker-popup {
+  width: max-content;
+  min-width: 180px;
+  max-width: min(280px, calc(100vw - 24px));
+}
+.orb-picker-provider .orb-picker-provider-name {
   font-size: 12px;
-  cursor: pointer;
 }
-.thread-context-option[data-highlighted] {
-  background: var(--accent);
-}
-.thread-context-option[data-selected] {
-  background: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--outline);
-}
-.thread-context-option[aria-disabled="true"] {
+.orb-picker-provider-hint {
   color: var(--muted-foreground);
-  cursor: default;
+  font-size: 11px;
+  white-space: nowrap;
 }
-.thread-context-option svg {
-  width: 14px;
-  height: 14px;
+.orb-picker-provider[data-popup-open] {
+  background: var(--accent);
 }
-.orb-picker-check {
-  display: flex;
-  grid-column: 3;
-  color: var(--foreground);
+.orb-picker-size {
+  height: auto;
+  min-height: 36px;
+  padding: 5px 8px;
 }
-.thread-context-orb-details {
-  grid-column: 2;
+.orb-picker-size[data-disabled] {
+  color: var(--muted-foreground);
+}
+.orb-picker-size-details {
   display: grid;
   min-width: 0;
+  font-size: 12px;
+  line-height: 16px;
 }
-.thread-context-project-details > span,
-.thread-context-orb-details > span {
+.orb-picker-size-details small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 14px;
+}
+.orb-picker-dot {
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+}
+.thread-context-project-details > span {
   min-width: 0;
   overflow: visible;
   text-overflow: clip;
   white-space: normal;
 }
-.thread-context-project-details small,
-.thread-context-orb-details small {
+.thread-context-project-details small {
   min-width: 0;
   overflow: hidden;
   color: var(--muted-foreground);
@@ -8490,13 +8331,6 @@ a {
   .workspace-capability-grid {
     grid-template-columns: 1fr;
   }
-  .mcp-server-form {
-    grid-template-columns: 1fr;
-  }
-  .mcp-grants,
-  .mcp-endpoint-field {
-    grid-column: 1;
-  }
 }
 
 @media (max-width: 560px) {
@@ -8511,12 +8345,6 @@ a {
   }
   .environment-row-actions {
     justify-content: flex-start;
-  }
-  .mcp-grants {
-    grid-template-columns: 1fr;
-  }
-  .mcp-server-header {
-    gap: 10px;
   }
   .dx-app-shell {
     padding: 6px;
@@ -8753,6 +8581,97 @@ a {
   }
 }
 
+.first-party-plugins-settings {
+  display: grid;
+  gap: 16px;
+}
+/* Same page heading as Model Routing (model-routing.css, .routing-parity). */
+.first-party-plugins-heading,
+.integrations-page-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  max-width: 823px;
+  min-height: 32px;
+  margin: 0 auto;
+}
+.first-party-plugins-heading h1,
+.integrations-page-heading h1 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  letter-spacing: -0.325px;
+}
+.first-party-plugins-heading > span,
+.integrations-page-heading > span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.first-party-plugin-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--divider);
+}
+.first-party-plugin-row:last-child {
+  border-bottom: 0;
+}
+.first-party-plugin-row strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.first-party-plugin-row > span:not(.first-party-plugin-creator) {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.first-party-plugin-row > .settings-toggle {
+  margin-left: auto;
+}
+/* Line the workspace policy switch up with the plugin switches (gear width + gap). */
+.first-party-plugin-row ~ .settings-row {
+  padding-right: calc(16px + 24px + 10px);
+}
+/* Orb Providers rows carry no switch; the gear sits at the row's end. */
+.orb-provider-row > .orb-provider-action {
+  margin-left: auto;
+}
+.orb-provider-row ~ .settings-row {
+  padding-right: 16px;
+}
+.orb-provider-row .first-party-plugin-creator svg {
+  width: 14px;
+  height: 14px;
+}
+.first-party-plugin-creator {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.first-party-plugin-dialog .settings-row {
+  padding: 12px 0;
+}
+.first-party-plugin-dialog .settings-row-control .input,
+.first-party-plugin-dialog .settings-row-control input {
+  width: 220px;
+}
+.first-party-plugin-form > p {
+  margin: 8px 0 0;
+}
+.first-party-plugin-form footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 12px;
+}
+
 .skills-settings .settings-card + .settings-card {
   margin-top: 16px;
 }
@@ -8912,12 +8831,84 @@ a {
   grid-template-columns: minmax(0, 1fr);
   gap: 20px;
 }
-
-.integrations-title {
-  grid-column: 1 / -1;
+.integrations-settings > * {
+  width: 100%;
+  max-width: 823px;
+  margin: 0 auto;
+}
+.integrations-settings > section {
+  display: grid;
+  gap: 8px;
+}
+.integrations-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+}
+.integrations-section-heading h2 {
   margin: 0;
-  font-size: 14px;
-  font-weight: 600;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 500;
+}
+.mcp-server-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--divider);
+}
+.mcp-server-row:last-child {
+  border-bottom: 0;
+}
+.mcp-server-row strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.mcp-server-row > span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.mcp-server-row > .settings-toggle {
+  margin-left: auto;
+}
+.mcp-server-dialog {
+  width: min(520px, calc(100vw - 30px));
+}
+.mcp-server-dialog .settings-row {
+  padding: 10px 0;
+}
+.mcp-server-dialog .settings-row-control input,
+.mcp-server-dialog .settings-row-control select {
+  width: 260px;
+}
+.mcp-server-dialog-note {
+  margin: 4px 0 0;
+}
+.mcp-server-tools {
+  margin-top: 12px;
+  border-top: 1px solid var(--divider);
+}
+.mcp-server-tools > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0 2px;
+  font-size: 12px;
+}
+.mcp-server-tools > p {
+  margin: 6px 0 0;
+}
+.mcp-server-tools code {
+  font: 11px / 1.4 var(--font-mono-family);
+}
+.mcp-server-dialog form > footer,
+.mcp-review-dialog .mcp-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 12px;
 }
 
 .github-integration {
@@ -11475,6 +11466,55 @@ button.sidebar-news-card {
 }
 .orb-size-card-indicator[data-selected] {
   border: 4px solid var(--primary);
+}
+.orb-size-accordion {
+  display: grid;
+  gap: 8px;
+}
+.orb-size-section {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.orb-size-section-header {
+  margin: 0;
+}
+.orb-size-section-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  color: var(--foreground);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.orb-size-section-name {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.orb-size-section-hint {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 400;
+}
+.orb-size-section-trigger:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.orb-size-section-trigger svg {
+  width: 14px;
+  height: 14px;
+  color: var(--muted-foreground);
+  transition: transform 120ms ease;
+}
+.orb-size-section-trigger[data-panel-open] svg {
+  transform: rotate(90deg);
+}
+.orb-size-section-panel {
+  padding: 0 12px 12px;
 }
 .project-orb-size-card .settings-form-actions {
   margin-top: 16px;

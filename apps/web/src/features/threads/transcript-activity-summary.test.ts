@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { activitySummary } from "./transcript-activities.js";
 import type { WorkRow } from "./transcript-activity-projection.js";
+import { activitySummary } from "./transcript-activity-summary.js";
 
 const tool = (
   index: number,
@@ -24,6 +24,37 @@ const tool = (
   }) as unknown as WorkRow;
 
 describe("activitySummary", () => {
+  it("groups the new file and shell tools without losing process checks", () => {
+    expect(
+      activitySummary([
+        tool(0, "create_file", { path: "/a", content: "a" }),
+        tool(1, "edit_file", { path: "/b", old_str: "a", new_str: "b" }),
+        tool(2, "shell_command", { command: "pwd", workdir: "/workspace" }),
+        tool(3, "shell_command_status", { pid: 42 }),
+        tool(4, "shell_command_kill", { pid: 42 }),
+      ]),
+    ).toBe(
+      "Created 1 file, edited 1 file, ran 1 command, checked on 2 commands",
+    );
+  });
+  it("counts shell operations and specialized tools", () => {
+    expect(
+      activitySummary([
+        tool(0, "shell_command", {
+          command: "cat a.ts b.ts; rg x src; ls src",
+        }),
+        tool(1, "shell_command", { command: "cat a.ts" }),
+        tool(2, "shell_command", { command: "pwd" }),
+        tool(3, "web_search", { objective: "docs" }),
+        tool(4, "read_web_page", { url: "https://example.com" }),
+        tool(5, "read_web_page", { url: "https://example.com" }),
+        tool(6, "tool_search", { query: "tools" }),
+        tool(7, "code_exec", { code: "text(1)" }),
+      ]),
+    ).toBe(
+      "Read 2 files, searched 1 time, listed 1 directory, ran 1 command, searched the web 1 time, read 1 web page, searched tools 1 time, executed code 1 time",
+    );
+  });
   it("counts bash as commands and edit tools as edited files", () => {
     expect(
       activitySummary([

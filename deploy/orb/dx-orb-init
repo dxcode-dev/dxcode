@@ -1,0 +1,91 @@
+#!/bin/sh
+# dx Orb entrypoint: supervises dxd without systemd.
+#
+# Cloudflare Containers start it from the image ENTRYPOINT (under tini as
+# PID 1); E2B starts it as the template's start command, so it is already
+# running in every sandbox created from the template. Core's daemon installer
+# (apps/core/src/execution/e2b/daemon-installer.ts) puts the dxd binary and its
+# configuration in place and sends SIGUSR1; this loop then starts dxd as
+# `user` and restarts it whenever it exits, as the systemd unit did. dxd
+# updates itself in place (exec), so a self-update keeps its PID.
+set -u
+
+if [ "$(id -u)" = 0 ]; then
+  exec setpriv --reuid=user --regid=user --init-groups -- "$0" "$@"
+fi
+
+# Cloudflare Containers name the host after the 64-hex object ID; the
+# provider passes a short, stable name (E2B passes none and keeps its own).
+# Map it in /etc/hosts first so sudo still resolves its own host, then set
+# it. Where the runtime refuses sethostname, record it for the login hook
+# /etc/profile.d/dx-orb-hostname.sh, which shows it in the prompt instead.
+if [ -n "${DX_ORB_HOSTNAME:-}" ] && [ "$(hostname)" != "$DX_ORB_HOSTNAME" ]; then
+  if ! grep -qw -- "$DX_ORB_HOSTNAME" /etc/hosts 2>/dev/null; then
+    printf '127.0.1.1\t%s\n' "$DX_ORB_HOSTNAME" | sudo -n tee -a /etc/hosts >/dev/null 2>&1 || :
+  fi
+  if sudo -n hostname "$DX_ORB_HOSTNAME" 2>/dev/null; then
+    sudo -n rm -f /etc/dx-orb-hostname 2>/dev/null || :
+  else
+    printf '%s\n' "$DX_ORB_HOSTNAME" | sudo -n tee /etc/dx-orb-hostname >/dev/null 2>&1 || :
+  fi
+fi
+
+state=/home/user/.local/state/dxd
+binary="$state/bin/dxd"
+config="$state/config.json"
+log="$state/dxd.log"
+umask 077
+mkdir -p "$state/bin"
+echo $$ >"$state/supervisor.pid"
+
+child=
+trap 'if [ -n "$child" ]; then kill -TERM "$child" 2>/dev/null; fi; exit 0' TERM INT
+# SIGUSR1 only interrupts the current wait: the installer's "start now".
+trap ':' USR1
+
+# Waits up to $1 seconds; SIGUSR1 ends the wait early.
+pause() {
+  sleep "$1" &
+  wait $! 2>/dev/null
+  kill $! 2>/dev/null
+}
+
+backoff=0
+while :; do
+  # An installer from before this image (a rolled-back Core) runs dxd as a
+  # systemd unit; stand down while that unit exists so dxd never runs twice.
+  if [ -e /etc/systemd/system/dxd.service ]; then
+    pause 5
+    continue
+  fi
+  if [ ! -x "$binary" ] || [ ! -f "$config" ]; then
+    pause 1
+    continue
+  fi
+  if [ -f "$log" ] && [ "$(stat -c %s "$log")" -gt 1048576 ]; then
+    mv -f "$log" "$log.1"
+  fi
+  started=$(date +%s)
+  # The environment systemd gave the dxd unit, plus a UTF-8 locale.
+  env -i HOME=/home/user USER=user LOGNAME=user SHELL=/bin/bash LANG=C.UTF-8 \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    "$binary" >>"$log" 2>&1 </dev/null &
+  child=$!
+  echo "$child" >"$state/dxd.pid"
+  while kill -0 "$child" 2>/dev/null; do
+    wait "$child"
+  done
+  child=
+  rm -f "$state/dxd.pid"
+  # Restart at once after a long run; back off up to 30 s while it keeps
+  # failing (systemd: RestartSec=500ms).
+  if [ $(($(date +%s) - started)) -ge 60 ]; then backoff=0; fi
+  if [ "$backoff" -eq 0 ]; then
+    backoff=1
+    pause 0.5
+  else
+    backoff=$((backoff * 2))
+    if [ "$backoff" -gt 30 ]; then backoff=30; fi
+    pause "$backoff"
+  fi
+done

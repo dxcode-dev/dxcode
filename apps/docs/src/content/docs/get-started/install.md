@@ -23,8 +23,10 @@ The wizard will ask you to:
 
 1. Authorize Cloudflare in a browser, or choose API-token authentication.
 2. Select a `workers.dev` address or configure a custom domain.
-3. Enter an E2B API key. The deploy builds the `a1.tiny`, `a1.small`, and
-   `a1.medium` profiles.
+3. Choose the Orb providers: E2B (default yes), Cloudflare Containers
+   (default no), or both. E2B asks for an API key, and the deploy builds the
+   `a1.tiny`, `a1.small`, and `a1.medium` profiles. Containers requires the
+   Workers Paid plan and Docker on this machine.
 4. Enter the first administrator email and a hidden password twice. Leave the
    first password prompt empty to generate one.
 5. Choose optional source and model integrations. Public Git repositories work
@@ -70,7 +72,8 @@ DX_DEPLOY_APPROVE=1 \
 ```
 
 The first deploy requires `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`,
-`DX_ADMIN_PASSWORD`, and `E2B_API_KEY`. After successful verification, the
+`DX_ADMIN_PASSWORD`, and, when `orbProviders` includes `e2b` (the default),
+`E2B_API_KEY`. After successful verification, the
 runner writes the same mode-`0600` administrator credential file. Add
 `DX_INTEGRATION_GITHUB_APP`, `DX_INTEGRATION_BITBUCKET_OAUTH`, or
 `SARVAM_API_KEY` only when the matching name appears in `integrations`.

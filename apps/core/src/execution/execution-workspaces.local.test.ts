@@ -133,6 +133,22 @@ vi.mock("./local/adapter.js", () => ({
   }),
   requestLocalRuntime: mocks.requestLocalRuntime,
 }));
+vi.mock("./runner-profiles/execution.js", () => {
+  const profile = {
+    id: "local-default",
+    label: "Local workspace",
+    adapter: "local",
+    resources: { cpuCores: 2, memoryMb: 4096, diskGb: 20 },
+    isolation: "process",
+    availability: "available",
+    capabilities: ["git", "environment-variables", "persistent-workspace"],
+  };
+  return {
+    resolveExecutionRunnerProfile: () => Effect.succeed(profile),
+    resolveExecutionTarget: () =>
+      Effect.succeed({ profile, credential: { scope: "deployment" } }),
+  };
+});
 vi.mock("../settings/environment-variables/execution.js", () => ({
   resolveExecutionEnvironment: mocks.resolveEnvironment,
 }));
@@ -160,8 +176,10 @@ vi.mock("./e2b/resolver.js", () => ({
   resolveExecutionWorkspace: mocks.resolveWorkspace,
 }));
 vi.mock("./e2b/adapter.js", () => ({
-  dxSandboxTools: mocks.sandboxTools,
   e2b: mocks.e2b,
+}));
+vi.mock("../plugins/execution/tools.js", () => ({
+  executionWorkspaceTools: mocks.sandboxTools,
 }));
 vi.mock("../thread-changes/coordinator.js", () => ({
   makeThreadChangesCoordinator: vi.fn(() => ({
@@ -207,7 +225,7 @@ describe("local execution workspace source boundary", () => {
         mintCredential,
         awaitRegistration,
       }),
-    ).resolves.toEqual({ bootstrapped: false });
+    ).resolves.toEqual({ bootstrapped: false, provider: "local" });
 
     expect(awaitRegistration).toHaveBeenCalledOnce();
     expect(mocks.primitiveExec).not.toHaveBeenCalled();

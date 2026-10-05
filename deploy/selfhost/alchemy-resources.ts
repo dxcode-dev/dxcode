@@ -1,8 +1,14 @@
 import { createHash } from "node:crypto";
+import { resolve } from "node:path";
 import * as Alchemy from "alchemy";
 import * as Provider from "alchemy/Provider";
 import { ApiClient, ConnectionConfig, Template } from "e2b";
 import { Effect, Layer, Redacted } from "effect";
+import {
+  deployOrbWorker,
+  destroyOrbWorker,
+  orbRecipeHash,
+} from "../orb/containers.mjs";
 import { e2bRecipeHash, reconcileE2BProfiles } from "./e2b.mjs";
 
 type HeldSecretResource = Alchemy.Resource<
@@ -26,7 +32,20 @@ type E2BProfilesResource = Alchemy.Resource<
   }
 >;
 
+/**
+ * The Cloudflare Containers Orb provider's Worker (deploy/orb/containers.mjs).
+ * It is redeployed only when its recipe (Worker source, image, wrangler)
+ * changes, because a redeploy restarts every Orb container object.
+ */
+type OrbContainersResource = Alchemy.Resource<
+  "Dx.OrbContainers",
+  { workerName: string; recipeHash: string },
+  { workerName: string; recipeHash: string }
+>;
+
 export const HeldSecret = Alchemy.Resource<HeldSecretResource>("Dx.HeldSecret");
+export const OrbContainers =
+  Alchemy.Resource<OrbContainersResource>("Dx.OrbContainers");
 export const E2BProfiles =
   Alchemy.Resource<E2BProfilesResource>("Dx.E2BProfiles");
 
@@ -104,7 +123,52 @@ const e2bProfilesProvider = () =>
     read: ({ output }) => Effect.succeed(output),
   });
 
-export const selfhostProviders = () =>
-  Layer.mergeAll(heldSecretProvider(), e2bProfilesProvider());
+const workspaceRoot = resolve(import.meta.dirname, "../..");
 
-export { e2bRecipeHash };
+const orbContainersProvider = () =>
+  Provider.succeed(OrbContainers, {
+    reconcile: ({ output, news }) =>
+      output?.recipeHash === news.recipeHash &&
+      output.workerName === news.workerName
+        ? Effect.succeed(output)
+        : Effect.try({
+            try: () => {
+              deployOrbWorker({
+                workerName: news.workerName,
+                workspaceRoot,
+                stateDirectory: resolve(
+                  workspaceRoot,
+                  ".dx/alchemy/orb",
+                  news.workerName,
+                ),
+              });
+              return {
+                workerName: news.workerName,
+                recipeHash: news.recipeHash,
+              };
+            },
+            catch: (cause) =>
+              new Error("Orb Worker deployment failed.", { cause }),
+          }),
+    delete: ({ output }) =>
+      Effect.tryPromise({
+        try: () =>
+          destroyOrbWorker({
+            workerName: output.workerName,
+            accountId: process.env.CLOUDFLARE_ACCOUNT_ID ?? "",
+            apiToken: process.env.CLOUDFLARE_API_TOKEN ?? "",
+            workspaceRoot,
+          }),
+        catch: (cause) => new Error("Orb Worker removal failed.", { cause }),
+      }),
+    read: ({ output }) => Effect.succeed(output),
+  });
+
+export const selfhostProviders = () =>
+  Layer.mergeAll(
+    heldSecretProvider(),
+    e2bProfilesProvider(),
+    orbContainersProvider(),
+  );
+
+export { e2bRecipeHash, orbRecipeHash };

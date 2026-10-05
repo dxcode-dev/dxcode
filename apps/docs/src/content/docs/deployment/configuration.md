@@ -51,11 +51,24 @@ address instead of assuming a mailbox or domain.
 
 Do not use a global API key. Keep account IDs and tokens out of committed config.
 
-## E2B is required
+## Orb providers
 
-v0.1.0 has no local or alternative production workspace adapter. The deployment
-needs an E2B API key and immutable template identities for every enabled profile.
-See [E2B profiles](/docs/deployment/e2b-profiles/).
+A deployment installs at least one Orb provider, where each Thread's workspace
+runs. `orbProviders` in `deploy.selfhost.json` records the choice. A file
+without it means `["e2b"]`.
+
+- `e2b` needs an E2B API key. The deploy builds immutable templates for every
+  profile. See [E2B profiles](/docs/deployment/e2b-profiles/).
+- `cloudflare` (Cloudflare Containers) needs no key. Containers run and are
+  billed in the deployment's Cloudflare account, which needs the Workers Paid
+  plan. The deploying machine needs a running Docker daemon with buildx to
+  build the Orb image and push it to the account registry. With API-token
+  authentication, the token must also manage Durable Objects and Containers.
+  Sizes are `cf.standard-1` through `cf.standard-4`.
+
+The wizard asks which providers to install on first deploy. To add Containers
+to an existing deployment, set `"orbProviders": ["e2b", "cloudflare"]` and rerun
+`pnpm dx:deploy`.
 
 ## `deploy.selfhost.json`
 
@@ -76,7 +89,8 @@ The wizard writes this nonsecret JSON file:
   "modelDeploymentProviders": "optional,comma-separated,ids",
   "modelEndpointAllowlist": "optional,comma-separated,origins",
   "dxdBinary": ".dx/release/dxd-linux-x64",
-  "integrations": ["github", "bitbucket", "sarvam"]
+  "integrations": ["github", "bitbucket", "sarvam"],
+  "orbProviders": ["e2b"]
 }
 ```
 

@@ -39,8 +39,16 @@ waitlist, email approval, or magic-link admission.
 
 ## E2B and dxd
 
-E2B is required. The deploy hashes the checked-in recipe, reuses its exact
-ready base build, and creates immutable `a1.tiny`, `a1.small`, and `a1.medium`
+A deployment installs at least one Orb provider: E2B, Cloudflare Containers, or
+both (`orbProviders` in `deploy.selfhost.json`; a file without it means
+`["e2b"]`). Containers needs the Workers Paid plan and a running Docker daemon
+with buildx on the deploying machine, which builds [`orb/Dockerfile`](orb/Dockerfile)
+for the Orb Worker ([`orb/README.md`](orb/README.md)).
+
+With E2B, the deploy hashes the checked-in recipe (the standard Orb
+image, [`orb/Dockerfile`](orb/Dockerfile), built by E2B through
+[`e2b/template.mjs`](e2b/template.mjs)), reuses its exact ready base build,
+and creates immutable `a1.tiny`, `a1.small`, and `a1.medium`
 builds. The Worker receives each exact `name:buildID`. Rerunning the same recipe
 builds nothing.
 

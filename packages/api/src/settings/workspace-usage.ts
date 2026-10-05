@@ -18,6 +18,7 @@ import { PageLimitQuerySchema } from "../http/page-limit-query.js";
 import { errorResponse, successResponse } from "../http/response.js";
 import {
   PersonalUsageExportDataSchema,
+  PluginUsageDataSchema,
   TimezoneOffsetQuerySchema,
   UsageDailyTrendDataSchema,
   UsagePriceSourceDataSchema,
@@ -61,6 +62,16 @@ export const WorkspaceUsageUserDataSchema = Schema.Struct({
   userName: Schema.String,
   ...WorkspaceUsageAggregateFields,
 });
+
+/** One member's plugin usage, attributed like {@link WorkspaceUsageUserDataSchema}. */
+export const WorkspacePluginUsageUserDataSchema = Schema.Struct({
+  userId: UserId,
+  userName: Schema.String,
+  ...PluginUsageDataSchema.fields,
+});
+
+export type WorkspacePluginUsageUserData =
+  typeof WorkspacePluginUsageUserDataSchema.Type;
 
 export const WorkspaceUsageProjectDataSchema = Schema.Struct({
   projectId: ProjectId,
@@ -109,6 +120,8 @@ export const WorkspaceUsageDataSchema = Schema.Struct({
   daily: Schema.Array(UsageDailyTrendDataSchema),
   ranking: WorkspaceUsageRankingDataSchema,
   runners: Schema.Array(UsageRunnerDataSchema),
+  plugins: Schema.Array(PluginUsageDataSchema),
+  pluginUsers: Schema.Array(WorkspacePluginUsageUserDataSchema),
   priceSources: Schema.Array(UsagePriceSourceDataSchema),
   privateInspection: WorkspacePrivateInspectionCapabilityDataSchema,
 });

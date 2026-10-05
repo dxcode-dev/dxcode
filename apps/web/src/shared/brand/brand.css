@@ -65,3 +65,9 @@
   letter-spacing: -0.145em;
   padding-right: 0.145em;
 }
+
+.dx-brand-wordmark[data-size="small"] .dx-brand-wordmark-glyph {
+  font-size: 14px;
+  /* "dx" has no descender, so the line box centers the ink high; nudge it. */
+  transform: translateY(0.05em);
+}
