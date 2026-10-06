@@ -197,6 +197,24 @@ const observeFlueEvent = (
       });
       return persistence;
     }
+    case "compaction_start":
+      agentModelLogger.info("Flue compaction started.", {
+        event: event.type,
+        ...correlations(event),
+        reason: event.reason,
+        estimatedTokens: event.estimatedTokens,
+      });
+      return persistence;
+    case "compaction":
+      agentModelLogger.info("Flue compaction completed.", {
+        event: event.type,
+        ...correlations(event),
+        isError: event.isError,
+        messagesBefore: event.messagesBefore,
+        messagesAfter: event.messagesAfter,
+        durationMs: event.durationMs,
+      });
+      return persistence;
     case "tool_start":
       agentToolLogger.info("Flue tool execution started.", {
         event: event.type,

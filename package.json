@@ -1,7 +1,7 @@
 {
   "name": "dx",
   "private": true,
-  "version": "0.2.5",
+  "version": "0.2.6",
   "license": "FSL-1.1-ALv2",
   "packageManager": "pnpm@9.15.0",
   "engines": {
@@ -13,7 +13,7 @@
       "@opentelemetry/api": "1.9.0",
       "@better-auth/utils": "0.4.2",
       "@earendil-works/pi-ai": "0.85.1",
-      "@flue/runtime": "file:third-party/flue/runtime-11963758a85ad512c317d4d3ea7d8955bde01432.tgz"
+      "@flue/runtime": "file:third-party/flue/runtime-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz"
     },
     "patchedDependencies": {
       "alchemy@2.0.0-beta.74": "third-party/alchemy/alchemy@2.0.0-beta.74.patch"

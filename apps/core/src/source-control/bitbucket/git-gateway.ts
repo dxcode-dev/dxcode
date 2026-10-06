@@ -100,9 +100,15 @@ bitbucketGitGatewayRoutes.all("/*", async (context) => {
     )
       return failure(403);
     if (write && lease.operation !== "contents-push") return failure(403);
-    if (context.req.header("content-encoding")) return failure(403);
-    const body =
+    // Git gzips smart-HTTP request bodies over 1 KiB, so any non-shallow
+    // fetch of a repository with a few refs sends one. Forward it decoded.
+    const encoding = context.req.header("content-encoding")?.toLowerCase();
+    const gzip = encoding === "gzip" && context.req.method === "POST" && !lfs;
+    if (encoding !== undefined && !gzip) return failure(403);
+    const raw =
       context.req.method === "POST" ? context.req.raw.body : undefined;
+    const body =
+      gzip && raw ? raw.pipeThrough(new DecompressionStream("gzip")) : raw;
     const control = await bitbucketControlPlaneFor(db, context.env);
     const response = await control.withConnection(
       lease.actor_user_id,

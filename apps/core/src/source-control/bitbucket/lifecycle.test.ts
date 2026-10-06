@@ -864,11 +864,44 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
                 .status,
             ).toBe(200);
             expect(upstream[1]?.body).toBe(body);
+            // Git gzips upload-pack bodies over 1 KiB; Bitbucket gets them decoded.
+            const wants = `0032want ${"c".repeat(40)}\n`.repeat(40);
+            const gzipped = new Response(
+              new Blob([wants])
+                .stream()
+                .pipeThrough(new CompressionStream("gzip")),
+            ).body;
+            const decoded = await app.request(
+              "https://dx.example/api/source/bitbucket/git/space/repo.git/git-upload-pack",
+              {
+                method: "POST",
+                body: gzipped,
+                headers: { ...headers, "content-encoding": "gzip" },
+                duplex: "half",
+              } as RequestInit,
+              { ...bindings, DB: f.db },
+            );
+            expect(decoded.status).toBe(200);
+            expect(upstream[2]?.body).toBe(wants);
+            expect(upstream[2]?.headers.get("content-encoding")).toBeNull();
+            expect(
+              (
+                await app.request(
+                  "https://dx.example/api/source/bitbucket/git/space/repo.git/git-upload-pack",
+                  {
+                    method: "POST",
+                    body: wants,
+                    headers: { ...headers, "content-encoding": "br" },
+                  },
+                  { ...bindings, DB: f.db },
+                )
+              ).status,
+            ).toBe(403);
             allowed = false;
             expect(
               (await request("info/refs?service=git-upload-pack")).status,
             ).toBe(403);
-            expect(upstream).toHaveLength(2);
+            expect(upstream).toHaveLength(3);
             expect((await readBitbucketConnection(f.db, userId))?.status).toBe(
               "active",
             );

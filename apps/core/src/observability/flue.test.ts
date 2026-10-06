@@ -226,6 +226,55 @@ describe("Flue observation", () => {
     );
   });
 
+  it("logs compaction start and outcome without the summary or error", () => {
+    subscriber(
+      observation({
+        type: "compaction_start",
+        agentName: "dx-agent",
+        instanceId: "thr_test",
+        submissionId: "sub_test",
+        reason: "threshold",
+        estimatedTokens: 251_000,
+      }),
+      {} as never,
+    );
+    subscriber(
+      observation({
+        type: "compaction",
+        agentName: "dx-agent",
+        instanceId: "thr_test",
+        submissionId: "sub_test",
+        messagesBefore: 120,
+        messagesAfter: 9,
+        durationMs: 4_200,
+        isError: true,
+        error: { message: "secret summary failure" },
+      }),
+      {} as never,
+    );
+
+    const correlation = {
+      agentName: "dx-agent",
+      threadId: "thr_test",
+      submissionId: "sub_test",
+    };
+    expect(mocks.modelInfo).toHaveBeenCalledWith("Flue compaction started.", {
+      event: "compaction_start",
+      ...correlation,
+      reason: "threshold",
+      estimatedTokens: 251_000,
+    });
+    expect(mocks.modelInfo).toHaveBeenCalledWith("Flue compaction completed.", {
+      event: "compaction",
+      ...correlation,
+      isError: true,
+      messagesBefore: 120,
+      messagesAfter: 9,
+      durationMs: 4_200,
+    });
+    expect(JSON.stringify(mocks.modelInfo.mock.calls)).not.toContain("secret");
+  });
+
   it("maps tool outcome without arguments or results", () => {
     subscriber(
       observation({

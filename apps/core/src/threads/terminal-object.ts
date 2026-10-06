@@ -79,6 +79,7 @@ import {
 } from "../settings/environment-variables/execution.js";
 import { resolveExecutionSigningPlan } from "../settings/keys/execution.js";
 import { signGitPayload } from "../settings/keys/ssh-ed25519.js";
+import { bitbucketControlPlaneFor } from "../source-control/bitbucket/control-plane.js";
 import {
   BITBUCKET_GIT_PATH,
   bitbucketRuntimeBroker,
@@ -2038,8 +2039,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     );
     // Independent D1 reads: a wake waits for the slowest, not their sum.
     const db = await Effect.runPromise(decodeD1Binding(this.env.DB));
-    // Every bitbucket.org remote routes through the dx gateway while the
-    // Thread owner has an active Bitbucket connection.
+    // While the Thread owner has an active Bitbucket connection, SSH
+    // bitbucket.org remotes use HTTPS so the native credential helper applies.
     const [snapshot, signing, bitbucketConnection] = await Promise.all([
       Effect.runPromise(resolveExecutionEnvironment(this.env, threadId)),
       Effect.runPromise(resolveExecutionSigningPlan(this.env, threadId)),
@@ -2426,6 +2427,22 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       });
       return { username: "x-access-token", password };
     }
+    if (host === "bitbucket.org") {
+      const control = await bitbucketControlPlaneFor(db, this.env);
+      const password = await control.withConnection(
+        thread.owner_user_id,
+        undefined,
+        async (token) => token,
+      );
+      threadDaemonLogger.info("Native Bitbucket credential issued.", {
+        event: "native_git_credential",
+        threadId,
+        actorUserId: thread.owner_user_id,
+        provider: "bitbucket",
+      });
+      return { username: "x-token-auth", password };
+    }
+    // dxd releases that still rewrite bitbucket.org remotes to the gateway.
     const gateway = new URL(this.env.DX_AUTH_URL as string);
     if (
       host !== gateway.host.toLowerCase() ||
