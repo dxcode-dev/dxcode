@@ -175,7 +175,7 @@ let input = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", chunk => {
   input += chunk;
-  if (input.length > 4096) fail();
+  if (input.length > 16384) fail();
 });
 process.stdin.on("end", () => {
   if (/[^\x20-\x7e\n]/.test(input)) fail();
@@ -186,7 +186,11 @@ process.stdin.on("end", () => {
     if (separator <= 0) fail();
     const key = line.slice(0, separator);
     const value = line.slice(separator + 1);
-    if (values.has(key) || !["protocol", "host", "path"].includes(key)) fail();
+    // Caller-supplied identity is refused. Only protocol, host, and path select authority; Git's
+    // other attributes (wwwauth[], capability[], and later additions) are ignored as the protocol requires.
+    if (key === "username" || key === "password") fail();
+    if (!["protocol", "host", "path"].includes(key)) continue;
+    if (values.has(key)) fail();
     values.set(key, value);
   }
   const allowed = process.env.DX_GIT_ALLOWED_PATH;

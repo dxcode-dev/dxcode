@@ -346,6 +346,13 @@ describe("dx Git credential helper", () => {
     expect(accepted.status).toBe(0);
     expect(accepted.stdout).toBe(`username=dx\npassword=${lease}\n\n`);
     expect(accepted.stdout).not.toContain("oauth-must-not-be-used");
+    const withGitAttributes = await invokeHelper(
+      "get",
+      'capability[]=authtype\ncapability[]=state\nprotocol=https\nhost=core.dx.example\npath=api/source/bitbucket/git/owner/repository.git\nwwwauth[]=Basic realm="dx"\n\n',
+      environment,
+    );
+    expect(withGitAttributes.status).toBe(0);
+    expect(withGitAttributes.stdout).toBe(`username=dx\npassword=${lease}\n\n`);
     for (const input of [
       "protocol=https\nhost=bitbucket.org\npath=owner/repository.git\n\n",
       "protocol=https\nhost=core.dx.example\npath=api/source/bitbucket/git/owner/other.git\n\n",
@@ -371,6 +378,23 @@ describe("dx Git credential helper", () => {
     expect(result.stdout).toBe(
       `username=x-access-token\npassword=${token}\n\n`,
     );
+  });
+
+  it("ignores Git's optional attributes but still refuses duplicate selectors", async () => {
+    const accepted = await invokeHelper(
+      "get",
+      'capability[]=authtype\ncapability[]=state\nprotocol=https\nhost=github.com\npath=owner/repository.git\nwwwauth[]=Basic realm="GitHub"\nwwwauth[]=Bearer\nstate[]=dx\n\n',
+    );
+    expect(accepted.status).toBe(0);
+    expect(accepted.stdout).toBe(
+      `username=x-access-token\npassword=${token}\n\n`,
+    );
+    const duplicate = await invokeHelper(
+      "get",
+      "protocol=https\nhost=github.com\npath=owner/repository\npath=owner/other\n\n",
+    );
+    expect(duplicate.status).not.toBe(0);
+    expect(duplicate.stdout).toBe("");
   });
 
   it.each([
@@ -399,6 +423,55 @@ describe("dx Git credential helper", () => {
       expect(result.stdout).toBe("");
     },
   );
+
+  it("serves through Git's credential fill when Git sends its optional fetch-time attributes", async () => {
+    // Git 2.41+ sends wwwauth[] and 2.46+ sends capability[] to helpers during fetch; the
+    // standard Orb image's Git 2.47 does both, so rejecting them broke every private checkout.
+    const directory = await mkdtemp(join(tmpdir(), "dx-git-fetch-attributes-"));
+    const helper = join(directory, "dx-git-credential");
+    writeFileSync(helper, gitCredentialHelperProgram, { mode: 0o555 });
+    const fill = (input: string) =>
+      spawnSync(
+        "git",
+        [
+          "-c",
+          "credential.helper=",
+          "-c",
+          `credential.helper=${helper}`,
+          "-c",
+          "credential.useHttpPath=true",
+          "-c",
+          "credential.interactive=false",
+          "credential",
+          "fill",
+        ],
+        {
+          input,
+          encoding: "utf8",
+          env: {
+            PATH: process.env.PATH,
+            DX_SOURCE_PROVIDER: "github",
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_CONFIG_SYSTEM: "/dev/null",
+            GIT_TERMINAL_PROMPT: "0",
+            GH_TOKEN: token,
+            DX_GIT_ALLOWED_PATH: "owner/repository",
+          },
+        },
+      );
+    const attributes =
+      'capability[]=authtype\ncapability[]=state\nwwwauth[]=Basic realm="GitHub"\n';
+    const accepted = fill(
+      `${attributes}protocol=https\nhost=github.com\npath=owner/repository.git\n\n`,
+    );
+    expect(accepted.status, accepted.stderr).toBe(0);
+    expect(accepted.stdout).toContain(`password=${token}`);
+    const rejected = fill(
+      `${attributes}protocol=https\nhost=github.com\npath=owner/repository-extra.git\n\n`,
+    );
+    expect(rejected.status).not.toBe(0);
+    expect(rejected.stdout + rejected.stderr).not.toContain(token);
+  });
 
   it("works through command-scoped Git credential plumbing only for the exact URL", async () => {
     const directory = await mkdtemp(join(tmpdir(), "dx-git-plumbing-"));

@@ -48,6 +48,30 @@ is `pnpm deploy:selfhost:dxd` with `dxdBinary` set in
 and its release record disagree. Deploy from an unmodified release tag, whose
 record names the `dxd` version in `apps/dxd/Cargo.toml`.
 
+## Cloudflare Containers image push
+
+When Cloudflare Containers is an Orb provider, the deploy builds the Orb image
+with Docker, and Wrangler pushes it to `registry.cloudflare.com`. On macOS,
+Wrangler's `docker login registry.cloudflare.com` can fail after the image
+builds with:
+
+```text
+error storing credentials ... The specified item already exists in the keychain. (-25299)
+```
+
+Docker's macOS credential helper found an old entry for the registry in the
+keychain. Try these in order, rerunning the deploy after each:
+
+1. Run `docker logout registry.cloudflare.com`.
+2. Run `security delete-internet-password -s registry.cloudflare.com` to
+   remove the keychain entry directly.
+3. Set `"credsStore": ""` in `~/.docker/config.json` for this deploy only, so
+   Docker stores the registry login unencrypted in that file. Restore the
+   previous value afterwards.
+
+A rerun is safe. The Orb Worker is created only after the image push succeeds,
+so a failed push leaves nothing partial.
+
 ## Provider errors
 
 **Not configured** means routing has no usable credential. Configure a route.
