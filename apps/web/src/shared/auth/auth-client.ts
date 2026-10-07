@@ -73,6 +73,7 @@ export const signUpWithEmail = (input: {
   readonly name: string;
   readonly email: string;
   readonly password: string;
+  readonly callbackURL?: string;
 }) =>
   Effect.tryPromise({
     try: async () => {

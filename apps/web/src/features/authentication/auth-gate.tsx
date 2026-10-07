@@ -13,10 +13,15 @@ import { AppFrame } from "../../shared/layout/app-frame.js";
 import { Button } from "../../shared/ui/button.js";
 import { Input } from "../../shared/ui/input.js";
 import {
+  inviteTokenFromPath,
+  workspaceInviteQueryOptions,
+} from "../settings/members/members-queries.js";
+import {
   accessRequestNotice,
   useAccessRequest,
 } from "./authentication-mutations.js";
 import { authenticationModeQueryOptions } from "./authentication-queries.js";
+import { browserCallbackURL } from "./authentication-requests.js";
 
 type EmailAuthMode = "sign-in" | "sign-up";
 
@@ -275,7 +280,10 @@ export function AuthGate({
       const operation =
         mode === "sign-in"
           ? signInWithEmail({ email: input.email, password: input.password })
-          : signUpWithEmail(input);
+          : signUpWithEmail({
+              ...input,
+              callbackURL: browserCallbackURL(window.location),
+            });
       run(
         operation.pipe(
           Effect.andThen(
@@ -321,6 +329,15 @@ export function AuthGate({
   const pending =
     sessionUnresolved || authenticationMode.isPending || actionPending;
   const isPublicHome = window.location.pathname === "/";
+  // A workspace invite link admits sign-in past the waitlist and sign-up when
+  // public sign-up is off; the callback returns to the invite.
+  const inviteToken = inviteTokenFromPath(window.location.pathname);
+  const invite = useQuery({
+    ...workspaceInviteQueryOptions(inviteToken ?? ""),
+    enabled: inviteToken !== undefined && context === undefined,
+  });
+  const invitedWorkspace =
+    invite.data?.status === "valid" ? invite.data.workspace : undefined;
   const isHostedPublicHome =
     isPublicHome && authenticationMode.data?.mode === "magic-link";
   let content: React.ReactNode;
@@ -368,7 +385,10 @@ export function AuthGate({
         <EmailPasswordAuthForm
           pending={pending}
           error={error}
-          signupEnabled={authenticationMode.data.signupEnabled ?? true}
+          signupEnabled={
+            (authenticationMode.data.signupEnabled ?? true) ||
+            invitedWorkspace !== undefined
+          }
           onAuthenticate={authenticateWithEmail}
         />
       ) : authenticationMode.isPending ? null : (
@@ -390,7 +410,11 @@ export function AuthGate({
                 <DxMark state="idle" className="auth-gate-mark" />
               </React.Suspense>
               <div className="auth-gate-card">
-                <strong>Sign in required</strong>
+                <strong>
+                  {invitedWorkspace === undefined
+                    ? "Sign in required"
+                    : `Sign in to join ${invitedWorkspace.displayName}`}
+                </strong>
                 {form}
               </div>
             </>

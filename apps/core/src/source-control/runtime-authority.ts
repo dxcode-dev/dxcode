@@ -97,6 +97,11 @@ export const SourceAuthorityRepositoryD1 = (db: D1Database) =>
                        project_authority.policy_revision,
                        grant_row.created_by_user_id, installation.provider_account_id,
                        installation.repository_selection,
+                       thread_grant.owner_scope AS thread_grant_owner_scope,
+                       thread_grant.owner_id AS thread_grant_owner_id,
+                       thread_grant.created_by_user_id AS thread_grant_created_by_user_id,
+                       thread_installation.provider_account_id AS thread_provider_account_id,
+                       thread_installation.repository_selection AS thread_repository_selection,
                        organization.lifecycleState AS workspace_lifecycle,
                        member.userId AS member_user_id
                   FROM threads AS thread
@@ -112,11 +117,14 @@ export const SourceAuthorityRepositoryD1 = (db: D1Database) =>
                     ON grant_row.id = project_authority.owner_grant_id
                   LEFT JOIN github_installation AS installation
                     ON installation.installation_id = project_authority.installation_id
+                  LEFT JOIN github_owner_grant AS thread_grant
+                    ON thread_grant.id = thread_authority.owner_grant_id
+                  LEFT JOIN github_installation AS thread_installation
+                    ON thread_installation.installation_id = thread_authority.installation_id
                   LEFT JOIN organization ON organization.id = project.workspace_id
                   LEFT JOIN member ON member.organizationId = project.workspace_id
                     AND member.userId = ?
                  WHERE thread.id = ? AND thread.owner_user_id = ?
-                   AND project.owner_user_id = thread.owner_user_id
                  LIMIT 1
               `)
               .bind(actorUserId, threadId, actorUserId)
@@ -125,10 +133,28 @@ export const SourceAuthorityRepositoryD1 = (db: D1Database) =>
               throw sourceAccessDenied("source-not-found", "retry");
             const projectId = string(row.project_id);
             const provider = string(row.snapshot_provider);
+            // Another member of a workspace Project's workspace works through
+            // the personal grant captured for their own Thread, not the
+            // Project creator's binding grant.
+            const memberThread =
+              row.owner_scope === "personal" &&
+              row.owner_id !== actorUserId &&
+              row.workspace_id !== null &&
+              row.workspace_lifecycle === "active" &&
+              row.member_user_id === actorUserId &&
+              row.thread_grant_owner_scope === "personal" &&
+              row.thread_grant_owner_id === actorUserId &&
+              row.thread_grant_created_by_user_id === actorUserId;
             const ownerScope = string(row.owner_scope);
-            const ownerId = string(row.owner_id);
-            const grantId = string(row.binding_grant_id);
-            const installationId = string(row.binding_installation_id);
+            const ownerId = memberThread ? actorUserId : string(row.owner_id);
+            const grantId = string(
+              memberThread ? row.snapshot_grant_id : row.binding_grant_id,
+            );
+            const installationId = string(
+              memberThread
+                ? row.snapshot_installation_id
+                : row.binding_installation_id,
+            );
             const repositoryId = string(row.binding_repository_id);
             if (
               projectId === undefined ||
@@ -154,8 +180,10 @@ export const SourceAuthorityRepositoryD1 = (db: D1Database) =>
               // Project or a workspace Project the user is still a member of.
               (ownerScope === "personal" &&
                 (ownerId !== actorUserId ||
-                  row.owner_user_id !== actorUserId ||
-                  row.created_by_user_id !== actorUserId ||
+                  (!memberThread &&
+                    ((row.workspace_id === null &&
+                      row.owner_user_id !== actorUserId) ||
+                      row.created_by_user_id !== actorUserId)) ||
                   (row.workspace_id !== null &&
                     (row.workspace_lifecycle !== "active" ||
                       row.member_user_id !== actorUserId)))) ||
@@ -173,9 +201,17 @@ export const SourceAuthorityRepositoryD1 = (db: D1Database) =>
                   : "retry",
               );
             const bindingRevision = number(row.binding_revision);
-            const authorizationEpoch = number(row.authorization_epoch);
-            const installationEpoch = number(row.installation_epoch);
-            const policyRevision = number(row.policy_revision);
+            const authorizationEpoch = number(
+              memberThread ? row.snapshot_grant_epoch : row.authorization_epoch,
+            );
+            const installationEpoch = number(
+              memberThread
+                ? row.snapshot_installation_epoch
+                : row.installation_epoch,
+            );
+            const policyRevision = number(
+              memberThread ? row.snapshot_policy_revision : row.policy_revision,
+            );
             if (
               row.snapshot_grant_id !== grantId ||
               row.snapshot_installation_id !== installationId ||
@@ -239,8 +275,16 @@ export const SourceAuthorityRepositoryD1 = (db: D1Database) =>
             )
               throw sourceAccessDenied("stale-authorization-epoch", "retry");
             const defaultBranch = string(row.default_branch);
-            const providerAccountId = string(row.provider_account_id);
-            const repositorySelection = string(row.repository_selection);
+            const providerAccountId = string(
+              memberThread
+                ? row.thread_provider_account_id
+                : row.provider_account_id,
+            );
+            const repositorySelection = string(
+              memberThread
+                ? row.thread_repository_selection
+                : row.repository_selection,
+            );
             const shipAction = string(row.ship_action);
             if (
               defaultBranch === undefined ||

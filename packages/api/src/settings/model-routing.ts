@@ -176,7 +176,7 @@ export const ModeGraphNodeDataSchema = Schema.Struct({
     model: CanonicalModelIdSchema,
     thinking: ThinkingLevel,
   }),
-  source: Schema.Literals(["default", "override"]),
+  source: Schema.Literals(["default", "override", "workspace"]),
   served: Schema.Boolean,
 });
 
@@ -212,7 +212,7 @@ export const ModeChoiceDataSchema = Schema.Struct({
     model: CanonicalModelIdSchema,
     thinking: ThinkingLevel,
   }),
-  source: Schema.Literals(["default", "override"]),
+  source: Schema.Literals(["default", "override", "workspace"]),
   served: Schema.Boolean,
   servingConnectionName: Schema.NullOr(Schema.String),
 });
@@ -234,7 +234,7 @@ export const ChoicesResponseSchema = successResponse(
   }),
 );
 
-// Profile (personal) ----------------------------------------------------------
+// Profile (personal and workspace) ----------------------------------------------------------
 
 export const ModeSlotDataSchema = Schema.Struct({
   model: CanonicalModelIdSchema,
@@ -247,9 +247,13 @@ export const ModeConfigDataSchema = Schema.Struct({
   subagents: Schema.optional(ModeSlotDataSchema),
 });
 
+/**
+ * `override` is the scope's own Mode Dial value. In a personal profile,
+ * `workspace` is inherited from the user's workspace Mode Dial.
+ */
 export const ProfileModeDataSchema = Schema.Struct({
   config: ModeConfigDataSchema,
-  source: Schema.Literals(["default", "override"]),
+  source: Schema.Literals(["default", "override", "workspace"]),
 });
 
 export const ProfileResponseSchema = successResponse(

@@ -4,6 +4,7 @@ import type { TeamTemplateState } from "../../execution/e2b/team-templates.js";
 import { readyProfileTemplates } from "../../execution/e2b/team-templates.js";
 import { loadRunnerProfileCatalog } from "../../execution/runner-profiles/catalog.js";
 import type { Bindings } from "../../http/types.js";
+import { threadProjectReachableSql } from "../../settings/members/membership-sql.js";
 import { findPlugin, isLocalRuntime } from "../registry.js";
 import {
   type ExecutionProviderId,
@@ -230,12 +231,18 @@ export const loadOrbScope = async (
       .prepare(
         `WITH scope AS (
            SELECT
-             (SELECT organizationId FROM member WHERE userId = ?1 LIMIT 1)
-               AS member_workspace_id,
+             (SELECT member.organizationId FROM member
+                JOIN organization ON organization.id = member.organizationId
+               WHERE member.userId = ?1 AND organization.lifecycleState = 'active'
+               LIMIT 1) AS member_workspace_id,
              (SELECT workspace_id FROM projects
-               WHERE id = ?2 AND owner_user_id = ?1) AS named_workspace_id,
+               WHERE id = ?2
+                 AND ${threadProjectReachableSql("projects", "?1")})
+               AS named_workspace_id,
              (SELECT runner_profile_id FROM projects
-               WHERE id = ?2 AND owner_user_id = ?1) AS project_runner_profile_id
+               WHERE id = ?2
+                 AND ${threadProjectReachableSql("projects", "?1")})
+               AS project_runner_profile_id
          )
          SELECT scope.member_workspace_id,
                 CASE WHEN ?2 IS NULL THEN scope.member_workspace_id

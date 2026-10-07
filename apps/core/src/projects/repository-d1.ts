@@ -167,6 +167,30 @@ export const ProjectRepositoryD1 = Layer.effect(
       String(cause).includes("UNIQUE constraint failed: projects.")
         ? new ProjectNameConflict()
         : unavailable(operation)(cause);
+    // The user's active workspace, if any.
+    const activeWorkspaceOf = (userId: string) => sql`
+      (SELECT member.organizationId FROM member
+         JOIN organization ON organization.id = member.organizationId
+        WHERE member.userId = ${userId}
+          AND organization.lifecycleState = 'active')`;
+    // A private Project of the user, or any workspace Project of the user's
+    // active workspace. Another member's projectless scope stays private.
+    const accessibleBy = (userId: string) => sql`
+      ((workspace_id IS NULL AND owner_user_id = ${userId})
+        OR (workspace_id IS NOT NULL
+          AND workspace_id = ${activeWorkspaceOf(userId)}
+          AND (name != ${PROJECTLESS_PROJECT_NAME} OR owner_user_id = ${userId})))`;
+    // Changing a workspace Project takes its creator or a workspace admin,
+    // while either is still an active member.
+    const manageableBy = (userId: string) => sql`
+      ((workspace_id IS NULL AND owner_user_id = ${userId})
+        OR (workspace_id IS NOT NULL
+          AND workspace_id = ${activeWorkspaceOf(userId)}
+          AND (owner_user_id = ${userId} OR EXISTS (
+            SELECT 1 FROM member
+             WHERE member.userId = ${userId}
+               AND member.organizationId = workspace_id
+               AND member.role IN ('owner', 'admin')))))`;
 
     return ProjectRepository.of({
       ensureProjectless: (ownerUserId, snapshot) =>
@@ -392,7 +416,7 @@ export const ProjectRepositoryD1 = Layer.effect(
           { projectId },
           sql<ProjectRow>`
             SELECT * FROM project_read_model
-            WHERE id = ${projectId} AND owner_user_id = ${ownerUserId}
+            WHERE id = ${projectId} AND ${accessibleBy(ownerUserId)}
           `.pipe(
             Effect.catchTag("SqlError", (cause) =>
               Effect.fail(unavailable("project.findOwnedById")(cause)),
@@ -424,7 +448,7 @@ export const ProjectRepositoryD1 = Layer.effect(
               cursor
                 ? sql<ProjectRow>`
                   SELECT * FROM project_read_model
-                  WHERE owner_user_id = ${ownerUserId}
+                  WHERE ${accessibleBy(ownerUserId)}
                     AND name != ${PROJECTLESS_PROJECT_NAME}
                     AND (created_at, id) < (${cursorTime}, ${cursor.id})
                   ORDER BY created_at DESC, id DESC
@@ -432,7 +456,7 @@ export const ProjectRepositoryD1 = Layer.effect(
                 `
                 : sql<ProjectRow>`
                   SELECT * FROM project_read_model
-                  WHERE owner_user_id = ${ownerUserId}
+                  WHERE ${accessibleBy(ownerUserId)}
                     AND name != ${PROJECTLESS_PROJECT_NAME}
                   ORDER BY created_at DESC, id DESC
                   LIMIT ${limit + 1}
@@ -463,7 +487,7 @@ export const ProjectRepositoryD1 = Layer.effect(
           Effect.gen(function* () {
             const current = yield* sql<ProjectRow>`
               SELECT * FROM project_read_model
-              WHERE id = ${projectId} AND owner_user_id = ${ownerUserId}
+              WHERE id = ${projectId} AND ${manageableBy(ownerUserId)}
                 AND name != ${PROJECTLESS_PROJECT_NAME}
             `.pipe(
               Effect.catchTag("SqlError", (cause) =>
@@ -495,7 +519,7 @@ export const ProjectRepositoryD1 = Layer.effect(
               // revision's compare-and-set update has committed.
               const applied = sql`
                 EXISTS (SELECT 1 FROM projects WHERE id = ${projectId}
-                  AND owner_user_id = ${ownerUserId}
+                  AND ${manageableBy(ownerUserId)}
                   AND revision = ${next.revision}
                   AND updated_at = ${encoded.updatedAt})
               `;
@@ -504,7 +528,7 @@ export const ProjectRepositoryD1 = Layer.effect(
                   sql`
                     UPDATE projects SET revision = ${next.revision},
                       updated_at = ${encoded.updatedAt}
-                    WHERE id = ${projectId} AND owner_user_id = ${ownerUserId}
+                    WHERE id = ${projectId} AND ${manageableBy(ownerUserId)}
                       AND revision = ${revision}
                       AND name != ${PROJECTLESS_PROJECT_NAME}
                     RETURNING id
@@ -549,7 +573,7 @@ export const ProjectRepositoryD1 = Layer.effect(
                 runner_profile_id = ${encoded.configuration.runnerProfileId},
                 public_code_enabled = ${encoded.configuration.publicCodeEnabled ? 1 : 0},
                 updated_at = ${encoded.updatedAt}
-              WHERE id = ${projectId} AND owner_user_id = ${ownerUserId}
+              WHERE id = ${projectId} AND ${manageableBy(ownerUserId)}
                 AND revision = ${expectedRevision}
               RETURNING id
             `.pipe(
@@ -579,7 +603,7 @@ export const ProjectRepositoryD1 = Layer.effect(
           Effect.gen(function* () {
             const mutable = yield* sql<{ readonly id: string }>`
               SELECT id FROM projects
-              WHERE id = ${projectId} AND owner_user_id = ${ownerUserId}
+              WHERE id = ${projectId} AND ${manageableBy(ownerUserId)}
                 AND revision = ${revision}
                 AND name != ${PROJECTLESS_PROJECT_NAME}
             `.pipe(
@@ -694,7 +718,7 @@ export const ProjectRepositoryD1 = Layer.effect(
                 `,
                 sql`
                   UPDATE projects SET revision = ${revision + 1}, updated_at = ${updatedAt}
-                  WHERE id = ${projectId} AND owner_user_id = ${ownerUserId}
+                  WHERE id = ${projectId} AND ${manageableBy(ownerUserId)}
                     AND revision = ${revision}
                     AND name != ${PROJECTLESS_PROJECT_NAME}
                 `,
@@ -720,7 +744,7 @@ export const ProjectRepositoryD1 = Layer.effect(
               );
             const rows = yield* sql<ProjectRow>`
               SELECT * FROM project_read_model
-              WHERE id = ${projectId} AND owner_user_id = ${ownerUserId}
+              WHERE id = ${projectId} AND ${manageableBy(ownerUserId)}
             `.pipe(
               Effect.catchTag("SqlError", (cause) =>
                 Effect.fail(

@@ -22,6 +22,7 @@ export const personalUsageSettingsSection = {
 export const workspaceUsageSettingsSection = {
   id: "workspace-usage",
   scope: "workspace",
+  adminOnly: true,
   slug: "usage",
   label: "Usage",
   title: "Workspace usage",
@@ -53,5 +54,6 @@ export const workspacePluginUsageSettingsSection = {
   ...pluginUsage,
   id: "workspace-plugin-usage",
   scope: "workspace",
+  adminOnly: true,
   component: WorkspacePluginUsageSettings,
 } satisfies SettingsSectionRegistration;

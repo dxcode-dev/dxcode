@@ -454,19 +454,39 @@ const REPOSITORY_LABELS = {
   gitlab: "GitLab",
   forgejo: "Forgejo",
 } as const;
+/**
+ * Why a workspace Project cannot start Threads for this user: Threads clone
+ * through the user's own source-control connection.
+ */
+const unavailableHint = (project: ProjectData) => {
+  const threads = project.viewerAccess?.threads;
+  if (threads === undefined || threads.status === "available") return;
+  const provider = REPOSITORY_LABELS[threads.provider];
+  return threads.status === "connect"
+    ? `Connect ${provider}`
+    : `No ${provider} access`;
+};
+
 function ProjectOption({ project }: { readonly project: ProjectData }) {
+  const hint = unavailableHint(project);
   return (
-    <Select.Item value={project.id} className="project-picker-option">
+    <Select.Item
+      value={project.id}
+      className="project-picker-option"
+      disabled={hint !== undefined}
+    >
       <Select.ItemText className="project-picker-name" title={project.name}>
         {project.name}
       </Select.ItemText>
       {project.repository ? (
         <span
           className="project-picker-repository"
-          title={project.repository.fullName}
+          title={hint ?? project.repository.fullName}
         >
           <span>{project.repository.fullName}</span>
-          <small>{REPOSITORY_LABELS[project.repository.provider]}</small>
+          <small>
+            {hint ?? REPOSITORY_LABELS[project.repository.provider]}
+          </small>
         </span>
       ) : null}
       <Select.ItemIndicator className="project-picker-check">

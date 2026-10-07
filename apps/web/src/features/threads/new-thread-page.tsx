@@ -51,6 +51,7 @@ import { orbProvidersQueryOptions } from "../settings/orb-providers/orb-provider
 import { projectDefaultsQueryOptions } from "../settings/project-defaults/project-defaults-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import {
+  canStartThreadsIn,
   rememberedProjectToResolve,
   effectiveRunnerProfileId as resolveRunnerProfileId,
   startingMode,
@@ -561,7 +562,9 @@ function ScopedNewThreadModal({
           ? initialProjectId
           : (recovery.project?.id ?? ""),
       remembered: remembered.project,
-      listedProjectIds: projects.map(({ id }) => id),
+      listedProjectIds: projects.flatMap((project) =>
+        canStartThreadsIn(project) ? [project.id] : [],
+      ),
     }),
   );
   const { choicesQuery, profile, model, chooseProfile, chooseModel } =

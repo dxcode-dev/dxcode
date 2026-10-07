@@ -14,13 +14,14 @@ const emailDomain = (email: string) => {
 export const emailPassword = (
   allowedSignupDomain: string | undefined,
   signupEnabled = false,
+  admitInvitedSignup?: (callbackURL: unknown) => Promise<boolean>,
 ): BetterAuthPlugin => ({
   id: "dx-email-password",
   init: () => ({
     options: {
       emailAndPassword: {
         enabled: true,
-        disableSignUp: !signupEnabled,
+        disableSignUp: !signupEnabled && admitInvitedSignup === undefined,
         autoSignIn: true,
         requireEmailVerification: false,
       },
@@ -36,6 +37,14 @@ export const emailPassword = (
             typeof email !== "string" ||
             (allowedSignupDomain !== undefined &&
               emailDomain(email) !== allowedSignupDomain)
+          ) {
+            throw accountCreationUnavailable();
+          }
+          // A valid workspace invite link admits sign-up when public
+          // sign-up is off.
+          if (
+            !signupEnabled &&
+            !(await admitInvitedSignup?.(context.body?.callbackURL))
           ) {
             throw accountCreationUnavailable();
           }

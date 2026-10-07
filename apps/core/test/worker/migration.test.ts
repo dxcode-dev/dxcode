@@ -50,9 +50,9 @@ describe("D1 migration", () => {
         "organization_slug_nocase_uidx",
         "workspace_organization_profile_before_insert",
         "workspace_organization_profile_before_update",
-        "workspace_invite_capability",
-        "workspace_invite_capability_hash_uidx",
-        "workspace_invite_capability_normalized_before_insert",
+        "workspace_invite_link",
+        "workspace_invite_link_token_hash_uidx",
+        "workspace_mode_profile_override",
         "workspace_member_role_before_insert",
         "workspace_member_role_before_update",
         "workspace_owner_role_immutable_before_update",
@@ -180,7 +180,7 @@ describe("D1 migration", () => {
       "(owner_user_id, project_id, created_at DESC, id DESC)",
     );
     expect(sqlByName.get("threads")).toContain(
-      "FOREIGN KEY (project_id, owner_user_id) REFERENCES projects(id, owner_user_id)",
+      "FOREIGN KEY (project_id) REFERENCES projects(id)",
     );
     expect(sqlByName.get("account_issuer_accountId_uidx")).toContain(
       '("issuer", "accountId")',
@@ -195,17 +195,12 @@ describe("D1 migration", () => {
     expect(sqlByName.get("organization")).toContain(
       "lifecycleState TEXT NOT NULL DEFAULT 'active'",
     );
-    expect(sqlByName.get("workspace_invite_capability")).toContain(
-      "capability_hash TEXT NOT NULL CHECK",
+    expect(sqlByName.get("workspace_invite_link")).toContain(
+      "token_hash TEXT NOT NULL",
     );
-    expect(sqlByName.get("workspace_invite_capability")).toContain(
-      "role TEXT NOT NULL DEFAULT 'member' CHECK (role = 'member')",
-    );
-    expect(sqlByName.get("workspace_invite_capability")).not.toContain(
-      "capability TEXT",
-    );
-    expect(sqlByName.get("workspace_invite_capability_hash_uidx")).toContain(
-      "(capability_hash)",
+    expect(sqlByName.get("workspace_invite_link")).not.toContain("max_uses");
+    expect(sqlByName.get("workspace_invite_link_token_hash_uidx")).toContain(
+      "(token_hash)",
     );
     expect(sqlByName.get("apikey_key_uidx")).toContain('("key")');
     expect(sqlByName.get("apikey_configId_referenceId_idx")).toContain(
@@ -942,15 +937,18 @@ describe("D1 migration", () => {
     );
   });
 
-  it("enforces owner-consistent foreign keys by default", async () => {
+  it("enforces Project foreign keys by default", async () => {
     const entity = project(
       "prj_00000000-0000-4000-8000-000000000031",
       owner,
       "Owned",
     );
-    const mismatched = thread(
+    // A workspace member's Thread may reference another member's Project, so
+    // the database enforces the Project reference and repositories enforce
+    // access.
+    const orphan = thread(
       "thr_00000000-0000-4000-8000-000000000032",
-      entity.id,
+      "prj_00000000-0000-4000-8000-000000000039" as typeof entity.id,
       otherOwner,
     );
 
@@ -959,7 +957,7 @@ describe("D1 migration", () => {
         const projects = yield* ProjectRepository;
         const threads = yield* ThreadRepository;
         yield* projects.insert(entity);
-        const error = yield* Effect.flip(threads.insert(mismatched));
+        const error = yield* Effect.flip(threads.insert(orphan));
         expect(error).toBeInstanceOf(PersistenceUnavailable);
         expect(error._tag).toBe("PersistenceUnavailable");
       }),

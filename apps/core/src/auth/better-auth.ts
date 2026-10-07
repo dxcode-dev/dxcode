@@ -14,6 +14,7 @@ import { APIError } from "better-auth/api";
 import { organization } from "better-auth/plugins";
 import { Effect, Option, Schema } from "effect";
 import type { Bindings } from "../http/types.js";
+import { inviteSignupAdmission } from "../settings/members/service.js";
 import { cloudflareMagicLink } from "./cloudflare-magic-link.js";
 import { emailPassword } from "./email-password.js";
 import type { AuthenticationRequirements } from "./requirements.js";
@@ -53,12 +54,19 @@ const defaultAuthenticationPlugins = (
   if (browserAuthenticationMode(requirements, bindings) === "email-password") {
     return [
       requirements.environment === "selfhost"
-        ? emailPassword(undefined, selfhostSignupEnabled(bindings))
+        ? emailPassword(
+            undefined,
+            selfhostSignupEnabled(bindings),
+            bindings.DB === undefined
+              ? undefined
+              : (callbackURL) =>
+                  inviteSignupAdmission(bindings.DB, callbackURL),
+          )
         : emailPassword(undefined, true),
     ];
   }
-  if (bindings.DB === undefined)
-    throw new Error("D1 database binding is required.");
+  const db = bindings.DB;
+  if (db === undefined) throw new Error("D1 database binding is required.");
   if (bindings.EMAIL === undefined)
     throw new Error("Cloudflare email binding is required for deployed auth.");
   const from = bindings.DX_AUTH_EMAIL_FROM?.trim();
@@ -67,7 +75,9 @@ const defaultAuthenticationPlugins = (
   const magicLink = cloudflareMagicLink({
     email: bindings.EMAIL,
     from,
-    admitEmail: waitlistAdmission(bindings.DB),
+    admitEmail: async (email, callbackURL) =>
+      (await inviteSignupAdmission(db, callbackURL)) ||
+      (await waitlistAdmission(db)(email)),
     verifyRequest: async (token) => {
       const error = await Effect.runPromise(
         verifyTurnstile({
@@ -149,6 +159,7 @@ const workspaceOrganization = (bindings: Bindings) => {
 
   return organization({
     organizationLimit: 1,
+    invitationLimit: 0,
     disableOrganizationDeletion: true,
     allowUserToCreateOrganization: async (user) =>
       !(await workspaceMembershipExists(db, user.id)),
@@ -161,6 +172,17 @@ const workspaceOrganization = (bindings: Bindings) => {
       }),
       beforeAddMember: async ({ member }) => {
         await assertNoMembership(member.userId);
+      },
+      // Workspaces grow only through dx invite links (settings/members).
+      beforeCreateInvitation: async () => {
+        throw new APIError("FORBIDDEN", {
+          message: "Use a workspace invite link.",
+        });
+      },
+      beforeAcceptInvitation: async () => {
+        throw new APIError("FORBIDDEN", {
+          message: "Use a workspace invite link.",
+        });
       },
     },
   });

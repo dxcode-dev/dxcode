@@ -3,6 +3,7 @@ import type { UserId, WorkspaceSlug } from "@dx/domain";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 import {
   createWorkspace,
+  leaveWorkspace,
   updateWorkspaceProfile,
 } from "../../../shared/api/client.js";
 import { settingsKeys } from "../settings-context-queries.js";
@@ -56,3 +57,9 @@ export const workspaceMutationOptions = (
       });
     },
   });
+
+export const leaveWorkspaceMutationOptions = (
+  workspaceSlug: WorkspaceSlug,
+) => ({
+  mutationFn: () => leaveWorkspace(workspaceSlug),
+});

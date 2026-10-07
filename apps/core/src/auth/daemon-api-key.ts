@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { ThreadId, UserId } from "@dx/domain";
 import { Effect, Option, Redacted, Schema } from "effect";
 import type { Bindings } from "../http/types.js";
+import { threadProjectReachableSql } from "../settings/members/membership-sql.js";
 import { createAuth } from "./better-auth.js";
 import { loadAuthenticationRequirements } from "./requirements.js";
 
@@ -94,7 +95,10 @@ export const verifyThreadDaemonApiKey = async (
     .prepare(
       `SELECT 1 AS owned
          FROM threads
-        WHERE id = ? AND owner_user_id = ? AND lifecycle_state = 'active'`,
+         JOIN projects ON projects.id = threads.project_id
+        WHERE threads.id = ? AND threads.owner_user_id = ?
+          AND threads.lifecycle_state = 'active'
+          AND ${threadProjectReachableSql("projects", "threads.owner_user_id")}`,
     )
     .bind(threadId, verified.key.referenceId)
     .first<{ readonly owned: number }>();
@@ -117,12 +121,14 @@ export const confirmThreadDaemonApiKey = async (
       `SELECT 1 AS owned
          FROM apikey
          JOIN threads ON threads.owner_user_id = apikey.referenceId
+         JOIN projects ON projects.id = threads.project_id
         WHERE apikey.id = ?
           AND apikey.configId = ?
           AND (apikey.enabled IS NULL OR apikey.enabled = 1)
           AND apikey.expiresAt IS NULL
           AND threads.id = ?
-          AND threads.lifecycle_state = 'active'`,
+          AND threads.lifecycle_state = 'active'
+          AND ${threadProjectReachableSql("projects", "threads.owner_user_id")}`,
     )
     .bind(keyId, DAEMON_KEY_CONFIG, threadId)
     .first<{ readonly owned: number }>();

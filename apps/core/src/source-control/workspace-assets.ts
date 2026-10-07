@@ -224,7 +224,7 @@ process.stdin.on("end", () => {
 
 const sourceWorkspaceTemplate = String.raw`#!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, parse, posix, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import process from "node:process";
@@ -491,17 +491,35 @@ const readyState = expected => ({
   defaultBranch: expected.defaultBranch,
   initialRef: expected.initialRef,
   state: "ready",
+  // false only while dx is still provisioning its own fresh clone. Once hooks
+  // are reached the repository belongs to the user: branches, history, remotes,
+  // and submodules are never verified again. Legacy states lack the field and
+  // count as provisioned.
+  provisioned: false,
   setup: { status: "pending" }
 });
+const provisioned = state => state.provisioned !== false;
+const markProvisioned = state => {
+  if (provisioned(state)) return state;
+  const next = { ...state, provisioned: true };
+  atomicState(next);
+  return next;
+};
 const resolveExisting = sourceIdentity => {
   assertDirectoryChain(dirname(STATE));
+  // The user deleted an accepted checkout: forget it so activation re-clones.
+  const forgetDeletedCheckout = () => {
+    if (lstat(CLAIM) === undefined && lstat(STATE) !== undefined) removeRegular(STATE);
+  };
   if (lstat(WORKSPACE_PARENT) === undefined) {
+    forgetDeletedCheckout();
     if (lstat(STATE) !== undefined || lstat(CLAIM) !== undefined) fail("conflict");
     fail("absent");
   }
   assertDirectoryChain(WORKSPACE_PARENT);
   const rootEntry = lstat(ROOT);
   if (rootEntry === undefined) {
+    forgetDeletedCheckout();
     if (lstat(STATE) !== undefined) fail("conflict");
     if (lstat(CLAIM) === undefined) fail("absent");
     const claim = readJson(CLAIM);
@@ -529,7 +547,7 @@ const resolveExisting = sourceIdentity => {
   }
   const current = readJson(STATE);
   if (!sameIdentity(current, sourceIdentity) || !validSnapshot(current)) fail("conflict");
-  verifyCheckout(current);
+  if (!provisioned(current)) verifyCheckout(current);
   return current;
 };
 const verify = expected => {
@@ -649,36 +667,37 @@ const canonicalRepository = (url, provider) => {
 };
 const modules = (expected, verified = verify(expected)) => {
   const file = join(ROOT, ".gitmodules");
-  if (lstat(file) === undefined) return [];
   const fileStat = lstat(file);
-  if (fileStat.isSymbolicLink() || !fileStat.isFile() || fileStat.size > 65536) fail("conflict");
-  const output = git(ROOT, required("DX_REPOSITORY_NAME"), ["config", "--null", "--file", ".gitmodules", "--get-regexp", "^submodule\..*\.(path|url)$"]);
+  // Repository content never blocks a Thread. Entries dx cannot safely
+  // initialize with credentials are left for the user to manage.
+  if (fileStat === undefined || fileStat.isSymbolicLink() || !fileStat.isFile() || fileStat.size > 65536) return [];
+  let output;
+  try {
+    output = git(ROOT, required("DX_REPOSITORY_NAME"), ["config", "--null", "--file", ".gitmodules", "--get-regexp", "^submodule\..*\.(path|url)$"], false, 120000, [0], true);
+  } catch { return []; }
   const records = new Map();
   for (const entry of output.split("\0").filter(Boolean)) {
     const separator = entry.indexOf("\n") >= 0 ? entry.indexOf("\n") : entry.indexOf(" ");
-    if (separator <= 0) fail("conflict");
+    if (separator <= 0) continue;
     const key = entry.slice(0, separator), value = entry.slice(separator + 1);
     const match = key.match(/^submodule\.(.+)\.(path|url)$/);
-    if (!match) fail("conflict");
+    if (!match) continue;
     const record = records.get(match[1]) ?? {};
     record[match[2]] = value; records.set(match[1], record);
   }
-  if (records.size > 16) fail("conflict");
-  const parsed = [...records.entries()].map(([key, record]) => {
+  const safe = ([key, record]) => {
     const path = record.path, repositoryName = canonicalRepository(record.url ?? "", expected.provider);
-    if (!/^[A-Za-z0-9_.-]{1,128}$/.test(key) || !path || !repositoryName || path.includes("\\") || posix.isAbsolute(path) || posix.normalize(path) !== path || path === "." || path.startsWith("../") || path.includes("/../") || path.split("/").some(part => part === "" || part === "." || part === ".git") || path.split("/").length > 8) fail("conflict");
+    if (!/^[A-Za-z0-9_.-]{1,128}$/.test(key) || !path || !repositoryName || path.includes("\\") || posix.isAbsolute(path) || posix.normalize(path) !== path || path === "." || path.startsWith("../") || path.includes("/../") || path.split("/").some(part => part === "" || part === "." || part === ".git") || path.split("/").length > 8) return undefined;
     let parent = ROOT;
     for (const part of path.split("/").slice(0, -1)) {
       parent = join(parent, part);
-      if (lstat(parent) !== undefined && !isRealDirectory(parent)) fail("conflict");
+      if (lstat(parent) !== undefined && !isRealDirectory(parent)) return undefined;
     }
-    const target = join(ROOT, path);
-    if (lstat(target)?.isSymbolicLink()) fail("conflict");
+    if (lstat(join(ROOT, path))?.isSymbolicLink()) return undefined;
     return { key, path, repositoryName };
-  });
-  const paths = parsed.map(module => module.path).sort();
-  if (new Set(paths).size !== paths.length || paths.some((path, index) => paths[index + 1]?.startsWith(path + "/"))) fail("conflict");
-  return parsed;
+  };
+  const parsed = [...records.entries()].map(safe).filter(module => module !== undefined);
+  return parsed.filter(module => !parsed.some(other => other !== module && (other.path === module.path || module.path.startsWith(other.path + "/") || other.path.startsWith(module.path + "/"))));
 };
 const runSubmodule = expected => {
   verify(expected);
@@ -693,7 +712,8 @@ const runSubmodule = expected => {
 };
 const lfsNeeded = (expected, verified = verify(expected)) => {
   const attributes = join(ROOT, ".gitattributes");
-  if (lstat(attributes) === undefined) return false;
+  const value = lstat(attributes);
+  if (value === undefined || value.isSymbolicLink() || !value.isFile() || value.size > MAX_MARKER) return false;
   return readRegular(attributes, MAX_MARKER).split("\n").some(line => !line.trimStart().startsWith("#") && /filter=lfs/.test(line));
 };
 const runLfs = expected => {
@@ -704,26 +724,23 @@ const runLfs = expected => {
   git(ROOT, required("DX_REPOSITORY_NAME"), ["lfs", "checkout"]);
 };
 const hook = (expected, name, current) => {
-  const agents = join(ROOT, ".agents");
-  const path = join(agents, name);
-  if (lstat(agents) !== undefined && !isRealDirectory(agents)) fail("conflict");
-  if (lstat(path)?.isSymbolicLink()) fail("conflict");
+  const path = join(ROOT, ".agents", name);
   let digest;
   if (name === "setup") {
-    const tree = git(ROOT, required("DX_REPOSITORY_NAME"), ["ls-tree", expected.sourceSha, "--", ".agents/setup"]).trim();
-    if (tree === "" || !tree.startsWith("100755 blob ")) return current;
-    const immutableSetup = git(ROOT, required("DX_REPOSITORY_NAME"), ["show", expected.sourceSha + ":.agents/setup"]);
+    // Setup runs once per snapshot. The file that runs is whatever the user's
+    // current checkout holds; a missing snapshot commit or setup file skips it.
+    let immutableSetup;
+    try {
+      const tree = git(ROOT, required("DX_REPOSITORY_NAME"), ["ls-tree", expected.sourceSha, "--", ".agents/setup"], false, 120000, [0], true).trim();
+      if (tree === "" || !tree.startsWith("100755 blob ")) return current;
+      immutableSetup = git(ROOT, required("DX_REPOSITORY_NAME"), ["show", expected.sourceSha + ":.agents/setup"], false, 120000, [0], true);
+    } catch { return current; }
     digest = sha(expected.sourceSha + "\0" + required("DX_SOURCE_CONFIG_DIGEST") + "\0" + immutableSetup);
     if (current.setup?.status === "success" && current.setup?.digest === digest) return current;
-    if (lstat(path) === undefined || readRegular(path, MAX_MARKER) !== immutableSetup) fail("hook", name);
   }
-  if (lstat(path) === undefined) name === "setup" ? fail("hook", name) : undefined;
-  if (lstat(path) === undefined) return current;
-  const hookStat = lstat(path);
-  if (!hookStat.isFile() || hookStat.isSymbolicLink() || (hookStat.mode & 0o111) === 0) {
-    if (name === "setup") fail("hook", name);
-    return current;
-  }
+  let hookStat;
+  try { hookStat = statSync(path); } catch { return current; }
+  if (!hookStat.isFile() || (hookStat.mode & 0o111) === 0) return current;
   ensureDirectoryChain(LOG_DIR);
   const environment = { PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", HOME, USER: "user", LOGNAME: "user", SHELL: "/bin/bash", GIT_TERMINAL_PROMPT: "0" };
   const result = spawnSync(path, [], { cwd: ROOT, env: environment, encoding: "utf8", timeout: 300000, maxBuffer: MAX_OUTPUT });
@@ -741,6 +758,8 @@ const hook = (expected, name, current) => {
 const action = process.argv[2];
 const inspectCheckout = expected => {
   const verified = verify(expected);
+  if (provisioned(verified))
+    return { verified, payload: { status: "ready", modules: [], lfsNeeded: false, shallow: false, fullHistoryNeeded: false } };
   const shallow = isShallow(expected, verified);
   return {
     verified,
@@ -772,11 +791,11 @@ try {
     if (action === "snapshot") process.stdout.write(JSON.stringify(checkoutPayload(expected)));
     else if (action === "activate") {
       const inspected = inspectCheckout(expected);
-      if (process.env.DX_ALLOW_COMBINED_HOOKS !== "true" || inspected.payload.modules.length > 0 || inspected.payload.lfsNeeded || inspected.payload.fullHistoryNeeded)
+      if (inspected.payload.modules.length > 0 || inspected.payload.lfsNeeded || inspected.payload.fullHistoryNeeded)
         process.stdout.write(JSON.stringify({ checkout: inspected.payload }));
       else {
         try {
-          const afterSetup = hook(expected, "setup", inspected.verified);
+          const afterSetup = hook(expected, "setup", markProvisioned(inspected.verified));
           if (process.env.DX_RUN_RESUME !== "false") hook(expected, "resume", afterSetup);
           process.stdout.write(JSON.stringify({ checkout: inspected.payload, hooks: { status: "ready" } }));
         } catch (cause) {
@@ -804,8 +823,9 @@ try {
       unshallow(expected, false);
       process.stdout.write(JSON.stringify(checkoutPayload(expected)));
     }
+    else if (action === "mark-provisioned") markProvisioned(verify(expected));
     else if (action === "hooks") {
-      const current = verify(expected);
+      const current = markProvisioned(verify(expected));
       const afterSetup = hook(expected, "setup", current);
       if (process.env.DX_RUN_RESUME !== "false") hook(expected, "resume", afterSetup);
       process.stdout.write(JSON.stringify({ status: "ready" }));

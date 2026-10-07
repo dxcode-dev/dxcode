@@ -62,6 +62,7 @@ export * from "./settings/plugins.js";
 export * from "./settings/project-defaults.js";
 export * from "./settings/signing-keys.js";
 export * from "./settings/skills.js";
+export * from "./settings/workspace-members.js";
 export * from "./settings/workspace-policy.js";
 export * from "./settings/workspace-profile.js";
 export * from "./settings/workspace-usage.js";

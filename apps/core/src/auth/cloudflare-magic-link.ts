@@ -7,7 +7,10 @@ export interface CloudflareMagicLinkOptions {
   readonly email: SendEmail;
   readonly from: string;
   readonly verifyRequest?: (token: string | null) => Promise<void>;
-  readonly admitEmail?: (email: string) => Promise<boolean>;
+  readonly admitEmail?: (
+    email: string,
+    callbackURL: unknown,
+  ) => Promise<boolean>;
 }
 
 const magicLinkToken = () =>
@@ -47,7 +50,7 @@ export const cloudflareMagicLink = ({
             if (
               typeof recipient === "string" &&
               admitEmail !== undefined &&
-              !(await admitEmail(recipient))
+              !(await admitEmail(recipient, context.body?.callbackURL))
             ) {
               return context.json({ status: true });
             }

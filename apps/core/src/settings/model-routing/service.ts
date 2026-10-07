@@ -37,8 +37,11 @@ import {
 } from "./catalog.js";
 import {
   loadConnectionsForTarget,
+  loadModeOverrideSources,
   loadRoutableConnections,
   loadSubscriptionModelIds,
+  loadWorkspaceModeOverrides,
+  type ModeOverrideSource,
 } from "./connection-store-d1.js";
 import { effectiveContextWindow } from "./context-window.js";
 import { COPILOT_SERVED_MODELS } from "./copilot-mapping.js";
@@ -480,6 +483,13 @@ export class ModelRoutingService {
     input: CreateConnectionInput,
   ): Promise<ConnectionData> {
     const fieldErrors = this.#validateCreate(input);
+    // Workspace routing shares custom endpoints only; subscriptions and
+    // provider API keys stay personal for now.
+    if (target.scope === "workspace" && input.kind !== "custom")
+      fieldErrors.push({
+        field: "kind",
+        message: "Workspace connections use a custom URL.",
+      });
     const existing = await loadConnectionsForTarget(this.db, target);
     if (existing.length >= MAX_MODEL_CONNECTIONS_PER_SCOPE) {
       fieldErrors.push({
@@ -849,30 +859,42 @@ export class ModelRoutingService {
           ),
       ),
     );
-    const defaultProfile = this.defaultProfile;
-    const modes = new Map(
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const overrides = yield* ModeProfileOverrideRepository;
-          const rows = yield* overrides.listOverrides(userId, "default");
-          return MODE_IDS.map(
-            (mode) =>
-              [
+    const modes = await this.#modes(userId, target);
+    return { connections, entitlements, modes };
+  }
+
+  /**
+   * Effective Mode Dial for a user (personal override, then workspace
+   * override, then the shipped profile), or for a workspace target its own
+   * override over the shipped profile.
+   */
+  async #modes(userId: UserId, target?: ModelConnectionTarget) {
+    const overrides: ReadonlyMap<
+      ModeId,
+      { readonly config: ModeConfig; readonly source: ModeOverrideSource }
+    > =
+      target?.scope === "workspace"
+        ? new Map(
+            [...(await loadWorkspaceModeOverrides(this.db, target.id))].map(
+              ([mode, config]) => [
                 mode,
-                {
-                  config:
-                    rows.find((row) => row.mode === mode)?.config ??
-                    defaultProfile.modes[mode],
-                  source: rows.some((row) => row.mode === mode)
-                    ? ("override" as const)
-                    : ("default" as const),
-                },
-              ] as const,
-          );
-        }).pipe(Effect.provide(ModeProfileOverrideRepositoryD1(this.db))),
+                { config, source: "override" as const },
+              ],
+            ),
+          )
+        : await loadModeOverrideSources(this.db, userId);
+    return new Map(
+      MODE_IDS.map(
+        (mode) =>
+          [
+            mode,
+            overrides.get(mode) ?? {
+              config: this.defaultProfile.modes[mode],
+              source: "default" as const,
+            },
+          ] as const,
       ),
     );
-    return { connections, entitlements, modes };
   }
 
   async graph(userId: UserId, target?: ModelConnectionTarget) {
@@ -920,8 +942,11 @@ export class ModelRoutingService {
     };
   }
 
-  async choices(userId: UserId) {
-    const { connections, entitlements, modes } = await this.#routable(userId);
+  async choices(userId: UserId, target?: ModelConnectionTarget) {
+    const { connections, entitlements, modes } = await this.#routable(
+      userId,
+      target,
+    );
     const candidates = new Set<string>();
     for (const connection of connections) {
       if (connection.kind === "subscription") {
@@ -1034,6 +1059,66 @@ export class ModelRoutingService {
       }),
     );
     return this.profile(userId);
+  }
+
+  async workspaceProfile(userId: UserId, workspaceId: string) {
+    const modes = await this.#modes(userId, {
+      scope: "workspace",
+      id: workspaceId,
+    } as ModelConnectionTarget);
+    return {
+      id: "default" as const,
+      modes: Object.fromEntries(
+        MODE_IDS.map((mode) => [mode, modeResolution(modes, mode)]),
+      ),
+    };
+  }
+
+  async putWorkspaceMode(
+    userId: UserId,
+    workspaceId: string,
+    mode: ModeId,
+    config: typeof PutModeRequestSchema.Type,
+  ) {
+    const decoded = Schema.decodeUnknownOption(ModeConfig)(config);
+    if (Option.isNone(decoded)) {
+      throw new ModelRoutingValidationError([
+        { field: "config", message: "Invalid mode configuration." },
+      ]);
+    }
+    const fieldErrors: SettingsFieldError[] = [];
+    validateModeConfig(decoded.value, fieldErrors);
+    if (fieldErrors.length > 0)
+      throw new ModelRoutingValidationError(fieldErrors);
+    await this.db
+      .prepare(
+        `INSERT INTO workspace_mode_profile_override
+           (workspace_id, profile_id, mode, config, updated_by_user_id, updated_at)
+         VALUES (?, 'default', ?, ?, ?, ?)
+         ON CONFLICT (workspace_id, profile_id, mode)
+         DO UPDATE SET config = excluded.config,
+                       updated_by_user_id = excluded.updated_by_user_id,
+                       updated_at = excluded.updated_at`,
+      )
+      .bind(
+        workspaceId,
+        mode,
+        JSON.stringify(Schema.encodeSync(ModeConfig)(decoded.value)),
+        userId,
+        new Date().toISOString(),
+      )
+      .run();
+    return this.workspaceProfile(userId, workspaceId);
+  }
+
+  async resetWorkspaceMode(userId: UserId, workspaceId: string, mode: ModeId) {
+    await this.db
+      .prepare(
+        "DELETE FROM workspace_mode_profile_override WHERE workspace_id = ? AND profile_id = 'default' AND mode = ?",
+      )
+      .bind(workspaceId, mode)
+      .run();
+    return this.workspaceProfile(userId, workspaceId);
   }
 
   async resetMode(

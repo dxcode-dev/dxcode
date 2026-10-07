@@ -4,7 +4,8 @@
   "previousAcceptedD1Migration": "0000_baseline_v0.1.0.sql",
   "acceptedDestructiveD1Migrations": [
     "0002_release_v0.1.2.sql",
-    "0003_release_v0.2.0.sql"
+    "0003_release_v0.2.0.sql",
+    "0005_release_v0.2.8.sql"
   ],
   "d1": [
     {
@@ -31,6 +32,11 @@
       "filename": "0004_release_v0.2.7.sql",
       "sha256": "8be098b80c880ff8795e4d83da23eaac8e8d622d4c99b074aa4447a3cae1d98b",
       "classification": "non-destructive"
+    },
+    {
+      "filename": "0005_release_v0.2.8.sql",
+      "sha256": "d96a76cbee9e18c273ba6da1a57bf0ab62e77e23d4b05420e6eb8ef7cbe501d8",
+      "classification": "destructive"
     }
   ],
   "durableObjects": [

@@ -1,4 +1,4 @@
-import type { PersonalComposerDefaultsData } from "@dx/api";
+import type { PersonalComposerDefaultsData, ProjectData } from "@dx/api";
 import type {
   ModeId,
   ProjectId,
@@ -13,6 +13,10 @@ type ProjectChoice = ProjectId | "";
  * "+", `?project=`) wins, then the remembered Project if it is still listed,
  * then the first listed Project.
  */
+/** Whether the user can start a Thread in the Project with their own connections. */
+export const canStartThreadsIn = (project: Pick<ProjectData, "viewerAccess">) =>
+  (project.viewerAccess?.threads.status ?? "available") === "available";
+
 export const startingProjectId = ({
   explicit,
   remembered,

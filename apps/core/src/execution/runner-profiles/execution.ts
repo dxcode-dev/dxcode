@@ -10,6 +10,7 @@ import {
 } from "../../plugins/settings-store-d1.js";
 import { SettingsAudit } from "../../settings/audit.js";
 import { loadConfigEncryptionKeyring } from "../../settings/config-encryption.js";
+import { activeMemberSql } from "../../settings/members/membership-sql.js";
 import { SettingsService } from "../../settings/service.js";
 import { WorkspaceRepositoryD1 } from "../../settings/workspace/repository-d1.js";
 import { WorkspacePolicyRepositoryD1 } from "../../settings/workspace-policy/repository-d1.js";
@@ -205,14 +206,14 @@ const targetQuery = `SELECT threads.runner_profile_id AS thread_runner_profile_i
         template.configured_at AS key_template_configured_at,
         policy.allow_personal_plugin_overrides,
         policy.allow_personal_execution_overrides,
-        CASE WHEN pin.account_scope = 'workspace' THEN EXISTS (
-          SELECT 1 FROM member
-           WHERE member.userId = threads.owner_user_id
-             AND member.organizationId = pin.account_owner_id
-        ) ELSE NULL END AS owner_is_member
+        CASE WHEN pin.account_scope = 'workspace' THEN ${activeMemberSql(
+          "pin.account_owner_id",
+          "threads.owner_user_id",
+        )} ELSE NULL END AS owner_is_member
    FROM threads
+   -- A Thread's Project is fixed; access is checked before activation, and
+   -- releasing must still resolve after the owner leaves the workspace.
    INNER JOIN projects ON projects.id = threads.project_id
-     AND projects.owner_user_id = threads.owner_user_id
    LEFT JOIN execution_workspace AS pin ON pin.thread_id = threads.id
    LEFT JOIN plugin_setting AS setting
      ON setting.scope = pin.account_scope

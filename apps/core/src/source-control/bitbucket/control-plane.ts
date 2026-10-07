@@ -584,17 +584,23 @@ export const readBitbucketThreadAuthority = async (
     FROM threads t JOIN projects p ON p.id = t.project_id JOIN thread_source_snapshot s ON s.thread_id = t.id
     JOIN thread_source_authority a ON a.thread_id = t.id JOIN project_repository r ON r.project_id = p.id
     JOIN project_source_authority b ON b.project_id = p.id JOIN bitbucket_connection c ON c.id = a.owner_grant_id
-    WHERE t.id = ? AND t.owner_user_id = ? AND p.owner_user_id = ?
+    WHERE t.id = ? AND t.owner_user_id = ?
+      AND (p.workspace_id IS NOT NULL OR p.owner_user_id = ?)
       AND (p.workspace_id IS NULL OR EXISTS (
         SELECT 1 FROM member JOIN organization ON organization.id = member.organizationId
         WHERE member.organizationId = p.workspace_id AND member.userId = t.owner_user_id
           AND organization.lifecycleState = 'active'))
       AND t.lifecycle_state = 'active' AND s.provider = 'bitbucket' AND r.provider = 'bitbucket' AND b.provider = 'bitbucket'
       AND s.binding_revision = r.binding_revision AND b.binding_revision = r.binding_revision
-      AND s.repository_full_name = r.full_name AND a.owner_grant_id = b.owner_grant_id
+      AND s.repository_full_name = r.full_name
       AND a.provider_repository_id = b.provider_repository_id AND a.provider_workspace_id = b.provider_workspace_id
-      AND a.authorization_epoch = b.authorization_epoch AND c.authorization_epoch = a.authorization_epoch
-      AND c.user_id = ? AND c.status = 'active' AND b.owner_scope = 'personal' AND b.owner_id = ?
+      AND c.authorization_epoch = a.authorization_epoch
+      -- The binding owner uses the bound connection; another workspace member
+      -- uses their own connection captured on the Thread.
+      AND ((b.owner_id = ? AND a.owner_grant_id = b.owner_grant_id
+            AND a.authorization_epoch = b.authorization_epoch)
+        OR (b.owner_id != t.owner_user_id AND p.workspace_id IS NOT NULL))
+      AND c.user_id = ? AND c.status = 'active' AND b.owner_scope = 'personal'
       AND b.provenance = 'live-grant' AND b.source_health = 'available' AND a.installation_id IS NULL
       AND b.installation_id IS NULL AND a.installation_epoch = 0 AND b.installation_epoch = 0
       AND a.policy_revision = 0 AND b.policy_revision = 0`)

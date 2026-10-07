@@ -649,8 +649,6 @@ const makeSourceWorkspaceService = (
               action: runThreadHooks ? "activate" : "snapshot",
               environment: {
                 ...prefetchedBase,
-                DX_ALLOW_COMBINED_HOOKS:
-                  source.privateSubmodules.length === 0 ? "true" : "false",
                 DX_RUN_RESUME: options?.runResume === false ? "false" : "true",
               },
               timeoutMs: runThreadHooks ? HOOKS_TIMEOUT_MS : COMMAND_TIMEOUT_MS,
@@ -755,19 +753,16 @@ const makeSourceWorkspaceService = (
         return yield* new SourceWorkspaceConflict();
       if (checkout.status !== "ready")
         return yield* new SourceWorkspaceInitializationFailed();
-      if (provider === "bitbucket" && checkout.modules.length > 0)
-        return yield* new SourceWorkspaceInitializationFailed();
-      if (checkout.modules.length !== source.privateSubmodules.length)
-        return yield* new SourceWorkspaceConflict();
-      for (const module of checkout.modules) {
-        stage = "initialize-submodule";
+      // dx initializes only the private submodules the Project selected, and
+      // only on GitHub. Every other submodule stays the user's to manage.
+      for (const module of provider === "github" ? checkout.modules : []) {
         const selected = source.privateSubmodules.find(
           (candidate) =>
             candidate.repositoryName.toLowerCase() ===
             module.repositoryName.toLowerCase(),
         );
-        if (selected === undefined || source.authority === undefined)
-          return yield* new SourceWorkspaceConflict();
+        if (selected === undefined || source.authority === undefined) continue;
+        stage = "initialize-submodule";
         yield* broker.withCommandEnvironment(
           threadId,
           source.actorUserId,
@@ -784,9 +779,9 @@ const makeSourceWorkspaceService = (
         );
       }
 
-      if (checkout.lfsNeeded) {
-        if (source.authority === undefined)
-          return yield* new SourceWorkspaceInitializationFailed();
+      // Anonymous sources have no credential to fetch LFS objects with; the
+      // pointer files stay in place for the user to pull.
+      if (checkout.lfsNeeded && source.authority !== undefined) {
         stage = "initialize-lfs";
         yield* broker.withCommandEnvironment(
           threadId,
@@ -840,6 +835,14 @@ const makeSourceWorkspaceService = (
           bindingRevision: snapshot.bindingRevision,
           outcome: "ready",
         });
+      } else if (!checkout.fullHistoryNeeded) {
+        // Preparation without hooks still finishes dx's provisioning; from now
+        // on the checkout belongs to the user. A pending unshallow waits for
+        // the hooks that need it.
+        stage = "mark-provisioned";
+        yield* requireSuccess(
+          yield* run(preparation, "mark-provisioned", base),
+        );
       }
       return SOURCE_WORKSPACE_CWD;
     }).pipe(

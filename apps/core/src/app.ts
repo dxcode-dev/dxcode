@@ -19,6 +19,10 @@ import { submissionStartupObservation } from "./observability/submission-startup
 import { projectRoutes } from "./projects/routes.js";
 import { readinessHandler } from "./readiness/handler.js";
 import { realtimeRoutes } from "./realtime/realtime-hub.js";
+import {
+  inviteAcceptRoutes,
+  publicInviteRoutes,
+} from "./settings/members/routes.js";
 import { settingsRoutes } from "./settings/routes.js";
 import { pluginTriggerIngressRoutes } from "./settings/triggers/routes.js";
 import { scheduleUsageRetention } from "./settings/usage/retention.js";
@@ -49,12 +53,14 @@ app.get("/readyz", readinessHandler);
 app.route("/api/auth", authRoutes);
 app.route("/api/workload-identity", workloadIdentityRoutes);
 app.route("/api/triggers", pluginTriggerIngressRoutes);
+app.route("/api/invites", publicInviteRoutes);
 app.route("/api/source/bitbucket/git", bitbucketGitGatewayRoutes);
 app.route("/v1/integrations/github", githubWebhookRoutes);
 app.route("/v1", threadDaemonRoutes);
 app.use("/v1/*", authenticate);
 app.use("/v1/*", authorizeApiTokenScope);
 app.route("/v1/dictation", dictationRoutes);
+app.route("/v1/invites", inviteAcceptRoutes);
 app.route("/v1/integrations/bitbucket", bitbucketControlPlaneRoutes);
 app.route("/v1/integrations/github", githubControlPlaneRoutes);
 app.route("/v1/projects", projectRoutes);

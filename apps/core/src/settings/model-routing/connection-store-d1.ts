@@ -215,17 +215,82 @@ export const loadSubscriptionModelIds = async (
   );
 };
 
-/** Personal mode-profile overrides keyed by mode (profile `default`). */
+export type ModeOverrideSource = "override" | "workspace";
+
+/**
+ * Mode Dial overrides that apply to a user, keyed by mode (profile
+ * `default`): the user's own override wins over their active workspace's,
+ * and a mode with neither resolves from the shipped profile.
+ */
+export const loadModeOverrideSources = async (
+  db: D1Database,
+  userId: string,
+): Promise<
+  ReadonlyMap<
+    ModeId,
+    { readonly config: ModeConfig; readonly source: ModeOverrideSource }
+  >
+> => {
+  const result = await db
+    .prepare(
+      `SELECT mode, config, 'override' AS source FROM mode_profile_override
+        WHERE user_id = ?1 AND profile_id = 'default'
+       UNION ALL
+       SELECT workspace_override.mode, workspace_override.config,
+              'workspace' AS source
+         FROM workspace_mode_profile_override AS workspace_override
+         JOIN member ON member.organizationId = workspace_override.workspace_id
+         JOIN organization ON organization.id = workspace_override.workspace_id
+        WHERE member.userId = ?1 AND workspace_override.profile_id = 'default'
+          AND organization.lifecycleState = 'active'`,
+    )
+    .bind(userId)
+    .all();
+  const rows = Schema.decodeUnknownSync(
+    Schema.Array(
+      Schema.Struct({
+        mode: ModeId,
+        config: Schema.String,
+        source: Schema.Literals(["override", "workspace"]),
+      }),
+    ),
+  )(result.results);
+  const overrides = new Map<
+    ModeId,
+    { readonly config: ModeConfig; readonly source: ModeOverrideSource }
+  >();
+  for (const row of rows) {
+    if (overrides.get(row.mode)?.source === "override") continue;
+    overrides.set(row.mode, {
+      config: Schema.decodeUnknownSync(ModeConfig)(JSON.parse(row.config)),
+      source: row.source,
+    });
+  }
+  return overrides;
+};
+
+/** Effective Mode Dial overrides for a user (personal, then workspace). */
 export const loadModeProfileOverrides = async (
   db: D1Database,
   ownerUserId: string,
+): Promise<ReadonlyMap<ModeId, ModeConfig>> =>
+  new Map(
+    [...(await loadModeOverrideSources(db, ownerUserId))].map(
+      ([mode, { config }]) => [mode, config],
+    ),
+  );
+
+/** A workspace's own Mode Dial overrides, keyed by mode. */
+export const loadWorkspaceModeOverrides = async (
+  db: D1Database,
+  workspaceId: string,
 ): Promise<ReadonlyMap<ModeId, ModeConfig>> => {
   const result = await db
     .prepare(
-      `SELECT mode, config FROM mode_profile_override
-       WHERE user_id = ? AND profile_id = 'default'`,
+      `SELECT mode, config FROM workspace_mode_profile_override
+        WHERE workspace_id = ? AND profile_id = 'default'`,
     )
-    .bind(ownerUserId)
+    .bind(workspaceId)
     .all();
   const rows = Schema.decodeUnknownSync(
     Schema.Array(Schema.Struct({ mode: ModeId, config: Schema.String })),

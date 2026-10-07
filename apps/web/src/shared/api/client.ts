@@ -1,4 +1,5 @@
 import {
+  AcceptWorkspaceInviteResponseSchema,
   AddVerificationKeyResponseSchema,
   ApplyBulkEnvironmentVariablesResponseSchema,
   ArchiveThreadExecutionUnavailableResponseSchema,
@@ -43,6 +44,7 @@ import {
   CreateThreadProjectlessForbiddenResponseSchema,
   CreateThreadProjectNotFoundResponseSchema,
   CreateThreadRunnerUnavailableResponseSchema,
+  type CreateWorkspaceInviteLinkRequest,
   CreateWorkspaceResponseSchema,
   DeleteConnectionResponseSchema,
   DeleteEnvironmentVariableResponseSchema,
@@ -86,6 +88,7 @@ import {
   ImportSkillResponseSchema,
   InspectWorkspacePrivateThreadResponseSchema,
   IntegrationsErrorResponseSchema,
+  LeaveWorkspaceResponseSchema,
   ListBrowserSessionsResponseSchema,
   ListConnectionsResponseSchema,
   ListEnvironmentVariableHistoryResponseSchema,
@@ -102,6 +105,8 @@ import {
   ListProjectsResponseSchema,
   ListSkillsResponseSchema,
   ListThreadsResponseSchema,
+  ListWorkspaceInviteLinksResponseSchema,
+  ListWorkspaceMembersResponseSchema,
   ListWorkspaceUsageAuditResponseSchema,
   type McpServerData,
   McpServersErrorResponseSchema,
@@ -145,6 +150,7 @@ import {
   RefreshPersonalModelSubscriptionResponseSchema,
   RemovePluginResponseSchema,
   RemoveSkillResponseSchema,
+  RemoveWorkspaceMemberResponseSchema,
   type ReorderConnectionsRequestSchema,
   ReorderConnectionsResponseSchema,
   RetryPluginTriggerDeliveryResponseSchema,
@@ -156,6 +162,7 @@ import {
   RevokePersonalApiTokenResponseSchema,
   RevokePluginTriggerResponseSchema,
   RevokeVerificationKeyResponseSchema,
+  RevokeWorkspaceInviteLinkResponseSchema,
   RotateEnvironmentVariableResponseSchema,
   RotateExternalApiApplicationResponseSchema,
   RotateManagedSigningKeyResponseSchema,
@@ -201,6 +208,10 @@ import {
   UpdateSkillWorkspacePolicyResponseSchema,
   UpdateWorkspacePolicyResponseSchema,
   UpdateWorkspaceProfileResponseSchema,
+  WorkspaceInviteLinkResponseSchema,
+  WorkspaceInvitePreviewResponseSchema,
+  WorkspaceMemberResponseSchema,
+  WorkspaceMembersErrorResponseSchema,
   type WorkspacePolicyData,
   WorkspacePolicyErrorResponseSchema,
   type WorkspacePrivateThreadInspectionData,
@@ -301,6 +312,7 @@ export const request = async <
         PersonalAgentInstructionsErrorResponseSchema,
         PersonalSecurityErrorResponseSchema,
         WorkspaceProfileErrorResponseSchema,
+        WorkspaceMembersErrorResponseSchema,
         WorkspacePolicyErrorResponseSchema,
         EnvironmentVariablesErrorResponseSchema,
         ExternalApiApplicationsErrorResponseSchema,
@@ -1422,6 +1434,158 @@ export const resetProfileMode = async (mode: string) =>
       `/v1/settings/personal/model-routing/profile/modes/${encodeURIComponent(mode)}`,
       ProfileResponseSchema,
       { method: "DELETE" },
+    )
+  ).data;
+
+export const getWorkspaceModelRoutingChoices = async (
+  workspaceSlug: WorkspaceSlug,
+  signal?: AbortSignal,
+) =>
+  (
+    await request(
+      `${modelRoutingBase({ scope: "workspace", workspaceSlug })}/choices`,
+      ChoicesResponseSchema,
+      { signal },
+    )
+  ).data;
+
+export const getWorkspaceModeProfile = async (
+  workspaceSlug: WorkspaceSlug,
+  signal?: AbortSignal,
+) =>
+  (
+    await request(
+      `${modelRoutingBase({ scope: "workspace", workspaceSlug })}/profile`,
+      ProfileResponseSchema,
+      { signal },
+    )
+  ).data;
+
+export const putWorkspaceProfileMode = async (
+  workspaceSlug: WorkspaceSlug,
+  mode: string,
+  config: typeof PutModeRequestSchema.Encoded,
+) =>
+  (
+    await request(
+      `${modelRoutingBase({ scope: "workspace", workspaceSlug })}/profile/modes/${encodeURIComponent(mode)}`,
+      ProfileResponseSchema,
+      { method: "PUT", body: JSON.stringify(config) },
+    )
+  ).data;
+
+export const resetWorkspaceProfileMode = async (
+  workspaceSlug: WorkspaceSlug,
+  mode: string,
+) =>
+  (
+    await request(
+      `${modelRoutingBase({ scope: "workspace", workspaceSlug })}/profile/modes/${encodeURIComponent(mode)}`,
+      ProfileResponseSchema,
+      { method: "DELETE" },
+    )
+  ).data;
+
+const workspaceSettingsBase = (workspaceSlug: WorkspaceSlug) =>
+  `/v1/settings/workspaces/${encodeURIComponent(workspaceSlug)}`;
+
+export const listWorkspaceMembers = async (
+  workspaceSlug: WorkspaceSlug,
+  signal?: AbortSignal,
+) =>
+  (
+    await request(
+      `${workspaceSettingsBase(workspaceSlug)}/members`,
+      ListWorkspaceMembersResponseSchema,
+      { signal },
+    )
+  ).data;
+
+export const updateWorkspaceMemberRole = async (
+  workspaceSlug: WorkspaceSlug,
+  userId: string,
+  role: "admin" | "member",
+) =>
+  (
+    await request(
+      `${workspaceSettingsBase(workspaceSlug)}/members/${encodeURIComponent(userId)}`,
+      WorkspaceMemberResponseSchema,
+      { method: "PATCH", body: JSON.stringify({ role }) },
+    )
+  ).data;
+
+export const removeWorkspaceMember = async (
+  workspaceSlug: WorkspaceSlug,
+  userId: string,
+) =>
+  (
+    await request(
+      `${workspaceSettingsBase(workspaceSlug)}/members/${encodeURIComponent(userId)}`,
+      RemoveWorkspaceMemberResponseSchema,
+      { method: "DELETE" },
+    )
+  ).data;
+
+export const leaveWorkspace = async (workspaceSlug: WorkspaceSlug) =>
+  (
+    await request(
+      `${workspaceSettingsBase(workspaceSlug)}/leave`,
+      LeaveWorkspaceResponseSchema,
+      { method: "POST" },
+    )
+  ).data;
+
+export const listWorkspaceInviteLinks = async (
+  workspaceSlug: WorkspaceSlug,
+  signal?: AbortSignal,
+) =>
+  (
+    await request(
+      `${workspaceSettingsBase(workspaceSlug)}/invite-links`,
+      ListWorkspaceInviteLinksResponseSchema,
+      { signal },
+    )
+  ).data.links;
+
+export const createWorkspaceInviteLink = async (
+  workspaceSlug: WorkspaceSlug,
+  input: CreateWorkspaceInviteLinkRequest,
+) =>
+  (
+    await request(
+      `${workspaceSettingsBase(workspaceSlug)}/invite-links`,
+      WorkspaceInviteLinkResponseSchema,
+      { method: "POST", body: JSON.stringify(input) },
+    )
+  ).data;
+
+export const revokeWorkspaceInviteLink = async (
+  workspaceSlug: WorkspaceSlug,
+  linkId: string,
+) =>
+  (
+    await request(
+      `${workspaceSettingsBase(workspaceSlug)}/invite-links/${encodeURIComponent(linkId)}`,
+      RevokeWorkspaceInviteLinkResponseSchema,
+      { method: "DELETE" },
+    )
+  ).data;
+
+export const getWorkspaceInvite = async (token: string, signal?: AbortSignal) =>
+  (
+    await request(
+      `/api/invites/${encodeURIComponent(token)}`,
+      WorkspaceInvitePreviewResponseSchema,
+      { signal },
+    )
+  ).data;
+
+export const acceptWorkspaceInvite = async (token: string) =>
+  (
+    await request(
+      `/v1/invites/${encodeURIComponent(token)}/accept`,
+      AcceptWorkspaceInviteResponseSchema,
+      { method: "POST" },
     )
   ).data;
 

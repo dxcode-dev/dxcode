@@ -22,4 +22,5 @@ export const workspaceOrbProvidersSettingsSection = {
   ...common,
   id: "workspace-orb-providers",
   scope: "workspace",
+  adminOnly: true,
 } satisfies SettingsSectionRegistration;

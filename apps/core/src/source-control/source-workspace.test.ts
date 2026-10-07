@@ -149,7 +149,6 @@ const makeSandbox = (
             const hookExitCode = input?.actionExitCodes?.hooks ?? 0;
             const hooks =
               action === "activate" &&
-              options?.envs?.DX_ALLOW_COMBINED_HOOKS === "true" &&
               state.status === "ready" &&
               state.modules.length === 0 &&
               !state.lfsNeeded &&
@@ -201,6 +200,7 @@ const makeSandbox = (
             "unshallow",
             "unshallow-anonymous",
             "hooks",
+            "mark-provisioned",
           ].includes(action)
         )
           input?.timeline?.push(action);
@@ -628,6 +628,16 @@ describe("SourceWorkspaceService", () => {
     ).resolves.toBe(SOURCE_WORKSPACE_CWD);
     const actions = fake.calls.map(({ command }) => command.split(" ").at(-1));
     expect(actions).not.toContain("hooks");
+    expect(actions.at(-1)).toBe("mark-provisioned");
+  });
+
+  it("leaves provisioning open when preparation defers a full-history unshallow", async () => {
+    const fake = makeSandbox([0], { shallow: true, fullHistoryNeeded: true });
+    await expect(
+      prepare(fake.preparation, serviceLayer({ source: snapshot })),
+    ).resolves.toBe(SOURCE_WORKSPACE_CWD);
+    const actions = fake.calls.map(({ command }) => command.split(" ").at(-1));
+    expect(actions).not.toContain("mark-provisioned");
   });
 
   it("warms a matching checkout in one verified Worker-to-guest call without a lease", async () => {
@@ -649,7 +659,7 @@ describe("SourceWorkspaceService", () => {
     expect(timeline).toEqual(["running-setup", "activate"]);
   });
 
-  it("does not run combined hooks before validating expected submodules", async () => {
+  it("runs hooks in the same call when selected private submodules need no work", async () => {
     const fake = makeSandbox([0]);
 
     await expect(
@@ -665,10 +675,32 @@ describe("SourceWorkspaceService", () => {
           ],
         }),
       ),
-    ).rejects.toBeInstanceOf(SourceWorkspaceConflict);
+    ).resolves.toBe(SOURCE_WORKSPACE_CWD);
 
-    expect(fake.calls).toHaveLength(1);
-    expect(fake.calls[0]?.environment?.DX_ALLOW_COMBINED_HOOKS).toBe("false");
+    expect(fake.commands.run).toHaveBeenCalledTimes(1);
+    expect(fake.calls[0]?.environment?.DX_ASSET_ACTION).toBe("activate");
+  });
+
+  it("initializes only selected GitHub submodules and leaves the rest to the user", async () => {
+    const leases: string[] = [];
+    const fake = makeSandbox([0], {
+      modules: JSON.stringify([
+        {
+          key: "public",
+          path: "vendor/public",
+          repositoryName: "owner/public",
+        },
+      ]),
+    });
+
+    await expect(
+      activate(fake.preparation, serviceLayer({ source: snapshot, leases })),
+    ).resolves.toBe(SOURCE_WORKSPACE_CWD);
+
+    expect(leases).toEqual([]);
+    expect(
+      fake.calls.some(({ command }) => command.endsWith(" submodule")),
+    ).toBe(false);
   });
 
   it("fails source activation without resuming when repository setup fails", async () => {
@@ -799,7 +831,24 @@ describe("SourceWorkspaceService", () => {
     ).toBeUndefined();
   });
 
-  it("rejects Bitbucket submodules before minting a checkout lease", async () => {
+  it("leaves anonymous LFS pointers to the user instead of failing activation", async () => {
+    const leases: string[] = [];
+    const fake = makeSandbox([0], { lfs: true });
+
+    await expect(
+      activate(
+        fake.preparation,
+        serviceLayer({ source: snapshot, anonymous: true, leases }),
+      ),
+    ).resolves.toBe(SOURCE_WORKSPACE_CWD);
+
+    expect(leases).toEqual([]);
+    expect(fake.calls.some(({ command }) => command.endsWith(" lfs"))).toBe(
+      false,
+    );
+  });
+
+  it("leaves Bitbucket submodules to the user without minting a checkout lease", async () => {
     const leases: string[] = [];
     const fake = makeSandbox([0], {
       modules: JSON.stringify([
@@ -825,7 +874,7 @@ describe("SourceWorkspaceService", () => {
           ],
         }),
       ),
-    ).rejects.toMatchObject({ _tag: "SourceWorkspaceInitializationFailed" });
+    ).resolves.toBe(SOURCE_WORKSPACE_CWD);
 
     expect(leases).toEqual([]);
     expect(

@@ -26,6 +26,10 @@ export default defineConfig({
               label: "First project and thread",
               slug: "get-started/first-project",
             },
+            {
+              label: "Workspace members",
+              slug: "get-started/workspace-members",
+            },
           ],
         },
         {

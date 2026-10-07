@@ -1,0 +1,188 @@
+/* Same density as the Plugins and Model Routing pages. */
+.members-settings {
+  display: grid;
+  gap: 12px;
+}
+.members-heading,
+.members-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  max-width: 823px;
+  margin: 0 auto;
+}
+.members-heading {
+  min-height: 32px;
+}
+.members-heading h1 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  letter-spacing: -0.325px;
+}
+.members-heading > span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.members-search {
+  position: relative;
+  width: 200px;
+}
+.members-search svg {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  width: 13px;
+  height: 13px;
+  color: var(--muted-foreground);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.members-input {
+  height: 28px;
+  padding: 0 28px 0 9px;
+  font-size: 12px;
+}
+.members-input[type="datetime-local"] {
+  padding-right: 9px;
+}
+.members-search .members-input::-webkit-search-cancel-button {
+  display: none;
+}
+.members-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--divider);
+}
+.members-row:last-child {
+  border-bottom: 0;
+}
+.members-avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  color: var(--foreground);
+  border-radius: 999px;
+  background: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+}
+.members-identity {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 1px;
+}
+.members-identity > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.members-identity strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.members-identity > span {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.members-badge {
+  flex: none;
+  padding: 1px 5px;
+  color: var(--foreground);
+  border-radius: 4px;
+  background: var(--accent);
+  font-size: 10px;
+  line-height: 14px;
+}
+.members-activity {
+  flex: 0 0 180px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.members-row-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 24px;
+}
+.members-card .settings-card-header {
+  min-height: 0;
+  padding: 10px 12px;
+}
+.members-row-actions > .members-revoke {
+  height: 22px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 400;
+}
+.members-row-actions > .members-revoke:hover {
+  color: var(--destructive);
+}
+.members-empty,
+.members-error {
+  margin: 0;
+  padding: 12px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.members-error {
+  color: var(--destructive);
+}
+.members-danger {
+  color: var(--destructive);
+}
+.members-link-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--divider);
+}
+.members-link-field {
+  display: grid;
+  flex: 1 1 160px;
+  gap: 4px;
+}
+.members-link-field > label {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.members-link-form-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.members-link-form > .members-error {
+  flex-basis: 100%;
+  padding: 0;
+}
+.members-dialog {
+  display: grid;
+  gap: 12px;
+  width: min(420px, calc(100vw - 32px));
+}
+.members-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

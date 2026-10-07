@@ -20,6 +20,7 @@ import { ProjectSettingsPage } from "./features/projects/project-settings-page.j
 import { ProjectsPage } from "./features/projects/projects-page.js";
 import { ProjectEnvironmentVariablesSettings } from "./features/settings/environment-variables/environment-variables-settings.js";
 import { settingsManifest } from "./features/settings/foundation-sections.js";
+import { JoinWorkspacePage } from "./features/settings/members/join-workspace-page.js";
 import { settingsContextQueryOptions } from "./features/settings/settings-context-queries.js";
 import { SettingsRouteNotFound } from "./features/settings/settings-page.js";
 import { resolveSettingsSection } from "./features/settings/settings-registration.js";
@@ -231,6 +232,12 @@ const workspaceSettingsSectionRoute = createRoute({
   notFoundComponent: SettingsRouteNotFound,
 });
 
+const joinWorkspaceRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/join/$token",
+  component: JoinWorkspacePage,
+});
+
 const routeTree = rootRoute.addChildren([
   productRoute.addChildren([
     indexRoute,
@@ -246,6 +253,7 @@ const routeTree = rootRoute.addChildren([
   workspaceSettingsEmptyRoute,
   workspaceSettingsRoute,
   workspaceSettingsSectionRoute,
+  joinWorkspaceRoute,
 ]);
 
 export const createAppRouter = (

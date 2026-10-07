@@ -33,7 +33,7 @@ vi.mock("../../../shared/auth/auth-context.js", () => ({
 }));
 
 describe("mode dial settings", () => {
-  it("registers the mode-dial slug for personal scope only", () => {
+  it("registers the mode-dial slug for both scopes, admin-only in a workspace", () => {
     expect(
       resolveSettingsSection(settingsManifest, "personal", "mode-dial"),
     ).toMatchObject({
@@ -42,7 +42,10 @@ describe("mode dial settings", () => {
     });
     expect(
       resolveSettingsSection(settingsManifest, "workspace", "mode-dial"),
-    ).toMatchObject({ found: false });
+    ).toMatchObject({
+      found: true,
+      registration: { id: "workspace-mode-dial", adminOnly: true },
+    });
   });
 
   it("opens Medium and reports edits and discard to the settings shell", async () => {

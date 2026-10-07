@@ -5004,7 +5004,8 @@ a {
   color: var(--muted-foreground);
   font-size: 10px;
 }
-.workspace-profile-settings .settings-card + .settings-card {
+.workspace-profile-settings .settings-card + .settings-card,
+.workspace-profile-settings .settings-form-actions + .settings-card {
   margin-top: 18px;
 }
 .workspace-profile-summary {
@@ -12051,6 +12052,10 @@ button.sidebar-news-card {
 }
 .project-picker-option[data-selected] {
   box-shadow: inset 0 0 0 1px var(--outline);
+}
+.project-picker-option[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 .project-picker-name {
   min-width: 0;

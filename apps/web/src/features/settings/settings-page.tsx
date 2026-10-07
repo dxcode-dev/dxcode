@@ -1,5 +1,5 @@
 import type { SettingsWorkspaceData } from "@dx/api";
-import type { SettingsScope, WorkspaceSlug } from "@dx/domain";
+import type { SettingsScope, WorkspaceRole, WorkspaceSlug } from "@dx/domain";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Link,
@@ -23,7 +23,10 @@ import {
   settingsContextQueryOptions,
   settingsKeys,
 } from "./settings-context-queries.js";
-import { settingsNavigationRegistrations } from "./settings-navigation.js";
+import {
+  isWorkspaceAdmin,
+  settingsNavigationRegistrations,
+} from "./settings-navigation.js";
 import { SettingsBackgroundError } from "./settings-primitives.js";
 import {
   type SettingsSectionRegistration,
@@ -112,6 +115,7 @@ type SettingsNavigationProps =
   | {
       readonly scope: "workspace";
       readonly workspaceSlug?: WorkspaceSlug;
+      readonly workspaceRole?: WorkspaceRole;
       readonly active: SettingsSectionRegistration;
       readonly settingsReturnTo?: string;
     };
@@ -135,6 +139,7 @@ function SettingsNavigation(props: SettingsNavigationProps) {
   const visibleRegistrations = settingsNavigationRegistrations(
     props.scope,
     allRegistrations,
+    props.scope === "workspace" ? props.workspaceRole : undefined,
   );
   const advancedChildren =
     props.scope === "personal"
@@ -400,6 +405,7 @@ export function SettingsPage(props: SettingsPageProps) {
               key={registration.id}
               scope={props.scope}
               workspaceSlug={effectiveWorkspaceSlug}
+              workspaceRole={workspace?.role}
               active={registration}
               settingsReturnTo={settingsReturnTo}
             />
@@ -425,14 +431,23 @@ export function SettingsPage(props: SettingsPageProps) {
                     {error} Showing the last loaded settings.
                   </SettingsBackgroundError>
                 )}
-                <Section
-                  key={sectionKey}
-                  onDirtyChange={setDirty}
-                  settingsReturnTo={settingsReturnTo}
-                  workspace={workspace}
-                  workspaceSlug={effectiveWorkspaceSlug}
-                  onWorkspaceChanged={workspaceChanged}
-                />
+                {scope === "workspace" &&
+                registration.adminOnly === true &&
+                !isWorkspaceAdmin(workspace?.role) ? (
+                  <div className="settings-route-state" role="status">
+                    <h1>{registration.title}</h1>
+                    <p>Only workspace admins can view this section.</p>
+                  </div>
+                ) : (
+                  <Section
+                    key={sectionKey}
+                    onDirtyChange={setDirty}
+                    settingsReturnTo={settingsReturnTo}
+                    workspace={workspace}
+                    workspaceSlug={effectiveWorkspaceSlug}
+                    onWorkspaceChanged={workspaceChanged}
+                  />
+                )}
               </>
             )}
           </section>

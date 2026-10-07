@@ -19,6 +19,7 @@ import {
   SettingsHeading,
 } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
+import { LeaveWorkspaceCard } from "./leave-workspace-card.js";
 import {
   type WorkspaceMutation,
   workspaceMutationOptions,
@@ -204,8 +205,10 @@ export function WorkspaceProfileForm({
   onSaved,
   mutateWorkspace,
   saving = false,
+  footer,
 }: {
   readonly initialWorkspace: WorkspaceProfileData;
+  readonly footer?: React.ReactNode;
   readonly onDirtyChange: (dirty: boolean) => void;
   readonly onSaved: (workspace: WorkspaceProfileData) => void;
   readonly mutateWorkspace?: (
@@ -364,7 +367,13 @@ export function WorkspaceProfileForm({
               </div>
             ) : null}
           </div>
-          <span className="account-local-badge">{baseline.role}</span>
+          <span className="account-local-badge">
+            {baseline.role === "owner"
+              ? "Owner"
+              : baseline.role === "admin"
+                ? "Admin"
+                : "Member"}
+          </span>
         </div>
         <form
           id={formId}
@@ -453,6 +462,7 @@ export function WorkspaceProfileForm({
           onReset={reset}
         />
       ) : null}
+      {footer}
     </div>
   );
 }
@@ -492,6 +502,14 @@ export function WorkspaceProfileSettings({
   return (
     <WorkspaceProfileForm
       initialWorkspace={workspace}
+      footer={
+        workspace.role === "owner" ? undefined : (
+          <LeaveWorkspaceCard
+            workspaceSlug={workspace.shortName}
+            displayName={workspace.displayName}
+          />
+        )
+      }
       mutateWorkspace={mutation.mutateAsync}
       saving={mutation.isPending}
       onDirtyChange={onDirtyChange}

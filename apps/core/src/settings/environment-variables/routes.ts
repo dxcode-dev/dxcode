@@ -263,7 +263,7 @@ const authorizeTarget = Effect.fn("authorizeEnvironmentVariableTarget")(
         ),
       };
     }
-    yield* settings.personal(principal);
+    const personal = yield* settings.personal(principal);
     if (input.scope === undefined || input.scope === "personal") {
       if (input.projectId !== undefined) {
         return yield* new SettingsScopeForbidden({ scope: "personal" });
@@ -284,19 +284,28 @@ const authorizeTarget = Effect.fn("authorizeEnvironmentVariableTarget")(
       return yield* new SettingsScopeForbidden({ scope: "personal" });
     }
     const projects = yield* ProjectRepository;
-    yield* projects
+    const project = yield* projects
       .findOwnedById(projectId.value, principal.userId)
       .pipe(
         Effect.catchTag("ProjectNotFound", () =>
           Effect.fail(new SettingsScopeForbidden({ scope: "personal" })),
         ),
       );
+    // Every member's Threads use a workspace Project's values; only its
+    // creator or a workspace admin changes them.
     return {
       target: {
         scope: "project",
         id: projectId.value,
       } satisfies EnvironmentVariableTarget,
-      canMutate: true,
+      canMutate:
+        project.workspaceId === undefined ||
+        project.ownerUserId === principal.userId ||
+        (personal.workspace !== undefined &&
+          workspaceRoleHasPermission(
+            personal.workspace.role,
+            "workspace:update",
+          )),
     };
   },
 );

@@ -24,6 +24,8 @@ export interface SettingsSectionRegistration {
   readonly description: string;
   readonly icon: ComponentType<SVGProps<SVGSVGElement>>;
   readonly component: ComponentType<SettingsSectionProps>;
+  /** Hidden from workspace members who are not admins. */
+  readonly adminOnly?: boolean;
 }
 
 export interface SettingsRouteNotFound {

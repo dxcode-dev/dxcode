@@ -51,6 +51,7 @@ export default defineConfig(({ mode }) => {
             });
           },
         },
+        "/api/invites": { target: apiTarget, changeOrigin: true },
         "/v1": {
           target: apiTarget,
           changeOrigin: false,

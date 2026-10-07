@@ -1,4 +1,4 @@
-import type { SettingsScope } from "@dx/domain";
+import type { SettingsScope, WorkspaceRole } from "@dx/domain";
 import type { SettingsSectionRegistration } from "./settings-registration.js";
 
 const hiddenNavigationIds: Readonly<
@@ -20,16 +20,27 @@ const hiddenNavigationIds: Readonly<
     "workspace-plugin-usage",
     "workspace-project-defaults",
     "workspace-applications",
-    "workspace-model-routing",
     "workspace-skills",
     "workspace-custom-plugins",
   ]),
 };
 
+export const isWorkspaceAdmin = (role: WorkspaceRole | undefined) =>
+  role === "owner" || role === "admin";
+
+/**
+ * Sections shown in a scope's menu. Admin-only workspace sections appear only
+ * once the viewer is known to be an owner or admin.
+ */
 export const settingsNavigationRegistrations = (
   scope: SettingsScope,
   registrations: ReadonlyArray<SettingsSectionRegistration>,
+  workspaceRole?: WorkspaceRole,
 ): ReadonlyArray<SettingsSectionRegistration> =>
   registrations.filter(
-    (registration) => !hiddenNavigationIds[scope].has(registration.id),
+    (registration) =>
+      !hiddenNavigationIds[scope].has(registration.id) &&
+      (scope === "personal" ||
+        registration.adminOnly !== true ||
+        isWorkspaceAdmin(workspaceRole)),
   );

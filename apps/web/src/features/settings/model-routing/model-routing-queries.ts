@@ -4,6 +4,8 @@ import {
   getModelRoutingChoices,
   getModelRoutingGraph,
   getModeProfile,
+  getWorkspaceModelRoutingChoices,
+  getWorkspaceModeProfile,
   listModelConnections,
   type ModelRoutingTarget,
 } from "../../../shared/api/client.js";
@@ -40,14 +42,26 @@ export const modelRoutingGraphQueryOptions = (
     queryFn: ({ signal }) => getModelRoutingGraph(target, signal),
   });
 
-export const modelRoutingChoicesQueryOptions = (identity: string) =>
+export const modelRoutingChoicesQueryOptions = (
+  identity: string,
+  target: ModelRoutingTarget = { scope: "personal" },
+) =>
   queryOptions({
-    queryKey: ["model-routing", "personal", "choices", identity],
-    queryFn: ({ signal }) => getModelRoutingChoices(signal),
+    queryKey: [...modelRoutingKey(target), "choices", identity],
+    queryFn: ({ signal }) =>
+      target.scope === "personal"
+        ? getModelRoutingChoices(signal)
+        : getWorkspaceModelRoutingChoices(target.workspaceSlug, signal),
   });
 
-export const modeProfileQueryOptions = (identity: string) =>
+export const modeProfileQueryOptions = (
+  identity: string,
+  target: ModelRoutingTarget = { scope: "personal" },
+) =>
   queryOptions({
-    queryKey: ["model-routing", "personal", "profile", identity],
-    queryFn: ({ signal }) => getModeProfile(signal),
+    queryKey: [...modelRoutingKey(target), "profile", identity],
+    queryFn: ({ signal }) =>
+      target.scope === "personal"
+        ? getModeProfile(signal)
+        : getWorkspaceModeProfile(target.workspaceSlug, signal),
   });

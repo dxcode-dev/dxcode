@@ -6,6 +6,7 @@ export const workspaceApplicationsSettingsSection: SettingsSectionRegistration =
   {
     id: "workspace-applications",
     scope: "workspace",
+    adminOnly: true,
     slug: "applications",
     label: "Applications",
     title: "External API Applications",

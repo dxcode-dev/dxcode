@@ -101,6 +101,8 @@ export function ProjectSettingsPage({
         {projectQuery.isPending ? "Loading project…" : "Project not found."}
       </div>
     );
+  // A workspace Project's settings belong to its creator and admins.
+  const canManage = project.viewerAccess?.canManage !== false;
   return (
     <div className="project-settings-overlay">
       <section
@@ -132,7 +134,13 @@ export function ProjectSettingsPage({
             ))}
           </nav>
           <main>
-            {section === "general" ? (
+            {canManage ? null : (
+              <p className="project-settings-state" role="status">
+                Only the project's creator or a workspace admin can change its
+                settings.
+              </p>
+            )}
+            {canManage && section === "general" ? (
               <GeneralProjectSettings
                 key={project.id}
                 project={project}
@@ -140,7 +148,7 @@ export function ProjectSettingsPage({
                 userId={identity.id}
               />
             ) : null}
-            {section === "orb" ? (
+            {canManage && section === "orb" ? (
               <OrbProjectSettings
                 key={project.id}
                 project={project}
@@ -152,7 +160,7 @@ export function ProjectSettingsPage({
                 userId={identity.id}
               />
             ) : null}
-            {section === "secrets" ? (
+            {canManage && section === "secrets" ? (
               <ProjectSecretsSettings
                 projectId={project.id}
                 renderEnvironmentSettings={renderEnvironmentSettings}

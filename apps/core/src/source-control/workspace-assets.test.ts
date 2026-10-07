@@ -303,10 +303,7 @@ const activationState = (
   fixture: HarnessFixture,
   environment: Record<string, string> = {},
 ) => {
-  const result = runHarness(fixture, "activate", {
-    DX_ALLOW_COMBINED_HOOKS: "true",
-    ...environment,
-  });
+  const result = runHarness(fixture, "activate", environment);
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(result.stdout);
 };
@@ -891,9 +888,6 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     "claim",
     "git",
     "git-file",
-    "agents",
-    "setup",
-    "resume",
     "logs",
     "log-file",
     "helper",
@@ -928,14 +922,6 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
               join(fixture.paths.root, ".git"),
               `gitdir: ${fixture.outside}\n`,
             );
-        } else if (kind === "agents") {
-          rmSync(join(fixture.paths.root, ".agents"), { recursive: true });
-          symlinkSync(fixture.outside, join(fixture.paths.root, ".agents"));
-          action = "hooks";
-        } else if (kind === "setup" || kind === "resume") {
-          rmSync(join(fixture.paths.root, ".agents", kind));
-          symlinkSync(outsideFile, join(fixture.paths.root, ".agents", kind));
-          action = "hooks";
         } else if (kind === "logs") {
           symlinkSync(fixture.outside, fixture.paths.logDirectory);
           action = "hooks";
@@ -958,7 +944,7 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     },
   );
 
-  it("rejects wrong marker, origin, and SHA identities without resetting files", async () => {
+  it("rejects wrong marker, origin, and SHA identities while dx is provisioning, without resetting files", async () => {
     for (const mutate of [
       (fixture: HarnessFixture) => {
         const state = JSON.parse(readFileSync(fixture.paths.state, "utf8"));
@@ -1003,6 +989,152 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     git(fixture.paths.root, "commit", "-m", "local change");
 
     expect(checkoutState(fixture)).toMatchObject({ status: "ready" });
+  });
+
+  it("leaves a provisioned checkout to the user: any branch, history, remote, submodules, or hooks", async () => {
+    const fixture = await makeHarness();
+    initialize(fixture);
+    expect(activationState(fixture)).toMatchObject({
+      hooks: { status: "ready" },
+    });
+    expect(
+      JSON.parse(readFileSync(fixture.paths.state, "utf8")).provisioned,
+    ).toBe(true);
+
+    const root = fixture.paths.root;
+    git(root, "config", "user.email", "fixture@example.test");
+    git(root, "config", "user.name", "Fixture");
+    git(root, "config", "commit.gpgsign", "false");
+    // A branch that does not contain the snapshot commit, as after a merge
+    // landed only on the default branch.
+    git(root, "checkout", "--orphan", "feature/unrelated");
+    git(root, "rm", "-r", "-q", "--cached", ".");
+    writeFileSync(join(root, "feature.txt"), "feature work\n");
+    git(root, "add", "feature.txt");
+    git(root, "commit", "-q", "-m", "unrelated history");
+    git(root, "remote", "set-url", "origin", "git@github.com:someone/fork.git");
+    git(root, "config", "url.git@github.com:.insteadOf", "https://github.com/");
+    writeFileSync(
+      join(root, ".gitmodules"),
+      '[submodule "../escape"]\n\tpath = ../escape\n\turl = ssh://example.test/x\n',
+    );
+    writeFileSync(join(root, ".gitattributes"), "*.bin filter=lfs\n");
+    rmSync(join(root, ".agents"), { recursive: true });
+    mkdirSync(join(fixture.outside, "agents"));
+    writeFileSync(
+      join(fixture.outside, "agents", "resume"),
+      `#!/bin/sh\nprintf 'linked-resume\\n' >> "$HOME/hook-order"\n`,
+      { mode: 0o755 },
+    );
+    symlinkSync(join(fixture.outside, "agents"), join(root, ".agents"));
+    // Drop every ref to the snapshot commit and prune it.
+    git(root, "branch", "-D", "main");
+    git(root, "update-ref", "-d", "refs/remotes/origin/main");
+    git(root, "reflog", "expire", "--expire=now", "--all");
+    git(root, "gc", "-q", "--prune=now");
+    expect(
+      spawnSync("git", ["cat-file", "-e", `${fixture.sourceSha}^{commit}`], {
+        cwd: root,
+      }).status,
+    ).not.toBe(0);
+
+    expect(activationState(fixture)).toEqual({
+      checkout: {
+        status: "ready",
+        modules: [],
+        lfsNeeded: false,
+        shallow: false,
+        fullHistoryNeeded: false,
+      },
+      hooks: { status: "ready" },
+    });
+    expect(hooksState(fixture)).toEqual({ status: "ready" });
+    expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
+      "setup\nresume\nlinked-resume\nlinked-resume\n",
+    );
+    expect(readFileSync(join(root, "feature.txt"), "utf8")).toBe(
+      "feature work\n",
+    );
+    expect(git(root, "branch", "--show-current")).toBe("feature/unrelated");
+  });
+
+  it("marks provisioning finished without running hooks", async () => {
+    const fixture = await makeHarness();
+    initialize(fixture);
+    const result = runHarness(fixture, "mark-provisioned");
+    expect(result.status, result.stderr).toBe(0);
+    expect(
+      JSON.parse(readFileSync(fixture.paths.state, "utf8")).provisioned,
+    ).toBe(true);
+    expect(existsSync(join(fixture.paths.home, "hook-order"))).toBe(false);
+  });
+
+  it("re-clones a checkout the user deleted", async () => {
+    const fixture = await makeHarness();
+    initialize(fixture);
+    expect(activationState(fixture)).toMatchObject({
+      hooks: { status: "ready" },
+    });
+    rmSync(fixture.paths.root, { recursive: true });
+    expect(checkoutState(fixture)).toMatchObject({ status: "absent" });
+    initialize(fixture);
+    expect(git(fixture.paths.root, "rev-parse", "HEAD")).toBe(
+      fixture.sourceSha,
+    );
+
+    rmSync(fixture.paths.workspaceParent, { recursive: true });
+    expect(checkoutState(fixture)).toMatchObject({ status: "absent" });
+    initialize(fixture);
+    expect(git(fixture.paths.root, "rev-parse", "HEAD")).toBe(
+      fixture.sourceSha,
+    );
+  });
+
+  it("treats a legacy state without the provisioned marker as user-owned", async () => {
+    const fixture = await makeHarness();
+    initialize(fixture);
+    const { provisioned: _provisioned, ...legacy } = JSON.parse(
+      readFileSync(fixture.paths.state, "utf8"),
+    );
+    writeFileSync(fixture.paths.state, `${JSON.stringify(legacy)}\n`);
+    git(
+      fixture.paths.root,
+      "remote",
+      "set-url",
+      "origin",
+      "https://github.com/owner/wrong.git",
+    );
+    expect(checkoutState(fixture)).toMatchObject({ status: "ready" });
+  });
+
+  it("skips submodule entries dx cannot safely initialize instead of failing", async () => {
+    const fixture = await makeHarness();
+    initialize(fixture);
+    writeFileSync(
+      join(fixture.paths.root, ".gitmodules"),
+      [
+        '[submodule "escape"]',
+        "\tpath = ../escape",
+        "\turl = https://github.com/owner/escape.git",
+        '[submodule "ssh"]',
+        "\tpath = vendor/ssh",
+        "\turl = git@github.com:owner/ssh.git",
+        '[submodule "private"]',
+        "\tpath = vendor/private",
+        "\turl = https://github.com/owner/private.git",
+        "",
+      ].join("\n"),
+    );
+    expect(checkoutState(fixture)).toMatchObject({
+      status: "ready",
+      modules: [
+        {
+          key: "private",
+          path: "vendor/private",
+          repositoryName: "owner/private",
+        },
+      ],
+    });
   });
 
   it("rejects oversized state and symlinked ownership markers", async () => {
@@ -1082,7 +1214,6 @@ describe("template source asset verifier", () => {
             DX_ASSET_TOOL_CONTRACT: "{}",
             DX_ASSET_ACTION: "activate",
             DX_ASSET_ACTION_TIMEOUT_MS: "660000",
-            DX_ALLOW_COMBINED_HOOKS: "true",
           },
         },
       );

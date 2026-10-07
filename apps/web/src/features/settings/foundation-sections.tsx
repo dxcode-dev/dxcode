@@ -17,7 +17,11 @@ import {
 } from "./integrations/registration.js";
 import { keyboardShortcutsSettingsSection } from "./keyboard-shortcuts/registration.js";
 import { personalSigningKeysSettingsSection } from "./keys/registration.js";
-import { personalModeDialSettingsSection } from "./mode-dial/registration.js";
+import { workspaceMembersSettingsSection } from "./members/registration.js";
+import {
+  personalModeDialSettingsSection,
+  workspaceModeDialSettingsSection,
+} from "./mode-dial/registration.js";
 import {
   personalModelRoutingSettingsSection,
   workspaceModelRoutingSettingsSection,
@@ -74,12 +78,14 @@ export const foundationSettingsSections: ReadonlyArray<SettingsSectionRegistrati
     personalSigningKeysSettingsSection,
     personalProjectDefaultsSettingsSection,
     workspaceProfileSettingsSection,
+    workspaceMembersSettingsSection,
     workspaceUsageSettingsSection,
     workspacePluginUsageSettingsSection,
     workspaceProjectDefaultsSettingsSection,
     workspaceEnvironmentVariablesSettingsSection,
-    workspaceApplicationsSettingsSection,
     workspaceModelRoutingSettingsSection,
+    workspaceModeDialSettingsSection,
+    workspaceApplicationsSettingsSection,
     workspaceIntegrationsSettingsSection,
     workspaceSkillsSettingsSection,
     workspacePluginsSettingsSection,

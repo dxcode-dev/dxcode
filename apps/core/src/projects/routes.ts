@@ -16,6 +16,7 @@ import {
   ListProjectsPersistenceUnavailableResponseSchema,
   ListProjectsQuerySchema,
   ListProjectsResponseSchema,
+  type ProjectViewerAccess,
   RebindProjectSourceForbiddenResponseSchema,
   RebindProjectSourceInvalidRequestResponseSchema,
   RebindProjectSourceNotFoundResponseSchema,
@@ -69,6 +70,7 @@ import { WorkspaceRepositoryD1 } from "../settings/workspace/repository-d1.js";
 import { WorkspacePolicyRepositoryD1 } from "../settings/workspace-policy/repository-d1.js";
 import { WorkspacePolicyService } from "../settings/workspace-policy/service.js";
 import { authorizeSource } from "../source-control/admission.js";
+import { projectViewerAccess } from "./access.js";
 import { ProjectRepositoryD1 } from "./repository-d1.js";
 import { ProjectService } from "./service.js";
 
@@ -110,6 +112,11 @@ const projectData = (project: Project) => ({
   createdAt: project.createdAt,
   updatedAt: project.updatedAt,
 });
+
+const withViewerAccess = (
+  data: ReturnType<typeof projectData>,
+  viewerAccess: ProjectViewerAccess | undefined,
+) => (viewerAccess === undefined ? data : { ...data, viewerAccess });
 
 /**
  * Canonical additional repositories in request order, without duplicates or
@@ -510,10 +517,19 @@ projectRoutes.get("/", async (context) => {
     }).pipe(
       Effect.provide(ProjectService.layer.pipe(Layer.provide(repositoryLayer))),
     );
+    const access = yield* Effect.promise(() =>
+      projectViewerAccess(
+        db,
+        context.get("principal").userId,
+        page.items.map((project) => project.id),
+      ),
+    );
     return yield* Schema.encodeUnknownEffect(ListProjectsResponseSchema)({
       status: "success",
       data: {
-        items: page.items.map(projectData),
+        items: page.items.map((project) =>
+          withViewerAccess(projectData(project), access.get(project.id)),
+        ),
         nextCursor: page.nextCursor,
       },
     });
@@ -594,9 +610,12 @@ projectRoutes.get("/:projectId", async (context) => {
     }).pipe(
       Effect.provide(ProjectService.layer.pipe(Layer.provide(repositoryLayer))),
     );
+    const access = yield* Effect.promise(() =>
+      projectViewerAccess(db, context.get("principal").userId, [project.id]),
+    );
     return yield* Schema.encodeUnknownEffect(GetProjectResponseSchema)({
       status: "success",
-      data: projectData(project),
+      data: withViewerAccess(projectData(project), access.get(project.id)),
     });
   });
 

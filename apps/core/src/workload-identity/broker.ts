@@ -18,6 +18,7 @@ import { importJWK, importPKCS8, jwtVerify, SignJWT } from "jose";
 import { encodeBase64Url } from "../encoding/base64.js";
 import type { Bindings } from "../http/types.js";
 import { workloadIdentityLogger } from "../logging.js";
+import { threadProjectReachableSql } from "../settings/members/membership-sql.js";
 
 const DEFAULT_TTL_SECONDS = 300;
 const MAX_SIGNING_SECRET_BYTES = 64 * 1024;
@@ -311,7 +312,7 @@ const resolveAuthority = async (
                 END AS runtime_id
            FROM threads AS thread
            JOIN projects AS project ON project.id = thread.project_id
-            AND project.owner_user_id = thread.owner_user_id
+            AND ${threadProjectReachableSql("project", "thread.owner_user_id")}
            JOIN execution_workspace AS execution
              ON execution.thread_id = thread.id
            LEFT JOIN organization
@@ -424,7 +425,7 @@ const recordIssued = async (
          SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'issued', NULL, ?
            FROM threads AS thread
            JOIN projects AS project ON project.id = thread.project_id
-            AND project.owner_user_id = thread.owner_user_id
+            AND ${threadProjectReachableSql("project", "thread.owner_user_id")}
            JOIN execution_workspace AS execution
              ON execution.thread_id = thread.id
            LEFT JOIN organization

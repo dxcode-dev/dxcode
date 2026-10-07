@@ -213,11 +213,51 @@ export const authorizeSource = async (input: {
   }
 };
 
+/**
+ * The member's own connection that can reach a workspace Project's repository:
+ * a live GitHub grant whose installation is entitled to it, or the member's
+ * live Bitbucket connection (Bitbucket decides repository access).
+ */
+const memberSourceGrant = async (
+  db: D1Database,
+  input: {
+    readonly provider: "github" | "bitbucket";
+    readonly userId: string;
+    readonly repositoryId: string;
+    readonly preferredGrantId?: string;
+  },
+) =>
+  input.provider === "github"
+    ? db
+        .prepare(`
+          SELECT grant_row.id
+            FROM github_owner_grant AS grant_row
+            JOIN github_installation AS installation
+              ON installation.installation_id = grant_row.installation_id
+            JOIN github_installation_repository AS entitlement
+              ON entitlement.installation_id = grant_row.installation_id
+             AND entitlement.provider_repository_id = ?
+           WHERE grant_row.owner_scope = 'personal' AND grant_row.owner_id = ?
+             AND grant_row.status = 'active' AND installation.status = 'active'
+             AND entitlement.entitled = 1
+           ORDER BY grant_row.id = ? DESC, grant_row.created_at, grant_row.id
+           LIMIT 1
+        `)
+        .bind(input.repositoryId, input.userId, input.preferredGrantId ?? "")
+        .first<{ id: string }>()
+    : db
+        .prepare(
+          "SELECT id FROM bitbucket_connection WHERE user_id = ? AND status = 'active' LIMIT 1",
+        )
+        .bind(input.userId)
+        .first<{ id: string }>();
+
 export const authorizeProjectSource = async (input: {
   readonly db: D1Database;
   readonly bindings: Bindings;
   readonly projectId: string;
   readonly ownerUserId: string;
+  readonly preferredGrantId?: string;
   readonly fetcher?: typeof fetch;
   readonly waitUntil?: (promise: Promise<unknown>) => void;
 }) => {
@@ -235,9 +275,21 @@ export const authorizeProjectSource = async (input: {
           ON authority.project_id = repository.project_id
          AND authority.binding_revision = repository.binding_revision
        WHERE repository.project_id = ?
-         AND EXISTS (SELECT 1 FROM projects WHERE id = ? AND owner_user_id = ?)
+         AND EXISTS (
+           SELECT 1 FROM projects
+            WHERE id = ?
+              AND ((workspace_id IS NULL AND owner_user_id = ?)
+                OR workspace_id = (
+                  SELECT member.organizationId FROM member
+                    JOIN organization ON organization.id = member.organizationId
+                   WHERE member.userId = ? AND organization.lifecycleState = 'active')))
     `)
-    .bind(input.projectId, input.projectId, input.ownerUserId)
+    .bind(
+      input.projectId,
+      input.projectId,
+      input.ownerUserId,
+      input.ownerUserId,
+    )
     .first<Record<string, string | number | null>>();
   if (binding === null) return undefined;
   if (binding.authority_project_id === null) {
@@ -256,27 +308,41 @@ export const authorizeProjectSource = async (input: {
     };
   }
   if (binding.owner_grant_id === null) throw deny("stale-binding", "rebind");
-  // A Thread clones on behalf of its creator: a personal grant, including one
-  // bound to a workspace Project, authorizes only the user who holds it.
-  if (
-    binding.owner_scope === "personal" &&
-    binding.owner_id !== input.ownerUserId
-  )
-    throw deny("grant-missing", "reconnect");
   if (
     binding.provenance !== "live-grant" ||
     binding.source_health !== "available" ||
     typeof binding.clone_url !== "string"
   )
     throw deny("stale-binding", "rebind");
+  // A Thread clones on behalf of its creator: a personal grant authorizes only
+  // the user who holds it. Another member of a workspace Project's workspace
+  // uses their own connection to the same repository.
+  const memberGrant =
+    binding.owner_scope === "personal" && binding.owner_id !== input.ownerUserId
+      ? await memberSourceGrant(input.db, {
+          provider: binding.provider as "github" | "bitbucket",
+          userId: input.ownerUserId,
+          repositoryId: String(binding.provider_repository_id),
+          ...(input.preferredGrantId === undefined
+            ? {}
+            : { preferredGrantId: input.preferredGrantId }),
+        })
+      : undefined;
+  if (memberGrant === null) throw deny("grant-missing", "reconnect");
   const source = await authorizeSource({
     db: input.db,
     bindings: input.bindings,
-    owner: {
-      scope: binding.owner_scope as "personal" | "workspace",
-      id: String(binding.owner_id),
-    },
-    grantId: String(binding.owner_grant_id),
+    owner:
+      memberGrant === undefined
+        ? {
+            scope: binding.owner_scope as "personal" | "workspace",
+            id: String(binding.owner_id),
+          }
+        : { scope: "personal", id: input.ownerUserId },
+    grantId:
+      memberGrant === undefined
+        ? String(binding.owner_grant_id)
+        : memberGrant.id,
     repositoryId: String(binding.provider_repository_id),
     provider: binding.provider as "github" | "bitbucket",
     ...(binding.provider_workspace_id === null
@@ -332,6 +398,7 @@ export const authorizeThreadSource = async (input: {
     bindings: input.bindings,
     projectId: String(row.project_id),
     ownerUserId: input.ownerUserId,
+    preferredGrantId: String(row.owner_grant_id),
     fetcher: input.fetcher,
     waitUntil: input.waitUntil,
   });

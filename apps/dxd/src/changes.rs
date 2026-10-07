@@ -1064,10 +1064,15 @@ fn capture_inner(
     };
     let mut all_bases = HashMap::new();
     for state in &states {
-        let base = if state.id == "primary" {
-            baseline.to_owned()
-        } else if state.head == EMPTY_TREE || baseline == EMPTY_TREE {
-            EMPTY_TREE.to_owned()
+        // Diff each worktree from where it forked off the Thread's starting
+        // commit, so a checkout of a branch that never contained that commit
+        // shows its own work rather than the reverse of the default branch.
+        let base = if state.head == EMPTY_TREE || baseline == EMPTY_TREE {
+            if state.id == "primary" {
+                baseline.to_owned()
+            } else {
+                EMPTY_TREE.to_owned()
+            }
         } else {
             let merge_base =
                 git_text(&state.path, &["merge-base", baseline, &state.head], &[0, 1])?;
@@ -1472,6 +1477,52 @@ mod tests {
         };
         assert_ne!(second.fingerprint, capture.fingerprint);
         assert_eq!(second.ranges[0].files[4].additions, 3);
+    }
+
+    #[test]
+    fn diffs_a_diverged_branch_from_its_fork_point_with_the_baseline() {
+        let (_directory, root, fork) = repository();
+        fs::write(root.join("README.md"), "one\ntwo\nmain-only\n").unwrap();
+        git_ok(&root, &["commit", "-q", "-am", "main only"]);
+        let baseline = git_ok(&root, &["rev-parse", "HEAD"]);
+        git_ok(&root, &["checkout", "-q", "-b", "feature", &fork]);
+        fs::write(root.join("feature.txt"), "f\n").unwrap();
+        git_ok(&root, &["add", "feature.txt"]);
+        git_ok(&root, &["commit", "-q", "-m", "feature"]);
+        let CandidateOutcome::Complete { capture } =
+            capture(&root, &request(&baseline, None), &CaptureCache::default())
+        else {
+            panic!("expected a complete capture")
+        };
+        let paths = capture.ranges[0]
+            .files
+            .iter()
+            .map(|file| (file.path.as_str(), file.status))
+            .collect::<Vec<_>>();
+        assert_eq!(paths, [("feature.txt", FileStatus::Added)]);
+    }
+
+    #[test]
+    fn diffs_unrelated_history_from_the_empty_tree() {
+        let (_directory, root, baseline) = repository();
+        git_ok(&root, &["checkout", "-q", "--orphan", "unrelated"]);
+        git_ok(&root, &["rm", "-r", "-q", "--cached", "."]);
+        fs::remove_file(root.join("README.md")).unwrap();
+        fs::remove_file(root.join("keep.txt")).unwrap();
+        fs::write(root.join("other.txt"), "o\n").unwrap();
+        git_ok(&root, &["add", "other.txt"]);
+        git_ok(&root, &["commit", "-q", "-m", "unrelated"]);
+        let CandidateOutcome::Complete { capture } =
+            capture(&root, &request(&baseline, None), &CaptureCache::default())
+        else {
+            panic!("expected a complete capture")
+        };
+        let paths = capture.ranges[0]
+            .files
+            .iter()
+            .map(|file| (file.path.as_str(), file.status))
+            .collect::<Vec<_>>();
+        assert_eq!(paths, [("other.txt", FileStatus::Added)]);
     }
 
     #[test]

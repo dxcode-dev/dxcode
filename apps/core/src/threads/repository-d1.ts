@@ -172,6 +172,18 @@ export const ThreadRepositoryD1 = Layer.effect(
     const d1: D1Client.D1Client = yield* D1Client.D1Client;
     const unavailable = (operation: string) => (cause: unknown) =>
       PersistenceUnavailable.new({ operation }, cause);
+    // A Thread in a workspace Project stays with the workspace: its owner
+    // reaches it only while a member, and again after rejoining.
+    const inReachableScope = (projectIdColumn: string, userId: string) => sql`
+      EXISTS (
+        SELECT 1 FROM projects AS scope_project
+         WHERE scope_project.id = ${sql.literal(projectIdColumn)}
+           AND (scope_project.workspace_id IS NULL OR EXISTS (
+             SELECT 1 FROM member
+               JOIN organization ON organization.id = member.organizationId
+              WHERE member.organizationId = scope_project.workspace_id
+                AND member.userId = ${userId}
+                AND organization.lifecycleState = 'active')))`;
 
     return ThreadRepository.of({
       insert: (thread, source, executionPin) =>
@@ -328,16 +340,19 @@ export const ThreadRepositoryD1 = Layer.effect(
                              AND repository.provider = ${snapshot.provider}
                              AND repository.full_name = ${snapshot.repositoryName}
                              AND repository.clone_url = ${snapshot.cloneUrl}
-                             AND binding.owner_grant_id = ${authority.grantId}
-                             AND binding.installation_id IS ${authority.installationId ?? null}
                              AND binding.provider_workspace_id IS ${authority.providerWorkspaceId ?? null}
                              AND binding.provider_repository_id = ${authority.providerRepositoryId}
                              AND binding.default_branch = ${snapshot.defaultBranch}
+                             AND binding.provenance = 'live-grant'
+                             AND binding.source_health = 'available'
+                             AND ((
+                             (binding.owner_scope != 'personal'
+                               OR binding.owner_id = ${encoded.ownerUserId})
+                             AND binding.owner_grant_id = ${authority.grantId}
+                             AND binding.installation_id IS ${authority.installationId ?? null}
                              AND binding.authorization_epoch = ${authority.authorizationEpoch}
                              AND binding.installation_epoch = ${authority.installationEpoch}
                              AND binding.policy_revision = ${authority.policyRevision}
-                             AND binding.provenance = 'live-grant'
-                             AND binding.source_health = 'available'
                              AND (binding.provider = 'bitbucket' OR COALESCE((SELECT epoch FROM github_authorization_epoch
                                WHERE subject_kind = 'owner-grant'
                                  AND subject_id = binding.owner_grant_id), 1)
@@ -377,6 +392,52 @@ export const ThreadRepositoryD1 = Layer.effect(
                                   AND connection.status = 'active'
                                   AND connection.authorization_epoch = binding.authorization_epoch
                                )))
+                             ) OR (
+                             -- Another member of a workspace Project's workspace
+                             -- clones through their own live connection.
+                             binding.owner_scope = 'personal'
+                             AND binding.owner_id != ${encoded.ownerUserId}
+                             AND EXISTS (
+                               SELECT 1 FROM projects AS project
+                                JOIN member ON member.organizationId = project.workspace_id
+                                JOIN organization ON organization.id = member.organizationId
+                               WHERE project.id = binding.project_id
+                                 AND member.userId = ${encoded.ownerUserId}
+                                 AND organization.lifecycleState = 'active')
+                             AND ${authority.policyRevision} = 0
+                             AND ((binding.provider = 'github' AND EXISTS (
+                               SELECT 1 FROM github_owner_grant AS grant_row
+                               JOIN github_installation AS installation
+                                 ON installation.installation_id = grant_row.installation_id
+                               JOIN github_installation_repository AS entitlement
+                                 ON entitlement.installation_id = grant_row.installation_id
+                                AND entitlement.provider_repository_id = binding.provider_repository_id
+                               WHERE grant_row.id = ${authority.grantId}
+                                 AND grant_row.installation_id = ${authority.installationId ?? null}
+                                 AND grant_row.owner_scope = 'personal'
+                                 AND grant_row.owner_id = ${encoded.ownerUserId}
+                                 AND grant_row.status = 'active'
+                                 AND installation.status = 'active'
+                                 AND entitlement.entitled = 1
+                                 AND COALESCE((SELECT epoch FROM github_authorization_epoch
+                                   WHERE subject_kind = 'owner-grant'
+                                     AND subject_id = grant_row.id), 1)
+                                   = ${authority.authorizationEpoch}
+                                 AND COALESCE((SELECT epoch FROM github_authorization_epoch
+                                   WHERE subject_kind = 'installation'
+                                     AND subject_id = grant_row.installation_id), 1)
+                                   = ${authority.installationEpoch}
+                             )) OR (binding.provider = 'bitbucket'
+                               AND ${authority.installationId ?? null} IS NULL
+                               AND ${authority.installationEpoch} = 0
+                               AND EXISTS (
+                                 SELECT 1 FROM bitbucket_connection AS connection
+                                WHERE connection.id = ${authority.grantId}
+                                  AND connection.user_id = ${encoded.ownerUserId}
+                                  AND connection.status = 'active'
+                                  AND connection.authorization_epoch = ${authority.authorizationEpoch}
+                               )))
+                             ))
                         ))
                       `,
                           sql`
@@ -425,6 +486,7 @@ export const ThreadRepositoryD1 = Layer.effect(
             FROM threads
             WHERE id = ${threadId}
               AND owner_user_id = ${ownerUserId}
+              AND ${inReachableScope("project_id", ownerUserId)}
               AND lifecycle_state != 'deleted'
           `.pipe(
             Effect.catchTag("SqlError", (cause) =>
@@ -453,6 +515,7 @@ export const ThreadRepositoryD1 = Layer.effect(
               SET pinned_at = ${encodedPinnedAt}, updated_at = ${encodedPinnedAt ?? new Date().toISOString()}
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
+                AND ${inReachableScope("project_id", ownerUserId)}
                 AND lifecycle_state != 'deleted'
                 AND (${encodedPinnedAt} IS NULL OR lifecycle_state = 'active')
             `.pipe(
@@ -470,6 +533,7 @@ export const ThreadRepositoryD1 = Layer.effect(
               FROM threads
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
+                AND ${inReachableScope("project_id", ownerUserId)}
                 AND lifecycle_state != 'deleted'
                 AND (${encodedPinnedAt} IS NULL OR lifecycle_state = 'active')
             `.pipe(
@@ -502,6 +566,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   updated_at = ${updatedAt}
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
+                AND ${inReachableScope("project_id", ownerUserId)}
                 AND lifecycle_state != 'deleted'
               RETURNING id, title, project_id, owner_user_id, agent_instructions,
                 agent_instructions_revision, agent_instructions_version,
@@ -608,6 +673,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                     INNER JOIN snapshot_activity AS activity
                       ON activity.thread_id = thread.id
                     WHERE thread.owner_user_id = ${ownerUserId}
+                      AND ${inReachableScope("thread.project_id", ownerUserId)}
                       AND thread.project_id = ${projectId}
                       AND thread.lifecycle_state != 'deleted'
                       AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
@@ -652,6 +718,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       ON activity.thread_id = thread.id
                     LEFT JOIN pin_snapshot AS pin ON pin.thread_id = thread.id
                     WHERE thread.owner_user_id = ${ownerUserId}
+                      AND ${inReachableScope("thread.project_id", ownerUserId)}
                       AND thread.project_id = ${projectId}
                       AND thread.lifecycle_state != 'deleted'
                       AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
@@ -702,6 +769,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       ON activity.thread_id = thread.id
                     LEFT JOIN pin_snapshot AS pin ON pin.thread_id = thread.id
                     WHERE thread.owner_user_id = ${ownerUserId}
+                      AND ${inReachableScope("thread.project_id", ownerUserId)}
                       AND thread.project_id = ${projectId}
                       AND thread.lifecycle_state != 'deleted'
                       AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
@@ -735,6 +803,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                     INNER JOIN snapshot_activity AS activity
                       ON activity.thread_id = thread.id
                     WHERE thread.owner_user_id = ${ownerUserId}
+                      AND ${inReachableScope("thread.project_id", ownerUserId)}
                       AND thread.lifecycle_state != 'deleted'
                       AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
                       AND (activity.last_activity_at, thread.id) < (${cursorTime}, ${cursor.id})
@@ -777,6 +846,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       ON activity.thread_id = thread.id
                     LEFT JOIN pin_snapshot AS pin ON pin.thread_id = thread.id
                     WHERE thread.owner_user_id = ${ownerUserId}
+                      AND ${inReachableScope("thread.project_id", ownerUserId)}
                       AND thread.lifecycle_state != 'deleted'
                       AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
                       AND (
@@ -825,6 +895,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       ON activity.thread_id = thread.id
                     LEFT JOIN pin_snapshot AS pin ON pin.thread_id = thread.id
                     WHERE thread.owner_user_id = ${ownerUserId}
+                      AND ${inReachableScope("thread.project_id", ownerUserId)}
                       AND thread.lifecycle_state != 'deleted'
                       AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
                     ORDER BY CASE WHEN pin.pinned_at IS NULL THEN 1 ELSE 0 END,

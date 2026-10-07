@@ -22,4 +22,7 @@ export const workspaceModelRoutingSettingsSection = {
   ...common,
   id: "workspace-model-routing",
   scope: "workspace",
+  description:
+    "Custom URL connections every member's Threads can use after their own.",
+  adminOnly: true,
 } satisfies SettingsSectionRegistration;

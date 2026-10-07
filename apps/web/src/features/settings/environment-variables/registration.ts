@@ -20,4 +20,5 @@ export const workspaceEnvironmentVariablesSettingsSection = {
   ...common,
   id: "workspace-environment-variables",
   scope: "workspace",
+  adminOnly: true,
 } satisfies SettingsSectionRegistration;

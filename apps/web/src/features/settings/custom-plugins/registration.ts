@@ -22,4 +22,5 @@ export const workspaceCustomPluginsSettingsSection = {
   ...common,
   id: "workspace-custom-plugins",
   scope: "workspace",
+  adminOnly: true,
 } satisfies SettingsSectionRegistration;

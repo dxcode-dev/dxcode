@@ -13,3 +13,16 @@ export const personalModeDialSettingsSection = {
   icon: Sliders,
   component: ModeDialSettings,
 } satisfies SettingsSectionRegistration;
+
+export const workspaceModeDialSettingsSection = {
+  id: "workspace-mode-dial",
+  scope: "workspace",
+  slug: "mode-dial",
+  label: "Mode Dial",
+  title: "Mode Dial",
+  description:
+    "Default model and thinking level for each mode, for members who have not tuned it.",
+  icon: Sliders,
+  component: ModeDialSettings,
+  adminOnly: true,
+} satisfies SettingsSectionRegistration;

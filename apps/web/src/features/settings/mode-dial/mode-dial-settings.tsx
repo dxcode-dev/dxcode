@@ -3,6 +3,7 @@ import type { ModeId, ThinkingLevel } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
+import type { ModelRoutingTarget } from "../../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import {
   modelRoutingChoicesQueryOptions,
@@ -10,8 +11,8 @@ import {
 } from "../model-routing/model-routing-queries.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
 import { ModeDialControl, ReasoningEffort } from "./mode-dial-controls.js";
-import { MODES, MODE_LABELS } from "./mode-dial-values.js";
 import { modeDialMutationOptions } from "./mode-dial-mutations.js";
+import { MODE_LABELS, MODES } from "./mode-dial-values.js";
 
 const message = (error: unknown) =>
   error instanceof Error ? error.message : "Request failed.";
@@ -20,8 +21,15 @@ interface ModeDraft {
   readonly thinking: ThinkingLevel;
 }
 
-export const ModeDialSettings = ({ onDirtyChange }: SettingsSectionProps) => {
+export const ModeDialSettings = ({
+  onDirtyChange,
+  workspaceSlug,
+}: SettingsSectionProps) => {
   const { identity } = useAuthenticatedIdentity();
+  const target: ModelRoutingTarget =
+    workspaceSlug === undefined
+      ? { scope: "personal" }
+      : { scope: "workspace", workspaceSlug };
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as { mode?: unknown };
@@ -29,9 +37,11 @@ export const ModeDialSettings = ({ onDirtyChange }: SettingsSectionProps) => {
   const [drafts, setDrafts] = useState<Partial<Record<ModeId, ModeDraft>>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
-  const profile = useQuery(modeProfileQueryOptions(identity.id));
-  const choices = useQuery(modelRoutingChoicesQueryOptions(identity.id));
-  const options = modeDialMutationOptions(queryClient);
+  const profile = useQuery(modeProfileQueryOptions(identity.id, target));
+  const choices = useQuery(
+    modelRoutingChoicesQueryOptions(identity.id, target),
+  );
+  const options = modeDialMutationOptions(queryClient, target);
   const saveMutation = useMutation(options.save);
   const resetMutation = useMutation(options.reset);
   const saved = profile.data?.modes[selected];
@@ -99,7 +109,7 @@ export const ModeDialSettings = ({ onDirtyChange }: SettingsSectionProps) => {
           config: { ...baseline.modes[mode].config, agent: draft },
         });
         queryClient.setQueryData(
-          modeProfileQueryOptions(identity.id).queryKey,
+          modeProfileQueryOptions(identity.id, target).queryKey,
           result,
         );
         remaining = { ...remaining, [mode]: undefined };
@@ -120,7 +130,7 @@ export const ModeDialSettings = ({ onDirtyChange }: SettingsSectionProps) => {
     try {
       const result = await resetMutation.mutateAsync(selected);
       queryClient.setQueryData(
-        modeProfileQueryOptions(identity.id).queryKey,
+        modeProfileQueryOptions(identity.id, target).queryKey,
         result,
       );
       updateDrafts({ ...drafts, [selected]: undefined }, result);
@@ -133,8 +143,9 @@ export const ModeDialSettings = ({ onDirtyChange }: SettingsSectionProps) => {
       <header className="mode-tuning-heading">
         <h1>Mode Dial</h1>
         <p>
-          Choose the main-agent model and reasoning effort for each mode. Models
-          come from your connections in Model Routing.
+          {target.scope === "personal"
+            ? "Choose the main-agent model and reasoning effort for each mode. Models come from your connections in Model Routing."
+            : "Set each mode's main-agent model and reasoning effort for members who have not tuned it themselves. Models come from the workspace's connections."}
         </p>
       </header>
       <div className="tuning-section-label">Tune Modes</div>
@@ -159,6 +170,8 @@ export const ModeDialSettings = ({ onDirtyChange }: SettingsSectionProps) => {
                 {saved?.source === "override" ||
                 dirtyModes.includes(selected) ? (
                   <span> · Tuned</span>
+                ) : saved?.source === "workspace" ? (
+                  <span> · Workspace</span>
                 ) : null}
               </h2>
               {saved?.source === "override" ? (
@@ -167,7 +180,7 @@ export const ModeDialSettings = ({ onDirtyChange }: SettingsSectionProps) => {
                   onClick={() => void reset()}
                   disabled={busy}
                 >
-                  Reset to default
+                  {target.scope === "personal" ? "Reset" : "Reset to default"}
                 </button>
               ) : null}
             </div>

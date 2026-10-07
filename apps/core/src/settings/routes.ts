@@ -33,6 +33,7 @@ import {
   personalMcpServerRoutes,
   workspaceMcpServerRoutes,
 } from "./mcp-servers/routes.js";
+import { workspaceMemberRoutes } from "./members/routes.js";
 import {
   personalModelRoutingRoutes,
   workspaceModelRoutingRoutes,
@@ -202,6 +203,7 @@ settingsRoutes.route("/personal/keys", personalSigningKeyRoutes);
 settingsRoutes.route("/personal/triggers", personalPluginTriggerRoutes);
 settingsRoutes.route("/workspaces", workspaceProfileRoutes);
 settingsRoutes.route("/workspaces", workspaceApplicationRoutes);
+settingsRoutes.route("/workspaces/:workspaceSlug", workspaceMemberRoutes);
 settingsRoutes.route(
   "/workspaces/:workspaceSlug/environment-variables",
   workspaceEnvironmentVariableRoutes,

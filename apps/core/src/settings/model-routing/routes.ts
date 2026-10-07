@@ -496,3 +496,89 @@ workspaceModelRoutingRoutes.get("/graph", (c) =>
     );
   }),
 );
+
+const modeParam = (c: Context<AppEnv>) => {
+  try {
+    return Schema.decodeUnknownSync(ModeId)(c.req.param("mode"));
+  } catch {
+    throw new ModelRoutingValidationError([
+      { field: "mode", message: "Mode must be low, medium, high, or ultra." },
+    ]);
+  }
+};
+
+// Models the workspace's own connections serve, for the workspace Mode Dial.
+workspaceModelRoutingRoutes.get("/choices", (c) =>
+  handle(c, async () => {
+    const { target } = await workspaceTarget(c);
+    const deps = await dependencies(c);
+    return c.json(
+      respond(
+        ChoicesResponseSchema,
+        await deps.service.choices(c.get("principal").userId, target),
+      ),
+      200,
+    );
+  }),
+);
+
+// Workspace Mode Dial: applies to members who have not set that mode in
+// their personal Mode Dial. Only admins change it.
+workspaceModelRoutingRoutes.get("/profile", (c) =>
+  handle(c, async () => {
+    const { target } = await workspaceTarget(c);
+    const deps = await dependencies(c);
+    return c.json(
+      respond(
+        ProfileResponseSchema,
+        await deps.service.workspaceProfile(
+          c.get("principal").userId,
+          target.id,
+        ),
+      ),
+      200,
+    );
+  }),
+);
+
+workspaceModelRoutingRoutes.put("/profile/modes/:mode", (c) =>
+  handle(c, async () => {
+    const { target, canMutate } = await workspaceTarget(c);
+    if (!canMutate) throw new MutationForbidden();
+    const mode = modeParam(c);
+    const config = await decodeBody(c, PutModeRequestSchema);
+    const deps = await dependencies(c);
+    return c.json(
+      respond(
+        ProfileResponseSchema,
+        await deps.service.putWorkspaceMode(
+          c.get("principal").userId,
+          target.id,
+          mode,
+          config,
+        ),
+      ),
+      200,
+    );
+  }),
+);
+
+workspaceModelRoutingRoutes.delete("/profile/modes/:mode", (c) =>
+  handle(c, async () => {
+    const { target, canMutate } = await workspaceTarget(c);
+    if (!canMutate) throw new MutationForbidden();
+    const mode = modeParam(c);
+    const deps = await dependencies(c);
+    return c.json(
+      respond(
+        ProfileResponseSchema,
+        await deps.service.resetWorkspaceMode(
+          c.get("principal").userId,
+          target.id,
+          mode,
+        ),
+      ),
+      200,
+    );
+  }),
+);

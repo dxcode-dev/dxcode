@@ -27,14 +27,27 @@ describe("settings navigation", () => {
       settingsNavigationRegistrations(
         "workspace",
         settingsManifest.workspace,
+        "admin",
       ).map(({ label }) => label),
     ).toEqual([
       "Workspace",
+      "Members",
       "Secrets & Env Vars",
+      "Model Routing",
+      "Mode Dial",
       "MCP & Integrations",
       "Plugins",
       "Orb Providers",
     ]);
+
+    // Members see shared configuration read-only; admin-only sections hide.
+    expect(
+      settingsNavigationRegistrations(
+        "workspace",
+        settingsManifest.workspace,
+        "member",
+      ).map(({ label }) => label),
+    ).toEqual(["Workspace", "Members", "MCP & Integrations", "Plugins"]);
   });
 
   it("keeps Usage but does not register Billing or Budgets", () => {

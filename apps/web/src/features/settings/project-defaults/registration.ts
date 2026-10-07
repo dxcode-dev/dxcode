@@ -21,4 +21,5 @@ export const workspaceProjectDefaultsSettingsSection = {
   ...common,
   id: "workspace-project-defaults",
   scope: "workspace",
+  adminOnly: true,
 } satisfies SettingsSectionRegistration;

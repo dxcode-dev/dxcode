@@ -137,4 +137,83 @@ describe("workspace model routing reads", () => {
       body.data.edges.find(({ mode }) => mode === "ultra")?.connectionId,
     ).toBe(workspaceId);
   });
+
+  it("accepts only admin-created custom connections on the workspace", async () => {
+    const post = (userId: UserId, body: Record<string, unknown>) =>
+      appFor(userId).request(
+        `${workspaceBase}/connections`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ enabled: true, ...body }),
+        },
+        bindings,
+      );
+    const provider = await post(owner, {
+      kind: "provider",
+      name: "Workspace Anthropic",
+      providerId: "anthropic",
+      apiKey: "sk-workspace-provider",
+    });
+    expect(provider.status).toBe(400);
+    expect(await provider.text()).toContain(
+      "Workspace connections use a custom URL.",
+    );
+    const custom = {
+      kind: "custom",
+      name: "Workspace custom",
+      providerId: "dx-custom",
+      apiKey: "sk-workspace-custom",
+      baseUrl: "https://models.example.com/v1",
+      format: "openai-completions",
+      models: [{ canonical: "anthropic/claude-fable-5-1" }],
+    };
+    expect((await post(member, custom)).status).toBe(403);
+    expect((await post(owner, custom)).status).toBe(200);
+  });
+
+  it("routes a member through their personal connection before the workspace one", async () => {
+    const create = async (userId: UserId, base: string, name: string) => {
+      const response = await appFor(userId).request(
+        `${base}/connections`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            kind: "custom",
+            name,
+            providerId: "dx-custom",
+            apiKey: "sk-routing-precedence",
+            baseUrl: "https://models.example.com/v1",
+            format: "openai-completions",
+            models: [{ canonical: "anthropic/claude-fable-5-1" }],
+            enabled: true,
+          }),
+        },
+        bindings,
+      );
+      expect(response.status).toBe(200);
+      return ((await response.json()) as { data: { id: string } }).data.id;
+    };
+    const ultraConnection = async () => {
+      const response = await appFor(member).request(
+        "/settings/personal/model-routing/graph",
+        {},
+        bindings,
+      );
+      const body = (await response.json()) as {
+        data: { edges: Array<{ mode: string; connectionId: string | null }> };
+      };
+      return body.data.edges.find(({ mode }) => mode === "ultra")?.connectionId;
+    };
+
+    const workspaceId = await create(owner, workspaceBase, "Shared route");
+    expect(await ultraConnection()).toBe(workspaceId);
+    const personalId = await create(
+      member,
+      "/settings/personal/model-routing",
+      "My route",
+    );
+    expect(await ultraConnection()).toBe(personalId);
+  });
 });

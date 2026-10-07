@@ -18,6 +18,7 @@ import {
 } from "../../execution/runner-profiles/catalog.js";
 import type { Bindings } from "../../http/types.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
+import { threadProjectReachableSql } from "../members/membership-sql.js";
 import { requireManagedSigning } from "./backend.js";
 import { decryptSigningPrivateKey } from "./encryption.js";
 import { SigningKeyRepositoryD1 } from "./repository-d1.js";
@@ -65,13 +66,28 @@ export const resolveExecutionSigningPlan = Effect.fn(
     try: () =>
       db
         .prepare(
-          `SELECT projects.owner_user_id, projects.commit_author_name,
-             projects.commit_author_email, projects.signing_preference,
+          `SELECT threads.owner_user_id,
+             -- A member's Thread in another member's workspace Project uses
+             -- the member's own account identity, as project defaults do,
+             -- when the Project asks for the user.
+             CASE WHEN projects.commit_author_preference = 'user'
+                    AND projects.owner_user_id != threads.owner_user_id
+                  THEN COALESCE(account.display_name, owner.name)
+                  ELSE projects.commit_author_name END
+               AS commit_author_name,
+             CASE WHEN projects.commit_author_preference = 'user'
+                    AND projects.owner_user_id != threads.owner_user_id
+                  THEN owner.email ELSE projects.commit_author_email END
+               AS commit_author_email,
+             projects.signing_preference,
              COALESCE(threads.runner_profile_id, projects.runner_profile_id)
                AS runner_profile_id
            FROM threads
+           INNER JOIN "user" AS owner ON owner.id = threads.owner_user_id
+           LEFT JOIN personal_account AS account
+             ON account.user_id = threads.owner_user_id
            INNER JOIN projects ON projects.id = threads.project_id
-             AND projects.owner_user_id = threads.owner_user_id
+             AND ${threadProjectReachableSql("projects", "threads.owner_user_id")}
            WHERE threads.id = ?
            LIMIT 1`,
         )

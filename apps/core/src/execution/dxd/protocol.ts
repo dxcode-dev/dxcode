@@ -24,7 +24,7 @@ import {
 } from "../../thread-changes/candidate.js";
 
 export const DXD_PROTOCOL_MAJOR = 2;
-export const DXD_RELEASE = "0.8.1";
+export const DXD_RELEASE = "0.8.2";
 export const DXD_TERMINAL_VERSION = 1;
 export const DXD_WORKLOAD_IDENTITY_VERSION = 1;
 export const DXD_HEARTBEAT_INTERVAL_MS = 2_000;
