@@ -10431,65 +10431,161 @@ button.sidebar-news-card {
   overflow-y: auto;
 }
 .new-project-dialog .dialog-form {
-  display: block;
+  display: grid;
+  gap: 20px;
 }
-.new-project-dialog > h2 {
+.new-project-header {
+  display: grid;
+  gap: 6px;
+  padding-right: 24px;
+}
+.new-project-dialog .new-project-header h2 {
   margin: 0;
   font-size: 13px;
   font-weight: 500;
   line-height: 16px;
   letter-spacing: -0.025em;
 }
-.new-project-dialog .project-source-fieldset,
-.new-project-dialog .new-project-details,
-.new-project-dialog .dialog-actions,
-.new-project-dialog .notice {
-  margin-top: 16px;
+.new-project-dialog .new-project-header p {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 15px;
 }
-.new-project-dialog .project-source-fieldset,
+.project-source-choices {
+  display: grid;
+  gap: 8px;
+}
+.project-source-choice {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 8px 12px;
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+.project-source-choice:hover,
+.project-source-choice:focus-visible {
+  border-color: var(--outline);
+  background: var(--accent);
+}
+.project-source-choice > svg {
+  width: 16px;
+  height: 16px;
+}
+.project-source-choice > svg:last-child {
+  width: 14px;
+  height: 14px;
+  color: var(--muted-foreground);
+}
+.project-source-choice strong,
+.project-source-choice small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-source-choice strong {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+.project-source-choice small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 14px;
+}
+.new-project-fields {
+  display: grid;
+  gap: 16px;
+  animation: project-details-in 140ms ease-out;
+}
+.new-project-dialog .project-field,
+.new-project-dialog .project-field > label {
+  display: grid;
+  gap: 8px;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+.new-project-dialog .project-field input:not([role="combobox"]) {
+  height: 28px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: var(--foreground);
+  background: var(--background);
+  font-size: 12px;
+  line-height: 16px;
+}
+.new-project-hint {
+  margin-top: -4px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 15px;
+}
+.new-project-dialog .new-project-hint:first-child {
+  margin-top: 0;
+}
+.new-project-hint a {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--foreground);
+  text-decoration: underline;
+  text-decoration-color: var(--outline);
+  text-underline-offset: 2px;
+}
+.new-project-hint a:hover {
+  text-decoration-color: currentColor;
+}
+.new-project-hint a svg {
+  width: 11px;
+  height: 11px;
+}
 .new-project-dialog .project-owner-fieldset {
   display: grid;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
   margin: 0;
   padding: 0;
   border: 0;
 }
-.new-project-dialog .project-source-fieldset legend,
-.new-project-dialog .project-owner-fieldset legend,
-.new-project-dialog .project-name-field {
+.new-project-dialog .project-owner-fieldset legend {
+  margin-bottom: 8px;
   color: var(--foreground);
   font-size: 12px;
   font-weight: 500;
-  line-height: 16.5px;
+  line-height: 16px;
 }
-.new-project-dialog .project-source-fieldset legend,
-.new-project-dialog .project-owner-fieldset legend {
-  margin-bottom: 12px;
-}
-.project-source-options,
 .project-owner-options {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
-.project-source-option,
 .project-owner-options label {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
   min-width: 0;
-  min-height: 69px;
-  padding: 12px;
   color: var(--foreground);
   border: 1px solid var(--border);
   border-radius: 8px;
   background: transparent;
   text-align: left;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
 }
-.project-source-option:hover:not(:disabled),
-.project-source-option.selected,
-.project-owner-options label:hover,
+.project-owner-options label:hover {
+  border-color: var(--outline);
+}
 .project-owner-options label.selected {
   border-color: var(--foreground);
   background: var(--accent);
@@ -10498,60 +10594,19 @@ button.sidebar-news-card {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
-.project-source-option:disabled {
-  cursor: not-allowed;
-  opacity: 0.48;
-}
-.project-source-option > svg {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
-}
-.project-source-option > span,
-.project-owner-copy {
-  min-width: 0;
-}
-.project-source-option strong,
-.project-source-option small,
-.project-owner-options strong,
-.project-owner-options small {
-  display: block;
-}
-.project-source-option strong,
-.project-owner-options strong {
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 16px;
-}
-.project-source-option small,
-.project-owner-options small {
-  margin-top: 0;
-  color: var(--muted-foreground);
-  font-size: 11px;
-  line-height: 13.6px;
-}
-.project-name-field input {
-  height: 26px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  color: var(--foreground);
-  background: var(--background);
-  font-size: 12px;
-  line-height: 16px;
-}
 .new-project-dialog .project-owner-options label {
   display: flex;
   position: relative;
-  min-height: 48px;
   align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 10px;
   cursor: pointer;
 }
 .project-owner-options .owner-mark {
-  width: 24px;
-  height: 24px;
-  flex-basis: 24px;
+  width: 22px;
+  height: 22px;
+  flex-basis: 22px;
 }
 .project-owner-options .owner-mark svg {
   width: 12px;
@@ -10562,19 +10617,76 @@ button.sidebar-news-card {
   opacity: 0;
   pointer-events: none;
 }
-.new-project-dialog .new-project-details {
-  gap: 16px;
-  padding: 1px;
+.project-owner-copy {
+  min-width: 0;
 }
-.new-project-dialog .new-project-details > label {
-  gap: 12px;
+.project-owner-options strong,
+.project-owner-options small {
+  display: block;
+}
+.project-owner-options strong {
+  font-size: 12px;
   font-weight: 500;
-  line-height: 16.5px;
+  line-height: 16px;
 }
-.new-project-dialog .new-project-details > button {
-  justify-self: start;
+.project-owner-options small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 14px;
+}
+.new-project-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: -8px;
+}
+.new-project-toggles > button {
   height: 26px;
+  padding: 0 8px;
   border-radius: 4px;
+  font-size: 12px;
+}
+.additional-repositories-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 28px;
+  padding: 0 8px 0 10px;
+  color: var(--foreground);
+  border: 1px solid var(--outline);
+  border-radius: 6px;
+  background: var(--background);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: left;
+}
+.additional-repositories-trigger:hover,
+.additional-repositories-trigger[data-popup-open] {
+  border-color: var(--foreground);
+}
+.additional-repositories-trigger svg {
+  width: 14px;
+  height: 14px;
+  color: var(--muted-foreground);
+}
+.additional-repositories-popup {
+  width: max(var(--anchor-width), 260px);
+}
+.additional-repositories-search {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  color: var(--foreground);
+  border: 0;
+  border-bottom: 1px solid var(--outline);
+  outline: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+}
+.additional-repositories-search::placeholder {
+  color: var(--muted-foreground);
 }
 .new-project-dialog .dialog-actions {
   gap: 8px;
@@ -11006,27 +11118,6 @@ button.sidebar-news-card {
   font-size: 13px;
 }
 
-.new-project-dialog .new-project-details {
-  display: grid;
-  gap: 16px;
-  animation: project-details-in 140ms ease-out;
-}
-.new-project-dialog .new-project-details > label {
-  display: grid;
-  gap: 12px;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 16.5px;
-}
-.new-project-dialog .new-project-details textarea {
-  min-width: 0;
-  padding: 8px 9px;
-  color: var(--foreground);
-  border: 1px solid var(--outline);
-  border-radius: 6px;
-  background: var(--surface);
-  font: inherit;
-}
 .repository-combobox-control {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) 28px;
@@ -11150,12 +11241,8 @@ button.sidebar-news-card {
   font-size: 12px;
   line-height: 16px;
 }
-.new-project-dialog .new-project-details textarea {
-  min-height: 72px;
-  resize: vertical;
-}
 @media (prefers-reduced-motion: reduce) {
-  .new-project-dialog .new-project-details {
+  .new-project-fields {
     animation: none;
   }
 }
@@ -12015,4 +12102,76 @@ button.sidebar-news-card {
   padding: 12px 10px;
   color: var(--muted-foreground);
   font-size: 12px;
+}
+.project-additional-repositories-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.project-additional-repositories-control .additional-repositories-trigger {
+  min-width: 180px;
+}
+.project-additional-repositories-control small {
+  flex-basis: 100%;
+  color: var(--destructive);
+  font-size: 11px;
+  text-align: right;
+}
+.new-project-dialog .repository-combobox-control {
+  grid-template-columns: minmax(0, 1fr) 28px;
+  height: 30px;
+  background: var(--background);
+}
+.new-project-dialog .repository-combobox-control input {
+  padding-left: 10px;
+  font-size: 12px;
+}
+.repository-combobox-item.repository-option {
+  grid-template-columns: 14px minmax(0, 1fr) 16px;
+}
+.repository-combobox-item.repository-option > svg {
+  width: 13px;
+  height: 13px;
+  color: var(--muted-foreground);
+}
+.repository-combobox-item.repository-option > span:nth-child(2),
+.repository-combobox-item.additional-repository-option > span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.repository-combobox-item.additional-repository-option {
+  grid-template-columns: 14px minmax(0, 1fr) 14px;
+  gap: 10px;
+}
+.additional-repository-option[data-disabled] {
+  opacity: 0.45;
+}
+.additional-repository-option > svg {
+  width: 13px;
+  height: 13px;
+  color: var(--muted-foreground);
+}
+.repository-checkbox {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--outline);
+  border-radius: 3px;
+}
+.repository-checkbox[data-checked] {
+  color: var(--background);
+  border-color: var(--foreground);
+  background: var(--foreground);
+}
+.repository-checkbox svg {
+  width: 10px;
+  height: 10px;
+  stroke-width: 3;
+}
+.repository-combobox-empty:empty {
+  display: none;
 }

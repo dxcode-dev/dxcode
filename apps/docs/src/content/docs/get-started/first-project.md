@@ -18,15 +18,28 @@ step, or magic-link flow.
 
 ## Create a project
 
-1. Choose **New project**.
-2. Paste an anonymously cloneable HTTPS Git repository URL, or connect a
-   supported source host to select a private repository.
-3. Choose an E2B profile. Start with `a1.small` for general work.
-4. Save the project.
+1. Choose **New Project**.
+2. Choose **Start From Scratch** for an empty repository, or **Use an Existing
+   Repository**. For an existing repository, search the repositories your
+   GitHub or Bitbucket connection can access, or paste the HTTPS URL of any Git
+   repository, then choose **Continue**.
+3. Name the project and choose its owner: your workspace or **Private**.
+4. Optionally choose **Add Description** or **Add Additional Repositories**,
+   then **Create Project**.
 
 Public repositories do not require GitHub, Bitbucket, or another provider
-integration. Private repository discovery and checkout require a configured
-source connection with access to that repository.
+integration. A connected repository is reached through your own connection, for
+workspace and private projects alike, so you need access to it before you can
+select it. Threads clone it with the credentials of the person who creates the
+Thread.
+
+Each Orb clones the project's repository into `~/workspace/repo` and its
+additional repositories into `~/workspace/repos/<name>`. Additional
+repositories on GitHub or Bitbucket clone with your connection when you have
+one; other public URLs clone anonymously. A repository you cannot reach is
+skipped without stopping the Orb. Change the list later in the project's
+settings under **Repository**; the next message in a Thread clones new entries and
+leave existing clones untouched. The Orb size is also a project setting.
 
 ## Start a thread
 

@@ -43,6 +43,7 @@ const sourceControlSchemaObjects = [
   ["table", "source_control_operation_audit"],
   ["table", "source_control_audit_retention_gate"],
   ["table", "source_control_operation"],
+  ["table", "project_additional_repository"],
   ["view", "project_read_model"],
   ["index", "github_user_authorization_user_idx"],
   ["index", "github_installation_account_idx"],

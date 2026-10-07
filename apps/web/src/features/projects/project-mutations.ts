@@ -86,6 +86,7 @@ export interface UpdateProjectInput {
   readonly name?: string;
   readonly description?: string;
   readonly runnerProfileId?: RunnerProfileId;
+  readonly additionalRepositories?: ReadonlyArray<string>;
 }
 
 export const updateProjectMutationOptions = (

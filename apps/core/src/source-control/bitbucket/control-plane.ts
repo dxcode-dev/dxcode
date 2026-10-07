@@ -584,7 +584,11 @@ export const readBitbucketThreadAuthority = async (
     FROM threads t JOIN projects p ON p.id = t.project_id JOIN thread_source_snapshot s ON s.thread_id = t.id
     JOIN thread_source_authority a ON a.thread_id = t.id JOIN project_repository r ON r.project_id = p.id
     JOIN project_source_authority b ON b.project_id = p.id JOIN bitbucket_connection c ON c.id = a.owner_grant_id
-    WHERE t.id = ? AND t.owner_user_id = ? AND p.owner_user_id = ? AND p.workspace_id IS NULL
+    WHERE t.id = ? AND t.owner_user_id = ? AND p.owner_user_id = ?
+      AND (p.workspace_id IS NULL OR EXISTS (
+        SELECT 1 FROM member JOIN organization ON organization.id = member.organizationId
+        WHERE member.organizationId = p.workspace_id AND member.userId = t.owner_user_id
+          AND organization.lifecycleState = 'active'))
       AND t.lifecycle_state = 'active' AND s.provider = 'bitbucket' AND r.provider = 'bitbucket' AND b.provider = 'bitbucket'
       AND s.binding_revision = r.binding_revision AND b.binding_revision = r.binding_revision
       AND s.repository_full_name = r.full_name AND a.owner_grant_id = b.owner_grant_id

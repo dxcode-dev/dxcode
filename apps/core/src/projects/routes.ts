@@ -41,10 +41,11 @@ import {
   canonicalPublicGitRepositoryLocator,
   PersistenceUnavailable,
   type Project,
+  type ProjectAdditionalRepository,
+  projectAdditionalRepositoryFromUrl,
   SourceControlAccessDenied,
   SourceControlProviderFailure,
   type WorkspacePolicyDenied,
-  workspaceRoleHasPermission,
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Match, Result, Schema } from "effect";
@@ -100,6 +101,7 @@ const projectData = (project: Project) => ({
   ...(project.repository === undefined
     ? {}
     : { repository: project.repository }),
+  additionalRepositories: project.additionalRepositories,
   revision: project.revision,
   ...(project.workspaceId === undefined
     ? {}
@@ -108,6 +110,27 @@ const projectData = (project: Project) => ({
   createdAt: project.createdAt,
   updatedAt: project.updatedAt,
 });
+
+/**
+ * Canonical additional repositories in request order, without duplicates or
+ * the primary repository. Request validation already proved each URL.
+ */
+const additionalRepositoriesFrom = (
+  urls: ReadonlyArray<string> | undefined,
+  primaryCloneUrl: string | undefined,
+): Array<ProjectAdditionalRepository> => {
+  const seen = new Set(
+    primaryCloneUrl === undefined ? [] : [primaryCloneUrl.toLowerCase()],
+  );
+  return (urls ?? []).flatMap((url) => {
+    const repository = projectAdditionalRepositoryFromUrl(url);
+    if (repository === undefined) throw new InvalidProjectRequest();
+    const key = repository.cloneUrl.toLowerCase();
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [repository];
+  });
+};
 
 export const projectRoutes = new Hono<AppEnv>();
 
@@ -234,13 +257,12 @@ projectRoutes.post("/", async (context) => {
                   authorizeSource({
                     db,
                     bindings: context.env,
-                    owner:
-                      snapshot.workspaceId === undefined
-                        ? {
-                            scope: "personal",
-                            id: context.get("principal").userId,
-                          }
-                        : { scope: "workspace", id: snapshot.workspaceId },
+                    // Workspace and private Projects bind a repository the
+                    // creator reaches through their own personal grant.
+                    owner: {
+                      scope: "personal",
+                      id: context.get("principal").userId,
+                    },
                     grantId: source.grantId,
                     repositoryId: source.providerRepositoryId,
                     provider: source.provider ?? "github",
@@ -296,6 +318,10 @@ projectRoutes.post("/", async (context) => {
             ? {}
             : { description: input.description }),
           ...sourceBinding,
+          additionalRepositories: additionalRepositoriesFrom(
+            input.additionalRepositories,
+            sourceBinding?.repository.cloneUrl,
+          ),
         },
       );
     }).pipe(
@@ -656,10 +682,12 @@ projectRoutes.put("/:projectId/source", async (context) => {
     }).pipe(
       Effect.provide(ProjectService.layer.pipe(Layer.provide(repositoryLayer))),
     );
-    const owner =
-      current.workspaceId === undefined
-        ? { scope: "personal" as const, id: context.get("principal").userId }
-        : { scope: "workspace" as const, id: current.workspaceId };
+    // The rebinding user's personal grant authorizes the repository for both
+    // private and workspace Projects.
+    const owner = {
+      scope: "personal" as const,
+      id: context.get("principal").userId,
+    };
     if (current.workspaceId !== undefined) {
       const membership = yield* Effect.tryPromise({
         try: () =>
@@ -674,14 +702,7 @@ projectRoutes.put("/:projectId/source", async (context) => {
             .first<{ role: string; lifecycle_state: string }>(),
         catch: () => new ProjectSourceRebindForbidden(),
       });
-      if (
-        membership === null ||
-        membership.lifecycle_state !== "active" ||
-        !workspaceRoleHasPermission(
-          membership.role as never,
-          "integrations:manage",
-        )
-      )
+      if (membership === null || membership.lifecycle_state !== "active")
         return yield* new ProjectSourceRebindForbidden();
     }
     const authorized = yield* Effect.tryPromise({
@@ -895,6 +916,14 @@ projectRoutes.patch("/:projectId", async (context) => {
           ...(input.description === undefined
             ? {}
             : { description: input.description || undefined }),
+          ...(input.additionalRepositories === undefined
+            ? {}
+            : {
+                additionalRepositories: additionalRepositoriesFrom(
+                  input.additionalRepositories,
+                  current.repository?.cloneUrl,
+                ),
+              }),
           configuration,
         },
       );

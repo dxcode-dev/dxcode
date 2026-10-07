@@ -1,7 +1,9 @@
 import {
+  MAX_PROJECT_ADDITIONAL_REPOSITORIES,
   ProjectDescription,
   ProjectId,
   ProjectNameInput,
+  PublicGitRepositoryUrl,
   RunnerProfileId,
   WorkspacePolicyDenialReason,
 } from "@dx/domain";
@@ -17,6 +19,11 @@ export const UpdateProjectRequestSchema = Schema.Struct({
   name: Schema.optional(ProjectNameInput),
   description: Schema.optional(ProjectDescription),
   runnerProfileId: Schema.optional(RunnerProfileId),
+  additionalRepositories: Schema.optional(
+    Schema.Array(PublicGitRepositoryUrl).check(
+      Schema.isMaxLength(MAX_PROJECT_ADDITIONAL_REPOSITORIES),
+    ),
+  ),
 });
 export const UpdateProjectResponseSchema = successResponse(ProjectDataSchema);
 export const UpdateProjectInvalidRequestResponseSchema = errorResponse(

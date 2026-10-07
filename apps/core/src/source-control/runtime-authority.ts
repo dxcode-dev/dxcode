@@ -150,11 +150,15 @@ export const SourceAuthorityRepositoryD1 = (db: D1Database) =>
             )
               throw sourceAccessDenied("stale-binding", "rebind");
             if (
+              // A personal grant authorizes only its own user, in a private
+              // Project or a workspace Project the user is still a member of.
               (ownerScope === "personal" &&
                 (ownerId !== actorUserId ||
                   row.owner_user_id !== actorUserId ||
-                  row.workspace_id !== null ||
-                  row.created_by_user_id !== actorUserId)) ||
+                  row.created_by_user_id !== actorUserId ||
+                  (row.workspace_id !== null &&
+                    (row.workspace_lifecycle !== "active" ||
+                      row.member_user_id !== actorUserId)))) ||
               (ownerScope === "workspace" &&
                 (ownerId !== row.workspace_id ||
                   row.workspace_lifecycle !== "active" ||

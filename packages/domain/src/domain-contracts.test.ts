@@ -66,11 +66,12 @@ describe("public domain schemas", () => {
       name: encodedProject.name,
       configuration: encodedProject.configuration,
     });
+    // Stored Projects that predate additional repositories decode with none.
     expect(
       Schema.encodeSync(Project)(
         Schema.decodeUnknownSync(Project)(encodedProject),
       ),
-    ).toEqual(encodedProject);
+    ).toEqual({ ...encodedProject, additionalRepositories: [] });
     expect(() => Schema.decodeUnknownSync(ProjectName)("")).toThrow();
     expect(() =>
       Schema.decodeUnknownSync(ProjectName)("x".repeat(64)),

@@ -93,6 +93,9 @@ export function ProjectsPage() {
         name: input.name,
         description: input.description,
         source: input.source,
+        ...(input.additionalRepositories === undefined
+          ? {}
+          : { additionalRepositories: input.additionalRepositories }),
         ...(input.owner === "workspace" && workspace !== undefined
           ? { workspaceSlug: workspace.shortName }
           : {}),

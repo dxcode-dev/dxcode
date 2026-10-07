@@ -1243,6 +1243,7 @@ export const updateProject = async (
     readonly name?: string;
     readonly description?: string;
     readonly runnerProfileId?: RunnerProfileId;
+    readonly additionalRepositories?: ReadonlyArray<string>;
   },
 ): Promise<ProjectData> =>
   (

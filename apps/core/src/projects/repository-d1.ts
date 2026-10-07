@@ -38,6 +38,7 @@ const ProjectRow = Schema.Struct({
   public_code_enabled: Schema.Number,
   created_at: Schema.String,
   updated_at: Schema.String,
+  additional_repositories_json: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 type ProjectRow = typeof ProjectRow.Type;
@@ -80,6 +81,9 @@ const decodeProjectRows = (rows: ReadonlyArray<unknown>) =>
                       : { cloneUrl: row.repository_clone_url }),
                   },
                 }),
+            additionalRepositories: JSON.parse(
+              row.additional_repositories_json ?? "[]",
+            ) as unknown,
             revision: row.revision,
             configuration: {
               shipAction: row.ship_action,
@@ -261,8 +265,22 @@ export const ProjectRepositoryD1 = Layer.effect(
                   ${encoded.createdAt}, ${encoded.updatedAt}
                 )
               `;
+              const additionalInserts = project.additionalRepositories.map(
+                (repository, position) => sql`
+                  INSERT INTO project_additional_repository (
+                    project_id, position, provider, full_name, web_url,
+                    clone_url, created_at
+                  ) VALUES (
+                    ${encoded.id}, ${position}, ${repository.provider},
+                    ${repository.fullName}, ${repository.webUrl},
+                    ${repository.cloneUrl}, ${encoded.createdAt}
+                  )
+                `,
+              );
               if (project.repository === undefined) {
-                return d1.batch([projectInsert] as const).pipe(Effect.asVoid);
+                return d1
+                  .batch([projectInsert, ...additionalInserts])
+                  .pipe(Effect.asVoid);
               }
               const repositoryInsert = sql`
                 INSERT INTO project_repository (
@@ -277,7 +295,11 @@ export const ProjectRepositoryD1 = Layer.effect(
               `;
               if (authority === undefined)
                 return d1
-                  .batch([projectInsert, repositoryInsert] as const)
+                  .batch([
+                    projectInsert,
+                    repositoryInsert,
+                    ...additionalInserts,
+                  ])
                   .pipe(Effect.asVoid);
               return Schema.encodeEffect(ProjectSourceAuthority)(
                 authority,
@@ -286,6 +308,7 @@ export const ProjectRepositoryD1 = Layer.effect(
                   d1.batch([
                     projectInsert,
                     repositoryInsert,
+                    ...additionalInserts,
                     sql`
                     INSERT INTO project_source_authority (
                       project_id, provider, owner_scope, owner_id, owner_grant_id,
@@ -352,7 +375,7 @@ export const ProjectRepositoryD1 = Layer.effect(
                     sql`
                     DELETE FROM source_admission_assertion WHERE project_id = ${project.id}
                   `,
-                  ] as const),
+                  ]),
                 ),
                 Effect.asVoid,
               );
@@ -466,6 +489,54 @@ export const ProjectRepositoryD1 = Layer.effect(
               updatedAt: now,
             });
             const encoded = yield* Schema.encodeEffect(Project)(next);
+            let expectedRevision = revision;
+            if (update.additionalRepositories !== undefined) {
+              // One batch: the guarded statements apply only after this
+              // revision's compare-and-set update has committed.
+              const applied = sql`
+                EXISTS (SELECT 1 FROM projects WHERE id = ${projectId}
+                  AND owner_user_id = ${ownerUserId}
+                  AND revision = ${next.revision}
+                  AND updated_at = ${encoded.updatedAt})
+              `;
+              const results = yield* d1
+                .batch([
+                  sql`
+                    UPDATE projects SET revision = ${next.revision},
+                      updated_at = ${encoded.updatedAt}
+                    WHERE id = ${projectId} AND owner_user_id = ${ownerUserId}
+                      AND revision = ${revision}
+                      AND name != ${PROJECTLESS_PROJECT_NAME}
+                    RETURNING id
+                  `,
+                  sql`
+                    DELETE FROM project_additional_repository
+                    WHERE project_id = ${projectId} AND ${applied}
+                  `,
+                  ...next.additionalRepositories.map(
+                    (repository, position) => sql`
+                      INSERT INTO project_additional_repository (
+                        project_id, position, provider, full_name, web_url,
+                        clone_url, created_at
+                      ) SELECT
+                        ${projectId}, ${position}, ${repository.provider},
+                        ${repository.fullName}, ${repository.webUrl},
+                        ${repository.cloneUrl}, ${encoded.updatedAt}
+                      WHERE ${applied}
+                    `,
+                  ),
+                ])
+                .pipe(
+                  Effect.catchTag("SqlError", (cause) =>
+                    Effect.fail(
+                      unavailable("project.updateOwned.repositories")(cause),
+                    ),
+                  ),
+                );
+              if ((results[0] as ReadonlyArray<unknown>).length !== 1)
+                return yield* new ProjectNotFound({ projectId });
+              expectedRevision = next.revision;
+            }
             const updated = yield* sql<{ readonly id: string }>`
               UPDATE projects SET
                 name = ${encoded.name}, description = ${encoded.description ?? null},
@@ -478,7 +549,8 @@ export const ProjectRepositoryD1 = Layer.effect(
                 runner_profile_id = ${encoded.configuration.runnerProfileId},
                 public_code_enabled = ${encoded.configuration.publicCodeEnabled ? 1 : 0},
                 updated_at = ${encoded.updatedAt}
-              WHERE id = ${projectId} AND owner_user_id = ${ownerUserId} AND revision = ${revision}
+              WHERE id = ${projectId} AND owner_user_id = ${ownerUserId}
+                AND revision = ${expectedRevision}
               RETURNING id
             `.pipe(
               Effect.catchTag("SqlError", (cause) =>

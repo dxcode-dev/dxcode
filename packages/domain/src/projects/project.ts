@@ -2,6 +2,7 @@ import { DateTime, Effect, Schema } from "effect";
 import { Timestamp } from "../persistence/timestamp.js";
 import { ProjectConfiguration } from "../settings/project-defaults.js";
 import { WorkspaceId } from "../settings/workspace.js";
+import { canonicalPublicGitRepositoryLocator } from "../source-control/public-git-repository-locator.js";
 import { UserId } from "../users/user-id.js";
 import { ProjectId } from "./project-id.js";
 
@@ -25,6 +26,43 @@ export const ProjectRepositoryIdentity = Schema.Struct({
   cloneUrl: Schema.optional(Schema.String),
 });
 export type ProjectRepositoryIdentity = typeof ProjectRepositoryIdentity.Type;
+
+/**
+ * A repository cloned beside the primary checkout, under
+ * `~/workspace/repos/<name>`, in every Thread workspace of the Project. It is
+ * identity only: the Thread owner's native Git credential decides access.
+ */
+export const ProjectAdditionalRepository = Schema.Struct({
+  provider: Schema.Literals(["git", "github", "bitbucket"]),
+  fullName: Schema.String.check(Schema.isMinLength(3), Schema.isMaxLength(512)),
+  webUrl: Schema.String,
+  cloneUrl: Schema.String,
+});
+export type ProjectAdditionalRepository =
+  typeof ProjectAdditionalRepository.Type;
+
+export const MAX_PROJECT_ADDITIONAL_REPOSITORIES = 10;
+
+export const ProjectAdditionalRepositories = Schema.Array(
+  ProjectAdditionalRepository,
+).check(Schema.isMaxLength(MAX_PROJECT_ADDITIONAL_REPOSITORIES));
+
+/** Canonical identity for an additional repository URL, or `undefined`. */
+export const projectAdditionalRepositoryFromUrl = (
+  url: string,
+): ProjectAdditionalRepository | undefined => {
+  const locator = canonicalPublicGitRepositoryLocator(url);
+  if (locator === undefined) return undefined;
+  const host = new URL(locator.webUrl).hostname;
+  const twoSegments = locator.fullName.split("/").length === 2;
+  const provider =
+    host === "github.com" && twoSegments
+      ? ("github" as const)
+      : host === "bitbucket.org" && twoSegments
+        ? ("bitbucket" as const)
+        : ("git" as const);
+  return { provider, ...locator };
+};
 
 export const PROJECT_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 export const PROJECTLESS_PROJECT_NAME = "No Project";
@@ -62,6 +100,9 @@ export const Project = Schema.Struct({
   description: Schema.optional(ProjectDescription),
   iconKey: Schema.optional(ProjectIconKey),
   repository: Schema.optional(ProjectRepositoryIdentity),
+  additionalRepositories: ProjectAdditionalRepositories.pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed([])),
+  ),
   revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed(0)),
   ),
@@ -78,6 +119,7 @@ export const CreateProjectInput = Schema.Struct({
   name: ProjectNameInput,
   description: Schema.optional(ProjectDescription),
   repository: Schema.optional(ProjectRepositoryIdentity),
+  additionalRepositories: Schema.optional(ProjectAdditionalRepositories),
   configuration: ProjectConfiguration,
 });
 
@@ -94,6 +136,7 @@ export const createProject = Effect.fn("createProject")(function* (
   return yield* Schema.decodeUnknownEffect(Schema.toType(Project))({
     id,
     ...input,
+    additionalRepositories: input.additionalRepositories ?? [],
     revision: 0,
     createdAt: now,
     updatedAt: now,

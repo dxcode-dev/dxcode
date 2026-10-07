@@ -658,14 +658,22 @@ describe("immutable Thread source snapshots", () => {
         "UPDATE projects SET workspace_id = 'workspace-115' WHERE id = ?",
       ).bind(projectEntity.id),
       env.DB.prepare(
+        "UPDATE github_authorization_epoch SET epoch = 1 WHERE subject_kind = 'owner-grant' AND subject_id = 'grant-114'",
+      ),
+    ]);
+    // A workspace Project may bind its member's personal grant; the lease
+    // stays the member's own.
+    await expect(resolveAuthority(owner)).resolves.toMatchObject({
+      ownerScope: "personal",
+      ownerId: owner,
+    });
+    await env.DB.batch([
+      env.DB.prepare(
         "UPDATE github_owner_grant SET owner_scope = 'workspace', owner_id = 'workspace-115' WHERE id = 'grant-114'",
       ),
       env.DB.prepare(
         "UPDATE project_source_authority SET owner_scope = 'workspace', owner_id = 'workspace-115' WHERE project_id = ?",
       ).bind(projectEntity.id),
-      env.DB.prepare(
-        "UPDATE github_authorization_epoch SET epoch = 1 WHERE subject_kind = 'owner-grant' AND subject_id = 'grant-114'",
-      ),
     ]);
     await expect(resolveAuthority(owner)).resolves.toMatchObject({
       ownerScope: "workspace",
@@ -679,6 +687,18 @@ describe("immutable Thread source snapshots", () => {
       .run();
     await expect(resolveAuthority(owner)).rejects.toMatchObject({
       reason: "policy-denied",
+    });
+    await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE github_owner_grant SET owner_scope = 'personal', owner_id = ? WHERE id = 'grant-114'",
+      ).bind(owner),
+      env.DB.prepare(
+        "UPDATE project_source_authority SET owner_scope = 'personal', owner_id = ? WHERE project_id = ?",
+      ).bind(owner, projectEntity.id),
+    ]);
+    // A former member's personal grant no longer reaches the workspace Project.
+    await expect(resolveAuthority(owner)).rejects.toMatchObject({
+      reason: "source-not-found",
     });
   });
 });

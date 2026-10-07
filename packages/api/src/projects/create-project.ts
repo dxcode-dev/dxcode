@@ -1,6 +1,7 @@
 import {
   BitbucketRepositoryUrl,
   GitHubRepositoryUrl,
+  MAX_PROJECT_ADDITIONAL_REPOSITORIES,
   ProjectDescription,
   ProjectNameInput,
   ProviderRepositoryId,
@@ -40,6 +41,11 @@ export const CreateProjectRequestSchema = Schema.Struct({
         url: PublicGitRepositoryUrl,
       }),
     ]),
+  ),
+  additionalRepositories: Schema.optional(
+    Schema.Array(PublicGitRepositoryUrl).check(
+      Schema.isMaxLength(MAX_PROJECT_ADDITIONAL_REPOSITORIES),
+    ),
   ),
   workspaceSlug: Schema.optional(WorkspaceSlug),
   publicCodeEnabled: Schema.optional(Schema.Boolean),

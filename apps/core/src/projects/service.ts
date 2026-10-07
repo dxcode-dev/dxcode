@@ -27,6 +27,7 @@ interface ProjectServiceShape {
     details?: {
       readonly description?: typeof ProjectDescription.Type;
       readonly repository?: typeof ProjectRepositoryIdentity.Type;
+      readonly additionalRepositories?: Project["additionalRepositories"];
       readonly sourceAuthority?: ProjectSourceAuthority;
     },
   ) => Effect.Effect<

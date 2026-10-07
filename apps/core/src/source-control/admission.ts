@@ -256,6 +256,13 @@ export const authorizeProjectSource = async (input: {
     };
   }
   if (binding.owner_grant_id === null) throw deny("stale-binding", "rebind");
+  // A Thread clones on behalf of its creator: a personal grant, including one
+  // bound to a workspace Project, authorizes only the user who holds it.
+  if (
+    binding.owner_scope === "personal" &&
+    binding.owner_id !== input.ownerUserId
+  )
+    throw deny("grant-missing", "reconnect");
   if (
     binding.provenance !== "live-grant" ||
     binding.source_health !== "available" ||

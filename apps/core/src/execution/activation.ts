@@ -39,6 +39,7 @@ import {
 import { createWorkspaceActivity, type WorkspaceActivity } from "./activity.js";
 import {
   activateSourceWorkspace,
+  cloneAdditionalRepositories,
   ensureGithubCliWrapper,
   withSourceRuntimeAdmission,
 } from "./source-preparation.js";
@@ -406,8 +407,10 @@ export const makeExecutionActivation =
               : sourcePreparationReporter(bindings, db, threadId),
             residency.value !== "running" || needsFirstReadiness,
           );
-          if (source === undefined)
+          if (source === undefined) {
             await ensureGithubCliWrapper(db, id, handle.guest);
+            await cloneAdditionalRepositories(bindings, db, id, handle.guest);
+          }
           await hooks.prepared?.({
             context,
             threadId,
@@ -588,6 +591,13 @@ export const makeExecutionActivation =
           if (source === undefined) {
             await ensureGithubCliWrapper(db, input.threadId, handle.guest);
             mark("githubCli");
+            await cloneAdditionalRepositories(
+              bindings,
+              db,
+              input.threadId,
+              handle.guest,
+            );
+            mark("additionalRepositories");
           }
           throwIfAborted(input.signal);
           stage = "guest";

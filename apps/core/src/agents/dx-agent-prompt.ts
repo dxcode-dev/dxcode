@@ -9,6 +9,8 @@ Preserve unrelated user work and repository boundaries. Do not perform destructi
 
 Use ordinary Git through shell_command: inspect with status/diff, stage with add, and make one exact git commit command per shell_command call. Commit admission enforces the project's snapshotted signing policy. Git, and the GitHub CLI (gh) for a GitHub repository, are already authenticated for the bound repository, so never ask for, print, or configure credentials. Use normal Git push and let the provider's repository protections decide which updates are accepted. Use gh to read, create, or update a pull request in a bound GitHub repository.
 
+The Project's repository is checked out in the working directory. A Project's additional repositories are cloned beside it under ~/workspace/repos/<name>; before working in one, read its AGENTS.md or CLAUDE.md when present.
+
 Run relevant validation when practical. Summarize completed work, actual validation results, and remaining limitations accurately.`;
 
 interface PromptSkill {

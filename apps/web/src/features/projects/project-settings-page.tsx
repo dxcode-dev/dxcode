@@ -39,6 +39,7 @@ import {
   projectDefaultsQueryOptions,
 } from "../settings/project-defaults/project-defaults-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
+import { AdditionalRepositoriesPicker } from "./new-project-dialog.js";
 import { buildProjectMetadataChanges } from "./project-metadata.js";
 import {
   rebindProjectSourceMutationOptions,
@@ -47,6 +48,10 @@ import {
 } from "./project-mutations.js";
 import { projectQueryOptions } from "./project-queries.js";
 import { ProjectRepositoryIcon } from "./project-repository-icon.js";
+import {
+  connectedRepositoryOptions,
+  type RepositoryOption,
+} from "./repository-options.js";
 import { sourceGrantsQueryOptions } from "./source-grant-queries.js";
 
 const isBitbucketUuid = (value: string) =>
@@ -349,7 +354,6 @@ function ProjectSourceSettings({
   const mutation = useMutation(
     rebindProjectSourceMutationOptions(queryClient, userId, project.id),
   );
-  const owner = project.workspaceId === undefined ? "personal" : "workspace";
   const grantsQuery = useQuery(sourceGrantsQueryOptions(userId));
   const bitbucketConnectionQuery = useQuery(
     bitbucketConnectionQueryOptions(userId),
@@ -363,24 +367,22 @@ function ProjectSourceSettings({
   );
   const [repositoryKey, setRepositoryKey] = React.useState("");
   const [error, setError] = React.useState<string>();
-  const githubRepositories =
-    owner === "workspace"
-      ? []
-      : (grantsQuery.data ?? []).flatMap((grant) =>
-          grant.ownerScope === "personal" &&
-          grant.status === "active" &&
-          grant.installationStatus === "active"
-            ? grant.repositories.map((repository) => ({
-                key: `github:${grant.id}:${repository.id}`,
-                provider: "github" as const,
-                grantId: grant.id,
-                repositoryId: repository.id,
-                fullName: repository.fullName,
-              }))
-            : [],
-        );
+  // Private and workspace Projects bind repositories the current user reaches
+  // through their own connections.
+  const githubRepositories = (grantsQuery.data ?? []).flatMap((grant) =>
+    grant.ownerScope === "personal" &&
+    grant.status === "active" &&
+    grant.installationStatus === "active"
+      ? grant.repositories.map((repository) => ({
+          key: `github:${grant.id}:${repository.id}`,
+          provider: "github" as const,
+          grantId: grant.id,
+          repositoryId: repository.id,
+          fullName: repository.fullName,
+        }))
+      : [],
+  );
   const bitbucketRepositories =
-    owner === "personal" &&
     bitbucketConnection !== undefined &&
     bitbucketRepositoriesQuery.data?.connectionId === bitbucketConnection?.id
       ? bitbucketRepositoriesQuery.data.repositories.flatMap((repository) =>
@@ -461,10 +463,8 @@ function ProjectSourceSettings({
                 bitbucketRepositoriesQuery.error !== null
               ? "Source-control authorization is currently unreachable. Retry before rebinding."
               : repositories.length === 0
-                ? owner === "workspace"
-                  ? "Workspace projects do not support source-control integrations."
-                  : "No personal GitHub or Bitbucket repositories are available. Connect a provider first."
-                : "Only repositories authorized for this Project owner are shown."
+                ? "No personal GitHub or Bitbucket repositories are available. Connect a provider first."
+                : "Only repositories your connections can access are shown."
         }
         control={
           repositories.length === 0 ? (
@@ -518,8 +518,106 @@ function ProjectSourceSettings({
           )
         }
       />
+      <AdditionalRepositoriesRow
+        key={`${project.id}:${project.revision}`}
+        project={project}
+        userId={userId}
+        disabled={disabled}
+        options={connectedRepositoryOptions(
+          grantsQuery.data ?? [],
+          bitbucketConnection?.id,
+          bitbucketConnection !== undefined &&
+            bitbucketRepositoriesQuery.data?.connectionId ===
+              bitbucketConnection.id
+            ? bitbucketRepositoriesQuery.data.repositories
+            : [],
+        ).filter(
+          (option) =>
+            option.webUrl.toLowerCase() !==
+            project.repository?.webUrl.toLowerCase(),
+        )}
+        onSaved={onRebound}
+      />
       {error === undefined ? null : <p role="alert">{error}</p>}
     </SettingsCard>
+  );
+}
+
+function AdditionalRepositoriesRow({
+  project,
+  userId,
+  disabled,
+  options,
+  onSaved,
+}: {
+  readonly project: ProjectData;
+  readonly userId: UserId;
+  readonly disabled: boolean;
+  readonly options: ReadonlyArray<RepositoryOption>;
+  readonly onSaved: (project: ProjectData) => void;
+}) {
+  const queryClient = useQueryClient();
+  const mutation = useMutation(
+    updateProjectMutationOptions(queryClient, userId, project.id),
+  );
+  const saved = (project.additionalRepositories ?? []).map(
+    (repository): RepositoryOption => {
+      const connected = options.find(
+        (option) =>
+          option.webUrl.toLowerCase() === repository.webUrl.toLowerCase(),
+      );
+      return (
+        connected ?? {
+          value: `url:${repository.webUrl.toLowerCase()}`,
+          label: repository.webUrl,
+          fullName: repository.fullName,
+          webUrl: repository.webUrl,
+        }
+      );
+    },
+  );
+  const [selected, setSelected] =
+    React.useState<ReadonlyArray<RepositoryOption>>(saved);
+  const changed =
+    selected.map(({ webUrl }) => webUrl.toLowerCase()).join("\n") !==
+    saved.map(({ webUrl }) => webUrl.toLowerCase()).join("\n");
+  return (
+    <SettingsRow
+      title="Additional repositories"
+      description={
+        saved.length === 0
+          ? "Clone other repositories into ~/workspace/repos in this project's Orbs."
+          : saved.map(({ fullName }) => fullName).join(", ")
+      }
+      control={
+        <div className="project-additional-repositories-control">
+          <AdditionalRepositoriesPicker
+            options={options}
+            value={selected}
+            disabled={disabled || mutation.isPending}
+            onValueChange={setSelected}
+          />
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={disabled || mutation.isPending || !changed}
+            onClick={() =>
+              void mutation
+                .mutateAsync({
+                  revision: project.revision,
+                  additionalRepositories: selected.map(({ webUrl }) => webUrl),
+                })
+                .then(onSaved, () => undefined)
+            }
+          >
+            {mutation.isPending ? "Saving…" : "Save"}
+          </Button>
+          {mutation.error instanceof Error ? (
+            <small role="alert">{mutation.error.message}</small>
+          ) : null}
+        </div>
+      }
+    />
   );
 }
 

@@ -57,16 +57,20 @@ export {
   CreateProjectInput,
   createProject,
   isValidProjectName,
+  MAX_PROJECT_ADDITIONAL_REPOSITORIES,
   normalizeProjectName,
   PROJECT_NAME_HELP,
   PROJECT_NAME_PATTERN,
   PROJECTLESS_PROJECT_NAME,
   Project,
+  ProjectAdditionalRepositories,
+  ProjectAdditionalRepository,
   ProjectDescription,
   ProjectIconKey,
   ProjectName,
   ProjectNameInput,
   ProjectRepositoryIdentity,
+  projectAdditionalRepositoryFromUrl,
 } from "./projects/project.js";
 export { ProjectId } from "./projects/project-id.js";
 export {

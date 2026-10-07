@@ -18,6 +18,7 @@ export interface ProjectUpdate {
   readonly description?: Project["description"];
   readonly iconKey?: Project["iconKey"];
   readonly configuration?: Project["configuration"];
+  readonly additionalRepositories?: Project["additionalRepositories"];
 }
 
 export interface ProjectRepositoryShape {

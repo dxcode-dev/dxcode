@@ -1,7 +1,11 @@
 import { DateTime, Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import { UserId } from "../users/user-id.js";
-import { createProject, Project } from "./project.js";
+import {
+  createProject,
+  Project,
+  projectAdditionalRepositoryFromUrl,
+} from "./project.js";
 import { ProjectId } from "./project-id.js";
 
 const ownerUserId = Schema.decodeUnknownSync(UserId)("user-1");
@@ -44,5 +48,28 @@ describe("Project domain", () => {
       ownerUserId: "user-1",
       name: "First",
     });
+  });
+
+  it("derives additional repository identity from canonical URLs", () => {
+    expect(
+      projectAdditionalRepositoryFromUrl("https://GitHub.com/acme/api.git"),
+    ).toEqual({
+      provider: "github",
+      fullName: "acme/api",
+      webUrl: "https://github.com/acme/api",
+      cloneUrl: "https://github.com/acme/api.git",
+    });
+    expect(
+      projectAdditionalRepositoryFromUrl("https://bitbucket.org/team/lib"),
+    ).toMatchObject({ provider: "bitbucket", fullName: "team/lib" });
+    expect(
+      projectAdditionalRepositoryFromUrl("https://gitlab.com/group/sub/tool"),
+    ).toMatchObject({ provider: "git", fullName: "group/sub/tool" });
+    expect(
+      projectAdditionalRepositoryFromUrl("https://token@github.com/acme/api"),
+    ).toBeUndefined();
+    expect(
+      projectAdditionalRepositoryFromUrl("git@github.com:acme/api.git"),
+    ).toBeUndefined();
   });
 });
