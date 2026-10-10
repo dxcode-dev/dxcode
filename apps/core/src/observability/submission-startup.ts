@@ -81,7 +81,8 @@ export const submissionStartupObservation: MiddlewareHandler<AppEnv> = async (
   const threadId = context.req.param("threadId");
 
   await next();
-  if (context.res.status !== 202) return;
+  // A chat message starts nothing to observe.
+  if (context.res.status !== 202 || context.get("chatDelivery")) return;
   const receipt = await flueSubmissionReceipt(context.res);
   if (receipt === undefined) return;
   const observations = submissionStartupObservations(

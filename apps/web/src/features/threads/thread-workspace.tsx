@@ -4,15 +4,16 @@ import {
   type ThreadDetailData,
   ThreadFilesPath,
 } from "@dx/api";
-import type { ProjectId, ThreadId } from "@dx/domain";
+import type { ProjectId, ThreadId, UserId } from "@dx/domain";
 import {
   type FlueAgentSession,
   type UseFlueAgentResult,
   useFlueAgent,
 } from "@flue/react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { Schema } from "effect";
+import { Eye } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { DxLoading } from "../../shared/brand/dx-loading.js";
@@ -36,6 +37,13 @@ import {
   useThreadPresence,
   useThreadWorkspaceStatus,
 } from "./realtime/realtime-provider.js";
+import type { ComposerMentions } from "./sharing/chat-composer.js";
+import { MessageAuthorsProvider } from "./sharing/message-authors.js";
+import {
+  setConversationMode,
+  useSetThreadFollowing,
+} from "./sharing/sharing-mutations.js";
+import { threadMembersQueryOptions } from "./sharing/thread-chat-queries.js";
 import { type CenterFileTab, ThreadCenterTabs } from "./thread-center-tabs.js";
 import { ThreadDesktopLayout } from "./thread-desktop-layout.js";
 import {
@@ -43,7 +51,10 @@ import {
   ThreadFileNavigationContext,
 } from "./thread-file-navigation.js";
 import { PendingThreadHeader, ThreadHeader } from "./thread-header.js";
-import { threadQueryOptions } from "./thread-queries.js";
+import {
+  invalidateThreadQueries,
+  threadQueryOptions,
+} from "./thread-queries.js";
 import {
   ThreadPresentationContext,
   ThreadSessionRegistryContext,
@@ -118,17 +129,26 @@ export function ThreadWorkspace({
       optimisticCreation === undefined ||
       optimisticCreation.submissionId !== undefined,
   });
+  // A member of a shared Thread cannot read the owner's Project; the Thread
+  // detail carries its name instead.
+  const sharedWithMe =
+    threadQuery.data?.access !== undefined &&
+    threadQuery.data.access !== "owner";
   const projectQuery = useQuery({
     ...projectQueryOptions(
       identity.id,
       threadQuery.data?.projectId as ProjectId,
     ),
-    enabled: threadQuery.data !== undefined,
+    enabled: threadQuery.data !== undefined && !sharedWithMe,
   });
+  const project: ThreadProject | undefined = sharedWithMe
+    ? { name: threadQuery.data?.projectName ?? "Shared project" }
+    : projectQuery.data;
+  const projectError = sharedWithMe ? null : projectQuery.error;
   const error =
-    [threadQuery.error, projectQuery.error].find(isAuthorizationError) ??
+    [threadQuery.error, projectError].find(isAuthorizationError) ??
     threadQuery.error ??
-    projectQuery.error;
+    projectError;
   const retry = () => {
     if (threadQuery.data === undefined || threadQuery.error !== null)
       void threadQuery.refetch();
@@ -151,7 +171,7 @@ export function ThreadWorkspace({
 
   if (
     threadQuery.data === undefined ||
-    projectQuery.data === undefined ||
+    project === undefined ||
     isAuthorizationError(error)
   ) {
     if (error)
@@ -174,7 +194,7 @@ export function ThreadWorkspace({
     <ThreadSession
       key={threadQuery.data.id}
       thread={threadQuery.data}
-      project={projectQuery.data}
+      project={project}
       refreshError={
         error === null
           ? undefined
@@ -261,9 +281,13 @@ function OpenThreadFilePane({
   );
 }
 
+/** What a Thread page needs of its Project. */
+type ThreadProject = Pick<ProjectData, "name"> &
+  Partial<Pick<ProjectData, "workspaceId">>;
+
 type ThreadSessionProps = {
   readonly thread: ThreadDetailData;
-  readonly project: ProjectData;
+  readonly project: ThreadProject;
   readonly refreshError?: string;
   readonly onRefreshRetry?: () => void;
   readonly optimisticCreation?: OptimisticThreadCreation;
@@ -279,9 +303,93 @@ type ThreadSessionProps = {
 
 export function ThreadSession(props: ThreadSessionProps) {
   const registry = React.useContext(ThreadSessionRegistryContext);
-  if (registry === undefined) return <RouteScopedThreadSession {...props} />;
-  return <RetainedThreadSession registry={registry} {...props} />;
+  const { identity } = useAuthenticatedIdentity();
+  return (
+    <MessageAuthorsProvider thread={props.thread} viewerId={identity.id}>
+      {registry === undefined ? (
+        <RouteScopedThreadSession {...props} />
+      ) : (
+        <RetainedThreadSession registry={registry} {...props} />
+      )}
+    </MessageAuthorsProvider>
+  );
 }
+
+/**
+ * What `@` does in the composer: in a shared Thread it tags members or the
+ * agent; in the owner's private Thread it offers Share. Viewers cannot send.
+ */
+function useComposerMentions(
+  thread: ThreadDetailData,
+  viewerId: UserId,
+  openShare: () => void,
+): ComposerMentions | undefined {
+  const queryClient = useQueryClient();
+  const access = thread.access ?? "owner";
+  const shared = thread.sharing !== undefined;
+  const membersQuery = useQuery({
+    ...threadMembersQueryOptions(viewerId, thread.id),
+    enabled: shared,
+  });
+  const members = membersQuery.data;
+  const conversationMode = thread.conversationMode ?? "agent";
+  return React.useMemo((): ComposerMentions | undefined => {
+    if (access === "view") return undefined;
+    if (shared)
+      return {
+        mode: "members",
+        members: members ?? [],
+        viewerId,
+        conversationMode,
+        onSent: (mode) =>
+          setConversationMode(queryClient, viewerId, thread.id, mode),
+      };
+    return access === "owner"
+      ? { mode: "share", onOpenShare: openShare }
+      : undefined;
+  }, [
+    access,
+    shared,
+    members,
+    viewerId,
+    conversationMode,
+    openShare,
+    queryClient,
+    thread.id,
+  ]);
+}
+
+/** Opening another member's shared Thread follows it. */
+function useFollowOnOpen(thread: ThreadDetailData, viewerId: UserId) {
+  const follow = useSetThreadFollowing(viewerId, thread.id);
+  const shouldFollow =
+    thread.access !== undefined &&
+    thread.access !== "owner" &&
+    thread.following === false;
+  useMountEffect(() => {
+    if (shouldFollow) follow.mutate(true);
+  });
+}
+
+/** Viewers of a shared Thread get a notice instead of the composer. */
+const sharedAgentPanelProps = (thread: ThreadDetailData) => {
+  const access = thread.access ?? "owner";
+  if (access === "owner") return {};
+  const ownerName =
+    thread.participants?.find(({ owner }) => owner)?.name ?? "the owner";
+  return access === "view"
+    ? {
+        onOpenModelRouting: undefined,
+        readOnlyNotice: (
+          <div className="shared-composer-notice" role="note">
+            <Eye aria-hidden="true" />
+            You can view this thread. Ask {ownerName} for Contribute access to
+            send messages.
+          </div>
+        ),
+      }
+    : { onOpenModelRouting: undefined };
+};
 
 function RouteScopedThreadSession(props: ThreadSessionProps) {
   const client = React.useMemo(
@@ -518,6 +626,27 @@ function ThreadSessionContent({
   const { identity } = useAuthenticatedIdentity();
   const mobile = useMobile();
   const archived = thread.lifecycleState === "archived";
+  const queryClient = useQueryClient();
+  const [shareOpen, setShareOpen] = React.useState(false);
+  const openShare = React.useCallback(() => setShareOpen(true), []);
+  const mentions = useComposerMentions(thread, identity.id, openShare);
+  useFollowOnOpen(thread, identity.id);
+  const headerProps = {
+    thread,
+    project,
+    shareOpen,
+    onShareOpenChange: setShareOpen,
+  };
+  const sharedPanelProps = {
+    mentions,
+    ...sharedAgentPanelProps(thread),
+    ...(thread.access === "contribute"
+      ? {
+          onAccessChanged: () =>
+            void invalidateThreadQueries(queryClient, identity.id, thread.id),
+        }
+      : {}),
+  };
   const settingsQuery = useQuery(settingsContextQueryOptions(identity.id));
   const dictationAvailable = settingsQuery.data?.dictationAvailable === true;
   const workspace = settingsQuery.data?.workspace;
@@ -576,8 +705,9 @@ function ThreadSessionContent({
             workspaceStatus={workspaceStatus}
             optimisticCreation={optimisticCreation}
             onInitialSubmissionObserved={onInitialSubmissionObserved}
+            {...sharedPanelProps}
             renderHeader={(model) => (
-              <ThreadHeader thread={thread} project={project} model={model} />
+              <ThreadHeader {...headerProps} model={model} />
             )}
           />
         </main>
@@ -600,8 +730,9 @@ function ThreadSessionContent({
             workspaceStatus={workspaceStatus}
             optimisticCreation={optimisticCreation}
             onInitialSubmissionObserved={onInitialSubmissionObserved}
+            {...sharedPanelProps}
             renderHeader={(model) => (
-              <ThreadHeader thread={thread} project={project} model={model} />
+              <ThreadHeader {...headerProps} model={model} />
             )}
           />
         </section>
@@ -625,8 +756,9 @@ function ThreadSessionContent({
             workspaceStatus={workspaceStatus}
             optimisticCreation={optimisticCreation}
             onInitialSubmissionObserved={onInitialSubmissionObserved}
+            {...sharedPanelProps}
             renderHeader={(model) => (
-              <ThreadHeader thread={thread} project={project} model={model} />
+              <ThreadHeader {...headerProps} model={model} />
             )}
           />
         </section>
@@ -640,15 +772,19 @@ function ThreadSessionContent({
       <ThreadDesktopLayout
         rightPaneCollapsed={rightPaneCollapsed}
         terminal={
-          Terminal === undefined
-            ? undefined
-            : (active) => (
-                <Terminal
-                  active={active}
-                  threadId={thread.id}
-                  onWorkspaceStatusChange={setLiveWorkspaceStatus}
-                />
-              )
+          Terminal === undefined ? undefined : thread.access === "view" ? (
+            <div className="thread-files-state" role="note">
+              Only contributors can use the terminal in a shared thread.
+            </div>
+          ) : (
+            (active) => (
+              <Terminal
+                active={active}
+                threadId={thread.id}
+                onWorkspaceStatusChange={setLiveWorkspaceStatus}
+              />
+            )
+          )
         }
         changes={
           <>
@@ -720,11 +856,11 @@ function ThreadSessionContent({
                 workspaceStatus={workspaceStatus}
                 optimisticCreation={optimisticCreation}
                 onInitialSubmissionObserved={onInitialSubmissionObserved}
+                {...sharedPanelProps}
                 renderHeader={(model) => (
                   <>
                     <ThreadHeader
-                      thread={thread}
-                      project={project}
+                      {...headerProps}
                       model={model}
                       rightPaneCollapsed={rightPaneCollapsed}
                       onToggleRightPane={toggleRightPane}

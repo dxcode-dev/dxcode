@@ -54,33 +54,38 @@ const timingSafeEqual = vi.fn(
 const startupBatches = vi.fn(async (_statements: ReadonlyArray<unknown>) => []);
 
 const ownedThreadBinding = {
-  prepare: () => ({
+  prepare: (sql: string) => ({
     bind: (...values: ReadonlyArray<unknown>) => ({
       values,
+      // The sender's name for the message author tag.
+      first: async () => ({ name: "Test User", email: null }),
       all: async () => ({
-        results: [
-          {
-            id: threadId,
-            title: "Test thread",
-            project_id: "prj_00000000-0000-4000-8000-000000000052",
-            owner_user_id: TEST_USER_ID,
-            agent_instructions: "",
-            agent_instructions_revision: 0,
-            agent_instructions_version: 1,
-            model_selection: JSON.stringify(defaultThreadModelSelection()),
-            plugin_snapshot_json: "[]",
-            skill_snapshot_json: "[]",
-            visibility: "private",
-            workspace_policy_revision: 0,
-            workspace_policy_migration_state: "grandfathered",
-            created_at: "2026-08-20T12:00:00.000Z",
-            updated_at: "2026-08-20T12:00:00.000Z",
-            last_activity_at: "2026-08-20T12:00:00.000Z",
-            activity_status: "idle",
-            lifecycle_state: "active",
-            pinned_at: null,
-          },
-        ],
+        // The Thread is private: nobody to tag.
+        results: sql.includes("JOIN member")
+          ? []
+          : [
+              {
+                id: threadId,
+                title: "Test thread",
+                project_id: "prj_00000000-0000-4000-8000-000000000052",
+                owner_user_id: TEST_USER_ID,
+                agent_instructions: "",
+                agent_instructions_revision: 0,
+                agent_instructions_version: 1,
+                model_selection: JSON.stringify(defaultThreadModelSelection()),
+                plugin_snapshot_json: "[]",
+                skill_snapshot_json: "[]",
+                visibility: "private",
+                workspace_policy_revision: 0,
+                workspace_policy_migration_state: "grandfathered",
+                created_at: "2026-08-20T12:00:00.000Z",
+                updated_at: "2026-08-20T12:00:00.000Z",
+                last_activity_at: "2026-08-20T12:00:00.000Z",
+                activity_status: "idle",
+                lifecycle_state: "active",
+                pinned_at: null,
+              },
+            ],
       }),
     }),
   }),

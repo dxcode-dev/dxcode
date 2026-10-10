@@ -50,7 +50,7 @@ const JsonString = Schema.String.pipe(
   Schema.decodeTo(Schema.Unknown, SchemaTransformation.fromJsonString()),
 );
 
-const decodeThreadRows = (rows: ReadonlyArray<unknown>) =>
+export const decodeThreadRows = (rows: ReadonlyArray<unknown>) =>
   Schema.decodeUnknownEffect(Schema.Array(ThreadRow))(rows).pipe(
     Effect.flatMap((decoded) =>
       Effect.all(

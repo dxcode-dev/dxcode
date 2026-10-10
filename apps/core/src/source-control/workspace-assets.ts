@@ -723,6 +723,10 @@ const runLfs = expected => {
   git(ROOT, required("DX_REPOSITORY_NAME"), ["lfs", "fetch", "origin", expected.sourceSha], true);
   git(ROOT, required("DX_REPOSITORY_NAME"), ["lfs", "checkout"]);
 };
+// Setup and resume prepare the workspace for convenience; the agent can
+// finish that work itself. A failing hook is recorded and logged, never fatal.
+const failedHooks = [];
+const hooksReady = () => (failedHooks.length === 0 ? { status: "ready" } : { status: "ready", failed: failedHooks });
 const hook = (expected, name, current) => {
   const path = join(ROOT, ".agents", name);
   let digest;
@@ -749,7 +753,8 @@ const hook = (expected, name, current) => {
   const afterHook = verify(expected);
   if (result.status !== 0) {
     if (name === "setup") atomicState({ ...afterHook, setup: { status: "failed", digest } });
-    fail("hook", name);
+    failedHooks.push(name);
+    return afterHook;
   }
   if (name === "setup") atomicState({ ...afterHook, setup: { status: "success", digest } });
   return afterHook;
@@ -797,7 +802,7 @@ try {
         try {
           const afterSetup = hook(expected, "setup", markProvisioned(inspected.verified));
           if (process.env.DX_RUN_RESUME !== "false") hook(expected, "resume", afterSetup);
-          process.stdout.write(JSON.stringify({ checkout: inspected.payload, hooks: { status: "ready" } }));
+          process.stdout.write(JSON.stringify({ checkout: inspected.payload, hooks: hooksReady() }));
         } catch (cause) {
           const failure = cause instanceof SourceWorkspaceFailure ? cause : new SourceWorkspaceFailure("initialization");
           process.stderr.write(failure.kind + (failure.detail ? ":" + failure.detail.slice(0, 160) : ""));
@@ -828,7 +833,7 @@ try {
       const current = markProvisioned(verify(expected));
       const afterSetup = hook(expected, "setup", current);
       if (process.env.DX_RUN_RESUME !== "false") hook(expected, "resume", afterSetup);
-      process.stdout.write(JSON.stringify({ status: "ready" }));
+      process.stdout.write(JSON.stringify(hooksReady()));
     }
     else fail("invalid-input", "action");
   }

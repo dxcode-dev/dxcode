@@ -1,3 +1,4 @@
+import { parseMessageAuthor } from "@dx/api";
 import {
   type Context,
   createProvider,
@@ -67,12 +68,19 @@ const fixtureMismatch = () =>
     message: LOCAL_MODEL_FIXTURE_MISMATCH_MESSAGE,
   });
 
+// dx prefixes each user message with its author tag; fixtures match the
+// prompt the person wrote, without a leading `@dx` that sent it to the agent
+// in a shared Thread.
+const writtenPrompt = (text: string) =>
+  parseMessageAuthor(text).text.replace(/^@dx\s+/, "");
+
 const promptFromContext = (context: Context) => {
   const message = context.messages.findLast(({ role }) => role === "user");
   if (message?.role !== "user") return undefined;
-  if (typeof message.content === "string") return message.content;
+  if (typeof message.content === "string")
+    return writtenPrompt(message.content);
   if (message.content.length === 1 && message.content[0]?.type === "text")
-    return message.content[0].text;
+    return writtenPrompt(message.content[0].text);
   return undefined;
 };
 

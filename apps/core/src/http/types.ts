@@ -69,8 +69,18 @@ export interface Variables {
   readonly requestStartedAt: number;
   readonly authenticatedAt: number;
   readonly threadAuthorizedAt: number;
+  /**
+   * Inside a Thread authorized for a workspace member, the Thread owner: every
+   * downstream credential, route, and setting resolves as the owner.
+   */
   readonly principal: Principal;
+  /** The signed-in user; differs from `principal` in a shared Thread. */
+  readonly actor: Principal;
+  readonly threadAccess: "owner" | "contribute" | "view";
+  readonly threadOwnerUserId: string;
   readonly threadLifecycleState: ThreadLifecycleState;
+  /** The Thread POST is a chat message: Flue records it without a model call. */
+  readonly chatDelivery: boolean;
 }
 
 export interface AppEnv {

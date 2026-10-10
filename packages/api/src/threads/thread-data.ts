@@ -28,6 +28,12 @@ import {
   Timestamp,
 } from "@dx/domain";
 import { Schema } from "effect";
+import { ThreadConversationModeSchema } from "./thread-chat.js";
+import {
+  ThreadParticipantDataSchema,
+  ThreadSharingDataSchema,
+  ThreadViewerAccessSchema,
+} from "./thread-sharing.js";
 
 export const ThreadAgentUrlSchema = Schema.TemplateLiteral([
   "/v1/agents/dx/",
@@ -53,6 +59,16 @@ export const ThreadDataSchema = Schema.Struct({
   /** True while DxTitleAgent may still replace `title`; show a loading state. */
   titlePending: Schema.optional(Schema.Boolean),
   agentUrl: ThreadAgentUrlSchema,
+  /** The requester's access; absent from older servers, meaning owner. */
+  access: Schema.optional(ThreadViewerAccessSchema),
+  /** Present while the Thread is shared with the owner's workspace. */
+  sharing: Schema.optional(ThreadSharingDataSchema),
+  /** The owner first, then members who opened or messaged a shared Thread. */
+  participants: Schema.optional(
+    Schema.Array(ThreadParticipantDataSchema).check(Schema.isMaxLength(50)),
+  ),
+  /** For members of a shared Thread, who cannot read the owner's Project. */
+  projectName: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
 }).check(
   Schema.makeFilter((thread) =>
     thread.agentUrl === threadAgentUrl(thread.id)
@@ -177,6 +193,22 @@ export const ThreadDetailDataSchema = Schema.Struct({
   agentUrl: ThreadAgentUrlSchema,
   agentInitialization: ThreadAgentInitializationDataSchema,
   executionWorkspace: ThreadExecutionWorkspaceDataSchema,
+  /** The requester's access; absent from older servers, meaning owner. */
+  access: Schema.optional(ThreadViewerAccessSchema),
+  /** Present while the Thread is shared with the owner's workspace. */
+  sharing: Schema.optional(ThreadSharingDataSchema),
+  /** The owner first, then members who opened or messaged a shared Thread. */
+  participants: Schema.optional(
+    Schema.Array(ThreadParticipantDataSchema).check(Schema.isMaxLength(50)),
+  ),
+  /** For members of a shared Thread, who cannot read the owner's Project. */
+  projectName: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
+  /** Who messages go to; see ThreadConversationModeSchema. */
+  conversationMode: Schema.optional(ThreadConversationModeSchema),
+  /** Members only: whether they follow this shared Thread. */
+  following: Schema.optional(Schema.Boolean),
+  /** Owner only: skip the Enable Multiplayer confirmation. */
+  skipMultiplayerConfirmation: Schema.optional(Schema.Boolean),
 }).check(
   Schema.makeFilter((thread) =>
     thread.agentUrl === threadAgentUrl(thread.id)

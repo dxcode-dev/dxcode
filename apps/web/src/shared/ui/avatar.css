@@ -1,0 +1,48 @@
+/* People: avatars and overlapping avatar stacks. */
+.dx-avatar {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  overflow: visible;
+  color: #fff;
+  border-radius: 999px;
+  background: oklch(52% 0.09 var(--avatar-hue, 160));
+  font-size: 8.5px;
+  font-weight: 600;
+  line-height: 1;
+}
+.dx-avatar > img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+.dx-avatar[data-live]::after {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 6px;
+  height: 6px;
+  content: "";
+  border: 1.5px solid var(--surface);
+  border-radius: 999px;
+  background: var(--success);
+}
+.participant-stack {
+  display: inline-flex;
+  align-items: center;
+}
+.participant-stack > .dx-avatar {
+  box-shadow: 0 0 0 1.5px var(--surface);
+}
+.participant-stack > .dx-avatar + .dx-avatar {
+  margin-left: -4px;
+}
+.participant-more {
+  margin-left: 3px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+}

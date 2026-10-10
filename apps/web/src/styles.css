@@ -521,36 +521,95 @@ a {
   font-weight: 600;
   line-height: 16px;
 }
-.thread-header-metadata {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  margin-left: auto;
-  color: var(--muted-foreground);
-  font-size: 11px;
-  text-transform: capitalize;
-}
-.thread-header-metadata > span {
+.thread-title-group {
   display: flex;
   align-items: center;
   gap: 4px;
-  max-width: 150px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.thread-title-group .thread-title {
+  max-width: 320px;
+  flex-basis: auto;
+}
+.thread-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: auto;
+}
+.thread-header-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 auto;
+  max-width: 160px;
+  height: 24px;
+  min-width: 0;
+  padding: 0 7px;
   overflow: hidden;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  line-height: 24px;
   text-overflow: ellipsis;
+  text-transform: capitalize;
   white-space: nowrap;
 }
-.thread-header-metadata svg {
+.thread-header-chip svg {
   width: 13px;
   height: 13px;
   flex: none;
 }
-.thread-title-bar > button {
+.thread-header-chip-button {
+  cursor: pointer;
+}
+.thread-header-chip-button:hover,
+.thread-header-chip-button:focus-visible {
+  color: var(--foreground);
+  background: var(--accent);
+  outline: none;
+}
+.thread-header-chip[data-privacy="workspace"] {
+  color: var(--foreground);
+}
+.thread-share-button {
+  height: 24px;
+  padding: 0 8px;
+  color: var(--foreground);
+  font-size: 11px;
+  font-weight: 500;
+}
+.thread-access-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  height: 22px;
+  padding: 0 7px;
+  color: var(--foreground);
+  border: 1px solid var(--outline);
+  border-radius: 999px;
+  background: var(--muted);
+  font-size: 10.5px;
+  font-weight: 500;
+}
+.thread-access-chip svg {
+  width: 12px;
+  height: 12px;
+}
+.thread-title-bar button.size-6 {
   width: 26px;
   height: 26px;
   flex: none;
 }
-.thread-title-bar > button[aria-disabled="true"] {
+.thread-title-bar button[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.55;
 }
@@ -10990,13 +11049,12 @@ button.sidebar-news-card {
   .mobile-thread-region .thread-title-bar {
     padding-left: 42px;
   }
-  .thread-header-metadata > span:first-child,
-  .thread-header-metadata > span:last-child {
+  .thread-header-actions > .thread-header-chip:not([data-privacy]) {
     display: none;
   }
 }
 @media (max-width: 480px), (pointer: coarse) {
-  .thread-header-metadata {
+  .thread-header-actions > .thread-header-chip {
     display: none;
   }
 }

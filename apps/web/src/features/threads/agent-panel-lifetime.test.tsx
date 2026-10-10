@@ -585,6 +585,50 @@ describe("thread composer ownership", () => {
     await React.act(() => root.unmount());
   });
 
+  it("keeps the draft and refreshes access when multiplayer ended", async () => {
+    const rejection = Object.assign(new Error("Forbidden"), {
+      status: 403,
+      body: { status: "error", data: { code: "THREAD_READ_ONLY" } },
+    });
+    const sendMessage = vi.fn().mockRejectedValue(rejection);
+    const onAccessChanged = vi.fn();
+    const mounted = await mountPanel(
+      { sendMessage },
+      false,
+      {},
+      {
+        onAccessChanged,
+      },
+    );
+    const textarea = mounted.container.querySelector<HTMLTextAreaElement>(
+      '[aria-label="Message"]',
+    );
+    const form = mounted.container.querySelector("form");
+    if (textarea === null || form === null)
+      throw new Error("Expected thread composer form.");
+
+    await React.act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )?.set?.call(textarea, "Ship the fix");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      form.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      );
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() =>
+      expect(
+        mounted.container.querySelector(".thread-error-card")?.textContent,
+      ).toContain("Multiplayer ended. You can still view this thread."),
+    );
+    expect(onAccessChanged).toHaveBeenCalledOnce();
+    expect(textarea.value).toBe("Ship the fix");
+    await React.act(() => mounted.root.unmount());
+  });
+
   it("unlocks after failed steering admission without re-sending it", async () => {
     const sendMessage = vi
       .fn()

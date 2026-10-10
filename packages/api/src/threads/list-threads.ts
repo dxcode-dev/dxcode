@@ -42,3 +42,8 @@ export type ListThreadsInvalidRequestResponse =
   typeof ListThreadsInvalidRequestResponseSchema.Type;
 export type ListThreadsPersistenceUnavailableResponse =
   typeof ListThreadsPersistenceUnavailableResponseSchema.Type;
+
+/** Active Threads other workspace members shared with the requester. */
+export const ListSharedThreadsResponseSchema = successResponse(
+  Schema.Struct({ items: Schema.Array(ThreadListItemSchema) }),
+);

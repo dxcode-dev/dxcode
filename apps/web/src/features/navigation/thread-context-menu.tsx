@@ -15,6 +15,8 @@ export function ThreadContextMenu({
     readonly id: string;
     readonly lifecycleState: "active" | "archived";
     readonly pinnedAt?: unknown;
+    /** Someone else's shared Thread: pinning and archiving stay theirs. */
+    readonly access?: "owner" | "contribute" | "view";
   };
   readonly onSetArchived: (archived: boolean) => void;
   readonly onSetPinned: (pinned: boolean) => void;
@@ -36,28 +38,34 @@ export function ThreadContextMenu({
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="thread-context-positioner">
           <ContextMenu.Popup className="thread-context-menu">
-            {thread.lifecycleState === "active" ? (
-              <ContextMenu.Item
-                className="thread-context-item"
-                disabled={pinning}
-                onClick={() => onSetPinned(thread.pinnedAt === undefined)}
-              >
-                <Pin /> {thread.pinnedAt === undefined ? "Pin" : "Unpin"}
-              </ContextMenu.Item>
-            ) : null}
-            <ContextMenu.Item
-              className="thread-context-item"
-              disabled={archiving}
-              onClick={() => onSetArchived(thread.lifecycleState === "active")}
-            >
-              {thread.lifecycleState === "active" ? (
-                <Archive />
-              ) : (
-                <ArchiveRestore />
-              )}
-              {thread.lifecycleState === "active" ? "Archive" : "Unarchive"}
-            </ContextMenu.Item>
-            <ContextMenu.Separator className="thread-context-separator" />
+            {thread.access !== undefined && thread.access !== "owner" ? null : (
+              <>
+                {thread.lifecycleState === "active" ? (
+                  <ContextMenu.Item
+                    className="thread-context-item"
+                    disabled={pinning}
+                    onClick={() => onSetPinned(thread.pinnedAt === undefined)}
+                  >
+                    <Pin /> {thread.pinnedAt === undefined ? "Pin" : "Unpin"}
+                  </ContextMenu.Item>
+                ) : null}
+                <ContextMenu.Item
+                  className="thread-context-item"
+                  disabled={archiving}
+                  onClick={() =>
+                    onSetArchived(thread.lifecycleState === "active")
+                  }
+                >
+                  {thread.lifecycleState === "active" ? (
+                    <Archive />
+                  ) : (
+                    <ArchiveRestore />
+                  )}
+                  {thread.lifecycleState === "active" ? "Archive" : "Unarchive"}
+                </ContextMenu.Item>
+                <ContextMenu.Separator className="thread-context-separator" />
+              </>
+            )}
             <ContextMenu.Item
               className="thread-context-item"
               onClick={copyLink}

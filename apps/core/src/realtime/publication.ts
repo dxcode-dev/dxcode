@@ -17,6 +17,11 @@ export type InvalidationType = Exclude<
   "workspace.status"
 >;
 export type WorkspaceStatus = "waking" | "ready";
+/**
+ * Who receives a Thread event: the owner and everyone viewing the Thread, or
+ * every member connected to the owner's workspace (sharing changed).
+ */
+export type RealtimeRecipients = "thread" | "audience";
 
 export const userAudienceKey = (userId: UserId): AudienceKey =>
   `user:${userId}`;
@@ -27,11 +32,15 @@ export const homeAudienceForUser = async (
   db: D1Database,
   userId: UserId,
 ): Promise<AudienceKey> => {
+  // The same workspace a shared Thread is shared with (see
+  // thread-sharing/service.ts), so owner and members meet in one hub.
   const membership = await db
     .prepare(
-      `SELECT organizationId
+      `SELECT member.organizationId
          FROM member
-        WHERE userId = ?
+         JOIN organization ON organization.id = member.organizationId
+        WHERE member.userId = ? AND organization.lifecycleState = 'active'
+        ORDER BY member.createdAt
         LIMIT 1`,
     )
     .bind(userId)
@@ -48,22 +57,13 @@ const threadAudience = async (
   { readonly audience: AudienceKey; readonly ownerUserId: UserId } | undefined
 > => {
   const row = await db
-    .prepare(
-      `SELECT threads.owner_user_id AS ownerUserId, member.organizationId
-         FROM threads
-         LEFT JOIN member ON member.userId = threads.owner_user_id
-        WHERE threads.id = ?
-        LIMIT 1`,
-    )
+    .prepare("SELECT owner_user_id AS ownerUserId FROM threads WHERE id = ?")
     .bind(threadId)
-    .first<{ ownerUserId: UserId; organizationId: string | null }>();
+    .first<{ ownerUserId: UserId }>();
   if (row === null) return undefined;
   return {
     ownerUserId: row.ownerUserId,
-    audience:
-      row.organizationId === null
-        ? userAudienceKey(row.ownerUserId)
-        : workspaceAudienceKey(row.organizationId),
+    audience: await homeAudienceForUser(db, row.ownerUserId),
   };
 };
 
@@ -71,8 +71,12 @@ export const publishRealtimeInvalidation = async (
   bindings: Pick<Bindings, "DB" | "REALTIME_HUB">,
   threadId: ThreadId,
   type: InvalidationType,
+  recipients: RealtimeRecipients = "thread",
 ): Promise<void> => {
-  await publishRealtimeThreadEvent(bindings, threadId, { type });
+  await publishRealtimeThreadEvent(bindings, threadId, {
+    type,
+    ...(recipients === "thread" ? {} : { recipients }),
+  });
 };
 
 export const publishRealtimeWorkspaceStatus = async (
@@ -90,7 +94,10 @@ const publishRealtimeThreadEvent = async (
   bindings: Pick<Bindings, "DB" | "REALTIME_HUB">,
   threadId: ThreadId,
   event:
-    | { readonly type: InvalidationType }
+    | {
+        readonly type: InvalidationType;
+        readonly recipients?: RealtimeRecipients;
+      }
     | { readonly type: "workspace.status"; readonly status: WorkspaceStatus },
 ): Promise<void> => {
   if (bindings.DB === undefined || bindings.REALTIME_HUB === undefined) return;
@@ -134,8 +141,14 @@ export const scheduleRealtimeInvalidation = async (
   bindings: Pick<Bindings, "DB" | "REALTIME_HUB">,
   threadId: ThreadId,
   type: InvalidationType,
+  recipients: RealtimeRecipients = "thread",
 ): Promise<void> => {
-  const publication = publishRealtimeInvalidation(bindings, threadId, type);
+  const publication = publishRealtimeInvalidation(
+    bindings,
+    threadId,
+    type,
+    recipients,
+  );
   try {
     executionContext().waitUntil(publication);
   } catch (cause) {

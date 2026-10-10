@@ -8,7 +8,7 @@ overrides:
   '@opentelemetry/api': 1.9.0
   '@better-auth/utils': 0.4.2
   '@earendil-works/pi-ai': 0.85.1
-  '@flue/runtime': file:third-party/flue/runtime-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz
+  '@flue/runtime': file:third-party/flue/runtime-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz
 
 patchedDependencies:
   alchemy@2.0.0-beta.74:
@@ -83,8 +83,8 @@ importers:
         specifier: 4.0.0-rc.110
         version: 4.0.0-rc.110(effect@4.0.0-rc.110)
       '@flue/runtime':
-        specifier: file:../../third-party/flue/runtime-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz
-        version: file:third-party/flue/runtime-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(typescript@7.0.2)(ws@8.21.3)(zod@4.3.6)
+        specifier: file:../../third-party/flue/runtime-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz
+        version: file:third-party/flue/runtime-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(typescript@7.0.2)(ws@8.21.3)(zod@4.3.6)
       '@jitl/quickjs-wasmfile-release-sync':
         specifier: 0.32.0
         version: 0.32.0
@@ -141,11 +141,11 @@ importers:
         specifier: 0.85.1
         version: 0.85.1(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(ws@8.21.3)(zod@4.3.6)
       '@flue/sdk':
-        specifier: file:../../third-party/flue/sdk-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz
-        version: file:third-party/flue/sdk-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz
+        specifier: file:../../third-party/flue/sdk-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz
+        version: file:third-party/flue/sdk-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz
       '@flue/vite':
-        specifier: file:../../third-party/flue/vite-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz
-        version: file:third-party/flue/vite-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz(@babel/core@8.0.1)(@babel/runtime@7.29.7)(@cloudflare/workers-types@5.20260820.1)(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@modelcontextprotocol/server@2.0.0)(hono@4.12.32)(react@19.2.8)(rolldown@1.2.5)(typescript@7.0.2)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(ws@8.21.3)(zod@4.3.6)
+        specifier: file:../../third-party/flue/vite-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz
+        version: file:third-party/flue/vite-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz(@babel/core@8.0.1)(@babel/runtime@7.29.7)(@cloudflare/workers-types@5.20260820.1)(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@modelcontextprotocol/server@2.0.0)(hono@4.12.32)(react@19.2.8)(rolldown@1.2.5)(typescript@7.0.2)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(ws@8.21.3)(zod@4.3.6)
       '@msw/cloudflare':
         specifier: ^0.0.1
         version: 0.0.1(msw@2.15.0(@types/node@26.2.0)(typescript@7.0.2))
@@ -208,11 +208,11 @@ importers:
         specifier: workspace:^
         version: link:../../packages/domain
       '@flue/react':
-        specifier: file:../../third-party/flue/react-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz
-        version: file:third-party/flue/react-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz(@flue/sdk@file:third-party/flue/sdk-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz)(react@19.2.8)
+        specifier: file:../../third-party/flue/react-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz
+        version: file:third-party/flue/react-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz(@flue/sdk@file:third-party/flue/sdk-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz)(react@19.2.8)
       '@flue/sdk':
-        specifier: file:../../third-party/flue/sdk-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz
-        version: file:third-party/flue/sdk-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz
+        specifier: file:../../third-party/flue/sdk-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz
+        version: file:third-party/flue/sdk-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz
       '@fontsource/dm-mono':
         specifier: 5.3.0
         version: 5.3.0
@@ -335,11 +335,11 @@ importers:
         specifier: workspace:^
         version: link:../packages/domain
       '@flue/runtime':
-        specifier: file:../third-party/flue/runtime-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz
-        version: file:third-party/flue/runtime-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.6.5))(typescript@7.0.2)(ws@8.21.3)(zod@4.6.5)
+        specifier: file:../third-party/flue/runtime-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz
+        version: file:third-party/flue/runtime-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.6.5))(typescript@7.0.2)(ws@8.21.3)(zod@4.6.5)
       '@flue/sdk':
-        specifier: file:../third-party/flue/sdk-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz
-        version: file:third-party/flue/sdk-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz
+        specifier: file:../third-party/flue/sdk-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz
+        version: file:third-party/flue/sdk-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz
       e2b:
         specifier: 2.44.0
         version: 2.44.0
@@ -369,8 +369,8 @@ importers:
         specifier: 0.85.1
         version: 0.85.1(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)
       '@flue/vite':
-        specifier: file:../third-party/flue/vite-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz
-        version: file:third-party/flue/vite-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz(@babel/core@8.0.1)(@babel/runtime@7.29.7)(@cloudflare/workers-types@5.20260820.1)(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.6.5))(@modelcontextprotocol/server@2.0.0)(hono@4.12.32)(react@19.2.8)(rolldown@1.2.5)(typescript@7.0.2)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(ws@8.21.3)(zod@4.6.5)
+        specifier: file:../third-party/flue/vite-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz
+        version: file:third-party/flue/vite-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz(@babel/core@8.0.1)(@babel/runtime@7.29.7)(@cloudflare/workers-types@5.20260820.1)(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.6.5))(@modelcontextprotocol/server@2.0.0)(hono@4.12.32)(react@19.2.8)(rolldown@1.2.5)(typescript@7.0.2)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(ws@8.21.3)(zod@4.6.5)
       '@types/ws':
         specifier: 8.18.1
         version: 8.18.1
@@ -1809,24 +1809,24 @@ packages:
   '@floating-ui/utils@0.2.12':
     resolution: {integrity: sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww==}
 
-  '@flue/react@file:third-party/flue/react-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz':
-    resolution: {integrity: sha512-lsdfwToH1At6JWE90YCLEGASo/Vex7nyXxu2ixLo5Ta15LqcVMdxBSTeHQ4urniWUErCC4qSzyNFLt+DrpwwRw==, tarball: file:third-party/flue/react-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz}
+  '@flue/react@file:third-party/flue/react-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz':
+    resolution: {integrity: sha512-VXaLY036Zhes42lyQpya98a601Lzi1MoOa44mp0coNpsk9o2AsAWkKpyxvDpOTR8CtcYGlhknIo/HtvTb4CO1Q==, tarball: file:third-party/flue/react-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz}
     version: 2.0.7
     peerDependencies:
       '@flue/sdk': 2.0.7
       react: '>=18'
 
-  '@flue/runtime@file:third-party/flue/runtime-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz':
-    resolution: {integrity: sha512-E679XLf5AsXdh3YKWhzSYtWuLBEHrXFvGNnVDi113anFpi44YQRp/Rc2ec2/QljRBzPBy9NhLEhWSA1T1fGYJg==, tarball: file:third-party/flue/runtime-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz}
+  '@flue/runtime@file:third-party/flue/runtime-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz':
+    resolution: {integrity: sha512-OG4NoH6ujqVR1rwD6cVPOV07SNu7pyUFZq8bmExnhhVRWNTByNsRxuzvWIkf6wF9v+HSXZnNF6KRBQy5cT5iKQ==, tarball: file:third-party/flue/runtime-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz}
     version: 2.0.7
     engines: {node: '>=22.19.0'}
 
-  '@flue/sdk@file:third-party/flue/sdk-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz':
-    resolution: {integrity: sha512-lt4NjYTGiKPmodpUXCEHqvNtRXk9x2C7MGjVkV00ueJOuR44wB9OzVPpZwe8j0TFSDawQyu6PEpKaKJh5SNp/A==, tarball: file:third-party/flue/sdk-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz}
+  '@flue/sdk@file:third-party/flue/sdk-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz':
+    resolution: {integrity: sha512-7wjI30t9BQU3KjOUPzfC7Pj8zumzAOm5SYxRlwSosY0k49VVy/hZcoRgMQNrWHZQeg+RZlAJ+RYge64T9B9ctg==, tarball: file:third-party/flue/sdk-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz}
     version: 2.0.7
 
-  '@flue/vite@file:third-party/flue/vite-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz':
-    resolution: {integrity: sha512-J8uJcn2XXWb0aErkOe3/QxbO4YXjWb0wFeMMko3rwYgj5RnQXP9/3kP+x0+2Yw26U/rZnGnzgNv8esMS319ouQ==, tarball: file:third-party/flue/vite-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz}
+  '@flue/vite@file:third-party/flue/vite-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz':
+    resolution: {integrity: sha512-L4E8n/p0xt7OZ+VwT6cgf9Wl1QOi0gIButNc9brajfJdyeXtvaJct3Yoq8jJHaTTUPYoDOPSXQvFYG7+Oo8Czw==, tarball: file:third-party/flue/vite-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz}
     version: 2.0.7
     engines: {node: '>=22.19.0'}
     peerDependencies:
@@ -8947,12 +8947,12 @@ snapshots:
 
   '@floating-ui/utils@0.2.12': {}
 
-  '@flue/react@file:third-party/flue/react-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz(@flue/sdk@file:third-party/flue/sdk-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz)(react@19.2.8)':
+  '@flue/react@file:third-party/flue/react-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz(@flue/sdk@file:third-party/flue/sdk-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz)(react@19.2.8)':
     dependencies:
-      '@flue/sdk': file:third-party/flue/sdk-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz
+      '@flue/sdk': file:third-party/flue/sdk-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz
       react: 19.2.8
 
-  '@flue/runtime@file:third-party/flue/runtime-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(typescript@7.0.2)(ws@8.21.3)(zod@4.3.6)':
+  '@flue/runtime@file:third-party/flue/runtime-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(typescript@7.0.2)(ws@8.21.3)(zod@4.3.6)':
     dependencies:
       '@earendil-works/pi-agent-core': 0.83.0(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(ws@8.21.3)(zod@4.3.6)
       '@earendil-works/pi-ai': 0.85.1(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(ws@8.21.3)(zod@4.3.6)
@@ -8972,7 +8972,7 @@ snapshots:
       - ws
       - zod
 
-  '@flue/runtime@file:third-party/flue/runtime-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.6.5))(typescript@7.0.2)(ws@8.21.3)(zod@4.6.5)':
+  '@flue/runtime@file:third-party/flue/runtime-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.6.5))(typescript@7.0.2)(ws@8.21.3)(zod@4.6.5)':
     dependencies:
       '@earendil-works/pi-agent-core': 0.83.0(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)
       '@earendil-works/pi-ai': 0.85.1(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)
@@ -8992,13 +8992,13 @@ snapshots:
       - ws
       - zod
 
-  '@flue/sdk@file:third-party/flue/sdk-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz':
+  '@flue/sdk@file:third-party/flue/sdk-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz':
     dependencies:
       '@durable-streams/client': 0.2.6
 
-  '@flue/vite@file:third-party/flue/vite-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz(@babel/core@8.0.1)(@babel/runtime@7.29.7)(@cloudflare/workers-types@5.20260820.1)(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@modelcontextprotocol/server@2.0.0)(hono@4.12.32)(react@19.2.8)(rolldown@1.2.5)(typescript@7.0.2)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(ws@8.21.3)(zod@4.3.6)':
+  '@flue/vite@file:third-party/flue/vite-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz(@babel/core@8.0.1)(@babel/runtime@7.29.7)(@cloudflare/workers-types@5.20260820.1)(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@modelcontextprotocol/server@2.0.0)(hono@4.12.32)(react@19.2.8)(rolldown@1.2.5)(typescript@7.0.2)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(ws@8.21.3)(zod@4.3.6)':
     dependencies:
-      '@flue/runtime': file:third-party/flue/runtime-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(typescript@7.0.2)(ws@8.21.3)(zod@4.3.6)
+      '@flue/runtime': file:third-party/flue/runtime-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(typescript@7.0.2)(ws@8.21.3)(zod@4.3.6)
       '@hono/node-server': 2.1.1(hono@4.12.32)
       agents: 0.20.1(@babel/core@8.0.1)(@babel/runtime@7.29.7)(@cloudflare/workers-types@5.20260820.1)(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@modelcontextprotocol/server@2.0.0)(react@19.2.8)(rolldown@1.2.5)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(zod@4.3.6)
       magic-string: 1.4.2
@@ -9031,9 +9031,9 @@ snapshots:
       - ws
       - zod
 
-  '@flue/vite@file:third-party/flue/vite-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz(@babel/core@8.0.1)(@babel/runtime@7.29.7)(@cloudflare/workers-types@5.20260820.1)(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.6.5))(@modelcontextprotocol/server@2.0.0)(hono@4.12.32)(react@19.2.8)(rolldown@1.2.5)(typescript@7.0.2)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(ws@8.21.3)(zod@4.6.5)':
+  '@flue/vite@file:third-party/flue/vite-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz(@babel/core@8.0.1)(@babel/runtime@7.29.7)(@cloudflare/workers-types@5.20260820.1)(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.6.5))(@modelcontextprotocol/server@2.0.0)(hono@4.12.32)(react@19.2.8)(rolldown@1.2.5)(typescript@7.0.2)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(ws@8.21.3)(zod@4.6.5)':
     dependencies:
-      '@flue/runtime': file:third-party/flue/runtime-86c9c05b22514ea646aedff869d1579a99d8eab9.tgz(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.6.5))(typescript@7.0.2)(ws@8.21.3)(zod@4.6.5)
+      '@flue/runtime': file:third-party/flue/runtime-a364411c2607607cf5c0a61e76e2cfe35c44cff2.tgz(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.6.5))(typescript@7.0.2)(ws@8.21.3)(zod@4.6.5)
       '@hono/node-server': 2.1.1(hono@4.12.32)
       agents: 0.20.1(@babel/core@8.0.1)(@babel/runtime@7.29.7)(@cloudflare/workers-types@5.20260820.1)(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.6.5))(@modelcontextprotocol/server@2.0.0)(react@19.2.8)(rolldown@1.2.5)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(zod@4.6.5)
       magic-string: 1.4.2

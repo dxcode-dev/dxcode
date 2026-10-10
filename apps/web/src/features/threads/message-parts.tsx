@@ -1,5 +1,6 @@
 import type { FlueConversationPart } from "@flue/react";
 import { Check, ChevronRight, LoaderCircle, X } from "lucide-react";
+import { AgentMentions, UserMessageText } from "./sharing/message-authors.js";
 import { presentTool } from "./tool-presentation.js";
 import {
   TranscriptAttachment,
@@ -67,18 +68,19 @@ function FilePart({
 }
 
 export function TranscriptRowContent({ row }: { readonly row: TranscriptRow }) {
-  if (
-    row.kind === "user-prompt" ||
-    row.kind === "assistant-prose" ||
-    row.kind === "final-answer"
-  ) {
+  // People write plain text; only the agent's replies are Markdown.
+  if (row.kind === "user-prompt")
+    return <UserMessageText text={row.text} mentions={row.mentions} />;
+  if (row.kind === "assistant-prose" || row.kind === "final-answer") {
     return (
       <div className="message-text">
-        <TranscriptMarkdown
-          streaming={row.kind === "assistant-prose" && row.streaming}
-        >
-          {row.text}
-        </TranscriptMarkdown>
+        <AgentMentions>
+          <TranscriptMarkdown
+            streaming={row.kind === "assistant-prose" && row.streaming}
+          >
+            {row.text}
+          </TranscriptMarkdown>
+        </AgentMentions>
       </div>
     );
   }

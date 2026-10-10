@@ -255,7 +255,8 @@ describe("thread page render scope", () => {
         ),
       );
     await render(history);
-    expect(counts.parses).toHaveLength(4);
+    // Only the agent's replies are Markdown; prompts are plain text.
+    expect(counts.parses).toEqual(["First **answer**", "Second answer"]);
 
     // A fresh derivation of unchanged history creates new row objects.
     counts.parses.length = 0;

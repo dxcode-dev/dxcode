@@ -159,6 +159,7 @@ export function AppSidebar({
   archiveAvailable = userId !== undefined,
   projects,
   threads,
+  sharedThreads,
   personalAccount,
   settingsContext,
   onCollapse,
@@ -171,6 +172,7 @@ export function AppSidebar({
   hasMore,
   loadMoreError,
   onSetPinned = noop,
+  onUnfollow,
   pinningThreadId,
   extensionRegion,
 }: {
@@ -178,6 +180,9 @@ export function AppSidebar({
   readonly archiveAvailable?: boolean;
   readonly projects: ReadonlyArray<ProjectData>;
   readonly threads: ReadonlyArray<ThreadData>;
+  /** Shared Threads of other workspace members that this user follows. */
+  readonly sharedThreads?: ReadonlyArray<ThreadData>;
+  readonly onUnfollow?: (threadId: ThreadData["id"]) => void;
   readonly personalAccount?: PersonalAccountData;
   readonly settingsContext?: SettingsContextData;
   readonly onCollapse: () => void;
@@ -217,8 +222,16 @@ export function AppSidebar({
     sidebarLifecycleRef,
   } = useThreadPreviewIntent();
   const projectNames = React.useMemo(
-    () => new Map(projects.map((project) => [project.id, project.name])),
-    [projects],
+    () =>
+      new Map<string, string>([
+        ...(sharedThreads ?? []).flatMap((thread) =>
+          thread.projectName === undefined
+            ? []
+            : [[thread.projectId, thread.projectName] as const],
+        ),
+        ...projects.map((project) => [project.id, project.name] as const),
+      ]),
+    [projects, sharedThreads],
   );
   const onThreadNavigate = React.useCallback(
     (threadId: ThreadData["id"]) => {
@@ -232,6 +245,7 @@ export function AppSidebar({
     threads,
     Date.now(),
     archiveAvailable,
+    sharedThreads,
   );
 
   const toggleGroup = (groupId: string) => {
@@ -322,13 +336,14 @@ export function AppSidebar({
         projectNames={projectNames}
         query=""
         sections={sections}
-        visibleThreadCount={threads.length}
+        visibleThreadCount={threads.length + (sharedThreads?.length ?? 0)}
         onLoadMore={onLoadMore}
         onNavigate={onNavigate}
         onThreadNavigate={onThreadNavigate}
         onThreadPointerEnter={openPreview}
         onThreadPointerLeave={leaveThreadRow}
         onToggleGroup={toggleGroup}
+        onUnfollow={onUnfollow}
         onSetArchived={archive.setArchived}
         onSetPinned={onSetPinned}
         archivingThreadId={archive.pendingThreadId}

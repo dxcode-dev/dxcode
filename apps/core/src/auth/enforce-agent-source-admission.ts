@@ -15,7 +15,11 @@ export const enforceAgentSourceAdmission: MiddlewareHandler<AppEnv> = async (
   context,
   next,
 ) => {
-  if (["GET", "HEAD", "OPTIONS"].includes(context.req.method)) {
+  // Reads, and chat between members, touch no source.
+  if (
+    ["GET", "HEAD", "OPTIONS"].includes(context.req.method) ||
+    context.get("chatDelivery")
+  ) {
     await next();
     return;
   }

@@ -45,8 +45,12 @@ export class RealtimeClient {
   #reconnect?: ReturnType<typeof setTimeout>;
   #heartbeat?: ReturnType<typeof setInterval>;
   #topic?: `thread:${ThreadId}`;
+  /** The current topic's join was refused; retried once the Thread changes. */
+  #deniedTopic?: `thread:${ThreadId}`;
   readonly #workspaceStatuses = new Map<ThreadId, WorkspaceStatus>();
   readonly #workspaceStatusListeners = new Map<ThreadId, Set<() => void>>();
+  readonly #presentUsers = new Map<ThreadId, ReadonlyArray<UserId>>();
+  readonly #presenceListeners = new Map<ThreadId, Set<() => void>>();
   #stopped = true;
   #attempt = 0;
 
@@ -82,6 +86,7 @@ export class RealtimeClient {
     if (this.#topic === next) return () => undefined;
     if (this.#topic !== undefined) this.#send("presence.leave", this.#topic);
     this.#topic = next;
+    this.#deniedTopic = undefined;
     this.#send("presence.join", next);
     return () => {
       if (this.#topic !== next) return;
@@ -102,6 +107,21 @@ export class RealtimeClient {
 
   workspaceStatus(threadId: ThreadId): WorkspaceStatus {
     return this.#workspaceStatuses.get(threadId);
+  }
+
+  observePresentUsers(threadId: ThreadId, listener: () => void) {
+    const listeners = this.#presenceListeners.get(threadId) ?? new Set();
+    listeners.add(listener);
+    this.#presenceListeners.set(threadId, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) this.#presenceListeners.delete(threadId);
+    };
+  }
+
+  /** People with this Thread open right now, one entry per user. */
+  presentUsers(threadId: ThreadId): ReadonlyArray<UserId> | undefined {
+    return this.#presentUsers.get(threadId);
   }
 
   #connect() {
@@ -144,9 +164,10 @@ export class RealtimeClient {
     const event = decoded.value;
     if (event.type === "ready") {
       this.#cursor = event.revision;
+      this.#deniedTopic = undefined;
       if (this.#topic !== undefined) this.#send("presence.join", this.#topic);
       this.#heartbeat = setInterval(() => {
-        if (this.#topic !== undefined)
+        if (this.#topic !== undefined && this.#topic !== this.#deniedTopic)
           this.#send("presence.heartbeat", this.#topic);
       }, 10_000);
       return;
@@ -167,6 +188,11 @@ export class RealtimeClient {
       this.#cursor = event.revision;
     }
     if (event.type === "thread.invalidated") {
+      // Sharing may have changed: try the refused Thread once more.
+      if (this.#deniedTopic === `thread:${event.threadId}`) {
+        this.#deniedTopic = undefined;
+        this.#send("presence.join", `thread:${event.threadId}`);
+      }
       void invalidateThreadQueries(
         this.#queryClient,
         this.#userId,
@@ -191,6 +217,26 @@ export class RealtimeClient {
         ?.forEach((listener) => {
           listener();
         });
+    } else if (event.type === "presence.snapshot") {
+      const threadId = event.topic.slice("thread:".length) as ThreadId;
+      const previous = new Set(this.#presentUsers.get(threadId) ?? []);
+      const present = [
+        ...new Set(event.participants.map(({ userId }) => userId)),
+      ];
+      this.#presentUsers.set(threadId, present);
+      // Someone new opened a shared Thread: refresh it for their name.
+      if (
+        previous.size > 0 &&
+        present.some(
+          (userId) => userId !== this.#userId && !previous.has(userId),
+        )
+      )
+        void invalidateThreadQueries(this.#queryClient, this.#userId, threadId);
+      this.#presenceListeners.get(threadId)?.forEach((listener) => {
+        listener();
+      });
+    } else if (event.type === "presence.denied") {
+      if (event.topic === this.#topic) this.#deniedTopic = this.#topic;
     } else if (event.type === "presence.rejoin-required") {
       if (event.topic === this.#topic && this.#topic !== undefined)
         this.#send("presence.join", this.#topic);
@@ -206,6 +252,14 @@ export class RealtimeClient {
   }
 
   #clearWorkspaceStatuses() {
+    if (this.#presentUsers.size > 0) {
+      const present = [...this.#presentUsers.keys()];
+      this.#presentUsers.clear();
+      for (const threadId of present)
+        this.#presenceListeners.get(threadId)?.forEach((listener) => {
+          listener();
+        });
+    }
     if (this.#workspaceStatuses.size === 0) return;
     const threadIds = [...this.#workspaceStatuses.keys()];
     this.#workspaceStatuses.clear();

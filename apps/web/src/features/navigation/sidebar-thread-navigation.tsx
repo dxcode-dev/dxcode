@@ -32,6 +32,7 @@ export function SidebarThreadNavigation({
   onToggleGroup,
   onSetArchived,
   onSetPinned,
+  onUnfollow,
   archivingThreadId,
   pinningThreadId,
 }: {
@@ -61,6 +62,7 @@ export function SidebarThreadNavigation({
     archived: boolean,
   ) => void;
   readonly onSetPinned: (threadId: ThreadData["id"], pinned: boolean) => void;
+  readonly onUnfollow?: (threadId: ThreadData["id"]) => void;
   readonly archivingThreadId?: ThreadData["id"];
   readonly pinningThreadId?: ThreadData["id"];
 }) {
@@ -159,6 +161,7 @@ export function SidebarThreadNavigation({
                 onThreadPointerLeave={onThreadPointerLeave}
                 onSetArchived={onSetArchived}
                 onSetPinned={onSetPinned}
+                onUnfollow={onUnfollow}
                 archivingThreadId={archivingThreadId}
                 pinningThreadId={pinningThreadId}
               />

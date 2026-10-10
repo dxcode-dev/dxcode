@@ -1,6 +1,7 @@
 import {
   CreateProjectResponseSchema,
   CreateThreadResponseSchema,
+  parseMessageAuthor,
   threadAgentUrl,
 } from "@dx/api";
 import { newThreadId, type ProjectId, type ThreadId } from "@dx/domain";
@@ -135,7 +136,9 @@ const initialSubmissionId = (snapshot: FlueConversationSnapshot) =>
     (message) =>
       message.role === "user" &&
       message.parts.some(
-        (part) => part.type === "text" && part.text === INITIAL_PROMPT,
+        (part) =>
+          part.type === "text" &&
+          parseMessageAuthor(part.text).text === INITIAL_PROMPT,
       ),
   )?.submissionId;
 

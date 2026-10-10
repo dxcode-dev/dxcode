@@ -76,13 +76,16 @@ export * from "./threads/files.js";
 export * from "./threads/get-thread.js";
 export * from "./threads/get-thread-readiness.js";
 export * from "./threads/list-threads.js";
+export * from "./threads/message-author.js";
 export * from "./threads/pin-thread.js";
 export * from "./threads/terminal.js";
+export * from "./threads/thread-chat.js";
 export * from "./threads/thread-data.js";
 export {
   type ThreadNotFoundResponse,
   ThreadNotFoundResponseSchema,
 } from "./threads/thread-not-found-response.js";
 export * from "./threads/thread-settlement-provenance.js";
+export * from "./threads/thread-sharing.js";
 export * from "./threads/workspace-policy-denied-response.js";
 export * from "./workload-identity.js";

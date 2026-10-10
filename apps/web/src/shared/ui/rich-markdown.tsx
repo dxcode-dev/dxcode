@@ -1,5 +1,6 @@
 import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-700.css";
+import { splitMentions } from "@dx/api";
 import { Check, Copy, WrapText } from "lucide-react";
 import * as React from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
@@ -12,6 +13,10 @@ import {
   MarkdownFileLinkContext,
   type MarkdownFileLinkResolver,
 } from "./markdown-file-link-context.js";
+import {
+  MarkdownMentionContext,
+  type MarkdownMentions,
+} from "./markdown-mention-context.js";
 
 const accessibleName = (value: string | undefined, fallback: string) =>
   value?.trim() || fallback;
@@ -274,9 +279,59 @@ const urlTransform = (url: string) =>
     ? url
     : safeUrl(url);
 
+interface MarkdownNode {
+  type: string;
+  value?: string;
+  children?: MarkdownNode[];
+  data?: Record<string, unknown>;
+}
+
+/**
+ * Turns `@handle` in prose (not code or links) into `dx-mention` elements
+ * for the handles given.
+ */
+const remarkMentions =
+  (handles: ReadonlyArray<string>) => () => (tree: MarkdownNode) => {
+    const visit = (node: MarkdownNode) => {
+      if (node.children === undefined) return;
+      if (node.type === "link" || node.type === "linkReference") return;
+      node.children = node.children.flatMap((child): MarkdownNode[] => {
+        if (child.type !== "text" || child.value === undefined) {
+          visit(child);
+          return [child];
+        }
+        return splitMentions(child.value, handles).map((part) =>
+          part.handle === undefined
+            ? { type: "text", value: part.text }
+            : {
+                type: "mention",
+                data: {
+                  hName: "dx-mention",
+                  hProperties: { handle: part.handle },
+                },
+                children: [{ type: "text", value: part.text }],
+              },
+        );
+      });
+    };
+    visit(tree);
+  };
+
 const markdownComponents = (
   resolveFile: MarkdownFileLinkResolver | undefined,
+  mentions: MarkdownMentions | undefined,
 ): React.ComponentProps<typeof ReactMarkdown>["components"] => ({
+  ...(mentions === undefined
+    ? {}
+    : {
+        "dx-mention": ({
+          handle,
+          children: content,
+        }: {
+          readonly handle?: string;
+          readonly children?: React.ReactNode;
+        }) => mentions.render(handle ?? "", content),
+      }),
   a: ({ children: content, href }) => (
     <MarkdownLink href={href} resolveFile={resolveFile}>
       {content}
@@ -307,13 +362,22 @@ const MarkdownDocument = React.memo(function MarkdownDocument({
   readonly children: string;
 }) {
   const resolveFile = React.useContext(MarkdownFileLinkContext);
+  const mentions = React.useContext(MarkdownMentionContext);
   const components = React.useMemo(
-    () => markdownComponents(resolveFile),
-    [resolveFile],
+    () => markdownComponents(resolveFile, mentions),
+    [resolveFile, mentions],
+  );
+  const handles = mentions?.handles;
+  const plugins = React.useMemo(
+    () =>
+      handles === undefined || handles.length === 0
+        ? remarkPlugins
+        : [...remarkPlugins, remarkMentions(handles)],
+    [handles],
   );
   return (
     <ReactMarkdown
-      remarkPlugins={remarkPlugins}
+      remarkPlugins={plugins}
       rehypePlugins={rehypePlugins}
       skipHtml
       urlTransform={urlTransform}

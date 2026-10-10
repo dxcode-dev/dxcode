@@ -53,3 +53,18 @@ export const useThreadWorkspaceStatus = (threadId: ThreadId) => {
   );
   return React.useSyncExternalStore(subscribe, snapshot, snapshot);
 };
+
+/** Users who have this Thread open now; subscribes without joining. */
+export const useThreadPresentUsers = (threadId: ThreadId) => {
+  const client = React.use(RealtimeContext);
+  const subscribe = React.useCallback(
+    (onStoreChange: () => void) =>
+      client?.observePresentUsers(threadId, onStoreChange) ?? (() => undefined),
+    [client, threadId],
+  );
+  const snapshot = React.useCallback(
+    () => client?.presentUsers(threadId),
+    [client, threadId],
+  );
+  return React.useSyncExternalStore(subscribe, snapshot, snapshot);
+};

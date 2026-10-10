@@ -7,6 +7,7 @@ import {
 import {
   getThread,
   getThreadReadiness,
+  listSharedThreads,
   listThreads,
 } from "../../shared/api/client.js";
 
@@ -31,6 +32,14 @@ export const threadKeys = {
     ] as const,
   detail: (userId: UserId, threadId: ThreadId) =>
     [...threadKeys.all(userId), "detail", threadId] as const,
+  /**
+   * Members who can be tagged in a shared Thread. Under the detail key, so
+   * every Thread invalidation refreshes it too.
+   */
+  members: (userId: UserId, threadId: ThreadId) =>
+    [...threadKeys.detail(userId, threadId), "members"] as const,
+  /** Threads other workspace members shared with this user. */
+  shared: (userId: UserId) => [...threadKeys.all(userId), "shared"] as const,
 };
 
 export const invalidateAllThreadQueries = (
@@ -39,7 +48,10 @@ export const invalidateAllThreadQueries = (
 ) => client.invalidateQueries({ queryKey: threadKeys.all(userId) });
 
 export const invalidateThreadLists = (client: QueryClient, userId: UserId) =>
-  client.invalidateQueries({ queryKey: threadKeys.lists(userId) });
+  Promise.all([
+    client.invalidateQueries({ queryKey: threadKeys.lists(userId) }),
+    client.invalidateQueries({ queryKey: threadKeys.shared(userId) }),
+  ]);
 
 export const invalidateThreadQueries = async (
   client: QueryClient,
@@ -109,4 +121,16 @@ export const threadQueryOptions = (userId: UserId, threadId: ThreadId) =>
         : false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
+  });
+
+export const sharedThreadsQueryOptions = (userId: UserId) =>
+  queryOptions({
+    queryKey: threadKeys.shared(userId),
+    queryFn: ({ signal }) => listSharedThreads(signal),
+    staleTime,
+    gcTime,
+    refetchInterval: THREAD_FRESHNESS_SLO_MS,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: "always",
+    refetchOnReconnect: "always",
   });

@@ -1,4 +1,7 @@
 import {
+  type MessageAuthor,
+  type MessageMention,
+  parseMessageAuthor,
   type ThreadSettlementProvenance,
   threadSettlementProvenance,
 } from "@dx/api";
@@ -21,7 +24,20 @@ type SourcePart = {
 export type TranscriptRow =
   | ({
       readonly kind: "user-prompt";
+      /** What the person wrote, without dx's author tag. */
       readonly text: string;
+      /** Who sent it, from the author tag dx prefixes to every prompt. */
+      readonly author?: MessageAuthor;
+      /** False for a local echo Flue has not admitted yet. */
+      readonly admitted: boolean;
+      /** Members it tagged, by the handle written. */
+      readonly mentions?: ReadonlyArray<MessageMention>;
+      /** When Flue recorded it. */
+      readonly sentAt?: string;
+      /** A chat message between members; it started no agent turn. */
+      readonly chat?: true;
+      /** Follows a message from the same author; its label is not repeated. */
+      readonly continued?: true;
     } & TranscriptRowBase &
       SourcePart)
   | ({
@@ -108,6 +124,11 @@ export interface DeriveTranscriptViewModelInput {
   readonly settlements: ReadonlyArray<FlueConversationSettlement>;
   readonly finalOutputs?: ReadonlyArray<FlueConversationFinalOutput>;
   readonly subagents?: ReadonlyArray<TranscriptSubagentProjection>;
+  /**
+   * Whether a message the viewer is still sending will be chat, from what
+   * they wrote. Chat starts no run, so its local echo is not shown as one.
+   */
+  readonly chatEcho?: (text: string) => boolean;
 }
 
 type TranscriptToolRow = Extract<
@@ -150,7 +171,7 @@ const outlineLabel = (text: string) => {
 };
 
 const authoritativeTimestamp = (message: FlueConversationMessage) => {
-  const timestamp = message.metadata?.timestamp;
+  const timestamp = message.timestamp ?? message.metadata?.timestamp;
   if (typeof timestamp !== "string" || Number.isNaN(Date.parse(timestamp))) {
     return undefined;
   }
@@ -167,11 +188,39 @@ const authoritativeResponseStart = (
   return timestamp;
 };
 
+/**
+ * Marks a prompt that directly follows a prompt from the same author, so
+ * consecutive messages from one person share one label.
+ */
+const groupConsecutivePrompts = (
+  rows: TranscriptRow[],
+  turns: ReadonlyArray<TranscriptTurn>,
+) => {
+  const indexById = new Map(rows.map((row, index) => [row.id, index]));
+  let previous: TranscriptRow | undefined;
+  for (const turn of turns) {
+    for (const rowId of turn.rowIds) {
+      const index = indexById.get(rowId);
+      const row = index === undefined ? undefined : rows[index];
+      if (row === undefined || index === undefined) continue;
+      if (
+        row.kind === "user-prompt" &&
+        previous?.kind === "user-prompt" &&
+        row.author !== undefined &&
+        previous.author?.userId === row.author.userId
+      )
+        rows[index] = { ...row, continued: true };
+      previous = row;
+    }
+  }
+};
+
 export const deriveTranscriptViewModel = ({
   messages,
   settlements,
   finalOutputs = [],
   subagents,
+  chatEcho,
 }: DeriveTranscriptViewModelInput): TranscriptViewModel => {
   const settlementBySubmission = new Map(
     settlements.map((settlement) => [settlement.submissionId, settlement]),
@@ -186,6 +235,19 @@ export const deriveTranscriptViewModel = ({
     finalOutputs.map((output) => [output.messageId, output]),
   );
   let currentTurnId: TranscriptTurnId | undefined;
+  // Chat sent while a turn runs shows where it was sent: when the turn's
+  // output continues after the chat, it continues in a new segment.
+  const continuation = new Map<TranscriptTurnId, TranscriptTurnId>();
+  const chatMessageIds = new Set<string>();
+  let chatAfterTurn: string | undefined;
+  const segmentOf = (turnId: TranscriptTurnId) => {
+    let segment = turnId;
+    for (let next = continuation.get(segment); next !== undefined; ) {
+      segment = next;
+      next = continuation.get(segment);
+    }
+    return segment;
+  };
 
   for (const message of messages) {
     messageById.set(message.id, message);
@@ -200,8 +262,31 @@ export const deriveTranscriptViewModel = ({
       continue;
     }
 
-    const turnId = turnIdFor(message, currentTurnId);
-    currentTurnId = turnId;
+    const chat =
+      message.purpose === "chat" ||
+      (chatEcho !== undefined &&
+        message.role === "user" &&
+        message.submissionId === undefined &&
+        chatEcho(
+          message.parts
+            .map((part) => (part.type === "text" ? part.text : ""))
+            .join(""),
+        ));
+    let turnId: TranscriptTurnId;
+    if (chat) {
+      chatMessageIds.add(message.id);
+      turnId = `turn:chat:${message.id}`;
+      if (currentTurnId !== undefined) chatAfterTurn = message.id;
+    } else {
+      const next = turnIdFor(message, currentTurnId);
+      if (chatAfterTurn !== undefined && next === currentTurnId) {
+        const segment = segmentOf(next);
+        continuation.set(segment, `${segment}~${chatAfterTurn}`);
+      }
+      chatAfterTurn = undefined;
+      currentTurnId = next;
+      turnId = segmentOf(next);
+    }
     if (!turnRows.has(turnId)) {
       turnOrder.push(turnId);
       turnRows.set(turnId, []);
@@ -227,15 +312,31 @@ export const deriveTranscriptViewModel = ({
       let row: TranscriptRow | undefined;
 
       if (part.type === "text") {
-        if (!part.text.trim()) continue;
-        row = {
-          ...source,
-          kind: message.role === "user" ? "user-prompt" : "assistant-prose",
-          text: part.text,
-          ...(message.role === "assistant"
-            ? { streaming: part.state === "streaming" }
-            : {}),
-        } as TranscriptRow;
+        if (message.role === "user") {
+          const { author, mentions, text } = parseMessageAuthor(part.text);
+          if (!text.trim()) continue;
+          const sentAt = authoritativeTimestamp(message);
+          row = {
+            ...source,
+            kind: "user-prompt",
+            text,
+            ...(author === undefined ? {} : { author }),
+            ...(mentions === undefined ? {} : { mentions }),
+            admitted: message.submissionId !== undefined,
+            ...(sentAt === undefined ? {} : { sentAt }),
+            ...(chat ? { chat: true as const } : {}),
+          };
+        } else {
+          if (!part.text.trim()) continue;
+          row = {
+            ...source,
+            kind: "assistant-prose",
+            text: part.text,
+            ...(message.role === "assistant"
+              ? { streaming: part.state === "streaming" }
+              : {}),
+          } as TranscriptRow;
+        }
       } else if (part.type === "file") {
         row = { ...source, kind: "attachment", attachment: part };
       } else {
@@ -271,7 +372,12 @@ export const deriveTranscriptViewModel = ({
     const messageSettlement = messagesInTurn
       .map((message) => message.settlement)
       .findLast((value) => value !== undefined);
-    const outcome = settlement?.outcome ?? messageSettlement?.outcome;
+    // Chat starts no run, so it never settles.
+    const outcome =
+      messagesInTurn.length > 0 &&
+      messagesInTurn.every((message) => chatMessageIds.has(message.id))
+        ? "completed"
+        : (settlement?.outcome ?? messageSettlement?.outcome);
     const status =
       outcome === "failed"
         ? "failed"
@@ -291,7 +397,9 @@ export const deriveTranscriptViewModel = ({
         > & { readonly kind: "assistant-prose" } =>
           row.kind === "assistant-prose",
       );
-    const finalAnswerRowId = status === "completed" ? answer?.id : undefined;
+    // The answer is in the run's last segment, after any chat.
+    const finalAnswerRowId =
+      status === "completed" && !continuation.has(id) ? answer?.id : undefined;
     if (answer?.kind === "assistant-prose" && finalAnswerRowId) {
       const finalAnswer: TranscriptRow = { ...answer, kind: "final-answer" };
       const turnIndex = turn.findIndex((row) => row.id === finalAnswerRowId);
@@ -358,7 +466,7 @@ export const deriveTranscriptViewModel = ({
   });
 
   const outline = rows.flatMap((row): TranscriptOutlineAnchor[] =>
-    row.kind === "user-prompt"
+    row.kind === "user-prompt" && row.chat !== true
       ? (() => {
           const timestamp = authoritativeTimestamp(
             messageById.get(row.messageId) as FlueConversationMessage,
@@ -384,6 +492,7 @@ export const deriveTranscriptViewModel = ({
         : { available: true, source: "authoritative", items: subagents },
   };
 
+  groupConsecutivePrompts(rows, turns);
   return { rows, turns, outline, capabilities };
 };
 
@@ -421,6 +530,17 @@ const sameIds = (
 export const sameTranscriptRow = (a: TranscriptRow, b: TranscriptRow) => {
   if (a === b) return true;
   if (a.id !== b.id || a.kind !== b.kind || a.turnId !== b.turnId) return false;
+  // A sent prompt learns its author once Flue admits it.
+  if (
+    a.kind === "user-prompt" &&
+    b.kind === "user-prompt" &&
+    (a.admitted !== b.admitted ||
+      a.author?.userId !== b.author?.userId ||
+      a.sentAt !== b.sentAt ||
+      a.continued !== b.continued ||
+      a.mentions?.length !== b.mentions?.length)
+  )
+    return false;
   if ("text" in a && "text" in b) {
     if (a.text !== b.text) return false;
     if ("streaming" in a || "streaming" in b)

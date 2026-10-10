@@ -35,6 +35,15 @@ import {
 import { threadChangesRoutes } from "./thread-changes/routes.js";
 import { threadFilesRoutes } from "./thread-files/routes.js";
 import { threadSandboxFileRoutes } from "./thread-files/sandbox.js";
+import {
+  attributeSubmission,
+  shareThreadReads,
+} from "./thread-sharing/middleware.js";
+import {
+  sharedThreadRoutes,
+  threadMemberRoutes,
+  threadSharingRoutes,
+} from "./thread-sharing/routes.js";
 import { threadDaemonRoutes } from "./threads/daemon-route.js";
 import { threadRoutes } from "./threads/routes.js";
 import { threadTerminalRoutes } from "./threads/terminal-route.js";
@@ -66,7 +75,14 @@ app.route("/v1/integrations/github", githubControlPlaneRoutes);
 app.route("/v1/projects", projectRoutes);
 app.route("/v1/realtime", realtimeRoutes);
 app.route("/v1/settings", settingsRoutes);
+app.route("/v1/shared-threads", sharedThreadRoutes);
+app.use("/v1/threads/:threadId", shareThreadReads);
+app.use("/v1/threads/:threadId/readiness", shareThreadReads);
 app.route("/v1/threads", threadRoutes);
+app.route("/v1/threads", threadSharingRoutes);
+app.use("/v1/threads/:threadId/members", authorizeThread);
+app.use("/v1/threads/:threadId/follow", authorizeThread);
+app.route("/v1/threads", threadMemberRoutes);
 app.use("/v1/threads/:threadId/changes", authorizeThread);
 app.use("/v1/threads/:threadId/changes/*", authorizeThread);
 app.route("/v1/threads", threadChangesRoutes);
@@ -85,6 +101,8 @@ app.use("/v1/agents/dx/:threadId", authorizeThread);
 app.use("/v1/agents/dx/:threadId/:subpath{.+}", authorizeThread);
 app.use("/v1/agents/dx/:threadId", enforceThreadActive);
 app.use("/v1/agents/dx/:threadId/:subpath{.+}", enforceThreadActive);
+// Before source and policy checks, which a chat message skips.
+app.use("/v1/agents/dx/:threadId", attributeSubmission);
 app.use("/v1/agents/dx/:threadId", enforceAgentSourceAdmission);
 app.use("/v1/agents/dx/:threadId/:subpath{.+}", enforceAgentSourceAdmission);
 app.use("/v1/agents/dx/:threadId", enforceAgentWorkspacePolicy);

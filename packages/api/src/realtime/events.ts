@@ -71,6 +71,11 @@ export const RealtimeServerEvent = Schema.Union([
     type: Schema.Literal("presence.rejoin-required"),
     topic: PresenceTopic,
   }),
+  /** The user may not join this Thread (now); do not retry until it changes. */
+  Schema.Struct({
+    type: Schema.Literal("presence.denied"),
+    topic: PresenceTopic,
+  }),
 ]);
 
 export type RealtimeServerEvent = typeof RealtimeServerEvent.Type;

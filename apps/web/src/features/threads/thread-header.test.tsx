@@ -67,9 +67,11 @@ describe("ThreadHeader", () => {
 
   it("presents authoritative metadata and the defined no-project state", async () => {
     const container = await render(<ThreadHeader thread={thread} />);
-    const titleBar = container.querySelector(".thread-title-bar");
-    expect(titleBar?.firstElementChild?.className).toBe("thread-title-orb");
-    expect(titleBar?.children.item(1)?.className).toBe("thread-title");
+    const titleGroup = container.querySelector(
+      ".thread-title-bar > .thread-title-group",
+    );
+    expect(titleGroup?.firstElementChild?.className).toBe("thread-title-orb");
+    expect(titleGroup?.children.item(1)?.className).toBe("thread-title");
     expect(
       container.querySelector(`[title="${thread.title}"]`)?.textContent,
     ).toBe(thread.title);
@@ -77,14 +79,20 @@ describe("ThreadHeader", () => {
       container.querySelector('[title="No project"]')?.textContent,
     ).toContain("No project");
     expect(container.querySelector('[title="Mode: medium"]')).toBeTruthy();
-    expect(container.querySelector('[title="Privacy: private"]')).toBeTruthy();
     expect(
-      container
-        .querySelector<HTMLButtonElement>(
-          '[aria-label="Multiplayer is unavailable in this version"]',
-        )
-        ?.getAttribute("aria-disabled"),
-    ).toBe("true");
+      container.querySelector('[data-privacy="private"]')?.textContent,
+    ).toContain("Private");
+    // The owner shares from the header; the old disabled control is gone.
+    expect(
+      [...container.querySelectorAll(".thread-header-actions button")].some(
+        (button) => button.textContent === "Share",
+      ),
+    ).toBe(true);
+    expect(
+      container.querySelector(
+        '[aria-label="Multiplayer is unavailable in this version"]',
+      ),
+    ).toBeNull();
   });
 
   it("passes working and idle activity to the Orb and keeps archived Orbs idle", async () => {
@@ -148,9 +156,10 @@ describe("ThreadHeader", () => {
       />,
     );
     const toggle = container.querySelector('[aria-label="Hide Right Pane"]');
-    expect(toggle?.parentElement?.classList.contains("thread-title-bar")).toBe(
-      true,
-    );
+    expect(
+      toggle?.parentElement?.classList.contains("thread-header-actions"),
+    ).toBe(true);
+    expect(toggle?.parentElement?.lastElementChild).toBe(toggle);
     const actions = container.querySelector('[aria-label="Thread actions"]');
     expect(
       actions && toggle

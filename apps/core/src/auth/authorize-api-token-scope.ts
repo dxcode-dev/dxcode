@@ -18,7 +18,11 @@ const requiredScope = (
   if (path === "/v1/projects" || path.startsWith("/v1/projects/")) {
     return read ? "projects:read" : "projects:write";
   }
-  if (path === "/v1/threads" || path.startsWith("/v1/threads/")) {
+  if (
+    path === "/v1/threads" ||
+    path.startsWith("/v1/threads/") ||
+    path === "/v1/shared-threads"
+  ) {
     return read ? "threads:read" : "threads:write";
   }
   if (path === "/v1/agents/dx" || path.startsWith("/v1/agents/dx/")) {

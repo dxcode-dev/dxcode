@@ -1,0 +1,551 @@
+/* Thread sharing: Share dialog, Multiplayer confirmation, participants. */
+.thread-participants-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  height: 24px;
+  padding: 0 6px;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+}
+.thread-participants-trigger:hover,
+.thread-participants-trigger[data-popup-open],
+.thread-participants-trigger:focus-visible {
+  color: var(--foreground);
+  background: var(--accent);
+  outline: none;
+}
+.thread-multiplayer-icon {
+  width: 13px;
+  height: 13px;
+  color: var(--success);
+}
+.thread-menu-label {
+  padding: 6px 8px 4px;
+  color: var(--muted-foreground);
+  font-size: 10.5px;
+  font-weight: 500;
+}
+.thread-participants-menu {
+  width: min(260px, calc(100vw - 8px));
+}
+.thread-participant-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 8px;
+  font-size: 11.5px;
+}
+.thread-participant-row .dx-avatar {
+  width: 20px;
+  height: 20px;
+}
+.thread-participant-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-participant-badge {
+  padding: 1px 6px;
+  color: var(--muted-foreground);
+  border-radius: 4px;
+  background: var(--muted);
+  font-size: 10px;
+}
+.thread-participant-live {
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  border-radius: 999px;
+  background: var(--success);
+}
+
+.dialog-popup.thread-share-dialog {
+  width: min(460px, 100%);
+  padding: 0;
+}
+.thread-share-dialog > h2 {
+  margin: 0;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--divider);
+  font-size: 13px;
+  font-weight: 600;
+}
+.thread-share-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--divider);
+}
+.thread-share-section h3 {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 500;
+}
+.thread-share-url {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 32px;
+  padding: 0 4px 0 10px;
+  border: 1px solid var(--outline);
+  border-radius: 6px;
+  background: var(--muted);
+}
+.thread-share-url-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-family: var(--font-mono-family);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-share-open {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--muted-foreground);
+  border-radius: 4px;
+}
+.thread-share-open:hover {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.thread-share-open > svg {
+  width: 12px;
+  height: 12px;
+}
+.thread-share-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+}
+.thread-share-row > div {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.thread-share-row strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.thread-share-row span,
+.thread-share-row a {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.thread-share-row a {
+  text-decoration: underline;
+}
+.thread-share-workspace-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  color: var(--foreground);
+  border: 1px solid var(--outline);
+  border-radius: 5px;
+  background: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.thread-share-workspace-mark > svg {
+  width: 13px;
+  height: 13px;
+}
+.thread-share-permission {
+  color: var(--foreground);
+  font-weight: 500;
+}
+.thread-share-permission-static {
+  flex: none;
+  color: var(--foreground);
+  font-size: 11.5px;
+}
+.thread-share-menu {
+  width: 150px;
+}
+.thread-share-radio-dot {
+  display: grid;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+}
+.thread-share-radio-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+.thread-share-section > .thread-share-error {
+  margin: 0;
+  color: var(--destructive);
+  font-size: 11px;
+}
+.thread-share-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 14px 18px 18px;
+  padding: 12px;
+  border: 1px solid var(--outline);
+  border-radius: 8px;
+  background: var(--muted);
+}
+.thread-share-status > svg {
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+  flex: none;
+  color: var(--muted-foreground);
+}
+.thread-share-status[data-multiplayer] > svg {
+  color: var(--success);
+}
+.thread-share-status > div {
+  display: grid;
+  gap: 2px;
+}
+.thread-share-status strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.thread-share-status span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.dialog-popup.thread-share-confirm {
+  width: min(440px, 100%);
+}
+.thread-share-confirm p {
+  line-height: 1.5;
+}
+.dialog-popup .thread-share-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.thread-share-checkbox > input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--primary);
+}
+.thread-share-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 18px;
+}
+
+/* Who sent a message in a shared Thread. */
+.message-author {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-bottom: 4px;
+  color: var(--muted-foreground);
+  font-size: 10.5px;
+}
+.message-author .dx-avatar {
+  width: 16px;
+  height: 16px;
+  font-size: 7.5px;
+}
+.message-author-name {
+  color: var(--foreground);
+  font-weight: 500;
+}
+.message-author time {
+  color: var(--muted-foreground);
+}
+/* Messages from other people sit on the left, like a chat. */
+.user-message[data-author="other"] > .message-author {
+  justify-content: flex-start;
+}
+.user-message[data-author="other"] .message-content {
+  margin-right: auto;
+  margin-left: 0;
+}
+
+/* Composer notices for members of a shared Thread. */
+.shared-composer-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  max-width: 41rem;
+  margin: 0 auto 6px;
+  pointer-events: auto;
+  padding: 6px 10px;
+  color: var(--muted-foreground);
+  border: 1px solid var(--outline);
+  border-radius: 7px;
+  background: var(--muted);
+  font-size: 11px;
+}
+.shared-composer-notice > svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+
+/* `@` in the composer: member suggestions, or Share for a private Thread. */
+.composer-mention-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: min(100%, 26rem);
+  /* Left-aligned with the composer (max 41rem, centered). */
+  margin: 0 auto 6px max(0px, calc((100% - 41rem) / 2));
+  pointer-events: auto;
+  padding: 8px 10px;
+  color: var(--muted-foreground);
+  border: 1px solid var(--outline);
+  border-radius: 10px;
+  background: var(--popover, var(--background));
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.composer-mention-card > svg {
+  width: 13px;
+  height: 13px;
+  margin-top: 2px;
+  flex: none;
+}
+.composer-mention-link {
+  padding: 0;
+  color: var(--link, var(--primary));
+  border: 0;
+  background: none;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.composer-mention-list {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  padding: 4px;
+}
+.composer-mention-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.composer-mention-option[data-active] {
+  background: var(--accent);
+}
+.composer-mention-option .dx-avatar {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  font-size: 8px;
+}
+.composer-mention-agent {
+  display: inline-grid;
+  place-items: center;
+  color: var(--background);
+  background: var(--foreground);
+}
+.composer-mention-agent > svg {
+  width: 12px;
+  height: 12px;
+}
+.composer-mention-handle {
+  color: var(--foreground);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.composer-mention-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-chat-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  max-width: 41rem;
+  margin: 0 auto 6px;
+  padding: 0 4px;
+  pointer-events: auto;
+  color: var(--chat-mention-foreground);
+  font-size: 11px;
+}
+.composer-chat-banner > svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+.composer-chat-banner strong {
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+/* Sidebar rows for shared Threads: people at the row's end stay put; hover
+   actions open to their left. */
+.thread-row-avatars {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  display: flex;
+  justify-content: flex-end;
+  width: 24px;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.thread-row-avatars .participant-stack {
+  display: inline-flex;
+  flex-direction: row;
+  overflow: visible;
+}
+.thread-row-avatars .dx-avatar {
+  width: 15px;
+  height: 15px;
+  font-size: 7px;
+}
+.thread-row-shell[data-avatars] .thread-row {
+  padding-right: 36px;
+}
+.thread-row-shell[data-avatars]:hover .thread-row {
+  padding-right: 92px;
+}
+.thread-row-shell[data-avatars] .thread-hover-actions {
+  right: 34px;
+}
+
+/* Messages people wrote: plain text with tagged members. */
+.user-message-text {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.message-mention {
+  padding: 0 3px;
+  border-radius: 4px;
+  color: var(--chat-mention-foreground);
+  background: var(--chat-mention-background);
+  font-weight: 500;
+}
+button.message-mention,
+.message-author-trigger {
+  border: 0;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+button.message-mention {
+  display: inline;
+  margin: 0;
+}
+.message-author-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  color: inherit;
+  background: none;
+}
+/* Consecutive messages from one person share the first one's label. */
+.user-message[data-continued] {
+  margin-top: -6px;
+}
+.member-card-positioner {
+  z-index: 210;
+}
+.member-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 200px;
+  max-width: 300px;
+  padding: 10px 12px;
+  border: 1px solid var(--outline);
+  border-radius: 10px;
+  background: var(--popover, var(--background));
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  font-size: 11.5px;
+}
+.member-card .dx-avatar {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  font-size: 12px;
+}
+.member-card > div {
+  display: grid;
+  min-width: 0;
+}
+.member-card strong {
+  color: var(--foreground);
+  font-weight: 600;
+}
+.member-card span {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Chat mode tints the composer so it is clear no agent will answer. */
+:root {
+  --chat-mention-foreground: light-dark(#5b3fc4, #c6b8ff);
+  --chat-mention-background: light-dark(
+    rgb(124 92 255 / 0.12),
+    rgb(150 125 255 / 0.2)
+  );
+  --chat-composer-border: light-dark(
+    rgb(124 92 255 / 0.55),
+    rgb(160 136 255 / 0.55)
+  );
+  --chat-composer-background: light-dark(
+    rgb(124 92 255 / 0.05),
+    rgb(150 125 255 / 0.08)
+  );
+}
+.agent-composer[data-chat-mode] {
+  border-color: var(--chat-composer-border);
+  background-color: var(--chat-composer-background);
+  box-shadow: 0 0 0 1px var(--chat-composer-border);
+}
+
+/* Title bar of another member's shared Thread. */
+.thread-title-owner {
+  display: inline-flex;
+  flex: none;
+}
+.thread-title-owner .dx-avatar {
+  width: 18px;
+  height: 18px;
+  font-size: 8px;
+}
+.thread-follow-button {
+  flex: none;
+}

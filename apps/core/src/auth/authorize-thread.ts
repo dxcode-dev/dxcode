@@ -4,6 +4,7 @@ import {
   ThreadId,
   type ThreadLifecycleState,
   ThreadRepository,
+  type UserId,
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Option, Schema } from "effect";
@@ -11,12 +12,20 @@ import type { MiddlewareHandler } from "hono";
 import type { AppEnv } from "../http/types.js";
 import { authorizationLogger } from "../logging.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
+import {
+  canUseSharedThreads,
+  findSharedThreadGrant,
+  impersonateThreadOwner,
+  viewerMayRequest,
+} from "../thread-sharing/access.js";
 import { ThreadRepositoryD1 } from "../threads/repository-d1.js";
 
 interface ThreadAuthorizationResult {
   readonly authorized: boolean;
   readonly threadId?: ThreadId;
   readonly lifecycleState?: ThreadLifecycleState;
+  readonly access?: "owner" | "contribute" | "view";
+  readonly ownerUserId?: string;
 }
 
 export const authorizeThreadRequest = Effect.fn("authorizeThreadRequest")(
@@ -39,17 +48,35 @@ export const authorizeThreadRequest = Effect.fn("authorizeThreadRequest")(
       Effect.catchTag("ThreadNotFound", () => Effect.succeed(undefined)),
       Effect.provide(repositoryLayer),
     );
+    if (lifecycleState !== undefined)
+      return {
+        authorized: true,
+        threadId,
+        lifecycleState,
+        access: "owner",
+        ownerUserId: principal.userId,
+      } satisfies ThreadAuthorizationResult;
+    if (!canUseSharedThreads(principal)) return { authorized: false, threadId };
 
-    return {
-      authorized: lifecycleState !== undefined,
-      threadId,
-      lifecycleState,
-    } satisfies ThreadAuthorizationResult;
+    const grant = yield* Effect.promise(() =>
+      findSharedThreadGrant(db, threadId, principal.userId),
+    );
+    return (
+      grant === undefined
+        ? { authorized: false, threadId }
+        : {
+            authorized: true,
+            threadId,
+            lifecycleState: grant.lifecycleState,
+            access: grant.access,
+            ownerUserId: grant.ownerUserId,
+          }
+    ) satisfies ThreadAuthorizationResult;
   },
 );
 
 const logAuthorization = (
-  outcome: "authorized" | "not_found" | "infrastructure_error",
+  outcome: "authorized" | "not_found" | "read_only" | "infrastructure_error",
   requestId: string,
   startedAt: number,
   threadId?: ThreadId,
@@ -63,6 +90,11 @@ const logAuthorization = (
   };
   if (outcome === "authorized") {
     authorizationLogger.info("Thread authorization succeeded.", properties);
+  } else if (outcome === "read_only") {
+    authorizationLogger.info(
+      "Thread authorization denied a write to a View-only member.",
+      properties,
+    );
   } else if (outcome === "not_found") {
     authorizationLogger.warn(
       "Thread authorization found no owned Thread.",
@@ -105,7 +137,38 @@ export const authorizeThread: MiddlewareHandler<AppEnv> = async (
     );
   }
 
+  const access = result.access ?? "owner";
+  if (
+    access === "view" &&
+    !viewerMayRequest(context.req.method, context.req.path)
+  ) {
+    logAuthorization("read_only", requestId, startedAt, result.threadId);
+    return context.json(
+      {
+        status: "error",
+        data: {
+          code: "THREAD_READ_ONLY",
+          message:
+            "You can view this Thread. Ask its owner for Contribute access.",
+          requestId,
+        },
+      },
+      403,
+    );
+  }
+
   logAuthorization("authorized", requestId, startedAt, result.threadId);
+  const actor = context.get("principal");
+  context.set("actor", actor);
+  context.set("threadAccess", access);
+  context.set("threadOwnerUserId", result.ownerUserId ?? actor.userId);
+  // A member acting in a shared Thread acts as its owner: keys, model routing,
+  // source access, environment variables, and the Orb all resolve as the owner.
+  if (access !== "owner" && result.ownerUserId !== undefined)
+    context.set(
+      "principal",
+      impersonateThreadOwner(actor, result.ownerUserId as UserId),
+    );
   context.set("threadAuthorizedAt", Date.now());
   context.set(
     "threadLifecycleState",

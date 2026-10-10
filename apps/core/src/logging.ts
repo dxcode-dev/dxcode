@@ -74,6 +74,7 @@ export const workloadIdentityLogger = getLogger([
 ]);
 export const threadChangesLogger = getLogger(["dx", "thread-changes"]);
 export const realtimeLogger = getLogger(["dx", "realtime"]);
+export const threadSharingLogger = getLogger(["dx", "threads", "sharing"]);
 export const agentLifecycleLogger = getLogger(["dx", "agent", "lifecycle"]);
 export const agentModelLogger = getLogger(["dx", "agent", "model"]);
 export const agentToolLogger = getLogger(["dx", "agent", "tool"]);

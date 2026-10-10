@@ -79,8 +79,8 @@ beforeEach(async () => {
       "INSERT OR IGNORE INTO projects (id, owner_user_id, workspace_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
     ).bind(project, owner, workspace, "Realtime", "2026-09-17", "2026-09-17"),
     env.DB.prepare(
-      "INSERT OR IGNORE INTO threads (id, project_id, owner_user_id, visibility, created_at, updated_at) VALUES (?, ?, ?, 'workspace', ?, ?)",
-    ).bind(threadId, project, owner, "2026-09-17", "2026-09-17"),
+      "INSERT OR IGNORE INTO threads (id, project_id, owner_user_id, visibility, workspace_access, shared_workspace_id, created_at, updated_at) VALUES (?, ?, ?, 'workspace', 'view', ?, ?, ?)",
+    ).bind(threadId, project, owner, workspace, "2026-09-17", "2026-09-17"),
   ]);
 });
 
@@ -119,6 +119,61 @@ describe("RealtimeHub", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(memberEvents).toEqual([]);
     ownerSocket.socket.close();
+    memberSocket.socket.close();
+  });
+
+  it("also delivers Thread events to members viewing a shared Thread, each on their own revision", async () => {
+    const audience = `workspace:${workspace}`;
+    const ownerSocket = await connect(audience, owner, client(11));
+    const memberSocket = await connect(audience, member, client(12));
+    const [ownerReady, memberReady] = (await Promise.all([
+      ownerSocket.first,
+      memberSocket.first,
+    ])) as Array<{ revision: number }>;
+    const joined = nextMessage(memberSocket.socket);
+    memberSocket.socket.send(
+      JSON.stringify({ type: "presence.join", topic: `thread:${threadId}` }),
+    );
+    await joined;
+    const ownerEvent = nextMessage(ownerSocket.socket);
+    const memberEvent = nextMessage(memberSocket.socket);
+
+    await publishRealtimeInvalidation(
+      { DB: env.DB, REALTIME_HUB: env.REALTIME_HUB },
+      threadId,
+      "thread.invalidated",
+    );
+
+    await expect(ownerEvent).resolves.toEqual({
+      type: "thread.invalidated",
+      threadId,
+      revision: (ownerReady?.revision ?? 0) + 1,
+    });
+    await expect(memberEvent).resolves.toEqual({
+      type: "thread.invalidated",
+      threadId,
+      revision: (memberReady?.revision ?? 0) + 1,
+    });
+    ownerSocket.socket.close();
+    memberSocket.socket.close();
+  });
+
+  it("delivers sharing changes to every member of the workspace", async () => {
+    const audience = `workspace:${workspace}`;
+    const memberSocket = await connect(audience, member, client(13));
+    const ready = (await memberSocket.first) as { revision: number };
+    const event = nextMessage(memberSocket.socket);
+    await publishRealtimeInvalidation(
+      { DB: env.DB, REALTIME_HUB: env.REALTIME_HUB },
+      threadId,
+      "thread.invalidated",
+      "audience",
+    );
+    await expect(event).resolves.toEqual({
+      type: "thread.invalidated",
+      threadId,
+      revision: ready.revision + 1,
+    });
     memberSocket.socket.close();
   });
 
@@ -173,8 +228,9 @@ describe("RealtimeHub", () => {
     outsiderSocket.socket.send(
       JSON.stringify({ type: "presence.join", topic: `thread:${threadId}` }),
     );
+    // Denied, not "rejoin": a rejoin answer made clients retry in a loop.
     await expect(denied).resolves.toEqual({
-      type: "presence.rejoin-required",
+      type: "presence.denied",
       topic: `thread:${threadId}`,
     });
     ownerSocket.socket.close();

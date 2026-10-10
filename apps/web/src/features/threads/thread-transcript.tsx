@@ -9,6 +9,10 @@ import * as React from "react";
 import { Button } from "../../shared/ui/button.js";
 import { TranscriptRowContent } from "./message-parts.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
+import {
+  MessageAuthorLabel,
+  useMessageAuthor,
+} from "./sharing/message-authors.js";
 import { TranscriptOutline } from "./transcript-outline.js";
 import {
   sameTranscriptRow,
@@ -58,15 +62,27 @@ function TranscriptRowShellContent({
   row,
 }: TranscriptRowShellProps) {
   const user = row.kind === "user-prompt";
+  const author = useMessageAuthor(
+    user ? row.author : undefined,
+    user ? row.admitted : true,
+    user ? row.sentAt : undefined,
+  );
   return (
     <article
       id={row.id}
       data-row-id={row.id}
       data-row-kind={row.kind}
+      data-author={
+        user && author !== undefined && !author.mine ? "other" : undefined
+      }
+      data-continued={user && row.continued ? "" : undefined}
       ref={measureElement}
       tabIndex={-1}
       className={`transcript-row conversation-message ${user ? "user-message" : "agent-message"}`}
     >
+      {user && author !== undefined && row.continued !== true ? (
+        <MessageAuthorLabel author={author} />
+      ) : null}
       <div className="message-content">
         <TranscriptRowContent row={row} />
       </div>

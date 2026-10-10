@@ -133,7 +133,9 @@ vi.mock("./agent-panel.js", () => ({
     onOpenModelRouting,
     showArchivedNotice,
     workspaceStatus,
+    readOnlyNotice,
   }: {
+    readOnlyNotice?: React.ReactNode;
     archived?: boolean;
     renderHeader?: (model: {
       rows: never[];
@@ -176,7 +178,11 @@ vi.mock("./agent-panel.js", () => ({
           Open Model Routing
         </button>
       ) : null}
-      {archived || draft === undefined ? null : <MockComposer draft={draft} />}
+      {archived ? null : readOnlyNotice !== undefined ? (
+        readOnlyNotice
+      ) : draft === undefined ? null : (
+        <MockComposer draft={draft} />
+      )}
     </>
   ),
 }));
@@ -348,7 +354,7 @@ describe("ThreadSession right pane", () => {
     expect(Terminal).not.toHaveBeenCalled();
     expect(
       container.querySelector(
-        '.thread-title-bar > [aria-label="Show Right Pane"]',
+        '.thread-header-actions > [aria-label="Show Right Pane"]',
       ),
     ).not.toBeNull();
     expect(panel?.dataset.collapsed).toBe("true");
@@ -861,6 +867,60 @@ describe("ThreadSession right pane", () => {
     expect(renderTerminal).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Archived thread");
     expect(container.textContent).not.toContain("Undo");
+    await React.act(() => root.unmount());
+  });
+
+  it("gives a View-only member of a shared Thread no composer, Terminal, or Share", async () => {
+    viewport.mobile = false;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const Terminal = vi.fn(() => <div className="thread-terminal" />);
+    const { container, root } = await renderSession(
+      {
+        ...thread,
+        access: "view",
+        sharing: { workspaceAccess: "view" },
+        participants: [
+          { userId: "owner-1" as UserId, name: "Ada Owner", owner: true },
+          { userId, name: "Ben Member" },
+        ],
+      },
+      Terminal,
+      vi.fn(),
+    );
+
+    expect(container.textContent).toContain(
+      "You can view this thread. Ask Ada Owner for Contribute access",
+    );
+    expect(
+      container.querySelector('[aria-label="Thread composer"]'),
+    ).toBeNull();
+    // Model Routing belongs to the owner.
+    expect(container.textContent).not.toContain("Open Model Routing");
+    expect(container.querySelector(".thread-access-chip")?.textContent).toBe(
+      "View only",
+    );
+    expect(
+      [...container.querySelectorAll(".thread-header-actions button")].some(
+        (button) => button.textContent === "Share",
+      ),
+    ).toBe(false);
+
+    await click(container.querySelector('[aria-label="Show Right Pane"]'));
+    await click(
+      [...container.querySelectorAll('[role="tab"]')].find(
+        (tab) => tab.textContent === "Terminal",
+      ) ?? null,
+    );
+    expect(
+      container.querySelector("#thread-terminal-panel")?.textContent,
+    ).toContain("Only contributors can use the terminal");
+    expect(Terminal).not.toHaveBeenCalled();
     await React.act(() => root.unmount());
   });
 

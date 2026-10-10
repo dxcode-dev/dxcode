@@ -53,11 +53,6 @@ export class SourceWorkspaceInitializationFailed extends Schema.TaggedError<Sour
   {},
 ) {}
 
-export class SourceWorkspaceHookFailed extends Schema.TaggedError<SourceWorkspaceHookFailed>()(
-  "SourceWorkspaceHookFailed",
-  { hook: Schema.Literals(["setup", "resume"]) },
-) {}
-
 export class SourceWorkspaceHistoryUnavailable extends Schema.TaggedError<SourceWorkspaceHistoryUnavailable>()(
   "SourceWorkspaceHistoryUnavailable",
   {},
@@ -101,7 +96,6 @@ export interface SourceWorkspaceServiceShape {
     string,
     | SourceWorkspaceConflict
     | SourceWorkspaceInitializationFailed
-    | SourceWorkspaceHookFailed
     | Schema.SchemaError
     | unknown
   >;
@@ -112,7 +106,6 @@ export interface SourceWorkspaceServiceShape {
     string,
     | SourceWorkspaceConflict
     | SourceWorkspaceInitializationFailed
-    | SourceWorkspaceHookFailed
     | Schema.SchemaError
     | unknown
   >;
@@ -427,9 +420,13 @@ const CheckoutState = Schema.Struct({
   fullHistoryNeeded: Schema.Boolean,
 });
 
+const HookName = Schema.Literals(["setup", "resume"]);
+
 const HooksState = Schema.Struct({
   status: Schema.Literals(["ready", "conflict", "hook-failed", "failed"]),
-  hook: Schema.optional(Schema.Literals(["setup", "resume"])),
+  hook: Schema.optional(HookName),
+  /** Hooks that failed. The workspace is still ready: the agent carries on. */
+  failed: Schema.optional(Schema.Array(HookName)),
 });
 
 const ActivationState = Schema.Struct({
@@ -452,13 +449,17 @@ const decodeCheckoutState = Effect.fn("decodeCheckoutState")(function* (
   });
 });
 
+/**
+ * Settles a hooks run. Setup and resume only prepare the workspace for
+ * convenience, so a failing hook is logged and the workspace stays usable;
+ * the agent can finish that work itself.
+ */
 const requireHooksSuccess = Effect.fn("requireHooksSuccess")(function* (
+  threadId: string,
   result: CommandResult,
 ): Effect.fn.Return<
   void,
-  | SourceWorkspaceConflict
-  | SourceWorkspaceInitializationFailed
-  | SourceWorkspaceHookFailed
+  SourceWorkspaceConflict | SourceWorkspaceInitializationFailed
 > {
   const hooks = yield* Effect.try({
     try: () =>
@@ -467,11 +468,16 @@ const requireHooksSuccess = Effect.fn("requireHooksSuccess")(function* (
       ),
     catch: () => new SourceWorkspaceInitializationFailed(),
   });
-  if (hooks.status === "ready") return;
   if (hooks.status === "conflict") return yield* new SourceWorkspaceConflict();
-  if (hooks.status === "hook-failed" && hooks.hook !== undefined)
-    return yield* new SourceWorkspaceHookFailed({ hook: hooks.hook });
-  return yield* new SourceWorkspaceInitializationFailed();
+  if (hooks.status === "failed")
+    return yield* new SourceWorkspaceInitializationFailed();
+  const failed = hooks.failed ?? (hooks.hook === undefined ? [] : [hooks.hook]);
+  if (failed.length > 0)
+    sourceControlLogger.warn("Source workspace hooks failed; continuing.", {
+      event: "source_workspace_hooks_failed",
+      threadId,
+      hooks: failed,
+    });
 });
 
 const AnonymousDiscovery = Schema.Struct({
@@ -820,9 +826,9 @@ const makeSourceWorkspaceService = (
             HOOKS_TIMEOUT_MS,
           );
           yield* requireSuccess(hooks);
-          yield* requireHooksSuccess(hooks);
+          yield* requireHooksSuccess(threadId, hooks);
         } else {
-          yield* requireHooksSuccess({
+          yield* requireHooksSuccess(threadId, {
             stdout: JSON.stringify(prefetchedHooks),
             stderr: "",
             exitCode: 0,

@@ -10,6 +10,8 @@ export const enforceAgentWorkspacePolicy: MiddlewareHandler<AppEnv> = async (
   context,
   next,
 ) => {
+  // Chat between members runs nothing.
+  if (context.get("chatDelivery")) return next();
   const operation = resolveExecutionRunnerProfile(
     context.env,
     context.req.param("threadId") ?? "",

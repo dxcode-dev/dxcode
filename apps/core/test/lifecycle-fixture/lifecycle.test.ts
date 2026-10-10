@@ -1,3 +1,4 @@
+import { parseMessageAuthor } from "@dx/api";
 import { createFlueClient } from "@flue/sdk";
 import { newThreadId, ProjectNameInput } from "@dx/domain";
 import { Redacted, Schema } from "effect";
@@ -314,7 +315,9 @@ describe("generated Flue Worker lifecycle", () => {
       (message) =>
         message.role === "user" &&
         message.parts.some(
-          (part) => part.type === "text" && part.text === prompt,
+          (part) =>
+            part.type === "text" &&
+            parseMessageAuthor(part.text).text === prompt,
         ),
     );
     expect(initialMessages).toHaveLength(1);
@@ -338,7 +341,9 @@ describe("generated Flue Worker lifecycle", () => {
       (message) =>
         message.role === "user" &&
         message.parts.some(
-          (part) => part.type === "text" && part.text === followUp,
+          (part) =>
+            part.type === "text" &&
+            parseMessageAuthor(part.text).text === followUp,
         ),
     );
     expect(followUpMessage?.parts).toContainEqual(

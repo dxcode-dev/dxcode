@@ -155,8 +155,8 @@ const makeSandbox = (
               !state.fullHistoryNeeded
                 ? hookExitCode === 30 || hookExitCode === 31
                   ? {
-                      status: "hook-failed",
-                      hook: hookExitCode === 30 ? "setup" : "resume",
+                      status: "ready",
+                      failed: [hookExitCode === 30 ? "setup" : "resume"],
                     }
                   : { status: hookExitCode === 20 ? "conflict" : "ready" }
                 : undefined;
@@ -236,8 +236,8 @@ const makeSandbox = (
             stdout: JSON.stringify(
               exitCode === 30 || exitCode === 31
                 ? {
-                    status: "hook-failed",
-                    hook: exitCode === 30 ? "setup" : "resume",
+                    status: "ready",
+                    failed: [exitCode === 30 ? "setup" : "resume"],
                   }
                 : { status: exitCode === 20 ? "conflict" : "ready" },
             ),
@@ -703,29 +703,14 @@ describe("SourceWorkspaceService", () => {
     ).toBe(false);
   });
 
-  it("fails source activation without resuming when repository setup fails", async () => {
-    const fake = makeSandbox([0], { actionExitCodes: { hooks: 30 } });
-
-    await expect(
-      activate(fake.preparation, serviceLayer({ source: snapshot })),
-    ).rejects.toMatchObject({
-      _tag: "SourceWorkspaceHookFailed",
-      hook: "setup",
-    });
-
-    expect(fake.calls).toHaveLength(1);
-    expect(fake.calls[0]?.environment?.DX_ASSET_ACTION).toBe("activate");
-  });
-
-  it("reports a resume failure from the merged hooks action", async () => {
-    const fake = makeSandbox([0], { actionExitCodes: { hooks: 31 } });
-
-    await expect(
-      activate(fake.preparation, serviceLayer({ source: snapshot })),
-    ).rejects.toMatchObject({
-      _tag: "SourceWorkspaceHookFailed",
-      hook: "resume",
-    });
+  it("activates the workspace when repository setup or resume fails", async () => {
+    for (const hooks of [30, 31]) {
+      const fake = makeSandbox([0], { actionExitCodes: { hooks } });
+      await expect(
+        activate(fake.preparation, serviceLayer({ source: snapshot })),
+      ).resolves.toBe(SOURCE_WORKSPACE_CWD);
+      expect(fake.calls).toHaveLength(1);
+    }
   });
 
   it("keeps setup verification but skips resume after a known-running reconnect", async () => {

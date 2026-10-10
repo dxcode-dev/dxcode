@@ -8,6 +8,7 @@ import {
   Copy,
   Download,
   Ellipsis,
+  Share2,
   X,
 } from "lucide-react";
 import * as React from "react";
@@ -58,12 +59,16 @@ export function ThreadMenu({
   thread,
   project,
   model,
+  onOpenShare,
 }: {
   readonly thread: ThreadDetailData;
   readonly project?: Pick<ProjectData, "name">;
   readonly model: TranscriptViewModel;
+  readonly onOpenShare?: () => void;
 }) {
   const archive = useOptionalThreadArchive();
+  // Archiving is the owner's; members of a shared Thread only read or export.
+  const own = thread.access === undefined || thread.access === "owner";
   const [announcement, setAnnouncement] = React.useState("");
   const copyUrl = async () => {
     try {
@@ -118,26 +123,39 @@ export function ThreadMenu({
             sideOffset={4}
           >
             <Menu.Popup className="thread-menu-popup">
-              <Menu.Item
-                className="thread-menu-item"
-                disabled={
-                  archive === undefined || archive.pendingThreadId === thread.id
-                }
-                onClick={() =>
-                  archive?.setArchived(
-                    thread.id,
-                    thread.lifecycleState !== "archived",
-                  )
-                }
-              >
-                {thread.lifecycleState === "archived" ? (
-                  <ArchiveRestore />
-                ) : (
-                  <Archive />
-                )}
-                {thread.lifecycleState === "archived" ? "Unarchive" : "Archive"}
-              </Menu.Item>
-              <Menu.Separator className="thread-menu-separator" />
+              {onOpenShare === undefined ? null : (
+                <Menu.Item className="thread-menu-item" onClick={onOpenShare}>
+                  <Share2 />
+                  <span>Share…</span>
+                </Menu.Item>
+              )}
+              {own ? (
+                <Menu.Item
+                  className="thread-menu-item"
+                  disabled={
+                    archive === undefined ||
+                    archive.pendingThreadId === thread.id
+                  }
+                  onClick={() =>
+                    archive?.setArchived(
+                      thread.id,
+                      thread.lifecycleState !== "archived",
+                    )
+                  }
+                >
+                  {thread.lifecycleState === "archived" ? (
+                    <ArchiveRestore />
+                  ) : (
+                    <Archive />
+                  )}
+                  {thread.lifecycleState === "archived"
+                    ? "Unarchive"
+                    : "Archive"}
+                </Menu.Item>
+              ) : null}
+              {own || onOpenShare !== undefined ? (
+                <Menu.Separator className="thread-menu-separator" />
+              ) : null}
               <Menu.Item
                 className="thread-menu-item"
                 onClick={() => void copyUrl()}

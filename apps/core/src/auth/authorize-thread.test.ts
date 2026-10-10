@@ -36,6 +36,8 @@ const row = {
 const createD1Binding = (options: { readonly fail?: boolean } = {}) => {
   const prepare = vi.fn(() => ({
     bind: (threadId: string, ownerUserId: string) => ({
+      // The shared-Thread lookup: no workspace grants in these tests.
+      first: async () => null,
       all: async () => {
         if (options.fail) throw new Error("simulated D1 outage");
         return {

@@ -167,3 +167,57 @@ describe("RealtimeClient", () => {
     client.stop();
   });
 });
+
+describe("RealtimeClient presence", () => {
+  it("stops joining a refused Thread until that Thread changes", () => {
+    vi.useFakeTimers();
+    const queryClient = new QueryClient();
+    const socket = new FakeSocket();
+    const client = new RealtimeClient(queryClient, userId, () => socket);
+    client.start();
+    socket.receive({ type: "ready", revision: 0 });
+    client.observeThread(threadId);
+    const topic = `thread:${threadId}`;
+    const joins = () =>
+      socket.sent.filter(
+        (message) => JSON.parse(message).type === "presence.join",
+      ).length;
+    expect(joins()).toBe(1);
+
+    socket.receive({ type: "presence.denied", topic });
+    vi.advanceTimersByTime(60_000);
+    // No join retry and no heartbeat for a refused Thread.
+    expect(joins()).toBe(1);
+    expect(
+      socket.sent.some(
+        (message) => JSON.parse(message).type === "presence.heartbeat",
+      ),
+    ).toBe(false);
+
+    // Sharing changed: one more try.
+    socket.receive({ type: "thread.invalidated", threadId, revision: 1 });
+    expect(joins()).toBe(2);
+    client.stop();
+  });
+
+  it("reports who has a Thread open, once per user", () => {
+    const socket = new FakeSocket();
+    const client = new RealtimeClient(new QueryClient(), userId, () => socket);
+    client.start();
+    socket.receive({ type: "ready", revision: 0 });
+    const other = Schema.decodeUnknownSync(UserId)(
+      "usr_00000000-0000-4000-8000-000000000002",
+    );
+    socket.receive({
+      type: "presence.snapshot",
+      topic: `thread:${threadId}`,
+      participants: [
+        { userId, clientId: "00000000-0000-4000-8000-000000000001" },
+        { userId: other, clientId: "00000000-0000-4000-8000-000000000002" },
+        { userId: other, clientId: "00000000-0000-4000-8000-000000000003" },
+      ],
+    });
+    expect(client.presentUsers(threadId)).toEqual([userId, other]);
+    client.stop();
+  });
+});

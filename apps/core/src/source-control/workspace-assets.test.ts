@@ -795,10 +795,8 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     const fixture = await makeHarness();
     initialize(fixture);
     writeFileSync(join(fixture.paths.home, "fail-setup"), "fail\n");
-    expect(hooksState(fixture)).toEqual({
-      status: "hook-failed",
-      hook: "setup",
-    });
+    // A failing setup leaves the workspace ready and still resumes.
+    expect(hooksState(fixture)).toEqual({ status: "ready", failed: ["setup"] });
     const immutableSetup = readFileSync(
       join(fixture.paths.root, ".agents", "setup"),
       "utf8",
@@ -813,11 +811,11 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     expect(hooksState(fixture)).toEqual({ status: "ready" });
     expect(hooksState(fixture)).toEqual({ status: "ready" });
     expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
-      "setup\nresume\nresume\n",
+      "resume\nsetup\nresume\nresume\n",
     );
   });
 
-  it("maps a resume hook failure to the hooks JSON state", async () => {
+  it("reports a failing resume hook without failing the workspace", async () => {
     const fixture = await makeHarness();
     initialize(fixture);
     writeFileSync(
@@ -827,8 +825,8 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     );
 
     expect(hooksState(fixture)).toEqual({
-      status: "hook-failed",
-      hook: "resume",
+      status: "ready",
+      failed: ["resume"],
     });
   });
 

@@ -21,8 +21,12 @@ import { useMobile } from "../../shared/use-mobile.js";
 import { projectsQueryOptions } from "../projects/project-queries.js";
 import { personalAccountQueryOptions } from "../settings/account/personal-account-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
+import { unfollowThreadMutationOptions } from "../threads/sharing/sharing-mutations.js";
 import { setThreadPinnedMutationOptions } from "../threads/thread-mutations.js";
-import { threadsQueryOptions } from "../threads/thread-queries.js";
+import {
+  sharedThreadsQueryOptions,
+  threadsQueryOptions,
+} from "../threads/thread-queries.js";
 import { AppSidebar } from "./app-sidebar.js";
 import { shouldOpenMobileSidebarByDefault } from "./mobile-sidebar.js";
 import { SidebarExtensionRegion } from "./sidebar-extensions.js";
@@ -40,6 +44,9 @@ export function ProductShell() {
   const pinMutation = useMutation(
     setThreadPinnedMutationOptions(queryClient, identity.id),
   );
+  const unfollowThread = useMutation(
+    unfollowThreadMutationOptions(queryClient, identity.id),
+  ).mutate;
   const projectsQuery = useInfiniteQuery(projectsQueryOptions(identity.id));
   const threadsQuery = useInfiniteQuery(
     threadsQueryOptions(identity.id, undefined, "active"),
@@ -77,6 +84,7 @@ export function ProductShell() {
     ...threadsQueryOptions(identity.id),
     enabled: threadSearchOpen,
   });
+  const sharedThreadsQuery = useQuery(sharedThreadsQueryOptions(identity.id));
   const sidebarSearchTriggerRef = React.useRef<HTMLButtonElement>(null);
   const mobileSidebarTriggerRef = React.useRef<HTMLButtonElement>(null);
   const mobileSidebarPopupRef = React.useRef<HTMLDivElement>(null);
@@ -119,6 +127,8 @@ export function ProductShell() {
       archiveAvailable={archiveAvailable}
       projects={projects}
       threads={threads}
+      sharedThreads={sharedThreadsQuery.data}
+      onUnfollow={unfollowThread}
       personalAccount={personalAccountQuery.data}
       settingsContext={settingsQuery.data}
       onCollapse={toggleSidebar}

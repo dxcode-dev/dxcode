@@ -394,6 +394,7 @@ describe("ProductShell route ownership across the mobile breakpoint", () => {
     client.setQueryData(settingsContextQueryOptions(userId).queryKey, {
       activeScope: "personal",
     });
+    client.setQueryData(threadKeys.shared(userId), []);
     runtime.createFlueClient.mockReturnValue(runtime.client);
     runtime.useFlueAgent.mockReturnValue({});
   });

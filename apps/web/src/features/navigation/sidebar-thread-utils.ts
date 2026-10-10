@@ -1,4 +1,5 @@
 import type { ProjectData, ThreadData } from "@dx/api";
+import { PROJECTLESS_PROJECT_NAME } from "@dx/domain";
 
 export interface ThreadSection {
   readonly id: string;
@@ -17,21 +18,36 @@ const byPin = (left: ThreadData, right: ThreadData) =>
   (right.pinnedAt?.epochMilliseconds ?? 0) -
     (left.pinnedAt?.epochMilliseconds ?? 0) || byActivity(left, right);
 
+/**
+ * Sidebar sections. Shared Threads the user follows sit with their own
+ * Threads under the Thread's Project, named by the Project even when it is
+ * another member's.
+ */
 export function buildThreadSections(
   projects: ReadonlyArray<ProjectData>,
   threads: ReadonlyArray<ThreadData>,
   now: number,
   archiveAvailable = false,
+  sharedThreads: ReadonlyArray<ThreadData> = [],
 ): ReadonlyArray<ThreadSection> {
-  const projectNames = new Map(
-    projects.map((project) => [project.id, project.name]),
+  const projectNames = new Map<string, string>(
+    sharedThreads.flatMap((thread) =>
+      thread.projectName === undefined
+        ? []
+        : [[thread.projectId, thread.projectName] as const],
+    ),
   );
+  for (const project of projects) projectNames.set(project.id, project.name);
   const pinned: Array<ThreadData> = [];
   const inactive: Array<ThreadData> = [];
   const archived: Array<ThreadData> = [];
   const groups = new Map<ThreadData["projectId"], Array<ThreadData>>();
 
-  for (const thread of threads.toSorted(byActivity)) {
+  const owned = new Set(threads.map(({ id }) => id));
+  for (const thread of [
+    ...threads,
+    ...sharedThreads.filter(({ id }) => !owned.has(id)),
+  ].toSorted(byActivity)) {
     if (thread.lifecycleState === "archived") {
       archived.push(thread);
     } else if (thread.lifecycleState === "active") {
@@ -55,7 +71,8 @@ export function buildThreadSections(
     ...(pinned.length === 0 ? [] : [{ id: "pinned", threads: pinned }]),
     ...Array.from(groups, ([id, groupedThreads]) => ({
       id,
-      label: projectNames.get(id) ?? "Project",
+      // Project lists leave out each person's No Project.
+      label: projectNames.get(id) ?? PROJECTLESS_PROJECT_NAME,
       project: true,
       threads: groupedThreads,
     })),

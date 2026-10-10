@@ -77,6 +77,7 @@ import {
   GetSettingsContextErrorResponseSchema,
   GetSettingsContextResponseSchema,
   GetSigningKeysResponseSchema,
+  GetThreadMembersResponseSchema,
   GetThreadReadinessResponseSchema,
   GetThreadResponseSchema,
   GetWorkspacePolicyResponseSchema,
@@ -103,6 +104,7 @@ import {
   ListPluginsResponseSchema,
   ListPluginTriggersResponseSchema,
   ListProjectsResponseSchema,
+  ListSharedThreadsResponseSchema,
   ListSkillsResponseSchema,
   ListThreadsResponseSchema,
   ListWorkspaceInviteLinksResponseSchema,
@@ -183,7 +185,9 @@ import {
   SourceControlProviderFailureResponseSchema,
   type ThreadData,
   type ThreadDetailData,
+  ThreadFollowResponseSchema,
   type ThreadListItem,
+  ThreadSharingErrorResponseSchema,
   TrustPluginResponseSchema,
   type UpdateConnectionRequestSchema,
   UpdateEnvironmentVariableResponseSchema,
@@ -206,6 +210,8 @@ import {
   UpdateProjectResponseSchema,
   UpdateSkillStateResponseSchema,
   UpdateSkillWorkspacePolicyResponseSchema,
+  type UpdateThreadSharingRequest,
+  UpdateThreadSharingResponseSchema,
   UpdateWorkspacePolicyResponseSchema,
   UpdateWorkspaceProfileResponseSchema,
   WorkspaceInviteLinkResponseSchema,
@@ -355,6 +361,7 @@ export const request = async <
         ArchiveThreadExecutionUnavailableResponseSchema,
         SourceControlDeniedResponseSchema,
         SourceControlProviderFailureResponseSchema,
+        ThreadSharingErrorResponseSchema,
       ]),
     )(body).catch(() => undefined);
     if (settingsError !== undefined) {
@@ -1328,6 +1335,51 @@ export const setThreadPinned = async (
       `/v1/threads/${encodeURIComponent(threadId)}/pin`,
       PinThreadResponseSchema,
       { method: "PATCH", body: JSON.stringify({ pinned }) },
+    )
+  ).data;
+
+export const listSharedThreads = async (
+  signal?: AbortSignal,
+): Promise<ReadonlyArray<ThreadListClientItem>> =>
+  (
+    await request("/v1/shared-threads", ListSharedThreadsResponseSchema, {
+      signal,
+    })
+  ).data.items;
+
+export const updateThreadSharing = async (
+  threadId: ThreadId,
+  input: UpdateThreadSharingRequest,
+) =>
+  (
+    await request(
+      `/v1/threads/${encodeURIComponent(threadId)}/sharing`,
+      UpdateThreadSharingResponseSchema,
+      { method: "PUT", body: JSON.stringify(input) },
+    )
+  ).data;
+
+export const getThreadMembers = async (
+  threadId: ThreadId,
+  signal?: AbortSignal,
+) =>
+  (
+    await request(
+      `/v1/threads/${encodeURIComponent(threadId)}/members`,
+      GetThreadMembersResponseSchema,
+      { signal },
+    )
+  ).data.members;
+
+export const setThreadFollowing = async (
+  threadId: ThreadId,
+  following: boolean,
+) =>
+  (
+    await request(
+      `/v1/threads/${encodeURIComponent(threadId)}/follow`,
+      ThreadFollowResponseSchema,
+      { method: following ? "PUT" : "DELETE" },
     )
   ).data;
 

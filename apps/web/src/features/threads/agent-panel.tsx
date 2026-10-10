@@ -30,6 +30,11 @@ import {
 import { AttachmentMenu, ImagePreviews } from "./image-attachments-ui.js";
 import { useImageDropTarget } from "./image-drop-target.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
+import {
+  type ComposerMentions,
+  useComposerMentions,
+} from "./sharing/chat-composer.js";
+import { draftMode } from "./sharing/thread-chat.js";
 import type {
   OptimisticThreadCreation,
   PendingSubmissionControl,
@@ -491,6 +496,7 @@ function AgentComposer({
   images,
   errorCard,
   dockRef,
+  mentions,
   onAbort,
   onAddImages,
   onRemoveImage,
@@ -498,6 +504,7 @@ function AgentComposer({
   onTakeScreenshot,
   ref,
 }: {
+  readonly mentions?: ComposerMentions;
   readonly agentActive: boolean;
   readonly stopAvailable: boolean;
   readonly dictationAvailable: boolean;
@@ -528,6 +535,12 @@ function AgentComposer({
     disabled: draftLocked,
     onFiles: onAddImages,
   });
+  const composerMentions = useComposerMentions({
+    mentions,
+    draft,
+    setDraft: onChangeDraft,
+    textareaRef,
+  });
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     if (!dictation.interceptSubmit()) onSubmit(draft);
@@ -535,8 +548,11 @@ function AgentComposer({
   return (
     <div className="agent-composer-dock" ref={dockRef}>
       {errorCard}
+      {composerMentions.popover}
+      {composerMentions.banner}
       <form
         className="agent-composer"
+        data-chat-mode={composerMentions.chatMode ? "" : undefined}
         onSubmit={submit}
         ref={ref}
         {...dropTarget}
@@ -553,8 +569,17 @@ function AgentComposer({
           disabled={draftLocked}
           placeholder="Message"
           value={draft}
-          onChange={(event) => onChangeDraft(event.target.value)}
+          {...composerMentions.textareaProps}
+          onChange={(event) => {
+            onChangeDraft(event.target.value);
+            composerMentions.onInput(event);
+          }}
+          onSelect={composerMentions.trackCaret}
           onKeyDown={(event) => {
+            if (composerMentions.onKeyDown(event)) {
+              event.preventDefault();
+              return;
+            }
             if (
               event.key === "Enter" &&
               !event.shiftKey &&
@@ -607,8 +632,23 @@ function AgentComposer({
   );
 }
 
+/** A shared Thread's owner ended multiplayer or revoked Contribute. */
+const isReadOnlyRejection = (cause: unknown) =>
+  cause instanceof Error &&
+  "status" in cause &&
+  cause.status === 403 &&
+  "body" in cause &&
+  typeof cause.body === "object" &&
+  cause.body !== null &&
+  "data" in cause.body &&
+  typeof cause.body.data === "object" &&
+  cause.body.data !== null &&
+  "code" in cause.body.data &&
+  cause.body.data.code === "THREAD_READ_ONLY";
+
 function useAgentSubmission({
   agent,
+  mentions,
   setDraft,
   images,
   setImages,
@@ -617,8 +657,11 @@ function useAgentSubmission({
   submissionPending,
   submissionControl,
   onSubmissionPendingChange,
+  onAccessChanged,
 }: {
+  readonly onAccessChanged?: () => void;
   readonly agent: UseFlueAgentResult;
+  readonly mentions?: ComposerMentions;
   readonly setDraft: (draft: string) => void;
   readonly images: ReadonlyArray<PendingImage>;
   readonly setImages: (images: ReadonlyArray<PendingImage>) => void;
@@ -629,6 +672,8 @@ function useAgentSubmission({
   readonly onSubmissionPendingChange?: (pending: boolean) => void;
 }) {
   const [admissionPending, setAdmissionPending] = React.useState(false);
+  // A chat message being admitted has no run to stop.
+  const [admittingChat, setAdmittingChat] = React.useState(false);
   const submitInFlight = React.useRef(false);
   const submitGeneration = React.useRef(0);
   const composerMounted = React.useRef(false);
@@ -666,10 +711,29 @@ function useAgentSubmission({
       (!message && images.length === 0)
     )
       return;
+    const mode =
+      mentions?.mode === "members"
+        ? draftMode(
+            message,
+            mentions.members,
+            mentions.viewerId,
+            mentions.conversationMode,
+          )
+        : "agent";
+    if (mode === "chat" && images.length > 0) {
+      setActionError({
+        id: "action:send",
+        title: "Message not sent",
+        message: "Chat messages can't include images. Tag @dx to send them.",
+        action: "none",
+      });
+      return;
+    }
     submitInFlight.current = true;
     submissionControl.stopRequested = false;
     onSubmissionPendingChange?.(true);
     const generation = ++submitGeneration.current;
+    setAdmittingChat(mode === "chat");
     setAdmissionPending(true);
     const runAdmission = async () => {
       let submittedImages: ReadonlyArray<PendingImage> | undefined;
@@ -685,6 +749,7 @@ function useAgentSubmission({
         setActionError(undefined);
         const attachments = deliveredImages(submittedImages);
         await agent.sendMessage(message, { images: attachments });
+        if (mentions?.mode === "members") mentions.onSent(mode);
         if (submissionControl.stopRequested) await stopAgent();
         if (
           !imagesRetained ||
@@ -706,6 +771,19 @@ function useAgentSubmission({
             submissionImageRetention?.complete(submittedImages);
           disposeImages(submittedImages);
         }
+        if (isReadOnlyRejection(cause)) {
+          // Refresh access so the composer gives way to the viewer notice.
+          onAccessChanged?.();
+          if (!composerMounted.current) return;
+          setDraft(message);
+          setActionError({
+            id: "action:send",
+            title: "Message not sent",
+            message: "Multiplayer ended. You can still view this thread.",
+            action: "none",
+          });
+          return;
+        }
         if (!composerMounted.current) return;
         setActionError({
           id: "action:send",
@@ -723,6 +801,7 @@ function useAgentSubmission({
     actionError,
     composerMounted,
     admissionPending,
+    admittingChat,
     setActionError,
     stop,
     submit,
@@ -751,7 +830,16 @@ export function AgentPanel({
   optimisticCreation,
   onInitialSubmissionObserved,
   onOpenModelRouting,
+  readOnlyNotice,
+  onAccessChanged,
+  mentions,
 }: {
+  /** What `@` does in the composer; absent for people who cannot send. */
+  readonly mentions?: ComposerMentions;
+  /** A send found the user's access changed; refresh the Thread. */
+  readonly onAccessChanged?: () => void;
+  /** Replaces the composer for people who can only view this Thread. */
+  readonly readOnlyNotice?: React.ReactNode;
   readonly agent: UseFlueAgentResult & {
     readonly hasMore?: boolean;
     readonly loadingOlder?: boolean;
@@ -802,11 +890,13 @@ export function AgentPanel({
     actionError,
     composerMounted,
     admissionPending,
+    admittingChat,
     setActionError,
     stop,
     submit,
   } = useAgentSubmission({
     agent,
+    mentions,
     setDraft: draftValue.set,
     images,
     setImages,
@@ -815,20 +905,50 @@ export function AgentPanel({
     submissionPending,
     submissionControl,
     onSubmissionPendingChange,
+    onAccessChanged,
   });
-  const agentActive =
-    agent.status === "submitted" || agent.status === "streaming";
-  const draftLocked = admissionPending || submissionPending;
-  const stopAvailable = agentActive || admissionPending;
+  // A message being sent as chat starts no run; recognize its local echo.
+  const chatEcho = React.useMemo(
+    () =>
+      mentions?.mode === "members"
+        ? (text: string) =>
+            draftMode(
+              text,
+              mentions.members,
+              mentions.viewerId,
+              mentions.conversationMode,
+            ) === "chat"
+        : undefined,
+    [mentions],
+  );
   // Derive only when Flue history changes, not on composer or layout state.
   const { messages, settlements, finalOutputs } = agent;
   const model = React.useMemo(
-    () => deriveTranscriptViewModel({ messages, settlements, finalOutputs }),
-    [messages, settlements, finalOutputs],
+    () =>
+      deriveTranscriptViewModel({
+        messages,
+        settlements,
+        finalOutputs,
+        chatEcho,
+      }),
+    [messages, settlements, finalOutputs, chatEcho],
   );
+  // Only chat is on its way and nothing runs: the agent is not working.
+  const sendingOnlyChat =
+    agent.status === "submitted" &&
+    model.rows.some((row) => row.kind === "user-prompt" && !row.admitted) &&
+    model.rows.every(
+      (row) => row.kind !== "user-prompt" || row.admitted || row.chat === true,
+    ) &&
+    !model.turns.some((turn) => turn.status === "active");
+  const agentActive =
+    (agent.status === "submitted" && !sendingOnlyChat) ||
+    agent.status === "streaming";
+  const draftLocked = admissionPending || submissionPending;
+  const stopAvailable = agentActive || (admissionPending && !admittingChat);
   const statusMessage =
     workspaceStatus ??
-    (agent.status === "submitted" && !workspaceReady
+    (agent.status === "submitted" && !sendingOnlyChat && !workspaceReady
       ? "Preparing workspace…"
       : undefined);
   const initialSubmissionObserved =
@@ -967,7 +1087,11 @@ export function AgentPanel({
           }
         />
 
-        {archived ? null : (
+        {archived ? null : readOnlyNotice !== undefined ? (
+          <div className="agent-composer-dock" ref={composerDockRef}>
+            {readOnlyNotice}
+          </div>
+        ) : (
           <AgentComposer
             agentActive={agentActive}
             stopAvailable={stopAvailable}
@@ -977,6 +1101,7 @@ export function AgentPanel({
             images={images}
             dockRef={composerDockRef}
             errorCard={errorCard}
+            mentions={mentions}
             onAbort={() => void stop()}
             onAddImages={(files) => void addImages(files)}
             onRemoveImage={(image) => {

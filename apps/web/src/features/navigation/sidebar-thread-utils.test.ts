@@ -99,7 +99,7 @@ describe("fixed sidebar sections", () => {
       "unknown-b",
       "unknown-a",
     ]);
-    expect(sections[0]?.label).toBe("Project");
+    expect(sections[0]?.label).toBe("No Project");
   });
 
   it("omits empty categories but keeps a separately available archive reachable", () => {

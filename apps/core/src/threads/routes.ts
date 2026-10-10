@@ -42,6 +42,7 @@ import {
   type ThreadData,
   type ThreadDetailData,
   threadAgentUrl,
+  withMessageAuthor,
 } from "@dx/api";
 import {
   defaultThreadModelSelection,
@@ -53,6 +54,7 @@ import {
   SourceControlProviderFailure,
   type Thread,
   UNTITLED_THREAD_TITLE,
+  type UserId,
   type WorkspacePolicyDenied,
   WorkspaceRepository,
 } from "@dx/domain";
@@ -110,6 +112,11 @@ import { WorkspacePolicyRepositoryD1 } from "../settings/workspace-policy/reposi
 import { WorkspacePolicyService } from "../settings/workspace-policy/service.js";
 import { authorizeProjectSource } from "../source-control/admission.js";
 import {
+  threadSharingDecorations,
+  threadSharingDetail,
+  userIdentity,
+} from "../thread-sharing/service.js";
+import {
   type DxTitleAgentRunner,
   dxTitleAgentApplies,
   runDxTitleAgent,
@@ -149,6 +156,27 @@ const threadData = (thread: Thread): ThreadData => ({
   pinnedAt: thread.pinnedAt,
   ...(isThreadTitlePending(thread) ? { titlePending: true } : {}),
   agentUrl: threadAgentUrl(thread.id),
+});
+
+/**
+ * Thread detail for a member of a shared Thread: the owner's personal agent
+ * instructions, skill instructions, MCP endpoints, and plugins stay private.
+ * The agent still runs with them; the server supplies them (see
+ * attributeSubmission).
+ */
+const withoutOwnerConfiguration = <
+  Detail extends Pick<ThreadDetailData, "agentInitialization">,
+>(
+  detail: Detail,
+): Detail => ({
+  ...detail,
+  agentInitialization: {
+    ...detail.agentInitialization,
+    personalInstructions: "",
+    mcpConnections: [],
+    plugins: [],
+    skills: [],
+  },
 });
 
 export const threadDetailData = Effect.fn("threadDetailData")(function* (
@@ -571,6 +599,10 @@ export const createThreadRoutes = (
       );
       let initialSubmission: { readonly submissionId: string } | undefined;
       if (initialMessage !== undefined) {
+        const owner = yield* Effect.tryPromise({
+          try: () => userIdentity(db, thread.ownerUserId),
+          catch: () => new ThreadInitialAdmissionUnavailable(),
+        });
         const receipt = yield* Effect.tryPromise({
           try: () =>
             dispatchInitialMessage({
@@ -579,7 +611,16 @@ export const createThreadRoutes = (
               initialData: detail.agentInitialization,
               message: {
                 kind: "user",
-                body: initialMessage.body,
+                body: withMessageAuthor(
+                  {
+                    author: {
+                      role: "owner",
+                      userId: thread.ownerUserId,
+                      ...owner,
+                    },
+                  },
+                  initialMessage.body,
+                ),
                 attachments: [...initialMessage.attachments],
               },
               idempotencyKey: "initial",
@@ -888,12 +929,18 @@ export const createThreadRoutes = (
           lifecycleState: query.lifecycleState,
         });
       }).pipe(Effect.provide(threadServiceLayer(db)));
-      const projection = yield* Effect.tryPromise({
+      const [projection, sharing] = yield* Effect.tryPromise({
         try: () =>
-          readThreadListProjection(
-            db,
-            page.items.map(({ id }) => id),
-          ),
+          Promise.all([
+            readThreadListProjection(
+              db,
+              page.items.map(({ id }) => id),
+            ),
+            threadSharingDecorations(
+              db,
+              page.items.map(({ id }) => id),
+            ),
+          ]),
         catch: (cause) =>
           PersistenceUnavailable.new(
             { operation: "thread.listProjection" },
@@ -903,9 +950,10 @@ export const createThreadRoutes = (
       return yield* Schema.encodeUnknownEffect(ListThreadsResponseSchema)({
         status: "success",
         data: {
-          items: page.items.map((thread) =>
-            threadListItem(thread, projection.get(thread.id)),
-          ),
+          items: page.items.map((thread) => ({
+            ...threadListItem(thread, projection.get(thread.id)),
+            ...sharing.get(thread.id),
+          })),
           nextCursor: page.nextCursor,
         },
       });
@@ -1267,9 +1315,26 @@ export const createThreadRoutes = (
         return yield* service.get(context.get("principal"), params.threadId);
       }).pipe(Effect.provide(threadServiceLayer(db)));
       const detail = yield* threadDetailData(context.env.DB, db, thread);
+      const sharing = yield* Effect.tryPromise({
+        try: () =>
+          threadSharingDetail(
+            db,
+            thread.id,
+            thread.ownerUserId,
+            context.get("threadAccess") ?? "owner",
+            (context.get("actor") ?? context.get("principal")).userId as UserId,
+          ),
+        catch: (cause) =>
+          PersistenceUnavailable.new({ operation: "thread.sharing" }, cause),
+      });
       return yield* Schema.encodeUnknownEffect(GetThreadResponseSchema)({
         status: "success",
-        data: detail,
+        data: {
+          ...(sharing.access === "owner"
+            ? detail
+            : withoutOwnerConfiguration(detail)),
+          ...sharing,
+        },
       });
     });
 
