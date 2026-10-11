@@ -31,9 +31,14 @@ cannot serve them.
 
 Claude Code works with its own tools, such as Bash, Read, Write, Edit, web
 search, and subagents. dx adds its own tools as `mcp__dx__*`: the thread tools,
-Code's `code_exec` and `tool_search` for connected MCP servers, skill
-resources, and installed plugin tools. The transcript, Stop, Retry, Changes,
-and Files work as in any other thread.
+including `find_thread` and `read_thread`, Code's `code_exec` and
+`tool_search` for connected MCP servers, skill resources, and installed plugin
+tools. The transcript, Stop, Retry, Changes, and Files work as in any other
+thread.
+
+`read_thread` reads another thread with a separate reader model. A Claude
+Code thread has no such model yet, so there `read_thread` answers "Subagent
+not configured"; `find_thread` works as usual.
 
 ## Orb requirements
 

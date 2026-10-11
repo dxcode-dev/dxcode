@@ -78,6 +78,7 @@ export * from "./threads/get-thread-readiness.js";
 export * from "./threads/list-threads.js";
 export * from "./threads/message-author.js";
 export * from "./threads/pin-thread.js";
+export * from "./threads/search-threads.js";
 export * from "./threads/terminal.js";
 export * from "./threads/thread-chat.js";
 export * from "./threads/thread-data.js";

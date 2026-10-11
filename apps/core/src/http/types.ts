@@ -62,6 +62,7 @@ export interface Bindings {
   readonly SUBSCRIPTION_CREDENTIAL_COORDINATOR?: DurableObjectNamespace;
   readonly REALTIME_HUB?: DurableObjectNamespace;
   readonly BYOK_CREDENTIAL_COORDINATOR?: DurableObjectNamespace;
+  readonly THREAD_SEARCH_INDEX?: DurableObjectNamespace;
   /**
    * The Cloudflare Containers Orb provider: the Orb Worker's container
    * object namespace, bound across scripts. Present only when the deployment

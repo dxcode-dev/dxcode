@@ -2,9 +2,9 @@ import type { UserId } from "@dx/domain";
 import type { QueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { AuthContext, useIdentity } from "../../shared/auth/auth-context.js";
+import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
 import { ThreadSessionRegistryContext } from "./thread-session-context.js";
 import { ThreadSessionRegistry } from "./thread-session-registry.js";
-import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
 
 export function ThreadSessionProvider({
   userId,

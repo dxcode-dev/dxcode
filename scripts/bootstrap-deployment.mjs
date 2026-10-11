@@ -169,6 +169,10 @@ export const approveBootstrapEmail = async ({ email, database }) => {
     throw new Error("Bootstrap approval requires a valid email address.");
   const now = new Date().toISOString();
   await database.approveAuthenticationEmail({ email: normalized, now });
+  // An administrator account from a release before email verification was
+  // stored unverified, which stops Google from linking to it. The operator
+  // supplied this address, so it counts as proven.
+  await database.markEmailVerifiedByEmail?.({ email: normalized, now });
   return { email: normalized };
 };
 
@@ -285,6 +289,11 @@ export const createCloudflareD1BootstrapDatabase = ({
       query(
         "UPDATE personal_account SET display_name = ?, username = ?, updated_at = ? WHERE user_id = ?",
         [displayName ?? "dx deployment reviewer", username, now, userId],
+      ),
+    markEmailVerifiedByEmail: ({ email, now }) =>
+      query(
+        'UPDATE "user" SET emailVerified = 1, updatedAt = ? WHERE email = ? AND emailVerified = 0',
+        [now, email],
       ),
     approveAuthenticationEmail: ({ email, now }) =>
       query(

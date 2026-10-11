@@ -3,13 +3,13 @@ set -euo pipefail
 script_directory=${0%/*}
 if [[ "$script_directory" == "$0" ]]; then script_directory=.; fi
 here="$(cd -- "$script_directory" && pwd -P)"
-revision=a364411c2607607cf5c0a61e76e2cfe35c44cff2
+revision=42ad0d88784dc4300fd472129acad9218b218131
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 node - "$here/source.bundle" <<'NODE'
 const { createHash } = require("node:crypto");
 const { readFileSync } = require("node:fs");
-const expected = "26ad07ed4c53607507ae141b57613a133322ac2d2eb86cea1601bf41cdd3f8b9";
+const expected = "fe0562e4267c2c17b2d434089bcef76214f7ebcd02f14b3d6b516a98dc6feead";
 const actual = createHash("sha256").update(readFileSync(process.argv[2])).digest("hex");
 if (actual !== expected) throw new Error("Retained Flue source bundle checksum mismatch.");
 NODE

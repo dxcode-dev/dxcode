@@ -703,6 +703,15 @@ export {
 } from "./threads/thread.js";
 export { newThreadId, ThreadId } from "./threads/thread-id.js";
 export {
+  parseThreadSearchQuery,
+  THREAD_SEARCH_FILTER_KEYS,
+  THREAD_SEARCH_QUERY_MAX_LENGTH,
+  type ThreadSearchFilterKey,
+  type ThreadSearchFilters,
+  type ThreadSearchQuery,
+  ThreadSearchQueryError,
+} from "./threads/thread-search-query.js";
+export {
   generateThreadTitle,
   THREAD_TITLE_MAX_LENGTH,
   THREAD_TITLE_PENDING_MS,

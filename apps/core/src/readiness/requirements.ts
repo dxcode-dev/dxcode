@@ -540,6 +540,7 @@ export const loadReadinessRequirements = Effect.fn("loadReadinessRequirements")(
         bindings.THREAD_EXECUTION,
         bindings.SUBSCRIPTION_CREDENTIAL_COORDINATOR,
         bindings.REALTIME_HUB,
+        bindings.THREAD_SEARCH_INDEX,
       ])
         yield* validateDurableObjectBinding(binding);
       yield* validateAiBinding(bindings.AI);

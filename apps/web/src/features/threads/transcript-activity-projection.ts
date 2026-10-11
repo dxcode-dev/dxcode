@@ -33,6 +33,8 @@ export const THREAD_TOOL_NAMES: ReadonlySet<string> = new Set([
   "update_thread",
   "list_orbs",
   "list_agent_modes",
+  "find_thread",
+  "read_thread",
 ]);
 
 export type TranscriptActivity =

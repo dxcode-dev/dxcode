@@ -69,6 +69,17 @@ export function ThreadToolLabel({ part }: { readonly part: ToolPart }) {
           {only === undefined ? "this thread" : threadLink(only, "thread")}
         </>
       );
+    case "find_thread":
+      return (
+        <>
+          Searched threads for{" "}
+          <strong>{stringField(part.input, "query") ?? "threads"}</strong>
+        </>
+      );
+    case "read_thread":
+      return (
+        <>Read {only === undefined ? "thread" : threadLink(only, "thread")}</>
+      );
     case "list_orbs":
       return <>Listed Orbs</>;
     case "list_agent_modes":

@@ -6,22 +6,22 @@ import {
   isClaudeCodeModel,
   ModeId,
   PROJECTLESS_PROJECT_NAME,
-  type Principal,
   type RunnerProfileCatalog,
   THREAD_COLORS,
   type ThreadId,
   type ThreadModelSelection,
-  type UserId,
 } from "@dx/domain";
 import { defineTool, type ToolDefinition } from "@flue/runtime";
 import { Effect, Result, Schema } from "effect";
-import { Hono } from "hono";
 import * as v from "valibot";
 import { loadRunnerProfileCatalog } from "../execution/runner-profiles/catalog.js";
-import type { AppEnv, Bindings } from "../http/types.js";
+import type { Bindings } from "../http/types.js";
 import { publishRealtimeInvalidation } from "../realtime/publication.js";
 import { threadProjectReachableSql } from "../settings/members/membership-sql.js";
+import { createThreadSearchTools } from "../thread-search/agent-tools.js";
 import { resolveOrbChoice } from "./agent-orbs.js";
+import { type CallingThread, readCallingThread } from "./calling-thread.js";
+import { ownerRequest as requestAsOwner } from "./owner-request.js";
 
 /** The Worker bindings the Thread tools resolve against at call time. */
 export interface ThreadToolsContext {
@@ -72,19 +72,6 @@ const idempotentThreadId = async (seed: string) => {
   );
   return `thr_${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 };
-
-interface CallingThread {
-  readonly id: string;
-  readonly ownerUserId: UserId;
-  readonly projectId: string;
-  readonly selection: ThreadModelSelection | undefined;
-  /**
-   * While the calling Thread is shared with the workspace, the root of its
-   * family: the tools reach only that root and its children, never the
-   * owner's other private Threads.
-   */
-  readonly sharedFamilyRoot?: string;
-}
 
 interface ThreadRow {
   readonly id: string;
@@ -165,29 +152,6 @@ const agentModeSelection = (
   } as ThreadModelSelection;
 };
 
-let ownerRouteModules:
-  | Promise<
-      [
-        typeof import("./routes.js"),
-        typeof import("../agents/routes.js"),
-        typeof import("../settings/routes.js"),
-      ]
-    >
-  | undefined;
-
-/**
- * The routes the tools call as the owner, imported once and lazily: they
- * import DxAgent, which mounts these tools.
- */
-const ownerRoutes = () => {
-  ownerRouteModules ??= Promise.all([
-    import("./routes.js"),
-    import("../agents/routes.js"),
-    import("../settings/routes.js"),
-  ]);
-  return ownerRouteModules;
-};
-
 /**
  * Tools that let the agent start, message, check on, wait for, and update
  * the owner's other Threads. Every call acts as the calling Thread's owner,
@@ -213,42 +177,8 @@ export const createThreadTools = (
       ? `${callingThreadId}:${crypto.randomUUID()}`
       : `${callingThreadId}:${submissionId ?? ""}:${toolCallId}`;
 
-  const callingThread = async (
-    context: ThreadToolsContext,
-  ): Promise<CallingThread> => {
-    const row = await context.db
-      .prepare(
-        `SELECT owner_user_id, project_id, model_selection, parent_thread_id,
-           workspace_access
-         FROM threads WHERE id = ? LIMIT 1`,
-      )
-      .bind(callingThreadId)
-      .first<{
-        owner_user_id: string;
-        project_id: string;
-        model_selection: string;
-        parent_thread_id: string | null;
-        workspace_access: string | null;
-      }>();
-    if (row === null) throw new Error("This Thread is unavailable.");
-    let selection: ThreadModelSelection | undefined;
-    try {
-      selection = JSON.parse(row.model_selection) as ThreadModelSelection;
-    } catch {
-      selection = undefined;
-    }
-    const shared =
-      row.workspace_access !== null && row.workspace_access !== "none";
-    return {
-      id: callingThreadId,
-      ownerUserId: row.owner_user_id as UserId,
-      projectId: row.project_id,
-      selection,
-      ...(shared
-        ? { sharedFamilyRoot: row.parent_thread_id ?? callingThreadId }
-        : {}),
-    };
-  };
+  const callingThread = (context: ThreadToolsContext) =>
+    readCallingThread(context.db, callingThreadId);
 
   /** The owner's Threads among `threadIds`; others are absent. */
   const readThreads = async (
@@ -295,62 +225,28 @@ export const createThreadTools = (
     return row;
   };
 
-  /**
-   * Calls the routes the web client uses, as the Thread owner signed in to
-   * the browser: the Thread routes and DxAgent's routes, with the same
-   * admission, policy, and realtime updates.
-   */
-  const ownerRequest = async (
+  /** Calls the web client's routes as the Thread owner; see `ownerRequest`. */
+  const ownerRequest = (
     context: ThreadToolsContext,
     owner: CallingThread,
     method: "GET" | "POST" | "PATCH",
     path: string,
     body?: unknown,
-  ) => {
-    const [{ threadRoutes }, { dxAgentRoutes }, { settingsRoutes }] =
-      await ownerRoutes();
-    const app = new Hono<AppEnv>();
-    app.use(async (honoContext, next) => {
-      honoContext.set("principal", {
-        userId: owner.ownerUserId,
-        credentialScopes: ["personal", "workspace"],
-      } satisfies Principal);
-      honoContext.set("requestId", `thread_tool_${crypto.randomUUID()}`);
-      honoContext.set("requestStartedAt", Date.now());
-      // Messages this request delivers come from the calling Thread.
-      honoContext.set("messageSourceThreadId", callingThreadId);
-      await next();
-    });
-    app.route("/v1/threads", threadRoutes);
-    app.route("/v1/agents/dx", dxAgentRoutes);
-    app.route("/v1/settings", settingsRoutes);
-    const response = await app.request(
-      path,
+  ) =>
+    requestAsOwner(
       {
-        method,
-        ...(body === undefined
+        bindings: context.bindings,
+        ownerUserId: owner.ownerUserId,
+        // Messages this request delivers come from the calling Thread.
+        sourceThreadId: callingThreadId,
+        ...(context.waitUntil === undefined
           ? {}
-          : {
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify(body),
-            }),
+          : { waitUntil: context.waitUntil }),
       },
-      context.bindings,
-      {
-        // Title generation and realtime updates outlive the response.
-        waitUntil: (promise: Promise<unknown>) => {
-          const settled = promise.catch(() => undefined);
-          context.waitUntil?.(settled);
-        },
-        passThroughOnException: () => undefined,
-        props: {},
-      } as unknown as ExecutionContext,
+      method,
+      path,
+      body,
     );
-    const payload = (await response.json().catch(() => undefined)) as
-      | Record<string, unknown>
-      | undefined;
-    return { response, payload };
-  };
 
   /** The route's error code and message, from a dx or a Flue error body. */
   const routeFailure = (
@@ -1050,5 +946,7 @@ export const createThreadTools = (
           };
         }),
     }),
+    // find_thread and read_thread only read; see thread-search/agent-tools.ts.
+    ...createThreadSearchTools(callingThreadId, getContext),
   ];
 };

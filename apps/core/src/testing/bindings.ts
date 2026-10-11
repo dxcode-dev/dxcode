@@ -170,6 +170,7 @@ export const createTestBindings = (
   THREAD_EXECUTION: validAgentBinding,
   SUBSCRIPTION_CREDENTIAL_COORDINATOR: validAgentBinding,
   REALTIME_HUB: validAgentBinding,
+  THREAD_SEARCH_INDEX: validAgentBinding,
   AI: validAiBinding,
   DB: validD1Binding,
   EMAIL: validEmailBinding,

@@ -120,6 +120,7 @@ import { WorkspaceRepositoryD1 } from "../settings/workspace/repository-d1.js";
 import { WorkspacePolicyRepositoryD1 } from "../settings/workspace-policy/repository-d1.js";
 import { WorkspacePolicyService } from "../settings/workspace-policy/service.js";
 import { authorizeProjectSource } from "../source-control/admission.js";
+import { scheduleThreadSearchIndex } from "../thread-search/enqueue.js";
 import {
   threadSharingDecorations,
   threadSharingDetail,
@@ -1242,6 +1243,15 @@ export const createThreadRoutes = (
             context.env,
             id,
             "thread.invalidated",
+          ),
+        );
+      // A renamed Thread is found by its new title.
+      if (body.title !== undefined)
+        yield* Effect.promise(async () =>
+          scheduleThreadSearchIndex(
+            () => context.executionCtx,
+            context.env,
+            thread.id,
           ),
         );
       return yield* Schema.encodeUnknownEffect(UpdateThreadResponseSchema)({

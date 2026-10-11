@@ -134,8 +134,7 @@ const commandDefinitions = Object.freeze([
   {
     id: "threads.search",
     label: "Search Threads",
-    description:
-      "Search the workspace Threads currently loaded on this device.",
+    description: "Search your Threads and Threads shared with your workspace.",
     category: "Threads",
     scope: "global",
     defaults: everyPlatform("Mod+Shift+K"),

@@ -305,7 +305,7 @@ describe("Thread tools", () => {
     routes.status = { create: 201, send: 202 };
   });
 
-  it("offers create, send, status, wait, Orb and mode lookups, and update", () => {
+  it("offers create, send, status, wait, Orb and mode lookups, update, find, and read", () => {
     expect(Object.keys(toolsFor(fakeDb(new Map())))).toEqual([
       "create_thread",
       "send_thread_message",
@@ -314,6 +314,8 @@ describe("Thread tools", () => {
       "list_orbs",
       "list_agent_modes",
       "update_thread",
+      "find_thread",
+      "read_thread",
     ]);
   });
 

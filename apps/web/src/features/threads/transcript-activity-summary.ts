@@ -53,6 +53,8 @@ const isGuidance = (part: ToolPart) => {
 };
 
 type SummaryKind =
+  | "thread-find"
+  | "thread-read"
   | "thread-start"
   | "thread-message"
   | "thread-wait"
@@ -83,6 +85,8 @@ const threadSummaryKinds: Readonly<Record<string, SummaryKind>> = {
   update_thread: "thread-update",
   list_orbs: "thread-orbs",
   list_agent_modes: "thread-modes",
+  find_thread: "thread-find",
+  read_thread: "thread-read",
 };
 
 /**
@@ -96,6 +100,11 @@ export const threadsFor = (part: ToolPart): ReadonlyArray<string> => {
     return listed.filter((id): id is string => typeof id === "string");
   const thread = stringField(part.input, "thread");
   if (thread !== undefined) return [thread];
+  // read_thread names its Thread by ID or URL.
+  const read = /thr_[0-9a-f-]{36}/.exec(
+    stringField(part.input, "threadID") ?? "",
+  )?.[0];
+  if (read !== undefined) return [read];
   // Only a created Thread is named by the result alone.
   if (part.toolName !== "create_thread") return [];
   const created = stringField(part.output, "threadId");
@@ -119,6 +128,10 @@ const summaryKind = (category: ToolCategory, part: ToolPart): SummaryKind => {
 
 const summaryPhrase = (kind: SummaryKind, count: number) => {
   switch (kind) {
+    case "thread-find":
+      return `searched threads ${plural(count, "time")}`;
+    case "thread-read":
+      return `read ${plural(count, "thread")}`;
     case "thread-start":
       return `started ${plural(count, "thread")}`;
     case "thread-message":

@@ -106,9 +106,9 @@ export function SignInPage({
     requestError !== null &&
     signInErrorCode(requestError) !== "waitlisted" &&
     signInErrorCode(requestError) !== "EMAIL_NOT_VERIFIED"
-      ? signInErrorMessage(requestError)
+      ? signInErrorMessage(requestError, options)
       : redirectError !== undefined && redirectError !== "waitlisted"
-        ? signInErrorMessage(redirectError)
+        ? signInErrorMessage(redirectError, options)
         : undefined;
 
   const title =
@@ -185,7 +185,7 @@ export function SignInPage({
               resendError={
                 resendLink.error === null
                   ? undefined
-                  : signInErrorMessage(resendLink.error)
+                  : signInErrorMessage(resendLink.error, options)
               }
               onResend={() =>
                 magicLink.variables &&

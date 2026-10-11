@@ -31,6 +31,7 @@ import {
 import { threadChangesRoutes } from "./thread-changes/routes.js";
 import { threadFilesRoutes } from "./thread-files/routes.js";
 import { threadSandboxFileRoutes } from "./thread-files/sandbox.js";
+import { threadSearchRoutes } from "./thread-search/routes.js";
 import { shareThreadReads } from "./thread-sharing/middleware.js";
 import {
   sharedThreadRoutes,
@@ -69,6 +70,7 @@ app.route("/v1/projects", projectRoutes);
 app.route("/v1/realtime", realtimeRoutes);
 app.route("/v1/settings", settingsRoutes);
 app.route("/v1/shared-threads", sharedThreadRoutes);
+app.route("/v1/thread-search", threadSearchRoutes);
 app.use("/v1/threads/:threadId", shareThreadReads);
 app.use("/v1/threads/:threadId/readiness", shareThreadReads);
 app.route("/v1/threads", threadRoutes);

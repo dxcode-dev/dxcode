@@ -80,10 +80,6 @@ export function ProductShell() {
     shouldOpenMobileSidebarByDefault(mobile, pathname),
   );
   const [threadSearchOpen, setThreadSearchOpen] = React.useState(false);
-  const searchQuery = useInfiniteQuery({
-    ...threadsQueryOptions(identity.id),
-    enabled: threadSearchOpen,
-  });
   const sharedThreadsQuery = useQuery(sharedThreadsQueryOptions(identity.id));
   const sidebarSearchTriggerRef = React.useRef<HTMLButtonElement>(null);
   const mobileSidebarTriggerRef = React.useRef<HTMLButtonElement>(null);
@@ -238,25 +234,14 @@ export function ProductShell() {
       </Dialog.Root>
       <ThreadSearchDialog
         open={threadSearchOpen}
-        projects={projects}
-        threads={
-          searchQuery.data?.pages.flatMap((page) => page.items) ?? threads
-        }
-        hasMore={searchQuery.hasNextPage}
-        loading={searchQuery.isPending || searchQuery.isFetchingNextPage}
-        onLoadMore={() => void searchQuery.fetchNextPage()}
-        error={
-          searchQuery.error instanceof Error
-            ? searchQuery.error.message
-            : undefined
-        }
+        userId={identity.id}
         finalFocus={mobile ? mobileSidebarTriggerRef : sidebarSearchTriggerRef}
         onOpenChange={setThreadSearchOpen}
-        onSelectThread={(thread) => {
+        onSelectThread={(threadId) => {
           setMobileSidebarOpen(false);
           void navigate({
             to: "/threads/$threadId",
-            params: { threadId: thread.id },
+            params: { threadId },
           });
         }}
       />

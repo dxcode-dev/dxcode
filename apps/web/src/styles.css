@@ -10031,10 +10031,93 @@ div.claude-code-mode-main {
   justify-content: flex-end;
   background: var(--background);
 }
-.thread-search-result {
+.thread-search-filters {
   display: flex;
   align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.thread-search-filter-keys {
+  display: flex;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.thread-search-filter {
+  flex: none;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: var(--radius);
+  color: var(--muted-foreground);
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.thread-search-filter:hover,
+.thread-search-filter:focus-visible {
+  color: var(--foreground);
+  background: var(--muted);
+}
+.thread-search-filter-hint {
+  flex: none;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.thread-search-syntax {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.thread-search-syntax code,
+.thread-search-example code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.thread-search-syntax p code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  color: var(--foreground);
+  background: var(--background);
+}
+.thread-search-examples {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.thread-search-example {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--muted-foreground);
+  background: var(--background);
+  text-align: left;
+}
+.thread-search-example strong {
+  color: var(--foreground);
+  font-size: 12px;
+}
+.thread-search-heading {
+  margin: 4px 14px 6px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.thread-search-result {
+  display: flex;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: 12px;
   width: 100%;
   min-height: 56px;
   padding: 8px 14px;
@@ -10049,6 +10132,7 @@ div.claude-code-mode-main {
 }
 .thread-search-result-copy {
   display: grid;
+  gap: 3px;
   min-width: 0;
 }
 .thread-search-result-copy strong {
@@ -10057,20 +10141,48 @@ div.claude-code-mode-main {
   white-space: nowrap;
   font-size: 14px;
 }
+.thread-search-result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.thread-search-avatar.dx-avatar {
+  width: 16px;
+  height: 16px;
+  font-size: 8px;
+}
+.thread-search-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--muted);
+}
+.thread-search-badge[data-active] {
+  color: var(--success);
+}
+.thread-search-badge svg {
+  width: 10px;
+}
+.thread-search-snippet {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.thread-search-project {
+  flex: none;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
 .thread-search-result-copy small,
-.thread-search-privacy,
 .thread-search-state {
   color: var(--muted-foreground);
   font-size: 11px;
-}
-.thread-search-privacy {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: 12px;
-}
-.thread-search-privacy svg {
-  width: 12px;
 }
 .thread-search-state {
   margin: 16px 14px;

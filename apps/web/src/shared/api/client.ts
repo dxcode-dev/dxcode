@@ -166,6 +166,10 @@ import {
   RotateManagedSigningKeyResponseSchema,
   RotatePersonalApiTokenResponseSchema,
   RotatePluginTriggerResponseSchema,
+  SearchThreadsInvalidRequestResponseSchema,
+  type SearchThreadsItem,
+  SearchThreadsResponseSchema,
+  SearchThreadsUnavailableResponseSchema,
   type SetConnectionEnabledRequestSchema,
   SetExternalApiApplicationStatusResponseSchema,
   type SetFirstPartyPluginConfigurationRequest,
@@ -358,6 +362,8 @@ export const request = async <
         SourceControlDeniedResponseSchema,
         SourceControlProviderFailureResponseSchema,
         ThreadSharingErrorResponseSchema,
+        SearchThreadsInvalidRequestResponseSchema,
+        SearchThreadsUnavailableResponseSchema,
       ]),
     )(body).catch(() => undefined);
     if (settingsError !== undefined) {
@@ -1272,6 +1278,28 @@ export const listThreads = async (
   if (cursor !== undefined) query.set("cursor", cursor);
   return (
     await request(`/v1/threads?${query}`, ListThreadsResponseSchema, { signal })
+  ).data;
+};
+
+export interface ThreadSearchPage {
+  readonly items: ReadonlyArray<SearchThreadsItem>;
+  readonly nextCursor?: string;
+}
+
+/** Thread search: the signed-in person's Threads and Threads shared with them. */
+export const searchThreads = async (
+  query: string,
+  cursor?: string,
+  signal?: AbortSignal,
+): Promise<ThreadSearchPage> => {
+  const parameters = new URLSearchParams({ q: query, limit: "30" });
+  if (cursor !== undefined) parameters.set("cursor", cursor);
+  return (
+    await request(
+      `/v1/thread-search?${parameters}`,
+      SearchThreadsResponseSchema,
+      { signal },
+    )
   ).data;
 };
 

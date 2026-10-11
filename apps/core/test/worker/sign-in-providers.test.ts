@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  approveBootstrapEmail,
   bootstrapDeployment,
   createCloudflareD1BootstrapDatabase,
 } from "../../../../scripts/bootstrap-deployment.mjs";
@@ -573,6 +574,68 @@ describe("sign-in providers", () => {
     ).toBe("dx admin");
     const password = await signIn(auth, admin);
     expect(password.status).toBe(200);
+  });
+
+  it("lets Google link to an administrator from a release before email verification once bootstrap approves it", async () => {
+    // Releases before 0.2.12 stored every self-host account unverified.
+    const admin = "older-admin@selfhost.dev";
+    const now = new Date().toISOString();
+    const { hashPassword, verifyPassword } = await import("better-auth/crypto");
+    await env.DB.batch([
+      env.DB.prepare(
+        'INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 0, ?, ?)',
+      ).bind("usr_older_admin_0001", "dx admin", admin, now, now),
+      env.DB.prepare(
+        "INSERT INTO account (id, issuer, accountId, providerId, userId, password, createdAt, updatedAt) VALUES (?, 'local:credential', ?, 'credential', ?, ?, ?, ?)",
+      ).bind(
+        "acc_older_admin_0001",
+        "usr_older_admin_0001",
+        "usr_older_admin_0001",
+        await hashPassword("a-long-password-123"),
+        now,
+        now,
+      ),
+    ]);
+    // The upgrade turned password sign-in off and Google on.
+    const auth = configured({
+      DX_SIGN_IN_PROVIDERS: "google",
+      DX_SIGN_IN_ADMISSION: "invite",
+    });
+    const refused = await signInWithGoogle(auth, {
+      email: admin,
+      email_verified: true,
+    });
+    expect(refused.location.searchParams.get("error")).toBe(
+      "account_not_linked",
+    );
+
+    // Bootstrap without password sign-in only approves the address; it also
+    // marks the operator's existing account verified.
+    await approveBootstrapEmail({
+      email: admin,
+      database: createCloudflareD1BootstrapDatabase({
+        accountId: "a".repeat(32),
+        apiToken: "test-token",
+        databaseId: "test-database",
+        hashPassword,
+        verifyPassword,
+      }),
+    });
+    const linked = await signInWithGoogle(auth, {
+      email: admin,
+      email_verified: true,
+    });
+    expect(linked.location.pathname).toBe("/new");
+    expect(linked.cookies.join(";")).toContain("session_token=");
+    const accounts = await env.DB.prepare(
+      "SELECT providerId FROM account WHERE userId = ? ORDER BY providerId",
+    )
+      .bind("usr_older_admin_0001")
+      .all<{ providerId: string }>();
+    expect(accounts.results.map((row) => row.providerId)).toEqual([
+      "credential",
+      "google",
+    ]);
   });
 
   it("attaches a password to an administrator who signed in before password sign-in was on", async () => {

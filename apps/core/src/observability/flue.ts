@@ -11,6 +11,7 @@ import {
   settingsPersistenceLogger,
 } from "../logging.js";
 import { recordFlueUsage } from "../settings/usage/recorder.js";
+import { enqueueThreadSearchIndex } from "../thread-search/enqueue.js";
 import { recordFlueThreadActivity } from "../threads/activity.js";
 import {
   recordActiveSubmissionPhase,
@@ -108,9 +109,14 @@ const observeFlueEvent = (
         threadActivityDeliveries.delete(threadId);
     });
   }
+  const searchIndexDelivery =
+    event.type === "submission_settled" && event.instanceId !== undefined
+      ? enqueueThreadSearchIndex(bindings, event.instanceId)
+      : Promise.resolve();
   const persistence = Promise.all([
     usageDelivery,
     activityDelivery,
+    searchIndexDelivery,
     startupDelivery.catch(() => {
       settingsPersistenceLogger.warn(
         "Startup phase observation could not be delivered.",

@@ -9,6 +9,7 @@ import {
   getThreadReadiness,
   listSharedThreads,
   listThreads,
+  searchThreads,
   type ThreadListTree,
 } from "../../shared/api/client.js";
 
@@ -46,6 +47,9 @@ export const threadKeys = {
     [...threadKeys.detail(userId, threadId), "members"] as const,
   /** Threads other workspace members shared with this user. */
   shared: (userId: UserId) => [...threadKeys.all(userId), "shared"] as const,
+  /** One Thread search query's pages. */
+  search: (userId: UserId, query: string) =>
+    [...threadKeys.all(userId), "search", query] as const,
 };
 
 export const invalidateAllThreadQueries = (
@@ -128,6 +132,21 @@ export const threadQueryOptions = (userId: UserId, threadId: ThreadId) =>
         : false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
+  });
+
+/**
+ * Thread search pages for one query. Each keystroke is debounced by the
+ * caller; results stay cached briefly so going back to a query is free.
+ */
+export const threadSearchQueryOptions = (userId: UserId, query: string) =>
+  infiniteQueryOptions({
+    queryKey: threadKeys.search(userId, query),
+    queryFn: ({ pageParam, signal }) => searchThreads(query, pageParam, signal),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page) => page.nextCursor,
+    staleTime,
+    gcTime,
+    retry: false,
   });
 
 export const sharedThreadsQueryOptions = (userId: UserId) =>

@@ -60,6 +60,10 @@
       {
         "name": "BYOK_CREDENTIAL_COORDINATOR",
         "class_name": "ByokCredentialCoordinatorObject"
+      },
+      {
+        "name": "THREAD_SEARCH_INDEX",
+        "class_name": "ThreadSearchIndexObject"
       }
     ]
   },
@@ -87,6 +91,10 @@
     {
       "tag": "v5-byok-credential-coordinator",
       "new_sqlite_classes": ["ByokCredentialCoordinatorObject"]
+    },
+    {
+      "tag": "v6-thread-search-index",
+      "new_sqlite_classes": ["ThreadSearchIndexObject"]
     }
   ]
 }

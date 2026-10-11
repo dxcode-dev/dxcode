@@ -7,6 +7,7 @@ import {
 import type { Bindings } from "../http/types.js";
 import { threadPersistenceLogger } from "../logging.js";
 import { publishRealtimeInvalidation } from "../realtime/publication.js";
+import { enqueueKnownThreadSearchIndex } from "../thread-search/enqueue.js";
 
 /**
  * DxTitleAgent: a single tool-free model call that replaces a new thread's
@@ -168,11 +169,21 @@ export const runDxTitleAgent: DxTitleAgentRunner = async (bindings, job) => {
             .bind(title, job.threadId);
     const result = await statement.run();
     if (result.meta.changes > 0)
-      await publishRealtimeInvalidation(
-        bindings,
-        job.threadId,
-        "thread.invalidated",
-      );
+      await Promise.all([
+        publishRealtimeInvalidation(
+          bindings,
+          job.threadId,
+          "thread.invalidated",
+        ),
+        // The generated title replaces the fallback in search too.
+        title === undefined
+          ? undefined
+          : enqueueKnownThreadSearchIndex(bindings, {
+              threadId: job.threadId,
+              ownerUserId: job.ownerUserId,
+              title,
+            }),
+      ]);
   } catch (error) {
     threadPersistenceLogger.warn("Thread title persistence failed.", {
       event: "thread_title_persistence_failed",

@@ -80,6 +80,7 @@ const preWorkloadIdentityBindingOmissions = [
 const preDeploymentTargetBindingOmission = "DX_DEPLOYMENT_TARGET";
 const preSourceShallowCloneBindingOmission = "DX_SOURCE_SHALLOW_CLONE";
 const preRealtimeHubBindingOmission = "REALTIME_HUB";
+const preThreadSearchIndexBindingOmission = "THREAD_SEARCH_INDEX";
 const preAuthenticationEmailBindingOmissions = ["DX_AUTH_EMAIL_FROM", "EMAIL"];
 const preTurnstileBindingOmissions = [
   "DX_TURNSTILE_SECRET_KEY",
@@ -99,6 +100,7 @@ const destroyWorkerBindingOmissions = new Set([
   "DX_WORKSPACE_INACTIVITY_MS",
   "EMAIL",
   "REALTIME_HUB",
+  "THREAD_SEARCH_INDEX",
 ]);
 const preBranchPreviewIdentityBindingOmissions = [
   "DX_DEPLOYMENT_TARGET",
@@ -129,6 +131,7 @@ const workerDurableObjectBindings = [
     "SubscriptionCredentialCoordinatorObject",
   ],
   ["THREAD_EXECUTION", "ThreadExecutionObject"],
+  ["THREAD_SEARCH_INDEX", "ThreadSearchIndexObject"],
 ];
 const commonDeploymentResourceTypes = new Map([
   ["AccessTurnstile", "Cloudflare.Turnstile.Widget"],
@@ -1140,6 +1143,11 @@ const validateWorkerProps = (
         !current &&
         (representation === "persisted" || representation === "prior") &&
         name === preRealtimeHubBindingOmission
+      ) &&
+      !(
+        !current &&
+        (representation === "persisted" || representation === "prior") &&
+        name === preThreadSearchIndexBindingOmission
       ) &&
       !(
         !current &&

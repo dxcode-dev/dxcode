@@ -302,6 +302,11 @@
       "name": "THREAD_EXECUTION",
       "type": "durable-object",
       "provenance": "authored-wrangler"
+    },
+    {
+      "name": "THREAD_SEARCH_INDEX",
+      "type": "durable-object",
+      "provenance": "authored-wrangler"
     }
   ]
 }

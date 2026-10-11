@@ -40,6 +40,9 @@ vi.mock("./settings/model-byok/invocation.js", () => ({
 vi.mock("./settings/triggers/durable-object.js", () => ({
   PluginTriggerDeliveryObject: class {},
 }));
+vi.mock("./thread-search/index-object.js", () => ({
+  ThreadSearchIndexObject: class {},
+}));
 vi.mock("./threads/terminal-object.js", () => ({
   ThreadExecutionObject: class {},
 }));

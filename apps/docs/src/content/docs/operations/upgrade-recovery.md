@@ -47,6 +47,12 @@ every new address, so it needs a sender. Choose one:
   `"providers": ["email-password"]` and `"admission": "open"`. This needs
   API-token mode. See [send sign-in email](/docs/deployment/authentication/#send-sign-in-email).
 
+Accounts created before v0.2.12 have unconfirmed emails, so Google sign-in
+cannot link to them until they are confirmed. From v0.2.13 the deploy confirms
+the administrator's address whichever methods you choose; see
+[accounts created before v0.2.12](/docs/deployment/authentication/#accounts-created-before-v0212)
+for everyone else.
+
 Then rerun `pnpm dx:deploy`. The first deploy on this release also offers,
 once, to review sign-in methods; `pnpm dx:deploy -- --sign-in` repeats that
 step at any time, for example to add Google. See

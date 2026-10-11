@@ -57,6 +57,29 @@ Someone who tries to sign up with an email that already has an account gets an
 email with a sign-in link instead; the page does not reveal that the account
 exists.
 
+Google links only to an account whose email is confirmed. A magic link
+confirms it, and so does the confirmation email a password sign-in sends when
+the deployment has a sender. The deploy marks the administrator's address
+confirmed.
+
+### Accounts created before v0.2.12
+
+Releases before v0.2.12 stored every self-host account with an unconfirmed
+email, so Google cannot link to them; the sign-in page says so. The next
+`pnpm dx:deploy` confirms the administrator's address. For other people,
+either let them confirm it themselves (a magic link, or a password sign-in on
+a deployment with a sender) or, when you know the address belongs to them,
+confirm it in the deployment's D1 database:
+
+```sh
+pnpm --filter @dx/core exec wrangler d1 execute dx-db-selfhost-<name> --remote \
+  --command "UPDATE \"user\" SET emailVerified = 1, updatedAt = datetime('now') WHERE email = 'person@example.com'"
+```
+
+Confirm only addresses you trust: on a deployment that allowed open password
+sign-up without verification, anyone could have registered someone else's
+email.
+
 ## Send sign-in email
 
 Magic links and verification emails come from `authEmailFrom` through
@@ -185,4 +208,4 @@ invite link also admits them.
 | No dx account uses this email | `admission` is `invite` and there is no invite link |
 | Google hasn't verified this email address | The Google account's email is unverified |
 | That link is invalid or was already used | A magic link or confirmation link was reused or replaced |
-| An account already uses this email. Sign in with email first | A Google sign-in matched an account whose email is not yet verified |
+| An account already uses this email … isn't confirmed yet | A Google sign-in matched an account whose email is not confirmed; see [accounts created before v0.2.12](#accounts-created-before-v0212) |

@@ -13,6 +13,9 @@ declare module "cloudflare:test" {
     readonly REALTIME_HUB: DurableObjectNamespace<
       import("../../src/realtime/realtime-hub.js").RealtimeHub
     >;
+    readonly THREAD_SEARCH_INDEX: DurableObjectNamespace<
+      import("../../src/thread-search/index-object.js").ThreadSearchIndexObject
+    >;
     readonly TEST_MIGRATIONS: D1Migration[];
   }
 }

@@ -85,6 +85,12 @@
       "newSqliteClasses": ["ByokCredentialCoordinatorObject"],
       "sha256": "fa936915c9e281025de4ed08db0362e831b23ece5baf9196f290be87d7945fab",
       "classification": "non-destructive"
+    },
+    {
+      "tag": "v6-thread-search-index",
+      "newSqliteClasses": ["ThreadSearchIndexObject"],
+      "sha256": "a089b3aefbfd31383654b1fa673f69b9267ba09755f02ce65deb0229c6869694",
+      "classification": "non-destructive"
     }
   ]
 }
