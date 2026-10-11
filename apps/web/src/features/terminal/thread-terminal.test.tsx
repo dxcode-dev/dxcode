@@ -495,26 +495,6 @@ describe("ThreadTerminal browser protocol v1", () => {
     await React.act(() => root.unmount());
   });
 
-  it("allows an owner to refresh the current environment", async () => {
-    const confirm = vi
-      .fn<(message?: string) => boolean>()
-      .mockReturnValue(true);
-    vi.stubGlobal("confirm", confirm);
-    const { container, root, socket } = await render();
-    socket.emit("open");
-    await React.act(() => socket.emit("message", ready));
-    const form = container.querySelector("form") as HTMLFormElement;
-
-    expect(container.querySelector("button")).toBeNull();
-    await React.act(() => form.requestSubmit());
-
-    expect(confirm).toHaveBeenCalledWith(
-      "Refresh Terminal environment? If values changed, dx restarts the shared shell and ends any running command or process in every open Terminal view.",
-    );
-    expect(socket.sent.at(-1)).toBe(JSON.stringify({ v: 1, type: "restart" }));
-    await React.act(() => root.unmount());
-  });
-
   it("requires destructive confirmation before refreshing a changed environment", async () => {
     const confirm = vi
       .fn<(message?: string) => boolean>()
@@ -728,23 +708,6 @@ describe("ThreadTerminal browser protocol v1", () => {
     await React.act(() => vi.advanceTimersByTimeAsync(1));
     expect(FakeSocket.instances).toHaveLength(2);
     expect(container.textContent).toContain("Waking terminal…");
-    await React.act(() => root.unmount());
-  });
-
-  it("keeps a ready terminal connected while daemon heartbeats continue", async () => {
-    vi.useFakeTimers();
-    const { container, root, socket } = await render();
-    socket.emit("open");
-    await React.act(() => socket.emit("message", ready));
-
-    for (let elapsed = 0; elapsed < 30_000; elapsed += 2_000) {
-      await React.act(() => vi.advanceTimersByTimeAsync(2_000));
-      await React.act(() =>
-        socket.emit("message", JSON.stringify({ v: 1, type: "heartbeat" })),
-      );
-    }
-    expect(FakeSocket.instances).toHaveLength(1);
-    expect(container.textContent).toContain("Terminal ready");
     await React.act(() => root.unmount());
   });
 

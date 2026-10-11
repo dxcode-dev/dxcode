@@ -37,6 +37,7 @@ import {
   NewThreadProvider,
 } from "./features/threads/new-thread-page.js";
 import { ThreadArchiveProvider } from "./features/threads/thread-archive.js";
+import { ThreadEditingProvider } from "./features/threads/thread-editing.js";
 import { ThreadWorkspace } from "./features/threads/thread-workspace.js";
 
 export interface RouterContext {
@@ -68,7 +69,9 @@ const productRoute = createRoute({
   id: "_product",
   component: () => (
     <ThreadArchiveProvider>
-      <ProductShell />
+      <ThreadEditingProvider>
+        <ProductShell />
+      </ThreadEditingProvider>
     </ThreadArchiveProvider>
   ),
 });

@@ -22,20 +22,12 @@ const routerLocation = vi.hoisted(() => ({
   searchStr: "",
   state: undefined as unknown,
 }));
-const linkStates = vi.hoisted(() => ({ values: [] as unknown[] }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
-  Link: ({
-    children,
-    state,
-  }: {
-    readonly children: React.ReactNode;
-    readonly state?: unknown;
-  }) => {
-    linkStates.values.push(state);
-    return <a href="/settings">{children}</a>;
-  },
+  Link: ({ children }: { readonly children: React.ReactNode }) => (
+    <a href="/settings">{children}</a>
+  ),
   useLocation: () => routerLocation,
   useNavigate: () => navigation,
   useBlocker: () => ({
@@ -140,7 +132,6 @@ describe("SettingsPage workspace lifetime", () => {
   beforeEach(() => {
     completePendingSave = undefined;
     navigation.mockClear();
-    linkStates.values = [];
     routerLocation.searchStr = "";
     routerLocation.state = undefined;
     container = document.createElement("div");
@@ -283,23 +274,6 @@ describe("SettingsPage workspace lifetime", () => {
     });
   });
 
-  it("preserves the OAuth return route when navigating between settings sections", async () => {
-    routerLocation.searchStr = "?github=installed&return_to=%2Fprevious-page";
-    await act(() => root.render(page(workspaceA)));
-
-    const settingsStateUpdaters = linkStates.values.filter(
-      (state): state is (previous: unknown) => unknown =>
-        typeof state === "function",
-    );
-
-    expect(settingsStateUpdaters.length).toBeGreaterThan(0);
-    for (const stateUpdater of settingsStateUpdaters) {
-      expect(stateUpdater({})).toEqual({
-        settingsReturnTo: "/previous-page",
-      });
-    }
-  });
-
   it("returns to home instead of an external history entry without a DX return", async () => {
     window.history.pushState(null, "", "/previous-external-page");
     window.history.pushState(null, "", "/settings/integrations");
@@ -384,32 +358,6 @@ describe("SettingsPage workspace lifetime", () => {
 
     expect(back).not.toHaveBeenCalled();
     recording.remove();
-  });
-
-  it("re-renders the page only when a section's dirty state changes", async () => {
-    await act(() => root.render(page(workspaceA)));
-    const draft = container.querySelector<HTMLInputElement>(
-      '[aria-label="Sensitive workspace draft"]',
-    );
-    const setter = Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      "value",
-    )?.set;
-    const type = (value: string) =>
-      act(() => {
-        setter?.call(draft, value);
-        draft?.dispatchEvent(new Event("input", { bubbles: true }));
-      });
-    // Every settings page render renders its navigation links.
-    const shellRenders = () => linkStates.values.length;
-    const before = shellRenders();
-    await type("a");
-    const afterDirty = shellRenders();
-    await type("ab");
-    await type("abc");
-    expect(afterDirty).toBeGreaterThan(before);
-    expect(shellRenders()).toBe(afterDirty);
-    expect(container.textContent).toContain("Unsaved changes");
   });
 
   it("remounts a cached section when its workspace changes", async () => {

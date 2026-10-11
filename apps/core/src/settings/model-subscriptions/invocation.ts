@@ -1,5 +1,4 @@
 import { DurableObject } from "cloudflare:workers";
-import type { CloudflareAIBinding } from "@flue/runtime/cloudflare/workers-ai";
 import { Effect } from "effect";
 import type { Bindings } from "../../http/types.js";
 import { settingsPersistenceLogger } from "../../logging.js";
@@ -20,7 +19,6 @@ import { PersonalModelSubscriptionService } from "./service.js";
 
 const MAX_BODY_BYTES = 4 * 1_048_576;
 const INVOCATION_PATH = "/invoke";
-const SHARD_VERSION = "v1";
 
 interface InvocationRequest {
   readonly threadId: string;
@@ -268,50 +266,3 @@ export class SubscriptionCredentialCoordinatorObject extends DurableObject<Bindi
     }
   }
 }
-
-export interface SubscriptionDurableObjectIdentity {
-  readonly name: string;
-}
-
-const shardName = async (ownerUserId: string, connectionId: string) => {
-  const bytes = new TextEncoder().encode(
-    `dx-subscription\0${ownerUserId}\0${connectionId}`,
-  );
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-  return `subscription-${SHARD_VERSION}-${[...digest]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("")}`;
-};
-
-export const createDxSubscriptionCloudflareBinding = (options: {
-  readonly db: D1Database;
-  readonly namespace: DurableObjectNamespace;
-  readonly identity: () => SubscriptionDurableObjectIdentity;
-}): CloudflareAIBinding => ({
-  async run(modelId, payload, runOptions) {
-    const threadId = options.identity().name;
-    const route = await resolvePersonalSubscriptionThreadRoute(
-      options.db,
-      threadId,
-    );
-    const stub = options.namespace.get(
-      options.namespace.idFromName(
-        await shardName(route.ownerUserId, route.connectionId),
-      ),
-    );
-    return stub.fetch("https://dx-subscription.invalid/invoke", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        threadId,
-        ownerUserId: route.ownerUserId,
-        connectionId: route.connectionId,
-        modelId,
-        payload,
-      }),
-      ...(runOptions?.signal instanceof AbortSignal
-        ? { signal: runOptions.signal }
-        : {}),
-    });
-  },
-});

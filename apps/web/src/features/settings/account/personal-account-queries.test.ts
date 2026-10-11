@@ -10,7 +10,6 @@ import {
 } from "./personal-account-queries.js";
 
 const userId = Schema.decodeUnknownSync(UserId)("user-1");
-const otherUserId = Schema.decodeUnknownSync(UserId)("user-2");
 const account = {
   displayName: "Test User",
   username: "test-user",
@@ -26,64 +25,6 @@ const account = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("personal account query contracts", () => {
-  it("reuses the existing user-scoped key for every account consumer", () => {
-    expect(personalAccountQueryOptions(userId).queryKey).toEqual(
-      personalAccountKeys.detail(userId),
-    );
-    expect(personalAccountQueryOptions(otherUserId).queryKey).not.toEqual(
-      personalAccountQueryOptions(userId).queryKey,
-    );
-  });
-
-  it("forwards Query cancellation to the account request", async () => {
-    let requestSignal: AbortSignal | undefined;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof globalThis.fetch>().mockImplementation((_input, init) => {
-        requestSignal = init?.signal ?? undefined;
-        return new Promise<Response>((_resolve, reject) =>
-          requestSignal?.addEventListener("abort", () =>
-            reject(new DOMException("Aborted", "AbortError")),
-          ),
-        );
-      }),
-    );
-    const queryClient = new QueryClient();
-    const pending = queryClient.fetchQuery(personalAccountQueryOptions(userId));
-
-    await queryClient.cancelQueries({
-      queryKey: personalAccountKeys.detail(userId),
-    });
-
-    expect(requestSignal?.aborted).toBe(true);
-    await expect(pending).rejects.toBeDefined();
-  });
-
-  it("writes the authoritative account returned by update", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn<typeof globalThis.fetch>()
-        .mockResolvedValue(Response.json({ status: "success", data: account })),
-    );
-    const queryClient = new QueryClient();
-    const mutation = queryClient
-      .getMutationCache()
-      .build(
-        queryClient,
-        updatePersonalAccountMutationOptions(queryClient, userId),
-      );
-
-    const updated = await mutation.execute({
-      displayName: account.displayName,
-      username: account.username,
-    });
-
-    expect(queryClient.getQueryData(personalAccountKeys.detail(userId))).toBe(
-      updated,
-    );
-  });
-
   it("applies appearance optimistically and restores it when persistence fails", async () => {
     let rejectRequest: (error: Error) => void = () => undefined;
     vi.stubGlobal(

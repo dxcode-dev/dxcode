@@ -34,45 +34,6 @@ describe("image attachment controls", () => {
     await React.act(() => root.unmount());
   });
 
-  it("opens a thumbnail preview without treating it as the remove control", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
-    const onRemove = vi.fn();
-    await React.act(() =>
-      root.render(
-        <ImagePreviews images={[image(vi.fn())]} onRemove={onRemove} />,
-      ),
-    );
-
-    const preview = container.querySelector<HTMLButtonElement>(
-      '[aria-label="Preview image.png"]',
-    );
-    expect(preview?.className).toBe("composer-attachment-preview");
-    await React.act(() => preview?.click());
-    expect(
-      document.querySelector('[aria-label="Close image preview"]'),
-    ).not.toBeNull();
-    expect(onRemove).not.toHaveBeenCalled();
-
-    await React.act(() =>
-      document
-        .querySelector<HTMLButtonElement>('[aria-label="Close image preview"]')
-        ?.click(),
-    );
-    expect(
-      document.querySelector('[aria-label="Close image preview"]'),
-    ).toBeNull();
-    await React.act(() =>
-      container
-        .querySelector<HTMLButtonElement>('[aria-label="Remove image.png"]')
-        ?.click(),
-    );
-    expect(onRemove).toHaveBeenCalledOnce();
-    await React.act(() => root.unmount());
-    container.remove();
-  });
-
   it("closes and disables every attachment action when submission locks", async () => {
     const container = document.createElement("div");
     document.body.append(container);

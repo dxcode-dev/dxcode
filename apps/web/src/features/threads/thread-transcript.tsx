@@ -13,6 +13,7 @@ import {
   MessageAuthorLabel,
   useMessageAuthor,
 } from "./sharing/message-authors.js";
+import { ThreadSourceMessage } from "./thread-source-message.js";
 import { TranscriptOutline } from "./transcript-outline.js";
 import {
   sameTranscriptRow,
@@ -25,6 +26,8 @@ import { TranscriptTurn } from "./transcript-work.js";
 import { useThreadPresentation } from "./use-thread-presentation.js";
 
 const ROW_ESTIMATE_PX = 56;
+/** Message IDs the panel gives messages other Threads sent, not yet joined. */
+export const INBOUND_MESSAGE_PREFIX = "inbound:";
 const LIVE_EDGE_THRESHOLD_PX = 24;
 
 interface TranscriptPosition {
@@ -62,11 +65,30 @@ function TranscriptRowShellContent({
   row,
 }: TranscriptRowShellProps) {
   const user = row.kind === "user-prompt";
+  const fromThread = user ? row.sourceThreadId : undefined;
   const author = useMessageAuthor(
     user ? row.author : undefined,
     user ? row.admitted : true,
     user ? row.sentAt : undefined,
   );
+  if (fromThread !== undefined && row.kind === "user-prompt")
+    return (
+      <article
+        id={row.id}
+        data-row-id={row.id}
+        data-row-kind={row.kind}
+        data-source-thread=""
+        ref={measureElement}
+        tabIndex={-1}
+        className="transcript-row conversation-message thread-source-row"
+      >
+        <ThreadSourceMessage
+          sourceThreadId={fromThread}
+          text={row.text}
+          pending={!row.admitted}
+        />
+      </article>
+    );
   return (
     <article
       id={row.id}
@@ -653,10 +675,17 @@ export function TranscriptViewport(
     jumpToEnd,
     navigateToRow,
   } = useTranscriptViewport(props);
-  const processingTurnId = model.turns.findLast(
-    (turn) => turn.status === "active",
-  )?.id;
+  // A message another Thread sent that has not joined yet is its own
+  // turn; the work in progress is the turn before it.
   const rowsByTurn = React.useMemo(() => transcriptRowsByTurn(model), [model]);
+  const processingTurnId = model.turns.findLast((turn) => {
+    if (turn.status !== "active") return false;
+    const rows = rowsByTurn.get(turn.id) ?? [];
+    return !(
+      rows.length > 0 &&
+      rows.every((row) => row.messageId.startsWith(INBOUND_MESSAGE_PREFIX))
+    );
+  })?.id;
   return (
     <>
       <section

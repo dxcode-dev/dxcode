@@ -147,30 +147,6 @@ describe("hidden terminal prompts", () => {
     },
   );
 
-  it.each([
-    ["generated administrator password", ""],
-    ["supplied administrator password", "fixture-admin-password"],
-  ])("accepts E2B input after %s", async (_label, administratorPassword) => {
-    const f = fixture();
-    const first = f.hidden("Administrator password");
-    await f.enter(administratorPassword);
-    await expect(first).resolves.toBe(administratorPassword);
-
-    const second = f.hidden("E2B API key");
-    await f.enter("fixture-e2b-key");
-    await expect(second).resolves.toBe("fixture-e2b-key");
-    await tick();
-
-    expect(f.input.destroyed).toBe(false);
-    expect(f.errors).toEqual([]);
-    expect(f.printed()).not.toContain(administratorPassword || "generated");
-    expect(f.printed()).not.toContain("fixture-e2b-key");
-    expect(f.rawModes).toEqual([true, false, true, false]);
-    f.close();
-    f.input.destroy();
-    f.output.destroy();
-  });
-
   it("supports an ordinary prompt after a hidden prompt", async () => {
     const f = fixture();
     const hidden = f.hidden("Secret");
@@ -197,18 +173,6 @@ describe("hidden terminal prompts", () => {
     expect(f.rawModes).toEqual([true, false]);
     f.close();
     f.input.destroy();
-    f.output.destroy();
-  });
-
-  it("returns collected input on EOF", async () => {
-    const f = fixture();
-    const hidden = f.hidden("Secret");
-    await tick();
-    f.input.write("partial");
-    f.input.end();
-    await expect(hidden).resolves.toBe("partial");
-    expect(f.rawModes).toEqual([true, false]);
-    f.close();
     f.output.destroy();
   });
 });

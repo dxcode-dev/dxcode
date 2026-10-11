@@ -51,7 +51,7 @@ export const orbRecipeHash = (workspaceRoot) => {
   return hash.update(wranglerVersion(workspaceRoot)).digest("hex");
 };
 
-export const orbWorkerConfig = ({ workerName, workspaceRoot }) => ({
+const orbWorkerConfig = ({ workerName, workspaceRoot }) => ({
   name: workerName,
   main: resolve(
     workspaceRoot,

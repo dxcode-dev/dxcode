@@ -38,7 +38,7 @@ const initials = (name: string) =>
     .map((part) => part[0]?.toLocaleUpperCase())
     .join("") || "W";
 
-export function CreateWorkspaceCard({
+function CreateWorkspaceCard({
   onDirtyChange,
   onCreated,
   mutateWorkspace,

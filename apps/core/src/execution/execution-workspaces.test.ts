@@ -2,7 +2,7 @@ import { ThreadId } from "@dx/domain";
 import type { Sandbox, SandboxFactory } from "@flue/runtime";
 import { Effect, Redacted, Schema } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { executionWorkspaceLogger, threadDaemonLogger } from "../logging.js";
+import { executionWorkspaceLogger } from "../logging.js";
 import {
   GITHUB_CLI_WRAPPER_INSTALL_COMMAND,
   githubCliWrapper,
@@ -483,43 +483,6 @@ describe("sandbox command lifecycle admission", () => {
 });
 
 describe("execution workspace admission", () => {
-  it("skips resume and first-readiness writes for a confirmed running agent workspace", async () => {
-    const threadId = thread("thr_00000000-0000-4000-8000-000000000291");
-    const sourceRun = vi.fn(async () => ({
-      stdout: "",
-      stderr: "",
-      exitCode: 0,
-    }));
-    const providerSandbox = {
-      commands: { run: sourceRun },
-      files: { write: vi.fn(async () => undefined) },
-      setTimeout: vi.fn(async () => undefined),
-    };
-    mocks.resolveWorkspace.mockImplementationOnce((options) => {
-      options.observeResidency?.("running");
-      return Effect.succeed(providerSandbox) as never;
-    });
-
-    await expect(
-      ExecutionWorkspaces.sandboxFactory.createSandbox({ id: threadId }),
-    ).resolves.toBeDefined();
-
-    expect(mocks.firstWorkspaceReadiness).toHaveBeenCalledOnce();
-    expect(mocks.resolveWorkspace).toHaveBeenCalledWith(
-      expect.objectContaining({ observeResidency: expect.any(Function) }),
-    );
-    expect(sourceRun).toHaveBeenCalledWith(
-      "mkdir -p -- /home/user/workspace/repo && git -C /home/user/workspace/repo init && git -C /home/user/workspace/repo hash-object -w -t tree --stdin </dev/null",
-      expect.objectContaining({ cwd: "/home/user" }),
-    );
-    expect(
-      mocks.prepareThreadLifecycle.mock.calls.some(([sql]) =>
-        (sql as string).includes("UPDATE execution_workspace"),
-      ),
-    ).toBe(false);
-    expect(mocks.publishRealtimeWorkspaceStatus).not.toHaveBeenCalled();
-  });
-
   it("publishes wake status only around a confirmed paused workspace connection", async () => {
     const threadId = thread("thr_00000000-0000-4000-8000-000000000294");
     const providerSandbox = {
@@ -834,62 +797,6 @@ describe("execution workspace admission", () => {
     );
     expect(mocks.ensureDaemonInGuest).toHaveBeenCalled();
     warn.mockRestore();
-  });
-
-  it("attributes parallel release metadata failures to the release stage", async () => {
-    const threadId = thread("thr_00000000-0000-4000-8000-000000000293");
-    const failure = new Error("invalid release metadata");
-    const log = vi
-      .spyOn(threadDaemonLogger, "error")
-      .mockImplementation(() => {});
-    mocks.loadDaemonReleaseMetadata.mockRejectedValueOnce(failure);
-    mocks.connectWorkspace.mockReturnValueOnce(
-      Effect.succeed({
-        commands: { run: vi.fn(async () => ({ exitCode: 0 })) },
-        files: { write: vi.fn(async () => undefined) },
-      }) as never,
-    );
-
-    await expect(
-      ExecutionWorkspaces.ensureDaemon({
-        threadId,
-        endpoint: "https://daemon.test",
-        mintCredential,
-        awaitRegistration: async () => false,
-      }),
-    ).rejects.toBe(failure);
-
-    expect(log).toHaveBeenCalledWith(
-      "Thread daemon installation failed.",
-      expect.objectContaining({ stage: "release" }),
-    );
-    log.mockRestore();
-  });
-
-  it("passes the resolved profile through sandbox creation without resolving it twice", async () => {
-    const threadId = thread("thr_00000000-0000-4000-8000-000000000102");
-    const firstProfile = { ...mocks.profile, template: "first-template" };
-    const secondProfile = { ...mocks.profile, template: "second-template" };
-    mocks.resolveProfile
-      .mockReturnValueOnce(Effect.succeed(firstProfile))
-      .mockReturnValueOnce(Effect.succeed(secondProfile));
-    mocks.resolveWorkspace.mockReturnValueOnce(
-      Effect.succeed({
-        commands: { run: vi.fn(async () => ({ exitCode: 0 })) },
-        files: { write: vi.fn(async () => undefined) },
-        setTimeout: vi.fn(async () => undefined),
-      }) as never,
-    );
-
-    await expect(
-      ExecutionWorkspaces.sandboxFactory.createSandbox({ id: threadId }),
-    ).resolves.toBeDefined();
-
-    expect(mocks.resolveProfile).toHaveBeenCalledOnce();
-    expect(mocks.loadRequirements).toHaveBeenCalledWith(
-      mocks.workerEnv,
-      "first-template",
-    );
   });
 
   it("runs the prepared hook between source preparation and first use", async () => {

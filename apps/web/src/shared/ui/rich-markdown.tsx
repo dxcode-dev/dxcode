@@ -242,17 +242,15 @@ function MarkdownLink({
   return (
     <FileContextMenu
       trigger={
-        <a
+        // Opens in the workspace; a button has no href that could navigate
+        // and reload dx.
+        <button
+          type="button"
           className="markdown-file-link"
-          href={href}
-          onClick={(event) => {
-            event.preventDefault();
-            file.open();
-          }}
+          title={href}
+          onClick={() => file.open()}
           onAuxClick={(event) => {
-            if (event.button !== 1) return;
-            event.preventDefault();
-            file.open();
+            if (event.button === 1) file.open();
           }}
         />
       }

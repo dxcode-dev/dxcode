@@ -65,23 +65,12 @@ const managedBackend: SigningBackend = {
   },
 };
 
-export const signingBackends: ReadonlyArray<SigningBackend> = [
+const signingBackends: ReadonlyArray<SigningBackend> = [
   unavailableRunnerBackend("runner-ssh-agent"),
   unavailableRunnerBackend("runner-gpg-agent"),
   unavailableRunnerBackend("hardware"),
   managedBackend,
 ];
-
-export const preferredSigningBackend = (
-  capabilities: ReadonlyArray<SigningBackendCapability>,
-): SigningBackendCapability | undefined =>
-  signingBackends
-    .map(({ kind }) =>
-      capabilities.find(
-        ({ backend, state }) => backend === kind && state === "available",
-      ),
-    )
-    .find((capability) => capability !== undefined);
 
 export const signingBackendCapabilities = Effect.fn(
   "signingBackendCapabilities",

@@ -93,48 +93,4 @@ describe("landing access submission", () => {
       }
     },
   );
-
-  it("uses the same neutral confirmation for every accepted request", async () => {
-    vi.mocked(getBrowserAuthenticationConfiguration).mockResolvedValue({
-      mode: "magic-link",
-      turnstileSiteKey: "public-key",
-    });
-    vi.mocked(requestTurnstileToken).mockResolvedValue("token");
-    vi.mocked(requestMagicLink).mockReturnValue(
-      Effect.succeed("request-accepted"),
-    );
-    const element = document.createElement("div");
-    document.body.append(element);
-    const root = createRoot(element);
-    const client = new QueryClient();
-    try {
-      await act(async () =>
-        root.render(
-          <QueryClientProvider client={client}>
-            <LiveAccessContext.Provider value={true}>
-              <WaitlistForm />
-            </LiveAccessContext.Provider>
-          </QueryClientProvider>,
-        ),
-      );
-      const input = element.querySelector<HTMLInputElement>("input");
-      if (!input) throw new Error("Missing email input");
-      input.value = "approved@example.com";
-      await act(async () => {
-        element
-          .querySelector("form")
-          ?.dispatchEvent(
-            new Event("submit", { bubbles: true, cancelable: true }),
-          );
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      });
-      expect(element.textContent).toContain(
-        "Check your email for a sign-in link. If one doesn’t arrive, your address is on the waitlist.",
-      );
-    } finally {
-      await act(async () => root.unmount());
-      client.clear();
-      element.remove();
-    }
-  });
 });

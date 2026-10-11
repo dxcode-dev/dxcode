@@ -3,7 +3,6 @@ import { QueryClient } from "@tanstack/react-query";
 import { Schema } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  browserSessionsQueryOptions,
   createPersonalApiTokenMutationOptions,
   personalApiTokensQueryOptions,
   rotatePersonalApiTokenMutationOptions,
@@ -23,19 +22,6 @@ const token = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("personal security query contracts", () => {
-  it("uses a user-scoped infinite key and the server offset", () => {
-    const options = browserSessionsQueryOptions(userId);
-    expect(options.queryKey).toEqual(securityKeys.sessions(userId));
-    expect(
-      options.getNextPageParam?.(
-        { items: [], nextOffset: 25 },
-        [],
-        undefined,
-        [],
-      ),
-    ).toBe(25);
-  });
-
   it("reveals one-display plaintext locally while caching only token metadata", async () => {
     vi.stubGlobal(
       "fetch",

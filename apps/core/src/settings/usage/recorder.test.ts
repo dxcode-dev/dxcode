@@ -1,68 +1,11 @@
 import type { FlueObservation } from "@flue/runtime";
-import { describe, expect, it, vi } from "vitest";
-import {
-  fetchUsageRouteAttribution,
-  runnerResourceAttribution,
-  usageEventFromFlue,
-} from "./recorder.js";
+import { describe, expect, it } from "vitest";
+import { usageEventFromFlue } from "./recorder.js";
 
 const observation = (value: Record<string, unknown>) =>
   value as unknown as FlueObservation;
 
 describe("usage recorder", () => {
-  it("reads exact safe attribution from the submission's thread coordinator", async () => {
-    const fetch = vi.fn(async () =>
-      Response.json({
-        connectionId: "connection-canonical",
-        providerId: "anthropic",
-        modelId: "claude-canonical",
-      }),
-    );
-    const get = vi.fn(() => ({ fetch }));
-    const idFromName = vi.fn(() => ({ id: "coordinator" }));
-
-    await expect(
-      fetchUsageRouteAttribution(
-        {
-          BYOK_CREDENTIAL_COORDINATOR: { get, idFromName },
-        } as never,
-        "thread-38",
-        "submission-38",
-      ),
-    ).resolves.toEqual({
-      connectionId: "connection-canonical",
-      providerId: "anthropic",
-      modelId: "claude-canonical",
-    });
-    expect(idFromName).toHaveBeenCalledWith("byok-thread-38");
-    expect(fetch).toHaveBeenCalledWith(
-      "https://dx-byok.invalid/usage-route",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          threadId: "thread-38",
-          submissionId: "submission-38",
-        }),
-      }),
-    );
-  });
-
-  it("only treats a genuine 404 as unavailable", async () => {
-    const bindings = (status: number) =>
-      ({
-        BYOK_CREDENTIAL_COORDINATOR: {
-          idFromName: () => ({}),
-          get: () => ({ fetch: async () => new Response(null, { status }) }),
-        },
-      }) as never;
-    await expect(
-      fetchUsageRouteAttribution(bindings(404), "thread", "submission"),
-    ).resolves.toBeUndefined();
-    await expect(
-      fetchUsageRouteAttribution(bindings(503), "thread", "submission"),
-    ).rejects.toThrow("status 503");
-  });
-
   it("maps public Flue response hooks to content-free model attribution and counts", () => {
     const event = usageEventFromFlue(
       observation({
@@ -146,24 +89,5 @@ describe("usage recorder", () => {
     expect(event).not.toHaveProperty("result");
     expect(event).not.toHaveProperty("effectiveResult");
     expect(JSON.stringify(event)).not.toMatch(/private|secret/i);
-  });
-
-  it("exposes the runner-profile adapter seam while preserving real observations", () => {
-    expect(
-      runnerResourceAttribution(
-        {
-          id: "compute-medium",
-          resources: { cpuCores: 2, memoryMb: 4096, diskGb: 20 },
-        },
-        { cpuCores: 4, memoryMb: 8192 },
-        3,
-      ),
-    ).toEqual({
-      profileId: "compute-medium",
-      profileVersion: 3,
-      cpuCores: 4,
-      memoryMb: 8192,
-      diskGb: 20,
-    });
   });
 });

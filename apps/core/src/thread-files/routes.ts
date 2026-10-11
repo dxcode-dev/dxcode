@@ -177,10 +177,10 @@ const rejectUnknownQuery = (
   return params;
 };
 
-export const makeThreadFilesRoutes = (resident?: ResidentFiles) => {
+const makeThreadFilesRoutes = () => {
   const routes = new Hono<AppEnv>();
-  const configuredResident = resident ?? residentFiles;
-  const localResident = resident ?? localResidentFiles;
+  const configuredResident = residentFiles;
+  const localResident = localResidentFiles;
 
   routes.get("/:threadId/files", async (context) => {
     try {

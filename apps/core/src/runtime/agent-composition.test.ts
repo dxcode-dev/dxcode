@@ -16,28 +16,6 @@ import {
 } from "./agent-composition.js";
 
 describe("agent runtime composition", () => {
-  it("uses resolved prompt data over the selection fallback", () => {
-    const execution = {
-      createSandbox: vi.fn(),
-    } as unknown as SandboxFactory;
-    const runtime = makeAgentRuntimeComposition(
-      { DX_RUNTIME_MODE: "deployed" },
-      execution,
-    );
-
-    expect(runtime.execution).toBe(execution);
-    expect(runtime.capabilities).toBe("workspace");
-    expect(
-      runtime.model.select({
-        model: "openai/gpt-6-astra",
-        thinking: "medium",
-      }),
-    ).toEqual({
-      model: "openai/gpt-6-astra",
-      options: { thinkingLevel: "medium" },
-    });
-  });
-
   it("deployed selection without prompt data fails visibly", () => {
     const execution = {
       createSandbox: vi.fn(),

@@ -8,11 +8,25 @@ import type {
 import type { ProjectId } from "../projects/project-id.js";
 import type { ThreadSourceAdmission } from "../source-control/source-control.js";
 import type { UserId } from "../users/user-id.js";
-import type { Thread } from "./thread.js";
+import type { Thread, ThreadColor } from "./thread.js";
 import type { ThreadId } from "./thread-id.js";
+import type { ThreadTitle } from "./thread-title.js";
+
+/** Fields an owner may change; `color: null` returns the Thread to auto. */
+export interface ThreadUpdate {
+  readonly title?: ThreadTitle;
+  readonly color?: ThreadColor | null;
+}
 
 export interface ThreadListRequest extends PageRequest {
   readonly lifecycleState?: "active" | "archived";
+  /**
+   * Roots: Threads not listed under a parent. Children: one parent's child
+   * Threads. Absent lists every Thread.
+   */
+  readonly tree?:
+    | { readonly kind: "roots" }
+    | { readonly kind: "children"; readonly parentThreadId: ThreadId };
 }
 
 /**
@@ -47,6 +61,15 @@ export interface ThreadRepositoryShape {
     threadId: ThreadId,
     ownerUserId: UserId,
     pinnedAt: Thread["pinnedAt"],
+  ) => Effect.Effect<
+    Thread,
+    Schema.SchemaError | PersistenceUnavailable | ThreadNotFound
+  >;
+  /** Renames or recolors; a rename also ends a pending generated title. */
+  readonly updateOwned: (
+    threadId: ThreadId,
+    ownerUserId: UserId,
+    update: ThreadUpdate,
   ) => Effect.Effect<
     Thread,
     Schema.SchemaError | PersistenceUnavailable | ThreadNotFound

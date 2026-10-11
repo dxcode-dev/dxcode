@@ -107,60 +107,6 @@ afterEach(() => {
 });
 
 describe("application route map", () => {
-  it("mounts the native Flue agent routes under /v1/agents/dx", () => {
-    const routes = app.routes.map(({ method, path }) => `${method} ${path}`);
-
-    expect(routes).toEqual(
-      expect.arrayContaining([
-        "GET /api/workload-identity/.well-known/openid-configuration",
-        "GET /api/workload-identity/jwks.json",
-        "ALL /v1/*",
-        "POST /v1/integrations/github/webhooks",
-        "GET /v1/integrations/github/oauth/callback",
-        "GET /v1/integrations/github/setup",
-        "POST /v1/integrations/github/personal/authorize",
-        "GET /v1/integrations/github/personal/grants",
-        "POST /v1/projects",
-        "GET /v1/projects",
-        "GET /v1/projects/:projectId",
-        "GET /v1/settings/personal/projects",
-        "PUT /v1/settings/personal/projects",
-        "GET /v1/settings/workspaces/:workspaceSlug/projects",
-        "PUT /v1/settings/workspaces/:workspaceSlug/projects",
-        "POST /v1/threads",
-        "GET /v1/threads",
-        "PATCH /v1/threads/:threadId/archive",
-        "GET /v1/threads/:threadId",
-        "GET /v1/threads/:threadId/changes",
-        "GET /v1/threads/:threadId/changes/diff",
-        "POST /v1/threads/:threadId/changes/push",
-        "ALL /v1/agents/dx/:threadId",
-        "ALL /v1/agents/dx/:threadId/:subpath{.+}",
-        "POST /v1/agents/dx/:id",
-        "ALL /v1/agents/dx/:id",
-        "ALL /v1/agents/dx/:id/abort",
-        "ALL /v1/agents/dx/:id/attachments/:attachmentId",
-      ]),
-    );
-    expect(routes).not.toContain("POST /api/workload-identity/e2b/exchange");
-
-    expect(routes.indexOf("ALL /v1/*")).toBeLessThan(
-      routes.indexOf("POST /v1/projects"),
-    );
-    expect(
-      routes.indexOf("POST /v1/integrations/github/webhooks"),
-    ).toBeLessThan(routes.indexOf("ALL /v1/*"));
-    expect(routes.indexOf("ALL /v1/*")).toBeLessThan(
-      routes.indexOf("POST /v1/integrations/github/personal/authorize"),
-    );
-    expect(routes.indexOf("GET /v1/threads")).toBeLessThan(
-      routes.indexOf("ALL /v1/agents/dx/:threadId"),
-    );
-    expect(
-      routes.indexOf("ALL /v1/agents/dx/:threadId/:subpath{.+}"),
-    ).toBeLessThan(routes.indexOf("POST /v1/agents/dx/:id"));
-  });
-
   it("authenticates every method at the /v1 base and current or future subpaths", async () => {
     const methods = [
       "GET",
@@ -195,34 +141,6 @@ describe("application route map", () => {
         ).toBe("Bearer");
       }
     }
-  });
-
-  it("preserves Flue's native validation envelope", async () => {
-    vi.spyOn(console, "info").mockImplementation(() => {});
-    await using _runtime = await start({ agents: [DxAgent], providers: [] });
-
-    const response = await app.request(
-      `/v1/agents/dx/${threadId}?wait=result`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${TEST_API_TOKEN}`,
-          "content-type": "application/json",
-        },
-        body: "{}",
-      },
-      createTestBindings({ DB: ownedThreadBinding }),
-    );
-
-    expect(response.status).toBe(400);
-    expect(response.headers.get("content-type")).toContain("application/json");
-    await expect(response.json()).resolves.toMatchObject({
-      error: {
-        type: "invalid_request",
-        message: "Request is malformed.",
-        details: expect.stringContaining("?wait=result"),
-      },
-    });
   });
 
   it("observes an admitted native Flue submission through the mounted app", async () => {

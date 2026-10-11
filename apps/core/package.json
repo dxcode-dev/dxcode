@@ -1,7 +1,7 @@
 {
   "name": "@dx/core",
   "private": true,
-  "version": "0.2.9",
+  "version": "0.2.10",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -14,8 +14,8 @@
     "validate:cloudflare": "node scripts/validate-cloudflare-build.mjs && wrangler deploy --dry-run"
   },
   "dependencies": {
-    "@better-auth/api-key": "1.7.1",
-    "@better-auth/core": "1.7.1",
+    "@better-auth/api-key": "1.7.7",
+    "@better-auth/core": "1.7.7",
     "@better-auth/utils": "0.4.2",
     "@dx/api": "workspace:^",
     "@dx/domain": "workspace:^",
@@ -25,7 +25,7 @@
     "@logtape/logtape": "2.3.1",
     "@modelcontextprotocol/client": "2.0.0",
     "@opentelemetry/api": "1.9.0",
-    "better-auth": "1.7.1",
+    "better-auth": "1.7.7",
     "diff": "9.0.0",
     "e2b": "2.44.0",
     "effect": "4.0.0-rc.110",
@@ -34,7 +34,7 @@
     "quickjs-emscripten-core": "0.32.0",
     "sarvamai": "1.1.10",
     "valibot": "1.4.2",
-    "zod": "4.3.6"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.53.0",

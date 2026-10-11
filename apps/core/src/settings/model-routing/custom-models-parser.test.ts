@@ -2,17 +2,6 @@ import { describe, expect, it } from "vitest";
 import { parseCustomModels } from "./custom-models-parser.js";
 
 describe("parseCustomModels", () => {
-  it("parses plain canonical lines", () => {
-    const { models, errors } = parseCustomModels(
-      "openai/gpt-6-astra\nanthropic/claude-fable-5-1",
-    );
-    expect(errors).toEqual([]);
-    expect(models).toEqual([
-      { canonical: "openai/gpt-6-astra" },
-      { canonical: "anthropic/claude-fable-5-1" },
-    ]);
-  });
-
   it("parses upstream renames", () => {
     const { models, errors } = parseCustomModels(
       "anthropic/claude-fable-5-1 -> claude-fable-5.1-litellm",

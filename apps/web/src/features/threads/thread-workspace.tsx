@@ -640,6 +640,7 @@ function ThreadSessionContent({
   const sharedPanelProps = {
     mentions,
     ...sharedAgentPanelProps(thread),
+    inboundMessages: thread.inboundMessages,
     ...(thread.access === "contribute"
       ? {
           onAccessChanged: () =>

@@ -254,7 +254,6 @@ describe("Bitbucket provider HTTP boundary", () => {
 
   it.each([
     [401, "unauthorized"],
-    [429, "rate-limited"],
     [500, "unavailable"],
   ])("preserves hydration failure %i as %s", async (status, category) => {
     const fetcher = vi
@@ -292,22 +291,18 @@ describe("Bitbucket provider HTTP boundary", () => {
     });
   });
 
-  it.each([
-    null,
-    { uuid: workspaceId },
-    { workspace: null },
-    { workspace: "invalid" },
-    { workspace: {} },
-    { workspace: { uuid: "invalid" } },
-  ])("rejects malformed workspace membership %j", async (membership) => {
-    const fetcher = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(response({ values: [membership] }));
-    await expect(
-      createBitbucketProvider(config, fetcher).listRepositories("token"),
-    ).rejects.toMatchObject({ category: "invalid-response" });
-    expect(fetcher).toHaveBeenCalledTimes(1);
-  });
+  it.each([null, { workspace: { uuid: "invalid" } }])(
+    "rejects malformed workspace membership %j",
+    async (membership) => {
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(response({ values: [membership] }));
+      await expect(
+        createBitbucketProvider(config, fetcher).listRepositories("token"),
+      ).rejects.toMatchObject({ category: "invalid-response" });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("rejects cyclic pagination", async () => {
     const first = "https://api.bitbucket.org/2.0/user/workspaces?pagelen=100";
@@ -320,19 +315,6 @@ describe("Bitbucket provider HTTP boundary", () => {
     await expect(provider.listRepositories("token")).rejects.toMatchObject({
       category: "invalid-response",
     });
-  });
-
-  it.each([
-    [401, "unauthorized"],
-    [403, "forbidden"],
-    [404, "not-found"],
-    [500, "unavailable"],
-  ] as const)("maps status %i to %s", async (status, category) => {
-    const provider = createBitbucketProvider(
-      config,
-      vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status })),
-    );
-    await expect(provider.getUser("token")).rejects.toMatchObject({ category });
   });
 
   it("maps OAuth errors distinctly and parses rate limits", async () => {

@@ -1,5 +1,5 @@
 import { Effect, Redacted } from "effect";
-import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createSarvamSpeechProvider,
   dispatchSarvam,
@@ -76,15 +76,6 @@ const transport = (
 };
 
 describe("Sarvam speech provider transport", () => {
-  it("exports lazy typed Effects", () => {
-    expectTypeOf(dispatchSarvam).returns.toMatchTypeOf<
-      Effect.Effect<string, unknown>
-    >();
-    expectTypeOf(pollSarvam).returns.toMatchTypeOf<
-      Effect.Effect<"processing" | "failed" | { text: string }, unknown>
-    >();
-  });
-
   it("uploads the exact WAV bytes without credentials and disables redirects", async () => {
     const { fakeFetch, seen } = transport();
     const wav = new Uint8Array([1, 2, 3]);

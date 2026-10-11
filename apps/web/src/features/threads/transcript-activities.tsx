@@ -7,6 +7,7 @@ import {
   shellCommandOperations,
 } from "./shell-command-operation.js";
 import { ThreadFileNavigationContext } from "./thread-file-navigation.js";
+import { ThreadToolDetail, ThreadToolLabel } from "./thread-tool-activity.js";
 import { presentTool } from "./tool-presentation.js";
 import {
   categoryForPart,
@@ -187,6 +188,7 @@ function ToolLabel({
     part.state === "output-error" ||
     (parseShellResult(textualOutputFor(part) ?? "").exitCode ?? 0) !== 0;
   if (category === "explore") return <ExploreOperationLabel part={part} />;
+  if (category === "thread") return <ThreadToolLabel part={part} />;
   if (category === "command") {
     return (
       <span className="transcript-command-label">
@@ -235,6 +237,8 @@ function ToolOutput({
       ? (textualOutputFor(part) ?? outputFor(part))
       : outputFor(part);
   if (output === undefined) return null;
+  if (category === "thread")
+    return <ThreadToolDetail part={part} output={output} />;
   if (part.toolName.startsWith("shell_command")) {
     const result = parseShellResult(output);
     const operations =

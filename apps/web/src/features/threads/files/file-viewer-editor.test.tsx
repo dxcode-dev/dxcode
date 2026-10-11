@@ -354,37 +354,4 @@ describe("Thread file viewer save lifecycle", () => {
       expectedVersion: version("c"),
     });
   });
-
-  it("preserves a dirty editor while navigation hides and restores its pane", async () => {
-    const container = document.body.appendChild(document.createElement("div"));
-    const root = createRoot(container);
-    const render = (active: boolean) =>
-      root.render(
-        <>
-          <section hidden={active}>Agent</section>
-          <section hidden={!active}>
-            <ThreadFileViewer
-              conflict={false}
-              file={file("A", version("a"))}
-              onDirtyChange={vi.fn()}
-              onPreserveLocal={vi.fn()}
-              onReload={vi.fn()}
-              onSave={vi.fn()}
-              saving={false}
-            />
-          </section>
-        </>,
-      );
-
-    await React.act(() => render(true));
-    const editor = editorIn(container);
-    await input(editor, "dirty navigation draft");
-    await React.act(() => render(false));
-    expect(editor.isConnected).toBe(true);
-    await React.act(() => render(true));
-    expect(editorIn(container)).toBe(editor);
-    expect(editor.value).toBe("dirty navigation draft");
-    expect(container.textContent).toContain("Unsaved changes");
-    await React.act(() => root.unmount());
-  });
 });

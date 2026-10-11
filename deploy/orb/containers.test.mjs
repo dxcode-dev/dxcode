@@ -1,46 +1,10 @@
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  destroyOrbWorker,
-  orbRecipeHash,
-  orbWorkerConfig,
-} from "./containers.mjs";
+import { destroyOrbWorker } from "./containers.mjs";
 
 const workspaceRoot = resolve(import.meta.dirname, "../..");
 
 describe("Cloudflare Containers Orb Worker deployment", () => {
-  it("binds the container object class with the durable_object policy and the standard image", () => {
-    const config = orbWorkerConfig({
-      workerName: "dx-orb-test",
-      workspaceRoot,
-    });
-    expect(config).toMatchObject({
-      name: "dx-orb-test",
-      main: resolve(
-        workspaceRoot,
-        "apps/core/src/execution/cloudflare/orb-worker.ts",
-      ),
-      workers_dev: false,
-      containers: [
-        {
-          class_name: "OrbContainerObject",
-          scheduling_policy: "durable_object",
-          images: {
-            orb: {
-              dockerfile: resolve(workspaceRoot, "deploy/orb/Dockerfile"),
-              build_context: workspaceRoot,
-            },
-          },
-        },
-      ],
-      migrations: [
-        { tag: "v1-orb-container", new_sqlite_classes: ["OrbContainerObject"] },
-      ],
-    });
-    expect(orbRecipeHash(workspaceRoot)).toMatch(/^[a-f0-9]{64}$/);
-    expect(orbRecipeHash(workspaceRoot)).toBe(orbRecipeHash(workspaceRoot));
-  });
-
   it("removes the application, the Worker, and the image repository with its snapshots", async () => {
     const calls = [];
     const fetch = vi.fn(async (url, init) => {

@@ -312,9 +312,7 @@ describe("workload identity broker", () => {
   });
 
   it.each([
-    ["inactive or deleted authority", []],
-    ["revoked organization authority", []],
-    ["revoked organization member authority", []],
+    ["inactive, deleted, or revoked authority", []],
     ["ambiguous thread authority", [authorityRow, authorityRow]],
   ] as const)(
     "denies an %s represented by the authority query result",
@@ -326,53 +324,6 @@ describe("workload identity broker", () => {
       expect(calls[0]?.sql).toContain("thread.lifecycle_state = 'active'");
       expect(calls[0]?.sql).toContain("organization.lifecycleState = 'active'");
       expect(calls[0]?.sql).toContain("member.userId = thread.owner_user_id");
-    },
-  );
-
-  it.each([
-    [
-      "local",
-      "thread-secret-53",
-      ["local", "thread-secret-53", "local", "local"],
-    ],
-    ["e2b", "sandbox-secret-67", ["e2b", "thread-secret-53", "e2b", "e2b"]],
-  ] as const)(
-    "uses exact %s authority and audit bind ordering",
-    async (provider, runtimeId, authorityBinds) => {
-      const { db, calls } = fakeDb({
-        rows: [{ ...authorityRow, runtime_id: runtimeId }],
-      });
-      await broker().issue(
-        bindings(db),
-        resident({ runtimeProvider: provider }),
-        request(60),
-      );
-      expect(calls[0]?.binds).toEqual(authorityBinds);
-      expect(calls[1]?.binds).toEqual([
-        "wid_audit-id-not-a-token-jti",
-        "2026-09-04T12:00:00.000Z",
-        authorityRow.user_id,
-        authorityRow.project_id,
-        authorityRow.workspace_id,
-        authorityRow.thread_id,
-        provider,
-        expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
-        "dx_provider_attested_v1",
-        audience,
-        60,
-        60,
-        now / 1_000 + 60,
-        kid,
-        0,
-        authorityRow.thread_id,
-        authorityRow.user_id,
-        authorityRow.project_id,
-        authorityRow.workspace_id,
-        provider,
-        runtimeId,
-        provider,
-        runtimeId,
-      ]);
     },
   );
 

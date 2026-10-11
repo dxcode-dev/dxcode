@@ -6,6 +6,7 @@ import {
   useNewThreadSurface,
 } from "../../shared/new-thread-surface.js";
 import { Button } from "../../shared/ui/button.js";
+import { SidebarThreadChildrenProvider } from "./sidebar-thread-children.js";
 import {
   SidebarPendingThreadRow,
   SidebarThreadRows,
@@ -29,6 +30,7 @@ export function SidebarThreadNavigation({
   onThreadNavigate,
   onThreadPointerEnter,
   onThreadPointerLeave,
+  onThreadMenuOpen,
   onToggleGroup,
   onSetArchived,
   onSetPinned,
@@ -56,10 +58,13 @@ export function SidebarThreadNavigation({
     element: HTMLElement,
   ) => void;
   readonly onThreadPointerLeave: (threadId: ThreadData["id"]) => void;
+  readonly onThreadMenuOpen?: (threadId: ThreadData["id"]) => void;
   readonly onToggleGroup: (groupId: string) => void;
+  /** `includeChildren` also archives or restores the Thread's children. */
   readonly onSetArchived: (
     threadId: ThreadData["id"],
     archived: boolean,
+    includeChildren?: boolean,
   ) => void;
   readonly onSetPinned: (threadId: ThreadData["id"], pinned: boolean) => void;
   readonly onUnfollow?: (threadId: ThreadData["id"]) => void;
@@ -83,106 +88,109 @@ export function SidebarThreadNavigation({
       className={`sidebar-scroll ${empty && query.length === 0 ? "sidebar-scroll-empty" : ""}`}
       aria-label="Threads"
     >
-      {empty ? (
-        query.length === 0 ? (
-          <div className="sidebar-first-thread">
-            <svg
-              viewBox="0 0 240 280"
-              preserveAspectRatio="none"
-              aria-hidden="true"
-            >
-              <path d="M95 255 C35 190 30 105 102 100 C175 95 155 173 108 145 C60 116 175 68 222 6 M207 12 L222 6 L223 23" />
-            </svg>
-            <button
-              type="button"
-              onClick={() => {
-                onNavigate();
-                openNewThread();
-              }}
-            >
-              Create new thread
-            </button>
-          </div>
-        ) : (
-          <div className="sidebar-empty">No matching threads</div>
-        )
-      ) : null}
-      {pendingCreation === undefined || canonicalPendingCreation ? null : (
-        <SidebarPendingThreadRow
-          creation={pendingCreation}
-          activeThreadId={activeThreadId}
-          onThreadNavigate={onThreadNavigate}
-        />
-      )}
-      {sections.map((section) => {
-        const collapsed =
-          section.label !== undefined && collapsedGroups.has(section.id);
-        return (
-          <section
-            className="thread-project-group"
-            data-thread-section={section.id}
-            key={section.id}
-          >
-            {section.label === undefined ? null : (
-              <button
-                className="thread-group-heading"
-                data-collapsed={collapsed || undefined}
-                type="button"
-                onClick={() => onToggleGroup(section.id)}
-                aria-expanded={!collapsed}
+      <SidebarThreadChildrenProvider>
+        {empty ? (
+          query.length === 0 ? (
+            <div className="sidebar-first-thread">
+              <svg
+                viewBox="0 0 240 280"
+                preserveAspectRatio="none"
+                aria-hidden="true"
               >
-                {section.project ? (
-                  <FolderGit2
-                    className="thread-group-icon"
-                    aria-hidden="true"
-                  />
-                ) : null}
-                <span>{section.label}</span>
-                <i />
-                <span className="thread-group-meta">
-                  {section.id === "archived" &&
-                  archiveContent !== undefined ? null : (
-                    <small>{section.threads.length}</small>
-                  )}
-                  {collapsed ? null : <ChevronDown aria-hidden="true" />}
-                </span>
+                <path d="M95 255 C35 190 30 105 102 100 C175 95 155 173 108 145 C60 116 175 68 222 6 M207 12 L222 6 L223 23" />
+              </svg>
+              <button
+                type="button"
+                onClick={() => {
+                  onNavigate();
+                  openNewThread();
+                }}
+              >
+                Create new thread
               </button>
-            )}
-            {collapsed ? null : section.id === "archived" &&
-              archiveContent !== undefined ? (
-              archiveContent
-            ) : (
-              <SidebarThreadRows
-                threads={section.threads}
-                activeThreadId={activeThreadId}
-                projectNames={projectNames}
-                onThreadNavigate={onThreadNavigate}
-                onThreadPointerEnter={onThreadPointerEnter}
-                onThreadPointerLeave={onThreadPointerLeave}
-                onSetArchived={onSetArchived}
-                onSetPinned={onSetPinned}
-                onUnfollow={onUnfollow}
-                archivingThreadId={archivingThreadId}
-                pinningThreadId={pinningThreadId}
-              />
-            )}
-          </section>
-        );
-      })}
-      {hasMore ? (
-        <Button
-          type="button"
-          size="xs"
-          variant="ghost"
-          disabled={loadingMore}
-          onClick={onLoadMore}
-        >
-          {loadingMore ? "Loading…" : "Load more threads"}
-        </Button>
-      ) : null}
-      {loadMoreError === undefined ? null : (
-        <div className="sidebar-empty">{loadMoreError}</div>
-      )}
+            </div>
+          ) : (
+            <div className="sidebar-empty">No matching threads</div>
+          )
+        ) : null}
+        {pendingCreation === undefined || canonicalPendingCreation ? null : (
+          <SidebarPendingThreadRow
+            creation={pendingCreation}
+            activeThreadId={activeThreadId}
+            onThreadNavigate={onThreadNavigate}
+          />
+        )}
+        {sections.map((section) => {
+          const collapsed =
+            section.label !== undefined && collapsedGroups.has(section.id);
+          return (
+            <section
+              className="thread-project-group"
+              data-thread-section={section.id}
+              key={section.id}
+            >
+              {section.label === undefined ? null : (
+                <button
+                  className="thread-group-heading"
+                  data-collapsed={collapsed || undefined}
+                  type="button"
+                  onClick={() => onToggleGroup(section.id)}
+                  aria-expanded={!collapsed}
+                >
+                  {section.project ? (
+                    <FolderGit2
+                      className="thread-group-icon"
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                  <span>{section.label}</span>
+                  <i />
+                  <span className="thread-group-meta">
+                    {section.id === "archived" &&
+                    archiveContent !== undefined ? null : (
+                      <small>{section.threads.length}</small>
+                    )}
+                    {collapsed ? null : <ChevronDown aria-hidden="true" />}
+                  </span>
+                </button>
+              )}
+              {collapsed ? null : section.id === "archived" &&
+                archiveContent !== undefined ? (
+                archiveContent
+              ) : (
+                <SidebarThreadRows
+                  threads={section.threads}
+                  activeThreadId={activeThreadId}
+                  projectNames={projectNames}
+                  onThreadNavigate={onThreadNavigate}
+                  onThreadPointerEnter={onThreadPointerEnter}
+                  onThreadPointerLeave={onThreadPointerLeave}
+                  onThreadMenuOpen={onThreadMenuOpen}
+                  onSetArchived={onSetArchived}
+                  onSetPinned={onSetPinned}
+                  onUnfollow={onUnfollow}
+                  archivingThreadId={archivingThreadId}
+                  pinningThreadId={pinningThreadId}
+                />
+              )}
+            </section>
+          );
+        })}
+        {hasMore ? (
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            disabled={loadingMore}
+            onClick={onLoadMore}
+          >
+            {loadingMore ? "Loading…" : "Load more threads"}
+          </Button>
+        ) : null}
+        {loadMoreError === undefined ? null : (
+          <div className="sidebar-empty">{loadMoreError}</div>
+        )}
+      </SidebarThreadChildrenProvider>
     </nav>
   );
 }

@@ -1,4 +1,4 @@
-import { PluginProviderId, PluginScope, WorkspaceShortName } from "@dx/domain";
+import { PluginProviderId, PluginScope } from "@dx/domain";
 import { Schema } from "effect";
 import { errorResponse, successResponse } from "../http/response.js";
 
@@ -9,10 +9,6 @@ export {
 
 import { SettingsFieldErrorSchema } from "./field-error.js";
 import { WorkspaceProfileDataSchema } from "./workspace-profile.js";
-
-export const GetWorkspaceSettingsContextParamsSchema = Schema.Struct({
-  workspaceSlug: WorkspaceShortName,
-});
 
 export const SettingsWorkspaceDataSchema = WorkspaceProfileDataSchema;
 
@@ -48,7 +44,7 @@ export const GetSettingsContextResponseSchema = successResponse(
   SettingsContextDataSchema,
 );
 
-export const GetSettingsContextInvalidRequestResponseSchema = Schema.Struct({
+const GetSettingsContextInvalidRequestResponseSchema = Schema.Struct({
   status: Schema.Literal("error"),
   data: Schema.Struct({
     code: Schema.Literal("INVALID_SETTINGS_SCOPE"),

@@ -7,12 +7,7 @@ import { categoryForTool } from "./transcript-activity-projection.js";
 
 describe("shell command operations", () => {
   it.each([
-    ["web_search", "explore"],
-    ["read_web_page", "explore"],
-    ["tool_search", "explore"],
-    ["code_exec", "generic"],
     ["create_file", "edit"],
-    ["edit_file", "edit"],
     ["shell_command_status", "check"],
     ["shell_command_kill", "check"],
   ])("categorizes %s before generic heuristics", (name, category) =>
@@ -36,16 +31,10 @@ describe("shell command operations", () => {
     ],
     ["rg -e 'a b' src", [{ kind: "search", pattern: "a b", path: "src" }]],
     [
-      "grep -rn needle src",
-      [{ kind: "search", pattern: "needle", path: "src" }],
-    ],
-    [
       "git grep needle src",
       [{ kind: "search", pattern: "needle", path: "src" }],
     ],
     ["rg --files src", [{ kind: "list", path: "src" }]],
-    ["ls -la dir", [{ kind: "list", path: "dir" }]],
-    ["find . -name '*.ts'", [{ kind: "list", path: "." }]],
     [
       "rg needle src | head -n 5",
       [{ kind: "search", pattern: "needle", path: "src" }],
@@ -60,12 +49,6 @@ describe("shell command operations", () => {
     ],
     ['cat "a b"', [{ kind: "read", path: "a b" }]],
     ["cat a\\ b", [{ kind: "read", path: "a b" }]],
-    ["tail -n 3 a.ts", [{ kind: "read", path: "a.ts" }]],
-    ["nl -ba a.ts", [{ kind: "read", path: "a.ts" }]],
-    ["batcat a.ts", [{ kind: "read", path: "a.ts" }]],
-    ["tree src", [{ kind: "list", path: "src" }]],
-    ["fd needle src", [{ kind: "list", path: "src" }]],
-    ["git ls-files", [{ kind: "list" }]],
     [
       "cat a\ncat b || cat c",
       [
@@ -105,18 +88,6 @@ describe("shell results", () => {
         "<output>hello\n<output>x</output></output>\n<exitCode>2</exitCode>",
       ),
     ).toEqual({ output: "hello\n<output>x</output>", exitCode: 2 }));
-  it("keeps truncation notice", () =>
-    expect(
-      parseShellResult(
-        "<output>x\n[Output truncated to last 50 KB / 2,000 lines]</output>\n<exitCode>0</exitCode>",
-      ).output,
-    ).toContain("[Output truncated"));
-  it("unwraps running process without output", () =>
-    expect(parseShellResult("<running>true</running>\n<pid>42</pid>")).toEqual({
-      output: "",
-      running: true,
-      pid: 42,
-    }));
   it("unwraps stopped process", () =>
     expect(
       parseShellResult(

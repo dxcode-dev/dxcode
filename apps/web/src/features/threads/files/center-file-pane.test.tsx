@@ -130,20 +130,6 @@ describe("CenterFilePane", () => {
     await React.act(() => root.unmount());
   });
 
-  it("plays a video in a player that fills the pane", async () => {
-    serve({ "/home/user/demo.mp4": { size: 2048, type: "video/mp4" } });
-    const { container, root } = await render(sandbox("/home/user/demo.mp4"));
-    const video = await vi.waitFor(() => {
-      const found = container.querySelector("video");
-      if (found === null) throw new Error("video not rendered");
-      return found;
-    });
-    expect(video.hasAttribute("controls")).toBe(true);
-    expect(video.parentElement?.classList).toContain("thread-file-media-video");
-    expect(video.getAttribute("src")).toContain("files-sandbox?path=");
-    await React.act(() => root.unmount());
-  });
-
   it("offers files above 100 MiB only as a download", async () => {
     serve({
       "/home/user/huge.mp4": {

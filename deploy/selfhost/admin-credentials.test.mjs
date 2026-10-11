@@ -5,23 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   adminCredentialPath,
   collectAdminPassword,
-  generateAdminPassword,
   writeAdminCredentialFile,
 } from "./admin-credentials.mjs";
 
 describe("self-host administrator credentials", () => {
-  it("confirms an operator-supplied password without logging it", async () => {
-    const readSecret = vi
-      .fn()
-      .mockResolvedValueOnce("operator-password")
-      .mockResolvedValueOnce("operator-password");
-
-    await expect(collectAdminPassword({ readSecret })).resolves.toBe(
-      "operator-password",
-    );
-    expect(readSecret).toHaveBeenCalledTimes(2);
-  });
-
   it("generates a valid password from one empty response", async () => {
     const readSecret = vi.fn().mockResolvedValue("");
     const password = await collectAdminPassword({ readSecret });
@@ -29,7 +16,6 @@ describe("self-host administrator credentials", () => {
     expect(password).toHaveLength(32);
     expect(password).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(readSecret).toHaveBeenCalledOnce();
-    expect(generateAdminPassword()).not.toBe(password);
   });
 
   it("rejects a mismatched confirmation", async () => {

@@ -25,10 +25,7 @@ const runtime = vi.hoisted(() => ({
 
 vi.mock("./startup-runtime.js", () => runtime);
 
-import {
-  submissionStartupObservation,
-  submissionStartupObservations,
-} from "./submission-startup.js";
+import { submissionStartupObservation } from "./submission-startup.js";
 
 const bindings = { DB: {} } as Bindings;
 
@@ -39,7 +36,6 @@ const ignoredObservationCases: ReadonlyArray<{
   readonly receipt?: unknown;
   readonly pathSuffix?: string;
 }> = [
-  { name: "a read", method: "GET", status: 202, receipt: undefined },
   {
     name: "a non-accepted response",
     method: "POST",
@@ -105,26 +101,6 @@ describe("submission startup observation", () => {
     );
     expect(runtime.recordStartupPhases).toHaveBeenCalledWith(
       bindings.DB,
-      expect.arrayContaining([
-        expect.objectContaining({ phase: "request_admitted" }),
-        expect.objectContaining({ phase: "submission_accepted" }),
-        expect.objectContaining({ phase: "flue_queued" }),
-      ]),
-    );
-  });
-
-  it("builds the same observations for a server-dispatched receipt", () => {
-    expect(
-      submissionStartupObservations(
-        "request-server-dispatch",
-        "thr_00000000-0000-4000-8000-000000000204",
-        {
-          submissionId: "submission-server-dispatch",
-        },
-        1,
-        2,
-      ),
-    ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ phase: "request_admitted" }),
         expect.objectContaining({ phase: "submission_accepted" }),

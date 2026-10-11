@@ -1,4 +1,4 @@
-import { env } from "cloudflare:workers";
+import { env, waitUntil } from "cloudflare:workers";
 import type { Bindings } from "../http/types.js";
 import type { PluginHostContext } from "./host.js";
 import { resolveSubmissionPluginTools } from "./submission-tools.js";
@@ -10,6 +10,15 @@ export const agentPluginHostContext = (): PluginHostContext => {
     throw new Error("Plugin host requires the D1 binding.");
   return { db: bindings.DB, bindings };
 };
+
+/**
+ * What the Thread tools resolve against: the plugin host context, plus the
+ * runtime's `waitUntil` for work a route starts and finishes later.
+ */
+export const agentThreadToolsContext = () => ({
+  ...agentPluginHostContext(),
+  waitUntil,
+});
 
 /** The plugin tool set for one agent submission, recorded with it. */
 export const resolveAgentPluginTools = async (

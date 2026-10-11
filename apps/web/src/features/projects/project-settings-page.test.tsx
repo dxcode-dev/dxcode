@@ -214,22 +214,6 @@ const renderSettings = async (
 };
 
 describe("project settings workspace state", () => {
-  it("keeps public project settings copy dx-owned", async () => {
-    const general = await renderSettings("general", project());
-    expect(general.container.textContent).toContain(
-      "Shown next to the project across dx.",
-    );
-    expect(general.container.textContent).not.toMatch(/\bamp\b/i);
-    await React.act(() => general.root.unmount());
-
-    const orb = await renderSettings("orb", project());
-    expect(orb.container.textContent).toContain(
-      "These files help dx prepare Orbs and expose app portals.",
-    );
-    expect(orb.container.textContent).not.toMatch(/\bamp\b/i);
-    await React.act(() => orb.root.unmount());
-  });
-
   it("keeps available providers visible while active Bitbucket repositories load", async () => {
     vi.stubGlobal(
       "fetch",

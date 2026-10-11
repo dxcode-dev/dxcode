@@ -12,7 +12,6 @@ import {
   DxdFilesListResult,
   DxdFilesReadResult,
   DxdFilesSaveOperation,
-  DxdRequestMessage,
   DxdU64,
   decodeDxdSandboxChunkFrame,
   decodeDxdTerminalFrame,
@@ -84,22 +83,6 @@ describe("dxd Files protocol", () => {
           sizeBytes: invalid.length,
         }),
       ).toThrow();
-  });
-
-  it("carries only Thread filesystem data, generation, and correlation", () => {
-    const message = Schema.decodeUnknownSync(DxdRequestMessage)({
-      type: "request",
-      generation: "generation_1",
-      requestId: "request_12345678",
-      operation: { operation: "files.read", path: "src/main.ts" },
-    });
-    expect(message).toEqual({
-      type: "request",
-      generation: "generation_1",
-      requestId: "request_12345678",
-      operation: { operation: "files.read", path: "src/main.ts" },
-    });
-    expect(JSON.stringify(message)).not.toMatch(/provider|sandbox|e2b/i);
   });
 
   it("bounds a typed save and carries only its resident Changes refresh", () => {

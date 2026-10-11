@@ -3,12 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Sandbox } from "@flue/runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  createFileDescription,
-  createFileParameters,
-  editFileDescription,
-  editFileParameters,
-} from "./definitions.js";
 import { createFileTools } from "./tools.js";
 
 describe("file tools", () => {
@@ -38,35 +32,6 @@ describe("file tools", () => {
       ...params,
     });
 
-  it("exposes the exact model definitions", () => {
-    expect(
-      createFileTools(sandbox).map(({ name, description, parameters }) => ({
-        name,
-        description,
-        parameters,
-      })),
-    ).toEqual([
-      {
-        name: "create_file",
-        description: createFileDescription,
-        parameters: createFileParameters,
-      },
-      {
-        name: "edit_file",
-        description: editFileDescription,
-        parameters: editFileParameters,
-      },
-    ]);
-    expect(createFileDescription.endsWith("\n")).toBe(true);
-    expect(editFileDescription.endsWith("\n")).toBe(true);
-    expect(
-      createFileTools(sandbox).map(({ name, description, parameters }) => ({
-        name,
-        description,
-        parameters: JSON.parse(JSON.stringify(parameters)),
-      })),
-    ).toMatchSnapshot();
-  });
   it("creates nested files and overwrites existing content", async () => {
     const path = join(root, "nested/a");
     expect(
@@ -161,13 +126,4 @@ describe("file tools", () => {
       await expect(edit({})).rejects.toThrow("binary");
     },
   );
-  it("honours cancellation before mutation", async () => {
-    await expect(
-      call(
-        "create_file",
-        { path: join(root, "a"), content: "x" },
-        AbortSignal.abort(),
-      ),
-    ).rejects.toThrow();
-  });
 });

@@ -1,0 +1,993 @@
+import {
+  ModeId,
+  PROJECTLESS_PROJECT_NAME,
+  type Principal,
+  type RunnerProfileCatalog,
+  THREAD_COLORS,
+  type ThreadId,
+  type ThreadModelSelection,
+  type UserId,
+} from "@dx/domain";
+import { defineTool, type ToolDefinition } from "@flue/runtime";
+import { Effect, Result, Schema } from "effect";
+import { Hono } from "hono";
+import * as v from "valibot";
+import { loadRunnerProfileCatalog } from "../execution/runner-profiles/catalog.js";
+import type { AppEnv, Bindings } from "../http/types.js";
+import { publishRealtimeInvalidation } from "../realtime/publication.js";
+import { threadProjectReachableSql } from "../settings/members/membership-sql.js";
+import { resolveOrbChoice } from "./agent-orbs.js";
+
+/** The Worker bindings the Thread tools resolve against at call time. */
+export interface ThreadToolsContext {
+  readonly db: D1Database;
+  readonly bindings: Bindings;
+  /** Keeps work a route starts, such as title generation, running. */
+  readonly waitUntil?: (promise: Promise<unknown>) => void;
+}
+
+/** The longest `wait_for_threads` blocks. */
+const WAIT_MAX_SECONDS = 300;
+const WAIT_MAX_THREADS = 20;
+/** How much of a Thread's latest agent message the tools return. */
+const MESSAGE_PREVIEW_CHARS = 4_000;
+const MESSAGE_MAX_CHARS = 32_000;
+const THREAD_ID_MAX_CHARS = 128;
+
+const description = (lines: ReadonlyArray<string>) => lines.join("\n\n");
+
+const pause = (milliseconds: number, signal: AbortSignal | undefined) =>
+  new Promise<void>((resolve, reject) => {
+    signal?.throwIfAborted();
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    // A long wait pauses many times; each pause removes its listener.
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, milliseconds);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+
+const sha256Hex = async (seed: string) =>
+  Array.from(
+    new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(seed)),
+    ),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+
+/** A stable Thread ID per tool call, so a retried call reuses its Thread. */
+const idempotentThreadId = async (seed: string) => {
+  const hex = (await sha256Hex(seed)).slice(0, 32);
+  const variant = ((Number.parseInt(hex[16] ?? "0", 16) & 0x3) | 0x8).toString(
+    16,
+  );
+  return `thr_${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+};
+
+interface CallingThread {
+  readonly id: string;
+  readonly ownerUserId: UserId;
+  readonly projectId: string;
+  readonly selection: ThreadModelSelection | undefined;
+  /**
+   * While the calling Thread is shared with the workspace, the root of its
+   * family: the tools reach only that root and its children, never the
+   * owner's other private Threads.
+   */
+  readonly sharedFamilyRoot?: string;
+}
+
+interface ThreadRow {
+  readonly id: string;
+  readonly title: string;
+  readonly title_pending_until: string | null;
+  readonly project_id: string;
+  readonly parent_thread_id: string | null;
+  readonly color: string | null;
+  readonly lifecycle_state: string;
+  readonly activity_status: "idle" | "working";
+  readonly last_activity_at: string | null;
+  readonly created_at: string;
+  readonly conversation_mode: string;
+  readonly workspace_access: string | null;
+}
+
+/** What the tools report for one Thread. */
+const threadState = (row: ThreadRow) => ({
+  threadId: row.id,
+  title: row.title,
+  ...(row.title_pending_until !== null &&
+  Date.parse(row.title_pending_until) > Date.now()
+    ? { titlePending: true }
+    : {}),
+  projectId: row.project_id,
+  ...(row.parent_thread_id === null
+    ? {}
+    : { parentThreadId: row.parent_thread_id }),
+  color: row.color ?? "auto",
+  state: row.activity_status,
+  archived: row.lifecycle_state !== "active",
+  lastActivityAt: row.last_activity_at ?? row.created_at,
+  createdAt: row.created_at,
+});
+
+const isMode = Schema.is(ModeId);
+
+let ownerRouteModules:
+  | Promise<
+      [
+        typeof import("./routes.js"),
+        typeof import("../agents/routes.js"),
+        typeof import("../settings/routes.js"),
+      ]
+    >
+  | undefined;
+
+/**
+ * The routes the tools call as the owner, imported once and lazily: they
+ * import DxAgent, which mounts these tools.
+ */
+const ownerRoutes = () => {
+  ownerRouteModules ??= Promise.all([
+    import("./routes.js"),
+    import("../agents/routes.js"),
+    import("../settings/routes.js"),
+  ]);
+  return ownerRouteModules;
+};
+
+/**
+ * Tools that let the agent start, message, check on, wait for, and update
+ * the owner's other Threads. Every call acts as the calling Thread's owner,
+ * whoever sent the message that started the turn, and reaches only Threads
+ * that owner owns. A Thread started here is the owner's private Thread and
+ * lists under the calling Thread, or under its parent when the calling
+ * Thread is itself a child.
+ */
+export const createThreadTools = (
+  callingThreadId: string,
+  getContext: () => ThreadToolsContext,
+  /** The submission this turn runs, which a retried tool call shares. */
+  submissionId?: string,
+): ToolDefinition[] => {
+  /**
+   * What a tool call's Thread IDs and message keys derive from, so a retry
+   * of the call reuses them. Providers may repeat or omit tool call IDs
+   * across turns, so the submission is part of it; a call with no ID gets a
+   * fresh seed and is not retried safely, but never reuses another's work.
+   */
+  const callSeed = (toolCallId: string) =>
+    toolCallId.trim() === ""
+      ? `${callingThreadId}:${crypto.randomUUID()}`
+      : `${callingThreadId}:${submissionId ?? ""}:${toolCallId}`;
+
+  const callingThread = async (
+    context: ThreadToolsContext,
+  ): Promise<CallingThread> => {
+    const row = await context.db
+      .prepare(
+        `SELECT owner_user_id, project_id, model_selection, parent_thread_id,
+           workspace_access
+         FROM threads WHERE id = ? LIMIT 1`,
+      )
+      .bind(callingThreadId)
+      .first<{
+        owner_user_id: string;
+        project_id: string;
+        model_selection: string;
+        parent_thread_id: string | null;
+        workspace_access: string | null;
+      }>();
+    if (row === null) throw new Error("This Thread is unavailable.");
+    let selection: ThreadModelSelection | undefined;
+    try {
+      selection = JSON.parse(row.model_selection) as ThreadModelSelection;
+    } catch {
+      selection = undefined;
+    }
+    const shared =
+      row.workspace_access !== null && row.workspace_access !== "none";
+    return {
+      id: callingThreadId,
+      ownerUserId: row.owner_user_id as UserId,
+      projectId: row.project_id,
+      selection,
+      ...(shared
+        ? { sharedFamilyRoot: row.parent_thread_id ?? callingThreadId }
+        : {}),
+    };
+  };
+
+  /** The owner's Threads among `threadIds`; others are absent. */
+  const readThreads = async (
+    context: ThreadToolsContext,
+    owner: CallingThread,
+    threadIds: ReadonlyArray<string>,
+  ) => {
+    const rows = await context.db
+      .prepare(
+        `SELECT id, title, title_pending_until, project_id, parent_thread_id, color,
+           lifecycle_state, activity_status, last_activity_at, created_at,
+           conversation_mode, workspace_access
+         FROM threads
+         WHERE owner_user_id = ? AND lifecycle_state != 'deleted'
+           AND id IN (${threadIds.map(() => "?").join(", ")})${
+             owner.sharedFamilyRoot === undefined
+               ? ""
+               : " AND (id = ? OR parent_thread_id = ?)"
+}`,
+      )
+      .bind(
+        owner.ownerUserId,
+        ...threadIds,
+        ...(owner.sharedFamilyRoot === undefined
+          ? []
+          : [owner.sharedFamilyRoot, owner.sharedFamilyRoot]),
+      )
+      .all<ThreadRow>();
+    return new Map(rows.results.map((row) => [row.id, row]));
+  };
+
+  const readThread = async (
+    context: ThreadToolsContext,
+    owner: CallingThread,
+    threadId: string,
+  ) => {
+    const row = (await readThreads(context, owner, [threadId])).get(threadId);
+    if (row === undefined)
+      throw new Error(
+        owner.sharedFamilyRoot === undefined
+          ? `Thread ${threadId} was not found among this Thread owner's Threads.`
+          : `Thread ${threadId} is not reachable from this shared Thread: it reaches only its parent and child Threads.`,
+      );
+    return row;
+  };
+
+  /**
+   * Calls the routes the web client uses, as the Thread owner signed in to
+   * the browser: the Thread routes and DxAgent's routes, with the same
+   * admission, policy, and realtime updates.
+   */
+  const ownerRequest = async (
+    context: ThreadToolsContext,
+    owner: CallingThread,
+    method: "GET" | "POST" | "PATCH",
+    path: string,
+    body?: unknown,
+  ) => {
+    const [{ threadRoutes }, { dxAgentRoutes }, { settingsRoutes }] =
+      await ownerRoutes();
+    const app = new Hono<AppEnv>();
+    app.use(async (honoContext, next) => {
+      honoContext.set("principal", {
+        userId: owner.ownerUserId,
+        credentialScopes: ["personal", "workspace"],
+      } satisfies Principal);
+      honoContext.set("requestId", `thread_tool_${crypto.randomUUID()}`);
+      honoContext.set("requestStartedAt", Date.now());
+      // Messages this request delivers come from the calling Thread.
+      honoContext.set("messageSourceThreadId", callingThreadId);
+      await next();
+    });
+    app.route("/v1/threads", threadRoutes);
+    app.route("/v1/agents/dx", dxAgentRoutes);
+    app.route("/v1/settings", settingsRoutes);
+    const response = await app.request(
+      path,
+      {
+        method,
+        ...(body === undefined
+          ? {}
+          : {
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(body),
+            }),
+      },
+      context.bindings,
+      {
+        // Title generation and realtime updates outlive the response.
+        waitUntil: (promise: Promise<unknown>) => {
+          const settled = promise.catch(() => undefined);
+          context.waitUntil?.(settled);
+        },
+        passThroughOnException: () => undefined,
+        props: {},
+      } as unknown as ExecutionContext,
+    );
+    const payload = (await response.json().catch(() => undefined)) as
+      | Record<string, unknown>
+      | undefined;
+    return { response, payload };
+  };
+
+  /** The route's error code and message, from a dx or a Flue error body. */
+  const routeFailure = (
+    operation: string,
+    status: number,
+    payload: Record<string, unknown> | undefined,
+  ) => {
+    const detail = (payload?.data ?? payload?.error) as
+      | { code?: string; type?: string; message?: string }
+      | undefined;
+    const code = detail?.code ?? detail?.type ?? status;
+    return new Error(
+      `${operation} failed: ${code}${detail?.message === undefined ? "" : ` (${detail.message})`}`,
+    );
+  };
+
+  /**
+   * Waits briefly until Thread activity has recorded a just-admitted
+   * submission, so a status check or wait that follows reports it working.
+   */
+  const awaitActivity = async (
+    context: ThreadToolsContext,
+    threadId: string,
+    submissionId: string,
+    signal: AbortSignal | undefined,
+  ) => {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const row = await context.db
+        .prepare(
+          "SELECT 1 AS seen FROM thread_activity_submission WHERE thread_id = ? AND submission_id = ?",
+        )
+        .bind(threadId, submissionId)
+        .first();
+      if (row !== null) return;
+      await pause(200, signal);
+    }
+  };
+
+  interface HistoryMessage {
+    readonly role?: string;
+    readonly purpose?: string;
+    readonly parts?: ReadonlyArray<{ readonly type?: string; text?: string }>;
+  }
+
+  /**
+   * The text of the Thread's latest agent message, read from the history
+   * route the web client loads; null before the agent has answered.
+   */
+  const lastAgentMessage = async (
+    context: ThreadToolsContext,
+    owner: CallingThread,
+    threadId: string,
+  ) => {
+    const { response, payload } = await ownerRequest(
+      context,
+      owner,
+      "GET",
+      `/v1/agents/dx/${encodeURIComponent(threadId)}?view=history&promptLimit=1`,
+    );
+    // No conversation yet, archived, or Flue is still indexing its history.
+    if (
+      response.status === 404 ||
+      response.status === 409 ||
+      response.status === 503
+    )
+      return null;
+    if (!response.ok)
+      throw routeFailure("Reading the Thread", response.status, payload);
+    const messages = (payload?.messages ?? []) as ReadonlyArray<HistoryMessage>;
+    const message = messages.findLast(
+      ({ role, purpose }) => role === "assistant" && purpose === "assistant",
+    );
+    const text = (message?.parts ?? [])
+      .flatMap(({ type, text }) => (type === "text" && text ? [text] : []))
+      .join("\n")
+      .trim();
+    if (text === "") return null;
+    return text.length > MESSAGE_PREVIEW_CHARS
+      ? `${text.slice(0, MESSAGE_PREVIEW_CHARS)}…`
+      : text;
+  };
+
+  /** The project a child joins when the call names none: the caller's. */
+  const defaultProjectId = async (
+    context: ThreadToolsContext,
+    owner: CallingThread,
+  ) => {
+    const project = await context.db
+      .prepare("SELECT name, owner_user_id FROM projects WHERE id = ?")
+      .bind(owner.projectId)
+      .first<{ name: string; owner_user_id: string }>();
+    // A projectless Thread's child is projectless too; the route resolves
+    // the owner's projectless defaults when no project is named.
+    return project !== null &&
+      project.name === PROJECTLESS_PROJECT_NAME &&
+      project.owner_user_id === owner.ownerUserId
+      ? undefined
+      : owner.projectId;
+  };
+
+  const withContext = async <T>(
+    use: (context: ThreadToolsContext, owner: CallingThread) => Promise<T>,
+  ) => {
+    const context = getContext();
+    return use(context, await callingThread(context));
+  };
+
+  const threadIdInput = (text: string) =>
+    v.pipe(
+      v.string(),
+      v.minLength(1),
+      v.maxLength(THREAD_ID_MAX_CHARS),
+      v.description(text),
+    );
+
+  /** The deployment's Orb catalog; a missing or invalid one has no Orbs. */
+  const orbCatalog = async (context: ThreadToolsContext) => {
+    const loaded = await Effect.runPromise(
+      Effect.result(loadRunnerProfileCatalog(context.bindings)),
+    );
+    if (Result.isFailure(loaded))
+      throw new Error("This deployment's Orb catalog is unavailable.");
+    return loaded.success.publicCatalog;
+  };
+  return [
+    defineTool({
+      name: "create_thread",
+      description: description([
+        "Start a child Thread: a new dx Thread with its own agent and its own Orb that works on a task while you continue. It belongs to this Thread's owner, stays private to them, and lists under this Thread in their sidebar.",
+        "Use a child Thread for a self-contained task that can run on its own or in parallel with yours, or that needs a separate Orb. Do the work yourself when it is small, when you need its result immediately, or when it depends on files you changed here.",
+        "Files do not transfer. The child starts from its project's repository, not from this Orb, so uncommitted changes here are invisible to it. Put everything it needs in the prompt, and push any commits it must build on first.",
+        "Returns the child's thread ID. Use send_thread_message for follow-ups, get_thread_status to check on it, and wait_for_threads to block until it finishes its turn.",
+        "Before choosing an Orb or a mode, call list_orbs for the providers and sizes the owner can start, and list_agent_modes for the modes and the models they run. Omit them to use the project's Orb and this Thread's mode.",
+      ]),
+      input: v.object({
+        prompt: v.pipe(
+          v.string(),
+          v.minLength(1),
+          v.maxLength(MESSAGE_MAX_CHARS),
+          v.description(
+            "The complete task for the child's agent. It cannot see this conversation.",
+          ),
+        ),
+        title: v.optional(
+          v.pipe(
+            v.string(),
+            v.minLength(1),
+            v.maxLength(256),
+            v.description(
+              "Title for the child Thread in the sidebar; kept as given. Omit to have one generated.",
+            ),
+          ),
+        ),
+        project_id: v.optional(
+          v.pipe(
+            v.string(),
+            v.description(
+              "Project ID for the child Thread. Defaults to this Thread's project.",
+            ),
+          ),
+        ),
+        orb_provider: v.optional(
+          v.pipe(
+            v.string(),
+            v.maxLength(64),
+            v.description(
+              "The Orb provider, such as e2b or cloudflare. With no orb_size, the provider's default size. Omit both for the project's Orb.",
+            ),
+          ),
+        ),
+        orb_size: v.optional(
+          v.pipe(
+            v.string(),
+            v.maxLength(64),
+            v.description(
+              "The Orb size: a size ID such as a1.tiny, or its short name such as tiny when orb_provider is set. Omit both for the project's Orb.",
+            ),
+          ),
+        ),
+        agent_mode: v.optional(
+          v.pipe(
+            v.string(),
+            v.description(
+              "How much model effort the child gets: low, medium, high, or ultra. Defaults to this Thread's mode.",
+            ),
+          ),
+        ),
+      }),
+      run: async ({ data, toolCallId, signal }) =>
+        withContext(async (context, owner) => {
+          if (data.agent_mode !== undefined && !isMode(data.agent_mode))
+            throw new Error(
+              `agent_mode must be one of ${ModeId.literals.join(", ")}.`,
+            );
+          const runnerProfileId =
+            data.orb_provider === undefined && data.orb_size === undefined
+              ? undefined
+              : resolveOrbChoice(
+                  await orbCatalog(context),
+                  data.orb_provider,
+                  data.orb_size,
+                );
+          const projectId =
+            data.project_id ?? (await defaultProjectId(context, owner));
+          const selection: ThreadModelSelection | undefined =
+            data.agent_mode === undefined
+              ? owner.selection
+              : ({
+                  kind: "mode",
+                  profileId:
+                    owner.selection?.kind === "mode"
+                      ? owner.selection.profileId
+                      : "default",
+                  mode: data.agent_mode as ModeId,
+                } as ThreadModelSelection);
+          // A retried tool call reuses its Thread.
+          const threadId = await idempotentThreadId(callSeed(toolCallId));
+          signal?.throwIfAborted();
+          const { response, payload } = await ownerRequest(
+            context,
+            owner,
+            "POST",
+            "/v1/threads",
+            {
+              threadId,
+              parentThreadId: callingThreadId,
+              ...(projectId === undefined ? {} : { projectId }),
+              // An explicit title is final: DxTitleAgent does not replace it.
+              ...(data.title === undefined
+                ? {}
+                : { title: data.title, generateTitle: false }),
+              ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
+              ...(selection === undefined ? {} : { selection }),
+              initialMessage: { body: data.prompt, attachments: [] },
+            },
+          );
+          const created = payload?.data as
+            | { readonly id?: string; readonly projectId?: string }
+            | undefined;
+          const submission = payload?.initialSubmission as
+            | { readonly submissionId?: string }
+            | undefined;
+          if (!response.ok || created?.id === undefined)
+            throw routeFailure("create_thread", response.status, payload);
+          if (submission?.submissionId !== undefined)
+            await awaitActivity(
+              context,
+              created.id,
+              submission.submissionId,
+              signal,
+            );
+          return {
+            output: {
+              threadId: created.id,
+              projectId: created.projectId ?? projectId ?? null,
+            },
+          };
+        }),
+    }),
+    defineTool({
+      name: "send_thread_message",
+      description: description([
+        "Send a message to another of this Thread owner's Threads, such as a child you started. It shows there as a message from this Thread. Returns as soon as the Thread accepts it; use wait_for_threads to wait for the reply.",
+        "Only the owner's own Threads can receive it, not Threads other people shared with them. If the Thread is working, the message steers its current turn. A message carries text only: files and commits do not transfer.",
+      ]),
+      input: v.object({
+        thread: threadIdInput("The thread ID, as create_thread returned it."),
+        message: v.pipe(
+          v.string(),
+          v.minLength(1),
+          v.maxLength(MESSAGE_MAX_CHARS),
+          v.description("The message to deliver. Write it in full."),
+        ),
+      }),
+      run: async ({ data, toolCallId, signal }) =>
+        withContext(async (context, owner) => {
+          if (data.thread === callingThreadId)
+            throw new Error("A Thread cannot send a message to itself.");
+          const thread = await readThread(context, owner, data.thread);
+          if (thread.lifecycle_state !== "active")
+            throw new Error(`Thread ${data.thread} is archived.`);
+          const working = thread.activity_status === "working";
+          // In a shared Thread in chat mode an untagged message would stay
+          // chat between members; this one is for the agent.
+          const body =
+            thread.workspace_access !== null &&
+            thread.workspace_access !== "none" &&
+            thread.conversation_mode === "chat"
+              ? `@dx ${data.message}`
+              : data.message;
+          signal?.throwIfAborted();
+          const { response, payload } = await ownerRequest(
+            context,
+            owner,
+            "POST",
+            `/v1/agents/dx/${encodeURIComponent(data.thread)}`,
+            {
+              kind: "user",
+              body,
+              idempotencyKey: await sha256Hex(`${callSeed(toolCallId)}:send`),
+            },
+          );
+          const submissionId = payload?.submissionId;
+          if (response.status !== 202 || typeof submissionId !== "string")
+            throw routeFailure("send_thread_message", response.status, payload);
+          await awaitActivity(context, data.thread, submissionId, signal);
+          // Flue shows a message joining a running turn only once it joins;
+          // until then the Thread's clients show that it is on its way. The
+          // message itself stays in Flue.
+          if (working) {
+            const markSource = async () =>
+              (
+                await context.db
+                  .prepare(
+                    `UPDATE thread_activity_submission SET source_thread_id = ?
+                      WHERE thread_id = ? AND submission_id = ?`,
+                  )
+                  .bind(callingThreadId, data.thread, submissionId)
+                  .run()
+              ).meta.changes > 0;
+            // Thread activity can record the submission after the first
+            // wait; one more wait catches a slow record.
+            if (!(await markSource())) {
+              await awaitActivity(context, data.thread, submissionId, signal);
+              await markSource();
+            }
+            await publishRealtimeInvalidation(
+              context.bindings,
+              data.thread as ThreadId,
+              "thread.invalidated",
+            ).catch(() => undefined);
+          }
+          return {
+            output: { threadId: data.thread, submissionId, steered: working },
+          };
+        }),
+    }),
+    defineTool({
+      name: "get_thread_status",
+      description: description([
+        "Check one of this Thread owner's Threads: whether its agent is working or idle, its title, its last activity, and the text of its latest agent message.",
+        "Idle means the Thread finished its turn and is waiting for a message, not that it failed. Use wait_for_threads instead of calling this repeatedly.",
+      ]),
+      input: v.object({ thread: threadIdInput("The thread ID.") }),
+      run: async ({ data }) =>
+        withContext(async (context, owner) => {
+          const thread = await readThread(context, owner, data.thread);
+          return {
+            output: {
+              ...threadState(thread),
+              lastMessage: await lastAgentMessage(context, owner, data.thread),
+            },
+          };
+        }),
+    }),
+    defineTool({
+      name: "wait_for_threads",
+      description: description([
+        "Wait until each listed Thread is idle, meaning its agent finished its turn, or until the timeout. Returns each Thread's state and the text of its latest agent message, and settled: true when every Thread is idle or archived.",
+        "Use it after create_thread or send_thread_message when you need the result before you continue. On a timeout, call it again to keep waiting.",
+      ]),
+      input: v.object({
+        threads: v.pipe(
+          v.array(threadIdInput("A thread ID.")),
+          v.minLength(1),
+          v.maxLength(WAIT_MAX_THREADS),
+          v.description(`Thread IDs to wait on, at most ${WAIT_MAX_THREADS}.`),
+        ),
+        timeout_seconds: v.optional(
+          v.pipe(
+            v.number(),
+            v.integer(),
+            v.minValue(1),
+            v.maxValue(WAIT_MAX_SECONDS),
+            v.description(
+              `Seconds to wait, from 1 to ${WAIT_MAX_SECONDS}. Defaults to 120.`,
+            ),
+          ),
+        ),
+      }),
+      run: async ({ data, signal }) =>
+        withContext(async (context, owner) => {
+          const ids = [...new Set(data.threads)];
+          if (ids.includes(callingThreadId))
+            throw new Error("A Thread cannot wait for itself.");
+          const deadline = Date.now() + (data.timeout_seconds ?? 120) * 1_000;
+          let rows = await readThreads(context, owner, ids);
+          const settled = () =>
+            ids.every((id) => {
+              const row = rows.get(id);
+              return (
+                row === undefined ||
+                row.activity_status === "idle" ||
+                row.lifecycle_state !== "active"
+              );
+            });
+          while (!settled() && Date.now() + 2_000 <= deadline) {
+            await pause(2_000, signal);
+            rows = await readThreads(context, owner, ids);
+          }
+          return {
+            output: {
+              settled: settled(),
+              threads: await Promise.all(
+                ids.map(async (id) => {
+                  const row = rows.get(id);
+                  return row === undefined
+                    ? { threadId: id, state: "not-found" }
+                    : {
+                        ...threadState(row),
+                        lastMessage: await lastAgentMessage(context, owner, id),
+                      };
+                }),
+              ),
+            },
+          };
+        }),
+    }),
+    defineTool({
+      name: "list_orbs",
+      description: description([
+        "List the Orbs this Thread's owner can start a child Thread on: each provider (such as e2b or cloudflare) with its status and whose key pays, and the sizes it offers with CPU, memory, and disk. Also returns the size a new Thread in the project gets by default.",
+        "Call it before create_thread when the user names a provider or size, or asks what is available. Pass the provider ID and a size ID to create_thread as orb_provider and orb_size.",
+      ]),
+      input: v.object({
+        project_id: v.optional(
+          v.pipe(
+            v.string(),
+            v.description(
+              "Project ID to check. Defaults to this Thread's project.",
+            ),
+          ),
+        ),
+      }),
+      run: async ({ data }) =>
+        withContext(async (context, owner) => {
+          const projectId =
+            data.project_id ?? (await defaultProjectId(context, owner));
+          const query =
+            projectId === undefined
+              ? ""
+              : `?projectId=${encodeURIComponent(projectId)}`;
+          const [providers, defaults] = await Promise.all([
+            ownerRequest(
+              context,
+              owner,
+              "GET",
+              `/v1/settings/personal/orb-providers${query}`,
+            ),
+            ownerRequest(
+              context,
+              owner,
+              "GET",
+              "/v1/settings/personal/projects",
+            ),
+          ]);
+          if (!providers.response.ok)
+            throw routeFailure(
+              "list_orbs",
+              providers.response.status,
+              providers.payload,
+            );
+          if (!defaults.response.ok)
+            throw routeFailure(
+              "list_orbs",
+              defaults.response.status,
+              defaults.payload,
+            );
+          const resolved =
+            (
+              providers.payload?.data as
+                | {
+                    readonly resolved: ReadonlyArray<{
+                      readonly providerId: string;
+                      readonly scope: string;
+                      readonly status: string;
+                    }>;
+                  }
+                | undefined
+            )?.resolved ?? [];
+          const settings = defaults.payload?.data as
+            | {
+                readonly catalog: RunnerProfileCatalog;
+                readonly restrictions: {
+                  readonly allowedRunnerProfileIds: ReadonlyArray<string> | null;
+                };
+                readonly resolved: {
+                  readonly runnerProfileId: { readonly value: string };
+                };
+              }
+            | undefined;
+          if (settings === undefined)
+            throw new Error(
+              "list_orbs failed: the Orb catalog is unavailable.",
+            );
+          const allowed = settings.restrictions.allowedRunnerProfileIds;
+          // Only a project the owner reaches: their own, or their
+          // workspace's while they belong to it.
+          const projectDefault =
+            projectId === undefined
+              ? null
+              : await context.db
+                  .prepare(
+                    `SELECT runner_profile_id FROM projects
+                      WHERE id = ?1 AND ${threadProjectReachableSql("projects", "?2")}`,
+                  )
+                  .bind(projectId, owner.ownerUserId)
+                  .first<string>("runner_profile_id");
+          if (data.project_id !== undefined && projectDefault === null)
+            throw new Error(`Project ${data.project_id} was not found.`);
+          return {
+            output: {
+              projectId: projectId ?? null,
+              defaultSize:
+                projectDefault ?? settings.resolved.runnerProfileId.value,
+              providers: (
+                settings.catalog.providers ??
+                [
+                  ...new Set(settings.catalog.profiles.map((p) => p.adapter)),
+                ].map((adapter) => ({ adapter, displayName: adapter }))
+              ).map((provider) => {
+                const usable = resolved.find(
+                  ({ providerId }) => providerId === provider.adapter,
+                );
+                return {
+                  provider: provider.adapter,
+                  name: provider.displayName,
+                  // ready, building, or failed; unavailable when the owner
+                  // has no key or deployment access for it.
+                  status: usable?.status ?? "unavailable",
+                  ...(usable === undefined ? {} : { paidBy: usable.scope }),
+                  sizes: settings.catalog.profiles
+                    .filter(
+                      (profile) =>
+                        profile.adapter === provider.adapter &&
+                        profile.availability === "available" &&
+                        (allowed === null || allowed.includes(profile.id)),
+                    )
+                    .map((profile) => ({
+                      size: profile.id,
+                      cpu: profile.resources.cpuCores,
+                      memoryGb: profile.resources.memoryMb / 1024,
+                      diskGb: profile.resources.diskGb,
+                    })),
+                };
+              }),
+            },
+          };
+        }),
+    }),
+    defineTool({
+      name: "list_agent_modes",
+      description: description([
+        "List the agent modes a child Thread can run in (low, medium, high, ultra) with the model and thinking level each uses for this Thread's owner, and whether a connection serves that model now. Also returns this Thread's mode, which a child gets by default.",
+        "Call it before create_thread when the user asks for a mode or a model. Pass the mode to create_thread as agent_mode.",
+      ]),
+      input: v.object({}),
+      run: async () =>
+        withContext(async (context, owner) => {
+          const { response, payload } = await ownerRequest(
+            context,
+            owner,
+            "GET",
+            "/v1/settings/personal/model-routing/choices",
+          );
+          if (!response.ok)
+            throw routeFailure("list_agent_modes", response.status, payload);
+          const modes =
+            (
+              payload?.data as
+                | {
+                    readonly modes: ReadonlyArray<{
+                      readonly mode: string;
+                      readonly config: {
+                        readonly model: string;
+                        readonly thinking: string;
+                      };
+                      readonly served: boolean;
+                      readonly servingConnectionName: string | null;
+                    }>;
+                  }
+                | undefined
+            )?.modes ?? [];
+          return {
+            output: {
+              currentMode:
+                owner.selection?.kind === "mode"
+                  ? owner.selection.mode
+                  : owner.selection?.kind === "model"
+                    ? `model:${owner.selection.model}`
+                    : "medium",
+              modes: modes.map((mode) => ({
+                mode: mode.mode,
+                model: mode.config.model,
+                thinking: mode.config.thinking,
+                served: mode.served,
+                ...(mode.servingConnectionName === null
+                  ? {}
+                  : { connection: mode.servingConnectionName }),
+              })),
+            },
+          };
+        }),
+    }),
+    defineTool({
+      name: "update_thread",
+      description: description([
+        "Rename, recolor, pin or unpin, or archive or restore one of this Thread owner's Threads. Omit thread to update this Thread. Change only what the user asked for.",
+        "Archiving stops the Thread's Orb, so this Thread cannot archive itself.",
+      ]),
+      input: v.object({
+        thread: v.optional(
+          threadIdInput("The thread ID. Omit to update this Thread."),
+        ),
+        title: v.optional(
+          v.pipe(
+            v.string(),
+            v.minLength(1),
+            v.maxLength(256),
+            v.description("New title."),
+          ),
+        ),
+        color: v.optional(
+          v.pipe(
+            v.picklist([...THREAD_COLORS, "auto"]),
+            v.description(
+              `The Thread's color in the sidebar: ${THREAD_COLORS.join(", ")}, or auto to derive one from the Thread.`,
+            ),
+          ),
+        ),
+        pinned: v.optional(
+          v.pipe(v.boolean(), v.description("True to pin, false to unpin.")),
+        ),
+        archived: v.optional(
+          v.pipe(
+            v.boolean(),
+            v.description("True to archive, false to restore."),
+          ),
+        ),
+      }),
+      run: async ({ data }) =>
+        withContext(async (context, owner) => {
+          const threadId = data.thread ?? callingThreadId;
+          if (
+            data.title === undefined &&
+            data.color === undefined &&
+            data.pinned === undefined &&
+            data.archived === undefined
+          )
+            throw new Error(
+              "Name at least one of title, color, pinned, or archived.",
+            );
+          if (data.archived === true && threadId === callingThreadId)
+            throw new Error("This Thread cannot archive itself.");
+          await readThread(context, owner, threadId);
+          const patch = async (path: string, body: unknown) => {
+            const { response, payload } = await ownerRequest(
+              context,
+              owner,
+              "PATCH",
+              `/v1/threads/${encodeURIComponent(threadId)}${path}`,
+              body,
+            );
+            if (!response.ok)
+              throw routeFailure("update_thread", response.status, payload);
+          };
+          // Restore before pinning: only an active Thread can be pinned.
+          if (data.archived === false)
+            await patch("/archive", { archived: false });
+          // A rename also ends a pending generated title.
+          if (data.title !== undefined || data.color !== undefined)
+            await patch("", {
+              ...(data.title === undefined ? {} : { title: data.title }),
+              ...(data.color === undefined
+                ? {}
+                : { color: data.color === "auto" ? null : data.color }),
+            });
+          if (data.pinned !== undefined)
+            await patch("/pin", { pinned: data.pinned });
+          if (data.archived === true)
+            await patch("/archive", { archived: true });
+          return {
+            output: threadState(await readThread(context, owner, threadId)),
+          };
+        }),
+    }),
+  ];
+};

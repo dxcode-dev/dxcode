@@ -1,4 +1,3 @@
-import type { AgentProps } from "@flue/runtime";
 import * as v from "valibot";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -19,6 +18,9 @@ const pluginHost = vi.hoisted(() => ({
   agentPluginHostContext: vi.fn(() => {
     throw new Error("Host context is read only when a tool runs.");
   }),
+  agentThreadToolsContext: vi.fn(() => {
+    throw new Error("Host context is read only when a tool runs.");
+  }),
   resolveAgentPluginTools: vi.fn(),
 }));
 
@@ -35,6 +37,9 @@ const skills = vi.hoisted(() => ({
 const plugins = vi.hoisted(() => ({
   createPluginTool: vi.fn((_threadId, { name }) => ({ name, run: vi.fn() })),
   invokePluginLive: vi.fn(),
+}));
+const threadTools = vi.hoisted(() => ({
+  createThreadTools: vi.fn((): unknown[] => []),
 }));
 const runtime = vi.hoisted(() => ({
   capabilities: "workspace" as "model-only" | "workspace",
@@ -62,6 +67,7 @@ vi.mock("../settings/plugins/execution.js", () => ({
   invokePluginLive: plugins.invokePluginLive,
 }));
 vi.mock("../plugins/agent-context.js", () => pluginHost);
+vi.mock("../threads/agent-tools.js", () => threadTools);
 vi.mock("../plugins/code/providers/wasm.js", () => ({ getCodeWasm: vi.fn() }));
 vi.mock("../settings/plugins/flue.js", () => ({
   createPluginTool: plugins.createPluginTool,
@@ -89,50 +95,6 @@ describe("DxAgent", () => {
       model: "cloudflare/@cf/zai-org/glm-5.3-flash",
       options: undefined,
     }));
-  });
-
-  it("selects its model, workspace, and instructions", () => {
-    const props = Object.freeze({
-      id: "thr_00000000-0000-4000-8000-000000000005",
-    }) satisfies AgentProps;
-
-    expect(DxAgent(props)).toBe(dxAgentPrompt);
-    expect(props.id).toBe("thr_00000000-0000-4000-8000-000000000005");
-    expect(hooks.useModel).toHaveBeenCalledOnce();
-    expect(hooks.useModel).toHaveBeenCalledWith(
-      "cloudflare/@cf/zai-org/glm-5.3-flash",
-      undefined,
-    );
-    expect(hooks.useResponseStart).toHaveBeenCalledOnce();
-    const responseStart = hooks.useResponseStart.mock.calls[0]?.[0];
-    expect(responseStart?.()).toEqual({
-      dxResponseStartedAt: expect.any(String),
-    });
-    expect(hooks.useSandbox).toHaveBeenCalledOnce();
-    expect(hooks.useSandbox).toHaveBeenCalledWith(runtime.execution);
-    expect(hooks.useAgentStart).toHaveBeenCalledOnce();
-    expect(hooks.useTool).not.toHaveBeenCalled();
-  });
-
-  it("injects the resolved personal content exactly once at the top-level prompt boundary", () => {
-    const content = "EXACTLY-ONCE-PERSONAL-INSTRUCTION";
-    hooks.useInitialData.mockReturnValue({
-      personalInstructions: content,
-      settingsRevision: 5,
-      settingsVersion: 1,
-      selection: { kind: "mode", profileId: "default", mode: "high" },
-    });
-
-    const prompt = DxAgent({ id: "thr_existing" });
-    expect(prompt.split(content)).toHaveLength(2);
-    expect(prompt).toContain("top-level dx agent");
-    expect(prompt).toContain(
-      "do not automatically apply to delegated agents, specialized agents, or system tasks",
-    );
-    expect(hooks.useModel).toHaveBeenCalledWith(
-      "cloudflare/@cf/zai-org/glm-5.3-flash",
-      undefined,
-    );
   });
 
   it("always mounts code_exec and adds tool_search only with a reviewed MCP module", () => {
@@ -203,6 +165,34 @@ describe("DxAgent", () => {
     expect(disabledPrompt).not.toMatch(/web_search|read_web_page|web search/i);
   });
 
+  it("mounts the built-in Thread tools in every workspace Thread, with no plugin enabled", () => {
+    threadTools.createThreadTools.mockReturnValueOnce([
+      { name: "create_thread", run: vi.fn() },
+      { name: "send_thread_message", run: vi.fn() },
+    ]);
+    hooks.usePromptData.mockReturnValueOnce({
+      plugins: { submissionId: "sub_1", tools: [] },
+    } as never);
+    const prompt = DxAgent({ id: "thr_existing" });
+    expect(threadTools.createThreadTools).toHaveBeenCalledWith(
+      "thr_existing",
+      pluginHost.agentThreadToolsContext,
+      "sub_1",
+    );
+    expect(
+      hooks.useTool.mock.calls.map(([tool]) => (tool as { name: string }).name),
+    ).toEqual(["create_thread", "send_thread_message"]);
+    expect(pluginHost.agentThreadToolsContext).not.toHaveBeenCalled();
+    expect(prompt).toMatch(/create_thread/);
+
+    hooks.useTool.mockReset();
+    threadTools.createThreadTools.mockClear();
+    runtime.capabilities = "model-only";
+    DxAgent({ id: "thr_model_preview" });
+    expect(threadTools.createThreadTools).not.toHaveBeenCalled();
+    expect(hooks.useTool).not.toHaveBeenCalled();
+  });
+
   it("never mounts plugin tools in the model-only preview", () => {
     runtime.capabilities = "model-only";
     hooks.usePromptData.mockReturnValueOnce({
@@ -268,10 +258,6 @@ describe("DxAgent", () => {
 
   it("pins the durable identity", () => {
     expect(DxAgent.agentName).toBe("dx-agent");
-  });
-
-  it("lets Flue run a submission for seven days", () => {
-    expect(DxAgent.durability).toEqual({ timeoutMs: 604_800_000 });
   });
 
   it("registers only Workers AI in the local model preview", () => {

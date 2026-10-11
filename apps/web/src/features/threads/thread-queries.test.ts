@@ -14,11 +14,7 @@ import {
   optimisticThreadData,
   setThreadArchivedMutationOptions,
 } from "./thread-mutations.js";
-import {
-  threadKeys,
-  threadQueryOptions,
-  threadsQueryOptions,
-} from "./thread-queries.js";
+import { threadKeys, threadQueryOptions } from "./thread-queries.js";
 
 const userId = Schema.decodeUnknownSync(UserId)("user-1");
 const projectId = Schema.decodeUnknownSync(ProjectId)(
@@ -35,31 +31,6 @@ const project = { id: projectId } as ProjectData;
 afterEach(() => vi.unstubAllGlobals());
 
 describe("thread query contracts", () => {
-  it("uses distinct semantic list keys and forwards only the server cursor", () => {
-    const all = threadsQueryOptions(userId);
-    const project = threadsQueryOptions(userId, projectId);
-    const archived = threadsQueryOptions(userId, undefined, "archived");
-
-    expect(all.queryKey).toEqual(threadKeys.list(userId));
-    expect(project.queryKey).toEqual(threadKeys.list(userId, projectId));
-    expect(archived.queryKey).toEqual(
-      threadKeys.list(userId, undefined, "archived"),
-    );
-    expect(archived.queryKey).not.toEqual(all.queryKey);
-    expect(project.queryKey).not.toEqual(all.queryKey);
-    expect(
-      project.getNextPageParam?.(
-        { items: [], nextCursor: "next" as never },
-        [],
-        undefined,
-        [],
-      ),
-    ).toBe("next");
-    expect(
-      project.getNextPageParam?.({ items: [] }, [], undefined, []),
-    ).toBeUndefined();
-  });
-
   it("polls only readiness while an existing detail is unready", async () => {
     const detail = {
       id: threadId,

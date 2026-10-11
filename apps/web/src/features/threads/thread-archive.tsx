@@ -1,8 +1,8 @@
-import type { ThreadData } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Archive, ArchiveRestore, LoaderCircle, X } from "lucide-react";
 import * as React from "react";
+import type { ArchivedThread } from "../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import {
   ThreadArchiveContext,
@@ -15,6 +15,8 @@ interface ArchiveNotice {
   readonly kind: "progress" | "success" | "error";
   readonly message: string;
   readonly undoThreadId?: ThreadId;
+  /** The children the archive changed, which Undo restores with it. */
+  readonly undoChildThreadIds?: ReadonlyArray<ThreadId>;
 }
 
 export function ThreadArchiveProvider({
@@ -58,8 +60,17 @@ export function ThreadArchiveProvider({
     };
   }, []);
 
-  const setArchived = React.useCallback(
-    (threadId: ThreadId, archived: boolean) => {
+  /**
+   * `children`: true for every child in the parent's former state, or the
+   * exact children an Undo restores.
+   */
+  const changeArchived = React.useCallback(
+    (
+      threadId: ThreadId,
+      archived: boolean,
+      children?: true | ReadonlyArray<ThreadId>,
+    ) => {
+      const includeChildren = children !== undefined;
       if (mutationPending.current) return;
       mutationPending.current = true;
       if (dismissTimer.current !== undefined)
@@ -67,16 +78,34 @@ export function ThreadArchiveProvider({
       dismissTimer.current = undefined;
       setNotice({
         kind: "progress",
-        message: archived ? "Archiving thread…" : "Unarchiving thread…",
+        message: archived
+          ? includeChildren
+            ? "Archiving threads…"
+            : "Archiving thread…"
+          : "Unarchiving thread…",
       });
       mutate(
-        { threadId, archived },
+        children === undefined
+          ? { threadId, archived }
+          : { threadId, archived, children },
         {
-          onSuccess: (thread: ThreadData) =>
+          onSuccess: ({ thread, changedChildThreadIds }: ArchivedThread) =>
             showTemporary({
               kind: "success",
-              message: archived ? "Archived thread" : "Unarchived thread",
-              ...(archived ? { undoThreadId: thread.id } : {}),
+              message: archived
+                ? includeChildren
+                  ? "Archived threads"
+                  : "Archived thread"
+                : "Unarchived thread",
+              ...(archived
+                ? {
+                    undoThreadId: thread.id,
+                    ...(changedChildThreadIds === undefined ||
+                    changedChildThreadIds.length === 0
+                      ? {}
+                      : { undoChildThreadIds: changedChildThreadIds }),
+                  }
+                : {}),
             }),
           onError: (cause) =>
             showTemporary({
@@ -95,6 +124,12 @@ export function ThreadArchiveProvider({
       );
     },
     [mutate, showTemporary],
+  );
+
+  const setArchived = React.useCallback(
+    (threadId: ThreadId, archived: boolean, includeChildren = false) =>
+      changeArchived(threadId, archived, includeChildren ? true : undefined),
+    [changeArchived],
   );
 
   const controller = React.useMemo<ThreadArchiveController>(
@@ -129,7 +164,11 @@ export function ThreadArchiveProvider({
               type="button"
               onClick={() => {
                 if (notice.undoThreadId !== undefined)
-                  setArchived(notice.undoThreadId, false);
+                  changeArchived(
+                    notice.undoThreadId,
+                    false,
+                    notice.undoChildThreadIds,
+                  );
               }}
             >
               Undo

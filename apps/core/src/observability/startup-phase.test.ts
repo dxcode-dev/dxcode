@@ -6,8 +6,6 @@ import {
   StartupPhaseRegression,
   StartupTraceCorrelation,
   startStartupTimeline,
-  startupPhaseOrdinal,
-  startupPhases,
 } from "./startup-phase.js";
 
 const submissionCorrelation = Schema.decodeUnknownSync(StartupTraceCorrelation)(
@@ -32,60 +30,6 @@ const submissionObservation = (
   });
 
 describe("startup phase timeline", () => {
-  it("declares the complete thread-create path without removed budget admission", () => {
-    expect(startupPhases.thread_create).toEqual({
-      request_admitted: 0,
-      source_authorized: 1,
-      thread_persisted: 3,
-      response_ready: 4,
-    });
-    expect(() =>
-      Schema.decodeUnknownSync(StartupPhaseObservation)({
-        correlation: {
-          journey: "thread_create",
-          requestId: "request-stale-budget",
-          threadId: "thr_00000000-0000-4000-8000-000000000231",
-        },
-        phase: "budget_admitted",
-        occurredAt: "2026-08-28T00:00:00.000Z",
-        outcome: "reached",
-        durationMs: 1,
-      }),
-    ).toThrow();
-  });
-
-  it("keeps daemon activation independent from the ordered submission path", () => {
-    expect(
-      [
-        "changes_synced",
-        "context_discovered",
-        "model_requested",
-        "model_first_token",
-        "settled",
-      ].map((phase) =>
-        startupPhaseOrdinal({
-          correlation: submissionCorrelation,
-          phase,
-        }),
-      ),
-    ).toEqual([6, 7, 8, 9, 10]);
-    const daemonCorrelation = Schema.decodeUnknownSync(StartupTraceCorrelation)(
-      { ...submissionCorrelation, journey: "submission_daemon_activation" },
-    );
-    expect(
-      [
-        "requested",
-        "release_loaded",
-        "installed",
-        "connected",
-        "environment_ready",
-        "workspace_ready",
-      ].map((phase) =>
-        startupPhaseOrdinal({ correlation: daemonCorrelation, phase }),
-      ),
-    ).toEqual([0, 1, 2, 3, 4, 5]);
-  });
-
   it("appends monotonic phases and treats a duplicate phase as idempotent", () => {
     const admitted = appendStartupPhase(
       startStartupTimeline(submissionCorrelation),

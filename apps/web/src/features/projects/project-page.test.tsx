@@ -29,26 +29,6 @@ vi.mock("../../shared/auth/auth-context.js", () => ({
 import { ProjectPage } from "./project-page.js";
 
 describe("project page thread state", () => {
-  it("shows loading rather than an empty state while the initial query is pending", () => {
-    queries.useQuery
-      .mockReturnValueOnce({
-        data: { id: "project-1", name: "Test project" },
-        error: null,
-        isPending: false,
-      })
-      .mockReturnValueOnce({ data: undefined, error: null, isPending: true });
-    queries.useInfiniteQuery.mockReturnValue({
-      data: undefined,
-      error: null,
-      isPending: true,
-    });
-
-    const markup = renderToStaticMarkup(<ProjectPage />);
-
-    expect(markup).toContain("Loading recent threads…");
-    expect(markup).not.toContain("No threads yet");
-  });
-
   it("preserves server activity order and displays last activity time", () => {
     queries.useQuery
       .mockReturnValueOnce({

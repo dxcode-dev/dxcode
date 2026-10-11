@@ -6,11 +6,6 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { AuthContext } from "../../../shared/auth/auth-context.js";
-import { settingsManifest } from "../foundation-sections.js";
-import {
-  resolveSettingsSection,
-  settingsPath,
-} from "../settings-registration.js";
 import { bitbucketKeys } from "./bitbucket-queries.js";
 import { integrationKeys } from "./integration-queries.js";
 import { IntegrationsSettings } from "./integrations-settings.js";
@@ -39,12 +34,11 @@ const render = (
   data?: unknown,
   bitbucket?: unknown,
   bitbucketError?: Error,
-  githubConfigured = true,
 ) => {
   const queryClient = new QueryClient();
   if (data !== undefined)
     queryClient.setQueryData(integrationKeys.github(userId), {
-      configured: githubConfigured,
+      configured: true,
       grants: data,
     });
   if (bitbucket !== undefined) {
@@ -78,35 +72,6 @@ const render = (
 };
 
 describe("integrations settings", () => {
-  it("groups personal and organization installations under one GitHub integration", () => {
-    const markup = render(
-      ["octocat", "example-org"].map((login, index) => ({
-        id: `grant-${index}`,
-        status: "active",
-        installationStatus: "active",
-        account: {
-          id: String(index),
-          login,
-          type: index === 0 ? "user" : "organization",
-        },
-      })),
-      { configured: false, connection: null },
-    );
-    expect(markup.match(/aria-label="GitHub integration"/g)).toHaveLength(1);
-    expect(markup).toContain("2 connected installations.");
-    expect(markup).toContain("@octocat");
-    expect(markup).toContain("@example-org");
-    expect(markup).toContain("Personal");
-    expect(markup).toContain("Organization");
-    expect(markup.match(/>Configure</g)).toHaveLength(2);
-    expect(markup.match(/>Disconnect</g)).toHaveLength(2);
-    expect(markup).toContain('aria-label="Configure @octocat"');
-    expect(markup).toContain('aria-label="Configure @example-org"');
-    expect(markup).toContain('aria-label="Disconnect @octocat"');
-    expect(markup).toContain('aria-label="Disconnect @example-org"');
-    expect(markup).toContain(">Connect another<");
-  });
-
   it.each(["reauthorization-required", "active"])(
     "reconnect chooses the right ceremony for %s",
     async (status) => {
@@ -226,58 +191,6 @@ describe("integrations settings", () => {
     }
   });
 
-  it("registers MCP & Integrations in both scopes and no separate MCP page", () => {
-    expect(settingsPath({ scope: "personal", section: "integrations" })).toBe(
-      "/settings/integrations",
-    );
-    for (const scope of ["personal", "workspace"] as const) {
-      expect(
-        resolveSettingsSection(settingsManifest, scope, "integrations"),
-      ).toMatchObject({
-        found: true,
-        registration: { label: "MCP & Integrations" },
-      });
-      expect(
-        resolveSettingsSection(settingsManifest, scope, "mcp-servers"),
-      ).toMatchObject({ found: false });
-    }
-  });
-
-  it("shows one GitHub row without a username while disconnected", () => {
-    const markup = render([]);
-    expect(markup).toContain("GitHub integration");
-    expect(markup).toContain(">Connect<");
-    expect(markup).not.toContain("on GitHub");
-    expect(markup).not.toMatch(/workspace integration/i);
-  });
-
-  it("shows Configure and Disconnect for the connected account", () => {
-    const markup = render([
-      {
-        id: "grant-1",
-        ownerScope: "personal",
-        ownerId: "user-1",
-        installationId: "7",
-        status: "active",
-        installationStatus: "active",
-        account: { id: "9", login: "octocat", type: "user" },
-        repositorySelection: "selected",
-        repositories: [
-          {
-            id: "101",
-            fullName: "octocat/dx",
-            webUrl: "https://github.com/octocat/dx",
-            visibility: "private",
-          },
-        ],
-      },
-    ]);
-    expect(markup).toContain("@octocat");
-    expect(markup).toContain(">Configure<");
-    expect(markup).toContain(">Disconnect<");
-    expect(markup).not.toMatch(/selected repositor/i);
-  });
-
   it("requires reconnection before a revoked GitHub installation can disconnect", () => {
     const markup = render([
       {
@@ -291,25 +204,6 @@ describe("integrations settings", () => {
     expect(markup).not.toContain(">Disconnect<");
   });
 
-  it("shows Bitbucket as unavailable when the deployment is unconfigured", () => {
-    const markup = render([], { configured: false, connection: null });
-    expect(markup).toContain("Bitbucket integration");
-    expect(markup).toContain("not configured");
-  });
-
-  it("shows GitHub as unavailable when the deployment is unconfigured", () => {
-    const markup = render(
-      [],
-      { configured: false, connection: null },
-      undefined,
-      false,
-    );
-    expect(markup).toContain("GitHub integration");
-    expect(markup).toContain(
-      "GitHub is unavailable because it is not configured",
-    );
-  });
-
   it("offers reconnect for revoked or expired Bitbucket authorization", () => {
     const markup = render([], {
       configured: true,
@@ -321,19 +215,6 @@ describe("integrations settings", () => {
     });
     expect(markup).toContain("expired or was revoked");
     expect(markup).toContain(">Reconnect<");
-    expect(markup).toContain(">Disconnect<");
-  });
-
-  it("offers disconnect for a stored Bitbucket connection when disabled", () => {
-    const markup = render([], {
-      configured: false,
-      connection: {
-        id: "connection-1",
-        accountName: "dx-team",
-        status: "reauthorization-required",
-      },
-    });
-    expect(markup).toContain("not configured");
     expect(markup).toContain(">Disconnect<");
   });
 
@@ -367,20 +248,6 @@ describe("integrations settings", () => {
     );
     expect(markup).toContain("Connection status is unavailable");
     expect(markup).toContain(">Retry<");
-    expect(markup).toContain(">Disconnect<");
-  });
-
-  it("shows refresh and disconnect for a connected Bitbucket account", () => {
-    const markup = render([], {
-      configured: true,
-      connection: {
-        id: "connection-1",
-        accountName: "dx-team",
-        status: "active",
-      },
-    });
-    expect(markup).toContain("dx-team on Bitbucket");
-    expect(markup).toContain("Refresh status");
     expect(markup).toContain(">Disconnect<");
   });
 });

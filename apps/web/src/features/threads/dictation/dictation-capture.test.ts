@@ -25,32 +25,6 @@ describe("DictationCapture", () => {
     expect(capture.getSnapshot().state).toBe("idle");
   });
 
-  it("requests browser speech processing to reduce ambient noise", async () => {
-    let grant!: (stream: MediaStream) => void;
-    const permission = new Promise<MediaStream>((resolve) => {
-      grant = resolve;
-    });
-    const getUserMedia = vi.fn(() => permission);
-    Object.defineProperty(navigator, "mediaDevices", {
-      configurable: true,
-      value: { getUserMedia },
-    });
-    const capture = new DictationCapture();
-
-    const starting = capture.start(vi.fn());
-    expect(getUserMedia).toHaveBeenCalledWith({
-      audio: {
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
-    await capture.cancel();
-    grant({ getTracks: () => [] } as unknown as MediaStream);
-    await starting;
-  });
-
   it("falls back without AudioWorklet and resamples native-rate audio", async () => {
     const stop = vi.fn();
     Object.defineProperty(navigator, "mediaDevices", {

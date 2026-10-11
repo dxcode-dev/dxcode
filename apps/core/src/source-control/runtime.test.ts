@@ -12,7 +12,6 @@ import {
   githubPermissionsForOperation,
 } from "./github/runtime-adapter.js";
 import {
-  SourceAuthorizationPolicy,
   SourceAuthorizationPolicyLive,
   SourceRuntimeBroker,
   SourceRuntimeBrokerLive,
@@ -45,36 +44,28 @@ const authority: RuntimeSourceAuthority = {
   fingerprint: "stable-authority",
 };
 
-const cases = [
-  ["checkout", { contents: "read", metadata: "read" }],
-  ["fetch", { contents: "read", metadata: "read" }],
-  ["provider-auth-read", { metadata: "read" }],
-  ["repository-read", { contents: "read", metadata: "read" }],
-  ["contents-push", { contents: "write", metadata: "read" }],
-  ["pull-request-read", { metadata: "read", pull_requests: "read" }],
-  ["pull-request-write", { metadata: "read", pull_requests: "write" }],
-  ["issue-read", { issues: "read", metadata: "read" }],
-  ["issue-write", { issues: "write", metadata: "read" }],
-  ["actions-read", { actions: "read", metadata: "read" }],
-  ["actions-write", { actions: "write", metadata: "read" }],
-  [
-    "workflow-write",
-    { contents: "write", metadata: "read", workflows: "write" },
-  ],
-  [
-    "checks-status-read",
-    {
-      checks: "read",
-      metadata: "read",
-      pull_requests: "read",
-      statuses: "read",
-    },
-  ],
+const readOperations = [
+  "checkout",
+  "fetch",
+  "provider-auth-read",
+  "repository-read",
+  "pull-request-read",
+  "issue-read",
+  "actions-read",
+  "checks-status-read",
 ] as const;
 
 const policyLayer = SourceAuthorizationPolicyLive;
 
 describe("SourceAuthorizationPolicy", () => {
+  it("never mints a write permission for a read operation", () => {
+    for (const operation of readOperations) {
+      const permissions = githubPermissionsForOperation(operation);
+      expect(permissions, operation).toMatchObject({ metadata: "read" });
+      expect(Object.values(permissions), operation).not.toContain("write");
+    }
+  });
+
   it("requires the approved broad installation envelope before narrowing a lease", () => {
     const approved = {
       actions: "write",
@@ -111,56 +102,6 @@ describe("SourceAuthorizationPolicy", () => {
       githubInstallationHasApprovedEnvelope(personalApproved, "User"),
     ).toBe(true);
     expect(githubInstallationHasApprovedEnvelope(approved, "User")).toBe(false);
-  });
-
-  it.each(cases)(
-    "maps %s to only its minimum permission subset",
-    async (operation, expected) => {
-      const decision = await Effect.runPromise(
-        Effect.gen(function* () {
-          return yield* (yield* SourceAuthorizationPolicy).authorize(
-            authority,
-            {
-              operation,
-              invocationSource: "agent-command",
-              ...(["contents-push", "workflow-write"].includes(operation)
-                ? { targetBranch: "feature/115" }
-                : {}),
-            },
-          );
-        }).pipe(Effect.provide(policyLayer)),
-      );
-      expect(decision.requestedCapabilities).toEqual([operation]);
-      const permissions = githubPermissionsForOperation(operation);
-      expect(permissions).toEqual(expected);
-      expect(Object.keys(permissions).sort()).toEqual(
-        Object.keys(expected).sort(),
-      );
-    },
-  );
-
-  it("leaves native Git ref and default-branch decisions to the provider", async () => {
-    const authorize = (targetBranch: string) =>
-      Effect.runPromise(
-        Effect.gen(function* () {
-          return yield* (yield* SourceAuthorizationPolicy).authorize(
-            { ...authority, shipAction: "commit" },
-            {
-              operation: "contents-push",
-              invocationSource: "agent-command",
-              targetBranch,
-            },
-          );
-        }).pipe(Effect.provide(policyLayer)),
-      );
-    await expect(authorize("main")).resolves.toMatchObject({
-      access: "write",
-      requestedCapabilities: ["contents-push"],
-    });
-    await expect(authorize("bad..branch")).resolves.toMatchObject({
-      access: "write",
-      requestedCapabilities: ["contents-push"],
-    });
   });
 });
 

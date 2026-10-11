@@ -6,8 +6,21 @@ import { ThreadDataSchema } from "./thread-data.js";
 export const ArchiveThreadParamsSchema = Schema.Struct({ threadId: ThreadId });
 export const ArchiveThreadRequestSchema = Schema.Struct({
   archived: Schema.Boolean,
+  /** Also archive or restore the Thread's child Threads. */
+  includeChildren: Schema.optional(Schema.Boolean),
+  /**
+   * With `includeChildren`, only these children: an Undo restores exactly
+   * the ones its archive changed.
+   */
+  childThreadIds: Schema.optional(
+    Schema.Array(ThreadId).check(Schema.isMaxLength(1_000)),
+  ),
 });
-export const ArchiveThreadResponseSchema = successResponse(ThreadDataSchema);
+export const ArchiveThreadResponseSchema = Schema.Struct({
+  ...successResponse(ThreadDataSchema).fields,
+  /** With `includeChildren`: the children this request changed. */
+  changedChildThreadIds: Schema.optional(Schema.Array(ThreadId)),
+});
 export const ArchiveThreadInvalidRequestResponseSchema = errorResponse(
   "INVALID_REQUEST",
   "Request validation failed.",

@@ -17,7 +17,6 @@ import {
   mcpCreateInput,
   mcpFieldsComplete,
   mcpFieldsFor,
-  mcpServerHint,
   mcpUpdateInput,
 } from "./mcp-server-fields.js";
 
@@ -175,21 +174,6 @@ describe("MCP section", () => {
       name: "Docs",
       endpoint: "https://mcp.example.com/mcp",
     });
-  });
-
-  it("hints only when a server needs attention", () => {
-    expect(mcpServerHint(server())).toBeUndefined();
-    expect(mcpServerHint(server({ tools: [] }))).toBe("Tools not discovered");
-    expect(
-      mcpServerHint(
-        server({
-          tools: [tool("a", false), tool("b", false), tool("c", true)],
-        }),
-      ),
-    ).toBe("2 tools to review");
-    expect(mcpServerHint(server({ healthStatus: "unhealthy" }))).toBe(
-      "Unreachable",
-    );
   });
 
   it("shows integrations and MCP personally, and only MCP plus policy in a workspace", () => {

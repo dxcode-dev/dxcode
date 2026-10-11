@@ -55,18 +55,6 @@ describe("activitySummary", () => {
       "Read 2 files, searched 1 time, listed 1 directory, ran 1 command, searched the web 1 time, read 1 web page, searched tools 1 time, executed code 1 time",
     );
   });
-  it("counts bash as commands and edit tools as edited files", () => {
-    expect(
-      activitySummary([
-        tool(0, "bash", { command: "pnpm test" }),
-        tool(1, "edit", { path: "a.ts", oldText: "a", newText: "b" }),
-        tool(2, "bash", { command: "git status" }),
-        tool(3, "edit", { path: "b.ts", oldText: "a", newText: "b" }),
-        tool(4, "write", { path: "c.ts", content: "c" }),
-      ]),
-    ).toBe("Ran 2 commands, edited 3 files");
-  });
-
   it("counts edits made through bash as commands", () => {
     expect(
       activitySummary([

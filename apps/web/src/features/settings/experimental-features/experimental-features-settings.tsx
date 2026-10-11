@@ -97,7 +97,7 @@ function FeatureMetadata({
   );
 }
 
-export function ExperimentalFeaturesPanel({
+function ExperimentalFeaturesPanel({
   data,
   savingFeatureId,
   message,
@@ -164,7 +164,7 @@ export function ExperimentalFeaturesPanel({
   );
 }
 
-export function ExperimentalFeaturesErrorState({
+function ExperimentalFeaturesErrorState({
   error,
   onRetry,
 }: {

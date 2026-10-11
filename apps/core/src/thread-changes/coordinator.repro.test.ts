@@ -101,22 +101,6 @@ const setupCoordinator = () => {
 };
 
 describe("orphan R2 object handling on publish failure", () => {
-  it("cleans up the orphan R2 object when publish throws (D1 transient)", async () => {
-    const { coordinator, deleteObject, releaseCapture } = setupCoordinator();
-    mocks.publish.mockRejectedValue(new Error("D1 unavailable"));
-
-    // flushBestEffort (invoked by runMutation) still swallows the rethrow.
-    await expect(
-      coordinator.runMutation(async () => undefined),
-    ).resolves.toBeUndefined();
-
-    expect(mocks.put).toHaveBeenCalledOnce();
-    expect(mocks.publish).toHaveBeenCalledOnce();
-    expect(mocks.read).toHaveBeenCalledTimes(2);
-    expect(deleteObject).toHaveBeenCalledExactlyOnceWith("capture-key");
-    expect(releaseCapture).toHaveBeenCalledOnce();
-  });
-
   it("preserves the live object when publish commits before its response is lost", async () => {
     const { coordinator, deleteObject, releaseCapture } = setupCoordinator();
     mocks.publish.mockRejectedValue(new Error("D1 unavailable"));

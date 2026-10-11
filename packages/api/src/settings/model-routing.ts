@@ -43,7 +43,7 @@ export const MaskedHeaderDataSchema = Schema.Struct({
   masked: Schema.String,
 });
 
-export const ConnectionDataSchema = Schema.Struct({
+const ConnectionDataSchema = Schema.Struct({
   id: ModelConnectionId,
   name: Schema.String,
   kind: ConnectionKindSchema,

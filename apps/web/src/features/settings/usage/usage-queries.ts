@@ -57,7 +57,7 @@ export const applyPersonalUsageFilters = (
   update(next);
 };
 
-export const usageKeys = {
+const usageKeys = {
   personal: (userId: UserId, filters: PersonalUsageFilters) =>
     ["usage", userId, "personal", filters] as const,
   workspaceRoot: (userId: UserId, workspaceSlug: WorkspaceSlug) =>

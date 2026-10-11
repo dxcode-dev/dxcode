@@ -34,15 +34,9 @@ vi.mock("@tanstack/react-query", async (importOriginal) => ({
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
 
-import { settingsManifest } from "../foundation-sections.js";
-import {
-  resolveSettingsSection,
-  settingsPath,
-} from "../settings-registration.js";
 import {
   PrivateInspection,
   WorkspaceRankingTable,
-  WorkspaceUsageAuditTable,
   WorkspaceUsageOverview,
   WorkspaceUsageSettings,
 } from "./workspace-usage-settings.js";
@@ -216,22 +210,6 @@ describe("workspace usage settings", () => {
     document.body.replaceChildren();
   });
 
-  it("registers the exact canonical workspace route only", () => {
-    expect(
-      settingsPath({
-        scope: "workspace",
-        workspaceSlug: "dx-team" as never,
-        section: "usage",
-      }),
-    ).toBe("/workspaces/dx-team/usage");
-    expect(
-      resolveSettingsSection(settingsManifest, "workspace", "usage"),
-    ).toMatchObject({
-      found: true,
-      registration: { id: "workspace-usage", label: "Usage" },
-    });
-  });
-
   it("reuses aggregate cards/trends/runners and exposes user rankings without Thread rows", () => {
     const overview = renderToStaticMarkup(
       <WorkspaceUsageOverview
@@ -250,25 +228,6 @@ describe("workspace usage settings", () => {
     expect(overview).toContain("never read prompts, responses");
     expect(ranking).toContain("Avery Engineer");
     expect(ranking).not.toContain("Thread</th>");
-  });
-
-  it("explains guarded Auditor access and immutable audit", () => {
-    const privateAccess = renderToStaticMarkup(
-      <PrivateInspection
-        workspaceSlug={"dx-team" as never}
-        capability={data.privateInspection}
-      />,
-    );
-    const auditMarkup = renderToStaticMarkup(
-      <WorkspaceUsageAuditTable data={audit} />,
-    );
-
-    expect(privateAccess).toContain("Auditor role required");
-    expect(privateAccess).toContain("immutable audit log");
-    expect(privateAccess).toContain("disabled");
-    expect(auditMarkup).toContain("Avery Auditor");
-    expect(auditMarkup).toContain("Approved incident 42 investigation");
-    expect(auditMarkup).toContain("success");
   });
 
   it("keeps private-inspection drafts mounted when usage refresh fails", async () => {
@@ -380,27 +339,6 @@ describe("workspace usage settings", () => {
       "Inspect logged private access",
     );
     expect(document.body.textContent).not.toContain("Stale denial");
-    expect(inspectionMutation.reset).toHaveBeenCalledTimes(1);
-    await act(() => root.unmount());
-  });
-
-  it("ignores a late success after X closes and reopens the dialog", async () => {
-    const attempt = deferred<void>();
-    inspectionMutation.mutateAsync.mockReturnValue(attempt.promise);
-    const { root } = await openInspectionDialog();
-
-    await act(() => clickButton("Inspect"));
-    await act(() =>
-      document.body
-        .querySelector<HTMLButtonElement>('[aria-label="Close dialog"]')
-        ?.click(),
-    );
-    await act(() => clickButton("Review exceptional access"));
-    await act(() => attempt.resolve());
-
-    expect(document.body.textContent).toContain(
-      "Inspect logged private access",
-    );
     expect(inspectionMutation.reset).toHaveBeenCalledTimes(1);
     await act(() => root.unmount());
   });

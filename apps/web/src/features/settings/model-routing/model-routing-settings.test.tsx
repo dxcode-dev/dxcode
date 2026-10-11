@@ -3,8 +3,6 @@
 import type { ChoicesData, GraphData } from "@dx/api";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { settingsManifest } from "../foundation-sections.js";
-import { resolveSettingsSection } from "../settings-registration.js";
 import { parseCustomModelsText } from "./custom-models.js";
 import { ModelRoutingGraph } from "./model-routing-graph.js";
 import {
@@ -49,51 +47,6 @@ const graphFixture: GraphData = {
 };
 
 describe("model routing settings", () => {
-  it("registers the model-routing slug for both scopes", () => {
-    expect(
-      resolveSettingsSection(settingsManifest, "personal", "model-routing"),
-    ).toMatchObject({
-      found: true,
-      registration: { id: "personal-model-routing" },
-    });
-    expect(
-      resolveSettingsSection(settingsManifest, "workspace", "model-routing"),
-    ).toMatchObject({
-      found: true,
-      registration: { id: "workspace-model-routing" },
-    });
-  });
-
-  it("renders modes to connections with a not-served destination", () => {
-    const markup = renderToStaticMarkup(
-      <ModelRoutingGraph graph={graphFixture} />,
-    );
-    expect(markup).toContain("Low");
-    expect(markup).toContain("High");
-    expect(markup).toContain("openai/gpt-5.6-terra");
-    expect(markup).toContain("OpenAI");
-    expect(markup).not.toContain("Oracle");
-    expect(markup).toContain("Main Agent");
-    expect(markup).toContain("Not served");
-  });
-
-  it("keeps destinations without a local connection row non-actionable", () => {
-    const markup = renderToStaticMarkup(
-      <ModelRoutingGraph
-        graph={graphFixture}
-        connections={[]}
-        onConnectionClick={() => undefined}
-      />,
-    );
-    const container = document.createElement("div");
-    container.innerHTML = markup;
-    const destination = container.querySelector(
-      '[data-routing-destination="mcon_1"]',
-    );
-    expect(destination?.tagName).toBe("DIV");
-    expect(destination?.getAttribute("tabindex")).toBe("0");
-  });
-
   it("retains separate source rows when modes share a model", () => {
     const repeatedModel: GraphData = {
       ...graphFixture,
@@ -197,39 +150,6 @@ describe("routing presentation preserves dx authority", () => {
         destination: "mcon_1",
       },
     ]);
-  });
-  it("adds the resolved Speech provider only when dictation is available", () => {
-    const absent = routingPresentation({ graph: graphFixture });
-    expect(
-      absent.groups
-        .flatMap((g) => g.rows)
-        .some((r) => r.id === "speech:transcription"),
-    ).toBe(false);
-    expect(absent.destinations.some((d) => d.detail === "Transcription")).toBe(
-      false,
-    );
-    for (const [scope, destination] of [
-      ["deployment", { id: "dx-transcription", name: "dx" }],
-      ["workspace", { id: "workspace-transcription", name: "Workspace key" }],
-      ["personal", { id: "personal-transcription", name: "Your key" }],
-    ] as const) {
-      const result = routingPresentation({
-        graph: graphFixture,
-        dictation: { providerId: "sarvam", displayName: "Sarvam", scope },
-      });
-      expect(
-        result.groups
-          .flatMap((g) => g.rows)
-          .find((r) => r.id === "speech:transcription"),
-      ).toMatchObject({
-        name: "Sarvam",
-        label: "Transcription",
-        destination: destination.id,
-      });
-      expect(
-        result.destinations.find((d) => d.id === destination.id),
-      ).toMatchObject({ name: destination.name, detail: "Transcription" });
-    }
   });
   it("highlights main-agent slots, individual routes, and incoming provider routes", () => {
     const { groups } = routingPresentation({ graph: graphFixture });

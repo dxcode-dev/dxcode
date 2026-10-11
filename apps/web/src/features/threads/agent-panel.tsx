@@ -1,6 +1,8 @@
 import {
   type ThreadAgentInitializationData,
+  type ThreadDetailData,
   threadSettlementProvenance,
+  withMessageAuthor,
 } from "@dx/api";
 import {
   type FailedSend,
@@ -40,7 +42,10 @@ import type {
   PendingSubmissionControl,
   PendingSubmissionImageRetention,
 } from "./thread-session-registry.js";
-import { ThreadTranscript } from "./thread-transcript.js";
+import {
+  INBOUND_MESSAGE_PREFIX,
+  ThreadTranscript,
+} from "./thread-transcript.js";
 import { TranscriptMarkdown } from "./transcript-markdown.js";
 import { deriveTranscriptViewModel } from "./transcript-view-model.js";
 import {
@@ -808,32 +813,7 @@ function useAgentSubmission({
   };
 }
 
-export function AgentPanel({
-  agent,
-  agentInitialization,
-  archived = false,
-  showArchivedNotice = false,
-  active = true,
-  additionalPanels,
-  renderHeader,
-  draft: ownerDraft,
-  images: controlledImages,
-  onImagesChange,
-  imageCollection: retainedImageCollection,
-  submissionImageRetention,
-  submissionPending = false,
-  submissionControl: retainedSubmissionControl,
-  onSubmissionPendingChange,
-  dictationAvailable = false,
-  workspaceReady = false,
-  workspaceStatus,
-  optimisticCreation,
-  onInitialSubmissionObserved,
-  onOpenModelRouting,
-  readOnlyNotice,
-  onAccessChanged,
-  mentions,
-}: {
+interface AgentPanelProps {
   /** What `@` does in the composer; absent for people who cannot send. */
   readonly mentions?: ComposerMentions;
   /** A send found the user's access changed; refresh the Thread. */
@@ -869,109 +849,34 @@ export function AgentPanel({
   readonly optimisticCreation?: OptimisticThreadCreation;
   readonly onInitialSubmissionObserved?: (submissionId: string) => void;
   readonly onOpenModelRouting?: () => void;
-}) {
-  const retainedDraft = useThreadPresentationValue("draft", "");
-  const draftValue = ownerDraft ?? retainedDraft;
+  /** Messages other Threads sent while this one worked, not yet joined. */
+  readonly inboundMessages?: ThreadDetailData["inboundMessages"];
+}
+
+/** Pending composer images, owned here unless the caller retains them. */
+function usePendingImages(
+  controlledImages: ReadonlyArray<PendingImage> | undefined,
+  onImagesChange: ((images: ReadonlyArray<PendingImage>) => void) | undefined,
+  retainedImageCollection: PendingImageCollection | undefined,
+) {
   const [localImages, setLocalImages] = React.useState<
     ReadonlyArray<PendingImage>
   >([]);
-  const images = controlledImages ?? localImages;
-  const setImages = onImagesChange ?? setLocalImages;
   const [imageCollection] = React.useState(
     () => retainedImageCollection ?? createPendingImageCollection(),
   );
-  const [localSubmissionControl] = React.useState<PendingSubmissionControl>(
-    () => ({
-      stopRequested: false,
-    }),
-  );
-  const submissionControl = retainedSubmissionControl ?? localSubmissionControl;
-  const {
-    actionError,
-    composerMounted,
-    admissionPending,
-    admittingChat,
-    setActionError,
-    stop,
-    submit,
-  } = useAgentSubmission({
-    agent,
-    mentions,
-    setDraft: draftValue.set,
-    images,
-    setImages,
+  return {
+    images: controlledImages ?? localImages,
+    setImages: onImagesChange ?? setLocalImages,
     imageCollection,
-    submissionImageRetention,
-    submissionPending,
-    submissionControl,
-    onSubmissionPendingChange,
-    onAccessChanged,
-  });
-  // A message being sent as chat starts no run; recognize its local echo.
-  const chatEcho = React.useMemo(
-    () =>
-      mentions?.mode === "members"
-        ? (text: string) =>
-            draftMode(
-              text,
-              mentions.members,
-              mentions.viewerId,
-              mentions.conversationMode,
-            ) === "chat"
-        : undefined,
-    [mentions],
-  );
-  // Derive only when Flue history changes, not on composer or layout state.
-  const { messages, settlements, finalOutputs } = agent;
-  const model = React.useMemo(
-    () =>
-      deriveTranscriptViewModel({
-        messages,
-        settlements,
-        finalOutputs,
-        chatEcho,
-      }),
-    [messages, settlements, finalOutputs, chatEcho],
-  );
-  // Only chat is on its way and nothing runs: the agent is not working.
-  const sendingOnlyChat =
-    agent.status === "submitted" &&
-    model.rows.some((row) => row.kind === "user-prompt" && !row.admitted) &&
-    model.rows.every(
-      (row) => row.kind !== "user-prompt" || row.admitted || row.chat === true,
-    ) &&
-    !model.turns.some((turn) => turn.status === "active");
-  const agentActive =
-    (agent.status === "submitted" && !sendingOnlyChat) ||
-    agent.status === "streaming";
-  const draftLocked = admissionPending || submissionPending;
-  const stopAvailable = agentActive || (admissionPending && !admittingChat);
-  const statusMessage =
-    workspaceStatus ??
-    (agent.status === "submitted" && !sendingOnlyChat && !workspaceReady
-      ? "Preparing workspace…"
-      : undefined);
-  const initialSubmissionObserved =
-    optimisticCreation?.submissionId !== undefined &&
-    agent.messages.some(
-      (message) =>
-        message.role === "user" &&
-        message.submissionId === optimisticCreation.submissionId,
-    );
-  const reconcileInitialSubmission = React.useCallback(
-    (node: HTMLSpanElement | null) => {
-      if (
-        node === null ||
-        optimisticCreation?.submissionId === undefined ||
-        onInitialSubmissionObserved === undefined
-      )
-        return;
-      const submissionId = optimisticCreation.submissionId;
-      queueMicrotask(() => onInitialSubmissionObserved(submissionId));
-    },
-    [onInitialSubmissionObserved, optimisticCreation?.submissionId],
-  );
+  };
+}
 
+function useImageActions(
+  imageCollection: PendingImageCollection,
+  setImages: (images: ReadonlyArray<PendingImage>) => void,
+  setActionError: ReturnType<typeof useAgentSubmission>["setActionError"],
+) {
   const addImages = async (files: ReadonlyArray<File>) => {
     if (files.length === 0) return;
     setActionError(undefined);
@@ -1003,6 +908,257 @@ export function AgentPanel({
       });
     }
   };
+  return { addImages, takeScreenshot };
+}
+
+/**
+ * A message another Thread sent while this one worked reaches Flue's history
+ * only when it joins the turn. Until then a row shows that one is on its way
+ * from its source Thread, after the history; its text arrives with Flue.
+ */
+/** Stands in for a pending message's text, which only Flue holds. */
+const PENDING_INBOUND_TEXT = "…";
+
+const withInboundMessages = (
+  messages: AgentPanelProps["agent"]["messages"],
+  inbound: AgentPanelProps["inboundMessages"],
+  olderHistory: boolean,
+): AgentPanelProps["agent"]["messages"] => {
+  if (inbound === undefined || inbound.length === 0) return messages;
+  const joined = new Set(
+    messages.flatMap(({ submissionId }) =>
+      submissionId === undefined ? [] : [submissionId],
+    ),
+  );
+  // Flue joins waiting messages in order. One older than the oldest loaded
+  // prompt has joined already, into history not loaded yet.
+  const oldestLoadedPrompt = olderHistory
+    ? Math.min(
+        ...messages.flatMap((message) => {
+          const at = Date.parse(
+            String(message.timestamp ?? message.metadata?.timestamp ?? ""),
+          );
+          return message.role === "user" &&
+            message.submissionId !== undefined &&
+            !Number.isNaN(at)
+            ? [at]
+            : [];
+        }),
+      )
+    : Number.NEGATIVE_INFINITY;
+  const pending = inbound.filter(
+    ({ submissionId, createdAt }) =>
+      !joined.has(submissionId) && Date.parse(createdAt) >= oldestLoadedPrompt,
+  );
+  if (pending.length === 0) return messages;
+  return [
+    ...messages,
+    ...pending.map(
+      ({ submissionId, sourceThreadId }) =>
+        ({
+          id: `${INBOUND_MESSAGE_PREFIX}${submissionId}`,
+          role: "user",
+          purpose: "user",
+          display: "visible",
+          parts: [
+            {
+              type: "text",
+              text: withMessageAuthor(
+                {
+                  author: { role: "owner", userId: "thread", name: "Thread" },
+                  sourceThreadId,
+                },
+                PENDING_INBOUND_TEXT,
+              ),
+              state: "done",
+            },
+          ],
+        }) as AgentPanelProps["agent"]["messages"][number],
+    ),
+  ];
+};
+
+/** The transcript model and run state the panel derives from Flue. */
+function useAgentRunState({
+  agent,
+  inboundMessages,
+  mentions,
+  admissionPending,
+  admittingChat,
+  submissionPending,
+  workspaceReady,
+  workspaceStatus,
+}: {
+  readonly agent: AgentPanelProps["agent"];
+  readonly inboundMessages: AgentPanelProps["inboundMessages"];
+  readonly mentions: ComposerMentions | undefined;
+  readonly admissionPending: boolean;
+  readonly admittingChat: boolean;
+  readonly submissionPending: boolean;
+  readonly workspaceReady: boolean;
+  readonly workspaceStatus: string | undefined;
+}) {
+  // A message being sent as chat starts no run; recognize its local echo.
+  const chatEcho = React.useMemo(
+    () =>
+      mentions?.mode === "members"
+        ? (text: string) =>
+            draftMode(
+              text,
+              mentions.members,
+              mentions.viewerId,
+              mentions.conversationMode,
+            ) === "chat"
+        : undefined,
+    [mentions],
+  );
+  // Derive only when Flue history changes, not on composer or layout state.
+  const { messages, settlements, finalOutputs } = agent;
+  const model = React.useMemo(
+    () =>
+      deriveTranscriptViewModel({
+        // After history loads: a pending message ahead of it would move
+        // once history arrives.
+        messages: agent.historyReady
+          ? withInboundMessages(
+              messages,
+              inboundMessages,
+              agent.hasMore === true,
+            )
+          : messages,
+        settlements,
+        finalOutputs,
+        chatEcho,
+      }),
+    [
+      messages,
+      agent.historyReady,
+      agent.hasMore,
+      inboundMessages,
+      settlements,
+      finalOutputs,
+      chatEcho,
+    ],
+  );
+  // Only chat is on its way and nothing runs: the agent is not working.
+  const sendingOnlyChat =
+    agent.status === "submitted" &&
+    model.rows.some((row) => row.kind === "user-prompt" && !row.admitted) &&
+    model.rows.every(
+      (row) => row.kind !== "user-prompt" || row.admitted || row.chat === true,
+    ) &&
+    !model.turns.some((turn) => turn.status === "active");
+  const agentActive =
+    (agent.status === "submitted" && !sendingOnlyChat) ||
+    agent.status === "streaming";
+  const draftLocked = admissionPending || submissionPending;
+  const stopAvailable = agentActive || (admissionPending && !admittingChat);
+  const statusMessage =
+    workspaceStatus ??
+    (agent.status === "submitted" && !sendingOnlyChat && !workspaceReady
+      ? "Preparing workspace…"
+      : undefined);
+  return { model, agentActive, draftLocked, stopAvailable, statusMessage };
+}
+
+export function AgentPanel({
+  agent,
+  agentInitialization,
+  archived = false,
+  showArchivedNotice = false,
+  active = true,
+  additionalPanels,
+  renderHeader,
+  draft: ownerDraft,
+  images: controlledImages,
+  onImagesChange,
+  imageCollection: retainedImageCollection,
+  submissionImageRetention,
+  submissionPending = false,
+  submissionControl: retainedSubmissionControl,
+  onSubmissionPendingChange,
+  dictationAvailable = false,
+  workspaceReady = false,
+  workspaceStatus,
+  optimisticCreation,
+  onInitialSubmissionObserved,
+  onOpenModelRouting,
+  inboundMessages,
+  readOnlyNotice,
+  onAccessChanged,
+  mentions,
+}: AgentPanelProps) {
+  const retainedDraft = useThreadPresentationValue("draft", "");
+  const draftValue = ownerDraft ?? retainedDraft;
+  const { images, setImages, imageCollection } = usePendingImages(
+    controlledImages,
+    onImagesChange,
+    retainedImageCollection,
+  );
+  const [localSubmissionControl] = React.useState<PendingSubmissionControl>(
+    () => ({
+      stopRequested: false,
+    }),
+  );
+  const submissionControl = retainedSubmissionControl ?? localSubmissionControl;
+  const {
+    actionError,
+    composerMounted,
+    admissionPending,
+    admittingChat,
+    setActionError,
+    stop,
+    submit,
+  } = useAgentSubmission({
+    agent,
+    mentions,
+    setDraft: draftValue.set,
+    images,
+    setImages,
+    imageCollection,
+    submissionImageRetention,
+    submissionPending,
+    submissionControl,
+    onSubmissionPendingChange,
+    onAccessChanged,
+  });
+  const { model, agentActive, draftLocked, stopAvailable, statusMessage } =
+    useAgentRunState({
+      agent,
+      inboundMessages,
+      mentions,
+      admissionPending,
+      admittingChat,
+      submissionPending,
+      workspaceReady,
+      workspaceStatus,
+    });
+  const initialSubmissionObserved =
+    optimisticCreation?.submissionId !== undefined &&
+    agent.messages.some(
+      (message) =>
+        message.role === "user" &&
+        message.submissionId === optimisticCreation.submissionId,
+    );
+  const reconcileInitialSubmission = React.useCallback(
+    (node: HTMLSpanElement | null) => {
+      if (
+        node === null ||
+        optimisticCreation?.submissionId === undefined ||
+        onInitialSubmissionObserved === undefined
+      )
+        return;
+      const submissionId = optimisticCreation.submissionId;
+      queueMicrotask(() => onInitialSubmissionObserved(submissionId));
+    },
+    [onInitialSubmissionObserved, optimisticCreation?.submissionId],
+  );
+
+  const { addImages, takeScreenshot } = useImageActions(
+    imageCollection,
+    setImages,
+    setActionError,
+  );
 
   const composerDockRef = React.useCallback(
     (node: HTMLDivElement | null) =>

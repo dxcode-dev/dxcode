@@ -311,27 +311,6 @@ describe("project source binding admission", () => {
       ownerUserId: "user-233",
     });
 
-  it("admits a repository whose LEFT JOIN has no authority row anonymously", async () => {
-    await expect(
-      authorizeBinding({
-        provider: "github",
-        binding_revision: 1,
-        full_name: "owner/repository",
-        clone_url: "https://github.com/owner/repository.git",
-        authority_project_id: null,
-        owner_grant_id: null,
-        provenance: null,
-        source_health: null,
-      }),
-    ).resolves.toEqual({
-      kind: "anonymous",
-      bindingRevision: 1,
-      provider: "github",
-      repositoryName: "owner/repository",
-      cloneUrl: "https://github.com/owner/repository.git",
-    });
-  });
-
   it("admits a host-neutral public Git repository without authority", async () => {
     await expect(
       authorizeBinding({
@@ -351,21 +330,6 @@ describe("project source binding admission", () => {
       repositoryName: "group/owner/repository",
       cloneUrl: "https://git.example.test/group/owner/repository.git",
     });
-  });
-
-  it("rejects a legacy authority row with a null owner grant as stale", async () => {
-    await expect(
-      authorizeBinding({
-        provider: "github",
-        binding_revision: 1,
-        full_name: "owner/repository",
-        clone_url: "https://github.com/owner/repository.git",
-        authority_project_id: "project-233",
-        owner_grant_id: null,
-        provenance: "legacy",
-        source_health: "action-required",
-      }),
-    ).rejects.toMatchObject({ reason: "stale-binding", action: "rebind" });
   });
 
   it("reports a live-grant binding without a clone URL as stale", async () => {

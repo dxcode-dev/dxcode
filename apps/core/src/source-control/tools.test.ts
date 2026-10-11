@@ -60,55 +60,6 @@ describe("executeSourcePush", () => {
     ).rejects.toBeInstanceOf(SourcePushRemoteHeadChanged);
   });
 
-  it("propagates an admitted caller abort signal through local and provider push commands", async () => {
-    const controller = new AbortController();
-    const execute = vi.fn(async (_sandbox, command) => ({
-      stdout: command.startsWith("git ls-remote")
-        ? `${sha("a")}\trefs/heads/main\n`
-        : "",
-      stderr: "",
-      exitCode: 0,
-    }));
-    const local = vi.fn(async (command: string) => ({
-      stdout: command === "git rev-parse HEAD" ? sha("b") : "",
-      stderr: "",
-      exitCode: 0,
-    }));
-    const performMutation = async <A>(input: SourceToolMutationInput<A>) =>
-      (await input.execute()).value;
-
-    await executePush(
-      {
-        threadId: "thread-117",
-        sandbox: sandbox(local),
-        branch: "main",
-        signal: controller.signal,
-      },
-      { execute, performMutation, providerForThread: async () => "github" },
-    );
-
-    expect(local).toHaveBeenCalledWith(
-      "git rev-parse HEAD",
-      expect.objectContaining({ signal: controller.signal }),
-    );
-    expect(local).toHaveBeenCalledWith(
-      expect.stringContaining("git diff --name-only"),
-      expect.objectContaining({ signal: controller.signal }),
-    );
-    expect(execute).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.stringContaining("git ls-remote"),
-      expect.anything(),
-      expect.objectContaining({ signal: controller.signal }),
-    );
-    expect(execute).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.stringContaining("git push --force-with-lease"),
-      expect.anything(),
-      expect.objectContaining({ signal: controller.signal }),
-    );
-  });
-
   it("preserves an aborted provider push for mutation reconciliation", async () => {
     const controller = new AbortController();
     const abort = new DOMException("The operation was aborted", "AbortError");

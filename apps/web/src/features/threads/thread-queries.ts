@@ -9,6 +9,7 @@ import {
   getThreadReadiness,
   listSharedThreads,
   listThreads,
+  type ThreadListTree,
 } from "../../shared/api/client.js";
 
 const staleTime = 30_000;
@@ -25,10 +26,15 @@ export const threadKeys = {
     userId: UserId,
     projectId?: ProjectId,
     lifecycleState?: "active" | "archived",
+    tree?: ThreadListTree,
   ) =>
     [
       ...threadKeys.lists(userId),
-      { projectId: projectId ?? null, lifecycleState: lifecycleState ?? null },
+      {
+        projectId: projectId ?? null,
+        lifecycleState: lifecycleState ?? null,
+        tree: tree ?? null,
+      },
     ] as const,
   detail: (userId: UserId, threadId: ThreadId) =>
     [...threadKeys.all(userId), "detail", threadId] as const,
@@ -77,11 +83,12 @@ export const threadsQueryOptions = (
   userId: UserId,
   projectId?: ProjectId,
   lifecycleState?: "active" | "archived",
+  tree?: ThreadListTree,
 ) =>
   infiniteQueryOptions({
-    queryKey: threadKeys.list(userId, projectId, lifecycleState),
+    queryKey: threadKeys.list(userId, projectId, lifecycleState, tree),
     queryFn: ({ pageParam, signal }) =>
-      listThreads(projectId, pageParam, signal, lifecycleState),
+      listThreads(projectId, pageParam, signal, lifecycleState, tree),
     initialPageParam: undefined as PageCursor | undefined,
     getNextPageParam: (page) => page.nextCursor,
     staleTime,

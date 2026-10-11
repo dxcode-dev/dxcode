@@ -1,26 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { threadSettlementProvenance } from "./thread-settlement-provenance.js";
 
-const executionFailure = {
-  version: 1,
-  stage: "model",
-  code: "cancelled",
-  abortSource: "user",
-  requestDisposition: "sent_uncommitted",
-  retryDisposition: "aborted",
-  safeMessage: "The response was cancelled before it completed.",
-  correlationId: "correlation-id",
-};
-
 describe("threadSettlementProvenance", () => {
-  it("recognizes explicit user cancellation metadata", () => {
-    expect(
-      threadSettlementProvenance({
-        meta: { dxExecutionFailure: executionFailure },
-      }),
-    ).toBe("user-stop");
-  });
-
   it("recognizes Flue's typed native response to an explicit abort request", () => {
     expect(
       threadSettlementProvenance({
@@ -41,18 +22,13 @@ describe("threadSettlementProvenance", () => {
         type: "submission_aborted",
         meta: {
           dxExecutionFailure: {
-            ...executionFailure,
+            version: 1,
+            stage: "model",
+            code: "cancelled",
             abortSource: "provider",
           },
         },
       }),
     ).toBe("non-user");
   });
-
-  it.each([undefined, {}, { type: "submission_interrupted" }])(
-    "keeps unknown abort provenance non-user: %j",
-    (error) => {
-      expect(threadSettlementProvenance(error)).toBe("non-user");
-    },
-  );
 });

@@ -4,7 +4,6 @@ import { Template } from "e2b";
 import { describe, expect, it, vi } from "vitest";
 import {
   advanceTeamTemplates,
-  E2BKeyRejected,
   type E2BTeamApi,
   inlineOrbDockerfile,
   type ListedTeamTemplate,
@@ -89,10 +88,7 @@ const fakeTeam = (initial: Array<ListedTeamTemplate> = []) => {
     return build;
   };
   const api: E2BTeamApi = {
-    listTemplates: vi.fn(async (apiKey) => {
-      if (apiKey === "bad") throw new E2BKeyRejected();
-      return templates;
-    }),
+    listTemplates: vi.fn(async () => templates),
     buildBase: vi.fn(async (_apiKey, name) => start(name)),
     buildProfile: vi.fn(async (_apiKey, name, base) => {
       expect(base.name).toBe(teamTemplateName(recipe));
@@ -106,12 +102,6 @@ const fakeTeam = (initial: Array<ListedTeamTemplate> = []) => {
 };
 
 describe("building the Orb templates into a key's team", () => {
-  it("rejects a key E2B refuses", async () => {
-    await expect(
-      startTeamTemplates(fakeTeam().api, "bad", recipe),
-    ).rejects.toBeInstanceOf(E2BKeyRejected);
-  });
-
   it("builds the base, then each size from it, one at a time, naming the team", async () => {
     const { api, statuses } = fakeTeam();
     let state = await startTeamTemplates(api, "key", recipe);

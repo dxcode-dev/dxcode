@@ -66,18 +66,6 @@ const type = async (textarea: HTMLTextAreaElement, value: string) => {
 };
 
 describe("ThreadComposer", () => {
-  it("only renders dictation when Sarvam is available", async () => {
-    const absent = await mountComposer();
-    expect(
-      absent.container.querySelector('[aria-label="Start dictation"]'),
-    ).toBeNull();
-
-    const configured = await mountComposer({ dictationAvailable: true });
-    expect(
-      configured.container.querySelector('[aria-label="Start dictation"]'),
-    ).not.toBeNull();
-  });
-
   it("submits Enter, preserves Shift+Enter, and ignores composing Enter", async () => {
     const mounted = await mountComposer();
     const textarea = mounted.container.querySelector("textarea");

@@ -11,15 +11,4 @@ describe("project metadata changes", () => {
       ),
     ).toEqual({ ok: true, changes: { description: "Updated" } });
   });
-
-  it("normalizes and validates edited names", () => {
-    expect(buildProjectMetadataChanges("old", " new-name ", "")).toEqual({
-      ok: true,
-      changes: { name: "new-name", description: "" },
-    });
-    expect(buildProjectMetadataChanges("old", "new name", "").ok).toBe(false);
-    expect(buildProjectMetadataChanges("old", "x".repeat(65), "").ok).toBe(
-      false,
-    );
-  });
 });

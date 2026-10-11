@@ -84,6 +84,13 @@ export const CreateThreadRequestSchema = Schema.Struct({
   selection: Schema.optional(ThreadModelSelection),
   threadId: Schema.optional(ThreadId),
   initialMessage: Schema.optional(InitialThreadMessageSchema),
+  /** `false` keeps `title` as given: DxTitleAgent does not replace it. */
+  generateTitle: Schema.optional(Schema.Boolean),
+  /**
+   * The owner's Thread whose agent starts this one. A child of a child
+   * records that child's parent instead, so children never nest.
+   */
+  parentThreadId: Schema.optional(ThreadId),
 }).check(
   Schema.makeFilter((request) =>
     request.initialMessage === undefined && request.threadId === undefined

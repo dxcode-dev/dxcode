@@ -1,11 +1,8 @@
-import { createAgentRouter } from "@flue/runtime/routing";
 import { Hono } from "hono";
-import { DxAgent } from "./agents/dx-agent.js";
+import { dxAgentRoutes } from "./agents/routes.js";
 import { authenticate } from "./auth/authenticate.js";
 import { authorizeApiTokenScope } from "./auth/authorize-api-token-scope.js";
 import { authorizeThread } from "./auth/authorize-thread.js";
-import { enforceAgentSourceAdmission } from "./auth/enforce-agent-source-admission.js";
-import { enforceAgentWorkspacePolicy } from "./auth/enforce-agent-workspace-policy.js";
 import { enforceThreadActive } from "./auth/enforce-thread-active.js";
 import { authRoutes } from "./auth/routes.js";
 import { dictationRoutes } from "./dictation/routes.js";
@@ -15,7 +12,6 @@ import { requestId } from "./http/request-id.js";
 import { requestLogging } from "./http/request-logging.js";
 import type { AppEnv } from "./http/types.js";
 import { installFlueObservation } from "./observability/flue.js";
-import { submissionStartupObservation } from "./observability/submission-startup.js";
 import { projectRoutes } from "./projects/routes.js";
 import { readinessHandler } from "./readiness/handler.js";
 import { realtimeRoutes } from "./realtime/realtime-hub.js";
@@ -35,10 +31,7 @@ import {
 import { threadChangesRoutes } from "./thread-changes/routes.js";
 import { threadFilesRoutes } from "./thread-files/routes.js";
 import { threadSandboxFileRoutes } from "./thread-files/sandbox.js";
-import {
-  attributeSubmission,
-  shareThreadReads,
-} from "./thread-sharing/middleware.js";
+import { shareThreadReads } from "./thread-sharing/middleware.js";
 import {
   sharedThreadRoutes,
   threadMemberRoutes,
@@ -97,18 +90,7 @@ app.route("/v1/threads", threadSandboxFileRoutes);
 app.use("/v1/threads/:threadId/terminal", authorizeThread);
 app.use("/v1/threads/:threadId/terminal", enforceThreadActive);
 app.route("/v1/threads", threadTerminalRoutes);
-app.use("/v1/agents/dx/:threadId", authorizeThread);
-app.use("/v1/agents/dx/:threadId/:subpath{.+}", authorizeThread);
-app.use("/v1/agents/dx/:threadId", enforceThreadActive);
-app.use("/v1/agents/dx/:threadId/:subpath{.+}", enforceThreadActive);
-// Before source and policy checks, which a chat message skips.
-app.use("/v1/agents/dx/:threadId", attributeSubmission);
-app.use("/v1/agents/dx/:threadId", enforceAgentSourceAdmission);
-app.use("/v1/agents/dx/:threadId/:subpath{.+}", enforceAgentSourceAdmission);
-app.use("/v1/agents/dx/:threadId", enforceAgentWorkspacePolicy);
-app.use("/v1/agents/dx/:threadId/:subpath{.+}", enforceAgentWorkspacePolicy);
-app.use("/v1/agents/dx/:threadId", submissionStartupObservation);
-app.route("/v1/agents/dx", createAgentRouter(DxAgent));
+app.route("/v1/agents/dx", dxAgentRoutes);
 
 app.notFound(notFoundHandler);
 app.onError(errorHandler);

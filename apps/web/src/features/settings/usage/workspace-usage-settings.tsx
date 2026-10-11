@@ -214,7 +214,7 @@ export function WorkspaceUsageOverview({
   );
 }
 
-export function WorkspaceUsageAuditTable({
+function WorkspaceUsageAuditTable({
   data,
 }: {
   readonly data?: WorkspaceUsageAuditPageData;

@@ -53,6 +53,13 @@ const isGuidance = (part: ToolPart) => {
 };
 
 type SummaryKind =
+  | "thread-start"
+  | "thread-message"
+  | "thread-wait"
+  | "thread-check"
+  | "thread-update"
+  | "thread-orbs"
+  | "thread-modes"
   | "create"
   | "list"
   | "web"
@@ -67,12 +74,42 @@ type SummaryKind =
   | "check"
   | "generic";
 
+const threadSummaryKinds: Readonly<Record<string, SummaryKind>> = {
+  create_thread: "thread-start",
+  send_thread_message: "thread-message",
+  wait_for_threads: "thread-wait",
+  get_thread_status: "thread-check",
+  update_thread: "thread-update",
+  list_orbs: "thread-orbs",
+  list_agent_modes: "thread-modes",
+};
+
+/**
+ * The Threads one Thread tool call names, counted once per Thread in a
+ * summary; a call that names none counts as itself.
+ */
+export const threadsFor = (part: ToolPart): ReadonlyArray<string> => {
+  const fields = record(part.input);
+  const listed = fields?.threads;
+  if (Array.isArray(listed))
+    return listed.filter((id): id is string => typeof id === "string");
+  const thread = stringField(part.input, "thread");
+  if (thread !== undefined) return [thread];
+  // Only a created Thread is named by the result alone.
+  if (part.toolName !== "create_thread") return [];
+  const created = stringField(part.output, "threadId");
+  return created === undefined ? [] : [created];
+};
+
 const summaryKind = (category: ToolCategory, part: ToolPart): SummaryKind => {
+  const threadKind = threadSummaryKinds[part.toolName];
+  if (threadKind !== undefined) return threadKind;
   if (part.toolName === "create_file") return "create";
   if (part.toolName === "web_search") return "web";
   if (part.toolName === "read_web_page") return "page";
   if (part.toolName === "tool_search") return "tools";
   if (part.toolName === "code_exec") return "code";
+  if (category === "thread") return "generic";
   if (category !== "explore") return category;
   if (isSearch(part)) return "search";
   return isGuidance(part) ? "guidance" : "read";
@@ -80,6 +117,20 @@ const summaryKind = (category: ToolCategory, part: ToolPart): SummaryKind => {
 
 const summaryPhrase = (kind: SummaryKind, count: number) => {
   switch (kind) {
+    case "thread-start":
+      return `started ${plural(count, "thread")}`;
+    case "thread-message":
+      return `sent ${plural(count, "thread message")}`;
+    case "thread-wait":
+      return `waited for ${plural(count, "thread")}`;
+    case "thread-check":
+      return `checked on ${plural(count, "thread")}`;
+    case "thread-update":
+      return `updated ${plural(count, "thread")}`;
+    case "thread-orbs":
+      return "listed Orbs";
+    case "thread-modes":
+      return "listed agent modes";
     case "create":
       return `created ${plural(count, "file")}`;
     case "list":
@@ -136,6 +187,21 @@ export const activitySummary = (rows: ReadonlyArray<WorkRow>) => {
       continue;
     }
     const kind = summaryKind(categoryForPart(part), part);
+    // Waiting, checking, and updating count Threads; messages count sends.
+    if (
+      kind === "thread-wait" ||
+      kind === "thread-check" ||
+      kind === "thread-update"
+    ) {
+      const identities = kinds.get(kind) ?? new Set<string>();
+      const threads = threadsFor(part);
+      for (const thread of threads.length === 0
+        ? [`call:${part.toolCallId}`]
+        : threads)
+        identities.add(thread);
+      kinds.set(kind, identities);
+      continue;
+    }
     const path =
       kind === "page" ? stringField(part.input, "url") : pathFor(part);
     const identity =

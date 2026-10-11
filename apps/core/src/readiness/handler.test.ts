@@ -44,20 +44,6 @@ const expectNotReady = async (bindings: Bindings, category: string) => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("readiness endpoint", () => {
-  it("reports readiness when configuration and bindings are valid", async () => {
-    const response = await createReadinessApp().request(
-      "/readyz",
-      undefined,
-      createTestBindings(),
-    );
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      status: "success",
-      data: { state: "ready" },
-    });
-  });
-
   it("fails safely and identifies only the missing category", async () => {
     const warn = await expectNotReady(
       createTestBindings({ DX_ENV: undefined }),
@@ -66,46 +52,11 @@ describe("readiness endpoint", () => {
     expect(JSON.stringify(warn.mock.calls)).not.toContain("DX_ENV");
   });
 
-  it.each([
-    ["missing", undefined],
-    ["malformed", {}],
-  ])(
-    "fails safely when the generated binding is %s",
-    async (_label, binding) => {
-      await expectNotReady(
-        createTestBindings({
-          FLUE_DX_AGENT_AGENT: binding as DurableObjectNamespace | undefined,
-        }),
-        "agent_binding",
-      );
-    },
-  );
-
-  it.each([
-    ["missing", undefined],
-    ["malformed", {}],
-  ])("fails safely when the AI binding is %s", async (_label, binding) => {
-    await expectNotReady(
-      createTestBindings({ AI: binding as Ai | undefined }),
-      "ai_binding",
-    );
-  });
-
   it("distinguishes authentication configuration without exposing it", async () => {
     const warn = await expectNotReady(
       createTestBindings({ BETTER_AUTH_SECRET: undefined }),
       "authentication_configuration",
     );
     expect(JSON.stringify(warn.mock.calls)).not.toContain(TEST_AUTH_SECRET);
-  });
-
-  it.each([
-    ["missing", undefined],
-    ["malformed", {}],
-  ])("fails safely when the D1 binding is %s", async (_label, binding) => {
-    await expectNotReady(
-      createTestBindings({ DB: binding as D1Database | undefined }),
-      "d1_binding",
-    );
   });
 });

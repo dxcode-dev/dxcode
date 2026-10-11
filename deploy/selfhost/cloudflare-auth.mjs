@@ -13,7 +13,7 @@ const readJson = (path, label) => {
   }
 };
 
-export const cloudflareRequestAuth = (credentials) => {
+const cloudflareRequestAuth = (credentials) => {
   if (credentials.type === "oauth")
     return {
       accountId: credentials.accountId,

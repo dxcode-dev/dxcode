@@ -18,7 +18,6 @@ describe("Changes mutations", () => {
     const listKey = threadKeys.list(userId);
     client.setQueryData(changesKey, { kind: "changes" });
     client.setQueryData(listKey, { pages: [] });
-    const invalidate = vi.spyOn(client, "invalidateQueries");
     const transport = {
       push: vi.fn().mockResolvedValue({}),
     } as unknown as ChangesTransport;
@@ -31,12 +30,7 @@ describe("Changes mutations", () => {
       idempotencyKey: "push-1",
     });
 
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: changesKeys.all(threadId),
-    });
-    expect(invalidate).toHaveBeenCalledWith({
-      predicate: expect.any(Function),
-    });
+    expect(client.getQueryState(changesKey)?.isInvalidated).toBe(true);
     expect(client.getQueryState(listKey)?.isInvalidated).toBe(true);
   });
 });

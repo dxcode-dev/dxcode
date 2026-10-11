@@ -38,24 +38,6 @@ export interface PersonalExperimentalFeaturesView {
   readonly flags: ReadonlyArray<ExperimentalFeatureViewItem>;
 }
 
-export interface ExperimentalFeatureCapabilityConstraints {
-  readonly authorizationAllowed: boolean;
-  readonly retentionAllowed: boolean;
-  readonly securityPolicyAllowed: boolean;
-}
-
-export interface ExperimentalFeatureCapabilityDecision {
-  readonly enabled: boolean;
-  readonly reason?:
-    | "not-registered"
-    | "personal-preference"
-    | "prerequisite-disabled"
-    | "incompatible-feature"
-    | "authorization-denied"
-    | "retention-denied"
-    | "security-policy-denied";
-}
-
 type ReadError =
   | Schema.SchemaError
   | PersistenceUnavailable
@@ -82,12 +64,6 @@ interface ExperimentalFeaturesServiceShape {
     | ExperimentalFeaturePreferenceInvalid
     | ExperimentalFeaturePreferencesConflict
   >;
-  readonly evaluateCapability: (
-    principal: Principal,
-    registry: ExperimentalFeatureRegistry,
-    featureId: ExperimentalFeatureId,
-    constraints: ExperimentalFeatureCapabilityConstraints,
-  ) => Effect.Effect<ExperimentalFeatureCapabilityDecision, ReadError>;
 }
 
 const requestedState = (
@@ -291,36 +267,6 @@ export class ExperimentalFeaturesService extends Context.Service<
             return view(registry, saved);
           },
         ),
-        evaluateCapability: Effect.fn(
-          "ExperimentalFeaturesService.evaluateCapability",
-        )(function* (principal, registry, featureId, constraints) {
-          yield* settings.personal(principal);
-          if (!constraints.authorizationAllowed) {
-            return { enabled: false, reason: "authorization-denied" };
-          }
-          if (!constraints.retentionAllowed) {
-            return { enabled: false, reason: "retention-denied" };
-          }
-          if (!constraints.securityPolicyAllowed) {
-            return { enabled: false, reason: "security-policy-denied" };
-          }
-          const feature = registry.features.find(({ id }) => id === featureId);
-          if (feature === undefined) {
-            return { enabled: false, reason: "not-registered" };
-          }
-          const item = (yield* getPersonal(principal, registry)).flags.find(
-            ({ registration }) => registration.id === featureId,
-          );
-          if (item?.effectiveEnabled === true) return { enabled: true };
-          return {
-            enabled: false,
-            reason:
-              item?.denialReason ??
-              (item?.personalEnabled === false
-                ? "personal-preference"
-                : "not-registered"),
-          };
-        }),
       });
     }),
   );

@@ -5,7 +5,7 @@ import {
   type LogRecord,
 } from "@logtape/logtape";
 
-export const structuredConsoleFormatter = (record: LogRecord) => [
+const structuredConsoleFormatter = (record: LogRecord) => [
   {
     ...record.properties,
     timestamp: new Date(record.timestamp).toISOString(),

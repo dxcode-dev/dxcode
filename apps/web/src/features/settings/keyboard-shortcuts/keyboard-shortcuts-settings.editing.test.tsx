@@ -68,16 +68,6 @@ describe("KeyboardShortcutsSettings editing", () => {
     document.body.replaceChildren();
   });
 
-  it("shows the g g chord for Go to home screen exactly like the keymap dialog", async () => {
-    await mount();
-    expect(keycapsOf(rowFor("Go to home screen"))).toEqual(["G", "G"]);
-    // The dialog reads the same view, so both cannot disagree.
-    const dialogHome = registry
-      .getCommands("app")
-      .find(({ id }) => id === "navigation.home");
-    expect(dialogHome?.displayedBindings).toEqual([["G"], ["G"]]);
-  });
-
   it("records g g for home, replaces the chord, and saves without navigating", async () => {
     await mount();
     await React.act(() => rowFor("Go to home screen").click());

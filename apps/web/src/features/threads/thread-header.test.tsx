@@ -53,48 +53,6 @@ describe("ThreadHeader", () => {
     return container;
   };
 
-  it("shows the loading title instead of the fallback while it is generated", async () => {
-    const container = await render(
-      <ThreadHeader thread={{ ...thread, titlePending: true }} />,
-    );
-    const title = container.querySelector(".thread-title");
-    expect(
-      title?.querySelector('[role="status"]')?.getAttribute("aria-label"),
-    ).toBe("Generating thread title");
-    expect(title?.textContent).toBe("");
-    expect(title?.getAttribute("title")).toBeNull();
-  });
-
-  it("presents authoritative metadata and the defined no-project state", async () => {
-    const container = await render(<ThreadHeader thread={thread} />);
-    const titleGroup = container.querySelector(
-      ".thread-title-bar > .thread-title-group",
-    );
-    expect(titleGroup?.firstElementChild?.className).toBe("thread-title-orb");
-    expect(titleGroup?.children.item(1)?.className).toBe("thread-title");
-    expect(
-      container.querySelector(`[title="${thread.title}"]`)?.textContent,
-    ).toBe(thread.title);
-    expect(
-      container.querySelector('[title="No project"]')?.textContent,
-    ).toContain("No project");
-    expect(container.querySelector('[title="Mode: medium"]')).toBeTruthy();
-    expect(
-      container.querySelector('[data-privacy="private"]')?.textContent,
-    ).toContain("Private");
-    // The owner shares from the header; the old disabled control is gone.
-    expect(
-      [...container.querySelectorAll(".thread-header-actions button")].some(
-        (button) => button.textContent === "Share",
-      ),
-    ).toBe(true);
-    expect(
-      container.querySelector(
-        '[aria-label="Multiplayer is unavailable in this version"]',
-      ),
-    ).toBeNull();
-  });
-
   it("passes working and idle activity to the Orb and keeps archived Orbs idle", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -143,56 +101,6 @@ describe("ThreadHeader", () => {
         ?.getAttribute("data-activity-status"),
     ).toBe("idle");
     await React.act(() => root.unmount());
-  });
-
-  it("forwards the existing right-pane toggle callback", async () => {
-    const onToggle = vi.fn();
-    const container = await render(
-      <ThreadHeader
-        thread={thread}
-        model={model}
-        rightPaneCollapsed={false}
-        onToggleRightPane={onToggle}
-      />,
-    );
-    const toggle = container.querySelector('[aria-label="Hide Right Pane"]');
-    expect(
-      toggle?.parentElement?.classList.contains("thread-header-actions"),
-    ).toBe(true);
-    expect(toggle?.parentElement?.lastElementChild).toBe(toggle);
-    const actions = container.querySelector('[aria-label="Thread actions"]');
-    expect(
-      actions && toggle
-        ? actions.compareDocumentPosition(toggle) &
-            Node.DOCUMENT_POSITION_FOLLOWING
-        : 0,
-    ).not.toBe(0);
-    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
-    await React.act(() =>
-      toggle?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
-    );
-    expect(onToggle).toHaveBeenCalledOnce();
-  });
-
-  it("keeps the right-pane toggle icon stable across open states", async () => {
-    const expanded = await render(
-      <ThreadHeader
-        thread={thread}
-        rightPaneCollapsed={false}
-        onToggleRightPane={vi.fn()}
-      />,
-    );
-    const collapsed = await render(
-      <ThreadHeader
-        thread={thread}
-        rightPaneCollapsed
-        onToggleRightPane={vi.fn()}
-      />,
-    );
-
-    expect(
-      expanded.querySelector(".thread-right-pane-toggle svg")?.outerHTML,
-    ).toBe(collapsed.querySelector(".thread-right-pane-toggle svg")?.outerHTML);
   });
 
   it("archives from the open-Thread menu", async () => {

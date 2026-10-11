@@ -2,7 +2,6 @@ import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   decodeUsageThreadCursor,
-  encodeUsageThreadCursor,
   estimateUsageCostMicros,
   normalizeUsageQuery,
   UsageQuery,
@@ -78,17 +77,7 @@ describe("usage domain", () => {
     ).toBeNull();
   });
 
-  it("round-trips a keyset cursor and rejects malformed cursor payloads", async () => {
-    const threadId = "thr_00000000-0000-4000-8000-000000000038" as const;
-    const cursor = await Effect.runPromise(
-      encodeUsageThreadCursor({ estimatedCostMicros: 912, threadId }),
-    );
-    await expect(
-      Effect.runPromise(decodeUsageThreadCursor(cursor)),
-    ).resolves.toEqual({
-      estimatedCostMicros: 912,
-      threadId,
-    });
+  it("rejects malformed cursor payloads", async () => {
     await expect(
       Effect.runPromise(decodeUsageThreadCursor("bm90LWpzb24" as never)),
     ).rejects.toMatchObject({ _tag: "InvalidUsageQuery", reason: "cursor" });

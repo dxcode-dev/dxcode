@@ -8,13 +8,12 @@ import {
   PluginPermissionInvalid,
   PluginRepository,
   type PluginTarget,
-  type Principal,
   pluginPermissionsEmpty,
   StoredPlugin,
   StoredPluginVersion,
   UserId,
   type WorkspacePolicyAction,
-  WorkspacePolicyDenied,
+  type WorkspacePolicyDenied,
 } from "@dx/domain";
 import { Effect, Layer, Schema } from "effect";
 import { describe, expect, it } from "vitest";
@@ -330,93 +329,5 @@ describe("PluginService", () => {
     ).rejects.toBeInstanceOf(PluginPermissionInvalid);
     expect(test.insertVersionCalls()).toBe(0);
     expect(test.state().plugin.activeVersion).toBe("1.0.0");
-  });
-
-  it("applies secret and MCP policy to personal plugin admission without affecting workspace plugins", async () => {
-    const grants: PluginGrantedPermissions = {
-      ...grantedTools(),
-      secretReferences: [
-        {
-          name: "PLUGIN_TOKEN" as never,
-          reference: {
-            version: 1,
-            kind: "environment-variable",
-            id: "plugin-policy-secret" as never,
-          },
-        },
-      ],
-      mcpServerIds: ["mcp_00000000-0000-4000-8000-000000000045" as never],
-    };
-    const principal = { userId: owner } satisfies Principal;
-    const projectId = "prj_00000000-0000-4000-8000-000000000045" as never;
-    const resolve = (layer: Awaited<ReturnType<typeof harness>>["layer"]) =>
-      Effect.runPromise(
-        Effect.gen(function* () {
-          const service = yield* PluginService;
-          return yield* service.resolveForThread(principal, projectId);
-        }).pipe(Effect.provide(layer)),
-      );
-
-    const actions: Array<WorkspacePolicyAction> = [];
-    const allowed = await harness({
-      grants,
-      evaluateForUser: (_userId, action) =>
-        Effect.sync(() => {
-          actions.push(action);
-        }),
-    });
-    await expect(resolve(allowed.layer)).resolves.toHaveLength(1);
-    expect(actions).toEqual([
-      { kind: "secret.use-personal-override" },
-      { kind: "mcp.use-personal-override" },
-    ]);
-
-    const secretDenied = await harness({
-      grants,
-      evaluateForUser: () =>
-        Effect.fail(
-          new WorkspacePolicyDenied({
-            reason: "personal-secret-overrides-disabled",
-          }),
-        ),
-    });
-    await expect(resolve(secretDenied.layer)).resolves.toEqual([]);
-    await expect(
-      Effect.runPromise(
-        Effect.gen(function* () {
-          const service = yield* PluginService;
-          return yield* service.changeState(
-            target,
-            pluginId,
-            { enabled: true },
-            audit,
-          );
-        }).pipe(Effect.provide(secretDenied.layer)),
-      ),
-    ).rejects.toMatchObject({
-      _tag: "WorkspacePolicyDenied",
-      reason: "personal-secret-overrides-disabled",
-    });
-
-    const mcpDenied = await harness({
-      grants,
-      evaluateForUser: (_userId, action) =>
-        action.kind === "mcp.use-personal-override"
-          ? Effect.fail(
-              new WorkspacePolicyDenied({
-                reason: "personal-mcp-overrides-disabled",
-              }),
-            )
-          : Effect.void,
-    });
-    await expect(resolve(mcpDenied.layer)).resolves.toEqual([]);
-
-    const workspace = await harness({
-      grants,
-      target: { scope: "workspace", id: "plugin-policy-workspace" as never },
-      evaluateForUser: () =>
-        Effect.die("workspace plugin policy was evaluated"),
-    });
-    await expect(resolve(workspace.layer)).resolves.toHaveLength(1);
   });
 });

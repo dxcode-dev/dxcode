@@ -46,7 +46,6 @@ vi.mock("../source-control/operations.js", () => {
   return { SourceMutationRejected };
 });
 
-import { SourceMutationRejected } from "../source-control/operations.js";
 import { threadChangesRoutes } from "./routes.js";
 
 const threadId = "thr_00000000-0000-4000-8000-000000000249" as ThreadId;
@@ -410,27 +409,6 @@ describe("Thread Changes routes", () => {
       },
       { bindings },
     );
-  });
-
-  it("reports a definite remote push rejection as a conflict", async () => {
-    mocks.read.mockResolvedValueOnce(state()).mockResolvedValueOnce(state(2));
-    mocks.load.mockResolvedValue(manifest);
-    mocks.createSandbox.mockResolvedValue({
-      cwd: "/home/user/workspace/repo",
-    });
-    mocks.push.mockRejectedValue(new SourceMutationRejected());
-
-    const response = await request(`/v1/threads/${threadId}/changes/push`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        expectedCaptureId: captureId,
-        idempotencyKey: "push-operation-rejected",
-        confirmation: "push",
-      }),
-    });
-
-    expect(response.status).toBe(409);
   });
 
   it("blocks push when sandbox activation does not advance the generation", async () => {

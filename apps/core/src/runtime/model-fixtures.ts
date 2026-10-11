@@ -19,21 +19,47 @@ import {
   LOCAL_MODEL_FIXTURE_PROVIDER,
 } from "./model-fixture-route.js";
 
-export const LOCAL_MODEL_FIXTURE_AUDIT_MARKER =
-  "dx-local-model-fixture-v1" as const;
+const LOCAL_MODEL_FIXTURE_AUDIT_MARKER = "dx-local-model-fixture-v1" as const;
+
+const LOCAL_MODEL_FIXTURE_PROMPTS_TEXT_COMPLETION =
+  "Reply with two short sentences confirming this synthetic model-stream check. Do not use tools.";
 
 export const LOCAL_MODEL_FIXTURE_PROMPTS = {
-  textCompletion:
-    "Reply with two short sentences confirming this synthetic model-stream check. Do not use tools.",
+  textCompletion: LOCAL_MODEL_FIXTURE_PROMPTS_TEXT_COMPLETION,
   toolContinuation:
     "Use the create_file tool to create /home/user/workspace/repo/.dx-glm-journey.txt containing exactly synthetic-glm-tool-result. After the tool result, reply with one short confirmation sentence.",
+  childThread:
+    "Use the create_thread tool to start a child thread titled Synthetic child thread that runs the synthetic model-stream check. After the tool result, reply with one short confirmation sentence.",
+  threadColor:
+    "Use the update_thread tool to color this thread green. After the tool result, reply with one short confirmation sentence.",
 } as const;
 
-export const LOCAL_MODEL_FAILURE_FIXTURE_PROMPTS = {
-  error: "[dx fixture] deterministic model error",
-  cancellation: "[dx fixture] deterministic model cancellation",
-  retry: "[dx fixture] deterministic transient retry",
-  disconnect: "[dx fixture] deterministic provider disconnect",
+/** The tool call each tool fixture makes before its confirmation. */
+const LOCAL_MODEL_FIXTURE_TOOL_CALLS = {
+  toolContinuation: {
+    id: "dx-local-fixture-write",
+    name: "create_file",
+    arguments: {
+      path: "/home/user/workspace/repo/.dx-glm-journey.txt",
+      content: "synthetic-glm-tool-result",
+    },
+    confirmation: "The synthetic file change completed successfully.",
+  },
+  childThread: {
+    id: "dx-local-fixture-child-thread",
+    name: "create_thread",
+    arguments: {
+      prompt: LOCAL_MODEL_FIXTURE_PROMPTS_TEXT_COMPLETION,
+      title: "Synthetic child thread",
+    },
+    confirmation: "The synthetic child thread started.",
+  },
+  threadColor: {
+    id: "dx-local-fixture-thread-color",
+    name: "update_thread",
+    arguments: { color: "green" },
+    confirmation: "This thread is green now.",
+  },
 } as const;
 
 export type LocalModelFixtureKind = keyof typeof LOCAL_MODEL_FIXTURE_PROMPTS;
@@ -45,7 +71,7 @@ export interface LocalModelFixtureDefinition {
   readonly reviewed: true;
 }
 
-export const localModelFixtureDefinitions: readonly LocalModelFixtureDefinition[] =
+const localModelFixtureDefinitions: readonly LocalModelFixtureDefinition[] =
   Object.freeze(
     Object.entries(LOCAL_MODEL_FIXTURE_PROMPTS).map(([kind, prompt]) => ({
       kind: kind as LocalModelFixtureKind,
@@ -56,7 +82,7 @@ export const localModelFixtureDefinitions: readonly LocalModelFixtureDefinition[
   );
 
 const LOCAL_MODEL_FIXTURE_MISMATCH_MESSAGE =
-  "The local model accepts only the two approved synthetic fixture prompts." as const;
+  "The local model accepts only the approved synthetic fixture prompts." as const;
 
 export class LocalModelFixtureMismatch extends Schema.TaggedError<LocalModelFixtureMismatch>()(
   "LocalModelFixtureMismatch",
@@ -92,9 +118,10 @@ export const localModelFixtureForPrompt = (prompt: string | undefined) => {
   return fixture;
 };
 
-const LOCAL_MODEL_FIXTURE_TOOL_CALL_ID = "dx-local-fixture-write";
-
-const hasSuccessfulFixtureToolResult = (context: Context) => {
+const hasSuccessfulFixtureToolResult = (
+  context: Context,
+  expected: (typeof LOCAL_MODEL_FIXTURE_TOOL_CALLS)[keyof typeof LOCAL_MODEL_FIXTURE_TOOL_CALLS],
+) => {
   const promptIndex = context.messages.findLastIndex(
     ({ role }) => role === "user",
   );
@@ -105,20 +132,17 @@ const hasSuccessfulFixtureToolResult = (context: Context) => {
       message.content.some(
         (content) =>
           content.type === "toolCall" &&
-          content.id === LOCAL_MODEL_FIXTURE_TOOL_CALL_ID &&
-          content.name === "create_file" &&
+          content.id === expected.id &&
+          content.name === expected.name &&
           JSON.stringify(content.arguments) ===
-            JSON.stringify({
-              path: "/home/user/workspace/repo/.dx-glm-journey.txt",
-              content: "synthetic-glm-tool-result",
-            }),
+            JSON.stringify(expected.arguments),
       ),
   );
   const toolResult = continuation.find(
     (message) =>
       message.role === "toolResult" &&
-      message.toolCallId === LOCAL_MODEL_FIXTURE_TOOL_CALL_ID &&
-      message.toolName === "create_file",
+      message.toolCallId === expected.id &&
+      message.toolName === expected.name,
   );
   if (toolCall === undefined && toolResult === undefined) return false;
   if (
@@ -128,45 +152,6 @@ const hasSuccessfulFixtureToolResult = (context: Context) => {
   )
     throw fixtureMismatch();
   return true;
-};
-
-export type LocalModelFailureFixtureKind =
-  keyof typeof LOCAL_MODEL_FAILURE_FIXTURE_PROMPTS;
-
-export const localModelFailureFixture = (
-  kind: LocalModelFailureFixtureKind,
-  attempt = 1,
-) => {
-  switch (kind) {
-    case "error":
-      return fauxAssistantMessage([], {
-        stopReason: "error",
-        errorMessage: "Authored deterministic model failure.",
-        timestamp: 0,
-      });
-    case "cancellation":
-      return fauxAssistantMessage([], {
-        stopReason: "aborted",
-        errorMessage: "Authored deterministic cancellation.",
-        timestamp: 0,
-      });
-    case "retry":
-      return attempt === 1
-        ? fauxAssistantMessage([], {
-            stopReason: "error",
-            errorMessage: "Authored transient model failure.",
-            timestamp: 0,
-          })
-        : fauxAssistantMessage("Authored deterministic retry completed.", {
-            timestamp: 0,
-          });
-    case "disconnect":
-      throw new Error("Authored deterministic provider disconnect.");
-    default: {
-      const exhaustive: never = kind;
-      return exhaustive;
-    }
-  }
 };
 
 export const createLocalModelFixtureProvider = () => {
@@ -205,21 +190,16 @@ export const createLocalModelFixtureProvider = () => {
         ]);
         break;
       case "toolContinuation":
+      case "childThread":
+      case "threadColor": {
+        const expected = LOCAL_MODEL_FIXTURE_TOOL_CALLS[fixture.kind];
         core.setResponses([
-          hasSuccessfulFixtureToolResult(context)
-            ? fauxAssistantMessage(
-                "The synthetic file change completed successfully.",
-                { timestamp: 0 },
-              )
+          hasSuccessfulFixtureToolResult(context, expected)
+            ? fauxAssistantMessage(expected.confirmation, { timestamp: 0 })
             : fauxAssistantMessage(
-                fauxToolCall(
-                  "create_file",
-                  {
-                    path: "/home/user/workspace/repo/.dx-glm-journey.txt",
-                    content: "synthetic-glm-tool-result",
-                  },
-                  { id: LOCAL_MODEL_FIXTURE_TOOL_CALL_ID },
-                ),
+                fauxToolCall(expected.name, expected.arguments, {
+                  id: expected.id,
+                }),
                 {
                   stopReason: "toolUse",
                   timestamp: 0,
@@ -227,6 +207,7 @@ export const createLocalModelFixtureProvider = () => {
               ),
         ]);
         break;
+      }
       default: {
         const exhaustive: never = fixture.kind;
         return exhaustive;

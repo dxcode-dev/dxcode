@@ -71,6 +71,15 @@
   --sidebar-row-height: 32px;
   --sidebar-control-height: 18px;
   --sidebar-unread-indicator: #42a1ff;
+  --thread-color-gray: light-dark(#6b716c, #9ba29c);
+  --thread-color-blue: light-dark(#2f6fd6, #6ea8f2);
+  --thread-color-purple: light-dark(#7a4fd6, #ad91f2);
+  --thread-color-pink: light-dark(#c63f87, #e884bb);
+  --thread-color-red: light-dark(#c9423a, #ee8178);
+  --thread-color-orange: light-dark(#c4651d, #f0a463);
+  --thread-color-yellow: light-dark(#9a7410, #e2c15d);
+  --thread-color-green: light-dark(#2b8a4f, #6fcb8f);
+  --thread-color-cyan: light-dark(#13879b, #62cbd9);
   --sidebar-interactive-background: light-dark(
     rgba(11, 13, 11, 0.07),
     rgba(246, 255, 245, 0.07)
@@ -494,7 +503,7 @@ a {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--chat-foreground);
+  color: var(--thread-title-color, var(--chat-foreground));
   font-size: 13px;
   font-weight: 500;
   line-height: 20px;
@@ -504,7 +513,7 @@ a {
   flex: 0 0 16px;
   align-items: center;
   justify-content: center;
-  color: var(--muted-foreground);
+  color: var(--thread-color, var(--muted-foreground));
 }
 .thread-title-orb > svg {
   width: 14px;
@@ -641,6 +650,46 @@ a {
   max-width: calc(100vw - 8px);
   padding: 3px;
 }
+[data-thread-color="gray"] {
+  --thread-color: var(--thread-color-gray);
+}
+[data-thread-color="blue"] {
+  --thread-color: var(--thread-color-blue);
+}
+[data-thread-color="purple"] {
+  --thread-color: var(--thread-color-purple);
+}
+[data-thread-color="pink"] {
+  --thread-color: var(--thread-color-pink);
+}
+[data-thread-color="red"] {
+  --thread-color: var(--thread-color-red);
+}
+[data-thread-color="orange"] {
+  --thread-color: var(--thread-color-orange);
+}
+[data-thread-color="yellow"] {
+  --thread-color: var(--thread-color-yellow);
+}
+[data-thread-color="green"] {
+  --thread-color: var(--thread-color-green);
+}
+[data-thread-color="cyan"] {
+  --thread-color: var(--thread-color-cyan);
+}
+/* A chosen color tints the title too; auto colors only tint the orb. */
+[data-thread-color-chosen] {
+  --thread-title-color: var(--thread-color);
+}
+.thread-menu-popup.thread-actions-menu {
+  width: min(232px, calc(100vw - 8px));
+  padding: 5px;
+  border-radius: 10px;
+}
+.thread-menu-popup.thread-actions-submenu {
+  width: max-content;
+  min-width: 160px;
+}
 .thread-menu-separator {
   height: 1px;
   margin: 4px -4px;
@@ -666,8 +715,103 @@ a {
   height: 13px;
   flex: none;
 }
-.thread-menu-item svg:last-child {
+/* A trailing chevron or check; a lone leading icon stays with its label. */
+.thread-menu-item svg:last-child:not(:first-child) {
   margin-left: auto;
+}
+.thread-actions-menu .thread-menu-separator,
+.thread-context-separator {
+  height: 1px;
+  margin: 5px -5px;
+  background: var(--divider);
+}
+.thread-actions-menu .thread-menu-item,
+.thread-context-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 8px;
+  color: inherit;
+  border-radius: 6px;
+  outline: none;
+  text-decoration: none;
+  font-size: 13px;
+  letter-spacing: -0.003em;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: default;
+}
+.thread-actions-menu .thread-menu-item[data-popup-open],
+.thread-context-item[data-highlighted],
+.thread-context-item[data-popup-open] {
+  background: var(--accent);
+}
+.thread-actions-menu .thread-menu-item[data-disabled],
+.thread-context-item[data-disabled] {
+  opacity: 0.42;
+}
+.thread-actions-menu .thread-menu-item svg,
+.thread-context-item svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--muted-foreground);
+}
+.thread-actions-menu .thread-menu-item[data-highlighted] svg,
+.thread-context-item[data-highlighted] svg {
+  color: inherit;
+}
+.thread-actions-menu .thread-menu-item > span,
+.thread-context-item > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.thread-actions-menu .thread-menu-item svg:last-child:not(:first-child),
+.thread-context-item svg:last-child:not(:first-child) {
+  width: 13px;
+  height: 13px;
+  margin-left: auto;
+}
+.thread-color-popup {
+  display: grid;
+  grid-template-columns: repeat(5, 30px);
+  gap: 4px;
+  padding: 6px;
+  color: var(--popover-foreground);
+  border: 1px solid var(--outline);
+  border-radius: 10px;
+  outline: none;
+  background: var(--popover);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
+  transform-origin: var(--transform-origin);
+}
+.thread-color-swatch {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--thread-color);
+  border-radius: 50%;
+  outline: none;
+  cursor: default;
+}
+.thread-color-swatch[data-auto] {
+  color: var(--muted-foreground);
+}
+.thread-color-swatch svg {
+  width: 18px;
+  height: 18px;
+}
+.thread-color-swatch[data-highlighted] {
+  background: var(--accent);
+}
+.thread-color-swatch[data-current] {
+  box-shadow: inset 0 0 0 1.5px var(--foreground);
 }
 .thread-terminal-menu-popup .thread-menu-item {
   height: 26px;
@@ -1152,6 +1296,88 @@ a {
 .agent-message .message-content {
   padding: 4px 0;
 }
+/* A message another of the owner's Threads sent: one muted line naming the
+   Thread, opening to the message in a scrolling box. */
+.thread-source-row {
+  margin-bottom: 8px;
+  padding: 4px 0;
+}
+.thread-source-toggle {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  color: var(--muted-foreground);
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+}
+.thread-source-toggle:hover,
+.thread-source-toggle:focus-visible {
+  color: var(--chat-foreground);
+}
+.thread-source-toggle > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-source-toggle > svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+.thread-source-toggle > small {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  font-size: 11px;
+  line-height: 16px;
+}
+.thread-source-toggle > .thread-source-chevron {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  transition: rotate 150ms ease-out;
+}
+.thread-source-message[data-open] .thread-source-chevron {
+  rotate: 180deg;
+}
+.thread-source-body {
+  max-height: 320px;
+  margin-top: 6px;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: 8px;
+  color: var(--chat-foreground);
+  box-shadow: inset 0 0 0 1px
+    light-dark(rgb(80 80 55 / 0.12), rgb(246 255 245 / 0.072));
+  font-size: 13px;
+}
+.thread-source-pending {
+  margin: 0;
+  color: var(--muted-foreground);
+}
+.thread-source-link {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.thread-source-link:hover {
+  color: var(--chat-foreground);
+}
+@media (prefers-reduced-motion: reduce) {
+  .thread-source-toggle > .thread-source-chevron {
+    transition: none;
+  }
+}
 .message-text {
   min-width: 0;
 }
@@ -1561,6 +1787,14 @@ a {
   }
 }
 .markdown-file-link {
+  display: inline;
+  padding: 0;
+  color: var(--ring);
+  background: none;
+  border: 0;
+  font: inherit;
+  text-align: inherit;
+  text-decoration: underline;
   cursor: pointer;
 }
 .transcript-activity-children {
@@ -1643,6 +1877,37 @@ a {
 }
 .transcript-edit-output {
   padding: 8px 12px;
+}
+/* A Thread tool's parameters as the agent passed them, then its result. */
+.transcript-thread-tool > dl {
+  display: grid;
+  gap: 2px;
+  margin: 0 0 6px 12px;
+  font: 12px / 18px var(--font-mono-family);
+}
+.transcript-thread-tool > dl > div {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.transcript-thread-tool dt {
+  flex: none;
+  color: var(--muted-foreground);
+}
+.transcript-thread-tool dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.transcript-thread-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentcolor 40%, transparent);
+  text-underline-offset: 2px;
+}
+.transcript-thread-link:hover {
+  text-decoration-color: currentcolor;
 }
 .transcript-read-output {
   margin: 0 0 4px 12px;
@@ -5801,6 +6066,35 @@ a {
 .new-thread-dialog {
   min-height: 209px;
 }
+.rename-thread-dialog {
+  width: min(560px, 100%);
+}
+.rename-thread-dialog .modal-surface-header {
+  height: 40px;
+  padding: 0 12px;
+}
+.rename-thread-dialog form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 20px 14px;
+}
+.rename-thread-dialog input {
+  width: 100%;
+  padding: 0;
+  color: var(--foreground);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  letter-spacing: 0;
+  line-height: 22px;
+}
+.rename-thread-dialog footer {
+  display: flex;
+  justify-content: flex-end;
+}
 .modal-surface-header-action,
 .new-thread-header-action {
   display: inline-flex;
@@ -5832,9 +6126,7 @@ a {
 }
 .new-thread-composer[data-file-drop-active] {
   border-radius: inherit;
-  background: color-mix(in srgb, var(--ring) 8%, transparent);
-  outline: 2px dashed var(--ring);
-  outline-offset: -4px;
+  background: color-mix(in srgb, var(--ring) 6%, transparent);
 }
 .new-thread-composer-body {
   box-sizing: border-box;
@@ -5846,19 +6138,19 @@ a {
   display: block;
   field-sizing: content;
   width: 100%;
-  min-height: 38px;
+  min-height: 40px;
   max-height: 280px;
   resize: none;
   overflow-y: auto;
-  padding: 0 22px;
+  padding: 4px 20px 0;
   color: var(--foreground);
   background: transparent;
   border: 0;
   outline: 0;
   font-family: var(--font-ui);
-  font-size: 18px;
-  letter-spacing: -0.01em;
-  line-height: 38px;
+  font-size: 14px;
+  letter-spacing: 0;
+  line-height: 20px;
 }
 .new-thread-dialog textarea::placeholder {
   color: var(--muted-foreground);
@@ -6619,7 +6911,8 @@ a {
   }
   .new-thread-dialog textarea {
     font-size: 16px;
-    min-height: 38px;
+    line-height: 22px;
+    min-height: 40px;
     padding-inline: 12px;
   }
   .new-thread-orb-size,
@@ -9629,7 +9922,7 @@ a {
   min-width: 0;
 }
 .thread-context-trigger + .thread-context-trigger {
-  margin-top: 2px;
+  margin-top: 1px;
 }
 .thread-row-shell {
   position: relative;
@@ -9637,10 +9930,10 @@ a {
 }
 .product-sidebar .thread-row {
   align-items: center;
-  gap: 6px;
-  height: 36px;
-  min-height: 36px;
-  padding: 8px;
+  gap: 8px;
+  height: 30px;
+  min-height: 30px;
+  padding: 5px 8px;
   border-radius: var(--sidebar-radius-md);
 }
 .product-sidebar .thread-row > .thread-executor-icon {
@@ -9651,7 +9944,7 @@ a {
   flex: 0 0 16px;
   align-items: center;
   justify-content: center;
-  color: var(--muted-foreground);
+  color: var(--thread-color, var(--muted-foreground));
 }
 .thread-executor-icon > svg {
   width: 14px;
@@ -9674,15 +9967,19 @@ a {
   flex: 1;
   align-self: center;
   overflow: hidden;
-  color: inherit;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--thread-title-color, inherit);
   font-size: var(--sidebar-text-base);
   font-weight: 400;
-  line-height: var(--sidebar-leading-base);
+  letter-spacing: -0.003em;
+  line-height: 18px;
 }
 .product-sidebar .thread-row:not(.selected):not(:hover) strong {
-  color: var(--muted-foreground);
+  color: var(
+    --thread-title-color,
+    color-mix(in srgb, var(--foreground) 82%, var(--muted-foreground))
+  );
 }
 .product-sidebar .thread-row:hover,
 .product-sidebar .thread-row.selected,
@@ -9755,6 +10052,126 @@ a {
   width: 12px;
   height: 12px;
 }
+/* Child Threads: the parent's child-count control sits at the row's end,
+   after any avatars; hover actions open to the left of both. The corner
+   arrow fades into a chevron on hover and when expanded, in place, so
+   nothing in the row moves. */
+.thread-children-toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: var(--sidebar-control-height);
+  padding: 0 3px;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: var(--sidebar-radius-sm);
+  background: transparent;
+  font-size: var(--sidebar-text-md);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  transform: translateY(-50%);
+}
+.thread-children-toggle:hover,
+.thread-children-toggle:focus-visible {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.thread-children-icon {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+}
+.thread-children-icon > svg {
+  position: absolute;
+  inset: 0;
+  width: 12px;
+  height: 12px;
+  transition:
+    opacity 200ms ease-out,
+    rotate 200ms ease-out;
+}
+.thread-children-chevron,
+.thread-children-toggle:hover .thread-children-corner,
+.thread-children-toggle:focus-visible .thread-children-corner,
+.thread-children-toggle[data-expanded] .thread-children-corner {
+  opacity: 0;
+}
+.thread-children-toggle:hover .thread-children-chevron,
+.thread-children-toggle:focus-visible .thread-children-chevron,
+.thread-children-toggle[data-expanded] .thread-children-chevron {
+  opacity: 1;
+}
+.thread-children-toggle[data-expanded] .thread-children-chevron {
+  rotate: 180deg;
+}
+@media (prefers-reduced-motion: reduce) {
+  .thread-children-icon > svg {
+    transition: none;
+  }
+}
+.thread-row-shell[data-children] .thread-row {
+  padding-right: 48px;
+}
+.thread-row-shell[data-children]:hover .thread-row {
+  padding-right: 106px;
+}
+.thread-row-shell[data-children] .thread-hover-actions {
+  right: 44px;
+}
+.thread-row-shell[data-children] .thread-row-avatars {
+  right: 44px;
+}
+.thread-row-shell[data-children][data-avatars] .thread-row {
+  padding-right: 76px;
+}
+.thread-row-shell[data-children][data-avatars]:hover .thread-row {
+  padding-right: 134px;
+}
+.thread-row-shell[data-children][data-avatars] .thread-hover-actions {
+  right: 72px;
+}
+.product-sidebar .thread-row > .thread-child-marker {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  margin-right: -4px;
+  color: var(--muted-foreground);
+  opacity: 0.5;
+}
+/* Another Thread started this one: two bubbles 4px past the 14px Orb's
+   lower right. The icon box otherwise clips like the row's text spans. */
+.product-sidebar
+  .thread-row
+  > .thread-executor-icon:has(> .thread-child-badge) {
+  overflow: visible;
+}
+.thread-executor-icon > .thread-child-badge {
+  position: absolute;
+  right: -3px;
+  bottom: -1px;
+  width: 10px;
+  height: 10px;
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+.thread-children-more {
+  display: block;
+  width: 100%;
+  padding: 4px 8px 4px 32px;
+  color: var(--muted-foreground);
+  border: 0;
+  background: transparent;
+  font-size: var(--sidebar-text-sm);
+  text-align: left;
+}
+.thread-children-more:hover {
+  color: var(--foreground);
+}
 .sidebar-extension-region {
   display: flex;
   min-width: 0;
@@ -9767,99 +10184,6 @@ a {
   overflow-y: auto;
   padding: 0 8px 4px;
   scrollbar-width: thin;
-}
-.sidebar-news-stack {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 4px;
-}
-.sidebar-news-card {
-  display: flex;
-  min-width: 0;
-  width: 100%;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 8px 12px;
-  overflow: hidden;
-  color: var(--muted-foreground);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--secondary);
-  font: inherit;
-  text-align: left;
-}
-button.sidebar-news-card {
-  cursor: pointer;
-}
-.sidebar-news-card strong,
-.sidebar-news-card span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.sidebar-news-card strong {
-  color: var(--foreground);
-  font-size: var(--sidebar-text-sm);
-  font-weight: 600;
-  line-height: var(--sidebar-leading-xs);
-}
-.sidebar-news-card span {
-  font-size: var(--sidebar-text-sm);
-  line-height: var(--sidebar-leading-xs);
-}
-.sidebar-news-card:hover {
-  background: var(--sidebar-interactive-background);
-}
-.sidebar-news-card:focus-visible,
-.sidebar-update-action:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: -2px;
-}
-.sidebar-update-action {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  width: 100%;
-  min-width: 0;
-  height: var(--sidebar-row-height);
-  min-height: var(--sidebar-row-height);
-  padding: 6px 8px;
-  color: var(--foreground);
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  font: inherit;
-  font-size: var(--sidebar-text-base);
-  font-weight: 500;
-  line-height: var(--sidebar-leading-base);
-  text-align: left;
-}
-.sidebar-update-action:hover {
-  background: var(--sidebar-interactive-background);
-}
-.sidebar-update-action svg {
-  width: 14px;
-  height: 14px;
-  flex: 0 0 14px;
-}
-.sidebar-update-action span {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.sidebar-update-action kbd {
-  flex: 0 0 auto;
-  padding: 0 5px;
-  color: var(--muted-foreground);
-  border: 1px solid var(--border);
-  border-radius: var(--sidebar-radius-sm);
-  background: var(--secondary);
-  font-family: var(--font-mono-family);
-  font-size: var(--sidebar-text-xs);
-  font-weight: 400;
-  line-height: 18px;
 }
 .sidebar-dock {
   grid-template-columns: none;
@@ -10087,7 +10411,7 @@ button.sidebar-news-card {
 .thread-preview-header strong {
   display: block;
   overflow: hidden;
-  color: var(--foreground);
+  color: var(--thread-title-color, var(--foreground));
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
@@ -10107,7 +10431,7 @@ button.sidebar-news-card {
   height: 22px;
   flex: none;
   place-items: center;
-  color: var(--muted-foreground);
+  color: var(--thread-color, var(--muted-foreground));
 }
 .thread-preview-environment > svg {
   width: 17px;
@@ -10169,43 +10493,21 @@ button.sidebar-news-card {
   outline: none;
 }
 .thread-context-menu {
-  min-width: 190px;
-  padding: 4px;
+  min-width: 200px;
+  padding: 5px;
   color: var(--popover-foreground);
   border: 1px solid var(--outline);
-  border-radius: 7px;
+  border-radius: 10px;
   background: var(--popover);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
   transform-origin: var(--transform-origin);
 }
-.thread-context-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 29px;
-  padding: 5px 8px;
-  color: inherit;
-  border-radius: 4px;
-  outline: none;
-  text-decoration: none;
-  font-size: 11px;
-}
-.thread-context-item[data-highlighted] {
-  background: var(--accent);
-}
-.thread-context-item[data-disabled] {
-  opacity: 0.42;
-}
 .thread-context-item.destructive {
   color: var(--destructive);
 }
-.thread-context-item svg {
-  width: 13px;
-  height: 13px;
-}
 .thread-context-separator {
   height: 1px;
-  margin: 4px -4px;
+  margin: 5px -5px;
   background: var(--divider);
 }
 .product-sidebar-trigger {

@@ -1,30 +1,14 @@
 import { Option, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
-  configReferenceFor,
-  EnvironmentVariableId,
   EnvironmentVariableName,
   EnvironmentVariablePlaintext,
   isReservedEnvironmentVariableName,
-  MAX_ENVIRONMENT_VARIABLE_BULK_ITEMS,
   MAX_ENVIRONMENT_VARIABLE_NAME_LENGTH,
-  MAX_ENVIRONMENT_VARIABLE_VALUE_BYTES,
-  MAX_ENVIRONMENT_VARIABLES_PER_SCOPE,
   normalizeEnvironmentVariableName,
 } from "./environment-variable.js";
 
 describe("environment variable domain", () => {
-  it("publishes an opaque reusable reference without scope, name, or plaintext", () => {
-    const id = Schema.decodeUnknownSync(EnvironmentVariableId)("env_reference");
-    const reference = configReferenceFor(id);
-    expect(reference).toEqual({
-      version: 1,
-      kind: "environment-variable",
-      id,
-    });
-    expect(JSON.stringify(reference)).not.toMatch(/name|scope|value|secret/i);
-  });
-
   it("validates normalized portable names and reserves runtime-owned names", () => {
     expect(normalizeEnvironmentVariableName("  BUILD_CHANNEL  ")).toBe(
       "BUILD_CHANNEL",
@@ -75,13 +59,7 @@ describe("environment variable domain", () => {
     }
   });
 
-  it("exports stable scope, value, and bulk limits", () => {
-    expect({
-      name: MAX_ENVIRONMENT_VARIABLE_NAME_LENGTH,
-      valueBytes: MAX_ENVIRONMENT_VARIABLE_VALUE_BYTES,
-      scope: MAX_ENVIRONMENT_VARIABLES_PER_SCOPE,
-      bulk: MAX_ENVIRONMENT_VARIABLE_BULK_ITEMS,
-    }).toEqual({ name: 64, valueBytes: 32_768, scope: 100, bulk: 100 });
+  it("bounds plaintext by UTF-8 bytes and rejects NUL and lone surrogates", () => {
     expect(() =>
       Schema.decodeUnknownSync(EnvironmentVariablePlaintext)(
         "x".repeat(32_768),

@@ -9,12 +9,10 @@ import {
   ArchiveThreadResponseSchema,
   BeginGitHubCeremonyResponseSchema,
   BeginGitHubInstallationResponseSchema,
-  BeginIntegrationAuthorizationResponseSchema,
   BeginPersonalModelSubscriptionAuthorizationResponseSchema,
   type BrowserSessionData,
   type BulkEnvironmentVariablePreviewItem,
   CatalogResponseSchema,
-  CheckIntegrationHealthResponseSchema,
   ChoicesResponseSchema,
   type ConnectionData,
   ConnectionResponseSchema,
@@ -49,7 +47,6 @@ import {
   DeleteConnectionResponseSchema,
   DeleteEnvironmentVariableResponseSchema,
   DeleteMcpServerResponseSchema,
-  DisconnectIntegrationResponseSchema,
   DisconnectPersonalModelSubscriptionResponseSchema,
   DiscoverMcpServerResponseSchema,
   type EnvironmentVariableAuditEventData,
@@ -148,7 +145,6 @@ import {
   PublishSkillVersionResponseSchema,
   type PutModeRequestSchema,
   RebindProjectSourceResponseSchema,
-  RefreshIntegrationResponseSchema,
   RefreshPersonalModelSubscriptionResponseSchema,
   RemovePluginResponseSchema,
   RemoveSkillResponseSchema,
@@ -170,7 +166,6 @@ import {
   RotateManagedSigningKeyResponseSchema,
   RotatePersonalApiTokenResponseSchema,
   RotatePluginTriggerResponseSchema,
-  SelectIntegrationRepositoriesResponseSchema,
   type SetConnectionEnabledRequestSchema,
   SetExternalApiApplicationStatusResponseSchema,
   type SetFirstPartyPluginConfigurationRequest,
@@ -210,6 +205,8 @@ import {
   UpdateProjectResponseSchema,
   UpdateSkillStateResponseSchema,
   UpdateSkillWorkspacePolicyResponseSchema,
+  type UpdateThreadRequest,
+  UpdateThreadResponseSchema,
   type UpdateThreadSharingRequest,
   UpdateThreadSharingResponseSchema,
   UpdateWorkspacePolicyResponseSchema,
@@ -235,7 +232,6 @@ import type {
   ExperimentalFeaturePreferencesRevision,
   ExternalApiApplicationId,
   ExternalApiApplicationRotationOverlapSeconds,
-  GitIntegrationProvider,
   IntegrationConnectionId,
   IntegrationDisconnectImpact,
   McpServerId,
@@ -390,7 +386,13 @@ export interface ProjectPage {
 }
 
 export type ThreadListClientItem = ThreadData &
-  Partial<Pick<ThreadListItem, "mode" | "changes">>;
+  Partial<Pick<ThreadListItem, "mode" | "changes" | "childCount">>;
+
+/**
+ * `roots`: Threads not listed under a parent, with their child counts. A
+ * Thread ID: that parent's child Threads.
+ */
+export type ThreadListTree = "roots" | ThreadId;
 
 export interface ThreadPage {
   readonly items: ReadonlyArray<ThreadListClientItem>;
@@ -1108,29 +1110,6 @@ export const listPersonalIntegrations = async (signal?: AbortSignal) =>
     )
   ).data;
 
-export const beginIntegrationAuthorization = async (
-  provider: GitIntegrationProvider,
-): Promise<string> =>
-  (
-    await request(
-      `/v1/settings/personal/integrations/${encodeURIComponent(provider)}/authorize`,
-      BeginIntegrationAuthorizationResponseSchema,
-      { method: "POST", body: JSON.stringify({}) },
-    )
-  ).data.authorizationUrl;
-
-export const selectIntegrationRepositories = async (
-  connectionId: IntegrationConnectionId,
-  repositoryIds: ReadonlyArray<ProviderRepositoryId>,
-) =>
-  (
-    await request(
-      `/v1/settings/personal/integrations/connections/${encodeURIComponent(connectionId)}/repositories`,
-      SelectIntegrationRepositoriesResponseSchema,
-      { method: "PUT", body: JSON.stringify({ repositoryIds }) },
-    )
-  ).data.repositories;
-
 export const getIntegrationDisconnectImpact = async (
   connectionId: IntegrationConnectionId,
   signal?: AbortSignal,
@@ -1140,39 +1119,6 @@ export const getIntegrationDisconnectImpact = async (
       `/v1/settings/personal/integrations/connections/${encodeURIComponent(connectionId)}/disconnect-impact`,
       GetIntegrationDisconnectImpactResponseSchema,
       { signal },
-    )
-  ).data;
-
-export const disconnectIntegration = async (
-  connectionId: IntegrationConnectionId,
-) =>
-  (
-    await request(
-      `/v1/settings/personal/integrations/connections/${encodeURIComponent(connectionId)}`,
-      DisconnectIntegrationResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data;
-
-export const refreshIntegration = async (
-  connectionId: IntegrationConnectionId,
-) =>
-  (
-    await request(
-      `/v1/settings/personal/integrations/connections/${encodeURIComponent(connectionId)}/refresh`,
-      RefreshIntegrationResponseSchema,
-      { method: "POST", body: JSON.stringify({}) },
-    )
-  ).data;
-
-export const checkIntegrationHealth = async (
-  connectionId: IntegrationConnectionId,
-) =>
-  (
-    await request(
-      `/v1/settings/personal/integrations/connections/${encodeURIComponent(connectionId)}/health`,
-      CheckIntegrationHealthResponseSchema,
-      { method: "POST", body: JSON.stringify({}) },
     )
   ).data;
 
@@ -1316,9 +1262,12 @@ export const listThreads = async (
   cursor?: PageCursor,
   signal?: AbortSignal,
   lifecycleState?: "active" | "archived",
+  tree?: ThreadListTree,
 ): Promise<ThreadPage> => {
   const query = new URLSearchParams({ limit: "100" });
   if (lifecycleState !== undefined) query.set("lifecycleState", lifecycleState);
+  if (tree === "roots") query.set("roots", "true");
+  else if (tree !== undefined) query.set("parentThreadId", tree);
   if (projectId !== undefined) query.set("projectId", projectId);
   if (cursor !== undefined) query.set("cursor", cursor);
   return (
@@ -1335,6 +1284,18 @@ export const setThreadPinned = async (
       `/v1/threads/${encodeURIComponent(threadId)}/pin`,
       PinThreadResponseSchema,
       { method: "PATCH", body: JSON.stringify({ pinned }) },
+    )
+  ).data;
+
+export const updateThread = async (
+  threadId: ThreadId,
+  update: UpdateThreadRequest,
+): Promise<ThreadData> =>
+  (
+    await request(
+      `/v1/threads/${encodeURIComponent(threadId)}`,
+      UpdateThreadResponseSchema,
+      { method: "PATCH", body: JSON.stringify(update) },
     )
   ).data;
 
@@ -1383,17 +1344,44 @@ export const setThreadFollowing = async (
     )
   ).data;
 
+/** An archive or restore, and the child Threads it changed with it. */
+export interface ArchivedThread {
+  readonly thread: ThreadData;
+  readonly changedChildThreadIds?: ReadonlyArray<ThreadId>;
+}
+
+/**
+ * `children`: true for every child in the parent's former state, or the
+ * exact children to change, as an Undo restores them.
+ */
 export const setThreadArchived = async (
   threadId: ThreadId,
   archived: boolean,
-): Promise<ThreadData> =>
-  (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/archive`,
-      ArchiveThreadResponseSchema,
-      { method: "PATCH", body: JSON.stringify({ archived }) },
-    )
-  ).data;
+  children?: true | ReadonlyArray<ThreadId>,
+): Promise<ArchivedThread> => {
+  const response = await request(
+    `/v1/threads/${encodeURIComponent(threadId)}/archive`,
+    ArchiveThreadResponseSchema,
+    {
+      method: "PATCH",
+      body: JSON.stringify(
+        children === undefined
+          ? { archived }
+          : {
+              archived,
+              includeChildren: true,
+              ...(children === true ? {} : { childThreadIds: children }),
+            },
+      ),
+    },
+  );
+  return {
+    thread: response.data,
+    ...(response.changedChildThreadIds === undefined
+      ? {}
+      : { changedChildThreadIds: response.changedChildThreadIds }),
+  };
+};
 
 export const getThreadReadiness = async (
   threadId: ThreadId,

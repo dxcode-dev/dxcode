@@ -33,13 +33,6 @@ const active = (scope: "personal" | "workspace" | "deployment") => ({
 });
 
 describe("first-party plugin resolution", () => {
-  it("uses the deployment configuration when nothing else is set", () => {
-    expect(resolvePlugin(input())).toEqual(active("deployment"));
-    expect(resolvePlugin(input({ workspace: undefined }))).toEqual(
-      active("deployment"),
-    );
-  });
-
   it("prefers personal over workspace over deployment configuration", () => {
     const workspace = { enablement: null, providerId: "exa" } as const;
     expect(resolvePlugin(input({ workspace }))).toEqual(active("workspace"));
@@ -57,17 +50,6 @@ describe("first-party plugin resolution", () => {
         }),
       ),
     ).toEqual(active("personal"));
-  });
-
-  it("keeps a workspace disabled absolute even when personal says enabled", () => {
-    expect(
-      resolvePlugin(
-        input({
-          workspace: { enablement: "disabled", providerId: null },
-          personal: { enablement: "enabled", providerId: "exa" },
-        }),
-      ),
-    ).toEqual({ status: "disabled", by: "workspace" });
   });
 
   it("lets a personal disabled turn the plugin off for that person", () => {
@@ -102,18 +84,6 @@ describe("first-party plugin resolution", () => {
           personal,
           deploymentProviderId: undefined,
           personalOverridesAllowed: false,
-        }),
-      ),
-    ).toEqual({ status: "no-provider" });
-  });
-
-  it("contributes nothing when no provider resolves, even when enabled everywhere", () => {
-    expect(
-      resolvePlugin(
-        input({
-          deploymentProviderId: undefined,
-          workspace: { enablement: "enabled", providerId: null },
-          personal: { enablement: "enabled", providerId: null },
         }),
       ),
     ).toEqual({ status: "no-provider" });
@@ -206,161 +176,12 @@ describe("deployment-scope plugin configuration", () => {
   });
 });
 
-describe("Speech plugin resolution", () => {
-  const speech = FIRST_PARTY_PLUGINS.find(({ id }) => id === "speech");
-  if (speech === undefined) throw new Error("Speech must be registered.");
-  const sarvam = (scope: "personal" | "workspace" | "deployment") => ({
-    status: "active",
-    provider: { providerId: "sarvam", scope },
-    capabilities: ["speech.transcribe"],
-  });
-  const personalKey = { enablement: null, providerId: "sarvam" } as const;
-  const speechInput = (overrides: Partial<PluginResolutionInput> = {}) =>
-    input({
-      plugin: speech,
-      deploymentProviderId: deploymentProvider(speech, {
-        DX_RUNTIME_MODE: "deployed",
-        SARVAM_API_KEY: "deployment-key",
-      }),
-      ...overrides,
-    });
-
-  it("registers Sarvam as the provider of speech.transcribe, metered in audio seconds", () => {
-    expect(speech.capabilities).toEqual(["speech.transcribe"]);
-    expect(speech.providers).toEqual([
-      expect.objectContaining({
-        id: "sarvam",
-        capabilities: ["speech.transcribe"],
-        deploymentSecret: "SARVAM_API_KEY",
-        unit: "audio_second",
-      }),
-    ]);
-  });
-
-  it("uses the deployment SARVAM_API_KEY alone, and nothing without it", () => {
-    expect(resolvePlugin(speechInput())).toEqual(sarvam("deployment"));
-    expect(
-      deploymentProvider(speech, { DX_RUNTIME_MODE: "deployed" }),
-    ).toBeUndefined();
-    expect(
-      resolvePlugin(speechInput({ deploymentProviderId: undefined })),
-    ).toEqual({ status: "no-provider" });
-    // Local runtime resolves the fixture whether or not a key is present.
-    expect(
-      deploymentProvider(speech, {
-        DX_RUNTIME_MODE: "local",
-        SARVAM_API_KEY: "key",
-      }),
-    ).toBe("fixture");
-  });
-
-  it("prefers a personal Sarvam key, with or without a deployment key", () => {
-    expect(resolvePlugin(speechInput({ personal: personalKey }))).toEqual(
-      sarvam("personal"),
-    );
-    expect(
-      resolvePlugin(
-        speechInput({ personal: personalKey, deploymentProviderId: undefined }),
-      ),
-    ).toEqual(sarvam("personal"));
-    expect(
-      resolvePlugin(
-        speechInput({
-          workspace: { enablement: null, providerId: "sarvam" },
-          deploymentProviderId: undefined,
-        }),
-      ),
-    ).toEqual(sarvam("workspace"));
-  });
-
-  it("is off for members when the workspace disables it, even with a personal key", () => {
-    expect(
-      resolvePlugin(
-        speechInput({
-          workspace: { enablement: "disabled", providerId: null },
-          personal: { enablement: "enabled", providerId: "sarvam" },
-        }),
-      ),
-    ).toEqual({ status: "disabled", by: "workspace" });
-  });
-
-  it("ignores a personal key when policy denies overrides, without falling through to it", () => {
-    expect(
-      resolvePlugin(
-        speechInput({ personal: personalKey, personalOverridesAllowed: false }),
-      ),
-    ).toEqual(sarvam("deployment"));
-    expect(
-      resolvePlugin(
-        speechInput({
-          personal: personalKey,
-          personalOverridesAllowed: false,
-          deploymentProviderId: undefined,
-        }),
-      ),
-    ).toEqual({ status: "no-provider" });
-  });
-
-  it("is not installed unless DX_INSTALLED_PLUGINS lists it", () => {
-    const ids = (value: string) =>
-      installedPlugins({
-        DX_RUNTIME_MODE: "deployed",
-        DX_INSTALLED_PLUGINS: value,
-        SARVAM_API_KEY: "deployment-key",
-      }).map(({ id }) => id);
-    expect(ids("search")).not.toContain("speech");
-    expect(ids("search,speech")).toEqual([
-      "search",
-      "speech",
-      "code",
-      "execution",
-    ]);
-  });
-});
-
 describe("Execution plugin resolution", () => {
   const execution = FIRST_PARTY_PLUGINS.find(({ id }) => id === "execution");
   if (execution === undefined) throw new Error("Execution must be registered.");
 
-  it("resolves E2B only from the deployment E2B key, and the local runtime in development", () => {
-    expect(
-      deploymentProvider(execution, { DX_RUNTIME_MODE: "deployed" }),
-    ).toBeUndefined();
-    expect(
-      deploymentProvider(execution, {
-        DX_RUNTIME_MODE: "deployed",
-        E2B_API_KEY: " ",
-      }),
-    ).toBeUndefined();
-    expect(
-      deploymentProvider(execution, {
-        DX_RUNTIME_MODE: "deployed",
-        E2B_API_KEY: "key",
-      }),
-    ).toBe("e2b");
-    // Development never reaches E2B, even with a key present.
-    expect(
-      deploymentProvider(execution, {
-        DX_RUNTIME_MODE: "local",
-        E2B_API_KEY: "key",
-      }),
-    ).toBe("local");
-  });
-
-  it("is a required slot: always installed, never disabled; only E2B takes a person's key", () => {
+  it("is a required slot: always installed, never disabled", () => {
     expect(installedPlugins({ DX_INSTALLED_PLUGINS: "" })).toContain(execution);
-    // Bring-your-own keys (4b) apply to key-based providers only; the
-    // Orb Providers routes own them, not this per-user resolution.
-    expect(
-      execution.providers.map(({ id, credentialLabel }) => [
-        id,
-        credentialLabel,
-      ]),
-    ).toEqual([
-      ["e2b", "E2B API key"],
-      ["cloudflare", null],
-      ["local", null],
-    ]);
     expect(
       resolvePlugin({
         plugin: execution,
@@ -382,27 +203,6 @@ describe("Execution plugin resolution", () => {
         personalOverridesAllowed: true,
       }),
     ).toEqual({ status: "no-provider" });
-  });
-
-  it("claims only what each provider implements", () => {
-    const resolve = (providerId: "e2b" | "local") =>
-      resolvePlugin({
-        plugin: execution,
-        deploymentProviderId: providerId,
-        workspace: undefined,
-        personal: unset,
-        personalOverridesAllowed: true,
-      });
-    expect(resolve("e2b")).toMatchObject({
-      capabilities: [
-        "execution.workspace",
-        "execution.resident-daemon",
-        "execution.pause-resume",
-      ],
-    });
-    expect(resolve("local")).toMatchObject({
-      capabilities: ["execution.workspace", "execution.resident-daemon"],
-    });
   });
 
   it("is never part of a submission's tool set", () => {

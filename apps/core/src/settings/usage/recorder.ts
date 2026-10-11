@@ -17,7 +17,7 @@ import { UsageRepositoryD1 } from "./repository-d1.js";
 
 const USAGE_ROUTE_URL = "https://dx-byok.invalid/usage-route";
 
-export const fetchUsageRouteAttribution = async (
+const fetchUsageRouteAttribution = async (
   bindings: Bindings,
   threadId: string,
   submissionId: string,

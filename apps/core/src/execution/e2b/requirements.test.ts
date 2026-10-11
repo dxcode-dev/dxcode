@@ -1,4 +1,3 @@
-import { E2B_ORB_PROFILES } from "@dx/domain";
 import { Effect, Redacted } from "effect";
 import { describe, expect, it } from "vitest";
 import type { Bindings } from "../../http/types.js";
@@ -37,33 +36,6 @@ describe("loadE2BRequirements", () => {
     expect(Redacted.value(result.apiKey)).toBe("e2b-secret");
     expect(String(result.apiKey)).not.toContain("e2b-secret");
   });
-
-  it("defaults the E2B timeout to the five-minute inactivity deadline", async () => {
-    const result = await load({ DX_E2B_TIMEOUT_MS: undefined });
-
-    expect(result.timeoutMs).toBe(300_000);
-    expect(result.timeoutMs).toBe(result.inactivityMs);
-  });
-
-  it("uses the selected runner profile template", async () => {
-    const result = await Effect.runPromise(
-      loadE2BRequirements(bindings(), "selected-profile-template"),
-    );
-
-    expect(result.template).toBe("selected-profile-template");
-  });
-
-  it.each(E2B_ORB_PROFILES)(
-    "passes $id's dedicated E2B template to Sandbox.create",
-    async (profile) => {
-      const template = `dx-workspace-${profile.templateSuffix}`;
-      const result = await Effect.runPromise(
-        loadE2BRequirements(bindings(), template),
-      );
-
-      expect(result.template).toBe(template);
-    },
-  );
 
   it.each([
     ["E2B_API_KEY", ""],

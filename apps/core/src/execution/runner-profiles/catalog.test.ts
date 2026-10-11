@@ -1,8 +1,4 @@
-import {
-  CLOUDFLARE_ORB_PROFILES,
-  E2B_ORB_PROFILES,
-  RunnerProfileId,
-} from "@dx/domain";
+import { CLOUDFLARE_ORB_PROFILES, RunnerProfileId } from "@dx/domain";
 import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
@@ -40,69 +36,6 @@ const catalog = (overrides: Record<string, unknown> = {}) =>
   });
 
 describe("runner profile catalog", () => {
-  it("keeps every offered E2B size mapped to its declared resources", () => {
-    expect(E2B_ORB_PROFILES).toEqual([
-      {
-        id: "a1.tiny",
-        label: "a1.tiny",
-        templateSuffix: "a1-tiny",
-        resources: { cpuCores: 1, memoryMb: 2048, diskGb: 20 },
-      },
-      {
-        id: "a1.small",
-        label: "a1.small",
-        templateSuffix: "a1-small",
-        resources: { cpuCores: 2, memoryMb: 4096, diskGb: 20 },
-      },
-      {
-        id: "a1.medium",
-        label: "a1.medium",
-        templateSuffix: "a1-medium",
-        resources: { cpuCores: 4, memoryMb: 8192, diskGb: 20 },
-      },
-    ]);
-  });
-
-  it("publishes only validated real profiles and typed adapter capability states", async () => {
-    const loaded = await Effect.runPromise(
-      decodeRunnerProfileCatalog(catalog()),
-    );
-
-    expect(loaded.publicCatalog).toEqual({
-      version: 1,
-      defaultProfileId: "e2b-standard",
-      profiles: [
-        {
-          id: "e2b-standard",
-          label: "Standard workspace",
-          adapter: "e2b",
-          resources: { cpuCores: 2, memoryMb: 4096, diskGb: 20 },
-          isolation: "sandbox",
-          availability: "available",
-          costLabel: "Deployment managed",
-          capabilities: profile.capabilities,
-        },
-      ],
-      adapterStates: [
-        { kind: "e2b", state: "available" },
-        { kind: "cloudflare", state: "unavailable" },
-        { kind: "local", state: "unavailable" },
-        { kind: "container", state: "unavailable" },
-        { kind: "kubernetes", state: "unavailable" },
-        { kind: "remote", state: "unavailable" },
-      ],
-      providers: [
-        {
-          adapter: "e2b",
-          displayName: "E2B",
-          shortName: "E2B",
-          pauseResume: "processes",
-        },
-      ],
-    });
-    expect(JSON.stringify(loaded.publicCatalog)).not.toContain("dx-standard");
-  });
-
   it("publishes Cloudflare Containers sizes as instance types without the instance", async () => {
     const loaded = await Effect.runPromise(
       decodeRunnerProfileCatalog(

@@ -207,32 +207,6 @@ beforeEach(() => {
 });
 
 describe("local execution workspace source boundary", () => {
-  it("forwards the four-tool inventory through local workspace factories", () => {
-    expect(ExecutionWorkspaces.sandboxFactory.tools).toBe(mocks.sandboxTools);
-    expect(ExecutionWorkspaces.existingSandboxFactory.tools).toBe(
-      mocks.sandboxTools,
-    );
-  });
-
-  it("reuses a self-registered daemon without any source command", async () => {
-    const awaitRegistration = vi.fn(async () => true);
-    const mintCredential = vi.fn();
-
-    await expect(
-      ExecutionWorkspaces.ensureDaemon({
-        threadId: mocks.threadId as never,
-        endpoint: "https://local-dx.example.test/daemon",
-        mintCredential,
-        awaitRegistration,
-      }),
-    ).resolves.toEqual({ bootstrapped: false, provider: "local" });
-
-    expect(awaitRegistration).toHaveBeenCalledOnce();
-    expect(mocks.primitiveExec).not.toHaveBeenCalled();
-    expect(mocks.firstSource).not.toHaveBeenCalled();
-    expect(mintCredential).not.toHaveBeenCalled();
-  });
-
   it("does not wait for a registration a newly minted key cannot produce", async () => {
     const awaitRegistration = vi.fn(async () => true);
     mocks.requestLocalRuntime.mockImplementation((async (

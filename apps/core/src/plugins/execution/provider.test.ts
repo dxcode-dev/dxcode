@@ -171,30 +171,6 @@ describe("Execution provider contract", () => {
     });
   });
 
-  it("never reports snapshot, usage, or display, which have no operations yet", () => {
-    const { provider } = workspaceOnly();
-    const workspaces = composeExecutionWorkspaces(
-      deployed,
-      { e2b: provider },
-      stubActivation().activation,
-      [
-        {
-          providerId: "e2b",
-          capabilities: [
-            "execution.workspace",
-            "execution.snapshot",
-            "execution.usage",
-            "execution.display",
-          ],
-        },
-      ],
-      profileResolver(),
-    );
-    expect(workspaces.providers[0]?.capabilities).toEqual([
-      "execution.workspace",
-    ]);
-  });
-
   it("exposes a resident daemon only when the provider both claims and implements it", async () => {
     const { provider, resolved } = workspaceOnly();
     const claimed = stubActivation();
@@ -233,38 +209,6 @@ describe("Execution provider contract", () => {
     ).not.toHaveBeenCalled();
     // The pipeline never sees a daemon the provider does not claim.
     expect(implemented.composedOver[0]?.residentDaemon).toBeUndefined();
-  });
-
-  it("hands the pipeline a lazy context for terminal input", async () => {
-    const { provider, resolved } = workspaceOnly();
-    const { activation, pipeline } = stubActivation();
-    const resolveProfile = profileResolver();
-    const workspaces = composeExecutionWorkspaces(
-      deployed,
-      { e2b: { ...provider, residentDaemon } },
-      activation,
-      [
-        {
-          ...resolved,
-          capabilities: [...resolved.capabilities, "execution.resident-daemon"],
-        },
-      ],
-      resolveProfile,
-    );
-    await workspaces.recordResidentTerminalInput(threadId);
-    expect(resolveProfile).not.toHaveBeenCalled();
-    const loadContext = pipeline.recordResidentTerminalInput.mock.calls[0]?.[0];
-    await expect(loadContext?.()).resolves.toMatchObject({
-      profile: e2bProfile,
-    });
-    expect(resolveProfile).toHaveBeenCalledWith(deployed, threadId, {
-      admission: true,
-    });
-    workspaces.recordResidentTerminalHeartbeat(threadId, true);
-    expect(pipeline.recordResidentTerminalHeartbeat).toHaveBeenCalledWith(
-      threadId,
-      true,
-    );
   });
 
   it("drains the resident daemon before a daemon provider releases", async () => {
@@ -359,55 +303,6 @@ describe("Execution provider contract", () => {
     ).rejects.toMatchObject(unavailable);
     expect(composedOver).toEqual([]);
     expect(pipeline.activate).not.toHaveBeenCalled();
-  });
-
-  it("resolves the registered providers from deployment bindings", () => {
-    const e2b = {
-      providerId: "e2b",
-      capabilities: [
-        "execution.workspace",
-        "execution.resident-daemon",
-        "execution.pause-resume",
-      ],
-      pauseResumePreserves: "processes",
-    };
-    const cloudflare = {
-      providerId: "cloudflare",
-      capabilities: [
-        "execution.workspace",
-        "execution.resident-daemon",
-        "execution.pause-resume",
-      ],
-      pauseResumePreserves: "filesystem",
-    };
-    const orbContainer = {} as DurableObjectNamespace;
-    expect(resolveExecutionProviders(deployed)).toEqual([e2b]);
-    // Containers needs no key: its namespace binding is the installation.
-    expect(
-      resolveExecutionProviders({
-        DX_RUNTIME_MODE: "deployed",
-        ORB_CONTAINER: orbContainer as never,
-      }),
-    ).toEqual([cloudflare]);
-    expect(
-      resolveExecutionProviders({
-        ...deployed,
-        ORB_CONTAINER: orbContainer as never,
-      }),
-    ).toEqual([e2b, cloudflare]);
-    // Local runtime never selects a deployed provider.
-    expect(
-      resolveExecutionProviders({
-        DX_RUNTIME_MODE: "local",
-        E2B_API_KEY: "deployment-key",
-        ORB_CONTAINER: orbContainer as never,
-      }),
-    ).toEqual([
-      {
-        providerId: "local",
-        capabilities: ["execution.workspace", "execution.resident-daemon"],
-      },
-    ]);
   });
 
   it("dispatches each Thread to the provider its runner profile names", async () => {

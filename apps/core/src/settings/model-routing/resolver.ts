@@ -136,7 +136,7 @@ export const findServingConnection = (
 };
 
 /** Why a canonical id has no serving connection. */
-export const notServedReason = (
+const notServedReason = (
   connections: ReadonlyArray<StoredModelConnection>,
   canonical: string,
   copilotEntitlements: CopilotEntitlements = () => undefined,

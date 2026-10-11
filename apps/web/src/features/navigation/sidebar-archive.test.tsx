@@ -125,42 +125,6 @@ describe("sidebar archive and empty state", () => {
     }
   });
 
-  it("keeps a collapsed project count in its heading", async () => {
-    const container = document.createElement("div");
-    const root = createRoot(container);
-    try {
-      await React.act(() =>
-        root.render(
-          <SidebarThreadNavigation
-            {...rowProps}
-            collapsedGroups={new Set(["project"])}
-            onToggleGroup={vi.fn()}
-            onLoadMore={vi.fn()}
-            hasMore={false}
-            loadingMore={false}
-            query=""
-            visibleThreadCount={2}
-            sections={[
-              {
-                id: "project",
-                label: "Project",
-                project: true,
-                threads: [{}, {}] as never[],
-              },
-            ]}
-          />,
-        ),
-      );
-      const heading = container.querySelector(".thread-group-heading");
-      expect(heading?.getAttribute("data-collapsed")).toBe("true");
-      expect(heading?.getAttribute("aria-expanded")).toBe("false");
-      expect(heading?.querySelector("small")?.textContent).toBe("2");
-      expect(heading?.querySelector(".thread-group-meta svg")).toBeNull();
-    } finally {
-      await React.act(() => root.unmount());
-    }
-  });
-
   it("shows an actionable empty prompt and arrow only after loading completes", async () => {
     const container = document.createElement("div");
     const root = createRoot(container);

@@ -15,6 +15,7 @@ import {
   type ThreadExecutionPin,
   type ThreadId,
   type ThreadListRequest,
+  type ThreadUpdate,
   type ThreadModelSelection,
   type ThreadNotFound,
   ThreadRepository,
@@ -59,11 +60,13 @@ interface ThreadServiceShape {
     runnerProfileId?: RunnerProfileId,
     titlePending?: boolean,
     executionPin?: ThreadExecutionPin,
+    parentThreadId?: ThreadId,
   ) => Effect.Effect<
     Thread,
     | Schema.SchemaError
     | PersistenceUnavailable
     | ProjectNotFound
+    | ThreadNotFound
     | SettingsMembershipInvariantViolation
     | WorkspacePolicyDenied
   >;
@@ -86,6 +89,14 @@ interface ThreadServiceShape {
     principal: Principal,
     threadId: ThreadId,
     pinned: boolean,
+  ) => Effect.Effect<
+    Thread,
+    Schema.SchemaError | PersistenceUnavailable | ThreadNotFound
+  >;
+  readonly update: (
+    principal: Principal,
+    threadId: ThreadId,
+    update: ThreadUpdate,
   ) => Effect.Effect<
     Thread,
     Schema.SchemaError | PersistenceUnavailable | ThreadNotFound
@@ -125,7 +136,16 @@ export class ThreadService extends Context.Service<
             runnerProfileId,
             titlePending,
             executionPin,
+            parentThreadId,
           ) {
+            // Children never nest: a child's child becomes its sibling.
+            const parent =
+              parentThreadId === undefined
+                ? undefined
+                : yield* threads.findOwnedById(
+                    parentThreadId,
+                    principal.userId,
+                  );
             const projectId =
               project.kind === "project"
                 ? project.projectId
@@ -160,6 +180,9 @@ export class ThreadService extends Context.Service<
               selection: selection ?? defaultThreadModelSelection(),
               ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
               ...(titlePending === true ? { titlePending } : {}),
+              ...(parent === undefined
+                ? {}
+                : { parentThreadId: parent.parentThreadId ?? parent.id }),
               plugins: yield* plugins.resolveForThread(principal, projectId),
               skills: yield* skills.resolveForThread(principal, projectId),
             });
@@ -209,6 +232,10 @@ export class ThreadService extends Context.Service<
               pinnedAt,
             );
           },
+        ),
+        update: Effect.fn("ThreadService.update")(
+          (principal, threadId, update) =>
+            threads.updateOwned(threadId, principal.userId, update),
         ),
         setArchived: Effect.fn("ThreadService.setArchived")(
           (principal, threadId, archived) =>

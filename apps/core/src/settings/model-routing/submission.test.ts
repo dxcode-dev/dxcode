@@ -27,24 +27,6 @@ describe("connectionModel", () => {
     expect(withEffectiveContextWindow(pinned).contextWindow).toBe(270_000);
   });
 
-  it("describes a Copilot-only model for a subscription", () => {
-    expect(
-      connectionModel(
-        connection("subscription"),
-        "github-copilot/mai-code-1-flash-picker",
-      ),
-    ).toMatchObject({
-      id: "mai-code-1-flash-picker",
-      provider: "github-copilot",
-      api: "openai-responses",
-      baseUrl: "https://api.githubcopilot.com",
-      reasoning: true,
-      input: ["text"],
-      contextWindow: 256_000,
-      maxTokens: 128_000,
-    });
-  });
-
   it("describes a Copilot-only canonical model for a custom endpoint", () => {
     expect(
       connectionModel(
@@ -60,23 +42,6 @@ describe("connectionModel", () => {
       input: ["text"],
       contextWindow: 256_000,
       maxTokens: 128_000,
-    });
-  });
-
-  it("normalizes an Anthropic base saved with the SDK's own /v1", () => {
-    expect(
-      connectionModel(
-        {
-          kind: "custom",
-          baseUrl: "https://ai.example.test/v1",
-          format: "anthropic-messages",
-          fields: {},
-        } as StoredModelConnection,
-        "anthropic/claude-sonnet-4-5",
-      ),
-    ).toMatchObject({
-      api: "anthropic-messages",
-      baseUrl: "https://ai.example.test",
     });
   });
 

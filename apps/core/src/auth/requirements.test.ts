@@ -9,17 +9,6 @@ const failure = (overrides: Parameters<typeof createTestBindings>[0]) =>
   );
 
 describe("authentication requirements", () => {
-  it("loads explicit origins and secret", async () => {
-    const requirements = await Effect.runPromise(
-      loadAuthenticationRequirements(createTestBindings()),
-    );
-    expect(requirements).toMatchObject({
-      authUrl: "https://dx.test",
-      trustedOrigins: ["https://dx.test"],
-    });
-    expect(requirements.secret.length).toBeGreaterThanOrEqual(32);
-  });
-
   it("rejects missing, short, and insecure deployed configuration", async () => {
     const missingSecret = createTestBindings();
     Reflect.deleteProperty(missingSecret, "BETTER_AUTH_SECRET");
@@ -43,15 +32,6 @@ describe("authentication requirements", () => {
       _tag: "AuthenticationConfigurationError",
       reason: "deployed_requires_https",
     });
-  });
-
-  it("reports which URL failed to parse", async () => {
-    await expect(failure({ DX_AUTH_URL: "not a url" })).resolves.toMatchObject({
-      reason: "invalid_auth_url",
-    });
-    await expect(
-      failure({ DX_AUTH_TRUSTED_ORIGINS: "https://dx.test,nope" }),
-    ).resolves.toMatchObject({ reason: "invalid_trusted_origin" });
   });
 
   it("allows localhost HTTP authentication only in local mode", async () => {

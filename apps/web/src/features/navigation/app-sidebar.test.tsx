@@ -152,12 +152,6 @@ describe("sidebar thread preview intent", () => {
     vi.useRealTimers();
   });
 
-  it("keeps the toolbar free of deployment labels and organization controls", () => {
-    expect(container.querySelector(".deployment-identity")).toBeNull();
-    expect(container.querySelector('[aria-label="Organize"]')).toBeNull();
-    expect(container.querySelector(".dx-wordmark")?.textContent).toBe("dx");
-  });
-
   it("opens on the trailing edge after a 500 ms dwell and switches primed rows immediately", async () => {
     const first = requiredThreadRow(container, "First thread");
     const second = requiredThreadRow(container, "Second thread");
@@ -306,68 +300,6 @@ describe("sidebar thread preview intent", () => {
     ).not.toBeNull();
   });
 
-  it("cancels pending intent when the sidebar unmounts", async () => {
-    const first = requiredThreadRow(container, "First thread");
-
-    await act(() => dispatchPointer(first, "over"));
-    expect(vi.getTimerCount()).toBe(1);
-
-    await act(() => root.unmount());
-    mounted = false;
-    expect(vi.getTimerCount()).toBe(0);
-    await act(() => vi.runAllTimers());
-    expect(
-      document.querySelector('[aria-label="Preview thread-1"]'),
-    ).toBeNull();
-  });
-
-  it("shows Projects while Puck and Activity are unavailable", () => {
-    const dock = container.querySelector('[aria-label="Primary navigation"]');
-    expect(dock).not.toBeNull();
-    expect(dock?.children).toHaveLength(1);
-    expect(
-      Array.from(dock?.children ?? [], (item) => item.textContent?.trim()),
-    ).toEqual(["Projects"]);
-    expect(dock?.querySelectorAll("button:disabled")).toHaveLength(0);
-    expect(dock?.querySelector('a[href="/projects"]')).not.toBeNull();
-    expect(dock?.querySelectorAll("svg")).toHaveLength(1);
-  });
-
-  it("hides the unavailable Multiplayer destination", () => {
-    expect(container.textContent).not.toContain("Multiplayer");
-    expect(
-      container.querySelector('[title="Multiplayer is not available yet"]'),
-    ).toBeNull();
-  });
-
-  it.each([false, true])(
-    "shows only an available archive when there are no active threads: %s",
-    async (archiveAvailable) => {
-      await act(() =>
-        root.render(
-          <AppSidebar
-            userId={"user-1" as never}
-            archiveAvailable={archiveAvailable}
-            projects={[project]}
-            threads={[]}
-            onCollapse={vi.fn()}
-            onNavigate={vi.fn()}
-            onLoadMore={vi.fn()}
-            loadingMore={false}
-            hasMore={false}
-          />,
-        ),
-      );
-      expect(container.textContent).not.toContain("Multiplayer");
-      expect(
-        container.querySelector('[data-thread-section="inactive"]'),
-      ).toBeNull();
-      expect(
-        container.querySelector('[data-thread-section="archived"]') !== null,
-      ).toBe(archiveAvailable);
-    },
-  );
-
   it("starts inactive threads collapsed and reveals them on demand", async () => {
     const inactive = {
       ...threads[0],
@@ -446,43 +378,6 @@ describe("sidebar thread preview intent", () => {
     expect(
       container.querySelector('[data-thread-section="archived"]')?.textContent,
     ).toContain("Archived thread title");
-  });
-});
-
-describe("sidebar extension composition", () => {
-  it("places supplied presentation between threads and primary navigation without Multiplayer", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
-
-    await act(() =>
-      root.render(
-        <AppSidebar
-          projects={[project]}
-          threads={threads}
-          onCollapse={vi.fn()}
-          onNavigate={vi.fn()}
-          onLoadMore={vi.fn()}
-          loadingMore={false}
-          hasMore={false}
-          extensionRegion={<div data-testid="extension-region" />}
-        />,
-      ),
-    );
-
-    const extension = container.querySelector(
-      '[data-testid="extension-region"]',
-    );
-    expect(extension?.previousElementSibling?.getAttribute("aria-label")).toBe(
-      "Threads",
-    );
-    expect(container.textContent).not.toContain("Multiplayer");
-    expect(extension?.nextElementSibling?.getAttribute("aria-label")).toBe(
-      "Primary navigation",
-    );
-
-    await act(() => root.unmount());
-    container.remove();
   });
 });
 

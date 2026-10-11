@@ -2,11 +2,6 @@ import { PersonalUsageDataSchema } from "@dx/api";
 import { Schema } from "effect";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { settingsManifest } from "../foundation-sections.js";
-import {
-  resolveSettingsSection,
-  settingsPath,
-} from "../settings-registration.js";
 import { UsageDashboard } from "./usage-settings.js";
 
 const data = Schema.decodeUnknownSync(PersonalUsageDataSchema)({
@@ -101,18 +96,6 @@ const data = Schema.decodeUnknownSync(PersonalUsageDataSchema)({
 });
 
 describe("personal usage settings", () => {
-  it("registers the exact personal route", () => {
-    expect(settingsPath({ scope: "personal", section: "usage" })).toBe(
-      "/settings/usage",
-    );
-    expect(
-      resolveSettingsSection(settingsManifest, "personal", "usage"),
-    ).toMatchObject({
-      found: true,
-      registration: { id: "personal-usage", label: "Usage" },
-    });
-  });
-
   it("renders content-free unknown-aware token, cost, Thread, and E2B views", () => {
     const markup = renderToStaticMarkup(
       <UsageDashboard

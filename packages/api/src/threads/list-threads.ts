@@ -1,4 +1,4 @@
-import { ModeId, ModelId, PageCursor, ProjectId } from "@dx/domain";
+import { ModeId, ModelId, PageCursor, ProjectId, ThreadId } from "@dx/domain";
 import { Schema } from "effect";
 import { PageLimitQuerySchema } from "../http/page-limit-query.js";
 import { errorResponse, successResponse } from "../http/response.js";
@@ -9,6 +9,8 @@ export const ThreadListItemSchema = Schema.Struct({
   ...ThreadDataSchema.fields,
   mode: Schema.Union([ModeId, ModelId]),
   changes: Schema.optional(ThreadChangesSummarySchema),
+  /** Roots only: child Threads listed under this one; absent when none. */
+  childCount: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
 });
 
 export type ThreadListItem = typeof ThreadListItemSchema.Type;
@@ -18,7 +20,20 @@ export const ListThreadsQuerySchema = Schema.Struct({
   lifecycleState: Schema.optional(Schema.Literals(["active", "archived"])),
   cursor: Schema.optional(PageCursor),
   limit: Schema.optional(PageLimitQuerySchema),
-});
+  /**
+   * `true` lists only Threads not listed under a parent, each with its
+   * `childCount`. Not combined with `parentThreadId`.
+   */
+  roots: Schema.optional(Schema.Literal("true")),
+  /** Lists one parent's child Threads. */
+  parentThreadId: Schema.optional(ThreadId),
+}).check(
+  Schema.makeFilter((query) =>
+    query.roots !== undefined && query.parentThreadId !== undefined
+      ? { path: ["roots"], issue: "Use roots or parentThreadId, not both." }
+      : undefined,
+  ),
+);
 
 export const ListThreadsResponseSchema = successResponse(
   Schema.Struct({

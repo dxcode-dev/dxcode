@@ -9,21 +9,19 @@ vi.mock("../threads/daemon-client.js", () => ({
   requestThreadDaemon: mocks.requestThreadDaemon,
 }));
 
-import { makeThreadFilesRoutes } from "./routes.js";
+import { threadFilesRoutes } from "./routes.js";
 
 const threadId = "thr_00000000-0000-4000-8000-000000000243";
 const version = `sha256:${"a".repeat(64)}` as ThreadFileVersion;
 const path = "src/nested/example.ts" as ThreadFilesPath;
 
-const appFor = (
-  resident?: NonNullable<Parameters<typeof makeThreadFilesRoutes>[0]>,
-) => {
+const appFor = () => {
   const app = new Hono<AppEnv>();
   app.use("*", async (context, next) => {
     context.set("requestId", "files-route-test");
     await next();
   });
-  app.route("/v1/threads", makeThreadFilesRoutes(resident));
+  app.route("/v1/threads", threadFilesRoutes);
   return app;
 };
 
@@ -90,40 +88,6 @@ describe("Thread Files routes", () => {
         mediaType: "text/typescript",
       },
     });
-    expect(mocks.requestThreadDaemon).toHaveBeenNthCalledWith(
-      1,
-      bindings,
-      threadId,
-      { operation: "files.list", path: null },
-    );
-    expect(mocks.requestThreadDaemon).toHaveBeenNthCalledWith(
-      2,
-      bindings,
-      threadId,
-      { operation: "files.read", path },
-    );
-  });
-
-  it("selects resident dxd for deployed Files", async () => {
-    const resident = {
-      list: vi.fn(async () => ({
-        kind: "tree" as const,
-        version,
-        entries: [],
-      })),
-      read: vi.fn(),
-      save: vi.fn(),
-    };
-    const app = appFor(resident);
-    const response = await app.request(
-      `http://dx.test/v1/threads/${threadId}/files`,
-      undefined,
-      { DX_RUNTIME_MODE: "deployed" },
-    );
-
-    expect(response.status).toBe(200);
-    expect(resident.list).toHaveBeenCalledOnce();
-    expect(mocks.requestThreadDaemon).not.toHaveBeenCalled();
   });
 
   it("maps daemon failures without alternate dispatch", async () => {
@@ -138,91 +102,5 @@ describe("Thread Files routes", () => {
     expect(await response.json()).toMatchObject({
       data: { code: "THREAD_FILES_ENTRY_NOT_FOUND" },
     });
-  });
-
-  it("selects resident save before dispatch and never resolves a request-scoped workspace", async () => {
-    const save = vi.fn(async () => ({
-      kind: "saved" as const,
-      contentVersion: `sha256:${"b".repeat(64)}` as ThreadFileVersion,
-    }));
-    const app = appFor({
-      list: vi.fn(),
-      read: vi.fn(),
-      save,
-    });
-    const content = "export const newest = true;\n";
-
-    const response = await app.request(
-      `http://dx.test/v1/threads/${threadId}/files/${encodeURIComponent(path)}`,
-      {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ expectedVersion: version, content }),
-      },
-      { DX_RUNTIME_MODE: "local" },
-    );
-
-    expect(response.status).toBe(200);
-    expect(save).toHaveBeenCalledExactlyOnceWith(
-      expect.anything(),
-      threadId,
-      path,
-      version,
-      content,
-      undefined,
-    );
-    expect(save).toHaveBeenCalledOnce();
-  });
-
-  it("does not replay after a resident save dispatch fails", async () => {
-    const save = vi.fn(async () => {
-      throw new Error("uncertain dispatch");
-    });
-    const app = appFor({
-      list: vi.fn(),
-      read: vi.fn(),
-      save,
-    });
-
-    const response = await app.request(
-      `http://dx.test/v1/threads/${threadId}/files/${encodeURIComponent(path)}`,
-      {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ expectedVersion: version, content: "newest\n" }),
-      },
-      { DX_RUNTIME_MODE: "deployed" },
-    );
-
-    expect(response.status).toBe(503);
-    expect(save).toHaveBeenCalledOnce();
-  });
-
-  it("preserves the public conflict envelope from resident save", async () => {
-    const save = vi.fn(async () => {
-      const { ThreadFilesConflict } = await import("./service.js");
-      throw new ThreadFilesConflict();
-    });
-    const app = appFor({
-      list: vi.fn(),
-      read: vi.fn(),
-      save,
-    });
-
-    const response = await app.request(
-      `http://dx.test/v1/threads/${threadId}/files/${encodeURIComponent(path)}`,
-      {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ expectedVersion: version, content: "newest\n" }),
-      },
-      { DX_RUNTIME_MODE: "local" },
-    );
-
-    expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({
-      data: { code: "THREAD_FILES_CONFLICT" },
-    });
-    expect(save).toHaveBeenCalledOnce();
   });
 });

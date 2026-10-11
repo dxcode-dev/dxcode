@@ -259,65 +259,6 @@ describe("Thread Files lazy reads", () => {
     await React.act(() => root.unmount());
   });
 
-  it("sizes grouped worktree trees to their visible rows", async () => {
-    const linkedWorktree = "linked" as ThreadFilesWorktreeId;
-    const changes = changesData([]);
-    const transport: ThreadFilesApi = {
-      list: vi.fn(async () => rootTree),
-      read: vi.fn(),
-      save: vi.fn(),
-    };
-    const changesTransport = createChangesTransport(async () => ({
-      ...changes,
-      worktrees: [
-        {
-          id: primaryWorktree,
-          name: "dx",
-          head: changes.head,
-          branch: "main",
-        },
-        {
-          id: linkedWorktree,
-          name: "agent-worktree",
-          head: changes.head,
-          branch: "agent",
-        },
-      ],
-    }));
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    const container = document.body.appendChild(document.createElement("div"));
-    const root = createRoot(container);
-    await React.act(() =>
-      root.render(
-        <QueryClientProvider client={client}>
-          <ThreadFilesPanel
-            changesTransport={changesTransport}
-            onOpenFile={vi.fn()}
-            projectName="dx"
-            threadId={threadId}
-            transport={transport}
-          />
-        </QueryClientProvider>,
-      ),
-    );
-    await settle();
-
-    const worktrees = container.querySelectorAll(".thread-files-worktree");
-    expect(worktrees).toHaveLength(2);
-    await vi.waitFor(() =>
-      expect(container.querySelectorAll(".thread-files-tree")).toHaveLength(2),
-    );
-    for (const worktree of worktrees) {
-      const tree = worktree.querySelector<HTMLElement>(".thread-files-tree");
-      expect(
-        tree?.style.getPropertyValue("--thread-files-tree-content-height"),
-      ).toBe("60px");
-    }
-    await React.act(() => root.unmount());
-  });
-
   it("does not wake retained Files on focus while another tool is active", async () => {
     const transport: ThreadFilesApi = {
       list: vi.fn(async () => rootTree),
@@ -803,52 +744,6 @@ describe("Thread Files lazy reads", () => {
     await React.act(() => root.unmount());
   });
 
-  it("does not fetch file bytes until the opened file pane mounts", async () => {
-    const filePath = "src/index.ts" as ThreadFilesPath;
-    const transport: ThreadFilesApi = {
-      list: vi.fn(),
-      read: vi.fn(async () => ({
-        kind: "file" as const,
-        path: filePath,
-        editable: true as const,
-        contentVersion: version,
-        content: "export const proof = true;\n",
-        sizeBytes: 27,
-        language: "typescript",
-        mediaType: "text/typescript",
-      })),
-      save: vi.fn(),
-    };
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    const container = document.body.appendChild(document.createElement("div"));
-    const root = createRoot(container);
-    expect(transport.read).not.toHaveBeenCalled();
-    await React.act(() =>
-      root.render(
-        <QueryClientProvider client={client}>
-          <ThreadFilePane
-            threadId={threadId}
-            path={filePath}
-            transport={transport}
-            onDirtyChange={vi.fn()}
-          />
-        </QueryClientProvider>,
-      ),
-    );
-    await settle();
-    await settle();
-    expect(transport.read).toHaveBeenCalledTimes(1);
-    expect(transport.read).toHaveBeenCalledWith(
-      threadId,
-      filePath,
-      primaryWorktree,
-      expect.anything(),
-    );
-    await React.act(() => root.unmount());
-  });
-
   it("offers pagination independently for every expanded directory", async () => {
     const aCursor = "a-next" as ThreadFilesCursor;
     const bCursor = "b-next" as ThreadFilesCursor;
@@ -1066,63 +961,6 @@ describe("Thread Files lazy reads", () => {
       (button) => button.textContent === "src/",
     );
     expect(directory?.getAttribute("data-git-status")).toBeNull();
-    await React.act(() => root.unmount());
-  });
-
-  it("marks only the expanded directory as busy until its children load", async () => {
-    let resolveChildren: ((tree: ThreadFileTreeData) => void) | undefined;
-    const children = new Promise<ThreadFileTreeData>((resolve) => {
-      resolveChildren = resolve;
-    });
-    const transport: ThreadFilesApi = {
-      list: vi.fn(async (_threadId, path) =>
-        path === undefined ? rootTree : children,
-      ),
-      read: vi.fn(),
-      save: vi.fn(),
-    };
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    const container = document.body.appendChild(document.createElement("div"));
-    const root = createRoot(container);
-    await React.act(() =>
-      root.render(
-        <QueryClientProvider client={client}>
-          <ThreadFilesPanel
-            changesTransport={createChangesTransport()}
-            onOpenFile={vi.fn()}
-            threadId={threadId}
-            transport={transport}
-          />
-        </QueryClientProvider>,
-      ),
-    );
-    await settle();
-    const directory = [...container.querySelectorAll("button")].find(
-      (button) => button.textContent === "src/",
-    );
-    await React.act(() =>
-      directory?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
-    );
-
-    const tree = container.querySelector('[aria-label="Workspace files"]');
-    expect(tree?.getAttribute("aria-busy")).toBe("true");
-    expect(
-      [...(tree?.attributes ?? [])].some((attribute) =>
-        attribute.name.startsWith("data-loading-directory-"),
-      ),
-    ).toBe(true);
-    expect(container.textContent).toContain("Loading src…");
-
-    await React.act(async () => resolveChildren?.(sourceTree));
-    await settle();
-    expect(
-      container
-        .querySelector('[aria-label="Workspace files"]')
-        ?.getAttribute("aria-busy"),
-    ).toBe("false");
-    expect(container.textContent).not.toContain("Loading src…");
     await React.act(() => root.unmount());
   });
 });

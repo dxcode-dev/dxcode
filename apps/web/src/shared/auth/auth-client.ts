@@ -3,7 +3,7 @@ import { createAuthClient } from "better-auth/react";
 import { Effect, Schema } from "effect";
 import { useSyncExternalStore } from "react";
 
-export const BROWSER_SESSION_REFETCH_INTERVAL_SECONDS = 60 * 60 + 15;
+const BROWSER_SESSION_REFETCH_INTERVAL_SECONDS = 60 * 60 + 15;
 
 let browserSessionResolved = false;
 const browserSessionResolutionListeners = new Set<() => void>();

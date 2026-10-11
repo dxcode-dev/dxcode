@@ -36,7 +36,9 @@ const ThreadRow = Schema.Struct({
   activity_status: Schema.String,
   lifecycle_state: Schema.String,
   pinned_at: Schema.NullOr(Schema.String),
+  color: Schema.optional(Schema.NullOr(Schema.String)),
   title_pending_until: Schema.optional(Schema.NullOr(Schema.String)),
+  parent_thread_id: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 type ThreadRow = typeof ThreadRow.Type;
@@ -102,10 +104,17 @@ export const decodeThreadRows = (rows: ReadonlyArray<unknown>) =>
               activityStatus: row.activity_status,
               lifecycleState: row.lifecycle_state,
               pinnedAt: row.pinned_at ?? undefined,
+              ...(row.color === null || row.color === undefined
+                ? {}
+                : { color: row.color }),
               ...(row.title_pending_until === null ||
               row.title_pending_until === undefined
                 ? {}
                 : { titlePendingUntil: row.title_pending_until }),
+              ...(row.parent_thread_id === null ||
+              row.parent_thread_id === undefined
+                ? {}
+                : { parentThreadId: row.parent_thread_id }),
             });
           }),
         ),
@@ -208,6 +217,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   visibility,
                   lifecycle_state,
                   title_pending_until,
+                  parent_thread_id,
                   created_at,
                   updated_at
                 )
@@ -223,6 +233,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   ${encoded.visibility ?? "private"},
                   ${encoded.lifecycleState},
                   ${encoded.titlePendingUntil ?? null},
+                  ${encoded.parentThreadId ?? null},
                   ${encoded.createdAt}, ${encoded.updatedAt}
                 )
               `;
@@ -482,7 +493,9 @@ export const ThreadRepositoryD1 = Layer.effect(
               activity_status,
               lifecycle_state,
               pinned_at,
-              title_pending_until
+              title_pending_until,
+              color,
+              parent_thread_id
             FROM threads
             WHERE id = ${threadId}
               AND owner_user_id = ${ownerUserId}
@@ -529,7 +542,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                 model_selection, runner_profile_id, plugin_snapshot_json, skill_snapshot_json,
                 visibility, created_at, updated_at,
                 last_activity_at, activity_status, lifecycle_state, pinned_at,
-                title_pending_until
+                title_pending_until, color, parent_thread_id
               FROM threads
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
@@ -539,6 +552,48 @@ export const ThreadRepositoryD1 = Layer.effect(
             `.pipe(
               Effect.catchTag("SqlError", (cause) =>
                 Effect.fail(unavailable("thread.setPinnedAtOwned")(cause)),
+              ),
+              Effect.flatMap(decodeThreadRows),
+              Effect.flatMap((threads) =>
+                threads[0] === undefined
+                  ? Effect.fail(new ThreadNotFound({ threadId }))
+                  : Effect.succeed(threads[0]),
+              ),
+            );
+          }),
+        ),
+
+      updateOwned: (threadId, ownerUserId, update) =>
+        observe(
+          "thread.updateOwned",
+          { threadId },
+          Effect.gen(function* () {
+            const updatedAt = new Date().toISOString();
+            const title = update.title ?? null;
+            const colorChanged = update.color !== undefined ? 1 : 0;
+            const color = update.color ?? null;
+            return yield* sql<ThreadRow>`
+              UPDATE threads
+              SET title = COALESCE(${title}, title),
+                  title_pending_until = CASE
+                    WHEN ${title} IS NULL THEN title_pending_until
+                    ELSE NULL
+                  END,
+                  color = CASE WHEN ${colorChanged} = 1 THEN ${color} ELSE color END,
+                  updated_at = ${updatedAt}
+              WHERE id = ${threadId}
+                AND owner_user_id = ${ownerUserId}
+                AND ${inReachableScope("project_id", ownerUserId)}
+                AND lifecycle_state != 'deleted'
+              RETURNING id, title, project_id, owner_user_id, agent_instructions,
+                agent_instructions_revision, agent_instructions_version,
+                model_selection, runner_profile_id, plugin_snapshot_json, skill_snapshot_json,
+                visibility, created_at, updated_at,
+                last_activity_at, activity_status, lifecycle_state, pinned_at,
+                title_pending_until, color, parent_thread_id
+            `.pipe(
+              Effect.catchTag("SqlError", (cause) =>
+                Effect.fail(unavailable("thread.updateOwned")(cause)),
               ),
               Effect.flatMap(decodeThreadRows),
               Effect.flatMap((threads) =>
@@ -573,7 +628,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                 model_selection, runner_profile_id, plugin_snapshot_json, skill_snapshot_json,
                 visibility, created_at, updated_at,
                 last_activity_at, activity_status, lifecycle_state, pinned_at,
-                title_pending_until
+                title_pending_until, color, parent_thread_id
             `.pipe(
               Effect.catchTag("SqlError", (cause) =>
                 Effect.fail(
@@ -596,6 +651,24 @@ export const ThreadRepositoryD1 = Layer.effect(
           projectId ? { projectId } : {},
           Effect.gen(function* () {
             const limit = request.limit ?? 20;
+            // A child lists under its parent while both share a lifecycle
+            // state, it is not pinned, and its parent's project is still
+            // reachable; otherwise it lists as a root, so a pinned child
+            // sits with the other pinned Threads. Pages ordered by the pin
+            // snapshot judge pinning by that snapshot too.
+            const treeFilterFor = (
+              pinnedAt: "thread.pinned_at" | "pin.pinned_at",
+            ) =>
+              request.tree === undefined
+                ? sql`1 = 1`
+                : request.tree.kind === "children"
+                  ? sql`(thread.parent_thread_id = ${request.tree.parentThreadId} AND ${sql.literal(pinnedAt)} IS NULL)`
+                  : sql`(thread.parent_thread_id IS NULL OR ${sql.literal(pinnedAt)} IS NOT NULL OR NOT EXISTS (
+                      SELECT 1 FROM threads AS parent
+                       WHERE parent.id = thread.parent_thread_id
+                         AND parent.owner_user_id = thread.owner_user_id
+                         AND parent.lifecycle_state = thread.lifecycle_state
+                         AND ${inReachableScope("parent.project_id", ownerUserId)}))`;
             const cursor = request.cursor
               ? yield* decodeThreadPageCursor(request.cursor)
               : undefined;
@@ -663,7 +736,8 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.id, thread.title, thread.project_id, thread.owner_user_id,
                       thread.agent_instructions, thread.agent_instructions_revision,
                       thread.agent_instructions_version, thread.model_selection,
-                      thread.runner_profile_id, thread.title_pending_until,
+                      thread.runner_profile_id, thread.title_pending_until, thread.color,
+                      thread.parent_thread_id,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
                       thread.updated_at, activity.last_activity_at,
@@ -676,6 +750,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       AND ${inReachableScope("thread.project_id", ownerUserId)}
                       AND thread.project_id = ${projectId}
                       AND thread.lifecycle_state != 'deleted'
+                      AND ${treeFilterFor("thread.pinned_at")}
                       AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
                       AND (activity.last_activity_at, thread.id) < (${cursorTime}, ${cursor.id})
                     ORDER BY activity.last_activity_at DESC, thread.id DESC
@@ -707,7 +782,8 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.id, thread.title, thread.project_id, thread.owner_user_id,
                       thread.agent_instructions, thread.agent_instructions_revision,
                       thread.agent_instructions_version, thread.model_selection,
-                      thread.runner_profile_id, thread.title_pending_until,
+                      thread.runner_profile_id, thread.title_pending_until, thread.color,
+                      thread.parent_thread_id,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
                       thread.updated_at, activity.last_activity_at,
@@ -721,6 +797,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       AND ${inReachableScope("thread.project_id", ownerUserId)}
                       AND thread.project_id = ${projectId}
                       AND thread.lifecycle_state != 'deleted'
+                      AND ${treeFilterFor("pin.pinned_at")}
                       AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
                       AND (
                         CASE WHEN pin.pinned_at IS NULL THEN 1 ELSE 0 END > ${cursorPinRank}
@@ -758,7 +835,8 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.id, thread.title, thread.project_id, thread.owner_user_id,
                       thread.agent_instructions, thread.agent_instructions_revision,
                       thread.agent_instructions_version, thread.model_selection,
-                      thread.runner_profile_id, thread.title_pending_until,
+                      thread.runner_profile_id, thread.title_pending_until, thread.color,
+                      thread.parent_thread_id,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
                       thread.updated_at, activity.last_activity_at,
@@ -772,6 +850,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       AND ${inReachableScope("thread.project_id", ownerUserId)}
                       AND thread.project_id = ${projectId}
                       AND thread.lifecycle_state != 'deleted'
+                      AND ${treeFilterFor("pin.pinned_at")}
                       AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
                     ORDER BY CASE WHEN pin.pinned_at IS NULL THEN 1 ELSE 0 END,
                       pin.pinned_at DESC, activity.last_activity_at DESC, thread.id DESC
@@ -793,7 +872,8 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.id, thread.title, thread.project_id, thread.owner_user_id,
                       thread.agent_instructions, thread.agent_instructions_revision,
                       thread.agent_instructions_version, thread.model_selection,
-                      thread.runner_profile_id, thread.title_pending_until,
+                      thread.runner_profile_id, thread.title_pending_until, thread.color,
+                      thread.parent_thread_id,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
                       thread.updated_at, activity.last_activity_at,
@@ -805,6 +885,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                     WHERE thread.owner_user_id = ${ownerUserId}
                       AND ${inReachableScope("thread.project_id", ownerUserId)}
                       AND thread.lifecycle_state != 'deleted'
+                      AND ${treeFilterFor("thread.pinned_at")}
                       AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
                       AND (activity.last_activity_at, thread.id) < (${cursorTime}, ${cursor.id})
                     ORDER BY activity.last_activity_at DESC, thread.id DESC
@@ -835,7 +916,8 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.id, thread.title, thread.project_id, thread.owner_user_id,
                       thread.agent_instructions, thread.agent_instructions_revision,
                       thread.agent_instructions_version, thread.model_selection,
-                      thread.runner_profile_id, thread.title_pending_until,
+                      thread.runner_profile_id, thread.title_pending_until, thread.color,
+                      thread.parent_thread_id,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
                       thread.updated_at, activity.last_activity_at,
@@ -848,6 +930,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                     WHERE thread.owner_user_id = ${ownerUserId}
                       AND ${inReachableScope("thread.project_id", ownerUserId)}
                       AND thread.lifecycle_state != 'deleted'
+                      AND ${treeFilterFor("pin.pinned_at")}
                       AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
                       AND (
                         CASE WHEN pin.pinned_at IS NULL THEN 1 ELSE 0 END > ${cursorPinRank}
@@ -884,7 +967,8 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.id, thread.title, thread.project_id, thread.owner_user_id,
                       thread.agent_instructions, thread.agent_instructions_revision,
                       thread.agent_instructions_version, thread.model_selection,
-                      thread.runner_profile_id, thread.title_pending_until,
+                      thread.runner_profile_id, thread.title_pending_until, thread.color,
+                      thread.parent_thread_id,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
                       thread.updated_at, activity.last_activity_at,
@@ -897,6 +981,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                     WHERE thread.owner_user_id = ${ownerUserId}
                       AND ${inReachableScope("thread.project_id", ownerUserId)}
                       AND thread.lifecycle_state != 'deleted'
+                      AND ${treeFilterFor("pin.pinned_at")}
                       AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
                     ORDER BY CASE WHEN pin.pinned_at IS NULL THEN 1 ELSE 0 END,
                       pin.pinned_at DESC, activity.last_activity_at DESC, thread.id DESC

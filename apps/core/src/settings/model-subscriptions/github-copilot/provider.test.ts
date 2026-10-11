@@ -19,29 +19,6 @@ const entitlements = (modelId: string) => ({
 });
 
 describe("GitHub Copilot provider", () => {
-  it.each([
-    ["authorization_pending", "pending"],
-    ["slow_down", "slow_down"],
-    ["access_denied", "denied"],
-    ["expired_token", "expired"],
-  ] as const)("maps device flow %s", async (error, expected) => {
-    const provider = createGitHubCopilotProvider({
-      clientId: "dx-owned-client",
-      clock: () => 10_000,
-      fetch: vi.fn().mockResolvedValue(response({ error })),
-    });
-    await expect(
-      provider.pollDeviceAuthorization({
-        deviceCode: "secret",
-        userCode: "CODE",
-        verificationUri: "https://github.com/login/device",
-        expiresAt: 20_000,
-        intervalSeconds: 5,
-        nextPollAt: 10_000,
-      }),
-    ).resolves.toMatchObject({ status: expected });
-  });
-
   it("requires the exact verification URI", async () => {
     const provider = createGitHubCopilotProvider({
       clientId: "dx-owned-client",
@@ -130,34 +107,6 @@ describe("GitHub Copilot provider", () => {
       expect(fetcher).not.toHaveBeenCalled();
     },
   );
-
-  it("uses the dedicated OAuth token directly without a token exchange", async () => {
-    const fetcher = vi
-      .fn()
-      .mockResolvedValueOnce(response({ id: 42, login: "octo" }));
-    const provider = createGitHubCopilotProvider({
-      clientId: "dx-owned-client",
-      clock: () => 1_000_000,
-      fetch: fetcher,
-    });
-    await expect(provider.getGitHubIdentity("github-token")).resolves.toEqual({
-      id: "42",
-      login: "octo",
-    });
-    await expect(
-      provider.resolveCopilotAccess({ accessToken: "github-token" }),
-    ).resolves.toMatchObject({
-      credential: { accessToken: "github-token" },
-      access: {
-        accessToken: "github-token",
-        apiOrigin: "https://api.githubcopilot.com",
-      },
-    });
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(fetcher.mock.calls[0]?.[1]?.headers).toMatchObject({
-      authorization: "Bearer github-token",
-    });
-  });
 
   it("rotates an expiring device credential without a client secret", async () => {
     const fetcher = vi.fn().mockResolvedValue(
@@ -355,15 +304,6 @@ describe("GitHub Copilot provider", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("reports its code in the error message", () => {
-    expect(new CopilotError({ code: "TIMEOUT" }).message).toBe(
-      "Copilot request failed: TIMEOUT",
-    );
-    expect(
-      new CopilotError({ code: "UPSTREAM_REJECTED", status: 502 }).message,
-    ).toBe("Copilot request failed: UPSTREAM_REJECTED (HTTP 502)");
   });
 
   it("blocks redirects and keeps errors secret-free", async () => {

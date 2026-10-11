@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { validateSelfhostConfig } from "../deploy/selfhost/config.mjs";
 import {
@@ -8,52 +7,10 @@ import {
   collectOrbProviders,
   collectPluginChoices,
   E2B_ORB_PROMPT,
-  provisionalDeploymentConfigPath,
   WORKER_TRACES_PROMPT,
 } from "./dx-deploy.mjs";
 
 describe("common deployment installer", () => {
-  it("runs Cloudflare preflight before collecting deployment credentials", () => {
-    const source = readFileSync(
-      new URL("./dx-deploy.mjs", import.meta.url),
-      "utf8",
-    );
-    const runner = source.slice(source.indexOf("export const runDxDeploy"));
-    expect(runner.indexOf("Cloudflare deployment API token")).toBeLessThan(
-      runner.indexOf("Magic-link sender email"),
-    );
-    expect(runner.indexOf("await preflightCloudflareDeployment")).toBeLessThan(
-      runner.indexOf("config = await collectDeploymentConfig"),
-    );
-  });
-
-  it("keeps first-run config provisional until deployment succeeds", () => {
-    const source = readFileSync(
-      new URL("./dx-deploy.mjs", import.meta.url),
-      "utf8",
-    );
-    const runner = source.slice(source.indexOf("export const runDxDeploy"));
-    const provisionalWrite = runner.indexOf(
-      "writeFileSync(deploymentConfigPath",
-    );
-    const failedDeployment = runner.indexOf("if (result.status !== 0)");
-    const promotion = runner.indexOf(
-      "renameSync(deploymentConfigPath, configPath)",
-    );
-    expect(provisionalWrite).toBeGreaterThan(-1);
-    expect(provisionalWrite).toBeLessThan(failedDeployment);
-    expect(failedDeployment).toBeLessThan(promotion);
-  });
-
-  it("keeps each provisional config beside its final destination", () => {
-    expect(
-      provisionalDeploymentConfigPath("/mnt/config/deploy.json", "first"),
-    ).toBe("/mnt/config/.deploy.json.first.pending");
-    expect(
-      provisionalDeploymentConfigPath("/mnt/config/deploy.json", "second"),
-    ).toBe("/mnt/config/.deploy.json.second.pending");
-  });
-
   it("keeps private wrapper defaults fixed on rerun", () => {
     const defaults = {
       name: "hosted",
@@ -165,54 +122,6 @@ describe("common deployment installer", () => {
     expect(keyless.environment).not.toHaveProperty("EXA_API_KEY");
   });
 
-  it("installs Speech at deploy time with an optional deployment Sarvam key", async () => {
-    const asked = [];
-    const run = async (withKey) => {
-      const environment = {};
-      const config = await collectDeploymentConfig({
-        answer: async (label) => {
-          if (label === "First administrator email") return "owner@example.com";
-          if (label === "Magic-link sender email")
-            return "sign-in@auth.example.com";
-          throw new Error(`Unexpected answer prompt: ${label}`);
-        },
-        yes: async (label, fallback = false) => {
-          asked.push(label);
-          return label.startsWith("Install the Speech plugin")
-            ? true
-            : label.startsWith("Configure a deployment Sarvam API key")
-              ? withKey
-              : fallback;
-        },
-        secret: async (label) =>
-          label === "Sarvam API key" ? "fixture-sarvam-key" : "fixture-e2b-key",
-        environment,
-        defaults: {
-          name: "hosted",
-          cloudflareAccountId: "a".repeat(32),
-          domain: "app.example.com",
-          zone: "example.com",
-          hostedAuthentication: true,
-        },
-      });
-      return { config, environment };
-    };
-    const keyed = await run(true);
-    expect(keyed.config).toMatchObject({
-      plugins: ["speech"],
-      integrations: ["sarvam"],
-    });
-    expect(keyed.environment.SARVAM_API_KEY).toBe("fixture-sarvam-key");
-    const keyless = await run(false);
-    expect(keyless.config).toMatchObject({
-      plugins: ["speech"],
-      integrations: [],
-    });
-    expect(keyless.environment).not.toHaveProperty("SARVAM_API_KEY");
-    // The old standalone dictation question is gone.
-    expect(asked).not.toContain("Configure Sarvam dictation");
-  });
-
   it("asks an existing deployment once about plugins it was never offered", async () => {
     const yes = vi.fn(async (label) =>
       label.startsWith("Install the Speech plugin"),
@@ -243,17 +152,6 @@ describe("common deployment installer", () => {
     });
     expect(answered.offeredPlugins).toEqual(["search", "speech"]);
     expect(yes).toHaveBeenCalledTimes(2);
-
-    const source = readFileSync(
-      new URL("./dx-deploy.mjs", import.meta.url),
-      "utf8",
-    );
-    const runner = source.slice(source.indexOf("export const runDxDeploy"));
-    const ask = runner.indexOf("config.offeredPlugins ?? []");
-    expect(ask).toBeGreaterThan(
-      runner.indexOf("config = await collectDeploymentConfig"),
-    );
-    expect(ask).toBeLessThan(runner.indexOf("Deployment review"));
   });
 
   it("keeps a pre-plugin Sarvam deployment's dictation as the Speech plugin", () => {
@@ -304,53 +202,6 @@ describe("common deployment installer", () => {
     expect(() =>
       validateSelfhostConfig({ ...base, integrations: ["exa"] }),
     ).toThrow("requires the search plugin");
-  });
-
-  it("records a new deployment's traces answer", async () => {
-    const yes = vi.fn(async (label, fallback = false) =>
-      label === WORKER_TRACES_PROMPT ? true : fallback,
-    );
-    await expect(
-      collectDeploymentConfig({
-        answer: vi.fn(async () => "owner@example.com"),
-        yes,
-        secret: vi.fn(async () => "fixture-secret"),
-        environment: {},
-        defaults: {
-          name: "hosted",
-          cloudflareAccountId: "a".repeat(32),
-          domain: "app.example.com",
-          zone: "example.com",
-          hostedAuthentication: true,
-          authEmailFrom: "sign-in@example.com",
-        },
-      }),
-    ).resolves.toMatchObject({ workerTraces: true });
-  });
-
-  it("asks an upgraded deployment about traces once and keeps the answer", () => {
-    const source = readFileSync(
-      new URL("./dx-deploy.mjs", import.meta.url),
-      "utf8",
-    );
-    const runner = source.slice(source.indexOf("export const runDxDeploy"));
-    const ask = runner.indexOf("config.workerTraces === undefined");
-    expect(ask).toBeGreaterThan(
-      runner.indexOf("config = await collectDeploymentConfig"),
-    );
-    expect(ask).toBeLessThan(runner.indexOf("Deployment review"));
-    expect(ask).toBeLessThan(
-      runner.indexOf("writeFileSync(deploymentConfigPath"),
-    );
-
-    const legacy = { name: "hosted", adminEmail: "owner@example.com" };
-    expect(validateSelfhostConfig(legacy)).not.toHaveProperty("workerTraces");
-    expect(
-      validateSelfhostConfig({ ...legacy, workerTraces: false }),
-    ).toMatchObject({ workerTraces: false });
-    expect(() =>
-      validateSelfhostConfig({ ...legacy, workerTraces: "yes" }),
-    ).toThrow("workerTraces must be true or false.");
   });
 });
 

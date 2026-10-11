@@ -19,6 +19,7 @@ import {
 } from "@flue/runtime";
 import {
   agentPluginHostContext,
+  agentThreadToolsContext,
   resolveAgentPluginTools,
 } from "../plugins/agent-context.js";
 import { firstPartyPluginTools } from "../plugins/tools.js";
@@ -30,6 +31,7 @@ import { AGENT_RUN_LIMIT_MS } from "../runtime/agent-run-limit.js";
 import { invokePluginLive } from "../settings/plugins/execution.js";
 import { createPluginTool } from "../settings/plugins/flue.js";
 import { createSkillResourceTool } from "../settings/skills/execution.js";
+import { createThreadTools } from "../threads/agent-tools.js";
 import {
   type DxAgentInitialData,
   DxAgentInitialDataSchema,
@@ -85,6 +87,14 @@ export function DxAgent(props: AgentProps) {
     // modules for code_exec and tool_search.
     if (skills.some((skill) => skill.resources.length > 0)) {
       useTool(withToolFailureMessage(createSkillResourceTool(props.id)));
+    }
+    // Built in, not a plugin: the owner's other Threads are always in reach.
+    for (const tool of createThreadTools(
+      props.id,
+      agentThreadToolsContext,
+      promptData?.plugins?.submissionId,
+    )) {
+      useTool(withToolFailureMessage(tool));
     }
     // Plugin tools come from this submission's resolved set, never from
     // Thread creation data; providers and keys resolve again on every call.

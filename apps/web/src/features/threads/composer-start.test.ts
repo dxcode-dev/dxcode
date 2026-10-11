@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   effectiveRunnerProfileId,
   rememberedProjectToResolve,
-  startingMode,
   startingModel,
   startingProjectId,
 } from "./composer-start.js";
@@ -38,17 +37,6 @@ describe("rememberedProjectToResolve", () => {
       { explicit: undefined, remembered: null, listedProjectIds: [dx] },
     ] as const)
       expect(rememberedProjectToResolve(input)).toBeUndefined();
-  });
-
-  it("starts on the fetched Project instead of the first listed one", () => {
-    expect(
-      startingProjectId({
-        explicit: undefined,
-        remembered: api,
-        // The composer lists the fetched remembered Project ahead of page one.
-        listedProjectIds: [api, dx],
-      }),
-    ).toBe(api);
   });
 });
 
@@ -105,12 +93,7 @@ describe("startingProjectId", () => {
   });
 });
 
-describe("startingMode and startingModel", () => {
-  it("restores the remembered mode, defaulting to medium", () => {
-    expect(startingMode("high")).toBe("high");
-    expect(startingMode(null)).toBe("medium");
-  });
-
+describe("startingModel", () => {
   it("restores a remembered model only while it is offered", () => {
     expect(startingModel("openai/a", ["openai/a"])).toBe("openai/a");
     expect(startingModel("openai/a", ["openai/b"])).toBeUndefined();

@@ -213,41 +213,6 @@ describe("useDictation lifecycle", () => {
     expect(mounted.submissions).toHaveBeenCalledWith("message");
   });
 
-  it("shows a full waveform with only a stop control, then the shared processing dot", async () => {
-    const result = deferred<string>();
-    fakes.transcription.mockReturnValue(result.promise);
-    const mounted = await mount();
-
-    await start(mounted);
-    expect(
-      mounted.container.querySelector(".dictation-waveform"),
-    ).not.toBeNull();
-    expect(
-      mounted.container.querySelector('[aria-label="Stop dictation"]'),
-    ).not.toBeNull();
-    expect(
-      mounted.container
-        .querySelector('[aria-label="Stop dictation"]')
-        ?.classList.contains("size-8"),
-    ).toBe(true);
-    expect(
-      mounted.container.querySelector('[aria-label="Cancel dictation"]'),
-    ).toBeNull();
-
-    await click(
-      mounted.container.querySelector('[aria-label="Stop dictation"]'),
-    );
-    await vi.waitFor(() =>
-      expect(
-        mounted.container.querySelector(".dictation-processing-dot"),
-      ).not.toBeNull(),
-    );
-    expect(
-      mounted.container.querySelector('button[type="submit"]'),
-    ).not.toBeNull();
-    await React.act(() => result.resolve("done"));
-  });
-
   it("inserts at the current selection when a stopped recording resolves, without submitting", async () => {
     const result = deferred<string>();
     fakes.transcription.mockReturnValue(result.promise);

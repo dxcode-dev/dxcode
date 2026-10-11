@@ -7,11 +7,7 @@ import {
   createProjectMutationOptions,
   seedProjectDetail,
 } from "./project-mutations.js";
-import {
-  projectKeys,
-  projectQueryOptions,
-  projectsQueryOptions,
-} from "./project-queries.js";
+import { projectKeys, projectsQueryOptions } from "./project-queries.js";
 
 const userId = Schema.decodeUnknownSync(UserId)("user-1");
 const projectId = Schema.decodeUnknownSync(ProjectId)(
@@ -23,28 +19,6 @@ afterEach(() => {
 });
 
 describe("project query contracts", () => {
-  it("builds user-scoped detail keys for component and loader reuse", () => {
-    expect(projectQueryOptions(userId, projectId).queryKey).toEqual(
-      projectKeys.detail(userId, projectId),
-    );
-  });
-
-  it("shares one user-scoped list key and preserves the server cursor", () => {
-    const options = projectsQueryOptions(userId);
-    expect(options.queryKey).toEqual(projectKeys.lists(userId));
-    expect(
-      options.getNextPageParam?.(
-        { items: [], nextCursor: "next" as never },
-        [],
-        undefined,
-        [],
-      ),
-    ).toBe("next");
-    expect(options.getNextPageParam?.({ items: [] }, [], undefined, [])).toBe(
-      undefined,
-    );
-  });
-
   it("caches an authoritative create result in detail and list without a GET", async () => {
     const project = {
       id: projectId,

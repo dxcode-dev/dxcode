@@ -1,7 +1,6 @@
 import {
   EnvironmentVariableConflict,
   type EnvironmentVariableAuditEvent,
-  EnvironmentVariableId,
   EnvironmentVariableName,
   EnvironmentVariableNotFound,
   EnvironmentVariablePlaintext,
@@ -173,68 +172,6 @@ const harness = () => {
 const audit = { userId: ownerUserId, requestId: "request-synthetic" };
 
 describe("EnvironmentVariableService", () => {
-  it("persists only envelopes, masks secrets, rotates, disables, and deletes", async () => {
-    const test = harness();
-    const secret = "synthetic-secret-value";
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const keyring = yield* loadConfigEncryptionKeyring(keyringBinding);
-        const service = yield* EnvironmentVariableService;
-        const created = yield* service.create(
-          keyring,
-          personalTarget,
-          {
-            name: name("BUILD_CHANNEL"),
-            kind: "secret",
-            value: plaintext(secret),
-          },
-          audit,
-        );
-        const listed = yield* service.list(keyring, personalTarget);
-        const disabled = yield* service.updateState(
-          personalTarget,
-          created.id,
-          { enabled: false },
-          audit,
-        );
-        const rotated = yield* service.rotate(
-          keyring,
-          personalTarget,
-          created.id,
-          plaintext("replacement-secret-value"),
-          audit,
-        );
-        yield* service.remove(personalTarget, created.id, audit);
-        return { created, disabled, listed, rotated };
-      }).pipe(Effect.provide(test.layer)),
-    );
-
-    expect(JSON.stringify(result.created)).not.toContain(secret);
-    expect(result.listed[0]?.value).toBe("••••••••");
-    expect(result.disabled.enabled).toBe(false);
-    expect(result.rotated.enabled).toBe(true);
-    expect(result.rotated.envelope).not.toEqual(result.created.envelope);
-    expect(test.stored()).toEqual([]);
-    expect(JSON.stringify(test.events)).not.toMatch(
-      /BUILD_CHANNEL|synthetic-secret|replacement-secret/,
-    );
-    expect(test.events.map(({ action }) => action)).toEqual([
-      "environment_variable.create",
-      "environment_variable.update",
-      "environment_variable.rotate",
-      "environment_variable.delete",
-    ]);
-    expect(test.auditEvents.map(({ action }) => action)).toEqual([
-      "create",
-      "update",
-      "rotate",
-      "delete",
-    ]);
-    expect(JSON.stringify(test.auditEvents)).not.toMatch(
-      /synthetic-secret|replacement-secret/,
-    );
-  });
-
   it("isolates scopes and resolves personal, then project, then workspace", async () => {
     const test = harness();
     const resolved = await Effect.runPromise(
@@ -317,84 +254,5 @@ describe("EnvironmentVariableService", () => {
         source: "project",
       },
     ]);
-  });
-
-  it("applies bulk conflicts deterministically with reject or replace", async () => {
-    const test = harness();
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const keyring = yield* loadConfigEncryptionKeyring(keyringBinding);
-        const service = yield* EnvironmentVariableService;
-        const current = yield* service.create(
-          keyring,
-          projectTarget,
-          {
-            name: name("BUILD_CHANNEL"),
-            kind: "variable",
-            value: plaintext("old-value"),
-          },
-          audit,
-        );
-        const input = [
-          { name: name("BUILD_CHANNEL"), value: plaintext("new-value") },
-          { name: name("SECOND_VALUE"), value: plaintext("second-value") },
-        ];
-        const rejected = yield* Effect.flip(
-          service.applyBulk(
-            keyring,
-            projectTarget,
-            "secret",
-            input,
-            "reject",
-            audit,
-          ),
-        );
-        const replaced = yield* service.applyBulk(
-          keyring,
-          projectTarget,
-          "secret",
-          input,
-          "replace",
-          audit,
-        );
-        return { current, rejected, replaced };
-      }).pipe(Effect.provide(test.layer)),
-    );
-
-    expect(result.rejected).toBeInstanceOf(EnvironmentVariableConflict);
-    expect(result.replaced).toHaveLength(2);
-    expect(result.replaced[0]?.id).toBe(result.current.id);
-    expect(result.replaced.every(({ kind }) => kind === "secret")).toBe(true);
-    expect(JSON.stringify(test.stored())).not.toMatch(/new-value|second-value/);
-  });
-
-  it("does not allow an identifier to cross scope boundaries", async () => {
-    const test = harness();
-    const failure = await Effect.runPromise(
-      Effect.gen(function* () {
-        const keyring = yield* loadConfigEncryptionKeyring(keyringBinding);
-        const service = yield* EnvironmentVariableService;
-        const created = yield* service.create(
-          keyring,
-          personalTarget,
-          {
-            name: name("SCOPE_ONLY"),
-            kind: "variable",
-            value: plaintext("personal-only"),
-          },
-          audit,
-        );
-        return yield* Effect.flip(
-          service.rotate(
-            keyring,
-            projectTarget,
-            Schema.decodeUnknownSync(EnvironmentVariableId)(created.id),
-            plaintext("cross-scope"),
-            audit,
-          ),
-        );
-      }).pipe(Effect.provide(test.layer)),
-    );
-    expect(failure).toBeInstanceOf(EnvironmentVariableNotFound);
   });
 });

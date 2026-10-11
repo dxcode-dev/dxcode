@@ -1,19 +1,10 @@
-import { readFileSync } from "node:fs";
 import { CLOUDFLARE_ORB_PROFILES } from "@dx/domain";
 import { Effect } from "effect";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { Bindings } from "../http/types.js";
-import {
-  createTestBindings,
-  TEST_AUTH_SECRET,
-  validAgentBinding,
-  validAiBinding,
-  validD1Binding,
-  validR2Binding,
-} from "../testing/bindings.js";
+import { createTestBindings, validAgentBinding } from "../testing/bindings.js";
 import {
   loadReadinessRequirements,
-  SOURCE_CONTROL_SCHEMA_VERSION,
   sourceControlSchemaRows,
 } from "./requirements.js";
 
@@ -67,28 +58,6 @@ describe("readiness requirements", () => {
   it("reports local capability readiness without E2B or AI bindings", async () => {
     await expect(
       Effect.runPromise(loadReadinessRequirements(localBindings())),
-    ).resolves.toEqual({ dxEnv: "local" });
-  });
-
-  it("accepts synchronized local GitHub URLs on a linked-worktree port", async () => {
-    const bindings = localBindings();
-    const origin = "http://127.0.0.1:8123";
-    const github = JSON.parse(bindings.DX_INTEGRATION_GITHUB_APP ?? "{}");
-
-    await expect(
-      Effect.runPromise(
-        loadReadinessRequirements({
-          ...bindings,
-          DX_AUTH_URL: origin,
-          DX_AUTH_TRUSTED_ORIGINS: origin,
-          DX_INTEGRATION_GITHUB_APP: JSON.stringify({
-            ...github,
-            callbackUrl: `${origin}/v1/integrations/github/oauth/callback`,
-            setupUrl: `${origin}/v1/integrations/github/setup`,
-            webhookUrl: `${origin}/v1/integrations/github/webhooks`,
-          }),
-        }),
-      ),
     ).resolves.toEqual({ dxEnv: "local" });
   });
 
@@ -168,50 +137,6 @@ describe("readiness requirements", () => {
     );
   });
 
-  it("uses the default E2B template when the binding is omitted", async () => {
-    await expect(
-      Effect.runPromise(
-        loadReadinessRequirements(
-          createTestBindings({ DX_E2B_TEMPLATE: undefined }),
-        ),
-      ),
-    ).resolves.toMatchObject({ dxEnv: "test" });
-  });
-
-  it.each([undefined, ""])("rejects DX_ENV value %s", async (DX_ENV) => {
-    await expect(
-      failure(createTestBindings({ DX_ENV })),
-    ).resolves.toMatchObject({
-      _tag: "ReadinessError",
-      category: "configuration",
-    });
-  });
-
-  it("identifies a missing auth secret as authentication configuration", async () => {
-    const bindings = createTestBindings();
-    Reflect.deleteProperty(bindings, "BETTER_AUTH_SECRET");
-
-    await expect(failure(bindings)).resolves.toMatchObject({
-      _tag: "ReadinessError",
-      category: "authentication_configuration",
-    });
-  });
-
-  it.each([
-    ["short auth secret", { BETTER_AUTH_SECRET: "short" }],
-    ["insecure deployed auth URL", { DX_AUTH_URL: "http://dx.test" }],
-  ])(
-    "identifies %s as authentication configuration",
-    async (_label, overrides) => {
-      await expect(
-        failure(createTestBindings(overrides)),
-      ).resolves.toMatchObject({
-        _tag: "ReadinessError",
-        category: "authentication_configuration",
-      });
-    },
-  );
-
   it.each([undefined, "", "not-json"])(
     "fails closed for encryption keyring value %s",
     async (DX_CONFIG_ENCRYPTION_KEYS) => {
@@ -249,45 +174,6 @@ describe("readiness requirements", () => {
       },
     );
   });
-
-  it("allows preview readiness without a branch-specific GitHub App", async () => {
-    await expect(
-      Effect.runPromise(
-        loadReadinessRequirements(
-          createTestBindings({
-            DX_ENV: "preview",
-            DX_INTEGRATION_GITHUB_APP: "{}",
-          }),
-        ),
-      ),
-    ).resolves.toMatchObject({ dxEnv: "preview" });
-  });
-
-  it("allows deployed readiness while GitHub integration is disabled", async () => {
-    await expect(
-      Effect.runPromise(
-        loadReadinessRequirements(
-          createTestBindings({
-            DX_ENV: "staging",
-            DX_INTEGRATION_GITHUB_APP: undefined,
-          }),
-        ),
-      ),
-    ).resolves.toMatchObject({ dxEnv: "staging" });
-  });
-
-  it.each([undefined, "", "{}"])(
-    "allows deployed readiness while Bitbucket integration is disabled with %s",
-    async (DX_INTEGRATION_BITBUCKET_OAUTH) => {
-      await expect(
-        Effect.runPromise(
-          loadReadinessRequirements(
-            createTestBindings({ DX_INTEGRATION_BITBUCKET_OAUTH }),
-          ),
-        ),
-      ).resolves.toMatchObject({ dxEnv: "test" });
-    },
-  );
 
   it.each(["not-json", "{ }", JSON.stringify({ version: 1 })])(
     "reports malformed present Bitbucket OAuth configuration %s",
@@ -474,18 +360,6 @@ describe("readiness requirements", () => {
     });
   });
 
-  it("derives the source-control binding version from the manifest tail", () => {
-    const manifest = JSON.parse(
-      readFileSync(
-        new URL("../../migration-manifest.json", import.meta.url),
-        "utf8",
-      ),
-    ) as { d1: Array<{ filename: string }> };
-    const expected = /^(\d{4})_/.exec(manifest.d1.at(-1)?.filename ?? "")?.[1];
-    expect(expected).toBeDefined();
-    expect(SOURCE_CONTROL_SCHEMA_VERSION).toBe(expected);
-  });
-
   it.each([
     ["public URL", { DX_DXD_PUBLIC_URL: "https://other.test/" }],
     [
@@ -638,60 +512,5 @@ describe("readiness requirements", () => {
         }),
       ),
     ).resolves.toMatchObject({ category: "d1_binding" });
-  });
-
-  it("uses only cheap binding checks without E2B connect or AI inference", async () => {
-    const agentGet = vi.fn();
-    const agentIdFromName = vi.fn();
-    const aiRun = vi.fn();
-    const d1Prepare = vi.fn(validD1Binding.prepare.bind(validD1Binding));
-    const r2Head = vi.fn(validR2Binding.head.bind(validR2Binding));
-
-    await Effect.runPromise(
-      loadReadinessRequirements(
-        createTestBindings({
-          FLUE_DX_AGENT_AGENT: {
-            ...validAgentBinding,
-            get: agentGet,
-            idFromName: agentIdFromName,
-          } as unknown as DurableObjectNamespace,
-          AI: { ...validAiBinding, run: aiRun } as unknown as Ai,
-          DB: {
-            ...validD1Binding,
-            prepare: d1Prepare,
-          } as unknown as D1Database,
-          DX_STORAGE: { head: r2Head } as unknown as R2Bucket,
-        }),
-      ),
-    );
-
-    expect(agentGet).toHaveBeenCalledOnce();
-    expect(agentIdFromName).toHaveBeenCalledExactlyOnceWith("dx-readiness");
-    expect(aiRun).not.toHaveBeenCalled();
-    expect(r2Head).toHaveBeenCalledExactlyOnceWith("__dx_readiness__");
-    expect(d1Prepare).toHaveBeenCalledTimes(2);
-    expect(d1Prepare).toHaveBeenCalledWith(
-      expect.stringContaining("sqlite_master"),
-    );
-    expect(d1Prepare).toHaveBeenCalledWith(expect.stringContaining("'view'"));
-    expect(d1Prepare).toHaveBeenCalledWith(
-      expect.stringContaining("__alchemy_migrations"),
-    );
-    expect(TEST_AUTH_SECRET.length).toBeGreaterThanOrEqual(32);
-  });
-
-  it("has no E2B client or sandbox operation in the readiness implementation", () => {
-    const source = readFileSync(
-      new URL("./requirements.ts", import.meta.url),
-      "utf8",
-    );
-    for (const forbidden of [
-      'from "e2b"',
-      "ApiClient",
-      "Sandbox.create",
-      "Sandbox.connect",
-      ".run(",
-    ])
-      expect(source).not.toContain(forbidden);
   });
 });

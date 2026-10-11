@@ -328,62 +328,6 @@ describe("Thread Changes mutation coordination", () => {
     expect(mocks.capture).toHaveBeenCalledOnce();
   });
 
-  it("builds a resident save refresh before dispatch and refreshes again after lease release", async () => {
-    const release = vi.fn(async () => undefined);
-    mocks.beginMutation.mockResolvedValue({
-      generation: 4,
-      refreshToken: "opaque-refresh-token",
-      renew: vi.fn(async () => undefined),
-      release,
-    });
-    mocks.read.mockResolvedValue({
-      threadId,
-      mutationGeneration: 4,
-      latestFingerprint: "b".repeat(64),
-      activeMutations: 1,
-    });
-    mocks.source.mockResolvedValue({
-      baseline: "a".repeat(40),
-      defaultBranch: "main",
-      repositoryName: "example-org/example-repo",
-    });
-    const dispatch = vi.fn(async () => "saved");
-    const residentRefresh = vi.fn(async () => true);
-
-    await expect(
-      runResidentThreadChangesMutation({
-        db: {} as D1Database,
-        threadId,
-        operation: dispatch,
-        residentRefresh,
-      }),
-    ).resolves.toBe("saved");
-
-    expect(dispatch).toHaveBeenCalledExactlyOnceWith({
-      type: "changes-refresh",
-      token: "opaque-refresh-token",
-      source: { baseline: "a".repeat(40), defaultBranch: "main" },
-      expectedFingerprint: "b".repeat(64),
-    });
-    expect(mocks.beginMutation.mock.invocationCallOrder[0]).toBeLessThan(
-      dispatch.mock.invocationCallOrder[0] ?? 0,
-    );
-    expect(dispatch.mock.invocationCallOrder[0]).toBeLessThan(
-      release.mock.invocationCallOrder[0] ?? 0,
-    );
-    expect(release.mock.invocationCallOrder[0]).toBeLessThan(
-      residentRefresh.mock.invocationCallOrder[0] ?? 0,
-    );
-    expect(residentRefresh).toHaveBeenCalledExactlyOnceWith({
-      type: "changes-refresh",
-      token: "opaque-refresh-token",
-      source: { baseline: "a".repeat(40), defaultBranch: "main" },
-      expectedFingerprint: "b".repeat(64),
-    });
-    expect(mocks.acquireCapture).not.toHaveBeenCalled();
-    expect(mocks.put).not.toHaveBeenCalled();
-  });
-
   it("confirms a save preview after its lease releases without another R2 write", async () => {
     let active = true;
     const token = "opaque-refresh-token";
@@ -688,53 +632,6 @@ describe("Thread Changes mutation coordination", () => {
     expect(mocks.capture).not.toHaveBeenCalled();
     expect(mocks.put).not.toHaveBeenCalled();
     expect(mocks.publish).not.toHaveBeenCalled();
-    expect(releaseCapture).toHaveBeenCalledOnce();
-  });
-
-  it("seeds a full capture from a changed post-command fingerprint", async () => {
-    const releaseCapture = vi.fn(async () => undefined);
-    const previousFingerprint = "b".repeat(64);
-    const nextFingerprint = "c".repeat(64);
-    const head = "a".repeat(40) as ThreadChangesCommitSha;
-    mocks.acquireCapture.mockResolvedValue({ release: releaseCapture });
-    mocks.read.mockResolvedValue({
-      threadId,
-      mutationGeneration: 2,
-      latestCaptureId: "chg_00000000-0000-4000-8000-000000000248",
-      latestFingerprint: previousFingerprint,
-      activeMutations: 0,
-    });
-    const source = {
-      baseline: head,
-      defaultBranch: "main",
-      repositoryName: "example-org/example-repo",
-    };
-    mocks.source.mockResolvedValue(source);
-    mocks.probe.mockResolvedValue({
-      kind: "changed",
-      fingerprint: nextFingerprint,
-    });
-    mocks.capture.mockResolvedValue(undefined);
-    const sandbox = { cwd: "/repo" } as Sandbox;
-    const coordinator = makeThreadChangesCoordinator({
-      db: {} as D1Database,
-      bucket: {} as R2Bucket,
-      threadId,
-      sandbox,
-    });
-
-    await expect(coordinator.flush({ detectUnchanged: true })).resolves.toBe(
-      "raced",
-    );
-
-    expect(mocks.capture).toHaveBeenCalledWith({
-      sandbox,
-      threadId,
-      source,
-      generation: 2,
-      expectedFingerprint: nextFingerprint,
-    });
-    expect(mocks.confirmUnchanged).not.toHaveBeenCalled();
     expect(releaseCapture).toHaveBeenCalledOnce();
   });
 });

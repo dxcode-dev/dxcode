@@ -116,7 +116,9 @@ export function ThreadParticipants({
             {own && multiplayer && thread.sharing?.contributeUntil ? (
               <Menu.SubmenuRoot>
                 <Menu.SubmenuTrigger className="thread-menu-item">
-                  Remaining: {formatRemaining(thread.sharing.contributeUntil)}
+                  <span>
+                    Remaining: {formatRemaining(thread.sharing.contributeUntil)}
+                  </span>
                   <ChevronRight />
                 </Menu.SubmenuTrigger>
                 <Menu.Portal>

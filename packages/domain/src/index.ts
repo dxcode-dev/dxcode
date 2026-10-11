@@ -193,9 +193,6 @@ export {
   type UpdateExternalApiApplicationRecord,
 } from "./settings/external-api-application-repository.js";
 export {
-  CollaborationDelivery,
-  CollaborationDestination,
-  CollaborationEvent,
   CollaborationIntegrationProvider,
   GitIntegrationProvider,
   IntegrationConnection,
@@ -671,13 +668,16 @@ export {
   type ThreadListRequest,
   ThreadRepository,
   type ThreadRepositoryShape,
+  type ThreadUpdate,
 } from "./threads/repository.js";
 export {
   CreateThreadInput,
   createThread,
   isThreadTitlePending,
+  THREAD_COLORS,
   Thread,
   ThreadActivityStatus,
+  ThreadColor,
   ThreadLifecycleState,
   ThreadVisibility,
 } from "./threads/thread.js";

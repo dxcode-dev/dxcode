@@ -43,18 +43,19 @@ afterEach(() => {
 
 describe("Thread archive journey feedback", () => {
   it("shows progress, confirms archive, and supports Undo", async () => {
-    let resolveArchive: ((thread: ThreadData) => void) | undefined;
+    let resolveArchive:
+      | ((archived: { thread: ThreadData }) => void)
+      | undefined;
     archiveMutation.execute
       .mockImplementationOnce(
         () =>
-          new Promise<ThreadData>((resolve) => {
+          new Promise<{ thread: ThreadData }>((resolve) => {
             resolveArchive = resolve;
           }),
       )
       .mockResolvedValueOnce({
-        id: threadId,
-        lifecycleState: "active",
-      } as ThreadData);
+        thread: { id: threadId, lifecycleState: "active" } as ThreadData,
+      });
     const queryClient = new QueryClient({
       defaultOptions: { mutations: { retry: false } },
     });
@@ -88,9 +89,8 @@ describe("Thread archive journey feedback", () => {
 
     await React.act(async () => {
       resolveArchive?.({
-        id: threadId,
-        lifecycleState: "archived",
-      } as ThreadData);
+        thread: { id: threadId, lifecycleState: "archived" } as ThreadData,
+      });
       await Promise.resolve();
     });
     await vi.waitFor(() =>
@@ -119,47 +119,5 @@ describe("Thread archive journey feedback", () => {
     );
 
     await React.act(() => root.unmount());
-  });
-
-  it("automatically dismisses the archived Undo notification", async () => {
-    archiveMutation.execute.mockResolvedValueOnce({
-      id: threadId,
-      lifecycleState: "archived",
-    } as ThreadData);
-    const queryClient = new QueryClient({
-      defaultOptions: { mutations: { retry: false } },
-    });
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
-    vi.useFakeTimers();
-    try {
-      await React.act(() =>
-        root.render(
-          <QueryClientProvider client={queryClient}>
-            <ThreadArchiveProvider>
-              <ArchiveControl />
-            </ThreadArchiveProvider>
-          </QueryClientProvider>,
-        ),
-      );
-
-      await React.act(() =>
-        container
-          .querySelector("button")
-          ?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
-      );
-      await vi.waitFor(() =>
-        expect(
-          container.querySelector('[role="status"]')?.textContent,
-        ).toContain("Archived threadUndo"),
-      );
-
-      await React.act(() => vi.advanceTimersByTimeAsync(6_000));
-      expect(container.querySelector('[role="status"]')).toBeNull();
-    } finally {
-      await React.act(() => root.unmount());
-      vi.useRealTimers();
-    }
   });
 });

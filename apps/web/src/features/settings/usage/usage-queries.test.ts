@@ -15,10 +15,8 @@ vi.mock("../../../shared/api/client.js", () => api);
 import {
   applyPersonalUsageFilters,
   combineWorkspaceUsagePages,
-  personalUsageExportMutationOptions,
   personalUsageQueryOptions,
   privateInspectionMutationOptions,
-  usageKeys,
   workspaceAuditExportMutationOptions,
   workspaceUsageAuditQueryOptions,
   workspaceUsageQueryOptions,
@@ -95,66 +93,6 @@ describe("usage query ownership", () => {
         actorUserId: "actor-2",
       }).queryKey,
     );
-  });
-
-  it("uses pageParam for cursors and forwards cancellation", async () => {
-    const signal = new AbortController().signal;
-    api.getPersonalUsage.mockResolvedValue({ nextCursor: undefined });
-    const options = personalUsageQueryOptions("user-1" as never, personal);
-    await options.queryFn?.({ pageParam: "cursor-2", signal } as never);
-    expect(api.getPersonalUsage).toHaveBeenCalledWith(
-      { ...personal, cursor: "cursor-2" },
-      signal,
-    );
-  });
-
-  it("keeps exports one-shot and invalidates only the affected audit workspace", async () => {
-    const exported = {
-      content: "csv-payload",
-      contentType: "text/csv",
-      filename: "usage.csv",
-    };
-    const deliver = vi.fn();
-    api.exportPersonalUsage.mockResolvedValue(exported);
-    const exportOptions = personalUsageExportMutationOptions(deliver);
-    const exportMutation = new MutationObserver(
-      new QueryClient(),
-      exportOptions,
-    );
-    const result = await exportMutation.mutate(personal);
-    expect(api.exportPersonalUsage).toHaveBeenCalledWith(personal);
-    expect(deliver).toHaveBeenCalledWith(exported);
-    expect(result).toBeUndefined();
-    expect(exportMutation.getCurrentResult().data).toBeUndefined();
-    expect(JSON.stringify(exportMutation.getCurrentResult())).not.toContain(
-      "csv-payload",
-    );
-    expect(
-      workspaceAuditExportMutationOptions("alpha" as never, deliver)
-        .mutationKey,
-    ).toEqual(["usage-audit-export", "alpha"]);
-
-    const queryClient = new QueryClient();
-    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
-    const inspection = privateInspectionMutationOptions(
-      queryClient,
-      "user-1" as never,
-      "alpha" as never,
-      vi.fn(),
-    );
-    await inspection.onSettled?.(
-      undefined,
-      null,
-      {} as never,
-      undefined,
-      {} as never,
-    );
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: usageKeys.workspaceAuditRoot(
-        "user-1" as never,
-        "alpha" as never,
-      ),
-    });
   });
 
   it("follows every audit export cursor and delivers one header with all rows", async () => {

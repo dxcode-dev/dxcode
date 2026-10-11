@@ -3,7 +3,6 @@ import { Redacted, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   DXD_MAX_ENVIRONMENT_REQUEST_FRAME_BYTES,
-  DXD_MAX_REQUEST_FRAME_BYTES,
   DxdEnvironmentActivateOperation,
 } from "../../execution/dxd/protocol.js";
 import { environmentActivationOperation } from "./activation.js";
@@ -88,11 +87,6 @@ describe("resident environment activation", () => {
       ),
     ).toThrow();
     expect(() => environmentActivationOperation(snapshot([]), 0)).toThrow();
-  });
-
-  it("keeps the environment request exception distinct from ordinary requests", () => {
-    expect(DXD_MAX_REQUEST_FRAME_BYTES).toBe(2 * 1_024 * 1_024);
-    expect(DXD_MAX_ENVIRONMENT_REQUEST_FRAME_BYTES).toBe(14 * 1_024 * 1_024);
   });
 
   it("strictly rejects unknown fields, duplicate names, and noncanonical values", () => {

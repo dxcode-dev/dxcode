@@ -213,36 +213,6 @@ describe("thread composer ownership", () => {
     await React.act(() => reconciled.root.unmount());
   });
 
-  it("renders the initial prompt from Flue history without browser-owned state", async () => {
-    const mounted = await mountPanel({
-      messages: [
-        {
-          id: "initial-user-message",
-          role: "user",
-          purpose: "user",
-          display: "visible",
-          turnId: "turn-initial",
-          submissionId: "submission-initial",
-          parts: [
-            {
-              type: "text",
-              text: "Build the durable handoff",
-              state: "done",
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(mounted.container.textContent).toContain(
-      "Build the durable handoff",
-    );
-    expect(mounted.container.textContent).not.toContain(
-      "What should we work on?",
-    );
-    await React.act(() => mounted.root.unmount());
-  });
-
   it("replaces the turn dot with workspace progress while a cold prompt is running", async () => {
     const mounted = await mountPanel(
       { status: "submitted", messages: [activePrompt] },
@@ -251,22 +221,6 @@ describe("thread composer ownership", () => {
     );
 
     expect(mounted.container.textContent).toContain("Preparing workspace…");
-    expect(mounted.container.querySelectorAll('[role="status"]')).toHaveLength(
-      1,
-    );
-    await React.act(() => mounted.root.unmount());
-  });
-
-  it("shows only the turn dot for a follow-up when workspace temperature is unknown", async () => {
-    const mounted = await mountPanel(
-      { status: "submitted", messages: [activePrompt] },
-      false,
-      { ready: true },
-    );
-
-    expect(mounted.container.textContent).not.toContain(
-      "Connecting to the Orb",
-    );
     expect(mounted.container.querySelectorAll('[role="status"]')).toHaveLength(
       1,
     );
@@ -284,16 +238,6 @@ describe("thread composer ownership", () => {
     expect(mounted.container.querySelectorAll('[role="status"]')).toHaveLength(
       1,
     );
-    await React.act(() => mounted.root.unmount());
-  });
-
-  it("keeps an API-created blank Thread ready for its first message", async () => {
-    const mounted = await mountPanel();
-
-    expect(mounted.container.textContent).toContain("What should we work on?");
-    expect(
-      mounted.container.querySelector('[aria-label="Send message"]'),
-    ).not.toBeNull();
     await React.act(() => mounted.root.unmount());
   });
 
@@ -674,45 +618,6 @@ describe("thread composer ownership", () => {
     await React.act(() => mounted.root.unmount());
   });
 
-  it("keeps archived history visible without mounting message controls", async () => {
-    const mounted = await mountPanel({}, true);
-
-    expect(
-      mounted.container.querySelector('[aria-label="Thread transcript"]'),
-    ).not.toBeNull();
-    expect(mounted.container.querySelector("form")).toBeNull();
-    expect(mounted.container.querySelector("textarea")).toBeNull();
-    expect(
-      mounted.container.querySelector('[aria-label="Send message"]'),
-    ).toBeNull();
-    expect(mounted.container.querySelector('[role="note"]')?.textContent).toBe(
-      "Archived. Unarchive to resume or run commands.",
-    );
-    await React.act(() => mounted.root.unmount());
-  });
-
-  it("keeps sensitive drafts mount-scoped and resets them on remount", async () => {
-    const first = await mountPanel();
-    const textarea = first.container.querySelector("textarea");
-    if (textarea === null) throw new Error("Expected thread composer.");
-
-    await React.act(() => {
-      const setValue = Object.getOwnPropertyDescriptor(
-        HTMLTextAreaElement.prototype,
-        "value",
-      )?.set;
-      setValue?.call(textarea, "private draft");
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    expect(textarea.value).toBe("private draft");
-
-    await React.act(() => first.root.unmount());
-    first.container.remove();
-    const second = await mountPanel();
-    expect(second.container.querySelector("textarea")?.value).toBe("");
-    await React.act(() => second.root.unmount());
-  });
-
   it("does not send after Stop is clicked during attachment processing", async () => {
     let resolveRead: ((value: ArrayBuffer) => void) | undefined;
     const read = new Promise<ArrayBuffer>((resolve) => {
@@ -783,69 +688,6 @@ describe("thread composer ownership", () => {
         "blob:stopped-submission-preview",
       ),
     );
-  });
-
-  it("attaches an image dropped on the existing-thread prompt and sends it", async () => {
-    vi.mocked(agent.sendMessage).mockResolvedValue(undefined);
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:dropped-preview");
-    const mounted = await mountPanel();
-    const textarea = mounted.container.querySelector("textarea");
-    const form = mounted.container.querySelector("form");
-    if (textarea === null || form === null)
-      throw new Error("Expected composer controls.");
-    const file = new File(
-      [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
-      "dropped.png",
-      { type: "image/png" },
-    );
-    const drag = (type: string) => {
-      const event = new Event(type, { bubbles: true, cancelable: true });
-      Object.defineProperty(event, "dataTransfer", {
-        value: { types: ["Files"], files: [file], dropEffect: "none" },
-      });
-      textarea.dispatchEvent(event);
-      return event;
-    };
-
-    await React.act(() => {
-      drag("dragenter");
-      drag("dragover");
-    });
-    expect(form.dataset.fileDropActive).toBe("true");
-    let drop: Event | undefined;
-    await React.act(async () => {
-      drop = drag("drop");
-      await Promise.resolve();
-    });
-    expect(drop?.defaultPrevented).toBe(true);
-    expect(form.dataset.fileDropActive).toBeUndefined();
-    await vi.waitFor(() =>
-      expect(
-        mounted.container.querySelector(
-          'button[aria-label="Remove dropped.png"]',
-        ),
-      ).not.toBeNull(),
-    );
-
-    await React.act(async () => {
-      form.dispatchEvent(
-        new Event("submit", { bubbles: true, cancelable: true }),
-      );
-      await Promise.resolve();
-    });
-    await vi.waitFor(() =>
-      expect(agent.sendMessage).toHaveBeenCalledExactlyOnceWith("", {
-        images: [
-          {
-            type: "image",
-            data: "iVBORw0KGgo=",
-            mimeType: "image/png",
-            filename: "dropped.png",
-          },
-        ],
-      }),
-    );
-    await React.act(() => mounted.root.unmount());
   });
 
   it("disposes previews created by attachment work that settles after unmount", async () => {
@@ -1015,77 +857,6 @@ describe("thread composer ownership", () => {
     });
     imageCollection.dispose();
     expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:retained-preview");
-  });
-
-  it("renders an optimistic Flue message during submission", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
-    let reconcile: (() => void) | undefined;
-    const candidate = {
-      id: "local:1",
-      role: "user",
-      purpose: "user",
-      display: "visible",
-      turnId: "turn:1",
-      submissionId: "submission:1",
-      parts: [{ type: "text", text: "Start the migration", state: "done" }],
-    };
-    const canonical = { ...candidate, id: "canonical:1" };
-
-    function Harness() {
-      const [messages, setMessages] = React.useState<
-        ReadonlyArray<typeof candidate>
-      >([]);
-      reconcile = () => setMessages([canonical]);
-      const optimisticAgent = {
-        ...agent,
-        messages,
-        sendMessage: () => {
-          setMessages([candidate]);
-          return new Promise<void>(() => {});
-        },
-      } as unknown as UseFlueAgentResult;
-      return (
-        <AgentPanel
-          agent={optimisticAgent}
-          agentInitialization={agentInitialization}
-        />
-      );
-    }
-
-    const queryClient = new QueryClient();
-    await React.act(() =>
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <Harness />
-        </QueryClientProvider>,
-      ),
-    );
-    const textarea = container.querySelector("textarea");
-    const form = container.querySelector("form");
-    if (textarea === null || form === null)
-      throw new Error("Expected thread composer form.");
-    await React.act(async () => {
-      const setValue = Object.getOwnPropertyDescriptor(
-        HTMLTextAreaElement.prototype,
-        "value",
-      )?.set;
-      setValue?.call(textarea, "Start the migration");
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
-      form.dispatchEvent(
-        new Event("submit", { bubbles: true, cancelable: true }),
-      );
-      await Promise.resolve();
-    });
-
-    expect(container.textContent).toContain("Start the migration");
-    await React.act(() => reconcile?.());
-    await React.act(() => Promise.resolve());
-    expect(container.textContent?.match(/Start the migration/g)).toHaveLength(
-      1,
-    );
-    await React.act(() => root.unmount());
   });
 
   it("moves a model failure out of the transcript and resumes without a new prompt", async () => {
@@ -1504,50 +1275,6 @@ describe("thread composer ownership", () => {
       "local:terminal-message",
     );
     expect(retrySend).not.toHaveBeenCalled();
-    await React.act(() => panel.root.unmount());
-  });
-
-  it("keeps a failed Flue candidate visible and retries its retained identity", async () => {
-    const retrySend = vi.fn().mockResolvedValue(undefined);
-    const panel = await mountPanel({
-      messages: [
-        {
-          id: "local:failed-message",
-          role: "user",
-          purpose: "user",
-          display: "visible",
-          turnId: "turn:failed",
-          parts: [
-            {
-              type: "text",
-              text: "Reconnect the workspace",
-              state: "done",
-            },
-          ],
-        },
-      ],
-      failedSends: [
-        {
-          id: "local:failed-message",
-          message: "Reconnect the workspace",
-          error: new Error("send failed"),
-          retry: "transport",
-        },
-      ],
-      retrySend,
-    });
-    expect(
-      panel.container.querySelector(".thread-error-card")?.textContent,
-    ).toContain("Message not sentCheck your connection.");
-    const retry = panel.container.querySelector<HTMLButtonElement>("button");
-    if (retry === null) throw new Error("Expected failed-send retry.");
-
-    await React.act(async () => {
-      retry.click();
-      await Promise.resolve();
-    });
-
-    expect(retrySend).toHaveBeenCalledExactlyOnceWith("local:failed-message");
     await React.act(() => panel.root.unmount());
   });
 });

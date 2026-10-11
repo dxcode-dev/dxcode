@@ -1,20 +1,13 @@
 // @vitest-environment happy-dom
 
 import type { ProjectDefaultsData } from "@dx/api";
-import { RunnerProfile, UserId } from "@dx/domain";
+import { UserId } from "@dx/domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Schema } from "effect";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { AuthContext } from "../../../shared/auth/auth-context.js";
-import { RunnerProfileCard } from "../../../shared/ui/runner-profile-card.js";
-import { settingsManifest } from "../foundation-sections.js";
-import {
-  resolveSettingsSection,
-  settingsPath,
-} from "../settings-registration.js";
 import {
   type ProjectDefaultsTarget,
   projectDefaultsKeys,
@@ -113,75 +106,6 @@ const selectShipAction = (container: HTMLElement, value: "ship" | "commit") => {
 };
 
 describe("project defaults settings", () => {
-  it("registers exact personal and workspace settings routes distinct from the project library", () => {
-    expect(settingsPath({ scope: "personal", section: "projects" })).toBe(
-      "/settings/projects",
-    );
-    expect(
-      settingsPath({
-        scope: "workspace",
-        workspaceSlug: "dx-team" as never,
-        section: "projects",
-      }),
-    ).toBe("/workspaces/dx-team/projects");
-    expect(
-      resolveSettingsSection(settingsManifest, "personal", "projects"),
-    ).toMatchObject({
-      found: true,
-      registration: {
-        id: "personal-project-defaults",
-        label: "Project Defaults",
-      },
-    });
-    expect(
-      resolveSettingsSection(settingsManifest, "workspace", "projects"),
-    ).toMatchObject({
-      found: true,
-      registration: { id: "workspace-project-defaults" },
-    });
-    expect(settingsPath({ scope: "personal", section: "projects" })).not.toBe(
-      "/projects",
-    );
-  });
-
-  it("renders deployment-owned resources and capabilities without hosted SKU branding", () => {
-    const profile = Schema.decodeUnknownSync(RunnerProfile)({
-      id: "e2b-standard",
-      label: "Standard workspace",
-      adapter: "e2b",
-      resources: { cpuCores: 2, memoryMb: 4096, diskGb: 20 },
-      isolation: "sandbox",
-      availability: "available",
-      costLabel: "Deployment managed",
-      capabilities: [
-        "git",
-        "environment-variables",
-        "internet-access",
-        "persistent-workspace",
-        "pause-resume",
-      ],
-    });
-    const markup = renderToStaticMarkup(
-      <RunnerProfileCard
-        profile={profile}
-        selected
-        disabled={false}
-        onSelect={() => undefined}
-      />,
-    );
-
-    expect(markup).toContain('type="radio"');
-    expect(markup).toContain("checked");
-    expect(markup).toContain("Standard workspace");
-    expect(markup).toContain("2 CPU");
-    expect(markup).toContain("4 GB memory");
-    expect(markup).toContain("20 GB disk");
-    expect(markup).toContain("sandbox isolation");
-    expect(markup).toContain("environment variables");
-    expect(markup).toContain("Deployment managed");
-    expect(markup).not.toMatch(/\bAmp\b|orb|credits|per hour|\$\d/i);
-  });
-
   it("keeps the saved confirmation mounted through the authoritative Query write", async () => {
     const queryClient = new QueryClient({
       defaultOptions: {

@@ -31,6 +31,11 @@ export interface MessageAuthorTag {
   /** People talking to each other in a shared Thread; no model call. */
   readonly chat?: boolean;
   readonly mentions?: ReadonlyArray<MessageMention>;
+  /**
+   * The owner's Thread whose agent sent this message with a Thread tool.
+   * Only the server sets it; clients show the message as from that Thread.
+   */
+  readonly sourceThreadId?: string;
 }
 
 /** Tagging the agent sends a message to it, even beside member tags. */
@@ -61,6 +66,7 @@ export const formatMessageAuthor = ({
   author,
   chat,
   mentions = [],
+  sourceThreadId,
 }: MessageAuthorTag) =>
   `<${TAG} role="${author.role}" user_id="${escapeAttribute(author.userId)}" identifier="${escapeAttribute(author.name)}"${
     author.handle === undefined
@@ -70,6 +76,10 @@ export const formatMessageAuthor = ({
     mentions.length === 0
       ? ""
       : ` mentions="${escapeAttribute(mentions.map(({ handle, userId }) => `${handle}=${userId}`).join(" "))}"`
+  }${
+    sourceThreadId === undefined
+      ? ""
+      : ` source_thread="${escapeAttribute(sourceThreadId)}"`
   } />\n`;
 
 /**
@@ -99,6 +109,7 @@ export const parseMessageAuthor = (
   readonly author?: MessageAuthor;
   readonly chat?: true;
   readonly mentions?: ReadonlyArray<MessageMention>;
+  readonly sourceThreadId?: string;
   readonly text: string;
 } => {
   const match = leadingTag.exec(text);
@@ -131,6 +142,9 @@ export const parseMessageAuthor = (
     },
     ...(fields.get("kind") === "chat" ? { chat: true as const } : {}),
     ...(mentions.length === 0 ? {} : { mentions }),
+    ...(fields.get("source_thread")
+      ? { sourceThreadId: fields.get("source_thread") }
+      : {}),
     text: rest,
   };
 };

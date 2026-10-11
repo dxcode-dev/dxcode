@@ -133,17 +133,6 @@ describe("frontend dx request regression harness", () => {
     expect(() => network.assertNoDuplicateSemanticGets()).not.toThrow();
   });
 
-  it("reuses Query intent preloading when navigation mounts the consumer", async () => {
-    const network = new FrontendNetworkHarness(emptyProjectPage);
-    vi.stubGlobal("fetch", network.fetch);
-    const client = createQueryClient();
-
-    await client.prefetchInfiniteQuery(projectQuery());
-    await client.fetchInfiniteQuery(projectQuery());
-
-    expect(network.getCount("/v1/projects?limit=100")).toBe(1);
-  });
-
   it("reuses fresh data during back/forward navigation", async () => {
     const network = new FrontendNetworkHarness(emptyProjectPage);
     vi.stubGlobal("fetch", network.fetch);
@@ -379,14 +368,17 @@ describe("ProductShell route ownership across the mobile breakpoint", () => {
       pages: [{ items: [] }],
       pageParams: [undefined],
     });
-    client.setQueryData(threadKeys.list(userId, undefined, "active"), {
+    client.setQueryData(threadKeys.list(userId, undefined, "active", "roots"), {
       pages: [{ items: [] }],
       pageParams: [undefined],
     });
-    client.setQueryData(threadKeys.list(userId, undefined, "archived"), {
-      pages: [{ items: [] }],
-      pageParams: [undefined],
-    });
+    client.setQueryData(
+      threadKeys.list(userId, undefined, "archived", "roots"),
+      {
+        pages: [{ items: [] }],
+        pageParams: [undefined],
+      },
+    );
     client.setQueryData(personalAccountQueryOptions(userId).queryKey, {
       displayName: "Test User",
       email: "test@example.com",

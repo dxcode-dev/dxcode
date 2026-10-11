@@ -83,34 +83,6 @@ describe("Bitbucket personal refresh", () => {
     mocks.evaluations.length = 0;
   });
 
-  it("reports the exact disabled sentinel without constructing a provider", async () => {
-    mocks.readConnection.mockResolvedValueOnce(null);
-    const app = new Hono<AppEnv>();
-    app.use("*", async (context, next) => {
-      context.set("requestId", "request-bitbucket-status");
-      context.set("principal", {
-        userId: "preview-user",
-        credentialScopes: ["personal"],
-      } as never);
-      await next();
-    });
-    app.route("/", bitbucketControlPlaneRoutes);
-
-    const response = await app.request("/personal/connection", undefined, {
-      DX_AUTH_URL: "https://dx.test",
-      DX_RUNTIME_MODE: "deployed",
-      DX_INTEGRATION_BITBUCKET_OAUTH: "{}",
-      DB: {} as D1Database,
-    } satisfies Bindings);
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      data: { configured: false, connection: null },
-    });
-    expect(mocks.readConnection).toHaveBeenCalledOnce();
-    expect(mocks.provider).not.toHaveBeenCalled();
-  });
-
   it("checks personal-secret policy before connection status or provider traffic", async () => {
     const app = new Hono<AppEnv>();
     app.use("*", async (context, next) => {

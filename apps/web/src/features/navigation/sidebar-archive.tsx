@@ -13,7 +13,7 @@ export function SidebarArchive({
   ...rowProps
 }: Omit<SidebarThreadRowsProps, "threads"> & { readonly userId: UserId }) {
   const query = useInfiniteQuery(
-    threadsQueryOptions(userId, undefined, "archived"),
+    threadsQueryOptions(userId, undefined, "archived", "roots"),
   );
   const threads = query.data?.pages.flatMap((page) => page.items) ?? [];
   return (

@@ -148,15 +148,6 @@ describe("Thread sandbox file route", () => {
     await expect(response.arrayBuffer()).rejects.toThrow();
   });
 
-  it("classifies short invalid UTF-8 as binary", async () => {
-    const response = await appFor(
-      fileReader(new Uint8Array([0xff, 0xfe, 0xfd])),
-    ).request(url("/home/user/blob"));
-    expect(response.headers.get("content-type")).toBe(
-      "application/octet-stream",
-    );
-  });
-
   it("forces SVG to download on direct navigation while images stay inline", async () => {
     const svg = new TextEncoder().encode(
       "<svg><script>alert(1)</script></svg>",

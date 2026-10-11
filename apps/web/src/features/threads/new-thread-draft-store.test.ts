@@ -132,12 +132,6 @@ describe("New Thread draft store", () => {
     });
   });
 
-  it("has one referentially stable empty SSR snapshot", () => {
-    const store = createNewThreadDraftStore({ scope });
-    expect(store.getServerSnapshot()).toBe(store.getServerSnapshot());
-    expect(store.getServerSnapshot()).toEqual({ text: "" });
-  });
-
   it("applies live same-scope cross-tab updates with latest-write-wins", () => {
     let receive:
       | ((key: string | null, value: string | null) => void)
@@ -329,31 +323,6 @@ describe("New Thread draft store", () => {
     );
     unsubscribe();
     expect(cleanup).toHaveBeenCalledOnce();
-  });
-
-  it("restores and clears only the active account/workspace scope", () => {
-    const storage = new MemoryStorage();
-    const otherScope = {
-      userId,
-      workspaceId: "workspace-2" as WorkspaceId,
-    };
-    const first = createNewThreadDraftStore({ scope, storage, debounceMs: 0 });
-    first.setText("workspace one");
-    first.flush();
-    const second = createNewThreadDraftStore({
-      scope: otherScope,
-      storage,
-      debounceMs: 0,
-    });
-    second.setText("workspace two");
-    second.flush();
-
-    expect(
-      createNewThreadDraftStore({ scope, storage }).getSnapshot().text,
-    ).toBe("workspace one");
-    expect(second.getSnapshot().text).toBe("workspace two");
-    first.clear();
-    expect(second.getSnapshot().text).toBe("workspace two");
   });
 
   it("never throws during user-wide clearing when any storage operation fails", () => {

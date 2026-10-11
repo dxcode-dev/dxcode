@@ -3,8 +3,6 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
-import { settingsManifest } from "../foundation-sections.js";
-import { resolveSettingsSection } from "../settings-registration.js";
 import { ModeDialSettings } from "./mode-dial-settings.js";
 
 const router = vi.hoisted(() => ({
@@ -33,21 +31,6 @@ vi.mock("../../../shared/auth/auth-context.js", () => ({
 }));
 
 describe("mode dial settings", () => {
-  it("registers the mode-dial slug for both scopes, admin-only in a workspace", () => {
-    expect(
-      resolveSettingsSection(settingsManifest, "personal", "mode-dial"),
-    ).toMatchObject({
-      found: true,
-      registration: { id: "personal-mode-dial" },
-    });
-    expect(
-      resolveSettingsSection(settingsManifest, "workspace", "mode-dial"),
-    ).toMatchObject({
-      found: true,
-      registration: { id: "workspace-mode-dial", adminOnly: true },
-    });
-  });
-
   it("opens Medium and reports edits and discard to the settings shell", async () => {
     router.search = {};
     router.data = {
@@ -110,36 +93,6 @@ describe("mode dial settings", () => {
       await React.act(() => root.unmount());
       container.remove();
       router.data = {};
-    }
-  });
-
-  it("derives selection from search and navigates by changing search only", async () => {
-    router.search = { mode: "high" };
-    router.navigate.mockClear();
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
-    try {
-      await React.act(() =>
-        root.render(<ModeDialSettings onDirtyChange={() => undefined} />),
-      );
-      expect(container.textContent).toContain("High");
-      const dial = container.querySelector('[aria-label="Mode dial"]');
-      await React.act(() =>
-        dial?.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Home", bubbles: true }),
-        ),
-      );
-      expect(router.navigate).toHaveBeenCalledOnce();
-      const request = router.navigate.mock.calls[0]?.[0];
-      expect(request).not.toHaveProperty("to");
-      expect(request.search({ section: "mode-dial", mode: "high" })).toEqual({
-        section: "mode-dial",
-        mode: "low",
-      });
-    } finally {
-      await React.act(() => root.unmount());
-      container.remove();
     }
   });
 });

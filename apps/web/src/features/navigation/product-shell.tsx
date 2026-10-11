@@ -33,8 +33,8 @@ import { SidebarExtensionRegion } from "./sidebar-extensions.js";
 import { SidebarPanelIcon } from "./sidebar-panel-icon.js";
 import { ThreadSearchDialog } from "./thread-search-dialog.js";
 
-export const PRODUCT_SIDEBAR_MIN_SIZE = 250;
-export const PRODUCT_SIDEBAR_MAX_SIZE = 480;
+const PRODUCT_SIDEBAR_MIN_SIZE = 250;
+const PRODUCT_SIDEBAR_MAX_SIZE = 480;
 
 export function ProductShell() {
   const pathname = useLocation({ select: (location) => location.pathname });
@@ -49,7 +49,7 @@ export function ProductShell() {
   ).mutate;
   const projectsQuery = useInfiniteQuery(projectsQueryOptions(identity.id));
   const threadsQuery = useInfiniteQuery(
-    threadsQueryOptions(identity.id, undefined, "active"),
+    threadsQueryOptions(identity.id, undefined, "active", "roots"),
   );
   const personalAccountQuery = useQuery(
     personalAccountQueryOptions(identity.id),
@@ -62,7 +62,7 @@ export function ProductShell() {
   // cache so checking availability does not hide the only path to those rows.
   const checkEmptyArchive = threadsQuery.isSuccess && threads.length === 0;
   const archiveQuery = useInfiniteQuery({
-    ...threadsQueryOptions(identity.id, undefined, "archived"),
+    ...threadsQueryOptions(identity.id, undefined, "archived", "roots"),
     enabled: checkEmptyArchive,
   });
   const archiveAvailable =

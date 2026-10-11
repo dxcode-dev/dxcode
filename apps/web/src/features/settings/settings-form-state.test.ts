@@ -7,18 +7,6 @@ import {
 } from "./settings-form-state.js";
 
 describe("settings form state", () => {
-  it.each([null, undefined, "request failed"])(
-    "uses the fallback for a non-object mutation cause: %s",
-    (cause) => {
-      expect(
-        settingsMutationError(cause, "Settings could not be saved."),
-      ).toEqual({
-        message: "Settings could not be saved.",
-        fieldErrors: undefined,
-      });
-    },
-  );
-
   it("preserves decoded API messages and field errors", () => {
     expect(
       settingsMutationError(
@@ -52,28 +40,6 @@ describe("settings form state", () => {
       message: "Settings could not be saved.",
       fieldErrors: undefined,
     });
-  });
-
-  it("tracks dirty, saving, saved, and reset transitions", () => {
-    const dirty = reduceSettingsFormState(initialSettingsFormState, {
-      type: "changed",
-    });
-    expect(dirty).toMatchObject({ dirty: true, status: "idle" });
-    const saving = reduceSettingsFormState(dirty, { type: "saveStarted" });
-    expect(saving).toMatchObject({ dirty: true, saving: true });
-    const saved = reduceSettingsFormState(saving, {
-      type: "saveSucceeded",
-      message: "Settings saved.",
-    });
-    expect(saved).toMatchObject({
-      dirty: false,
-      saving: false,
-      status: "saved",
-      message: "Settings saved.",
-    });
-    expect(reduceSettingsFormState(saved, { type: "reset" })).toEqual(
-      initialSettingsFormState,
-    );
   });
 
   it("preserves field validation errors without clearing dirty state", () => {

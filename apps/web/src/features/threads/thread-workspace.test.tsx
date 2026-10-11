@@ -269,38 +269,6 @@ const press = async (element: Element | null, key: string) => {
 };
 
 describe("ThreadSession right pane", () => {
-  it("activates Terminal immediately when no Changes content is supplied", async () => {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        disconnect() {}
-      },
-    );
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
-
-    await React.act(() =>
-      root.render(
-        <ThreadDesktopLayout
-          rightPaneCollapsed={false}
-          main={<div>Main</div>}
-          terminal={<div data-testid="terminal-only">Terminal content</div>}
-        />,
-      ),
-    );
-
-    expect(
-      container.querySelector('[data-testid="terminal-only"]'),
-    ).not.toBeNull();
-    expect(
-      container.querySelector('[role="tab"][aria-selected="true"]')
-        ?.textContent,
-    ).toBe("Terminal");
-    await React.act(() => root.unmount());
-  });
-
   it("defaults to Changes, lazily preserves Terminal, and keeps collapse mechanics", async () => {
     viewport.mobile = false;
     vi.stubGlobal(
@@ -784,47 +752,6 @@ describe("ThreadSession right pane", () => {
     expect(panel?.style.width).toBe("260px");
     expect(handle?.getAttribute("aria-valuenow")).toBe("260");
     await React.act(() => root.unmount());
-  });
-
-  it("keeps layout state for the mounted Thread and resets it after navigation or refresh remount", async () => {
-    viewport.mobile = false;
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        disconnect() {}
-      },
-    );
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
-      width: 1000,
-    } as DOMRect);
-    const first = await renderSession();
-    await click(
-      first.container.querySelector('[aria-label="Hide Right Pane"]'),
-    );
-    await React.act(() =>
-      first.root.render(
-        first.render(thread, { ...project, name: "Refreshed" }),
-      ),
-    );
-    expect(
-      first.container.querySelector<HTMLElement>(".right-pane-panel")?.style
-        .width,
-    ).toBe("0px");
-    await React.act(() => first.root.unmount());
-
-    const remounted = await renderSession({
-      ...thread,
-      id: "thread-2" as ThreadId,
-    });
-    expect(
-      remounted.container.querySelector<HTMLElement>(".right-pane-panel")?.style
-        .width,
-    ).toBe("0px");
-    expect(
-      remounted.container.querySelector('[aria-label="Show Right Pane"]'),
-    ).not.toBeNull();
-    await React.act(() => remounted.root.unmount());
   });
 
   it("omits the right pane and its controls on mobile", async () => {

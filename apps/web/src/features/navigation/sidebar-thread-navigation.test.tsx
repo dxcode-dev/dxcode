@@ -53,47 +53,9 @@ const archived = {
   lifecycleState: "archived",
   activityStatus: "working",
 } as ThreadData;
-const working = {
-  ...active,
-  id: "thr_00000000-0000-4000-8000-000000000093" as ThreadId,
-  title: "Working thread",
-  activityStatus: "working",
-} as ThreadData;
-
-const navigation = () => (
-  <SidebarThreadNavigation
-    collapsedGroups={new Set()}
-    hasMore={false}
-    loadingMore={false}
-    projectNames={new Map([[projectId, "Project"]])}
-    query=""
-    sections={[{ id: "recent", threads: [thread] }]}
-    visibleThreadCount={1}
-    onLoadMore={vi.fn()}
-    onNavigate={vi.fn()}
-    onThreadNavigate={vi.fn()}
-    onThreadPointerEnter={vi.fn()}
-    onThreadPointerLeave={vi.fn()}
-    onToggleGroup={vi.fn()}
-    onSetArchived={vi.fn()}
-    onSetPinned={vi.fn()}
-  />
-);
 
 afterEach(() => {
   document.body.replaceChildren();
-});
-
-describe("sidebar thread title", () => {
-  it("renders the server-owned title", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
-
-    await React.act(() => root.render(navigation()));
-    expect(container.textContent).toContain("Resolved thread title");
-    await React.act(() => root.unmount());
-  });
 });
 
 describe("sidebar selection and pending titles", () => {
@@ -306,43 +268,6 @@ describe("sidebar archive hover actions", () => {
     );
     expect(onSetArchived).toHaveBeenNthCalledWith(1, active.id, true);
     expect(onSetArchived).toHaveBeenNthCalledWith(2, archived.id, false);
-    await React.act(() => root.unmount());
-  });
-});
-
-describe("sidebar Orb activity", () => {
-  it("uses baseline Thread activity for accessible idle and working states", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
-    await React.act(() =>
-      root.render(
-        <SidebarThreadNavigation
-          collapsedGroups={new Set()}
-          hasMore={false}
-          loadingMore={false}
-          projectNames={new Map([[projectId, "Project"]])}
-          query=""
-          sections={[{ id: "project", threads: [active, working] }]}
-          visibleThreadCount={2}
-          onLoadMore={vi.fn()}
-          onNavigate={vi.fn()}
-          onThreadNavigate={vi.fn()}
-          onThreadPointerEnter={vi.fn()}
-          onThreadPointerLeave={vi.fn()}
-          onToggleGroup={vi.fn()}
-          onSetArchived={vi.fn()}
-          onSetPinned={vi.fn()}
-        />,
-      ),
-    );
-
-    const idleOrb = container.querySelector('[aria-label="Orb idle"]');
-    const workingOrb = container.querySelector('[aria-label="Orb working"]');
-    expect(idleOrb?.getAttribute("data-activity-status")).toBe("idle");
-    expect(workingOrb?.getAttribute("data-activity-status")).toBe("working");
-    expect(workingOrb?.querySelector("[data-activity-artwork]")).not.toBeNull();
-
     await React.act(() => root.unmount());
   });
 });

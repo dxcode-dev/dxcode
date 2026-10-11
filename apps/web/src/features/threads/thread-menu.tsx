@@ -1,20 +1,29 @@
 import { Menu } from "@base-ui/react/menu";
 import type { ProjectData, ThreadDetailData } from "@dx/api";
+import { Link } from "@tanstack/react-router";
 import {
   Archive,
   ArchiveRestore,
+  Braces,
   Check,
   ChevronRight,
   Copy,
-  Download,
   Ellipsis,
+  FileDown,
+  FileText,
+  Hash,
+  Link2,
+  Pencil,
   Share2,
   X,
 } from "lucide-react";
 import * as React from "react";
 import { useOptionalThreadArchive } from "../../shared/thread-archive.js";
+import { useOptionalThreadEditing } from "../../shared/thread-editing.js";
 import { absoluteThreadUrl } from "../../shared/thread-url.js";
 import { Button } from "../../shared/ui/button.js";
+import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
+import { ThreadColorSubmenu } from "../../shared/ui/thread-color-submenu.js";
 import {
   serializeThreadJson,
   serializeThreadMarkdown,
@@ -22,32 +31,30 @@ import {
 } from "./thread-export.js";
 import type { TranscriptViewModel } from "./transcript-view-model.js";
 
-function ExportSubmenu({
-  onDownload,
+function Submenu({
+  icon,
+  label,
+  children,
 }: {
-  readonly onDownload: (format: "markdown" | "json") => void;
+  readonly icon: React.ReactNode;
+  readonly label: string;
+  readonly children: React.ReactNode;
 }) {
   return (
     <Menu.SubmenuRoot>
       <Menu.SubmenuTrigger className="thread-menu-item">
-        Export
+        {icon}
+        <span>{label}</span>
         <ChevronRight />
       </Menu.SubmenuTrigger>
       <Menu.Portal>
-        <Menu.Positioner className="thread-menu-positioner" sideOffset={2}>
-          <Menu.Popup className="thread-menu-popup">
-            <Menu.Item
-              className="thread-menu-item"
-              onClick={() => onDownload("markdown")}
-            >
-              <Download /> Markdown
-            </Menu.Item>
-            <Menu.Item
-              className="thread-menu-item"
-              onClick={() => onDownload("json")}
-            >
-              <Download /> JSON
-            </Menu.Item>
+        <Menu.Positioner
+          className="thread-menu-positioner"
+          sideOffset={4}
+          alignOffset={-4}
+        >
+          <Menu.Popup className="thread-menu-popup thread-actions-menu thread-actions-submenu">
+            {children}
           </Menu.Popup>
         </Menu.Positioner>
       </Menu.Portal>
@@ -67,17 +74,17 @@ export function ThreadMenu({
   readonly onOpenShare?: () => void;
 }) {
   const archive = useOptionalThreadArchive();
-  // Archiving is the owner's; members of a shared Thread only read or export.
+  const editing = useOptionalThreadEditing();
+  // Archiving and editing are the owner's; members of a shared Thread only
+  // read or export.
   const own = thread.access === undefined || thread.access === "owner";
   const [announcement, setAnnouncement] = React.useState("");
-  const copyUrl = async () => {
+  const copy = async (text: string, label: string) => {
     try {
-      await navigator.clipboard.writeText(
-        absoluteThreadUrl(thread.id, window.location.href),
-      );
-      setAnnouncement("Thread URL copied.");
+      await navigator.clipboard.writeText(text);
+      setAnnouncement(`${label} copied.`);
     } catch {
-      setAnnouncement("Could not copy the Thread URL.");
+      setAnnouncement(`Could not copy the ${label}.`);
     }
   };
   const download = (format: "markdown" | "json") => {
@@ -102,6 +109,7 @@ export function ThreadMenu({
     URL.revokeObjectURL(url);
     setAnnouncement(`${markdown ? "Markdown" : "JSON"} export downloaded.`);
   };
+  const editable = own && editing !== undefined;
   return (
     <>
       <Menu.Root>
@@ -122,48 +130,115 @@ export function ThreadMenu({
             align="end"
             sideOffset={4}
           >
-            <Menu.Popup className="thread-menu-popup">
+            <Menu.Popup className="thread-menu-popup thread-actions-menu">
+              {!own || thread.parentThreadId === undefined ? null : (
+                <>
+                  <Menu.Item
+                    className="thread-menu-item"
+                    render={
+                      <Link
+                        to="/threads/$threadId"
+                        params={{ threadId: thread.parentThreadId }}
+                      />
+                    }
+                  >
+                    <SubthreadIcon strokeWidth={2} />
+                    <span>Open Source Thread</span>
+                  </Menu.Item>
+                  <Menu.Separator className="thread-menu-separator" />
+                </>
+              )}
+              <Submenu icon={<Copy />} label="Copy">
+                <Menu.Item
+                  className="thread-menu-item"
+                  onClick={() =>
+                    void copy(
+                      absoluteThreadUrl(thread.id, window.location.href),
+                      "Thread URL",
+                    )
+                  }
+                >
+                  <Link2 />
+                  <span>Thread URL</span>
+                </Menu.Item>
+                <Menu.Item
+                  className="thread-menu-item"
+                  onClick={() => void copy(thread.id, "Thread ID")}
+                >
+                  <Hash />
+                  <span>Thread ID</span>
+                </Menu.Item>
+              </Submenu>
+              <Submenu icon={<FileDown />} label="Export">
+                <Menu.Item
+                  className="thread-menu-item"
+                  onClick={() => download("markdown")}
+                >
+                  <FileText />
+                  <span>Markdown</span>
+                </Menu.Item>
+                <Menu.Item
+                  className="thread-menu-item"
+                  onClick={() => download("json")}
+                >
+                  <Braces />
+                  <span>JSON</span>
+                </Menu.Item>
+              </Submenu>
+              {onOpenShare === undefined && !editable ? null : (
+                <Menu.Separator className="thread-menu-separator" />
+              )}
               {onOpenShare === undefined ? null : (
                 <Menu.Item className="thread-menu-item" onClick={onOpenShare}>
                   <Share2 />
                   <span>Share…</span>
                 </Menu.Item>
               )}
+              {editable ? (
+                <>
+                  <Menu.Item
+                    className="thread-menu-item"
+                    onClick={() => editing.openRename(thread)}
+                  >
+                    <Pencil />
+                    <span>Rename</span>
+                  </Menu.Item>
+                  <ThreadColorSubmenu
+                    thread={thread}
+                    itemClassName="thread-menu-item"
+                    onSelect={(color) => editing.setColor(thread.id, color)}
+                  />
+                </>
+              ) : null}
               {own ? (
-                <Menu.Item
-                  className="thread-menu-item"
-                  disabled={
-                    archive === undefined ||
-                    archive.pendingThreadId === thread.id
-                  }
-                  onClick={() =>
-                    archive?.setArchived(
-                      thread.id,
-                      thread.lifecycleState !== "archived",
-                    )
-                  }
-                >
-                  {thread.lifecycleState === "archived" ? (
-                    <ArchiveRestore />
-                  ) : (
-                    <Archive />
-                  )}
-                  {thread.lifecycleState === "archived"
-                    ? "Unarchive"
-                    : "Archive"}
-                </Menu.Item>
+                <>
+                  <Menu.Separator className="thread-menu-separator" />
+                  <Menu.Item
+                    className="thread-menu-item"
+                    disabled={
+                      archive === undefined ||
+                      archive.pendingThreadId === thread.id
+                    }
+                    onClick={() =>
+                      archive?.setArchived(
+                        thread.id,
+                        thread.lifecycleState !== "archived",
+                      )
+                    }
+                  >
+                    {thread.lifecycleState === "archived" ? (
+                      <ArchiveRestore />
+                    ) : (
+                      <Archive />
+                    )}
+                    <span>
+                      {thread.lifecycleState === "archived"
+                        ? "Unarchive"
+                        : "Archive"}
+                    </span>
+                  </Menu.Item>
+                </>
               ) : null}
-              {own || onOpenShare !== undefined ? (
-                <Menu.Separator className="thread-menu-separator" />
-              ) : null}
-              <Menu.Item
-                className="thread-menu-item"
-                onClick={() => void copyUrl()}
-              >
-                <Copy />
-                Copy Thread URL
-              </Menu.Item>
-              <ExportSubmenu onDownload={download} />
             </Menu.Popup>
           </Menu.Positioner>
         </Menu.Portal>

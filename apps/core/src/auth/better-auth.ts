@@ -250,6 +250,20 @@ function assertAuthApiKey<Auth extends { readonly api: object }>(
   }
 }
 
+/**
+ * The issuer better-auth 1.7.0 through 1.7.2 recorded for an account: the
+ * provider's own issuer when it has one (Cloudflare Access passes its team
+ * URL), otherwise a local issuer named after the provider, such as
+ * `local:credential`.
+ */
+const accountIssuer = (account: {
+  readonly providerId: string;
+  readonly issuer?: unknown;
+}) =>
+  typeof account.issuer === "string" && account.issuer !== ""
+    ? account.issuer
+    : `local:${encodeURIComponent(account.providerId)}`;
+
 export const createAuth = (
   bindings: Bindings,
   requirements: AuthenticationRequirements,
@@ -267,6 +281,24 @@ export const createAuth = (
     baseURL: requirements.authUrl,
     basePath: "/api/auth",
     trustedOrigins: [...requirements.trustedOrigins],
+    account: {
+      // Migration 0002 created the account table with better-auth 1.7.0's
+      // required issuer and its unique (issuer, accountId) index. Since
+      // 1.7.3 better-auth keys accounts by (providerId, accountId) and no
+      // longer writes issuer, so dx keeps writing it here.
+      additionalFields: {
+        issuer: { type: "string", required: false, input: false },
+      },
+    },
+    databaseHooks: {
+      account: {
+        create: {
+          before: async (account) => ({
+            data: { ...account, issuer: accountIssuer(account) },
+          }),
+        },
+      },
+    },
     session: {
       cookieCache: {
         enabled: true,

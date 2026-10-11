@@ -2,6 +2,7 @@ import type { ThreadData, ThreadListItem } from "@dx/api";
 import { FolderGit2 } from "lucide-react";
 import { createPortal } from "react-dom";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
+import { threadColorAttributes } from "../../shared/thread-color.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { ThreadTitleText } from "../../shared/ui/thread-title.js";
 import { formatRelativeTime } from "../../shared/utils.js";
@@ -68,6 +69,7 @@ export function ThreadHoverPreview({
       className="thread-hover-preview"
       style={{ left, top, width }}
       aria-label={`Preview ${projectName} thread`}
+      {...threadColorAttributes(currentThread)}
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
     >

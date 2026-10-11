@@ -66,7 +66,7 @@ export const redactSessionNetwork = (value: string | null): string => {
   return "Unknown network";
 };
 
-export const coarseSessionDevice = (value: string | null): string => {
+const coarseSessionDevice = (value: string | null): string => {
   if (value === null) return "Unknown browser/device";
   const browser = /Edg\//.test(value)
     ? "Edge"

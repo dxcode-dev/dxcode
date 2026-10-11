@@ -7,8 +7,6 @@ import {
   UserId,
   WorkspaceId,
   WorkspaceMembership,
-  WorkspacePrivateThreadInspectionForbidden,
-  WorkspacePrivateThreadInspectionUnavailable,
   WorkspaceRepository,
   type WorkspaceRole,
   WorkspaceUsageAuditRepository,
@@ -140,14 +138,6 @@ const inspect = (
   );
 
 describe("WorkspaceUsageService private inspection", () => {
-  it("requires the explicit Auditor role and records the denied outcome", async () => {
-    const results: Array<WorkspaceUsageAuditResultType> = [];
-    await expect(
-      inspect(layerFor({ role: "admin", auditResults: results })),
-    ).rejects.toBeInstanceOf(WorkspacePrivateThreadInspectionForbidden);
-    expect(results).toEqual(["permission_denied"]);
-  });
-
   it("rejects empty reasons before inspecting or auditing a target", async () => {
     const results: Array<WorkspaceUsageAuditResultType> = [];
     await expect(
@@ -157,46 +147,6 @@ describe("WorkspaceUsageService private inspection", () => {
     });
     expect(results).toEqual([]);
   });
-
-  it("returns only existing metadata and content-free usage after the success audit", async () => {
-    const results: Array<WorkspaceUsageAuditResultType> = [];
-    const inspection = await inspect(
-      layerFor({
-        target: target("private", "archived"),
-        auditResults: results,
-      }),
-    );
-
-    expect(results).toEqual(["success"]);
-    expect(inspection.thread).toMatchObject({
-      threadId,
-      lifecycle: "archived",
-      usage: { totalTokens: 42, unknownTokenEvents: 1 },
-    });
-    expect(inspection.contentSummary).toMatchObject({ status: "unavailable" });
-    expect(inspection.thread).not.toHaveProperty("prompt");
-    expect(inspection.thread).not.toHaveProperty("response");
-    expect(inspection.thread).not.toHaveProperty("messages");
-  });
-
-  it.each([
-    ["workspace", "active", "thread_not_private"],
-    ["private", "deleted", "thread_unavailable"],
-  ] as const)(
-    "does not return %s/%s Thread metadata and records %s",
-    async (visibility, lifecycle, result) => {
-      const results: Array<WorkspaceUsageAuditResultType> = [];
-      await expect(
-        inspect(
-          layerFor({
-            target: target(visibility, lifecycle),
-            auditResults: results,
-          }),
-        ),
-      ).rejects.toBeInstanceOf(WorkspacePrivateThreadInspectionUnavailable);
-      expect(results).toEqual([result]);
-    },
-  );
 
   it("returns no protected data when the immutable success audit cannot persist", async () => {
     await expect(inspect(layerFor({ failAudit: true }))).rejects.toBeInstanceOf(

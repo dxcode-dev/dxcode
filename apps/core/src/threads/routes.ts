@@ -42,17 +42,26 @@ import {
   type ThreadData,
   type ThreadDetailData,
   threadAgentUrl,
+  UpdateThreadInvalidRequestResponseSchema,
+  UpdateThreadNotFoundResponseSchema,
+  UpdateThreadParamsSchema,
+  UpdateThreadPersistenceUnavailableResponseSchema,
+  UpdateThreadRequestSchema,
+  UpdateThreadResponseSchema,
   withMessageAuthor,
 } from "@dx/api";
 import {
   defaultThreadModelSelection,
   isThreadTitlePending,
   ModelNotServed,
+  type PageCursor,
   PersistenceUnavailable,
   SourceControlAccessDenied,
   SourceControlGrantId,
   SourceControlProviderFailure,
   type Thread,
+  type ThreadColor,
+  type ThreadId,
   UNTITLED_THREAD_TITLE,
   type UserId,
   type WorkspacePolicyDenied,
@@ -122,6 +131,9 @@ import {
   runDxTitleAgent,
 } from "./dx-title-agent.js";
 import {
+  readInboundMessages,
+  readParentColors,
+  readThreadChildCounts,
   readThreadListProjection,
   threadListItem,
 } from "./list-projection-d1.js";
@@ -143,6 +155,18 @@ class ThreadInitialAdmissionUnavailable extends Schema.TaggedError<ThreadInitial
   {},
 ) {}
 
+/** A child's parent's chosen color, which it shows until it has its own. */
+const parentColorField = (
+  parentColors: ReadonlyMap<ThreadId, ThreadColor>,
+  thread: Pick<Thread, "parentThreadId">,
+) => {
+  const color =
+    thread.parentThreadId === undefined
+      ? undefined
+      : parentColors.get(thread.parentThreadId);
+  return color === undefined ? {} : { parentColor: color };
+};
+
 const threadData = (thread: Thread): ThreadData => ({
   id: thread.id,
   title: thread.title,
@@ -154,8 +178,12 @@ const threadData = (thread: Thread): ThreadData => ({
   activityStatus: thread.activityStatus,
   lifecycleState: thread.lifecycleState,
   pinnedAt: thread.pinnedAt,
+  ...(thread.color === undefined ? {} : { color: thread.color }),
   ...(isThreadTitlePending(thread) ? { titlePending: true } : {}),
   agentUrl: threadAgentUrl(thread.id),
+  ...(thread.parentThreadId === undefined
+    ? {}
+    : { parentThreadId: thread.parentThreadId }),
 });
 
 /**
@@ -184,43 +212,68 @@ export const threadDetailData = Effect.fn("threadDetailData")(function* (
   db: D1Database,
   thread: Thread,
 ) {
-  const [mcpConnections, skills, plugins, executionWorkspace] =
-    yield* Effect.all(
-      [
-        resolveMcpAgentConnections(binding, thread.id).pipe(
-          Effect.mapError(
-            () =>
-              new PersistenceUnavailable({ operation: "resolve MCP policy" }),
-          ),
+  const [
+    mcpConnections,
+    skills,
+    plugins,
+    executionWorkspace,
+    parentColors,
+    inboundMessages,
+  ] = yield* Effect.all(
+    [
+      resolveMcpAgentConnections(binding, thread.id).pipe(
+        Effect.mapError(
+          () => new PersistenceUnavailable({ operation: "resolve MCP policy" }),
         ),
-        resolveSkillAgentData(binding, thread).pipe(
-          Effect.mapError(
-            () =>
-              new PersistenceUnavailable({
-                operation: "resolve skill snapshot",
-              }),
-          ),
-        ),
-        resolvePluginAgentData(binding, thread).pipe(
-          Effect.mapError(
-            () =>
-              new PersistenceUnavailable({
-                operation: "resolve plugin snapshot",
-              }),
-          ),
-        ),
-        Effect.tryPromise({
-          try: () => readExecutionWorkspaceReadiness(db, thread.id),
-          catch: () =>
+      ),
+      resolveSkillAgentData(binding, thread).pipe(
+        Effect.mapError(
+          () =>
             new PersistenceUnavailable({
-              operation: "resolve execution workspace readiness",
+              operation: "resolve skill snapshot",
             }),
-        }),
-      ],
-      { concurrency: 4 },
-    );
+        ),
+      ),
+      resolvePluginAgentData(binding, thread).pipe(
+        Effect.mapError(
+          () =>
+            new PersistenceUnavailable({
+              operation: "resolve plugin snapshot",
+            }),
+        ),
+      ),
+      Effect.tryPromise({
+        try: () => readExecutionWorkspaceReadiness(db, thread.id),
+        catch: () =>
+          new PersistenceUnavailable({
+            operation: "resolve execution workspace readiness",
+          }),
+      }),
+      Effect.tryPromise({
+        try: () =>
+          readParentColors(
+            db,
+            thread.parentThreadId === undefined ? [] : [thread.parentThreadId],
+          ),
+        catch: () =>
+          new PersistenceUnavailable({
+            operation: "resolve parent Thread color",
+          }),
+      }),
+      Effect.tryPromise({
+        try: () => readInboundMessages(db, thread.id),
+        catch: () =>
+          new PersistenceUnavailable({
+            operation: "resolve inbound Thread messages",
+          }),
+      }),
+    ],
+    { concurrency: 4 },
+  );
   return {
     ...threadData(thread),
+    ...parentColorField(parentColors, thread),
+    ...(inboundMessages.length === 0 ? {} : { inboundMessages }),
     agentInitialization: {
       personalInstructions: thread.agentInstructions.content,
       settingsRevision: thread.agentInstructions.revision,
@@ -287,7 +340,7 @@ type InitialThreadDispatcher = (
 const dispatchInitialThreadMessage: InitialThreadDispatcher = (request) =>
   dispatch(DxAgent, request);
 
-export const resolveCreationResponseDetail = <
+const resolveCreationResponseDetail = <
   Detail,
   DetailError,
   DetailRequirements,
@@ -379,6 +432,7 @@ export const createThreadRoutes = (
         requestedThreadId !== undefined &&
         titleExecution !== undefined &&
         titleMessage !== undefined &&
+        input.generateTitle !== false &&
         dxTitleAgentApplies(context.env, titleMessage);
       if (titlePending)
         titleExecution.waitUntil(
@@ -564,8 +618,13 @@ export const createThreadRoutes = (
               runnerProfileId,
               titlePending,
               executionPin,
+              input.parentThreadId,
             )
             .pipe(
+              // Only the parent lookup reports a missing Thread here.
+              Effect.catchTag("ThreadNotFound", () =>
+                Effect.fail(new InvalidThreadRequest()),
+              ),
               Effect.catchTag("PersistenceUnavailable", (failure) =>
                 requestedThreadId === undefined
                   ? Effect.fail(failure)
@@ -598,6 +657,7 @@ export const createThreadRoutes = (
             ),
       );
       let initialSubmission: { readonly submissionId: string } | undefined;
+      const messageSourceThreadId = context.get("messageSourceThreadId");
       if (initialMessage !== undefined) {
         const owner = yield* Effect.tryPromise({
           try: () => userIdentity(db, thread.ownerUserId),
@@ -618,6 +678,10 @@ export const createThreadRoutes = (
                       userId: thread.ownerUserId,
                       ...owner,
                     },
+                    // Set only by the in-process Thread tools.
+                    ...(messageSourceThreadId === undefined
+                      ? {}
+                      : { sourceThreadId: messageSourceThreadId }),
                   },
                   initialMessage.body,
                 ),
@@ -927,32 +991,51 @@ export const createThreadRoutes = (
           cursor: query.cursor,
           limit: query.limit,
           lifecycleState: query.lifecycleState,
+          ...(query.roots !== undefined
+            ? { tree: { kind: "roots" as const } }
+            : query.parentThreadId !== undefined
+              ? {
+                  tree: {
+                    kind: "children" as const,
+                    parentThreadId: query.parentThreadId,
+                  },
+                }
+              : {}),
         });
       }).pipe(Effect.provide(threadServiceLayer(db)));
-      const [projection, sharing] = yield* Effect.tryPromise({
-        try: () =>
-          Promise.all([
-            readThreadListProjection(
-              db,
-              page.items.map(({ id }) => id),
+      const ids = page.items.map(({ id }) => id);
+      const [projection, sharing, childCounts, parentColors] =
+        yield* Effect.tryPromise({
+          try: () =>
+            Promise.all([
+              readThreadListProjection(db, ids),
+              threadSharingDecorations(db, ids),
+              query.roots === undefined
+                ? new Map<ThreadId, number>()
+                : readThreadChildCounts(db, ids),
+              readParentColors(
+                db,
+                page.items.flatMap(({ parentThreadId }) =>
+                  parentThreadId === undefined ? [] : [parentThreadId],
+                ),
+              ),
+            ]),
+          catch: (cause) =>
+            PersistenceUnavailable.new(
+              { operation: "thread.listProjection" },
+              cause,
             ),
-            threadSharingDecorations(
-              db,
-              page.items.map(({ id }) => id),
-            ),
-          ]),
-        catch: (cause) =>
-          PersistenceUnavailable.new(
-            { operation: "thread.listProjection" },
-            cause,
-          ),
-      });
+        });
       return yield* Schema.encodeUnknownEffect(ListThreadsResponseSchema)({
         status: "success",
         data: {
           items: page.items.map((thread) => ({
             ...threadListItem(thread, projection.get(thread.id)),
             ...sharing.get(thread.id),
+            ...(childCounts.has(thread.id)
+              ? { childCount: childCounts.get(thread.id) }
+              : {}),
+            ...parentColorField(parentColors, thread),
           })),
           nextCursor: page.nextCursor,
         },
@@ -1107,6 +1190,121 @@ export const createThreadRoutes = (
     );
   });
 
+  threadRoutes.patch("/:threadId", async (context) => {
+    const requestId = context.get("requestId");
+    const operation = Effect.gen(function* () {
+      const params = yield* decodeRequestInput(
+        UpdateThreadParamsSchema,
+        { threadId: context.req.param("threadId") },
+        () => new InvalidThreadRequest(),
+      );
+      const body = yield* decodeJsonBody(
+        context.req,
+        UpdateThreadRequestSchema,
+        () => new InvalidThreadRequest(),
+      );
+      const db = yield* decodeD1Binding(context.env.DB);
+      const thread = yield* Effect.gen(function* () {
+        const service = yield* ThreadService;
+        return yield* service.update(
+          context.get("principal"),
+          params.threadId,
+          body,
+        );
+      }).pipe(Effect.provide(threadServiceLayer(db)));
+      // Children on auto color show this Thread's color, so a recolor
+      // refreshes their detail too.
+      const children =
+        body.color === undefined
+          ? []
+          : yield* Effect.tryPromise({
+              try: async () =>
+                (
+                  await db
+                    .prepare(
+                      `SELECT id FROM threads
+                        WHERE parent_thread_id = ? AND owner_user_id = ?
+                          AND lifecycle_state != 'deleted' AND color IS NULL`,
+                    )
+                    .bind(thread.id, thread.ownerUserId)
+                    .all<{ id: ThreadId }>()
+                ).results,
+              catch: (cause) =>
+                PersistenceUnavailable.new(
+                  { operation: "thread.listRecoloredChildren" },
+                  cause,
+                ),
+            });
+      for (const { id } of [thread, ...children])
+        yield* Effect.promise(() =>
+          scheduleRealtimeInvalidation(
+            () => context.executionCtx,
+            context.env,
+            id,
+            "thread.invalidated",
+          ),
+        );
+      return yield* Schema.encodeUnknownEffect(UpdateThreadResponseSchema)({
+        status: "success",
+        data: threadData(thread),
+      });
+    });
+    const result = await Effect.runPromise(Effect.result(operation));
+    if (Result.isSuccess(result)) return context.json(result.success, 200);
+    return Match.value(result.failure).pipe(
+      Match.tags({
+        InvalidThreadRequest: () =>
+          context.json(
+            Schema.encodeUnknownSync(UpdateThreadInvalidRequestResponseSchema)({
+              status: "error",
+              data: {
+                code: "INVALID_REQUEST",
+                message: "Request validation failed.",
+                requestId,
+              },
+            }),
+            400,
+          ),
+        ThreadNotFound: () =>
+          context.json(
+            Schema.encodeUnknownSync(UpdateThreadNotFoundResponseSchema)({
+              status: "error",
+              data: {
+                code: "THREAD_NOT_FOUND",
+                message: "Thread was not found.",
+                requestId,
+              },
+            }),
+            404,
+          ),
+        PersistenceUnavailable: () =>
+          context.json(
+            Schema.encodeUnknownSync(
+              UpdateThreadPersistenceUnavailableResponseSchema,
+            )({
+              status: "error",
+              data: {
+                code: "PERSISTENCE_UNAVAILABLE",
+                message: "Persistence is temporarily unavailable.",
+                requestId,
+              },
+            }),
+            503,
+          ),
+        D1BindingUnavailable: (error) => {
+          throw error;
+        },
+        ConfigError: (error) => {
+          throw error;
+        },
+        SchemaError: (error) => {
+          throw error;
+        },
+      }),
+      Match.exhaustive,
+    );
+  });
+
   threadRoutes.patch("/:threadId/archive", async (context) => {
     const requestId = context.get("requestId");
     const operation = Effect.gen(function* () {
@@ -1121,31 +1319,102 @@ export const createThreadRoutes = (
         () => new InvalidThreadRequest(),
       );
       const db = yield* decodeD1Binding(context.env.DB);
-      const thread = yield* Effect.gen(function* () {
+      const principal = context.get("principal");
+      const [thread, children, childFailed] = yield* Effect.gen(function* () {
         const service = yield* ThreadService;
-        return yield* service.setArchived(
-          context.get("principal"),
+        const parent = yield* service.setArchived(
+          principal,
           params.threadId,
           body.archived,
         );
+        if (body.includeChildren !== true)
+          return [parent, [] as ReadonlyArray<Thread>, false] as const;
+        // Every child still in the state the parent just left, page by
+        // page; an Undo names exactly the children its archive changed.
+        const only =
+          body.childThreadIds === undefined
+            ? undefined
+            : new Set<string>(body.childThreadIds);
+        const pending: Thread[] = [];
+        let cursor: PageCursor | undefined;
+        for (let page = 0; page < 10; page++) {
+          const listed = yield* service
+            .list(principal, undefined, {
+              limit: 100,
+              cursor,
+              lifecycleState: body.archived ? "active" : "archived",
+              tree: { kind: "children", parentThreadId: parent.id },
+            })
+            .pipe(
+              // A cursor from the previous page cannot fail to decode.
+              Effect.catchTag("InvalidPageCursor", (cause) =>
+                Effect.die(cause),
+              ),
+            );
+          pending.push(
+            ...listed.items.filter(
+              (child) => only === undefined || only.has(child.id),
+            ),
+          );
+          cursor = listed.nextCursor;
+          if (cursor === undefined) break;
+        }
+        // Each child is best-effort: one deleted meanwhile or a failed
+        // write must not keep the others, or the parent, from finishing.
+        const results = yield* Effect.forEach(
+          pending,
+          (child) =>
+            service.setArchived(principal, child.id, body.archived).pipe(
+              Effect.map((thread) => ({ thread, failed: false })),
+              // Deleted since it was listed: nothing left to change.
+              Effect.catchTag("ThreadNotFound", () =>
+                Effect.succeed({ thread: undefined, failed: false }),
+              ),
+              Effect.catchTag("PersistenceUnavailable", () =>
+                Effect.succeed({ thread: undefined, failed: true }),
+              ),
+            ),
+          { concurrency: 4 },
+        );
+        const changed = results.flatMap(({ thread }) =>
+          thread === undefined ? [] : [thread],
+        );
+        const failed = results.some((result) => result.failed);
+        return [parent, changed, failed] as const;
       }).pipe(Effect.provide(threadServiceLayer(db)));
-      yield* Effect.promise(() =>
-        scheduleRealtimeInvalidation(
-          () => context.executionCtx,
-          context.env,
-          thread.id,
-          "thread.invalidated",
-        ),
-      );
+      for (const changed of [thread, ...children])
+        yield* Effect.promise(() =>
+          scheduleRealtimeInvalidation(
+            () => context.executionCtx,
+            context.env,
+            changed.id,
+            "thread.invalidated",
+          ),
+        );
       if (body.archived) {
         yield* Effect.tryPromise({
-          try: () => ExecutionWorkspaces.archive(thread.id),
+          try: () =>
+            Promise.all(
+              [thread, ...children].map(({ id }) =>
+                ExecutionWorkspaces.archive(id),
+              ),
+            ),
           catch: () => new ThreadArchiveExecutionUnavailable(),
         });
       }
+      // Whatever changed is published and stopped; then a child that could
+      // not be written reports the outage.
+      if (childFailed)
+        return yield* PersistenceUnavailable.new(
+          { operation: "thread.archiveChildren" },
+          new Error("A child Thread could not be archived or restored."),
+        );
       return yield* Schema.encodeUnknownEffect(ArchiveThreadResponseSchema)({
         status: "success",
         data: threadData(thread),
+        ...(body.includeChildren === true
+          ? { changedChildThreadIds: children.map(({ id }) => id) }
+          : {}),
       });
     });
     const result = await Effect.runPromise(Effect.result(operation));

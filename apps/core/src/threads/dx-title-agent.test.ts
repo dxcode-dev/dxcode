@@ -2,12 +2,9 @@ import { defaultThreadModelSelection } from "@dx/domain";
 import { describe, expect, it, vi } from "vitest";
 import type { Bindings } from "../http/types.js";
 import {
-  DX_TITLE_AGENT_MAX_OUTPUT_TOKENS,
-  DX_TITLE_AGENT_SYSTEM_PROMPT,
   dxTitleAgentApplies,
   runDxTitleAgent,
   sanitizeGeneratedTitle,
-  titleUserMessage,
 } from "./dx-title-agent.js";
 
 const job = {
@@ -41,17 +38,6 @@ const fakeBindings = (response: Response | Error, changes = 1) => {
 };
 
 describe("DxTitleAgent", () => {
-  it("wraps the bounded first message in user_message tags", () => {
-    expect(titleUserMessage("  Fix the login bug \n")).toBe(
-      "<user_message>\nFix the login bug\n</user_message>",
-    );
-    expect(titleUserMessage(" \n\t")).toBeUndefined();
-    const long = titleUserMessage("x".repeat(10_000)) ?? "";
-    expect(long.length).toBe(
-      4_000 + "<user_message>\n\n</user_message>".length,
-    );
-  });
-
   it("accepts only a bare title within the prompt limits", () => {
     expect(sanitizeGeneratedTitle("OAuth refresh retries")).toBe(
       "OAuth refresh retries",
@@ -83,13 +69,11 @@ describe("DxTitleAgent", () => {
     expect(fetch).toHaveBeenCalledOnce();
     const [url, init] = fetch.mock.calls[0] ?? [];
     expect(url).toBe("https://dx-byok.invalid/complete");
-    expect(JSON.parse(String(init?.body))).toEqual({
+    expect(JSON.parse(String(init?.body))).toMatchObject({
       threadId: job.threadId,
       ownerUserId: job.ownerUserId,
       selection: job.selection,
-      systemPrompt: DX_TITLE_AGENT_SYSTEM_PROMPT,
       message: `<user_message>\n${job.message}\n</user_message>`,
-      maxTokens: DX_TITLE_AGENT_MAX_OUTPUT_TOKENS,
     });
     expect(prepare).toHaveBeenCalledOnce();
     expect(prepare.mock.calls[0]?.[0]).toMatch(

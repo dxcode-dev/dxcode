@@ -4,6 +4,7 @@ import type {
   ThreadData,
   ThreadDetailData,
   ThreadListItem,
+  UpdateThreadRequest,
 } from "@dx/api";
 import { CreateThreadResponseSchema, threadAgentUrl } from "@dx/api";
 import type {
@@ -21,10 +22,12 @@ import {
 } from "@tanstack/react-query";
 import { DateTime } from "effect";
 import {
+  type ArchivedThread,
   request,
   setThreadArchived,
   setThreadPinned,
   type ThreadPage,
+  updateThread,
 } from "../../shared/api/client.js";
 import { seedProjectDetail } from "../projects/project-mutations.js";
 import { threadKeys } from "./thread-queries.js";
@@ -32,7 +35,7 @@ import { threadKeys } from "./thread-queries.js";
 type ThreadListData = InfiniteData<ThreadPage, unknown>;
 const optimisticCreation = "__dxOptimisticCreation" as const;
 
-export const createThread = async (
+const createThread = async (
   projectId: ProjectId | undefined,
   title: ThreadTitle,
   selection?: ThreadModelSelection,
@@ -89,10 +92,13 @@ const matchingActiveList = (
     | {
         readonly projectId: ProjectId | null;
         readonly lifecycleState?: "active" | "archived" | null;
+        readonly tree?: string | null;
       }
     | undefined;
+  // A Thread created here is a root; it never joins a parent's children.
   return (
     scope?.lifecycleState !== "archived" &&
+    (scope?.tree == null || scope.tree === "roots") &&
     (scope?.projectId === null || scope?.projectId === projectId)
   );
 };
@@ -322,10 +328,13 @@ export const setThreadArchivedMutationOptions = (
     mutationFn: ({
       threadId,
       archived,
+      children,
     }: {
       threadId: ThreadId;
       archived: boolean;
-    }) => setThreadArchived(threadId, archived),
+      /** True for every child, or the exact children to change. */
+      children?: true | ReadonlyArray<ThreadId>;
+    }) => setThreadArchived(threadId, archived, children),
     onMutate: async ({ threadId, archived }) => {
       await Promise.all([
         queryClient.cancelQueries({
@@ -386,7 +395,7 @@ export const setThreadArchivedMutationOptions = (
       }
       return { previousDetail, previousLists };
     },
-    onSuccess: (thread: ThreadData) => {
+    onSuccess: ({ thread }: ArchivedThread) => {
       queryClient.setQueryData<ThreadDetailData>(
         threadKeys.detail(userId, thread.id),
         (detail) => (detail === undefined ? detail : { ...detail, ...thread }),
@@ -405,6 +414,113 @@ export const setThreadArchivedMutationOptions = (
           queryClient.setQueryData(queryKey, data);
         }
       }
+      return Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: threadKeys.detail(userId, threadId),
+          exact: true,
+        }),
+        queryClient.invalidateQueries({
+          queryKey: threadKeys.lists(userId),
+        }),
+      ]);
+    },
+  });
+
+/** A rename or recolor as the server will apply it. */
+const withThreadUpdate = <Cached extends ThreadData>(
+  thread: Cached,
+  update: UpdateThreadRequest,
+): Cached => {
+  const { titlePending: _pending, color: _color, ...rest } = thread;
+  const title = update.title ?? thread.title;
+  const titlePending =
+    update.title === undefined ? thread.titlePending : undefined;
+  const color = update.color === undefined ? thread.color : update.color;
+  return {
+    ...rest,
+    title,
+    ...(titlePending === undefined ? {} : { titlePending }),
+    ...(color === null || color === undefined ? {} : { color }),
+  } as Cached;
+};
+
+export const updateThreadMutationOptions = (
+  queryClient: QueryClient,
+  userId: UserId,
+) =>
+  mutationOptions({
+    mutationKey: [...threadKeys.all(userId), "update"] as const,
+    mutationFn: ({
+      threadId,
+      update,
+    }: {
+      threadId: ThreadId;
+      update: UpdateThreadRequest;
+    }) => updateThread(threadId, update),
+    onMutate: async ({ threadId, update }) => {
+      await Promise.all([
+        queryClient.cancelQueries({
+          queryKey: threadKeys.detail(userId, threadId),
+          exact: true,
+        }),
+        queryClient.cancelQueries({ queryKey: threadKeys.lists(userId) }),
+      ]);
+      const previousDetail = queryClient.getQueryData<ThreadDetailData>(
+        threadKeys.detail(userId, threadId),
+      );
+      const previousLists = queryClient.getQueriesData<ThreadListData>({
+        queryKey: threadKeys.lists(userId),
+      });
+      queryClient.setQueryData<ThreadDetailData>(
+        threadKeys.detail(userId, threadId),
+        (detail) =>
+          detail === undefined ? detail : withThreadUpdate(detail, update),
+      );
+      queryClient.setQueriesData<ThreadListData>(
+        { queryKey: threadKeys.lists(userId) },
+        (current) =>
+          current === undefined
+            ? current
+            : {
+                ...current,
+                pages: current.pages.map((page) => ({
+                  ...page,
+                  items: page.items.map((thread) =>
+                    thread.id === threadId
+                      ? withThreadUpdate(thread, update)
+                      : thread,
+                  ),
+                })),
+              },
+      );
+      return { previousDetail, previousLists };
+    },
+    onSuccess: (thread: ThreadData) => {
+      queryClient.setQueryData<ThreadDetailData>(
+        threadKeys.detail(userId, thread.id),
+        (detail) => {
+          if (detail === undefined) return detail;
+          // Optional fields the server omitted are cleared, not kept.
+          const { color: _color, titlePending: _pending, ...rest } = detail;
+          return { ...rest, ...thread };
+        },
+      );
+      return queryClient.invalidateQueries({
+        queryKey: threadKeys.lists(userId),
+      });
+    },
+    onError: (_error, { threadId }, rollback) => {
+      if (rollback !== undefined) {
+        queryClient.setQueryData(
+          threadKeys.detail(userId, threadId),
+          rollback.previousDetail,
+        );
+        for (const [queryKey, data] of rollback.previousLists) {
+          queryClient.setQueryData(queryKey, data);
+        }
+      }
+      // The snapshot may predate an overlapping update that succeeded, so
+      // the server, not the rollback, decides what the Thread shows.
       return Promise.all([
         queryClient.invalidateQueries({
           queryKey: threadKeys.detail(userId, threadId),

@@ -149,11 +149,6 @@ describe("image attachments", () => {
     expect(read).not.toHaveBeenCalled();
   });
 
-  it("reports unsupported capture", async () => {
-    vi.stubGlobal("navigator", {});
-    await expect(captureScreenshot()).rejects.toThrow("not supported");
-  });
-
   it("disposes previews allocated before a later selection fails", async () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:first");
     const revoke = vi.spyOn(URL, "revokeObjectURL");

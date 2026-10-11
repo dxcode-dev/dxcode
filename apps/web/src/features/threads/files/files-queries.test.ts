@@ -9,11 +9,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { Schema } from "effect";
 import { expect, it } from "vitest";
 import { createThreadFilesApi } from "./files-api.js";
-import {
-  saveThreadFileOptions,
-  threadFileOptions,
-  threadFileTreeOptions,
-} from "./files-queries.js";
+import { saveThreadFileOptions } from "./files-queries.js";
 
 it("sends the Save mutation through the strict HTTP body contract without the URL path", async () => {
   const version = `sha256:${"a".repeat(64)}` as ThreadFileVersion;
@@ -51,18 +47,17 @@ it("sends the Save mutation through the strict HTTP body contract without the UR
   expect(result.kind).toBe("saved");
 });
 
-it("bounds read recovery retries while never retrying uncertain saves", () => {
-  const api = createThreadFilesApi();
-  const id = "thr_00000000-0000-4000-8000-000000000243" as ThreadId;
-  const worktree = "primary" as ThreadFilesWorktreeId;
-  const path = "src/proof.ts" as ThreadFilesPath;
+it("never retries an uncertain save, even when the client default retries", () => {
   const client = new QueryClient({
     defaultOptions: { mutations: { retry: 9 } },
   });
 
-  expect(threadFileTreeOptions(api, id, worktree, undefined, true).retry).toBe(
-    2,
-  );
-  expect(threadFileOptions(api, id, worktree, path, true).retry).toBe(2);
-  expect(saveThreadFileOptions(api, id, worktree, client).retry).toBe(false);
+  expect(
+    saveThreadFileOptions(
+      createThreadFilesApi(),
+      "thr_00000000-0000-4000-8000-000000000243" as ThreadId,
+      "primary" as ThreadFilesWorktreeId,
+      client,
+    ).retry,
+  ).toBe(false);
 });

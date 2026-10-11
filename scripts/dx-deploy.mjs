@@ -198,10 +198,7 @@ export const assertInstallerDefaults = (config, defaults) => {
       );
 };
 
-export const provisionalDeploymentConfigPath = (
-  configPath,
-  nonce = randomUUID(),
-) =>
+const provisionalDeploymentConfigPath = (configPath, nonce = randomUUID()) =>
   join(
     dirname(resolve(configPath)),
     `.${basename(configPath)}.${nonce}.pending`,

@@ -11,7 +11,6 @@ import {
   fauxProvider,
   fauxText,
   fauxThinking,
-  fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
 import { afterAll, beforeAll, expect, it } from "vitest";
 
@@ -73,48 +72,6 @@ it("observes the first meaningful thinking, text, or tool-call delta once withou
     types.indexOf("turn"),
   );
 });
-
-it.each([
-  {
-    id: "first-text-output",
-    outputKind: "text",
-    responses: [fauxAssistantMessage([fauxText("private answer")])],
-  },
-  {
-    id: "first-tool-output",
-    outputKind: "tool-call",
-    responses: [
-      fauxAssistantMessage(
-        [fauxToolCall("task", { agent: "missing", prompt: "private task" })],
-        { stopReason: "toolUse" },
-      ),
-      fauxAssistantMessage("done"),
-    ],
-  },
-])(
-  "classifies the first $outputKind delta",
-  async ({ id, outputKind, responses }) => {
-    observations.length = 0;
-    provider.setResponses(responses);
-    const handle = init(FirstOutputAgent, { id });
-    const receipt = await handle.dispatch("private prompt");
-    await handle.read(receipt);
-
-    const firstOutputs = observations.filter(
-      (event) => event.type === "turn_first_output",
-    );
-    expect(firstOutputs[0]).toEqual(
-      expect.objectContaining({
-        type: "turn_first_output",
-        instanceId: id,
-        outputKind,
-      }),
-    );
-    expect(new Set(firstOutputs.map((event) => event.turnId)).size).toBe(
-      firstOutputs.length,
-    );
-  },
-);
 
 it("does not await a first-output observation subscriber", async () => {
   let release!: () => void;

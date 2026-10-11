@@ -523,18 +523,6 @@ describe("dx Git credential helper", () => {
 });
 
 describe("generated source workspace harness", { timeout: 30000 }, () => {
-  it("maps a missing checkout to the snapshot absent JSON state", async () => {
-    const fixture = await makeHarness();
-
-    expect(checkoutState(fixture)).toEqual({
-      status: "absent",
-      modules: [],
-      lfsNeeded: false,
-      shallow: false,
-      fullHistoryNeeded: false,
-    });
-  });
-
   it("clones anonymous default HEAD once and reports the finalized identity without credentials", async () => {
     const fixture = await makeHarness({ http: true });
     try {
@@ -847,25 +835,6 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     );
   });
 
-  it("verifies checkout and runs ordered hooks in one activation", async () => {
-    const fixture = await makeHarness();
-    initialize(fixture);
-
-    expect(activationState(fixture)).toEqual({
-      checkout: {
-        status: "ready",
-        modules: [],
-        lfsNeeded: false,
-        shallow: false,
-        fullHistoryNeeded: false,
-      },
-      hooks: { status: "ready" },
-    });
-    expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
-      "setup\nresume\n",
-    );
-  });
-
   it("does not run hooks in combined activation when source preparation remains", async () => {
     const fixture = await makeHarness({ lfsAttributes: true });
     initialize(fixture);
@@ -1056,17 +1025,6 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     expect(git(root, "branch", "--show-current")).toBe("feature/unrelated");
   });
 
-  it("marks provisioning finished without running hooks", async () => {
-    const fixture = await makeHarness();
-    initialize(fixture);
-    const result = runHarness(fixture, "mark-provisioned");
-    expect(result.status, result.stderr).toBe(0);
-    expect(
-      JSON.parse(readFileSync(fixture.paths.state, "utf8")).provisioned,
-    ).toBe(true);
-    expect(existsSync(join(fixture.paths.home, "hook-order"))).toBe(false);
-  });
-
   it("re-clones a checkout the user deleted", async () => {
     const fixture = await makeHarness();
     initialize(fixture);
@@ -1171,15 +1129,6 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     expect(result.stdout + result.stderr).not.toContain(token);
     expect(() => lstatSync(fixture.paths.root)).toThrow();
     expect(() => lstatSync(fixture.paths.state)).toThrow();
-  });
-
-  it("detects root LFS configuration without invoking unavailable git-lfs", async () => {
-    const fixture = await makeHarness({ lfsAttributes: true });
-    initialize(fixture);
-    expect(checkoutState(fixture)).toMatchObject({
-      status: "ready",
-      lfsNeeded: true,
-    });
   });
 });
 

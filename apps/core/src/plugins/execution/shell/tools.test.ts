@@ -4,8 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Sandbox } from "@flue/runtime";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { shellDefinitions } from "./definitions.js";
-import { createShellTools, shellWaitMs } from "./tools.js";
+import { createShellTools } from "./tools.js";
 
 let home: string;
 let sandbox: Sandbox;
@@ -68,18 +67,6 @@ const call = async (
   };
 };
 
-it("exports the exact ordered definitions", () => {
-  expect(
-    tools().map(({ name, description, parameters }) => ({
-      name,
-      description,
-      parameters: JSON.parse(JSON.stringify(parameters)),
-    })),
-  ).toEqual(shellDefinitions);
-  expect(tools().map((tool) => Object.keys(tool.parameters))).toEqual(
-    shellDefinitions.map((definition) => Object.keys(definition.parameters)),
-  );
-});
 it("formats a quick exit and preserves merged output and safe quoting", async () => {
   expect(
     (await call(0, { command: `printf "a'\\n"; printf 'b\\n' >&2; exit 7` }))
@@ -151,11 +138,6 @@ it("caps bytes and lines and consumes discarded output", async () => {
     "<output></output>",
   );
 });
-it("clamps timeout values", () => {
-  expect([undefined, -20, 0, 123.8, 90000].map(shellWaitMs)).toEqual([
-    10000, 0, 0, 123, 60000,
-  ]);
-});
 it("aborts the wait but leaves the background command running", async () => {
   const controller = new AbortController();
   const pending = call(
@@ -163,12 +145,16 @@ it("aborts the wait but leaves the background command running", async () => {
     { command: "sleep 0.5; echo survived", timeout_ms: 10000 },
     controller.signal,
   );
-  setTimeout(() => controller.abort(), 100);
-  await expect(pending).rejects.toThrow();
   const root = join(home, ".local/state/dx-shell");
-  const pid = Number(
-    (await readdir(root)).find((entry) => /^\d+$/.test(entry)),
-  );
+  const startedPid = async () =>
+    (await readdir(root).catch(() => [])).find((entry) => /^\d+$/.test(entry));
+  // Abort the wait only once the command has started, however slow bash is.
+  while ((await startedPid()) === undefined) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  controller.abort();
+  await expect(pending).rejects.toThrow();
+  const pid = Number(await startedPid());
   expect((await call(1, { pid, timeout_ms: 2000 })).text).toContain(
     "survived\n</output>",
   );

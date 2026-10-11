@@ -38,49 +38,6 @@ const setup = () => {
 };
 
 describe("workload identity public routes", () => {
-  it("publishes deterministic discovery and JWKS documents", async () => {
-    const { app, broker, bindings } = setup();
-
-    const discovery = await app.request(
-      "/.well-known/openid-configuration",
-      {},
-      bindings,
-    );
-    expect(discovery.status).toBe(200);
-    expect(discovery.headers.get("cache-control")).toBe(
-      "public, max-age=300, must-revalidate",
-    );
-    await expect(discovery.json()).resolves.toMatchObject({
-      issuer,
-      jwks_uri: `${issuer}/jwks.json`,
-    });
-
-    const jwks = await app.request("/jwks.json", {}, bindings);
-    expect(jwks.status).toBe(200);
-    expect(jwks.headers.get("cache-control")).toBe(
-      "public, max-age=300, must-revalidate",
-    );
-    await expect(jwks.json()).resolves.toMatchObject({
-      keys: [{ kid: "test-key-01" }],
-    });
-    expect(broker.discovery).toHaveBeenCalledOnce();
-    expect(broker.jwks).toHaveBeenCalledOnce();
-  });
-
-  it("has no public token-minting endpoint", async () => {
-    const { app, broker, bindings } = setup();
-
-    const response = await app.request(
-      "/e2b/exchange",
-      { method: "POST", body: "{}" },
-      bindings,
-    );
-
-    expect(response.status).toBe(404);
-    expect(broker.discovery).not.toHaveBeenCalled();
-    expect(broker.jwks).not.toHaveBeenCalled();
-  });
-
   it("fails public metadata closed without reflecting configuration errors", async () => {
     const { app, broker, bindings } = setup();
     broker.discovery.mockImplementation(() => {

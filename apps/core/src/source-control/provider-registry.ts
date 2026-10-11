@@ -7,7 +7,7 @@ import {
 } from "@dx/domain";
 import { Schema } from "effect";
 
-export class SourceControlRegistryInvalid extends Schema.TaggedError<SourceControlRegistryInvalid>()(
+class SourceControlRegistryInvalid extends Schema.TaggedError<SourceControlRegistryInvalid>()(
   "SourceControlRegistryInvalid",
   {
     reason: Schema.Literals([
@@ -63,7 +63,7 @@ const unavailableDescriptors = [
   descriptor("forgejo", "Forgejo", []),
 ];
 
-export const createPrivilegedSourceControlProviderRegistry = (
+const createPrivilegedSourceControlProviderRegistry = (
   inputs: ReadonlyArray<unknown>,
 ): PrivilegedSourceControlProviderRegistry => {
   const descriptors: Array<SourceControlAdapterDescriptorType> = [];

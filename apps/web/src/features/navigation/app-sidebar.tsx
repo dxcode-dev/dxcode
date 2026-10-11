@@ -320,6 +320,7 @@ export function AppSidebar({
               onThreadNavigate={onThreadNavigate}
               onThreadPointerEnter={openPreview}
               onThreadPointerLeave={leaveThreadRow}
+              onThreadMenuOpen={dismissPreviewForNavigation}
               onSetArchived={archive.setArchived}
               onSetPinned={onSetPinned}
               archivingThreadId={archive.pendingThreadId}
@@ -342,6 +343,7 @@ export function AppSidebar({
         onThreadNavigate={onThreadNavigate}
         onThreadPointerEnter={openPreview}
         onThreadPointerLeave={leaveThreadRow}
+        onThreadMenuOpen={dismissPreviewForNavigation}
         onToggleGroup={toggleGroup}
         onUnfollow={onUnfollow}
         onSetArchived={archive.setArchived}

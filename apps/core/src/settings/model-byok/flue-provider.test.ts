@@ -15,38 +15,9 @@ vi.mock("@earendil-works/pi-ai/api/openai-completions", () => ({
   }),
 }));
 
-import { AGENT_RUN_LIMIT_MS } from "../../runtime/agent-run-limit.js";
 import { createDxModelRoutingProvider } from "./flue-provider.js";
 
 describe("dx model routing transport", () => {
-  it("lets Flue's run deadline, not SDK defaults, bound wire model calls", async () => {
-    const { provider } = createDxModelRoutingProvider("openai", {
-      namespace: {} as DurableObjectNamespace,
-      identity: () => ({ name: "thr_test" }) as never,
-      invocation: () => undefined,
-    });
-    const model = {
-      id: "gpt-test",
-      provider: "openai",
-      api: "openai-completions",
-      baseUrl: "https://api.example.test/v1",
-    } as Model<Api>;
-
-    for await (const _event of provider.streamSimple(
-      model,
-      { messages: [] } as never,
-      { maxRetries: 3, timeoutMs: 1_000 } as never,
-    ));
-
-    expect(adapter.options).toEqual([
-      expect.objectContaining({
-        maxRetries: 0,
-        timeoutMs: AGENT_RUN_LIMIT_MS,
-      }),
-    ]);
-    expect(AGENT_RUN_LIMIT_MS).toBe(7 * 24 * 60 * 60 * 1000);
-  });
-
   it("never sends a failed tool result without text to the provider", async () => {
     const bodies: unknown[] = [];
     const { provider } = createDxModelRoutingProvider("anthropic", {

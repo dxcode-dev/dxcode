@@ -81,6 +81,11 @@ export interface Variables {
   readonly threadLifecycleState: ThreadLifecycleState;
   /** The Thread POST is a chat message: Flue records it without a model call. */
   readonly chatDelivery: boolean;
+  /**
+   * Set only in-process by the Thread tools: the Thread whose agent sent
+   * this request's message, shown as its source in the receiving Thread.
+   */
+  readonly messageSourceThreadId?: string;
 }
 
 export interface AppEnv {

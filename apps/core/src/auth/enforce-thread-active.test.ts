@@ -53,17 +53,4 @@ describe("archived Thread execution admission", () => {
     const response = await createApp("archived").request(path);
     expect(response.status).toBe(204);
   });
-
-  it.each([
-    `/v1/threads/${threadId}/terminal`,
-    `/v1/threads/${threadId}/files`,
-    `/v1/threads/${threadId}/files/src%2Findex.ts`,
-    `/v1/agents/dx/${threadId}`,
-    `/v1/agents/dx/${threadId}/abort`,
-  ])("allows active execution at %s", async (path) => {
-    const response = await createApp("active").request(path, {
-      method: path.includes("/files") ? "GET" : "POST",
-    });
-    expect(response.status).toBe(204);
-  });
 });

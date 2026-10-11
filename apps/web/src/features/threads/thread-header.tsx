@@ -10,6 +10,7 @@ import {
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
+import { threadColorAttributes } from "../../shared/thread-color.js";
 import { Avatar } from "../../shared/ui/avatar.js";
 import { Button } from "../../shared/ui/button.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
@@ -140,7 +141,7 @@ export function ThreadHeader({
   const openShare = own && !archived ? () => setShareOpen(true) : undefined;
   return (
     <header className="thread-title-bar">
-      <div className="thread-title-group">
+      <div className="thread-title-group" {...threadColorAttributes(thread)}>
         <span
           className="thread-title-orb"
           title={`${EXECUTION_ENVIRONMENT_DISPLAY_NAME} ${environmentState}`}

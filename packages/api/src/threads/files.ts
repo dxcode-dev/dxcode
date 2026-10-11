@@ -142,7 +142,7 @@ const FileFields = {
   sizeBytes: NonNegativeInt,
 };
 
-export const ThreadEditableFileDataSchema = Schema.Struct({
+const ThreadEditableFileDataSchema = Schema.Struct({
   kind: Schema.Literal("file"),
   ...FileFields,
   editable: Schema.Literal(true),
@@ -156,7 +156,7 @@ export const ThreadEditableFileDataSchema = Schema.Struct({
   ),
 });
 
-export const ThreadReadonlyFileDataSchema = Schema.Struct({
+const ThreadReadonlyFileDataSchema = Schema.Struct({
   kind: Schema.Literal("file"),
   ...FileFields,
   editable: Schema.Literal(false),

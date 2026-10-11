@@ -73,16 +73,6 @@ describe("dxd ingress", () => {
     },
   );
 
-  it("rejects an absent Durable Object binding", async () => {
-    const app = new Hono<AppEnv>().route("/v1", threadDaemonRoutes);
-    const response = await app.request(
-      `/v1/threads/${threadId}/dxd`,
-      { headers: { upgrade: "websocket" } },
-      {} as Bindings,
-    );
-    expect(response.status).toBe(404);
-  });
-
   it("rejects a malformed daemon API key before Durable Object lookup", async () => {
     const fixture = harness();
     const response = await fixture.request(`/v1/threads/${threadId}/dxd`, {

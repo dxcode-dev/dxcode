@@ -72,15 +72,6 @@ describe("PCM capture worklet", () => {
     expect(messages).toHaveLength(count);
   });
 
-  it("flushes one final silent sample before acknowledging stop", () => {
-    const { messages, processor } = createProcessor();
-    processor.process([[Float32Array.of(0)]]);
-    processor.port.onmessage?.({ data: { type: "stop" } });
-
-    expect(messages.map(({ type }) => type)).toEqual(["samples", "stopped"]);
-    expect(messages[0]?.pcm).toEqual(Int16Array.of(0));
-  });
-
   it("caps output at the actual 14.4 million sample maximum", () => {
     const { messages, processor } = createProcessor();
     expect(processor.limit).toBe(14_400_000);

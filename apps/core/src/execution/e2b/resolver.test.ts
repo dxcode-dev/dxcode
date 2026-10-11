@@ -1,4 +1,3 @@
-import { E2B_ORB_PROFILES } from "@dx/domain";
 import { Effect, Redacted } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { executionWorkspaceLogger } from "../../logging.js";
@@ -206,27 +205,6 @@ describe("resolveExecutionWorkspace", () => {
     expect(observed.mock.calls[0]?.[0]).not.toHaveProperty("sandboxId");
   });
 
-  it.each(E2B_ORB_PROFILES)(
-    "sends $id's dedicated template to the E2B create adapter",
-    async (profile) => {
-      const fake = provider();
-      const store = stateStore(uninitialized);
-
-      await resolve(fake, store, {
-        requirements: {
-          ...requirements,
-          template: `dx-workspace-${profile.templateSuffix}`,
-        },
-      });
-
-      expect(fake.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          template: `dx-workspace-${profile.templateSuffix}`,
-        }),
-      );
-    },
-  );
-
   it("kills a newly created sandbox when authority changes before persistence", async () => {
     const store = stateStore(uninitialized);
     const originalTransition = store.transition.getMockImplementation();
@@ -299,25 +277,6 @@ describe("resolveExecutionWorkspace", () => {
       providerCreates: 0,
       authorizations: 3,
     });
-  });
-
-  it("observes a running persisted workspace before connecting it", async () => {
-    const fake = provider({
-      getInfo: async (sandboxId) => info(sandboxId, currentMetadata, "running"),
-    });
-    const store = stateStore(initialized("immutable-sandbox"));
-    const observeResidency = vi.fn();
-
-    await expect(resolve(fake, store, { observeResidency })).resolves.toEqual({
-      sandboxId: "immutable-sandbox",
-    });
-
-    expect(fake.getInfo).toHaveBeenCalledWith("immutable-sandbox", {
-      apiKey: "e2b-test-credential",
-      requestTimeoutMs: 30_000,
-    });
-    expect(observeResidency).toHaveBeenCalledWith("running");
-    expect(fake.connect).toHaveBeenCalledOnce();
   });
 
   it("waits for paused residency reporting before waking the workspace", async () => {

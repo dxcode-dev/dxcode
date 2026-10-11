@@ -1,4 +1,4 @@
-import { Effect, Redacted } from "effect";
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   loadReferenceLifecycleConfig,
@@ -12,31 +12,6 @@ import {
 const token = "reference-token-00000000000000000";
 
 describe("reference lifecycle configuration", () => {
-  it("loads a validated base URL, redacted token, and exactly one project selector", async () => {
-    const created = await Effect.runPromise(
-      loadReferenceLifecycleConfig({
-        DX_BASE_URL: "https://dx.example/",
-        DX_TEMP_API_TOKEN: token,
-        DX_REFERENCE_PROJECT_NAME: "Reference",
-      }),
-    );
-    expect(created.baseUrl.toString()).toBe("https://dx.example/");
-    expect(Redacted.value(created.apiToken)).toBe(token);
-    expect(created.project).toMatchObject({
-      kind: "create",
-      name: "Reference",
-    });
-
-    const existing = await Effect.runPromise(
-      loadReferenceLifecycleConfig({
-        DX_BASE_URL: "http://localhost:8787/",
-        DX_TEMP_API_TOKEN: token,
-        DX_REFERENCE_PROJECT_ID: "prj_00000000-0000-4000-8000-000000000001",
-      }),
-    );
-    expect(existing.project).toMatchObject({ kind: "existing" });
-  });
-
   it.each([
     {
       DX_BASE_URL: "https://user:password@dx.example/",

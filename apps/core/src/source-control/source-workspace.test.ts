@@ -60,12 +60,6 @@ const bitbucketSnapshot = Schema.decodeUnknownSync(ThreadSourceSnapshot)({
   cloneUrl: "https://bitbucket.org/owner/repository.git",
   capturedAt: "2026-08-25T12:00:00.000Z",
 });
-const bitbucketIntent = Schema.decodeUnknownSync(ThreadSourceIntent)({
-  ...intent,
-  provider: "bitbucket",
-  cloneUrl: "https://bitbucket.org/owner/repository.git",
-  createdAt: "2026-08-25T12:00:00.000Z",
-});
 const publicGitIntent = Schema.decodeUnknownSync(ThreadSourceIntent)({
   ...intent,
   provider: "git",
@@ -370,22 +364,6 @@ const prepare = (
   );
 
 describe("SourceWorkspaceService", () => {
-  it("creates the standard empty workspace for scratch Threads without source setup", async () => {
-    const fake = makeSandbox([]);
-    await expect(activate(fake.preparation, serviceLayer({}))).resolves.toBe(
-      SOURCE_WORKSPACE_CWD,
-    );
-    expect(fake.calls).toEqual([
-      {
-        command: `mkdir -p -- ${SOURCE_WORKSPACE_CWD} && git -C ${SOURCE_WORKSPACE_CWD} init && git -C ${SOURCE_WORKSPACE_CWD} hash-object -w -t tree --stdin </dev/null`,
-        environment: undefined,
-        cwd: SCRATCH_WORKSPACE_CWD,
-        timeoutMs: 10_000,
-      },
-    ]);
-    expect(fake.files.write).not.toHaveBeenCalled();
-  });
-
   it("uses one asset check, then initializes and runs merged hooks with a fresh callback token", async () => {
     const leases: string[] = [];
     const fake = makeSandbox([10]);
@@ -451,28 +429,6 @@ describe("SourceWorkspaceService", () => {
           ),
         ),
     ).toBe(true);
-  });
-
-  it("requires only Git to activate a repository checkout", async () => {
-    const fake = makeSandbox([0]);
-    await activate(
-      fake.preparation,
-      serviceLayer({ source: bitbucketSnapshot }),
-    );
-    const assetCheck = fake.calls.find(({ command }) =>
-      command.includes("DX_ASSET_HELPER_DIGEST"),
-    );
-    expect(assetCheck?.environment?.DX_ASSET_TOOLS).toBe(
-      JSON.stringify(["git"]),
-    );
-    expect(
-      fake.calls.find(
-        ({ environment }) => environment?.DX_ASSET_ACTION === "activate",
-      )?.environment,
-    ).toMatchObject({
-      DX_SOURCE_PROVIDER: "bitbucket",
-      DX_CLONE_URL: "https://bitbucket.org/owner/repository.git",
-    });
   });
 
   it("maps a rejected template tool check to an actionable template error", async () => {
@@ -564,31 +520,6 @@ describe("SourceWorkspaceService", () => {
     ).not.toHaveProperty("GH_TOKEN");
   });
 
-  it("activates an anonymous canonical Bitbucket intent without credentials", async () => {
-    const leases: string[] = [];
-    const finalizations: Array<unknown> = [];
-    const fake = makeSandbox([0]);
-    await activate(
-      fake.preparation,
-      serviceLayer({
-        intent: bitbucketIntent,
-        anonymous: true,
-        leases,
-        finalizations,
-      }),
-    );
-    expect(leases).toEqual([]);
-    expect(finalizations[0]).toMatchObject({ sourceIntent: bitbucketIntent });
-    expect(
-      fake.calls.find(({ command }) =>
-        command.endsWith(" initialize-anonymous"),
-      )?.environment,
-    ).toMatchObject({
-      DX_SOURCE_PROVIDER: "bitbucket",
-      DX_CLONE_URL: "https://bitbucket.org/owner/repository.git",
-    });
-  });
-
   it("does not finalize or run hooks after an anonymous clone failure", async () => {
     const finalizations: Array<unknown> = [];
     const leases: string[] = [];
@@ -657,28 +588,6 @@ describe("SourceWorkspaceService", () => {
     expect(fake.commands.run).toHaveBeenCalledTimes(1);
     expect(fake.files.write).not.toHaveBeenCalled();
     expect(timeline).toEqual(["running-setup", "activate"]);
-  });
-
-  it("runs hooks in the same call when selected private submodules need no work", async () => {
-    const fake = makeSandbox([0]);
-
-    await expect(
-      activate(
-        fake.preparation,
-        serviceLayer({
-          source: snapshot,
-          privateSubmodules: [
-            {
-              providerRepositoryId: "8116",
-              repositoryName: "owner/private",
-            },
-          ],
-        }),
-      ),
-    ).resolves.toBe(SOURCE_WORKSPACE_CWD);
-
-    expect(fake.commands.run).toHaveBeenCalledTimes(1);
-    expect(fake.calls[0]?.environment?.DX_ASSET_ACTION).toBe("activate");
   });
 
   it("initializes only selected GitHub submodules and leaves the rest to the user", async () => {

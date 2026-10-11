@@ -19,6 +19,7 @@ import {
   SkillResourcePath,
   SkillVersion,
   ThreadActivityStatus,
+  ThreadColor,
   type ThreadId,
   ThreadId as ThreadIdSchema,
   ThreadLifecycleState,
@@ -35,7 +36,7 @@ import {
   ThreadViewerAccessSchema,
 } from "./thread-sharing.js";
 
-export const ThreadAgentUrlSchema = Schema.TemplateLiteral([
+const ThreadAgentUrlSchema = Schema.TemplateLiteral([
   "/v1/agents/dx/",
   ThreadIdSchema,
 ]);
@@ -56,6 +57,8 @@ export const ThreadDataSchema = Schema.Struct({
   activityStatus: ThreadActivityStatus,
   lifecycleState: ThreadLifecycleState,
   pinnedAt: Schema.optional(Timestamp),
+  /** The owner's chosen color; absent means auto. */
+  color: Schema.optional(ThreadColor),
   /** True while DxTitleAgent may still replace `title`; show a loading state. */
   titlePending: Schema.optional(Schema.Boolean),
   agentUrl: ThreadAgentUrlSchema,
@@ -69,6 +72,13 @@ export const ThreadDataSchema = Schema.Struct({
   ),
   /** For members of a shared Thread, who cannot read the owner's Project. */
   projectName: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
+  /** The Thread whose agent started this one. */
+  parentThreadId: Schema.optional(ThreadIdSchema),
+  /**
+   * The parent's chosen color, when it has one. A child without its own
+   * color takes its parent's, on the orb only.
+   */
+  parentColor: Schema.optional(ThreadColor),
 }).check(
   Schema.makeFilter((thread) =>
     thread.agentUrl === threadAgentUrl(thread.id)
@@ -189,6 +199,8 @@ export const ThreadDetailDataSchema = Schema.Struct({
   lastActivityAt: Timestamp,
   activityStatus: ThreadActivityStatus,
   lifecycleState: ThreadLifecycleState,
+  /** The owner's chosen color; absent means auto. */
+  color: Schema.optional(ThreadColor),
   titlePending: Schema.optional(Schema.Boolean),
   agentUrl: ThreadAgentUrlSchema,
   agentInitialization: ThreadAgentInitializationDataSchema,
@@ -209,6 +221,27 @@ export const ThreadDetailDataSchema = Schema.Struct({
   following: Schema.optional(Schema.Boolean),
   /** Owner only: skip the Enable Multiplayer confirmation. */
   skipMultiplayerConfirmation: Schema.optional(Schema.Boolean),
+  /**
+   * Messages other Threads' agents sent while this Thread worked that Flue
+   * has not joined yet. Only their source: the message stays in Flue, and
+   * clients show that one is on its way until history holds it.
+   */
+  inboundMessages: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        submissionId: Schema.String,
+        sourceThreadId: ThreadIdSchema,
+        createdAt: Schema.String,
+      }),
+    ).check(Schema.isMaxLength(50)),
+  ),
+  /** The Thread whose agent started this one. */
+  parentThreadId: Schema.optional(ThreadIdSchema),
+  /**
+   * The parent's chosen color, when it has one. A child without its own
+   * color takes its parent's, on the orb only.
+   */
+  parentColor: Schema.optional(ThreadColor),
 }).check(
   Schema.makeFilter((thread) =>
     thread.agentUrl === threadAgentUrl(thread.id)

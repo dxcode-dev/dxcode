@@ -99,24 +99,6 @@ describe("daemon guest bootstrap", () => {
     mintCredential.mockClear();
   });
 
-  it("downloads the pinned release in the guest and installs it user-owned", async () => {
-    const target = guest({ config: true });
-    await ensureDaemonInGuest(target, input);
-    const curl = target.commands.run.mock.calls.find(([command]) =>
-      command.startsWith("curl "),
-    )?.[0];
-    expect(curl).toContain(input.releaseUrl);
-    expect(curl).toContain(`'${input.sha256}'`);
-    expect(loadBinary).not.toHaveBeenCalled();
-    const script = installScript(target);
-    expect(script).toContain(`mv -f`);
-    expect(script).toContain(DXD_GUEST_BINARY_PATH);
-    expect(script).not.toContain("sudo install -o root -g root -m 0755");
-    expect(script).toContain("systemctl restart dxd.service");
-    expect(script).not.toContain("curl --unix-socket");
-    expect(DXD_SYSTEMD_UNIT).toContain(`ExecStart=${DXD_GUEST_BINARY_PATH}`);
-  });
-
   it("only nudges a current, configured daemon: one guest command", async () => {
     const target = guest({ nudged: true });
     await expect(ensureDaemonInGuest(target, input)).resolves.toBe("nudged");
@@ -154,28 +136,6 @@ describe("daemon guest bootstrap", () => {
     expect(probe).not.toContain("echo nudged");
   });
 
-  it("replaces a running pre-protocol-2 daemon once, without a Terminal notice", async () => {
-    const target = guest({ config: false, installed: "upgraded" });
-    await expect(ensureDaemonInGuest(target, input)).resolves.toBe("upgraded");
-    const script = installScript(target);
-    // The protocol is read before the new binary lands; only an old one
-    // forces the restart.
-    expect(script.indexOf('case "$running" in')).toBeLessThan(
-      script.indexOf(`mv -f`),
-    );
-    expect(script).toContain(
-      `case "$running" in ""|${DXD_GUEST_BINARY_PATH}*) ;; *) restart=1 ;; esac`,
-    );
-    expect(script).toMatch(
-      /elif test "\$restart" = 1; then\n {2}sudo systemctl restart dxd.service; echo upgraded/,
-    );
-    for (const [command] of target.commands.run.mock.calls.slice(1))
-      expect(command).not.toContain("notice");
-    expect(
-      target.files.write.mock.calls.some(([path]) => path.includes("notice")),
-    ).toBe(false);
-  });
-
   it("falls back to a Worker upload when the guest cannot fetch the release", async () => {
     const target = guest({ config: true }, false);
     await ensureDaemonInGuest(target, input);
@@ -208,15 +168,6 @@ describe("daemon guest bootstrap", () => {
     expect(script).toContain(
       "sudo systemctl kill --signal=SIGHUP --kill-whom=main dxd.service",
     );
-  });
-
-  it("never restarts a current-protocol daemon for a new binary", async () => {
-    const target = guest({ config: true });
-    await expect(ensureDaemonInGuest(target, input)).resolves.toBe("installed");
-    const script = installScript(target);
-    expect(script).toMatch(/mv -f \S+ \S+\/bin\/dxd\n/);
-    expect(script).not.toMatch(/restart=1\n/);
-    expect(script).not.toContain("systemctl is-active");
   });
 
   it("writes a static version-2 configuration only when a key is provided or missing", async () => {

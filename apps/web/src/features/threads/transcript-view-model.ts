@@ -38,6 +38,8 @@ export type TranscriptRow =
       readonly chat?: true;
       /** Follows a message from the same author; its label is not repeated. */
       readonly continued?: true;
+      /** Another of the owner's Threads sent it with a Thread tool. */
+      readonly sourceThreadId?: string;
     } & TranscriptRowBase &
       SourcePart)
   | ({
@@ -207,7 +209,10 @@ const groupConsecutivePrompts = (
         row.kind === "user-prompt" &&
         previous?.kind === "user-prompt" &&
         row.author !== undefined &&
-        previous.author?.userId === row.author.userId
+        previous.author?.userId === row.author.userId &&
+        // A message another Thread sent carries the owner's id; it neither
+        // continues nor is continued by the owner's own messages.
+        previous.sourceThreadId === row.sourceThreadId
       )
         rows[index] = { ...row, continued: true };
       previous = row;
@@ -313,7 +318,9 @@ export const deriveTranscriptViewModel = ({
 
       if (part.type === "text") {
         if (message.role === "user") {
-          const { author, mentions, text } = parseMessageAuthor(part.text);
+          const { author, mentions, sourceThreadId, text } = parseMessageAuthor(
+            part.text,
+          );
           if (!text.trim()) continue;
           const sentAt = authoritativeTimestamp(message);
           row = {
@@ -322,6 +329,7 @@ export const deriveTranscriptViewModel = ({
             text,
             ...(author === undefined ? {} : { author }),
             ...(mentions === undefined ? {} : { mentions }),
+            ...(sourceThreadId === undefined ? {} : { sourceThreadId }),
             admitted: message.submissionId !== undefined,
             ...(sentAt === undefined ? {} : { sentAt }),
             ...(chat ? { chat: true as const } : {}),
@@ -538,6 +546,7 @@ export const sameTranscriptRow = (a: TranscriptRow, b: TranscriptRow) => {
       a.author?.userId !== b.author?.userId ||
       a.sentAt !== b.sentAt ||
       a.continued !== b.continued ||
+      a.sourceThreadId !== b.sourceThreadId ||
       a.mentions?.length !== b.mentions?.length)
   )
     return false;

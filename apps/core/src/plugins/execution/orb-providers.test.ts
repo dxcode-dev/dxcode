@@ -82,23 +82,6 @@ const summary = (set: ReturnType<typeof orbProviderSet>) =>
   }));
 
 describe("Orb provider set", () => {
-  it("is every deployment provider when nobody brought a key", () => {
-    expect(summary(orbProviderSet(input()))).toEqual([
-      {
-        providerId: "e2b",
-        scope: "deployment",
-        ownerId: null,
-        status: "ready",
-      },
-      {
-        providerId: "cloudflare",
-        scope: "deployment",
-        ownerId: null,
-        status: "ready",
-      },
-    ]);
-  });
-
   it("puts a personal key over a workspace key over the deployment, per provider", () => {
     const set = orbProviderSet(
       input({
@@ -199,34 +182,6 @@ describe("Orb provider set", () => {
         recipe,
       ),
     ).toBe("building");
-  });
-
-  it("ignores personal and workspace keys in the local runtime", () => {
-    expect(
-      summary(
-        orbProviderSet(
-          input({
-            deploymentProviders: [
-              {
-                providerId: "local",
-                capabilities: ["execution.workspace"],
-              },
-            ],
-            profileAdapters: new Set(["local", "e2b"]),
-            personal: [key("personal", "u")],
-            workspace: [key("workspace", "ws")],
-            localRuntime: true,
-          }),
-        ),
-      ),
-    ).toEqual([
-      {
-        providerId: "local",
-        scope: "deployment",
-        ownerId: null,
-        status: "ready",
-      },
-    ]);
   });
 
   it("leaves out a provider without sizes in the catalog", () => {

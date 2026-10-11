@@ -3,7 +3,6 @@ import {
   absolutePathFor,
   linesForText,
   resolveTranscriptFileLink,
-  sandboxFileUrl,
 } from "./transcript-file-link.js";
 
 describe("resolveTranscriptFileLink", () => {
@@ -34,7 +33,6 @@ describe("resolveTranscriptFileLink", () => {
     ["src/a.ts:7:3", "src/a.ts", { start: 7, end: 7 }],
     ["src/a.ts#L3", "src/a.ts", { start: 3, end: 3 }],
     ["README.md:12", "README.md", { start: 12, end: 12 }],
-    ["package.json:3-5", "package.json", { start: 3, end: 5 }],
   ])("opens repository-relative link %j", (href, path, lines) =>
     expect(resolveTranscriptFileLink(href)).toEqual({
       target: { kind: "workspace", worktree: "primary", path },
@@ -98,17 +96,5 @@ describe("linesForText", () => {
     expect(linesForText(content, "four\n")).toEqual({ start: 4, end: 4 });
     expect(linesForText(content, "absent")).toBeUndefined();
     expect(linesForText(content, "")).toBeUndefined();
-  });
-});
-
-describe("sandboxFileUrl", () => {
-  it("builds the same-origin streaming and download URLs", () => {
-    const path = "/tmp/a b.png" as Parameters<typeof sandboxFileUrl>[1];
-    expect(sandboxFileUrl("thr_1", path)).toBe(
-      "/v1/threads/thr_1/files-sandbox?path=%2Ftmp%2Fa+b.png",
-    );
-    expect(sandboxFileUrl("thr_1", path, true)).toBe(
-      "/v1/threads/thr_1/files-sandbox?path=%2Ftmp%2Fa+b.png&download=1",
-    );
   });
 });

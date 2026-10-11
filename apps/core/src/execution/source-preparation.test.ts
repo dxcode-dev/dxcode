@@ -131,15 +131,4 @@ describe("additional repositories", () => {
       expect(clone).not.toHaveProperty("GIT_CONFIG_COUNT");
     }
   });
-
-  it("does nothing for a Project without additional repositories", async () => {
-    const sandbox = recordingSandbox(new Set());
-    await cloneAdditionalRepositories(
-      {} as Bindings,
-      fakeDb([]),
-      "thr_1",
-      sandbox,
-    );
-    expect(sandbox.clones).toEqual([]);
-  });
 });

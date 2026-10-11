@@ -34,7 +34,7 @@ const provisionAccessIdentity = async (
   const adapter = context.context.internalAdapter;
   const userId = await accessUserId(identity.issuer, identity.subject);
   let account = await adapter.findAccountByKey({
-    issuer: identity.issuer,
+    providerId,
     accountId: identity.subject,
   });
   let user = account === null ? await adapter.findUserById(userId) : null;
@@ -80,7 +80,7 @@ const provisionAccessIdentity = async (
       });
     } catch {
       account = await adapter.findAccountByKey({
-        issuer: identity.issuer,
+        providerId,
         accountId: identity.subject,
       });
     }

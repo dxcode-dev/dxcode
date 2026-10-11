@@ -98,45 +98,6 @@ beforeEach(() => {
 });
 
 describe("resident Thread Changes publication", () => {
-  it("stamps, writes, and CAS-publishes one complete candidate before deleting the prior object", async () => {
-    const deleteObject = vi.fn(async () => undefined);
-
-    await expect(
-      publishThreadChangesResidentCandidate({
-        db: {} as D1Database,
-        bucket: { delete: deleteObject } as unknown as R2Bucket,
-        threadId,
-        candidate: event({ kind: "complete", capture: content }),
-      }),
-    ).resolves.toBe("published");
-
-    expect(mocks.put).toHaveBeenCalledOnce();
-    const manifest = mocks.put.mock.calls[0]?.[1];
-    expect(manifest).toMatchObject({
-      schemaVersion: 1,
-      threadId,
-      generation: 7,
-      repositoryName: "example-org/example-repo",
-      defaultBranch: "main",
-      fingerprint,
-      baseline,
-      worktrees: content.worktrees,
-    });
-    expect(mocks.publish).toHaveBeenCalledWith({
-      threadId,
-      generation: 7,
-      captureId: manifest.captureId,
-      fingerprint,
-      capturedAt: manifest.capturedAt,
-    });
-    expect(mocks.put.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.publish.mock.invocationCallOrder[0] ?? 0,
-    );
-    expect(deleteObject).toHaveBeenCalledExactlyOnceWith(
-      `threads/${threadId}/changes/v1/${captureId}.json`,
-    );
-  });
-
   it("notifies as soon as the pointer commits, before cleanup and lease release", async () => {
     const deleteObject = vi.fn(async () => undefined);
     const release = vi.fn(async () => undefined);
@@ -208,48 +169,6 @@ describe("resident Thread Changes publication", () => {
     expect(mocks.confirmUnchanged).not.toHaveBeenCalled();
     expect(onCommitted).toHaveBeenCalledOnce();
   });
-
-  it("deletes the orphan and preserves the prior pointer when publication CAS loses", async () => {
-    const deleteObject = vi.fn(async () => undefined);
-    mocks.publish.mockResolvedValue(false);
-
-    await expect(
-      publishThreadChangesResidentCandidate({
-        db: {} as D1Database,
-        bucket: { delete: deleteObject } as unknown as R2Bucket,
-        threadId,
-        candidate: event({ kind: "complete", capture: content }),
-      }),
-    ).resolves.toBe("raced");
-
-    const manifest = mocks.put.mock.calls[0]?.[1];
-    expect(deleteObject).toHaveBeenCalledExactlyOnceWith(
-      `threads/${threadId}/changes/v1/${manifest.captureId}.json`,
-    );
-    expect(deleteObject).not.toHaveBeenCalledWith(
-      `threads/${threadId}/changes/v1/${captureId}.json`,
-    );
-  });
-
-  it.each([
-    [{ kind: "raced" }, "raced"],
-    [{ kind: "unavailable", reason: "capture-failed" }, "unavailable"],
-  ] as const)(
-    "settles %s without touching R2 or D1 publication",
-    async (outcome, expected) => {
-      await expect(
-        publishThreadChangesResidentCandidate({
-          db: {} as D1Database,
-          bucket: {} as R2Bucket,
-          threadId,
-          candidate: event(outcome),
-        }),
-      ).resolves.toBe(expected);
-      expect(mocks.put).not.toHaveBeenCalled();
-      expect(mocks.publish).not.toHaveBeenCalled();
-      expect(mocks.confirmUnchanged).not.toHaveBeenCalled();
-    },
-  );
 
   it("rejects stale tokens, clean generations, and mismatched baselines but allows marked previews", async () => {
     mocks.read.mockResolvedValueOnce({

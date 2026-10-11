@@ -139,6 +139,7 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
     return next();
   const actor = context.get("actor");
   const access = context.get("threadAccess");
+  const sourceThreadId = context.get("messageSourceThreadId");
   const delivered: unknown = await context.req.raw
     .clone()
     .json()
@@ -217,6 +218,8 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
         },
         ...(chat ? { chat } : {}),
         mentions,
+        // Set only by the in-process Thread tools, never from a request.
+        ...(sourceThreadId === undefined ? {} : { sourceThreadId }),
       },
       userMessage.body,
     );

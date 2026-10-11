@@ -4,7 +4,7 @@ import { shellDefinitions } from "./definitions.js";
 
 type AgentTool = ReturnType<SandboxToolFactory>[number];
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-export const shellWaitMs = (value?: number) =>
+const shellWaitMs = (value?: number) =>
   value === undefined || !Number.isFinite(value)
     ? 10_000
     : Math.min(60_000, Math.max(0, Math.floor(value)));

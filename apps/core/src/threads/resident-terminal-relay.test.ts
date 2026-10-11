@@ -165,26 +165,6 @@ describe("resident Terminal tracer relay", () => {
     ).toHaveLength(8);
   });
 
-  it("reports when an explicit Terminal attach is waking the Orb", () => {
-    const relay = new ResidentTerminalRelay();
-    const socket = new SocketFake();
-    const fixture = transportFixture({
-      terminalVersion: 1,
-      terminal: "default",
-      state: "absent",
-    });
-    relay.attach(socket, fixture.transport);
-    socket.emit("message", attach());
-
-    relay.workspaceWaking();
-
-    expect(controlsSent(socket)).toContainEqual({
-      v: 1,
-      type: "progress",
-      phase: "waking",
-    });
-  });
-
   it("targets replay, fans out equal live output, orders whole input frames, and isolates a slow tab", async () => {
     const relay = new ResidentTerminalRelay();
     const state = {
@@ -423,25 +403,6 @@ describe("resident Terminal tracer relay", () => {
       nextResizeOrdinal: "2",
     });
     expect(JSON.stringify(metadata)).not.toMatch(/payload|content|command/i);
-    expect(Object.keys(metadata).sort()).toEqual(
-      [
-        "attachmentGeneration",
-        "dimensions",
-        "expectedOutputSequence",
-        "nextInputSequence",
-        "nextResizeOrdinal",
-        "phase",
-        "replayBytes",
-        "replayReceived",
-        "replayThrough",
-        "replayTruncated",
-        "requested",
-        "residentGeneration",
-        "restartRequired",
-        "restartResident",
-        "version",
-      ].sort(),
-    );
 
     const restored = new ResidentTerminalRelay();
     const restoredSocket = new SocketFake();

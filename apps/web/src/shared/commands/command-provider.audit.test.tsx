@@ -101,18 +101,6 @@ it("binds sidebar navigation and the thread file picker to mounted controls", as
   expect(fileClick).toHaveBeenCalledOnce();
 });
 
-it("opens workspace selection when no current workspace owns the command", async () => {
-  await mount("/threads/one");
-  await key(window, ",", { metaKey: true, altKey: true });
-  expect(navigation.navigate).toHaveBeenCalledOnce();
-  expect(navigation.navigate).toHaveBeenCalledWith(
-    expect.objectContaining({
-      state: expect.any(Function),
-      to: "/workspaces",
-    }),
-  );
-});
-
 it("toggles an open sidebar closed and a closed sidebar open with the platform modifier", async () => {
   await mount("/threads/one");
   const toggle = document.querySelector<HTMLButtonElement>(

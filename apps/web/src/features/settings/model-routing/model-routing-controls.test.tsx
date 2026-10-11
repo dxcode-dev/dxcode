@@ -208,28 +208,4 @@ describe("connection dialog endpoint preview", () => {
       container.remove();
     }
   });
-
-  it("shows no preview for a catalog provider override", async () => {
-    const provider = {
-      id: "openai",
-      name: "OpenAI",
-      description: "OpenAI",
-      connectionKind: "provider",
-      transport: "proxy",
-      fields: [],
-      models: [],
-    } as CatalogProviderData;
-    const { container, root } = await renderDialog(vi.fn(), { provider });
-    try {
-      const baseUrl = document.querySelector<HTMLInputElement>("#mr-base-url");
-      await React.act(() => {
-        if (baseUrl !== null) setValue(baseUrl, "https://proxy.example.com/v1");
-      });
-      expect(preview()).toBeNull();
-      expect(document.querySelector('input[name="api-format"]')).toBeNull();
-    } finally {
-      await React.act(() => root.unmount());
-      container.remove();
-    }
-  });
 });

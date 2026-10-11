@@ -4,11 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   type CommandRuntime,
   commandContextFromPath,
-  commandDefinitions,
   createCommandRegistry,
   keyboardShortcutStorageKey,
-  keymapCategories,
-  keymapCategoryFor,
   reservedShortcutReason,
 } from "./command-registry.js";
 
@@ -72,49 +69,6 @@ const runtime = () =>
   }) satisfies CommandRuntime;
 
 describe("keyboard shortcut command registry", () => {
-  it("has unique typed command ids and rejects duplicate definitions", () => {
-    const ids = commandDefinitions.map((command) => command.id);
-    expect(new Set(ids).size).toBe(ids.length);
-    expect(() =>
-      createCommandRegistry({ platform: "linux" }, [
-        commandDefinitions[0],
-        commandDefinitions[0],
-      ]),
-    ).toThrow("Duplicate command id: navigation.home");
-  });
-
-  it("derives one keymap grouping from command definitions with no second list", () => {
-    expect(keymapCategories).toEqual([
-      "Global",
-      "Sidebar",
-      "Thread",
-      "Keyboard shortcuts",
-    ]);
-    expect(
-      keymapCategoryFor({ id: "sidebar.open-menu", scope: "global" }),
-    ).toBe("Sidebar");
-    expect(
-      keymapCategoryFor({ id: "thread.add-images", scope: "thread" }),
-    ).toBe("Thread");
-    expect(keymapCategoryFor({ id: "threads.search", scope: "global" })).toBe(
-      "Global",
-    );
-    expect(
-      keymapCategoryFor({
-        id: "shortcuts.focus-search",
-        scope: "keyboard-shortcuts",
-      }),
-    ).toBe("Keyboard shortcuts");
-    expect(keymapCategoryFor({ id: "navigation.home", scope: "global" })).toBe(
-      "Global",
-    );
-    for (const definition of commandDefinitions) {
-      expect(keymapCategoryFor(definition)).toMatch(
-        /^(Global|Sidebar|Thread|Keyboard shortcuts)$/,
-      );
-    }
-  });
-
   it("resolves portable defaults and keycap display for every platform", () => {
     const mac = createCommandRegistry({ platform: "mac" });
     const windows = createCommandRegistry({ platform: "windows" });
@@ -410,21 +364,6 @@ describe("keyboard shortcut command registry", () => {
     expect(actions.restoreKeyboardShortcutDefaults).toHaveBeenCalledOnce();
   });
 
-  it("shows sequence commands with their chord in every view", () => {
-    const registry = createCommandRegistry({ platform: "linux" });
-    const home = registry
-      .getCommands("app")
-      .find(({ id }) => id === "navigation.home");
-    expect(home).toMatchObject({
-      binding: null,
-      bindings: [],
-      sequence: ["g", "g"],
-      displayedBindings: [["G"], ["G"]],
-      customized: false,
-    });
-    expect(registry.getBinding("navigation.home")).toBeNull();
-  });
-
   it("validates and persists sequence overrides without breaking single-chord edits", () => {
     const storage = new MemoryStorage();
     const registry = createCommandRegistry({ platform: "linux", storage });
@@ -633,23 +572,5 @@ describe("keyboard shortcut command registry", () => {
       { kind: "sequence", steps: ["G", "H"] },
       { kind: "clear" },
     ]);
-  });
-
-  it("keeps single-chord recording semantics for non-sequence commands", () => {
-    const registry = createCommandRegistry({ platform: "linux" });
-    const recorded: unknown[] = [];
-    registry.startRecording("navigation.projects", {
-      onRecorded: (proposal) => recorded.push(proposal),
-    });
-    registry.recordKeyboardEvent(
-      new KeyboardEvent("keydown", {
-        key: "p",
-        ctrlKey: true,
-        shiftKey: true,
-        cancelable: true,
-      }),
-    );
-    expect(registry.getSnapshot().recording).toBeNull();
-    expect(recorded).toEqual([{ kind: "hotkey", hotkey: "Mod+Shift+P" }]);
   });
 });

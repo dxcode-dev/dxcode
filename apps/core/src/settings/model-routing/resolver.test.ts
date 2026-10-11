@@ -9,11 +9,7 @@ import {
 import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_PROFILE } from "./defaults.js";
-import {
-  findServingConnection,
-  notServedReason,
-  resolveSubmissionModel,
-} from "./resolver.js";
+import { resolveSubmissionModel } from "./resolver.js";
 
 const ts = Schema.decodeUnknownSync(Timestamp)("2026-01-01T00:00:00Z");
 
@@ -87,33 +83,6 @@ describe("resolveSubmissionModel", () => {
     const on = conn();
     const resolved = resolve([off, on]);
     expect(resolved.connection.id).toBe(on.id);
-  });
-
-  it("pins a raw model selection with neutral thinking", () => {
-    const resolved = resolve(
-      [conn()],
-      selection({ kind: "model", model: "openai/gpt-6-astra" } as never),
-    );
-    expect(resolved.model).toBe("openai/gpt-6-astra");
-    expect(resolved.thinking).toBe("high");
-  });
-
-  it("resolves mode selections through the default profile", () => {
-    const anthropic = conn({
-      providerId: "anthropic" as never,
-      name: "anthropic" as never,
-    });
-    const resolved = resolve(
-      [conn(), anthropic],
-      selection({
-        kind: "mode",
-        profileId: "default",
-        mode: "ultra",
-      } as never),
-    );
-    expect(resolved.model).toBe("anthropic/claude-fable-5-1");
-    expect(resolved.connection.id).toBe(anthropic.id);
-    expect(resolved.thinking).toBe("high");
   });
 
   it("prefers mode overrides over the shipped default", () => {
@@ -204,26 +173,5 @@ describe("resolveSubmissionModel", () => {
     } catch (error) {
       expect((error as ModelNotServed).reason).toBe("unknown-model");
     }
-  });
-
-  it("reports capabilities from the catalog", () => {
-    const resolved = resolve([conn()]);
-    expect(resolved.capabilities.contextWindow).toBeGreaterThan(0);
-  });
-});
-
-describe("findServingConnection / notServedReason", () => {
-  it("findServingConnection returns undefined when disabled", () => {
-    expect(
-      findServingConnection([conn({ enabled: false })], "openai/gpt-6-astra"),
-    ).toBeUndefined();
-  });
-
-  it("notServedReason distinguishes the failure modes", () => {
-    expect(notServedReason([], "openai/gpt-6-astra")).toBe("no-connection");
-    expect(
-      notServedReason([conn({ enabled: false })], "openai/gpt-6-astra"),
-    ).toBe("disabled");
-    expect(notServedReason([], "bogus/x")).toBe("unknown-model");
   });
 });

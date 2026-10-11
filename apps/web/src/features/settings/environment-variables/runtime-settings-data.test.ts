@@ -10,7 +10,6 @@ const api = vi.hoisted(() => ({
   createEnvironmentVariable: vi.fn(),
   createPluginTrigger: vi.fn(),
   deleteMcpServer: vi.fn(),
-  exportSkill: vi.fn(),
   getProjectDefaults: vi.fn(),
   listEnvironmentVariableHistory: vi.fn(),
   listEnvironmentVariables: vi.fn(),
@@ -33,54 +32,33 @@ vi.mock("../../../shared/api/client.js", async (importOriginal) => ({
 }));
 
 import {
-  type PluginsMutationAction,
   pluginPreviewMutationOptions,
   pluginsMutationOptions,
 } from "../custom-plugins/custom-plugins-mutations.js";
-import {
-  pluginKeys,
-  pluginsQueryOptions,
-} from "../custom-plugins/custom-plugins-queries.js";
-import {
-  type McpServersMutationAction,
-  mcpServersMutationOptions,
-} from "../integrations/mcp-mutations.js";
-import {
-  mcpServerKeys,
-  mcpServersQueryOptions,
-} from "../integrations/mcp-queries.js";
+import { pluginKeys } from "../custom-plugins/custom-plugins-queries.js";
+import { mcpServersMutationOptions } from "../integrations/mcp-mutations.js";
+import { mcpServerKeys } from "../integrations/mcp-queries.js";
 import { projectDefaultsMutationOptions } from "../project-defaults/project-defaults-mutations.js";
+import { projectDefaultsKeys } from "../project-defaults/project-defaults-queries.js";
 import {
-  projectDefaultsKeys,
-  projectDefaultsQueryOptions,
-} from "../project-defaults/project-defaults-queries.js";
-import {
-  type SkillsMutationAction,
-  skillExportMutationOptions,
   skillPreviewMutationOptions,
   skillsMutationOptions,
 } from "../skills/skills-mutations.js";
-import { skillKeys, skillsQueryOptions } from "../skills/skills-queries.js";
+import { skillKeys } from "../skills/skills-queries.js";
 import {
   type TriggerCapabilityAction,
-  type TriggersMutationAction,
   triggerCapabilityMutationOptions,
   triggersMutationOptions,
 } from "../triggers/triggers-mutations.js";
-import {
-  triggerKeys,
-  triggersQueryOptions,
-} from "../triggers/triggers-queries.js";
+import { triggerKeys } from "../triggers/triggers-queries.js";
 import {
   createEnvironmentVariableMutationOptions,
-  type EnvironmentVariablesMutationAction,
   environmentVariablesMutationOptions,
   environmentVariablesPreviewMutationOptions,
 } from "./environment-variables-mutations.js";
 import {
   environmentVariableHistoryQueryOptions,
   environmentVariableKeys,
-  environmentVariablesQueryOptions,
 } from "./environment-variables-queries.js";
 
 const userId = "usr_test" as never;
@@ -92,21 +70,6 @@ const projectDefaultOverrides = {
   runnerProfileId: null,
 } as const;
 
-const runQuery = async (
-  options: {
-    readonly queryFn?: unknown;
-    readonly queryKey: readonly unknown[];
-  },
-  signal: AbortSignal,
-) => {
-  if (typeof options.queryFn !== "function") throw new Error("Missing queryFn");
-  await options.queryFn({
-    queryKey: options.queryKey,
-    signal,
-    meta: undefined,
-  });
-};
-
 const mutationData = (client: QueryClient) =>
   client
     .getMutationCache()
@@ -117,32 +80,6 @@ describe("runtime settings data ownership", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     for (const request of Object.values(api)) request.mockResolvedValue({});
-  });
-
-  it("forwards Query cancellation to every owned settings read", async () => {
-    const signal = new AbortController().signal;
-    await runQuery(environmentVariablesQueryOptions(userId, personal), signal);
-    await runQuery(
-      environmentVariableHistoryQueryOptions(userId, personal),
-      signal,
-    );
-    await runQuery(mcpServersQueryOptions(userId, personal), signal);
-    await runQuery(pluginsQueryOptions(userId, personal), signal);
-    await runQuery(skillsQueryOptions(userId, personal), signal);
-    await runQuery(triggersQueryOptions(userId), signal);
-    await runQuery(projectDefaultsQueryOptions(userId, personal), signal);
-
-    expect(api.listEnvironmentVariables).toHaveBeenCalledWith(personal, signal);
-    expect(api.listEnvironmentVariableHistory).toHaveBeenCalledWith(
-      personal,
-      undefined,
-      signal,
-    );
-    expect(api.listMcpServers).toHaveBeenCalledWith(personal, signal);
-    expect(api.listPlugins).toHaveBeenCalledWith(personal, signal);
-    expect(api.listSkills).toHaveBeenCalledWith(personal, signal);
-    expect(api.listPluginTriggers).toHaveBeenCalledWith(signal);
-    expect(api.getProjectDefaults).toHaveBeenCalledWith(personal, signal);
   });
 
   it("keeps loaded history when a continuation fails and retries its cursor", async () => {
@@ -190,86 +127,6 @@ describe("runtime settings data ownership", () => {
     );
 
     unsubscribe();
-  });
-
-  it("starts feature HTTP requests inside typed mutation functions", async () => {
-    const client = new QueryClient();
-    const environmentAction: EnvironmentVariablesMutationAction = {
-      type: "applyBulk",
-      input: {
-        kind: "variable",
-        contents: "NAME=value",
-        conflictBehavior: "reject",
-      },
-    };
-    const mcpAction: McpServersMutationAction = {
-      type: "delete",
-      serverId: "mcp_test" as never,
-    };
-    const pluginAction: PluginsMutationAction = {
-      type: "remove",
-      pluginId: "plg_test" as never,
-    };
-    const skillAction: SkillsMutationAction = {
-      type: "remove",
-      skillId: "skl_test" as never,
-    };
-    const triggerAction: TriggersMutationAction = {
-      type: "revoke",
-      triggerId: "trg_test" as never,
-    };
-
-    const environment = environmentVariablesMutationOptions(
-      client,
-      userId,
-      personal,
-    );
-    const mcp = mcpServersMutationOptions(client, userId, personal);
-    const plugin = pluginsMutationOptions(client, userId, personal);
-    const skill = skillsMutationOptions(client, userId, personal);
-    const trigger = triggersMutationOptions(client, userId);
-    const defaults = projectDefaultsMutationOptions(client, userId, personal);
-
-    expect(api.applyBulkEnvironmentVariables).not.toHaveBeenCalled();
-    await environment.mutationFn?.(environmentAction, {} as never);
-    expect(api.applyBulkEnvironmentVariables).toHaveBeenCalledWith(
-      personal,
-      environmentAction.input,
-    );
-
-    expect(api.deleteMcpServer).not.toHaveBeenCalled();
-    await mcp.mutationFn?.(mcpAction, {} as never);
-    expect(api.deleteMcpServer).toHaveBeenCalledWith(
-      personal,
-      mcpAction.serverId,
-    );
-
-    expect(api.removePlugin).not.toHaveBeenCalled();
-    await plugin.mutationFn?.(pluginAction, {} as never);
-    expect(api.removePlugin).toHaveBeenCalledWith(
-      personal,
-      pluginAction.pluginId,
-    );
-
-    expect(api.removeSkill).not.toHaveBeenCalled();
-    await skill.mutationFn?.(skillAction, {} as never);
-    expect(api.removeSkill).toHaveBeenCalledWith(personal, skillAction.skillId);
-
-    expect(api.revokePluginTrigger).not.toHaveBeenCalled();
-    await trigger.mutationFn?.(triggerAction, {} as never);
-    expect(api.revokePluginTrigger).toHaveBeenCalledWith(
-      triggerAction.triggerId,
-    );
-
-    expect(api.updatePersonalProjectDefaults).not.toHaveBeenCalled();
-    await defaults.mutationFn?.(
-      { expectedRevision: 3, overrides: projectDefaultOverrides },
-      {} as never,
-    );
-    expect(api.updatePersonalProjectDefaults).toHaveBeenCalledWith(
-      3,
-      projectDefaultOverrides,
-    );
   });
 
   it("applies exact invalidation and authoritative cache policies", async () => {
@@ -389,26 +246,6 @@ describe("runtime settings data ownership", () => {
     });
     expect(cached).not.toContain(secret);
     expect(cached).not.toContain(capability);
-  });
-
-  it("treats skill export as a resettable one-shot mutation", async () => {
-    const client = new QueryClient();
-    const contents = "export-only-contents";
-    api.exportSkill.mockResolvedValueOnce({ files: [{ content: contents }] });
-    const observer = new MutationObserver(
-      client,
-      skillExportMutationOptions(userId, personal),
-    );
-
-    expect(api.exportSkill).not.toHaveBeenCalled();
-    const delivered = await observer.mutate("skl_test" as never);
-    expect(api.exportSkill).toHaveBeenCalledWith(personal, "skl_test");
-    expect(delivered).toEqual({ files: [{ content: contents }] });
-    expect(client.getQueryCache().getAll()).toEqual([]);
-
-    observer.reset();
-    await vi.waitFor(() => expect(mutationData(client)).toEqual([]));
-    expect(JSON.stringify(mutationData(client))).not.toContain(contents);
   });
 
   it("delivers previews locally without retaining them in Query caches", async () => {

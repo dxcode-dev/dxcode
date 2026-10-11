@@ -22,6 +22,23 @@ export const ThreadLifecycleState = Schema.Literals(["active", "archived"]);
 
 export type ThreadLifecycleState = typeof ThreadLifecycleState.Type;
 
+/** Colors an owner may give a Thread; absent means auto. */
+export const THREAD_COLORS = [
+  "gray",
+  "blue",
+  "purple",
+  "pink",
+  "red",
+  "orange",
+  "yellow",
+  "green",
+  "cyan",
+] as const;
+
+export const ThreadColor = Schema.Literals(THREAD_COLORS);
+
+export type ThreadColor = typeof ThreadColor.Type;
+
 export const Thread = Schema.Struct({
   id: ThreadId,
   title: ThreadTitle,
@@ -39,8 +56,11 @@ export const Thread = Schema.Struct({
   activityStatus: ThreadActivityStatus,
   lifecycleState: ThreadLifecycleState,
   pinnedAt: Schema.optional(Timestamp),
+  color: Schema.optional(ThreadColor),
   /** Until this time clients show a loading title while one is generated. */
   titlePendingUntil: Schema.optional(Timestamp),
+  /** The Thread whose agent started this one; never itself a child. */
+  parentThreadId: Schema.optional(ThreadId),
 });
 
 export type Thread = typeof Thread.Type;
@@ -62,6 +82,7 @@ export const CreateThreadInput = Schema.Struct({
   skills: ResolvedSkillSnapshots,
   visibility: Schema.optional(ThreadVisibility),
   titlePending: Schema.optional(Schema.Boolean),
+  parentThreadId: Schema.optional(ThreadId),
 });
 
 export type CreateThreadInput = typeof CreateThreadInput.Type;

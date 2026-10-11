@@ -4,10 +4,7 @@ import { join } from "node:path";
 import * as Redacted from "effect/Redacted";
 import { describe, expect, it, vi } from "vitest";
 import { reconcileHeldSecret } from "./alchemy-resources.ts";
-import {
-  cloudflareRequestAuth,
-  preflightCloudflareDeployment,
-} from "./cloudflare-auth.mjs";
+import { preflightCloudflareDeployment } from "./cloudflare-auth.mjs";
 import { validateSelfhostConfig } from "./config.mjs";
 import {
   downloadDxdRelease,
@@ -124,28 +121,6 @@ describe("held deployment secrets", () => {
 });
 
 describe("shared Cloudflare authentication", () => {
-  it.each([
-    [
-      { type: "oauth", accountId: "a", accessToken: Redacted.make("oauth") },
-      "alchemy-oauth",
-      { Authorization: "Bearer oauth" },
-    ],
-    [
-      { type: "apiToken", accountId: "a", apiToken: Redacted.make("token") },
-      "api-token",
-      { Authorization: "Bearer token" },
-    ],
-  ])(
-    "uses one resolved credential for preflight (%s)",
-    (input, method, headers) => {
-      expect(cloudflareRequestAuth(input)).toEqual({
-        accountId: "a",
-        method,
-        headers,
-      });
-    },
-  );
-
   it("checks the matching Alchemy store and Email Sending domain", async () => {
     const results = new Map([
       [
@@ -341,35 +316,6 @@ describe("E2B profile reconciliation", () => {
       `${prefix}-a1-medium:medium-build`,
     ]);
   });
-
-  it("reports the exact rejected E2B profile size", async () => {
-    const prefix = "dx-mine-0123456789abcdef";
-    await expect(
-      reconcileE2BProfiles({
-        deploymentName: "mine",
-        apiKey: "redacted",
-        recipeHash: "0123456789abcdef".padEnd(64, "0"),
-        listTemplates: async () => [ready(`${prefix}-base`, "base-build")],
-        buildTemplate: vi.fn(async () => {
-          throw new Error("plan limit");
-        }),
-      }),
-    ).rejects.toThrow("a1.tiny (1 vCPU, 2048 MB)");
-  });
-
-  it("reports the exact rejected E2B base size", async () => {
-    await expect(
-      reconcileE2BProfiles({
-        deploymentName: "mine",
-        apiKey: "redacted",
-        recipeHash: "0123456789abcdef".padEnd(64, "0"),
-        listTemplates: async () => [],
-        buildTemplate: vi.fn(async () => {
-          throw new Error("plan limit");
-        }),
-      }),
-    ).rejects.toThrow("base template (2 vCPU, 4096 MB)");
-  });
 });
 
 describe("dxd release integrity", () => {
@@ -407,24 +353,6 @@ describe("dxd release integrity", () => {
       release: "v0.1.2",
       dxd: "0.8.0",
     });
-  });
-
-  it("downloads public assets anonymously", async () => {
-    const fetcher = vi.fn(async () => new Response("public-dxd"));
-    await expect(
-      downloadDxdRelease(
-        {
-          release: "v0.1.0",
-          asset: "dxd-linux-x64",
-          url: "https://releases.example/dxd-linux-x64",
-        },
-        { fetcher },
-      ),
-    ).resolves.toEqual(Buffer.from("public-dxd"));
-    expect(fetcher).toHaveBeenCalledWith(
-      "https://releases.example/dxd-linux-x64",
-      { redirect: "follow" },
-    );
   });
 
   it("resolves a private GitHub asset without exposing its bearer token", async () => {

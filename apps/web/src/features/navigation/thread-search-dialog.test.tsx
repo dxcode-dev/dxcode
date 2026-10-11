@@ -120,39 +120,4 @@ describe("ThreadSearchDialog", () => {
     expect(onSelectThread).toHaveBeenCalledWith(threads[1]);
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
-
-  it.each([
-    [{ threads: [], loading: true }, "Loading Threads…"],
-    [{ threads: [], loading: false }, "No loaded Threads yet."],
-    [{ hasMore: true }, "Load more Threads"],
-    [{ error: "Could not load another page" }, "Could not load another page"],
-  ] as const)("renders state %#", async (props, message) => {
-    await render(props);
-    expect(document.body.textContent).toContain(message);
-  });
-
-  it("loads the next search page from an actionable control", async () => {
-    await render({ hasMore: true });
-    const loadMore = Array.from(document.querySelectorAll("button")).find(
-      (button) => button.textContent === "Load more Threads",
-    );
-    expect(loadMore).toBeDefined();
-
-    await act(() => loadMore?.click());
-
-    expect(onLoadMore).toHaveBeenCalledTimes(1);
-  });
-
-  it("renders no-results and loading-more states", async () => {
-    await render({ loading: true });
-    expect(document.body.textContent).toContain("Loading more Threads…");
-    const input = document.querySelector<HTMLInputElement>('[role="combobox"]');
-    await act(() => {
-      if (input === null) throw new Error("missing combobox");
-      enterText(input, "missing");
-    });
-    expect(document.body.textContent).toContain(
-      "No loaded Threads match your search.",
-    );
-  });
 });

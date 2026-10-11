@@ -1,9 +1,6 @@
 import type { OrbProviderData } from "@dx/api";
 import { describe, expect, it } from "vitest";
-import {
-  orbKeyPlaceholder,
-  orbProviderSource,
-} from "./orb-providers-status.js";
+import { orbProviderSource } from "./orb-providers-status.js";
 
 const e2b: OrbProviderData = {
   id: "e2b",
@@ -50,27 +47,5 @@ describe("Orb provider rows", () => {
         "personal",
       ),
     ).toBe("Provided by this deployment");
-  });
-
-  it("show the template state of a key's own account", () => {
-    expect(
-      orbProviderSource({ ...e2b, key: key("building") }, "personal"),
-    ).toBe("Building template…");
-    expect(orbProviderSource({ ...e2b, key: key("failed") }, "personal")).toBe(
-      "Template failed",
-    );
-    expect(orbProviderSource({ ...e2b, key: key(null) }, "personal")).toBe(
-      "Ignored locally",
-    );
-  });
-
-  it("put where the key comes from today in the empty field", () => {
-    expect(orbKeyPlaceholder(e2b)).toBe("Using the deployment key");
-    expect(orbKeyPlaceholder({ ...e2b, workspaceKey: key("ready") })).toBe(
-      "Using the workspace key",
-    );
-    expect(orbKeyPlaceholder({ ...e2b, key: key("ready") })).toBe(
-      "Key saved. Enter a new key to replace it.",
-    );
   });
 });

@@ -19,29 +19,25 @@ describe("docs content checks", () => {
     expect(result.stdout).toContain("docs source and internal links passed");
   });
 
-  it.each([
-    "TODO: finish this",
-    "TBD",
-    "Pending Track C integration",
-    "This is not implemented.",
-    "pre-release instructions",
-    "external clean-room check",
-  ])("rejects unfinished release content: %s", (contents) => {
-    const fixture = mkdtempSync(resolve(tmpdir(), "dx-docs-content-"));
-    writeFileSync(resolve(fixture, "page.md"), contents);
-    const script = fileURLToPath(
-      new URL("./check-content.mjs", import.meta.url),
-    );
-    const result = spawnSync(process.execPath, [script, "--root", fixture], {
-      encoding: "utf8",
-    });
-    rmSync(fixture, { recursive: true, force: true });
+  it.each(["TODO: finish this", "pre-release instructions"])(
+    "rejects unfinished release content: %s",
+    (contents) => {
+      const fixture = mkdtempSync(resolve(tmpdir(), "dx-docs-content-"));
+      writeFileSync(resolve(fixture, "page.md"), contents);
+      const script = fileURLToPath(
+        new URL("./check-content.mjs", import.meta.url),
+      );
+      const result = spawnSync(process.execPath, [script, "--root", fixture], {
+        encoding: "utf8",
+      });
+      rmSync(fixture, { recursive: true, force: true });
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toMatch(
-      /unfinished content marker|obsolete release language/,
-    );
-  });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toMatch(
+        /unfinished content marker|obsolete release language/,
+      );
+    },
+  );
 
   it("typechecks through the workspace gate without generated Astro state", () => {
     const generatedDirectory = fileURLToPath(

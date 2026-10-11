@@ -4,7 +4,12 @@ import * as React from "react";
 export interface ThreadArchiveController {
   readonly pendingArchived?: boolean;
   readonly pendingThreadId?: ThreadId;
-  readonly setArchived: (threadId: ThreadId, archived: boolean) => void;
+  /** `includeChildren` also archives or restores the Thread's children. */
+  readonly setArchived: (
+    threadId: ThreadId,
+    archived: boolean,
+    includeChildren?: boolean,
+  ) => void;
 }
 
 export const ThreadArchiveContext = React.createContext<

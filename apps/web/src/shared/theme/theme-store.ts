@@ -40,12 +40,6 @@ export const terminalThemeOptions: ReadonlyArray<{
   { value: "material", label: "Material" },
 ];
 
-export const defaultThemePreferences = Object.freeze({
-  appearance: "dark" as Appearance,
-  palette: "daydream" as Palette,
-  terminalTheme: "github" as TerminalTheme,
-});
-
 export interface ThemePreferences {
   readonly appearance: Appearance;
   readonly resolvedAppearance: ResolvedAppearance;

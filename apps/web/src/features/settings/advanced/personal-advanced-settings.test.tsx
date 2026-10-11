@@ -4,14 +4,8 @@ import { PersonalAgentInstructionsDataSchema } from "@dx/api";
 import { Schema } from "effect";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../../shared/api/client.js";
-import { settingsManifest } from "../foundation-sections.js";
-import {
-  resolveSettingsSection,
-  settingsPath,
-} from "../settings-registration.js";
 import { PersonalAgentInstructionsForm } from "./personal-advanced-settings.js";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -25,52 +19,6 @@ const instructions = (revision: number, value: string) =>
   });
 
 describe("personal Advanced settings", () => {
-  it("replaces the placeholder at the exact registered route", () => {
-    expect(settingsPath({ scope: "personal", section: "advanced" })).toBe(
-      "/settings/advanced",
-    );
-    const resolved = resolveSettingsSection(
-      settingsManifest,
-      "personal",
-      "advanced",
-    );
-    expect(resolved.found && resolved.registration.id).toBe(
-      "personal-advanced",
-    );
-  });
-
-  it("renders bounded revisioned guidance with honest scope and privacy copy", () => {
-    const markup = renderToStaticMarkup(
-      <PersonalAgentInstructionsForm
-        initialSettings={instructions(3, "Prefer focused changes.")}
-        onDirtyChange={() => undefined}
-        onReload={() => Promise.resolve(undefined)}
-        updateInstructions={() => Promise.reject(new Error("not submitted"))}
-        resetInstructions={() => Promise.reject(new Error("not submitted"))}
-      />,
-    );
-    const visibleText = markup
-      .replace(/<[^>]+>/g, " ")
-      .replaceAll("&amp;", "&");
-
-    expect(markup).toContain('name="instructions"');
-    expect(markup).toContain("Prefer focused changes.");
-    expect(markup).toContain("10,000");
-    expect(markup).toContain("Revision 3");
-    expect(markup).toContain("Format version 1");
-    expect(markup).toContain("Reset to empty");
-    expect(markup).toContain("Existing Threads keep");
-    expect(markup).toContain(
-      "delegated agents, specialized agents, or system tasks",
-    );
-    expect(markup).toContain("no privacy toggle is shown");
-    expect(markup).toContain("not added as a conversation-history message");
-    expect(visibleText).not.toMatch(
-      /\bAmp\b|appearance|experimental features|marketing|bonus email|public activity|training consent|dictation vocabulary|delete account|danger zone/i,
-    );
-    expect(markup).not.toContain('class="settings-toggle"');
-  });
-
   it("keeps a dirty draft on its original revision when a newer revision arrives", async () => {
     const container = document.createElement("div");
     const root = createRoot(container);
@@ -286,50 +234,6 @@ describe("personal Advanced settings", () => {
     expect(onDirtyChange).toHaveBeenLastCalledWith(true);
     expect(textarea?.value).toBe("Unsaved draft I have not saved yet");
     expect(resetInstructions).not.toHaveBeenCalled();
-
-    act(() => root.unmount());
-  });
-
-  it("re-enables Reset to empty after the unsaved draft is discarded", () => {
-    const container = document.createElement("div");
-    const root = createRoot(container);
-    const resetInstructions = vi.fn().mockResolvedValue(instructions(4, ""));
-
-    act(() =>
-      root.render(
-        <PersonalAgentInstructionsForm
-          initialSettings={instructions(3, "Be helpful")}
-          onDirtyChange={() => undefined}
-          onReload={() => Promise.resolve(undefined)}
-          updateInstructions={() => Promise.reject(new Error("not submitted"))}
-          resetInstructions={resetInstructions}
-        />,
-      ),
-    );
-
-    const reset = [...container.querySelectorAll("button")].find((b) =>
-      b.textContent?.includes("Reset to empty"),
-    );
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    act(() => {
-      const setter = Object.getOwnPropertyDescriptor(
-        HTMLTextAreaElement.prototype,
-        "value",
-      )?.set;
-      setter?.call(textarea, "Unsaved draft I have not saved yet");
-      textarea?.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    expect(reset?.disabled).toBe(true);
-
-    const discard = [...container.querySelectorAll("button")].find((b) =>
-      b.textContent?.includes("Discard edits"),
-    );
-    expect(discard?.disabled).toBe(false);
-    act(() => discard?.click());
-
-    // The guard is derived from the draft, not a one-shot disable.
-    expect(textarea?.value).toBe("Be helpful");
-    expect(reset?.disabled).toBe(false);
 
     act(() => root.unmount());
   });

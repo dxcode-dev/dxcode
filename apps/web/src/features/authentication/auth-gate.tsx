@@ -44,7 +44,7 @@ const DxLoading = React.lazy(() =>
 );
 
 /** Renders the email sign-in and account-creation controls shared by auth gates. */
-export function EmailPasswordAuthForm({
+function EmailPasswordAuthForm({
   pending,
   error,
   signupEnabled = true,
@@ -163,7 +163,7 @@ export function EmailPasswordAuthForm({
 }
 
 /** Renders passwordless sign-in and waitlist enrollment. */
-export function MagicLinkAuthForm({
+function MagicLinkAuthForm({
   pending,
   error,
   notice,
@@ -218,7 +218,7 @@ export function MagicLinkAuthForm({
   );
 }
 
-export function AuthenticationModeError({
+function AuthenticationModeError({
   message,
   onRetry,
 }: {

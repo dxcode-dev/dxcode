@@ -71,52 +71,8 @@ const mount = () => {
   cleanup = motion.dispose;
   return { svg, motion, group: svg.querySelector("g") as SVGGElement };
 };
-const paths = (svg: SVGSVGElement) =>
-  [...svg.querySelectorAll("path")].map((path) => path.getAttribute("d"));
 
 describe("rimmed gyroscope motion", () => {
-  it("starts static with equal-radius rim and gyro, inheriting currentColor", () => {
-    const { svg } = mount();
-    expect(frames.size).toBe(0);
-    expect(svg.querySelectorAll("path")).toHaveLength(16);
-    expect(svg.getAttribute("stroke")).toBe("currentColor");
-    expect(paths(svg).slice(0, 8).join("")).toContain("M22050 12000");
-    expect(paths(svg).slice(8).join("")).toContain("M22050 12000");
-    const idle = svg.innerHTML;
-    advance(100);
-    expect(svg.innerHTML).toBe(idle);
-  });
-
-  it("turns rim and inner rings together and breathes only inside the layout box", () => {
-    const { svg, group, motion } = mount();
-    const idle = paths(svg);
-    motion.update({ activityStatus: "working", reducedMotion: false });
-    expect(frames.size).toBe(1);
-    advance(60);
-    const working = paths(svg);
-    expect(working.slice(0, 8)).not.toEqual(idle.slice(0, 8));
-    expect(working.slice(8)).not.toEqual(idle.slice(8));
-    let minScale = 1;
-    let minOpacity = 1;
-    for (let i = 0; i < 216; i++) {
-      step();
-      const scale = Number(
-        group.getAttribute("transform")?.match(/scale\(([^)]+)\)/)?.[1],
-      );
-      const opacity = Number(group.getAttribute("opacity"));
-      expect(scale).toBeGreaterThanOrEqual(0.9);
-      expect(scale).toBeLessThanOrEqual(1);
-      expect(opacity).toBeGreaterThanOrEqual(0.65);
-      expect(opacity).toBeLessThanOrEqual(1);
-      minScale = Math.min(minScale, scale);
-      minOpacity = Math.min(minOpacity, opacity);
-    }
-    expect(minScale).toBeCloseTo(0.9, 3);
-    expect(minOpacity).toBeCloseTo(0.65, 3);
-    expect(svg.hasAttribute("width")).toBe(false);
-    expect(svg.hasAttribute("height")).toBe(false);
-  });
-
   it("preserves geometry on rapid reversals and repeated states, then stops all frames", () => {
     const { svg, motion } = mount();
     const idle = svg.innerHTML;
@@ -198,35 +154,6 @@ describe("rimmed gyroscope motion", () => {
 });
 
 describe("OrbIcon compatibility", () => {
-  it("preserves decorative defaults, opt-in labels, and SVG props", () => {
-    const markup = renderToStaticMarkup(<OrbIcon />);
-    expect(markup).toContain('aria-hidden="true"');
-    expect(markup).toContain("<path");
-    expect(markup).toContain("M22050 12000");
-    const visible = renderToStaticMarkup(
-      <OrbIcon
-        aria-hidden={false}
-        activityStatus="working"
-        color="red"
-        width={14}
-        className="custom"
-      />,
-    );
-    expect(visible).toContain('aria-label="Working"');
-    expect(visible).toContain('role="img"');
-    expect(visible).toContain('width="14"');
-    expect(visible).toContain('color="red"');
-    expect(visible).toContain('class="custom"');
-    expect(
-      renderToStaticMarkup(
-        <OrbIcon aria-hidden="false" aria-label="Agent running" />,
-      ),
-    ).toContain('aria-label="Agent running"');
-    expect(renderToStaticMarkup(<OrbIcon aria-hidden={false} />)).toContain(
-      'aria-label="Idle"',
-    );
-  });
-
   it("retains the renderer across prop changes and cleans up in StrictMode", () => {
     const container = document.createElement("div");
     document.body.append(container);

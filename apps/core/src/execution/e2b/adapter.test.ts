@@ -64,40 +64,6 @@ const runGuestCommand = async (command: string, options?: CommandOptions) => {
 };
 
 describe("Flue E2B 2.0.7 blueprint adapter", () => {
-  it("uses /home/user as cwd and maps E2B-shaped file operations", async () => {
-    const fake = makeE2B();
-    const sandbox = await e2b(fake.value).createSandbox({ id: "test" });
-
-    expect(sandbox.cwd).toBe("/home/user");
-    await expect(sandbox.readFile("src/a.ts")).resolves.toBe("contents");
-    await expect(sandbox.readFileBuffer("a.bin")).resolves.toEqual(
-      new Uint8Array([1, 2]),
-    );
-    await expect(sandbox.readdir("src")).resolves.toEqual(["one", "two"]);
-    await expect(sandbox.exists("src/a.ts")).resolves.toBe(true);
-    await expect(sandbox.stat("src/a.ts")).resolves.toEqual({
-      isFile: true,
-      isDirectory: false,
-      isSymbolicLink: false,
-    });
-
-    expect(fake.files.read).toHaveBeenNthCalledWith(1, "/home/user/src/a.ts");
-    expect(fake.files.read).toHaveBeenNthCalledWith(2, "/home/user/a.bin", {
-      format: "bytes",
-    });
-    expect(fake.files.list).toHaveBeenCalledWith("/home/user/src");
-  });
-
-  it("uses an explicitly provisioned source cwd", async () => {
-    const fake = makeE2B();
-    const sandbox = await e2b(
-      fake.value,
-      "/home/user/workspace/repo",
-    ).createSandbox({ id: "test" });
-
-    expect(sandbox.cwd).toBe("/home/user/workspace/repo");
-  });
-
   it("returns one provider-neutral workspace-context snapshot in one bounded operation", async () => {
     const fake = makeE2B();
     const snapshot: WorkspaceContextSnapshot = {

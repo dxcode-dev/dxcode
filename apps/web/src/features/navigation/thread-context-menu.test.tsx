@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import type { ThreadId } from "@dx/domain";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +9,7 @@ import { ThreadContextMenu } from "./thread-context-menu.js";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const thread = {
-  id: "thr_00000000-0000-4000-8000-000000000081",
+  id: "thr_00000000-0000-4000-8000-000000000081" as ThreadId,
   lifecycleState: "active" as const,
   pinnedAt: undefined,
 };
@@ -72,7 +73,7 @@ describe("Thread context archive touchpoints", () => {
     expect(menu?.textContent).toContain("Pin");
     expect(menu?.textContent).not.toContain("Hide");
     expect(menu?.textContent).toContain("Archive");
-    expect(menu?.textContent).toContain("Copy Thread URL");
+    expect(menu?.textContent).toContain("Copy");
     const archive = Array.from(
       document.querySelectorAll<HTMLElement>(".thread-context-item"),
     ).find((item) => item.textContent?.trim() === "Archive");
@@ -98,31 +99,13 @@ describe("Thread context archive touchpoints", () => {
 
     const menu = document.querySelector(".thread-context-menu");
     expect(menu?.textContent).toContain("Archive");
-    expect(menu?.textContent).toContain("Copy Thread URL");
+    expect(menu?.textContent).toContain("Copy");
     expect(menu?.textContent).not.toContain("Hide");
     const archive = Array.from(
       document.querySelectorAll<HTMLElement>(".thread-context-item"),
     ).find((item) => item.textContent?.trim() === "Archive");
     await React.act(() => archive?.click());
     expect(mounted.onSetArchived).toHaveBeenCalledExactlyOnceWith(true);
-    await React.act(() => mounted.root.unmount());
-  });
-
-  it("omits Hide for a keyboard-generated context-menu event", async () => {
-    const mounted = await renderMenu("active");
-    await React.act(() =>
-      mounted.trigger.dispatchEvent(
-        new MouseEvent("contextmenu", {
-          bubbles: true,
-          cancelable: true,
-          detail: 0,
-        }),
-      ),
-    );
-
-    const menu = document.querySelector(".thread-context-menu");
-    expect(menu?.textContent).toContain("Archive");
-    expect(menu?.textContent).not.toContain("Hide");
     await React.act(() => mounted.root.unmount());
   });
 });

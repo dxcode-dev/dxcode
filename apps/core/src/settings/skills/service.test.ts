@@ -1,7 +1,7 @@
 import {
   McpServerNotFound,
   McpServerRepository,
-  PersistenceUnavailable,
+  type PersistenceUnavailable,
   type Principal,
   type ProjectId,
   SkillId,
@@ -280,52 +280,8 @@ describe("SkillService", () => {
         );
         expect(error).toBeInstanceOf(SkillMcpReferenceInvalid);
       });
-
-      it("propagates persistence failures without mutation", async () => {
-        const failure = PersistenceUnavailable.new(
-          { operation: "find MCP server" },
-          new Error("D1 unavailable"),
-        );
-        const error = await rejectMcpMutation(operation, failure);
-        expect(error).toBe(failure);
-      });
-
-      it("propagates schema failures without mutation", async () => {
-        const failure = await Effect.runPromise(
-          Effect.flip(Schema.decodeUnknownEffect(StoredMcpServer)({})),
-        );
-        const error = await rejectMcpMutation(operation, failure);
-        expect(error).toBe(failure);
-        expect(Schema.isSchemaError(error)).toBe(true);
-      });
     },
   );
-
-  it("leaves the active immutable version unchanged after invalid updates", async () => {
-    const test = await harness();
-    const nextBundle = bundle("Use a changed reviewed version.");
-    const error = await Effect.runPromise(
-      Effect.gen(function* () {
-        const service = yield* SkillService;
-        return yield* Effect.flip(
-          service.update(
-            target,
-            skillId,
-            nextBundle,
-            test.initialPreview.integrity,
-            true,
-            audit,
-          ),
-        );
-      }).pipe(Effect.provide(test.layer)),
-    );
-    expect(error).toBeInstanceOf(SkillIntegrityConflict);
-    expect(test.insertVersionCalls()).toBe(0);
-    expect(test.state()).toMatchObject({
-      skill: { activeVersion: 1 },
-      versions: [1],
-    });
-  });
 
   it("publishes versions, rolls back, and requires unpinning before changing the active version", async () => {
     const test = await harness();

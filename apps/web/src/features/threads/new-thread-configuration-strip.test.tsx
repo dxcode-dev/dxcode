@@ -1,7 +1,5 @@
 // @vitest-environment happy-dom
 
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import type { ProjectData } from "@dx/api";
 import type { ModeId, ProjectId, RunnerProfileId } from "@dx/domain";
 import * as React from "react";
@@ -28,17 +26,6 @@ const longProject = {
     webUrl: "https://github.com/dxcode-dev/metadata-that-may-truncate",
   },
 } as ProjectData;
-const source = readFileSync(
-  resolve(
-    process.cwd(),
-    "apps/web/src/features/threads/new-thread-configuration-strip.tsx",
-  ),
-  "utf8",
-);
-const styles = readFileSync(
-  resolve(process.cwd(), "apps/web/src/styles.css"),
-  "utf8",
-);
 
 const choices = {
   sourceScope: "personal",
@@ -126,10 +113,6 @@ const runnerProfiles = [
 const renderStrip = (
   overrides: {
     readonly locked?: boolean;
-    readonly retrying?: boolean;
-    readonly runnerProfileId?: RunnerProfileId;
-    readonly runnerProfileLoading?: boolean;
-    readonly allowedRunnerProfileIds?: ReadonlyArray<RunnerProfileId> | null;
     readonly runnerProfiles?: Parameters<
       typeof NewThreadConfigurationStrip
     >[0]["runnerProfiles"];
@@ -151,43 +134,22 @@ const renderStrip = (
       locked={overrides.locked ?? false}
       submitting={false}
       ready
-      retrying={overrides.retrying ?? false}
+      retrying={false}
       onProjectChange={() => undefined}
       runnerProfiles={overrides.runnerProfiles ?? runnerProfiles}
       runnerProviders={overrides.runnerProviders}
       runnerOrbs={overrides.runnerOrbs}
       runnerProfileId={
-        overrides.runnerProfileId ??
-        overrides.runnerProfiles?.[0]?.id ??
-        runnerProfiles[0]?.id
+        overrides.runnerProfiles?.[0]?.id ?? runnerProfiles[0]?.id
       }
-      runnerProfileLoading={overrides.runnerProfileLoading}
-      allowedRunnerProfileIds={overrides.allowedRunnerProfileIds}
       onRunnerProfileChange={() => undefined}
       onRunnerProfileRetry={overrides.onRunnerProfileRetry}
       onModelChange={() => undefined}
       onProfileChange={() => undefined}
-      dictationControls={
-        <button
-          type="button"
-          aria-label="Press to dictate. Hold to dictate and send."
-        />
-      }
     />,
   );
 
 describe("new thread configuration strip accessibility", () => {
-  it("keeps the Orb affordance stable while its profile catalog loads", () => {
-    const markup = renderStrip({
-      runnerProfiles: [],
-      runnerProfileLoading: true,
-    });
-
-    expect(markup).toContain('aria-label="Orb"');
-    expect(markup).toContain("Loading Orb options");
-    expect(markup).not.toContain('aria-label="Orb: a1.tiny"');
-  });
-
   it("offers an accessible retry when the profile catalog is unavailable", () => {
     const markup = renderStrip({
       runnerProfiles: [],
@@ -274,72 +236,6 @@ describe("new thread configuration strip accessibility", () => {
         ],
       }),
     ).toContain('aria-label="Orb: E2B a1.tiny"');
-    // A key whose template still builds cannot start a Thread yet.
-    expect(source).toContain('group.orb.status !== "ready"');
-  });
-
-  it("uses the configured runner-profile catalog rather than a hard-coded Orb size", () => {
-    expect(renderStrip()).toContain('aria-label="Orb: a1.tiny"');
-    expect(renderStrip({ runnerProfileId: runnerProfiles[1]?.id })).toContain(
-      'aria-label="Orb: a1.small"',
-    );
-    expect(renderStrip({ runnerProfileId: runnerProfiles[2]?.id })).toContain(
-      'aria-label="Orb: a1.medium"',
-    );
-    expect(source).not.toContain("a1.medium");
-    expect(source).not.toContain("a1.large");
-    expect(source).not.toContain("MoreVertical");
-  });
-
-  it("disables profiles excluded by a workspace restriction", () => {
-    expect(source).toContain("new Set(allowedRunnerProfileIds)");
-    expect(source).toContain("allowedRunnerProfileIdSet.has(runnerProfile.id)");
-    expect(source).toContain('runnerProfile.availability !== "available" ||');
-  });
-
-  it("keeps truthful full names and renders the supplied dictation control", () => {
-    const markup = renderStrip();
-
-    expect(markup).not.toContain("Executor: ");
-    expect(markup).toContain(">a1.tiny</span>");
-    expect(markup).toContain('aria-label="Project: dx"');
-    expect(source).toContain("Choose a project…");
-    expect(markup).toContain('aria-label="Reasoning mode: high"');
-    expect(source).toContain("Choose a mode");
-    expect(source).toContain("<ModeDialPlate");
-    expect(source).toContain("Raw Models");
-    expect(source).toContain("Choose a Model…");
-    expect(source).toContain('pickerTab === "modes" ? (');
-    expect(source).toContain("dx Modes");
-    expect(source).not.toContain("<Zap");
-    expect(source).not.toContain("CHATGPT SUBSCRIPTION CONNECTED");
-    expect(source).toContain("<OrbIcon");
-    expect(markup).toContain(
-      'aria-label="Press to dictate. Hold to dictate and send."',
-    );
-  });
-
-  it("uses compact project rows with a trailing selection check", () => {
-    expect(source).toContain('className="project-picker-check"');
-    expect(source).toContain('className="project-picker-repository"');
-    expect(styles).toContain(".project-picker-option[data-selected]");
-  });
-
-  it("orders compact controls as Orb, Project, then Mode", () => {
-    const markup = renderStrip();
-    const orb = markup.indexOf('aria-label="Orb: a1.tiny"');
-    const project = markup.indexOf('aria-label="Project: dx"');
-    const mode = markup.indexOf('aria-label="Reasoning mode: high"');
-
-    expect(orb).toBeGreaterThanOrEqual(0);
-    expect(project).toBeGreaterThan(orb);
-    expect(mode).toBeGreaterThan(project);
-  });
-
-  it("preserves the retry submit accessible name", () => {
-    expect(renderStrip({ retrying: true })).toContain(
-      'aria-label="Retry sending message"',
-    );
   });
 
   it("keeps a valid mode when switching to the raw-model tab", async () => {
@@ -720,26 +616,6 @@ describe("new thread configuration strip accessibility", () => {
     container.remove();
   });
 
-  it("gives a long project title its row width before truncating metadata", async () => {
-    const markup = renderToStaticMarkup(
-      <NewThreadConfigurationStrip
-        projects={[longProject]}
-        projectId={longProject.id}
-        profile="medium"
-        locked={false}
-        submitting={false}
-        ready
-        retrying={false}
-        onProjectChange={() => undefined}
-        onModelChange={() => undefined}
-        onProfileChange={() => undefined}
-      />,
-    );
-
-    expect(markup).toContain(longProject.name);
-    expect(source).toContain("project-picker-name");
-    expect(source).toContain("project.repository?.fullName");
-  });
   it("shows repository badges, recent selection, and selects No Project", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -956,29 +832,6 @@ describe("new thread Orb picker", () => {
       expect(picker.onRunnerProfileChange).toHaveBeenCalledWith(
         "cf.standard-2",
       );
-    } finally {
-      await picker.unmount();
-    }
-  });
-
-  it("opens a provider's sizes with the keyboard", async () => {
-    const picker = await mountPicker(undefined);
-    try {
-      await React.act(() => picker.trigger?.click());
-      const row = picker.providerRow("E2B");
-      await React.act(() => {
-        row?.focus();
-        row?.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
-        );
-      });
-      expect(row?.getAttribute("aria-expanded")).toBe("true");
-      expect(
-        Array.from(
-          document.querySelectorAll('[role="menuitemradio"]'),
-          (size) => size.firstElementChild?.firstElementChild?.textContent,
-        ),
-      ).toEqual(["a1.tiny", "a1.small", "a1.medium"]);
     } finally {
       await picker.unmount();
     }

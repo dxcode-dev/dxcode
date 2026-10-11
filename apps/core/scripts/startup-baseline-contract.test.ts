@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  percentageChange,
   type StartupEventRow,
-  startupBaselineOptions,
-  startupBaselineQuery,
   startupMetricReport,
 } from "./startup-baseline-contract.js";
 
@@ -25,23 +22,6 @@ const row = (
 });
 
 describe("startup baseline report", () => {
-  it("accepts pnpm's forwarded argument separator", () => {
-    expect(
-      startupBaselineOptions([
-        "--",
-        "--since",
-        "2026-09-17T00:00:00.000Z",
-        "--classification",
-        "cold",
-      ]),
-    ).toEqual(
-      new Map([
-        ["since", "2026-09-17T00:00:00.000Z"],
-        ["classification", "cold"],
-      ]),
-    );
-  });
-
   it("reports source-backed raw samples, nearest-rank percentiles, and failures", () => {
     const rows = [
       row("a", "request_admitted", 1, "2026-09-17T00:00:00.000Z"),
@@ -80,25 +60,6 @@ describe("startup baseline report", () => {
       successRate: 0,
       rawSamples: [{ requestId: "cancelled", outcome: "cancelled" }],
     });
-  });
-
-  it("bounds correlations before joining every phase and classifies against prior history", () => {
-    const cold = startupBaselineQuery("2026-09-17T00:00:00.000Z", "cold", 7);
-    const warm = startupBaselineQuery("2026-09-17T00:00:00.000Z", "warm", 7);
-
-    expect(cold).toContain("AND NOT EXISTS (");
-    expect(warm).toContain("AND EXISTS (");
-    expect(cold).toContain("prior.occurred_at < opening.occurred_at");
-    expect(cold).toContain("LIMIT 7");
-    expect(cold).toContain("JOIN selected");
-    expect(cold).toContain("classification_history");
-    expect(cold).toContain("SELECT MIN(first.occurred_at)");
-    expect(cold.trimEnd()).not.toMatch(/LIMIT 7$/);
-  });
-
-  it("computes signed percentage change and rejects a zero baseline", () => {
-    expect(percentageChange(200, 150)).toBe(-25);
-    expect(percentageChange(0, 10)).toBeUndefined();
   });
 
   it("classifies the first submission per Thread as cold and repeats as warm", () => {

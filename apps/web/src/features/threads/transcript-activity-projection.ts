@@ -10,7 +10,24 @@ export type ToolPart = Extract<
   FlueConversationPart,
   { readonly type: "dynamic-tool" }
 >;
-export type ToolCategory = "check" | "command" | "edit" | "explore" | "generic";
+export type ToolCategory =
+  | "check"
+  | "command"
+  | "edit"
+  | "explore"
+  | "generic"
+  | "thread";
+
+/** The built-in tools that act on the owner's other Threads. */
+export const THREAD_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "create_thread",
+  "send_thread_message",
+  "get_thread_status",
+  "wait_for_threads",
+  "update_thread",
+  "list_orbs",
+  "list_agent_modes",
+]);
 
 export type TranscriptActivity =
   | { readonly kind: "row"; readonly row: TranscriptRow }
@@ -41,6 +58,7 @@ export const categoryForTool = (
   input: unknown,
 ): ToolCategory => {
   const name = toolName.toLowerCase();
+  if (THREAD_TOOL_NAMES.has(name)) return "thread";
   if (name === "code_exec") return "generic";
   if (
     name === "web_search" ||

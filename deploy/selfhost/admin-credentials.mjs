@@ -5,8 +5,7 @@ import { dirname, resolve } from "node:path";
 export const adminCredentialPath = (workspaceRoot) =>
   resolve(workspaceRoot, ".dx/secrets/selfhost-admin.txt");
 
-export const generateAdminPassword = () =>
-  randomBytes(24).toString("base64url");
+const generateAdminPassword = () => randomBytes(24).toString("base64url");
 
 const assertAdminPassword = (password) => {
   if (password.length < 8 || password.length > 128)

@@ -90,7 +90,7 @@ const everyPlatform = (
   linux: binding,
 });
 
-export const commandDefinitions = Object.freeze([
+const commandDefinitions = Object.freeze([
   {
     id: "navigation.home",
     label: "Go to home screen",

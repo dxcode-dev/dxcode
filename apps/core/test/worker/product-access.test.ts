@@ -140,6 +140,81 @@ describe("Product route access in workerd with real D1", () => {
     ).toBeUndefined();
   });
 
+  it("lets the owner rename and recolor a Thread, and returns it to auto color", async () => {
+    const createdProject = await createProjectViaApi();
+    const createdThread = await createThreadViaApi(createdProject.data.id);
+    const threadId = createdThread.data.id;
+    const path = `/threads/${threadId}`;
+    const update = (body: unknown, app = createProductApp()) =>
+      app.request(
+        path,
+        { method: "PATCH", headers: jsonHeaders, body: JSON.stringify(body) },
+        bindings,
+      );
+    // A generated title is still pending; a rename must end it so the title
+    // agent cannot overwrite the owner's name.
+    await bindings.DB.prepare(
+      "UPDATE threads SET title_pending_until = ? WHERE id = ?",
+    )
+      .bind(new Date(Date.now() + 60_000).toISOString(), threadId)
+      .run();
+
+    const recolored = await update({ color: "green" });
+    expect(recolored.status).toBe(200);
+    expect(
+      (
+        await recolored.json<{
+          data: { color?: string; titlePending?: boolean };
+        }>()
+      ).data,
+    ).toMatchObject({ color: "green", titlePending: true });
+
+    const renamed = await update({ title: "Port features to 0.2.10" });
+    expect(renamed.status).toBe(200);
+    const renamedBody = await renamed.json<{
+      data: { title: string; color?: string; titlePending?: boolean };
+    }>();
+    expect(renamedBody.data).toMatchObject({
+      title: "Port features to 0.2.10",
+      color: "green",
+    });
+    expect(renamedBody.data.titlePending).toBeUndefined();
+    expect(
+      await bindings.DB.prepare(
+        "SELECT title_pending_until FROM threads WHERE id = ?",
+      )
+        .bind(threadId)
+        .first("title_pending_until"),
+    ).toBeNull();
+
+    const listed = await createProductApp().request("/threads", {}, bindings);
+    const listedThread = (
+      await listed.json<{
+        data: { items: ReadonlyArray<{ id: string; color?: string }> };
+      }>()
+    ).data.items.find((item) => item.id === threadId);
+    expect(listedThread?.color).toBe("green");
+
+    const detail = await createProductApp().request(path, {}, bindings);
+    expect(
+      (await detail.json<{ data: { title: string; color?: string } }>()).data,
+    ).toMatchObject({ title: "Port features to 0.2.10", color: "green" });
+
+    expect((await update({ color: "magenta" })).status).toBe(400);
+    expect((await update({ title: "" })).status).toBe(400);
+    expect(
+      (await update({ color: "red" }, createProductApp(otherPrincipal))).status,
+    ).toBe(404);
+
+    const auto = await update({ color: null });
+    expect(auto.status).toBe(200);
+    const autoBody = await auto.json<{
+      data: { title: string; color?: string };
+    }>();
+    expect(autoBody.data.color).toBeUndefined();
+    expect(autoBody.data.title).toBe("Port features to 0.2.10");
+  });
+
   it("persists Thread ownership before native routing without runtime side effects", async () => {
     const before = await createProductApp().request(
       "/agents/thr_00000000-0000-4000-8000-0000000000c1",
