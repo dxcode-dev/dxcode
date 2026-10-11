@@ -1,6 +1,8 @@
 import type { ProjectData } from "@dx/api";
 import {
+  type ClaudeCodeEffort,
   generateThreadTitle,
+  isClaudeCodeModel,
   type ModeId,
   type ModelId,
   newThreadId,
@@ -27,6 +29,7 @@ export interface InitialThreadCreationAttempt {
   readonly projectId?: ProjectId;
   readonly profile: ModeId;
   readonly model?: string;
+  readonly effort?: ClaudeCodeEffort;
   readonly runnerProfileId?: RunnerProfileId;
   readonly body: string;
   readonly attachmentIds: ReadonlyArray<string>;
@@ -37,6 +40,7 @@ export async function submitNewThread({
   effectiveProjectId,
   profile,
   model,
+  effort,
   runnerProfileId,
   projects,
   imageCollection,
@@ -56,6 +60,8 @@ export async function submitNewThread({
   readonly effectiveProjectId: ProjectId | "";
   readonly profile: ModeId;
   readonly model: string | undefined;
+  /** Claude Code effort, sent only with a Claude Code model. */
+  readonly effort?: ClaudeCodeEffort;
   readonly runnerProfileId?: RunnerProfileId;
   readonly projects: ReadonlyArray<ProjectData>;
   readonly imageCollection: PendingImageCollection;
@@ -89,12 +95,17 @@ export async function submitNewThread({
     const body = submittedPrompt.trim();
     const attachmentIds = stagedImages.map(({ id }) => id);
     const selectedProfile = reasoningModeId(profile);
+    // Effort belongs to Claude Code models only; other selections have none,
+    // so a recovered attempt without one still matches.
+    const claudeEffort =
+      model !== undefined && isClaudeCodeModel(model) ? effort : undefined;
     const previousAttempt = initialCreationAttempt.current;
     const threadId =
       previousAttempt !== undefined &&
       previousAttempt.projectId === project?.id &&
       previousAttempt.profile === selectedProfile &&
       previousAttempt.model === model &&
+      previousAttempt.effort === claudeEffort &&
       previousAttempt.runnerProfileId === runnerProfileId &&
       previousAttempt.body === body &&
       previousAttempt.attachmentIds.length === attachmentIds.length &&
@@ -108,6 +119,7 @@ export async function submitNewThread({
       projectId: project?.id,
       profile: selectedProfile,
       model,
+      ...(claudeEffort === undefined ? {} : { effort: claudeEffort }),
       runnerProfileId,
       body,
       attachmentIds,
@@ -119,6 +131,7 @@ export async function submitNewThread({
       title,
       profile: selectedProfile,
       model,
+      ...(claudeEffort === undefined ? {} : { effort: claudeEffort }),
       runnerProfileId,
       body,
       images: stagedImages,
@@ -131,7 +144,11 @@ export async function submitNewThread({
       selection:
         model === undefined
           ? { kind: "mode", profileId: "default", mode: selectedProfile }
-          : { kind: "model", model: model as ModelId },
+          : {
+              kind: "model",
+              model: model as ModelId,
+              ...(claudeEffort === undefined ? {} : { thinking: claudeEffort }),
+            },
       ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
       threadId,
       ...(project === undefined
@@ -201,6 +218,9 @@ export async function submitNewThread({
             title: generateThreadTitle(submittedPrompt),
             profile: initialCreationAttempt.current.profile,
             model: initialCreationAttempt.current.model,
+            ...(initialCreationAttempt.current.effort === undefined
+              ? {}
+              : { effort: initialCreationAttempt.current.effort }),
             runnerProfileId: initialCreationAttempt.current.runnerProfileId,
             body: initialCreationAttempt.current.body,
             images: stagedImages,

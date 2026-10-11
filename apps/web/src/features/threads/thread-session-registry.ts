@@ -1,5 +1,6 @@
 import type { ProjectData, ThreadAgentInitializationData } from "@dx/api";
 import type {
+  ClaudeCodeEffort,
   ModeId,
   ProjectId,
   RunnerProfileId,
@@ -86,6 +87,8 @@ export interface OptimisticThreadCreation {
   readonly title: ThreadTitle;
   readonly profile: ModeId;
   readonly model?: string;
+  /** The Claude Code effort, with a Claude Code model only. */
+  readonly effort?: ClaudeCodeEffort;
   readonly runnerProfileId?: RunnerProfileId;
   readonly body: string;
   readonly images: ReadonlyArray<PendingImage>;

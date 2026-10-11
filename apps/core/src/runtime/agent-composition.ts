@@ -1,9 +1,10 @@
 import { env } from "cloudflare:workers";
-import type { ThinkingLevel } from "@dx/domain";
+import { isClaudeCodeModel, type ThinkingLevel } from "@dx/domain";
 import type { ModelResolutionContext, SandboxFactory } from "@flue/runtime";
 import { Effect } from "effect";
 import { ExecutionWorkspaces } from "../execution/execution-workspaces.js";
 import type { Bindings } from "../http/types.js";
+import { loadThreadRoute } from "../settings/model-routing/connection-store-d1.js";
 import {
   loadRuntimeConfiguration,
   selectRuntimeAdapters,
@@ -85,6 +86,29 @@ const localModelAdapter: AgentModelAdapter = {
   resolvePromptData: async () => undefined,
 };
 
+/**
+ * Local development with the Claude Code opt-in: a Thread pinned to a Claude
+ * Code model resolves its route like a deployment, on the owner's own
+ * Claude plan. Every other Thread keeps the fixture.
+ */
+const localClaudeCodeModelAdapter = (
+  bindings: Bindings,
+): AgentModelAdapter => ({
+  select: (promptData) =>
+    selectModel(promptData, () => localModelAdapter.select(undefined)),
+  resolvePromptData: async (context) => {
+    const db = bindings.DB;
+    if (db === undefined || context.scope?.kind !== "prompt") return undefined;
+    const thread = await loadThreadRoute(db, context.instanceId);
+    if (
+      thread?.selection.kind !== "model" ||
+      !isClaudeCodeModel(thread.selection.model)
+    )
+      return undefined;
+    return resolvePromptData(bindings)(context);
+  },
+});
+
 const defaultCloudflareModel = "cloudflare/@cf/zai-org/glm-5.3-flash";
 
 /** Deployed threads must resolve; a missing route fails visibly. */
@@ -122,7 +146,10 @@ export const makeAgentRuntimeComposition = (
     {
       local: {
         execution,
-        model: localModelAdapter,
+        model:
+          bindings.DX_LOCAL_CLAUDE_CODE === "1"
+            ? localClaudeCodeModelAdapter(bindings)
+            : localModelAdapter,
       },
       deployed: {
         execution,

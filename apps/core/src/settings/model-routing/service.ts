@@ -6,11 +6,12 @@ import type {
   SettingsFieldError,
   UpdateConnectionRequestSchema,
 } from "@dx/api";
-import type { Profile } from "@dx/domain";
 import {
+  CLAUDE_CODE_PROVIDER_ID,
   customModelBaseUrlForFormatChange,
   EnvironmentVariableId,
   EnvironmentVariablePlaintext,
+  isClaudeCodeModel,
   MAX_CONNECTION_HEADERS,
   MAX_CONNECTION_MODELS,
   MAX_MODEL_CONNECTIONS_PER_SCOPE,
@@ -22,6 +23,7 @@ import {
   ModelCredentialId,
   ModelRoutingRepository,
   ModeProfileOverrideRepository,
+  type Profile,
   StoredModelConnection,
   Timestamp,
   type UserId,
@@ -35,6 +37,11 @@ import {
   pickerProviders,
   supportedProvider,
 } from "./catalog.js";
+import {
+  CLAUDE_CODE_TOKEN_PREFIX,
+  checkClaudeCodeToken,
+  claudeCodeTokenHealth,
+} from "./claude-code-token.js";
 import {
   loadConnectionsForTarget,
   loadModeOverrideSources,
@@ -67,6 +74,14 @@ import {
 export type CreateConnectionInput = typeof CreateConnectionRequestSchema.Type;
 export type UpdateConnectionInput = typeof UpdateConnectionRequestSchema.Type;
 
+const CLAUDE_CODE_MODEL_ONLY =
+  "Claude Code models run only through a Claude Pro/Max connection.";
+
+const CLAUDE_CODE_ALREADY_CONNECTED: SettingsFieldError = {
+  field: "providerId",
+  message: "Claude Pro/Max is already connected. Replace its token.",
+};
+
 /** Field-level validation failure rendered as `fieldErrors` on 400s. */
 export class ModelRoutingValidationError extends Error {
   readonly _tag = "ModelRoutingValidationError";
@@ -87,6 +102,27 @@ export class ModelRoutingPersistenceError extends Error {
 }
 
 export const CUSTOM_PROVIDER_ID = "dx-custom";
+
+const CLAUDE_CODE_TOKEN_SHAPE =
+  "Paste the sk-ant-oat… token that claude setup-token prints.";
+
+const claudeCodeTokenShaped = (token: string) =>
+  token.trim().startsWith(CLAUDE_CODE_TOKEN_PREFIX) && !/\s/.test(token.trim());
+
+/** Anthropic must accept the token before dx stores it. */
+const verifiedClaudeCodeHealth = async (token: string) => {
+  const check = await checkClaudeCodeToken(token.trim());
+  if (check === "valid") return claudeCodeTokenHealth(check);
+  throw new ModelRoutingValidationError([
+    {
+      field: "apiKey",
+      message:
+        check === "rejected"
+          ? "Anthropic rejected this token. Run claude setup-token again and paste the new token."
+          : "Anthropic could not be reached to check this token. Try again.",
+    },
+  ]);
+};
 
 /** Headers a connection may never set — auth and transport stay owned. */
 const RESERVED_HEADERS = new Set([
@@ -227,7 +263,12 @@ const validateModels = (
   }
   const seen = new Set<string>();
   models.forEach((model, index) => {
-    if (!canonicalModelKnown(model.canonical)) {
+    if (isClaudeCodeModel(model.canonical)) {
+      fieldErrors.push({
+        field: `models.${index}.canonical`,
+        message: CLAUDE_CODE_MODEL_ONLY,
+      });
+    } else if (!canonicalModelKnown(model.canonical)) {
       fieldErrors.push({
         field: `models.${index}.canonical`,
         message: `Unknown model ${model.canonical} — pick a model from the catalog.`,
@@ -253,7 +294,9 @@ const validateModeConfig = (
     ["subagents.model", config.subagents?.model],
   ] as const;
   for (const [field, model] of slots) {
-    if (model !== undefined && !canonicalModelKnown(model)) {
+    if (model !== undefined && isClaudeCodeModel(model)) {
+      fieldErrors.push({ field, message: CLAUDE_CODE_MODEL_ONLY });
+    } else if (model !== undefined && !canonicalModelKnown(model)) {
       fieldErrors.push({
         field,
         message: `Unknown model ${model} — pick a model from the catalog.`,
@@ -392,6 +435,11 @@ export class ModelRoutingService {
       }
       if ((input.apiKey ?? "") === "") {
         fieldErrors.push({ field: "apiKey", message: "API key is required." });
+      } else if (
+        input.providerId === CLAUDE_CODE_PROVIDER_ID &&
+        !claudeCodeTokenShaped(input.apiKey ?? "")
+      ) {
+        fieldErrors.push({ field: "apiKey", message: CLAUDE_CODE_TOKEN_SHAPE });
       }
       if (input.models !== undefined && input.models.length > 0) {
         fieldErrors.push({
@@ -497,6 +545,15 @@ export class ModelRoutingService {
         message: `At most ${MAX_MODEL_CONNECTIONS_PER_SCOPE} connections per scope.`,
       });
     }
+    // One Claude plan per owner: Claude Code mode has no routing order.
+    if (
+      input.providerId === CLAUDE_CODE_PROVIDER_ID &&
+      existing.some(
+        (connection) => connection.providerId === CLAUDE_CODE_PROVIDER_ID,
+      )
+    ) {
+      fieldErrors.push(CLAUDE_CODE_ALREADY_CONNECTED);
+    }
     if (existing.some((connection) => connection.name === input.name)) {
       fieldErrors.push({
         field: "name",
@@ -505,13 +562,20 @@ export class ModelRoutingService {
     }
     if (fieldErrors.length > 0)
       throw new ModelRoutingValidationError(fieldErrors);
+    const claudeCodeHealth =
+      input.providerId === CLAUDE_CODE_PROVIDER_ID
+        ? await verifiedClaudeCodeHealth(input.apiKey ?? "")
+        : undefined;
 
     const timestamp = new Date().toISOString();
     const endpointResult =
       input.baseUrl === undefined
         ? undefined
         : normalizedEndpoint(input.baseUrl, this.endpointAllowlist);
-    const apiKey = input.apiKey;
+    const apiKey =
+      input.providerId === CLAUDE_CODE_PROVIDER_ID
+        ? input.apiKey?.trim()
+        : input.apiKey;
     const credential =
       apiKey === undefined || apiKey === ""
         ? undefined
@@ -533,22 +597,37 @@ export class ModelRoutingService {
       models: input.models ?? [],
       enabled: input.enabled ?? true,
       priority,
-      health: untestedModelConnectionHealth(),
+      health:
+        claudeCodeHealth === undefined
+          ? untestedModelConnectionHealth()
+          : { ...claudeCodeHealth, checkedAt: timestamp },
       ...(credential === undefined ? {} : { credentialId: credential.id }),
       createdAt: timestamp,
       updatedAt: timestamp,
     });
-    await this.#run(
-      Effect.gen(function* () {
-        if (credential === undefined) {
-          const repository = yield* ModelRoutingRepository;
-          yield* repository.insertConnection(connection);
-        } else {
-          const credentials = yield* ModelCredentialRepository;
-          yield* credentials.insertConnection(connection, credential);
-        }
-      }),
-    );
+    try {
+      await this.#run(
+        Effect.gen(function* () {
+          if (credential === undefined) {
+            const repository = yield* ModelRoutingRepository;
+            yield* repository.insertConnection(connection);
+          } else {
+            const credentials = yield* ModelCredentialRepository;
+            yield* credentials.insertConnection(connection, credential);
+          }
+        }),
+      );
+    } catch (error) {
+      // A concurrent create connected the plan between the check and here.
+      if (
+        input.providerId === CLAUDE_CODE_PROVIDER_ID &&
+        (await loadConnectionsForTarget(this.db, target)).some(
+          ({ providerId }) => providerId === CLAUDE_CODE_PROVIDER_ID,
+        )
+      )
+        throw new ModelRoutingValidationError([CLAUDE_CODE_ALREADY_CONNECTED]);
+      throw error;
+    }
     return this.#connectionData(connection);
   }
 
@@ -613,8 +692,23 @@ export class ModelRoutingService {
         message: "A connection with this name already exists.",
       });
     }
+    const claudeCodeToken =
+      current.providerId === CLAUDE_CODE_PROVIDER_ID &&
+      input.apiKey !== undefined &&
+      input.apiKey !== ""
+        ? input.apiKey
+        : undefined;
+    if (
+      claudeCodeToken !== undefined &&
+      !claudeCodeTokenShaped(claudeCodeToken)
+    )
+      fieldErrors.push({ field: "apiKey", message: CLAUDE_CODE_TOKEN_SHAPE });
     if (fieldErrors.length > 0)
       throw new ModelRoutingValidationError(fieldErrors);
+    const claudeCodeHealth =
+      claudeCodeToken === undefined
+        ? undefined
+        : await verifiedClaudeCodeHealth(claudeCodeToken);
 
     const timestamp = new Date().toISOString();
     const endpointResult =
@@ -631,7 +725,7 @@ export class ModelRoutingService {
           : normalizedEndpoint(input.baseUrl, this.endpointAllowlist);
     let credentialId = current.credentialId;
     let replacementCredential: StoredModelCredential | undefined;
-    const apiKey = input.apiKey;
+    const apiKey = claudeCodeToken?.trim() ?? input.apiKey;
     if (apiKey !== undefined && apiKey !== "") {
       replacementCredential = await this.#buildCredential(
         target,
@@ -653,6 +747,9 @@ export class ModelRoutingService {
       headers: merged.headers ?? current.headers,
       models: merged.models ?? current.models,
       ...(credentialId === undefined ? {} : { credentialId }),
+      ...(claudeCodeHealth === undefined
+        ? {}
+        : { health: { ...claudeCodeHealth, checkedAt: timestamp } }),
       updatedAt: timestamp,
     });
     await this.#run(

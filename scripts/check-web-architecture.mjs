@@ -475,7 +475,10 @@ export const inspectWebArchitecture = ({
     const persistenceOwner =
       displayPath.endsWith("/shared/theme/theme-store.ts") ||
       displayPath.endsWith("/shared/commands/command-registry.ts") ||
-      displayPath.endsWith("/features/threads/new-thread-draft-store.ts");
+      displayPath.endsWith("/features/threads/new-thread-draft-store.ts") ||
+      displayPath.endsWith(
+        "/features/settings/model-routing/claude-code-notice-store.ts",
+      );
     if (!persistenceOwner)
       for (const { index, text } of indices(
         source,

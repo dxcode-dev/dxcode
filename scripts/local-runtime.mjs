@@ -77,6 +77,9 @@ export const localProcessEnvironment = (inherited, overrides = {}) => {
       name === "AWS_SECRET_ACCESS_KEY" ||
       name === "AWS_SESSION_TOKEN" ||
       name === "GOOGLE_APPLICATION_CREDENTIALS" ||
+      // Claude Code mode reads the plan token only from a saved connection.
+      name === "CLAUDE_CODE_OAUTH_TOKEN" ||
+      name.startsWith("ANTHROPIC_") ||
       name.startsWith("CLOUDFLARE_") ||
       name.startsWith("CF_") ||
       name.startsWith("DX_E2B_") ||

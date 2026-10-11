@@ -11,6 +11,7 @@ import type {
   FlueConversationPart,
   FlueConversationSettlement,
 } from "@flue/react";
+import { presentableToolPart } from "./claude-code-tools.js";
 import { terminalToolActivityRowIds } from "./transcript-activity-projection.js";
 
 export type TranscriptTurnId = `turn:${string}`;
@@ -352,7 +353,7 @@ export const deriveTranscriptViewModel = ({
         row = {
           ...source,
           kind: isActivePart(part) ? "active-work" : "settled-work",
-          part,
+          part: part.type === "dynamic-tool" ? presentableToolPart(part) : part,
           ...(part.type === "dynamic-tool"
             ? { toolCallId: part.toolCallId }
             : {}),

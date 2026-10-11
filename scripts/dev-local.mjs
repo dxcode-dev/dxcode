@@ -26,8 +26,16 @@ const localStateRoot = resolve(workspaceRoot, ".dx/local");
 const pnpmCli = process.env.npm_execpath;
 const modelPreview = process.argv.includes("--model-preview");
 const uiOnly = process.argv.includes("--ui-only");
+// Claude Code mode bills the owner's own Claude plan, so it is opt-in even
+// though routine local development never calls a dx-billed model.
+const claudeCode = process.argv.includes("--claude-code");
 if (uiOnly && modelPreview) {
   throw new Error("--ui-only cannot be combined with --model-preview.");
+}
+if (claudeCode && (uiOnly || modelPreview)) {
+  throw new Error(
+    "--claude-code needs the local workspace; it cannot be combined with --ui-only or --model-preview.",
+  );
 }
 
 const migrationManifest = await loadMigrationManifest();
@@ -137,6 +145,7 @@ if (!modelPreview && !uiOnly) {
 
 let devVars = readFileSync(devVarsPath, "utf8");
 process.env.DX_LOCAL_MODEL_PREVIEW = modelPreview ? "1" : "0";
+process.env.DX_LOCAL_CLAUDE_CODE = claudeCode ? "1" : "0";
 const generatedBindings = {
   DX_ENV: "local",
   DX_RUNTIME_MODE: "local",

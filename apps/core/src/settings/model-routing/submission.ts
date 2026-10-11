@@ -25,7 +25,7 @@ import { copilotModelForCanonical } from "./copilot-mapping.js";
 import { DEFAULT_PROFILE } from "./defaults.js";
 import {
   findServingConnection,
-  RAW_MODEL_THINKING,
+  pinThinking,
   resolveSubmissionModel,
 } from "./resolver.js";
 
@@ -240,7 +240,10 @@ export const resolveRouteSubmission = async (
           overrides.get(thread.selection.mode) ??
           defaults.modes[thread.selection.mode]
         ).agent
-      : { model: thread.selection.model, thinking: RAW_MODEL_THINKING };
+      : {
+          model: thread.selection.model,
+          thinking: pinThinking(thread.selection),
+        };
   const entitlements = new Map<string, ReadonlySet<string>>(
     await Promise.all(
       connections

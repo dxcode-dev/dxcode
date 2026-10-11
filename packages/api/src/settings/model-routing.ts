@@ -159,7 +159,13 @@ export const CatalogProviderDataSchema = Schema.Struct({
   /** Which connection kind creates this provider. */
   connectionKind: ConnectionKindSchema,
   /** `proxy` = coordinator header-swap; `in-do` = adapter inside the DO. */
-  transport: Schema.Literals(["proxy", "in-do", "subscription", "binding"]),
+  transport: Schema.Literals([
+    "proxy",
+    "in-do",
+    "subscription",
+    "binding",
+    "agent",
+  ]),
   fields: Schema.Array(CatalogFieldDataSchema),
   models: Schema.Array(CatalogModelDataSchema),
 });

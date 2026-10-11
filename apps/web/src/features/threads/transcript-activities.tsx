@@ -6,6 +6,7 @@ import {
   parseShellResult,
   shellCommandOperations,
 } from "./shell-command-operation.js";
+import { SubagentActivity } from "./subagent-activity.js";
 import { ThreadFileNavigationContext } from "./thread-file-navigation.js";
 import { ThreadToolDetail, ThreadToolLabel } from "./thread-tool-activity.js";
 import { presentTool } from "./tool-presentation.js";
@@ -436,9 +437,21 @@ function ToolActivityRow({
   readonly category: ToolCategory;
   readonly row: WorkRow;
 }) {
-  const [expanded, setExpanded] = React.useState(false);
   const part = toolPart(row);
-  if (part === undefined) return null;
+  return part === undefined ? null : (
+    <ToolPartRow category={category} part={part} />
+  );
+}
+
+/** One tool call: its label, and its output behind a disclosure. */
+function ToolPartRow({
+  category,
+  part,
+}: {
+  readonly category: ToolCategory;
+  readonly part: ToolPart;
+}) {
+  const [expanded, setExpanded] = React.useState(false);
   const expandable = outputFor(part) !== undefined;
   const label = <ToolLabel category={category} part={part} />;
   const opener =
@@ -527,6 +540,10 @@ function ActivityRow({
   return renderRow(row);
 }
 
+const renderSubagentStep = (part: ToolPart, key: string) => (
+  <ToolPartRow category={categoryForPart(part)} key={key} part={part} />
+);
+
 export function TranscriptActivityList({
   processing,
   renderRow,
@@ -546,6 +563,12 @@ export function TranscriptActivityList({
             key={activity.row.id}
             renderRow={renderRow}
             row={activity.row}
+          />
+        ) : activity.kind === "subagent" ? (
+          <SubagentActivity
+            key={activity.row.id}
+            view={activity.view}
+            renderStep={renderSubagentStep}
           />
         ) : (
           <ActivityGroup

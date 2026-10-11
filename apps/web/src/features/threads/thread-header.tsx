@@ -1,4 +1,5 @@
 import type { ProjectData, ThreadDetailData } from "@dx/api";
+import { isClaudeCodeModel } from "@dx/domain";
 import {
   Bookmark,
   Eye,
@@ -10,6 +11,7 @@ import {
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
+import { modelDisplayName } from "../../shared/model-display-name.js";
 import { threadColorAttributes } from "../../shared/thread-color.js";
 import { Avatar } from "../../shared/ui/avatar.js";
 import { Button } from "../../shared/ui/button.js";
@@ -132,12 +134,20 @@ export function ThreadHeader({
       ? "working"
       : "idle";
   const selection = thread.agentInitialization.selection;
+  const claudeCode =
+    selection.kind === "model" && isClaudeCodeModel(selection.model);
   const selectionLabel =
-    selection.kind === "mode" ? selection.mode : selection.model;
+    selection.kind === "mode"
+      ? selection.mode
+      : claudeCode
+        ? "claude code"
+        : selection.model;
   const selectionTitle =
     selection.kind === "mode"
       ? `Mode: ${selection.mode}`
-      : `Model: ${selection.model}`;
+      : claudeCode
+        ? `Claude Code: ${modelDisplayName(selection.model)}${selection.thinking === undefined ? "" : `, ${selection.thinking} effort`}`
+        : `Model: ${selection.model}`;
   const openShare = own && !archived ? () => setShareOpen(true) : undefined;
   return (
     <header className="thread-title-bar">

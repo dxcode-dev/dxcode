@@ -5,7 +5,7 @@ import type {
   CustomApiFormatData,
   PendingPersonalModelSubscriptionAuthorizationDataSchema,
 } from "@dx/api";
-import { customModelEndpoint } from "@dx/domain";
+import { CLAUDE_CODE_PROVIDER_ID, customModelEndpoint } from "@dx/domain";
 import {
   ArrowDown,
   ArrowUp,
@@ -17,6 +17,7 @@ import {
 import type { FormEvent, PointerEventHandler } from "react";
 import { useRef, useState } from "react";
 import { Button } from "../../../shared/ui/button.js";
+import { ClaudeIcon } from "../../../shared/ui/claude-icon.js";
 import {
   DialogContent,
   DialogDescription,
@@ -54,10 +55,12 @@ const healthLabel = (health: ConnectionData["health"]): string => {
 
 export const AddConnectionMenu = ({
   showCopilot,
+  showClaude,
   onPick,
 }: {
   readonly showCopilot: boolean;
-  readonly onPick: (pick: "copilot" | "custom") => void;
+  readonly showClaude: boolean;
+  readonly onPick: (pick: "copilot" | "claude" | "custom") => void;
 }) => (
   <Menu.Root>
     <Menu.Trigger className="routing-add-button">
@@ -71,6 +74,12 @@ export const AddConnectionMenu = ({
         className="routing-menu-positioner"
       >
         <Menu.Popup className="routing-add-menu">
+          {showClaude ? (
+            <Menu.Item onClick={() => onPick("claude")}>
+              <ClaudeIcon aria-hidden="true" />
+              Claude Pro/Max
+            </Menu.Item>
+          ) : null}
           {showCopilot ? (
             <Menu.Item onClick={() => onPick("copilot")}>
               <GitHubIcon aria-hidden="true" />
@@ -128,9 +137,15 @@ export const ConnectionRow = ({
 }) => {
   const managed =
     connection.kind === "subscription" || connection.kind === "deployment";
-  const Icon = connection.kind === "subscription" ? GitHubIcon : GitBranch;
-  const label =
-    connection.kind === "subscription"
+  const claude = connection.providerId === CLAUDE_CODE_PROVIDER_ID;
+  const Icon = claude
+    ? ClaudeIcon
+    : connection.kind === "subscription"
+      ? GitHubIcon
+      : GitBranch;
+  const label = claude
+    ? "Used in Claude Code mode only"
+    : connection.kind === "subscription"
       ? "GitHub Copilot"
       : connection.kind === "custom"
         ? "Custom URL"
@@ -141,29 +156,32 @@ export const ConnectionRow = ({
       data-disabled={!connection.enabled || undefined}
     >
       <div className="model-routing-connection-head">
-        <button
-          type="button"
-          className="model-routing-drag-handle"
-          disabled={!canMutate}
-          aria-label={`Drag ${connection.name} to change priority`}
-          title="Drag to change priority. Use arrow keys to reorder."
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerCancel}
-          onKeyDown={(event) => {
-            if (event.key === "ArrowUp" && canReorderUp) {
-              event.preventDefault();
-              onMove(-1);
-            }
-            if (event.key === "ArrowDown" && canReorderDown) {
-              event.preventDefault();
-              onMove(1);
-            }
-          }}
-        >
-          <GripVertical aria-hidden="true" />
-        </button>
+        {/* Claude Code mode has no routing order to drag. */}
+        {claude ? null : (
+          <button
+            type="button"
+            className="model-routing-drag-handle"
+            disabled={!canMutate}
+            aria-label={`Drag ${connection.name} to change priority`}
+            title="Drag to change priority. Use arrow keys to reorder."
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerCancel={onPointerCancel}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowUp" && canReorderUp) {
+                event.preventDefault();
+                onMove(-1);
+              }
+              if (event.key === "ArrowDown" && canReorderDown) {
+                event.preventDefault();
+                onMove(1);
+              }
+            }}
+          >
+            <GripVertical aria-hidden="true" />
+          </button>
+        )}
         <button
           type="button"
           className="model-routing-connection-disclosure"
@@ -201,7 +219,7 @@ export const ConnectionRow = ({
         >
           <dl>
             <div>
-              <dt>{managed ? "Account" : "API key"}</dt>
+              <dt>{managed ? "Account" : claude ? "Token" : "API key"}</dt>
               <dd>
                 {connection.credential?.present
                   ? `Stored ···${connection.credential.tail ?? ""}`
@@ -236,19 +254,21 @@ export const ConnectionRow = ({
             <div>
               <dt>Models</dt>
               <dd>
-                {connection.serves === "catalog"
-                  ? "Provider catalog"
-                  : connection.models.length
-                    ? connection.models.map((m) => (
-                        <span
-                          key={m.canonical}
-                          className="model-routing-connection-mono"
-                        >
-                          {m.canonical}
-                          {m.upstream ? ` → ${m.upstream}` : ""}
-                        </span>
-                      ))
-                    : "No models configured"}
+                {claude
+                  ? "Claude Code models on your plan"
+                  : connection.serves === "catalog"
+                    ? "Provider catalog"
+                    : connection.models.length
+                      ? connection.models.map((m) => (
+                          <span
+                            key={m.canonical}
+                            className="model-routing-connection-mono"
+                          >
+                            {m.canonical}
+                            {m.upstream ? ` → ${m.upstream}` : ""}
+                          </span>
+                        ))
+                      : "No models configured"}
               </dd>
             </div>
             <div>
@@ -257,28 +277,37 @@ export const ConnectionRow = ({
             </div>
           </dl>
           <div className="model-routing-connection-footer">
-            <span className="model-routing-connection-meta">
-              Priority {priority}
-            </span>
+            {/* Claude Pro/Max has no routing priority. */}
+            {claude ? (
+              <span className="model-routing-connection-meta" />
+            ) : (
+              <span className="model-routing-connection-meta">
+                Priority {priority}
+              </span>
+            )}
             <div className="model-routing-connection-actions">
-              <button
-                type="button"
-                className="model-routing-connection-action"
-                disabled={!canReorderUp}
-                aria-label="Move connection up"
-                onClick={() => onMove(-1)}
-              >
-                <ArrowUp />
-              </button>
-              <button
-                type="button"
-                className="model-routing-connection-action"
-                disabled={!canReorderDown}
-                aria-label="Move connection down"
-                onClick={() => onMove(1)}
-              >
-                <ArrowDown />
-              </button>
+              {claude ? null : (
+                <>
+                  <button
+                    type="button"
+                    className="model-routing-connection-action"
+                    disabled={!canReorderUp}
+                    aria-label="Move connection up"
+                    onClick={() => onMove(-1)}
+                  >
+                    <ArrowUp />
+                  </button>
+                  <button
+                    type="button"
+                    className="model-routing-connection-action"
+                    disabled={!canReorderDown}
+                    aria-label="Move connection down"
+                    onClick={() => onMove(1)}
+                  >
+                    <ArrowDown />
+                  </button>
+                </>
+              )}
               {canMutate ? (
                 <>
                   <button
@@ -294,7 +323,7 @@ export const ConnectionRow = ({
                       className="model-routing-connection-action"
                       onClick={onEdit}
                     >
-                      Edit
+                      {claude ? "Replace token" : "Edit"}
                     </button>
                   ) : null}
                   <button

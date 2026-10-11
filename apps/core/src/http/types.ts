@@ -22,6 +22,8 @@ export interface Bindings {
   readonly DX_LOCAL_RUNTIME_URL?: string;
   readonly DX_LOCAL_RUNTIME_TOKEN?: string;
   readonly DX_LOCAL_MODEL_PREVIEW?: string;
+  /** `1` lets local development run Claude Code on a connected Claude plan. */
+  readonly DX_LOCAL_CLAUDE_CODE?: string;
   readonly DX_RUNNER_PROFILE_CATALOG?: string;
   readonly DX_SOURCE_CONTROL_SCHEMA_VERSION?: string;
   readonly DX_SOURCE_SHALLOW_CLONE?: string;

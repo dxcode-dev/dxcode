@@ -6,6 +6,8 @@ import type {
   UpdatePersonalComposerDefaultsRequest,
 } from "@dx/api";
 import {
+  CLAUDE_CODE_DEFAULT_EFFORT,
+  type ClaudeCodeEffort,
   type ModeId,
   ModelId,
   type ProjectId,
@@ -391,7 +393,13 @@ function useComposerProjects(
  */
 function useComposerModeSelection(
   userId: UserId,
-  recovery: { readonly profile: ModeId; readonly model?: string } | undefined,
+  recovery:
+    | {
+        readonly profile: ModeId;
+        readonly model?: string;
+        readonly effort?: ClaudeCodeEffort;
+      }
+    | undefined,
   remembered: PersonalComposerDefaultsData,
   rememberComposer: (input: UpdatePersonalComposerDefaultsRequest) => void,
 ) {
@@ -413,6 +421,9 @@ function useComposerModeSelection(
     lastSentSelection.current = key;
     rememberComposer(input);
   };
+  const [effort, chooseEffort] = React.useState<ClaudeCodeEffort>(
+    recovery?.effort ?? CLAUDE_CODE_DEFAULT_EFFORT,
+  );
   const choicesQuery = useQuery(modelRoutingChoicesQueryOptions(userId));
   const profile = chosenProfile ?? startingMode(remembered.mode);
   const model =
@@ -443,7 +454,15 @@ function useComposerModeSelection(
         model: modelId.value,
       });
   };
-  return { choicesQuery, profile, model, chooseProfile, chooseModel };
+  return {
+    choicesQuery,
+    profile,
+    model,
+    effort,
+    chooseProfile,
+    chooseModel,
+    chooseEffort,
+  };
 }
 
 /**
@@ -567,13 +586,20 @@ function ScopedNewThreadModal({
       ),
     }),
   );
-  const { choicesQuery, profile, model, chooseProfile, chooseModel } =
-    useComposerModeSelection(
-      identity.id,
-      recovery,
-      remembered,
-      rememberComposer,
-    );
+  const {
+    choicesQuery,
+    profile,
+    model,
+    effort,
+    chooseProfile,
+    chooseModel,
+    chooseEffort,
+  } = useComposerModeSelection(
+    identity.id,
+    recovery,
+    remembered,
+    rememberComposer,
+  );
   const routingGraphQuery = useQuery(
     modelRoutingGraphQueryOptions({ scope: "personal" }, identity.id),
   );
@@ -605,6 +631,7 @@ function ScopedNewThreadModal({
           projectId: recovery.project?.id,
           profile: recovery.profile,
           model: recovery.model,
+          ...(recovery.effort === undefined ? {} : { effort: recovery.effort }),
           runnerProfileId: recovery.runnerProfileId,
           body: recovery.body,
           attachmentIds: recovery.images.map(({ id }) => id),
@@ -658,6 +685,7 @@ function ScopedNewThreadModal({
         effectiveProjectId,
         profile,
         model,
+        effort,
         runnerProfileId: effectiveRunnerProfileId,
         projects,
         imageCollection,
@@ -745,6 +773,7 @@ function ScopedNewThreadModal({
           projectId={effectiveProjectId}
           profile={profile}
           model={model}
+          effort={effort}
           choices={choicesQuery.data}
           routingGraph={routingGraphQuery.data}
           onProjectChange={(projectId) => {
@@ -775,6 +804,7 @@ function ScopedNewThreadModal({
           }
           onProfileChange={chooseProfile}
           onModelChange={chooseModel}
+          onEffortChange={chooseEffort}
           dictationControls={dictation.controls}
           dictationActive={dictation.active}
           dictationHideSubmit={dictation.hideSubmit}

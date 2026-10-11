@@ -2,6 +2,8 @@ import { env } from "cloudflare:workers";
 import { getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
 import { getModelInvocationContext, setProvider } from "@flue/runtime";
 import { getDurableObjectIdentity } from "@flue/runtime/cloudflare";
+import { registerClaudeCodeProvider } from "./claude-code/registration.js";
+import { ExecutionWorkspaces } from "./execution/execution-workspaces.js";
 import type { Bindings } from "./http/types.js";
 import { settingsPersistenceLogger } from "./logging.js";
 import { createDxCloudflareModelProvider } from "./runtime/cloudflare-model-provider.js";
@@ -64,4 +66,18 @@ if (
       hasCoordinatorBinding: bindings.BYOK_CREDENTIAL_COORDINATOR !== undefined,
     },
   );
+}
+
+// Claude Code mode runs on the owner's Claude plan, never on a dx-billed
+// provider, so local development offers it only behind its own opt-in.
+if (
+  bindings.BYOK_CREDENTIAL_COORDINATOR !== undefined &&
+  bindings.DX_LOCAL_MODEL_PREVIEW !== "1" &&
+  (bindings.DX_RUNTIME_MODE !== "local" ||
+    bindings.DX_LOCAL_CLAUDE_CODE === "1")
+) {
+  registerClaudeCodeProvider({
+    coordinator: bindings.BYOK_CREDENTIAL_COORDINATOR,
+    execution: () => ExecutionWorkspaces.sandboxFactory,
+  });
 }

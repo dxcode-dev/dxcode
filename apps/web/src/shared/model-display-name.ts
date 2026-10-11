@@ -8,6 +8,7 @@ const MODEL_WORDS: Readonly<Record<string, string>> = {
   luna: "Luna",
   opus: "Opus",
   sonnet: "Sonnet",
+  haiku: "Haiku",
 };
 export function modelDisplayName(name: string): string {
   const short = name.split("/").at(-1) ?? name;

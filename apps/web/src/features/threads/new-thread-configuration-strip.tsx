@@ -6,18 +6,23 @@ import type {
   OrbResolvedProvider,
   ProjectData,
 } from "@dx/api";
-import type {
-  ModeId,
-  ProjectId,
-  RunnerProfile,
-  RunnerProfileId,
-  RunnerProviderPresentation,
+import {
+  CLAUDE_CODE_DEFAULT_EFFORT,
+  type ClaudeCodeEffort,
+  isClaudeCodeModel,
+  type ModeId,
+  type ProjectId,
+  type RunnerProfile,
+  type RunnerProfileId,
+  type RunnerProviderPresentation,
 } from "@dx/domain";
 import { ArrowRight, Check, ChevronRight, Folder } from "lucide-react";
 import type { ReactNode } from "react";
 import * as React from "react";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
+import { modelDisplayName } from "../../shared/model-display-name.js";
 import { Button } from "../../shared/ui/button.js";
+import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
 import {
   angularDistance,
   DIAL_MODE_ORDER,
@@ -25,7 +30,14 @@ import {
 } from "../../shared/ui/mode-dial-geometry.js";
 import { ModeDialPlate } from "../../shared/ui/mode-dial-plate.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
-import { modelDisplayName } from "./model-display-name.js";
+import {
+  ClaudeCodeDialControls,
+  ClaudeCodeModeOption,
+} from "./claude-code-mode.js";
+import {
+  claudeCodeDial,
+  claudeCodeEffortLabel,
+} from "./claude-code-mode-options.js";
 import { ServingBadge } from "./model-picker-presentation.js";
 import { REASONING_MODES } from "./new-thread-modal-utils.js";
 
@@ -74,7 +86,11 @@ function RawModelList({
   readonly onSelect: (modelId: string) => void;
 }) {
   const normalized = query.trim().toLowerCase();
-  const models = (choices?.models ?? []).filter(
+  // Claude Code models are an agent, not a raw model; the mode list offers them.
+  const rawModels = (choices?.models ?? []).filter(
+    ({ canonical }) => !isClaudeCodeModel(canonical),
+  );
+  const models = rawModels.filter(
     (model) =>
       normalized === "" ||
       modelDisplayName(model.name).toLowerCase().includes(normalized) ||
@@ -87,7 +103,7 @@ function RawModelList({
         <p className="reasoning-raw-empty">Loading models…</p>
       ) : models.length === 0 ? (
         <p className="reasoning-raw-empty">
-          {choices.models.length === 0
+          {rawModels.length === 0
             ? "No models available. Add a provider connection in Settings."
             : `No models match “${query.trim()}”.`}
         </p>
@@ -141,10 +157,16 @@ function ReasoningModeConsole({
   onModelChange,
   pickerTab,
   onPickerTabChange,
+  effort,
+  onEffortChange,
+  onClaudeCodeSelect,
 }: {
   readonly profile: ModeId;
   readonly onProfileChange: (profile: ModeId) => void;
   readonly onFocusDial: () => void;
+  readonly effort: ClaudeCodeEffort;
+  readonly onEffortChange: (effort: ClaudeCodeEffort) => void;
+  readonly onClaudeCodeSelect: (model: string, close: boolean) => void;
   readonly choices: ChoicesData | undefined;
   readonly routingGraph?: GraphData;
   readonly selectedModel: string | undefined;
@@ -202,9 +224,15 @@ function ReasoningModeConsole({
   const displayModel = modelDisplayName(
     activeModel?.name ?? tier?.config.model ?? "—",
   );
-  const agentEffort = tier?.config.thinking.toUpperCase() ?? "—";
-  const resolutionLabel =
-    selectedModel !== undefined
+  const claudeCode =
+    selectedModel !== undefined && isClaudeCodeModel(selectedModel);
+  const dial = claudeCodeDial(choices, selectedModel, effort);
+  const agentEffort = claudeCode
+    ? effort.toUpperCase()
+    : (tier?.config.thinking.toUpperCase() ?? "—");
+  const resolutionLabel = claudeCode
+    ? "USES YOUR CLAUDE PRO/MAX PLAN"
+    : selectedModel !== undefined
       ? pickedModel?.connectionName
         ? `SERVED BY ${pickedModel.connectionName}`
         : "NOT SERVED"
@@ -267,7 +295,10 @@ function ReasoningModeConsole({
           onSelect={(modelId) => onModelChange(modelId)}
         />
       ) : (
-        <div className="reasoning-console-plate-wrap">
+        <div
+          className="reasoning-console-plate-wrap"
+          data-claude-code={dial === undefined ? undefined : true}
+        >
           <ModeDialPlate
             profile={mode.id}
             selectedAngle={selectedAngle}
@@ -275,6 +306,14 @@ function ReasoningModeConsole({
             displayModel={displayModel}
             resolutionLabel={resolutionLabel}
             agentOnly
+            claudeCode={dial}
+          />
+          <ClaudeCodeDialControls
+            choices={choices}
+            model={selectedModel}
+            effort={effort}
+            onSelect={onClaudeCodeSelect}
+            onEffortChange={onEffortChange}
           />
           <div
             className="reasoning-console-dial-target"
@@ -326,6 +365,8 @@ function ModePicker({
   onOpenChange,
   onProfileChange,
   onModelChange,
+  effort,
+  onEffortChange,
 }: {
   readonly profile: ModeId;
   readonly model: string | undefined;
@@ -336,12 +377,21 @@ function ModePicker({
   readonly onOpenChange: (open: boolean) => void;
   readonly onProfileChange: (profile: ModeId) => void;
   readonly onModelChange: (model: string | undefined) => void;
+  readonly effort: ClaudeCodeEffort;
+  readonly onEffortChange: (effort: ClaudeCodeEffort) => void;
 }) {
   const [pickerTab, setPickerTab] = React.useState<"modes" | "raw">("modes");
+  const claudeCode = model !== undefined && isClaudeCodeModel(model);
+  const modelName = (canonical: string) =>
+    modelDisplayName(
+      choices?.models.find((choice) => choice.canonical === canonical)?.name ??
+        canonical,
+    );
 
   return (
     <Select.Root
-      value={profile}
+      // A pinned model (Claude Code or raw) means no mode is selected.
+      value={model === undefined ? profile : null}
       disabled={locked}
       open={open}
       onOpenChange={onOpenChange}
@@ -354,15 +404,32 @@ function ModePicker({
     >
       <Select.Trigger
         className="new-thread-config-pill new-thread-mode"
+        data-claude-code={claudeCode || undefined}
         aria-label={
-          model === undefined ? `Reasoning mode: ${profile}` : `Model: ${model}`
+          claudeCode
+            ? `Claude Code: ${modelName(model)}, ${claudeCodeEffortLabel(effort)}`
+            : model === undefined
+              ? `Reasoning mode: ${profile}`
+              : `Model: ${model}`
         }
         title={
-          model === undefined ? `Reasoning mode: ${profile}` : `Model: ${model}`
+          claudeCode
+            ? `Claude Code: ${modelName(model)}, ${claudeCodeEffortLabel(effort)}`
+            : model === undefined
+              ? `Reasoning mode: ${profile}`
+              : `Model: ${model}`
         }
       >
-        <ModeDialIcon profile={profile} />
-        {model === undefined ? (
+        {claudeCode ? (
+          <ClaudeIcon className="new-thread-mode-dial-icon" />
+        ) : (
+          <ModeDialIcon profile={profile} />
+        )}
+        {claudeCode ? (
+          <span className="new-thread-mode-value">
+            Claude Code · {modelName(model)} · {claudeCodeEffortLabel(effort)}
+          </span>
+        ) : model === undefined ? (
           <>
             <span className="new-thread-mode-label">Mode: </span>
             <Select.Value />
@@ -402,7 +469,25 @@ function ModePicker({
               }}
               pickerTab={pickerTab}
               onPickerTabChange={setPickerTab}
+              effort={effort}
+              onEffortChange={onEffortChange}
+              onClaudeCodeSelect={(next, close) => {
+                onModelChange(next);
+                if (close) onOpenChange(false);
+              }}
             />
+            {pickerTab === "modes" ? (
+              <ClaudeCodeModeOption
+                choices={choices}
+                model={model}
+                effort={effort}
+                onEffortChange={onEffortChange}
+                onSelect={(next, close) => {
+                  onModelChange(next);
+                  if (close) onOpenChange(false);
+                }}
+              />
+            ) : null}
             {pickerTab === "modes" ? (
               <Select.List className="reasoning-list">
                 {REASONING_MODES.map((mode) => (
@@ -817,6 +902,8 @@ export function NewThreadConfigurationStrip({
   projectId,
   profile,
   model,
+  effort = CLAUDE_CODE_DEFAULT_EFFORT,
+  onEffortChange = () => undefined,
   choices,
   routingGraph,
   locked,
@@ -845,6 +932,8 @@ export function NewThreadConfigurationStrip({
   readonly projectId: ProjectId | "";
   readonly profile: ModeId;
   readonly model?: string;
+  readonly effort?: ClaudeCodeEffort;
+  readonly onEffortChange?: (effort: ClaudeCodeEffort) => void;
   readonly choices?: ChoicesData;
   readonly routingGraph?: GraphData;
   readonly locked: boolean;
@@ -998,6 +1087,8 @@ export function NewThreadConfigurationStrip({
         onOpenChange={setModePickerOpen}
         onProfileChange={onProfileChange}
         onModelChange={onModelChange}
+        effort={effort}
+        onEffortChange={onEffortChange}
       />
       <span className="new-thread-config-spacer" />
       {dictationControls}

@@ -1,5 +1,5 @@
 import "./mode-dial.css";
-import type { ModeId, ThinkingLevel } from "@dx/domain";
+import { isClaudeCodeModel, type ModeId, type ThinkingLevel } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
@@ -75,7 +75,10 @@ export const ModeDialSettings = ({
     );
   };
   const busy = saving || resetMutation.isPending;
-  const servedModels = choices.data?.models ?? [];
+  // Claude Code models run as Claude Code mode, never in a Mode Dial slot.
+  const servedModels = (choices.data?.models ?? []).filter(
+    ({ canonical }) => !isClaudeCodeModel(canonical),
+  );
   const servingModel = servedModels.find(
     (model) => model.canonical === effective?.model,
   );

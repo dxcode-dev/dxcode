@@ -5,6 +5,7 @@ import type {
   ProjectData,
 } from "@dx/api";
 import type {
+  ClaudeCodeEffort,
   ModeId,
   ProjectId,
   RunnerProfile,
@@ -45,6 +46,8 @@ export function NewThreadComposer({
   onProfileChange,
   model,
   onModelChange,
+  effort,
+  onEffortChange,
   choices,
   routingGraph,
   dictationControls,
@@ -79,6 +82,8 @@ export function NewThreadComposer({
   readonly onProfileChange: (profile: ModeId) => void;
   readonly model?: string;
   readonly onModelChange: (model: string | undefined) => void;
+  readonly effort?: ClaudeCodeEffort;
+  readonly onEffortChange?: (effort: ClaudeCodeEffort) => void;
   readonly choices?: ChoicesData;
   readonly routingGraph?: GraphData;
   readonly dictationControls?: React.ReactNode;
@@ -139,6 +144,7 @@ export function NewThreadComposer({
         projectId={projectId}
         profile={profile}
         model={model}
+        effort={effort}
         choices={choices}
         routingGraph={routingGraph}
         locked={submitting}
@@ -156,6 +162,7 @@ export function NewThreadComposer({
         onRunnerProfileRetry={onRunnerProfileRetry}
         onProfileChange={onProfileChange}
         onModelChange={onModelChange}
+        onEffortChange={onEffortChange}
         dictationControls={dictationControls}
         dictationActive={dictationActive}
         dictationHideSubmit={dictationHideSubmit}

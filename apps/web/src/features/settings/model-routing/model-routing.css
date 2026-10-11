@@ -436,3 +436,146 @@
 .dialog-viewport:has(.model-routing-dialog) {
   padding: 8px;
 }
+
+/* Claude Pro/Max: one-time notice and token dialog. */
+.claude-code-notice {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface), var(--foreground) 2%);
+}
+.claude-code-notice-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.claude-code-notice-head h2 {
+  margin: 0;
+  flex: 1;
+  font-size: 15px;
+  font-weight: 500;
+}
+.claude-code-notice-icon {
+  width: 20px;
+  height: 20px;
+}
+.claude-code-notice p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.claude-code-notice-dismiss {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.claude-code-notice-dismiss:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.claude-code-notice-dismiss svg {
+  width: 16px;
+  height: 16px;
+}
+.claude-code-connect-button {
+  justify-self: start;
+}
+.claude-code-connect-button svg {
+  width: 16px;
+  height: 16px;
+}
+.claude-code-dialog form {
+  display: grid;
+  gap: 16px;
+}
+.claude-code-steps {
+  display: grid;
+  gap: 18px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.claude-code-dialog .claude-code-steps > li {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 14px;
+  align-items: start;
+}
+.claude-code-steps p,
+.claude-code-steps label {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.claude-code-dialog .claude-code-steps > li > div {
+  display: grid;
+  gap: 8px;
+}
+.claude-code-step-number {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--foreground);
+  color: var(--background);
+  font-size: 12px;
+  font-weight: 600;
+}
+.claude-code-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.claude-code-command code {
+  flex: 1;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--muted) 40%, var(--surface));
+  font-size: 12px;
+}
+.claude-code-copy {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.claude-code-copy:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.claude-code-copy svg {
+  width: 15px;
+  height: 15px;
+}
+.claude-code-steps .claude-code-step-hint {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.claude-code-step-hint a {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: inherit;
+  text-decoration: underline;
+}
+.claude-code-step-hint a svg {
+  width: 12px;
+  height: 12px;
+}

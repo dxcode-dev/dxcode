@@ -1,7 +1,9 @@
 import type { ThreadData, ThreadListItem } from "@dx/api";
+import { isClaudeCodeModel } from "@dx/domain";
 import { FolderGit2 } from "lucide-react";
 import { createPortal } from "react-dom";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
+import { modelDisplayName } from "../../shared/model-display-name.js";
 import { threadColorAttributes } from "../../shared/thread-color.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { ThreadTitleText } from "../../shared/ui/thread-title.js";
@@ -27,7 +29,10 @@ export function ThreadHoverPreview({
   readonly onPointerLeave: () => void;
 }) {
   const currentThread = thread;
-  const mode = thread.mode;
+  const mode =
+    thread.mode !== undefined && isClaudeCodeModel(thread.mode)
+      ? `Claude Code · ${modelDisplayName(thread.mode)}`
+      : thread.mode;
   const changes = thread.changes;
   const environmentState =
     currentThread.lifecycleState === "archived"

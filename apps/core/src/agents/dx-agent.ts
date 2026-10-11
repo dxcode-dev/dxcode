@@ -1,7 +1,7 @@
 "use agent";
 
 import { MAX_IMAGES_PER_MESSAGE } from "@dx/api";
-import type { PluginToolSet } from "@dx/domain";
+import { isClaudeCodeModel, type PluginToolSet } from "@dx/domain";
 import {
   type AgentProps,
   type DeliveredMessage,
@@ -17,6 +17,9 @@ import {
   useSandbox,
   useTool,
 } from "@flue/runtime";
+import { claudeCodeDxTools } from "../claude-code/dx-tools.js";
+import { rememberClaudeCodeSandbox } from "../claude-code/runs.js";
+import { claudeCodeMirrorTools } from "../claude-code/tools.js";
 import {
   agentPluginHostContext,
   agentThreadToolsContext,
@@ -36,7 +39,10 @@ import {
   type DxAgentInitialData,
   DxAgentInitialDataSchema,
 } from "./dx-agent-initial-data.js";
-import { composeDxAgentPrompt } from "./dx-agent-prompt.js";
+import {
+  composeClaudeCodePrompt,
+  composeDxAgentPrompt,
+} from "./dx-agent-prompt.js";
 
 /** Per-submission data from `resolvePromptData`. */
 interface DxAgentPromptData {
@@ -71,6 +77,94 @@ const withToolFailureMessage = <T extends ToolDefinition>(tool: T): T =>
     },
   }) as T;
 
+/**
+ * dx's own tools for one submission: skill resources, the thread tools,
+ * first-party plugin tools (MCP servers reach the model only as Code's
+ * modules, never mounted directly), and installed plugins. Plugin tools come
+ * from the submission's resolved set, never from Thread creation data;
+ * providers and keys resolve again on every call. Every tool DxAgent offers
+ * belongs here: Claude Code mode serves this same list to Claude as
+ * `mcp__dx__<name>`, so a tool mounted anywhere else would be missing there
+ * (wiki/claude-code-tool-parity.md).
+ */
+const dxTools = (
+  threadId: string,
+  initialData: DxAgentInitialData | undefined,
+  promptData: DxAgentPromptData | undefined,
+  withoutPlugins: ReadonlyArray<string> = [],
+): ToolDefinition[] => {
+  const tools: ToolDefinition[] = [];
+  if ((initialData?.skills ?? []).some((skill) => skill.resources.length > 0))
+    tools.push(withToolFailureMessage(createSkillResourceTool(threadId)));
+  // Built in, not a plugin: the owner's other Threads are always in reach.
+  for (const tool of createThreadTools(
+    threadId,
+    agentThreadToolsContext,
+    promptData?.plugins?.submissionId,
+  ))
+    tools.push(withToolFailureMessage(tool));
+  const pluginTools = promptData?.plugins;
+  if (pluginTools !== undefined)
+    for (const tool of firstPartyPluginTools(
+      { threadId, submissionId: pluginTools.submissionId },
+      pluginTools.tools.filter(
+        ({ pluginId }) => !withoutPlugins.includes(pluginId),
+      ),
+      agentPluginHostContext,
+      initialData?.mcpConnections ?? [],
+    ))
+      tools.push(withToolFailureMessage(tool));
+  for (const plugin of initialData?.plugins ?? [])
+    for (const tool of plugin.tools)
+      tools.push(
+        withToolFailureMessage(
+          createPluginTool(threadId, {
+            id: plugin.id as never,
+            version: plugin.version,
+            name: tool.name as never,
+            description: tool.description,
+          }),
+        ),
+      );
+  return tools;
+};
+
+/** Installed plugins' agent-start and agent-finish hooks. */
+const usePluginLifecycle = (
+  threadId: string,
+  plugins: DxAgentInitialData["plugins"],
+) => {
+  const hook =
+    (name: "agent-start" | "agent-finish") =>
+    async ({
+      harness,
+      log,
+    }: Parameters<Parameters<typeof useAgentStart>[0]>[0]) => {
+      for (const plugin of plugins.filter(({ lifecycle }) =>
+        lifecycle.includes(name),
+      )) {
+        try {
+          await invokePluginLive(
+            threadId,
+            plugin.id,
+            plugin.version,
+            { kind: "lifecycle", name },
+            null,
+            harness.sandbox,
+          );
+        } catch {
+          log.error(`Trusted plugin ${name} hook failed.`, {
+            pluginId: plugin.id,
+            version: plugin.version,
+          });
+        }
+      }
+    };
+  useAgentStart(hook("agent-start"));
+  if (plugins.some(({ lifecycle }) => lifecycle.includes("agent-finish")))
+    useAgentFinish(hook("agent-finish"));
+};
+
 export function DxAgent(props: AgentProps) {
   const initialData = useInitialData<DxAgentInitialData | undefined>();
   const promptData = usePromptData<DxAgentPromptData | undefined>();
@@ -83,90 +177,31 @@ export function DxAgent(props: AgentProps) {
   const plugins = initialData?.plugins ?? [];
   if (agentRuntimeComposition.capabilities === "workspace") {
     useSandbox(agentRuntimeComposition.execution);
-    // MCP servers are never mounted directly; the Code plugin exposes them as
-    // modules for code_exec and tool_search.
-    if (skills.some((skill) => skill.resources.length > 0)) {
-      useTool(withToolFailureMessage(createSkillResourceTool(props.id)));
-    }
-    // Built in, not a plugin: the owner's other Threads are always in reach.
-    for (const tool of createThreadTools(
-      props.id,
-      agentThreadToolsContext,
-      promptData?.plugins?.submissionId,
-    )) {
-      useTool(withToolFailureMessage(tool));
-    }
-    // Plugin tools come from this submission's resolved set, never from
-    // Thread creation data; providers and keys resolve again on every call.
-    const pluginTools = promptData?.plugins;
-    if (pluginTools !== undefined) {
-      for (const tool of firstPartyPluginTools(
-        { threadId: props.id, submissionId: pluginTools.submissionId },
-        pluginTools.tools,
-        agentPluginHostContext,
-        initialData?.mcpConnections ?? [],
-      )) {
-        useTool(withToolFailureMessage(tool));
-      }
-    }
-    for (const plugin of plugins) {
-      for (const tool of plugin.tools) {
-        useTool(
-          withToolFailureMessage(
-            createPluginTool(props.id, {
-              id: plugin.id as never,
-              version: plugin.version,
-              name: tool.name as never,
-              description: tool.description,
-            }),
-          ),
-        );
-      }
-    }
-    useAgentStart(async ({ harness, log }) => {
-      for (const plugin of plugins.filter(({ lifecycle }) =>
-        lifecycle.includes("agent-start"),
-      )) {
-        try {
-          await invokePluginLive(
-            props.id,
-            plugin.id,
-            plugin.version,
-            { kind: "lifecycle", name: "agent-start" },
-            null,
-            harness.sandbox,
-          );
-        } catch {
-          log.error("Trusted plugin agent-start hook failed.", {
-            pluginId: plugin.id,
-            version: plugin.version,
-          });
-        }
-      }
-    });
-    if (plugins.some(({ lifecycle }) => lifecycle.includes("agent-finish"))) {
-      useAgentFinish(async ({ harness, log }) => {
-        for (const plugin of plugins.filter(({ lifecycle }) =>
-          lifecycle.includes("agent-finish"),
-        )) {
-          try {
-            await invokePluginLive(
-              props.id,
-              plugin.id,
-              plugin.version,
-              { kind: "lifecycle", name: "agent-finish" },
-              null,
-              harness.sandbox,
-            );
-          } catch {
-            log.error("Trusted plugin agent-finish hook failed.", {
-              pluginId: plugin.id,
-              version: plugin.version,
-            });
-          }
-        }
+    usePluginLifecycle(props.id, plugins);
+    // Claude Code mode: the CLI in the workspace runs the loop and its own
+    // tools; Flue records each call through a mirror of the same name. dx's
+    // own tools reach Claude through the dx MCP server, except web search
+    // and page reading, which Claude Code has itself.
+    if (
+      promptData?.route !== undefined &&
+      isClaudeCodeModel(promptData.route.model)
+    ) {
+      for (const tool of claudeCodeMirrorTools(props.id)) useTool(tool);
+      for (const tool of claudeCodeDxTools(
+        props.id,
+        dxTools(props.id, initialData, promptData, ["search"]),
+      ))
+        useTool(tool);
+      useAgentStart(({ harness }) => {
+        rememberClaudeCodeSandbox(props.id, harness.sandbox);
       });
+      return composeClaudeCodePrompt(
+        initialData?.personalInstructions ?? "",
+        skills,
+      );
     }
+    for (const tool of dxTools(props.id, initialData, promptData))
+      useTool(tool);
   }
   if (agentRuntimeComposition.capabilities === "model-only")
     return localModelPreviewPrompt;

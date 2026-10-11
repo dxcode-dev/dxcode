@@ -1,4 +1,4 @@
-import { ModelId } from "@dx/domain";
+import { isClaudeCodeModel, ModelId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { catalogModelExists } from "./catalog.js";
 import { copilotModelForCanonical } from "./copilot-mapping.js";
@@ -52,6 +52,14 @@ export const parseCustomModels = (
       errors.push({
         line,
         message: "Expected a canonical model id like `openai/gpt-6-astra`.",
+      });
+      return;
+    }
+    if (isClaudeCodeModel(canonical.value)) {
+      errors.push({
+        line,
+        message:
+          "Claude Code models run only through a Claude Pro/Max connection.",
       });
       return;
     }

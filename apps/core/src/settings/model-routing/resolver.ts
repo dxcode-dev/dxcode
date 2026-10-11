@@ -1,4 +1,5 @@
 import {
+  isClaudeCodeModel,
   MODE_IDS,
   type ModeConfig,
   type ModeId,
@@ -9,6 +10,7 @@ import {
   type Profile,
   type ResolvedSubmissionModel,
   type StoredModelConnection,
+  type ThinkingLevel,
   type ThreadModelSelection,
   type UserId,
 } from "@dx/domain";
@@ -73,6 +75,8 @@ export const connectionUpstreamFor = (
 ): string | undefined => {
   switch (connection.kind) {
     case "custom": {
+      // Only a Claude Pro/Max connection runs Claude Code models.
+      if (isClaudeCodeModel(canonical)) return undefined;
       const declared = connection.models.find(
         ({ canonical: id }) => id === canonical,
       );
@@ -153,7 +157,19 @@ const notServedReason = (
   return declared ? "disabled" : "no-connection";
 };
 
-/** Raw-model threads carry no thinking slot; use a neutral default. */
+/**
+ * A Claude Code pin carries its effort; any other raw model runs at the
+ * neutral default, whatever an API client sent.
+ */
+export const pinThinking = (selection: {
+  readonly model: string;
+  readonly thinking?: ThinkingLevel | undefined;
+}): ThinkingLevel =>
+  isClaudeCodeModel(selection.model)
+    ? (selection.thinking ?? RAW_MODEL_THINKING)
+    : RAW_MODEL_THINKING;
+
+/** Raw-model pins without an effort use a neutral default. */
 export const RAW_MODEL_THINKING = "high" as const;
 
 export interface ResolveSubmissionInput {
@@ -178,7 +194,9 @@ export const resolveSubmissionModel = (
   const model =
     input.selection.kind === "mode" ? slot!.model : input.selection.model;
   const thinking =
-    input.selection.kind === "mode" ? slot!.thinking : RAW_MODEL_THINKING;
+    input.selection.kind === "mode"
+      ? slot!.thinking
+      : pinThinking(input.selection);
   const entitlements = input.copilotEntitlements ?? (() => undefined);
   const match = findServingConnection(input.connections, model, entitlements);
   if (match === undefined) {

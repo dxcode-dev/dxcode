@@ -57,6 +57,10 @@ export default defineConfig({
               slug: "deployment/github-copilot",
             },
             {
+              label: "Claude Pro/Max",
+              slug: "deployment/claude-code",
+            },
+            {
               label: "Upgrade and recovery",
               slug: "operations/upgrade-recovery",
             },

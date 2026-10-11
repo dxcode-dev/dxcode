@@ -6,6 +6,7 @@ import { defineConfig, type Plugin } from "vite";
 const alchemyLocal = process.env.DX_ALCHEMY_LOCAL === "1";
 const checkoutLocal = process.env.DX_RUNTIME_MODE === "local";
 const checkoutModelPreview = process.env.DX_LOCAL_MODEL_PREVIEW === "1";
+const checkoutClaudeCode = process.env.DX_LOCAL_CLAUDE_CODE === "1";
 const checkoutLocalVariableNames = [
   "DX_ENV",
   "DX_RUNTIME_MODE",
@@ -146,6 +147,7 @@ export default defineConfig(({ mode }) => ({
               }),
             ),
             DX_LOCAL_MODEL_PREVIEW: checkoutModelPreview ? "1" : "0",
+            DX_LOCAL_CLAUDE_CODE: checkoutClaudeCode ? "1" : "0",
           };
         }
         if (alchemyLocal || (checkoutLocal && !checkoutModelPreview)) {

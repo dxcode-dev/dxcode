@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { modelDisplayName } from "./model-display-name.js";
+import { modelDisplayName } from "../../shared/model-display-name.js";
 
 describe("model picker presentation", () => {
   it("keeps model versions and converts routing IDs to readable names", () => {

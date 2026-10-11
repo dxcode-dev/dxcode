@@ -79,6 +79,17 @@ export {
   type ProjectUpdate,
 } from "./projects/repository.js";
 export {
+  CLAUDE_CODE_DEFAULT_EFFORT,
+  CLAUDE_CODE_DEFAULT_MODEL,
+  CLAUDE_CODE_EFFORTS,
+  CLAUDE_CODE_MODELS,
+  CLAUDE_CODE_PROVIDER_ID,
+  type ClaudeCodeEffort,
+  type ClaudeCodeModel,
+  claudeCodeEffort,
+  isClaudeCodeModel,
+} from "./settings/claude-code.js";
+export {
   ConfigReference,
   configReferenceFor,
   decodeEnvironmentVariableAuditCursor,

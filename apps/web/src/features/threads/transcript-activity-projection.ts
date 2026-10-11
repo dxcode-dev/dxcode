@@ -1,5 +1,10 @@
 import type { FlueConversationPart } from "@flue/react";
 import { shellCommandOperations } from "./shell-command-operation.js";
+import {
+  isSubagentPart,
+  type SubagentView,
+  subagentView,
+} from "./subagent-view.js";
 import type { TranscriptRow } from "./transcript-view-model.js";
 
 export type WorkRow = Extract<
@@ -16,6 +21,7 @@ export type ToolCategory =
   | "edit"
   | "explore"
   | "generic"
+  | "subagent"
   | "thread";
 
 /** The built-in tools that act on the owner's other Threads. */
@@ -35,6 +41,12 @@ export type TranscriptActivity =
       readonly kind: "tools";
       /** Consecutive tool calls in chronological order, across categories. */
       readonly rows: ReadonlyArray<WorkRow>;
+    }
+  /** A subagent stands on its own row, never inside a tool group. */
+  | {
+      readonly kind: "subagent";
+      readonly row: WorkRow;
+      readonly view: SubagentView;
     };
 
 const record = (value: unknown): Record<string, unknown> | undefined =>
@@ -120,7 +132,9 @@ const workRow = (row: TranscriptRow): WorkRow | undefined =>
   row.kind === "active-work" || row.kind === "settled-work" ? row : undefined;
 
 export const categoryForPart = (part: ToolPart): ToolCategory =>
-  categoryForTool(part.toolName, part.input);
+  isSubagentPart(part)
+    ? "subagent"
+    : categoryForTool(part.toolName, part.input);
 
 /**
  * Collapse each uninterrupted run of tool calls into one activity so the
@@ -135,6 +149,12 @@ export const projectTranscriptActivities = (
     if (work?.part.type === "reasoning") continue;
     if (work === undefined || toolPart(work) === undefined) {
       activities.push({ kind: "row", row });
+      continue;
+    }
+    const part = toolPart(work);
+    const view = part === undefined ? undefined : subagentView(part);
+    if (view !== undefined) {
+      activities.push({ kind: "subagent", row: work, view });
       continue;
     }
     const previous = activities.at(-1);

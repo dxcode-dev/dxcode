@@ -5,6 +5,7 @@ import type {
   DictationProviderData,
   GraphData,
 } from "@dx/api";
+import { isClaudeCodeModel } from "@dx/domain";
 
 export interface RoutingSource {
   readonly id: string;
@@ -77,7 +78,12 @@ export function routingPresentation({
       },
     ],
   }));
-  const served = new Map(choices?.models.map((m) => [m.canonical, m]) ?? []);
+  // Claude Code models run as Claude Code mode, not as routed models.
+  const served = new Map(
+    choices?.models.flatMap((m) =>
+      isClaudeCodeModel(m.canonical) ? [] : [[m.canonical, m] as const],
+    ) ?? [],
+  );
   // Choices is the server's resolved personal catalog. Do not infer winners
   // from connection order or reproduce its routing algorithm in the browser.
   if (choices !== undefined) {

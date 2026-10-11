@@ -23,17 +23,20 @@ dx encrypts stored provider secrets and does not return their plaintext.
 | Cloudflare Workers AI | Optional deployment binding |
 | Personal and workspace BYOK | Provider API key stored by dx |
 | GitHub Copilot | Personal GitHub device authorization |
+| Claude Pro/Max (Claude Code mode) | Personal `claude setup-token` token |
 | GitHub source access | GitHub App installation |
 | Bitbucket source access | OAuth consumer authorization |
 | Sarvam dictation (Speech plugin) | Optional deployment API key; people and workspaces can add their own in Settings → Plugins |
 | Custom endpoint | HTTPS base URL, API format, model map, and credential |
 
 GitHub and Bitbucket connections grant repository access. GitHub Copilot grants
-model access through a subscription.
+model access through a subscription. Claude Pro/Max runs Claude Code threads on
+a person's own Claude plan.
 
 - [Configure GitHub source access](/docs/deployment/github-source/)
 - [Configure Bitbucket source access](/docs/deployment/bitbucket-source/)
 - [Configure GitHub Copilot](/docs/deployment/github-copilot/)
+- [Connect Claude Pro/Max](/docs/deployment/claude-code/)
 
 The installer asks which API-key providers to expose in the model picker. After
 deployment, open **Settings → Model routing**, add a personal or workspace

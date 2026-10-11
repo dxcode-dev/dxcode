@@ -1,4 +1,9 @@
 import {
+  CLAUDE_CODE_DEFAULT_EFFORT,
+  CLAUDE_CODE_DEFAULT_MODEL,
+  CLAUDE_CODE_MODELS,
+  CLAUDE_CODE_PROVIDER_ID,
+  isClaudeCodeModel,
   ModeId,
   PROJECTLESS_PROJECT_NAME,
   type Principal,
@@ -116,6 +121,49 @@ const threadState = (row: ThreadRow) => ({
 });
 
 const isMode = Schema.is(ModeId);
+
+/** The agent modes create_thread accepts, in the order they are listed. */
+const AGENT_MODES = [
+  ...ModeId.literals,
+  CLAUDE_CODE_PROVIDER_ID,
+  ...CLAUDE_CODE_MODELS.map(({ id }) => `${CLAUDE_CODE_PROVIDER_ID}/${id}`),
+];
+
+/**
+ * A child Thread's selection for an agent mode. A dx mode keeps the calling
+ * Thread's profile. Claude Code (`claude-code`, or `claude-code/<model>`)
+ * pins a Claude Code model on the owner's Claude Pro/Max plan: bare, the
+ * calling Thread's Claude Code model or the default; at the calling Thread's
+ * Claude Code effort or the default.
+ */
+const agentModeSelection = (
+  agentMode: string,
+  caller: ThreadModelSelection | undefined,
+): ThreadModelSelection => {
+  if (isMode(agentMode))
+    return {
+      kind: "mode",
+      profileId: caller?.kind === "mode" ? caller.profileId : "default",
+      mode: agentMode,
+    } as ThreadModelSelection;
+  const claudeCaller =
+    caller?.kind === "model" && isClaudeCodeModel(caller.model)
+      ? caller
+      : undefined;
+  const model =
+    agentMode === CLAUDE_CODE_PROVIDER_ID
+      ? (claudeCaller?.model ?? CLAUDE_CODE_DEFAULT_MODEL)
+      : agentMode;
+  if (!AGENT_MODES.includes(model) || isMode(model))
+    throw new Error(
+      `agent_mode must be one of ${ModeId.literals.join(", ")}. For Claude Code, use ${CLAUDE_CODE_PROVIDER_ID} or ${CLAUDE_CODE_PROVIDER_ID}/<model> from list_agent_modes.`,
+    );
+  return {
+    kind: "model",
+    model,
+    thinking: claudeCaller?.thinking ?? CLAUDE_CODE_DEFAULT_EFFORT,
+  } as ThreadModelSelection;
+};
 
 let ownerRouteModules:
   | Promise<
@@ -486,17 +534,17 @@ export const createThreadTools = (
           v.pipe(
             v.string(),
             v.description(
-              "How much model effort the child gets: low, medium, high, or ultra. Defaults to this Thread's mode.",
+              "How much model effort the child gets: low, medium, high, or ultra. Or claude-code, or claude-code/<model> from list_agent_modes, to run the child through Claude Code on the owner's Claude Pro/Max plan. Defaults to this Thread's mode.",
             ),
           ),
         ),
       }),
       run: async ({ data, toolCallId, signal }) =>
         withContext(async (context, owner) => {
-          if (data.agent_mode !== undefined && !isMode(data.agent_mode))
-            throw new Error(
-              `agent_mode must be one of ${ModeId.literals.join(", ")}.`,
-            );
+          const selection: ThreadModelSelection | undefined =
+            data.agent_mode === undefined
+              ? owner.selection
+              : agentModeSelection(data.agent_mode, owner.selection);
           const runnerProfileId =
             data.orb_provider === undefined && data.orb_size === undefined
               ? undefined
@@ -507,17 +555,6 @@ export const createThreadTools = (
                 );
           const projectId =
             data.project_id ?? (await defaultProjectId(context, owner));
-          const selection: ThreadModelSelection | undefined =
-            data.agent_mode === undefined
-              ? owner.selection
-              : ({
-                  kind: "mode",
-                  profileId:
-                    owner.selection?.kind === "mode"
-                      ? owner.selection.profileId
-                      : "default",
-                  mode: data.agent_mode as ModeId,
-                } as ThreadModelSelection);
           // A retried tool call reuses its Thread.
           const threadId = await idempotentThreadId(callSeed(toolCallId));
           signal?.throwIfAborted();
@@ -856,7 +893,7 @@ export const createThreadTools = (
     defineTool({
       name: "list_agent_modes",
       description: description([
-        "List the agent modes a child Thread can run in (low, medium, high, ultra) with the model and thinking level each uses for this Thread's owner, and whether a connection serves that model now. Also returns this Thread's mode, which a child gets by default.",
+        "List the agent modes a child Thread can run in (low, medium, high, ultra) with the model and thinking level each uses for this Thread's owner, and whether a connection serves that model now. When the owner has connected a Claude Pro/Max plan, it also lists claude-code/<model> modes, which run the child through Claude Code on that plan. Also returns this Thread's mode, which a child gets by default.",
         "Call it before create_thread when the user asks for a mode or a model. Pass the mode to create_thread as agent_mode.",
       ]),
       input: v.object({}),
@@ -870,39 +907,63 @@ export const createThreadTools = (
           );
           if (!response.ok)
             throw routeFailure("list_agent_modes", response.status, payload);
-          const modes =
-            (
-              payload?.data as
-                | {
-                    readonly modes: ReadonlyArray<{
-                      readonly mode: string;
-                      readonly config: {
-                        readonly model: string;
-                        readonly thinking: string;
-                      };
-                      readonly served: boolean;
-                      readonly servingConnectionName: string | null;
-                    }>;
-                  }
-                | undefined
-            )?.modes ?? [];
+          const choices = payload?.data as
+            | {
+                readonly modes: ReadonlyArray<{
+                  readonly mode: string;
+                  readonly config: {
+                    readonly model: string;
+                    readonly thinking: string;
+                  };
+                  readonly served: boolean;
+                  readonly servingConnectionName: string | null;
+                }>;
+                readonly models?: ReadonlyArray<{
+                  readonly canonical: string;
+                  readonly connectionName?: string | null;
+                }>;
+              }
+            | undefined;
+          const claudeCaller =
+            owner.selection?.kind === "model" &&
+            isClaudeCodeModel(owner.selection.model)
+              ? owner.selection
+              : undefined;
           return {
             output: {
               currentMode:
                 owner.selection?.kind === "mode"
                   ? owner.selection.mode
-                  : owner.selection?.kind === "model"
-                    ? `model:${owner.selection.model}`
-                    : "medium",
-              modes: modes.map((mode) => ({
-                mode: mode.mode,
-                model: mode.config.model,
-                thinking: mode.config.thinking,
-                served: mode.served,
-                ...(mode.servingConnectionName === null
-                  ? {}
-                  : { connection: mode.servingConnectionName }),
-              })),
+                  : claudeCaller !== undefined
+                    ? claudeCaller.model
+                    : owner.selection?.kind === "model"
+                      ? `model:${owner.selection.model}`
+                      : "medium",
+              modes: [
+                ...(choices?.modes ?? []).map((mode) => ({
+                  mode: mode.mode,
+                  model: mode.config.model,
+                  thinking: mode.config.thinking,
+                  served: mode.served,
+                  ...(mode.servingConnectionName === null
+                    ? {}
+                    : { connection: mode.servingConnectionName }),
+                })),
+                // Served only while the owner's plan is connected.
+                ...(choices?.models ?? [])
+                  .filter(({ canonical }) => isClaudeCodeModel(canonical))
+                  .map((model) => ({
+                    mode: model.canonical,
+                    model: model.canonical,
+                    thinking:
+                      claudeCaller?.thinking ?? CLAUDE_CODE_DEFAULT_EFFORT,
+                    served: true,
+                    agent: "Claude Code",
+                    ...(model.connectionName == null
+                      ? {}
+                      : { connection: model.connectionName }),
+                  })),
+              ],
             },
           };
         }),

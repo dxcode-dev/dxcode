@@ -351,6 +351,8 @@ export const ThreadModeSelection = Schema.Struct({
 export const ThreadModelPin = Schema.Struct({
   kind: Schema.Literal("model"),
   model: ModelId,
+  /** Effort for this pin; raw models without one use the neutral default. */
+  thinking: Schema.optional(ThinkingLevel),
 });
 
 export const ThreadModelSelection = Schema.Union([

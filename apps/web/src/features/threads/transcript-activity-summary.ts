@@ -72,6 +72,7 @@ type SummaryKind =
   | "guidance"
   | "search"
   | "check"
+  | "subagent"
   | "generic";
 
 const threadSummaryKinds: Readonly<Record<string, SummaryKind>> = {
@@ -102,6 +103,7 @@ export const threadsFor = (part: ToolPart): ReadonlyArray<string> => {
 };
 
 const summaryKind = (category: ToolCategory, part: ToolPart): SummaryKind => {
+  if (category === "subagent") return "subagent";
   const threadKind = threadSummaryKinds[part.toolName];
   if (threadKind !== undefined) return threadKind;
   if (part.toolName === "create_file") return "create";
@@ -155,6 +157,8 @@ const summaryPhrase = (kind: SummaryKind, count: number) => {
       return `searched ${plural(count, "time")}`;
     case "check":
       return `checked on ${plural(count, "command")}`;
+    case "subagent":
+      return `ran ${plural(count, "subagent")}`;
     case "generic":
       return `used ${plural(count, "tool")}`;
   }

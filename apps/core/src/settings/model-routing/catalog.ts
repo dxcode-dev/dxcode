@@ -1,3 +1,4 @@
+import { CLAUDE_CODE_MODELS, CLAUDE_CODE_PROVIDER_ID } from "@dx/domain";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import {
   getBuiltinModelDataGeneratedAt,
@@ -38,6 +39,27 @@ const currentWorkersAiModels: ReadonlyArray<Model<Api>> = [
 ];
 
 /**
+ * Claude Code models. The `claude-code` api is not a wire format: the Claude
+ * Code CLI in the Thread workspace owns these calls on the owner's plan.
+ */
+export const CLAUDE_CODE_API = "claude-code" as const;
+
+const claudeCodeModels: ReadonlyArray<Model<Api>> = CLAUDE_CODE_MODELS.map(
+  ({ id, name }) => ({
+    id,
+    name,
+    api: CLAUDE_CODE_API,
+    provider: CLAUDE_CODE_PROVIDER_ID,
+    baseUrl: "",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  }),
+);
+
+/**
  * The pi-ai catalog entry for a canonical `providerId/modelId` pair, or
  * undefined when the catalog does not know it. Capabilities (context window,
  * output limit, reasoning, vision) and cost come only from here — users
@@ -56,6 +78,7 @@ export const catalogModelExists = (canonical: string): boolean => {
 };
 
 export const catalogProviderModels = (providerId: string) => {
+  if (providerId === CLAUDE_CODE_PROVIDER_ID) return [...claudeCodeModels];
   const models = getBuiltinModels(
     piCatalogProviderId(providerId) as BuiltinProviderId,
   );
@@ -88,9 +111,14 @@ export const modelCatalogGeneratedAt = (() => {
  * credentials and forwards); `in-do` adapters refuse custom fetch and run
  * inside the coordinator DO (Google genai SDK, Bedrock AWS SDK);
  * `subscription` is the OAuth Copilot flow; `binding` is the deployment
- * Workers AI binding.
+ * Workers AI binding; `agent` runs the Claude Code CLI in the workspace.
  */
-export type ProviderTransport = "proxy" | "in-do" | "subscription" | "binding";
+export type ProviderTransport =
+  | "proxy"
+  | "in-do"
+  | "subscription"
+  | "binding"
+  | "agent";
 
 /** pi-ai `api` values routed through the coordinator header-swap proxy. */
 export const PROXY_APIS: ReadonlySet<string> = new Set([
@@ -150,6 +178,13 @@ export const SUPPORTED_PROVIDERS: ReadonlyArray<SupportedProvider> = [
     description: "Copilot subscription (device sign-in).",
     connectionKind: "subscription",
     transport: "subscription",
+  }),
+  provider({
+    id: CLAUDE_CODE_PROVIDER_ID,
+    name: "Claude Pro/Max",
+    description:
+      "Claude Code runs on your Claude subscription (claude setup-token).",
+    transport: "agent",
   }),
   provider({
     id: "openai",
@@ -296,7 +331,11 @@ export const pickerProviders = (
       .filter(Boolean),
   );
   return SUPPORTED_PROVIDERS.filter((provider) => {
-    if (provider.connectionKind === "subscription") return true;
+    if (
+      provider.connectionKind === "subscription" ||
+      provider.id === CLAUDE_CODE_PROVIDER_ID
+    )
+      return true;
     if (provider.connectionKind === "deployment") return workersAiAvailable;
     return enabled.has(provider.id);
   });

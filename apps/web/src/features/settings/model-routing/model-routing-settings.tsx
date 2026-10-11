@@ -1,13 +1,25 @@
 import "./model-routing.css";
 import type { CatalogProviderData, ConnectionData } from "@dx/api";
-import { workspaceRoleHasPermission } from "@dx/domain";
+import {
+  CLAUDE_CODE_PROVIDER_ID,
+  workspaceRoleHasPermission,
+} from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { type PointerEvent, useState } from "react";
+import {
+  type Dispatch,
+  type PointerEvent,
+  type SetStateAction,
+  useState,
+} from "react";
 import type { ModelRoutingTarget } from "../../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { settingsContextQueryOptions } from "../settings-context-queries.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
+import {
+  ClaudeCodeNotice,
+  ClaudeConnectDialog,
+} from "./claude-code-connect.js";
 import {
   AddConnectionMenu,
   ConnectionDialog,
@@ -36,7 +48,43 @@ type DialogState =
   | { readonly kind: "add-provider"; readonly provider: CatalogProviderData }
   | { readonly kind: "add-custom" }
   | { readonly kind: "edit"; readonly connection: ConnectionData }
-  | { readonly kind: "copilot" };
+  | { readonly kind: "copilot" }
+  | { readonly kind: "claude"; readonly connection?: ConnectionData };
+
+const isClaudeConnection = (connection: ConnectionData) =>
+  connection.providerId === CLAUDE_CODE_PROVIDER_ID;
+
+/** A Claude Pro/Max connection edits only its token, in its own dialog. */
+const editDialog = (connection: ConnectionData): DialogState =>
+  isClaudeConnection(connection)
+    ? { kind: "claude", connection }
+    : { kind: "edit", connection };
+
+type FormDialog = Extract<
+  DialogState,
+  { readonly kind: "add-provider" | "add-custom" | "edit" }
+>;
+
+const formDialogKey = (dialog: FormDialog) =>
+  dialog.kind === "add-provider"
+    ? dialog.provider.id
+    : dialog.kind === "edit"
+      ? dialog.connection.id
+      : "custom";
+
+const formDialogProvider = (
+  dialog: FormDialog,
+  catalog:
+    | { readonly providers: ReadonlyArray<CatalogProviderData> }
+    | undefined,
+) =>
+  dialog.kind === "add-provider"
+    ? dialog.provider
+    : dialog.kind === "edit" && dialog.connection.kind === "provider"
+      ? catalog?.providers.find(
+          (provider) => provider.id === dialog.connection.providerId,
+        )
+      : undefined;
 
 function ConnectionList({
   rows,
@@ -152,6 +200,113 @@ function ConnectionList({
   );
 }
 
+/**
+ * The routing connections in priority order, then Claude Pro/Max in its own
+ * card, with the row actions' progress and failures.
+ */
+function RoutingConnections({
+  target,
+  routingRows,
+  claudeRows,
+  canMutate,
+  expanded,
+  setExpanded,
+  onEdit,
+}: {
+  readonly target: ModelRoutingTarget;
+  readonly routingRows: ReadonlyArray<ConnectionData>;
+  readonly claudeRows: ReadonlyArray<ConnectionData>;
+  readonly canMutate: boolean;
+  readonly expanded: ReadonlyArray<string>;
+  readonly setExpanded: Dispatch<SetStateAction<ReadonlyArray<string>>>;
+  readonly onEdit: (connection: ConnectionData) => void;
+}) {
+  const queryClient = useQueryClient();
+  const options = connectionMutationOptions(queryClient, target);
+  const enabledMutation = useMutation(options.setEnabled);
+  const reorderMutation = useMutation(options.reorder);
+  const checkAccessMutation = useMutation(options.checkAccess);
+  const removeMutation = useMutation(options.remove);
+  const disconnectMutation = useMutation(options.disconnectSubscription);
+  const listProps = {
+    expanded,
+    onExpand: (id: string) =>
+      setExpanded((current) =>
+        current.includes(id)
+          ? current.filter((value) => value !== id)
+          : [...current, id],
+      ),
+    canMutate,
+    checkingConnectionId: checkAccessMutation.isPending
+      ? checkAccessMutation.variables
+      : undefined,
+    onToggle: (connectionId: string, enabled: boolean) =>
+      enabledMutation.mutate({ connectionId, enabled }),
+    onCheckAccess: (connectionId: string) =>
+      checkAccessMutation.mutate(connectionId),
+    onEdit,
+    onDelete: (connection: ConnectionData) => {
+      if (confirm(`Delete ${connection.name}?`)) {
+        removeMutation.mutate(connection.id);
+      }
+    },
+    onDisconnect: (connection: ConnectionData) => {
+      if (confirm(`Disconnect ${connection.name}?`)) {
+        disconnectMutation.mutate(connection.id);
+      }
+    },
+  };
+  return (
+    <>
+      {routingRows.length > 0 || claudeRows.length === 0 ? (
+        <ConnectionList
+          {...listProps}
+          rows={routingRows}
+          // Reorder lists every connection; Claude Pro/Max keeps its place.
+          onReorder={(ids) =>
+            reorderMutation.mutate([...ids, ...claudeRows.map(({ id }) => id)])
+          }
+        />
+      ) : null}
+      {claudeRows.length > 0 ? (
+        <ConnectionList
+          {...listProps}
+          rows={claudeRows}
+          onReorder={() => undefined}
+        />
+      ) : null}
+      {[
+        reorderMutation,
+        enabledMutation,
+        checkAccessMutation,
+        removeMutation,
+        disconnectMutation,
+      ].some((m) => m.isPending) ? (
+        <p className="routing-status" role="status">
+          Updating connection…
+        </p>
+      ) : null}
+      {[
+        reorderMutation,
+        enabledMutation,
+        checkAccessMutation,
+        removeMutation,
+        disconnectMutation,
+      ]
+        .filter((m) => m.isError)
+        .map((m) => (
+          <p
+            key={message(m.error)}
+            className="model-routing-field-error"
+            role="alert"
+          >
+            {message(m.error)}
+          </p>
+        ))}
+    </>
+  );
+}
+
 export const ModelRoutingSettings = ({
   workspace,
   workspaceSlug,
@@ -179,11 +334,6 @@ export const ModelRoutingSettings = ({
   const options = connectionMutationOptions(queryClient, target);
   const createMutation = useMutation(options.create);
   const updateMutation = useMutation(options.update);
-  const enabledMutation = useMutation(options.setEnabled);
-  const reorderMutation = useMutation(options.reorder);
-  const checkAccessMutation = useMutation(options.checkAccess);
-  const removeMutation = useMutation(options.remove);
-  const disconnectMutation = useMutation(options.disconnectSubscription);
 
   const [dialog, setDialog] = useState<DialogState>({ kind: "closed" });
   const navigate = useNavigate();
@@ -258,6 +408,11 @@ export const ModelRoutingSettings = ({
   const copilotRow = rows.find(
     (connection) => connection.kind === "subscription",
   );
+  const claudeRows = rows.filter(isClaudeConnection);
+  const claudeRow = claudeRows[0];
+  const routingRows = rows.filter(
+    (connection) => !isClaudeConnection(connection),
+  );
 
   return (
     <div className="model-routing-settings routing-parity">
@@ -266,90 +421,45 @@ export const ModelRoutingSettings = ({
         {canMutate ? (
           <AddConnectionMenu
             showCopilot={personal && copilotRow === undefined}
+            showClaude={personal}
             onPick={(pick) =>
-              setDialog({ kind: pick === "copilot" ? "copilot" : "add-custom" })
+              setDialog(
+                // One plan per owner: picking it again replaces the token.
+                pick === "claude" && claudeRow !== undefined
+                  ? editDialog(claudeRow)
+                  : { kind: pick === "custom" ? "add-custom" : pick },
+              )
             }
           />
         ) : null}
       </header>
+      {personal && claudeRow === undefined && connections.isSuccess ? (
+        <ClaudeCodeNotice onConnect={() => setDialog({ kind: "claude" })} />
+      ) : null}
       {connections.isError ? (
         <p className="model-routing-field-error">
           {message(connections.error)}
         </p>
       ) : null}
-      <ConnectionList
-        rows={rows}
-        expanded={expanded}
-        onExpand={(id) =>
-          setExpanded((current) =>
-            current.includes(id)
-              ? current.filter((value) => value !== id)
-              : [...current, id],
-          )
-        }
-        canMutate={canMutate}
-        checkingConnectionId={
-          checkAccessMutation.isPending
-            ? checkAccessMutation.variables
-            : undefined
-        }
-        onReorder={(ids) => reorderMutation.mutate(ids)}
-        onToggle={(connectionId, enabled) =>
-          enabledMutation.mutate({ connectionId, enabled })
-        }
-        onCheckAccess={(connectionId) =>
-          checkAccessMutation.mutate(connectionId)
-        }
-        onEdit={(connection) => setDialog({ kind: "edit", connection })}
-        onDelete={(connection) => {
-          if (confirm(`Delete ${connection.name}?`)) {
-            removeMutation.mutate(connection.id);
-          }
-        }}
-        onDisconnect={(connection) => {
-          if (confirm(`Disconnect ${connection.name}?`)) {
-            disconnectMutation.mutate(connection.id);
-          }
-        }}
-      />
       {connections.isPending ? (
         <p className="routing-empty" role="status">
           Loading connections…
         </p>
       ) : rows.length === 0 && !connections.isError ? (
         <p className="routing-empty">
-          No connections yet. Add GitHub Copilot or a Custom URL to serve your
-          models.
+          No connections yet. Add Claude Pro/Max, GitHub Copilot, or a Custom
+          URL to serve your models.
         </p>
       ) : null}
-      {[
-        reorderMutation,
-        enabledMutation,
-        checkAccessMutation,
-        removeMutation,
-        disconnectMutation,
-      ].some((m) => m.isPending) ? (
-        <p className="routing-status" role="status">
-          Updating connection…
-        </p>
-      ) : null}
-      {[
-        reorderMutation,
-        enabledMutation,
-        checkAccessMutation,
-        removeMutation,
-        disconnectMutation,
-      ]
-        .filter((m) => m.isError)
-        .map((m) => (
-          <p
-            key={message(m.error)}
-            className="model-routing-field-error"
-            role="alert"
-          >
-            {message(m.error)}
-          </p>
-        ))}
+      <RoutingConnections
+        target={target}
+        routingRows={routingRows}
+        claudeRows={claudeRows}
+        canMutate={canMutate}
+        expanded={expanded}
+        setExpanded={setExpanded}
+        onEdit={(connection) => setDialog(editDialog(connection))}
+      />
       {graph.isError ? (
         <p className="model-routing-field-error" role="alert">
           {message(graph.error)}
@@ -397,46 +507,28 @@ export const ModelRoutingSettings = ({
           {message(catalog.error ?? choices.error)}
         </p>
       ) : null}
-      {dialog.kind === "add-provider" ? (
+      {dialog.kind === "add-provider" ||
+      dialog.kind === "add-custom" ||
+      dialog.kind === "edit" ? (
         <ConnectionDialog
-          key={dialog.provider.id}
+          key={formDialogKey(dialog)}
           open
-          provider={dialog.provider}
-          busy={createMutation.isPending}
-          fieldErrors={fieldErrors}
-          submitError={submitError}
-          onClose={closeDialog}
-          onSubmit={submit}
-        />
-      ) : null}
-      {dialog.kind === "add-custom" ? (
-        <ConnectionDialog
-          key="custom"
-          open
-          busy={createMutation.isPending}
-          fieldErrors={fieldErrors}
-          submitError={submitError}
-          onClose={closeDialog}
-          onSubmit={submit}
-        />
-      ) : null}
-      {dialog.kind === "edit" ? (
-        <ConnectionDialog
-          key={dialog.connection.id}
-          open
-          provider={
-            dialog.connection.kind === "provider"
-              ? catalog.data?.providers.find(
-                  (provider) => provider.id === dialog.connection.providerId,
-                )
-              : undefined
+          provider={formDialogProvider(dialog, catalog.data)}
+          {...(dialog.kind === "edit" ? { existing: dialog.connection } : {})}
+          busy={
+            (dialog.kind === "edit" ? updateMutation : createMutation).isPending
           }
-          existing={dialog.connection}
-          busy={updateMutation.isPending}
           fieldErrors={fieldErrors}
           submitError={submitError}
           onClose={closeDialog}
           onSubmit={submit}
+        />
+      ) : null}
+      {dialog.kind === "claude" ? (
+        <ClaudeConnectDialog
+          target={target}
+          connection={dialog.connection}
+          onClose={closeDialog}
         />
       ) : null}
       {dialog.kind === "copilot" ? (

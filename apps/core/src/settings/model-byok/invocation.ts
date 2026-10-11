@@ -1,5 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
-import { type StoredModelConnection, ThreadModelSelection } from "@dx/domain";
+import {
+  CLAUDE_CODE_PROVIDER_ID,
+  type StoredModelConnection,
+  ThreadModelSelection,
+} from "@dx/domain";
 import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
 import { Effect, Schema } from "effect";
 import {
@@ -13,7 +17,17 @@ import { createDxCloudflareModelProvider } from "../../runtime/cloudflare-model-
 import { workersAiDeploymentEnabled } from "../../runtime/model-routing-dev-defaults.js";
 import type { ConfigEncryptionKeyring } from "../config-encryption.js";
 import { loadConfigEncryptionKeyring } from "../config-encryption.js";
-import { catalogProviderModels, IN_DO_APIS } from "../model-routing/catalog.js";
+import {
+  CLAUDE_CODE_API,
+  catalogProviderModels,
+  IN_DO_APIS,
+} from "../model-routing/catalog.js";
+import {
+  checkClaudeCodeToken,
+  claudeCodeTokenFetch,
+  claudeCodeTokenHeaders,
+  claudeCodeTokenHealth,
+} from "../model-routing/claude-code-token.js";
 import {
   loadConnectionForTarget,
   updateConnectionHealth,
@@ -148,6 +162,11 @@ const isCompleteEnvelope = (value: unknown): value is CompleteEnvelope => {
 };
 
 const COMPLETE_TIMEOUT_MS = 25_000;
+
+const CLAUDE_CODE_IDENTITY =
+  "You are Claude Code, Anthropic's official CLI for Claude.";
+/** Titles stay cheap whatever model the Thread runs. */
+const CLAUDE_CODE_TITLE_MODEL = "claude-haiku-5-5";
 
 const completionRequest = (envelope: CompleteEnvelope) =>
   JSON.stringify([
@@ -908,6 +927,8 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       throw new Error("CREDENTIAL_UNAVAILABLE");
     const pin: PinnedSubmission = { ...route, credential };
     const canonical = `${route.model.provider}/${route.model.id}`;
+    if (route.model.api === CLAUDE_CODE_API)
+      return this.#completeClaudeCode(pin, envelope, signal, started);
     // Low effort is supported across the catalog, unlike "off" (GLM 5.3 Flash).
     const reasoning = "low";
     const context = {
@@ -1001,6 +1022,101 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     );
   }
 
+  async #claudeCodeToken(pin: PinnedSubmission) {
+    if (pin.connection.providerId !== CLAUDE_CODE_PROVIDER_ID)
+      throw new Error("SUBMISSION_MODEL_MISMATCH");
+    const keyring = await this.#loadKeyring();
+    const token = await decryptConnectionCredential(
+      keyring,
+      pin.credential,
+    ).catch(() => undefined);
+    if (token === undefined) throw new Error("CREDENTIAL_UNAVAILABLE");
+    return token;
+  }
+
+  /**
+   * The Claude Code CLI in the Thread workspace needs the plan's OAuth token
+   * itself; it is returned only for the pinned Claude Code route.
+   */
+  async #handleClaudeCodeCredential(envelope: ModelEnvelope) {
+    const pin = await this.#resolve(
+      envelope.threadId,
+      envelope.submissionId,
+      envelope.canonical,
+    );
+    return jsonResponse({ token: await this.#claudeCodeToken(pin) }, 200);
+  }
+
+  /**
+   * A Claude Code route has no wire adapter, so a one-shot completion calls
+   * the Messages API with the plan's OAuth token. Anthropic serves OAuth
+   * tokens only to requests that identify as Claude Code.
+   */
+  async #completeClaudeCode(
+    pin: PinnedSubmission,
+    envelope: CompleteEnvelope,
+    signal: AbortSignal,
+    started: number,
+  ) {
+    const token = await this.#claudeCodeToken(pin);
+    const response = await claudeCodeTokenFetch
+      .current("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          ...claudeCodeTokenHeaders(token),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: CLAUDE_CODE_TITLE_MODEL,
+          max_tokens: envelope.maxTokens,
+          system: [
+            { type: "text", text: CLAUDE_CODE_IDENTITY },
+            { type: "text", text: envelope.systemPrompt },
+          ],
+          messages: [{ role: "user", content: envelope.message }],
+        }),
+        redirect: "manual",
+        signal,
+      })
+      .catch(() => undefined);
+    const body = (await response?.json().catch(() => undefined)) as
+      | {
+          readonly content?: ReadonlyArray<{ type: string; text?: string }>;
+          readonly usage?: {
+            readonly input_tokens?: number;
+            readonly output_tokens?: number;
+          };
+        }
+      | undefined;
+    if (response?.ok !== true || body?.content === undefined) {
+      settingsPersistenceLogger.warn("One-shot completion failed.", {
+        event: "model_one_shot_failed",
+        threadId: pin.threadId,
+        connectionId: pin.connection.id,
+        model: `${pin.model.provider}/${pin.model.id}`,
+        error: `HTTP_${response?.status ?? "NETWORK"}`,
+      });
+      return jsonResponse({ code: "COMPLETION_FAILED" }, 502);
+    }
+    settingsPersistenceLogger.info("One-shot completion finished.", {
+      event: "model_one_shot_completed",
+      threadId: pin.threadId,
+      connectionId: pin.connection.id,
+      model: `${pin.model.provider}/${CLAUDE_CODE_TITLE_MODEL}`,
+      inputTokens: body.usage?.input_tokens ?? 0,
+      outputTokens: body.usage?.output_tokens ?? 0,
+      durationMs: Math.round(performance.now() - started),
+    });
+    return jsonResponse(
+      {
+        text: body.content
+          .flatMap((block) => (block.type === "text" ? [block.text ?? ""] : []))
+          .join(""),
+      },
+      200,
+    );
+  }
+
   async #handleCheck(envelope: CheckEnvelope) {
     const connection = await loadConnectionForTarget(
       this.#db(),
@@ -1044,6 +1160,8 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       const apiKey = await connectionApiKey(this.#db(), keyring, connection);
       if (apiKey === undefined) {
         health = { state: "unhealthy", code: "CREDENTIAL_UNAVAILABLE" };
+      } else if (connection.providerId === CLAUDE_CODE_PROVIDER_ID) {
+        health = claudeCodeTokenHealth(await checkClaudeCodeToken(apiKey));
       } else if (connection.providerId === "amazon-bedrock") {
         health = await this.#probeBedrock(connection, apiKey);
       } else if (connection.providerId === "google") {
@@ -1227,6 +1345,10 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
           );
         case "/check":
           return await this.#handleCheck(envelope as CheckEnvelope);
+        case "/claude-code-credential":
+          return await this.#handleClaudeCodeCredential(
+            envelope as ModelEnvelope,
+          );
         case "/complete":
           return isCompleteEnvelope(envelope)
             ? await this.#handleComplete(envelope, request.signal)

@@ -34,8 +34,14 @@ COPY deploy/orb/dx-orb-hostname.sh /etc/profile.d/dx-orb-hostname.sh
 RUN chown root:root /etc/profile.d/dx-terminal.sh /etc/profile.d/dx-orb-hostname.sh /usr/local/bin/dx-orb-init && chmod 0644 /etc/profile.d/dx-terminal.sh /etc/profile.d/dx-orb-hostname.sh && chmod 0755 /usr/local/bin/dx-orb-init && ln -sfn /home/user/.local/state/dxd/bin/dxd /usr/local/bin/dxd
 
 # Every binary Core's daemon installer and source runtime invoke.
-RUN for bin in sudo curl sha256sum install cmp git git-lfs gh bash setpriv setsid readlink tini rg jq node java python3; do command -v "$bin" >/dev/null || { echo "missing required binary: $bin"; exit 1; }; done
+RUN for bin in sudo curl sha256sum install cmp git git-lfs gh bash setpriv setsid readlink tini rg jq node java python3 awk; do command -v "$bin" >/dev/null || { echo "missing required binary: $bin"; exit 1; }; done
 
 USER user
 WORKDIR /home/user
+
+# Claude Code for Claude Code mode, pinned and self-update disabled at run
+# time (DISABLE_AUTOUPDATER), installed for the workspace account in
+# ~/.local/bin. Core installs it on first use in an older workspace.
+RUN curl -fsSL https://claude.ai/install.sh | bash -s 2.1.296 && /home/user/.local/bin/claude --version
+
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/dx-orb-init"]
