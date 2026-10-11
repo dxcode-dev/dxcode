@@ -222,6 +222,32 @@ const migration = spawnSync(migrationCommand, migrationArgs, {
 });
 if (migration.status !== 0) process.exit(migration.status ?? 1);
 
+// Approve the local account so it can sign in when apps/core/.dev.vars
+// previews a waitlist (DX_SIGN_IN_ADMISSION=waitlist).
+const localEmail = process.env.DX_LOCAL_AUTH_EMAIL?.trim().toLowerCase();
+if (localEmail && /^[^\s@']+@[^\s@']+$/.test(localEmail)) {
+  const [approveCommand, approveArgs] = pnpm(
+    "--filter",
+    "@dx/core",
+    "exec",
+    "wrangler",
+    "d1",
+    "execute",
+    "DB",
+    "--local",
+    "--persist-to",
+    resolve(localStateRoot, "cloudflare"),
+    "--command",
+    `INSERT INTO auth_waitlist (email, status, created_at, updated_at, approved_at) VALUES ('${localEmail}', 'approved', datetime('now'), datetime('now'), datetime('now')) ON CONFLICT(email) DO UPDATE SET status = 'approved'`,
+  );
+  const approval = spawnSync(approveCommand, approveArgs, {
+    cwd: workspaceRoot,
+    env: { ...coreEnvironment, CI: "1" },
+    stdio: "ignore",
+  });
+  if (approval.status !== 0) process.exit(approval.status ?? 1);
+}
+
 const webEnvironment = localProcessEnvironment(process.env, {
   DX_ENV: "local",
   DX_DEV_REQUEST_ORIGIN: webOrigin,

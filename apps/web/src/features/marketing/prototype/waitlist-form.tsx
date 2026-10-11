@@ -1,8 +1,6 @@
 import { useContext, useId, useRef, useState } from "react";
-import {
-  accessRequestNotice,
-  useAccessRequest,
-} from "../../authentication/authentication-mutations.js";
+import { WaitlistDialog } from "../../../shared/ui/waitlist-dialog.js";
+import { useMagicLinkRequest } from "../../authentication/sign-in-mutations.js";
 import { ArrowIcon } from "./arrow-icon.js";
 import { LiveAccessContext } from "./live-access-context.js";
 
@@ -27,64 +25,79 @@ function LiveWaitlistForm({
   const generatedId = useId();
   const inputId = id ?? generatedId;
   const challenge = useRef<HTMLDivElement>(null);
-  const request = useAccessRequest();
+  const request = useMagicLinkRequest();
+  const sent =
+    request.data?.outcome === "sent" ? request.data.email : undefined;
   return (
-    <form
-      className={`waitlist-form${hero ? " hero-waitlist" : ""}`}
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (request.isPending || !challenge.current) return;
-        const email = String(
-          new FormData(event.currentTarget).get("email") ?? "",
-        ).trim();
-        request.mutate({
-          email,
-          container: challenge.current,
-          callbackURL: "/new",
-        });
-      }}
-    >
-      <label htmlFor={inputId}>
-        {hero
-          ? "We handle the infrastructure. Get early access."
-          : "Try dx with infrastructure handled for you."}
-      </label>
-      <div className="waitlist-fields">
-        <input
-          id={inputId}
-          name="email"
-          type="email"
-          autoComplete="email"
-          required
-          placeholder="you@example.com"
-          disabled={request.isPending}
-          aria-describedby={
-            request.isError || request.isSuccess
-              ? `${inputId}-status`
-              : undefined
-          }
-          onInput={() => request.reset()}
-        />
-        <button className="primary" type="submit" disabled={request.isPending}>
-          {request.isPending ? "Please wait…" : "Get early access"}{" "}
-          <span aria-hidden="true">
-            <ArrowIcon direction="up-right" />
-          </span>
-        </button>
-      </div>
-      <div ref={challenge} />
-      {(request.isError || request.isSuccess) && (
-        <p id={`${inputId}-status`} role={request.isError ? "alert" : "status"}>
-          {request.isError
-            ? request.error instanceof Error
-              ? request.error.message
-              : "Request failed. Please try again."
-            : request.isSuccess
-              ? accessRequestNotice
-              : ""}
-        </p>
-      )}
-    </form>
+    <>
+      <form
+        className={`waitlist-form${hero ? " hero-waitlist" : ""}`}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (request.isPending || !challenge.current) return;
+          const email = String(
+            new FormData(event.currentTarget).get("email") ?? "",
+          ).trim();
+          request.mutate({
+            email,
+            challenge: challenge.current,
+            callbackURL: "/new",
+            errorCallbackURL: "/signin?next=%2Fnew",
+          });
+        }}
+      >
+        <label htmlFor={inputId}>
+          {hero
+            ? "We handle the infrastructure. Get early access."
+            : "Try dx with infrastructure handled for you."}
+        </label>
+        <div className="waitlist-fields">
+          <input
+            id={inputId}
+            name="email"
+            type="email"
+            autoComplete="email"
+            required
+            placeholder="you@example.com"
+            disabled={request.isPending}
+            aria-describedby={
+              request.isError || sent !== undefined
+                ? `${inputId}-status`
+                : undefined
+            }
+            onInput={() => request.reset()}
+          />
+          <button
+            className="primary"
+            type="submit"
+            disabled={request.isPending}
+          >
+            {request.isPending ? "Please wait…" : "Get early access"}{" "}
+            <span aria-hidden="true">
+              <ArrowIcon direction="up-right" />
+            </span>
+          </button>
+        </div>
+        <div ref={challenge} />
+        {(request.isError || sent !== undefined) && (
+          <p
+            id={`${inputId}-status`}
+            role={request.isError ? "alert" : "status"}
+          >
+            {request.isError
+              ? request.error instanceof Error
+                ? request.error.message
+                : "Request failed. Please try again."
+              : `Check your email. We sent a sign-in link to ${sent}.`}
+          </p>
+        )}
+      </form>
+      <WaitlistDialog
+        open={request.data?.outcome === "waitlisted"}
+        email={request.data?.email}
+        onClose={() => request.reset()}
+      />
+    </>
   );
 }
 

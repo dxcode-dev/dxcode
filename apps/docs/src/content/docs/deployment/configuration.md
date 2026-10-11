@@ -1,6 +1,6 @@
 ---
 title: Deployment configuration
-description: Choose an origin, authenticate to Cloudflare, and review deployment behavior.
+description: Choose an origin, authenticate to Cloudflare, configure sign-in, and review deployment behavior.
 ---
 
 ## Origin
@@ -18,12 +18,12 @@ The wizard uses Alchemy browser authorization by default. Alchemy and Wrangler
 have separate OAuth clients and token stores, so a Wrangler login is not used.
 API tokens support headless machines.
 
-Hosted magic-link authentication requires API-token mode. Alchemy OAuth does
-not include the Turnstile and Email Sending capabilities needed by that path.
+Sending sign-in email (`authEmailFrom`) requires API-token mode. Alchemy OAuth
+does not include the Turnstile and Email Sending capabilities it needs.
 
 For API-token mode, use a narrowly scoped token for the target account and zone.
-The complete permission set for a custom-domain deployment with hosted
-magic-link authentication is:
+The complete permission set for a custom-domain deployment that sends sign-in
+email is:
 
 | Scope | Permission | Access |
 | --- | --- | --- |
@@ -39,17 +39,17 @@ magic-link authentication is:
 Scope the account permissions to the deployment account and the zone
 permissions to the custom-domain zone. Durable Objects, Worker secrets, Workers
 AI bindings, and Email Sending bindings are part of the Worker deployment and
-do not require additional token permissions. A deployment without hosted
-authentication does not need Turnstile or Email Sending. A deployment without
+do not require additional token permissions. A deployment without
+`authEmailFrom` does not need Turnstile or Email Sending. A deployment without
 a custom domain does not need Zone or Workers Routes.
 
-Cloudflare Email Sending is the outbound sender service. Email Routing handles
-inbound mail and is not required. Onboard the exact domain after `@` in the
-sender address and wait until Cloudflare marks it enabled. The sender may use
-the deployment zone or one of its subdomains. The installer asks for the full
-address instead of assuming a mailbox or domain.
-
 Do not use a global API key. Keep account IDs and tokens out of committed config.
+
+## Sign-in
+
+Sign-in methods (magic link, email and password, Google), who may create an
+account, allowed email domains, and the sign-in email sender are covered in
+[sign-in and authentication](/docs/deployment/authentication/).
 
 ## Orb providers
 
@@ -82,7 +82,15 @@ The wizard writes this nonsecret JSON file:
   "adminEmail": "me@example.com",
   "domain": "dx.example.com",
   "zone": "example.com",
-  "allowSignup": false,
+  "authEmailFrom": "sign-in@mail.example.com",
+  "signIn": {
+    "providers": ["magic-link", "google"],
+    "admission": "waitlist",
+    "allowedEmailDomains": ["example.com"],
+    "googleClientId": "1234567890-abc.apps.googleusercontent.com",
+    "termsUrl": "https://example.com/terms",
+    "privacyUrl": "https://example.com/privacy"
+  },
   "workersAi": true,
   "workerTraces": false,
   "githubCopilotClientId": "optional-oauth-app-client-id",
@@ -99,10 +107,17 @@ be omitted. `domain` and `zone` must appear together. Without them, the deploy
 uses the account's `workers.dev` subdomain. `dxdBinary` selects the checked local
 fallback instead of downloading the release asset.
 
-`allowSignup` defaults to `false`, leaving only the bootstrapped administrator
-able to sign in. Setting it to `true` exposes Better Auth's direct
-email/password account creation. It does not enable hosted magic links, a
-waitlist, or an approved-email gate.
+`authEmailFrom` must be an address inside `zone`. In `signIn`, `providers`
+lists each method once; `admission` defaults to `invite`; `googleClientId` is
+required with, and only with, `google`; `termsUrl` and `privacyUrl` must be
+https URLs.
+
+A file without `signIn` keeps its earlier behavior. With `authEmailFrom`, it
+means magic link with `waitlist` admission. Without it, it means email and
+password with `invite` admission. In such a file, `allowSignup: true`
+without `authEmailFrom` fails validation, because public password sign-up now
+verifies each address by email; see [upgrade and
+recovery](/docs/operations/upgrade-recovery/#sign-in-configuration).
 
 `workerTraces` turns on Cloudflare Workers traces for the dx Worker. Logs are
 always on. Traces record request URLs and Durable Object names, so they default
@@ -113,14 +128,24 @@ file, so later reruns do not ask again. Edit the value and rerun
 
 Wizard and noninteractive runs produce the same fail-closed plan. Same-version
 reruns reuse unchanged resources and do not require the administrator password.
-The matching secret environment inputs are
-`CLOUDFLARE_API_TOKEN`, `DX_ADMIN_PASSWORD`, `E2B_API_KEY`,
-`DX_INTEGRATION_GITHUB_APP`, `DX_INTEGRATION_BITBUCKET_OAUTH`, and
-`SARVAM_API_KEY`.
+Secrets are supplied through hidden prompts or these environment variables.
+Each one is needed on the first deploy that uses it; Alchemy retains it
+afterwards.
 
-The first self-host wizard run asks for a hidden administrator password and
-confirmation. An empty first response generates one. A successful deploy
-stores the URL, email, and password in ignored
+| Variable | Needed when |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | API-token mode, including any deployment with `authEmailFrom` |
+| `DX_ADMIN_PASSWORD` | `signIn.providers` includes `email-password` |
+| `DX_GOOGLE_CLIENT_SECRET` | `signIn.providers` includes `google` |
+| `E2B_API_KEY` | `orbProviders` includes `e2b` |
+| `DX_INTEGRATION_GITHUB_APP` | `integrations` includes `github` |
+| `DX_INTEGRATION_BITBUCKET_OAUTH` | `integrations` includes `bitbucket` |
+| `SARVAM_API_KEY` | `integrations` includes `sarvam` |
+| `EXA_API_KEY` | `integrations` includes `exa` |
+
+With password sign-in, the first wizard run asks for a hidden administrator
+password and confirmation. An empty first response generates one. A
+successful deploy stores the URL, email, and password in ignored
 `.dx/secrets/selfhost-admin.txt` with mode `0600`. Use
 `pnpm dx:deploy -- --reset-admin` to replace the password explicitly.
 

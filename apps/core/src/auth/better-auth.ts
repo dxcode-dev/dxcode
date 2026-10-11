@@ -1,102 +1,135 @@
 import { apiKey } from "@better-auth/api-key";
 import type { BetterAuthPlugin } from "@better-auth/core";
-import type { BrowserAuthenticationMode } from "@dx/api";
 import {
   normalizeWorkspaceDisplayName,
   normalizeWorkspaceShortName,
   type Principal,
   personalApiTokenScopes,
+  type SignInRejection,
   WorkspaceDisplayName,
   WorkspaceShortName,
 } from "@dx/domain";
 import { betterAuth, type InferAPI } from "better-auth";
-import { APIError } from "better-auth/api";
+import { APIError, getOAuthState } from "better-auth/api";
 import { organization } from "better-auth/plugins";
 import { Effect, Option, Schema } from "effect";
 import type { Bindings } from "../http/types.js";
-import { inviteSignupAdmission } from "../settings/members/service.js";
+import {
+  admitNewIdentity,
+  signInRejectionMessages,
+  userExists,
+} from "./admission.js";
 import { cloudflareMagicLink } from "./cloudflare-magic-link.js";
 import { emailPassword } from "./email-password.js";
+import { fillMissingName } from "./profile-name.js";
 import type { AuthenticationRequirements } from "./requirements.js";
+import {
+  loadSignInConfiguration,
+  type SignInConfiguration,
+} from "./sign-in-configuration.js";
 import { verifyTurnstile } from "./turnstile.js";
-import { waitlistAdmission } from "./waitlist.js";
 import { workspaceMembershipExists } from "./workspace-membership.js";
 
-export const browserAuthenticationMode = (
-  requirements: AuthenticationRequirements,
-  bindings: Pick<Bindings, "DX_AUTH_EMAIL_FROM"> = {},
-): BrowserAuthenticationMode =>
-  bindings.DX_AUTH_EMAIL_FROM?.trim()
-    ? "magic-link"
-    : requirements.environment === "local" ||
-        requirements.environment === "test" ||
-        requirements.environment === "selfhost"
-      ? "email-password"
-      : "magic-link";
+const turnstileVerifier =
+  (
+    configuration: SignInConfiguration,
+    requirements: AuthenticationRequirements,
+  ) =>
+  async (token: string | null) => {
+    const error = await Effect.runPromise(
+      verifyTurnstile({
+        token,
+        secret: configuration.turnstile?.secretKey,
+        hostname: new URL(requirements.authUrl).hostname,
+      }).pipe(
+        Effect.match({
+          onFailure: (failure) => failure.message,
+          onSuccess: () => undefined,
+        }),
+      ),
+    );
+    if (error) throw new APIError("FORBIDDEN", { message: error });
+  };
 
-export const reviewerPasswordEnabled = (
-  bindings: Pick<Bindings, "DX_DEPLOYMENT_TARGET">,
-  requirements: AuthenticationRequirements,
-) =>
-  (requirements.environment === "preview" &&
-    bindings.DX_DEPLOYMENT_TARGET === "branch") ||
-  (requirements.environment === "staging" &&
-    bindings.DX_DEPLOYMENT_TARGET === "staging");
+const rejectionError = (rejection: SignInRejection) =>
+  new APIError("FORBIDDEN", {
+    code: rejection,
+    message: signInRejectionMessages[rejection],
+  });
 
-export const selfhostSignupEnabled = (
-  bindings: Pick<Bindings, "DX_SIGNUP_ENABLED">,
-) => bindings.DX_SIGNUP_ENABLED === "true";
-
-const defaultAuthenticationPlugins = (
+/** Builds the Better Auth plugins for the configured sign-in providers. */
+export const signInPlugins = (
   bindings: Bindings,
   requirements: AuthenticationRequirements,
+  configuration: SignInConfiguration,
 ): readonly BetterAuthPlugin[] => {
-  if (browserAuthenticationMode(requirements, bindings) === "email-password") {
-    return [
-      requirements.environment === "selfhost"
-        ? emailPassword(
-            undefined,
-            selfhostSignupEnabled(bindings),
-            bindings.DB === undefined
-              ? undefined
-              : (callbackURL) =>
-                  inviteSignupAdmission(bindings.DB, callbackURL),
-          )
-        : emailPassword(undefined, true),
-    ];
-  }
   const db = bindings.DB;
   if (db === undefined) throw new Error("D1 database binding is required.");
-  if (bindings.EMAIL === undefined)
-    throw new Error("Cloudflare email binding is required for deployed auth.");
-  const from = bindings.DX_AUTH_EMAIL_FROM?.trim();
-  if (from === undefined || from.length === 0)
-    throw new Error("DX_AUTH_EMAIL_FROM is required for deployed auth.");
-  const magicLink = cloudflareMagicLink({
-    email: bindings.EMAIL,
-    from,
-    admitEmail: async (email, callbackURL) =>
-      (await inviteSignupAdmission(db, callbackURL)) ||
-      (await waitlistAdmission(db)(email)),
-    verifyRequest: async (token) => {
-      const error = await Effect.runPromise(
-        verifyTurnstile({
-          token,
-          secret: bindings.DX_TURNSTILE_SECRET_KEY,
-          hostname: new URL(requirements.authUrl).hostname,
-        }).pipe(
-          Effect.match({
-            onFailure: (failure) => failure.message,
-            onSuccess: () => undefined,
-          }),
-        ),
-      );
-      if (error) throw new APIError("FORBIDDEN", { message: error });
-    },
-  });
-  return reviewerPasswordEnabled(bindings, requirements)
-    ? [magicLink, emailPassword(undefined)]
-    : [magicLink];
+  const verifyRequest =
+    configuration.turnstile === undefined
+      ? undefined
+      : turnstileVerifier(configuration, requirements);
+  const plugins: BetterAuthPlugin[] = [];
+  if (configuration.providers.includes("magic-link")) {
+    const email = configuration.email;
+    if (email === undefined)
+      throw new Error("Magic link requires an email sender.");
+    plugins.push(
+      cloudflareMagicLink({
+        email: email.binding,
+        from: email.from,
+        verifyRequest,
+        admitEmail: async (address, callbackURL) => {
+          if (await userExists(db, address)) return "sent";
+          const rejection = await admitNewIdentity(db, configuration, {
+            email: address,
+            callbackURL,
+          });
+          if (rejection === "waitlisted") return "waitlisted";
+          if (rejection !== undefined) throw rejectionError(rejection);
+          return "sent";
+        },
+      }),
+    );
+  }
+  if (configuration.providers.includes("email-password"))
+    plugins.push(
+      emailPassword({
+        ...(configuration.emailVerification && configuration.email
+          ? {
+              verification: {
+                email: configuration.email.binding,
+                from: configuration.email.from,
+                signInUrl: `${requirements.authUrl}/signin`,
+              },
+            }
+          : {}),
+        ...(configuration.emailVerification && verifyRequest
+          ? { verifyRequest }
+          : {}),
+        admitSignUp: async (address, callbackURL) => {
+          if (await userExists(db, address)) return;
+          const rejection = await admitNewIdentity(db, configuration, {
+            email: address,
+            callbackURL,
+          });
+          if (rejection !== undefined) throw rejectionError(rejection);
+        },
+      }),
+    );
+  return plugins;
+};
+
+const requestCallbackURL = async (
+  method: string,
+  context: { readonly body?: unknown; readonly query?: unknown } | undefined,
+) => {
+  if (method === "oauth") return (await getOAuthState())?.callbackURL;
+  const fromRecord = (value: unknown) =>
+    typeof value === "object" && value !== null && "callbackURL" in value
+      ? value.callbackURL
+      : undefined;
+  return fromRecord(context?.body) ?? fromRecord(context?.query);
 };
 
 const localCookiePrefix = (requirements: AuthenticationRequirements) => {
@@ -267,13 +300,19 @@ const accountIssuer = (account: {
 export const createAuth = (
   bindings: Bindings,
   requirements: AuthenticationRequirements,
-  authenticationPlugin:
-    | BetterAuthPlugin
-    | readonly BetterAuthPlugin[] = defaultAuthenticationPlugins(
-    bindings,
-    requirements,
-  ),
+  authenticationPlugin?: BetterAuthPlugin | readonly BetterAuthPlugin[],
 ) => {
+  const configuration = Effect.runSync(
+    loadSignInConfiguration(bindings, requirements),
+  );
+  const db = bindings.DB;
+  if (db === undefined) throw new Error("D1 database binding is required.");
+  const providerPlugins =
+    authenticationPlugin === undefined
+      ? signInPlugins(bindings, requirements, configuration)
+      : Array.isArray(authenticationPlugin)
+        ? authenticationPlugin
+        : [authenticationPlugin];
   const auth = betterAuth({
     appName: "dx",
     database: bindings.DB,
@@ -281,6 +320,49 @@ export const createAuth = (
     baseURL: requirements.authUrl,
     basePath: "/api/auth",
     trustedOrigins: [...requirements.trustedOrigins],
+    ...(configuration.google === undefined
+      ? {}
+      : {
+          socialProviders: {
+            google: {
+              clientId: configuration.google.clientId,
+              clientSecret: configuration.google.clientSecret,
+              prompt: "select_account",
+            },
+          },
+        }),
+    user: {
+      // The one admission gate for every provider: magic link, password,
+      // Google, and Cloudflare Access all create users through it.
+      validateUserInfo: async ({ user, source }, context) => {
+        if (
+          source.action === "link-account" &&
+          source.method === "oauth" &&
+          typeof user.id === "string"
+        )
+          await fillMissingName(db, user.id, user.name);
+        if (source.action !== "create-user") return;
+        if (typeof user.email !== "string")
+          return { error: "email_unverified" };
+        if (source.method === "oauth" && user.emailVerified !== true) {
+          const rejection: SignInRejection = "email_unverified";
+          return {
+            error: rejection,
+            errorDescription: signInRejectionMessages[rejection],
+          };
+        }
+        const rejection = await admitNewIdentity(db, configuration, {
+          email: user.email,
+          callbackURL: await requestCallbackURL(source.method, context),
+        });
+        return rejection === undefined
+          ? undefined
+          : {
+              error: rejection,
+              errorDescription: signInRejectionMessages[rejection],
+            };
+      },
+    },
     account: {
       // Migration 0002 created the account table with better-auth 1.7.0's
       // required issuer and its unique (issuer, accountId) index. Since
@@ -291,6 +373,19 @@ export const createAuth = (
       },
     },
     databaseHooks: {
+      user: {
+        create: {
+          // Local and test environments send no email, so a password sign-up
+          // there counts as proven, as the deployment bootstrap's operator
+          // address does. Otherwise a later magic link would revoke it.
+          before: async (user, context) =>
+            (requirements.environment === "local" ||
+              requirements.environment === "test") &&
+            context?.path === "/sign-up/email"
+              ? { data: { ...user, emailVerified: true } }
+              : undefined,
+        },
+      },
       account: {
         create: {
           before: async (account) => ({
@@ -318,13 +413,7 @@ export const createAuth = (
       useSecureCookies: new URL(requirements.authUrl).protocol === "https:",
       database: { generateId: () => crypto.randomUUID() },
     },
-    plugins: [
-      ...(Array.isArray(authenticationPlugin)
-        ? authenticationPlugin
-        : [authenticationPlugin]),
-      workspaceOrganization(bindings),
-      dxApiKey(),
-    ],
+    plugins: [...providerPlugins, workspaceOrganization(bindings), dxApiKey()],
   });
   assertAuthApiKey(auth);
   return auth;

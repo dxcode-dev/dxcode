@@ -1,20 +1,28 @@
 import type { BetterAuthPlugin } from "@better-auth/core";
+import type { MagicLinkRequestOutcome } from "@dx/api";
 import { createAuthMiddleware } from "better-auth/api";
 import { magicLink } from "better-auth/plugins";
 import { encodeBase64Url } from "../encoding/base64.js";
+import { signInLinkEmail } from "./email-messages.js";
 
 export interface CloudflareMagicLinkOptions {
   readonly email: SendEmail;
   readonly from: string;
   readonly verifyRequest?: (token: string | null) => Promise<void>;
+  /**
+   * Decides before any email is sent. Returns `waitlisted` to skip the email,
+   * or throws an APIError to refuse the request.
+   */
   readonly admitEmail?: (
     email: string,
     callbackURL: unknown,
-  ) => Promise<boolean>;
+  ) => Promise<MagicLinkRequestOutcome>;
 }
 
 const magicLinkToken = () =>
   encodeBase64Url(crypto.getRandomValues(new Uint8Array(32)));
+
+const requestPath = "/sign-in/magic-link";
 
 export const cloudflareMagicLink = ({
   email,
@@ -30,18 +38,16 @@ export const cloudflareMagicLink = ({
       await email.send({
         from: { email: from, name: "dx" },
         to: recipient,
-        subject: "Sign in to dx",
-        text: `Sign in to dx:\n\n${url}\n\nThis link expires in 10 minutes and can be used once. If you did not request it, ignore this email.`,
+        ...signInLinkEmail(url),
       });
     },
   });
-  if (admitEmail === undefined && verifyRequest === undefined) return plugin;
   return {
     ...plugin,
     hooks: {
       before: [
         {
-          matcher: ({ path }) => path === "/sign-in/magic-link",
+          matcher: ({ path }) => path === requestPath,
           handler: createAuthMiddleware(async (context) => {
             await verifyRequest?.(
               context.headers?.get("x-turnstile-token") ?? null,
@@ -50,10 +56,34 @@ export const cloudflareMagicLink = ({
             if (
               typeof recipient === "string" &&
               admitEmail !== undefined &&
-              !(await admitEmail(recipient, context.body?.callbackURL))
+              (await admitEmail(recipient, context.body?.callbackURL)) ===
+                "waitlisted"
             ) {
-              return context.json({ status: true });
+              return context.json({
+                status: true,
+                outcome: "waitlisted" satisfies MagicLinkRequestOutcome,
+              });
             }
+          }),
+        },
+      ],
+      after: [
+        {
+          matcher: ({ path }) => path === requestPath,
+          handler: createAuthMiddleware(async (context) => {
+            const returned = context.context.returned;
+            if (
+              typeof returned === "object" &&
+              returned !== null &&
+              !(returned instanceof Response) &&
+              "status" in returned &&
+              returned.status === true &&
+              !("outcome" in returned)
+            )
+              return context.json({
+                status: true,
+                outcome: "sent" satisfies MagicLinkRequestOutcome,
+              });
           }),
         },
       ],

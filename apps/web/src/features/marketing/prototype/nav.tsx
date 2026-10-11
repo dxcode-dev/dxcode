@@ -16,7 +16,7 @@ export function Nav({
       <DxWordmark href="#" />
       <span className="nav-note">{tagline}</span>
       <nav>
-        {live && <a href="/new">Sign in</a>}
+        {live && <a href="/signin">Sign in</a>}
         <a className="nav-section-link" href="#work">
           How it works
         </a>

@@ -3,6 +3,7 @@ import migrationManifest from "../../migration-manifest.json" with {
   type: "json",
 };
 import { loadAuthenticationRequirements } from "../auth/requirements.js";
+import { loadSignInConfiguration } from "../auth/sign-in-configuration.js";
 import { loadE2BRequirements } from "../execution/e2b/requirements.js";
 import { validateLocalRuntimeConfiguration } from "../execution/local/adapter.js";
 import { loadRunnerProfileCatalog } from "../execution/runner-profiles/catalog.js";
@@ -358,6 +359,11 @@ export const loadReadinessRequirements = Effect.fn("loadReadinessRequirements")(
       return yield* new ReadinessError({
         category: "authentication_configuration",
       });
+    yield* loadSignInConfiguration(bindings, authentication).pipe(
+      Effect.mapError(
+        () => new ReadinessError({ category: "authentication_configuration" }),
+      ),
+    );
     let config: ReadinessRequirements;
     if (runtime.mode === "local") {
       if (dxEnv !== "local")

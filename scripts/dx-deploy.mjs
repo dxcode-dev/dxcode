@@ -13,7 +13,10 @@ import { basename, dirname, join, resolve } from "node:path";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { assertDockerAvailable } from "../deploy/orb/containers.mjs";
-import { collectAdminPassword } from "../deploy/selfhost/admin-credentials.mjs";
+import {
+  adminCredentialPath,
+  collectAdminPassword,
+} from "../deploy/selfhost/admin-credentials.mjs";
 import {
   loadAlchemyCloudflareAuth,
   preflightCloudflareContainers,
@@ -21,6 +24,7 @@ import {
 } from "../deploy/selfhost/cloudflare-auth.mjs";
 import {
   FIRST_PARTY_PLUGIN_IDS,
+  SIGN_IN_ADMISSIONS,
   validateSelfhostConfig,
 } from "../deploy/selfhost/config.mjs";
 import { createHiddenPrompt } from "./hidden-prompt.mjs";
@@ -108,6 +112,98 @@ export const collectOrbProviders = async ({
   throw new Error("A deployment must install at least one Orb provider.");
 };
 
+export const EMAIL_SENDING_PROMPT =
+  "Send sign-in email from your domain (magic links and verified sign-ups; needs a Cloudflare API token and Email Sending on your zone)";
+export const MAGIC_LINK_PROMPT = "Offer magic-link sign-in";
+export const SIGN_IN_UPGRADE_PROMPT =
+  "Review sign-in methods now (Google, allowed email domains, Terms and Privacy links)";
+export const PASSWORD_PROMPT = "Offer email and password sign-in";
+export const GOOGLE_PROMPT =
+  "Offer Google sign-in (needs a Google OAuth client)";
+
+/**
+ * Sign-in providers are Better Auth methods chosen per deployment. The page
+ * at /signin shows exactly these. Hosted dx always runs magic link behind the
+ * waitlist and may add Google.
+ */
+export const collectSignIn = async ({
+  answer,
+  yes,
+  secret,
+  environment,
+  emailSending,
+  hosted = false,
+  origin,
+  log,
+}) => {
+  let providers = [];
+  for (let attempt = 0; attempt < 3 && providers.length === 0; attempt += 1) {
+    providers = [];
+    if (hosted || (emailSending && (await yes(MAGIC_LINK_PROMPT, true))))
+      providers.push("magic-link");
+    if (!hosted && (await yes(PASSWORD_PROMPT, !emailSending)))
+      providers.push("email-password");
+    if (await yes(GOOGLE_PROMPT, false)) providers.push("google");
+    if (providers.length === 0) log("Offer at least one sign-in method.\n");
+  }
+  if (providers.length === 0)
+    throw new Error("A deployment must offer at least one sign-in method.");
+  let googleClientId;
+  if (providers.includes("google")) {
+    log(
+      `Create a Google OAuth web client with the redirect URI ${origin ?? "https://<your-domain>"}/api/auth/callback/google\n`,
+    );
+    googleClientId = await answer("Google OAuth client ID");
+    environment.DX_GOOGLE_CLIENT_SECRET = await secret(
+      "Google OAuth client secret",
+    );
+  }
+  let admission = "waitlist";
+  if (!hosted) {
+    const publicSignUpAllowed =
+      emailSending || !providers.includes("email-password");
+    for (let attempt = 0; ; attempt += 1) {
+      admission = await answer(
+        `Who can create an account: ${SIGN_IN_ADMISSIONS.join(", ")}`,
+        "invite",
+      );
+      const valid =
+        SIGN_IN_ADMISSIONS.includes(admission) &&
+        (admission === "invite" || publicSignUpAllowed);
+      if (valid) break;
+      if (attempt === 2)
+        throw new Error("Choose open, waitlist, or invite for sign-up.");
+      log(
+        SIGN_IN_ADMISSIONS.includes(admission)
+          ? "Public password sign-up verifies each email; enable sign-in email or choose invite.\n"
+          : "Choose open, waitlist, or invite.\n",
+      );
+    }
+  }
+  const domains = (
+    (await answer(
+      "Allowed email domains, comma-separated (blank allows any domain)",
+      "",
+    )) ?? ""
+  )
+    .split(",")
+    .map((domain) => domain.trim().toLowerCase())
+    .filter(Boolean);
+  const legal = (await yes("Link Terms of Service and Privacy Policy pages"))
+    ? {
+        termsUrl: await answer("Terms of Service URL"),
+        privacyUrl: await answer("Privacy Policy URL"),
+      }
+    : {};
+  return {
+    providers,
+    admission,
+    allowedEmailDomains: [...new Set(domains)],
+    ...(googleClientId === undefined ? {} : { googleClientId }),
+    ...legal,
+  };
+};
+
 export const collectDeploymentConfig = async ({
   answer,
   yes,
@@ -131,9 +227,19 @@ export const collectDeploymentConfig = async ({
   const authEmailFrom =
     providedAuthEmailFrom ??
     (hostedAuthentication
-      ? await answer("Magic-link sender email", defaults.authEmailFrom)
+      ? await answer("Sign-in sender email", defaults.authEmailFrom)
       : undefined);
-  if (!hostedAuthentication)
+  const signIn = await collectSignIn({
+    answer,
+    yes,
+    secret,
+    environment,
+    emailSending: authEmailFrom !== undefined,
+    hosted: defaults.hostedAuthentication === true,
+    origin: domain === undefined ? undefined : `https://${domain}`,
+    log: (message) => stdout.write(message),
+  });
+  if (signIn.providers.includes("email-password"))
     environment.DX_ADMIN_PASSWORD = await collectAdminPassword({
       readSecret: secret,
     });
@@ -184,9 +290,7 @@ export const collectDeploymentConfig = async ({
     workersAi,
     workerTraces,
     modelDeploymentProviders,
-    allowSignup: hostedAuthentication
-      ? false
-      : await yes("Allow public account creation"),
+    signIn,
   });
 };
 
@@ -210,9 +314,13 @@ export const runDxDeploy = async ({
   argv = process.argv.slice(2),
 } = {}) => {
   const flags = new Set(argv.filter((value) => value !== "--"));
-  const existing = existsSync(configPath)
-    ? validateSelfhostConfig(JSON.parse(readFileSync(configPath, "utf8")))
+  const existingInput = existsSync(configPath)
+    ? JSON.parse(readFileSync(configPath, "utf8"))
     : undefined;
+  const existing =
+    existingInput === undefined
+      ? undefined
+      : validateSelfhostConfig(existingInput);
   if (existing !== undefined) assertInstallerDefaults(existing, defaults);
   let rl = createInterface({ input: stdin, output: stdout });
   const answer = async (label, fallback) => {
@@ -235,7 +343,12 @@ export const runDxDeploy = async ({
     },
   });
   const environment = { ...process.env };
-  const hostedAuthentication = defaults.hostedAuthentication === true;
+  // A sender needs Email Sending and Turnstile, which Alchemy's OAuth login
+  // cannot manage, so decide before signing in to Cloudflare.
+  const hostedAuthentication =
+    defaults.hostedAuthentication === true ||
+    existing?.authEmailFrom !== undefined ||
+    (existing === undefined && (await yes(EMAIL_SENDING_PROMPT, false)));
   if (existing?.cloudflareAccountId && !environment.CLOUDFLARE_ACCOUNT_ID)
     environment.CLOUDFLARE_ACCOUNT_ID = existing.cloudflareAccountId;
   if (hostedAuthentication && !environment.CLOUDFLARE_API_TOKEN) {
@@ -267,7 +380,7 @@ export const runDxDeploy = async ({
   const authEmailFrom =
     existing?.authEmailFrom ??
     (hostedAuthentication
-      ? await answer("Magic-link sender email")
+      ? await answer("Sign-in sender email (an address on your zone)")
       : undefined);
   await preflightCloudflareDeployment({
     auth: cloudflareAuth,
@@ -301,6 +414,13 @@ export const runDxDeploy = async ({
       if (await yes(`Rotate ${integration}`))
         environment[variable] = await secret(`New ${integration} secret`);
     }
+    if (
+      config.signIn.providers.includes("google") &&
+      (await yes("Rotate the Google OAuth client secret"))
+    )
+      environment.DX_GOOGLE_CLIENT_SECRET = await secret(
+        "New Google OAuth client secret",
+      );
   }
   // Deployments created before a plugin existed were never asked about it.
   if (
@@ -319,6 +439,28 @@ export const runDxDeploy = async ({
         offered: config.offeredPlugins ?? [],
       })),
     });
+  // `--sign-in` revisits the sign-in step; a deployment created before
+  // sign-in settings existed is offered it once.
+  if (
+    existing !== undefined &&
+    (flags.has("--sign-in") ||
+      (existingInput.signIn === undefined &&
+        (await yes(SIGN_IN_UPGRADE_PROMPT, false))))
+  )
+    config = validateSelfhostConfig({
+      ...config,
+      signIn: await collectSignIn({
+        answer,
+        yes,
+        secret,
+        environment,
+        emailSending: config.authEmailFrom !== undefined,
+        hosted: defaults.hostedAuthentication === true,
+        origin:
+          config.domain === undefined ? undefined : `https://${config.domain}`,
+        log: (message) => stdout.write(message),
+      }),
+    });
   // Deployments created before tracing was configurable were never asked.
   if (config.workerTraces === undefined)
     config = validateSelfhostConfig({
@@ -330,10 +472,28 @@ export const runDxDeploy = async ({
     assertDockerAvailable(environment);
     stdout.write("Cloudflare Containers prerequisites passed.\n");
   }
+  // Turning password sign-in on for an existing deployment needs a first
+  // administrator password. A machine that already holds the credential file
+  // has one; elsewhere the operator decides, since the deployment may hold
+  // one from an earlier run.
+  if (
+    existing !== undefined &&
+    !flags.has("--reset-admin") &&
+    config.signIn.providers.includes("email-password") &&
+    !environment.DX_ADMIN_PASSWORD &&
+    !existsSync(adminCredentialPath(process.cwd())) &&
+    (await yes(
+      "Password sign-in is on. Set the administrator password now (needed the first time password sign-in is enabled)",
+      false,
+    ))
+  )
+    environment.DX_ADMIN_PASSWORD = await collectAdminPassword({
+      readSecret: secret,
+    });
   if (flags.has("--reset-admin")) {
-    if (config.authEmailFrom !== undefined)
+    if (!config.signIn.providers.includes("email-password"))
       throw new Error(
-        "Hosted magic-link authentication has no administrator password to reset.",
+        "This deployment has no password sign-in, so there is no administrator password to reset.",
       );
     environment.DX_ADMIN_PASSWORD = await collectAdminPassword({
       readSecret: secret,
@@ -356,6 +516,7 @@ export const runDxDeploy = async ({
           "DX_INTEGRATION_BITBUCKET_OAUTH",
           "SARVAM_API_KEY",
           "EXA_API_KEY",
+          "DX_GOOGLE_CLIENT_SECRET",
         ]).has(name),
       )
       .sort()

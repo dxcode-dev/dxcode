@@ -88,12 +88,6 @@ export const workspaceInviteQueryOptions = (token: string) =>
     retry: false,
   });
 
-const INVITE_PATH = /^\/join\/([A-Za-z0-9_-]{43})$/;
-
-/** The invite token in a `/join/<token>` path, if any. */
-export const inviteTokenFromPath = (pathname: string) =>
-  INVITE_PATH.exec(pathname)?.[1];
-
 export const acceptInviteMutationOptions = (token: string) => ({
   mutationFn: () => acceptWorkspaceInvite(token),
 });

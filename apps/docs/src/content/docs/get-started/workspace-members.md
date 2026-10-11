@@ -18,9 +18,9 @@ expiry, and anyone who has it can join until it expires or an admin revokes
 it. Admins can copy a link again at any time.
 
 The person opens the link, signs in or creates an account, and chooses
-**Join workspace**. A valid invite link lets them sign in even when sign-up is
-otherwise closed. Someone who already belongs to another workspace must leave
-it first.
+**Join workspace**. A valid invite link lets them create an account even when
+the deployment is invite-only or uses a waitlist or an email-domain list.
+Someone who already belongs to another workspace must leave it first.
 
 ## Roles
 

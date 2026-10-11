@@ -97,6 +97,18 @@
       "optional": true
     },
     {
+      "name": "DX_GOOGLE_CLIENT_ID",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_GOOGLE_CLIENT_SECRET",
+      "type": "secret",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
       "name": "DX_INSTALLED_PLUGINS",
       "type": "text",
       "provenance": "alchemy",
@@ -142,6 +154,12 @@
       "optional": true
     },
     {
+      "name": "DX_PRIVACY_URL",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
       "name": "DX_RUNNER_PROFILE_CATALOG",
       "type": "text",
       "provenance": "authored-wrangler"
@@ -153,6 +171,24 @@
     },
     {
       "name": "DX_SIGNUP_ENABLED",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_SIGN_IN_ADMISSION",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_SIGN_IN_ALLOWED_EMAIL_DOMAINS",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_SIGN_IN_PROVIDERS",
       "type": "text",
       "provenance": "alchemy",
       "optional": true
@@ -171,6 +207,12 @@
       "name": "DX_STORAGE",
       "type": "r2",
       "provenance": "authored-wrangler"
+    },
+    {
+      "name": "DX_TERMS_URL",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
     },
     {
       "name": "DX_TURNSTILE_SECRET_KEY",

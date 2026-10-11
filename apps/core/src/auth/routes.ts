@@ -1,38 +1,34 @@
-import { BrowserAuthenticationModeResponseSchema } from "@dx/api";
+import { SignInOptionsResponseSchema } from "@dx/api";
 import { Effect, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import type { AppEnv } from "../http/types.js";
-import {
-  browserAuthenticationMode,
-  createAuth,
-  reviewerPasswordEnabled,
-  selfhostSignupEnabled,
-} from "./better-auth.js";
+import { createAuth } from "./better-auth.js";
 import { loadAuthenticationRequirements } from "./requirements.js";
+import { loadSignInConfiguration } from "./sign-in-configuration.js";
 
 export const authRoutes = new Hono<AppEnv>();
 
-authRoutes.get("/mode", async (context) => {
-  const requirements = await Effect.runPromise(
-    loadAuthenticationRequirements(context.env),
+authRoutes.get("/sign-in-options", async (context) => {
+  const value = await Effect.runPromise(
+    loadAuthenticationRequirements(context.env).pipe(
+      Effect.flatMap((requirements) =>
+        loadSignInConfiguration(context.env, requirements),
+      ),
+    ),
   );
-  const mode = browserAuthenticationMode(requirements, context.env);
   return context.json(
-    Schema.encodeUnknownSync(BrowserAuthenticationModeResponseSchema)({
-      mode,
-      ...(mode === "email-password"
-        ? {
-            signupEnabled:
-              requirements.environment !== "selfhost" ||
-              selfhostSignupEnabled(context.env),
-          }
-        : {}),
-      ...(reviewerPasswordEnabled(context.env, requirements)
-        ? { emailPasswordEnabled: true as const }
-        : {}),
-      ...(mode === "magic-link" && context.env.DX_TURNSTILE_SITE_KEY
-        ? { turnstileSiteKey: context.env.DX_TURNSTILE_SITE_KEY }
-        : {}),
+    Schema.encodeUnknownSync(SignInOptionsResponseSchema)({
+      providers: value.providers,
+      admission: value.admission,
+      allowedEmailDomains: value.allowedEmailDomains,
+      emailVerification: value.emailVerification,
+      ...(value.turnstile?.siteKey === undefined
+        ? {}
+        : { turnstileSiteKey: value.turnstile.siteKey }),
+      ...(value.termsUrl === undefined ? {} : { termsUrl: value.termsUrl }),
+      ...(value.privacyUrl === undefined
+        ? {}
+        : { privacyUrl: value.privacyUrl }),
     }),
   );
 });
@@ -58,7 +54,11 @@ const authRequestHandler = async (context: Context<AppEnv>) => {
     path === "/api/auth/list-sessions" ||
     path === "/api/auth/revoke-session" ||
     path === "/api/auth/revoke-sessions" ||
-    path === "/api/auth/revoke-other-sessions"
+    path === "/api/auth/revoke-other-sessions" ||
+    // Verification emails go out on sign-up and on a password sign-in, both
+    // behind their own checks; an open resend endpoint would let anyone mail
+    // any unverified address.
+    path === "/api/auth/send-verification-email"
   ) {
     return context.body(null, 404);
   }

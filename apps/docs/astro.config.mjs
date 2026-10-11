@@ -39,6 +39,10 @@ export default defineConfig({
               label: "Deployment configuration",
               slug: "deployment/configuration",
             },
+            {
+              label: "Sign-in and authentication",
+              slug: "deployment/authentication",
+            },
             { label: "E2B profiles", slug: "deployment/e2b-profiles" },
             {
               label: "Models and providers",

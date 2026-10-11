@@ -10,6 +10,14 @@ export interface Bindings {
   readonly DX_AUTH_EMAIL_FROM?: string;
   readonly DX_TURNSTILE_SITE_KEY?: string;
   readonly DX_TURNSTILE_SECRET_KEY?: string;
+  /** Comma-separated sign-in providers; see auth/sign-in-configuration.ts. */
+  readonly DX_SIGN_IN_PROVIDERS?: string;
+  readonly DX_SIGN_IN_ADMISSION?: string;
+  readonly DX_SIGN_IN_ALLOWED_EMAIL_DOMAINS?: string;
+  readonly DX_GOOGLE_CLIENT_ID?: string;
+  readonly DX_GOOGLE_CLIENT_SECRET?: string;
+  readonly DX_TERMS_URL?: string;
+  readonly DX_PRIVACY_URL?: string;
   readonly DX_E2B_TEMPLATE?: string;
   readonly DX_E2B_TIMEOUT_MS?: string;
   readonly DX_WORKSPACE_INACTIVITY_MS?: string;

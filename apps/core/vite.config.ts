@@ -19,6 +19,17 @@ const checkoutLocalVariableNames = [
   "DX_LOCAL_RUNTIME_TOKEN",
   "DX_INSTALLED_PLUGINS",
 ] as const;
+// Optional: preview other sign-in providers locally (see development-workflow.md).
+const checkoutLocalSignInVariableNames = [
+  "DX_SIGN_IN_PROVIDERS",
+  "DX_SIGN_IN_ADMISSION",
+  "DX_SIGN_IN_ALLOWED_EMAIL_DOMAINS",
+  "DX_AUTH_EMAIL_FROM",
+  "DX_GOOGLE_CLIENT_ID",
+  "DX_GOOGLE_CLIENT_SECRET",
+  "DX_TERMS_URL",
+  "DX_PRIVACY_URL",
+] as const;
 
 const localCallbackHost = (() => {
   const value = process.env.DX_DXD_PUBLIC_URL;
@@ -146,9 +157,25 @@ export default defineConfig(({ mode }) => ({
                 return [name, value];
               }),
             ),
+            ...Object.fromEntries(
+              checkoutLocalSignInVariableNames.flatMap((name) => {
+                const value = process.env[name]?.trim();
+                return value ? [[name, value]] : [];
+              }),
+            ),
             DX_LOCAL_MODEL_PREVIEW: checkoutModelPreview ? "1" : "0",
             DX_LOCAL_CLAUDE_CODE: checkoutClaudeCode ? "1" : "0",
           };
+        }
+        if (checkoutLocal) {
+          // Miniflare simulates Email Sending locally and writes each message
+          // to disk, so magic-link and verification emails cost nothing.
+          config.send_email = [
+            ...(config.send_email ?? []).filter(
+              (binding) => binding.name !== "EMAIL",
+            ),
+            { name: "EMAIL" },
+          ];
         }
         if (alchemyLocal || (checkoutLocal && !checkoutModelPreview)) {
           delete (config as { ai?: unknown }).ai;

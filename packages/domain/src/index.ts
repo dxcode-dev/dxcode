@@ -1,5 +1,14 @@
 export { Principal } from "./auth/principal.js";
 export {
+  AllowedEmailDomain,
+  emailDomain,
+  emailDomainAllowed,
+  normalizeEmail,
+  SignInAdmission,
+  SignInProviderId,
+  SignInRejection,
+} from "./auth/sign-in.js";
+export {
   type CursorPosition,
   decodeProjectPageCursor,
   decodeThreadPageCursor,

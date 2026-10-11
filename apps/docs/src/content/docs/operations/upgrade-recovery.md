@@ -29,6 +29,29 @@ Do not run an older release unless its notes explicitly confirm schema and
 resource compatibility. Recovering data after an incompatible change requires
 provider-level exports or snapshots made before the upgrade.
 
+## Sign-in configuration
+
+Releases with the `signIn` block read older `deploy.selfhost.json` files
+without changes: a file with `authEmailFrom` keeps magic link behind the
+waitlist, and a file without it keeps email and password with invite-only
+account creation.
+
+One older setting now fails validation: `allowSignup: true` without
+`authEmailFrom`. Public password sign-up now sends a verification email to
+every new address, so it needs a sender. Choose one:
+
+- Keep sign-up invite-only: remove `allowSignup`. People join through
+  [workspace invite links](/docs/get-started/workspace-members/).
+- Keep public sign-up: onboard a sender domain to Cloudflare Email Sending and
+  set `authEmailFrom`, then add a `signIn` block with
+  `"providers": ["email-password"]` and `"admission": "open"`. This needs
+  API-token mode. See [send sign-in email](/docs/deployment/authentication/#send-sign-in-email).
+
+Then rerun `pnpm dx:deploy`. The first deploy on this release also offers,
+once, to review sign-in methods; `pnpm dx:deploy -- --sign-in` repeats that
+step at any time, for example to add Google. See
+[change sign-in on an existing deployment](/docs/deployment/authentication/#change-sign-in-on-an-existing-deployment).
+
 ## Move to another machine
 
 Copy the same `deploy.selfhost.json` to the new machine, install the same dx
@@ -45,8 +68,8 @@ Rotate one credential class at a time:
 3. Verify health, readiness, and one operation that uses the credential.
 4. Revoke the old credential at the provider.
 
-Run `pnpm dx:deploy -- --rotate` to replace the E2B key and selected deployment
-integration secrets. Ordinary reruns retain omitted secrets. Encryption and
+Run `pnpm dx:deploy -- --rotate` to replace the E2B key, selected deployment
+integration secrets, and, with Google sign-in, the Google OAuth client secret. Ordinary reruns retain omitted secrets. Encryption and
 workload-signing keys are generated state and are not rotated by this flag.
 
 ## Reset the administrator
@@ -54,7 +77,9 @@ workload-signing keys are generated state and are not rotated by this flag.
 Run `pnpm dx:deploy -- --reset-admin`. The wizard reads the replacement password
 and confirmation without echoing them; leave the first prompt empty to generate
 a replacement. After verification succeeds, it updates the ignored mode-`0600`
-credential file. The reset does not enable public signup.
+credential file. The reset does not change who can create an account. It
+fails on a deployment without password sign-in; that administrator signs in
+with a magic link or Google instead.
 
 ## Back up data
 

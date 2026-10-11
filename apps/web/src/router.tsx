@@ -7,8 +7,13 @@ import {
   notFound,
   Outlet,
   type RouterHistory,
+  redirect,
 } from "@tanstack/react-router";
 import { Option, Schema } from "effect";
+import {
+  safeNextPath,
+  validateSignInSearch,
+} from "./features/authentication/sign-in-paths.js";
 import { HomePage } from "./features/home/home-page.js";
 import { ProductShell } from "./features/navigation/product-shell.js";
 import { ProjectPage } from "./features/projects/project-page.js";
@@ -238,7 +243,30 @@ const workspaceSettingsSectionRoute = createRoute({
 const joinWorkspaceRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/join/$token",
+  // Provider redirects can return here with `?error=` before sign-in.
+  validateSearch: validateSignInSearch,
   component: JoinWorkspacePage,
+});
+
+// Signing in lands on the sign-in page with a session; continue to `next`,
+// which safeNextPath limits to a same-origin path.
+const signedInRedirect = ({ search }: { search: { next?: string } }) => {
+  // react-doctor-disable-next-line react-doctor/clickjacking-redirect-risk
+  throw redirect({ href: safeNextPath(search.next) ?? "/", replace: true });
+};
+
+const signInRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/signin",
+  validateSearch: validateSignInSearch,
+  beforeLoad: signedInRedirect,
+});
+
+const signUpRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/signup",
+  validateSearch: validateSignInSearch,
+  beforeLoad: signedInRedirect,
 });
 
 const routeTree = rootRoute.addChildren([
@@ -257,6 +285,8 @@ const routeTree = rootRoute.addChildren([
   workspaceSettingsRoute,
   workspaceSettingsSectionRoute,
   joinWorkspaceRoute,
+  signInRoute,
+  signUpRoute,
 ]);
 
 export const createAppRouter = (

@@ -7,6 +7,7 @@ import {
   collectOrbProviders,
   collectPluginChoices,
   E2B_ORB_PROMPT,
+  PASSWORD_PROMPT,
   WORKER_TRACES_PROMPT,
 } from "./dx-deploy.mjs";
 
@@ -31,8 +32,8 @@ describe("common deployment installer", () => {
     const environment = {};
     const answer = vi.fn(async (label) => {
       if (label === "First administrator email") return "owner@example.com";
-      if (label === "Magic-link sender email")
-        return "sign-in@auth.example.com";
+      if (label === "Sign-in sender email") return "sign-in@auth.example.com";
+      if (label.startsWith("Allowed email domains")) return "";
       throw new Error(`Unexpected answer prompt: ${label}`);
     });
     const yes = vi.fn(async (label, fallback = false) =>
@@ -67,6 +68,11 @@ describe("common deployment installer", () => {
       workersAi: true,
       workerTraces: false,
       allowSignup: false,
+      signIn: {
+        providers: ["magic-link"],
+        admission: "waitlist",
+        allowedEmailDomains: [],
+      },
     });
     expect(yes).toHaveBeenCalledWith(WORKER_TRACES_PROMPT, false);
     expect(environment).toEqual({ E2B_API_KEY: "fixture-e2b-key" });
@@ -76,6 +82,7 @@ describe("common deployment installer", () => {
     );
     expect(yes).not.toHaveBeenCalledWith("Use a custom domain");
     expect(yes).not.toHaveBeenCalledWith("Allow public account creation");
+    expect(yes).not.toHaveBeenCalledWith(PASSWORD_PROMPT, expect.anything());
   });
 
   it("installs Search at deploy time with an optional deployment Exa key", async () => {
@@ -84,8 +91,9 @@ describe("common deployment installer", () => {
       const config = await collectDeploymentConfig({
         answer: async (label) => {
           if (label === "First administrator email") return "owner@example.com";
-          if (label === "Magic-link sender email")
+          if (label === "Sign-in sender email")
             return "sign-in@auth.example.com";
+          if (label.startsWith("Allowed email domains")) return "";
           throw new Error(`Unexpected answer prompt: ${label}`);
         },
         yes: async (label, fallback = false) =>

@@ -165,6 +165,34 @@ const exaApiKey =
   target !== "selfhost" || selfhostConfig.integrations.includes("exa")
     ? operatorEnvironment.EXA_API_KEY?.trim()
     : undefined;
+// Google sign-in's client secret. HeldSecret keeps it across deploys, so it
+// is required only the first time google is configured.
+const googleClientSecret =
+  target === "selfhost" && selfhostConfig.signIn.providers.includes("google")
+    ? operatorEnvironment.DX_GOOGLE_CLIENT_SECRET?.trim()
+    : undefined;
+// Previews and staging keep their derived magic link (plus reviewer
+// password); an operator OAuth client adds Google for testing it there.
+const hostedGoogleClient =
+  target !== "selfhost" &&
+  operatorEnvironment.DX_GOOGLE_CLIENT_ID?.trim() &&
+  operatorEnvironment.DX_GOOGLE_CLIENT_SECRET?.trim()
+    ? {
+        clientId: operatorEnvironment.DX_GOOGLE_CLIENT_ID.trim(),
+        clientSecret: operatorEnvironment.DX_GOOGLE_CLIENT_SECRET.trim(),
+      }
+    : undefined;
+const deploymentSignIn =
+  selfhostConfig !== undefined
+    ? selfhostConfig.signIn
+    : hostedGoogleClient === undefined
+      ? undefined
+      : {
+          providers: ["magic-link", "email-password", "google"],
+          admission: "waitlist",
+          allowedEmailDomains: [],
+          googleClientId: hostedGoogleClient.clientId,
+        };
 // Orb providers: self-host records them; previews and staging read
 // DX_ORB_PROVIDERS (e2b, cloudflare, or both; E2B by default).
 const orbProviders =
@@ -556,6 +584,15 @@ const environment = {
     : { DX_INTEGRATION_BITBUCKET_OAUTH: bitbucketOAuth }),
   ...(sarvamApiKey ? { SARVAM_API_KEY: sarvamApiKey } : {}),
   ...(exaApiKey ? { EXA_API_KEY: exaApiKey } : {}),
+  ...((googleClientSecret ?? hostedGoogleClient?.clientSecret)
+    ? {
+        DX_GOOGLE_CLIENT_SECRET:
+          googleClientSecret ?? hostedGoogleClient?.clientSecret,
+      }
+    : {}),
+  ...(deploymentSignIn !== undefined
+    ? { DX_DEPLOYMENT_SIGN_IN: JSON.stringify(deploymentSignIn) }
+    : {}),
   ...(process.env.DX_ADMIN_PASSWORD
     ? { DX_ADMIN_PASSWORD: process.env.DX_ADMIN_PASSWORD }
     : {}),
@@ -708,14 +745,17 @@ if (operation === "deploy") {
     console.log("\nSelf-host administrator");
     console.log(`URL: https://${selection.domain}`);
     console.log(`Login email: ${selfhostConfig.adminEmail}`);
-    if (selfhostConfig.authEmailFrom === undefined) {
+    if (selfhostConfig.signIn.providers.includes("email-password")) {
       console.log(
         `Credential file: ${credentials}${existsSync(credentials) ? "" : " (not present on this machine)"}`,
       );
       console.log("Reset password: pnpm dx:deploy -- --reset-admin");
-    } else {
-      console.log("Authentication: approved-email magic link");
     }
+    console.log(`Sign-in: ${selfhostConfig.signIn.providers.join(", ")}`);
+    if (selfhostConfig.signIn.providers.includes("google"))
+      console.log(
+        `Google redirect URI: https://${selection.domain}/api/auth/callback/google`,
+      );
   }
 }
 rmSync(applyStartedFile, { force: true });

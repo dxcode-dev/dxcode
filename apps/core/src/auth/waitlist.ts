@@ -22,3 +22,15 @@ export const waitlistAdmission = (db: D1Database) => async (input: string) => {
   }
   return false;
 };
+
+/** An operator approval, such as the deployment's first administrator. */
+export const waitlistApproved = async (db: D1Database, input: string) => {
+  const email = normalizedEmail(input);
+  if (email === undefined) return false;
+  return (
+    (await db
+      .prepare("SELECT status FROM auth_waitlist WHERE email = ?")
+      .bind(email)
+      .first("status")) === "approved"
+  );
+};

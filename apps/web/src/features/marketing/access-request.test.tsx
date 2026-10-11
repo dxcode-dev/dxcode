@@ -1,20 +1,19 @@
 // @vitest-environment happy-dom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Effect } from "effect";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  getBrowserAuthenticationConfiguration,
+  getSignInOptions,
   requestMagicLink,
-} from "../authentication/authentication-requests.js";
+} from "../../shared/auth/auth-client.js";
 import { requestTurnstileToken } from "../authentication/turnstile.js";
 import { LiveAccessContext } from "./prototype/live-access-context.js";
 import { WaitlistForm } from "./prototype/waitlist-form.js";
 
-vi.mock("../authentication/authentication-requests.js", () => ({
-  getBrowserAuthenticationConfiguration: vi.fn(),
-  getBrowserAuthenticationMode: vi.fn(),
+vi.mock("../../shared/auth/auth-client.js", async (original) => ({
+  ...(await original<typeof import("../../shared/auth/auth-client.js")>()),
+  getSignInOptions: vi.fn(),
   requestMagicLink: vi.fn(),
 }));
 vi.mock("../authentication/turnstile.js", () => ({
@@ -27,16 +26,19 @@ describe("landing access submission", () => {
   it.each([true, false])(
     "connects the hero=%s form, retains input on failure, and retries with a new token",
     async (hero) => {
-      vi.mocked(getBrowserAuthenticationConfiguration).mockResolvedValue({
-        mode: "magic-link",
+      vi.mocked(getSignInOptions).mockResolvedValue({
+        providers: ["magic-link"],
+        admission: "waitlist",
+        allowedEmailDomains: [],
+        emailVerification: false,
         turnstileSiteKey: "public-key",
       });
       vi.mocked(requestTurnstileToken)
         .mockResolvedValueOnce("first-token")
         .mockResolvedValueOnce("fresh-token");
       vi.mocked(requestMagicLink)
-        .mockReturnValueOnce(Effect.die(new Error("Please retry")))
-        .mockReturnValueOnce(Effect.succeed("request-accepted"));
+        .mockRejectedValueOnce(new Error("Please retry"))
+        .mockResolvedValueOnce("sent");
       const element = document.createElement("div");
       document.body.append(element);
       const root = createRoot(element);
@@ -71,19 +73,23 @@ describe("landing access submission", () => {
         expect(input.value).toBe("reader@example.com");
         expect(requestMagicLink).toHaveBeenNthCalledWith(
           1,
-          "reader@example.com",
-          "first-token",
-          "/new",
+          expect.objectContaining({
+            email: "reader@example.com",
+            turnstileToken: "first-token",
+            callbackURL: "/new",
+          }),
         );
         await submit();
         expect(requestMagicLink).toHaveBeenNthCalledWith(
           2,
-          "reader@example.com",
-          "fresh-token",
-          "/new",
+          expect.objectContaining({
+            email: "reader@example.com",
+            turnstileToken: "fresh-token",
+            callbackURL: "/new",
+          }),
         );
         expect(element.textContent).toContain(
-          "Check your email for a sign-in link. If one doesn’t arrive, your address is on the waitlist.",
+          "Check your email. We sent a sign-in link to reader@example.com.",
         );
         expect(element.textContent).not.toContain("Signup is not connected");
       } finally {

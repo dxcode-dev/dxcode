@@ -7,14 +7,17 @@ sidebar:
 
 ## Sign in
 
-Open the URL printed by `pnpm dx:deploy`. Sign in with the administrator account
-created during deployment. Its credentials are in the path printed by the
-successful deploy, normally `.dx/secrets/selfhost-admin.txt`.
+Open the URL printed by `pnpm dx:deploy`. The sign-in page shows the methods
+the deployment offers. Sign in with the administrator email. With password
+sign-in, the password is in the path printed by the successful deploy,
+normally `.dx/secrets/selfhost-admin.txt`. With a magic link, dx emails a
+one-time link to that address. With Google, use the Google account for that
+address.
 
-With the default `allowSignup: false`, only the bootstrapped administrator can
-sign in. With `allowSignup: true`, the sign-in page also offers direct
-email/password account creation. Self-host signup has no waitlist, approval
-step, or magic-link flow.
+Who else can create an account depends on the deployment's admission policy:
+only people with a workspace invite link (`invite`, the default), people you
+approve from the waitlist (`waitlist`), or anyone (`open`). See
+[sign-in](/docs/deployment/authentication/).
 
 ## Create a project
 

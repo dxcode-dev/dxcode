@@ -116,6 +116,13 @@ export const smokeProductionPackage = async (packageRoot) => {
     }),
     DX_RUNTIME_MODE: "deployed",
     DX_SIGNUP_ENABLED: "",
+    DX_SIGN_IN_ADMISSION: "",
+    DX_SIGN_IN_ALLOWED_EMAIL_DOMAINS: "",
+    DX_SIGN_IN_PROVIDERS: "",
+    DX_GOOGLE_CLIENT_ID: "",
+    DX_GOOGLE_CLIENT_SECRET: "",
+    DX_TERMS_URL: "",
+    DX_PRIVACY_URL: "",
     DX_SOURCE_CONTROL_SCHEMA_VERSION: sourceControlSchemaVersion(migrations),
     DX_SOURCE_SHALLOW_CLONE: "false",
     DX_WORKLOAD_IDENTITY_AUDIENCE_POLICIES: JSON.stringify({

@@ -20,7 +20,27 @@ const CONFIG_KEYS = new Set([
   "plugins",
   "offeredPlugins",
   "orbProviders",
+  "signIn",
 ]);
+
+/** Better Auth sign-in providers a deployment may offer; see apps/core/src/auth/sign-in-configuration.ts. */
+export const SIGN_IN_PROVIDER_IDS = Object.freeze([
+  "magic-link",
+  "email-password",
+  "google",
+]);
+/** Who may create an account; invite links admit under every policy. */
+export const SIGN_IN_ADMISSIONS = Object.freeze(["open", "waitlist", "invite"]);
+const SIGN_IN_KEYS = new Set([
+  "providers",
+  "admission",
+  "allowedEmailDomains",
+  "googleClientId",
+  "termsUrl",
+  "privacyUrl",
+]);
+const EMAIL_DOMAIN =
+  /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
 /**
  * Orb (Execution) providers a deployment may install; at least one. E2B needs
@@ -37,6 +57,7 @@ export const DEPLOYMENT_SECRET_NAMES = Object.freeze([
   "DX_INTEGRATION_BITBUCKET_OAUTH",
   "SARVAM_API_KEY",
   "EXA_API_KEY",
+  "DX_GOOGLE_CLIENT_SECRET",
 ]);
 
 /**
@@ -65,6 +86,104 @@ const optionalString = (value, label) => {
   if (typeof value !== "string" || value.trim() === "")
     throw new Error(`${label} must be a non-empty string when configured.`);
   return value.trim();
+};
+
+const httpsUrl = (value, label) => {
+  const url = optionalString(value, label);
+  if (url === undefined) return undefined;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`${label} must be an https URL.`);
+  }
+  if (parsed.protocol !== "https:")
+    throw new Error(`${label} must be an https URL.`);
+  return parsed.toString();
+};
+
+/**
+ * Configs written before `signIn` existed chose one mode: a sender meant
+ * magic link behind a waitlist; otherwise email/password, open only with
+ * `allowSignup`.
+ */
+const legacySignIn = (authEmailFrom, allowSignup) =>
+  authEmailFrom === undefined
+    ? {
+        providers: ["email-password"],
+        admission: allowSignup ? "open" : "invite",
+      }
+    : { providers: ["magic-link"], admission: "waitlist" };
+
+export const validateSignIn = (input, { authEmailFrom, allowSignup }) => {
+  if (input === undefined) {
+    // A sender always meant the waitlist; allowSignup only opened password sign-up.
+    if (allowSignup && authEmailFrom === undefined)
+      throw new Error(
+        "allowSignup now verifies each new email, so it needs authEmailFrom. Configure authEmailFrom, or remove allowSignup to keep sign-up invite-only.",
+      );
+    const legacy = legacySignIn(authEmailFrom, allowSignup);
+    return { ...legacy, allowedEmailDomains: [] };
+  }
+  if (input === null || typeof input !== "object" || Array.isArray(input))
+    throw new Error("signIn must be an object.");
+  const unknown = Object.keys(input).filter((key) => !SIGN_IN_KEYS.has(key));
+  if (unknown.length > 0)
+    throw new Error(`signIn contains unsupported keys: ${unknown.join(", ")}.`);
+  const providers = input.providers;
+  if (
+    !Array.isArray(providers) ||
+    providers.length === 0 ||
+    providers.some((id) => !SIGN_IN_PROVIDER_IDS.includes(id)) ||
+    new Set(providers).size !== providers.length
+  )
+    throw new Error(
+      `signIn.providers must list ${SIGN_IN_PROVIDER_IDS.join(", ")} (at least one, once each).`,
+    );
+  const admission = input.admission ?? "invite";
+  if (!SIGN_IN_ADMISSIONS.includes(admission))
+    throw new Error(
+      `signIn.admission must be ${SIGN_IN_ADMISSIONS.join(", ")}.`,
+    );
+  const domains = input.allowedEmailDomains ?? [];
+  if (
+    !Array.isArray(domains) ||
+    domains.some(
+      (domain) => typeof domain !== "string" || !EMAIL_DOMAIN.test(domain),
+    ) ||
+    new Set(domains).size !== domains.length
+  )
+    throw new Error(
+      "signIn.allowedEmailDomains must list lowercase domains such as example.com, once each.",
+    );
+  if (providers.includes("magic-link") && authEmailFrom === undefined)
+    throw new Error("Magic-link sign-in needs authEmailFrom to send links.");
+  if (
+    providers.includes("email-password") &&
+    admission !== "invite" &&
+    authEmailFrom === undefined
+  )
+    throw new Error(
+      "Public password sign-up verifies each email, so it needs authEmailFrom. Set authEmailFrom or use admission invite.",
+    );
+  const googleClientId = optionalString(
+    input.googleClientId,
+    "signIn.googleClientId",
+  );
+  if (providers.includes("google") !== (googleClientId !== undefined))
+    throw new Error(
+      "signIn.googleClientId is required with, and only with, the google provider.",
+    );
+  const termsUrl = httpsUrl(input.termsUrl, "signIn.termsUrl");
+  const privacyUrl = httpsUrl(input.privacyUrl, "signIn.privacyUrl");
+  return {
+    providers: [...providers],
+    admission,
+    allowedEmailDomains: [...domains],
+    ...(googleClientId === undefined ? {} : { googleClientId }),
+    ...(termsUrl === undefined ? {} : { termsUrl }),
+    ...(privacyUrl === undefined ? {} : { privacyUrl }),
+  };
 };
 
 export const validateSelfhostConfig = (input) => {
@@ -174,6 +293,10 @@ export const validateSelfhostConfig = (input) => {
       throw new Error(
         `The ${integration} integration requires the ${plugin} plugin.`,
       );
+  const signIn = validateSignIn(input.signIn, {
+    authEmailFrom,
+    allowSignup: input.allowSignup === true,
+  });
   return Object.freeze({
     version: 1,
     name,
@@ -183,7 +306,12 @@ export const validateSelfhostConfig = (input) => {
     ...(authEmailFrom === undefined
       ? {}
       : { authEmailFrom: authEmailFrom.toLowerCase() }),
-    allowSignup: input.allowSignup === true,
+    // Kept for deployments that read it; signIn.admission decides.
+    allowSignup:
+      input.signIn === undefined
+        ? input.allowSignup === true
+        : signIn.admission === "open",
+    signIn,
     workersAi: input.workersAi !== false,
     // Absent means the operator was never asked; the installer asks once.
     ...(input.workerTraces === undefined

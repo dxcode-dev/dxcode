@@ -8,11 +8,23 @@ pnpm install
 pnpm dx:deploy
 ```
 
-The wizard signs in through Alchemy, collects the first administrator and E2B
-key, offers optional deployment integrations, prints a redacted review, and
-asks once before apply. It confirms an entered administrator password or
+The wizard asks whether to send sign-in email from your domain, signs in to
+Cloudflare, collects the first administrator, the sign-in methods and
+admission policy, and the E2B key, offers optional deployment integrations,
+prints a redacted review, and asks once before apply. When the deployment
+offers email and password, it confirms an entered administrator password or
 generates one from an empty prompt. It writes only nonsecrets to
 `deploy.selfhost.json`.
+
+Sign-in methods are magic link, email and password, and Google. Admission is
+`open`, `waitlist`, or `invite` (the default), optionally limited to listed
+email domains. Magic links and public password sign-up need `authEmailFrom`,
+a Cloudflare Email Sending address inside the deployment zone. Google needs an
+OAuth client with the redirect URI `https://<domain>/api/auth/callback/google`;
+its client ID goes in the `signIn` block and its secret is
+`DX_GOOGLE_CLIENT_SECRET`. `pnpm dx:deploy -- --sign-in` changes sign-in on
+an existing deployment. See [sign-in and
+authentication](../apps/docs/src/content/docs/deployment/authentication.md).
 
 Alchemy browser OAuth is the default Cloudflare login. Alchemy and Wrangler
 have separate OAuth clients and token stores. dx does not read Wrangler tokens.
@@ -31,11 +43,11 @@ operator secrets remain in that state and in Worker secret bindings. A normal
 rerun asks for no unchanged secrets and works from another machine when it has
 the same `deploy.selfhost.json` and Cloudflare login.
 
-After successful verification, the deploy stores only the login URL, email, and
-password in ignored `.dx/secrets/selfhost-admin.txt` with mode `0600`. Standard
-output contains the file path, never the password. Public signup defaults off;
-`allowSignup: true` enables direct email/password registration without a
-waitlist, email approval, or magic-link admission.
+When the deployment offers email and password, the deploy stores only the
+login URL, email, and password in ignored `.dx/secrets/selfhost-admin.txt` with
+mode `0600` after successful verification. Standard output contains the file
+path, never the password. It also prints the enabled sign-in methods and, with
+Google, the redirect URI.
 
 ## E2B and dxd
 
@@ -66,8 +78,8 @@ fallback remains `pnpm deploy:selfhost:dxd` with `dxdBinary` set to
 
 ```bash
 pnpm dx:deploy                    # repeatable upgrade
-pnpm dx:deploy -- --rotate        # rotate supplied integration/E2B secrets
-pnpm dx:deploy -- --reset-admin   # explicitly replace the first admin password
+pnpm dx:deploy -- --rotate        # rotate supplied integration, E2B, and Google secrets
+pnpm dx:deploy -- --reset-admin   # replace the first admin password (password sign-in only)
 ```
 
 GitHub, Bitbucket, Sarvam, Copilot, and other deployment integrations are

@@ -35,11 +35,20 @@ export const bootstrapDeployment = async ({
   }
   if (user === undefined)
     throw new Error("Deployment user bootstrap did not converge.");
-  if (user.id !== credentials.userId)
+  // A self-host administrator may already have signed in by magic link or
+  // Google before password sign-in was turned on. The deployment owns that
+  // address, so the password attaches to the existing account.
+  const adopted = user.id !== credentials.userId;
+  if (adopted && credentials.target !== "selfhost")
     throw new Error("Deployment user identity does not match private state.");
+  // The operator supplied this address, so it counts as proven: password
+  // sign-in needs a verified email once email verification is on, and a
+  // magic link or Google sign-in would otherwise revoke the password.
+  await database.markEmailVerified?.({ userId: user.id, now });
 
   const username = await database.findUsername(user.id);
   if (
+    !adopted &&
     username !== undefined &&
     username !== credentials.username &&
     !generatedPersonalAccountUsername.test(username)
@@ -96,7 +105,8 @@ export const bootstrapDeployment = async ({
   await validateCredential(credential);
   if (credential === undefined)
     throw new Error("Deployment credential bootstrap did not converge.");
-  if (username !== credentials.username) {
+  // An adopted account keeps the profile its owner already has.
+  if (!adopted && username !== credentials.username) {
     await database.updateUsername({
       userId: user.id,
       username: credentials.username,
@@ -232,8 +242,13 @@ export const createCloudflareD1BootstrapDatabase = ({
     },
     insertUser: ({ id, name, email, now }) =>
       query(
-        'INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 0, ?, ?) ON CONFLICT(email) DO NOTHING',
+        'INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, ?, ?) ON CONFLICT(email) DO NOTHING',
         [id, name, email, now, now],
+      ),
+    markEmailVerified: ({ userId, now }) =>
+      query(
+        'UPDATE "user" SET emailVerified = 1, updatedAt = ? WHERE id = ? AND emailVerified = 0',
+        [now, userId],
       ),
     insertCredential: async ({ id, userId, password, now }) => {
       const passwordHash = await hashPassword(password);

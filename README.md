@@ -15,22 +15,27 @@ pnpm install --frozen-lockfile
 pnpm dx:deploy
 ```
 
-The wizard uses Alchemy browser login for ordinary self-hosting. Wrangler login
-is separate and is not read. Hosted magic-link deployments need a scoped
-Cloudflare API token because Alchemy OAuth cannot manage Turnstile or inspect
-Email Sending. See the [deployment configuration](apps/docs/src/content/docs/deployment/configuration.md#cloudflare-authentication)
+The wizard first asks whether dx should send sign-in email from your domain.
+Without email it uses Alchemy browser login; Wrangler login is separate and is
+not read. Sending email needs a custom domain, Cloudflare Email Sending on the
+sender domain, and a scoped Cloudflare API token, because Alchemy OAuth cannot
+manage Turnstile or inspect Email Sending. See the [deployment configuration](apps/docs/src/content/docs/deployment/configuration.md#cloudflare-authentication)
 for the exact account and zone permissions.
 
-The wizard configures the deployment, asks for the first administrator's email,
-and reads the password twice without echoing it. Leave the first password prompt
-empty to generate a password. After health and readiness pass, dx writes the
-login URL, email, and password only to the ignored mode-`0600` file
-`.dx/secrets/selfhost-admin.txt` and prints its path. It never prints the
-password in deployment or Alchemy output.
+The wizard then asks which sign-in methods the deployment offers (magic link,
+email and password, Google) and who can create an account: anyone (`open`),
+people you approve from a waitlist (`waitlist`), or only people with a
+workspace invite link (`invite`, the default). Public password sign-up needs
+sign-in email because every new address must be verified. You can also limit
+accounts to a list of email domains. See [sign-in and authentication](apps/docs/src/content/docs/deployment/authentication.md).
 
-Public signup is disabled by default. Set `allowSignup` to `true` in
-`deploy.selfhost.json` to enable ordinary email/password account creation. This
-does not enable a waitlist, approval gate, or magic-link admission.
+The wizard asks for the first administrator's email. When the deployment offers
+email and password, it reads the administrator password twice without echoing
+it; leave the first prompt empty to generate one. After health and readiness
+pass, dx writes the login URL, email, and password only to the ignored
+mode-`0600` file `.dx/secrets/selfhost-admin.txt` and prints its path. It never
+prints the password in deployment or Alchemy output. Without password sign-in,
+the administrator signs in with a magic link or Google using that email.
 
 Rerunning `pnpm dx:deploy` reconciles the existing deployment without requesting
 or changing the administrator password. To replace it explicitly, run:

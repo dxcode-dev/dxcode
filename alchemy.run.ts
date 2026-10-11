@@ -294,6 +294,11 @@ export default Alchemy.Stack(
       githubApp: Config.option(Config.redacted("DX_INTEGRATION_GITHUB_APP")),
       sarvamApiKey: Config.option(Config.redacted("SARVAM_API_KEY")),
       exaApiKey: Config.option(Config.redacted("EXA_API_KEY")),
+      // Self-host sign-in providers and admission, validated by the runner.
+      signIn: Config.option(Config.nonEmptyString("DX_DEPLOYMENT_SIGN_IN")),
+      googleClientSecret: Config.option(
+        Config.redacted("DX_GOOGLE_CLIENT_SECRET"),
+      ),
       plugins: Config.withDefault(Config.string("DX_DEPLOYMENT_PLUGINS"), ""),
       // Orb providers the deployment installs: e2b, cloudflare, or both.
       orbProviders: Config.withDefault(
@@ -343,6 +348,20 @@ export default Alchemy.Stack(
     });
 
     const hostedAuthentication = Option.isSome(configuration.authEmailFrom);
+    const signIn = Option.isSome(configuration.signIn)
+      ? (JSON.parse(configuration.signIn.value) as {
+          readonly providers: ReadonlyArray<string>;
+          readonly admission: string;
+          readonly allowedEmailDomains: ReadonlyArray<string>;
+          readonly googleClientId?: string;
+          readonly termsUrl?: string;
+          readonly privacyUrl?: string;
+        })
+      : undefined;
+    // Without a recorded signIn, a sender meant magic link only.
+    const passwordSignIn =
+      signIn?.providers.includes("email-password") ?? !hostedAuthentication;
+    const googleSignIn = signIn?.providers.includes("google") ?? false;
     const expectedEnvironment =
       configuration.deploymentTarget === "branch"
         ? "preview"
@@ -395,7 +414,7 @@ export default Alchemy.Stack(
         ? configuration.githubApp.value
         : yield* Effect.die("DX_INTEGRATION_GITHUB_APP is required.");
     const adminPassword =
-      selfhost && !hostedAuthentication
+      selfhost && passwordSignIn
         ? (yield* HeldSecret("AdminPassword", {
             value: Option.getOrUndefined(configuration.adminPassword),
           })).value
@@ -414,6 +433,15 @@ export default Alchemy.Stack(
             value: Option.getOrUndefined(configuration.sarvamApiKey),
           })).value
         : Option.getOrUndefined(configuration.sarvamApiKey);
+    const googleClientSecret = !googleSignIn
+      ? undefined
+      : selfhost
+        ? (yield* HeldSecret("GoogleClientSecret", {
+            value: Option.getOrUndefined(configuration.googleClientSecret),
+          })).value
+        : Option.isSome(configuration.googleClientSecret)
+          ? configuration.googleClientSecret.value
+          : yield* Effect.die("DX_GOOGLE_CLIENT_SECRET is required.");
     // Plugin installation is deployment scope. Hosted targets install every
     // first-party plugin; self-host installs what `pnpm dx:deploy` recorded.
     const installedPlugins = selfhost ? configuration.plugins : "search,speech";
@@ -649,6 +677,27 @@ export default Alchemy.Stack(
           ? {}
           : { DX_INSTALLED_PLUGINS: installedPlugins }),
         ...(configuration.signupEnabled ? { DX_SIGNUP_ENABLED: "true" } : {}),
+        ...(signIn === undefined
+          ? {}
+          : {
+              DX_SIGN_IN_PROVIDERS: signIn.providers.join(","),
+              DX_SIGN_IN_ADMISSION: signIn.admission,
+              ...(signIn.allowedEmailDomains.length === 0
+                ? {}
+                : {
+                    DX_SIGN_IN_ALLOWED_EMAIL_DOMAINS:
+                      signIn.allowedEmailDomains.join(","),
+                  }),
+              ...(signIn.googleClientId === undefined
+                ? {}
+                : { DX_GOOGLE_CLIENT_ID: signIn.googleClientId }),
+              ...(signIn.termsUrl === undefined
+                ? {}
+                : { DX_TERMS_URL: signIn.termsUrl }),
+              ...(signIn.privacyUrl === undefined
+                ? {}
+                : { DX_PRIVACY_URL: signIn.privacyUrl }),
+            }),
         ...(Option.isSome(configuration.githubCopilotClientId)
           ? {
               DX_GITHUB_COPILOT_CLIENT_ID:
@@ -692,6 +741,9 @@ export default Alchemy.Stack(
         ...(e2bApiKey === undefined ? {} : { E2B_API_KEY: e2bApiKey }),
         ...(sarvamApiKey !== undefined ? { SARVAM_API_KEY: sarvamApiKey } : {}),
         ...(exaApiKey !== undefined ? { EXA_API_KEY: exaApiKey } : {}),
+        ...(googleClientSecret !== undefined
+          ? { DX_GOOGLE_CLIENT_SECRET: googleClientSecret }
+          : {}),
         ...(bitbucketOAuth !== undefined
           ? {
               DX_INTEGRATION_BITBUCKET_OAUTH: bitbucketOAuth,
@@ -723,7 +775,7 @@ export default Alchemy.Stack(
       command: "node scripts/bootstrap-deployment.mjs",
       cwd: ".",
       env: {
-        ...(selfhost && hostedAuthentication
+        ...(selfhost && !passwordSignIn
           ? {
               DX_BOOTSTRAP_ADMIN_EMAIL: Option.getOrElse(
                 configuration.adminEmail,

@@ -4,7 +4,17 @@ const Verification = Schema.Struct({
   success: Schema.Boolean,
   hostname: Schema.optional(Schema.String),
   action: Schema.optional(Schema.String),
+  metadata: Schema.optional(
+    Schema.Struct({ result_with_testing_key: Schema.optional(Schema.Boolean) }),
+  ),
 });
+
+/**
+ * Cloudflare's published always-pass secret, which branch previews may bind
+ * (DX_DEPLOYMENT_TURNSTILE_TEST_KEYS). Its answers name example.com and carry
+ * no action, so they are accepted only for this exact secret.
+ */
+const TEST_SECRET = "1x0000000000000000000000000000000AA";
 
 export class TurnstileError extends Schema.TaggedError<TurnstileError>()(
   "TurnstileError",
@@ -49,10 +59,13 @@ export const verifyTurnstile = (input: {
           message: "Security check unavailable. Please try again.",
         }),
     });
+    const testingKey =
+      input.secret === TEST_SECRET &&
+      result.metadata?.result_with_testing_key === true;
     if (
       !result.success ||
-      result.hostname !== input.hostname ||
-      result.action !== "dx-access"
+      (!testingKey &&
+        (result.hostname !== input.hostname || result.action !== "dx-access"))
     ) {
       return yield* new TurnstileError({
         message: "Security check failed. Please try again.",

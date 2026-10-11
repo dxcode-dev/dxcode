@@ -8157,82 +8157,11 @@ div.claude-code-mode-main {
 .fatal-state strong {
   color: var(--foreground);
 }
-.auth-pending-indicator {
-  display: flex;
-  align-items: center;
-  flex-direction: column;
-  gap: 8px;
-  opacity: 0;
-  animation: reveal-auth-pending 0s linear 200ms forwards;
-}
-@keyframes reveal-auth-pending {
-  to {
-    opacity: 1;
-  }
-}
-.auth-local-card {
-  display: flex;
-  width: min(390px, calc(100% - 28px));
-  margin-top: 8px;
-  padding: 16px;
-  color: var(--foreground);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--card);
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.12);
-  flex-direction: column;
-  gap: 14px;
-}
-.auth-local-card > div > strong {
-  font-size: 14px;
-}
-.auth-local-card > div > p {
-  margin: 3px 0 0;
-  color: var(--muted-foreground);
-  font-size: 10px;
-}
-.auth-local-tabs {
-  display: flex;
-  align-self: flex-start;
-  gap: 2px;
-  margin: 0;
-  padding: 2px;
-  border: 0;
-  border-radius: 7px;
-  background: var(--muted);
-}
-.auth-local-card form {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.auth-local-card form > div {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.auth-local-card label {
-  font-size: 10px;
-  font-weight: 600;
-}
-.auth-local-card input {
-  background: var(--background);
-}
-.auth-local-card form > button {
-  width: 100%;
-  margin-top: 2px;
-}
 .auth-local-error {
   margin: 0;
   color: var(--destructive);
   font-size: 10px;
 }
-.auth-local-notice {
-  margin: 0;
-  color: var(--foreground);
-  font-size: 10px;
-}
-
 .personal-security-settings .settings-card + .settings-card {
   margin-top: 14px;
 }
@@ -11774,11 +11703,6 @@ div.claude-code-mode-main {
   height: 100%;
   overflow: hidden;
   perspective: 900px;
-}
-.auth-gate-surface > .auth-gate-mark {
-  position: absolute;
-  inset: 50% auto auto 50%;
-  transform: translate(-50%, -50%);
 }
 .auth-gate-card {
   position: relative;

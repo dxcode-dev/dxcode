@@ -1,18 +1,18 @@
 export {
-  type BrowserAuthenticationMode,
-  type BrowserAuthenticationModeResponse,
-  BrowserAuthenticationModeResponseSchema,
-  BrowserAuthenticationModeSchema,
-} from "./auth/browser-authentication-mode.js";
-export {
   type ForbiddenResponse,
   ForbiddenResponseSchema,
 } from "./auth/forbidden-response.js";
 export {
-  type AccessRequestOutcome,
+  type MagicLinkRequestOutcome,
+  MagicLinkRequestOutcomeSchema,
   type MagicLinkRequestResponse,
   MagicLinkRequestResponseSchema,
 } from "./auth/magic-link-request.js";
+export {
+  type SignInOptionsResponse,
+  SignInOptionsResponseSchema,
+  SignInRejectionCodeSchema,
+} from "./auth/sign-in-options.js";
 export {
   type UnauthenticatedResponse,
   UnauthenticatedResponseSchema,
@@ -78,7 +78,6 @@ export * from "./threads/get-thread-readiness.js";
 export * from "./threads/list-threads.js";
 export * from "./threads/message-author.js";
 export * from "./threads/pin-thread.js";
-export * from "./threads/update-thread.js";
 export * from "./threads/terminal.js";
 export * from "./threads/thread-chat.js";
 export * from "./threads/thread-data.js";
@@ -88,5 +87,6 @@ export {
 } from "./threads/thread-not-found-response.js";
 export * from "./threads/thread-settlement-provenance.js";
 export * from "./threads/thread-sharing.js";
+export * from "./threads/update-thread.js";
 export * from "./threads/workspace-policy-denied-response.js";
 export * from "./workload-identity.js";
