@@ -221,9 +221,10 @@ describe("GitHub webhook lifecycle persistence", () => {
   it("reconciles additions and actual all-to-selected transitions against out-of-order delivery", async () => {
     const repository = {
       id: 7003,
+      node_id: "R_7003",
+      name: "stale",
       full_name: "display/stale",
-      html_url: "https://github.com/display/stale",
-      visibility: "private",
+      private: true,
     };
     let reconciliations = 0;
     await send(
@@ -281,9 +282,10 @@ describe("GitHub webhook lifecycle persistence", () => {
     const now = new Date().toISOString();
     const repository = {
       id: 7004,
+      node_id: "R_7004",
+      name: "current",
       full_name: "display/current",
-      html_url: "https://github.com/display/current",
-      visibility: "private",
+      private: true,
     };
     await env.DB.prepare(`
       INSERT INTO github_installation_repository (
@@ -370,9 +372,10 @@ describe("GitHub webhook lifecycle persistence", () => {
   it("adds entitlement without selecting, then removes it for all owners before success", async () => {
     const repository = {
       id: 7001,
+      node_id: "R_7001",
+      name: "repository",
       full_name: "display/repository",
-      html_url: "https://github.com/display/repository",
-      visibility: "private",
+      private: true,
     };
     const installation = { id: 9001, repository_selection: "selected" };
     await send("installation_repositories", {
@@ -429,9 +432,10 @@ describe("GitHub webhook lifecycle persistence", () => {
       repositories_added: [
         {
           id: 7999,
+          node_id: "R_7999",
+          name: "stale",
           full_name: "display/stale",
-          html_url: "https://github.com/display/stale",
-          visibility: "private",
+          private: true,
         },
       ],
     };
@@ -573,9 +577,10 @@ describe("GitHub webhook lifecycle persistence", () => {
 
     const repository = {
       id: 7002,
+      node_id: "R_7002",
+      name: "original",
       full_name: "display/original",
-      html_url: "https://github.com/display/original",
-      visibility: "private",
+      private: true,
     };
     await send("installation_repositories", {
       action: "added",

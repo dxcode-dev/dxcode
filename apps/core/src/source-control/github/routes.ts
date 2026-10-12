@@ -43,7 +43,6 @@ import {
   GitHubControlPlaneInvalid,
   type GitHubOwner,
   listGitHubGrants,
-  ownerForGitHubSetupState,
 } from "./control-plane.js";
 import { GitHubProviderError } from "./provider-http.js";
 import {
@@ -231,6 +230,15 @@ const boundedQuery = (
   return value;
 };
 
+const optionalBoundedQuery = (
+  context: Context<AppEnv>,
+  name: string,
+  maximum: number,
+) =>
+  context.req.query(name) === undefined
+    ? undefined
+    : boundedQuery(context, name, maximum);
+
 const optionalReturnTo = (context: Context<AppEnv>) => {
   const value = context.req.query("return_to");
   return value === undefined || value.length === 0 ? undefined : value;
@@ -377,30 +385,33 @@ githubControlPlaneRoutes.get("/setup", (context) =>
     async () => {
       const deps = await controlPlane(context);
       const session = await browser(context);
-      const state = boundedQuery(context, "state", 128);
+      const userId = context.get("principal").userId;
+      const state = optionalBoundedQuery(context, "state", 128);
       const installationId = boundedQuery(context, "installation_id", 32);
-      const owner = await ownerForGitHubSetupState(
-        deps.db,
-        state,
-        context.get("principal").userId,
-        session.sessionId,
-      );
-      if (
-        owner.scope !== "personal" ||
-        owner.id !== context.get("principal").userId
-      ) {
-        throw new GitHubControlPlaneForbidden();
-      }
+      // GitHub sends `state` back only for a new installation. Saving an
+      // existing one redirects with setup_action=update and no state.
+      if (state === undefined && context.req.query("setup_action") !== "update")
+        throw new GitHubControlPlaneInvalid();
       const completion = await deps.service.completeInstallation(
-        context.get("principal").userId,
+        userId,
         session.sessionId,
         state,
         installationId,
       );
+      // No Configure pending in this browser: the change was made on GitHub,
+      // so refresh the installation if this user connected it.
+      if (completion === undefined)
+        await Effect.runPromise(
+          deps.service.reconcile(
+            userId,
+            `ghg_personal_${userId}_${installationId}`,
+            personalOwner(context),
+          ),
+        );
       const destination = new URL(context.env.DX_AUTH_URL as string);
       destination.pathname = "/settings/integrations";
       destination.search = "github=installed";
-      if (completion.returnTo !== undefined)
+      if (completion?.returnTo !== undefined)
         destination.searchParams.set("return_to", completion.returnTo);
       return destination.toString();
     },

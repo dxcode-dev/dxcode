@@ -128,6 +128,15 @@ const ownerEpochs = async (
   );
 };
 
+const fullName = (value: unknown) => {
+  const name = text(value);
+  if (!/^[A-Za-z0-9-]+\/(?!\.\.?$)[A-Za-z0-9._-]+$/.test(name))
+    throw new GitHubWebhookInvalid();
+  return name;
+};
+
+// installation_repositories lists repositories as id, node_id, name,
+// full_name, and private only; the repository event sends the full object.
 const decodeRepository = (value: unknown) => {
   const repository = record(value);
   const visibility =
@@ -139,10 +148,14 @@ const decodeRepository = (value: unknown) => {
     visibility !== "internal"
   )
     throw new GitHubWebhookInvalid();
+  const name = fullName(repository.full_name);
   return {
     id: id(repository.id),
-    fullName: text(repository.full_name),
-    webUrl: githubUrl(repository.html_url),
+    fullName: name,
+    webUrl:
+      repository.html_url === undefined
+        ? `https://github.com/${name}`
+        : githubUrl(repository.html_url),
     visibility,
   };
 };
@@ -159,7 +172,10 @@ const eventActions: Record<GitHubWebhookEvent, ReadonlySet<string>> = {
   ]),
   installation_repositories: new Set(["added", "removed"]),
   installation_target: new Set(["renamed"]),
+  // A new repository under an all-repositories installation also arrives as
+  // installation_repositories added, which grants entitlement.
   repository: new Set([
+    "created",
     "renamed",
     "transferred",
     "deleted",

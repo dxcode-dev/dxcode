@@ -20,7 +20,9 @@ guide](https://docs.github.com/en/apps/creating-github-apps/registering-a-github
 4. Leave **Expire user authorization tokens** enabled.
 5. Do not select **Request user authorization during installation**. dx starts
    user authorization before installation.
-6. Set the setup URL to `<deployment-origin>/v1/integrations/github/setup`.
+6. Set the setup URL to `<deployment-origin>/v1/integrations/github/setup`
+   and select **Redirect on update**, so GitHub returns users to dx after they
+   change repository access.
 7. Enable webhooks. Set the webhook URL to
    `<deployment-origin>/v1/integrations/github/webhooks`, create a strong random
    webhook secret, and keep SSL verification enabled.
@@ -141,7 +143,8 @@ remove remaining installations and credentials in GitHub.
   deployed HTTPS origin.
 - **Installation returns to the wrong page:** check the setup URL and ensure
   **Request user authorization during installation** is off.
-- **Repository missing:** grant the installation access to that repository,
-  then use **Refresh** in dx.
+- **Repository missing:** grant the installation access to that repository.
+  dx picks up the change from the webhook; use **Refresh** in dx if it still
+  does not appear.
 - **Webhook rejected:** confirm the configured webhook secret matches the JSON
   and SSL verification remains enabled.

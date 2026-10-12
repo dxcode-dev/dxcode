@@ -876,32 +876,67 @@ export const createGitHubControlPlane = (input: {
     };
   };
 
+  const pendingSetup = `actor_user_id = ? AND browser_session_id = ?
+    AND status = 'pending' AND consumed_at IS NULL AND expires_at > ?`;
+
+  /**
+   * Completes the setup transaction named by `state`. GitHub omits `state`
+   * when the user saves an installation that already exists, so without it
+   * this browser session's newest pending setup is completed instead, and
+   * `undefined` means this session has none.
+   */
   const completeInstallation = async (
     actorUserId: string,
     browserSessionId: string,
-    state: string,
+    state: string | undefined,
     installationId: string,
   ) => {
     if (!/^[1-9][0-9]{0,30}$/.test(installationId))
       throw new GitHubControlPlaneInvalid();
-    const stateHash = await hashOAuthState(state);
     const now = nowIso();
+    const pending =
+      state === undefined
+        ? await db
+            .prepare(`
+              SELECT id, owner_scope, owner_id FROM github_setup_transaction
+               WHERE ${pendingSetup}
+               ORDER BY created_at DESC, id DESC LIMIT 1
+            `)
+            .bind(actorUserId, browserSessionId, now)
+            .first<{ id: string; owner_scope: string; owner_id: string }>()
+        : await db
+            .prepare(`
+              SELECT id, owner_scope, owner_id FROM github_setup_transaction
+               WHERE state_hash = ? AND ${pendingSetup}
+            `)
+            .bind(
+              await hashOAuthState(state),
+              actorUserId,
+              browserSessionId,
+              now,
+            )
+            .first<{ id: string; owner_scope: string; owner_id: string }>();
+    if (pending === null) {
+      if (state === undefined) return undefined;
+      throw new GitHubControlPlaneInvalid();
+    }
+    if (pending.owner_scope !== "personal" || pending.owner_id !== actorUserId)
+      throw new GitHubControlPlaneForbidden();
     const claim = await db
       .prepare(`
         UPDATE github_setup_transaction SET status = 'oauth-proved'
-         WHERE state_hash = ? AND actor_user_id = ? AND browser_session_id = ?
-           AND status = 'pending' AND consumed_at IS NULL AND expires_at > ?
+         WHERE id = ? AND ${pendingSetup}
       `)
-      .bind(stateHash, actorUserId, browserSessionId, now)
+      .bind(pending.id, actorUserId, browserSessionId, now)
       .run();
     if (claim.meta.changes !== 1) throw new GitHubControlPlaneInvalid();
     const transaction = await db
       .prepare(`
         SELECT id, actor_user_id, owner_scope, owner_id, verifier_reference_id,
                return_to
-          FROM github_setup_transaction WHERE state_hash = ?
+          FROM github_setup_transaction WHERE id = ?
       `)
-      .bind(stateHash)
+      .bind(pending.id)
       .first<SetupTransactionRow>();
     if (transaction === null) throw new GitHubControlPlaneInvalid();
     const authorization = await freshAuthorization(actorUserId);
@@ -1471,23 +1506,4 @@ export const listGitHubGrants = async (db: D1Database, owner: GitHubOwner) => {
       };
     }),
   );
-};
-
-export const ownerForGitHubSetupState = async (
-  db: D1Database,
-  state: string,
-  actorUserId: string,
-  browserSessionId: string,
-) => {
-  const stateHash = await hashOAuthState(state);
-  const row = await db
-    .prepare(`
-      SELECT owner_scope, owner_id FROM github_setup_transaction
-       WHERE state_hash = ? AND actor_user_id = ? AND browser_session_id = ?
-         AND status = 'pending' AND consumed_at IS NULL AND expires_at > ?
-    `)
-    .bind(stateHash, actorUserId, browserSessionId, nowIso())
-    .first<{ owner_scope: "personal" | "workspace"; owner_id: string }>();
-  if (row === null) throw new GitHubControlPlaneInvalid();
-  return { scope: row.owner_scope, id: row.owner_id } satisfies GitHubOwner;
 };
