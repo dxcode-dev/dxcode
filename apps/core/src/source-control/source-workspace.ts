@@ -480,6 +480,42 @@ const requireHooksSuccess = Effect.fn("requireHooksSuccess")(function* (
     });
 });
 
+/** Git LFS is best-effort: objects dx could not fetch stay pointer files. */
+const LfsState = Schema.Struct({
+  status: Schema.Literals(["complete", "incomplete"]),
+  reason: Schema.optional(
+    Schema.Literals(["unavailable", "install", "fetch", "checkout"]),
+  ),
+});
+
+const requireLfsResult = Effect.fn("requireLfsResult")(function* (
+  threadId: string,
+  result: CommandResult,
+): Effect.fn.Return<
+  void,
+  | SourceWorkspaceConflict
+  | SourceWorkspaceHistoryUnavailable
+  | SourceWorkspaceInitializationFailed
+> {
+  yield* requireSuccess(result);
+  const lfs = yield* Effect.try({
+    try: () =>
+      Schema.decodeUnknownSync(LfsState)(
+        JSON.parse(result.stdout || "{}") as unknown,
+      ),
+    catch: () => new SourceWorkspaceInitializationFailed(),
+  });
+  if (lfs.status === "incomplete")
+    sourceControlLogger.warn(
+      "Source workspace LFS objects incomplete; continuing.",
+      {
+        event: "source_workspace_lfs_incomplete",
+        threadId,
+        reason: lfs.reason ?? "unknown",
+      },
+    );
+});
+
 const AnonymousDiscovery = Schema.Struct({
   sourceRevision: Schema.String.check(
     Schema.isMinLength(40),
@@ -795,7 +831,7 @@ const makeSourceWorkspaceService = (
           { operation: "fetch", invocationSource: "checkout" },
           (credential) =>
             run(preparation, "lfs", { ...base, ...credential }).pipe(
-              Effect.flatMap((result) => requireSuccess(result)),
+              Effect.flatMap((result) => requireLfsResult(threadId, result)),
             ),
         );
       }

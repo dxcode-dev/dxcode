@@ -710,18 +710,41 @@ const runSubmodule = expected => {
   assertNetworkConfiguration(ROOT, repositoryName);
   git(ROOT, repositoryName, ["-c", "submodule.recurse=false", "submodule", "update", "--init", "--", path], true);
 };
+// Any .gitattributes in the snapshot can route paths through LFS, as in a clone.
 const lfsNeeded = (expected, verified = verify(expected)) => {
-  const attributes = join(ROOT, ".gitattributes");
-  const value = lstat(attributes);
-  if (value === undefined || value.isSymbolicLink() || !value.isFile() || value.size > MAX_MARKER) return false;
-  return readRegular(attributes, MAX_MARKER).split("\n").some(line => !line.trimStart().startsWith("#") && /filter=lfs/.test(line));
+  try {
+    return git(ROOT, required("DX_REPOSITORY_NAME"), ["grep", "-l", "-E", "^[^#]*filter=lfs", expected.sourceSha, "--", ".gitattributes", "**/.gitattributes"], false, 120000, [0, 1], true) !== "";
+  } catch { return false; }
+};
+// LFS never blocks a Thread. As in a clone whose download fails, whatever dx
+// cannot install or fetch stays a pointer file for the user to pull later.
+const lfsStep = (reason, step) => {
+  // Only a failed Git command degrades; safety and input failures still stop.
+  try { step(); return undefined; } catch (cause) {
+    if (cause instanceof SourceWorkspaceFailure) throw cause;
+    return reason;
+  }
 };
 const runLfs = expected => {
   verify(expected);
-  git(ROOT, required("DX_REPOSITORY_NAME"), ["lfs", "install", "--local", "--skip-smudge"]);
-  assertNetworkConfiguration(ROOT, required("DX_REPOSITORY_NAME"));
-  git(ROOT, required("DX_REPOSITORY_NAME"), ["lfs", "fetch", "origin", expected.sourceSha], true);
-  git(ROOT, required("DX_REPOSITORY_NAME"), ["lfs", "checkout"]);
+  const repositoryName = required("DX_REPOSITORY_NAME");
+  const unavailable = lfsStep("unavailable", () => git(ROOT, repositoryName, ["lfs", "version"], false, 120000, [0], true));
+  if (unavailable !== undefined) return { status: "incomplete", reason: unavailable };
+  // Configure LFS as a laptop clone has it: smudging filters for later checkouts
+  // and pulls, and the repository hooks that upload objects on push. dx's own
+  // Git calls disable hooks, so name the repository's hooks directory here.
+  // Setup hooks run without credentials and the workspace can be offline, so a
+  // later download failure leaves a pointer instead of failing the command.
+  const install = lfsStep("install", () => {
+    git(ROOT, repositoryName, ["-c", "core.hooksPath=" + join(ROOT, ".git", "hooks"), "lfs", "install", "--local"], false, 120000, [0], true);
+    git(ROOT, repositoryName, ["config", "--local", "lfs.skipdownloaderrors", "true"], false, 120000, [0], true);
+  });
+  if (install !== undefined) return { status: "incomplete", reason: install };
+  assertNetworkConfiguration(ROOT, repositoryName);
+  const fetch = lfsStep("fetch", () => git(ROOT, repositoryName, ["lfs", "fetch", "origin", expected.sourceSha], true, 300000, [0], true));
+  const checkout = lfsStep("checkout", () => git(ROOT, repositoryName, ["lfs", "checkout"], false, 120000, [0], true));
+  const reason = fetch ?? checkout;
+  return reason === undefined ? { status: "complete" } : { status: "incomplete", reason };
 };
 // Setup and resume prepare the workspace for convenience; the agent can
 // finish that work itself. A failing hook is recorded and logged, never fatal.
@@ -819,7 +842,7 @@ try {
       process.stdout.write(JSON.stringify(checkoutPayload(expected)));
     }
     else if (action === "submodule") runSubmodule(expected);
-    else if (action === "lfs") runLfs(expected);
+    else if (action === "lfs") process.stdout.write(JSON.stringify(runLfs(expected)));
     else if (action === "unshallow") {
       unshallow(expected, true);
       process.stdout.write(JSON.stringify(checkoutPayload(expected)));

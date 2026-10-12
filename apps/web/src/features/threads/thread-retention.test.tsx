@@ -216,7 +216,7 @@ it("initializes the first Flue candidate with its stable delivery identity", asy
     )
     .mockResolvedValueOnce({ submissionId: "submission-1" })
     .mockResolvedValueOnce({ submissionId: "submission-2" });
-  const client = createThreadAgentClient("agent-url", initialData);
+  const client = createThreadAgentClient("agent-url", () => initialData);
   const message = { kind: "user" as const, body: "Start locally" };
 
   await client.send({ idempotencyKey: "first-input", message });
@@ -243,11 +243,11 @@ it("initializes the first Flue candidate with its stable delivery identity", asy
 
 it("keeps authoritative empty history distinct from Thread access revocation", () => {
   const registry = new ThreadSessionRegistry(new QueryClient(), userId);
-  const cold = registry.prepare("cold" as ThreadId, projectId, "cold");
+  const cold = registry.prepare("cold" as ThreadId, "cold");
   network.absent.get("cold")?.();
   registry.activate(cold);
   expect(cold.disposed).toBe(false);
-  const known = registry.prepare("known" as ThreadId, projectId, "known");
+  const known = registry.prepare("known" as ThreadId, "known");
   registry.activate(known);
   known.presentation.set("draft", "sensitive");
   network.absent.get("known")?.();
@@ -385,8 +385,7 @@ it("keeps pending composer images across an A-B-A switch", async () => {
 
 it("evicts the least recently selected ninth entry, never a prepared render", () => {
   const registry = new ThreadSessionRegistry(new QueryClient(), userId);
-  const prepare = (id: string) =>
-    registry.prepare(id as ThreadId, projectId, id);
+  const prepare = (id: string) => registry.prepare(id as ThreadId, id);
   const a = prepare("A");
   registry.activate(a);
   const b = prepare("B");
@@ -412,12 +411,13 @@ it("ignores late activation cleanup and retains metadata beyond five minutes wit
   const registry = new ThreadSessionRegistry(client, userId);
   const id = "A" as ThreadId;
   client.setQueryData(threadKeys.detail(userId, id), {
+    projectId,
     executionWorkspace: { ready: false },
   });
   client.setQueryData(projectKeys.detail(userId, projectId), {
     name: "retained",
   });
-  const entry = registry.prepare(id, projectId, "A");
+  const entry = registry.prepare(id, "A");
   const oldCleanup = registry.activate(entry);
   const currentCleanup = registry.activate(entry);
   oldCleanup();
@@ -441,9 +441,9 @@ it.each([401, 403, 404])(
     const registry = new ThreadSessionRegistry(client, userId);
     const container = document.createElement("div");
     const root = createRoot(container);
-    const a = registry.prepare("A" as ThreadId, projectId, "A");
+    const a = registry.prepare("A" as ThreadId, "A");
     registry.activate(a);
-    const b = registry.prepare("B" as ThreadId, projectId, "B");
+    const b = registry.prepare("B" as ThreadId, "B");
     registry.activate(b);
     await React.act(() =>
       root.render(
@@ -490,15 +490,15 @@ it.each([401, 403, 404])(
 
 it("retains dictation per Thread and clears it with the owning session", () => {
   const registry = new ThreadSessionRegistry(new QueryClient(), userId);
-  const a = registry.prepare("A" as ThreadId, projectId, "A");
-  const b = registry.prepare("B" as ThreadId, projectId, "B");
+  const a = registry.prepare("A" as ThreadId, "A");
+  const b = registry.prepare("B" as ThreadId, "B");
   registry.activate(a);
   const audio = new Blob([new Uint8Array([1, 2, 3])], { type: "audio/wav" });
   a.dictation.retain(audio, "insert", "Retry this recording.");
   registry.activate(b);
 
   expect(
-    registry.prepare("A" as ThreadId, projectId, "A").dictation.getSnapshot(),
+    registry.prepare("A" as ThreadId, "A").dictation.getSnapshot(),
   ).toMatchObject({
     state: "retained",
     audio,
@@ -517,7 +517,7 @@ it("keeps image URLs on switches and releases them on eviction and clear", async
     .spyOn(URL, "createObjectURL")
     .mockReturnValue("blob:retained-image");
   const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
-  const a = registry.prepare("A" as ThreadId, projectId, "A");
+  const a = registry.prepare("A" as ThreadId, "A");
   registry.activate(a);
   await a.images.addFiles([
     new File(
@@ -527,9 +527,9 @@ it("keeps image URLs on switches and releases them on eviction and clear", async
     ),
   ]);
   for (const id of ["B", "C", "D", "E", "F", "G", "H"])
-    registry.activate(registry.prepare(id as ThreadId, projectId, id));
+    registry.activate(registry.prepare(id as ThreadId, id));
   expect(revoke).not.toHaveBeenCalled();
-  registry.activate(registry.prepare("I" as ThreadId, projectId, "I"));
+  registry.activate(registry.prepare("I" as ThreadId, "I"));
   expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:retained-image");
   registry.clear();
   await Promise.resolve();
@@ -542,7 +542,7 @@ it("releases an in-flight image exactly once when its retained entry is cleared"
   const registry = new ThreadSessionRegistry(new QueryClient(), userId);
   vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:in-flight-image");
   const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
-  const entry = registry.prepare("A" as ThreadId, projectId, "A");
+  const entry = registry.prepare("A" as ThreadId, "A");
   registry.activate(entry);
   await entry.images.addFiles([
     new File(
@@ -562,7 +562,7 @@ it("releases an in-flight image exactly once when its retained entry is cleared"
 
 it("keeps newer composer state when an older retained send fails", () => {
   const registry = new ThreadSessionRegistry(new QueryClient(), userId);
-  const entry = registry.prepare("A" as ThreadId, projectId, "A");
+  const entry = registry.prepare("A" as ThreadId, "A");
   registry.activate(entry);
   const disposeOld = vi.fn();
   const oldImages = [
@@ -608,7 +608,7 @@ it("keeps newer composer state when an older retained send fails", () => {
 
 it("delivers late presentation receipts to the replacement mount and ignores them after eviction", async () => {
   const registry = new ThreadSessionRegistry(new QueryClient(), userId);
-  const entry = registry.prepare("A" as ThreadId, projectId, "A");
+  const entry = registry.prepare("A" as ThreadId, "A");
   registry.activate(entry);
   let receipt: (value: string) => void = () => {};
   function Composer() {
@@ -640,8 +640,8 @@ it("delivers late presentation receipts to the replacement mount and ignores the
 
 it("keeps composer drafts isolated across warm Thread navigation", async () => {
   const registry = new ThreadSessionRegistry(new QueryClient(), userId);
-  const a = registry.prepare("A" as ThreadId, projectId, "A");
-  const b = registry.prepare("B" as ThreadId, projectId, "B");
+  const a = registry.prepare("A" as ThreadId, "A");
+  const b = registry.prepare("B" as ThreadId, "B");
   function Composer() {
     const [draft, setDraft] = useThreadPresentation("draft", "");
     return (

@@ -1,6 +1,9 @@
 import { DxMark } from "./dx-mark.js";
 
-/** Shows the dx loading mark as an inline status or full-screen transition. */
+/**
+ * Shows the dx loading mark as an inline status, a pulsing mark centered in
+ * its pane, or a full-screen transition.
+ */
 export function DxLoading({
   active = true,
   label,
@@ -8,7 +11,7 @@ export function DxLoading({
 }: {
   readonly active?: boolean;
   readonly label: string;
-  readonly variant?: "inline" | "screen";
+  readonly variant?: "inline" | "pane" | "screen";
 }) {
   if (!active) return null;
   return (

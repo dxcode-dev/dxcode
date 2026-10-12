@@ -1,4 +1,8 @@
-import type { ProjectData, ThreadAgentInitializationData } from "@dx/api";
+import {
+  type ProjectData,
+  type ThreadAgentInitializationData,
+  threadAgentUrl,
+} from "@dx/api";
 import type {
   ClaudeCodeEffort,
   ModeId,
@@ -22,20 +26,22 @@ import {
 } from "./image-attachments.js";
 import { threadQueryOptions } from "./thread-queries.js";
 
+/** The first send creates the agent with `initialData` once it is known. */
 export const createThreadAgentClient = (
   agentUrl: string,
-  initialData: ThreadAgentInitializationData,
+  initialData: () => ThreadAgentInitializationData | undefined,
 ): FlueClient => {
   const client = createFlueClient({ url: agentUrl, fetch: sameOriginFetch });
   const send = client.send.bind(client);
   let initializing = true;
   client.send = async (options) => {
-    if (!initializing) return send(options);
+    const data = initialData();
+    if (!initializing || data === undefined) return send(options);
     try {
       const receipt = await send({
         ...options,
         uid: null,
-        initialData,
+        initialData: data,
       });
       initializing = false;
       return receipt;
@@ -57,7 +63,8 @@ export const isAuthorizationError = (error: unknown): boolean =>
 
 export interface RetainedThread {
   readonly id: ThreadId;
-  readonly projectId: ProjectId;
+  /** Set from the Thread detail, which loads alongside the history. */
+  agentInitialization?: ThreadAgentInitializationData;
   readonly client: FlueClient;
   readonly session: FlueAgentSession;
   readonly dictation: DictationRecoverySession;
@@ -213,21 +220,16 @@ export class ThreadSessionRegistry {
     for (const listener of this.creationListeners) listener();
   }
 
-  prepare(
-    id: ThreadId,
-    projectId: ProjectId,
-    agentUrl: string,
-    initialData?: ThreadAgentInitializationData,
-  ): RetainedThread {
+  /** Needs only the Thread id, so history loads alongside the Thread detail. */
+  prepare(id: ThreadId, agentUrl: string = threadAgentUrl(id)): RetainedThread {
     const existing = this.entries.get(id);
     if (existing !== undefined) return existing;
-    const client =
-      initialData === undefined
-        ? createFlueClient({ url: agentUrl, fetch: sameOriginFetch })
-        : createThreadAgentClient(agentUrl, initialData);
-    return {
+    const client = createThreadAgentClient(
+      agentUrl,
+      () => entry.agentInitialization,
+    );
+    const entry: RetainedThread = {
       id,
-      projectId,
       client,
       session: createFlueAgentSession({ client, live: "sse", promptLimit: 2 }),
       dictation: new DictationRecoverySession(),
@@ -236,6 +238,7 @@ export class ThreadSessionRegistry {
       images: createPendingAttachmentCollection(),
       disposed: false,
     };
+    return entry;
   }
 
   activate(entry: RetainedThread): () => void {
@@ -252,20 +255,27 @@ export class ThreadSessionRegistry {
         enabled: false,
         refetchInterval: false,
       });
-      const project = new QueryObserver(this.queryClient, {
-        ...projectQueryOptions(this.userId, entry.projectId),
-        enabled: false,
-      });
       const revoke = (error: unknown) => {
         if (isAuthorizationError(error)) this.remove(entry.id);
       };
-      const releaseThread = thread.subscribe((result) => revoke(result.error));
-      const releaseProject = project.subscribe((result) =>
-        revoke(result.error),
-      );
+      let releaseProject: (() => void) | undefined;
+      // The Project is known once the Thread detail loads.
+      const watchProject = (projectId: ProjectId | undefined) => {
+        if (releaseProject !== undefined || projectId === undefined) return;
+        const project = new QueryObserver(this.queryClient, {
+          ...projectQueryOptions(this.userId, projectId),
+          enabled: false,
+        });
+        releaseProject = project.subscribe((result) => revoke(result.error));
+      };
+      const releaseThread = thread.subscribe((result) => {
+        watchProject(result.data?.projectId);
+        revoke(result.error);
+      });
+      watchProject(thread.getCurrentResult().data?.projectId);
       this.releases.set(entry.id, () => {
         releaseThread();
-        releaseProject();
+        releaseProject?.();
       });
     }
     while (this.entries.size > 8) {

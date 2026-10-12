@@ -7,7 +7,7 @@ import {
 import {
   PROJECTLESS_PROJECT_NAME,
   type ProjectId,
-  type ThreadId,
+  ThreadId,
   type UserId,
 } from "@dx/domain";
 import {
@@ -69,6 +69,7 @@ import {
   isAuthorizationError,
   type OptimisticThreadCreation,
   type PendingSubmissionControl,
+  type RetainedThread,
   retainSubmissionImages,
   type ThreadSessionRegistry,
 } from "./thread-session-registry.js";
@@ -108,6 +109,69 @@ const useOptimisticThreadCreation = (
     [registry, threadId],
   );
   return React.useSyncExternalStore(subscribe, snapshot, snapshot);
+};
+
+const isThreadId = Schema.is(ThreadId);
+const HISTORY_SETTLED = "history-settled";
+
+/** History loaded, or failed: Flue retries a failure while `connecting`. */
+const historySettledNow = (session: FlueAgentSession) => {
+  const history = session.getSnapshot();
+  return (
+    history.historyReady ||
+    history.status === "error" ||
+    history.error !== undefined
+  );
+};
+
+/**
+ * Activates the Thread's retained session from its id alone, so history loads
+ * alongside the Thread detail. True once history has loaded or failed, and
+ * stays true while a refresh reloads it, so the open page never unmounts.
+ * A revoked Thread is not activated; access granted again starts a new entry.
+ */
+const useRetainedThread = (
+  registry: ThreadSessionRegistry | undefined,
+  threadId: ThreadId,
+  authorized: boolean,
+) => {
+  const entry = React.useMemo(
+    () =>
+      authorized && isThreadId(threadId)
+        ? registry?.prepare(threadId)
+        : undefined,
+    [registry, threadId, authorized],
+  );
+  const subscribe = React.useCallback(
+    (listener: () => void) => {
+      if (registry === undefined || entry === undefined) return () => {};
+      const deactivate = registry.activate(entry);
+      const observe = () => {
+        if (historySettledNow(entry.session))
+          entry.presentation.set(HISTORY_SETTLED, true);
+      };
+      observe();
+      const unsubscribe = entry.session.subscribe(() => {
+        observe();
+        listener();
+      });
+      return () => {
+        unsubscribe();
+        deactivate();
+      };
+    },
+    [registry, entry],
+  );
+  const snapshot = () =>
+    entry === undefined ||
+    entry.presentation.get(HISTORY_SETTLED) === true ||
+    historySettledNow(entry.session);
+  const historySettled = React.useSyncExternalStore(
+    subscribe,
+    snapshot,
+    snapshot,
+  );
+  return { entry, historySettled };
 };
 
 export function ThreadWorkspace({
@@ -158,18 +222,31 @@ export function ThreadWorkspace({
     [threadQuery.error, projectError].find(isAuthorizationError) ??
     threadQuery.error ??
     projectError;
+  const retained = useRetainedThread(
+    registry,
+    id,
+    !isAuthorizationError(error),
+  );
   const retry = () => {
     if (threadQuery.data === undefined || threadQuery.error !== null)
       void threadQuery.refetch();
     if (threadQuery.data !== undefined) void projectQuery.refetch();
   };
 
+  const metadataReady =
+    threadQuery.data !== undefined &&
+    project !== undefined &&
+    !isAuthorizationError(error);
+  // A Thread created here shows its first message without waiting for history.
+  const historyReady =
+    retained.historySettled || optimisticCreation !== undefined;
   if (
     threadQuery.data === undefined ||
     project === undefined ||
-    isAuthorizationError(error)
+    isAuthorizationError(error) ||
+    !historyReady
   ) {
-    if (error)
+    if (error && !metadataReady)
       return (
         <div className="fatal-state">
           <strong>Thread unavailable</strong>
@@ -183,11 +260,12 @@ export function ThreadWorkspace({
           </Button>
         </div>
       );
-    return <DxLoading label="Loading thread…" />;
+    return <DxLoading label="Loading thread…" variant="pane" />;
   }
   return (
     <ThreadSession
       key={threadQuery.data.id}
+      retained={retained.entry}
       thread={threadQuery.data}
       project={project}
       refreshError={
@@ -282,6 +360,8 @@ type ThreadProject = Pick<ProjectData, "name"> &
 
 type ThreadSessionProps = {
   readonly thread: ThreadDetailData;
+  /** Already activated by the page that loaded it. */
+  readonly retained?: RetainedThread;
   readonly project: ThreadProject;
   readonly refreshError?: string;
   readonly onRefreshRetry?: () => void;
@@ -391,7 +471,7 @@ function RouteScopedThreadSession(props: ThreadSessionProps) {
     () =>
       createThreadAgentClient(
         props.thread.agentUrl,
-        props.thread.agentInitialization,
+        () => props.thread.agentInitialization,
       ),
     [props.thread.agentInitialization, props.thread.agentUrl],
   );
@@ -403,15 +483,16 @@ function RetainedThreadSession({
   registry,
   ...props
 }: ThreadSessionProps & { readonly registry: ThreadSessionRegistry }) {
-  const [entry] = React.useState(() =>
-    registry.prepare(
-      props.thread.id,
-      props.thread.projectId,
-      props.thread.agentUrl,
-      props.thread.agentInitialization,
-    ),
+  const [entry] = React.useState(() => {
+    const entry =
+      props.retained ??
+      registry.prepare(props.thread.id, props.thread.agentUrl);
+    entry.agentInitialization ??= props.thread.agentInitialization;
+    return entry;
+  });
+  useMountEffect(() =>
+    props.retained === undefined ? registry.activate(entry) : undefined,
   );
-  useMountEffect(() => registry.activate(entry));
   const subscribe = React.useCallback(
     (listener: () => void) => {
       entry.presentationListeners.add(listener);

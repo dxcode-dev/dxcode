@@ -86,8 +86,11 @@ const parseJson = async (
   }
 };
 
-// Bitbucket Cloud's basic adapter currently uses its own web origin and the
+// Bitbucket Cloud's basic adapter answers with presigned URLs on its LFS
+// file-service bucket (observed 2026-10-12), its own web origin, or the
 // Atlassian Media API. New storage origins must be reviewed before being added.
+const BITBUCKET_LFS_BUCKET =
+  /^micros--prod-[a-z0-9-]+--bitbucketci-file-service--git-lfs-files\.s3(?:\.[a-z0-9-]+)?\.amazonaws\.com$/;
 const approvedActionUrl = (raw: unknown) => {
   if (typeof raw !== "string" || raw.length > 8_192) invalid();
   let url: URL;
@@ -101,7 +104,8 @@ const approvedActionUrl = (raw: unknown) => {
     url.username ||
     url.password ||
     (url.hostname !== "bitbucket.org" &&
-      url.hostname !== "api.media.atlassian.com")
+      url.hostname !== "api.media.atlassian.com" &&
+      !BITBUCKET_LFS_BUCKET.test(url.hostname))
   )
     invalid();
   return url.href;
@@ -261,7 +265,8 @@ export const handleBitbucketLfs = async (input: {
     batch.objects.length < 1 ||
     batch.objects.length > MAX_OBJECTS ||
     (batch.hash_algo !== undefined && batch.hash_algo !== "sha256") ||
-    batch.transfers?.some((transfer) => transfer !== "basic") ||
+    // Git LFS offers every adapter it has; the gateway serves only basic.
+    (batch.transfers !== undefined && !batch.transfers.includes("basic")) ||
     batch.objects.some(
       (object) =>
         !OID.test(object.oid) ||

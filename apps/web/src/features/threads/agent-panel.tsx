@@ -107,11 +107,6 @@ function AgentTranscriptHeader({
           </div>
         </aside>
       ) : null}
-      {!historyReady && messageCount === 0 ? (
-        <div className="transcript-loading">
-          <span className="tool-spinner" /> Loading conversation…
-        </div>
-      ) : null}
       {historyReady && messageCount === 0 ? (
         <div className="empty-conversation">
           <strong>

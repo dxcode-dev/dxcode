@@ -239,6 +239,12 @@ const makeSandbox = (
             exitCode: 0,
           };
         }
+        if (action === "lfs")
+          return {
+            stdout: JSON.stringify({ status: "complete" }),
+            stderr: "",
+            exitCode: input?.actionExitCodes?.[action] ?? 0,
+          };
         return {
           stdout: "",
           stderr: "",

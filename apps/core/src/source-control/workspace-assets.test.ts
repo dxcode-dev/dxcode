@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -14,9 +14,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { handleBitbucketLfs } from "./bitbucket/lfs-gateway.js";
 import {
   assetInstallerProgram,
   assetVerifierProgram,
@@ -52,8 +55,20 @@ const invokeHelper = async (
   );
 };
 
+// Fixtures never read the developer's Git configuration: a global
+// core.hooksPath would otherwise receive the hooks Git LFS installs.
+const hermeticGitEnvironment = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+};
+
 const git = (cwd: string, ...argumentsList: string[]) => {
-  const result = spawnSync("git", argumentsList, { cwd, encoding: "utf8" });
+  const result = spawnSync("git", argumentsList, {
+    cwd,
+    encoding: "utf8",
+    env: hermeticGitEnvironment,
+  });
   if (result.status !== 0)
     throw new Error(`git failed: ${result.stderr || result.stdout}`);
   return result.stdout.trim();
@@ -68,6 +83,12 @@ interface HarnessFixture {
   readonly environment: Record<string, string>;
   readonly outside: string;
   readonly stop: () => Promise<void>;
+  readonly gateway?: {
+    readonly origin: string;
+    readonly requests: GatewayRequest[];
+  };
+  readonly source: string;
+  readonly upstream: string;
 }
 
 const startGitHttpServer = async (repository: string) => {
@@ -165,11 +186,239 @@ process.on("SIGTERM", () => server.close());
   };
 };
 
+const spawnAsync = (
+  command: string,
+  argumentsList: string[],
+  options: { cwd?: string; env?: Record<string, string | undefined> } = {},
+) =>
+  new Promise<{ status: number | null; stdout: string; stderr: string }>(
+    (resolveRun, reject) => {
+      const child = spawn(command, argumentsList, {
+        ...options,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+        stdout += chunk;
+      });
+      child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+        stderr += chunk;
+      });
+      child.once("error", reject);
+      child.once("close", (status) => resolveRun({ status, stdout, stderr }));
+    },
+  );
+
+const BITBUCKET_GATEWAY_PATH = "/api/source/bitbucket/git";
+// The host Bitbucket Cloud's LFS batch API returned for downloads, observed
+// live on 2026-10-12 together with the response shape replayed below.
+const BITBUCKET_LFS_BUCKET =
+  "https://micros--prod-east--bitbucketci-file-service--git-lfs-files.s3.amazonaws.com";
+const bitbucketAccessToken = "bitbucket-oauth-116";
+const bitbucketLeaseToken = "dx-lease-116";
+
+interface GatewayRequest {
+  readonly method: string;
+  readonly path: string;
+  readonly status: number;
+  readonly transfers?: unknown;
+}
+
+/**
+ * Plays the dx Bitbucket gateway at its production path: Git's dumb HTTP
+ * protocol over the bare upstream, and LFS through the production handler.
+ * The handler's upstream replays Bitbucket Cloud's live LFS answers:
+ * presigned download URLs on its LFS file-service bucket, without headers.
+ */
+const startBitbucketGateway = async (upstream: string, lfsObjects: string) => {
+  const repositoryRoot = `${BITBUCKET_GATEWAY_PATH}/owner/repository.git`;
+  const requests: GatewayRequest[] = [];
+  const rows = new Map<string, Record<string, unknown>>();
+  const db = {
+    prepare: (sql: string) => ({
+      bind: (...values: unknown[]) => ({
+        run: async () => {
+          if (sql.startsWith("INSERT"))
+            rows.set(values[0] as string, {
+              lease_id_hash: values[1],
+              method: values[2],
+              oid: values[3],
+              size: values[4],
+              envelope_json: values[5],
+            });
+          return { success: true };
+        },
+        first: async () => {
+          const row = rows.get(values[0] as string);
+          return row?.lease_id_hash === values[1] && row?.method === values[2]
+            ? row
+            : null;
+        },
+      }),
+    }),
+    batch: async (statements: Array<{ run: () => Promise<unknown> }>) =>
+      Promise.all(statements.map((statement) => statement.run())),
+  } as unknown as D1Database;
+  const bitbucket: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    const authorization = new Headers(init?.headers).get("authorization");
+    if (
+      url.href ===
+      "https://bitbucket.org/owner/repository.git/info/lfs/objects/batch"
+    ) {
+      if (
+        authorization !==
+        `Basic ${btoa(`x-token-auth:${bitbucketAccessToken}`)}`
+      )
+        return new Response(null, { status: 401 });
+      const batch = JSON.parse(String(init?.body)) as {
+        objects: Array<{ oid: string; size: number }>;
+      };
+      return Response.json(
+        {
+          objects: batch.objects.map(({ oid, size }) =>
+            existsSync(join(lfsObjects, oid.slice(0, 2), oid.slice(2, 4), oid))
+              ? {
+                  oid,
+                  size,
+                  actions: {
+                    download: {
+                      href: `${BITBUCKET_LFS_BUCKET}/lfs/%7Bworkspace%7D/%7Brepository%7D/${oid}?X-Amz-Signature=signed`,
+                      expires_in: 3600,
+                    },
+                  },
+                }
+              : {
+                  oid,
+                  size,
+                  error: { code: 404, message: "Object does not exist" },
+                },
+          ),
+        },
+        { headers: { "content-type": "application/vnd.git-lfs+json" } },
+      );
+    }
+    const oid = url.pathname.split("/").at(-1) ?? "";
+    if (
+      url.origin === BITBUCKET_LFS_BUCKET &&
+      url.searchParams.get("X-Amz-Signature") === "signed" &&
+      authorization === null &&
+      /^[0-9a-f]{64}$/.test(oid)
+    )
+      return new Response(
+        readFileSync(join(lfsObjects, oid.slice(0, 2), oid.slice(2, 4), oid)),
+        { headers: { "content-type": "binary/octet-stream" } },
+      );
+    return new Response(null, { status: 404 });
+  };
+  let origin = "";
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? "/", origin);
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(chunk as Buffer);
+    const body = Buffer.concat(chunks);
+    let answer: Response;
+    let transfers: unknown;
+    if (url.pathname.startsWith(`${repositoryRoot}/info/lfs/`)) {
+      if (url.pathname.endsWith("/objects/batch"))
+        transfers = (
+          JSON.parse(body.toString("utf8")) as { transfers?: unknown }
+        ).transfers;
+      const objectRequest = url.pathname.includes("/info/lfs/dx-objects/");
+      // The production route admits object requests only with the lease the
+      // batch answer handed out in each action's headers.
+      answer =
+        objectRequest &&
+        request.headers.authorization !==
+          `Basic ${btoa(`dx:${bitbucketLeaseToken}`)}`
+          ? new Response(null, { status: 401 })
+          : await handleBitbucketLfs({
+              request: new Request(url, {
+                method: request.method,
+                headers: Object.entries(request.headers).flatMap(
+                  ([name, value]) =>
+                    value === undefined
+                      ? []
+                      : [
+                          [
+                            name,
+                            Array.isArray(value) ? value.join(", ") : value,
+                          ],
+                        ],
+                ) as Array<[string, string]>,
+                ...(request.method === "GET" ? {} : { body }),
+              }),
+              suffix: url.pathname.slice(repositoryRoot.length),
+              gatewayRepositoryUrl: `${origin}${repositoryRoot}`,
+              lease: {
+                id_hash: "lease-116",
+                thread_id: "thr_00000000-0000-4000-8000-000000000116",
+                actor_user_id: "user-116",
+                connection_id: "connection-116",
+                authorization_epoch: 1,
+                operation: "fetch",
+              },
+              repositoryName: "owner/repository",
+              leaseToken: bitbucketLeaseToken,
+              accessToken: bitbucketAccessToken,
+              db,
+              bindings: {
+                DX_CONFIG_ENCRYPTION_KEYS: JSON.stringify({
+                  activeVersion: 1,
+                  keys: { 1: btoa("01234567890123456789012345678901") },
+                }),
+              },
+              fetcher: bitbucket,
+            }).catch(
+              (cause: unknown) =>
+                new Response(String((cause as { _tag?: string })?._tag), {
+                  status: 403,
+                }),
+            );
+    } else if (
+      request.method === "GET" &&
+      url.pathname.startsWith(`${repositoryRoot}/`) &&
+      !url.pathname.includes("..")
+    ) {
+      const target = join(upstream, url.pathname.slice(repositoryRoot.length));
+      answer = existsSync(target)
+        ? new Response(readFileSync(target))
+        : new Response(null, { status: 404 });
+    } else answer = new Response(null, { status: 404 });
+    requests.push({
+      method: request.method ?? "",
+      path: url.pathname.slice(repositoryRoot.length),
+      status: answer.status,
+      ...(transfers === undefined ? {} : { transfers }),
+    });
+    response.writeHead(answer.status, {
+      "content-type":
+        answer.headers.get("content-type") ?? "application/octet-stream",
+    });
+    response.end(Buffer.from(await answer.arrayBuffer()));
+  });
+  await new Promise<void>((resolveListen) =>
+    server.listen(0, "127.0.0.1", resolveListen),
+  );
+  origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  return {
+    origin,
+    requests,
+    stop: () =>
+      new Promise<void>((resolveClose) => server.close(() => resolveClose())),
+  };
+};
+
 const makeHarness = async (input?: {
   readonly lfsAttributes?: boolean;
   readonly http?: boolean;
   readonly shallowClone?: boolean;
   readonly requiresFullHistory?: boolean;
+  /** A nested LFS asset served through the Bitbucket gateway, plus another branch and a tag. */
+  readonly bitbucketLfs?: boolean;
+  /** With `bitbucketLfs`, a second LFS asset whose object the provider no longer has. */
+  readonly missingLfsObject?: boolean;
 }): Promise<HarnessFixture> => {
   const base = await mkdtemp(
     join(realpathSync(tmpdir()), "dx-workspace-harness-"),
@@ -190,6 +439,26 @@ const makeHarness = async (input?: {
   git(source, "config", "user.email", "fixture@example.test");
   git(source, "config", "user.name", "Fixture");
   git(source, "config", "commit.gpgsign", "false");
+  if (input?.bitbucketLfs === true) {
+    // Name the hooks directory, as production does: an ambient global
+    // core.hooksPath must not receive this fixture's hooks.
+    git(
+      source,
+      "-c",
+      `core.hooksPath=${join(source, ".git", "hooks")}`,
+      "lfs",
+      "install",
+      "--local",
+    );
+    mkdirSync(join(source, "assets"));
+    writeFileSync(
+      join(source, "assets", ".gitattributes"),
+      "*.bin filter=lfs diff=lfs merge=lfs -text\n",
+    );
+    writeFileSync(join(source, "assets", "model.bin"), randomBytes(65_536));
+    if (input.missingLfsObject === true)
+      writeFileSync(join(source, "assets", "missing.bin"), randomBytes(1_024));
+  }
   mkdirSync(join(source, ".agents"));
   writeFileSync(join(source, "README.md"), "snapshot\n");
   if (input?.lfsAttributes === true)
@@ -207,10 +476,45 @@ const makeHarness = async (input?: {
   git(source, "add", ".");
   git(source, "commit", "-m", "fixture");
   const sourceSha = git(source, "rev-parse", "HEAD");
+  if (input?.bitbucketLfs === true) {
+    git(source, "checkout", "-q", "-b", "feature");
+    writeFileSync(join(source, "feature.txt"), "feature\n");
+    git(source, "add", ".");
+    git(source, "commit", "-m", "feature");
+    git(source, "tag", "v1");
+    git(source, "checkout", "-q", "main");
+  }
+  // After the last commit: Git's clean filter rewrites objects while adding.
+  if (input?.missingLfsObject === true) {
+    const oid = createHash("sha256")
+      .update(readFileSync(join(source, "assets", "missing.bin")))
+      .digest("hex");
+    rmSync(
+      join(
+        source,
+        ".git",
+        "lfs",
+        "objects",
+        oid.slice(0, 2),
+        oid.slice(2, 4),
+        oid,
+      ),
+    );
+  }
   git(base, "clone", "--bare", source, upstream);
-  let fixtureRemote = upstream;
+  let fixtureRemote: string | undefined = upstream;
   let stop = async () => {};
-  if (input?.http === true) {
+  let gateway: Awaited<ReturnType<typeof startBitbucketGateway>> | undefined;
+  if (input?.bitbucketLfs === true) {
+    git(base, "--git-dir", upstream, "update-server-info");
+    gateway = await startBitbucketGateway(
+      upstream,
+      join(source, ".git", "lfs", "objects"),
+    );
+    // Production transport: the canonical origin, rewritten to the gateway.
+    fixtureRemote = undefined;
+    stop = gateway.stop;
+  } else if (input?.http === true) {
     git(base, "--git-dir", upstream, "update-server-info");
     const http = await startGitHttpServer(upstream);
     fixtureRemote = http.url;
@@ -227,7 +531,9 @@ const makeHarness = async (input?: {
     workspaceParent,
     gitHome: join(base, "state", "git-home"),
     fixtureRemote:
-      input?.shallowClone === true && input.http !== true
+      input?.shallowClone === true &&
+      input.http !== true &&
+      fixtureRemote !== undefined
         ? `file://${fixtureRemote}`
         : fixtureRemote,
     shallowClone: input?.shallowClone,
@@ -257,7 +563,20 @@ const makeHarness = async (input?: {
       DX_BINDING_REVISION: "1",
       DX_INVOCATION_ID: crypto.randomUUID(),
       DX_SOURCE_CONFIG_DIGEST: "config-116",
+      ...(gateway === undefined
+        ? {}
+        : {
+            DX_SOURCE_PROVIDER: "bitbucket",
+            GH_TOKEN: "",
+            DX_CLONE_URL: "https://bitbucket.org/owner/repository.git",
+            DX_BITBUCKET_GIT_TOKEN: bitbucketLeaseToken,
+            DX_BITBUCKET_GIT_ORIGIN: gateway.origin,
+            DX_BITBUCKET_GIT_PATH: BITBUCKET_GATEWAY_PATH,
+          }),
     },
+    gateway,
+    source,
+    upstream,
   };
 };
 
@@ -847,6 +1166,251 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     ).toThrow();
   });
 
+  it("checks out a Bitbucket LFS repository through the dx gateway the way a laptop clone does", async () => {
+    const fixture = await makeHarness({ bitbucketLfs: true });
+    const run = (action: string) =>
+      spawnAsync(process.execPath, [fixture.program, action], {
+        env: { ...fixture.environment, DX_INVOCATION_ID: crypto.randomUUID() },
+      });
+    try {
+      const initialized = await run("initialize");
+      expect(initialized.status, initialized.stderr).toBe(0);
+      expect(JSON.parse(initialized.stdout)).toMatchObject({
+        status: "ready",
+        lfsNeeded: true,
+      });
+      // Only the snapshot's branch arrives: no other branch, tag, or commit.
+      const checkoutRefs = git(
+        fixture.paths.root,
+        "for-each-ref",
+        "--format=%(refname)",
+      );
+      expect(checkoutRefs).toBe("refs/heads/main\nrefs/remotes/origin/main");
+      const featureSha = git(fixture.upstream, "rev-parse", "feature");
+      expect(
+        spawnSync("git", ["cat-file", "-e", featureSha], {
+          env: hermeticGitEnvironment,
+          cwd: fixture.paths.root,
+        }).status,
+      ).not.toBe(0);
+
+      const lfs = await run("lfs");
+      expect(
+        lfs.status,
+        `${lfs.stderr} ${JSON.stringify(fixture.gateway?.requests)}`,
+      ).toBe(0);
+      expect(JSON.parse(lfs.stdout)).toEqual({ status: "complete" });
+      expect(
+        readFileSync(join(fixture.paths.root, "assets", "model.bin")),
+      ).toEqual(readFileSync(join(fixture.source, "assets", "model.bin")));
+      expect(git(fixture.paths.root, "status", "--porcelain")).toBe("");
+      // Later checkouts and pulls smudge, and pushes upload, like a laptop.
+      expect(
+        git(fixture.paths.root, "config", "--local", "filter.lfs.process"),
+      ).toBe("git-lfs filter-process");
+      const prePush = join(fixture.paths.root, ".git", "hooks", "pre-push");
+      expect(lstatSync(prePush).mode & 0o111).not.toBe(0);
+      expect(readFileSync(prePush, "utf8")).toContain("git lfs pre-push");
+      expect(fixture.gateway?.requests).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            method: "POST",
+            path: "/info/lfs/objects/batch",
+            status: 200,
+            transfers: expect.arrayContaining(["basic"]),
+          }),
+          expect.objectContaining({
+            method: "GET",
+            path: expect.stringMatching(/^\/info\/lfs\/dx-objects\//),
+            status: 200,
+          }),
+        ]),
+      );
+
+      expect(hooksState(fixture)).toEqual({ status: "ready" });
+
+      // A later pull of a new LFS object materializes it during checkout.
+      writeFileSync(
+        join(fixture.source, "assets", "next.bin"),
+        randomBytes(4_096),
+      );
+      git(fixture.source, "add", ".");
+      git(fixture.source, "commit", "-m", "next");
+      git(
+        fixture.source,
+        "push",
+        "--no-verify",
+        "-q",
+        fixture.upstream,
+        "main",
+      );
+      git(fixture.upstream, "update-server-info");
+      const pulled = await spawnAsync(
+        "git",
+        [
+          "-c",
+          `url.${fixture.gateway?.origin}${BITBUCKET_GATEWAY_PATH}/owner/repository.git.insteadOf=https://bitbucket.org/owner/repository.git`,
+          "pull",
+          "--ff-only",
+          "-q",
+        ],
+        {
+          cwd: fixture.paths.root,
+          env: {
+            PATH: process.env.PATH,
+            HOME: fixture.paths.home,
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_CONFIG_NOSYSTEM: "1",
+          },
+        },
+      );
+      expect(pulled.status, pulled.stderr).toBe(0);
+      expect(
+        readFileSync(join(fixture.paths.root, "assets", "next.bin")),
+      ).toEqual(readFileSync(join(fixture.source, "assets", "next.bin")));
+
+      const contents = allRegularFileContents(fixture.paths.root);
+      expect(contents).not.toContain(bitbucketAccessToken);
+      expect(contents).not.toContain(bitbucketLeaseToken);
+      const evidence = process.env.DX_SOURCE_LFS_EVIDENCE;
+      if (evidence !== undefined)
+        writeFileSync(
+          evidence,
+          JSON.stringify(
+            {
+              gitLfs: git(fixture.paths.root, "lfs", "version"),
+              refsAfterCheckout: checkoutRefs.split("\n"),
+              refsAfterPull: git(
+                fixture.paths.root,
+                "for-each-ref",
+                "--format=%(refname)",
+              ).split("\n"),
+              lfsFiles: git(
+                fixture.paths.root,
+                "lfs",
+                "ls-files",
+                "--long",
+              ).split("\n"),
+              assets: Object.fromEntries(
+                ["model.bin", "next.bin"].map((name) => [
+                  name,
+                  createHash("sha256")
+                    .update(
+                      readFileSync(join(fixture.paths.root, "assets", name)),
+                    )
+                    .digest("hex"),
+                ]),
+              ),
+              lfsConfig: git(
+                fixture.paths.root,
+                "config",
+                "--local",
+                "--get-regexp",
+                "^filter\\.lfs\\.",
+              ).split("\n"),
+              gatewayRequests: fixture.gateway?.requests,
+            },
+            null,
+            2,
+          ),
+        );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("activates with pointer files when the provider lacks an LFS object, and later checkouts keep the pointer", async () => {
+    const fixture = await makeHarness({
+      bitbucketLfs: true,
+      missingLfsObject: true,
+    });
+    const run = (action: string) =>
+      spawnAsync(process.execPath, [fixture.program, action], {
+        env: { ...fixture.environment, DX_INVOCATION_ID: crypto.randomUUID() },
+      });
+    try {
+      const initialized = await run("initialize");
+      expect(initialized.status, initialized.stderr).toBe(0);
+      const lfs = await run("lfs");
+      expect(lfs.status, lfs.stderr).toBe(0);
+      expect(JSON.parse(lfs.stdout)).toEqual({
+        status: "incomplete",
+        reason: "fetch",
+      });
+      // Every object the provider has is checked out; the missing one stays a pointer.
+      expect(
+        readFileSync(join(fixture.paths.root, "assets", "model.bin")),
+      ).toEqual(readFileSync(join(fixture.source, "assets", "model.bin")));
+      const missing = join(fixture.paths.root, "assets", "missing.bin");
+      expect(readFileSync(missing, "utf8")).toMatch(
+        /^version https:\/\/git-lfs\.github\.com\/spec\/v1\n/,
+      );
+      expect(hooksState(fixture)).toEqual({ status: "ready" });
+
+      // A later checkout that cannot download keeps the pointer instead of failing.
+      rmSync(missing);
+      const restored = await spawnAsync(
+        "git",
+        [
+          "-c",
+          `url.${fixture.gateway?.origin}${BITBUCKET_GATEWAY_PATH}/owner/repository.git.insteadOf=https://bitbucket.org/owner/repository.git`,
+          "checkout",
+          "--",
+          "assets/missing.bin",
+        ],
+        {
+          cwd: fixture.paths.root,
+          env: {
+            PATH: process.env.PATH,
+            HOME: fixture.paths.home,
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_TERMINAL_PROMPT: "0",
+          },
+        },
+      );
+      expect(restored.status, restored.stderr).toBe(0);
+      expect(readFileSync(missing, "utf8")).toMatch(
+        /^version https:\/\/git-lfs\.github\.com\/spec\/v1\n/,
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("activates with pointer files when Git LFS is unavailable in the workspace", async () => {
+    const fixture = await makeHarness({ bitbucketLfs: true });
+    const brokenLfs = join(fixture.base, "broken-lfs");
+    mkdirSync(brokenLfs);
+    writeFileSync(join(brokenLfs, "git-lfs"), "#!/bin/sh\nexit 127\n", {
+      mode: 0o755,
+    });
+    const run = (action: string) =>
+      spawnAsync(process.execPath, [fixture.program, action], {
+        env: {
+          ...fixture.environment,
+          PATH: `${brokenLfs}:${fixture.environment.PATH}`,
+          DX_INVOCATION_ID: crypto.randomUUID(),
+        },
+      });
+    try {
+      const initialized = await run("initialize");
+      expect(initialized.status, initialized.stderr).toBe(0);
+      const lfs = await run("lfs");
+      expect(lfs.status, lfs.stderr).toBe(0);
+      expect(JSON.parse(lfs.stdout)).toEqual({
+        status: "incomplete",
+        reason: "unavailable",
+      });
+      expect(
+        readFileSync(join(fixture.paths.root, "assets", "model.bin"), "utf8"),
+      ).toMatch(/^version https:\/\/git-lfs\.github\.com\/spec\/v1\n/);
+      expect(hooksState(fixture)).toEqual({ status: "ready" });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it.each([
     "root",
     "workspace-parent",
@@ -1001,6 +1565,7 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     git(root, "gc", "-q", "--prune=now");
     expect(
       spawnSync("git", ["cat-file", "-e", `${fixture.sourceSha}^{commit}`], {
+        env: hermeticGitEnvironment,
         cwd: root,
       }).status,
     ).not.toBe(0);
