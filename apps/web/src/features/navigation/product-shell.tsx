@@ -122,6 +122,7 @@ export function ProductShell() {
       userId={identity.id}
       archiveAvailable={archiveAvailable}
       projects={projects}
+      projectsComplete={projectsQuery.isSuccess && !projectsQuery.hasNextPage}
       threads={threads}
       sharedThreads={sharedThreadsQuery.data}
       onUnfollow={unfollowThread}

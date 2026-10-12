@@ -498,8 +498,7 @@ a {
 }
 .thread-title {
   min-width: 40px;
-  max-width: 240px;
-  flex: 0 1 240px;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -537,16 +536,13 @@ a {
   flex: 0 1 auto;
   min-width: 0;
 }
-.thread-title-group .thread-title {
-  max-width: 320px;
-  flex-basis: auto;
-}
 .thread-header-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 2px;
-  flex: 1 1 auto;
+  /* The title gives up its width first; these controls shrink only after. */
+  flex: 1 0.001 auto;
   min-width: 0;
   margin-left: auto;
 }
@@ -6433,6 +6429,11 @@ a {
 }
 .new-thread-submit:disabled {
   opacity: 0.5;
+}
+.new-thread-submit[data-submitting] {
+  position: relative;
+  background: var(--muted);
+  opacity: 1;
 }
 .reasoning-positioner,
 .thread-context-positioner {

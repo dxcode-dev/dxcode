@@ -68,7 +68,7 @@ import {
   WorkspaceRepository,
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
-import { dispatch } from "@flue/runtime";
+import { dispatch, getAgentInstance } from "@flue/runtime";
 import { Effect, Layer, Match, Option, Result, Schema } from "effect";
 import { Hono } from "hono";
 import { DxAgent } from "../agents/dx-agent.js";
@@ -341,6 +341,15 @@ type InitialThreadDispatcher = (
 const dispatchInitialThreadMessage: InitialThreadDispatcher = (request) =>
   dispatch(DxAgent, request);
 
+/**
+ * Starts the Thread's agent Durable Object without changing it, so its cold
+ * start overlaps model resolution and persistence instead of following them.
+ */
+type InitialThreadAgentWarmer = (threadId: ThreadId) => Promise<unknown>;
+
+const warmInitialThreadAgent: InitialThreadAgentWarmer = (threadId) =>
+  getAgentInstance(DxAgent, threadId);
+
 const resolveCreationResponseDetail = <
   Detail,
   DetailError,
@@ -377,6 +386,7 @@ const resolveCreationResponseDetail = <
 export const createThreadRoutes = (
   dispatchInitialMessage: InitialThreadDispatcher = dispatchInitialThreadMessage,
   titleAgent: DxTitleAgentRunner = runDxTitleAgent,
+  warmInitialAgent: InitialThreadAgentWarmer = warmInitialThreadAgent,
 ) => {
   const threadRoutes = new Hono<AppEnv>();
 
@@ -386,6 +396,18 @@ export const createThreadRoutes = (
     let requestAdmittedAt = startedAt;
     let sourceAuthorizedAt = startedAt;
     let threadPersistedAt = startedAt;
+    let agentWarmedAt: number | undefined;
+    let detailResolvedAt: number | undefined;
+    let initialMessageAdmittedAt: number | undefined;
+    // Creation outlives the request: once it reaches Core, a closed tab or a
+    // dropped connection cannot stop the Thread or its first message.
+    const execution = (() => {
+      try {
+        return context.executionCtx;
+      } catch {
+        return undefined;
+      }
+    })();
     let settleTitlePersisted: ((persisted: boolean) => void) | undefined;
     let recoveredConcurrentCreation = false;
     const operation = Effect.gen(function* () {
@@ -403,13 +425,7 @@ export const createThreadRoutes = (
       const principal = context.get("principal");
       const requestedThreadId = input.threadId;
       // DxTitleAgent needs an execution context to outlive the response.
-      const titleExecution = (() => {
-        try {
-          return context.executionCtx;
-        } catch {
-          return undefined;
-        }
-      })();
+      const titleExecution = execution;
       const existingThread =
         requestedThreadId === undefined
           ? undefined
@@ -647,6 +663,23 @@ export const createThreadRoutes = (
       threadPersistedAt = Date.now();
       settleTitlePersisted?.(!recoveredConcurrentCreation);
       const initialMessage = input.initialMessage;
+      // The Thread now exists, so its agent is real: start it while the
+      // detail and author are read, ahead of the dispatch below.
+      if (initialMessage !== undefined)
+        void warmInitialAgent(thread.id).then(
+          () => {
+            agentWarmedAt = Date.now();
+          },
+          () => undefined,
+        );
+      // The author identity is read beside the detail, not after it.
+      const ownerIdentity =
+        initialMessage === undefined
+          ? undefined
+          : userIdentity(db, thread.ownerUserId).then(
+              (identity) => ({ identity }),
+              () => ({ identity: undefined }),
+            );
       const detail = yield* resolveCreationResponseDetail(
         threadDetailData(context.env.DB, db, thread),
         initialMessage === undefined
@@ -657,13 +690,17 @@ export const createThreadRoutes = (
               ),
             ),
       );
+      detailResolvedAt = Date.now();
       let initialSubmission: { readonly submissionId: string } | undefined;
       const messageSourceThreadId = context.get("messageSourceThreadId");
-      if (initialMessage !== undefined) {
-        const owner = yield* Effect.tryPromise({
-          try: () => userIdentity(db, thread.ownerUserId),
-          catch: () => new ThreadInitialAdmissionUnavailable(),
-        });
+      if (initialMessage !== undefined && ownerIdentity !== undefined) {
+        const owner = yield* Effect.flatMap(
+          Effect.promise(() => ownerIdentity),
+          ({ identity }) =>
+            identity === undefined
+              ? Effect.fail(new ThreadInitialAdmissionUnavailable())
+              : Effect.succeed(identity),
+        );
         const receipt = yield* Effect.tryPromise({
           try: () =>
             dispatchInitialMessage({
@@ -693,6 +730,7 @@ export const createThreadRoutes = (
           catch: () => new ThreadInitialAdmissionUnavailable(),
         });
         initialSubmission = { submissionId: receipt.submissionId };
+        initialMessageAdmittedAt = Date.now();
         const observations = submissionStartupObservations(
           requestId,
           thread.id,
@@ -717,16 +755,23 @@ export const createThreadRoutes = (
       return { body, threadId: thread.id };
     });
 
-    const result = await Effect.runPromise(Effect.result(operation));
-    // A creation that failed before persisting leaves no row to title.
-    settleTitlePersisted?.(false);
+    const completion = Effect.runPromise(Effect.result(operation)).then(
+      async (result) => {
+        // A creation that failed before persisting leaves no row to title.
+        settleTitlePersisted?.(false);
+        if (Result.isSuccess(result))
+          await scheduleRealtimeInvalidation(
+            () => context.executionCtx,
+            context.env,
+            result.success.threadId,
+            "thread.invalidated",
+          );
+        return result;
+      },
+    );
+    execution?.waitUntil(completion);
+    const result = await completion;
     if (Result.isSuccess(result)) {
-      await scheduleRealtimeInvalidation(
-        () => context.executionCtx,
-        context.env,
-        result.success.threadId,
-        "thread.invalidated",
-      );
       const responseReadyAt = Date.now();
       const decodedCorrelation = Schema.decodeUnknownResult(
         StartupTraceCorrelation,
@@ -764,7 +809,21 @@ export const createThreadRoutes = (
           responseReadyAt,
         ),
       ];
-      context.header("Server-Timing", startupServerTiming(observations));
+      // Header-only marks between persistence and the response.
+      const responseMarks = [
+        ["agent_warmed", agentWarmedAt],
+        ["detail_resolved", detailResolvedAt],
+        ["initial_message_admitted", initialMessageAdmittedAt],
+      ] as const;
+      context.header(
+        "Server-Timing",
+        [
+          startupServerTiming(observations),
+          ...responseMarks.flatMap(([phase, at]) =>
+            at === undefined ? [] : [`dx_${phase};dur=${at - startedAt}`],
+          ),
+        ].join(", "),
+      );
       await scheduleStartupPersistence(
         () => context.executionCtx,
         recordStartupPhases(context.env.DB, observations),

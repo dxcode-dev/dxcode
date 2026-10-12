@@ -16,49 +16,12 @@ import { threadColorAttributes } from "../../shared/thread-color.js";
 import { Avatar } from "../../shared/ui/avatar.js";
 import { Button } from "../../shared/ui/button.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
-import {
-  PendingThreadTitle,
-  ThreadTitleText,
-} from "../../shared/ui/thread-title.js";
+import { ThreadTitleText } from "../../shared/ui/thread-title.js";
 import { ShareDialog } from "./sharing/share-dialog.js";
 import { useSetThreadFollowing } from "./sharing/sharing-mutations.js";
 import { ThreadParticipants } from "./sharing/thread-participants.js";
 import { ThreadMenu } from "./thread-menu.js";
-import type { OptimisticThreadCreation } from "./thread-session-registry.js";
 import type { TranscriptViewModel } from "./transcript-view-model.js";
-
-export function PendingThreadHeader({
-  creation,
-}: {
-  readonly creation: OptimisticThreadCreation;
-}) {
-  return (
-    <header className="thread-title-bar">
-      <div className="thread-title-group">
-        <strong className="thread-title">
-          <PendingThreadTitle />
-        </strong>
-      </div>
-      <div className="thread-header-actions">
-        <span
-          className="thread-header-chip"
-          title={creation.project?.name ?? "No project"}
-        >
-          <FolderGit2 /> {creation.project?.name ?? "No project"}
-        </span>
-        <span
-          className="thread-header-chip"
-          title={`Thinking level: ${creation.profile}`}
-        >
-          {creation.profile}
-        </span>
-        <span className="thread-header-chip" title="Privacy: private">
-          <LockKeyhole /> Private
-        </span>
-      </div>
-    </header>
-  );
-}
 
 function PrivacyChip({
   thread,
@@ -171,7 +134,7 @@ export function ThreadHeader({
           className="thread-title"
           title={thread.titlePending === true ? undefined : thread.title}
         >
-          <ThreadTitleText thread={thread} />
+          <ThreadTitleText thread={thread} maxCharacters={60} />
         </strong>
         {own ? null : <FollowButton thread={thread} />}
         {model ? (

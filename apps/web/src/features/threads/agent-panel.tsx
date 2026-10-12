@@ -36,6 +36,7 @@ import {
   type ComposerMentions,
   useComposerMentions,
 } from "./sharing/chat-composer.js";
+import { UserMessageText } from "./sharing/message-authors.js";
 import { draftMode } from "./sharing/thread-chat.js";
 import type {
   OptimisticThreadCreation,
@@ -46,7 +47,6 @@ import {
   INBOUND_MESSAGE_PREFIX,
   ThreadTranscript,
 } from "./thread-transcript.js";
-import { TranscriptMarkdown } from "./transcript-markdown.js";
 import { deriveTranscriptViewModel } from "./transcript-view-model.js";
 import {
   type PresentationValue,
@@ -54,11 +54,7 @@ import {
   useThreadPresentationValue,
 } from "./use-thread-presentation.js";
 
-const emptyTranscript = deriveTranscriptViewModel({
-  messages: [],
-  settlements: [],
-});
-
+/** The first message until Flue exposes it, rendered as Flue's row will be. */
 function OptimisticInitialMessage({
   creation,
 }: {
@@ -70,62 +66,10 @@ function OptimisticInitialMessage({
       data-optimistic-initial-message=""
     >
       <div className="message-content">
-        {creation.body ? (
-          <TranscriptMarkdown>{creation.body}</TranscriptMarkdown>
-        ) : null}
+        {creation.body ? <UserMessageText text={creation.body} /> : null}
         <ImagePreviews images={creation.images} onRemove={() => {}} disabled />
       </div>
     </article>
-  );
-}
-
-export function PendingAgentPanel({
-  creation,
-}: {
-  readonly creation: OptimisticThreadCreation;
-}) {
-  return (
-    <div className="agent-panel-stack">
-      <section className="workspace-pane agent-pane" aria-label="Agent chat">
-        <ThreadTranscript
-          model={emptyTranscript}
-          historyReady={false}
-          showProcessingIndicator={false}
-          pinnedContent={<OptimisticInitialMessage creation={creation} />}
-          footer={
-            <ProcessingIndicator
-              accessibleLabel="Starting thread…"
-              className="initial-thread-status"
-              label="Starting thread…"
-            />
-          }
-        />
-        <div className="agent-composer-dock">
-          <form className="agent-composer">
-            <textarea
-              aria-label="Message"
-              data-command-target="thread-composer"
-              disabled
-              placeholder="Message"
-              value=""
-              readOnly
-            />
-            <div className="composer-actions">
-              <span className="composer-spacer" />
-              <Button
-                type="submit"
-                size="icon-sm"
-                className="composer-submit"
-                aria-label="Send message"
-                disabled
-              >
-                <ArrowUp />
-              </Button>
-            </div>
-          </form>
-        </div>
-      </section>
-    </div>
   );
 }
 

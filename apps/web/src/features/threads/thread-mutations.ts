@@ -56,9 +56,10 @@ const createThread = async (
   });
 
 export type OptimisticThreadData = ThreadData & {
-  readonly [optimisticCreation]: string;
+  readonly [optimisticCreation]: true;
 };
 
+/** A Thread the server has not admitted yet; the sidebar shows it creating. */
 export const isOptimisticThread = (
   thread: ThreadData,
 ): thread is OptimisticThreadData => optimisticCreation in thread;
@@ -67,20 +68,21 @@ export const optimisticThreadData = (
   id: ThreadId,
   projectId: ProjectId,
   title: ThreadTitle,
+  startedAt: number,
 ): OptimisticThreadData => {
-  const now = DateTime.nowUnsafe();
+  const at = DateTime.makeUnsafe(startedAt);
   return {
     id,
     projectId,
     title,
     visibility: "private",
-    createdAt: now,
-    updatedAt: now,
-    lastActivityAt: now,
+    createdAt: at,
+    updatedAt: at,
+    lastActivityAt: at,
     activityStatus: "idle",
     lifecycleState: "active",
     agentUrl: threadAgentUrl(id),
-    [optimisticCreation]: crypto.randomUUID(),
+    [optimisticCreation]: true,
   };
 };
 
@@ -100,59 +102,6 @@ const matchingActiveList = (
     scope?.lifecycleState !== "archived" &&
     (scope?.tree == null || scope.tree === "roots") &&
     (scope?.projectId === null || scope?.projectId === projectId)
-  );
-};
-
-const updateLoadedThreadLists = (
-  queryClient: QueryClient,
-  userId: UserId,
-  projectId: ProjectId,
-  update: (items: ReadonlyArray<ThreadData>) => ReadonlyArray<ThreadData>,
-) => {
-  for (const query of queryClient.getQueryCache().findAll({
-    queryKey: threadKeys.lists(userId),
-  })) {
-    if (!matchingActiveList(query.queryKey, projectId)) continue;
-    queryClient.setQueryData<ThreadListData>(query.queryKey, (current) => {
-      if (current === undefined || current.pages.length === 0) return current;
-      return {
-        ...current,
-        pages: current.pages.map((page, index) =>
-          index === 0 ? { ...page, items: update(page.items) } : page,
-        ),
-      };
-    });
-  }
-};
-
-export const cacheOptimisticThread = (
-  queryClient: QueryClient,
-  userId: UserId,
-  thread: OptimisticThreadData,
-) => {
-  const cancellations = queryClient.cancelQueries({
-    queryKey: threadKeys.lists(userId),
-  });
-  updateLoadedThreadLists(queryClient, userId, thread.projectId, (items) =>
-    items.some(({ id }) => id === thread.id) ? items : [thread, ...items],
-  );
-  return cancellations;
-};
-
-export const rollbackOptimisticThread = (
-  queryClient: QueryClient,
-  userId: UserId,
-  thread: OptimisticThreadData,
-) => {
-  updateLoadedThreadLists(queryClient, userId, thread.projectId, (items) =>
-    items.filter(
-      (item) =>
-        !(
-          item.id === thread.id &&
-          (item as Partial<OptimisticThreadData>)[optimisticCreation] ===
-            thread[optimisticCreation]
-        ),
-    ),
   );
 };
 
@@ -258,23 +207,12 @@ export const createThreadMutationOptions = (
         throw new Error("The initial message receipt was missing.");
       return response;
     },
-    onMutate: ({ project, ...input }) => {
+    onMutate: ({ project }) => {
       if (project !== undefined)
         seedProjectDetail(queryClient, userId, project);
-      return "optimisticThread" in input && input.optimisticThread !== undefined
-        ? cacheOptimisticThread(
-            queryClient,
-            userId,
-            input.optimisticThread,
-          ).then(() => ({ optimisticThread: input.optimisticThread }))
-        : undefined;
     },
     onSuccess: (response) =>
       cacheCreatedThread(queryClient, userId, response.data),
-    onError: (_error, _input, context) => {
-      if (context?.optimisticThread !== undefined)
-        rollbackOptimisticThread(queryClient, userId, context.optimisticThread);
-    },
   });
 
 interface CreateBlankThreadMutationInput {
@@ -288,7 +226,6 @@ interface CreateThreadWithInitialMessageMutationInput
   extends CreateBlankThreadMutationInput {
   readonly initialMessage: InitialThreadMessage;
   readonly threadId: ThreadId;
-  readonly optimisticThread?: OptimisticThreadData;
 }
 
 export type CreateThreadMutationInput =

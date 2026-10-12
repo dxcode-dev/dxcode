@@ -92,11 +92,9 @@ export interface OptimisticThreadCreation {
   readonly runnerProfileId?: RunnerProfileId;
   readonly body: string;
   readonly images: ReadonlyArray<PendingImage>;
+  /** Epoch milliseconds when the user sent it; orders its sidebar row. */
+  readonly startedAt: number;
   readonly submissionId?: string;
-}
-
-export interface FailedThreadCreation extends OptimisticThreadCreation {
-  readonly error: string;
 }
 
 export const retainSubmissionImages = (
@@ -146,7 +144,7 @@ export class ThreadSessionRegistry {
   private readonly releases = new Map<ThreadId, () => void>();
   private readonly creations = new Map<ThreadId, OptimisticThreadCreation>();
   private readonly creationListeners = new Set<() => void>();
-  private failedCreation: FailedThreadCreation | undefined;
+  private creationSnapshot: ReadonlyArray<OptimisticThreadCreation> = [];
   private active: { entry: RetainedThread; generation: number } | undefined;
   private generation = 0;
 
@@ -163,6 +161,10 @@ export class ThreadSessionRegistry {
   creation(id: ThreadId): OptimisticThreadCreation | undefined {
     return this.creations.get(id);
   }
+
+  /** Every creation in flight or not yet seen in Flue, oldest first. */
+  readonly pendingCreations = (): ReadonlyArray<OptimisticThreadCreation> =>
+    this.creationSnapshot;
 
   beginCreation(creation: OptimisticThreadCreation): void {
     const previous = this.creations.get(creation.id);
@@ -206,18 +208,8 @@ export class ThreadSessionRegistry {
     return creation;
   }
 
-  retainFailedCreation(creation: FailedThreadCreation): void {
-    disposeImages(this.failedCreation?.images ?? []);
-    this.failedCreation = creation;
-  }
-
-  claimFailedCreation(): FailedThreadCreation | undefined {
-    const creation = this.failedCreation;
-    this.failedCreation = undefined;
-    return creation;
-  }
-
   private notifyCreations(): void {
+    this.creationSnapshot = [...this.creations.values()];
     for (const listener of this.creationListeners) listener();
   }
 
@@ -312,8 +304,6 @@ export class ThreadSessionRegistry {
     for (const creation of this.creations.values())
       disposeImages(creation.images);
     this.creations.clear();
-    disposeImages(this.failedCreation?.images ?? []);
-    this.failedCreation = undefined;
     this.notifyCreations();
   }
 }

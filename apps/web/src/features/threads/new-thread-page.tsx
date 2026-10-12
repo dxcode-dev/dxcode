@@ -27,6 +27,7 @@ import { Option, Schema } from "effect";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { CommandProvider } from "../../shared/commands/command-provider.js";
+import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
 import {
   NewThreadSurfaceContext,
   type NewThreadSurfaceValue,
@@ -115,14 +116,8 @@ export function NewThreadProvider({
         };
         setInvocation({ key: Date.now(), projectId });
       },
-      pendingProjectlessCreation: (threadId) => {
-        const creation = registry?.creation(threadId as ThreadId);
-        if (creation === undefined || creation.project !== undefined)
-          return undefined;
-        return creation;
-      },
-      subscribePendingProjectlessCreation: (listener) =>
-        registry?.subscribeCreations(listener) ?? (() => undefined),
+      pendingCreations: registry?.pendingCreations,
+      subscribePendingCreations: registry?.subscribeCreations,
     }),
     [registry],
   );
@@ -139,7 +134,6 @@ export function NewThreadProvider({
           finalFocus={finalFocus}
           onClose={() => setInvocation(undefined)}
           onAccepted={() => setInvocation(undefined)}
-          routeScoped={false}
         />
       )}
     </NewThreadSurfaceContext.Provider>
@@ -154,7 +148,6 @@ export function NewThreadPage() {
       initialProjectId={search.project}
       onClose={() => void navigate({ to: "/" })}
       onAccepted={() => {}}
-      routeScoped
     />
   );
 }
@@ -164,13 +157,11 @@ function NewThreadModal({
   finalFocus,
   onClose,
   onAccepted,
-  routeScoped,
 }: {
   readonly initialProjectId?: ProjectId;
   readonly finalFocus?: React.ComponentProps<typeof Dialog.Popup>["finalFocus"];
   readonly onClose: () => void;
   readonly onAccepted: () => void;
-  readonly routeScoped: boolean;
 }) {
   const { identity } = useAuthenticatedIdentity();
   const settingsQuery = useQuery(settingsContextQueryOptions(identity.id));
@@ -237,7 +228,6 @@ function NewThreadModal({
       finalFocus={finalFocus}
       onClose={onClose}
       onAccepted={onAccepted}
-      routeScoped={routeScoped}
       workspaceId={settingsQuery.data.workspace?.id ?? "personal"}
       workspace={settingsQuery.data.workspace}
       dictationAvailable={settingsQuery.data.dictationAvailable === true}
@@ -393,22 +383,13 @@ function useComposerProjects(
  */
 function useComposerModeSelection(
   userId: UserId,
-  recovery:
-    | {
-        readonly profile: ModeId;
-        readonly model?: string;
-        readonly effort?: ClaudeCodeEffort;
-      }
-    | undefined,
   remembered: PersonalComposerDefaultsData,
   rememberComposer: (input: UpdatePersonalComposerDefaultsRequest) => void,
 ) {
-  const [chosenProfile, setChosenProfile] = React.useState<ModeId | undefined>(
-    recovery?.profile,
-  );
+  const [chosenProfile, setChosenProfile] = React.useState<ModeId>();
   const [chosenModel, setChosenModel] = React.useState<
     { readonly value: string | undefined } | undefined
-  >(recovery === undefined ? undefined : { value: recovery.model });
+  >();
   // Last mode/model selection sent from this composer. Deduping against it
   // (not the query cache, which updates asynchronously) keeps rapid changes
   // from dropping the final choice.
@@ -422,7 +403,7 @@ function useComposerModeSelection(
     rememberComposer(input);
   };
   const [effort, chooseEffort] = React.useState<ClaudeCodeEffort>(
-    recovery?.effort ?? CLAUDE_CODE_DEFAULT_EFFORT,
+    CLAUDE_CODE_DEFAULT_EFFORT,
   );
   const choicesQuery = useQuery(modelRoutingChoicesQueryOptions(userId));
   const profile = chosenProfile ?? startingMode(remembered.mode);
@@ -532,7 +513,6 @@ function ScopedNewThreadModal({
   finalFocus,
   onClose,
   onAccepted,
-  routeScoped,
   workspaceId,
   workspace,
   dictationAvailable,
@@ -543,7 +523,6 @@ function ScopedNewThreadModal({
   readonly finalFocus?: React.ComponentProps<typeof Dialog.Popup>["finalFocus"];
   readonly onClose: () => void;
   readonly onAccepted: () => void;
-  readonly routeScoped: boolean;
   readonly workspaceId: WorkspaceId | "personal";
   readonly workspace?: SettingsWorkspaceData;
   readonly dictationAvailable: boolean;
@@ -552,13 +531,9 @@ function ScopedNewThreadModal({
   readonly rememberedProject?: ProjectData;
 }) {
   const navigate = useNavigate();
-  const returnPath = useLocation({ select: (location) => location.href });
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
   const registry = React.useContext(ThreadSessionRegistryContext);
-  const [recovery] = React.useState(() =>
-    routeScoped ? registry?.claimFailedCreation() : undefined,
-  );
   const { projectsQuery, selectedProjectQuery, projects } = useComposerProjects(
     identity.id,
     initialProjectId,
@@ -576,10 +551,7 @@ function ScopedNewThreadModal({
     ProjectId | ""
   >(() =>
     startingProjectId({
-      explicit:
-        recovery === undefined
-          ? initialProjectId
-          : (recovery.project?.id ?? ""),
+      explicit: initialProjectId,
       remembered: remembered.project,
       listedProjectIds: projects.flatMap((project) =>
         canStartThreadsIn(project) ? [project.id] : [],
@@ -594,12 +566,7 @@ function ScopedNewThreadModal({
     chooseProfile,
     chooseModel,
     chooseEffort,
-  } = useComposerModeSelection(
-    identity.id,
-    recovery,
-    remembered,
-    rememberComposer,
-  );
+  } = useComposerModeSelection(identity.id, remembered, rememberComposer);
   const routingGraphQuery = useQuery(
     modelRoutingGraphQueryOptions({ scope: "personal" }, identity.id),
   );
@@ -608,39 +575,26 @@ function ScopedNewThreadModal({
     workspaceId,
   );
   const prompt = draft.text;
-  const [imageCollection] = React.useState(() => {
-    const collection = createPendingImageCollection();
-    if (recovery !== undefined) collection.restore(recovery.images);
-    return collection;
-  });
-  const [images, setImages] = React.useState<ReadonlyArray<PendingImage>>(
-    recovery?.images ?? [],
-  );
+  const [imageCollection] = React.useState(createPendingImageCollection);
+  const [images, setImages] = React.useState<ReadonlyArray<PendingImage>>([]);
   const [sending, setSending] = React.useState(false);
   const [runnerProfileOverride, setRunnerProfileOverride] = React.useState<
     RunnerProfileId | undefined
-  >(recovery?.runnerProfileId);
+  >();
   const submittingRef = React.useRef(false);
+  // A send outlives this composer when the user leaves the page mid-create.
+  const composerOpen = React.useRef(true);
+  useMountEffect(() => {
+    composerOpen.current = true;
+    return () => {
+      composerOpen.current = false;
+    };
+  });
   const initialCreationAttempt = React.useRef<
     InitialThreadCreationAttempt | undefined
-  >(
-    recovery === undefined
-      ? undefined
-      : {
-          threadId: recovery.id,
-          projectId: recovery.project?.id,
-          profile: recovery.profile,
-          model: recovery.model,
-          ...(recovery.effort === undefined ? {} : { effort: recovery.effort }),
-          runnerProfileId: recovery.runnerProfileId,
-          body: recovery.body,
-          attachmentIds: recovery.images.map(({ id }) => id),
-        },
-  );
-  const [error, setError] = React.useState<string | undefined>(recovery?.error);
+  >(undefined);
+  const [error, setError] = React.useState<string>();
   const [acceptedNavigationTarget, setAcceptedNavigationTarget] =
-    React.useState<ThreadId>();
-  const [optimisticThreadId, setOptimisticThreadId] =
     React.useState<ThreadId>();
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
@@ -693,12 +647,10 @@ function ScopedNewThreadModal({
         registry,
         create: createThreadMutation.mutateAsync,
         navigate,
-        routeScoped,
-        returnPath,
         draftStore,
         onAccepted,
         onAcceptedNavigationFailure: setAcceptedNavigationTarget,
-        setOptimisticThreadId,
+        composerOpen: () => composerOpen.current,
         initialCreationAttempt,
       });
     } catch (cause) {
@@ -721,8 +673,6 @@ function ScopedNewThreadModal({
     textareaRef,
   });
 
-  if (optimisticThreadId !== undefined) return null;
-
   const addFiles = (files: ReadonlyArray<File>) =>
     updatePendingImages(
       () => imageCollection.addFiles(files),
@@ -740,6 +690,8 @@ function ScopedNewThreadModal({
     );
 
   const close = () => {
+    // Leaving would hide a Thread that is still being created.
+    if (submitting) return;
     draftStore.flush();
     imageCollection.dispose();
     onClose();

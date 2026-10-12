@@ -4,7 +4,12 @@ import {
   type ThreadDetailData,
   ThreadFilesPath,
 } from "@dx/api";
-import type { ProjectId, ThreadId, UserId } from "@dx/domain";
+import {
+  PROJECTLESS_PROJECT_NAME,
+  type ProjectId,
+  type ThreadId,
+  type UserId,
+} from "@dx/domain";
 import {
   type FlueAgentSession,
   type UseFlueAgentResult,
@@ -25,7 +30,7 @@ import { MarkdownFileLinkContext } from "../../shared/ui/markdown-file-link-cont
 import { useMobile } from "../../shared/use-mobile.js";
 import { projectQueryOptions } from "../projects/project-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
-import { AgentPanel, PendingAgentPanel } from "./agent-panel.js";
+import { AgentPanel } from "./agent-panel.js";
 import { ChangesPane } from "./changes/changes-pane.js";
 import { CenterFilePane } from "./files/center-file-pane.js";
 import {
@@ -50,7 +55,7 @@ import {
   type ThreadFileNavigation,
   ThreadFileNavigationContext,
 } from "./thread-file-navigation.js";
-import { PendingThreadHeader, ThreadHeader } from "./thread-header.js";
+import { ThreadHeader } from "./thread-header.js";
 import {
   invalidateThreadQueries,
   threadQueryOptions,
@@ -122,13 +127,9 @@ export function ThreadWorkspace({
   const id = threadId as ThreadId;
   useThreadPresence(id);
   const workspaceStatus = useThreadWorkspaceStatus(id);
+  // The page opens only once the server admitted the creation.
   const optimisticCreation = useOptimisticThreadCreation(registry, id);
-  const threadQuery = useQuery({
-    ...threadQueryOptions(identity.id, id),
-    enabled:
-      optimisticCreation === undefined ||
-      optimisticCreation.submissionId !== undefined,
-  });
+  const threadQuery = useQuery(threadQueryOptions(identity.id, id));
   // A member of a shared Thread cannot read the owner's Project; the Thread
   // detail carries its name instead.
   const sharedWithMe =
@@ -141,9 +142,17 @@ export function ThreadWorkspace({
     ),
     enabled: threadQuery.data !== undefined && !sharedWithMe,
   });
+  // A Thread created in this browser knows its Project's name and scope, so
+  // it opens without waiting for the Project (a hidden one for No Project).
   const project: ThreadProject | undefined = sharedWithMe
     ? { name: threadQuery.data?.projectName ?? "Shared project" }
-    : projectQuery.data;
+    : (projectQuery.data ??
+      (optimisticCreation === undefined
+        ? undefined
+        : {
+            name: optimisticCreation.project?.name ?? PROJECTLESS_PROJECT_NAME,
+            workspaceId: optimisticCreation.project?.workspaceId,
+          }));
   const projectError = sharedWithMe ? null : projectQuery.error;
   const error =
     [threadQuery.error, projectError].find(isAuthorizationError) ??
@@ -154,20 +163,6 @@ export function ThreadWorkspace({
       void threadQuery.refetch();
     if (threadQuery.data !== undefined) void projectQuery.refetch();
   };
-
-  if (
-    optimisticCreation !== undefined &&
-    optimisticCreation.submissionId === undefined
-  ) {
-    return (
-      <div className="thread-region" data-pending-thread="">
-        <section className="thread-main-panel">
-          <PendingThreadHeader creation={optimisticCreation} />
-          <PendingAgentPanel creation={optimisticCreation} />
-        </section>
-      </div>
-    );
-  }
 
   if (
     threadQuery.data === undefined ||

@@ -9,7 +9,10 @@ import { useDebouncer } from "@tanstack/react-pacer";
 import { Link, useLocation } from "@tanstack/react-router";
 import { Search, SquarePen } from "lucide-react";
 import * as React from "react";
-import { useNewThreadSurface } from "../../shared/new-thread-surface.js";
+import {
+  type PendingThreadCreation,
+  useNewThreadSurface,
+} from "../../shared/new-thread-surface.js";
 import { useThreadArchive } from "../../shared/thread-archive.js";
 import { Button } from "../../shared/ui/button.js";
 import { SidebarAccountMenu } from "./sidebar-account-menu.js";
@@ -17,7 +20,10 @@ import { SidebarArchive } from "./sidebar-archive.js";
 import { ProjectsIcon } from "./sidebar-icons.js";
 import { SidebarPanelIcon } from "./sidebar-panel-icon.js";
 import { SidebarThreadNavigation } from "./sidebar-thread-navigation.js";
-import { buildThreadSections } from "./sidebar-thread-utils.js";
+import {
+  buildThreadSections,
+  withPendingThreads,
+} from "./sidebar-thread-utils.js";
 import {
   ThreadHoverPreview,
   type ThreadPreviewAnchor,
@@ -137,27 +143,26 @@ const useThreadPreviewIntent = () => {
   };
 };
 
-const usePendingProjectlessCreation = (
+const noPendingCreations: ReadonlyArray<PendingThreadCreation> = [];
+const readNoPendingCreations = () => noPendingCreations;
+const subscribeNothing = () => () => undefined;
+
+const usePendingCreations = (
   surface: ReturnType<typeof useNewThreadSurface>,
-  threadId: string | undefined,
 ) => {
-  const subscribe = React.useCallback(
-    (listener: () => void) =>
-      surface.subscribePendingProjectlessCreation?.(listener) ??
-      (() => undefined),
-    [surface],
+  const read = surface.pendingCreations ?? readNoPendingCreations;
+  return React.useSyncExternalStore(
+    surface.subscribePendingCreations ?? subscribeNothing,
+    read,
+    read,
   );
-  const snapshot = React.useCallback(() => {
-    if (threadId === undefined) return undefined;
-    return surface.pendingProjectlessCreation?.(threadId);
-  }, [surface, threadId]);
-  return React.useSyncExternalStore(subscribe, snapshot, snapshot);
 };
 
 export function AppSidebar({
   userId,
   archiveAvailable = userId !== undefined,
   projects,
+  projectsComplete = false,
   threads,
   sharedThreads,
   personalAccount,
@@ -179,6 +184,8 @@ export function AppSidebar({
   readonly userId?: UserId;
   readonly archiveAvailable?: boolean;
   readonly projects: ReadonlyArray<ProjectData>;
+  /** Every Project the user can see is loaded, so unnamed ones are hidden. */
+  readonly projectsComplete?: boolean;
   readonly threads: ReadonlyArray<ThreadData>;
   /** Shared Threads of other workspace members that this user follows. */
   readonly sharedThreads?: ReadonlyArray<ThreadData>;
@@ -205,10 +212,7 @@ export function AppSidebar({
   const activeThreadId = pathname.startsWith("/threads/")
     ? pathname.slice("/threads/".length)
     : undefined;
-  const pendingCreation = usePendingProjectlessCreation(
-    newThreadSurface,
-    activeThreadId,
-  );
+  const pendingCreations = usePendingCreations(newThreadSurface);
   const [collapsedGroups, setCollapsedGroups] = React.useState<
     ReadonlySet<string>
   >(() => new Set(["inactive", "archived"]));
@@ -240,9 +244,19 @@ export function AppSidebar({
     },
     [dismissPreviewForNavigation, onNavigate],
   );
+  const listedThreads = React.useMemo(
+    () =>
+      withPendingThreads(
+        threads,
+        pendingCreations,
+        projectNames,
+        projectsComplete,
+      ),
+    [threads, pendingCreations, projectNames, projectsComplete],
+  );
   const sections = buildThreadSections(
     projects,
-    threads,
+    listedThreads,
     Date.now(),
     archiveAvailable,
     sharedThreads,
@@ -329,7 +343,6 @@ export function AppSidebar({
           )
         }
         activeThreadId={activeThreadId}
-        pendingCreation={pendingCreation}
         collapsedGroups={collapsedGroups}
         hasMore={hasMore}
         loadingMore={loadingMore}
@@ -337,7 +350,7 @@ export function AppSidebar({
         projectNames={projectNames}
         query=""
         sections={sections}
-        visibleThreadCount={threads.length + (sharedThreads?.length ?? 0)}
+        visibleThreadCount={listedThreads.length + (sharedThreads?.length ?? 0)}
         onLoadMore={onLoadMore}
         onNavigate={onNavigate}
         onThreadNavigate={onThreadNavigate}

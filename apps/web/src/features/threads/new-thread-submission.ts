@@ -14,14 +14,12 @@ import type { useNavigate } from "@tanstack/react-router";
 import type { RefObject } from "react";
 import {
   deliveredImages,
+  disposeImages,
   type PendingImage,
   type PendingImageCollection,
 } from "./image-attachments.js";
 import { reasoningModeId } from "./new-thread-modal-utils.js";
-import {
-  type CreateThreadMutationInput,
-  optimisticThreadData,
-} from "./thread-mutations.js";
+import type { CreateThreadMutationInput } from "./thread-mutations.js";
 import type { ThreadSessionRegistry } from "./thread-session-registry.js";
 
 export interface InitialThreadCreationAttempt {
@@ -35,6 +33,12 @@ export interface InitialThreadCreationAttempt {
   readonly attachmentIds: ReadonlyArray<string>;
 }
 
+/**
+ * Creates the Thread and admits its first message on the server, then opens
+ * it. The composer stays up, showing that the Thread is being created, until
+ * Core has persisted the Thread and Flue has admitted the message; from then
+ * on the run belongs to the server, whether or not this browser stays open.
+ */
 export async function submitNewThread({
   submittedPrompt,
   effectiveProjectId,
@@ -48,12 +52,10 @@ export async function submitNewThread({
   registry,
   create,
   navigate,
-  routeScoped,
-  returnPath,
   draftStore,
   onAccepted,
   onAcceptedNavigationFailure,
-  setOptimisticThreadId,
+  composerOpen,
   initialCreationAttempt,
 }: {
   readonly submittedPrompt: string;
@@ -71,27 +73,23 @@ export async function submitNewThread({
     readonly initialSubmission?: { readonly submissionId: string };
   }>;
   readonly navigate: ReturnType<typeof useNavigate>;
-  readonly routeScoped: boolean;
-  readonly returnPath: string;
   readonly draftStore: { readonly clear: () => void };
   readonly onAccepted: () => void;
   readonly onAcceptedNavigationFailure: (threadId: ThreadId) => void;
-  readonly setOptimisticThreadId: (threadId?: ThreadId) => void;
+  /** False once the composer is gone, e.g. the user went Back mid-create. */
+  readonly composerOpen: () => boolean;
   readonly initialCreationAttempt: RefObject<
     InitialThreadCreationAttempt | undefined
   >;
 }) {
   let stagedImages: ReadonlyArray<PendingImage> | undefined;
   let pendingThreadId: ThreadId | undefined;
-  let navigationSucceeded = false;
-  let creationAccepted = false;
   try {
     const project = projects.find(({ id }) => id === effectiveProjectId);
     if (effectiveProjectId !== "" && project === undefined)
       throw new Error("Select a valid project.");
     await imageCollection.settle();
     stagedImages = imageCollection.take();
-    setImages([]);
     const body = submittedPrompt.trim();
     const attachmentIds = stagedImages.map(({ id }) => id);
     const selectedProfile = reasoningModeId(profile);
@@ -100,6 +98,8 @@ export async function submitNewThread({
     const claudeEffort =
       model !== undefined && isClaudeCodeModel(model) ? effort : undefined;
     const previousAttempt = initialCreationAttempt.current;
+    // A retry of the same request reuses its Thread, so a creation whose
+    // response was lost is not created twice.
     const threadId =
       previousAttempt !== undefined &&
       previousAttempt.projectId === project?.id &&
@@ -125,7 +125,7 @@ export async function submitNewThread({
       attachmentIds,
     };
     const title = generateThreadTitle(submittedPrompt);
-    const creation = {
+    registry.beginCreation({
       id: threadId,
       project,
       title,
@@ -135,10 +135,10 @@ export async function submitNewThread({
       runnerProfileId,
       body,
       images: stagedImages,
-    };
-    registry.beginCreation(creation);
+      startedAt: Date.now(),
+    });
     pendingThreadId = threadId;
-    const responseOutcome = create({
+    const response = await create({
       project,
       title,
       selection:
@@ -151,95 +151,44 @@ export async function submitNewThread({
             },
       ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
       threadId,
-      ...(project === undefined
-        ? {}
-        : {
-            optimisticThread: optimisticThreadData(threadId, project.id, title),
-          }),
       initialMessage: {
         body,
         attachments: deliveredImages(stagedImages),
       },
-    }).then(
-      (response) => ({ response }) as const,
-      (error: unknown) => ({ error }) as const,
-    );
-    setOptimisticThreadId(threadId);
-    let navigationError: unknown;
-    try {
-      await navigate({
-        to: "/threads/$threadId",
-        params: { threadId },
-      });
-      navigationSucceeded = true;
-    } catch (cause) {
-      navigationError = cause;
-    }
-    const outcome = await responseOutcome;
-    if ("error" in outcome) throw outcome.error;
-    const response = outcome.response;
+    });
     const submissionId = response.initialSubmission?.submissionId;
     if (submissionId === undefined)
       throw new Error("The initial message receipt was missing.");
+    // The registry now owns the staged images until Flue shows the message.
     registry.acceptCreation(threadId, submissionId);
-    creationAccepted = true;
+    pendingThreadId = undefined;
     stagedImages = undefined;
+    setImages([]);
     draftStore.clear();
-    if (navigationError !== undefined) {
+    // The user already left; the Thread waits for them in the sidebar.
+    if (!composerOpen()) return;
+    try {
+      await navigate({ to: "/threads/$threadId", params: { threadId } });
+    } catch (cause) {
       onAcceptedNavigationFailure(threadId);
       throw new Error("Thread was created, but could not be opened.", {
-        cause: navigationError,
+        cause,
       });
     }
     onAccepted();
   } catch (cause) {
-    const message =
+    if (pendingThreadId !== undefined) registry.failCreation(pendingThreadId);
+    // Nothing was admitted: the composer keeps the prompt and its images,
+    // or, when it is gone, the images are released; the draft text stays.
+    if (stagedImages !== undefined) {
+      if (composerOpen()) setImages(imageCollection.restore(stagedImages));
+      else disposeImages(stagedImages);
+    }
+    throw new Error(
       cause instanceof Error
         ? cause.message
-        : "The thread could not be started.";
-    const failed =
-      pendingThreadId === undefined || creationAccepted
-        ? undefined
-        : registry.failCreation(pendingThreadId);
-    const recoverable =
-      failed ??
-      (stagedImages === undefined ||
-      initialCreationAttempt.current === undefined
-        ? undefined
-        : {
-            id: initialCreationAttempt.current.threadId,
-            project:
-              initialCreationAttempt.current.projectId === undefined
-                ? undefined
-                : (projects.find(
-                    ({ id }) =>
-                      id === initialCreationAttempt.current?.projectId,
-                  ) ?? projects[0]),
-            title: generateThreadTitle(submittedPrompt),
-            profile: initialCreationAttempt.current.profile,
-            model: initialCreationAttempt.current.model,
-            ...(initialCreationAttempt.current.effort === undefined
-              ? {}
-              : { effort: initialCreationAttempt.current.effort }),
-            runnerProfileId: initialCreationAttempt.current.runnerProfileId,
-            body: initialCreationAttempt.current.body,
-            images: stagedImages,
-          });
-    if (recoverable !== undefined) {
-      stagedImages = undefined;
-      if (routeScoped && navigationSucceeded) {
-        registry.retainFailedCreation({ ...recoverable, error: message });
-        await navigate({
-          to: "/new",
-          search: { project: recoverable.project?.id },
-          replace: true,
-        });
-      } else {
-        setImages(imageCollection.restore(recoverable.images));
-        if (!routeScoped) await navigate({ to: returnPath });
-      }
-    }
-    setOptimisticThreadId(undefined);
-    throw new Error(message, { cause });
+        : "The thread could not be started.",
+      { cause },
+    );
   }
 }

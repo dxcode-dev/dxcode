@@ -18,8 +18,15 @@ export function PendingThreadTitle() {
 /** The Thread title, or the loading dots until DxTitleAgent settles it. */
 export function ThreadTitleText({
   thread,
+  maxCharacters,
 }: {
   readonly thread: Pick<ThreadData, "title" | "titlePending">;
+  /** Longer titles end in an ellipsis after this many characters. */
+  readonly maxCharacters?: number;
 }) {
-  return thread.titlePending === true ? <PendingThreadTitle /> : thread.title;
+  if (thread.titlePending === true) return <PendingThreadTitle />;
+  const characters = Array.from(thread.title);
+  return maxCharacters === undefined || characters.length <= maxCharacters
+    ? thread.title
+    : `${characters.slice(0, maxCharacters).join("").trimEnd()}…`;
 }

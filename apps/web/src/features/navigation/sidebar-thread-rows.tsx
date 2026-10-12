@@ -1,14 +1,6 @@
-import type { ThreadData } from "@dx/api";
 import { PROJECTLESS_PROJECT_NAME } from "@dx/domain";
-import { Link } from "@tanstack/react-router";
 import * as React from "react";
 import type { ThreadListClientItem } from "../../shared/api/client.js";
-import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
-import type { PendingProjectlessCreation } from "../../shared/new-thread-surface.js";
-import { threadColorAttributes } from "../../shared/thread-color.js";
-import { OrbIcon } from "../../shared/ui/orb-icon.js";
-import { PendingThreadTitle } from "../../shared/ui/thread-title.js";
-import { focusSidebarCommandItem } from "./sidebar-command-focus.js";
 import {
   SidebarChildThreadRows,
   useThreadChildrenExpansion,
@@ -17,43 +9,6 @@ import {
   type SidebarThreadListProps,
   SidebarThreadRow,
 } from "./sidebar-thread-row.js";
-
-export function SidebarPendingThreadRow({
-  creation,
-  activeThreadId,
-  onThreadNavigate,
-}: {
-  readonly creation: PendingProjectlessCreation;
-  readonly activeThreadId?: string;
-  readonly onThreadNavigate: (threadId: ThreadData["id"]) => void;
-}) {
-  const selected = creation.id === activeThreadId;
-  return (
-    <div className="thread-row-shell" data-pending-thread-row>
-      <Link
-        className={`thread-row ${selected ? "selected" : ""}`}
-        data-command-sidebar-item
-        aria-current={selected ? "page" : undefined}
-        {...threadColorAttributes({ id: creation.id })}
-        to="/threads/$threadId"
-        params={{ threadId: creation.id }}
-        onFocus={(event) => focusSidebarCommandItem(event.currentTarget)}
-        onClick={() => onThreadNavigate(creation.id)}
-      >
-        <span className="thread-executor-icon">
-          <OrbIcon
-            activityStatus="idle"
-            aria-hidden="false"
-            aria-label={`${EXECUTION_ENVIRONMENT_DISPLAY_NAME} idle`}
-          />
-        </span>
-        <strong>
-          <PendingThreadTitle />
-        </strong>
-      </Link>
-    </div>
-  );
-}
 
 export interface SidebarThreadRowsProps extends SidebarThreadListProps {
   readonly threads: ReadonlyArray<ThreadListClientItem>;

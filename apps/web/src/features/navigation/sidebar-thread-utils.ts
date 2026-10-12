@@ -1,11 +1,61 @@
 import type { ProjectData, ThreadData } from "@dx/api";
-import { PROJECTLESS_PROJECT_NAME } from "@dx/domain";
+import { PROJECTLESS_PROJECT_NAME, type ProjectId } from "@dx/domain";
+import type { PendingThreadCreation } from "../../shared/new-thread-surface.js";
+import { optimisticThreadData } from "../threads/thread-mutations.js";
 
 export interface ThreadSection {
   readonly id: string;
   readonly label?: string;
   readonly project?: boolean;
   readonly threads: ReadonlyArray<ThreadData>;
+}
+
+/** Groups a pending No Project Thread until the server names its Project. */
+const PENDING_PROJECTLESS_ID = "prj_pending-no-project" as ProjectId;
+
+/**
+ * The listed Threads plus those this browser is still creating. A pending
+ * Thread comes from the creation itself, not the list cache, so no list
+ * refetch can drop it before Core admits it. Admission caches the server's
+ * row in the lists first, so the pending row hands over without a gap, and
+ * from then the server's list alone decides whether the Thread is shown.
+ *
+ * A No Project Thread's hidden Project is unknown until Core answers. When
+ * every Project's name is loaded, an owned Thread under an unnamed Project
+ * can only be under that hidden one, so the pending row joins its section;
+ * otherwise it gets a No Project section of its own.
+ */
+export function withPendingThreads(
+  threads: ReadonlyArray<ThreadData>,
+  pending: ReadonlyArray<PendingThreadCreation>,
+  projectNames: ReadonlyMap<string, string>,
+  projectNamesComplete: boolean,
+): ReadonlyArray<ThreadData> {
+  const listed = new Set(threads.map(({ id }) => id));
+  const unlisted = pending.filter(
+    ({ id, submissionId }) => submissionId === undefined && !listed.has(id),
+  );
+  if (unlisted.length === 0) return threads;
+  const projectlessId =
+    (projectNamesComplete
+      ? threads.find(
+          (thread) =>
+            thread.lifecycleState === "active" &&
+            thread.pinnedAt === undefined &&
+            !projectNames.has(thread.projectId),
+        )?.projectId
+      : undefined) ?? PENDING_PROJECTLESS_ID;
+  return [
+    ...unlisted.map((creation) =>
+      optimisticThreadData(
+        creation.id,
+        creation.project?.id ?? projectlessId,
+        creation.title,
+        creation.startedAt,
+      ),
+    ),
+    ...threads,
+  ];
 }
 
 const INACTIVE_AFTER_MS = 72 * 60 * 60 * 1_000;

@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 
-import type { ThreadData } from "@dx/api";
+import type { ProjectData, ThreadData } from "@dx/api";
 import type { ProjectId, ThreadId } from "@dx/domain";
+import { DateTime } from "effect";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -31,6 +32,10 @@ vi.mock("./thread-context-menu.js", () => ({
 
 import { optimisticThreadData } from "../threads/thread-mutations.js";
 import { SidebarThreadNavigation } from "./sidebar-thread-navigation.js";
+import {
+  buildThreadSections,
+  withPendingThreads,
+} from "./sidebar-thread-utils.js";
 
 const threadId = "thread-1" as ThreadId;
 const projectId = "project-1" as ProjectId;
@@ -64,6 +69,7 @@ describe("sidebar selection and pending titles", () => {
       "thr_00000000-0000-4000-8000-000000000094" as ThreadId,
       projectId,
       "Candidate title" as ThreadData["title"],
+      Date.now(),
     );
     const canonical = {
       ...thread,
@@ -124,22 +130,47 @@ describe("sidebar selection and pending titles", () => {
     await React.act(() => root.unmount());
   });
 
-  it("keeps a projectless pending Thread selected without fabricating a Project", async () => {
+  it("keeps a pending No Project Thread in the No Project section from send to listing", async () => {
     const container = document.createElement("div");
     document.body.append(container);
     const root = createRoot(container);
+    const hiddenProjectId = "prj_hidden-no-project" as ProjectId;
     const pendingId = "thr_00000000-0000-4000-8000-000000000095" as ThreadId;
-    const render = (threads: ReadonlyArray<ThreadData>) =>
-      root.render(
+    const earlier = {
+      ...thread,
+      id: "thr_00000000-0000-4000-8000-000000000097" as ThreadId,
+      projectId: hiddenProjectId,
+      title: "Earlier No Project thread",
+      lastActivityAt: DateTime.makeUnsafe(Date.now() - 60_000),
+    } as ThreadData;
+    const named = {
+      ...thread,
+      lastActivityAt: DateTime.makeUnsafe(Date.now() - 30_000),
+    } as ThreadData;
+    const projectNames = new Map([[projectId, "Project"]]);
+    const pending = [
+      {
+        id: pendingId,
+        title: "Fallback title" as ThreadData["title"],
+        startedAt: Date.now(),
+      },
+    ];
+    const render = (listed: ReadonlyArray<ThreadData>) => {
+      const threads = withPendingThreads(listed, pending, projectNames, true);
+      const sections = buildThreadSections(
+        [{ id: projectId, name: "Project" } as ProjectData],
+        threads,
+        Date.now(),
+      );
+      return root.render(
         <SidebarThreadNavigation
           activeThreadId={pendingId}
           collapsedGroups={new Set()}
           hasMore={false}
           loadingMore={false}
-          pendingCreation={{ id: pendingId }}
-          projectNames={new Map([[projectId, "Project"]])}
+          projectNames={projectNames}
           query=""
-          sections={threads.length === 0 ? [] : [{ id: "project", threads }]}
+          sections={sections}
           visibleThreadCount={threads.length}
           onLoadMore={vi.fn()}
           onNavigate={vi.fn()}
@@ -151,23 +182,57 @@ describe("sidebar selection and pending titles", () => {
           onSetPinned={vi.fn()}
         />,
       );
+    };
+    const placement = () => {
+      const row = container.querySelector<HTMLElement>(
+        '.thread-row[aria-current="page"]',
+      );
+      const section = row?.closest<HTMLElement>("[data-thread-section]");
+      return {
+        section: section?.querySelector(".thread-group-heading")?.textContent,
+        index: [...(section?.querySelectorAll(".thread-row") ?? [])].indexOf(
+          row as HTMLElement,
+        ),
+        sectionIndex: [
+          ...container.querySelectorAll("[data-thread-section]"),
+        ].indexOf(section as HTMLElement),
+        pending: row?.querySelector(".thread-title-pending") !== null,
+      };
+    };
 
-    await React.act(() => render([]));
-
+    await React.act(() => render([named, earlier]));
+    expect(placement()).toEqual({
+      section: expect.stringContaining("No Project"),
+      index: 0,
+      sectionIndex: 0,
+      pending: true,
+    });
     expect(container.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
-    expect(container.querySelector("[data-pending-thread-row]")).not.toBeNull();
-    expect(container.textContent).not.toContain("Create new thread");
 
-    const canonical = {
+    // A list refetch that does not include it yet cannot remove it.
+    await React.act(() => render([named]));
+    expect(placement()).toMatchObject({
+      section: expect.stringContaining("No Project"),
+      index: 0,
+      sectionIndex: 0,
+    });
+
+    const listed = {
       ...thread,
       id: pendingId,
+      projectId: hiddenProjectId,
       title: "Canonical pending title",
+      lastActivityAt: DateTime.makeUnsafe(pending[0]?.startedAt ?? 0),
     } as ThreadData;
-    await React.act(() => render([canonical]));
-
-    expect(container.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
-    expect(container.querySelector("[data-pending-thread-row]")).toBeNull();
+    await React.act(() => render([listed, named, earlier]));
+    expect(placement()).toEqual({
+      section: expect.stringContaining("No Project"),
+      index: 0,
+      sectionIndex: 0,
+      pending: false,
+    });
     expect(container.textContent).toContain("Canonical pending title");
+    expect(container.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
     await React.act(() => root.unmount());
   });
 
@@ -175,20 +240,24 @@ describe("sidebar selection and pending titles", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const root = createRoot(container);
-    const pendingId = "thr_00000000-0000-4000-8000-000000000096" as ThreadId;
+    const pending = optimisticThreadData(
+      "thr_00000000-0000-4000-8000-000000000096" as ThreadId,
+      projectId,
+      "Pending title" as ThreadData["title"],
+      Date.now(),
+    );
 
     await React.act(() =>
       root.render(
         <SidebarThreadNavigation
-          activeThreadId={pendingId}
+          activeThreadId={pending.id}
           collapsedGroups={new Set()}
           hasMore={false}
           loadingMore={false}
-          pendingCreation={{ id: pendingId }}
           projectNames={new Map([[projectId, "Project"]])}
           query=""
-          sections={[{ id: "project", threads: [thread] }]}
-          visibleThreadCount={1}
+          sections={[{ id: "project", threads: [pending, thread] }]}
+          visibleThreadCount={2}
           onLoadMore={vi.fn()}
           onNavigate={vi.fn()}
           onThreadNavigate={vi.fn()}
@@ -205,7 +274,7 @@ describe("sidebar selection and pending titles", () => {
       `[data-command-sidebar-item]:not([aria-current="page"])`,
     );
     const pendingRow = container.querySelector<HTMLElement>(
-      "[data-pending-thread-row] [data-command-sidebar-item]",
+      `[data-command-sidebar-item][aria-current="page"]`,
     );
     canonicalRow?.focus();
     expect(canonicalRow?.dataset.commandFocused).toBe("true");
@@ -213,6 +282,53 @@ describe("sidebar selection and pending titles", () => {
     expect(pendingRow?.dataset.commandFocused).toBe("true");
     expect(canonicalRow?.dataset.commandFocused).toBeUndefined();
     await React.act(() => root.unmount());
+  });
+});
+
+describe("pending creations in the sidebar", () => {
+  const pendingId = "thr_00000000-0000-4000-8000-000000000098" as ThreadId;
+  const creation = {
+    id: pendingId,
+    title: "Pending title" as ThreadData["title"],
+    startedAt: Date.now(),
+  };
+  const projectNames = new Map([[projectId, "Project"]]);
+  const sectionOf = (threads: ReadonlyArray<ThreadData>) =>
+    buildThreadSections(
+      [{ id: projectId, name: "Project" } as ProjectData],
+      threads,
+      Date.now(),
+    ).find((section) => section.threads.some(({ id }) => id === pendingId));
+
+  it("drops an admitted Thread the server no longer lists, such as an archived one", () => {
+    const threads = withPendingThreads(
+      [thread],
+      [{ ...creation, submissionId: "submission-1" }],
+      projectNames,
+      true,
+    );
+
+    expect(threads.map(({ id }) => id)).toEqual([thread.id]);
+  });
+
+  it("keeps a pending No Project row out of a Project whose name is not loaded yet", () => {
+    const unloadedProject = {
+      ...thread,
+      id: "thr_00000000-0000-4000-8000-000000000099" as ThreadId,
+      projectId: "prj_second-page" as ProjectId,
+      lastActivityAt: DateTime.makeUnsafe(Date.now() - 60_000),
+    } as ThreadData;
+
+    const incomplete = sectionOf(
+      withPendingThreads([unloadedProject], [creation], projectNames, false),
+    );
+    const complete = sectionOf(
+      withPendingThreads([unloadedProject], [creation], projectNames, true),
+    );
+
+    expect(incomplete?.label).toBe("No Project");
+    expect(incomplete?.id).not.toBe("prj_second-page");
+    expect(complete?.id).toBe("prj_second-page");
   });
 });
 

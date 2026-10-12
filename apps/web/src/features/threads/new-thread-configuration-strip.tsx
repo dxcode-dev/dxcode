@@ -1100,10 +1100,16 @@ export function NewThreadConfigurationStrip({
           aria-label={
             retrying ? "Retry sending message" : "Create thread and send"
           }
+          aria-busy={submitting || undefined}
+          data-submitting={submitting ? "" : undefined}
           disabled={submitting || (!ready && !dictationActive)}
         >
           {submitting ? (
-            <span className="tool-spinner" />
+            // The same pending mark dictation shows while it transcribes.
+            <span
+              className="processing-dot dictation-processing-dot"
+              aria-hidden="true"
+            />
           ) : retrying ? (
             "↻"
           ) : (

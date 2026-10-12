@@ -249,7 +249,7 @@ it("keeps authoritative empty history distinct from Thread access revocation", (
   registry.clear();
 });
 
-it("hands a failed create's exact draft metadata and attachments back once", () => {
+it("hands a failed create's exact draft metadata and attachments back to the composer", () => {
   const registry = new ThreadSessionRegistry(new QueryClient(), userId);
   const disposePreview = vi.fn();
   const image = {
@@ -268,21 +268,15 @@ it("hands a failed create's exact draft metadata and attachments back once", () 
     profile: "high" as const,
     body: "Restore this exact draft",
     images: [image],
+    startedAt: Date.now(),
   };
 
   registry.beginCreation(creation);
-  const failed = registry.failCreation(creation.id);
-  if (failed === undefined) throw new Error("Expected pending creation.");
-  registry.retainFailedCreation({
-    ...failed,
-    error: "Creation failed exactly",
-  });
+  expect(registry.pendingCreations()).toEqual([creation]);
 
-  expect(registry.claimFailedCreation()).toEqual({
-    ...creation,
-    error: "Creation failed exactly",
-  });
-  expect(registry.claimFailedCreation()).toBeUndefined();
+  expect(registry.failCreation(creation.id)).toEqual(creation);
+  expect(registry.failCreation(creation.id)).toBeUndefined();
+  expect(registry.pendingCreations()).toEqual([]);
   expect(disposePreview).not.toHaveBeenCalled();
   image.disposePreview();
   registry.clear();

@@ -22,7 +22,23 @@ const flue = vi.hoisted(() => {
 const viewport = vi.hoisted(() => ({ mobile: true }));
 const router = vi.hoisted(() => ({ navigate: vi.fn() }));
 
-vi.mock("@flue/react", () => ({ useFlueAgent: () => ({}) }));
+vi.mock("@flue/react", () => ({
+  useFlueAgent: () => ({}),
+  createFlueAgentSession: () => ({
+    start: () => undefined,
+    stop: () => undefined,
+    dispose: () => undefined,
+    subscribe: () => () => undefined,
+    getSnapshot: () => ({ messages: [] }),
+    sendMessage: vi.fn(),
+    resume: vi.fn(),
+    abort: vi.fn(),
+    retrySend: vi.fn(),
+    resendPrompt: vi.fn(),
+    refresh: vi.fn(),
+    loadOlder: vi.fn(),
+  }),
+}));
 vi.mock("@flue/sdk", () => ({ createFlueClient: flue.createClient }));
 vi.mock("@tanstack/react-router", () => ({
   useLocation: ({
@@ -120,12 +136,6 @@ function MockComposer({
 }
 
 vi.mock("./agent-panel.js", () => ({
-  PendingAgentPanel: ({ creation }: { creation: { body: string } }) => (
-    <section aria-label="Pending agent chat">
-      <span>{creation.body}</span>
-      <textarea aria-label="Message" disabled />
-    </section>
-  ),
   AgentPanel: ({
     archived,
     renderHeader,
@@ -873,24 +883,22 @@ describe("ThreadSession right pane", () => {
 });
 
 describe("ThreadWorkspace cached metadata lifetime", () => {
-  it("renders only an explicitly registered pending create without issuing a detail GET", async () => {
+  it("opens an admitted No Project creation without waiting for its hidden Project", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
     const registry = new ThreadSessionRegistry(queryClient, userId);
     registry.beginCreation({
       id: threadId,
-      project,
       title: thread.title,
       profile: "medium",
-      body: "Visible before the POST resolves",
+      body: "Opened from the admitted creation",
       images: [],
+      startedAt: Date.now(),
     });
-    const fetch = vi.fn(() =>
-      Promise.reject(
-        new Error("A pending create must not issue a detail GET."),
-      ),
-    );
+    registry.acceptCreation(threadId, "submission-1");
+    queryClient.setQueryData(threadKeys.detail(userId, threadId), thread);
+    const fetch = vi.fn(() => new Promise<Response>(() => {}));
     vi.stubGlobal("fetch", fetch);
     const container = document.createElement("div");
     document.body.append(container);
@@ -906,19 +914,16 @@ describe("ThreadWorkspace cached metadata lifetime", () => {
       ),
     );
 
-    expect(container.textContent).toContain("Visible before the POST resolves");
-    expect(container.querySelector('[data-pending-thread=""]')).not.toBeNull();
-    expect(container.querySelector(".thread-title-bar")).not.toBeNull();
     expect(
-      container.querySelector('[aria-label="Generating thread title"]'),
+      container.querySelector('[aria-label="Loading thread…"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[aria-label="Thread composer"]'),
     ).not.toBeNull();
-    expect(container.textContent).toContain("Project one");
-    expect(container.textContent).toContain("medium");
-    expect(
-      container.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')
-        ?.disabled,
-    ).toBe(true);
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalledWith(
+      `/v1/threads/${threadId}`,
+      expect.anything(),
+    );
     await React.act(() => root.unmount());
     registry.clear();
   });
@@ -956,7 +961,6 @@ describe("ThreadWorkspace cached metadata lifetime", () => {
       ),
     );
 
-    expect(container.querySelector('[data-pending-thread=""]')).toBeNull();
     await React.act(() => root.unmount());
   });
 

@@ -1,22 +1,15 @@
 import type { ThreadData } from "@dx/api";
 import { ChevronDown, FolderGit2 } from "lucide-react";
 import type { ReactNode } from "react";
-import {
-  type PendingProjectlessCreation,
-  useNewThreadSurface,
-} from "../../shared/new-thread-surface.js";
+import { useNewThreadSurface } from "../../shared/new-thread-surface.js";
 import { Button } from "../../shared/ui/button.js";
 import { SidebarThreadChildrenProvider } from "./sidebar-thread-children.js";
-import {
-  SidebarPendingThreadRow,
-  SidebarThreadRows,
-} from "./sidebar-thread-rows.js";
+import { SidebarThreadRows } from "./sidebar-thread-rows.js";
 import type { ThreadSection } from "./sidebar-thread-utils.js";
 
 export function SidebarThreadNavigation({
   archiveContent,
   activeThreadId,
-  pendingCreation,
   collapsedGroups,
   hasMore,
   loadingMore,
@@ -40,7 +33,6 @@ export function SidebarThreadNavigation({
 }: {
   readonly archiveContent?: ReactNode;
   readonly activeThreadId?: string;
-  readonly pendingCreation?: PendingProjectlessCreation;
   readonly collapsedGroups: ReadonlySet<string>;
   readonly hasMore: boolean;
   readonly loadingMore: boolean;
@@ -72,14 +64,8 @@ export function SidebarThreadNavigation({
   readonly pinningThreadId?: ThreadData["id"];
 }) {
   const { openNewThread } = useNewThreadSurface();
-  const canonicalPendingCreation =
-    pendingCreation !== undefined &&
-    sections.some((section) =>
-      section.threads.some((thread) => thread.id === pendingCreation.id),
-    );
   const empty =
     visibleThreadCount === 0 &&
-    pendingCreation === undefined &&
     !loadingMore &&
     loadMoreError === undefined &&
     (archiveContent === undefined || collapsedGroups.has("archived"));
@@ -113,13 +99,6 @@ export function SidebarThreadNavigation({
             <div className="sidebar-empty">No matching threads</div>
           )
         ) : null}
-        {pendingCreation === undefined || canonicalPendingCreation ? null : (
-          <SidebarPendingThreadRow
-            creation={pendingCreation}
-            activeThreadId={activeThreadId}
-            onThreadNavigate={onThreadNavigate}
-          />
-        )}
         {sections.map((section) => {
           const collapsed =
             section.label !== undefined && collapsedGroups.has(section.id);

@@ -54,9 +54,11 @@ vi.mock("./thread-transcript.js", () => ({
   ),
 }));
 
-import { AgentPanel, PendingAgentPanel } from "./agent-panel.js";
+import { AgentPanel } from "./agent-panel.js";
 import { createPendingImageCollection } from "./image-attachments.js";
+import { TranscriptRowContent } from "./message-parts.js";
 import type { OptimisticThreadCreation } from "./thread-session-registry.js";
+import { deriveTranscriptViewModel } from "./transcript-view-model.js";
 import { createPresentationValue } from "./use-thread-presentation.js";
 
 const agent = {
@@ -135,22 +137,52 @@ afterEach(() => {
 });
 
 describe("thread composer ownership", () => {
-  it("shows the local initial message and locked composer before admission", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
-
-    await React.act(() =>
-      root.render(<PendingAgentPanel creation={optimisticCreation} />),
+  it("renders the first message as Flue's row will before Flue exposes it", async () => {
+    const body = "Reply with **THREAD READY** and make no `changes`.";
+    const local = await mountPanel(
+      {},
+      false,
+      {},
+      {
+        optimisticCreation: {
+          ...optimisticCreation,
+          body,
+          submissionId: "submission-initial",
+        },
+      },
     );
+    const localMarkup = local.container.querySelector(
+      "[data-optimistic-initial-message] .message-content",
+    )?.innerHTML;
+    await React.act(() => local.root.unmount());
 
-    expect(container.textContent).toContain("Build the optimistic path");
-    expect(container.textContent).toContain("Starting thread…");
-    expect(
-      container.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')
-        ?.disabled,
-    ).toBe(true);
-    await React.act(() => root.unmount());
+    const [row] = deriveTranscriptViewModel({
+      messages: [
+        {
+          id: "initial-user-message",
+          role: "user",
+          purpose: "user",
+          display: "visible",
+          turnId: "turn-initial",
+          submissionId: "submission-initial",
+          parts: [{ type: "text", text: body, state: "done" }],
+        },
+      ] as UseFlueAgentResult["messages"],
+      settlements: [],
+    }).rows;
+    const flue = document.createElement("div");
+    document.body.append(flue);
+    const flueRoot = createRoot(flue);
+    await React.act(() =>
+      flueRoot.render(
+        row === undefined ? null : <TranscriptRowContent row={row} />,
+      ),
+    );
+    const flueMarkup = flue.innerHTML;
+    await React.act(() => flueRoot.unmount());
+
+    expect(row?.kind).toBe("user-prompt");
+    expect(localMarkup).toBe(flueMarkup);
   });
 
   it("keeps one local message until Flue exposes the admission receipt", async () => {

@@ -3,12 +3,7 @@ import { defaultThreadModelSelection, UserId } from "@dx/domain";
 import { QueryClient } from "@tanstack/react-query";
 import { Schema } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  cacheCreatedThread,
-  cacheOptimisticThread,
-  optimisticThreadData,
-  rollbackOptimisticThread,
-} from "./thread-mutations.js";
+import { cacheCreatedThread } from "./thread-mutations.js";
 import { threadKeys, threadsQueryOptions } from "./thread-queries.js";
 
 const userId = Schema.decodeUnknownSync(UserId)("user-1");
@@ -21,23 +16,13 @@ const created = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("thread mutation cache ownership", () => {
-  it("updates every matching loaded list and rolls back only its own row", async () => {
+  it("adds the created Thread to every matching loaded list only", async () => {
     const queryClient = new QueryClient();
     const otherProject = "project-2" as typeof created.projectId;
     const existing = {
       id: "thread-existing",
       projectId: created.projectId,
     } as ThreadDetailData;
-    const first = optimisticThreadData(
-      "thread-first" as typeof created.id,
-      created.projectId,
-      "First pending thread" as ThreadDetailData["title"],
-    );
-    const second = optimisticThreadData(
-      "thread-second" as typeof created.id,
-      created.projectId,
-      "Second pending thread" as ThreadDetailData["title"],
-    );
     const matching = [
       threadKeys.list(userId),
       threadKeys.list(userId, created.projectId),
@@ -54,46 +39,27 @@ describe("thread mutation cache ownership", () => {
       });
     }
 
-    await Promise.all([
-      cacheOptimisticThread(queryClient, userId, first),
-      cacheOptimisticThread(queryClient, userId, second),
-    ]);
-    rollbackOptimisticThread(queryClient, userId, first);
+    await cacheCreatedThread(queryClient, userId, created);
 
-    for (const key of matching) {
-      expect(
-        queryClient
-          .getQueryData<{
-            pages: Array<{ items: ThreadDetailData[] }>;
-          }>(key)
-          ?.pages[0]?.items.map(({ id }) => id),
-      ).toEqual([second.id, existing.id]);
-    }
-    for (const key of excluded) {
-      expect(
-        queryClient
-          .getQueryData<{
-            pages: Array<{ items: ThreadDetailData[] }>;
-          }>(key)
-          ?.pages[0]?.items.map(({ id }) => id),
-      ).toEqual([existing.id]);
-    }
+    const ids = (key: readonly unknown[]) =>
+      queryClient
+        .getQueryData<{
+          pages: Array<{ items: ThreadDetailData[] }>;
+        }>(key)
+        ?.pages[0]?.items.map(({ id }) => id);
+    for (const key of matching)
+      expect(ids(key)).toEqual([created.id, existing.id]);
+    for (const key of excluded) expect(ids(key)).toEqual([existing.id]);
   });
 
-  it("replaces the optimistic row with canonical detail without duplication", async () => {
+  it("does not duplicate a created Thread a list refetch already returned", async () => {
     const queryClient = new QueryClient();
     const listKey = threadKeys.list(userId);
-    const optimistic = optimisticThreadData(
-      created.id,
-      created.projectId,
-      "Pending title" as ThreadDetailData["title"],
-    );
     queryClient.setQueryData(listKey, {
-      pages: [{ items: [] }],
+      pages: [{ items: [{ ...created, mode: "medium" }] }],
       pageParams: [undefined],
     });
 
-    await cacheOptimisticThread(queryClient, userId, optimistic);
     await cacheCreatedThread(queryClient, userId, created);
 
     expect(

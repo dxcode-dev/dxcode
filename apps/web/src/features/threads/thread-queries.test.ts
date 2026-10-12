@@ -11,7 +11,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { projectKeys } from "../projects/project-queries.js";
 import {
   createThreadMutationOptions,
-  optimisticThreadData,
   setThreadArchivedMutationOptions,
 } from "./thread-mutations.js";
 import { threadKeys, threadQueryOptions } from "./thread-queries.js";
@@ -247,11 +246,6 @@ describe("thread query contracts", () => {
       title: "Test thread",
       selection: defaultThreadModelSelection(),
       threadId: initialThreadId,
-      optimisticThread: optimisticThreadData(
-        initialThreadId,
-        projectId,
-        "Test thread",
-      ),
       initialMessage,
     });
     const detail = await queryClient.fetchQuery(
@@ -352,19 +346,12 @@ describe("thread query contracts", () => {
     const mutation = queryClient
       .getMutationCache()
       .build(queryClient, createThreadMutationOptions(queryClient, userId));
-    const optimistic = optimisticThreadData(
-      threadId,
-      projectId,
-      "Failed optimistic thread",
-    );
-
     await expect(
       mutation.execute({
         project,
         title: "Failed optimistic thread",
         selection: defaultThreadModelSelection(),
         threadId,
-        optimisticThread: optimistic,
         initialMessage: { body: "Restore this", attachments: [] },
       }),
     ).rejects.toThrow("failed");

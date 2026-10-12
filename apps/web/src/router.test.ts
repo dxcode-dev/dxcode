@@ -16,10 +16,7 @@ import {
   projectQueryOptions,
 } from "./features/projects/project-queries.js";
 import { settingsKeys } from "./features/settings/settings-context-queries.js";
-import {
-  createThreadMutationOptions,
-  optimisticThreadData,
-} from "./features/threads/thread-mutations.js";
+import { createThreadMutationOptions } from "./features/threads/thread-mutations.js";
 import {
   threadKeys,
   threadQueryOptions,
@@ -82,64 +79,6 @@ afterEach(() => {
 });
 
 describe("Router Query coordination", () => {
-  it("navigates while thread admission is pending and exposes the optimistic row", async () => {
-    const response = Promise.withResolvers<Response>();
-    const network = new FrontendNetworkHarness((request) => {
-      if (request.method === "POST" && request.url === "/v1/threads")
-        return response.promise;
-      throw new Error(`Unexpected request: ${request.method} ${request.url}`);
-    });
-    vi.stubGlobal("fetch", network.fetch);
-    const queryClient = createQueryClient();
-    const activeList = threadKeys.list(userId, undefined, "active");
-    queryClient.setQueryData(activeList, {
-      pages: [{ items: [] }],
-      pageParams: [undefined],
-    });
-    const mutation = queryClient
-      .getMutationCache()
-      .build(queryClient, createThreadMutationOptions(queryClient, userId));
-    const router = createAppRouter(
-      { queryClient, userId },
-      createMemoryHistory({ initialEntries: ["/new"] }),
-    );
-    const optimistic = optimisticThreadData(threadId, projectId, thread.title);
-
-    const admission = mutation.execute({
-      project,
-      title: thread.title,
-      selection: defaultThreadModelSelection(),
-      threadId,
-      optimisticThread: optimistic,
-      initialMessage: { body: "Start immediately", attachments: [] },
-    });
-    await router.navigate({
-      to: "/threads/$threadId",
-      params: { threadId },
-    });
-
-    expect(router.state.location.pathname).toBe(`/threads/${threadId}`);
-    expect(
-      queryClient
-        .getQueryData<{
-          pages: Array<{ items: Array<{ id: ThreadId }> }>;
-        }>(activeList)
-        ?.pages[0]?.items.map(({ id }) => id),
-    ).toEqual([threadId]);
-    expect(
-      queryClient.getQueryData(threadKeys.detail(userId, threadId)),
-    ).toBeUndefined();
-
-    response.resolve(
-      Response.json({
-        status: "success",
-        data: thread,
-        initialSubmission: { submissionId: "submission-initial" },
-      }),
-    );
-    await admission;
-  });
-
   it("shares intent-preloaded project data with warm route loading", async () => {
     const network = new FrontendNetworkHarness(() =>
       Response.json({ status: "success", data: project }),
