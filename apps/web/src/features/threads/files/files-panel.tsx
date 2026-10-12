@@ -11,6 +11,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { lazyRouteComponent } from "@tanstack/react-router";
 import { ChevronDown, Files } from "lucide-react";
 import * as React from "react";
 import {
@@ -33,14 +34,26 @@ import {
   threadFileOptions,
   threadFileTreeOptions,
 } from "./files-queries.js";
-import { ThreadFilesTree } from "./files-tree.js";
 import "./files.css";
 
 const api = createThreadFilesApi();
+// The tree library is the largest dependency of the thread page; the Files
+// pane mounts only once opened, so it loads then. `lazyRouteComponent` (not
+// React.lazy) reloads the page once if a deploy removed the chunk.
+const ThreadFilesTree = lazyRouteComponent(
+  () => import("./files-tree.js"),
+  "ThreadFilesTree",
+);
 const ThreadFileViewer = React.lazy(() =>
   import("./file-viewer.js").then((module) => ({
     default: module.ThreadFileViewer,
   })),
+);
+const loadingFiles = (
+  <div className="thread-files-state" role="status">
+    <Files className="workspace-loading-glyph" aria-hidden="true" />
+    <span className="sr-only">Waking workspace and loading files…</span>
+  </div>
 );
 const message = (error: unknown) =>
   error instanceof Error ? error.message : "Files are temporarily unavailable.";
@@ -93,10 +106,7 @@ function FilesWorktreeRoot({
   const entries = query.data?.pages.flatMap((page) => page.entries) ?? [];
   const content =
     query.data === undefined && query.isPending ? (
-      <div className="thread-files-state" role="status">
-        <Files className="workspace-loading-glyph" aria-hidden="true" />
-        <span className="sr-only">Waking workspace and loading files…</span>
-      </div>
+      loadingFiles
     ) : query.data === undefined ? (
       <div className="thread-files-state" role="alert">
         <span>{message(query.error)}</span>
@@ -123,33 +133,35 @@ function FilesWorktreeRoot({
             Disconnected. Files will reconnect automatically.
           </div>
         ) : null}
-        <ThreadFilesTree
-          api={transport}
-          active={active}
-          entries={entries}
-          gitStatus={gitStatus}
-          key={worktree.id}
-          onOpenFile={(path) =>
-            onOpenFile({
-              worktree: worktree.id,
-              ...(grouped ? { worktreeLabel: label } : {}),
-              path,
-            })
-          }
-          downloadUrlFor={(path) => {
-            const absolute = absolutePathFor({
-              kind: "workspace",
-              worktree: worktree.id,
-              path,
-            });
-            return absolute === undefined
-              ? undefined
-              : sandboxFileUrl(threadId, absolute, true);
-          }}
-          selectedPath={selectedPath}
-          threadId={threadId}
-          worktree={worktree.id}
-        />
+        <React.Suspense fallback={loadingFiles}>
+          <ThreadFilesTree
+            api={transport}
+            active={active}
+            entries={entries}
+            gitStatus={gitStatus}
+            key={worktree.id}
+            onOpenFile={(path) =>
+              onOpenFile({
+                worktree: worktree.id,
+                ...(grouped ? { worktreeLabel: label } : {}),
+                path,
+              })
+            }
+            downloadUrlFor={(path) => {
+              const absolute = absolutePathFor({
+                kind: "workspace",
+                worktree: worktree.id,
+                path,
+              });
+              return absolute === undefined
+                ? undefined
+                : sandboxFileUrl(threadId, absolute, true);
+            }}
+            selectedPath={selectedPath}
+            threadId={threadId}
+            worktree={worktree.id}
+          />
+        </React.Suspense>
         {query.hasNextPage ? (
           <button
             className="thread-files-more"

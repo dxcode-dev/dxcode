@@ -5,7 +5,6 @@ import type {
   ThreadChangesWorktreeId,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
-import { getFiletypeFromFileName, preloadHighlighter } from "@pierre/diffs";
 import {
   mutationOptions,
   type QueryClient,
@@ -15,17 +14,24 @@ import type { ResolvedAppearance } from "../../../shared/theme/theme-store.js";
 import { threadKeys } from "../thread-queries.js";
 import type { ChangesTransport } from "./changes-api.js";
 
-// FileDiff must mount after its bundled language and theme are ready.
+// FileDiff must mount after its bundled language and theme are ready. The
+// diff library loads here, not at import: realtime code that every page loads
+// imports these query keys.
 export const changesHighlightQueryOptions = (
   path: ThreadChangesPath,
   appearance: ResolvedAppearance,
 ) => {
-  const language = getFiletypeFromFileName(path);
   const theme = appearance === "light" ? "pierre-light" : "pierre-dark";
   return queryOptions({
-    queryKey: ["changes-highlighter", theme, language],
+    queryKey: ["changes-highlighter", theme, path],
     queryFn: async () => {
-      await preloadHighlighter({ themes: [theme], langs: [language] });
+      const { getFiletypeFromFileName, preloadHighlighter } = await import(
+        "@pierre/diffs"
+      );
+      await preloadHighlighter({
+        themes: [theme],
+        langs: [getFiletypeFromFileName(path)],
+      });
       return true;
     },
     staleTime: Infinity,

@@ -245,6 +245,8 @@ describe("Chat in a shared Thread, in workerd with real D1", () => {
       },
       chat: true,
       mentions: [{ handle: "ada", userId: owner }],
+      // A message that tags someone is named so a notification can open it.
+      messageId: expect.stringMatching(/^msg_[0-9a-f]{24}$/),
       text: "@Ada the build is red",
     });
     expect(await mode()).toBe("chat");

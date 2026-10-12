@@ -6,8 +6,11 @@ import {
   collectDeploymentConfig,
   collectOrbProviders,
   collectPluginChoices,
+  collectSenderUpgrade,
   E2B_ORB_PROMPT,
+  EMAIL_SENDING_PROMPT,
   PASSWORD_PROMPT,
+  SENDER_EMAIL_PROMPT,
   WORKER_TRACES_PROMPT,
 } from "./dx-deploy.mjs";
 
@@ -32,7 +35,7 @@ describe("common deployment installer", () => {
     const environment = {};
     const answer = vi.fn(async (label) => {
       if (label === "First administrator email") return "owner@example.com";
-      if (label === "Sign-in sender email") return "sign-in@auth.example.com";
+      if (label === SENDER_EMAIL_PROMPT) return "sign-in@auth.example.com";
       if (label.startsWith("Allowed email domains")) return "";
       throw new Error(`Unexpected answer prompt: ${label}`);
     });
@@ -91,8 +94,7 @@ describe("common deployment installer", () => {
       const config = await collectDeploymentConfig({
         answer: async (label) => {
           if (label === "First administrator email") return "owner@example.com";
-          if (label === "Sign-in sender email")
-            return "sign-in@auth.example.com";
+          if (label === SENDER_EMAIL_PROMPT) return "sign-in@auth.example.com";
           if (label.startsWith("Allowed email domains")) return "";
           throw new Error(`Unexpected answer prompt: ${label}`);
         },
@@ -249,5 +251,86 @@ describe("Orb provider choice", () => {
     expect(retried.providers).toEqual(["cloudflare"]);
     expect(retried.log).toHaveBeenCalledOnce();
     await expect(run([])).rejects.toThrow("at least one Orb provider");
+  });
+
+  it("offers a sender once to a deployment without one, for notification email", async () => {
+    const base = validateSelfhostConfig({
+      name: "self",
+      adminEmail: "owner@example.com",
+      domain: "dx.example.com",
+      zone: "example.com",
+      signIn: { providers: ["email-password"], admission: "invite" },
+    });
+    const run = async (options) => {
+      // `existing: undefined` means a new install, not the default.
+      const existing = "existing" in options ? options.existing : base;
+      const { defaults = {}, argv = [], answer = true } = options;
+      const asked = [];
+      const log = vi.fn();
+      const result = await collectSenderUpgrade({
+        existing,
+        defaults,
+        flags: new Set(argv),
+        yes: async (label, fallback) => {
+          asked.push([label, fallback]);
+          return answer;
+        },
+        log,
+      });
+      return { ...result, asked, log };
+    };
+
+    // A new install answers the sender question in the main wizard.
+    expect(await run({ existing: undefined })).toMatchObject({
+      offered: false,
+      addSender: false,
+      asked: [],
+    });
+    // A deployment with a sender, or the hosted wrapper, is never asked.
+    expect(
+      await run({ existing: { ...base, authEmailFrom: "dx@example.com" } }),
+    ).toMatchObject({ offered: false, asked: [] });
+    expect(
+      await run({ defaults: { hostedAuthentication: true } }),
+    ).toMatchObject({ offered: false, asked: [] });
+
+    // Without a sender it is asked once, defaulting to no.
+    expect(await run({})).toMatchObject({
+      offered: true,
+      addSender: true,
+      asked: [[EMAIL_SENDING_PROMPT, false]],
+    });
+    expect(await run({ answer: false })).toMatchObject({
+      offered: true,
+      addSender: false,
+    });
+    const recorded = validateSelfhostConfig({
+      ...base,
+      offeredEmailSending: true,
+    });
+    expect(recorded.offeredEmailSending).toBe(true);
+    expect(await run({ existing: recorded })).toMatchObject({
+      offered: false,
+      asked: [],
+    });
+    // `--email` asks again.
+    expect(await run({ existing: recorded, argv: ["--email"] })).toMatchObject({
+      offered: true,
+      addSender: true,
+    });
+
+    // A workers.dev deployment has no zone to send from: it is told, not asked.
+    const workersDev = validateSelfhostConfig({
+      name: "self",
+      adminEmail: "owner@example.com",
+      signIn: { providers: ["email-password"], admission: "invite" },
+    });
+    const noZone = await run({ existing: workersDev });
+    expect(noZone).toMatchObject({
+      offered: true,
+      addSender: false,
+      asked: [],
+    });
+    expect(noZone.log).toHaveBeenCalledOnce();
   });
 });

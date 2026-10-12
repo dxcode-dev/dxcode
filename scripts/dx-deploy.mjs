@@ -113,7 +113,43 @@ export const collectOrbProviders = async ({
 };
 
 export const EMAIL_SENDING_PROMPT =
-  "Send sign-in email from your domain (magic links and verified sign-ups; needs a Cloudflare API token and Email Sending on your zone)";
+  "Send email from your domain (magic links, verified sign-ups, and notification emails such as mentions; needs a Cloudflare API token and Email Sending on your zone)";
+/**
+ * One sender serves sign-in and notification email. Notification email needs
+ * only the sender, so it works whether or not magic-link sign-in is offered.
+ */
+export const SENDER_EMAIL_PROMPT =
+  "Sender email for sign-in and notification emails";
+export const SENDER_NEEDS_DOMAIN_NOTICE =
+  "Notification emails need a sender on a custom domain. This deployment uses workers.dev, so mentions show in the app only.\n";
+
+/**
+ * A deployment created without a sender is offered one once, because
+ * notification email needs only a sender, not magic-link sign-in. The hosted
+ * wrapper always has one, and `--email` asks again.
+ */
+export const collectSenderUpgrade = async ({
+  existing,
+  defaults = {},
+  flags,
+  yes,
+  log,
+}) => {
+  const offered =
+    existing !== undefined &&
+    defaults.hostedAuthentication !== true &&
+    existing.authEmailFrom === undefined &&
+    (flags.has("--email") || existing.offeredEmailSending !== true);
+  if (!offered) return { offered: false, addSender: false };
+  if (existing.zone === undefined) {
+    log(SENDER_NEEDS_DOMAIN_NOTICE);
+    return { offered: true, addSender: false };
+  }
+  return { offered: true, addSender: await yes(EMAIL_SENDING_PROMPT, false) };
+};
+
+export const NO_SENDER_NOTICE =
+  "No email sender: mentions show in the app only, and notification emails stay off. Run pnpm dx:deploy again with a sender to turn them on.\n";
 export const MAGIC_LINK_PROMPT = "Offer magic-link sign-in";
 export const SIGN_IN_UPGRADE_PROMPT =
   "Review sign-in methods now (Google, allowed email domains, Terms and Privacy links)";
@@ -227,7 +263,7 @@ export const collectDeploymentConfig = async ({
   const authEmailFrom =
     providedAuthEmailFrom ??
     (hostedAuthentication
-      ? await answer("Sign-in sender email", defaults.authEmailFrom)
+      ? await answer(SENDER_EMAIL_PROMPT, defaults.authEmailFrom)
       : undefined);
   const signIn = await collectSignIn({
     answer,
@@ -345,9 +381,17 @@ export const runDxDeploy = async ({
   const environment = { ...process.env };
   // A sender needs Email Sending and Turnstile, which Alchemy's OAuth login
   // cannot manage, so decide before signing in to Cloudflare.
+  const senderUpgrade = await collectSenderUpgrade({
+    existing,
+    defaults,
+    flags,
+    yes,
+    log: (message) => stdout.write(message),
+  });
   const hostedAuthentication =
     defaults.hostedAuthentication === true ||
     existing?.authEmailFrom !== undefined ||
+    senderUpgrade.addSender ||
     (existing === undefined && (await yes(EMAIL_SENDING_PROMPT, false)));
   if (existing?.cloudflareAccountId && !environment.CLOUDFLARE_ACCOUNT_ID)
     environment.CLOUDFLARE_ACCOUNT_ID = existing.cloudflareAccountId;
@@ -380,8 +424,13 @@ export const runDxDeploy = async ({
   const authEmailFrom =
     existing?.authEmailFrom ??
     (hostedAuthentication
-      ? await answer("Sign-in sender email (an address on your zone)")
+      ? await answer(`${SENDER_EMAIL_PROMPT} (an address on your zone)`)
       : undefined);
+  if (
+    authEmailFrom === undefined &&
+    (existing === undefined || senderUpgrade.offered)
+  )
+    stdout.write(NO_SENDER_NOTICE);
   await preflightCloudflareDeployment({
     auth: cloudflareAuth,
     zone: existing?.zone ?? defaults.zone,
@@ -390,6 +439,22 @@ export const runDxDeploy = async ({
   stdout.write("Cloudflare prerequisites passed.\n");
 
   let config = existing;
+  // A sender entered for an existing deployment is saved with it, and the
+  // offer is remembered either way. Sign-in methods stay as they were.
+  if (
+    config !== undefined &&
+    (authEmailFrom !== config.authEmailFrom || senderUpgrade.offered)
+  ) {
+    config = validateSelfhostConfig({
+      ...config,
+      ...(authEmailFrom === undefined ? {} : { authEmailFrom }),
+      ...(senderUpgrade.offered ? { offeredEmailSending: true } : {}),
+    });
+    if (authEmailFrom !== undefined && existing?.authEmailFrom === undefined)
+      stdout.write(
+        `Notification emails will come from ${config.authEmailFrom}. To also offer magic-link sign-in, run pnpm dx:deploy -- --sign-in.\n`,
+      );
+  }
   if (config === undefined)
     config = await collectDeploymentConfig({
       answer,

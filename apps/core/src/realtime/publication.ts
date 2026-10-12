@@ -132,6 +132,40 @@ const publishRealtimeThreadEvent = async (
   }
 };
 
+/**
+ * Tells a user's open apps that their notification inbox changed. It goes
+ * only to that user, on their own revision stream in their home hub.
+ */
+export const publishNotificationsInvalidation = async (
+  bindings: Pick<Bindings, "DB" | "REALTIME_HUB">,
+  userId: UserId,
+): Promise<void> => {
+  if (bindings.DB === undefined || bindings.REALTIME_HUB === undefined) return;
+  try {
+    const audience = await homeAudienceForUser(bindings.DB, userId);
+    const response = await bindings.REALTIME_HUB.getByName(audience).fetch(
+      "https://realtime.internal/notify",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AUDIENCE_HEADER]: audience,
+          [PARTICIPANT_HEADER]: userId,
+          [CLIENT_HEADER]: crypto.randomUUID(),
+        },
+        body: JSON.stringify({ type: "notifications.invalidated", userId }),
+      },
+    );
+    if (!response.ok)
+      throw new Error(`Realtime hub returned ${response.status}.`);
+  } catch (cause) {
+    realtimeLogger.warn("Realtime notification event publication failed.", {
+      event: "realtime_notification_event_publication_failed",
+      cause,
+    });
+  }
+};
+
 const missingExecutionContextMessage = "This context has no ExecutionContext";
 
 export const scheduleRealtimeInvalidation = async (

@@ -1,8 +1,9 @@
 {
   "name": "dx",
   "private": true,
-  "version": "0.2.17",
+  "version": "0.2.18",
   "license": "FSL-1.1-ALv2",
+  "type": "module",
   "packageManager": "pnpm@9.15.0",
   "engines": {
     "node": ">=22.19.0",

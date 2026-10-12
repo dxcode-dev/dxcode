@@ -116,13 +116,13 @@ export const preflightCloudflareDeployment = async ({
 
   if (authEmailFrom === undefined) return;
   if (!/^[^\s@]+@[^\s@]+$/.test(authEmailFrom))
-    throw new Error("Magic-link sender must be a valid email address.");
+    throw new Error("The email sender must be a valid email address.");
   const senderDomain = authEmailFrom
     .slice(authEmailFrom.lastIndexOf("@") + 1)
     .toLowerCase();
   if (senderDomain !== zone && !senderDomain.endsWith(`.${zone}`))
     throw new Error(
-      `Magic-link sender must use ${zone} or one of its subdomains.`,
+      `The email sender must use ${zone} or one of its subdomains.`,
     );
   if (auth.method === "alchemy-oauth")
     throw new Error(

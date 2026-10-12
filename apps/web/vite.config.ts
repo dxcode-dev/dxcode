@@ -23,6 +23,9 @@ export default defineConfig(({ mode }) => {
     plugins: [tailwindcss(), react(), localTranscriptCapture],
     build: {
       manifest: true,
+      // Shiki grammars (cpp, emacs-lisp) and the terminal emulator are large
+      // by nature and load only when used; the warning should flag the rest.
+      chunkSizeWarningLimit: 800,
       rollupOptions: {
         input: {
           app: resolve(import.meta.dirname, "index.html"),

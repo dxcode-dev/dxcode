@@ -40,7 +40,8 @@ vi.mock("@flue/react", () => ({
   }),
 }));
 vi.mock("@flue/sdk", () => ({ createFlueClient: flue.createClient }));
-vi.mock("@tanstack/react-router", () => ({
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useLocation: ({
     select,
   }: {

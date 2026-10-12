@@ -3,7 +3,8 @@ import {
   SignInAdmission,
   SignInProviderId,
 } from "@dx/domain";
-import { Effect, Predicate, Schema } from "effect";
+import { Effect, Schema } from "effect";
+import { deploymentEmailSender, type EmailSender } from "../email/sender.js";
 import type { Bindings } from "../http/types.js";
 import type { AuthenticationRequirements } from "./requirements.js";
 
@@ -30,8 +31,11 @@ export interface SignInConfiguration {
   readonly providers: ReadonlyArray<SignInProviderId>;
   readonly admission: SignInAdmission;
   readonly allowedEmailDomains: ReadonlyArray<string>;
-  /** Cloudflare Email Sending; required by magic link and by password verification. */
-  readonly email?: { readonly binding: SendEmail; readonly from: string };
+  /**
+   * The deployment's sender; required by magic link and by password
+   * verification. Notification email uses the same sender.
+   */
+  readonly email?: EmailSender;
   /** Password sign-ups confirm their address before the first session. */
   readonly emailVerification: boolean;
   readonly google?: {
@@ -154,13 +158,7 @@ export const loadSignInConfiguration = Effect.fn("loadSignInConfiguration")(
         allowedEmailDomains.push(normalized);
     }
 
-    const from = nonEmpty(bindings.DX_AUTH_EMAIL_FROM);
-    const email =
-      from !== undefined &&
-      Predicate.isObject(bindings.EMAIL) &&
-      Predicate.isFunction(bindings.EMAIL.send)
-        ? { binding: bindings.EMAIL, from }
-        : undefined;
+    const email = deploymentEmailSender(bindings);
     const development = developmentEnvironment(requirements.environment);
     if (providers.includes("magic-link") && email === undefined)
       return yield* fail("email_sender_required");

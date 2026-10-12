@@ -30,6 +30,7 @@ import { MarkdownFileLinkContext } from "../../shared/ui/markdown-file-link-cont
 import { useMobile } from "../../shared/use-mobile.js";
 import { projectQueryOptions } from "../projects/project-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
+import type { TranscriptFocus } from "./thread-transcript.js";
 import { AgentPanel } from "./agent-panel.js";
 import { ChangesPane } from "./changes/changes-pane.js";
 import { CenterFilePane } from "./files/center-file-pane.js";
@@ -186,6 +187,39 @@ export function ThreadWorkspace({
   const { threadId } = useParams({ from: "/_product/threads/$threadId" });
   const navigate = useNavigate();
   const returnTo = useLocation({ select: (location) => location.href });
+  // A notification opens the Thread at a message; the URL keeps it only
+  // until the transcript has scrolled there.
+  const focusMessageId = useLocation({
+    select: (location) => {
+      const message: unknown = location.search?.message;
+      return typeof message === "string" && /^msg_[0-9a-f]{24}$/.test(message)
+        ? message
+        : undefined;
+    },
+  });
+  // Each navigation is its own request, so opening the same mention again
+  // scrolls to it again.
+  const focusRequestKey = useLocation({
+    select: (location) =>
+      location.state?.__TSR_key ?? location.state?.key ?? location.href,
+  });
+  const focus = React.useMemo(
+    () =>
+      focusMessageId === undefined
+        ? undefined
+        : { messageId: focusMessageId, requestKey: String(focusRequestKey) },
+    [focusMessageId, focusRequestKey],
+  );
+  const onFocusHandled = React.useCallback(
+    () =>
+      void navigate({
+        to: "/threads/$threadId",
+        params: { threadId },
+        search: {},
+        replace: true,
+      }),
+    [navigate, threadId],
+  );
   const { identity } = useAuthenticatedIdentity();
   const registry = React.useContext(ThreadSessionRegistryContext);
   const id = threadId as ThreadId;
@@ -291,6 +325,7 @@ export function ThreadWorkspace({
           state: settingsNavigationState(returnTo),
         })
       }
+      {...(focus === undefined ? {} : { focus, onFocusHandled })}
       Terminal={Terminal}
     />
   );
@@ -369,6 +404,9 @@ type ThreadSessionProps = {
   readonly onInitialSubmissionObserved?: (submissionId: string) => void;
   readonly workspaceStatus?: string;
   readonly onOpenModelRouting?: (destination: string) => void;
+  /** Open the transcript at this message (`?message=`), as a notification links. */
+  readonly focus?: TranscriptFocus;
+  readonly onFocusHandled?: () => void;
   readonly Terminal?: React.ComponentType<{
     readonly active?: boolean;
     readonly threadId: ThreadId;
@@ -694,6 +732,8 @@ function ThreadSessionContent({
   onInitialSubmissionObserved,
   workspaceStatus: realtimeWorkspaceStatus,
   onOpenModelRouting,
+  focus,
+  onFocusHandled,
   Terminal,
   agentSource,
 }: ThreadSessionProps & {
@@ -713,8 +753,31 @@ function ThreadSessionContent({
     shareOpen,
     onShareOpenChange: setShareOpen,
   };
+  const {
+    files,
+    setFiles,
+    activeFile,
+    setActiveFile,
+    openFile,
+    closeFile,
+    fileNavigation,
+    resolveFileLink,
+  } = useCenterFileTabs(thread.id);
+  // A notification opens the transcript at a message, so it comes forward
+  // from an open file tab.
+  const onFocusRequested = React.useCallback(
+    () => setActiveFile(undefined),
+    [setActiveFile],
+  );
   const sharedPanelProps = {
     mentions,
+    ...(focus === undefined
+      ? {}
+      : {
+          focus,
+          onFocusHandled,
+          onFocusRequested,
+        }),
     ...sharedAgentPanelProps(thread),
     inboundMessages: thread.inboundMessages,
     ...(thread.access === "contribute"
@@ -754,16 +817,7 @@ function ThreadSessionContent({
     () => setRightPaneCollapsed((collapsed) => !collapsed),
     [],
   );
-  const {
-    files,
-    setFiles,
-    activeFile,
-    setActiveFile,
-    openFile,
-    closeFile,
-    fileNavigation,
-    resolveFileLink,
-  } = useCenterFileTabs(thread.id);
+
   if (mobile) {
     return (
       <div className="mobile-thread-region">

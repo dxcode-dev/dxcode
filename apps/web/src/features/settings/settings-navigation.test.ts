@@ -17,6 +17,7 @@ describe("settings navigation", () => {
       "MCP & Integrations",
       "Plugins",
       "Orb Providers",
+      "Notifications",
       "Advanced",
       "Appearance",
       "Keyboard Shortcuts",

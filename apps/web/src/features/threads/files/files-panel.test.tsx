@@ -253,7 +253,10 @@ describe("Thread Files lazy reads", () => {
     await settle();
 
     expect(transport.list).toHaveBeenCalledOnce();
-    expect(container.textContent).toContain("README.md");
+    // The tree's code loads when the Files pane first opens.
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("README.md"),
+    );
     expect(container.querySelector('[role="alert"]')).toBeNull();
     expect(container.querySelector(".thread-files-worktree")).toBeNull();
     await React.act(() => root.unmount());

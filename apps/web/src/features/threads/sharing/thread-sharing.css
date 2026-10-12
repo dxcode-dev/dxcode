@@ -549,3 +549,28 @@ button.message-mention {
 .thread-follow-button {
   flex: none;
 }
+
+/* The message a notification opened, marked briefly in the transcript. */
+@keyframes notification-target-flash {
+  from {
+    background: color-mix(
+      in srgb,
+      var(--chat-mention-foreground) 16%,
+      transparent
+    );
+  }
+  to {
+    background: transparent;
+  }
+}
+.transcript-row[data-notification-target] {
+  border-radius: 12px;
+  animation: notification-target-flash 2.4s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .transcript-row[data-notification-target] {
+    animation: none;
+    outline: 2px solid var(--chat-mention-foreground);
+    outline-offset: 4px;
+  }
+}

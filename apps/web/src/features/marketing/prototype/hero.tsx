@@ -1,7 +1,7 @@
 import { ArrowIcon } from "./arrow-icon.js";
 import { WaitlistForm } from "./waitlist-form.js";
 
-const workshop = new URL("./workshop.png", import.meta.url).href;
+const workshop = new URL("./workshop.webp", import.meta.url).href;
 
 export function Hero() {
   return (

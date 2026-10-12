@@ -1,6 +1,6 @@
 ---
 title: Sign-in and authentication
-description: Choose sign-in methods, who may create an account, allowed email domains, Google sign-in, and the sender for sign-in email.
+description: Choose sign-in methods, who may create an account, allowed email domains, Google sign-in, and the sender for sign-in and notification email.
 ---
 
 Each deployment chooses how people sign in and who may create an account.
@@ -82,9 +82,11 @@ email.
 
 ## Send sign-in email
 
-Magic links and verification emails come from `authEmailFrom` through
-Cloudflare Email Sending. Email Routing handles inbound mail and is not
-required.
+Magic links, verification emails, and notification emails (mentions) come
+from `authEmailFrom` through Cloudflare Email Sending. Notification emails
+need only the sender: they work with any sign-in methods, magic link or not.
+Without a sender, mentions show in the app only. Email Routing handles
+inbound mail and is not required.
 
 1. Choose a sender domain: the deployment zone or one of its subdomains, such
    as `mail.example.com`. A dedicated subdomain keeps Cloudflare's sending
@@ -153,9 +155,12 @@ invite only.
 - **Adding email and password** to a deployment that ran without it: the
   wizard offers to set the administrator password, which attaches to the
   administrator account that already signed in by magic link or Google.
-- **Adding a sender** (for magic link or public password sign-up): add
-  `authEmailFrom` to `deploy.selfhost.json`, deploy with an API token, then
-  run `--sign-in`.
+- **Adding a sender** (for notification emails, magic link, or public
+  password sign-up): `pnpm dx:deploy` offers one once to a deployment that
+  has none, and `pnpm dx:deploy -- --email` asks again. It needs a custom
+  domain and a Cloudflare API token. Sign-in methods stay as they were, so
+  notification emails start without changing how people sign in; run
+  `--sign-in` afterward to also offer magic link.
 
 ## Configuration reference
 

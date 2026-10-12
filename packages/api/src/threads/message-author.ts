@@ -36,6 +36,12 @@ export interface MessageAuthorTag {
    * Only the server sets it; clients show the message as from that Thread.
    */
   readonly sourceThreadId?: string;
+  /**
+   * dx's name for the message, set when it tags someone, so a notification
+   * can open the Thread at it. Only the server sets it, from the delivery's
+   * idempotency key, so a retry carries the same tag.
+   */
+  readonly messageId?: string;
 }
 
 /** Tagging the agent sends a message to it, even beside member tags. */
@@ -67,6 +73,7 @@ export const formatMessageAuthor = ({
   chat,
   mentions = [],
   sourceThreadId,
+  messageId,
 }: MessageAuthorTag) =>
   `<${TAG} role="${author.role}" user_id="${escapeAttribute(author.userId)}" identifier="${escapeAttribute(author.name)}"${
     author.handle === undefined
@@ -80,6 +87,8 @@ export const formatMessageAuthor = ({
     sourceThreadId === undefined
       ? ""
       : ` source_thread="${escapeAttribute(sourceThreadId)}"`
+  }${
+    messageId === undefined ? "" : ` message_id="${escapeAttribute(messageId)}"`
   } />\n`;
 
 /**
@@ -110,6 +119,7 @@ export const parseMessageAuthor = (
   readonly chat?: true;
   readonly mentions?: ReadonlyArray<MessageMention>;
   readonly sourceThreadId?: string;
+  readonly messageId?: string;
   readonly text: string;
 } => {
   const match = leadingTag.exec(text);
@@ -144,6 +154,9 @@ export const parseMessageAuthor = (
     ...(mentions.length === 0 ? {} : { mentions }),
     ...(fields.get("source_thread")
       ? { sourceThreadId: fields.get("source_thread") }
+      : {}),
+    ...(fields.get("message_id")
+      ? { messageId: fields.get("message_id") }
       : {}),
     text: rest,
   };

@@ -15,6 +15,7 @@ import {
 } from "../../shared/new-thread-surface.js";
 import { useThreadArchive } from "../../shared/thread-archive.js";
 import { Button } from "../../shared/ui/button.js";
+import { NotificationInbox } from "./notification-inbox.js";
 import { SidebarAccountMenu } from "./sidebar-account-menu.js";
 import { SidebarArchive } from "./sidebar-archive.js";
 import { ProjectsIcon } from "./sidebar-icons.js";
@@ -298,6 +299,9 @@ export function AppSidebar({
           dx
         </Link>
         <span className="sidebar-top-spacer" />
+        {userId === undefined ? null : (
+          <NotificationInbox userId={userId} onNavigate={onNavigate} />
+        )}
         <Button
           ref={searchTriggerRef}
           aria-label="Search threads"

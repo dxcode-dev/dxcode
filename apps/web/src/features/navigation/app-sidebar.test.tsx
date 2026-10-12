@@ -46,6 +46,10 @@ vi.mock("./sidebar-account-menu.js", () => ({
   SidebarAccountMenu: () => null,
 }));
 
+vi.mock("./notification-inbox.js", () => ({
+  NotificationInbox: () => null,
+}));
+
 vi.mock("../../shared/new-thread-surface.js", () => ({
   useNewThreadSurface: () => ({
     openNewThread: vi.fn(),

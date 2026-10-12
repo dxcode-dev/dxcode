@@ -52,6 +52,7 @@ import type {
 import {
   INBOUND_MESSAGE_PREFIX,
   ThreadTranscript,
+  type TranscriptFocus,
 } from "./thread-transcript.js";
 import { deriveTranscriptViewModel } from "./transcript-view-model.js";
 import {
@@ -849,6 +850,11 @@ interface AgentPanelProps {
   readonly onOpenModelRouting?: () => void;
   /** Messages other Threads sent while this one worked, not yet joined. */
   readonly inboundMessages?: ThreadDetailData["inboundMessages"];
+  /** Open the transcript at this message, as a notification links. */
+  readonly focus?: TranscriptFocus;
+  readonly onFocusHandled?: () => void;
+  /** The transcript is hidden behind another tab and must come forward. */
+  readonly onFocusRequested?: () => void;
 }
 
 /** Pending composer images, owned here unless the caller retains them. */
@@ -1087,6 +1093,9 @@ export function AgentPanel({
   readOnlyNotice,
   onAccessChanged,
   mentions,
+  focus,
+  onFocusHandled,
+  onFocusRequested,
 }: AgentPanelProps) {
   const retainedDraft = useThreadPresentationValue("draft", "");
   const draftValue = ownerDraft ?? retainedDraft;
@@ -1212,6 +1221,9 @@ export function AgentPanel({
           loadingOlder={agent.loadingOlder}
           olderError={agent.olderError}
           loadOlder={agent.loadOlder}
+          {...(focus === undefined
+            ? {}
+            : { focus, onFocusHandled, onFocusRequested })}
           showProcessingIndicator={!archived && statusMessage === undefined}
           header={
             <AgentTranscriptHeader

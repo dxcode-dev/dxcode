@@ -45,6 +45,8 @@ export type TranscriptRow =
       readonly continued?: true;
       /** Another of the owner's Threads sent it with a Thread tool. */
       readonly sourceThreadId?: string;
+      /** dx's name for a message that tags someone; notifications link to it. */
+      readonly dxMessageId?: string;
     } & TranscriptRowBase &
       SourcePart)
   | ({
@@ -324,7 +326,7 @@ export const deriveTranscriptViewModel = ({
       if (part.type === "text") {
         if (message.role === "user") {
           const parsedAuthor = parseMessageAuthor(part.text);
-          const { author, mentions, sourceThreadId } = parsedAuthor;
+          const { author, mentions, sourceThreadId, messageId } = parsedAuthor;
           const { attachments, text } = parseMessageAttachments(
             parsedAuthor.text,
           );
@@ -338,6 +340,7 @@ export const deriveTranscriptViewModel = ({
             ...(author === undefined ? {} : { author }),
             ...(mentions === undefined ? {} : { mentions }),
             ...(sourceThreadId === undefined ? {} : { sourceThreadId }),
+            ...(messageId === undefined ? {} : { dxMessageId: messageId }),
             admitted: message.submissionId !== undefined,
             ...(sentAt === undefined ? {} : { sentAt }),
             ...(chat ? { chat: true as const } : {}),

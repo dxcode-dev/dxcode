@@ -1,6 +1,6 @@
 import { WaitlistForm } from "./waitlist-form.js";
 
-const mascot = new URL("./mascot.png", import.meta.url).href;
+const mascot = new URL("./mascot.webp", import.meta.url).href;
 export function Access({
   illustrated = false,
 }: {

@@ -7,6 +7,7 @@ import {
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Match, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { notificationPreferenceRoutes } from "../notifications/routes.js";
 import type { AppEnv } from "../http/types.js";
 import { authorizationLogger, dictationLogger } from "../logging.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
@@ -185,6 +186,7 @@ settingsRoutes.route(
 );
 settingsRoutes.route("/personal/model-routing", personalModelRoutingRoutes);
 settingsRoutes.route("/personal/mcp-servers", personalMcpServerRoutes);
+settingsRoutes.route("/personal/notifications", notificationPreferenceRoutes);
 settingsRoutes.route(
   "/personal/first-party-plugins",
   personalFirstPartyPluginRoutes,

@@ -78,6 +78,30 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("Settings routes", () => {
+  it("reports an unknown workspace section before a malformed workspace slug", async () => {
+    vi.stubGlobal(
+      "fetch",
+      new FrontendNetworkHarness(() => Response.json({}, { status: 404 }))
+        .fetch,
+    );
+    const router = createAppRouter(
+      { queryClient: createQueryClient(), userId },
+      createMemoryHistory({ initialEntries: ["/workspaces/Bad%20Slug!/nope"] }),
+    );
+
+    await router.load();
+
+    const match = router.state.matches.find(
+      ({ routeId }) => routeId === "/workspaces/$workspaceSlug/$section",
+    );
+    expect(match?.status).toBe("notFound");
+    expect(match?.error).toMatchObject({
+      data: { code: "SETTINGS_SECTION_NOT_FOUND", section: "nope" },
+    });
+  });
+});
+
 describe("Router Query coordination", () => {
   it("shares intent-preloaded project data with warm route loading", async () => {
     const network = new FrontendNetworkHarness(() =>

@@ -21,10 +21,12 @@ pnpm dx:deploy
 
 The wizard will ask you to:
 
-1. Choose whether dx sends sign-in email from your domain. Sending email
-   enables magic links and verified password sign-up. It needs a custom domain,
-   Cloudflare Email Sending on the sender domain, and a Cloudflare API token.
-   Without it, the wizard uses browser authorization.
+1. Choose whether dx sends email from your domain. One sender serves magic
+   links, verified password sign-up, and notification emails such as
+   mentions; notification emails need only the sender, not magic-link
+   sign-in. It needs a custom domain, Cloudflare Email Sending on the sender
+   domain, and a Cloudflare API token. Without it, the wizard uses browser
+   authorization, and mentions show in the app only.
 2. Authorize Cloudflare in a browser, or enter the API token, then enter the
    sender address when sending email.
 3. Select a `workers.dev` address or configure a custom domain.

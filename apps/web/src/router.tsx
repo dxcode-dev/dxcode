@@ -4,6 +4,7 @@ import {
   createRootRouteWithContext,
   createRoute,
   createRouter,
+  lazyRouteComponent,
   notFound,
   Outlet,
   type RouterHistory,
@@ -14,52 +15,65 @@ import {
   safeNextPath,
   validateSignInSearch,
 } from "./features/authentication/sign-in-paths.js";
-import { HomePage } from "./features/home/home-page.js";
 import { ProductShell } from "./features/navigation/product-shell.js";
-import { ProjectPage } from "./features/projects/project-page.js";
 import {
   projectQueryOptions,
   seedProjectDetailFromList,
 } from "./features/projects/project-queries.js";
-import { ProjectSettingsPage } from "./features/projects/project-settings-page.js";
-import { ProjectsPage } from "./features/projects/projects-page.js";
-import { ProjectEnvironmentVariablesSettings } from "./features/settings/environment-variables/environment-variables-settings.js";
-import { settingsManifest } from "./features/settings/foundation-sections.js";
-import { JoinWorkspacePage } from "./features/settings/members/join-workspace-page.js";
 import { settingsContextQueryOptions } from "./features/settings/settings-context-queries.js";
-import { SettingsRouteNotFound } from "./features/settings/settings-page.js";
 import { resolveSettingsSection } from "./features/settings/settings-registration.js";
-import {
-  PersonalSettingsRoot,
-  PersonalSettingsSection,
-  WorkspaceSettingsEmptyRoot,
-  WorkspaceSettingsRoot,
-  WorkspaceSettingsSection,
-} from "./features/settings/settings-route-components.js";
-import { ThreadTerminal } from "./features/terminal/thread-terminal.js";
+import { SettingsRouteNotFound } from "./features/settings/settings-route-not-found.js";
 import {
   NewThreadPage,
   NewThreadProvider,
 } from "./features/threads/new-thread-page.js";
 import { ThreadArchiveProvider } from "./features/threads/thread-archive.js";
 import { ThreadEditingProvider } from "./features/threads/thread-editing.js";
-import { ThreadWorkspace } from "./features/threads/thread-workspace.js";
+import { isStaleChunkError } from "./shared/stale-chunk.js";
 
 export interface RouterContext {
   readonly queryClient: QueryClient;
   readonly userId: UserId;
 }
 
-const ProjectSettingsRoute = () => (
-  <ProjectSettingsPage
-    renderEnvironmentSettings={(projectId, onDirtyChange) => (
-      <ProjectEnvironmentVariablesSettings
-        projectId={projectId}
-        onDirtyChange={onDirtyChange}
-      />
-    )}
-  />
-);
+// Each page loads as its own chunk, so the first visit downloads only the
+// shell and the page it lands on; links preload a page's chunk on intent.
+const page = {
+  home: lazyRouteComponent(
+    () => import("./features/home/home-page.js"),
+    "HomePage",
+  ),
+  projects: lazyRouteComponent(
+    () => import("./features/projects/projects-page.js"),
+    "ProjectsPage",
+  ),
+  project: lazyRouteComponent(
+    () => import("./features/projects/project-page.js"),
+    "ProjectPage",
+  ),
+  projectSettings: lazyRouteComponent(
+    () => import("./project-settings-route.js"),
+    "ProjectSettingsRoute",
+  ),
+  thread: lazyRouteComponent(() => import("./thread-route.js"), "ThreadRoute"),
+  joinWorkspace: lazyRouteComponent(
+    () => import("./features/settings/members/join-workspace-page.js"),
+    "JoinWorkspacePage",
+  ),
+};
+
+const settingsPage = (
+  name:
+    | "PersonalSettingsRoot"
+    | "PersonalSettingsSection"
+    | "WorkspaceSettingsRoot"
+    | "WorkspaceSettingsEmptyRoot"
+    | "WorkspaceSettingsSection",
+) =>
+  lazyRouteComponent(
+    () => import("./features/settings/settings-route-components.js"),
+    name,
+  );
 
 const rootRoute = createRootRouteWithContext<RouterContext>()({
   component: () => (
@@ -84,7 +98,7 @@ const productRoute = createRoute({
 const indexRoute = createRoute({
   getParentRoute: () => productRoute,
   path: "/",
-  component: HomePage,
+  component: page.home,
 });
 
 const projectsRoute = createRoute({
@@ -102,7 +116,7 @@ const projectsRoute = createRoute({
     );
     return owner === undefined ? {} : { owner };
   },
-  component: ProjectsPage,
+  component: page.projects,
 });
 
 const projectId = (input: string) => {
@@ -132,7 +146,7 @@ const projectRoute = createRoute({
   path: "/projects/$projectId",
   loader: ({ context, params }) =>
     ensureProjectRouteData(context, params.projectId),
-  component: ProjectPage,
+  component: page.project,
 });
 
 const projectSettingsRoute = createRoute({
@@ -140,7 +154,7 @@ const projectSettingsRoute = createRoute({
   path: "/projects/$projectId/settings",
   loader: ({ context, params }) =>
     ensureProjectRouteData(context, params.projectId),
-  component: ProjectSettingsRoute,
+  component: page.projectSettings,
 });
 
 const projectSettingsSectionRoute = createRoute({
@@ -148,7 +162,7 @@ const projectSettingsSectionRoute = createRoute({
   path: "/projects/$projectId/settings/$section",
   loader: ({ context, params }) =>
     ensureProjectRouteData(context, params.projectId),
-  component: ProjectSettingsRoute,
+  component: page.projectSettings,
 });
 
 const newThreadRoute = createRoute({
@@ -169,13 +183,35 @@ const newThreadRoute = createRoute({
 const threadRoute = createRoute({
   getParentRoute: () => productRoute,
   path: "/threads/$threadId",
-  component: () => <ThreadWorkspace Terminal={ThreadTerminal} />,
+  // `message` opens the Thread at a message, for example a mention.
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { readonly message?: string } =>
+    typeof search.message === "string" &&
+    /^msg_[0-9a-f]{24}$/.test(search.message)
+      ? { message: search.message }
+      : {},
+  component: page.thread,
 });
 
-const registeredSettingsSection = (
+const registeredSettingsSection = async (
   scope: "personal" | "workspace",
   section?: string,
 ) => {
+  // The manifest carries every section's component; load it with the page.
+  // A tab opened before a deploy cannot load the old chunk. Resolve nothing
+  // then: the settings page's lazy route component needs the same chunk,
+  // fails on it, and TanStack reloads the page once to pick up the new build.
+  const settingsManifest = await import(
+    "./features/settings/foundation-sections.js"
+  ).then(
+    (module) => module.settingsManifest,
+    (error: unknown) => {
+      if (isStaleChunkError(error)) return undefined;
+      throw error;
+    },
+  );
+  if (settingsManifest === undefined) return undefined;
   const result = resolveSettingsSection(settingsManifest, scope, section);
   if (!result.found) throw notFound({ data: result.error });
   return result.registration;
@@ -198,7 +234,7 @@ const personalSettingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
   loader: () => registeredSettingsSection("personal"),
-  component: PersonalSettingsRoot,
+  component: settingsPage("PersonalSettingsRoot"),
   notFoundComponent: SettingsRouteNotFound,
 });
 
@@ -206,18 +242,19 @@ const personalSettingsSectionRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings/$section",
   loader: ({ params }) => registeredSettingsSection("personal", params.section),
-  component: PersonalSettingsSection,
+  component: settingsPage("PersonalSettingsSection"),
   notFoundComponent: SettingsRouteNotFound,
 });
 
 const workspaceSettingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/workspaces/$workspaceSlug",
-  loader: ({ params }) => ({
-    registration: registeredSettingsSection("workspace"),
-    workspaceSlug: workspaceSlug(params.workspaceSlug),
-  }),
-  component: WorkspaceSettingsRoot,
+  // An unknown section takes precedence over a malformed slug.
+  loader: async ({ params }) => {
+    const registration = await registeredSettingsSection("workspace");
+    return { registration, workspaceSlug: workspaceSlug(params.workspaceSlug) };
+  },
+  component: settingsPage("WorkspaceSettingsRoot"),
   notFoundComponent: SettingsRouteNotFound,
 });
 
@@ -225,18 +262,21 @@ const workspaceSettingsEmptyRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/workspaces",
   loader: () => registeredSettingsSection("workspace"),
-  component: WorkspaceSettingsEmptyRoot,
+  component: settingsPage("WorkspaceSettingsEmptyRoot"),
   notFoundComponent: SettingsRouteNotFound,
 });
 
 const workspaceSettingsSectionRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/workspaces/$workspaceSlug/$section",
-  loader: ({ params }) => ({
-    registration: registeredSettingsSection("workspace", params.section),
-    workspaceSlug: workspaceSlug(params.workspaceSlug),
-  }),
-  component: WorkspaceSettingsSection,
+  loader: async ({ params }) => {
+    const registration = await registeredSettingsSection(
+      "workspace",
+      params.section,
+    );
+    return { registration, workspaceSlug: workspaceSlug(params.workspaceSlug) };
+  },
+  component: settingsPage("WorkspaceSettingsSection"),
   notFoundComponent: SettingsRouteNotFound,
 });
 
@@ -245,7 +285,7 @@ const joinWorkspaceRoute = createRoute({
   path: "/join/$token",
   // Provider redirects can return here with `?error=` before sign-in.
   validateSearch: validateSignInSearch,
-  component: JoinWorkspacePage,
+  component: page.joinWorkspace,
 });
 
 // Signing in lands on the sign-in page with a session; continue to `next`,

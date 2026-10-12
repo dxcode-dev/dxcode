@@ -17,6 +17,7 @@ import {
 } from "./integrations/registration.js";
 import { keyboardShortcutsSettingsSection } from "./keyboard-shortcuts/registration.js";
 import { personalSigningKeysSettingsSection } from "./keys/registration.js";
+import { personalNotificationsSettingsSection } from "./notifications/registration.js";
 import { workspaceMembersSettingsSection } from "./members/registration.js";
 import {
   personalModeDialSettingsSection,
@@ -71,6 +72,7 @@ export const foundationSettingsSections: ReadonlyArray<SettingsSectionRegistrati
     personalCustomPluginsSettingsSection,
     personalPluginTriggersSettingsSection,
     personalSkillsSettingsSection,
+    personalNotificationsSettingsSection,
     personalAdvancedSettingsSection,
     appearanceSettingsSection,
     personalExperimentalFeaturesSettingsSection,

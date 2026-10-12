@@ -336,6 +336,208 @@ function useOlderHistoryDrain({
   return { viewportRef, sentinelRef, schedule, markRestored };
 }
 
+const FOCUS_HIGHLIGHT_MS = 2_400;
+const FOCUS_STEADY_FRAMES = 6;
+const FOCUS_MAX_FRAMES = 240;
+const MAX_FOCUS_PAGES = 40;
+const MAX_FOCUS_LOAD_RETRIES = 3;
+
+/**
+ * A request to open the transcript at a message (dx's message id). Each
+ * navigation has its own `requestKey`, so opening the same message again is a
+ * new request.
+ */
+export interface TranscriptFocus {
+  readonly messageId: string;
+  readonly requestKey: string;
+}
+
+/**
+ * Opens the transcript at the message a notification links to: scrolls to
+ * its turn, loading older history until the message arrives or history
+ * ends, then marks it briefly. It runs from a commit-time ref, once per
+ * request, and stops as soon as its anchor leaves the page or the person
+ * scrolls.
+ */
+function useMessageFocus({
+  focus,
+  active,
+  onRequested,
+  model,
+  virtualizer,
+  historyReady,
+  hasMore,
+  loadingOlder,
+  olderError,
+  loadOlder,
+  onHandled,
+}: {
+  readonly focus?: TranscriptFocus;
+  readonly active: boolean;
+  readonly onRequested?: () => void;
+  readonly model: TranscriptViewModel;
+  readonly virtualizer: {
+    scrollToIndex: (
+      index: number,
+      options: { align: "center" | "start"; behavior: "auto" },
+    ) => void;
+  };
+  readonly historyReady: boolean;
+  readonly hasMore: boolean;
+  readonly loadingOlder: boolean;
+  readonly olderError?: Error;
+  readonly loadOlder?: () => Promise<void>;
+  readonly onHandled?: () => void;
+}) {
+  const state = React.useRef<{
+    requestKey?: string;
+    handled: boolean;
+    pages: number;
+    retries: number;
+    retriedError?: Error;
+    requested?: boolean;
+  }>({ handled: false, pages: 0, retries: 0 });
+  const messageId = focus?.messageId;
+  const requestKey = focus?.requestKey;
+  const target =
+    messageId === undefined
+      ? undefined
+      : model.rows.find(
+          (row) => row.kind === "user-prompt" && row.dxMessageId === messageId,
+        );
+  const targetIndex =
+    target === undefined
+      ? -1
+      : model.turns.findIndex((turn) => turn.id === target.turnId);
+  const targetRowId = target?.id;
+  return React.useCallback(
+    (anchor: HTMLSpanElement | null) => {
+      if (anchor === null || requestKey === undefined) return;
+      if (state.current.requestKey !== requestKey)
+        state.current = { requestKey, handled: false, pages: 0, retries: 0 };
+      const current = state.current;
+      if (current.handled) return;
+      // Hidden behind a file tab: ask to come forward, then continue once
+      // this transcript is shown.
+      if (!active) {
+        if (!current.requested) {
+          current.requested = true;
+          onRequested?.();
+        }
+        return;
+      }
+      if (!historyReady) return;
+      // The request ended: the person left the Thread or opened another.
+      const live = () =>
+        anchor.isConnected && state.current.requestKey === requestKey;
+      if (targetRowId !== undefined && targetIndex >= 0) {
+        current.handled = true;
+        // The list anchors to its end and measures turns as they render, so
+        // one scroll does not stick: keep the row in view until it stays.
+        let frames = 0;
+        let steady = 0;
+        let interrupted = false;
+        let viewport: Element | undefined;
+        const interrupt = () => {
+          interrupted = true;
+        };
+        const finish = (row: HTMLElement | null) => {
+          viewport?.removeEventListener("wheel", interrupt);
+          viewport?.removeEventListener("touchstart", interrupt);
+          viewport?.removeEventListener("keydown", interrupt);
+          if (!live()) return;
+          if (row !== null) {
+            row.focus({ preventScroll: true });
+            row.setAttribute("data-notification-target", "");
+            window.setTimeout(
+              () => row.removeAttribute("data-notification-target"),
+              FOCUS_HIGHLIGHT_MS,
+            );
+          }
+          onHandled?.();
+        };
+        const settle = () => {
+          if (!live()) return finish(null);
+          frames += 1;
+          const row = document.getElementById(targetRowId);
+          const view = row?.closest(".transcript-viewport") ?? undefined;
+          if (row === null || view === undefined) {
+            virtualizer.scrollToIndex(targetIndex, {
+              align: "center",
+              behavior: "auto",
+            });
+          } else {
+            if (viewport === undefined) {
+              // Scrolling by hand ends the request where the person is.
+              viewport = view;
+              const options = { passive: true } as const;
+              view.addEventListener("wheel", interrupt, options);
+              view.addEventListener("touchstart", interrupt, options);
+              view.addEventListener("keydown", interrupt, options);
+            }
+            if (interrupted) return finish(row);
+            const rowRect = row.getBoundingClientRect();
+            const viewRect = view.getBoundingClientRect();
+            // A row taller than the transcript is shown from its top.
+            const tall = rowRect.height > viewRect.height;
+            const inView = tall
+              ? rowRect.top >= viewRect.top - 1 &&
+                rowRect.top <= viewRect.top + 64
+              : rowRect.top >= viewRect.top - 1 &&
+                rowRect.bottom <= viewRect.bottom + 1;
+            steady = inView ? steady + 1 : 0;
+            if (!inView)
+              row.scrollIntoView({ block: tall ? "start" : "center" });
+            if (steady >= FOCUS_STEADY_FRAMES || frames >= FOCUS_MAX_FRAMES)
+              return finish(row);
+          }
+          if (frames < FOCUS_MAX_FRAMES) requestAnimationFrame(settle);
+          else finish(null);
+        };
+        requestAnimationFrame(settle);
+        return;
+      }
+      if (loadingOlder) return;
+      const canLoad = hasMore && loadOlder !== undefined;
+      if (canLoad && olderError !== undefined) {
+        // This failure already has a retry scheduled or in flight.
+        if (current.retriedError === olderError) return;
+        // A failed page is retried a few times with backoff, then the
+        // request gives up rather than hammering history.
+        current.retriedError = olderError;
+        if (current.retries < MAX_FOCUS_LOAD_RETRIES) {
+          const delay = 1_000 * 2 ** current.retries;
+          current.retries += 1;
+          window.setTimeout(() => {
+            if (live() && !state.current.handled) void loadOlder?.();
+          }, delay);
+          return;
+        }
+      } else if (canLoad && current.pages < MAX_FOCUS_PAGES) {
+        current.pages += 1;
+        void loadOlder?.();
+        return;
+      }
+      current.handled = true;
+      onHandled?.();
+    },
+    [
+      active,
+      hasMore,
+      historyReady,
+      loadOlder,
+      loadingOlder,
+      olderError,
+      onHandled,
+      onRequested,
+      requestKey,
+      targetIndex,
+      targetRowId,
+      virtualizer,
+    ],
+  );
+}
+
 function useTranscriptViewport({
   active = true,
   model,
@@ -357,6 +559,12 @@ function useTranscriptViewport({
   readonly loadingOlder?: boolean;
   readonly olderError?: Error;
   readonly loadOlder?: () => Promise<void>;
+  /** Open at this message, as a notification links. */
+  readonly focus?: TranscriptFocus;
+  /** The transcript is hidden and must come forward to show the message. */
+  readonly onFocusRequested?: () => void;
+  /** The focus was applied, or the message is not in this Thread. */
+  readonly onFocusHandled?: () => void;
 }) {
   const [position] = useThreadPresentation<{ saved?: TranscriptPosition }>(
     "transcriptPosition",
@@ -662,6 +870,13 @@ export function TranscriptViewport(
     showProcessingIndicator = true,
     loadingOlder = false,
     loadOlder,
+    historyReady = false,
+    hasMore = false,
+    olderError,
+    focus,
+    onFocusHandled,
+    onFocusRequested,
+    active = true,
   } = props;
   const {
     viewportRef,
@@ -677,6 +892,19 @@ export function TranscriptViewport(
     jumpToEnd,
     navigateToRow,
   } = useTranscriptViewport(props);
+  const focusRef = useMessageFocus({
+    focus,
+    active,
+    onRequested: onFocusRequested,
+    model,
+    virtualizer,
+    historyReady,
+    hasMore,
+    loadingOlder,
+    olderError,
+    loadOlder,
+    onHandled: onFocusHandled,
+  });
   // A message another Thread sent that has not joined yet is its own
   // turn; the work in progress is the turn before it.
   const rowsByTurn = React.useMemo(() => transcriptRowsByTurn(model), [model]);
@@ -781,6 +1009,7 @@ export function TranscriptViewport(
           {hasUnread ? <span className="unread-dot" /> : null}
         </Button>
       </div>
+      {focus === undefined ? null : <span hidden ref={focusRef} />}
     </>
   );
 }

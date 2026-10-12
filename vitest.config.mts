@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+import { WeightedShardSequencer } from "./scripts/test-shard-sequencer.js";
 
 // Workerd imports `.wasm` files as compiled modules; Node would treat them as
 // ES module integrations instead, so compile them the same way under test.
@@ -27,6 +28,9 @@ export default defineConfig({
   ],
   test: {
     name: "node-unit-contract",
+    sequence: { sequencer: WeightedShardSequencer },
+    // Console output from passing tests buried CI failures in thousands of lines.
+    silent: "passed-only",
     server: { deps: { inline: [/\.wasm\?dx-compiled-wasm$/] } },
     setupFiles: [
       fileURLToPath(

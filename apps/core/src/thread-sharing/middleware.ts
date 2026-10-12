@@ -1,6 +1,7 @@
 import {
   AGENT_MENTION,
   parseMessageAttachments,
+  stripMessageAuthorTags,
   type ThreadConversationMode,
   withMessageAuthor,
 } from "@dx/api";
@@ -14,6 +15,7 @@ import {
 } from "../attachments/message.js";
 import type { AppEnv } from "../http/types.js";
 import { threadSharingLogger } from "../logging.js";
+import { scheduleNotification } from "../notifications/publish.js";
 import { scheduleRealtimeInvalidation } from "../realtime/publication.js";
 import { ThreadRepositoryD1 } from "../threads/repository-d1.js";
 import { threadDetailData } from "../threads/routes.js";
@@ -102,6 +104,22 @@ const ownerAgentInitialization = (
     ),
   );
 
+/**
+ * dx's name for a message that tags someone, so a notification can open the
+ * Thread at it. It derives from the delivery's idempotency key, which a
+ * client reuses on retry, so a retried message carries an identical tag.
+ */
+const messageIdFor = async (threadId: ThreadId, deliveryKey: string) => {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`dx-message\n${threadId}\n${deliveryKey}`),
+  );
+  return `msg_${[...new Uint8Array(digest)]
+    .slice(0, 12)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
+};
+
 const rejectDelivery = (context: Context<AppEnv>, message: string) =>
   context.json(
     {
@@ -172,6 +190,7 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
       ? { ...delivered, body: delivered.body }
       : undefined;
   let mentioned: ReadonlyArray<UserId> = [];
+  let mention: { messageId: string; excerpt: string } | undefined;
   let switchTo: ThreadConversationMode | undefined;
   if (userMessage !== undefined) {
     const [identity, initialData, members] = await Promise.all([
@@ -230,6 +249,29 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
         return rejectDelivery(context, cause.message);
       throw cause;
     }
+    // Flue names a chat message by its key, so a retry converges on it.
+    const deliveryKey =
+      "idempotencyKey" in userMessage &&
+      typeof userMessage.idempotencyKey === "string" &&
+      userMessage.idempotencyKey !== ""
+        ? userMessage.idempotencyKey
+        : chat
+          ? crypto.randomUUID()
+          : undefined;
+    const messageId =
+      mentioned.length === 0
+        ? undefined
+        : await messageIdFor(
+            threadId.value,
+            deliveryKey ?? crypto.randomUUID(),
+          );
+    if (messageId !== undefined)
+      mention = {
+        messageId,
+        excerpt: parseMessageAttachments(
+          stripMessageAuthorTags(userMessage.body),
+        ).text,
+      };
     const body = withMessageAuthor(
       {
         author: {
@@ -241,6 +283,7 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
         mentions,
         // Set only by the in-process Thread tools, never from a request.
         ...(sourceThreadId === undefined ? {} : { sourceThreadId }),
+        ...(messageId === undefined ? {} : { messageId }),
       },
       admittedBody,
     );
@@ -255,13 +298,7 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
           ...initialData,
           kind: "chat",
           body,
-          // Flue names a chat message by its key; a retry converges on it.
-          idempotencyKey:
-            "idempotencyKey" in userMessage &&
-            typeof userMessage.idempotencyKey === "string" &&
-            userMessage.idempotencyKey !== ""
-              ? userMessage.idempotencyKey
-              : crypto.randomUUID(),
+          idempotencyKey: deliveryKey,
         }
       : { ...userMessage, ...initialData, body };
     context.set("chatDelivery", chat);
@@ -294,6 +331,16 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
       { event: "thread_participant_record_failed", cause },
     );
   }
+  if (mention !== undefined)
+    await scheduleNotification(() => context.executionCtx, context.env, {
+      topic: "mention",
+      sourceKey: `mention:${threadId.value}:${mention.messageId}`,
+      recipients: mentioned,
+      threadId: threadId.value,
+      messageId: mention.messageId,
+      actorUserId: actor.userId as UserId,
+      excerpt: mention.excerpt,
+    });
   if (!modeChanged && mentioned.length === 0 && access !== "contribute") return;
   // A new mode, participant, or follower changes Thread detail and the
   // sidebars of everyone who can open the Thread.

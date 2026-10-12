@@ -15,6 +15,10 @@ import { requestId } from "./http/request-id.js";
 import { requestLogging } from "./http/request-logging.js";
 import type { AppEnv } from "./http/types.js";
 import { attachmentLogger } from "./logging.js";
+import {
+  notificationRoutes,
+  notificationUnsubscribeRoutes,
+} from "./notifications/routes.js";
 import { installFlueObservation } from "./observability/flue.js";
 import { projectRoutes } from "./projects/routes.js";
 import { readinessHandler } from "./readiness/handler.js";
@@ -61,6 +65,7 @@ app.route("/api/auth", authRoutes);
 app.route("/api/workload-identity", workloadIdentityRoutes);
 app.route("/api/triggers", pluginTriggerIngressRoutes);
 app.route("/api/invites", publicInviteRoutes);
+app.route("/api/notifications/unsubscribe", notificationUnsubscribeRoutes);
 app.route("/api/source/bitbucket/git", bitbucketGitGatewayRoutes);
 app.route("/v1/integrations/github", githubWebhookRoutes);
 app.route("/v1", threadDaemonRoutes);
@@ -69,6 +74,7 @@ app.use("/v1/*", authorizeApiTokenScope);
 app.route("/v1/attachments", attachmentRoutes);
 app.route("/v1/dictation", dictationRoutes);
 app.route("/v1/invites", inviteAcceptRoutes);
+app.route("/v1/notifications", notificationRoutes);
 app.route("/v1/integrations/bitbucket", bitbucketControlPlaneRoutes);
 app.route("/v1/integrations/github", githubControlPlaneRoutes);
 app.route("/v1/projects", projectRoutes);

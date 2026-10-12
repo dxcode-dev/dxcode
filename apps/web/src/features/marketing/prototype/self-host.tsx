@@ -1,4 +1,4 @@
-const image = new URL("./workshop.png", import.meta.url).href;
+const image = new URL("./workshop.webp", import.meta.url).href;
 export function SelfHost({
   illustrated = false,
 }: {

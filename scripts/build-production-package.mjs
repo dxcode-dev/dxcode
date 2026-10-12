@@ -58,7 +58,18 @@ const cleanEnvironment = {
 const run = (filter, environment = cleanEnvironment) =>
   execFileSync(
     "pnpm",
-    ["--filter", filter, "exec", "vite", "build", "--mode", "dx-production"],
+    [
+      "--filter",
+      filter,
+      "exec",
+      "vite",
+      "build",
+      "--mode",
+      "dx-production",
+      // The per-asset size table runs to hundreds of lines in deploy logs.
+      "--logLevel",
+      "warn",
+    ],
     { cwd: workspaceRoot, env: environment, stdio: "inherit" },
   );
 

@@ -66,6 +66,8 @@ Use the hero at full richness, then alternate quieter portraits and wider scenes
 | [work.png](work.png) | Task execution and inspection chapter | Generated candidate for review |
 | [future.png](future.png) | Broader-workflow vision | Generated candidate for review |
 
+The PNGs are sources. The page delivers WebP copies (quality 82) of `workshop`, `mascot`, and `work`; regenerate them when a source changes.
+
 All companion assets were generated with `workshop.png` as the image reference. Generation direction: preserve navy/cobalt feather plates, aged brass joints, curved beak, ivory eye ring, lens eye, crest and segmented tail; fine engraved linework and restrained paper texture; generous ivory margins; no lettering or logos. Scene-specific directions:
 
 - Portrait: one parrot on a brass perch, three-quarter view, wing lifted inquisitively.

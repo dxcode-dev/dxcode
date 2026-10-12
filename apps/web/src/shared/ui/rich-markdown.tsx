@@ -1,7 +1,7 @@
 import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-700.css";
 import { splitMentions } from "@dx/api";
-import { Check, Copy, WrapText } from "lucide-react";
+import { Check, Copy, Image, WrapText } from "lucide-react";
 import * as React from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
@@ -277,6 +277,63 @@ const urlTransform = (url: string) =>
     ? url
     : safeUrl(url);
 
+/**
+ * Rendering an image fetches it, so an agent-written remote image URL could
+ * carry thread content to its host without a click. Only same-origin images
+ * load; the rest render as links the reader can choose to open.
+ */
+const sameOriginImage = (src: string) => {
+  const page =
+    typeof window === "undefined"
+      ? "https://dx.invalid/"
+      : window.location.href;
+  try {
+    return new URL(src, page).origin === new URL(page).origin;
+  } catch {
+    return false;
+  }
+};
+
+// A link inside a link is invalid HTML, and clicks would reach the inner one.
+const InsideMarkdownLink = React.createContext(false);
+
+function MarkdownImage({
+  alt,
+  src,
+  title,
+}: Pick<React.ComponentProps<"img">, "alt" | "src" | "title">) {
+  const insideLink = React.useContext(InsideMarkdownLink);
+  const name = accessibleName(alt, "Markdown image");
+  const url = typeof src === "string" && src !== "" ? src : undefined;
+  if (url !== undefined && sameOriginImage(url))
+    return <img src={url} alt={name} title={title} loading="lazy" />;
+  const label = (
+    <>
+      <Image aria-hidden="true" />
+      {name}
+    </>
+  );
+  // The surrounding link keeps its own target; a URL the transform removed
+  // has nothing to open. Either way the alt text stays visible.
+  if (url === undefined || insideLink)
+    return (
+      <span className="markdown-remote-image" title={url}>
+        {label}
+      </span>
+    );
+  return (
+    <a
+      className="markdown-remote-image"
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={url}
+    >
+      {label}
+    </a>
+  );
+}
+
 interface MarkdownNode {
   type: string;
   value?: string;
@@ -332,17 +389,10 @@ const markdownComponents = (
       }),
   a: ({ children: content, href }) => (
     <MarkdownLink href={href} resolveFile={resolveFile}>
-      {content}
+      <InsideMarkdownLink value={true}>{content}</InsideMarkdownLink>
     </MarkdownLink>
   ),
-  img: ({ alt, src, title }) => (
-    <img
-      src={src}
-      alt={accessibleName(alt, "Markdown image")}
-      title={title}
-      loading="lazy"
-    />
-  ),
+  img: MarkdownImage,
   input: ({ node: _node, ...props }) => (
     <input
       {...props}

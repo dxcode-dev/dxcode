@@ -6,7 +6,7 @@ import { Product } from "./product.js";
 import { NestStory } from "./nest-story.js";
 import { Hero } from "./hero.js";
 
-const workImage = new URL("./work.png", import.meta.url).href;
+const workImage = new URL("./work.webp", import.meta.url).href;
 const foundation = new URL("./foundation-blueprint.webp", import.meta.url).href;
 export function VariantA() {
   return (

@@ -1908,6 +1908,16 @@ a {
   text-decoration: underline;
   cursor: pointer;
 }
+.markdown-remote-image {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.markdown-remote-image svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
 .transcript-activity-children {
   display: flex;
   flex-direction: column;
@@ -9533,13 +9543,15 @@ div.claude-code-mode-main {
   }
 }
 
-.first-party-plugins-settings {
+.first-party-plugins-settings,
+.notification-settings {
   display: grid;
   gap: 16px;
 }
 /* Same page heading as Model Routing (model-routing.css, .routing-parity). */
 .first-party-plugins-heading,
-.integrations-page-heading {
+.integrations-page-heading,
+.notification-settings-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -9550,7 +9562,8 @@ div.claude-code-mode-main {
   margin: 0 auto;
 }
 .first-party-plugins-heading h1,
-.integrations-page-heading h1 {
+.integrations-page-heading h1,
+.notification-settings-heading h1 {
   margin: 0;
   font-size: 13px;
   font-weight: 500;

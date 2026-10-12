@@ -1,13 +1,8 @@
 import type { SettingsWorkspaceData } from "@dx/api";
 import type { SettingsScope, WorkspaceRole, WorkspaceSlug } from "@dx/domain";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Link,
-  type NotFoundRouteProps,
-  useLocation,
-  useNavigate,
-} from "@tanstack/react-router";
-import { AlertTriangle, Check, ChevronDown, UserRound, X } from "lucide-react";
+import { Link, useLocation, useNavigate } from "@tanstack/react-router";
+import { AlertTriangle, ChevronDown, UserRound, X } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { DxLoading } from "../../shared/brand/dx-loading.js";
@@ -458,46 +453,6 @@ export function SettingsPage(props: SettingsPageProps) {
         allowModeChanges={registration.id === "personal-mode-dial"}
         onDiscard={() => setDirty(false)}
       />
-    </AppFrame>
-  );
-}
-
-const isInvalidSettingsScope = (data: unknown) =>
-  typeof data === "object" &&
-  data !== null &&
-  "code" in data &&
-  data.code === "INVALID_SETTINGS_SCOPE";
-
-export function SettingsRouteNotFound({ data }: NotFoundRouteProps) {
-  const invalidScope = isInvalidSettingsScope(data);
-  const focusHeading = React.useCallback((node: HTMLHeadingElement | null) => {
-    node?.focus();
-  }, []);
-  return (
-    <AppFrame className="settings-stage">
-      <main className="settings-shell settings-failure-shell">
-        <div className="settings-route-state">
-          <AlertTriangle />
-          <h1 ref={focusHeading} tabIndex={-1}>
-            {invalidScope
-              ? "Invalid workspace settings URL"
-              : "Settings section not found"}
-          </h1>
-          <span>
-            {invalidScope
-              ? "The workspace slug in this URL is malformed. No workspace data was requested."
-              : "The URL does not match a registered settings section. No fallback section was opened."}
-          </span>
-          <code>
-            {invalidScope
-              ? "INVALID_SETTINGS_SCOPE"
-              : "SETTINGS_SECTION_NOT_FOUND"}
-          </code>
-          <Link to="/settings" state={true} className="settings-return-link">
-            <Check /> Return to Personal settings
-          </Link>
-        </div>
-      </main>
     </AppFrame>
   );
 }

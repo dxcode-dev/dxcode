@@ -19,6 +19,7 @@ const CONFIG_KEYS = new Set([
   "integrations",
   "plugins",
   "offeredPlugins",
+  "offeredEmailSending",
   "orbProviders",
   "signIn",
 ]);
@@ -242,7 +243,12 @@ export const validateSelfhostConfig = (input) => {
     throw new Error(
       "authEmailFrom must be an email address inside the deployment zone.",
     );
-  for (const key of ["allowSignup", "workersAi", "workerTraces"])
+  for (const key of [
+    "allowSignup",
+    "workersAi",
+    "workerTraces",
+    "offeredEmailSending",
+  ])
     if (input[key] !== undefined && typeof input[key] !== "boolean")
       throw new Error(`${key} must be true or false.`);
   const integrations = input.integrations ?? [];
@@ -306,6 +312,10 @@ export const validateSelfhostConfig = (input) => {
     ...(authEmailFrom === undefined
       ? {}
       : { authEmailFrom: authEmailFrom.toLowerCase() }),
+    // The installer offered a sender to this deployment; it asks once.
+    ...(input.offeredEmailSending === true
+      ? { offeredEmailSending: true }
+      : {}),
     // Kept for deployments that read it; signIn.admission decides.
     allowSignup:
       input.signIn === undefined

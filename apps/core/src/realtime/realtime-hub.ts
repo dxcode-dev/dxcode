@@ -273,6 +273,8 @@ export class RealtimeHub extends DurableObject<Bindings> {
       });
     if (request.method === "POST" && url.pathname === "/invalidate")
       return this.#publishInvalidation(request, audience);
+    if (request.method === "POST" && url.pathname === "/notify")
+      return this.#publishUserEvent(request, audience);
     return new Response(null, { status: 404 });
   }
 
@@ -367,6 +369,52 @@ export class RealtimeHub extends DurableObject<Bindings> {
       }
     }
     const revision = revisions.get(threadEvent.ownerUserId) ?? 0;
+    return Response.json({ revision });
+  }
+
+  /** An event for one user only, such as a change to their inbox. */
+  async #publishUserEvent(
+    request: Request,
+    audience: AudienceKey,
+  ): Promise<Response> {
+    const body: unknown = await request.json().catch(() => undefined);
+    const userId = Schema.decodeUnknownOption(UserId)(
+      typeof body === "object" && body !== null && "userId" in body
+        ? body.userId
+        : undefined,
+    );
+    if (
+      Option.isNone(userId) ||
+      typeof body !== "object" ||
+      body === null ||
+      !("type" in body) ||
+      body.type !== "notifications.invalidated" ||
+      Object.keys(body).length !== 2
+    )
+      return new Response(null, { status: 400 });
+    const key = revisionKey(userId.value);
+    const revision = await this.ctx.storage.transaction(async (transaction) => {
+      const next = ((await transaction.get<number>(key)) ?? 0) + 1;
+      await transaction.put(key, next);
+      return next;
+    });
+    for (const socket of this.ctx.getWebSockets()) {
+      const attachment = socket.deserializeAttachment() as
+        | SocketAttachment
+        | undefined;
+      if (
+        attachment?.audience !== audience ||
+        attachment.participant !== userId.value
+      )
+        continue;
+      try {
+        socket.send(
+          JSON.stringify({ type: "notifications.invalidated", revision }),
+        );
+      } catch {
+        // The hub is a hint channel. HTTP state remains authoritative.
+      }
+    }
     return Response.json({ revision });
   }
 

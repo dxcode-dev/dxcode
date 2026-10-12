@@ -109,6 +109,19 @@ email. You and contributors can chat; people with **View** read the chat but
 cannot send. A private thread is always in agent mode: there, `@` explains that
 you need to share the thread first and opens **Share**.
 
+## Mentions and notifications
+
+When someone tags you in a shared thread, dx notifies you. The **@** button
+next to search in the sidebar lists your mentions, newest first, with a dot
+while you have unread ones. Clicking a mention opens the thread scrolled to
+that message and marks it read; the **⋮** menu marks them all read.
+
+dx also emails you each mention when your deployment has an email sender. The
+email shows the message and links to it, and its **Unsubscribe from mention
+emails** link turns those emails off without signing in. Turn them off or back
+on under **Personal Settings → Notifications**. Mentions always appear under
+**@**, whatever you choose there.
+
 ## Leaving a workspace
 
 Choose **Leave workspace** under **Workspace Settings → Workspace**. Threads you

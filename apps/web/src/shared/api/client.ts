@@ -1,5 +1,9 @@
 import {
   AcceptWorkspaceInviteResponseSchema,
+  ListNotificationsResponseSchema,
+  MarkNotificationsReadResponseSchema,
+  NotificationPreferencesResponseSchema,
+  type UpdateNotificationPreferenceRequest,
   AddVerificationKeyResponseSchema,
   ApplyBulkEnvironmentVariablesResponseSchema,
   ArchiveThreadExecutionUnavailableResponseSchema,
@@ -2507,5 +2511,53 @@ export const exportWorkspaceUsageAudit = async (
     await request(
       `${workspaceUsagePath(workspaceSlug)}/audit/export?${workspaceUsageAuditSearch(input)}`,
       ExportWorkspaceUsageAuditResponseSchema,
+    )
+  ).data;
+
+export const listNotifications = async (signal?: AbortSignal) =>
+  (
+    await request("/v1/notifications", ListNotificationsResponseSchema, {
+      signal,
+    })
+  ).data;
+
+export const markNotificationsRead = async (ids: ReadonlyArray<string>) =>
+  (
+    await request(
+      "/v1/notifications/read",
+      MarkNotificationsReadResponseSchema,
+      {
+        method: "POST",
+        body: JSON.stringify({ ids }),
+      },
+    )
+  ).data;
+
+export const markAllNotificationsRead = async () =>
+  (
+    await request(
+      "/v1/notifications/read-all",
+      MarkNotificationsReadResponseSchema,
+      { method: "POST" },
+    )
+  ).data;
+
+export const getNotificationPreferences = async (signal?: AbortSignal) =>
+  (
+    await request(
+      "/v1/settings/personal/notifications",
+      NotificationPreferencesResponseSchema,
+      { signal },
+    )
+  ).data;
+
+export const updateNotificationPreference = async (
+  input: UpdateNotificationPreferenceRequest,
+) =>
+  (
+    await request(
+      "/v1/settings/personal/notifications",
+      NotificationPreferencesResponseSchema,
+      { method: "PUT", body: JSON.stringify(input) },
     )
   ).data;

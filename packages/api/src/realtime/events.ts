@@ -42,6 +42,12 @@ export const RealtimeInvalidationEvent = Schema.Union([
   }),
 ]);
 
+/** The user's notification inbox changed; refetch it. */
+export const RealtimeNotificationsEvent = Schema.Struct({
+  type: Schema.Literal("notifications.invalidated"),
+  revision: Revision,
+});
+
 export const RealtimePresenceSnapshotEvent = Schema.Struct({
   type: Schema.Literal("presence.snapshot"),
   topic: PresenceTopic,
@@ -62,6 +68,7 @@ export const RealtimeServerEvent = Schema.Union([
   RealtimeRevisionGapEvent,
   RealtimeInvalidationEvent,
   RealtimeWorkspaceStatusEvent,
+  RealtimeNotificationsEvent,
   RealtimePresenceSnapshotEvent,
   Schema.Struct({
     type: Schema.Literal("presence.heartbeat"),

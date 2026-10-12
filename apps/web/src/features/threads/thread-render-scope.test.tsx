@@ -61,7 +61,8 @@ vi.mock("@tanstack/react-virtual", async (importOriginal) => ({
     });
   },
 }));
-vi.mock("@tanstack/react-router", () => ({
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useLocation: ({ select }: { select: (l: { href: string }) => string }) =>
     select({ href: "/threads/thread-1" }),
   useNavigate: () => () => undefined,

@@ -137,6 +137,13 @@ export default defineConfig(({ mode }) => ({
   define: {
     __DX_CORE_DEV_FIXTURES__: JSON.stringify(mode !== "dx-production"),
   },
+  build: {
+    rolldownOptions: {
+      // Some dynamic imports break import cycles (threads/owner-request.ts)
+      // rather than split chunks, so their "ineffective" warning is noise.
+      checks: { ineffectiveDynamicImport: false },
+    },
+  },
   plugins: [
     publicBoundaryHygiene(mode === "dx-production"),
     fluePlugin,

@@ -19,7 +19,9 @@ generates one from an empty prompt. It writes only nonsecrets to
 Sign-in methods are magic link, email and password, and Google. Admission is
 `open`, `waitlist`, or `invite` (the default), optionally limited to listed
 email domains. Magic links and public password sign-up need `authEmailFrom`,
-a Cloudflare Email Sending address inside the deployment zone. Google needs an
+a Cloudflare Email Sending address inside the deployment zone. The same sender
+sends notification emails (mentions) whatever sign-in methods are offered;
+without it, notifications stay in the app. Google needs an
 OAuth client with the redirect URI `https://<domain>/api/auth/callback/google`;
 its client ID goes in the `signIn` block and its secret is
 `DX_GOOGLE_CLIENT_SECRET`. `pnpm dx:deploy -- --sign-in` changes sign-in on
