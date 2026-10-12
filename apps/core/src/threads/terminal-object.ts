@@ -6,6 +6,14 @@ import {
 } from "@dx/api";
 import { ThreadId, WorkloadIdentityUnauthorized } from "@dx/domain";
 import { Effect, Option, Redacted, Schema } from "effect";
+import { canReadAttachment, userPrincipal } from "../attachments/access.js";
+import {
+  attachmentResponseType,
+  findAttachment,
+  isAttachmentId,
+  serveAttachment,
+} from "../attachments/store.js";
+import { attachmentTransfer } from "../attachments/transfer.js";
 import {
   confirmThreadDaemonApiKey,
   mintThreadDaemonApiKey,
@@ -570,6 +578,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     if (path === "/daemon/request") return this.#requestDaemon(request);
     if (path === "/daemon/drain") return this.#drainDaemon(request);
     if (path === "/daemon/socket") return this.#acceptDaemon(request);
+    if (path === "/daemon/attachment")
+      return this.#serveDaemonAttachment(request);
     if (path === "/environment/refresh")
       return this.#refreshEnvironment(request);
     if (path === "/changes/refresh") return this.#queueChangesRefresh(request);
@@ -2635,6 +2645,88 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     } catch {
       // The socket closes on its own; the next registration retries.
     }
+  }
+
+  /**
+   * Describe a message attachment for `dxd files get` in the guest. The key
+   * is checked exactly as a daemon registration checks it, hash first and
+   * then its D1 row, owner, active lifecycle, and reachable Project; the
+   * download then reads as the Thread's owner. The answer is a presigned R2
+   * URL the guest fetches directly, so no bytes pass through Core; only
+   * local development streams them here.
+   */
+  async #serveDaemonAttachment(request: Request) {
+    const authority = this.#authority;
+    const key = threadDaemonBearer(request.headers.get("authorization"));
+    if (
+      request.headers.get("x-dx-daemon-ingress") !== "1" ||
+      authority === undefined
+    )
+      return new Response(null, { status: 404 });
+    const threadId = Schema.decodeUnknownOption(ThreadId)(
+      request.headers.get("x-dx-thread-id"),
+    );
+    if (Option.isNone(threadId) || threadId.value !== authority.threadId)
+      return new Response(null, { status: 404 });
+    if (key === undefined) return new Response(null, { status: 401 });
+    if (authority.apiKeyHash === undefined) {
+      const verified = await verifyThreadDaemonApiKey(
+        this.env,
+        threadId.value,
+        request.headers.get("authorization"),
+      );
+      if (verified?.keyId !== authority.apiKeyId)
+        return new Response(null, { status: 401 });
+    } else if (
+      threadDaemonApiKeyHash(key) !== authority.apiKeyHash ||
+      !(await confirmThreadDaemonApiKey(
+        this.env,
+        threadId.value,
+        authority.apiKeyId,
+      ))
+    )
+      return new Response(null, { status: 401 });
+    const attachmentId = request.headers.get("x-dx-attachment-id") ?? undefined;
+    const transfer = attachmentTransfer(this.env);
+    const db = this.env.DB;
+    if (
+      !isAttachmentId(attachmentId) ||
+      transfer === undefined ||
+      db === undefined ||
+      this.env.DX_STORAGE === undefined
+    )
+      return new Response(null, { status: 404 });
+    // The daemon key acts as the Thread's owner: it reads any attachment
+    // the owner could open, not only files sent in this Thread.
+    const owner = await db
+      .prepare("SELECT owner_user_id FROM threads WHERE id = ?")
+      .bind(threadId.value)
+      .first<{ readonly owner_user_id: string }>();
+    const row = await findAttachment(db, attachmentId);
+    if (
+      owner === null ||
+      row === null ||
+      !(await canReadAttachment(db, row, userPrincipal(owner.owner_user_id)))
+    )
+      return new Response(null, { status: 404 });
+    if (request.headers.get("x-dx-attachment-content") === "1")
+      return transfer.kind === "core"
+        ? serveAttachment(this.env.DX_STORAGE, row, request, {
+            download: true,
+          })
+        : new Response(null, { status: 404 });
+    const url =
+      transfer.kind === "direct"
+        ? await transfer.readUrl(
+            row.object_key,
+            attachmentResponseType(row, true),
+          )
+        : // Local development: the same daemon route, streamed by Core.
+          `/v1/dxd/${encodeURIComponent(threadId.value)}/attachments/${row.id}?content=1`;
+    return Response.json(
+      { url, name: row.filename, size: row.size },
+      { headers: { "cache-control": "no-store" } },
+    );
   }
 
   /**

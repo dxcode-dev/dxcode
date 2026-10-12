@@ -130,8 +130,8 @@ vi.mock("./agent-panel.js", () => ({
             onImagesChange(
               imageCollection.addImage({
                 id: "pending-image",
-                type: "image",
-                data: "aGVsbG8=",
+                size: 5,
+                upload: idleUpload,
                 mimeType: "image/png",
                 filename: "pending.png",
                 previewUrl: "blob:pending-image",
@@ -149,7 +149,7 @@ import { FlueApiError } from "@flue/sdk";
 import { ApiError } from "../../shared/api/client.js";
 import { AuthContext, useIdentity } from "../../shared/auth/auth-context.js";
 import { projectKeys } from "../projects/project-queries.js";
-import type { PendingImage } from "./image-attachments.js";
+import type { PendingAttachment } from "./image-attachments.js";
 import { threadKeys } from "./thread-queries.js";
 import {
   ThreadPresentationContext,
@@ -163,6 +163,14 @@ import {
 } from "./thread-session-registry.js";
 import { ThreadSession } from "./thread-workspace.js";
 import { useThreadPresentation } from "./use-thread-presentation.js";
+
+const uploadingState = { status: "uploading", loaded: 0 } as const;
+const idleUpload = {
+  getSnapshot: () => uploadingState,
+  subscribe: () => () => {},
+  settled: new Promise<never>(() => {}),
+  cancel: () => {},
+};
 
 afterEach(() => {
   Object.assign(network, {
@@ -254,13 +262,13 @@ it("hands a failed create's exact draft metadata and attachments back to the com
   const disposePreview = vi.fn();
   const image = {
     id: "pending-image",
-    type: "image",
-    data: "aGVsbG8=",
+    size: 5,
+    upload: idleUpload,
     mimeType: "image/png",
     filename: "pending.png",
     previewUrl: "blob:pending-image",
     disposePreview,
-  } as PendingImage;
+  } as PendingAttachment;
   const creation = {
     id: "pending" as ThreadId,
     project: { id: projectId } as ProjectData,
@@ -560,25 +568,25 @@ it("keeps newer composer state when an older retained send fails", () => {
   const oldImages = [
     {
       id: "old",
-      type: "image",
-      data: "old-data",
+      size: 5,
+      upload: idleUpload,
       mimeType: "image/png",
       filename: "old.png",
       previewUrl: "blob:old",
       disposePreview: disposeOld,
-    } satisfies PendingImage,
+    } satisfies PendingAttachment,
   ];
   const disposeNew = vi.fn();
   const newerImages = [
     {
       id: "newer",
-      type: "image",
-      data: "newer-data",
+      size: 5,
+      upload: idleUpload,
       mimeType: "image/png",
       filename: "newer.png",
       previewUrl: "blob:newer",
       disposePreview: disposeNew,
-    } satisfies PendingImage,
+    } satisfies PendingAttachment,
   ];
   const setPending = (pending: boolean) =>
     entry.presentation.set("submission-pending", pending);

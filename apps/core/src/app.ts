@@ -1,5 +1,8 @@
 import { Hono } from "hono";
 import { dxAgentRoutes } from "./agents/routes.js";
+import { attachmentRoutes } from "./attachments/routes.js";
+import { purgeUnsentAttachments } from "./attachments/store.js";
+import { attachmentTransfer } from "./attachments/transfer.js";
 import { authenticate } from "./auth/authenticate.js";
 import { authorizeApiTokenScope } from "./auth/authorize-api-token-scope.js";
 import { authorizeThread } from "./auth/authorize-thread.js";
@@ -11,6 +14,7 @@ import { errorHandler, notFoundHandler } from "./http/http-errors.js";
 import { requestId } from "./http/request-id.js";
 import { requestLogging } from "./http/request-logging.js";
 import type { AppEnv } from "./http/types.js";
+import { attachmentLogger } from "./logging.js";
 import { installFlueObservation } from "./observability/flue.js";
 import { projectRoutes } from "./projects/routes.js";
 import { readinessHandler } from "./readiness/handler.js";
@@ -62,6 +66,7 @@ app.route("/v1/integrations/github", githubWebhookRoutes);
 app.route("/v1", threadDaemonRoutes);
 app.use("/v1/*", authenticate);
 app.use("/v1/*", authorizeApiTokenScope);
+app.route("/v1/attachments", attachmentRoutes);
 app.route("/v1/dictation", dictationRoutes);
 app.route("/v1/invites", inviteAcceptRoutes);
 app.route("/v1/integrations/bitbucket", bitbucketControlPlaneRoutes);
@@ -97,4 +102,30 @@ app.route("/v1/agents/dx", dxAgentRoutes);
 app.notFound(notFoundHandler);
 app.onError(errorHandler);
 
-export default Object.assign(app, { scheduled: scheduleUsageRetention });
+export default Object.assign(app, {
+  scheduled: (
+    controller: ScheduledController,
+    bindings: AppEnv["Bindings"],
+    context: ExecutionContext,
+  ) => {
+    scheduleUsageRetention(controller, bindings, context);
+    const transfer = attachmentTransfer(bindings);
+    if (transfer === undefined) return;
+    context.waitUntil(
+      purgeUnsentAttachments(bindings, transfer, controller.scheduledTime, {
+        limit: 500,
+      })
+        .then((deleted) =>
+          attachmentLogger.info("Unsent attachments purged.", {
+            event: "attachment_retention_completed",
+            deleted,
+          }),
+        )
+        .catch(() =>
+          attachmentLogger.error("Unsent attachment retention failed.", {
+            event: "attachment_retention_failed",
+          }),
+        ),
+    );
+  },
+});

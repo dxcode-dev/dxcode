@@ -80,6 +80,14 @@ const selection = {
   workersDevSubdomain:
     process.env.DX_DEPLOYMENT_WORKERS_DEV_SUBDOMAIN?.trim() || undefined,
   orbProviders: parseOrbProviders(process.env.DX_DEPLOYMENT_ORB_PROVIDERS),
+  attachmentSigning: (() => {
+    const value = process.env.DX_DEPLOYMENT_ATTACHMENT_SIGNING ?? "token";
+    if (value === "token" || (value === "core" && target === "selfhost"))
+      return value;
+    throw new Error(
+      "DX_DEPLOYMENT_ATTACHMENT_SIGNING must be token, or core for self-host.",
+    );
+  })(),
   turnstileTestKeys: (() => {
     const value = process.env.DX_DEPLOYMENT_TURNSTILE_TEST_KEYS;
     if (value === undefined || value === "false") return false;

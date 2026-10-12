@@ -22,6 +22,24 @@
       "provenance": "authored-wrangler"
     },
     {
+      "name": "DX_ATTACHMENT_R2_CREDENTIALS",
+      "type": "secret",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_ATTACHMENT_R2_ENDPOINT",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_ATTACHMENT_TRANSFER",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
       "name": "DX_AUTH_EMAIL_FROM",
       "type": "text",
       "provenance": "alchemy",

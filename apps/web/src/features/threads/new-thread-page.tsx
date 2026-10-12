@@ -63,9 +63,10 @@ import {
 } from "./composer-start.js";
 import { useDictation } from "./dictation/use-dictation.js";
 import {
+  attachmentsUploading,
   captureScreenshot,
-  createPendingImageCollection,
-  type PendingImage,
+  createPendingAttachmentCollection,
+  type PendingAttachment,
 } from "./image-attachments.js";
 import { NewThreadComposer } from "./new-thread-composer.js";
 import {
@@ -327,9 +328,9 @@ function NewThreadError({
 }
 
 const updatePendingImages = async (
-  load: () => Promise<ReadonlyArray<PendingImage>>,
+  load: () => Promise<ReadonlyArray<PendingAttachment>>,
   fallbackError: string,
-  setImages: (images: ReadonlyArray<PendingImage>) => void,
+  setImages: (images: ReadonlyArray<PendingAttachment>) => void,
   setError: (error?: string) => void,
 ) => {
   setError(undefined);
@@ -575,8 +576,10 @@ function ScopedNewThreadModal({
     workspaceId,
   );
   const prompt = draft.text;
-  const [imageCollection] = React.useState(createPendingImageCollection);
-  const [images, setImages] = React.useState<ReadonlyArray<PendingImage>>([]);
+  const [imageCollection] = React.useState(createPendingAttachmentCollection);
+  const [images, setImages] = React.useState<ReadonlyArray<PendingAttachment>>(
+    [],
+  );
   const [sending, setSending] = React.useState(false);
   const [runnerProfileOverride, setRunnerProfileOverride] = React.useState<
     RunnerProfileId | undefined
@@ -625,7 +628,8 @@ function ScopedNewThreadModal({
   const submit = async (submittedPrompt = prompt) => {
     if (
       submittingRef.current ||
-      (!submittedPrompt.trim() && images.length === 0)
+      (!submittedPrompt.trim() && images.length === 0) ||
+      attachmentsUploading(images)
     )
       return;
     submittingRef.current = true;
@@ -676,7 +680,7 @@ function ScopedNewThreadModal({
   const addFiles = (files: ReadonlyArray<File>) =>
     updatePendingImages(
       () => imageCollection.addFiles(files),
-      "Images could not be attached.",
+      "Files could not be attached.",
       setImages,
       setError,
     );

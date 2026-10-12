@@ -165,6 +165,14 @@ const exaApiKey =
   target !== "selfhost" || selfhostConfig.integrations.includes("exa")
     ? operatorEnvironment.EXA_API_KEY?.trim()
     : undefined;
+// Attachment bytes move straight between browsers, dxd, and R2 when the
+// deployment can mint the bucket-scoped token Core signs URLs with. Alchemy
+// OAuth cannot create tokens, so those self-hosts carry the bytes through
+// Core instead. Decided here, never at runtime.
+const attachmentSigning =
+  target === "selfhost" && selfhostCloudflareAuth.method === "alchemy-oauth"
+    ? "core"
+    : "token";
 // Google sign-in's client secret. HeldSecret keeps it across deploys, so it
 // is required only the first time google is configured.
 const googleClientSecret =
@@ -549,6 +557,9 @@ console.log(`Alchemy stage: ${stage}`);
 console.log(`Worker: ${selection.workerName}`);
 console.log(`URL: https://${selection.domain}`);
 console.log(`Orb providers: ${orbProviders.join(", ")}`);
+console.log(
+  `Attachments: ${attachmentSigning === "token" ? "direct to R2 (bucket-scoped signing token)" : "through Core (Alchemy OAuth cannot mint a signing token)"}`,
+);
 if (operation === "deploy" && e2bInstalled)
   console.log(
     `E2B template: ${templateEvidence.name} (${templateEvidence.buildId})`,
@@ -670,6 +681,7 @@ const environment = {
       ? ""
       : JSON.stringify(hostedPolicy.bootstrapRepository),
   DX_DEPLOYMENT_ORB_PROVIDERS: orbProviders.join(","),
+  DX_DEPLOYMENT_ATTACHMENT_SIGNING: attachmentSigning,
   DX_DEPLOYMENT_ORB_WORKER_NAME: orbWorkerName(stage),
   DX_DEPLOYMENT_E2B_TEMPLATE: templateEvidence.name,
   DX_DEPLOYMENT_E2B_TEMPLATE_BUILD_ID: templateEvidence.buildId,

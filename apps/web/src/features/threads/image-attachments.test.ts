@@ -1,166 +1,117 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AttachmentUpload } from "./attachment-upload.js";
 import {
   captureScreenshot,
-  createPendingImageCollection,
-  deliveredImages,
-  readImage,
-  readSelectedImages,
+  createPendingAttachmentCollection,
+  messageWithAttachments,
+  readAttachment,
 } from "./image-attachments.js";
 
-const png = (name = "image.png", lastModified = 1) =>
-  new File(
-    [
-      new Uint8Array([
-        0x89,
-        0x50,
-        0x4e,
-        0x47,
-        0x0d,
-        0x0a,
-        0x1a,
-        0x0a,
-        ...(lastModified === 1 ? [] : [lastModified % 256]),
-      ]),
-    ],
-    name,
-    { type: "image/png", lastModified },
-  );
+const png = (name = "image.png") =>
+  new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], name, {
+    type: "image/png",
+  });
+
+const uploaded = (file: File, cancel = vi.fn()): AttachmentUpload => {
+  const attachment = {
+    id: `att_${"0".repeat(32)}`,
+    filename: file.name,
+    mimeType: file.type,
+    size: file.size,
+    url: `https://dx.example/v1/attachments/att_${"0".repeat(32)}/${file.name}`,
+  };
+  return {
+    getSnapshot: () => ({ status: "ready", attachment }),
+    subscribe: () => () => {},
+    settled: Promise.resolve(attachment),
+    cancel,
+  };
+};
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("image attachments", () => {
-  it("uses detected MIME and exposes only Flue's image contract", async () => {
+describe("file attachments", () => {
+  it("sends only the uploaded files' references with the message", async () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:preview");
     const revoke = vi.spyOn(URL, "revokeObjectURL");
-    const image = await readImage(png());
-    expect(image.mimeType).toBe("image/png");
-    expect(deliveredImages([image])).toEqual([
-      {
-        type: "image",
-        data: "iVBORw0KGgo=",
-        mimeType: "image/png",
-        filename: "image.png",
-      },
-    ]);
-    image.disposePreview();
+    const attachment = readAttachment(png(), (file) => uploaded(file));
+    await expect(messageWithAttachments("Look", [attachment])).resolves.toBe(
+      `Look\n\n<dx_attachments>\n<dx_attachment id="att_${"0".repeat(32)}" name="image.png" type="image/png" size="4" url="https://dx.example/v1/attachments/att_${"0".repeat(32)}/image.png" />\n</dx_attachments>`,
+    );
+    attachment.disposePreview();
     expect(revoke).toHaveBeenCalledWith("blob:preview");
   });
 
-  it("accepts verified image bytes when the picker omits the MIME type", async () => {
+  it("fails the message with the first failed upload", async () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:preview");
-    const file = new File([await png().arrayBuffer()], "image.png");
-    await expect(readImage(file)).resolves.toMatchObject({
-      mimeType: "image/png",
-    });
-  });
-
-  it("rejects spoofed and duplicate selections", async () => {
-    await expect(
-      readImage(new File(["not png"], "bad.png", { type: "image/png" })),
-    ).rejects.toThrow("not a valid");
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:preview");
-    const image = await readImage(png());
-    await expect(readSelectedImages([png()], [image])).rejects.toThrow(
-      "already attached",
+    const failed = readAttachment(png("broken.png"), () => ({
+      getSnapshot: () => ({ status: "failed", error: "Network" }),
+      subscribe: () => () => {},
+      settled: Promise.reject(new Error("broken.png: Network")),
+      cancel: vi.fn(),
+    }));
+    await expect(messageWithAttachments("", [failed])).rejects.toThrow(
+      "broken.png: Network",
     );
   });
 
-  it("uses content identities instead of colliding file metadata", async () => {
+  it("serializes concurrent selections and limits a message to ten files", async () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:preview");
-    const first = png("same.png", 1);
-    const second = new File(
-      [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01])],
-      "same.png",
-      { type: "image/png", lastModified: 1 },
+    const collection = createPendingAttachmentCollection((file) =>
+      uploaded(file),
     );
-    const images = await readSelectedImages([first, second], []);
-    expect(images[0]?.id).not.toBe(images[1]?.id);
-  });
-
-  it("serializes concurrent selections and limits a message to ten images", async () => {
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:preview");
-    const collection = createPendingImageCollection();
     const first = collection.addFiles(
-      Array.from({ length: 10 }, (_, index) => png(`${index}.png`, index)),
+      Array.from({ length: 10 }, (_, index) => png(`${index}.png`)),
     );
-    const second = collection.addFiles([png("next.png", 20)]);
+    const second = collection.addFiles([png("next.png")]);
     await expect(first).resolves.toHaveLength(10);
-    await expect(second).rejects.toThrow("no more than 10 images");
+    await expect(second).rejects.toThrow("no more than 10 files");
   });
 
-  it("limits generated images and preserves previews across retry", async () => {
-    const collection = createPendingImageCollection();
-    const makeImage = (index: number) => ({
-      id: `image-${index}`,
-      type: "image" as const,
-      data: "data",
-      mimeType: "image/png" as const,
-      filename: `${index}.png`,
-      previewUrl: `blob:${index}`,
-      disposePreview: vi.fn(),
-    });
-    const attached = Array.from({ length: 10 }, (_, index) => makeImage(index));
-    for (const image of attached) collection.addImage(image);
-    const next = makeImage(10);
-    expect(() => collection.addImage(next)).toThrow("no more than 10 images");
-    expect(next.disposePreview).toHaveBeenCalledOnce();
-    const create = vi.fn(async () => makeImage(11));
+  it("limits generated files and keeps uploads across retry", async () => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:preview");
+    const revoke = vi.spyOn(URL, "revokeObjectURL");
+    const cancel = vi.fn();
+    const collection = createPendingAttachmentCollection((file) =>
+      uploaded(file, cancel),
+    );
+    await collection.addFiles(
+      Array.from({ length: 10 }, (_, index) => png(`${index}.png`)),
+    );
+    const create = vi.fn(async () => png("screenshot.png"));
     await expect(collection.addGenerated(create)).rejects.toThrow(
-      "no more than 10 images",
+      "no more than 10 files",
     );
     expect(create).not.toHaveBeenCalled();
-
     const submitted = collection.take();
     expect(collection.restore(submitted)).toHaveLength(10);
-    expect(
-      attached.every((image) => image.disposePreview.mock.calls.length === 0),
-    ).toBe(true);
+    expect(revoke).not.toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
   });
 
-  it("allows several individually valid images beyond the old aggregate limit", () => {
-    const collection = createPendingImageCollection();
-    const first = {
-      id: "first",
-      type: "image" as const,
-      data: "a".repeat(8 * 1024 * 1024),
-      mimeType: "image/png" as const,
-      filename: "first.png",
-      previewUrl: "blob:first",
-      disposePreview: vi.fn(),
-    };
-    const second = {
-      ...first,
-      id: "second",
-      data: "a".repeat(8 * 1024 * 1024),
-      filename: "second.png",
-      previewUrl: "blob:second",
-      disposePreview: vi.fn(),
-    };
-    collection.addImage(first);
-    expect(collection.addImage(second)).toHaveLength(2);
-    expect(second.disposePreview).not.toHaveBeenCalled();
+  it("rejects empty files and files over 500 MB before uploading", () => {
+    const upload = vi.fn();
+    const large = png("large.mp4");
+    Object.defineProperty(large, "size", { value: 500 * 1024 * 1024 + 1 });
+    expect(() => readAttachment(large, upload)).toThrow("500 MB limit");
+    expect(() => readAttachment(new File([], "empty.txt"), upload)).toThrow(
+      "is empty",
+    );
+    expect(upload).not.toHaveBeenCalled();
   });
 
-  it("rejects oversized files before allocating their contents", async () => {
-    const file = png();
-    Object.defineProperty(file, "size", { value: 20 * 1024 * 1024 });
-    const read = vi.spyOn(file, "arrayBuffer");
-    await expect(readImage(file)).rejects.toThrow("encoded limit");
-    expect(read).not.toHaveBeenCalled();
-  });
-
-  it("disposes previews allocated before a later selection fails", async () => {
+  it("discards files read before a later file in the selection fails", async () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:first");
     const revoke = vi.spyOn(URL, "revokeObjectURL");
-
+    const cancel = vi.fn();
+    const collection = createPendingAttachmentCollection((file) =>
+      uploaded(file, cancel),
+    );
     await expect(
-      readSelectedImages(
-        [png("first.png"), new File(["bad"], "bad.png", { type: "image/png" })],
-        [],
-      ),
-    ).rejects.toThrow("not a valid");
-
+      collection.addFiles([png("first.png"), new File([], "empty.txt")]),
+    ).rejects.toThrow("is empty");
     expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:first");
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("reports denial and stops every acquired track", async () => {

@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { generateKeyPairSync, randomBytes } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
@@ -29,6 +29,10 @@ import E2B_ORB_PROFILES from "./packages/domain/e2b-orb-profiles.json" with {
   type: "json",
 };
 import { decodeGitHubAppDeploymentConfiguration } from "./packages/domain/src/source-control/github-app-configuration.ts";
+import {
+  attachmentBucketCors,
+  attachmentSigningTokenProps,
+} from "./scripts/attachment-deployment.mjs";
 
 type RecordValue<T> = T extends Record<string, infer Value> ? Value : never;
 type WorkloadIdentitySigningKey = Alchemy.Resource<
@@ -293,6 +297,19 @@ export default Alchemy.Stack(
       e2bApiKey: Config.option(Config.redacted("E2B_API_KEY")),
       githubApp: Config.option(Config.redacted("DX_INTEGRATION_GITHUB_APP")),
       sarvamApiKey: Config.option(Config.redacted("SARVAM_API_KEY")),
+      // How attachment bytes move: "token" deployments mint a bucket-scoped
+      // R2 token Core signs direct URLs with; "core" deployments (Alchemy
+      // OAuth, which cannot create tokens) carry the bytes through Core.
+      attachmentSigning: Config.withDefault(
+        Config.literals(
+          ["token", "core"] as const,
+          "DX_DEPLOYMENT_ATTACHMENT_SIGNING",
+        ),
+        "token",
+      ),
+      cloudflareAccountId: Config.option(
+        Config.nonEmptyString("CLOUDFLARE_ACCOUNT_ID"),
+      ),
       exaApiKey: Config.option(Config.redacted("EXA_API_KEY")),
       // Self-host sign-in providers and admission, validated by the runner.
       signIn: Config.option(Config.nonEmptyString("DX_DEPLOYMENT_SIGN_IN")),
@@ -542,10 +559,45 @@ export default Alchemy.Stack(
       name: configuration.databaseName,
       migrations: `apps/core/${migrationManifest.d1Directory}`,
     });
+    // Browsers upload attachment parts and read attachments straight from
+    // R2 through presigned URLs, so the bucket admits this origin.
     const bucket = yield* Cloudflare.R2.Bucket("Storage", {
       name: configuration.bucketName,
       forceDestroy: false,
+      cors: [attachmentBucketCors(configuration.origin)],
     });
+    // A token that can only read and write this stage's bucket. R2's S3
+    // credentials derive from it: the token id is the access key id and the
+    // SHA-256 of its value is the secret. Destroying the stage deletes it.
+    const attachmentSigning =
+      configuration.attachmentSigning === "token"
+        ? yield* Effect.gen(function* () {
+            const accountId = Option.isSome(configuration.cloudflareAccountId)
+              ? configuration.cloudflareAccountId.value
+              : yield* Effect.die(
+                  "CLOUDFLARE_ACCOUNT_ID is required to sign attachment URLs.",
+                );
+            const token = yield* Cloudflare.ApiToken.AccountApiToken(
+              "AttachmentSigningToken",
+              attachmentSigningTokenProps(accountId, configuration.bucketName),
+            );
+            return {
+              endpoint: `https://${accountId}.r2.cloudflarestorage.com/${configuration.bucketName}`,
+              credentials: Output.map(
+                Output.all(token.tokenId, token.value),
+                ([tokenId, value]) =>
+                  Redacted.make(
+                    JSON.stringify({
+                      accessKeyId: tokenId,
+                      secretAccessKey: createHash("sha256")
+                        .update(Redacted.value(value))
+                        .digest("hex"),
+                    }),
+                  ),
+              ),
+            };
+          })
+        : undefined;
     // Previews may use Cloudflare's published always-pass test keys instead of
     // creating a widget, because the account caps widgets at 20.
     const turnstile = !hostedAuthentication
@@ -615,6 +667,9 @@ export default Alchemy.Stack(
           : {}),
         DX_AUTH_URL: configuration.origin,
         DX_AUTH_TRUSTED_ORIGINS: configuration.origin,
+        ...(attachmentSigning === undefined
+          ? { DX_ATTACHMENT_TRANSFER: "core" }
+          : { DX_ATTACHMENT_R2_ENDPOINT: attachmentSigning.endpoint }),
         ...(e2bInstalled
           ? {
               DX_E2B_TEMPLATE:
@@ -736,6 +791,9 @@ export default Alchemy.Stack(
             }
           : {}),
         DX_CONFIG_ENCRYPTION_KEYS: encryptionKeyring,
+        ...(attachmentSigning === undefined
+          ? {}
+          : { DX_ATTACHMENT_R2_CREDENTIALS: attachmentSigning.credentials }),
         DX_INTEGRATION_GITHUB_APP: githubApp,
         DX_WORKLOAD_IDENTITY_SIGNING_KEYS: workloadIdentitySigningKeys,
         ...(e2bApiKey === undefined ? {} : { E2B_API_KEY: e2bApiKey }),

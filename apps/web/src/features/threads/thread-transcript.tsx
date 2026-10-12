@@ -8,6 +8,7 @@ import { ArrowDown } from "lucide-react";
 import * as React from "react";
 import { Button } from "../../shared/ui/button.js";
 import { TranscriptRowContent } from "./message-parts.js";
+import { MessageImageTiles } from "./message-attachments-ui.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
 import {
   MessageAuthorLabel,
@@ -105,6 +106,7 @@ function TranscriptRowShellContent({
       {user && author !== undefined && row.continued !== true ? (
         <MessageAuthorLabel author={author} />
       ) : null}
+      {user ? <MessageImageTiles attachments={row.attachments ?? []} /> : null}
       <div className="message-content">
         <TranscriptRowContent row={row} />
       </div>

@@ -22,6 +22,15 @@ export interface Bindings {
   readonly DX_E2B_TIMEOUT_MS?: string;
   readonly DX_WORKSPACE_INACTIVITY_MS?: string;
   readonly DX_DXD_PUBLIC_URL?: string;
+  /**
+   * R2's S3 endpoint for the storage bucket and the JSON
+   * `{ accessKeyId, secretAccessKey }` Core signs attachment URLs with.
+   * Deployed stages have attachments only with both.
+   */
+  readonly DX_ATTACHMENT_R2_ENDPOINT?: string;
+  readonly DX_ATTACHMENT_R2_CREDENTIALS?: string;
+  /** "core" where the deployment carries attachment bytes through Core. */
+  readonly DX_ATTACHMENT_TRANSFER?: string;
   readonly DX_DXD_RELEASE_URL?: string;
   readonly DX_DXD_RELEASE_SHA256?: string;
   readonly DX_E2B_TEMPLATE_BUILD_ID?: string;

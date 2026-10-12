@@ -1,6 +1,8 @@
 import {
   type MessageAuthor,
   type MessageMention,
+  type MessageAttachment,
+  parseMessageAttachments,
   parseMessageAuthor,
   type ThreadSettlementProvenance,
   threadSettlementProvenance,
@@ -27,6 +29,8 @@ export type TranscriptRow =
       readonly kind: "user-prompt";
       /** What the person wrote, without dx's author tag. */
       readonly text: string;
+      /** The files the message references, from its attachment block. */
+      readonly attachments?: ReadonlyArray<MessageAttachment>;
       /** Who sent it, from the author tag dx prefixes to every prompt. */
       readonly author?: MessageAuthor;
       /** False for a local echo Flue has not admitted yet. */
@@ -319,15 +323,18 @@ export const deriveTranscriptViewModel = ({
 
       if (part.type === "text") {
         if (message.role === "user") {
-          const { author, mentions, sourceThreadId, text } = parseMessageAuthor(
-            part.text,
+          const parsedAuthor = parseMessageAuthor(part.text);
+          const { author, mentions, sourceThreadId } = parsedAuthor;
+          const { attachments, text } = parseMessageAttachments(
+            parsedAuthor.text,
           );
-          if (!text.trim()) continue;
+          if (!text.trim() && attachments.length === 0) continue;
           const sentAt = authoritativeTimestamp(message);
           row = {
             ...source,
             kind: "user-prompt",
             text,
+            ...(attachments.length === 0 ? {} : { attachments }),
             ...(author === undefined ? {} : { author }),
             ...(mentions === undefined ? {} : { mentions }),
             ...(sourceThreadId === undefined ? {} : { sourceThreadId }),

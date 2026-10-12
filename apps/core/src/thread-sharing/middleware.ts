@@ -1,5 +1,6 @@
 import {
   AGENT_MENTION,
+  parseMessageAttachments,
   type ThreadConversationMode,
   withMessageAuthor,
 } from "@dx/api";
@@ -7,6 +8,10 @@ import { ThreadId, ThreadRepository, type UserId } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Option, Schema } from "effect";
 import type { Context, MiddlewareHandler } from "hono";
+import {
+  admitMessageAttachments,
+  MessageAttachmentsRejected,
+} from "../attachments/message.js";
 import type { AppEnv } from "../http/types.js";
 import { threadSharingLogger } from "../logging.js";
 import { scheduleRealtimeInvalidation } from "../realtime/publication.js";
@@ -201,14 +206,30 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
     const chat = mode === "chat";
     if (
       chat &&
-      "attachments" in userMessage &&
-      Array.isArray(userMessage.attachments) &&
-      userMessage.attachments.length > 0
+      (parseMessageAttachments(userMessage.body).attachments.length > 0 ||
+        ("attachments" in userMessage &&
+          Array.isArray(userMessage.attachments) &&
+          userMessage.attachments.length > 0))
     )
       return rejectDelivery(
         context,
-        `Chat messages can't include images. Tag @${AGENT_MENTION} to send them.`,
+        `Chat messages can't include attachments. Tag @${AGENT_MENTION} to send them.`,
       );
+    let admittedBody: string;
+    try {
+      admittedBody = (
+        await admitMessageAttachments(context.env, {
+          threadId: threadId.value,
+          senderUserId: actor.userId,
+          body: userMessage.body,
+          requestUrl: context.req.url,
+        })
+      ).body;
+    } catch (cause) {
+      if (cause instanceof MessageAttachmentsRejected)
+        return rejectDelivery(context, cause.message);
+      throw cause;
+    }
     const body = withMessageAuthor(
       {
         author: {
@@ -221,7 +242,7 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
         // Set only by the in-process Thread tools, never from a request.
         ...(sourceThreadId === undefined ? {} : { sourceThreadId }),
       },
-      userMessage.body,
+      admittedBody,
     );
     const {
       kind: _kind,

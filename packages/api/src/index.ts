@@ -17,6 +17,7 @@ export {
   type UnauthenticatedResponse,
   UnauthenticatedResponseSchema,
 } from "./auth/unauthenticated-response.js";
+export * from "./attachments/index.js";
 export * from "./dictation/index.js";
 export {
   type HealthResponse,

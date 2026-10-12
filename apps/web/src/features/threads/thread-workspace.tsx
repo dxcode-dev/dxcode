@@ -37,7 +37,7 @@ import {
   type ThreadFileLocation,
   ThreadFilesPanel,
 } from "./files/files-panel.js";
-import type { PendingImage } from "./image-attachments.js";
+import type { PendingAttachment } from "./image-attachments.js";
 import {
   useThreadPresence,
   useThreadWorkspaceStatus,
@@ -481,7 +481,7 @@ function SessionAgentPanel({
 function useRetainedImageProps() {
   const retainedThread = React.useContext(ThreadPresentationContext);
   const [images, setImages] = useThreadPresentation<
-    ReadonlyArray<PendingImage>
+    ReadonlyArray<PendingAttachment>
   >("pending-images", () => []);
   const [submissionPending, setSubmissionPending] = useThreadPresentation(
     "submission-pending",

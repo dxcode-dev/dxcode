@@ -13,8 +13,12 @@ import type {
   RunnerProviderPresentation,
 } from "@dx/domain";
 import type * as React from "react";
-import type { PendingImage } from "./image-attachments.js";
-import { AttachmentMenu, ImagePreviews } from "./image-attachments-ui.js";
+import { type PendingAttachment, pastedFiles } from "./image-attachments.js";
+import {
+  AttachmentMenu,
+  ImagePreviews,
+  useAttachmentsUploading,
+} from "./image-attachments-ui.js";
 import { useImageDropTarget } from "./image-drop-target.js";
 import { NewThreadConfigurationStrip } from "./new-thread-configuration-strip.js";
 
@@ -56,12 +60,12 @@ export function NewThreadComposer({
   footer,
 }: {
   readonly prompt: string;
-  readonly images: ReadonlyArray<PendingImage>;
+  readonly images: ReadonlyArray<PendingAttachment>;
   readonly textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   readonly submitting: boolean;
   readonly onPromptChange: (value: string) => void;
   readonly onSubmit: () => void;
-  readonly onRemoveImage: (image: PendingImage) => void;
+  readonly onRemoveImage: (image: PendingAttachment) => void;
   readonly onFiles: (files: ReadonlyArray<File>) => void;
   readonly onScreenshot: () => void;
   readonly projects: ReadonlyArray<ProjectData>;
@@ -91,8 +95,9 @@ export function NewThreadComposer({
   readonly dictationHideSubmit: boolean;
   readonly footer: React.ReactNode;
 }) {
+  const uploading = useAttachmentsUploading(images);
   const dropTarget = useImageDropTarget({
-    disabled: submitting,
+    disabled: submitting || uploading,
     onFiles,
   });
   return (
@@ -110,6 +115,12 @@ export function NewThreadComposer({
           value={prompt}
           readOnly={submitting}
           onChange={(event) => onPromptChange(event.target.value)}
+          onPaste={(event) => {
+            const files = pastedFiles(event);
+            if (files.length === 0 || submitting || uploading) return;
+            event.preventDefault();
+            onFiles(files);
+          }}
           onKeyDown={(event) => {
             if (
               event.key === "Enter" &&
@@ -123,16 +134,16 @@ export function NewThreadComposer({
           placeholder="Write prompt…"
           aria-label="Prompt"
         />
-        <ImagePreviews
-          images={images}
-          onRemove={onRemoveImage}
-          disabled={submitting}
-        />
         <div className="new-thread-attachment-row">
           <AttachmentMenu
-            disabled={submitting}
+            disabled={submitting || uploading}
             onFiles={onFiles}
             onScreenshot={onScreenshot}
+          />
+          <ImagePreviews
+            images={images}
+            onRemove={onRemoveImage}
+            disabled={submitting}
           />
         </div>
       </div>
@@ -149,7 +160,7 @@ export function NewThreadComposer({
         routingGraph={routingGraph}
         locked={submitting}
         submitting={submitting}
-        ready={Boolean(prompt.trim() || images.length > 0)}
+        ready={!uploading && Boolean(prompt.trim() || images.length > 0)}
         retrying={false}
         onProjectChange={onProjectChange}
         runnerProfiles={runnerProfiles}

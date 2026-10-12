@@ -3,19 +3,24 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
-import type { PendingImage } from "./image-attachments.js";
+import type { PendingAttachment } from "./image-attachments.js";
 import { AttachmentMenu, ImagePreviews } from "./image-attachments-ui.js";
 
-const image = (disposePreview: () => void) =>
-  ({
-    id: "image-id",
-    type: "image",
-    data: "data",
-    mimeType: "image/png",
-    filename: "image.png",
-    previewUrl: "blob:preview",
-    disposePreview,
-  }) as PendingImage;
+const uploadingState = { status: "uploading", loaded: 0 } as const;
+const image = (disposePreview: () => void): PendingAttachment => ({
+  id: "image-id",
+  mimeType: "image/png",
+  filename: "image.png",
+  size: 4,
+  previewUrl: "blob:preview",
+  disposePreview,
+  upload: {
+    getSnapshot: () => uploadingState,
+    subscribe: () => () => {},
+    settled: new Promise(() => {}),
+    cancel: () => {},
+  },
+});
 
 describe("image attachment controls", () => {
   it("does not revoke previews merely because their UI unmounts", async () => {

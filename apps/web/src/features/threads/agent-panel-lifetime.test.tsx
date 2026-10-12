@@ -54,8 +54,62 @@ vi.mock("./thread-transcript.js", () => ({
   ),
 }));
 
+/**
+ * Uploads are a network effect; these tests control when one finishes.
+ * `uploads.hold` keeps new uploads in flight until `uploads.release()`.
+ */
+const uploads = vi.hoisted(() => ({
+  hold: false,
+  cancelled: 0,
+  pending: [] as Array<() => void>,
+  release() {
+    for (const finish of this.pending.splice(0)) finish();
+  },
+}));
+
+vi.mock("./attachment-upload.js", () => ({
+  startAttachmentUpload: (file: File) => {
+    const attachment = {
+      id: `att_${"0".repeat(32)}`,
+      filename: file.name,
+      mimeType: file.type,
+      size: file.size,
+      url: `https://dx.example/v1/attachments/att_${"0".repeat(32)}/${file.name}`,
+    };
+    const ready = { status: "ready", attachment } as const;
+    const uploading = { status: "uploading", loaded: 0 } as const;
+    let state: typeof uploading | typeof ready = uploads.hold
+      ? uploading
+      : ready;
+    const listeners = new Set<() => void>();
+    let finish: (value: typeof attachment) => void = () => {};
+    const settled = uploads.hold
+      ? new Promise<typeof attachment>((resolve) => {
+          finish = resolve;
+        })
+      : Promise.resolve(attachment);
+    if (uploads.hold)
+      uploads.pending.push(() => {
+        state = ready;
+        for (const listener of listeners) listener();
+        finish(attachment);
+      });
+    return {
+      getSnapshot: () => state,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      settled,
+      cancel: () => {
+        uploads.cancelled++;
+      },
+    };
+  },
+}));
+
 import { AgentPanel } from "./agent-panel.js";
-import { createPendingImageCollection } from "./image-attachments.js";
+import { createPendingAttachmentCollection } from "./image-attachments.js";
 import { TranscriptRowContent } from "./message-parts.js";
 import type { OptimisticThreadCreation } from "./thread-session-registry.js";
 import { deriveTranscriptViewModel } from "./transcript-view-model.js";
@@ -308,7 +362,6 @@ describe("thread composer ownership", () => {
 
     expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
       "First prompt awaiting admission",
-      { images: [] },
     );
     expect(textarea.disabled).toBe(true);
     expect(
@@ -342,7 +395,6 @@ describe("thread composer ownership", () => {
     expect(sendMessage).toHaveBeenNthCalledWith(
       2,
       "Steer at the next tool boundary",
-      { images: [] },
     );
     expect(
       mounted.container.querySelector('[aria-label="Stop agent"]'),
@@ -409,9 +461,7 @@ describe("thread composer ownership", () => {
       );
       await Promise.resolve();
     });
-    expect(sendMessage).toHaveBeenNthCalledWith(2, "Steer after Stop", {
-      images: [],
-    });
+    expect(sendMessage).toHaveBeenNthCalledWith(2, "Steer after Stop");
     await React.act(() => mounted.root.unmount());
   });
 
@@ -642,7 +692,6 @@ describe("thread composer ownership", () => {
     expect(textarea.disabled).toBe(false);
     expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
       "Failed steering prompt",
-      { images: [] },
     );
     expect(
       mounted.container.querySelector('[aria-label="Stop agent"]'),
@@ -650,13 +699,9 @@ describe("thread composer ownership", () => {
     await React.act(() => mounted.root.unmount());
   });
 
-  it("does not send after Stop is clicked during attachment processing", async () => {
-    let resolveRead: ((value: ArrayBuffer) => void) | undefined;
-    const read = new Promise<ArrayBuffer>((resolve) => {
-      resolveRead = resolve;
-    });
-    const file = new File([], "slow.png", { type: "image/png" });
-    vi.spyOn(file, "arrayBuffer").mockReturnValue(read);
+  it("does not send while an attachment is still uploading", async () => {
+    uploads.hold = true;
+    const file = new File(["png"], "slow.png", { type: "image/png" });
     vi.spyOn(URL, "createObjectURL").mockReturnValue(
       "blob:stopped-submission-preview",
     );
@@ -669,7 +714,7 @@ describe("thread composer ownership", () => {
     if (textarea === null || input === null || form === null)
       throw new Error("Expected composer controls.");
 
-    await React.act(() => {
+    await React.act(async () => {
       const setValue = Object.getOwnPropertyDescriptor(
         HTMLTextAreaElement.prototype,
         "value",
@@ -681,39 +726,33 @@ describe("thread composer ownership", () => {
         value: [file],
       });
       input.dispatchEvent(new Event("change", { bubbles: true }));
+      await Promise.resolve();
     });
+    const send = () =>
+      mounted.container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Send message"]',
+      );
+    await vi.waitFor(() => expect(send()?.disabled).toBe(true));
+    expect(
+      mounted.container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Add Images & Files"]',
+      )?.disabled,
+    ).toBe(true);
     await React.act(async () => {
       form.dispatchEvent(
         new Event("submit", { bubbles: true, cancelable: true }),
       );
       await Promise.resolve();
     });
-    const stop = mounted.container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Stop agent"]',
-    );
-    if (stop === null) throw new Error("Expected Stop agent button.");
+    expect(agent.sendMessage).not.toHaveBeenCalled();
+
     await React.act(async () => {
-      stop.click();
+      uploads.release();
       await Promise.resolve();
     });
-    await React.act(async () => {
-      resolveRead?.(
-        new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).buffer,
-      );
-      await read;
-    });
-    await vi.waitFor(async () => {
-      await React.act(() => Promise.resolve());
-      expect(
-        mounted.container.querySelector('button[aria-label="Send message"]'),
-      ).not.toBeNull();
-      expect(
-        mounted.container.querySelector('button[aria-label="Remove slow.png"]'),
-      ).not.toBeNull();
-    });
-
-    expect(agent.abort).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(send()?.disabled).toBe(false));
     expect(agent.sendMessage).not.toHaveBeenCalled();
+    uploads.hold = false;
     await React.act(() => mounted.root.unmount());
     await vi.waitFor(() =>
       expect(revoke).toHaveBeenCalledExactlyOnceWith(
@@ -722,13 +761,10 @@ describe("thread composer ownership", () => {
     );
   });
 
-  it("disposes previews created by attachment work that settles after unmount", async () => {
-    let resolveRead: ((value: ArrayBuffer) => void) | undefined;
-    const read = new Promise<ArrayBuffer>((resolve) => {
-      resolveRead = resolve;
-    });
-    const file = new File([], "slow.png", { type: "image/png" });
-    vi.spyOn(file, "arrayBuffer").mockReturnValue(read);
+  it("discards files still uploading when the composer unmounts", async () => {
+    uploads.hold = true;
+    uploads.cancelled = 0;
+    const file = new File(["png"], "slow.png", { type: "image/png" });
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:slow-preview");
     const revoke = vi.spyOn(URL, "revokeObjectURL");
     const mounted = await mountPanel();
@@ -743,13 +779,12 @@ describe("thread composer ownership", () => {
       input.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await React.act(() => mounted.root.unmount());
-    resolveRead?.(
-      new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).buffer,
-    );
-    await read;
+    uploads.hold = false;
+    uploads.release();
     await vi.waitFor(() =>
       expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:slow-preview"),
     );
+    expect(uploads.cancelled).toBe(1);
   });
 
   it("disposes submitted previews when a send fails after unmount", async () => {
@@ -783,7 +818,7 @@ describe("thread composer ownership", () => {
     await vi.waitFor(() =>
       expect(
         mounted.container.querySelector(
-          'button[aria-label="Remove submitted.png"]',
+          'button[aria-label="Preview submitted.png"]',
         ),
       ).not.toBeNull(),
     );
@@ -810,7 +845,7 @@ describe("thread composer ownership", () => {
     );
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:retained-preview");
     const revoke = vi.spyOn(URL, "revokeObjectURL");
-    const imageCollection = createPendingImageCollection();
+    const imageCollection = createPendingAttachmentCollection();
     const restore = vi.spyOn(imageCollection, "restore");
     const onDraftChange = vi.fn();
     const retainedDraft = createPresentationValue("Retry with this image");

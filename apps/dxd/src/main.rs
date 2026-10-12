@@ -1,6 +1,7 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("dxd runs on Linux only; cross-build it from any host with `pnpm build:dxd`");
 
+mod attachments;
 mod changes;
 mod child;
 mod environment;
@@ -97,6 +98,9 @@ fn start() -> Result<(), StartExit> {
         Some("--version") => {
             println!("dxd {RELEASE} protocol {PROTOCOL_MAJOR}");
             return Ok(());
+        }
+        Some("files") => {
+            return attachments::run_cli(&arguments[1..]).map_err(|()| StartExit::Command);
         }
         Some("changes-capture") => {
             return changes::run_cli().map_err(|()| StartExit::Command);

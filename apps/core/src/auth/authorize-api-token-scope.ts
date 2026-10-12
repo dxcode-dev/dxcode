@@ -21,7 +21,9 @@ const requiredScope = (
   if (
     path === "/v1/threads" ||
     path.startsWith("/v1/threads/") ||
-    path === "/v1/shared-threads"
+    path === "/v1/shared-threads" ||
+    path === "/v1/attachments" ||
+    path.startsWith("/v1/attachments/")
   ) {
     return read ? "threads:read" : "threads:write";
   }

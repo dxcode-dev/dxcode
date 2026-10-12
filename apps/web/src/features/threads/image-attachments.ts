@@ -1,71 +1,31 @@
-import { FLUE_MAX_IMAGE_DATA_LENGTH, MAX_IMAGES_PER_MESSAGE } from "@dx/api";
-import type { DeliveredAttachment } from "@flue/sdk";
+import {
+  type AttachmentData,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  withMessageAttachments,
+} from "@dx/api";
+import {
+  type AttachmentUpload,
+  startAttachmentUpload,
+} from "./attachment-upload.js";
 
-export const IMAGE_ACCEPT = "image/jpeg,image/png,image/gif,image/webp";
-export const MAX_IMAGE_COUNT = MAX_IMAGES_PER_MESSAGE;
-export const MAX_ENCODED_IMAGE_SIZE = FLUE_MAX_IMAGE_DATA_LENGTH;
-const MAX_RAW_IMAGE_SIZE = Math.floor(MAX_ENCODED_IMAGE_SIZE / 4) * 3;
-const IMAGE_MIME_TYPES = [
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-] as const;
+export const MAX_ATTACHMENT_COUNT = MAX_ATTACHMENTS_PER_MESSAGE;
 
-export type ImageMimeType = (typeof IMAGE_MIME_TYPES)[number];
-
-export interface PendingImage extends Omit<DeliveredAttachment, "mimeType"> {
+/**
+ * A file in the composer. It starts uploading to Core as soon as it is
+ * added; the message sent later carries only its attachment reference.
+ */
+export interface PendingAttachment {
   readonly id: string;
-  readonly mimeType: ImageMimeType;
+  readonly filename: string;
+  /** The browser's type for the file, used only to pick its preview. */
+  readonly mimeType: string;
+  readonly size: number;
+  /** A local `blob:` URL for the composer's thumbnail and preview. */
   readonly previewUrl: string;
   readonly disposePreview: () => void;
+  readonly upload: AttachmentUpload;
 }
-
-const signatures: ReadonlyArray<
-  readonly [ImageMimeType, ReadonlyArray<number>]
-> = [
-  ["image/jpeg", [0xff, 0xd8, 0xff]],
-  ["image/png", [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]],
-  ["image/gif", [0x47, 0x49, 0x46, 0x38]],
-  ["image/webp", [0x52, 0x49, 0x46, 0x46]],
-];
-
-const actualMime = (bytes: Uint8Array): ImageMimeType | undefined => {
-  for (const [mime, signature] of signatures) {
-    if (
-      bytes.length < signature.length ||
-      !signature.every((value, index) => bytes[index] === value)
-    )
-      continue;
-    if (
-      mime !== "image/webp" ||
-      String.fromCharCode(...bytes.slice(8, 12)) === "WEBP"
-    )
-      return mime;
-  }
-  return undefined;
-};
-
-const base64 = (bytes: Uint8Array) => {
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(
-      ...bytes.subarray(offset, offset + chunkSize),
-    );
-  }
-  return btoa(binary);
-};
-
-const imageIdentity = async (bytes: Uint8Array) => {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    Uint8Array.from(bytes).buffer,
-  );
-  return [...new Uint8Array(digest)]
-    .map((value) => value.toString(16).padStart(2, "0"))
-    .join("");
-};
 
 const allocatePreview = (file: File) => {
   const { createObjectURL, revokeObjectURL } = URL;
@@ -76,112 +36,115 @@ const allocatePreview = (file: File) => {
   };
 };
 
-export async function readImage(file: File): Promise<PendingImage> {
-  if (file.size > MAX_RAW_IMAGE_SIZE)
+const megabytes = MAX_ATTACHMENT_BYTES / (1024 * 1024);
+
+export function readAttachment(
+  file: File,
+  upload: (file: File) => AttachmentUpload = startAttachmentUpload,
+): PendingAttachment {
+  if (file.size === 0) throw new Error(`${file.name || "File"} is empty.`);
+  if (file.size > MAX_ATTACHMENT_BYTES)
     throw new Error(
-      `${file.name || "Image"} exceeds the 14 MiB encoded limit.`,
+      `${file.name || "File"} is larger than the ${megabytes} MB limit.`,
     );
-  let bytes: Uint8Array;
-  try {
-    bytes = new Uint8Array(await file.arrayBuffer());
-  } catch {
-    throw new Error(`${file.name || "Image"} could not be read.`);
-  }
-  const mimeType = actualMime(bytes);
-  if (mimeType === undefined) {
-    throw new Error(
-      `${file.name || "Image"} is not a valid JPEG, PNG, GIF, or WebP image.`,
-    );
-  }
-  const data = base64(bytes);
-  if (data.length > MAX_ENCODED_IMAGE_SIZE) {
-    throw new Error(
-      `${file.name || "Image"} exceeds the 14 MiB encoded limit.`,
-    );
-  }
-  const id = await imageIdentity(bytes);
-  const preview = allocatePreview(file);
   return {
-    id,
-    type: "image",
-    data,
-    mimeType,
-    filename: file.name || "image",
-    ...preview,
+    id: crypto.randomUUID(),
+    filename: file.name || "file",
+    mimeType: file.type,
+    size: file.size,
+    ...allocatePreview(file),
+    upload: upload(file),
   };
 }
 
-export async function readSelectedImages(
-  files: ReadonlyArray<File>,
-  current: ReadonlyArray<PendingImage>,
-) {
-  if (current.length + files.length > MAX_IMAGE_COUNT)
-    throw new Error(`Attach no more than ${MAX_IMAGE_COUNT} images.`);
-  const read: PendingImage[] = [];
-  try {
-    const identities = new Set(current.map(({ id }) => id));
-    for (const file of files) {
-      const image = await readImage(file);
-      if (identities.has(image.id)) {
-        image.disposePreview();
-        throw new Error(`${file.name} is already attached.`);
-      }
-      identities.add(image.id);
-      read.push(image);
-    }
-    return read;
-  } catch (cause) {
-    disposeImages(read);
-    throw cause;
-  }
-}
-
-export const deliveredImages = (images: ReadonlyArray<PendingImage>) =>
-  images.map(({ data, filename, mimeType, type }) => ({
-    data,
-    filename,
-    mimeType,
-    type,
-  }));
-
-export const disposeImages = (images: ReadonlyArray<PendingImage>) => {
-  for (const image of images) image.disposePreview();
+/** Revoke the local previews; uploads that were sent stay in the Thread. */
+export const disposeAttachments = (
+  attachments: ReadonlyArray<PendingAttachment>,
+) => {
+  for (const attachment of attachments) attachment.disposePreview();
 };
 
-export interface PendingImageCollection {
+/** Drop unsent files: revoke previews and delete their uploads. */
+export const discardAttachments = (
+  attachments: ReadonlyArray<PendingAttachment>,
+) => {
+  for (const attachment of attachments) {
+    attachment.disposePreview();
+    attachment.upload.cancel();
+  }
+};
+
+export const attachmentsUploading = (
+  attachments: ReadonlyArray<PendingAttachment>,
+) =>
+  attachments.some(({ upload }) => upload.getSnapshot().status === "uploading");
+
+/**
+ * The message as sent: the text followed by the `<dx_attachments>` block
+ * naming every uploaded file. Waits for uploads still in flight and fails
+ * with the first upload's error.
+ */
+export const messageWithAttachments = async (
+  message: string,
+  attachments: ReadonlyArray<PendingAttachment>,
+) => {
+  const uploaded: AttachmentData[] = await Promise.all(
+    attachments.map(({ upload }) => upload.settled),
+  );
+  return withMessageAttachments(
+    message,
+    uploaded.map(({ id, filename, mimeType, size, url }) => ({
+      id,
+      name: filename,
+      mimeType,
+      size,
+      url,
+    })),
+  );
+};
+
+/** Files pasted into a text field, such as a copied screenshot. */
+export const pastedFiles = (event: {
+  readonly clipboardData: DataTransfer | null;
+}) => [...(event.clipboardData?.files ?? [])];
+
+export interface PendingAttachmentCollection {
   readonly addFiles: (
     files: ReadonlyArray<File>,
-  ) => Promise<ReadonlyArray<PendingImage>>;
-  readonly addImage: (image: PendingImage) => ReadonlyArray<PendingImage>;
+  ) => Promise<ReadonlyArray<PendingAttachment>>;
+  readonly addImage: (
+    attachment: PendingAttachment,
+  ) => ReadonlyArray<PendingAttachment>;
   readonly addGenerated: (
-    create: () => Promise<PendingImage>,
-  ) => Promise<ReadonlyArray<PendingImage>>;
-  readonly remove: (id: string) => ReadonlyArray<PendingImage>;
-  readonly take: () => ReadonlyArray<PendingImage>;
+    create: () => Promise<File>,
+  ) => Promise<ReadonlyArray<PendingAttachment>>;
+  readonly remove: (id: string) => ReadonlyArray<PendingAttachment>;
+  readonly take: () => ReadonlyArray<PendingAttachment>;
   readonly restore: (
-    images: ReadonlyArray<PendingImage>,
-  ) => ReadonlyArray<PendingImage>;
+    attachments: ReadonlyArray<PendingAttachment>,
+  ) => ReadonlyArray<PendingAttachment>;
   readonly settle: () => Promise<void>;
   readonly dispose: () => void;
 }
 
-export const createPendingImageCollection = (): PendingImageCollection => {
-  let images: ReadonlyArray<PendingImage> = [];
+export const createPendingAttachmentCollection = (
+  upload: (file: File) => AttachmentUpload = startAttachmentUpload,
+): PendingAttachmentCollection => {
+  let attachments: ReadonlyArray<PendingAttachment> = [];
   let queue: Promise<void> = Promise.resolve();
 
-  const append = (next: ReadonlyArray<PendingImage>) => {
-    if (images.length + next.length > MAX_IMAGE_COUNT) {
-      disposeImages(next);
-      throw new Error(`Attach no more than ${MAX_IMAGE_COUNT} images.`);
+  const append = (files: ReadonlyArray<File>) => {
+    if (attachments.length + files.length > MAX_ATTACHMENT_COUNT)
+      throw new Error(`Attach no more than ${MAX_ATTACHMENT_COUNT} files.`);
+    const read: PendingAttachment[] = [];
+    try {
+      for (const file of files) read.push(readAttachment(file, upload));
+    } catch (cause) {
+      discardAttachments(read);
+      throw cause;
     }
-    const identities = new Set(images.map(({ id }) => id));
-    const duplicate = next.find(({ id }) => identities.has(id));
-    if (duplicate !== undefined) {
-      disposeImages(next);
-      throw new Error(`${duplicate.filename} is already attached.`);
-    }
-    images = [...images, ...next];
-    return images;
+    attachments = [...attachments, ...read];
+    return attachments;
   };
   const enqueue = <A>(operation: () => Promise<A>) => {
     const result = queue.then(operation);
@@ -193,39 +156,45 @@ export const createPendingImageCollection = (): PendingImageCollection => {
   };
 
   return {
-    addFiles: (files) =>
-      enqueue(async () => append(await readSelectedImages(files, images))),
-    addImage: (image) => append([image]),
+    addFiles: (files) => enqueue(async () => append(files)),
+    addImage: (attachment) => {
+      if (attachments.length >= MAX_ATTACHMENT_COUNT) {
+        discardAttachments([attachment]);
+        throw new Error(`Attach no more than ${MAX_ATTACHMENT_COUNT} files.`);
+      }
+      attachments = [...attachments, attachment];
+      return attachments;
+    },
     addGenerated: (create) =>
       enqueue(async () => {
-        if (images.length >= MAX_IMAGE_COUNT)
-          throw new Error(`Attach no more than ${MAX_IMAGE_COUNT} images.`);
+        if (attachments.length >= MAX_ATTACHMENT_COUNT)
+          throw new Error(`Attach no more than ${MAX_ATTACHMENT_COUNT} files.`);
         return append([await create()]);
       }),
     remove: (id) => {
-      const removed = images.find((image) => image.id === id);
-      if (removed !== undefined) removed.disposePreview();
-      images = images.filter((image) => image.id !== id);
-      return images;
+      const removed = attachments.find((attachment) => attachment.id === id);
+      if (removed !== undefined) discardAttachments([removed]);
+      attachments = attachments.filter((attachment) => attachment.id !== id);
+      return attachments;
     },
     take: () => {
-      const taken = images;
-      images = [];
+      const taken = attachments;
+      attachments = [];
       return taken;
     },
     restore: (restored) => {
-      images = restored;
-      return images;
+      attachments = restored;
+      return attachments;
     },
     settle: () => queue,
     dispose: () => {
-      disposeImages(images);
-      images = [];
+      discardAttachments(attachments);
+      attachments = [];
     },
   };
 };
 
-export async function captureScreenshot(): Promise<PendingImage> {
+export async function captureScreenshot(): Promise<File> {
   if (navigator.mediaDevices?.getDisplayMedia === undefined)
     throw new Error("Screenshot capture is not supported by this browser.");
   let stream: MediaStream | undefined;
@@ -259,12 +228,10 @@ export async function captureScreenshot(): Promise<PendingImage> {
         "image/png",
       ),
     );
-    return readImage(
-      new File([blob], `Screenshot ${new Date().toISOString()}.png`, {
-        type: "image/png",
-        lastModified: Date.now(),
-      }),
-    );
+    return new File([blob], `Screenshot ${new Date().toISOString()}.png`, {
+      type: "image/png",
+      lastModified: Date.now(),
+    });
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === "NotAllowedError")
       throw new Error("Screenshot capture was cancelled or denied.");

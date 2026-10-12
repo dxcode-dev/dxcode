@@ -99,6 +99,11 @@ import {
   resolveThreadExecutionPin,
 } from "../plugins/execution/orb-providers.js";
 import { ProjectRepositoryD1 } from "../projects/repository-d1.js";
+import {
+  admitMessageAttachments,
+  MessageAttachmentsRejected,
+  resolveMessageAttachments,
+} from "../attachments/message.js";
 import { scheduleRealtimeInvalidation } from "../realtime/publication.js";
 import { PersonalAgentInstructionsRepositoryD1 } from "../settings/agent-instructions/repository-d1.js";
 import { SettingsAudit } from "../settings/audit.js";
@@ -424,6 +429,22 @@ export const createThreadRoutes = (
       const serviceLayer = threadServiceLayer(db);
       const principal = context.get("principal");
       const requestedThreadId = input.threadId;
+      // Check the first message's files before anything is created, so a
+      // refused file never leaves an empty Thread behind.
+      const initialAttachments =
+        input.initialMessage === undefined
+          ? undefined
+          : yield* Effect.tryPromise({
+              try: () =>
+                resolveMessageAttachments(context.env, {
+                  senderUserId: principal.userId,
+                  body: input.initialMessage?.body ?? "",
+                }),
+              catch: (cause) =>
+                cause instanceof MessageAttachmentsRejected
+                  ? new InvalidThreadRequest()
+                  : new ThreadInitialAdmissionUnavailable(),
+            });
       // DxTitleAgent needs an execution context to outlive the response.
       const titleExecution = execution;
       const existingThread =
@@ -443,7 +464,8 @@ export const createThreadRoutes = (
       // model resolution, persistence, and dispatch. It waits for the row only
       // to store the title, and keeps it even if the first message is not
       // admitted; a retry reuses this Thread and its title.
-      const titleMessage = input.initialMessage?.body;
+      // The title comes from what the person wrote, not the file list.
+      const titleMessage = initialAttachments?.text;
       const titlePending =
         existingThread === undefined &&
         requestedThreadId !== undefined &&
@@ -701,6 +723,22 @@ export const createThreadRoutes = (
               ? Effect.fail(new ThreadInitialAdmissionUnavailable())
               : Effect.succeed(identity),
         );
+        const admitted = yield* Effect.tryPromise({
+          try: () =>
+            admitMessageAttachments(context.env, {
+              threadId: thread.id,
+              senderUserId: principal.userId,
+              body: initialMessage.body,
+              requestUrl: context.req.url,
+              ...(initialAttachments === undefined
+                ? {}
+                : { resolved: initialAttachments }),
+            }),
+          catch: (cause) =>
+            cause instanceof MessageAttachmentsRejected
+              ? new InvalidThreadRequest()
+              : new ThreadInitialAdmissionUnavailable(),
+        });
         const receipt = yield* Effect.tryPromise({
           try: () =>
             dispatchInitialMessage({
@@ -721,7 +759,7 @@ export const createThreadRoutes = (
                       ? {}
                       : { sourceThreadId: messageSourceThreadId }),
                   },
-                  initialMessage.body,
+                  admitted.body,
                 ),
                 attachments: [...initialMessage.attachments],
               },

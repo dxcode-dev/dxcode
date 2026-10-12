@@ -13,10 +13,10 @@ import {
 import type { useNavigate } from "@tanstack/react-router";
 import type { RefObject } from "react";
 import {
-  deliveredImages,
-  disposeImages,
-  type PendingImage,
-  type PendingImageCollection,
+  disposeAttachments,
+  messageWithAttachments,
+  type PendingAttachment,
+  type PendingAttachmentCollection,
 } from "./image-attachments.js";
 import { reasoningModeId } from "./new-thread-modal-utils.js";
 import type { CreateThreadMutationInput } from "./thread-mutations.js";
@@ -66,8 +66,8 @@ export async function submitNewThread({
   readonly effort?: ClaudeCodeEffort;
   readonly runnerProfileId?: RunnerProfileId;
   readonly projects: ReadonlyArray<ProjectData>;
-  readonly imageCollection: PendingImageCollection;
-  readonly setImages: (images: ReadonlyArray<PendingImage>) => void;
+  readonly imageCollection: PendingAttachmentCollection;
+  readonly setImages: (images: ReadonlyArray<PendingAttachment>) => void;
   readonly registry: ThreadSessionRegistry;
   readonly create: (input: CreateThreadMutationInput) => Promise<{
     readonly initialSubmission?: { readonly submissionId: string };
@@ -82,7 +82,7 @@ export async function submitNewThread({
     InitialThreadCreationAttempt | undefined
   >;
 }) {
-  let stagedImages: ReadonlyArray<PendingImage> | undefined;
+  let stagedImages: ReadonlyArray<PendingAttachment> | undefined;
   let pendingThreadId: ThreadId | undefined;
   try {
     const project = projects.find(({ id }) => id === effectiveProjectId);
@@ -91,6 +91,16 @@ export async function submitNewThread({
     await imageCollection.settle();
     stagedImages = imageCollection.take();
     const body = submittedPrompt.trim();
+    let sentBody: string;
+    try {
+      sentBody = await messageWithAttachments(body, stagedImages);
+    } catch (cause) {
+      // An upload failed: keep the files so the person can remove it.
+      setImages(imageCollection.restore(stagedImages));
+      stagedImages = undefined;
+      throw cause;
+    }
+    // The composer stays unchanged, files included, until admission.
     const attachmentIds = stagedImages.map(({ id }) => id);
     const selectedProfile = reasoningModeId(profile);
     // Effort belongs to Claude Code models only; other selections have none,
@@ -152,8 +162,8 @@ export async function submitNewThread({
       ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
       threadId,
       initialMessage: {
-        body,
-        attachments: deliveredImages(stagedImages),
+        body: sentBody,
+        attachments: [],
       },
     });
     const submissionId = response.initialSubmission?.submissionId;
@@ -182,7 +192,7 @@ export async function submitNewThread({
     // or, when it is gone, the images are released; the draft text stays.
     if (stagedImages !== undefined) {
       if (composerOpen()) setImages(imageCollection.restore(stagedImages));
-      else disposeImages(stagedImages);
+      else disposeAttachments(stagedImages);
     }
     throw new Error(
       cause instanceof Error

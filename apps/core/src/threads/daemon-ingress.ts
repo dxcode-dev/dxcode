@@ -17,6 +17,49 @@ const FORWARDED_HEADERS = [
 ] as const;
 
 export const DAEMON_INGRESS_PATH = /^\/v1\/dxd\/([^/]+)$/;
+export const DAEMON_ATTACHMENT_PATH =
+  /^\/v1\/dxd\/([^/]+)\/attachments\/(att_[0-9a-f]{32})$/;
+
+/**
+ * `dxd files get` downloads a message attachment into the guest with the
+ * daemon's own key. The Thread execution object checks the key as it does for
+ * the socket and answers with a presigned R2 URL for any file the Thread's
+ * owner could open; the guest then downloads straight from R2.
+ */
+export const forwardDaemonAttachment = async (
+  request: Request,
+  namespace: DurableObjectNamespace | undefined,
+  threadId: string | undefined,
+  attachmentId: string | undefined,
+): Promise<Response> => {
+  if (
+    (request.method !== "GET" && request.method !== "HEAD") ||
+    threadId === undefined ||
+    !THREAD_ID.test(threadId) ||
+    attachmentId === undefined ||
+    namespace === undefined
+  )
+    return new Response(null, { status: 404 });
+  if (!DAEMON_KEY.test(request.headers.get("authorization") ?? ""))
+    return new Response(null, { status: 401 });
+  const headers = new Headers({
+    authorization: request.headers.get("authorization") ?? "",
+    "x-dx-daemon-ingress": "1",
+    "x-dx-thread-id": threadId,
+    "x-dx-attachment-id": attachmentId,
+  });
+  const range = request.headers.get("range");
+  if (range !== null) headers.set("range", range);
+  // Only local development streams the bytes through Core.
+  if (new URL(request.url).searchParams.get("content") === "1")
+    headers.set("x-dx-attachment-content", "1");
+  return namespace.get(namespace.idFromName(threadId)).fetch(
+    new Request("https://thread.internal/daemon/attachment", {
+      method: request.method,
+      headers,
+    }),
+  );
+};
 
 export const forwardDaemonUpgrade = async (
   request: Request,
@@ -52,7 +95,16 @@ export default {
     request: Request,
     env: { readonly THREAD_EXECUTION?: DurableObjectNamespace },
   ) {
-    const match = DAEMON_INGRESS_PATH.exec(new URL(request.url).pathname);
+    const path = new URL(request.url).pathname;
+    const attachment = DAEMON_ATTACHMENT_PATH.exec(path);
+    if (attachment !== null)
+      return forwardDaemonAttachment(
+        request,
+        env.THREAD_EXECUTION,
+        attachment[1],
+        attachment[2],
+      );
+    const match = DAEMON_INGRESS_PATH.exec(path);
     return forwardDaemonUpgrade(request, env.THREAD_EXECUTION, match?.[1]);
   },
 };

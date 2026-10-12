@@ -1,7 +1,7 @@
 {
   "name": "@dx/core",
   "private": true,
-  "version": "0.2.14",
+  "version": "0.2.15",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -25,6 +25,7 @@
     "@logtape/logtape": "2.3.1",
     "@modelcontextprotocol/client": "2.0.0",
     "@opentelemetry/api": "1.9.0",
+    "aws4fetch": "1.0.20",
     "better-auth": "1.7.7",
     "diff": "9.0.0",
     "e2b": "2.44.0",

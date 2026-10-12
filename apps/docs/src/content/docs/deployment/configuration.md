@@ -33,6 +33,7 @@ email is:
 | Account | Secrets Store | Edit |
 | Account | Turnstile | Edit |
 | Account | Email Sending | Edit |
+| Account | Account API Tokens | Edit |
 | Zone | Zone | Read |
 | Zone | Workers Routes | Edit |
 
@@ -42,6 +43,14 @@ AI bindings, and Email Sending bindings are part of the Worker deployment and
 do not require additional token permissions. A deployment without
 `authEmailFrom` does not need Turnstile or Email Sending. A deployment without
 a custom domain does not need Zone or Workers Routes.
+
+Account API Tokens lets the deployment create one more token: object read
+and write on its own storage bucket and nothing else. dx signs short-lived
+storage URLs with it, so browsers upload message attachments straight to R2
+and the agent's Orb downloads them from R2 without passing through the Worker.
+Removing the deployment deletes that token. With Alchemy OAuth, which cannot
+create tokens, attachments work the same way for people but their bytes pass
+through the Worker.
 
 Do not use a global API key. Keep account IDs and tokens out of committed config.
 

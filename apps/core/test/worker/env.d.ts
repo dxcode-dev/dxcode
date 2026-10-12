@@ -16,6 +16,7 @@ declare module "cloudflare:test" {
     readonly THREAD_SEARCH_INDEX: DurableObjectNamespace<
       import("../../src/thread-search/index-object.js").ThreadSearchIndexObject
     >;
+    readonly DX_STORAGE: R2Bucket;
     readonly TEST_MIGRATIONS: D1Migration[];
   }
 }

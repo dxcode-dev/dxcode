@@ -48,8 +48,8 @@ The wizard will ask you to:
 
 To send sign-in email, prepare a Cloudflare API token before starting. It needs
 account Edit access for Workers Scripts, D1, Workers R2 Storage, Secrets Store,
-Turnstile, and Email Sending, plus zone Read and Workers Routes Edit for the
-selected zone. Cloudflare Email Sending must be enabled for the exact sender
+Turnstile, Email Sending, and Account API Tokens, plus zone Read and Workers
+Routes Edit for the selected zone. Cloudflare Email Sending must be enabled for the exact sender
 domain. Email Routing is unrelated and is not a prerequisite. See [sign-in](/docs/deployment/authentication/)
 and [Cloudflare authentication](/docs/deployment/configuration/#cloudflare-authentication).
 

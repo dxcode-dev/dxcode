@@ -16,9 +16,9 @@ import { projectQueryOptions } from "../projects/project-queries.js";
 import { DictationRecoverySession } from "./dictation/dictation-session.js";
 import { existingAgentUid } from "./existing-agent-uid.js";
 import {
-  createPendingImageCollection,
-  disposeImages,
-  type PendingImage,
+  createPendingAttachmentCollection,
+  disposeAttachments,
+  type PendingAttachment,
 } from "./image-attachments.js";
 import { threadQueryOptions } from "./thread-queries.js";
 
@@ -63,16 +63,16 @@ export interface RetainedThread {
   readonly dictation: DictationRecoverySession;
   readonly presentation: Map<string, unknown>;
   readonly presentationListeners: Set<() => void>;
-  readonly images: ReturnType<typeof createPendingImageCollection>;
-  pendingSubmissionImages?: ReadonlyArray<PendingImage>;
+  readonly images: ReturnType<typeof createPendingAttachmentCollection>;
+  pendingSubmissionImages?: ReadonlyArray<PendingAttachment>;
   disposed: boolean;
 }
 
 export interface PendingSubmissionImageRetention {
-  readonly retain: (images: ReadonlyArray<PendingImage>) => boolean;
-  readonly complete: (images: ReadonlyArray<PendingImage>) => boolean;
+  readonly retain: (images: ReadonlyArray<PendingAttachment>) => boolean;
+  readonly complete: (images: ReadonlyArray<PendingAttachment>) => boolean;
   readonly restore: (
-    images: ReadonlyArray<PendingImage>,
+    images: ReadonlyArray<PendingAttachment>,
     draft: string,
   ) => boolean;
 }
@@ -91,7 +91,7 @@ export interface OptimisticThreadCreation {
   readonly effort?: ClaudeCodeEffort;
   readonly runnerProfileId?: RunnerProfileId;
   readonly body: string;
-  readonly images: ReadonlyArray<PendingImage>;
+  readonly images: ReadonlyArray<PendingAttachment>;
   /** Epoch milliseconds when the user sent it; orders its sidebar row. */
   readonly startedAt: number;
   readonly submissionId?: string;
@@ -130,7 +130,7 @@ export const retainSubmissionImages = (
       entry.presentation.set("draft", draft);
       entry.presentation.set("pending-images", images);
     } else {
-      disposeImages(images);
+      disposeAttachments(images);
     }
     setPending(false);
     return true;
@@ -169,7 +169,7 @@ export class ThreadSessionRegistry {
   beginCreation(creation: OptimisticThreadCreation): void {
     const previous = this.creations.get(creation.id);
     if (previous !== undefined && previous !== creation)
-      disposeImages(previous.images);
+      disposeAttachments(previous.images);
     this.creations.delete(creation.id);
     this.creations.set(creation.id, creation);
     while (this.creations.size > 8) {
@@ -177,7 +177,7 @@ export class ThreadSessionRegistry {
       if (oldest === undefined) break;
       const evicted = this.creations.get(oldest);
       this.creations.delete(oldest);
-      disposeImages(evicted?.images ?? []);
+      disposeAttachments(evicted?.images ?? []);
     }
     this.notifyCreations();
   }
@@ -193,7 +193,7 @@ export class ThreadSessionRegistry {
     const creation = this.creations.get(id);
     if (creation?.submissionId !== submissionId) return;
     this.creations.delete(id);
-    disposeImages(creation.images);
+    disposeAttachments(creation.images);
     this.notifyCreations();
   }
 
@@ -233,7 +233,7 @@ export class ThreadSessionRegistry {
       dictation: new DictationRecoverySession(),
       presentation: new Map(),
       presentationListeners: new Set(),
-      images: createPendingImageCollection(),
+      images: createPendingAttachmentCollection(),
       disposed: false,
     };
   }
@@ -294,7 +294,7 @@ export class ThreadSessionRegistry {
     entry.dictation.clear();
     entry.session.dispose();
     entry.images.dispose();
-    disposeImages(entry.pendingSubmissionImages ?? []);
+    disposeAttachments(entry.pendingSubmissionImages ?? []);
     entry.pendingSubmissionImages = undefined;
     void entry.images.settle().then(() => entry.images.dispose());
   }
@@ -302,7 +302,7 @@ export class ThreadSessionRegistry {
   clear(): void {
     for (const id of this.entries.keys()) this.remove(id);
     for (const creation of this.creations.values())
-      disposeImages(creation.images);
+      disposeAttachments(creation.images);
     this.creations.clear();
     this.notifyCreations();
   }

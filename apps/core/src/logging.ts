@@ -86,6 +86,7 @@ export const startupObservabilityLogger = getLogger([
 ]);
 export const sourceControlLogger = getLogger(["dx", "source-control"]);
 export const dictationLogger = getLogger(["dx", "dictation"]);
+export const attachmentLogger = getLogger(["dx", "attachments"]);
 export const sourceControlAuditLogger = getLogger([
   "dx",
   "source-control",

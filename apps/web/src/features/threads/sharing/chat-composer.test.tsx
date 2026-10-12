@@ -157,7 +157,6 @@ describe("mentions in the composer", () => {
     await panel.submit();
     expect(panel.sendMessage).toHaveBeenCalledExactlyOnceWith(
       "@ben can you look?",
-      { images: [] },
     );
     expect(onSent).toHaveBeenCalledExactlyOnceWith("chat");
     expect(panel.textarea.value).toBe("");

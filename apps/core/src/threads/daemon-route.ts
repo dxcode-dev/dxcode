@@ -2,7 +2,10 @@ import { type Context, Hono } from "hono";
 import { isolateRequestOrdinal } from "../http/request-logging.js";
 import type { AppEnv } from "../http/types.js";
 import { threadDaemonLogger } from "../logging.js";
-import { forwardDaemonUpgrade } from "./daemon-ingress.js";
+import {
+  forwardDaemonAttachment,
+  forwardDaemonUpgrade,
+} from "./daemon-ingress.js";
 
 /**
  * Daemon ingress on the Core Worker. Deployed stages route `/v1/dxd/*` to the
@@ -32,5 +35,15 @@ const ingress = async (context: Context<AppEnv>) => {
 };
 
 export const threadDaemonRoutes = new Hono<AppEnv>()
+  .on(["GET", "HEAD"], "/dxd/:threadId/attachments/:attachmentId", (context) =>
+    forwardDaemonAttachment(
+      context.req.raw,
+      context.env.THREAD_EXECUTION,
+      context.req.param("threadId"),
+      /^att_[0-9a-f]{32}$/.test(context.req.param("attachmentId"))
+        ? context.req.param("attachmentId")
+        : undefined,
+    ),
+  )
   .get("/dxd/:threadId", ingress)
   .get("/threads/:threadId/dxd", ingress);

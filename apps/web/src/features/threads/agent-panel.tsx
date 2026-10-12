@@ -23,13 +23,19 @@ import { Button } from "../../shared/ui/button.js";
 import { useDictation } from "./dictation/use-dictation.js";
 import {
   captureScreenshot,
-  createPendingImageCollection,
-  deliveredImages,
-  disposeImages,
-  type PendingImage,
-  type PendingImageCollection,
+  createPendingAttachmentCollection,
+  attachmentsUploading,
+  disposeAttachments,
+  messageWithAttachments,
+  pastedFiles,
+  type PendingAttachment,
+  type PendingAttachmentCollection,
 } from "./image-attachments.js";
-import { AttachmentMenu, ImagePreviews } from "./image-attachments-ui.js";
+import {
+  AttachmentMenu,
+  ImagePreviews,
+  useAttachmentsUploading,
+} from "./image-attachments-ui.js";
 import { useImageDropTarget } from "./image-drop-target.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
 import {
@@ -460,12 +466,12 @@ function AgentComposer({
   /** Only the composer subscribes, so typing never re-renders the transcript. */
   readonly draftValue: PresentationValue<string>;
   readonly draftLocked: boolean;
-  readonly images: ReadonlyArray<PendingImage>;
+  readonly images: ReadonlyArray<PendingAttachment>;
   readonly errorCard?: React.ReactNode;
   readonly dockRef: React.RefCallback<HTMLDivElement>;
   readonly onAbort: () => void;
   readonly onAddImages: (files: ReadonlyArray<File>) => void;
-  readonly onRemoveImage: (image: PendingImage) => void;
+  readonly onRemoveImage: (image: PendingAttachment) => void;
   readonly onSubmit: (draft: string) => void;
   readonly onTakeScreenshot: () => void;
   readonly ref: React.RefCallback<HTMLFormElement>;
@@ -480,8 +486,9 @@ function AgentComposer({
     onSend: onSubmit,
     textareaRef,
   });
+  const uploading = useAttachmentsUploading(images);
   const dropTarget = useImageDropTarget({
-    disabled: draftLocked,
+    disabled: draftLocked || uploading,
     onFiles: onAddImages,
   });
   const composerMentions = useComposerMentions({
@@ -506,11 +513,6 @@ function AgentComposer({
         ref={ref}
         {...dropTarget}
       >
-        <ImagePreviews
-          images={images}
-          onRemove={onRemoveImage}
-          disabled={draftLocked}
-        />
         <textarea
           ref={textareaRef}
           aria-label="Message"
@@ -524,6 +526,12 @@ function AgentComposer({
             composerMentions.onInput(event);
           }}
           onSelect={composerMentions.trackCaret}
+          onPaste={(event) => {
+            const files = pastedFiles(event);
+            if (files.length === 0 || draftLocked || uploading) return;
+            event.preventDefault();
+            onAddImages(files);
+          }}
           onKeyDown={(event) => {
             if (composerMentions.onKeyDown(event)) {
               event.preventDefault();
@@ -541,9 +549,14 @@ function AgentComposer({
         />
         <div className="composer-actions">
           <AttachmentMenu
-            disabled={draftLocked}
+            disabled={draftLocked || uploading}
             onFiles={onAddImages}
             onScreenshot={onTakeScreenshot}
+          />
+          <ImagePreviews
+            images={images}
+            onRemove={onRemoveImage}
+            disabled={draftLocked}
           />
           <span className="composer-spacer" />
           {dictation.controls}
@@ -557,6 +570,7 @@ function AgentComposer({
               }
               disabled={
                 draftLocked ||
+                uploading ||
                 (!dictation.active && !draft.trim() && images.length === 0)
               }
             >
@@ -595,6 +609,30 @@ const isReadOnlyRejection = (cause: unknown) =>
   "code" in cause.body.data &&
   cause.body.data.code === "THREAD_READ_ONLY";
 
+/**
+ * Core refused the message itself, for example an attachment that is no
+ * longer available: its reason, so the person can fix the message.
+ */
+const admissionRejection = (cause: unknown) => {
+  if (
+    !(cause instanceof Error) ||
+    !("status" in cause) ||
+    cause.status !== 400 ||
+    !("body" in cause) ||
+    typeof cause.body !== "object" ||
+    cause.body === null ||
+    !("data" in cause.body) ||
+    typeof cause.body.data !== "object" ||
+    cause.body.data === null ||
+    !("code" in cause.body.data) ||
+    cause.body.data.code !== "INVALID_REQUEST" ||
+    !("message" in cause.body.data) ||
+    typeof cause.body.data.message !== "string"
+  )
+    return undefined;
+  return cause.body.data.message;
+};
+
 function useAgentSubmission({
   agent,
   mentions,
@@ -612,9 +650,9 @@ function useAgentSubmission({
   readonly agent: UseFlueAgentResult;
   readonly mentions?: ComposerMentions;
   readonly setDraft: (draft: string) => void;
-  readonly images: ReadonlyArray<PendingImage>;
-  readonly setImages: (images: ReadonlyArray<PendingImage>) => void;
-  readonly imageCollection: PendingImageCollection;
+  readonly images: ReadonlyArray<PendingAttachment>;
+  readonly setImages: (images: ReadonlyArray<PendingAttachment>) => void;
+  readonly imageCollection: PendingAttachmentCollection;
   readonly submissionImageRetention?: PendingSubmissionImageRetention;
   readonly submissionPending: boolean;
   readonly submissionControl: PendingSubmissionControl;
@@ -657,9 +695,22 @@ function useAgentSubmission({
     if (
       submitInFlight.current ||
       submissionPending ||
-      (!message && images.length === 0)
+      (!message && images.length === 0) ||
+      attachmentsUploading(images)
     )
       return;
+    const failedUpload = images.find(
+      ({ upload }) => upload.getSnapshot().status === "failed",
+    );
+    if (failedUpload !== undefined) {
+      setActionError({
+        id: "action:send",
+        title: "Message not sent",
+        message: `${failedUpload.filename} did not upload. Remove it and attach it again.`,
+        action: "none",
+      });
+      return;
+    }
     const mode =
       mentions?.mode === "members"
         ? draftMode(
@@ -673,7 +724,8 @@ function useAgentSubmission({
       setActionError({
         id: "action:send",
         title: "Message not sent",
-        message: "Chat messages can't include images. Tag @dx to send them.",
+        message:
+          "Chat messages can't include attachments. Tag @dx to send them.",
         action: "none",
       });
       return;
@@ -685,7 +737,7 @@ function useAgentSubmission({
     setAdmittingChat(mode === "chat");
     setAdmissionPending(true);
     const runAdmission = async () => {
-      let submittedImages: ReadonlyArray<PendingImage> | undefined;
+      let submittedImages: ReadonlyArray<PendingAttachment> | undefined;
       let imagesRetained = false;
       try {
         await imageCollection.settle();
@@ -696,19 +748,21 @@ function useAgentSubmission({
         setDraft("");
         setImages([]);
         setActionError(undefined);
-        const attachments = deliveredImages(submittedImages);
-        await agent.sendMessage(message, { images: attachments });
+        await agent.sendMessage(
+          await messageWithAttachments(message, submittedImages),
+        );
         if (mentions?.mode === "members") mentions.onSent(mode);
         if (submissionControl.stopRequested) await stopAgent();
         if (
           !imagesRetained ||
           submissionImageRetention?.complete(submittedImages)
         )
-          disposeImages(submittedImages);
+          disposeAttachments(submittedImages);
       } catch (cause) {
+        const rejection = admissionRejection(cause);
         if (
           submittedImages !== undefined &&
-          isInputTooLargeError(cause) &&
+          (isInputTooLargeError(cause) || rejection !== undefined) &&
           composerMounted.current
         ) {
           if (imagesRetained)
@@ -718,7 +772,7 @@ function useAgentSubmission({
         } else if (submittedImages !== undefined) {
           if (imagesRetained)
             submissionImageRetention?.complete(submittedImages);
-          disposeImages(submittedImages);
+          disposeAttachments(submittedImages);
         }
         if (isReadOnlyRejection(cause)) {
           // Refresh access so the composer gives way to the viewer notice.
@@ -734,12 +788,17 @@ function useAgentSubmission({
           return;
         }
         if (!composerMounted.current) return;
+        // Refused messages keep their text so the person can correct them.
+        if (rejection !== undefined && submittedImages === undefined)
+          setDraft(message);
         setActionError({
           id: "action:send",
           title: "Message not sent",
-          message: isInputTooLargeError(cause)
-            ? "The message or attachments are too large."
-            : "Check your connection.",
+          message:
+            rejection ??
+            (isInputTooLargeError(cause)
+              ? "The message or attachments are too large."
+              : "Check your connection."),
           action: "none",
         });
       }
@@ -780,9 +839,9 @@ interface AgentPanelProps {
   ) => React.ReactNode;
   /** The owner's draft; defaults to this Thread's retained composer draft. */
   readonly draft?: PresentationValue<string>;
-  readonly images?: ReadonlyArray<PendingImage>;
-  readonly onImagesChange?: (images: ReadonlyArray<PendingImage>) => void;
-  readonly imageCollection?: PendingImageCollection;
+  readonly images?: ReadonlyArray<PendingAttachment>;
+  readonly onImagesChange?: (images: ReadonlyArray<PendingAttachment>) => void;
+  readonly imageCollection?: PendingAttachmentCollection;
   readonly submissionImageRetention?: PendingSubmissionImageRetention;
   readonly submissionPending?: boolean;
   readonly submissionControl?: PendingSubmissionControl;
@@ -799,15 +858,17 @@ interface AgentPanelProps {
 
 /** Pending composer images, owned here unless the caller retains them. */
 function usePendingImages(
-  controlledImages: ReadonlyArray<PendingImage> | undefined,
-  onImagesChange: ((images: ReadonlyArray<PendingImage>) => void) | undefined,
-  retainedImageCollection: PendingImageCollection | undefined,
+  controlledImages: ReadonlyArray<PendingAttachment> | undefined,
+  onImagesChange:
+    | ((images: ReadonlyArray<PendingAttachment>) => void)
+    | undefined,
+  retainedImageCollection: PendingAttachmentCollection | undefined,
 ) {
   const [localImages, setLocalImages] = React.useState<
-    ReadonlyArray<PendingImage>
+    ReadonlyArray<PendingAttachment>
   >([]);
   const [imageCollection] = React.useState(
-    () => retainedImageCollection ?? createPendingImageCollection(),
+    () => retainedImageCollection ?? createPendingAttachmentCollection(),
   );
   return {
     images: controlledImages ?? localImages,
@@ -817,8 +878,8 @@ function usePendingImages(
 }
 
 function useImageActions(
-  imageCollection: PendingImageCollection,
-  setImages: (images: ReadonlyArray<PendingImage>) => void,
+  imageCollection: PendingAttachmentCollection,
+  setImages: (images: ReadonlyArray<PendingAttachment>) => void,
   setActionError: ReturnType<typeof useAgentSubmission>["setActionError"],
 ) {
   const addImages = async (files: ReadonlyArray<File>) => {
@@ -829,8 +890,8 @@ function useImageActions(
     } catch (cause) {
       setActionError({
         id: "action:attach-image",
-        title: "Image not attached",
-        message: cause instanceof Error ? cause.message : "Try another image.",
+        title: "File not attached",
+        message: cause instanceof Error ? cause.message : "Try another file.",
         action: "none",
       });
     }

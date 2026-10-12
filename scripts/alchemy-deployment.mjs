@@ -4,6 +4,10 @@ import { isAbsolute, normalize, relative, resolve, sep } from "node:path";
 import * as Output from "alchemy/Output";
 import { validateSelfhostConfig } from "../deploy/selfhost/config.mjs";
 import { alchemyStage } from "./alchemy-stage.mjs";
+import {
+  attachmentBucketCors,
+  attachmentSigningTokenProps,
+} from "./attachment-deployment.mjs";
 
 export const reservedBranches = new Set([
   "dev",
@@ -170,8 +174,14 @@ const deploymentResourceTypes = (
   turnstileTestKeys = false,
   workersDevSubdomain = undefined,
   orbProviders = ["e2b"],
+  attachmentSigning = "token",
 ) =>
   new Map([
+    // The bucket-scoped token Core signs attachment URLs with; Alchemy OAuth
+    // self-hosts cannot mint it and carry attachment bytes through Core.
+    ...(attachmentSigning === "token"
+      ? [["AttachmentSigningToken", "Cloudflare.ApiToken.AccountApiToken"]]
+      : []),
     ...(orbProviders.includes("cloudflare")
       ? [["OrbContainers", "Dx.OrbContainers"]]
       : []),
@@ -1641,20 +1651,34 @@ const assertExactE2BProfilesIdentity = (node, operation) => {
   }
 };
 
+/**
+ * The storage bucket's props: its name, no forced destroy, and the one
+ * attachment CORS rule for this deployment's origin. A stage persisted
+ * before attachments has no CORS rule yet; the next deploy adds it.
+ */
+const isExactStorageProps = (props, selection, persisted) => {
+  if (props.forceDestroy !== false) return false;
+  if (persisted && exactKeys(props, ["forceDestroy", "name"])) return true;
+  return (
+    exactKeys(props, ["cors", "forceDestroy", "name"]) &&
+    JSON.stringify(props.cors) ===
+      JSON.stringify([attachmentBucketCors(selection.origin)])
+  );
+};
+
 const assertExactStorageIdentity = (node, selection, kind) => {
   const expectedName =
     kind === "Database" ? selection.databaseName : selection.bucketName;
-  for (const props of [
-    node.resource?.Props,
-    node.props,
-    node.state?.props,
-    node.state?.old?.props,
-  ].filter(Boolean)) {
+  for (const [props, persisted] of [
+    [node.resource?.Props, false],
+    [node.props, false],
+    [node.state?.props, true],
+    [node.state?.old?.props, true],
+  ].filter(([props]) => Boolean(props))) {
     if (
       props.name !== expectedName ||
       (kind === "Storage" &&
-        (!exactKeys(props, ["forceDestroy", "name"]) ||
-          props.forceDestroy !== false)) ||
+        !isExactStorageProps(props, selection, persisted)) ||
       (kind === "Database" &&
         (!exactKeys(props, ["migrations", "name"]) ||
           props.migrations !== `apps/core/${migrationDirectory}`))
@@ -1677,6 +1701,32 @@ const assertExactStorageIdentity = (node, selection, kind) => {
   )
     throw new Error(
       `Persisted ${kind} identity is outside the exact allowlist.`,
+    );
+};
+
+/**
+ * The attachment signing token: exactly one allow policy, object read and
+ * write on this stage's bucket. Nothing broader is ever minted.
+ */
+const assertExactAttachmentSigningTokenIdentity = (node, selection) => {
+  const expected = JSON.stringify(
+    attachmentSigningTokenProps(selection.accountId, selection.bucketName),
+  );
+  for (const props of [
+    node.resource?.Props,
+    node.props,
+    node.state?.props,
+    node.state?.old?.props,
+  ].filter(Boolean)) {
+    if (JSON.stringify(props) !== expected)
+      throw new Error(
+        "AttachmentSigningToken plan identity is outside the exact allowlist.",
+      );
+  }
+  const attr = node.state?.attr ?? node.state?.old?.attr;
+  if (attr && attr.accountId !== selection.accountId)
+    throw new Error(
+      "Persisted AttachmentSigningToken identity is outside the exact allowlist.",
     );
 };
 
@@ -2100,14 +2150,18 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
       selection.turnstileTestKeys,
       selection.workersDevSubdomain,
       selection.orbProviders,
+      selection.attachmentSigning,
     ).get(id) !== type
   )
     throw new Error(`Alchemy plan selected an unapproved resource: ${id}.`);
   if (cloudflareResourceIds.has(id) && node.mode !== "live")
     throw new Error(`Alchemy plan selected a non-live provider for ${id}.`);
-  if (id === "AccessTurnstile" && node.mode !== undefined)
+  if (
+    (id === "AccessTurnstile" || id === "AttachmentSigningToken") &&
+    node.mode !== undefined
+  )
     throw new Error(
-      "Alchemy plan selected an unexpected Turnstile provider mode.",
+      `Alchemy plan selected an unexpected provider mode for ${id}.`,
     );
 
   const allowedActions =
@@ -2153,6 +2207,8 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
   if (id === "Database" || id === "Storage")
     assertExactStorageIdentity(node, selection, id);
   if (id === "AccessTurnstile") assertExactTurnstileIdentity(node, selection);
+  if (id === "AttachmentSigningToken")
+    assertExactAttachmentSigningTokenIdentity(node, selection);
   if (id === "Bootstrap" || id === "Verify")
     assertExactCommandIdentity(node, operation, selection, id, context);
 };
@@ -2168,6 +2224,7 @@ export const validateAlchemyPlan = (plan, operation, selection) => {
       selection.turnstileTestKeys,
       selection.workersDevSubdomain,
       selection.orbProviders,
+      selection.attachmentSigning,
     ).keys(),
   ].sort();
   const deletionIds = Object.keys(plan.deletions);

@@ -154,6 +154,8 @@ describe("shared Cloudflare authentication", () => {
       ["/accounts/account/r2/buckets?per_page=1", []],
       ["/accounts/account/challenges/widgets?per_page=1", []],
       ["/zones/zone/workers/routes", []],
+      // The bucket-scoped attachment signing token needs token management.
+      ["/accounts/account/tokens?per_page=1", []],
     ]);
     const fetch = vi.fn(async (url) => {
       const parsed = new URL(url);
@@ -179,7 +181,7 @@ describe("shared Cloudflare authentication", () => {
         fetch,
       }),
     ).resolves.toBeUndefined();
-    expect(fetch).toHaveBeenCalledTimes(10);
+    expect(fetch).toHaveBeenCalledTimes(11);
     expect(fetch).not.toHaveBeenCalledWith(
       "https://api.cloudflare.com/client/v4/accounts/account",
       expect.anything(),

@@ -84,6 +84,9 @@ export const smokeProductionPackage = async (packageRoot) => {
   const workloadIdentityKid = "smoke-key-0001";
   const scalarValues = {
     BETTER_AUTH_SECRET: "package-smoke-not-a-secret-package-smoke",
+    DX_ATTACHMENT_R2_CREDENTIALS: "",
+    DX_ATTACHMENT_R2_ENDPOINT: "",
+    DX_ATTACHMENT_TRANSFER: "",
     DX_AUTH_EMAIL_FROM: "sign-in@package-smoke.invalid",
     DX_AUTH_TRUSTED_ORIGINS: "http://127.0.0.1",
     DX_AUTH_URL: "http://127.0.0.1",
