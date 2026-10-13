@@ -65,7 +65,6 @@ import { useDictation } from "./dictation/use-dictation.js";
 import {
   attachmentsUploading,
   captureScreenshot,
-  createPendingAttachmentCollection,
   type PendingAttachment,
 } from "./image-attachments.js";
 import { NewThreadComposer } from "./new-thread-composer.js";
@@ -576,10 +575,15 @@ function ScopedNewThreadModal({
     workspaceId,
   );
   const prompt = draft.text;
-  const [imageCollection] = React.useState(createPendingAttachmentCollection);
-  const [images, setImages] = React.useState<ReadonlyArray<PendingAttachment>>(
-    [],
+  // The draft store keeps the files when the composer closes, as it keeps
+  // the prompt.
+  const imageCollection = draftStore.images;
+  const images = React.useSyncExternalStore(
+    draftStore.subscribe,
+    draftStore.getImages,
+    draftStore.getImages,
   );
+  const setImages = draftStore.setImages;
   const [sending, setSending] = React.useState(false);
   const [runnerProfileOverride, setRunnerProfileOverride] = React.useState<
     RunnerProfileId | undefined
@@ -697,7 +701,6 @@ function ScopedNewThreadModal({
     // Leaving would hide a Thread that is still being created.
     if (submitting) return;
     draftStore.flush();
-    imageCollection.dispose();
     onClose();
   };
 

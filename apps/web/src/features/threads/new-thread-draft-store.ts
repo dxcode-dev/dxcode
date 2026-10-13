@@ -1,6 +1,11 @@
 import type { UserId, WorkspaceId } from "@dx/domain";
 import { Schema } from "effect";
 import { DictationRecoverySession } from "./dictation/dictation-session.js";
+import {
+  createPendingAttachmentCollection,
+  type PendingAttachment,
+  type PendingAttachmentCollection,
+} from "./image-attachments.js";
 
 export const NEW_THREAD_DRAFT_MAX_BYTES = 64 * 1024;
 export const NEW_THREAD_DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -24,6 +29,13 @@ export interface NewThreadDraftSnapshot {
 }
 export interface NewThreadDraftStore {
   readonly dictation: DictationRecoverySession;
+  /**
+   * Files added to the composer. Like dictation audio they stay in memory,
+   * never in browser storage, so they outlive the composer but not the page.
+   */
+  readonly images: PendingAttachmentCollection;
+  readonly getImages: () => ReadonlyArray<PendingAttachment>;
+  readonly setImages: (images: ReadonlyArray<PendingAttachment>) => void;
   readonly subscribe: (listener: () => void) => () => void;
   readonly getSnapshot: () => NewThreadDraftSnapshot;
   readonly getServerSnapshot: () => NewThreadDraftSnapshot;
@@ -33,6 +45,7 @@ export interface NewThreadDraftStore {
 }
 
 const emptySnapshot: NewThreadDraftSnapshot = { text: "" };
+const noImages: ReadonlyArray<PendingAttachment> = [];
 const utf8Size = (text: string) => new TextEncoder().encode(text).byteLength;
 const scopeKey = ({ userId, workspaceId }: NewThreadDraftScope) =>
   `${newThreadDraftStoragePrefix}${encodeURIComponent(userId)}:${encodeURIComponent(workspaceId)}`;
@@ -59,6 +72,7 @@ export const createNewThreadDraftStore = ({
   subscribeToStorage,
   subscribeToPageHide,
   debounceMs = 150,
+  images = createPendingAttachmentCollection(),
 }: {
   readonly scope: NewThreadDraftScope;
   readonly storage?: Storage;
@@ -68,6 +82,7 @@ export const createNewThreadDraftStore = ({
   ) => () => void;
   readonly subscribeToPageHide?: (listener: () => void) => () => void;
   readonly debounceMs?: number;
+  readonly images?: PendingAttachmentCollection;
 }): NewThreadDraftStore => {
   const key = scopeKey(scope);
   const listeners = new Set<() => void>();
@@ -77,6 +92,7 @@ export const createNewThreadDraftStore = ({
   let unsubscribeStorage: (() => void) | undefined;
   let unsubscribePageHide: (() => void) | undefined;
   let locallyEditedAt = 0;
+  let imageList = noImages;
 
   const publish = (next: NewThreadDraftSnapshot) => {
     if (snapshot.text === next.text && snapshot.warning === next.warning)
@@ -170,8 +186,17 @@ export const createNewThreadDraftStore = ({
     }
   };
 
+  const setImages = (next: ReadonlyArray<PendingAttachment>) => {
+    if (imageList === next) return;
+    imageList = next;
+    for (const listener of listeners) listener();
+  };
+
   return {
     dictation: new DictationRecoverySession(),
+    images,
+    getImages: () => imageList,
+    setImages,
     subscribe: (listener) => {
       listeners.add(listener);
       if (listeners.size === 1) {
@@ -236,6 +261,9 @@ export const createNewThreadDraftStore = ({
       locallyEditedAt = 0;
       remove();
       publish(emptySnapshot);
+      // A sent Thread took its files first; anything left is discarded.
+      images.dispose();
+      setImages(noImages);
     },
   };
 };

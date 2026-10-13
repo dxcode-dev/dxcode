@@ -11,7 +11,7 @@ import {
 import * as React from "react";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
 import { threadColorAttributes } from "../../shared/thread-color.js";
-import { Avatar, ParticipantStack } from "../../shared/ui/avatar.js";
+import { Avatar } from "../../shared/ui/avatar.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
 import {
@@ -24,6 +24,7 @@ import {
   focusSidebarCommandItem,
   noteSidebarContextPress,
 } from "./sidebar-command-focus.js";
+import { observeTitleOverflow } from "./sidebar-title-overflow.js";
 import { ThreadContextMenu } from "./thread-context-menu.js";
 
 function SidebarThreadTitle({ thread }: { readonly thread: ThreadData }) {
@@ -111,23 +112,30 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
   const parentThreadId = thread.parentThreadId;
   const sharedWithMe = thread.access !== undefined && thread.access !== "owner";
   const owner = thread.participants?.find((person) => person.owner);
-  // Shared Threads keep their people at the row's end; hover actions open
-  // to their left, so the avatars never move.
-  const avatars = sharedWithMe ? (
-    owner === undefined ? null : (
+  // A shared Thread shows only its owner at the row's end; hover actions
+  // open to its left, so the avatar never moves.
+  const shared =
+    sharedWithMe ||
+    thread.sharing !== undefined ||
+    (thread.participants?.length ?? 0) > 1;
+  const avatars =
+    shared && owner !== undefined ? (
       <span
         className="thread-row-avatars"
         title={`Thread owner: ${owner.name}`}
       >
         <Avatar name={owner.name} image={owner.image} seed={owner.userId} />
       </span>
-    )
-  ) : thread.participants !== undefined &&
-    (thread.participants.length > 1 || thread.sharing !== undefined) ? (
-    <span className="thread-row-avatars">
-      <ParticipantStack participants={thread.participants} limit={2} />
-    </span>
-  ) : null;
+    ) : null;
+  // Hover actions: Unfollow for a shared Thread; Pin and Archive, or only
+  // Unarchive, for the person's own.
+  const actionCount = sharedWithMe
+    ? onUnfollow === undefined
+      ? 0
+      : 1
+    : thread.lifecycleState === "active"
+      ? 2
+      : 1;
   return (
     <ThreadContextMenu
       thread={thread}
@@ -163,6 +171,7 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
       <div
         className="thread-row-shell"
         data-avatars={avatars === null ? undefined : ""}
+        data-actions={actionCount === 0 ? undefined : actionCount}
         data-children={hasChildren ? "" : undefined}
         data-child={child ? "" : undefined}
         onPointerEnter={(event) =>
@@ -209,8 +218,10 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
           {thread.pinnedAt === undefined ? null : (
             <Pin className="thread-pin-icon" aria-label="Pinned" role="img" />
           )}
-          <strong>
-            <SidebarThreadTitle thread={thread} />
+          <strong data-title-overflow ref={observeTitleOverflow}>
+            <span className="thread-row-title-text">
+              <SidebarThreadTitle thread={thread} />
+            </span>
           </strong>
         </Link>
         {avatars}

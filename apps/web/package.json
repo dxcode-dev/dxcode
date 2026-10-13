@@ -1,7 +1,7 @@
 {
   "name": "@dx/web",
   "private": true,
-  "version": "0.2.20",
+  "version": "0.2.21",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -12,6 +12,8 @@
     "test:ghostty": "GHOSTTY_PROOF=1 node test/ghostty-web-production-proof.mjs",
     "test:changes-proof": "node test/changes-live-proof.mjs",
     "test:sign-in-journey": "node test/sign-in-journey.mjs",
+    "test:sidebar-composer": "node test/sidebar-composer-proof.mjs",
+    "test:markdown-rendering": "node test/markdown-rendering-proof.mjs",
     "test:thread-perf": "node test/thread-page-stress.mjs",
     "test:stale-chunk": "node test/stale-chunk-proof.mjs",
     "preview": "vite preview",
@@ -42,7 +44,9 @@
     "clsx": "2.1.1",
     "effect": "4.0.0-rc.110",
     "ghostty-web": "0.4.0",
+    "katex": "0.18.10",
     "lucide-react": "1.31.0",
+    "mermaid": "12.2.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-markdown": "10.1.0",
@@ -50,6 +54,7 @@
     "rehype-highlight": "7.0.2",
     "remark-breaks": "4.0.0",
     "remark-gfm": "4.0.1",
+    "remark-math": "6.0.0",
     "tailwind-merge": "3.6.0",
     "vgpu": "0.3.1"
   },

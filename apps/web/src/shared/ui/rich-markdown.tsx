@@ -1,22 +1,30 @@
 import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-700.css";
 import { splitMentions } from "@dx/api";
-import { Check, Copy, Image, WrapText } from "lucide-react";
+import { Check, Code, Copy, Image, WrapText } from "lucide-react";
 import * as React from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import { useTheme } from "../theme/theme-provider.js";
 import { FileContextMenu } from "./file-context-menu.js";
 import { settledMarkdownBlocks } from "./markdown-blocks.js";
 import {
   MarkdownFileLinkContext,
   type MarkdownFileLinkResolver,
 } from "./markdown-file-link-context.js";
+import { loadKatex, normalizeMathDelimiters } from "./markdown-math.js";
 import {
   MarkdownMentionContext,
   type MarkdownMentions,
 } from "./markdown-mention-context.js";
+import {
+  mermaidRender,
+  requestMermaid,
+  subscribeMermaid,
+} from "./markdown-mermaid.js";
 
 const accessibleName = (value: string | undefined, fallback: string) =>
   value?.trim() || fallback;
@@ -109,13 +117,17 @@ function CopyButton({
   );
 }
 
+const codeLanguages = (content: React.ReactNode) => {
+  const child = React.Children.toArray(content).find(React.isValidElement);
+  return React.isValidElement<{ className?: string }>(child)
+    ? (child.props.className?.split(" ") ?? [])
+    : [];
+};
+
 function CodeBlock({ content }: { readonly content: React.ReactNode }) {
   const [wrap, setWrap] = React.useState(false);
   const text = nodeText(content).replace(/\n$/, "");
-  const child = React.Children.toArray(content).find(React.isValidElement);
-  const diagram =
-    React.isValidElement<{ className?: string }>(child) &&
-    child.props.className?.split(" ").includes("language-diagram");
+  const diagram = codeLanguages(content).includes("language-diagram");
   return (
     <div
       className={`transcript-code-block${diagram ? " markdown-diagram" : ""}`}
@@ -160,6 +172,128 @@ function CodeBlock({ content }: { readonly content: React.ReactNode }) {
         )}
       </pre>
     </div>
+  );
+}
+
+// The unsettled tail of a streaming message; its diagrams render once settled.
+const UnsettledMarkdown = React.createContext(false);
+
+/**
+ * A ```mermaid fence as a diagram. The source block stays mounted while the
+ * diagram renders and when it cannot, so its copy and wrap state survive.
+ */
+function MermaidBlock({ content }: { readonly content: React.ReactNode }) {
+  const unsettled = React.useContext(UnsettledMarkdown);
+  const { resolvedAppearance } = useTheme();
+  const [showSource, setShowSource] = React.useState(false);
+  const source = nodeText(content).replace(/\n$/, "");
+  const renders = !unsettled && source.trim() !== "";
+  if (renders) requestMermaid(source, resolvedAppearance);
+  const image = React.useSyncExternalStore(
+    subscribeMermaid,
+    () => (renders ? mermaidRender(source, resolvedAppearance) : null),
+    () => null,
+  );
+  if (!image || showSource)
+    return (
+      <div className="markdown-mermaid-source">
+        <CodeBlock content={content} />
+        {image && (
+          <button
+            type="button"
+            className="markdown-mermaid-toggle"
+            aria-label="Show diagram"
+            onClick={() => setShowSource(false)}
+          >
+            <Image aria-hidden="true" />
+          </button>
+        )}
+      </div>
+    );
+  return (
+    <figure className="markdown-mermaid" data-diagram-label={image.label}>
+      <CopyButton text={source} label="Copy Mermaid source" subject="Diagram" />
+      <button
+        type="button"
+        className="markdown-mermaid-toggle"
+        aria-label="Show Mermaid source"
+        onClick={() => setShowSource(true)}
+      >
+        <Code aria-hidden="true" />
+      </button>
+      <div className="markdown-mermaid-scroll">
+        <img
+          src={image.src}
+          alt={image.label}
+          width={image.width}
+          height={image.height}
+        />
+      </div>
+    </figure>
+  );
+}
+
+function KatexFormula({
+  source,
+  display,
+  children: fallback,
+}: {
+  readonly source: string;
+  readonly display: boolean;
+  readonly children: React.ReactNode;
+}) {
+  const katex = React.use(loadKatex());
+  const unsettled = React.useContext(UnsettledMarkdown);
+  // KaTeX writes into an element React leaves empty, so React never
+  // reconciles its output.
+  const render = React.useCallback(
+    (element: HTMLElement | null) => {
+      if (element === null || katex === undefined) return;
+      const options = {
+        displayMode: display,
+        strict: "ignore",
+        trust: false,
+        output: "htmlAndMathml",
+      } as const;
+      try {
+        katex.render(source, element, { ...options, throwOnError: true });
+      } catch {
+        // A formula still streaming is often incomplete; show its source
+        // until it settles. Settled invalid TeX shows KaTeX's error.
+        if (unsettled) element.textContent = source;
+        else katex.render(source, element, { ...options, throwOnError: false });
+      }
+    },
+    [katex, source, display, unsettled],
+  );
+  if (katex === undefined) return fallback;
+  return display ? (
+    <div className="markdown-math-display" ref={render} />
+  ) : (
+    <span className="markdown-math-inline" ref={render} />
+  );
+}
+
+function MathFormula({
+  source,
+  display,
+}: {
+  readonly source: string;
+  readonly display: boolean;
+}) {
+  const fallback = display ? (
+    <pre className="markdown-math-source">
+      <code>{source}</code>
+    </pre>
+  ) : (
+    <code className="markdown-math-source">{source}</code>
+  );
+  return (
+    <React.Suspense fallback={fallback}>
+      <KatexFormula source={source} display={display}>
+        {fallback}
+      </KatexFormula>
+    </React.Suspense>
   );
 }
 
@@ -266,7 +400,15 @@ function MarkdownLink({
 
 // Stable across renders so react-markdown does not rebuild its processor
 // configuration on every parse.
-const remarkPlugins = [remarkGfm, remarkBreaks];
+const remarkPlugins: React.ComponentProps<
+  typeof ReactMarkdown
+>["remarkPlugins"] = [
+  remarkGfm,
+  remarkBreaks,
+  // Single dollars are prices more often than math; normalizeMathDelimiters
+  // rewrites the math ones to double dollars.
+  [remarkMath, { singleDollarTextMath: false }],
+];
 const rehypePlugins: React.ComponentProps<
   typeof ReactMarkdown
 >["rehypePlugins"] = [
@@ -399,15 +541,37 @@ const markdownComponents = (
       aria-label={props.checked ? "Completed task" : "Incomplete task"}
     />
   ),
-  pre: ({ children: content }) => <CodeBlock content={content} />,
+  code: ({ node: _node, className, children: content, ...props }) =>
+    className?.split(" ").includes("math-inline") ? (
+      <MathFormula source={nodeText(content)} display={false} />
+    ) : (
+      <code className={className} {...props}>
+        {content}
+      </code>
+    ),
+  pre: ({ children: content }) => {
+    const languages = codeLanguages(content);
+    if (languages.includes("math-display"))
+      return (
+        <MathFormula
+          source={nodeText(content).replace(/\n$/, "")}
+          display={true}
+        />
+      );
+    if (languages.includes("language-mermaid"))
+      return <MermaidBlock content={content} />;
+    return <CodeBlock content={content} />;
+  },
   table: ({ children: content }) => <MarkdownTable content={content} />,
 });
 
 /** One parsed Markdown document; memoized on its source text. */
 const MarkdownDocument = React.memo(function MarkdownDocument({
   children,
+  unsettled,
 }: {
   readonly children: string;
+  readonly unsettled: boolean;
 }) {
   const resolveFile = React.useContext(MarkdownFileLinkContext);
   const mentions = React.useContext(MarkdownMentionContext);
@@ -424,15 +588,17 @@ const MarkdownDocument = React.memo(function MarkdownDocument({
     [handles],
   );
   return (
-    <ReactMarkdown
-      remarkPlugins={plugins}
-      rehypePlugins={rehypePlugins}
-      skipHtml
-      urlTransform={urlTransform}
-      components={components}
-    >
-      {children}
-    </ReactMarkdown>
+    <UnsettledMarkdown value={unsettled}>
+      <ReactMarkdown
+        remarkPlugins={plugins}
+        rehypePlugins={rehypePlugins}
+        skipHtml
+        urlTransform={urlTransform}
+        components={components}
+      >
+        {normalizeMathDelimiters(children)}
+      </ReactMarkdown>
+    </UnsettledMarkdown>
   );
 });
 
@@ -459,8 +625,13 @@ export const RichMarkdown = React.memo(function RichMarkdown({
   });
   return (
     <div className="markdown transcript-markdown">
-      {keyed.map(({ start, block }) => (
-        <MarkdownDocument key={start}>{block}</MarkdownDocument>
+      {keyed.map(({ start, block }, index) => (
+        <MarkdownDocument
+          key={start}
+          unsettled={streaming && index === keyed.length - 1}
+        >
+          {block}
+        </MarkdownDocument>
       ))}
     </div>
   );

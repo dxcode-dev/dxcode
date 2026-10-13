@@ -485,10 +485,14 @@ a {
 .right-pane-resize-handle:has(+ .right-pane-panel[data-collapsed]) {
   cursor: default;
 }
+/* The title shows whole, up to its 60 characters, while the header chips
+   still have room to give: the chips shrink to their minimum first, and
+   only then does the title elide. The actions box lays its controls out in
+   the bar itself so one flex pass can order the two. */
 .thread-title-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   flex: 0 0 36px;
   height: 36px;
   min-width: 0;
@@ -509,6 +513,10 @@ a {
 }
 .thread-title-orb {
   display: flex;
+  /* The explicit width matters: WebKit sizes the title group from this
+     box's content (the 14px Orb), not its flex basis, and the 2px it
+     comes up short would elide the title. */
+  width: 16px;
   flex: 0 0 16px;
   align-items: center;
   justify-content: center;
@@ -535,25 +543,23 @@ a {
   gap: 4px;
   flex: 0 1 auto;
   min-width: 0;
+  margin-right: 4px;
 }
 .thread-header-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 2px;
-  /* The title gives up its width first; these controls shrink only after. */
-  flex: 1 0.001 auto;
-  min-width: 0;
+  display: contents;
+}
+.thread-header-actions > :first-child {
   margin-left: auto;
 }
 .thread-header-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  flex: 0 1 auto;
+  /* Shrinks ahead of the title: see .thread-title-bar. */
+  flex: 0 100000 auto;
   max-width: 160px;
   height: 24px;
-  min-width: 0;
+  min-width: 40px;
   padding: 0 7px;
   overflow: hidden;
   color: var(--muted-foreground);
@@ -571,6 +577,11 @@ a {
   width: 13px;
   height: 13px;
   flex: none;
+}
+.thread-header-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .thread-header-chip-button {
   cursor: pointer;
@@ -10657,16 +10668,37 @@ div.claude-code-mode-main {
 .thread-context-trigger + .thread-context-trigger {
   margin-top: 1px;
 }
+/* What sits at a row's end sets two distances from its right edge: where
+   the title stops at rest (--thread-row-end) and where the hover actions
+   sit (--thread-actions-end, --thread-actions-width). */
 .thread-row-shell {
+  --thread-row-end: 8px;
+  --thread-actions-end: 7px;
+  --thread-actions-width: 38px;
   position: relative;
   min-width: 0;
+}
+.thread-row-shell[data-actions="1"] {
+  --thread-actions-width: 18px;
+}
+.thread-row-shell[data-avatars] {
+  --thread-row-end: 29px;
+  --thread-actions-end: 34px;
+}
+.thread-row-shell[data-children] {
+  --thread-row-end: 42px;
+  --thread-actions-end: 44px;
+}
+.thread-row-shell[data-children][data-avatars] {
+  --thread-row-end: 65px;
+  --thread-actions-end: 72px;
 }
 .product-sidebar .thread-row {
   align-items: center;
   gap: 8px;
   height: 30px;
   min-height: 30px;
-  padding: 5px 8px;
+  padding: 5px var(--thread-row-end) 5px 8px;
   border-radius: var(--sidebar-radius-md);
 }
 .product-sidebar .thread-row > .thread-executor-icon {
@@ -10695,18 +10727,25 @@ div.claude-code-mode-main {
   margin-right: -2px;
   color: var(--muted-foreground);
 }
+/* Sidebar titles never elide: a title that does not fit fades out instead
+   (sidebar-title-overflow.ts marks it; the fade is with the hover actions
+   below), and one that fits stays crisp. */
 .product-sidebar .thread-row strong {
   min-width: 0;
   flex: 1;
   align-self: center;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
   color: var(--thread-title-color, inherit);
   font-size: var(--sidebar-text-base);
   font-weight: 400;
   letter-spacing: -0.003em;
   line-height: 18px;
+}
+.thread-row-title-text {
+  display: inline-block;
+  vertical-align: top;
 }
 .product-sidebar .thread-row:not(.selected):not(:hover) strong {
   color: var(
@@ -10715,10 +10754,18 @@ div.claude-code-mode-main {
   );
 }
 .product-sidebar .thread-row:hover,
-.product-sidebar .thread-row.selected,
-.product-sidebar .thread-row[data-command-focused="true"] {
+.product-sidebar .thread-row.selected {
   color: var(--foreground);
   background: var(--sidebar-interactive-background);
+}
+/* Only the open Thread's row is filled. The row the arrow keys reached is
+   ringed while it holds keyboard focus, so it never reads as a second
+   selection. */
+.product-sidebar .thread-row[data-command-focused="true"]:focus-visible {
+  color: var(--foreground);
+  outline: none;
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--foreground) 22%, transparent);
 }
 .product-sidebar .thread-row.selected {
   font-weight: 500;
@@ -10748,13 +10795,47 @@ div.claude-code-mode-main {
     opacity: 0.55;
   }
 }
-.thread-row-shell:hover .thread-row {
-  padding-right: 70px;
+/* Shared Threads show their owner at the row's end, where it stays put;
+   hover actions open to its left. These rules live with the sidebar, not
+   the Thread page's stylesheet, which loads only with that page. */
+.thread-row-avatars {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  display: flex;
+  justify-content: flex-end;
+  width: 24px;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.thread-row-avatars .dx-avatar {
+  width: 15px;
+  height: 15px;
+  font-size: 7px;
+}
+
+/* At rest a cut title runs to the row's end and fades over its last
+   letters. On hover the fade grows to where the actions start, and they
+   sit over it; the title itself does not move. */
+.product-sidebar .thread-row strong[data-overflowing] {
+  mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
+}
+.product-sidebar .thread-row-shell[data-actions]:hover .thread-row strong {
+  --thread-actions-start: calc(
+    var(--thread-actions-end) +
+    var(--thread-actions-width) -
+    var(--thread-row-end)
+  );
+  mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - var(--thread-actions-start) - 18px),
+    transparent calc(100% - var(--thread-actions-start) + 4px)
+  );
 }
 .thread-hover-actions {
   position: absolute;
   top: 50%;
-  right: 7px;
+  right: var(--thread-actions-end);
   transform: translateY(-50%);
   display: none;
   align-items: center;
@@ -10847,26 +10928,8 @@ div.claude-code-mode-main {
     transition: none;
   }
 }
-.thread-row-shell[data-children] .thread-row {
-  padding-right: 48px;
-}
-.thread-row-shell[data-children]:hover .thread-row {
-  padding-right: 106px;
-}
-.thread-row-shell[data-children] .thread-hover-actions {
-  right: 44px;
-}
 .thread-row-shell[data-children] .thread-row-avatars {
   right: 44px;
-}
-.thread-row-shell[data-children][data-avatars] .thread-row {
-  padding-right: 76px;
-}
-.thread-row-shell[data-children][data-avatars]:hover .thread-row {
-  padding-right: 134px;
-}
-.thread-row-shell[data-children][data-avatars] .thread-hover-actions {
-  right: 72px;
 }
 .product-sidebar .thread-row > .thread-child-marker {
   width: 12px;

@@ -13,7 +13,6 @@ import {
 import type { useNavigate } from "@tanstack/react-router";
 import type { RefObject } from "react";
 import {
-  disposeAttachments,
   messageWithAttachments,
   type PendingAttachment,
   type PendingAttachmentCollection,
@@ -188,12 +187,10 @@ export async function submitNewThread({
     onAccepted();
   } catch (cause) {
     if (pendingThreadId !== undefined) registry.failCreation(pendingThreadId);
-    // Nothing was admitted: the composer keeps the prompt and its images,
-    // or, when it is gone, the images are released; the draft text stays.
-    if (stagedImages !== undefined) {
-      if (composerOpen()) setImages(imageCollection.restore(stagedImages));
-      else disposeAttachments(stagedImages);
-    }
+    // Nothing was admitted: the draft keeps the prompt and its files, so
+    // they are there when the composer opens again.
+    if (stagedImages !== undefined)
+      setImages(imageCollection.restore(stagedImages));
     throw new Error(
       cause instanceof Error
         ? cause.message

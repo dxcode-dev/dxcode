@@ -111,6 +111,40 @@
   overflow-wrap: anywhere;
   width: auto;
 }
+.markdown.transcript-markdown .markdown-mermaid,
+.markdown.transcript-markdown .markdown-mermaid-source {
+  position: relative;
+  margin: 1.1em 0;
+}
+.markdown.transcript-markdown .markdown-mermaid-scroll {
+  overflow-x: auto;
+  padding: 16px 12px;
+  background: color-mix(in srgb, var(--chat-foreground) 3%, var(--background));
+  outline: 1px solid
+    color-mix(in oklab, var(--chat-foreground) 10%, transparent);
+}
+.markdown.transcript-markdown .markdown-mermaid img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+.markdown.transcript-markdown .markdown-mermaid-source .transcript-code-block {
+  margin: 0;
+}
+.markdown.transcript-markdown .markdown-math-display {
+  margin: 0.9em 0;
+  padding-block: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.markdown.transcript-markdown .markdown-math-display .katex-display {
+  margin: 0;
+}
+.markdown.transcript-markdown .markdown-math-inline .katex,
+.markdown.transcript-markdown .markdown-math-display .katex {
+  font-size: 1.1em;
+}
 .markdown.transcript-markdown .transcript-table {
   position: relative;
   display: grid;
@@ -141,7 +175,8 @@
   border-bottom: 0;
 }
 .markdown.transcript-markdown .transcript-copy,
-.markdown-wrap {
+.markdown-wrap,
+.markdown.transcript-markdown .markdown-mermaid-toggle {
   position: absolute;
   z-index: 1;
   top: 4px;
@@ -158,22 +193,33 @@
   cursor: pointer;
   opacity: 0;
 }
-.markdown-wrap {
+.markdown-wrap,
+.markdown.transcript-markdown .markdown-mermaid .markdown-mermaid-toggle {
   top: 34px;
+}
+.markdown.transcript-markdown
+  .markdown-mermaid-source
+  > .markdown-mermaid-toggle {
+  top: 64px;
 }
 .markdown.transcript-markdown .transcript-table > .transcript-copy {
   position: static;
   grid-row: 1;
   justify-self: end;
 }
-.markdown-wrap svg {
+.markdown-wrap svg,
+.markdown-mermaid-toggle svg {
   width: 14px;
   height: 14px;
 }
 .markdown.transcript-markdown .transcript-code-block:hover > button,
 .markdown.transcript-markdown .transcript-code-block:focus-within > button,
 .markdown.transcript-markdown .transcript-table:hover > button,
-.markdown.transcript-markdown .transcript-table:focus-within > button {
+.markdown.transcript-markdown .transcript-table:focus-within > button,
+.markdown.transcript-markdown .markdown-mermaid:hover > button,
+.markdown.transcript-markdown .markdown-mermaid:focus-within > button,
+.markdown.transcript-markdown .markdown-mermaid-source:hover button,
+.markdown.transcript-markdown .markdown-mermaid-source:focus-within button {
   opacity: 1;
 }
 .markdown.transcript-markdown .hljs-keyword,
@@ -203,7 +249,8 @@
 }
 @media (pointer: coarse) {
   .markdown.transcript-markdown .transcript-copy,
-  .markdown-wrap {
+  .markdown-wrap,
+  .markdown.transcript-markdown .markdown-mermaid-toggle {
     opacity: 1;
   }
 }

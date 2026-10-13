@@ -52,9 +52,17 @@ const project = {
   createdAt: now,
   updatedAt: now,
 } as unknown as ProjectData;
+// `shared=1` lists Threads shared with this person and Threads they shared,
+// and serves attachment uploads, for the sidebar and composer proof.
+const SHARED = params.get("shared") === "1";
+// `long=1` gives every sidebar Thread a title too long for its row.
+const LONG_TITLES = params.get("long") === "1";
+const otherUserId = "usr_other" as UserId;
+const me = { userId, name: "Perf User" };
+const other = { userId: otherUserId, name: "Riley Brook" };
 const thread = {
   id: threadId,
-  title: "Perf: long thread",
+  title: params.get("title") ?? "Perf: long thread",
   projectId,
   visibility: "private",
   lifecycleState: "active",
@@ -84,7 +92,10 @@ const threadListJson = () => ({
       const at = new Date(Date.parse("2026-10-01T10:00:00.000Z") - i * 60_000);
       return {
         id: sidebarThreadId(i),
-        title: i === 0 ? thread.title : `Sidebar thread ${i}`,
+        title:
+          i === 0
+            ? thread.title
+            : `Sidebar thread ${i}${LONG_TITLES ? ": a title longer than its row" : ""}`,
         projectId,
         visibility: "private",
         createdAt: at.toISOString(),
@@ -94,10 +105,48 @@ const threadListJson = () => ({
         lifecycleState: "active",
         agentUrl: `/v1/agents/dx/${sidebarThreadId(i)}`,
         mode: "medium",
+        // Thread 3 started one child Thread.
+        ...(SHARED && i === 3 ? { childCount: 1 } : {}),
+        // Threads 1 and 2 are shared with the workspace by their owner.
+        ...(SHARED && (i === 1 || i === 2)
+          ? {
+              access: "owner",
+              sharing: { workspaceAccess: "view" },
+              participants: [{ ...me, owner: true }, other],
+            }
+          : {}),
       };
     }),
   },
 });
+const sharedThreadId = "thr_00000000-0000-4000-8000-0000000005a1" as ThreadId;
+const sharedThreadsJson = () => ({
+  status: "success",
+  data: {
+    items: SHARED
+      ? [
+          {
+            id: sharedThreadId,
+            title: "Shared with me",
+            projectId,
+            visibility: "workspace",
+            createdAt: new Date(listOrigin).toISOString(),
+            updatedAt: new Date(listOrigin).toISOString(),
+            lastActivityAt: new Date(listOrigin - 30_000).toISOString(),
+            activityStatus: "idle",
+            lifecycleState: "active",
+            agentUrl: `/v1/agents/dx/${sharedThreadId}`,
+            mode: "medium",
+            access: "view",
+            sharing: { workspaceAccess: "view" },
+            participants: [{ ...other, owner: true }, me],
+          },
+        ]
+      : [],
+  },
+});
+let uploads = 0;
+const attachmentId = (n: number) => `att_${String(n).padStart(32, "0")}`;
 // Stable list timestamps: lastActivityAt above uses a fixed per-load origin.
 const listOrigin = Date.now();
 
@@ -182,6 +231,27 @@ const appendDelta = (messageId: string, delta: string) => {
   messages[index] = { ...message, parts };
   conversation = { ...conversation, messages };
 };
+const settleTurn = (n: number) => {
+  const messageId = `a-live-${n}`;
+  conversation = {
+    ...conversation,
+    messages: conversation.messages.map((message) =>
+      message.id === messageId
+        ? ({
+            ...message,
+            parts: message.parts.map((part) =>
+              part.type === "text" ? { ...part, state: "done" } : part,
+            ),
+          } as Message)
+        : message,
+    ),
+    settlements: [
+      ...conversation.settlements,
+      { submissionId: `s-live-${n}`, outcome: "completed" as const },
+    ],
+  };
+  publish();
+};
 const startTurn = (n: number) => {
   conversation = {
     ...conversation,
@@ -254,6 +324,33 @@ window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     url.searchParams.get("lifecycleState") === "active"
   )
     return Promise.resolve(Response.json(threadListJson()));
+  if (SHARED && url.pathname === "/v1/shared-threads")
+    return Promise.resolve(Response.json(sharedThreadsJson()));
+  // Uploads: one part, PUT to a URL the proof script answers.
+  if (SHARED && url.pathname === "/v1/attachments" && init?.method === "POST") {
+    const id = attachmentId(++uploads);
+    return Promise.resolve(
+      Response.json({
+        id,
+        partSize: 10 * 1024 * 1024,
+        partCount: 1,
+        parts: [{ partNumber: 1, url: `/__upload/${id}/1` }],
+      }),
+    );
+  }
+  const completed = /^\/v1\/attachments\/(att_[0-9a-f]{32})\/complete$/.exec(
+    url.pathname,
+  );
+  if (SHARED && completed !== null)
+    return Promise.resolve(
+      Response.json({
+        id: completed[1],
+        filename: "proof.png",
+        mimeType: "image/png",
+        size: 68,
+        url: `/v1/attachments/${completed[1]}/proof.png`,
+      }),
+    );
   pendingUrls.push(`${url.pathname}${url.search}`);
   return pending(input, init);
 }) as typeof fetch;
@@ -325,7 +422,7 @@ const container = document.getElementById("root");
 if (container)
   createRoot(container).render(
     <ThemeProvider
-      appearance="dark"
+      appearance={params.get("appearance") === "light" ? "light" : "dark"}
       palette="daydream"
       onAppearanceChange={() => undefined}
       onPaletteChange={() => undefined}
@@ -359,12 +456,18 @@ Object.assign(window, {
       await refetchSidebar();
     },
     async stream({
-      chars,
+      chars: requestedChars = 0,
+      text,
+      settle = false,
       deltaChars = 20,
       batchSize = 1,
       intervalMs = 0,
     }: {
-      chars: number;
+      chars?: number;
+      /** Exact Markdown to stream instead of generated answers. */
+      text?: string;
+      /** Finish the turn afterwards, as a completed model response does. */
+      settle?: boolean;
       deltaChars?: number;
       batchSize?: number;
       intervalMs?: number;
@@ -372,7 +475,8 @@ Object.assign(window, {
       const n = ++liveTurn;
       startTurn(n);
       await macrotask();
-      let source = "";
+      let source = text ?? "";
+      const chars = text?.length ?? requestedChars;
       while (source.length < chars) source += answerMarkdown(source.length);
       let worstBatchMs = 0;
       const started = performance.now();
@@ -390,6 +494,7 @@ Object.assign(window, {
           ? new Promise((r) => setTimeout(r, intervalMs))
           : macrotask());
       }
+      if (settle) settleTurn(n);
       // Prove the streamed text reached the DOM, so a broken path cannot look
       // fast: compare against the source length, ignoring Markdown syntax.
       await new Promise((resolve) => setTimeout(resolve, 200));

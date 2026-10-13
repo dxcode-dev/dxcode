@@ -34,7 +34,8 @@ function PrivacyChip({
   const label = shared ? "Workspace" : "Private";
   const content = (
     <>
-      {shared ? <UsersRound /> : <LockKeyhole />} {label}
+      {shared ? <UsersRound /> : <LockKeyhole />}
+      <span className="thread-header-chip-label">{label}</span>
     </>
   );
   const title = shared
@@ -187,10 +188,13 @@ export function ThreadHeader({
           className="thread-header-chip"
           title={projectName ?? "No project"}
         >
-          <FolderGit2 /> {projectName ?? "No project"}
+          <FolderGit2 />
+          <span className="thread-header-chip-label">
+            {projectName ?? "No project"}
+          </span>
         </span>
         <span className="thread-header-chip" title={selectionTitle}>
-          {selectionLabel}
+          <span className="thread-header-chip-label">{selectionLabel}</span>
         </span>
         <PrivacyChip thread={thread} onOpenShare={openShare} />
         {onToggleRightPane ? (

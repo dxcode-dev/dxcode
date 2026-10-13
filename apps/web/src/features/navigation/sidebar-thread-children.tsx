@@ -12,6 +12,8 @@ import {
 export interface ThreadChildrenExpansion {
   readonly expanded: ReadonlySet<ThreadData["id"]>;
   readonly toggle: (threadId: ThreadData["id"]) => void;
+  /** Threads the sections already list, which no parent repeats. */
+  readonly listed: ReadonlySet<ThreadData["id"]>;
 }
 
 const ThreadChildrenExpansionContext = React.createContext<
@@ -22,9 +24,13 @@ const ThreadChildrenExpansionContext = React.createContext<
  * Which parent Threads show their child Threads. Shared by every section
  * and the archive, so a parent stays expanded when it moves between them.
  */
+const noThreads: ReadonlySet<ThreadData["id"]> = new Set();
+
 export function SidebarThreadChildrenProvider({
+  listed = noThreads,
   children,
 }: {
+  readonly listed?: ReadonlySet<ThreadData["id"]>;
   readonly children: React.ReactNode;
 }) {
   const [expanded, setExpanded] = React.useState<ReadonlySet<ThreadData["id"]>>(
@@ -37,7 +43,10 @@ export function SidebarThreadChildrenProvider({
       return next;
     });
   }, []);
-  const value = React.useMemo(() => ({ expanded, toggle }), [expanded, toggle]);
+  const value = React.useMemo(
+    () => ({ expanded, toggle, listed }),
+    [expanded, toggle, listed],
+  );
   return (
     <ThreadChildrenExpansionContext.Provider value={value}>
       {children}
@@ -61,6 +70,7 @@ export function SidebarChildThreadRows({
   readonly parent: ThreadData;
 }) {
   const { identity } = useAuthenticatedIdentity();
+  const listed = useThreadChildrenExpansion()?.listed;
   const query = useInfiniteQuery(
     threadsQueryOptions(
       identity.id,
@@ -69,7 +79,12 @@ export function SidebarChildThreadRows({
       parent.id,
     ),
   );
-  const children = query.data?.pages.flatMap((page) => page.items) ?? [];
+  // The two lists refresh separately: a child that moved to the sections,
+  // such as one just pinned, must not show twice, nor be selected twice.
+  const children =
+    query.data?.pages.flatMap((page) =>
+      page.items.filter((thread) => listed?.has(thread.id) !== true),
+    ) ?? [];
   return (
     <div className="thread-children">
       {children.map((thread) => (

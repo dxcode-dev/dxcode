@@ -1,6 +1,7 @@
 import type { ThreadData } from "@dx/api";
 import { ChevronDown, FolderGit2 } from "lucide-react";
 import type { ReactNode } from "react";
+import * as React from "react";
 import { useNewThreadSurface } from "../../shared/new-thread-surface.js";
 import { Button } from "../../shared/ui/button.js";
 import { SidebarThreadChildrenProvider } from "./sidebar-thread-children.js";
@@ -64,6 +65,11 @@ export function SidebarThreadNavigation({
   readonly pinningThreadId?: ThreadData["id"];
 }) {
   const { openNewThread } = useNewThreadSurface();
+  const listed = React.useMemo(
+    () =>
+      new Set(sections.flatMap(({ threads }) => threads.map(({ id }) => id))),
+    [sections],
+  );
   const empty =
     visibleThreadCount === 0 &&
     !loadingMore &&
@@ -74,7 +80,7 @@ export function SidebarThreadNavigation({
       className={`sidebar-scroll ${empty && query.length === 0 ? "sidebar-scroll-empty" : ""}`}
       aria-label="Threads"
     >
-      <SidebarThreadChildrenProvider>
+      <SidebarThreadChildrenProvider listed={listed}>
         {empty ? (
           query.length === 0 ? (
             <div className="sidebar-first-thread">

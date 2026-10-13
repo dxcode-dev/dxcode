@@ -190,7 +190,12 @@ export function CommandProvider({
         const current = items.findIndex((item) =>
           item.classList.contains("selected"),
         );
-        items[current + direction]?.click();
+        const next = items[current + direction];
+        if (next === undefined) return;
+        // The arrow keys continue from the Thread just opened.
+        for (const item of items) delete item.dataset.commandFocused;
+        next.dataset.commandFocused = "true";
+        next.click();
       },
       openFocusedThreadMenu: () => {
         const focused = document.querySelector<HTMLElement>(

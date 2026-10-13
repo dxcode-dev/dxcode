@@ -409,38 +409,6 @@
   font-weight: 500;
 }
 
-/* Sidebar rows for shared Threads: people at the row's end stay put; hover
-   actions open to their left. */
-.thread-row-avatars {
-  position: absolute;
-  top: 50%;
-  right: 8px;
-  display: flex;
-  justify-content: flex-end;
-  width: 24px;
-  transform: translateY(-50%);
-  pointer-events: none;
-}
-.thread-row-avatars .participant-stack {
-  display: inline-flex;
-  flex-direction: row;
-  overflow: visible;
-}
-.thread-row-avatars .dx-avatar {
-  width: 15px;
-  height: 15px;
-  font-size: 7px;
-}
-.thread-row-shell[data-avatars] .thread-row {
-  padding-right: 36px;
-}
-.thread-row-shell[data-avatars]:hover .thread-row {
-  padding-right: 92px;
-}
-.thread-row-shell[data-avatars] .thread-hover-actions {
-  right: 34px;
-}
-
 /* Messages people wrote: plain text with tagged members. */
 .user-message-text {
   margin: 0;
