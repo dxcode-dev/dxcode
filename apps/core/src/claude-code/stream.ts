@@ -1,3 +1,6 @@
+import type { ClaudePlanReading } from "@dx/domain";
+import { claudePlanReadingFromEvent } from "./plan.js";
+
 /**
  * Reads the Claude Code CLI's `--output-format stream-json` events and
  * projects them onto Flue's agent loop. Flue sees one assistant message per
@@ -174,6 +177,10 @@ export class ClaudeCodeStream {
   /** Each subagent's steps, by the tool_use id of the call that started it. */
   readonly subagents = new Map<string, ClaudeCodeSubagentStep[]>();
   result: ClaudeCodeRunResult | undefined;
+  /** The plan's limits from the latest `rate_limit_event`. */
+  planReading: ClaudePlanReading | undefined;
+  /** When dx read `planReading` (epoch seconds). */
+  planReadingAt = 0;
   /** Blocks of the response being streamed, by Anthropic block index. */
   #response = new Map<number, ClaudeCodeBlock>();
   #responseCallsTools = false;
@@ -242,6 +249,13 @@ export class ClaudeCodeStream {
         this.#closeFallback();
         this.#finish(event);
         return;
+      case "rate_limit_event": {
+        const reading = claudePlanReadingFromEvent(event.rate_limit_info);
+        if (reading === undefined) return;
+        this.planReading = reading;
+        this.planReadingAt = Math.floor(Date.now() / 1000);
+        return;
+      }
       default:
         return;
     }

@@ -30,6 +30,12 @@ import {
   untestedModelConnectionHealth,
 } from "@dx/domain";
 import { Effect, Layer, Option, Schema } from "effect";
+import {
+  type ClaudePlanState,
+  forgetClaudePlanUsage,
+  loadClaudePlan,
+  setClaudePlanExtraUsage,
+} from "../../claude-code/plan.js";
 import type { ConfigEncryptionKeyring } from "../config-encryption.js";
 import {
   catalogProviderModels,
@@ -141,6 +147,7 @@ const mask = (value: string): string => `••••${value.slice(-4)}`;
 const toConnectionData = (
   connection: StoredModelConnection,
   credential: { present: boolean; tail?: string } | undefined,
+  claudePlan: ClaudePlanState | undefined,
 ): ConnectionData => ({
   id: connection.id,
   name: connection.name,
@@ -162,6 +169,7 @@ const toConnectionData = (
   health: connection.health,
   ...(credential === undefined ? {} : { credential }),
   serves: connection.kind === "custom" ? "declared" : "catalog",
+  ...(claudePlan === undefined ? {} : { claudePlan }),
   createdAt: connection.createdAt,
   updatedAt: connection.updatedAt,
 });
@@ -391,7 +399,13 @@ export class ModelRoutingService {
   async #connectionData(
     connection: StoredModelConnection,
   ): Promise<ConnectionData> {
-    return toConnectionData(connection, await this.#credentialData(connection));
+    return toConnectionData(
+      connection,
+      await this.#credentialData(connection),
+      connection.providerId === CLAUDE_CODE_PROVIDER_ID
+        ? await loadClaudePlan(this.db, connection.id)
+        : undefined,
+    );
   }
 
   async listConnections(
@@ -767,7 +781,35 @@ export class ModelRoutingService {
         }
       }),
     );
+    if (claudeCodeToken !== undefined)
+      await forgetClaudePlanUsage(this.db, current.id);
     return this.#connectionData(next);
+  }
+
+  /** Whether Claude Code may keep working on the plan's paid extra usage. */
+  async setClaudeExtraUsage(
+    target: ModelConnectionTarget,
+    id: string,
+    allowExtraUsage: boolean,
+  ): Promise<ConnectionData> {
+    const current = await this.#run(
+      Effect.gen(function* () {
+        const repository = yield* ModelRoutingRepository;
+        return yield* repository.findConnection(
+          target,
+          Schema.decodeUnknownSync(ModelConnectionId)(id),
+        );
+      }),
+    );
+    if (current.providerId !== CLAUDE_CODE_PROVIDER_ID)
+      throw new ModelRoutingValidationError([
+        {
+          field: "allowExtraUsage",
+          message: "Only a Claude Pro/Max connection has extra usage.",
+        },
+      ]);
+    await setClaudePlanExtraUsage(this.db, current.id, allowExtraUsage);
+    return this.#connectionData(current);
   }
 
   async setEnabled(

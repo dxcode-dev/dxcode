@@ -1,4 +1,5 @@
 import {
+  ClaudePlanUsage,
   type ConnectionKind,
   CustomApiFormat,
   type ModeConfig,
@@ -43,6 +44,18 @@ export const MaskedHeaderDataSchema = Schema.Struct({
   masked: Schema.String,
 });
 
+/**
+ * A Claude Pro/Max connection's plan: whether Claude Code may keep working on
+ * the account's paid extra usage once a plan limit is used up, and the latest
+ * limits Anthropic reported to a Claude Code run or title call.
+ */
+export const ClaudePlanDataSchema = Schema.Struct({
+  allowExtraUsage: Schema.Boolean,
+  usage: Schema.optional(ClaudePlanUsage),
+});
+
+export type ClaudePlanData = typeof ClaudePlanDataSchema.Type;
+
 const ConnectionDataSchema = Schema.Struct({
   id: ModelConnectionId,
   name: Schema.String,
@@ -65,6 +78,8 @@ const ConnectionDataSchema = Schema.Struct({
   ),
   /** `"catalog"` when the connection serves the provider's whole catalog. */
   serves: Schema.Literals(["catalog", "declared"]),
+  /** Set only for a Claude Pro/Max connection. */
+  claudePlan: Schema.optional(ClaudePlanDataSchema),
   createdAt: Schema.DateTimeUtcFromString,
   updatedAt: Schema.DateTimeUtcFromString,
 });
@@ -110,6 +125,10 @@ export const UpdateConnectionRequestSchema = Schema.Struct({
 
 export const SetConnectionEnabledRequestSchema = Schema.Struct({
   enabled: Schema.Boolean,
+});
+
+export const SetClaudePlanRequestSchema = Schema.Struct({
+  allowExtraUsage: Schema.Boolean,
 });
 
 export const ReorderConnectionsRequestSchema = Schema.Struct({

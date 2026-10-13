@@ -466,6 +466,11 @@ export const ModelRoutingRepositoryD1 = (db: D1Database) =>
                     .bind(id),
                   db
                     .prepare(
+                      "DELETE FROM claude_code_plan WHERE connection_id = ?",
+                    )
+                    .bind(id),
+                  db
+                    .prepare(
                       "DELETE FROM model_connection WHERE scope = ? AND target_id = ? AND id = ?",
                     )
                     .bind(target.scope, target.id, id),

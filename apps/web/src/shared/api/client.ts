@@ -1,9 +1,5 @@
 import {
   AcceptWorkspaceInviteResponseSchema,
-  ListNotificationsResponseSchema,
-  MarkNotificationsReadResponseSchema,
-  NotificationPreferencesResponseSchema,
-  type UpdateNotificationPreferenceRequest,
   AddVerificationKeyResponseSchema,
   ApplyBulkEnvironmentVariablesResponseSchema,
   ArchiveThreadExecutionUnavailableResponseSchema,
@@ -99,6 +95,7 @@ import {
   ListExternalApiApplicationsResponseSchema,
   ListGitHubGrantsResponseSchema,
   ListMcpServersResponseSchema,
+  ListNotificationsResponseSchema,
   ListPersonalApiTokensResponseSchema,
   ListPersonalIntegrationsResponseSchema,
   ListPersonalModelSubscriptionsResponseSchema,
@@ -111,9 +108,11 @@ import {
   ListWorkspaceInviteLinksResponseSchema,
   ListWorkspaceMembersResponseSchema,
   ListWorkspaceUsageAuditResponseSchema,
+  MarkNotificationsReadResponseSchema,
   type McpServerData,
   McpServersErrorResponseSchema,
   ModelRoutingErrorResponseSchema,
+  NotificationPreferencesResponseSchema,
   OrbProviderErrorResponseSchema,
   type OrbProviderId,
   OrbProviderListResponseSchema,
@@ -174,6 +173,7 @@ import {
   type SearchThreadsItem,
   SearchThreadsResponseSchema,
   SearchThreadsUnavailableResponseSchema,
+  type SetClaudePlanRequestSchema,
   type SetConnectionEnabledRequestSchema,
   SetExternalApiApplicationStatusResponseSchema,
   type SetFirstPartyPluginConfigurationRequest,
@@ -198,6 +198,7 @@ import {
   UpdateExternalApiApplicationResponseSchema,
   UpdateMcpServerResponseSchema,
   UpdateMcpWorkspacePolicyResponseSchema,
+  type UpdateNotificationPreferenceRequest,
   UpdatePersonalAccountResponseSchema,
   UpdatePersonalAgentInstructionsResponseSchema,
   type UpdatePersonalAppearanceRequest,
@@ -1755,6 +1756,24 @@ export const setModelConnectionEnabled = async (
         body: JSON.stringify({
           enabled,
         } satisfies typeof SetConnectionEnabledRequestSchema.Encoded),
+      },
+    )
+  ).data;
+
+export const setClaudePlanExtraUsage = async (
+  target: ModelRoutingTarget,
+  connectionId: string,
+  allowExtraUsage: boolean,
+) =>
+  (
+    await request(
+      `${modelRoutingBase(target)}/connections/${encodeURIComponent(connectionId)}/claude-plan`,
+      ConnectionResponseSchema,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          allowExtraUsage,
+        } satisfies typeof SetClaudePlanRequestSchema.Encoded),
       },
     )
   ).data;

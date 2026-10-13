@@ -5,6 +5,11 @@ import {
   withMessageAuthor,
 } from "@dx/api";
 import {
+  type ClaudePlanLimit,
+  claudePlanWindowName,
+  parseClaudePlanLimit,
+} from "@dx/domain";
+import {
   type FailedSend,
   isInputTooLargeError,
   type UseFlueAgentResult,
@@ -12,6 +17,7 @@ import {
 import {
   AlertCircle,
   ArrowUp,
+  ExternalLink,
   RotateCcw,
   Settings2,
   Square,
@@ -20,16 +26,18 @@ import {
 import * as React from "react";
 import { Badge } from "../../shared/ui/badge.js";
 import { Button } from "../../shared/ui/button.js";
+import { buttonVariants } from "../../shared/ui/button-variants.js";
+import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
 import { useDictation } from "./dictation/use-dictation.js";
 import {
+  attachmentsUploading,
   captureScreenshot,
   createPendingAttachmentCollection,
-  attachmentsUploading,
   disposeAttachments,
   messageWithAttachments,
-  pastedFiles,
   type PendingAttachment,
   type PendingAttachmentCollection,
+  pastedFiles,
 } from "./image-attachments.js";
 import {
   AttachmentMenu,
@@ -153,7 +161,52 @@ type ThreadErrorPresentation = {
     | "retry-send"
     | "model-routing";
   readonly failedSend?: FailedSend;
+  /** A Claude plan limit: the card carries the Claude mark and a usage link. */
+  readonly claudePlan?: boolean;
 };
+
+const CLAUDE_USAGE_URL = "https://claude.ai/settings/usage";
+
+const resetTime = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
+  timeZoneName: "short",
+});
+const resetDayAndTime = new Intl.DateTimeFormat(undefined, {
+  weekday: "short",
+  hour: "numeric",
+  minute: "2-digit",
+  timeZoneName: "short",
+});
+
+/** The reset in the reader's time; a later day names the day too. */
+const claudePlanReset = (seconds: number) => {
+  const date = new Date(seconds * 1000);
+  return (
+    date.toDateString() === new Date().toDateString()
+      ? resetTime
+      : resetDayAndTime
+  ).format(date);
+};
+
+const claudePlanLimitPresentation = (
+  id: string,
+  limit: ClaudePlanLimit,
+): ThreadErrorPresentation => ({
+  id,
+  title: "Claude subscription limit reached",
+  message: `You've hit your Claude ${
+    limit.window === undefined
+      ? "subscription limit"
+      : claudePlanWindowName(limit.window)
+  } · resets ${claudePlanReset(limit.resetsAt)}.${
+    limit.cause === "exhausted"
+      ? ""
+      : " dx kept Claude Code off paid extra usage."
+  }`,
+  action: "model-routing",
+  claudePlan: true,
+});
 
 const errorSearchText = (error: unknown): string => {
   if (typeof error === "string") return error;
@@ -220,6 +273,14 @@ const threadErrorPresentation = (
     (latestSettlementFailed || latestSettlementInterrupted) &&
     !dismissed.has(`settlement:${latestSettlement.submissionId}`)
   ) {
+    const claudePlanLimit = latestSettlementFailed
+      ? parseClaudePlanLimit(errorSearchText(latestSettlement.error))
+      : undefined;
+    if (claudePlanLimit !== undefined)
+      return claudePlanLimitPresentation(
+        `settlement:${latestSettlement.submissionId}`,
+        claudePlanLimit,
+      );
     if (latestSettlementFailed && isModelRoutingError(latestSettlement.error)) {
       return {
         id: `settlement:${latestSettlement.submissionId}`,
@@ -246,6 +307,13 @@ const threadErrorPresentation = (
       : undefined;
   if (failedSettlementMessage !== undefined) {
     const id = `settlement-message:${failedSettlementMessage.submissionId ?? failedSettlementMessage.id}`;
+    const claudePlanLimit = parseClaudePlanLimit(
+      failedSettlementMessage.parts
+        .flatMap((part) => (part.type === "text" ? [part.text] : []))
+        .join("\n"),
+    );
+    if (!dismissed.has(id) && claudePlanLimit !== undefined)
+      return claudePlanLimitPresentation(id, claudePlanLimit);
     if (!dismissed.has(id)) {
       return {
         id,
@@ -287,12 +355,16 @@ function ThreadErrorCard({
   const retryAction = onRetry !== undefined;
   return (
     <div className="thread-error-row">
-      <aside className="thread-error-card" role="alert">
-        <AlertCircle aria-hidden="true" />
+      <aside
+        className="thread-error-card"
+        role="alert"
+        data-kind={error.claudePlan ? "claude-plan" : undefined}
+      >
+        {error.claudePlan ? <ClaudeIcon /> : <AlertCircle aria-hidden="true" />}
         <div className="thread-error-copy">
           <strong>{error.title}</strong>
           <span>{error.message}</span>
-          {retryAction || settingsAction ? (
+          {retryAction || settingsAction || error.claudePlan ? (
             <div className="thread-error-actions">
               {retryAction ? (
                 <Button
@@ -315,6 +387,16 @@ function ThreadErrorCard({
                 >
                   <Settings2 /> Open Model Routing
                 </Button>
+              ) : null}
+              {error.claudePlan ? (
+                <a
+                  className={buttonVariants({ variant: "ghost", size: "xs" })}
+                  href={CLAUDE_USAGE_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <ExternalLink /> Check usage
+                </a>
               ) : null}
             </div>
           ) : null}

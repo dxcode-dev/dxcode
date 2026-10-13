@@ -2198,9 +2198,18 @@ a {
   margin-top: 4px;
   margin-left: -8px;
 }
-.thread-error-actions > button {
+.thread-error-actions > button,
+.thread-error-actions > a {
   height: 24px;
   color: var(--foreground);
+}
+.thread-error-actions > a {
+  font: inherit;
+  text-decoration: none;
+}
+.thread-error-card[data-kind="claude-plan"] {
+  border-color: color-mix(in srgb, #d97757 22%, var(--border));
+  background: color-mix(in srgb, var(--background) 95%, #d97757 5%);
 }
 .thread-error-dismiss {
   color: var(--muted-foreground);

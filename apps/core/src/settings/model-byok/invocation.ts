@@ -1,11 +1,18 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   CLAUDE_CODE_PROVIDER_ID,
+  ClaudePlanReading,
   type StoredModelConnection,
   ThreadModelSelection,
 } from "@dx/domain";
 import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
+import {
+  claudePlanAccess,
+  claudePlanReadingFromHeaders,
+  loadClaudePlan,
+  recordClaudePlanReading,
+} from "../../claude-code/plan.js";
 import {
   isPublicIpAddress,
   parseIpv4,
@@ -1044,7 +1051,49 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       envelope.submissionId,
       envelope.canonical,
     );
-    return jsonResponse({ token: await this.#claudeCodeToken(pin) }, 200);
+    const token = await this.#claudeCodeToken(pin);
+    const plan = claudePlanAccess(
+      await loadClaudePlan(this.#db(), pin.connection.id),
+      pin.model.id,
+    );
+    return jsonResponse({ token, plan }, 200);
+  }
+
+  /**
+   * Records the plan limits a Claude Code run reported, and answers with the
+   * plan's current extra usage choice, which the owner may change mid-run.
+   */
+  async #handleClaudeCodeUsage(
+    envelope: ModelEnvelope & {
+      readonly reading?: unknown;
+      readonly observedAt?: unknown;
+    },
+  ) {
+    const reading = Option.getOrUndefined(
+      Schema.decodeUnknownOption(ClaudePlanReading)(envelope.reading),
+    );
+    const observedAt = envelope.observedAt;
+    if (
+      reading === undefined ||
+      typeof observedAt !== "number" ||
+      !Number.isInteger(observedAt) ||
+      observedAt < 0
+    )
+      return jsonResponse({ code: "INVALID_REQUEST" }, 400);
+    const pin = await this.#resolve(
+      envelope.threadId,
+      envelope.submissionId,
+      envelope.canonical,
+    );
+    if (pin.connection.providerId !== CLAUDE_CODE_PROVIDER_ID)
+      throw new Error("SUBMISSION_MODEL_MISMATCH");
+    const state = await recordClaudePlanReading(
+      this.#db(),
+      pin.connection.id,
+      reading,
+      observedAt,
+    );
+    return jsonResponse({ plan: claudePlanAccess(state, pin.model.id) }, 200);
   }
 
   /**
@@ -1059,6 +1108,21 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     started: number,
   ) {
     const token = await this.#claudeCodeToken(pin);
+    // A title is not worth paid extra usage: while the plan is used up and
+    // its owner keeps dx off extra usage, the Thread keeps its default title.
+    const plan = claudePlanAccess(
+      await loadClaudePlan(this.#db(), pin.connection.id),
+      CLAUDE_CODE_TITLE_MODEL,
+    );
+    if (plan.blockedUntil !== undefined) {
+      settingsPersistenceLogger.info("One-shot completion skipped.", {
+        event: "model_one_shot_skipped",
+        threadId: pin.threadId,
+        connectionId: pin.connection.id,
+        reason: "CLAUDE_PLAN_LIMIT",
+      });
+      return jsonResponse({ code: "COMPLETION_FAILED" }, 502);
+    }
     const response = await claudeCodeTokenFetch
       .current("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -1079,6 +1143,22 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
         signal,
       })
       .catch(() => undefined);
+    const reading =
+      response === undefined
+        ? undefined
+        : claudePlanReadingFromHeaders(response.headers);
+    if (reading !== undefined)
+      await recordClaudePlanReading(
+        this.#db(),
+        pin.connection.id,
+        reading,
+      ).catch((error: unknown) =>
+        settingsPersistenceLogger.warn("Claude plan usage was not recorded.", {
+          event: "claude_plan_usage_record_failed",
+          connectionId: pin.connection.id,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
     const body = (await response?.json().catch(() => undefined)) as
       | {
           readonly content?: ReadonlyArray<{ type: string; text?: string }>;
@@ -1348,6 +1428,13 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
         case "/claude-code-credential":
           return await this.#handleClaudeCodeCredential(
             envelope as ModelEnvelope,
+          );
+        case "/claude-code-usage":
+          return await this.#handleClaudeCodeUsage(
+            envelope as ModelEnvelope & {
+              readonly reading?: unknown;
+              readonly observedAt?: unknown;
+            },
           );
         case "/complete":
           return isCompleteEnvelope(envelope)

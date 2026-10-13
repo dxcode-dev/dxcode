@@ -57,6 +57,11 @@
       "filename": "0009_release_v0.2.18.sql",
       "sha256": "f312cfe275d0d89ecb446f93ee768f132a4b62e9c81aee89e533c19f0dc6268e",
       "classification": "non-destructive"
+    },
+    {
+      "filename": "0010_release_v0.2.20.sql",
+      "sha256": "59eba1f3d3e7efd7342731225c7a20454b5b546a3d4e6ce9f661d878b3627f9a",
+      "classification": "non-destructive"
     }
   ],
   "durableObjects": [

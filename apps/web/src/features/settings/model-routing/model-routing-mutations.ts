@@ -13,6 +13,7 @@ import {
   type ModelRoutingTarget,
   pollPersonalModelSubscriptionAuthorization,
   reorderModelConnections,
+  setClaudePlanExtraUsage,
   setModelConnectionEnabled,
   updateModelConnection,
 } from "../../../shared/api/client.js";
@@ -74,6 +75,17 @@ export const connectionMutationOptions = (
     mutationFn: (input: { connectionId: string; enabled: boolean }) =>
       setModelConnectionEnabled(target, input.connectionId, input.enabled),
     onSettled: () => invalidate(queryClient, target),
+  },
+  setClaudeExtraUsage: {
+    mutationFn: (input: { connectionId: string; allowExtraUsage: boolean }) =>
+      setClaudePlanExtraUsage(
+        target,
+        input.connectionId,
+        input.allowExtraUsage,
+      ),
+    // Pending until the connections show the saved choice.
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: modelRoutingKey(target) }),
   },
   reorder: {
     mutationFn: (orderedIds: ReadonlyArray<string>) =>

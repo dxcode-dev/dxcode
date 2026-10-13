@@ -1,3 +1,4 @@
+import { Schema } from "effect";
 import type { ThinkingLevel } from "./model-routing.js";
 
 /**
@@ -46,3 +47,226 @@ export const claudeCodeEffort = (thinking: ThinkingLevel): ClaudeCodeEffort =>
   thinking === "off" || thinking === "minimal"
     ? "low"
     : (thinking as ClaudeCodeEffort);
+
+/**
+ * A usage window of a Claude plan, as Anthropic's rate-limit headers name
+ * it: the 5-hour session window, the weekly window, and weekly per-model
+ * windows.
+ */
+export const ClaudePlanWindowId = Schema.Literals([
+  "five_hour",
+  "seven_day",
+  "seven_day_opus",
+  "seven_day_sonnet",
+  "seven_day_overage_included",
+]);
+
+export type ClaudePlanWindowId = typeof ClaudePlanWindowId.Type;
+
+export const ClaudePlanLimitStatus = Schema.Literals([
+  "allowed",
+  "allowed_warning",
+  "rejected",
+]);
+
+export type ClaudePlanLimitStatus = typeof ClaudePlanLimitStatus.Type;
+
+/** Unix epoch seconds. */
+const EpochSeconds = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+
+export const ClaudePlanWindow = Schema.Struct({
+  id: ClaudePlanWindowId,
+  /** Fraction of the window used; above 1 when usage ran past its cap. */
+  utilization: Schema.Finite.check(
+    Schema.isGreaterThanOrEqualTo(0),
+    Schema.isLessThanOrEqualTo(100),
+  ),
+  resetsAt: EpochSeconds,
+});
+
+export type ClaudePlanWindow = typeof ClaudePlanWindow.Type;
+
+/**
+ * What one Anthropic response said about a Claude plan's limits. `status`
+ * and `limit` describe the window that limits now; `extraUsage` is the
+ * account's paid extra usage, which Anthropic bills once a window is used up
+ * when the account has it turned on.
+ */
+export const ClaudePlanReading = Schema.Struct({
+  status: ClaudePlanLimitStatus,
+  limit: Schema.optional(
+    Schema.Struct({ id: ClaudePlanWindowId, resetsAt: EpochSeconds }),
+  ),
+  windows: Schema.Array(ClaudePlanWindow).check(Schema.isMaxLength(5)),
+  extraUsage: Schema.Struct({
+    status: Schema.optional(ClaudePlanLimitStatus),
+    resetsAt: Schema.optional(EpochSeconds),
+    inUse: Schema.Boolean,
+  }),
+});
+
+export type ClaudePlanReading = typeof ClaudePlanReading.Type;
+
+/** The latest reading for a plan, with when dx observed it. */
+export const ClaudePlanUsage = Schema.Struct({
+  ...ClaudePlanReading.fields,
+  observedAt: EpochSeconds,
+});
+
+export type ClaudePlanUsage = typeof ClaudePlanUsage.Type;
+
+/** Whether the response that carried the reading drew on extra usage. */
+export const claudePlanUsesExtraUsage = (reading: ClaudePlanReading) =>
+  reading.extraUsage.inUse ||
+  (reading.status === "rejected" &&
+    (reading.extraUsage.status === "allowed" ||
+      reading.extraUsage.status === "allowed_warning"));
+
+/**
+ * Adds a reading to the plan's usage. A window the reading leaves out keeps
+ * its last value until it resets. A reading older than the stored one, such
+ * as a run's last reading sent again on a later step, changes nothing.
+ */
+export const mergeClaudePlanUsage = (
+  previous: ClaudePlanUsage | undefined,
+  reading: ClaudePlanReading,
+  observedAt: number,
+): ClaudePlanUsage => {
+  if (previous !== undefined && previous.observedAt > observedAt)
+    return previous;
+  const ids = new Set(reading.windows.map(({ id }) => id));
+  const kept = (previous?.windows ?? []).filter(
+    (window) => !ids.has(window.id) && window.resetsAt > observedAt,
+  );
+  const order = ClaudePlanWindowId.literals;
+  return {
+    ...reading,
+    windows: [...reading.windows, ...kept].sort(
+      (a, b) => order.indexOf(a.id) - order.indexOf(b.id),
+    ),
+    observedAt,
+  };
+};
+
+/** How long a used-up plan stays blocked when Anthropic named no reset. */
+const UNKNOWN_RESET_SECONDS = 3_600;
+
+/**
+ * The model family a per-model weekly window limits; account-wide windows
+ * have none. Claude Code calls the overage-included bucket the Fable limit.
+ */
+const WINDOW_FAMILIES: Partial<Record<ClaudePlanWindowId, string>> = {
+  seven_day_opus: "opus",
+  seven_day_sonnet: "sonnet",
+  seven_day_overage_included: "fable",
+};
+
+export const claudePlanWindowFamily = (id: ClaudePlanWindowId) =>
+  WINDOW_FAMILIES[id];
+
+/**
+ * Whether a window limits a model: account-wide windows limit every model, a
+ * per-model window only its family. Without a model, only account-wide
+ * windows count.
+ */
+const windowLimits = (id: ClaudePlanWindowId, model: string | undefined) => {
+  const family = WINDOW_FAMILIES[id];
+  return family === undefined || (model?.includes(family) ?? false);
+};
+
+/**
+ * When dx keeps Claude Code off the plan's paid extra usage, the time (epoch
+ * seconds) until which the plan is used up for `model` (a Claude model id
+ * such as `claude-opus-5-5`; omitted, the account-wide windows), or
+ * undefined while it has room.
+ */
+export const claudePlanBlockedUntil = (
+  usage: ClaudePlanUsage | undefined,
+  allowExtraUsage: boolean,
+  now: number,
+  model?: string,
+): number | undefined => {
+  if (allowExtraUsage || usage === undefined) return undefined;
+  if (usage.status !== "rejected" && !claudePlanUsesExtraUsage(usage))
+    return undefined;
+  const usedUp = Math.max(
+    0,
+    ...usage.windows
+      .filter(
+        ({ id, utilization }) => utilization >= 1 && windowLimits(id, model),
+      )
+      .map(({ resetsAt }) => resetsAt),
+  );
+  // A per-model window for another family: only a used-up account-wide
+  // window still limits this model.
+  if (usage.limit !== undefined && !windowLimits(usage.limit.id, model))
+    return usedUp > now ? usedUp : undefined;
+  const until = usage.limit?.resetsAt ?? usedUp;
+  const resetsAt = until > 0 ? until : usage.observedAt + UNKNOWN_RESET_SECONDS;
+  return resetsAt > now ? resetsAt : undefined;
+};
+
+/** The names Claude Code itself gives the plan's windows. */
+const WINDOW_NAMES: Record<ClaudePlanWindowId, string> = {
+  five_hour: "5-hour limit",
+  seven_day: "Weekly limit",
+  seven_day_opus: "Opus limit",
+  seven_day_sonnet: "Sonnet limit",
+  // Anthropic's per-model weekly bucket, which Claude Code calls the Fable limit.
+  seven_day_overage_included: "Fable limit",
+};
+
+export const claudePlanWindowName = (id: ClaudePlanWindowId) =>
+  WINDOW_NAMES[id];
+
+/**
+ * Why a Claude Code turn ended at a plan limit: dx did not start it or
+ * stopped it to keep it off paid extra usage, or the plan had nothing left.
+ */
+export type ClaudePlanLimitCause = "not-started" | "stopped" | "exhausted";
+
+export interface ClaudePlanLimit {
+  readonly window?: ClaudePlanWindowId;
+  /** Unix epoch seconds. */
+  readonly resetsAt: number;
+  readonly cause: ClaudePlanLimitCause;
+}
+
+const LIMIT_REASONS: Record<ClaudePlanLimitCause, string> = {
+  "not-started":
+    "dx did not start Claude Code so it does not run on paid extra usage. To keep working now, choose Allow extra usage for Claude Pro/Max in Settings → Model Routing.",
+  stopped:
+    "dx stopped Claude Code so it does not run on paid extra usage. To keep working now, choose Allow extra usage for Claude Pro/Max in Settings → Model Routing.",
+  exhausted: "Claude Code cannot run on this plan until then.",
+};
+
+/**
+ * The turn failure for a plan limit. The web app reads it back with
+ * `parseClaudePlanLimit` to show the limit card above the composer.
+ */
+export const claudePlanLimitText = (limit: ClaudePlanLimit) =>
+  `Claude plan limit reached (${
+    limit.window === undefined ? "Usage limit" : WINDOW_NAMES[limit.window]
+  }, resets ${new Date(limit.resetsAt * 1000).toISOString().slice(0, 16)}Z). ${
+    LIMIT_REASONS[limit.cause]
+  }`;
+
+const LIMIT_TEXT =
+  /Claude plan limit reached \(([^,]+), resets (\d{4}-\d\d-\d\dT\d\d:\d\d)Z\)\. (.+)/;
+
+export const parseClaudePlanLimit = (
+  text: string,
+): ClaudePlanLimit | undefined => {
+  const match = LIMIT_TEXT.exec(text);
+  if (match === null) return undefined;
+  const [, name, time, reason] = match;
+  const resetsAt = Date.parse(`${time}:00Z`) / 1000;
+  const cause = (Object.keys(LIMIT_REASONS) as ClaudePlanLimitCause[]).find(
+    (key) => reason?.startsWith(LIMIT_REASONS[key]),
+  );
+  if (!Number.isFinite(resetsAt) || cause === undefined) return undefined;
+  const window = ClaudePlanWindowId.literals.find(
+    (id) => WINDOW_NAMES[id] === name,
+  );
+  return { ...(window === undefined ? {} : { window }), resetsAt, cause };
+};

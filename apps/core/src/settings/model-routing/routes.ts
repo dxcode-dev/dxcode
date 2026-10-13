@@ -15,6 +15,7 @@ import {
   PutModeRequestSchema,
   ReorderConnectionsRequestSchema,
   ReorderConnectionsResponseSchema,
+  SetClaudePlanRequestSchema,
   SetConnectionEnabledRequestSchema,
   UpdateConnectionRequestSchema,
   WorkspaceModelRoutingParamsSchema,
@@ -307,6 +308,26 @@ const mountConnectionRoutes = (
             target,
             c.req.param("connectionId"),
             input.enabled,
+          ),
+        ),
+        200,
+      );
+    }),
+  );
+
+  app.post("/connections/:connectionId/claude-plan", (c) =>
+    handle(c, async () => {
+      const { target, canMutate } = await resolveTarget(c);
+      if (!canMutate) throw new MutationForbidden();
+      const input = await decodeBody(c, SetClaudePlanRequestSchema);
+      const deps = await dependencies(c);
+      return c.json(
+        respond(
+          ConnectionResponseSchema,
+          await deps.service.setClaudeExtraUsage(
+            target,
+            c.req.param("connectionId"),
+            input.allowExtraUsage,
           ),
         ),
         200,

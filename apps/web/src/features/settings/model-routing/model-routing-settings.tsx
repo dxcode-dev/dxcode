@@ -9,6 +9,7 @@ import { useNavigate } from "@tanstack/react-router";
 import {
   type Dispatch,
   type PointerEvent,
+  type ReactNode,
   type SetStateAction,
   useState,
 } from "react";
@@ -20,6 +21,7 @@ import {
   ClaudeCodeNotice,
   ClaudeConnectDialog,
 } from "./claude-code-connect.js";
+import { ClaudePlanPanel } from "./claude-plan-usage.js";
 import {
   AddConnectionMenu,
   ConnectionDialog,
@@ -98,7 +100,9 @@ function ConnectionList({
   onDisconnect,
   expanded,
   onExpand,
+  renderPanel,
 }: {
+  readonly renderPanel?: (connection: ConnectionData) => ReactNode;
   readonly expanded: ReadonlyArray<string>;
   readonly onExpand: (id: string) => void;
   readonly rows: ReadonlyArray<ConnectionData>;
@@ -193,7 +197,9 @@ function ConnectionList({
             onDelete={() => onDelete(connection)}
             onDisconnect={() => onDisconnect(connection)}
             checkingAccess={checkingConnectionId === connection.id}
-          />
+          >
+            {renderPanel?.(connection)}
+          </ConnectionRow>
         </li>
       ))}
     </ol>
@@ -273,6 +279,16 @@ function RoutingConnections({
           {...listProps}
           rows={claudeRows}
           onReorder={() => undefined}
+          renderPanel={(connection) =>
+            connection.claudePlan === undefined ? null : (
+              <ClaudePlanPanel
+                connection={connection}
+                plan={connection.claudePlan}
+                target={target}
+                canMutate={canMutate}
+              />
+            )
+          }
         />
       ) : null}
       {[

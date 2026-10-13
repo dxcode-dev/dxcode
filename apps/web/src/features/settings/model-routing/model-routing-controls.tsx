@@ -14,7 +14,7 @@ import {
   GripVertical,
   Plus,
 } from "lucide-react";
-import type { FormEvent, PointerEventHandler } from "react";
+import type { FormEvent, PointerEventHandler, ReactNode } from "react";
 import { useRef, useState } from "react";
 import { Button } from "../../../shared/ui/button.js";
 import { ClaudeIcon } from "../../../shared/ui/claude-icon.js";
@@ -115,6 +115,7 @@ export const ConnectionRow = ({
   onDelete,
   onDisconnect,
   checkingAccess,
+  children,
 }: {
   readonly connection: ConnectionData;
   readonly priority: number;
@@ -134,6 +135,8 @@ export const ConnectionRow = ({
   readonly onDelete: () => void;
   readonly onDisconnect: () => void;
   readonly checkingAccess: boolean;
+  /** Always-visible content under the row's head, such as a plan's usage. */
+  readonly children?: ReactNode;
 }) => {
   const managed =
     connection.kind === "subscription" || connection.kind === "deployment";
@@ -212,6 +215,7 @@ export const ConnectionRow = ({
           />
         </button>
       </div>
+      {children}
       {expanded ? (
         <div
           className="model-routing-connection-detail"

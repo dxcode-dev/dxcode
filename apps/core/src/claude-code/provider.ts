@@ -1,7 +1,11 @@
 import {
   CLAUDE_CODE_DEFAULT_EFFORT,
   CLAUDE_CODE_PROVIDER_ID,
+  type ClaudePlanReading,
   claudeCodeEffort,
+  claudePlanBlockedUntil,
+  claudePlanLimitText,
+  claudePlanUsesExtraUsage,
 } from "@dx/domain";
 import {
   type Api,
@@ -24,6 +28,7 @@ import {
   claudeCodeDxToolList,
   deliverClaudeCodeDxToolResults,
 } from "./dx-tools.js";
+import type { ClaudePlanAccess } from "./plan.js";
 import { claudeCodeRuns } from "./runs.js";
 import type { ClaudeCodeBlock, ClaudeCodeSegment } from "./stream.js";
 import { mirroredToolCall } from "./tools.js";
@@ -52,12 +57,45 @@ const CONTINUE_INPUT: ClaudeCodeInputBlock = {
 export interface ClaudeCodeProviderDeps {
   readonly invocation: typeof getModelInvocationContext;
   readonly sandbox: (threadId: string) => Promise<Sandbox>;
-  readonly token: (
+  readonly credential: (
     threadId: string,
     submissionId: string,
     canonical: string,
-  ) => Promise<string>;
+  ) => Promise<{ readonly token: string; readonly plan: ClaudePlanAccess }>;
+  /**
+   * Records plan limits the run reported, read at `observedAt` (epoch
+   * seconds); answers with the plan's current extra usage choice. Throws
+   * when the reading could not be recorded.
+   */
+  readonly recordUsage: (
+    threadId: string,
+    submissionId: string,
+    canonical: string,
+    reading: ClaudePlanReading,
+    observedAt: number,
+  ) => Promise<ClaudePlanAccess>;
 }
+
+/**
+ * Each Thread's latest known plan choice. A turn's later model calls rejoin
+ * its run without fetching the credential, so they start from this one.
+ */
+const knownPlans = new Map<string, ClaudePlanAccess>();
+const KNOWN_PLANS = 500;
+
+const rememberPlan = (threadId: string, plan: ClaudePlanAccess) => {
+  knownPlans.delete(threadId);
+  knownPlans.set(threadId, plan);
+  if (knownPlans.size > KNOWN_PLANS)
+    for (const key of [...knownPlans.keys()].slice(
+      0,
+      knownPlans.size - KNOWN_PLANS,
+    ))
+      knownPlans.delete(key);
+};
+
+/** A failed recording is tried again after these delays, in milliseconds. */
+const RECORD_RETRY_DELAYS = [250, 1_000];
 
 const usage = (segment?: ClaudeCodeSegment): Usage => {
   const input = segment?.usage.input ?? 0;
@@ -499,6 +537,35 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
             freshSession = true;
           }
         }
+        const canonical = `${model.provider}/${model.id}`;
+        // The plan's extra usage choice: from the credential at launch, then
+        // from each reading recorded, since the owner may change it mid-run.
+        let plan = knownPlans.get(threadId);
+        const setPlan = (next: ClaudePlanAccess) => {
+          plan = next;
+          rememberPlan(threadId, next);
+        };
+        let recording = Promise.resolve();
+        const record = (reading: ClaudePlanReading, observedAt: number) => {
+          recording = recording.then(async () => {
+            for (const delay of [0, ...RECORD_RETRY_DELAYS]) {
+              if (delay > 0)
+                await new Promise((resolve) => setTimeout(resolve, delay));
+              try {
+                setPlan(
+                  await deps.recordUsage(
+                    threadId,
+                    scope.submissionId,
+                    canonical,
+                    reading,
+                    observedAt,
+                  ),
+                );
+                return;
+              } catch {}
+            }
+          });
+        };
         let nextAttempt = (attempts.at(-1)?.attempt ?? -1) + 1;
         // A new session has none of the turn, so continuing it restates the
         // request instead of only asking to finish it.
@@ -514,6 +581,22 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
               latest?.run.stream.result?.text ||
                 "Claude Code failed repeatedly for this request.",
             );
+          const credential = await deps.credential(
+            threadId,
+            scope.submissionId,
+            canonical,
+          );
+          setPlan(credential.plan);
+          if (credential.plan.blockedUntil !== undefined)
+            throw new Error(
+              claudePlanLimitText({
+                ...(credential.plan.limitWindow === undefined
+                  ? {}
+                  : { window: credential.plan.limitWindow }),
+                resetsAt: credential.plan.blockedUntil,
+                cause: "not-started",
+              }),
+            );
           const next = claudeCodeRuns.create(
             threadId,
             turn,
@@ -524,11 +607,6 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
           nextAttempt += 1;
           // Set before launching, so Stop during the launch stops it.
           run = next;
-          const token = await deps.token(
-            threadId,
-            scope.submissionId,
-            `${model.provider}/${model.id}`,
-          );
           await next.launch(
             {
               model: model.id,
@@ -537,7 +615,7 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
               ),
               systemPrompt: context.systemPrompt ?? "",
               input: input(),
-              token,
+              token: credential.token,
               tools: claudeCodeDxToolList(threadId),
             },
             signal,
@@ -567,13 +645,76 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
           throw new Error("Claude Code has no run to read.");
         let current = run;
         let local = segment - (await current.base());
-        const waitForSegment = () =>
-          current.waitFor(() => {
-            const found = current.stream.segments[local];
-            if (found !== undefined) emitter.update(found, false);
-            return found?.stopReason !== undefined;
-          }, signal);
+        // Each new reading is recorded, starting with the latest one already
+        // read: a rejoined run may have read past it while settling. One that
+        // says the response drew on extra usage stops the wait until the
+        // plan's current choice is known. A run that already finished is not
+        // stopped: its work is done and billed.
+        let reported: ClaudePlanReading | undefined;
+        let extraUsage: ClaudePlanReading | undefined;
+        let overLimit: ClaudePlanReading | undefined;
+        const watchPlan = () => {
+          const reading = current.stream.planReading;
+          if (reading === undefined || reading === reported) return false;
+          reported = reading;
+          // Sent with when dx first read it: a later model call sends the
+          // run's last reading again, and it must not replace a newer one.
+          record(reading, current.stream.planReadingAt);
+          if (!claudePlanUsesExtraUsage(reading)) return false;
+          extraUsage = reading;
+          return true;
+        };
+        const waitForSegment = async () => {
+          for (;;) {
+            await current.waitFor(() => {
+              if (watchPlan()) return true;
+              const found = current.stream.segments[local];
+              if (found !== undefined) emitter.update(found, false);
+              return found?.stopReason !== undefined;
+            }, signal);
+            if (extraUsage === undefined) return;
+            const reading = extraUsage;
+            extraUsage = undefined;
+            await recording;
+            // The choice the recording answered with, else the last one known
+            // for this Thread; unknown when none ever was: fail closed.
+            if (
+              plan?.allowExtraUsage !== true &&
+              current.stream.segments[local]?.stopReason !== "stop"
+            ) {
+              overLimit = reading;
+              return;
+            }
+          }
+        };
         await waitForSegment();
+        const stopForPlan = async () => {
+          if (overLimit === undefined) return false;
+          await current.stop();
+          const now = Math.floor(Date.now() / 1000);
+          const resetsAt =
+            plan?.blockedUntil ??
+            claudePlanBlockedUntil(
+              { ...overLimit, observedAt: now },
+              false,
+              now,
+              model.id,
+            ) ??
+            now;
+          fail(
+            claudePlanLimitText({
+              ...(overLimit.limit === undefined
+                ? {}
+                : { window: overLimit.limit.id }),
+              resetsAt,
+              cause: "stopped",
+            }),
+            "error",
+            current.stream.segments[local],
+          );
+          return true;
+        };
+        if (await stopForPlan()) return;
         let found = current.stream.segments[local];
         // A resumed CLI that exited on its own before naming a session could
         // not load it: forget it and answer once more in a new session.
@@ -590,9 +731,39 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
           run = current;
           local = 0;
           await waitForSegment();
+          if (await stopForPlan()) return;
           found = current.stream.segments[local];
         }
         if (found?.stopReason === undefined || found.stopReason === "error") {
+          // Claude Code fails a request the plan has no usage left for, and
+          // no extra usage covers: say which limit, and when it resets, in
+          // the form the web app shows. Other failures keep their own text.
+          const reading = current.stream.planReading;
+          const now = Math.floor(Date.now() / 1000);
+          const limitedUntil =
+            reading?.status === "rejected" && !claudePlanUsesExtraUsage(reading)
+              ? claudePlanBlockedUntil(
+                  { ...reading, observedAt: now },
+                  false,
+                  now,
+                  model.id,
+                )
+              : undefined;
+          if (reading !== undefined && limitedUntil !== undefined) {
+            await recording;
+            fail(
+              claudePlanLimitText({
+                ...(reading.limit === undefined
+                  ? {}
+                  : { window: reading.limit.id }),
+                resetsAt: limitedUntil,
+                cause: "exhausted",
+              }),
+              "error",
+              found,
+            );
+            return;
+          }
           const detail =
             found?.errorMessage ??
             current.stream.result?.text ??
