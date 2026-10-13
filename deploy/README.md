@@ -21,7 +21,9 @@ Sign-in methods are magic link, email and password, and Google. Admission is
 email domains. Magic links and public password sign-up need `authEmailFrom`,
 a Cloudflare Email Sending address inside the deployment zone. The same sender
 sends notification emails (mentions) whatever sign-in methods are offered;
-without it, notifications stay in the app. Google needs an
+without it, notifications stay in the app. Only magic link needs an API token,
+for its Turnstile widget; a sender for notification email alone deploys with
+Alchemy's browser login (`cloudflareAuth` records the choice). Google needs an
 OAuth client with the redirect URI `https://<domain>/api/auth/callback/google`;
 its client ID goes in the `signIn` block and its secret is
 `DX_GOOGLE_CLIENT_SECRET`. `pnpm dx:deploy -- --sign-in` changes sign-in on

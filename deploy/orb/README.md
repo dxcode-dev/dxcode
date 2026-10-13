@@ -70,7 +70,12 @@ the `durable_object` scheduling policy). Wrangler builds this Dockerfile with
 the repository root as context, pushes it to the account's Cloudflare
 registry, waits until Cloudflare has prepared it, and creates the container
 application for the `OrbContainerObject` class. Docker must be running on the
-deploying machine. The image is about 1.6 GB, so it does not fit the `lite`
+deploying machine, with Buildx; both are checked before anything changes.
+Docker runs with a configuration of its own under the stage directory
+(`orbDockerEnvironment`): an API-token deploy points HOME at a private
+directory, so Docker keeps the operator's plugins and selected context from
+their own configuration, read only, and stores the registry login in that
+file instead of the OS keychain. The image is about 1.6 GB, so it does not fit the `lite`
 instance type; Orb sizes start at `standard-1`.
 
 The entrypoint runs unchanged: a container restored from a snapshot runs

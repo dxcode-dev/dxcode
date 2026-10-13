@@ -96,13 +96,15 @@ inbound mail and is not required.
    [Email Service documentation](https://developers.cloudflare.com/email-service/)
    and [sending-subdomain guide](https://developers.cloudflare.com/email-service/configuration/subdomains/).
 3. Wait until Cloudflare marks the domain enabled.
-4. Use a Cloudflare API token with the permissions in
+4. For magic link, use a Cloudflare API token with the permissions in
    [deployment configuration](/docs/deployment/configuration/#cloudflare-authentication).
-   Alchemy's browser login cannot manage Email Sending or Turnstile.
 
-With `authEmailFrom`, the deploy also creates and manages a Turnstile widget
-that protects sign-in email requests. The installer checks the exact sender
-domain before it asks for other secrets.
+Notification email needs only the sender, which Alchemy's browser login can
+deploy. Magic link also needs a Turnstile widget that protects sign-in email
+requests; the deploy creates and manages it, and only an API token can. With
+a token the installer checks the exact sender domain before it asks for other
+secrets. Browser login cannot read Email Sending, so the installer says so
+and mention emails fail until the domain is onboarded.
 
 ## Create a Google OAuth client
 
@@ -158,9 +160,15 @@ invite only.
 - **Adding a sender** (for notification emails, magic link, or public
   password sign-up): `pnpm dx:deploy` offers one once to a deployment that
   has none, and `pnpm dx:deploy -- --email` asks again. It needs a custom
-  domain and a Cloudflare API token. Sign-in methods stay as they were, so
+  domain, and works with browser login. Sign-in methods stay as they were, so
   notification emails start without changing how people sign in; run
-  `--sign-in` afterward to also offer magic link.
+  `--sign-in` with `CLOUDFLARE_API_TOKEN` set to also offer magic link.
+- **Returning to browser login.** A deployment that used an API token only
+  for its sender (any sender set up before 0.2.19) is offered browser login.
+  That deploy uses the token one last time to remove the Turnstile widget and
+  the attachment signing token, which browser login cannot manage; later
+  deploys use browser login, and attachments travel through dx. The choice is
+  recorded as `cloudflareAuth` (`alchemy-oauth` or `api-token`).
 
 ## Configuration reference
 

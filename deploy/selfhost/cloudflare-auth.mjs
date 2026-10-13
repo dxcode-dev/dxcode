@@ -49,7 +49,9 @@ export const preflightCloudflareDeployment = async ({
   auth,
   zone,
   authEmailFrom,
+  magicLink = false,
   fetch: request = globalThis.fetch,
+  log = () => {},
 }) => {
   const get = async (
     path,
@@ -124,10 +126,19 @@ export const preflightCloudflareDeployment = async ({
     throw new Error(
       `The email sender must use ${zone} or one of its subdomains.`,
     );
-  if (auth.method === "alchemy-oauth")
-    throw new Error(
-      "Hosted authentication requires a Cloudflare API token; Alchemy OAuth cannot manage Turnstile or inspect Email Sending.",
+  // Notification email needs only the sender, a Worker binding Alchemy's
+  // browser login can deploy. Magic link also needs a Turnstile widget, and
+  // that login can neither manage Turnstile nor read Email Sending.
+  if (auth.method === "alchemy-oauth") {
+    if (magicLink)
+      throw new Error(
+        "Magic-link sign-in needs a Cloudflare API token: Alchemy's browser login cannot manage its Turnstile widget.",
+      );
+    log(
+      `Alchemy's browser login cannot read Cloudflare Email Sending, so dx cannot check that ${senderDomain} is onboarded. Mention emails fail until it is.\n`,
     );
+    return;
+  }
   await Promise.all([
     get(`/accounts/${auth.accountId}/d1/database?per_page=1`, {
       label: "D1 permission",

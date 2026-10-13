@@ -3,7 +3,14 @@ export const ORB_IMAGE_NAME: "orb";
 export const ORB_COMPATIBILITY_DATE: string;
 export const orbRecipeFiles: ReadonlyArray<string>;
 export function orbRecipeHash(workspaceRoot: string): string;
-export function assertDockerAvailable(environment?: NodeJS.ProcessEnv): void;
+export function orbDockerEnvironment(input: {
+  environment?: NodeJS.ProcessEnv;
+  stateDirectory: string;
+}): NodeJS.ProcessEnv;
+export function assertDockerReady(
+  environment?: NodeJS.ProcessEnv,
+  options?: { daemon?: (environment: NodeJS.ProcessEnv) => boolean },
+): void;
 export function deployOrbWorker(input: {
   workerName: string;
   workspaceRoot: string;

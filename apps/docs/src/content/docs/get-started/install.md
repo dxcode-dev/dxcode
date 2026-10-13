@@ -21,18 +21,19 @@ pnpm dx:deploy
 
 The wizard will ask you to:
 
-1. Choose whether dx sends email from your domain. One sender serves magic
-   links, verified password sign-up, and notification emails such as
-   mentions; notification emails need only the sender, not magic-link
-   sign-in. It needs a custom domain, Cloudflare Email Sending on the sender
-   domain, and a Cloudflare API token. Without it, the wizard uses browser
-   authorization, and mentions show in the app only.
-2. Authorize Cloudflare in a browser, or enter the API token, then enter the
-   sender address when sending email.
+1. Choose whether dx sends email from your domain, and whether it offers
+   magic-link sign-in. One sender serves magic links, verified password
+   sign-up, and notification emails such as mentions. Sending email needs a
+   custom domain and Cloudflare Email Sending on the sender domain. Magic
+   link also needs a Cloudflare API token for its Turnstile widget;
+   notification email alone works with browser authorization. Without a
+   sender, mentions show in the app only.
+2. Authorize Cloudflare in a browser, or enter the API token when magic link
+   needs one, then enter the sender address when sending email.
 3. Select a `workers.dev` address or configure a custom domain.
 4. Enter the first administrator email.
-5. Choose sign-in methods: magic link (only when sending email), email and
-   password, and Google. For Google, create an OAuth client with the redirect
+5. Choose sign-in methods: email and password, and Google (magic link was
+   answered in step 1). For Google, create an OAuth client with the redirect
    URI the wizard prints, then enter its client ID and hidden secret.
 6. Choose who can create an account: `open`, `waitlist`, or `invite` (the
    default). Public password sign-up requires sending email. Optionally limit
@@ -48,7 +49,7 @@ The wizard will ask you to:
    without GitHub or Bitbucket configuration.
 10. Review the redacted configuration before approving the apply.
 
-To send sign-in email, prepare a Cloudflare API token before starting. It needs
+To offer magic-link sign-in, prepare a Cloudflare API token before starting. It needs
 account Edit access for Workers Scripts, D1, Workers R2 Storage, Secrets Store,
 Turnstile, Email Sending, and Account API Tokens, plus zone Read and Workers
 Routes Edit for the selected zone. Cloudflare Email Sending must be enabled for the exact sender

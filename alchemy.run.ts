@@ -294,6 +294,9 @@ export default Alchemy.Stack(
         Config.boolean("DX_DEPLOYMENT_TURNSTILE_TEST_KEYS"),
         false,
       ),
+      // Self-host only: whether magic link needs a Turnstile widget. Hosted
+      // targets derive it from their sender.
+      turnstile: Config.option(Config.boolean("DX_DEPLOYMENT_TURNSTILE")),
       e2bApiKey: Config.option(Config.redacted("E2B_API_KEY")),
       githubApp: Config.option(Config.redacted("DX_INTEGRATION_GITHUB_APP")),
       sarvamApiKey: Config.option(Config.redacted("SARVAM_API_KEY")),
@@ -598,9 +601,16 @@ export default Alchemy.Stack(
             };
           })
         : undefined;
+    // Turnstile protects magic-link requests. A self-host sender may serve
+    // notification email alone, which needs no widget; hosted targets always
+    // offer magic link with their sender.
+    const turnstileWanted = Option.getOrElse(
+      configuration.turnstile,
+      () => hostedAuthentication,
+    );
     // Previews may use Cloudflare's published always-pass test keys instead of
     // creating a widget, because the account caps widgets at 20.
-    const turnstile = !hostedAuthentication
+    const turnstile = !turnstileWanted
       ? undefined
       : configuration.turnstileTestKeys
         ? {
@@ -661,10 +671,11 @@ export default Alchemy.Stack(
           ? {
               DX_AUTH_EMAIL_FROM:
                 requiredHostedAuthenticationValue(authEmailFrom),
-              DX_TURNSTILE_SITE_KEY:
-                requiredHostedAuthenticationValue(turnstile).sitekey,
             }
           : {}),
+        ...(turnstile === undefined
+          ? {}
+          : { DX_TURNSTILE_SITE_KEY: turnstile.sitekey }),
         DX_AUTH_URL: configuration.origin,
         DX_AUTH_TRUSTED_ORIGINS: configuration.origin,
         ...(attachmentSigning === undefined
@@ -784,12 +795,9 @@ export default Alchemy.Stack(
       },
       secret: {
         BETTER_AUTH_SECRET: authSecret.text,
-        ...(hostedAuthentication
-          ? {
-              DX_TURNSTILE_SECRET_KEY:
-                requiredHostedAuthenticationValue(turnstile).secret,
-            }
-          : {}),
+        ...(turnstile === undefined
+          ? {}
+          : { DX_TURNSTILE_SECRET_KEY: turnstile.secret }),
         DX_CONFIG_ENCRYPTION_KEYS: encryptionKeyring,
         ...(attachmentSigning === undefined
           ? {}

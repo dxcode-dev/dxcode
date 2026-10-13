@@ -10,7 +10,10 @@ import {
 import { resolve } from "node:path";
 import { ApiClient, ConnectionConfig, Template } from "e2b";
 import { dxOrbTemplate } from "../deploy/e2b/template.mjs";
-import { assertDockerAvailable } from "../deploy/orb/containers.mjs";
+import {
+  assertDockerReady,
+  orbDockerEnvironment,
+} from "../deploy/orb/containers.mjs";
 import {
   adminCredentialPath,
   writeAdminCredentialFile,
@@ -50,6 +53,7 @@ import {
   securePrivateDeploymentState,
   selfhostStage,
   writeDeploymentAlchemyProfile,
+  selfhostDeploymentShape,
 } from "./alchemy-deployment.mjs";
 import { alchemyStage } from "./alchemy-stage.mjs";
 import { buildTarget, GUEST_TARGET } from "./build-dxd.mjs";
@@ -169,10 +173,20 @@ const exaApiKey =
 // deployment can mint the bucket-scoped token Core signs URLs with. Alchemy
 // OAuth cannot create tokens, so those self-hosts carry the bytes through
 // Core instead. Decided here, never at runtime.
-const attachmentSigning =
-  target === "selfhost" && selfhostCloudflareAuth.method === "alchemy-oauth"
-    ? "core"
-    : "token";
+// What a self-host deployment manages follows its recorded Cloudflare auth
+// and sign-in methods (see selfhostDeploymentShape).
+const selfhostShape =
+  target === "selfhost"
+    ? selfhostDeploymentShape({
+        signIn: selfhostConfig.signIn,
+        credentials:
+          selfhostCloudflareAuth.method === "alchemy-oauth"
+            ? "alchemy-oauth"
+            : "api-token",
+        cloudflareAuth: selfhostConfig.cloudflareAuth,
+      })
+    : undefined;
+const attachmentSigning = selfhostShape?.attachmentSigning ?? "token";
 // Google sign-in's client secret. HeldSecret keeps it across deploys, so it
 // is required only the first time google is configured.
 const googleClientSecret =
@@ -209,7 +223,14 @@ const orbProviders =
     : parseOrbProviders(process.env.DX_ORB_PROVIDERS?.trim() || "e2b");
 const e2bInstalled = orbProviders.includes("e2b");
 const cloudflareInstalled = orbProviders.includes("cloudflare");
-if (operation === "deploy" && cloudflareInstalled) assertDockerAvailable();
+// Check Docker as the Orb image build will see it, before Cloudflare changes.
+if (operation === "deploy" && cloudflareInstalled)
+  assertDockerReady(
+    orbDockerEnvironment({
+      environment: process.env,
+      stateDirectory: resolve(workspaceRoot, ".dx/alchemy/docker-preflight"),
+    }),
+  );
 const deploymentLabel =
   target === "staging"
     ? `Staging · ${revision.slice(0, 12)}`
@@ -682,6 +703,9 @@ const environment = {
       : JSON.stringify(hostedPolicy.bootstrapRepository),
   DX_DEPLOYMENT_ORB_PROVIDERS: orbProviders.join(","),
   DX_DEPLOYMENT_ATTACHMENT_SIGNING: attachmentSigning,
+  ...(selfhostShape === undefined
+    ? {}
+    : { DX_DEPLOYMENT_TURNSTILE: String(selfhostShape.turnstile) }),
   DX_DEPLOYMENT_ORB_WORKER_NAME: orbWorkerName(stage),
   DX_DEPLOYMENT_E2B_TEMPLATE: templateEvidence.name,
   DX_DEPLOYMENT_E2B_TEMPLATE_BUILD_ID: templateEvidence.buildId,

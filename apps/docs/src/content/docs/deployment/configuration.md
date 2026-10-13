@@ -18,12 +18,15 @@ The wizard uses Alchemy browser authorization by default. Alchemy and Wrangler
 have separate OAuth clients and token stores, so a Wrangler login is not used.
 API tokens support headless machines.
 
-Sending sign-in email (`authEmailFrom`) requires API-token mode. Alchemy OAuth
-does not include the Turnstile and Email Sending capabilities it needs.
+Magic-link sign-in requires API-token mode: Alchemy OAuth cannot manage the
+Turnstile widget that protects it. A sender used only for notification email
+(`authEmailFrom` without magic link) works with Alchemy OAuth, because the
+Email Sending binding is part of the Worker deployment. The deployment records
+its choice as `cloudflareAuth`.
 
 For API-token mode, use a narrowly scoped token for the target account and zone.
-The complete permission set for a custom-domain deployment that sends sign-in
-email is:
+The complete permission set for a custom-domain deployment that offers magic
+link is:
 
 | Scope | Permission | Access |
 | --- | --- | --- |
@@ -40,8 +43,9 @@ email is:
 Scope the account permissions to the deployment account and the zone
 permissions to the custom-domain zone. Durable Objects, Worker secrets, Workers
 AI bindings, and Email Sending bindings are part of the Worker deployment and
-do not require additional token permissions. A deployment without
-`authEmailFrom` does not need Turnstile or Email Sending. A deployment without
+do not require additional token permissions. A deployment without magic link
+does not need Turnstile, and one without `authEmailFrom` does not need Email
+Sending. A deployment without
 a custom domain does not need Zone or Workers Routes.
 
 Account API Tokens lets the deployment create one more token: object read
@@ -70,8 +74,10 @@ without it means `["e2b"]`.
   profile. See [E2B profiles](/docs/deployment/e2b-profiles/).
 - `cloudflare` (Cloudflare Containers) needs no key. Containers run and are
   billed in the deployment's Cloudflare account, which needs the Workers Paid
-  plan. The deploying machine needs a running Docker daemon with buildx to
-  build the Orb image and push it to the account registry. With API-token
+  plan. The deploying machine needs a running Docker daemon with Buildx to
+  build the Orb image and push it to the account registry; the deploy checks
+  both before it changes anything, and keeps the registry login out of your
+  OS keychain. With API-token
   authentication, the token must also manage Durable Objects and Containers.
   Sizes are `cf.standard-1` through `cf.standard-4`.
 

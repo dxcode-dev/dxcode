@@ -2315,6 +2315,27 @@ export const assertPostApplyVerification = ({ error, status }) => {
     );
 };
 
+/**
+ * What a self-host deployment manages besides its fixed resources. Turnstile
+ * protects magic-link requests, so only magic link creates it; notification
+ * email needs only the sender. Attachments are signed directly to R2 with a
+ * bucket-scoped token that only an API token can mint, so a deployment that
+ * records Alchemy's browser login carries them through Core, even on the one
+ * deploy that switches with a token and removes what browser login cannot
+ * manage.
+ */
+export const selfhostDeploymentShape = ({
+  signIn,
+  credentials,
+  cloudflareAuth,
+}) => ({
+  attachmentSigning:
+    credentials === "api-token" && cloudflareAuth !== "alchemy-oauth"
+      ? "token"
+      : "core",
+  turnstile: signIn.providers.includes("magic-link"),
+});
+
 export const isolatedAlchemyEnvironment = (inherited, deployment) => ({
   ...Object.fromEntries(
     Object.entries(inherited).filter(
@@ -2349,6 +2370,8 @@ export const isolatedAlchemyEnvironment = (inherited, deployment) => ({
   ...(deployment.apiToken === undefined
     ? {}
     : { CLOUDFLARE_API_TOKEN: deployment.apiToken }),
+  // Docker still needs the operator's own setup (deploy/orb/containers.mjs).
+  ...(inherited.HOME === undefined ? {} : { DX_OPERATOR_HOME: inherited.HOME }),
   HOME: deployment.authHome,
   USERPROFILE: deployment.authHome,
   XDG_CONFIG_HOME: `${deployment.authHome}/.config`,

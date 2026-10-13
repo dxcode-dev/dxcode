@@ -48,26 +48,20 @@ is `pnpm deploy:selfhost:dxd` with `dxdBinary` set in
 and its release record disagree. Deploy from an unmodified release tag, whose
 record names the `dxd` version in `apps/dxd/Cargo.toml`.
 
-## Cloudflare Containers image push
+## Cloudflare Containers image build and push
 
 When Cloudflare Containers is an Orb provider, the deploy builds the Orb image
-with Docker, and Wrangler pushes it to `registry.cloudflare.com`. On macOS,
-Wrangler's `docker login registry.cloudflare.com` can fail after the image
-builds with:
+with Docker Buildx, and Wrangler pushes it to `registry.cloudflare.com`. The
+deploy gives Docker a configuration of its own under `.dx/alchemy/`: the
+registry login is stored there, never in the macOS keychain, while your Docker
+plugins and selected engine (Docker Desktop, OrbStack, or Colima) are still
+used. Your own `~/.docker` is only read.
 
-```text
-error storing credentials ... The specified item already exists in the keychain. (-25299)
-```
+The deploy checks Docker before it changes anything in Cloudflare:
 
-Docker's macOS credential helper found an old entry for the registry in the
-keychain. Try these in order, rerunning the deploy after each:
-
-1. Run `docker logout registry.cloudflare.com`.
-2. Run `security delete-internet-password -s registry.cloudflare.com` to
-   remove the keychain entry directly.
-3. Set `"credsStore": ""` in `~/.docker/config.json` for this deploy only, so
-   Docker stores the registry login unencrypted in that file. Restore the
-   previous value afterwards.
+- **No running Docker daemon.** Start Docker and rerun.
+- **No Buildx.** Docker Desktop and OrbStack include it. Otherwise install the
+  `docker-buildx` plugin (for example `brew install docker-buildx`) and rerun.
 
 A rerun is safe. The Orb Worker is created only after the image push succeeds,
 so a failed push leaves nothing partial.

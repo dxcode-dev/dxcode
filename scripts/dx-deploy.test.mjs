@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { validateSelfhostConfig } from "../deploy/selfhost/config.mjs";
 import {
   assertInstallerDefaults,
+  BROWSER_LOGIN_SWITCH_PROMPT,
+  chooseCloudflareAuth,
   CLOUDFLARE_ORB_PROMPT,
   collectDeploymentConfig,
   collectOrbProviders,
@@ -332,5 +334,97 @@ describe("Orb provider choice", () => {
       asked: [],
     });
     expect(noZone.log).toHaveBeenCalledOnce();
+  });
+
+  it("needs a Cloudflare API token only for magic-link sign-in", async () => {
+    const base = validateSelfhostConfig({
+      name: "self",
+      adminEmail: "owner@example.com",
+      domain: "dx.example.com",
+      zone: "example.com",
+      signIn: { providers: ["email-password"], admission: "invite" },
+    });
+    const sender = { ...base, authEmailFrom: "dx@example.com" };
+    const magic = validateSelfhostConfig({
+      ...sender,
+      signIn: { providers: ["magic-link"], admission: "invite" },
+    });
+    const choose = async (input, answer = true) => {
+      const asked = [];
+      const log = vi.fn();
+      const result = await chooseCloudflareAuth({
+        hasToken: false,
+        defaults: {},
+        yes: async (label, fallback) => {
+          asked.push([label, fallback]);
+          return answer;
+        },
+        log,
+        ...input,
+      });
+      return { ...result, asked };
+    };
+    const token = { credentials: "api-token", record: "api-token", asked: [] };
+    const browser = {
+      credentials: "alchemy-oauth",
+      record: "alchemy-oauth",
+      asked: [],
+    };
+
+    // The hosted wrapper and magic link manage Turnstile: always a token.
+    expect(
+      await choose({
+        existing: sender,
+        defaults: { hostedAuthentication: true },
+      }),
+    ).toEqual(token);
+    expect(await choose({ existing: magic })).toEqual(token);
+    expect(
+      await choose({ existing: { ...magic, cloudflareAuth: "alchemy-oauth" } }),
+    ).toEqual(token);
+
+    // Notification email alone works with browser login.
+    expect(
+      await choose({
+        existing: { ...sender, cloudflareAuth: "alchemy-oauth" },
+      }),
+    ).toEqual(browser);
+    expect(await choose({ existing: base })).toEqual(browser);
+    expect(
+      await choose({ existing: { ...sender, cloudflareAuth: "api-token" } }),
+    ).toEqual(token);
+
+    // A sender from 0.2.18 or earlier was deployed with a token. Switching
+    // uses it once more to remove what browser login cannot manage.
+    const switched = await choose({ existing: sender });
+    expect(switched).toEqual({
+      credentials: "api-token",
+      record: "alchemy-oauth",
+      asked: [[BROWSER_LOGIN_SWITCH_PROMPT, true]],
+    });
+    expect(await choose({ existing: sender }, false)).toEqual({
+      ...token,
+      asked: [[BROWSER_LOGIN_SWITCH_PROMPT, true]],
+    });
+
+    // A token in the environment is used, never replaced by a browser login.
+    expect(await choose({ existing: base, hasToken: true })).toEqual(token);
+    expect(
+      await choose({
+        existing: { ...sender, cloudflareAuth: "alchemy-oauth" },
+        hasToken: true,
+      }),
+    ).toEqual({ ...browser, credentials: "api-token" });
+
+    // A new install decides from its sign-in answers.
+    expect(
+      await choose({ existing: undefined, sender: true, magicLink: true }),
+    ).toEqual(token);
+    expect(
+      await choose({ existing: undefined, sender: true, magicLink: false }),
+    ).toEqual(browser);
+    expect(
+      await choose({ existing: undefined, sender: false, magicLink: false }),
+    ).toEqual(browser);
   });
 });

@@ -20,6 +20,7 @@ const CONFIG_KEYS = new Set([
   "plugins",
   "offeredPlugins",
   "offeredEmailSending",
+  "cloudflareAuth",
   "orbProviders",
   "signIn",
 ]);
@@ -303,6 +304,22 @@ export const validateSelfhostConfig = (input) => {
     authEmailFrom,
     allowSignup: input.allowSignup === true,
   });
+  // How deploys sign in to Cloudflare: Alchemy's browser login, or an API
+  // token. Configs written before 0.2.19 record nothing.
+  const cloudflareAuth = input.cloudflareAuth;
+  if (
+    cloudflareAuth !== undefined &&
+    cloudflareAuth !== "alchemy-oauth" &&
+    cloudflareAuth !== "api-token"
+  )
+    throw new Error("cloudflareAuth must be alchemy-oauth or api-token.");
+  if (
+    cloudflareAuth === "alchemy-oauth" &&
+    signIn.providers.includes("magic-link")
+  )
+    throw new Error(
+      "Magic-link sign-in needs a Cloudflare API token: its Turnstile widget cannot be managed with Alchemy's browser login.",
+    );
   return Object.freeze({
     version: 1,
     name,
@@ -316,6 +333,7 @@ export const validateSelfhostConfig = (input) => {
     ...(input.offeredEmailSending === true
       ? { offeredEmailSending: true }
       : {}),
+    ...(cloudflareAuth === undefined ? {} : { cloudflareAuth }),
     // Kept for deployments that read it; signIn.admission decides.
     allowSignup:
       input.signIn === undefined

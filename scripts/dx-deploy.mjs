@@ -12,7 +12,10 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
-import { assertDockerAvailable } from "../deploy/orb/containers.mjs";
+import {
+  assertDockerReady,
+  orbDockerEnvironment,
+} from "../deploy/orb/containers.mjs";
 import {
   adminCredentialPath,
   collectAdminPassword,
@@ -148,6 +151,51 @@ export const collectSenderUpgrade = async ({
   return { offered: true, addSender: await yes(EMAIL_SENDING_PROMPT, false) };
 };
 
+export const BROWSER_LOGIN_SWITCH_PROMPT =
+  "This deployment no longer needs a Cloudflare API token. Switch to Alchemy browser login? This deploy uses your token one last time to remove the Turnstile widget and the attachment signing token, which browser login cannot manage";
+
+const magicLinkOffered = (config) =>
+  config.signIn.providers.includes("magic-link");
+
+/**
+ * How this run signs in to Cloudflare (`credentials`) and what the
+ * deployment records for later runs (`record`). Only magic link needs an API
+ * token, for its Turnstile widget; notification email needs just the sender.
+ * A token in the environment is always used. A deployment that switches to
+ * browser login runs once more with its token, already shaped for browser
+ * login, so the token removes what browser login cannot manage.
+ */
+export const chooseCloudflareAuth = async ({
+  existing,
+  defaults = {},
+  sender = false,
+  magicLink = false,
+  hasToken,
+  yes,
+  log = () => {},
+}) => {
+  const token = { credentials: "api-token", record: "api-token" };
+  const browser = {
+    credentials: hasToken ? "api-token" : "alchemy-oauth",
+    record: "alchemy-oauth",
+  };
+  if (defaults.hostedAuthentication === true) return token;
+  if (existing === undefined)
+    return (sender && magicLink) || hasToken ? token : browser;
+  if (magicLinkOffered(existing)) return token;
+  if (existing.cloudflareAuth === "alchemy-oauth") return browser;
+  if (existing.cloudflareAuth === "api-token") return token;
+  // Recorded before 0.2.19, when every sender meant an API token.
+  if (existing.authEmailFrom !== undefined) {
+    if (!(await yes(BROWSER_LOGIN_SWITCH_PROMPT, true))) return token;
+    log(
+      "This deploy uses your API token to remove the Turnstile widget and the attachment signing token; later deploys use Alchemy browser login.\n",
+    );
+    return { credentials: "api-token", record: "alchemy-oauth" };
+  }
+  return hasToken ? token : browser;
+};
+
 export const NO_SENDER_NOTICE =
   "No email sender: mentions show in the app only, and notification emails stay off. Run pnpm dx:deploy again with a sender to turn them on.\n";
 export const MAGIC_LINK_PROMPT = "Offer magic-link sign-in";
@@ -168,6 +216,7 @@ export const collectSignIn = async ({
   secret,
   environment,
   emailSending,
+  magicLink,
   hosted = false,
   origin,
   log,
@@ -175,7 +224,14 @@ export const collectSignIn = async ({
   let providers = [];
   for (let attempt = 0; attempt < 3 && providers.length === 0; attempt += 1) {
     providers = [];
-    if (hosted || (emailSending && (await yes(MAGIC_LINK_PROMPT, true))))
+    // A new install already answered magic link before Cloudflare login.
+    if (
+      hosted ||
+      (emailSending &&
+        (attempt === 0 && magicLink !== undefined
+          ? magicLink
+          : await yes(MAGIC_LINK_PROMPT, true)))
+    )
       providers.push("magic-link");
     if (!hosted && (await yes(PASSWORD_PROMPT, !emailSending)))
       providers.push("email-password");
@@ -247,6 +303,8 @@ export const collectDeploymentConfig = async ({
   environment,
   defaults = {},
   authEmailFrom: providedAuthEmailFrom,
+  magicLink,
+  cloudflareAuth,
 }) => {
   const name = defaults.name ?? (await answer("Deployment name", "my-dx"));
   const hostedAuthentication =
@@ -271,6 +329,7 @@ export const collectDeploymentConfig = async ({
     secret,
     environment,
     emailSending: authEmailFrom !== undefined,
+    magicLink,
     hosted: defaults.hostedAuthentication === true,
     origin: domain === undefined ? undefined : `https://${domain}`,
     log: (message) => stdout.write(message),
@@ -318,6 +377,7 @@ export const collectDeploymentConfig = async ({
     adminEmail,
     ...(domain ? { domain, zone } : {}),
     ...(authEmailFrom ? { authEmailFrom } : {}),
+    ...(cloudflareAuth === undefined ? {} : { cloudflareAuth }),
     integrations,
     orbProviders,
     plugins,
@@ -388,14 +448,33 @@ export const runDxDeploy = async ({
     yes,
     log: (message) => stdout.write(message),
   });
-  const hostedAuthentication =
+  // A new install answers the email questions first: magic link decides
+  // whether Cloudflare needs an API token.
+  const newSender =
+    existing === undefined &&
+    defaults.hostedAuthentication !== true &&
+    (await yes(EMAIL_SENDING_PROMPT, false));
+  const newMagicLink = newSender && (await yes(MAGIC_LINK_PROMPT, true));
+  const cloudflareAuthChoice = await chooseCloudflareAuth({
+    existing,
+    defaults,
+    sender: newSender,
+    magicLink: newMagicLink,
+    hasToken: Boolean(environment.CLOUDFLARE_API_TOKEN),
+    yes,
+    log: (message) => stdout.write(message),
+  });
+  const wantsSender =
     defaults.hostedAuthentication === true ||
     existing?.authEmailFrom !== undefined ||
     senderUpgrade.addSender ||
-    (existing === undefined && (await yes(EMAIL_SENDING_PROMPT, false)));
+    newSender;
   if (existing?.cloudflareAccountId && !environment.CLOUDFLARE_ACCOUNT_ID)
     environment.CLOUDFLARE_ACCOUNT_ID = existing.cloudflareAccountId;
-  if (hostedAuthentication && !environment.CLOUDFLARE_API_TOKEN) {
+  if (
+    cloudflareAuthChoice.credentials === "api-token" &&
+    !environment.CLOUDFLARE_API_TOKEN
+  ) {
     if (!environment.CLOUDFLARE_ACCOUNT_ID)
       environment.CLOUDFLARE_ACCOUNT_ID = await answer("Cloudflare account ID");
     const token = await secret("Cloudflare deployment API token");
@@ -423,7 +502,7 @@ export const runDxDeploy = async ({
 
   const authEmailFrom =
     existing?.authEmailFrom ??
-    (hostedAuthentication
+    (wantsSender
       ? await answer(`${SENDER_EMAIL_PROMPT} (an address on your zone)`)
       : undefined);
   if (
@@ -435,6 +514,11 @@ export const runDxDeploy = async ({
     auth: cloudflareAuth,
     zone: existing?.zone ?? defaults.zone,
     authEmailFrom,
+    magicLink:
+      existing === undefined
+        ? defaults.hostedAuthentication === true || newMagicLink
+        : magicLinkOffered(existing),
+    log: (message) => stdout.write(message),
   });
   stdout.write("Cloudflare prerequisites passed.\n");
 
@@ -443,12 +527,15 @@ export const runDxDeploy = async ({
   // offer is remembered either way. Sign-in methods stay as they were.
   if (
     config !== undefined &&
-    (authEmailFrom !== config.authEmailFrom || senderUpgrade.offered)
+    (authEmailFrom !== config.authEmailFrom ||
+      senderUpgrade.offered ||
+      config.cloudflareAuth !== cloudflareAuthChoice.record)
   ) {
     config = validateSelfhostConfig({
       ...config,
       ...(authEmailFrom === undefined ? {} : { authEmailFrom }),
       ...(senderUpgrade.offered ? { offeredEmailSending: true } : {}),
+      cloudflareAuth: cloudflareAuthChoice.record,
     });
     if (authEmailFrom !== undefined && existing?.authEmailFrom === undefined)
       stdout.write(
@@ -463,6 +550,8 @@ export const runDxDeploy = async ({
       environment,
       defaults: { ...defaults, cloudflareAccountId: cloudflareAuth.accountId },
       authEmailFrom,
+      magicLink: newSender ? newMagicLink : undefined,
+      cloudflareAuth: cloudflareAuthChoice.record,
     });
   else if (flags.has("--rotate")) {
     if (config.orbProviders.includes("e2b"))
@@ -511,21 +600,30 @@ export const runDxDeploy = async ({
     (flags.has("--sign-in") ||
       (existingInput.signIn === undefined &&
         (await yes(SIGN_IN_UPGRADE_PROMPT, false))))
-  )
+  ) {
+    const signIn = await collectSignIn({
+      answer,
+      yes,
+      secret,
+      environment,
+      emailSending: config.authEmailFrom !== undefined,
+      hosted: defaults.hostedAuthentication === true,
+      origin:
+        config.domain === undefined ? undefined : `https://${config.domain}`,
+      log: (message) => stdout.write(message),
+    });
+    // Magic link needs a Turnstile widget, which only an API token manages.
+    const magicLink = signIn.providers.includes("magic-link");
+    if (magicLink && cloudflareAuthChoice.credentials !== "api-token")
+      throw new Error(
+        "Magic-link sign-in needs a Cloudflare API token for its Turnstile widget. Rerun with CLOUDFLARE_API_TOKEN set.",
+      );
     config = validateSelfhostConfig({
       ...config,
-      signIn: await collectSignIn({
-        answer,
-        yes,
-        secret,
-        environment,
-        emailSending: config.authEmailFrom !== undefined,
-        hosted: defaults.hostedAuthentication === true,
-        origin:
-          config.domain === undefined ? undefined : `https://${config.domain}`,
-        log: (message) => stdout.write(message),
-      }),
+      signIn,
+      ...(magicLink ? { cloudflareAuth: "api-token" } : {}),
     });
+  }
   // Deployments created before tracing was configurable were never asked.
   if (config.workerTraces === undefined)
     config = validateSelfhostConfig({
@@ -534,7 +632,12 @@ export const runDxDeploy = async ({
     });
   if (config.orbProviders.includes("cloudflare")) {
     await preflightCloudflareContainers({ auth: cloudflareAuth });
-    assertDockerAvailable(environment);
+    assertDockerReady(
+      orbDockerEnvironment({
+        environment,
+        stateDirectory: resolve(".dx/alchemy/docker-preflight"),
+      }),
+    );
     stdout.write("Cloudflare Containers prerequisites passed.\n");
   }
   // Turning password sign-in on for an existing deployment needs a first

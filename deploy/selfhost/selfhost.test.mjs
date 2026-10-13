@@ -76,6 +76,38 @@ describe("exportable self-host configuration", () => {
       );
   });
 
+  it("records how the deployment signs in to Cloudflare", () => {
+    const base = {
+      name: "mine",
+      adminEmail: "me@example.com",
+      domain: "dx.example.com",
+      zone: "example.com",
+      authEmailFrom: "dx@example.com",
+      signIn: { providers: ["email-password"], admission: "invite" },
+    };
+    // Configs written before the field existed record nothing.
+    expect(validateSelfhostConfig(base).cloudflareAuth).toBeUndefined();
+    expect(
+      validateSelfhostConfig({ ...base, cloudflareAuth: "alchemy-oauth" })
+        .cloudflareAuth,
+    ).toBe("alchemy-oauth");
+    expect(
+      validateSelfhostConfig({ ...base, cloudflareAuth: "api-token" })
+        .cloudflareAuth,
+    ).toBe("api-token");
+    expect(() =>
+      validateSelfhostConfig({ ...base, cloudflareAuth: "password" }),
+    ).toThrow("cloudflareAuth");
+    // Magic link needs a Turnstile widget, which only a token can create.
+    expect(() =>
+      validateSelfhostConfig({
+        ...base,
+        cloudflareAuth: "alchemy-oauth",
+        signIn: { providers: ["magic-link"], admission: "invite" },
+      }),
+    ).toThrow("Magic-link sign-in needs a Cloudflare API token");
+  });
+
   it("enables generic hosted authentication only with a sender in the deployment zone", () => {
     const hosted = validateSelfhostConfig({
       name: "hosted",
@@ -188,7 +220,7 @@ describe("shared Cloudflare authentication", () => {
     );
   });
 
-  it("rejects Alchemy OAuth for hosted resources before provider credentials", async () => {
+  it("rejects Alchemy OAuth for magic-link sign-in, whose Turnstile it cannot manage", async () => {
     const fetch = vi.fn(async (url) => {
       const path = new URL(url).pathname;
       if (path.endsWith("/script-settings"))
@@ -209,10 +241,43 @@ describe("shared Cloudflare authentication", () => {
         },
         zone: "example.com",
         authEmailFrom: "no-reply@example.com",
+        magicLink: true,
         fetch,
       }),
-    ).rejects.toThrow("requires a Cloudflare API token");
+    ).rejects.toThrow("Magic-link sign-in needs a Cloudflare API token");
     expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("lets Alchemy OAuth deploy notification email, which needs no Turnstile", async () => {
+    const fetch = vi.fn(async (url) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/script-settings"))
+        return new Response(null, { status: 404 });
+      if (path.endsWith("/stores"))
+        return Response.json({ success: true, result: [] });
+      if (path === "/client/v4/zones")
+        return Response.json({ success: true, result: [{ id: "zone" }] });
+      throw new Error(`Unexpected Cloudflare request: ${url}`);
+    });
+    const log = vi.fn();
+
+    await expect(
+      preflightCloudflareDeployment({
+        auth: {
+          accountId: "account",
+          headers: { Authorization: "Bearer x" },
+          method: "alchemy-oauth",
+        },
+        zone: "example.com",
+        authEmailFrom: "no-reply@example.com",
+        magicLink: false,
+        fetch,
+        log,
+      }),
+    ).resolves.toBeUndefined();
+    // Neither Turnstile nor Email Sending is asked of a login without them.
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Email Sending"));
   });
 
   it("identifies the Cloudflare product whose token permission is missing", async () => {
