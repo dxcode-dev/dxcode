@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
-import { ThreadId } from "@dx/domain";
-import type { SandboxFactory } from "@flue/runtime";
+import { SourceControlAccessDenied, ThreadId } from "@dx/domain";
+import { FlueError, type SandboxFactory } from "@flue/runtime";
 import { Effect, Schema } from "effect";
 import type { Bindings } from "../http/types.js";
 import { executionWorkspaceLogger, threadDaemonLogger } from "../logging.js";
@@ -8,6 +8,7 @@ import {
   activeSubmissionId,
   recordActiveSubmissionPhase,
 } from "../observability/startup-runtime.js";
+import { observeCall, traceSpan } from "../observability/tracing.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
 import type {
   DaemonInstallation,
@@ -24,8 +25,12 @@ import {
   publishRealtimeInvalidation,
   publishRealtimeWorkspaceStatus,
 } from "../realtime/publication.js";
-import { resolveExecutionEnvironment } from "../settings/environment-variables/execution.js";
+import {
+  resolveExecutionEnvironment,
+  resolveExecutionEnvironmentRevision,
+} from "../settings/environment-variables/execution.js";
 import { withExecutionEnvironment } from "../settings/environment-variables/sandbox.js";
+import { authorizeRunStart } from "../source-control/admission.js";
 import {
   SOURCE_WORKSPACE_CWD,
   type SourceWorkspacePreparationPhase,
@@ -59,7 +64,8 @@ import {
  * A provider only returns raw handles
  * ([`ExecutionWorkspaceProvider`](../plugins/execution/provider.ts)). The
  * pinned context is resolved once per activation by composition and passed
- * in; nothing here adds a provider call or a D1 read to the wake path.
+ * in; nothing here adds a provider call to the wake path, and the only D1
+ * read beyond the lifecycle check is a connected source's live grant.
  */
 
 interface ActivityEntry {
@@ -106,17 +112,17 @@ const reportWorkspacePreparation = async (
   }
 };
 
-const sourcePreparationReporter =
-  (bindings: Bindings, db: D1Database, threadId: ThreadId) =>
-  (phase: SourceWorkspacePreparationPhase) =>
-    Effect.promise(() =>
-      reportWorkspacePreparation(
-        bindings,
-        db,
-        threadId,
-        sourcePreparationStatus[phase],
-      ),
-    );
+/**
+ * One activation's status publications, off its critical path: each starts
+ * after the previous one settles, so the browser sees them in order, and
+ * each publisher logs its own failure.
+ */
+const statusPublications = () => {
+  let last: Promise<unknown> = Promise.resolve();
+  return (publish: () => Promise<void>) => {
+    last = last.then(publish).catch(() => undefined);
+  };
+};
 
 const activityFor = (
   threadId: ThreadId,
@@ -286,6 +292,31 @@ export const assertThreadActive = (db: D1Database, threadId: string) =>
   assertThreadLifecycleState(db, threadId, "active");
 
 /**
+ * A run's Orb start: `authorizeRunStart`, with a source refusal as the run's
+ * error. Flue keeps a `FlueError`'s type, message, details, and meta on the
+ * failed settlement, so the Thread can say why; the message stays in history.
+ */
+const admitRunStart = async (db: D1Database, threadId: string) => {
+  try {
+    await authorizeRunStart(db, threadId);
+  } catch (cause) {
+    if (!(cause instanceof SourceControlAccessDenied)) throw cause;
+    throw new FlueError({
+      type: "source_authorization_denied",
+      message: "dx can't access this project's source.",
+      details:
+        "The source connection this Thread uses was revoked or changed. Reconnect or rebind the project's source, then retry.",
+      dev: "",
+      meta: {
+        code: "SOURCE_AUTHORIZATION_DENIED",
+        reason: cause.reason,
+        action: cause.action,
+      },
+    });
+  }
+};
+
+/**
  * Between source preparation and the workspace's first use, for 4e's warm
  * snapshot capture. Nothing registers one yet.
  */
@@ -335,58 +366,68 @@ export const makeExecutionActivation =
     ): Promise<FlueSandbox> => {
       const bindings = env as Bindings;
       const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
-      await assertThreadActive(db, id);
       const threadId = Schema.decodeUnknownSync(ThreadId)(id);
       const authorize = () => assertThreadActive(db, id);
-      const needsFirstReadiness = !existingOnly
-        ? await readExecutionWorkspaceReadiness(db, threadId)
-            .then((readiness) => !readiness.ready)
-            .catch(() => true)
-        : false;
-      if (needsFirstReadiness)
-        await reportWorkspacePreparation(
-          bindings,
-          db,
-          threadId,
-          "Preparing workspace…",
+      const publish = statusPublications();
+      const reportPreparation = (status: string | null) =>
+        publish(() =>
+          reportWorkspacePreparation(bindings, db, threadId, status),
         );
+      const [, needsFirstReadiness] = await Promise.all([
+        // Only a run's own activation checks its source before the Orb starts.
+        existingOnly ? authorize() : admitRunStart(db, id),
+        existingOnly
+          ? false
+          : readExecutionWorkspaceReadiness(db, threadId)
+              .then((readiness) => !readiness.ready)
+              .catch(() => true),
+      ]);
+      if (needsFirstReadiness) reportPreparation("Preparing workspace…");
       let wakeStatusPublished = false;
       try {
         const residency: { value: ExecutionWorkspaceResidency } = {
           value: "unknown",
         };
         const handle = existingOnly
-          ? await provider.workspace.connect(
-              context,
-              { threadId },
-              { authorize },
+          ? await observeCall(
+              "execution.activation.workspace",
+              "phase",
+              { "dx.operation": "connect" },
+              () =>
+                provider.workspace.connect(
+                  context,
+                  { threadId },
+                  { authorize },
+                ),
             )
-          : await provider.workspace.create(
-              context,
-              { threadId },
-              {
-                authorize,
-                observeResidency: async (observed) => {
-                  residency.value = observed;
-                  if (observed === "paused" && !needsFirstReadiness) {
-                    wakeStatusPublished = true;
-                    await publishRealtimeWorkspaceStatus(
-                      bindings,
-                      threadId,
-                      "waking",
-                    );
-                  }
-                },
-              },
+          : await observeCall(
+              "execution.activation.workspace",
+              "phase",
+              { "dx.operation": "create" },
+              () =>
+                provider.workspace.create(
+                  context,
+                  { threadId },
+                  {
+                    authorize,
+                    observeResidency: (observed) => {
+                      residency.value = observed;
+                      if (observed === "paused" && !needsFirstReadiness) {
+                        wakeStatusPublished = true;
+                        publish(() =>
+                          publishRealtimeWorkspaceStatus(
+                            bindings,
+                            threadId,
+                            "waking",
+                          ),
+                        );
+                      }
+                    },
+                  },
+                ),
             );
         void recordActiveSubmissionPhase(bindings, id, "workspace_resolved");
-        if (needsFirstReadiness)
-          await reportWorkspacePreparation(
-            bindings,
-            db,
-            threadId,
-            "Preparing source…",
-          );
+        if (needsFirstReadiness) reportPreparation("Preparing source…");
         const source = await handle.development?.source();
         // Source preparation runs on the raw guest, outside the agent's
         // command leases, and its setup and resume hooks can outlast the
@@ -395,17 +436,28 @@ export const makeExecutionActivation =
         const preparation = handleActivity(threadId, handle).retain();
         let sourceCwd: string;
         try {
-          sourceCwd = await activateSourceWorkspace(
-            bindings,
-            db,
-            id,
-            handle.guest,
-            true,
-            source,
-            needsFirstReadiness
-              ? undefined
-              : sourcePreparationReporter(bindings, db, threadId),
-            residency.value !== "running" || needsFirstReadiness,
+          sourceCwd = await observeCall(
+            "execution.activation.source",
+            "phase",
+            {},
+            () =>
+              activateSourceWorkspace(
+                bindings,
+                db,
+                id,
+                handle.guest,
+                true,
+                source,
+                // Only a first preparation has a status to show; a ready
+                // workspace's row no longer takes one.
+                needsFirstReadiness
+                  ? (phase) =>
+                      Effect.sync(() =>
+                        reportPreparation(sourcePreparationStatus[phase]),
+                      )
+                  : undefined,
+                residency.value !== "running" || needsFirstReadiness,
+              ),
           );
           if (source === undefined) {
             await ensureGithubCliWrapper(db, id, handle.guest);
@@ -422,19 +474,19 @@ export const makeExecutionActivation =
         }
         void recordActiveSubmissionPhase(bindings, id, "source_activated");
         if (wakeStatusPublished)
-          await publishRealtimeWorkspaceStatus(bindings, threadId, "ready");
-        if (needsFirstReadiness) {
-          await reportWorkspacePreparation(
-            bindings,
-            db,
-            threadId,
-            "Starting workspace services…",
+          publish(() =>
+            publishRealtimeWorkspaceStatus(bindings, threadId, "ready"),
           );
+        if (needsFirstReadiness) {
+          // A status still queued after this matches no row: readiness
+          // clears the status and only an unready row takes one.
           await markExecutionWorkspaceReady(db, threadId);
-          await publishRealtimeInvalidation(
-            bindings,
-            threadId,
-            "readiness.invalidated",
+          publish(() =>
+            publishRealtimeInvalidation(
+              bindings,
+              threadId,
+              "readiness.invalidated",
+            ),
           );
         }
         kickDaemonActivation(bindings, threadId, activeSubmissionId(id));
@@ -445,10 +497,16 @@ export const makeExecutionActivation =
         const environmentFactory = context.profile.capabilities.includes(
           "environment-variables",
         )
-          ? withExecutionEnvironment(factory, (activeThreadId) =>
-              Effect.runPromise(
-                resolveExecutionEnvironment(bindings, activeThreadId),
-              ),
+          ? withExecutionEnvironment(
+              factory,
+              (activeThreadId) =>
+                Effect.runPromise(
+                  resolveExecutionEnvironment(bindings, activeThreadId),
+                ),
+              (activeThreadId) =>
+                Effect.runPromise(
+                  resolveExecutionEnvironmentRevision(bindings, activeThreadId),
+                ),
             )
           : factory;
         const changesInput = {
@@ -496,10 +554,12 @@ export const makeExecutionActivation =
           },
         };
       } catch (cause) {
-        if (needsFirstReadiness)
-          await reportWorkspacePreparation(bindings, db, threadId, null);
+        if (needsFirstReadiness) reportPreparation(null);
+        // Queued after waking, ready clears it in the browser.
         else if (wakeStatusPublished)
-          await publishRealtimeWorkspaceStatus(bindings, threadId, "ready");
+          publish(() =>
+            publishRealtimeWorkspaceStatus(bindings, threadId, "ready"),
+          );
         throw cause;
       }
     };
@@ -654,8 +714,12 @@ export const makeExecutionActivation =
     const recordResidentTerminalInput = async (
       loadContext: () => Promise<ExecutionContext>,
       threadId: ThreadId,
+      options?: { readonly wake?: boolean },
     ) => {
       if (!activities.has(threadId)) {
+        // Starting to track reaches the provider, which may resume a
+        // paused workspace.
+        if (options?.wake === false) return;
         let initialization = residentActivityInitializations.get(threadId);
         if (initialization === undefined) {
           initialization = initializeResidentActivity(
@@ -675,8 +739,20 @@ export const makeExecutionActivation =
     };
 
     return {
-      activate: (context, request) => open(context, request, false),
-      reconnect: (context, request) => open(context, request, true),
+      activate: (context, request) =>
+        traceSpan(
+          "execution.activation.open",
+          "phase",
+          { "dx.thread_id": request.id, "dx.operation": "activate" },
+          () => open(context, request, false),
+        ),
+      reconnect: (context, request) =>
+        traceSpan(
+          "execution.activation.open",
+          "phase",
+          { "dx.thread_id": request.id, "dx.operation": "reconnect" },
+          () => open(context, request, true),
+        ),
       ensureDaemon,
       recordResidentTerminalInput,
       recordResidentTerminalHeartbeat,

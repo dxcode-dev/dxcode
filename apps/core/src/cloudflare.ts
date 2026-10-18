@@ -6,6 +6,7 @@ import { registerClaudeCodeProvider } from "./claude-code/registration.js";
 import { ExecutionWorkspaces } from "./execution/execution-workspaces.js";
 import type { Bindings } from "./http/types.js";
 import { settingsPersistenceLogger } from "./logging.js";
+import { installContentFreeFlueTracing } from "./observability/flue-tracing.js";
 import { createDxCloudflareModelProvider } from "./runtime/cloudflare-model-provider.js";
 import { createDxModelRoutingProvider } from "./settings/model-byok/flue-provider.js";
 
@@ -17,6 +18,9 @@ export { ThreadSearchIndexObject } from "./thread-search/index-object.js";
 export { ThreadExecutionObject } from "./threads/terminal-object.js";
 
 declare const __DX_CORE_DEV_FIXTURES__: boolean;
+
+// Before the generated entry's body installs Flue's content-bearing default.
+installContentFreeFlueTracing();
 
 const bindings = env as Bindings;
 if (

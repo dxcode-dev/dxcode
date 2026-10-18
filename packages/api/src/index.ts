@@ -1,3 +1,4 @@
+export * from "./attachments/index.js";
 export {
   type ForbiddenResponse,
   ForbiddenResponseSchema,
@@ -17,7 +18,6 @@ export {
   type UnauthenticatedResponse,
   UnauthenticatedResponseSchema,
 } from "./auth/unauthenticated-response.js";
-export * from "./attachments/index.js";
 export * from "./dictation/index.js";
 export {
   type HealthResponse,
@@ -74,12 +74,14 @@ export * from "./source-control/github.js";
 export * from "./threads/archive-thread.js";
 export * from "./threads/changes.js";
 export * from "./threads/create-thread.js";
+export * from "./threads/desktop.js";
 export * from "./threads/files.js";
 export * from "./threads/get-thread.js";
 export * from "./threads/get-thread-readiness.js";
 export * from "./threads/list-threads.js";
 export * from "./threads/message-author.js";
 export * from "./threads/pin-thread.js";
+export * from "./threads/portals.js";
 export * from "./threads/search-threads.js";
 export * from "./threads/terminal.js";
 export * from "./threads/thread-chat.js";
@@ -91,5 +93,4 @@ export {
 export * from "./threads/thread-settlement-provenance.js";
 export * from "./threads/thread-sharing.js";
 export * from "./threads/update-thread.js";
-export * from "./threads/workspace-policy-denied-response.js";
 export * from "./workload-identity.js";

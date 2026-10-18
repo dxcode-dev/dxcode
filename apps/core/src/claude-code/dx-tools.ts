@@ -35,12 +35,9 @@ const answer = async (
   text: string,
   isError: boolean,
 ) => {
-  const path = claudeCodeToolResultPath(toolCallId);
-  await sandbox.mkdir(path.slice(0, path.lastIndexOf("/")), {
-    recursive: true,
-  });
+  // A sandbox write creates missing parent directories.
   await sandbox.writeFile(
-    path,
+    claudeCodeToolResultPath(toolCallId),
     JSON.stringify({ content: [{ type: "text", text }], isError }),
   );
 };

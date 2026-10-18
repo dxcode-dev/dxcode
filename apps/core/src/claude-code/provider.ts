@@ -368,6 +368,7 @@ const position = (context: Context) => {
           (message, index) => isInput(message) && index < lastAssistant,
         );
   const previousAnchor = messages[previousIndex];
+  const last = messages[lastAssistant];
   return {
     pending,
     segment,
@@ -377,9 +378,21 @@ const position = (context: Context) => {
       previousAnchor?.role === "user"
         ? {
             anchor: previousAnchor,
-            recorded: messages
+            // Claude's result ended it, and no failure or Stop followed.
+            finished:
+              last?.role === "assistant" &&
+              last.stopReason === "stop" &&
+              !messages.slice(lastAssistant + 1).some(isLifecycleSignal),
+            /** Tool calls Flue recorded for it, in order. */
+            calls: messages
               .slice(previousIndex + 1, lastAssistant + 1)
-              .filter(({ role }) => role === "assistant").length,
+              .flatMap((message) =>
+                message.role === "assistant"
+                  ? message.content.flatMap((block) =>
+                      block.type === "toolCall" ? [block.id] : [],
+                    )
+                  : [],
+              ),
           }
         : undefined,
   };
@@ -403,20 +416,22 @@ const describeToolCall = (
 /**
  * Work Claude did after the last segment Flue recorded for the interrupted
  * turn: it happened in the workspace and in Claude's session, so the new
- * turn's transcript names it.
+ * turn's transcript names it. A run this isolate never read is read from
+ * the chunk that names the last call Flue recorded.
  */
 const unrecordedWork = async (
   run: ClaudeCodeRun,
-  recorded: number,
+  recorded: ReadonlyArray<string>,
 ): Promise<string | undefined> => {
-  if (!run.exited) await run.stop();
-  await run.poll();
-  const base = await run.base();
-  const calls = run.stream.segments
-    .slice(Math.max(0, recorded - base))
+  const last = run.unread ? recorded.at(-1) : undefined;
+  const from = run.exited ? undefined : await run.stop(last);
+  const reader = from === undefined ? run : run.readerFrom(from);
+  await reader.poll();
+  const known = new Set(recorded);
+  const calls = reader.stream.segments
     .flatMap(({ blocks }) => blocks)
     .flatMap((block) =>
-      block.type === "toolCall" && block.complete
+      block.type === "toolCall" && block.complete && !known.has(block.id)
         ? [describeToolCall(block)]
         : [],
     );
@@ -624,7 +639,11 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
         };
         if (relaunch) {
           // A fresh turn names the interrupted turn's unrecorded work.
-          if (nextAttempt === 0 && previous !== undefined) {
+          if (
+            nextAttempt === 0 &&
+            previous !== undefined &&
+            !previous.finished
+          ) {
             const earlier = (
               await claudeCodeRuns.attempts(
                 threadId,
@@ -635,7 +654,7 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
             const note =
               earlier === undefined
                 ? undefined
-                : await unrecordedWork(earlier.run, previous.recorded);
+                : await unrecordedWork(earlier.run, previous.calls);
             if (note !== undefined)
               emitter.prefix = { type: "text", text: note };
           }
@@ -788,6 +807,8 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
           fail("Stopped.", "aborted");
           return;
         }
+        // A failed turn must not leave Claude working unobserved.
+        if (run !== undefined && !run.exited) await run.stop();
         // Name what was thrown: a bare "failed" hides the cause.
         const detail =
           error instanceof Error

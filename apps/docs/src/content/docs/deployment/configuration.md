@@ -46,7 +46,9 @@ AI bindings, and Email Sending bindings are part of the Worker deployment and
 do not require additional token permissions. A deployment without magic link
 does not need Turnstile, and one without `authEmailFrom` does not need Email
 Sending. A deployment without
-a custom domain does not need Zone or Workers Routes.
+a custom domain does not need Zone or Workers Routes. A deployment with
+`portalDomain` also needs Zone Read, Workers Routes Edit, and DNS Edit on the
+Portal zone.
 
 Account API Tokens lets the deployment create one more token: object read
 and write on its own storage bucket and nothing else. dx signs short-lived
@@ -97,6 +99,7 @@ The wizard writes this nonsecret JSON file:
   "adminEmail": "me@example.com",
   "domain": "dx.example.com",
   "zone": "example.com",
+  "portalDomain": "example-portals.dev",
   "authEmailFrom": "sign-in@mail.example.com",
   "signIn": {
     "providers": ["magic-link", "google"],
@@ -136,10 +139,25 @@ recovery](/docs/operations/upgrade-recovery/#sign-in-configuration).
 
 `workerTraces` turns on Cloudflare Workers traces for the dx Worker. Logs are
 always on. Traces record request URLs and Durable Object names, so they default
-to off. The wizard asks on first deploy, and asks once when upgrading a
-deployment whose file has no `workerTraces` key. The answer is saved in this
-file, so later reruns do not ask again. Edit the value and rerun
-`pnpm dx:deploy` to change it.
+to off. They also carry dx's spans, which hold route templates, IDs, and
+counts, and the agent's model, token usage, and tool names, but not prompts,
+answers, or tool arguments and results. The wizard asks on first deploy, and
+asks once when upgrading a deployment whose file has no `workerTraces` key.
+The answer is saved in this file, so later reruns do not ask again. Edit the
+value and rerun `pnpm dx:deploy` to change it.
+
+`portalDomain` turns on Portals: a web app running in a Thread's workspace is
+served at `https://t-<thread>-p<port>.<portalDomain>/` behind dx sign-in. It
+names the apex of a separate, active Cloudflare zone in the same account, on a
+registrable domain other than the app's: with the app at `dx.example.com`,
+`example-portals.dev` works but `example.com` and `portals.example.com` do
+not, and no `workers.dev` name does. A same-site Portal could set cookies the
+app reads. The wizard asks whether to enable Portals and offers the account's
+eligible zones; `pnpm dx:deploy -- --portals` changes the choice later. The
+deploy adds a Worker route and a proxied wildcard DNS record on that zone,
+after checking that the credential holds Zone Read, DNS Edit, and Workers
+Routes Edit on it. Remove the key and rerun `pnpm dx:deploy` to turn Portals
+off.
 
 Wizard and noninteractive runs produce the same fail-closed plan. Same-version
 reruns reuse unchanged resources and do not require the administrator password.

@@ -12,6 +12,7 @@ import {
 } from "./authority.js";
 import {
   authorizeBitbucketSource,
+  readBitbucketThreadAuthority,
   recheckBitbucketThreadSource,
 } from "./bitbucket/control-plane.js";
 import { createGitHubAppJwt } from "./github/app-auth.js";
@@ -174,9 +175,13 @@ export const authorizeSource = async (input: {
         input.repositoryId,
       );
     } finally {
-      await provider
-        .revokeInstallationToken(lease.token)
-        .catch(() => undefined);
+      // The token expires on its own; revoking it need not delay the answer.
+      const revocation = provider.revokeInstallationToken(lease.token).then(
+        () => undefined,
+        () => undefined,
+      );
+      if (input.waitUntil === undefined) await revocation;
+      else input.waitUntil(revocation);
     }
     const after = validateLiveGrantAuthority(
       await readLiveGrantAuthority(
@@ -414,4 +419,63 @@ export const authorizeThreadSource = async (input: {
     source.policyRevision !== Number(row.policy_revision)
   )
     throw deny("stale-snapshot", "rebind");
+};
+
+/**
+ * Admits a run at Orb start, from D1 alone: the Thread is active and, when it
+ * has a connected source, the grant it captured is still live, entitled, and
+ * at the captured epochs, and its Project still binds the snapshot's
+ * revision. It makes no provider calls, and a Thread without a connected
+ * source costs the lifecycle read it already made. Credentialed commands
+ * still re-check through `SourceRuntimeBroker`.
+ */
+export const authorizeRunStart = async (db: D1Database, threadId: string) => {
+  const row = await db
+    .prepare(`
+      SELECT thread.lifecycle_state, thread.owner_user_id,
+             snapshot.provider, snapshot.binding_revision,
+             repository.binding_revision AS project_binding_revision,
+             authority.owner_grant_id, authority.installation_id,
+             authority.provider_repository_id, authority.authorization_epoch,
+             authority.installation_epoch, authority.policy_revision,
+             grant_row.owner_scope, grant_row.owner_id
+        FROM threads AS thread
+        LEFT JOIN thread_source_snapshot AS snapshot ON snapshot.thread_id = thread.id
+        LEFT JOIN thread_source_authority AS authority ON authority.thread_id = thread.id
+        LEFT JOIN project_repository AS repository ON repository.project_id = thread.project_id
+        LEFT JOIN github_owner_grant AS grant_row ON grant_row.id = authority.owner_grant_id
+       WHERE thread.id = ?
+       LIMIT 1
+    `)
+    .bind(threadId)
+    .first<Record<string, string | number | null>>();
+  if (row?.lifecycle_state !== "active")
+    throw new Error("Thread is not active.");
+  if (row.provider == null || row.owner_grant_id == null) return;
+  if (row.project_binding_revision !== row.binding_revision)
+    throw deny("stale-snapshot", "rebind");
+  if (row.provider === "bitbucket") {
+    await readBitbucketThreadAuthority(db, threadId, String(row.owner_user_id));
+    return;
+  }
+  const live = validateLiveGrantAuthority(
+    row.owner_scope === null
+      ? null
+      : await readLiveGrantAuthority(
+          db,
+          {
+            scope: row.owner_scope as SourceOwner["scope"],
+            id: String(row.owner_id),
+          },
+          String(row.owner_grant_id),
+          String(row.provider_repository_id),
+        ),
+  );
+  if (
+    live.installation_id !== row.installation_id ||
+    live.grant_epoch !== Number(row.authorization_epoch) ||
+    live.installation_epoch !== Number(row.installation_epoch) ||
+    live.policy_revision !== Number(row.policy_revision)
+  )
+    throw deny("stale-authorization-epoch", "retry");
 };

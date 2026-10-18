@@ -62,50 +62,23 @@ export const resolveMessageAttachments = async (
 };
 
 /**
- * Record that a message sends its files in this Thread, then rewrite the
- * block from Core's records, so the agent sees each file's real name, type,
- * size, and download URL. Recording a file again is a no-op, so a retry of
- * the same message produces the same body, which Flue needs to recognize it.
+ * The message as the agent receives it: the block rewritten from Core's
+ * records, so the agent sees each file's real name, type, size, and download
+ * URL. It records nothing, so a refused message leaves no trace, and a retry
+ * of the same message produces the same body, which Flue needs to recognize
+ * it.
  */
-export const admitMessageAttachments = async (
+export const messageAttachmentBody = (
   bindings: Bindings,
-  input: {
-    readonly threadId: string;
-    readonly senderUserId: string;
-    readonly body: string;
-    readonly requestUrl: string;
-    /** Already checked by `resolveMessageAttachments`. */
-    readonly resolved?: ResolvedMessageAttachments;
-  },
-): Promise<{
+  resolved: ResolvedMessageAttachments,
+  requestUrl: string,
+): {
   readonly body: string;
   readonly attachments: ReadonlyArray<MessageAttachment>;
-}> => {
-  const resolved =
-    input.resolved ?? (await resolveMessageAttachments(bindings, input));
+} => {
   if (resolved.rows.length === 0)
     return { body: resolved.text, attachments: [] };
-  const db = bindings.DB as D1Database;
-  const now = Date.now();
-  try {
-    // The foreign key refuses a file deleted since the check.
-    await db.batch(
-      resolved.rows.map((row) =>
-        db
-          .prepare(
-            `INSERT OR IGNORE INTO attachment_threads
-               (attachment_id, thread_id, sender_user_id, created_at)
-             VALUES (?, ?, ?, ?)`,
-          )
-          .bind(row.id, input.threadId, input.senderUserId, now),
-      ),
-    );
-  } catch {
-    throw new MessageAttachmentsRejected(
-      "An attachment is unavailable. Remove it and attach the file again.",
-    );
-  }
-  const origin = attachmentOrigin(bindings, input.requestUrl);
+  const origin = attachmentOrigin(bindings, requestUrl);
   const attachments = resolved.rows.map((row) => {
     const data = attachmentData(row, origin);
     return {
@@ -120,4 +93,61 @@ export const admitMessageAttachments = async (
     body: withMessageAttachments(resolved.text, attachments),
     attachments,
   };
+};
+
+/**
+ * Record that a message sent its files in this Thread, which lets every
+ * reader of the Thread open them and stops their deletion. Recording a file
+ * again is a no-op, so a retried message can record it again.
+ */
+export const linkMessageAttachments = async (
+  db: D1Database,
+  input: {
+    readonly threadId: string;
+    readonly senderUserId: string;
+    readonly rows: ReadonlyArray<AttachmentRow>;
+  },
+) => {
+  if (input.rows.length === 0) return;
+  const now = Date.now();
+  try {
+    // The foreign key refuses a file deleted since the check.
+    await db.batch(
+      input.rows.map((row) =>
+        db
+          .prepare(
+            `INSERT OR IGNORE INTO attachment_threads
+               (attachment_id, thread_id, sender_user_id, created_at)
+             VALUES (?, ?, ?, ?)`,
+          )
+          .bind(row.id, input.threadId, input.senderUserId, now),
+      ),
+    );
+  } catch {
+    throw new MessageAttachmentsRejected(
+      "An attachment is unavailable. Remove it and attach the file again.",
+    );
+  }
+};
+
+/** Records the message's files in the Thread, then rewrites its block. */
+export const admitMessageAttachments = async (
+  bindings: Bindings,
+  input: {
+    readonly threadId: string;
+    readonly senderUserId: string;
+    readonly body: string;
+    readonly requestUrl: string;
+    /** Already checked by `resolveMessageAttachments`. */
+    readonly resolved?: ResolvedMessageAttachments;
+  },
+) => {
+  const resolved =
+    input.resolved ?? (await resolveMessageAttachments(bindings, input));
+  await linkMessageAttachments(bindings.DB as D1Database, {
+    threadId: input.threadId,
+    senderUserId: input.senderUserId,
+    rows: resolved.rows,
+  });
+  return messageAttachmentBody(bindings, resolved, input.requestUrl);
 };

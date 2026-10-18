@@ -445,7 +445,7 @@ describe("SourceWorkspaceService", () => {
     ).rejects.toMatchObject({
       _tag: "SourceRuntimeToolUnavailable",
       tool: "git",
-      action: "update-e2b-template",
+      action: "update-orb-template",
     });
   });
 

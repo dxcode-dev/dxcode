@@ -33,6 +33,7 @@ import {
 import { loadE2BRequirements } from "../../execution/e2b/requirements.js";
 import type { Bindings } from "../../http/types.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
+import { resolveExecutionProviders } from "../../plugins/execution/provider.js";
 import { SettingsAudit } from "../audit.js";
 import {
   decryptEnvironmentVariable,
@@ -100,6 +101,15 @@ export class PluginExecutionUnavailable extends Schema.TaggedError<PluginExecuti
     return attachCause(new this(props), cause);
   }
 }
+
+/**
+ * Plugins run in a one-shot, egress-restricted E2B sandbox; no other
+ * Execution provider offers one. A deployment without E2B fails closed.
+ */
+export class PluginIsolationUnavailable extends Schema.TaggedError<PluginIsolationUnavailable>()(
+  "PluginIsolationUnavailable",
+  { provider: Schema.Literal("e2b") },
+) {}
 
 export class PluginExecutionLimited extends Schema.TaggedError<PluginExecutionLimited>()(
   "PluginExecutionLimited",
@@ -369,6 +379,12 @@ export const PluginIsolationLive = (bindings: Bindings) =>
   Layer.effect(
     PluginIsolation,
     Effect.gen(function* () {
+      if (
+        !resolveExecutionProviders(bindings).some(
+          ({ providerId }) => providerId === "e2b",
+        )
+      )
+        return yield* new PluginIsolationUnavailable({ provider: "e2b" });
       const requirements = yield* loadE2BRequirements(bindings).pipe(
         Effect.mapError(unavailable("e2b.requirements")),
       );

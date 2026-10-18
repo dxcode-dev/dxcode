@@ -1,3 +1,5 @@
+import { threadAgentName } from "@dx/api";
+import { MAX_MCP_SERVERS_PER_THREAD } from "@dx/domain";
 import * as v from "valibot";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,7 +13,9 @@ const hooks = vi.hoisted(() => ({
   usePromptData: vi.fn(() => undefined),
   useSandbox: vi.fn(),
   useTool: vi.fn(),
+  useSkill: vi.fn(),
   defineTool: vi.fn((tool: unknown) => tool),
+  defineSkill: vi.fn((skill: unknown) => skill),
   InputTooLargeError: class InputTooLargeError extends Error {},
 }));
 const pluginHost = vi.hoisted(() => ({
@@ -68,6 +72,7 @@ vi.mock("../settings/plugins/execution.js", () => ({
 }));
 vi.mock("../plugins/agent-context.js", () => pluginHost);
 vi.mock("../threads/agent-tools.js", () => threadTools);
+vi.mock("../portals/prompt.js", () => ({ threadPortalPrompt: () => "" }));
 vi.mock("../plugins/code/providers/wasm.js", () => ({ getCodeWasm: vi.fn() }));
 vi.mock("../settings/plugins/flue.js", () => ({
   createPluginTool: plugins.createPluginTool,
@@ -80,6 +85,7 @@ import { dxAgentPrompt } from "./dx-agent-prompt.js";
 describe("DxAgent", () => {
   beforeEach(() => {
     runtime.capabilities = "workspace";
+    hooks.useSkill.mockReset();
     hooks.useInitialData.mockReset();
     hooks.useMcpConnection.mockReset();
     hooks.useAgentFinish.mockReset();
@@ -91,6 +97,7 @@ describe("DxAgent", () => {
     skills.createSkillResourceTool.mockClear();
     plugins.createPluginTool.mockClear();
     plugins.invokePluginLive.mockReset();
+    runtime.execution.createSandbox.mockReset().mockResolvedValue({});
     runtime.selectModel.mockReset().mockImplementation(() => ({
       model: "cloudflare/@cf/zai-org/glm-5.3-flash",
       options: undefined,
@@ -163,6 +170,21 @@ describe("DxAgent", () => {
     const disabledPrompt = DxAgent({ id: "thr_search_disabled" });
     expect(toolNames()).toEqual([]);
     expect(disabledPrompt).not.toMatch(/web_search|read_web_page|web search/i);
+  });
+
+  it("mounts dx's workspace skill through Flue in a workspace Thread only", () => {
+    const prompt = DxAgent({ id: "thr_workspace" });
+    expect(
+      hooks.useSkill.mock.calls.map(
+        ([skill]) => (skill as { name: string }).name,
+      ),
+    ).toEqual(["dx-workspace"]);
+    expect(prompt).toContain("activate the dx-workspace skill");
+
+    hooks.useSkill.mockReset();
+    runtime.capabilities = "model-only";
+    DxAgent({ id: "thr_model_preview" });
+    expect(hooks.useSkill).not.toHaveBeenCalled();
   });
 
   it("mounts the built-in Thread tools in every workspace Thread, with no plugin enabled", () => {
@@ -256,8 +278,110 @@ describe("DxAgent", () => {
     expect(pluginHost.resolveAgentPluginTools).not.toHaveBeenCalled();
   });
 
+  describe("workspace activation in the attempt", () => {
+    const context = (instanceId: string) =>
+      ({
+        instanceId,
+        agentName: "dx-agent",
+        scope: { kind: "prompt", submissionId: "sub_1" },
+        signal: new AbortController().signal,
+        recovery: false,
+      }) as never;
+    const deferred = <T>() => {
+      let resolve: (value: T) => void = () => {};
+      let reject: (error: unknown) => void = () => {};
+      const promise = new Promise<T>((onResolve, onReject) => {
+        resolve = onResolve;
+        reject = onReject;
+      });
+      return { promise, resolve, reject };
+    };
+    /** The factory the rendered agent hands Flue. */
+    const renderedSandbox = (id: string) => {
+      hooks.useInitialData.mockReturnValue(undefined);
+      DxAgent({ id });
+      return hooks.useSandbox.mock.calls.at(-1)?.[0] as {
+        createSandbox: (request: { id: string }) => Promise<unknown>;
+      };
+    };
+
+    beforeEach(() => {
+      pluginHost.resolveAgentPluginTools.mockReset().mockResolvedValue({
+        submissionId: "sub_1",
+        tools: [],
+      });
+    });
+
+    it("starts while the route resolves and hands Flue that same sandbox", async () => {
+      const route = deferred<unknown>();
+      runtime.resolvePromptData.mockReturnValueOnce(route.promise);
+      const sandbox = { id: "started" };
+      runtime.execution.createSandbox.mockResolvedValueOnce(sandbox);
+
+      const resolving = DxAgent.resolvePromptData?.(
+        undefined,
+        context("thr_overlap"),
+      );
+      expect(runtime.execution.createSandbox).toHaveBeenCalledExactlyOnceWith({
+        id: "thr_overlap",
+      });
+      route.resolve({ model: "test/model", thinking: "medium" });
+      await resolving;
+
+      const factory = renderedSandbox("thr_overlap");
+      await expect(factory.createSandbox({ id: "thr_overlap" })).resolves.toBe(
+        sandbox,
+      );
+      expect(runtime.execution.createSandbox).toHaveBeenCalledOnce();
+      // A later createSandbox in the same attempt activates on its own.
+      await factory.createSandbox({ id: "thr_overlap" });
+      expect(runtime.execution.createSandbox).toHaveBeenCalledTimes(2);
+    });
+
+    it("fails the run with the activation's own error", async () => {
+      runtime.resolvePromptData.mockResolvedValueOnce({
+        model: "test/model",
+        thinking: "medium",
+      });
+      const failure = new Error("workspace unavailable");
+      runtime.execution.createSandbox.mockRejectedValueOnce(failure);
+
+      await expect(
+        DxAgent.resolvePromptData?.(undefined, context("thr_failed")),
+      ).resolves.toBeDefined();
+      await expect(
+        renderedSandbox("thr_failed").createSandbox({ id: "thr_failed" }),
+      ).rejects.toBe(failure);
+    });
+
+    it("fails with the route error and leaves no started sandbox behind", async () => {
+      runtime.resolvePromptData.mockRejectedValueOnce(
+        new Error("Model routing unavailable: test"),
+      );
+      await expect(
+        DxAgent.resolvePromptData?.(undefined, context("thr_route")),
+      ).rejects.toThrow("Model routing unavailable: test");
+
+      const fresh = { id: "fresh" };
+      runtime.execution.createSandbox.mockResolvedValueOnce(fresh);
+      await expect(
+        renderedSandbox("thr_route").createSandbox({ id: "thr_route" }),
+      ).resolves.toBe(fresh);
+      expect(runtime.execution.createSandbox).toHaveBeenCalledTimes(2);
+    });
+
+    it("starts nothing in the model-only preview", async () => {
+      runtime.capabilities = "model-only";
+      runtime.resolvePromptData.mockResolvedValueOnce(undefined);
+      await DxAgent.resolvePromptData?.(undefined, context("thr_preview"));
+      expect(runtime.execution.createSandbox).not.toHaveBeenCalled();
+    });
+  });
+
   it("pins the durable identity", () => {
     expect(DxAgent.agentName).toBe("dx-agent");
+    // Clients derive keyed submission IDs from it.
+    expect(DxAgent.agentName).toBe(threadAgentName);
   });
 
   it("registers only Workers AI in the local model preview", () => {
@@ -503,14 +627,17 @@ describe("DxAgent", () => {
         personalInstructions: "",
         settingsRevision: 0,
         settingsVersion: 1,
-        mcpConnections: Array.from({ length: 21 }, (_, index) => ({
-          id: `mcp_${index}`,
-          name: `server_${index}`,
-          endpoint: "https://mcp.example.com/mcp",
-          timeoutMs: 10_000,
-          authenticated: false,
-          tools: [],
-        })),
+        mcpConnections: Array.from(
+          { length: MAX_MCP_SERVERS_PER_THREAD + 1 },
+          (_, index) => ({
+            id: `mcp_${index}`,
+            name: `server_${index}`,
+            endpoint: "https://mcp.example.com/mcp",
+            timeoutMs: 10_000,
+            authenticated: false,
+            tools: [],
+          }),
+        ),
       }).success,
     ).toBe(false);
     expect(

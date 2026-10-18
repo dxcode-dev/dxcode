@@ -1,12 +1,13 @@
 import { env } from "cloudflare:test";
 import { Principal, type UserId } from "@dx/domain";
+import type { Sandbox } from "@flue/runtime";
 import { Schema } from "effect";
 import { Hono } from "hono";
-import { beforeEach, describe, expect, it } from "vitest";
-import { enforceAgentWorkspacePolicy } from "../../src/auth/enforce-agent-workspace-policy.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
+import { composeExecutionWorkspaces } from "../../src/plugins/execution/provider.js";
 import { projectRoutes } from "../../src/projects/routes.js";
 import { loadRoutableConnections } from "../../src/settings/model-routing/connection-store-d1.js";
 import { settingsRoutes } from "../../src/settings/routes.js";
@@ -274,34 +275,45 @@ describe("workspace policy routes in workerd with real D1", () => {
     ).toBe(400);
   });
 
-  it("enforces runner restrictions again at native agent admission", async () => {
-    const app = new Hono<AppEnv>();
-    app.use("*", requestId);
-    app.use("/agents/:threadId", enforceAgentWorkspacePolicy);
-    app.all("/agents/:threadId", (context) => context.body(null, 204));
-    app.onError(errorHandler);
+  it("enforces runner restrictions again when a run activates the Orb", async () => {
+    // Flue's sandbox factory for the Thread's run, over a stand-in pipeline.
+    const activate = vi.fn(async () => ({}) as Sandbox);
+    const run = () =>
+      composeExecutionWorkspaces(
+        { ...bindings, DX_RUNTIME_MODE: "deployed", E2B_API_KEY: "key" },
+        {
+          e2b: {
+            workspace: { create: vi.fn(), connect: vi.fn(), release: vi.fn() },
+          },
+        },
+        () => ({
+          activate,
+          reconnect: vi.fn(),
+          ensureDaemon: vi.fn(),
+          recordResidentTerminalInput: vi.fn(),
+          recordResidentTerminalHeartbeat: vi.fn(),
+        }),
+        [{ providerId: "e2b", capabilities: ["execution.workspace"] }],
+      ).sandboxFactory.createSandbox({ id: threadId });
 
     await env.DB.prepare(
       "UPDATE workspace_policy SET allow_remote_runners = 0 WHERE workspace_id = ?",
     )
       .bind(workspaceId)
       .run();
-    const denied = await app.request(`/agents/${threadId}`, {}, bindings);
-    expect(denied.status).toBe(403);
-    await expect(denied.json()).resolves.toMatchObject({
-      data: {
-        code: "WORKSPACE_POLICY_DENIED",
-        reason: "remote-runner-disabled",
-      },
+    await expect(run()).rejects.toMatchObject({
+      _tag: "WorkspacePolicyDenied",
+      reason: "remote-runner-disabled",
     });
+    expect(activate).not.toHaveBeenCalled();
 
     await env.DB.prepare(
       "UPDATE workspace_policy SET allow_remote_runners = 1 WHERE workspace_id = ?",
     )
       .bind(workspaceId)
       .run();
-    const allowed = await app.request(`/agents/${threadId}`, {}, bindings);
-    expect(allowed.status).toBe(204);
+    await run();
+    expect(activate).toHaveBeenCalledOnce();
   });
 
   it("enforces runner-profile restrictions during project creation", async () => {

@@ -17,19 +17,27 @@ import {
   assertThreadLifecycleState,
   atDaemonInstallationStage,
 } from "../activation.js";
-import { e2b } from "./adapter.js";
-import { type DaemonGuest, ensureDaemonInGuest } from "./daemon-installer.js";
+import {
+  type DaemonGuest,
+  ensureDaemonInGuest,
+} from "../guest/daemon-installer.js";
 import {
   loadDaemonRelease,
   loadDaemonReleaseMetadata,
-} from "./daemon-release.js";
+} from "../guest/daemon-release.js";
+import { e2b } from "./adapter.js";
 import { loadE2BRequirements } from "./requirements.js";
 import {
   connectExistingExecutionWorkspace,
   destroyExecutionWorkspace,
+  type E2BResolverApi,
   type ExecutionWorkspaceResolution,
+  makeConnectExistingExecutionWorkspace,
   makeD1ExecutionWorkspaceCoordinator,
   makeD1ExecutionWorkspaceStateStore,
+  makeDestroyExecutionWorkspace,
+  makePauseExecutionWorkspace,
+  makeResolveExecutionWorkspace,
   pauseExecutionWorkspace,
   resolveExecutionWorkspace,
 } from "./resolver.js";
@@ -110,6 +118,7 @@ const observeE2BResolution =
  * sandbox, or only reconnects. Every resolution records a `runner` usage row.
  */
 const openE2BWorkspace = async (
+  resolvers: E2BResolvers,
   context: ExecutionContext,
   threadId: string,
   options: {
@@ -124,8 +133,8 @@ const openE2BWorkspace = async (
   const { profile, requirements } = await e2bRequirements(bindings, context);
   const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
   const resolve = options.existingOnly
-    ? connectExistingExecutionWorkspace
-    : resolveExecutionWorkspace;
+    ? resolvers.connectExisting
+    : resolvers.resolve;
   const sandbox = await Effect.runPromise(
     resolve({
       id: threadId,
@@ -154,74 +163,108 @@ const openE2BWorkspace = async (
   };
 };
 
+interface E2BResolvers {
+  readonly resolve: typeof resolveExecutionWorkspace;
+  readonly connectExisting: typeof connectExistingExecutionWorkspace;
+  readonly pause: typeof pauseExecutionWorkspace;
+  readonly destroy: typeof destroyExecutionWorkspace;
+}
+
+const resolversFor = (api: E2BResolverApi | undefined): E2BResolvers =>
+  api === undefined
+    ? {
+        resolve: (options) => resolveExecutionWorkspace(options),
+        connectExisting: (options) =>
+          connectExistingExecutionWorkspace(options),
+        pause: (options) => pauseExecutionWorkspace(options),
+        destroy: (options) => destroyExecutionWorkspace(options),
+      }
+    : {
+        resolve: makeResolveExecutionWorkspace(api),
+        connectExisting: makeConnectExistingExecutionWorkspace(api),
+        pause: makePauseExecutionWorkspace(api),
+        destroy: makeDestroyExecutionWorkspace(api),
+      };
+
 /**
  * The first Execution provider: E2B sandboxes. It claims
  * `execution.pause-resume` (processes and memory survive): archiving pauses
- * the sandbox, and destroying kills it.
+ * the sandbox, and destroying kills it. Tests pass a fake control-plane API.
  */
-export const e2bExecutionProvider: ExecutionProvider<E2BWorkspaceHandle> = {
-  workspace: {
-    create: (context, { threadId }, options) =>
-      openE2BWorkspace(context, threadId, {
-        existingOnly: false,
-        authorize: options.authorize,
-        observeResidency: options.observeResidency,
-      }),
-    connect: (context, { threadId }, options) =>
-      openE2BWorkspace(context, threadId, {
-        existingOnly: true,
-        authorize: options.authorize,
-      }),
-    async release(context, { threadId }, mode) {
-      const bindings = env as Bindings;
-      const { requirements } = await e2bRequirements(bindings, context);
-      const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
-      const options = {
-        id: threadId,
-        requirements,
-        stateStore: makeD1ExecutionWorkspaceStateStore(db),
-        coordination: makeD1ExecutionWorkspaceCoordinator(db),
-      };
-      await Effect.runPromise(
-        mode === "archive"
-          ? pauseExecutionWorkspace({
-              ...options,
-              authorizePause: () =>
-                assertThreadLifecycleState(db, threadId, "archived"),
-            })
-          : destroyExecutionWorkspace(options),
-      );
+export const makeE2BExecutionProvider = (
+  api?: E2BResolverApi,
+): ExecutionProvider<E2BWorkspaceHandle> => {
+  let memoized: E2BResolvers | undefined;
+  const resolvers = () => {
+    memoized ??= resolversFor(api);
+    return memoized;
+  };
+  return {
+    workspace: {
+      create: (context, { threadId }, options) =>
+        openE2BWorkspace(resolvers(), context, threadId, {
+          existingOnly: false,
+          authorize: options.authorize,
+          observeResidency: options.observeResidency,
+        }),
+      connect: (context, { threadId }, options) =>
+        openE2BWorkspace(resolvers(), context, threadId, {
+          existingOnly: true,
+          authorize: options.authorize,
+        }),
+      async release(context, { threadId }, mode) {
+        const bindings = env as Bindings;
+        const { requirements } = await e2bRequirements(bindings, context);
+        const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
+        const options = {
+          id: threadId,
+          requirements,
+          stateStore: makeD1ExecutionWorkspaceStateStore(db),
+          coordination: makeD1ExecutionWorkspaceCoordinator(db),
+        };
+        await Effect.runPromise(
+          mode === "archive"
+            ? resolvers().pause({
+                ...options,
+                authorizePause: () =>
+                  assertThreadLifecycleState(db, threadId, "archived"),
+              })
+            : resolvers().destroy(options),
+        );
+      },
     },
-  },
-  residentDaemon: {
-    async install(_context, handle, input) {
-      const bindings = env as Bindings;
-      const release = await atDaemonInstallationStage(
-        "release",
-        loadDaemonReleaseMetadata(bindings),
-      );
-      let releaseLoadedAt: number | undefined;
-      const guest = await ensureDaemonInGuest(handle.guest, {
-        threadId: input.threadId,
-        endpoint: input.endpoint,
-        sha256: release.sha256,
-        releaseUrl: release.url,
-        credential: input.credential,
-        mintCredential: input.mintCredential,
-        loadBinary: async () => {
-          const loaded = await atDaemonInstallationStage(
-            "release",
-            loadDaemonRelease(bindings),
-          );
-          releaseLoadedAt = Date.now();
-          return loaded.binary;
-        },
-        ...(input.signal === undefined ? {} : { signal: input.signal }),
-      });
-      return {
-        guest,
-        ...(releaseLoadedAt === undefined ? {} : { releaseLoadedAt }),
-      };
+    residentDaemon: {
+      async install(_context, handle, input) {
+        const bindings = env as Bindings;
+        const release = await atDaemonInstallationStage(
+          "release",
+          loadDaemonReleaseMetadata(bindings),
+        );
+        let releaseLoadedAt: number | undefined;
+        const guest = await ensureDaemonInGuest(handle.guest, {
+          threadId: input.threadId,
+          endpoint: input.endpoint,
+          sha256: release.sha256,
+          releaseUrl: release.url,
+          credential: input.credential,
+          mintCredential: input.mintCredential,
+          loadBinary: async () => {
+            const loaded = await atDaemonInstallationStage(
+              "release",
+              loadDaemonRelease(bindings),
+            );
+            releaseLoadedAt = Date.now();
+            return loaded.binary;
+          },
+          ...(input.signal === undefined ? {} : { signal: input.signal }),
+        });
+        return {
+          guest,
+          ...(releaseLoadedAt === undefined ? {} : { releaseLoadedAt }),
+        };
+      },
     },
-  },
+  };
 };
+
+export const e2bExecutionProvider = makeE2BExecutionProvider();

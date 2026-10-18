@@ -28,6 +28,9 @@ vi.mock("@flue/runtime/cloudflare", () => ({
 vi.mock("./logging.js", () => ({
   settingsPersistenceLogger: { warn: vi.fn() },
 }));
+vi.mock("./observability/flue-tracing.js", () => ({
+  installContentFreeFlueTracing: vi.fn(),
+}));
 vi.mock("./runtime/model-fixtures.js", () => ({
   registerLocalModelFixtureProvider: registration.fixture,
 }));

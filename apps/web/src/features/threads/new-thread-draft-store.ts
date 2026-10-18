@@ -1,4 +1,12 @@
-import type { UserId, WorkspaceId } from "@dx/domain";
+import type {
+  ClaudeCodeEffort,
+  ModeId,
+  ProjectId,
+  RunnerProfileId,
+  ThreadId,
+  UserId,
+  WorkspaceId,
+} from "@dx/domain";
 import { Schema } from "effect";
 import { DictationRecoverySession } from "./dictation/dictation-session.js";
 import {
@@ -27,6 +35,32 @@ export interface NewThreadDraftSnapshot {
   readonly text: string;
   readonly warning?: "too-large" | "storage-unavailable";
 }
+/** A New Thread request as sent, and the Thread it creates. */
+export interface InitialThreadCreationAttempt {
+  readonly threadId: ThreadId;
+  readonly projectId?: ProjectId;
+  readonly profile: ModeId;
+  readonly model?: string;
+  readonly effort?: ClaudeCodeEffort;
+  readonly runnerProfileId?: RunnerProfileId;
+  readonly body: string;
+  readonly attachmentIds: ReadonlyArray<string>;
+}
+
+/**
+ * The draft's creation request. It outlives the composer, so a composer
+ * reopened mid-send shows the send, and resending an unchanged request
+ * reuses its Thread instead of creating a second one.
+ */
+export interface NewThreadCreation {
+  readonly attempt?: InitialThreadCreationAttempt;
+  readonly sending: boolean;
+  /** The request has outlasted the soft timeout. */
+  readonly stalled: boolean;
+  /** Abandons the in-flight request and sends it again for the same Thread. */
+  readonly retry?: () => void;
+}
+
 export interface NewThreadDraftStore {
   readonly dictation: DictationRecoverySession;
   /**
@@ -42,9 +76,12 @@ export interface NewThreadDraftStore {
   readonly setText: (text: string) => void;
   readonly flush: () => void;
   readonly clear: () => void;
+  readonly getCreation: () => NewThreadCreation;
+  readonly setCreation: (creation: NewThreadCreation) => void;
 }
 
 const emptySnapshot: NewThreadDraftSnapshot = { text: "" };
+const noCreation: NewThreadCreation = { sending: false, stalled: false };
 const noImages: ReadonlyArray<PendingAttachment> = [];
 const utf8Size = (text: string) => new TextEncoder().encode(text).byteLength;
 const scopeKey = ({ userId, workspaceId }: NewThreadDraftScope) =>
@@ -93,6 +130,7 @@ export const createNewThreadDraftStore = ({
   let unsubscribePageHide: (() => void) | undefined;
   let locallyEditedAt = 0;
   let imageList = noImages;
+  let creation = noCreation;
 
   const publish = (next: NewThreadDraftSnapshot) => {
     if (snapshot.text === next.text && snapshot.warning === next.warning)
@@ -191,6 +229,11 @@ export const createNewThreadDraftStore = ({
     imageList = next;
     for (const listener of listeners) listener();
   };
+  const setCreation = (next: NewThreadCreation) => {
+    if (creation === next) return;
+    creation = next;
+    for (const listener of listeners) listener();
+  };
 
   return {
     dictation: new DictationRecoverySession(),
@@ -264,7 +307,10 @@ export const createNewThreadDraftStore = ({
       // A sent Thread took its files first; anything left is discarded.
       images.dispose();
       setImages(noImages);
+      setCreation(noCreation);
     },
+    getCreation: () => creation,
+    setCreation,
   };
 };
 

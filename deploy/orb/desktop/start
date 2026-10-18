@@ -1,0 +1,142 @@
+#!/bin/bash
+# Starts the dx Desktop session (deploy/orb/README.md#desktop) and returns once
+# the Waymote gateway serves on 127.0.0.1:5900. Idempotent: exits 0 at once
+# when the gateway already answers, and waits for a running session whose
+# gateway is restarting instead of replacing it. dxd runs it as `user` with
+# only HOME, USER, LOGNAME, SHELL, LANG, and PATH set. The session runs
+# detached in its own session, so it outlives the caller. Finishes within
+# 40 s; on failure it prints one line to stderr and exits non-zero. Logs:
+# ~/.local/state/dx-desktop/.
+set -u
+
+desktop=/opt/dx/desktop
+state="${HOME:?HOME is not set}/.local/state/dx-desktop"
+log="$state/session.log"
+# dx Core gives the whole call 45 s; every wait below uses what is left of 40.
+budget_ms=40000
+
+now_ms() {
+  local micros=${EPOCHREALTIME//[!0-9]/}
+  echo $((10#$micros / 1000))
+}
+deadline=$(($(now_ms) + budget_ms))
+left_ms() {
+  local left=$((deadline - $(now_ms)))
+  echo $((left > 0 ? left : 0))
+}
+seconds() {
+  printf '%d.%03d' $(($1 / 1000)) $(($1 % 1000))
+}
+
+fail() {
+  printf 'dx desktop: %s\n' "$1" >&2
+  exit 1
+}
+
+# Run from inside the desktop (its terminal, or a program it launched), this
+# script would be among the processes ./stop ends when it replaces the
+# session. Continue in a session of its own, without the desktop's marker.
+if [ -n "${DX_DESKTOP_SESSION:-}" ] && [ -z "${DX_DESKTOP_DETACHED:-}" ]; then
+  exec env -u DX_DESKTOP_SESSION DX_DESKTOP_DETACHED=1 setsid -w "$0" "$@"
+fi
+
+ready() {
+  local left
+  left=$(left_ms)
+  ((left > 0)) || return 1
+  curl -fsS --max-time "$(seconds $((left > 2000 ? 2000 : left)))" \
+    -o /dev/null http://127.0.0.1:5900/healthz 2>/dev/null
+}
+
+# The session ID ./session recorded, if any.
+recorded_session() {
+  local sid
+  sid=$(cat "$state/session.pid" 2>/dev/null) || return 1
+  case "$sid" in
+    '' | *[!0-9]* | 0) return 1 ;;
+  esac
+  echo "$sid"
+}
+
+# The session runs while its script and its compositor do. The kernel does
+# not reuse a session ID while any process holds it.
+session_runs() {
+  pgrep -s "$1" -x labwc >/dev/null &&
+    pgrep -s "$1" -f '/opt/dx/desktop/session$' >/dev/null
+}
+
+last_log_line() {
+  tail -n 1 "$log" 2>/dev/null | cut -c 1-200
+}
+
+if ready; then
+  exit 0
+fi
+
+umask 077
+mkdir -p "$state" || fail "cannot create $state"
+exec 9>"$state/start.lock" || fail "cannot open $state/start.lock"
+flock -w "$(seconds "$(left_ms)")" 9 ||
+  fail "another start did not finish within $((budget_ms / 1000))s"
+
+# A concurrent start may have finished while this one waited for the lock.
+if ready; then
+  exit 0
+fi
+
+# A running session whose gateway does not answer yet (the session restarts a
+# crashed gateway after 1 to 30 s, or /healthz is slow) is waited for, not
+# replaced: replacing it would close the person's and the agent's windows.
+if sid=$(recorded_session) && [ ! -f "$state/session.failed" ] &&
+  session_runs "$sid"; then
+  printf '%s start: session %s runs; waiting for its gateway\n' \
+    "$(date -u +%FT%TZ)" "$sid" >>"$log"
+  while session_runs "$sid"; do
+    if ready; then
+      exit 0
+    fi
+    (($(left_ms) > 0)) ||
+      fail "the running desktop's gateway did not answer within $((budget_ms / 1000))s (see $log)"
+    sleep 0.2
+  done
+  printf '%s start: session %s ended while waiting\n' \
+    "$(date -u +%FT%TZ)" "$sid" >>"$log"
+fi
+
+# Replace a dead or failed session: end what is left of it, then launch.
+left=$(left_ms)
+((left >= 3000)) ||
+  fail "no time left to replace the desktop session (see $log)"
+stop_ms=$((left / 4 < 8500 ? left / 4 : 8500))
+"$desktop/stop" "$(seconds "$stop_ms")" >/dev/null 2>&1
+rm -f "$state/session.failed" "$state/session.pid"
+
+if [ -f "$log" ] && [ "$(stat -c %s "$log")" -gt 1048576 ]; then
+  mv -f "$log" "$log.1"
+fi
+printf '%s start: launching session\n' "$(date -u +%FT%TZ)" >>"$log"
+
+# A new session (setsid) with its own process group, so it survives the
+# caller and stop can signal every process in it. The lock descriptor is not
+# inherited.
+setsid -f dbus-run-session -- "$desktop/session" </dev/null >>"$log" 2>&1 9>&- ||
+  fail "cannot launch the session"
+launched=$(now_ms)
+
+while :; do
+  if ready; then
+    exit 0
+  fi
+  if [ -f "$state/session.failed" ]; then
+    fail "$(head -n 1 "$state/session.failed") (see $log)"
+  fi
+  if sid=$(recorded_session); then
+    pgrep -s "$sid" >/dev/null ||
+      fail "the session exited during startup: $(last_log_line) (see $log)"
+  elif (($(now_ms) - launched > 5000)); then
+    fail "the session did not start: $(last_log_line) (see $log)"
+  fi
+  (($(left_ms) > 0)) ||
+    fail "gateway did not listen on 127.0.0.1:5900 within $((budget_ms / 1000))s (see $log)"
+  sleep 0.2
+done

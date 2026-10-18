@@ -116,6 +116,34 @@ describe("source admission provider freshness", () => {
     expect(provider.revokeInstallationToken).toHaveBeenCalledWith(lease.token);
   });
 
+  it("answers without waiting for the token revocation, which outlives the request", async () => {
+    const revocation = deferred<void>();
+    const waitUntil = vi.fn<(promise: Promise<unknown>) => void>();
+    const provider = {
+      getInstallation: vi.fn(async () => installation),
+      createInstallationToken: vi.fn(async () => lease),
+      resolveRepositorySource: vi.fn(async () => resolved),
+      revokeInstallationToken: vi.fn(() => revocation.promise),
+    };
+    github.loadGitHubAppConfiguration.mockReturnValue(
+      Effect.succeed({
+        appId: "1",
+        privateKeyPem: Redacted.make("private-key"),
+      }),
+    );
+    github.createGitHubAppJwt.mockResolvedValue("app-jwt");
+    github.createGitHubProvider.mockReturnValue(provider);
+
+    // The revocation never settles; the source must still be authorized.
+    await expect(authorize(waitUntil)).resolves.toMatchObject({
+      providerRepositoryId: "42",
+    });
+    expect(provider.revokeInstallationToken).toHaveBeenCalledWith(lease.token);
+    expect(waitUntil).toHaveBeenCalledOnce();
+    revocation.reject(new Error("revocation unavailable"));
+    await expect(waitUntil.mock.calls[0]?.[0]).resolves.toBeUndefined();
+  });
+
   it("revokes a minted token when concurrent installation validation fails", async () => {
     const leaseResult = deferred<typeof lease>();
     const provider = {

@@ -173,6 +173,8 @@ const thread = async (id: string, projectId: string, userId: UserId) => {
   return id;
 };
 
+let recipeReads = 0;
+
 /** What the Thread repository writes beside a new Thread. */
 const pin = async (
   threadId: string,
@@ -185,7 +187,10 @@ const pin = async (
     userId,
     projectId,
     runnerProfileId: undefined,
-    recipe: await currentOrbTemplateRecipe(),
+    recipe: () => {
+      recipeReads += 1;
+      return currentOrbTemplateRecipe();
+    },
   });
   if (resolved === undefined) throw new Error("no pin");
   await env.DB.prepare(
@@ -217,6 +222,7 @@ const target = (threadId: string, bindings: Bindings = deployed) =>
 beforeEach(async () => {
   teams.clear();
   builds = 0;
+  recipeReads = 0;
   await env.DB.batch([
     ...[owner, member, solo].map((id) =>
       env.DB.prepare(
@@ -387,6 +393,30 @@ describe("Orb providers in workerd with real D1", () => {
       (await target(byok, { ...deployed, DX_RUNTIME_MODE: "local" }))
         .credential,
     ).toEqual({ scope: "unavailable", reason: "local-runtime" });
+  });
+
+  it("reads the template recipe only for a Thread pinned to a key", async () => {
+    const deploymentThread = await thread(
+      "thr_00000000-0000-4000-8000-0000000004d0",
+      personalProject,
+      solo,
+    );
+    expect(
+      (await pin(deploymentThread, solo, personalProject)).credentialScope,
+    ).toBe("deployment");
+    expect(recipeReads).toBe(0);
+
+    await call(solo, `${personal}/e2b/key`, "PUT", { credential: "key-a-1" });
+    await pollReady(solo, personal);
+    const byok = await thread(
+      "thr_00000000-0000-4000-8000-0000000004d1",
+      personalProject,
+      solo,
+    );
+    expect((await pin(byok, solo, personalProject)).credentialScope).toBe(
+      "personal",
+    );
+    expect(recipeReads).toBe(1);
   });
 
   it("ignores a member's personal key on workspace projects until the admin opts in", async () => {

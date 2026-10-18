@@ -522,8 +522,9 @@ describe("Thread tools", () => {
       data: { thread: OTHER, message: "Rebase on main." },
       toolCallId: "call_10",
     });
+    // attributeSubmission delivers it to the agent; no `@dx` tag needed.
     expect(routes.requests[1]?.body).toMatchObject({
-      body: "@dx Rebase on main.",
+      body: "Rebase on main.",
     });
   });
 

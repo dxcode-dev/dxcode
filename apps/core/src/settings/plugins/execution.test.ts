@@ -13,7 +13,9 @@ import {
   PLUGIN_WALL_TIME_LIMIT_MS,
   PluginExecutionLimited,
   PluginExecutionUnavailable,
+  PluginIsolation,
   type PluginIsolationInput,
+  PluginIsolationLive,
 } from "./execution.js";
 
 const input = (
@@ -183,5 +185,43 @@ describe("plugin E2B isolation", () => {
       Effect.runPromise(isolation.invoke(input())),
     ).rejects.toBeInstanceOf(PluginExecutionLimited);
     expect(kill).toHaveBeenCalledOnce();
+  });
+});
+
+describe("plugin isolation provider", () => {
+  const build = (bindings: Record<string, unknown>) =>
+    Effect.gen(function* () {
+      yield* PluginIsolation;
+    }).pipe(Effect.provide(PluginIsolationLive(bindings as never)));
+
+  it("runs only on a deployment whose Execution providers include E2B", async () => {
+    await expect(
+      Effect.runPromise(
+        build({
+          DX_RUNTIME_MODE: "deployed",
+          DX_ENV: "test",
+          E2B_API_KEY: "deployment-key",
+        }),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it.each([
+    [
+      "a Cloudflare-only deployment",
+      { DX_RUNTIME_MODE: "deployed", DX_ENV: "test", ORB_CONTAINER: {} },
+    ],
+    // Local development makes no billable call, even with a key present.
+    [
+      "local development",
+      { DX_RUNTIME_MODE: "local", DX_ENV: "local", E2B_API_KEY: "dev-key" },
+    ],
+  ])("fails closed on %s", async (_name, bindings) => {
+    await expect(
+      Effect.runPromise(Effect.flip(build(bindings))),
+    ).resolves.toMatchObject({
+      _tag: "PluginIsolationUnavailable",
+      provider: "e2b",
+    });
   });
 });

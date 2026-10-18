@@ -38,7 +38,7 @@ import {
 } from "../source-control/source-workspace.js";
 import { SourceWorkspaceRepositoryD1 } from "../source-control/source-workspace-repository-d1.js";
 import { GIT_CREDENTIAL_HELPER_PATH } from "../source-control/workspace-assets.js";
-import { withSourceCommandAdmission } from "./e2b/source-command-admission.js";
+import { withSourceCommandAdmission } from "./guest/source-command-admission.js";
 import { workspacePreparationFor } from "./workspace-preparation.js";
 
 /**

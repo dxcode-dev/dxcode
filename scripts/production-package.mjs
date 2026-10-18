@@ -396,11 +396,16 @@ const readGraph = (
     }
   };
   visit(roots[0][0]);
+  // A module a reachable chunk loads by URL (`new URL("./worklet.js",
+  // import.meta.url)`) is listed among that chunk's assets.
+  const urlAssets = new Set(
+    [...reachable].flatMap((key) => manifest[key].assets ?? []),
+  );
   for (const [source, value] of Object.entries(manifest)) {
     if (
       !reachable.has(source) &&
       typeof value?.file === "string" &&
-      !value.file.endsWith(".js")
+      (!value.file.endsWith(".js") || urlAssets.has(value.file))
     )
       visit(source);
   }
@@ -835,8 +840,18 @@ export const validateProductionPackage = async (root) => {
         visit(dependency);
     };
     visit(expectedSource);
+    // Modules a reachable chunk loads by URL are among its outputs.
+    const urlAssets = new Set(
+      [...reachable].flatMap((source) => {
+        const { file, outputs = [] } = entries.get(source);
+        return outputs.filter((path) => path !== file);
+      }),
+    );
     for (const entry of graph) {
-      if (!reachable.has(entry.source) && !entry.file?.endsWith(".js"))
+      if (
+        !reachable.has(entry.source) &&
+        (!entry.file?.endsWith(".js") || urlAssets.has(entry.file))
+      )
         visit(entry.source);
     }
     if (reachable.size !== graph.length)

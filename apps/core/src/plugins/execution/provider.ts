@@ -106,8 +106,6 @@ export interface DaemonInstallation {
   readonly installedAt?: number;
   /** Set when the guest was bootstrapped or reconfigured. */
   readonly bootstrapped: boolean;
-  /** The Thread's pinned provider; set by composition. */
-  readonly provider?: ExecutionProviderId;
   /** The workspace handle's `processesStartedAt`, when it reports one. */
   readonly processesStartedAt?: number;
 }
@@ -302,17 +300,25 @@ export interface ExecutionActivation {
   /**
    * Terminal input renews the workspace's idle deadline. It runs on every
    * input batch, so the context is loaded only when the workspace must be
-   * reached.
+   * reached. With `wake: false` it renews only a deadline this isolate
+   * already tracks and never reaches the provider, which could resume a
+   * paused workspace.
    */
   readonly recordResidentTerminalInput: (
     loadContext: () => Promise<ExecutionContext>,
     threadId: ThreadId,
+    options?: ResidentActivityOptions,
   ) => Promise<void>;
   /** In-memory activity bookkeeping; reaches no provider API. */
   readonly recordResidentTerminalHeartbeat: (
     threadId: ThreadId,
     foregroundCommand: boolean | undefined,
   ) => void;
+}
+
+export interface ResidentActivityOptions {
+  /** False: renew only a deadline already tracked; never reach the workspace. */
+  readonly wake?: boolean;
 }
 
 export type ExecutionActivationFactory = (
@@ -424,7 +430,12 @@ export interface ExecutionWorkspaces {
   readonly ensureDaemon: (
     input: EnsureDaemonInput,
   ) => Promise<DaemonInstallation>;
-  readonly recordResidentTerminalInput: (threadId: ThreadId) => Promise<void>;
+  /** The provider the Thread's execution pin names; it never changes. */
+  readonly pinnedProvider: (threadId: ThreadId) => Promise<ExecutionProviderId>;
+  readonly recordResidentTerminalInput: (
+    threadId: ThreadId,
+    options?: ResidentActivityOptions,
+  ) => Promise<void>;
   readonly recordResidentTerminalHeartbeat: (
     threadId: ThreadId,
     foregroundCommand: boolean | undefined,
@@ -545,6 +556,7 @@ export const composeExecutionWorkspaces = (
       archive: unavailable,
       destroy: unavailable,
       ensureDaemon: unavailable,
+      pinnedProvider: unavailable,
       recordResidentTerminalInput: unavailable,
       recordResidentTerminalHeartbeat: () => {},
     };
@@ -668,16 +680,15 @@ export const composeExecutionWorkspaces = (
               true,
             );
             if (!entry.residentDaemon) return daemonUnavailable();
-            const installation = await entry.pipeline.ensureDaemon(
-              resolvedContext,
-              input,
-            );
-            return { ...installation, provider: entry.provider.providerId };
+            return entry.pipeline.ensureDaemon(resolvedContext, input);
           },
+    pinnedProvider: async (threadId) =>
+      (threadProviders.get(threadId) ?? (await resolve(threadId, false)).entry)
+        .provider.providerId,
     recordResidentTerminalInput:
       residentEntries.length === 0
         ? daemonUnavailable
-        : async (threadId) => {
+        : async (threadId, options) => {
             // Known (or the only daemon provider): the pipeline loads the
             // context only when it must reach the workspace.
             const known =
@@ -685,18 +696,26 @@ export const composeExecutionWorkspaces = (
               (residentEntries.length === 1 ? residentEntries[0] : undefined);
             if (known !== undefined) {
               if (!known.residentDaemon) return daemonUnavailable();
-              return known.pipeline.recordResidentTerminalInput(async () => {
-                const loaded = await context(threadId, true);
-                if (loaded.entry !== known)
-                  throw new ExecutionProviderUnavailable();
-                return loaded.context;
-              }, threadId);
+              return known.pipeline.recordResidentTerminalInput(
+                async () => {
+                  const loaded = await context(threadId, true);
+                  if (loaded.entry !== known)
+                    throw new ExecutionProviderUnavailable();
+                  return loaded.context;
+                },
+                threadId,
+                options,
+              );
             }
+            // Finding the provider loads no workspace, but a non-waking
+            // record has nothing to renew without one.
+            if (options?.wake === false) return;
             const loaded = await context(threadId, true);
             if (!loaded.entry.residentDaemon) return daemonUnavailable();
             return loaded.entry.pipeline.recordResidentTerminalInput(
               async () => loaded.context,
               threadId,
+              options,
             );
           },
     // In-memory bookkeeping shared by every pipeline; reaches no provider.

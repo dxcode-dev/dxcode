@@ -836,7 +836,7 @@ describe("thread composer ownership", () => {
     );
   });
 
-  it("releases retained submission images when Flue keeps a failed candidate", async () => {
+  it("leaves a failed send's draft and files with their retained owner after unmount", async () => {
     let rejectSend: ((cause: Error) => void) | undefined;
     vi.mocked(agent.sendMessage).mockReturnValue(
       new Promise<never>((_resolve, reject) => {
@@ -846,7 +846,6 @@ describe("thread composer ownership", () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:retained-preview");
     const revoke = vi.spyOn(URL, "revokeObjectURL");
     const imageCollection = createPendingAttachmentCollection();
-    const restore = vi.spyOn(imageCollection, "restore");
     const onDraftChange = vi.fn();
     const retainedDraft = createPresentationValue("Retry with this image");
     const draft = {
@@ -856,29 +855,6 @@ describe("thread composer ownership", () => {
         retainedDraft.set(next);
       },
     };
-    let retainedImages: ReturnType<typeof imageCollection.take> | undefined;
-    const submissionImageRetention = {
-      retain: (images: ReturnType<typeof imageCollection.take>) => {
-        if (retainedImages !== undefined) return false;
-        retainedImages = images;
-        return true;
-      },
-      complete: (images: ReturnType<typeof imageCollection.take>) => {
-        if (retainedImages !== images) return false;
-        retainedImages = undefined;
-        return true;
-      },
-      restore: (
-        images: ReturnType<typeof imageCollection.take>,
-        draft: string,
-      ) => {
-        if (retainedImages !== images) return false;
-        retainedImages = undefined;
-        onDraftChange(draft);
-        imageCollection.restore(images);
-        return true;
-      },
-    };
     const mounted = await mountPanel(
       {},
       false,
@@ -886,7 +862,6 @@ describe("thread composer ownership", () => {
       {
         draft,
         imageCollection,
-        submissionImageRetention,
       },
     );
     const input =
@@ -916,12 +891,18 @@ describe("thread composer ownership", () => {
     });
     await vi.waitFor(() => expect(agent.sendMessage).toHaveBeenCalledOnce());
     await React.act(() => mounted.root.unmount());
-    rejectSend?.(new Error("send failed"));
-    await vi.waitFor(() => {
-      expect(retainedImages).toBeUndefined();
-      expect(onDraftChange).toHaveBeenCalledExactlyOnceWith("");
-      expect(restore).not.toHaveBeenCalled();
+    await React.act(async () => {
+      rejectSend?.(new Error("send failed"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
+
+    // The send never let go of them: the owner still holds both.
+    expect(onDraftChange).not.toHaveBeenCalled();
+    expect(retainedDraft.get()).toBe("Retry with this image");
+    expect(imageCollection.list().map(({ filename }) => filename)).toEqual([
+      "retained.png",
+    ]);
+    expect(revoke).not.toHaveBeenCalled();
     imageCollection.dispose();
     expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:retained-preview");
   });
@@ -1037,6 +1018,37 @@ describe("thread composer ownership", () => {
 
     expect(panel.container.textContent).toContain("Model unavailable");
     expect(panel.container.textContent).not.toContain("Open Model Routing");
+    await React.act(() => panel.root.unmount());
+  });
+
+  it("says a run failed because dx can no longer reach the project's source", async () => {
+    const panel = await mountPanel({
+      settlements: [
+        {
+          submissionId: "source-revoked",
+          outcome: "failed",
+          error: {
+            name: "FlueError",
+            type: "source_authorization_denied",
+            message: "dx can't access this project's source.",
+            details:
+              "The source connection this Thread uses was revoked or changed. Reconnect or rebind the project's source, then retry.",
+            meta: {
+              code: "SOURCE_AUTHORIZATION_DENIED",
+              reason: "grant-disconnected",
+              action: "reconnect",
+            },
+          },
+        },
+      ],
+    });
+
+    const card = panel.container.querySelector(".thread-error-card");
+    expect(card?.textContent).toContain(
+      "dx can't access this project's source.",
+    );
+    expect(card?.textContent).toContain("revoked or changed");
+    expect(card?.textContent).not.toContain("Provider error");
     await React.act(() => panel.root.unmount());
   });
 

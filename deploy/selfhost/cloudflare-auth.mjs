@@ -21,6 +21,8 @@ const cloudflareRequestAuth = (credentials) => {
         Authorization: `Bearer ${Redacted.value(credentials.accessToken)}`,
       },
       method: "alchemy-oauth",
+      // What the grant allows; Portals need DNS and Worker route scopes.
+      scopes: credentials.scopes,
     };
   if (credentials.type === "apiToken")
     return {
@@ -226,5 +228,8 @@ export const loadAlchemyCloudflareAuth = ({
     type: "oauth",
     accountId: config.accountId,
     accessToken: Redacted.make(oauth.access),
+    scopes: Array.isArray(oauth.scopes)
+      ? oauth.scopes.filter((scope) => typeof scope === "string")
+      : [],
   });
 };

@@ -37,6 +37,15 @@ export const orbRecipeFiles = [
   "deploy/orb/Dockerfile.dockerignore",
   "deploy/orb/dx-orb-init",
   "deploy/orb/dx-orb-hostname.sh",
+  "deploy/orb/tmux.conf",
+  "deploy/orb/desktop/start",
+  "deploy/orb/desktop/stop",
+  "deploy/orb/desktop/session",
+  "deploy/orb/desktop/chromium",
+  "deploy/orb/desktop/bin/ffmpeg",
+  "deploy/orb/desktop/labwc/autostart",
+  "deploy/orb/desktop/labwc/rc.xml",
+  "deploy/orb/desktop/labwc/menu.xml",
   "deploy/orb/containers.mjs",
 ];
 

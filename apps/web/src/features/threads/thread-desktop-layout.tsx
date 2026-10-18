@@ -1,10 +1,12 @@
 import { Menu } from "@base-ui/react/menu";
 import {
+  AppWindow,
   EllipsisVertical,
   Files,
   GitCompareArrows,
   Maximize2,
   Minimize2,
+  Monitor,
   RefreshCw,
   SquareTerminal,
 } from "lucide-react";
@@ -14,7 +16,13 @@ const RIGHT_PANE_MAX_VIEWPORT_RATIO = 0.46;
 const RIGHT_PANE_DEFAULT_WIDTH = 360;
 const RIGHT_PANE_MIN_WIDTH = 260;
 const RESIZE_HANDLE_WIDTH = 1;
-const WORKSPACE_TOOLS = ["changes", "files", "terminal"] as const;
+const WORKSPACE_TOOLS = [
+  "changes",
+  "files",
+  "terminal",
+  "preview",
+  "desktop",
+] as const;
 
 type WorkspaceTool = (typeof WORKSPACE_TOOLS)[number];
 
@@ -24,9 +32,12 @@ const toolPresentation = {
   changes: { label: "Changes", Icon: GitCompareArrows },
   files: { label: "Files", Icon: Files },
   terminal: { label: "Terminal", Icon: SquareTerminal },
+  preview: { label: "Preview", Icon: AppWindow },
+  desktop: { label: "Desktop", Icon: Monitor },
 } as const;
 
 function WorkspaceToolbar({
+  tools,
   activeTool,
   focused,
   onSelectTool,
@@ -34,6 +45,7 @@ function WorkspaceToolbar({
   onCaptureFocus,
   onToggleFocus,
 }: {
+  readonly tools: ReadonlyArray<WorkspaceTool>;
   readonly activeTool: WorkspaceTool;
   readonly focused: boolean;
   readonly onSelectTool: (tool: WorkspaceTool) => void;
@@ -52,7 +64,7 @@ function WorkspaceToolbar({
         role="tablist"
         aria-label="Workspace tools"
       >
-        {WORKSPACE_TOOLS.map((tool) => {
+        {tools.map((tool) => {
           const { label, Icon } = toolPresentation[tool];
           const active = activeTool === tool;
           const tab = (
@@ -142,6 +154,40 @@ function WorkspaceToolbar({
   );
 }
 
+type ToolContent =
+  | React.ReactNode
+  | ((active: boolean) => React.ReactNode)
+  | undefined;
+
+const renderTool = (content: ToolContent, active: boolean) =>
+  typeof content === "function" ? content(active) : content;
+
+function WorkspaceToolPanel({
+  tool,
+  activeTool,
+  children,
+}: {
+  readonly tool: WorkspaceTool;
+  readonly activeTool: WorkspaceTool;
+  readonly children: React.ReactNode;
+}) {
+  const hidden = activeTool !== tool;
+  return (
+    <div
+      id={toolPanelId(tool)}
+      className="right-pane-content"
+      role="tabpanel"
+      aria-labelledby={toolTabId(tool)}
+      aria-label={toolPresentation[tool].label}
+      aria-hidden={hidden || undefined}
+      hidden={hidden}
+      inert={hidden}
+    >
+      {children}
+    </div>
+  );
+}
+
 const maximumRightPaneWidth = (workspaceWidth: number, viewportWidth: number) =>
   Math.max(
     0,
@@ -171,26 +217,46 @@ export function ThreadDesktopLayout({
   rightPaneCollapsed,
   main,
   terminal,
+  desktop,
   changes,
   files,
+  preview,
 }: {
   readonly rightPaneCollapsed: boolean;
   readonly main: React.ReactNode;
-  readonly terminal?: React.ReactNode | ((active: boolean) => React.ReactNode);
+  readonly terminal?: ToolContent;
+  /** The Thread's remote desktop; its tab appears only when provided. */
+  readonly desktop?: ToolContent;
   readonly changes?: React.ReactNode;
-  readonly files?: React.ReactNode | ((active: boolean) => React.ReactNode);
+  readonly files?: ToolContent;
+  /** Portals; the tab exists only when the deployment serves them. */
+  readonly preview?: ToolContent;
 }) {
+  const previewAvailable = preview !== undefined;
+  const desktopAvailable = desktop !== undefined;
+  const tools = React.useMemo<ReadonlyArray<WorkspaceTool>>(
+    () =>
+      WORKSPACE_TOOLS.filter(
+        (tool) =>
+          (tool !== "preview" || previewAvailable) &&
+          (tool !== "desktop" || desktopAvailable),
+      ),
+    [previewAvailable, desktopAvailable],
+  );
   const [rightPaneWidth, setRightPaneWidth] = React.useState(
     RIGHT_PANE_DEFAULT_WIDTH,
   );
   const [rightPaneResizing, setRightPaneResizing] = React.useState(false);
-  const [activeTool, setActiveTool] = React.useState<WorkspaceTool>(() =>
+  const [selectedTool, setActiveTool] = React.useState<WorkspaceTool>(() =>
     changes === undefined && terminal !== undefined ? "terminal" : "changes",
   );
+  const activeTool = tools.includes(selectedTool) ? selectedTool : "changes";
   const [terminalActivated, setTerminalActivated] = React.useState(
     activeTool === "terminal",
   );
   const [filesActivated, setFilesActivated] = React.useState(false);
+  const [previewActivated, setPreviewActivated] = React.useState(false);
+  const [desktopActivated, setDesktopActivated] = React.useState(false);
   const [rightPaneFocused, setRightPaneFocused] = React.useState(false);
   const mainPanel = React.useRef<HTMLElement | null>(null);
   const focusRestoreTarget = React.useRef<HTMLElement | null>(null);
@@ -230,33 +296,34 @@ export function ThreadDesktopLayout({
   const selectTool = React.useCallback((tool: WorkspaceTool) => {
     if (tool === "files") setFilesActivated(true);
     if (tool === "terminal") setTerminalActivated(true);
+    if (tool === "preview") setPreviewActivated(true);
+    if (tool === "desktop") setDesktopActivated(true);
     setActiveTool(tool);
   }, []);
 
   const handleToolKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLButtonElement>, tool: WorkspaceTool) => {
-      const currentIndex = WORKSPACE_TOOLS.indexOf(tool);
+      const currentIndex = tools.indexOf(tool);
       let nextIndex: number | undefined;
       if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-        nextIndex = (currentIndex + 1) % WORKSPACE_TOOLS.length;
+        nextIndex = (currentIndex + 1) % tools.length;
       } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-        nextIndex =
-          (currentIndex - 1 + WORKSPACE_TOOLS.length) % WORKSPACE_TOOLS.length;
+        nextIndex = (currentIndex - 1 + tools.length) % tools.length;
       } else if (event.key === "Home") {
         nextIndex = 0;
       } else if (event.key === "End") {
-        nextIndex = WORKSPACE_TOOLS.length - 1;
+        nextIndex = tools.length - 1;
       }
-      if (nextIndex === undefined) return;
+      const nextTool = nextIndex === undefined ? undefined : tools[nextIndex];
+      if (nextTool === undefined) return;
       event.preventDefault();
-      const nextTool = WORKSPACE_TOOLS[nextIndex];
       selectTool(nextTool);
       event.currentTarget
         .closest('[role="tablist"]')
         ?.querySelector<HTMLButtonElement>(`#${toolTabId(nextTool)}`)
         ?.focus();
     },
-    [selectTool],
+    [selectTool, tools],
   );
 
   const toggleRightPaneFocus = React.useCallback(() => {
@@ -393,6 +460,7 @@ export function ThreadDesktopLayout({
           inert={effectivelyCollapsed}
         >
           <WorkspaceToolbar
+            tools={tools}
             activeTool={activeTool}
             focused={rightPaneFocused}
             onSelectTool={selectTool}
@@ -400,50 +468,45 @@ export function ThreadDesktopLayout({
             onCaptureFocus={captureFocusRestoreTarget}
             onToggleFocus={toggleRightPaneFocus}
           />
-          <div
-            id={toolPanelId("changes")}
-            className="right-pane-content"
-            role="tabpanel"
-            aria-labelledby={toolTabId("changes")}
-            aria-label="Changes"
-            aria-hidden={activeTool !== "changes" || undefined}
-            hidden={activeTool !== "changes"}
-            inert={activeTool !== "changes"}
-          >
+          <WorkspaceToolPanel tool="changes" activeTool={activeTool}>
             {changes}
-          </div>
-          <div
-            id={toolPanelId("files")}
-            className="right-pane-content"
-            role="tabpanel"
-            aria-labelledby={toolTabId("files")}
-            aria-label="Files"
-            aria-hidden={activeTool !== "files" || undefined}
-            hidden={activeTool !== "files"}
-            inert={activeTool !== "files"}
-          >
+          </WorkspaceToolPanel>
+          <WorkspaceToolPanel tool="files" activeTool={activeTool}>
             {filesActivated
-              ? typeof files === "function"
-                ? files(!effectivelyCollapsed && activeTool === "files")
-                : files
+              ? renderTool(
+                  files,
+                  !effectivelyCollapsed && activeTool === "files",
+                )
               : null}
-          </div>
-          <div
-            id={toolPanelId("terminal")}
-            className="right-pane-content"
-            role="tabpanel"
-            aria-labelledby={toolTabId("terminal")}
-            aria-label="Terminal"
-            aria-hidden={activeTool !== "terminal" || undefined}
-            hidden={activeTool !== "terminal"}
-            inert={activeTool !== "terminal"}
-          >
+          </WorkspaceToolPanel>
+          <WorkspaceToolPanel tool="terminal" activeTool={activeTool}>
             {terminalActivated
-              ? typeof terminal === "function"
-                ? terminal(!effectivelyCollapsed && activeTool === "terminal")
-                : terminal
+              ? renderTool(
+                  terminal,
+                  !effectivelyCollapsed && activeTool === "terminal",
+                )
               : null}
-          </div>
+          </WorkspaceToolPanel>
+          {!previewAvailable ? null : (
+            <WorkspaceToolPanel tool="preview" activeTool={activeTool}>
+              {previewActivated
+                ? renderTool(
+                    preview,
+                    !effectivelyCollapsed && activeTool === "preview",
+                  )
+                : null}
+            </WorkspaceToolPanel>
+          )}
+          {!desktopAvailable ? null : (
+            <WorkspaceToolPanel tool="desktop" activeTool={activeTool}>
+              {desktopActivated
+                ? renderTool(
+                    desktop,
+                    !effectivelyCollapsed && activeTool === "desktop",
+                  )
+                : null}
+            </WorkspaceToolPanel>
+          )}
         </aside>
       </div>
     </div>

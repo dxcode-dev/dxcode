@@ -25,18 +25,6 @@ vi.mock("./auth/better-auth.js", async (importOriginal) => {
     }),
   };
 });
-vi.mock("./auth/enforce-agent-workspace-policy.js", () => ({
-  enforceAgentWorkspacePolicy: async (
-    _context: unknown,
-    next: () => Promise<void>,
-  ) => next(),
-}));
-vi.mock("./auth/enforce-agent-source-admission.js", () => ({
-  enforceAgentSourceAdmission: async (
-    _context: unknown,
-    next: () => Promise<void>,
-  ) => next(),
-}));
 
 import { DxAgent } from "./agents/dx-agent.js";
 import app from "./app.js";

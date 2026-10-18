@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import {
   CLAUDE_CODE_PROVIDER_ID,
   ClaudePlanReading,
+  claudePlanLimitText,
   type StoredModelConnection,
   ThreadModelSelection,
 } from "@dx/domain";
@@ -20,6 +21,10 @@ import {
 } from "../../http/egress.js";
 import type { Bindings } from "../../http/types.js";
 import { settingsPersistenceLogger } from "../../logging.js";
+import {
+  observeExternal,
+  traceInvocation,
+} from "../../observability/boundaries.js";
 import { createDxCloudflareModelProvider } from "../../runtime/cloudflare-model-provider.js";
 import { workersAiDeploymentEnabled } from "../../runtime/model-routing-dev-defaults.js";
 import type { ConfigEncryptionKeyring } from "../config-encryption.js";
@@ -101,7 +106,7 @@ const upstreamFetchCall = async (
   if (addresses.length === 0 || !addresses.every(isPublicIpAddress))
     return Response.json({ code: "ENDPOINT_NOT_ALLOWED" }, { status: 403 });
   const impl = upstreamFetch.current;
-  return impl(...args);
+  return observeExternal("model", "upstream", input, () => impl(...args));
 };
 
 const AUTH_HEADER_NAMES = new Set([
@@ -289,6 +294,28 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     return live.length;
   }
 
+  /**
+   * A new Claude Code submission is refused while the plan is used up for its
+   * model, before the agent wakes the workspace; the text is the limit
+   * card's. A run that already started is checked again at
+   * `/claude-code-credential` and by its own readings.
+   */
+  async #refuseBlockedClaudePlan(route: SubmissionRoute) {
+    if (route.connection.providerId !== CLAUDE_CODE_PROVIDER_ID) return;
+    const plan = claudePlanAccess(
+      await loadClaudePlan(this.#db(), route.connection.id),
+      route.model.id,
+    );
+    if (plan.blockedUntil === undefined) return;
+    throw new ClaudePlanLimitReached(
+      claudePlanLimitText({
+        ...(plan.limitWindow === undefined ? {} : { window: plan.limitWindow }),
+        resetsAt: plan.blockedUntil,
+        cause: "not-started",
+      }),
+    );
+  }
+
   async #prepare(envelope: ResolveEnvelope) {
     if (!envelope.threadId || !envelope.submissionId)
       throw new Error("SUBMISSION_REQUIRED");
@@ -323,6 +350,7 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
           credential === undefined
         )
           throw new Error("CREDENTIAL_UNAVAILABLE");
+        await this.#refuseBlockedClaudePlan(route);
         // Keep ciphertext and its route together. Rotation must never send a
         // new credential to an old submission's pinned endpoint.
         const pin: StoredPinnedSubmission = {
@@ -371,9 +399,15 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     );
   }
 
-  async alarm() {
-    await pruneSubmissionUsageAttributions(this.ctx.storage);
-    await this.#prunePins();
+  alarm() {
+    return traceInvocation(
+      "ByokCredentialCoordinator.alarm",
+      undefined,
+      async () => {
+        await pruneSubmissionUsageAttributions(this.ctx.storage);
+        await this.#prunePins();
+      },
+    );
   }
 
   #validateEndpoint(connection: StoredModelConnection) {
@@ -1356,7 +1390,13 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     }
   }
 
-  async fetch(request: Request): Promise<Response> {
+  fetch(request: Request): Promise<Response> {
+    return traceInvocation("ByokCredentialCoordinator.fetch", request, () =>
+      this.#fetch(request),
+    );
+  }
+
+  async #fetch(request: Request): Promise<Response> {
     if (request.method !== "POST") {
       return jsonResponse({ code: "NOT_FOUND" }, 404);
     }
@@ -1444,6 +1484,11 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
           return jsonResponse({ code: "NOT_FOUND" }, 404);
       }
     } catch (error) {
+      if (error instanceof ClaudePlanLimitReached)
+        return jsonResponse(
+          { code: "CLAUDE_PLAN_LIMIT", message: error.message },
+          400,
+        );
       const detail = error instanceof Error ? error.message : "";
       const permanent =
         PERMANENT_FAILURE_CODES.has(detail) ||
@@ -1474,6 +1519,8 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     }
   }
 }
+
+class ClaudePlanLimitReached extends Error {}
 
 const PERMANENT_FAILURE_CODES = new Set([
   "ENDPOINT_NOT_ALLOWED",

@@ -1,6 +1,7 @@
 import {
   AGENT_MENTION,
   parseMessageAttachments,
+  stripMessageAttachmentTags,
   stripMessageAuthorTags,
   type ThreadConversationMode,
   withMessageAuthor,
@@ -10,8 +11,11 @@ import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Option, Schema } from "effect";
 import type { Context, MiddlewareHandler } from "hono";
 import {
-  admitMessageAttachments,
+  linkMessageAttachments,
   MessageAttachmentsRejected,
+  messageAttachmentBody,
+  type ResolvedMessageAttachments,
+  resolveMessageAttachments,
 } from "../attachments/message.js";
 import type { AppEnv } from "../http/types.js";
 import { threadSharingLogger } from "../logging.js";
@@ -120,6 +124,26 @@ const messageIdFor = async (threadId: ThreadId, deliveryKey: string) => {
     .join("")}`;
 };
 
+/** Flue refuses a longer chat body, author tag included. */
+const MAX_CHAT_BODY_LENGTH = 32_000;
+
+/**
+ * Runs work after the response, or inline where there is no
+ * ExecutionContext (tests and in-process callers).
+ */
+const afterResponse = (context: Context<AppEnv>, work: Promise<unknown>) => {
+  try {
+    context.executionCtx.waitUntil(work);
+  } catch (cause) {
+    if (
+      cause instanceof Error &&
+      cause.message === "This context has no ExecutionContext"
+    )
+      return work;
+    throw cause;
+  }
+};
+
 const rejectDelivery = (context: Context<AppEnv>, message: string) =>
   context.json(
     {
@@ -192,6 +216,7 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
   let mentioned: ReadonlyArray<UserId> = [];
   let mention: { messageId: string; excerpt: string } | undefined;
   let switchTo: ThreadConversationMode | undefined;
+  let attachments: ResolvedMessageAttachments | undefined;
   if (userMessage !== undefined) {
     const [identity, initialData, members] = await Promise.all([
       userIdentity(db, actor.userId as UserId),
@@ -206,17 +231,26 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
       threadMembers(db, threadId.value),
     ]);
     // Members are listed only while the Thread is shared; a private Thread
-    // is always in agent mode.
+    // is always in agent mode. Tags count only in the text the message
+    // keeps: the forged tags it strips can hide text.
     const classified =
       members.length === 0
         ? { mode: undefined, mentions: [] }
-        : classifyMessage(userMessage.body, members, actor.userId);
+        : classifyMessage(
+            stripMessageAuthorTags(
+              stripMessageAttachmentTags(userMessage.body),
+            ),
+            members,
+            actor.userId,
+          );
     const { mentions } = classified;
-    switchTo = classified.mode;
+    // Another Thread's agent always addresses this Thread's agent, and its
+    // tags never switch the members' mode.
+    switchTo = sourceThreadId === undefined ? classified.mode : undefined;
     // The switch is recorded once Flue admits the message, so a refused
     // message never changes the mode.
     const mode =
-      members.length === 0
+      members.length === 0 || sourceThreadId !== undefined
         ? "agent"
         : (switchTo ?? (await conversationMode(db, threadId.value)));
     mentioned = mentions.flatMap(({ userId }) =>
@@ -234,21 +268,22 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
         context,
         `Chat messages can't include attachments. Tag @${AGENT_MENTION} to send them.`,
       );
-    let admittedBody: string;
+    // The files are recorded as sent only once Flue admits the message.
     try {
-      admittedBody = (
-        await admitMessageAttachments(context.env, {
-          threadId: threadId.value,
-          senderUserId: actor.userId,
-          body: userMessage.body,
-          requestUrl: context.req.url,
-        })
-      ).body;
+      attachments = await resolveMessageAttachments(context.env, {
+        senderUserId: actor.userId,
+        body: userMessage.body,
+      });
     } catch (cause) {
       if (cause instanceof MessageAttachmentsRejected)
         return rejectDelivery(context, cause.message);
       throw cause;
     }
+    const admittedBody = messageAttachmentBody(
+      context.env,
+      attachments,
+      context.req.url,
+    ).body;
     // Flue names a chat message by its key, so a retry converges on it.
     const deliveryKey =
       "idempotencyKey" in userMessage &&
@@ -287,6 +322,11 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
       },
       admittedBody,
     );
+    if (chat && body.length > MAX_CHAT_BODY_LENGTH)
+      return rejectDelivery(
+        context,
+        `This chat message is too long. Shorten it, or tag @${AGENT_MENTION} to send it to the agent.`,
+      );
     const {
       kind: _kind,
       attachments: _attachments,
@@ -311,26 +351,30 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
   }
   await next();
   if (context.res.status !== 202) return;
-  let modeChanged = false;
-  try {
-    if (switchTo !== undefined)
-      modeChanged = await switchConversationMode(db, threadId.value, switchTo);
-    // Tagging a member follows the Thread for them; the owner always does.
-    await followThread(
-      db,
-      threadId.value,
-      mentioned.filter((userId) => userId !== context.get("threadOwnerUserId")),
+  // Awaited, so the 202 means every reader of the Thread can open the files
+  // and the next message is classified in the mode this one chose.
+  if (attachments !== undefined)
+    await linkMessageAttachments(db, {
+      threadId: threadId.value,
+      senderUserId: actor.userId,
+      rows: attachments.rows,
+    }).catch((cause) =>
+      threadSharingLogger.warn("Message attachments were not recorded.", {
+        event: "message_attachments_record_failed",
+        cause,
+      }),
     );
-    if (access === "contribute")
-      await recordParticipant(db, threadId.value, actor.userId as UserId, {
-        message: true,
-      });
-  } catch (cause) {
-    threadSharingLogger.warn(
-      "Thread mode, follower, or participant was not recorded.",
-      { event: "thread_participant_record_failed", cause },
-    );
-  }
+  const modeChanged =
+    switchTo !== undefined &&
+    (await switchConversationMode(db, threadId.value, switchTo).catch(
+      (cause) => {
+        threadSharingLogger.warn("Thread mode was not recorded.", {
+          event: "thread_mode_record_failed",
+          cause,
+        });
+        return false;
+      },
+    ));
   if (mention !== undefined)
     await scheduleNotification(() => context.executionCtx, context.env, {
       topic: "mention",
@@ -342,13 +386,39 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
       excerpt: mention.excerpt,
     });
   if (!modeChanged && mentioned.length === 0 && access !== "contribute") return;
-  // A new mode, participant, or follower changes Thread detail and the
-  // sidebars of everyone who can open the Thread.
-  await scheduleRealtimeInvalidation(
-    () => context.executionCtx,
-    context.env,
-    threadId.value,
-    "thread.invalidated",
-    mentioned.length === 0 ? undefined : "audience",
+  await afterResponse(
+    context,
+    Promise.all([
+      // Tagging a member follows the Thread for them; the owner always does.
+      followThread(
+        db,
+        threadId.value,
+        mentioned.filter(
+          (userId) => userId !== context.get("threadOwnerUserId"),
+        ),
+      ),
+      access === "contribute"
+        ? recordParticipant(db, threadId.value, actor.userId as UserId, {
+            message: true,
+          })
+        : undefined,
+    ])
+      .catch((cause) =>
+        threadSharingLogger.warn(
+          "Thread follower or participant was not recorded.",
+          { event: "thread_participant_record_failed", cause },
+        ),
+      )
+      // A new mode, participant, or follower changes Thread detail and the
+      // sidebars of everyone who can open the Thread.
+      .then(() =>
+        scheduleRealtimeInvalidation(
+          () => context.executionCtx,
+          context.env,
+          threadId.value,
+          "thread.invalidated",
+          mentioned.length === 0 ? undefined : "audience",
+        ),
+      ),
   );
 };

@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<!-- labwc for the dx Desktop: one workspace; labwc defaults otherwise. -->
+<labwc_config>
+  <desktops number="1" />
+</labwc_config>

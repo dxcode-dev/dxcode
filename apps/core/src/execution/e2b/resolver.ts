@@ -11,6 +11,7 @@ import type {
 import { Sandbox, SandboxNotFoundError } from "e2b";
 import { Effect, Redacted, Schema, Semaphore } from "effect";
 import { executionWorkspaceLogger } from "../../logging.js";
+import { observeExternal } from "../../observability/boundaries.js";
 import type { E2BRequirements } from "./requirements.js";
 
 const LIST_PAGE_LIMIT = 100;
@@ -33,14 +34,6 @@ export class ExecutionWorkspaceConflict extends Schema.TaggedError<ExecutionWork
 
 const providerCauses = new WeakMap<object, unknown>();
 
-class FastPathFallback extends ExecutionWorkspaceUnavailable {}
-
-class FastPathAuthorizationRejected extends ExecutionWorkspaceUnavailable {
-  constructor(readonly sandbox: E2BSandbox) {
-    super();
-  }
-}
-
 const unavailable = (cause?: unknown) => {
   const error = new ExecutionWorkspaceUnavailable();
   if (cause !== undefined) providerCauses.set(error, cause);
@@ -62,13 +55,21 @@ export interface E2BResolverApi {
   isNotFound(cause: unknown): boolean;
 }
 
+/** Each E2B control-plane call is one `external` span (service only). */
+const e2b = <A>(operation: string, call: () => Promise<A>) =>
+  observeExternal("e2b", operation, undefined, call);
+
 const liveE2BApi: E2BResolverApi = {
   list: (options) => Sandbox.list(options),
-  getInfo: (sandboxId, options) => Sandbox.getInfo(sandboxId, options),
-  connect: (sandboxId, options) => Sandbox.connect(sandboxId, options),
-  create: (options) => Sandbox.create(options),
-  kill: (sandboxId, options) => Sandbox.kill(sandboxId, options),
-  pause: (sandboxId, options) => Sandbox.pause(sandboxId, options),
+  getInfo: (sandboxId, options) =>
+    e2b("getInfo", () => Sandbox.getInfo(sandboxId, options)),
+  connect: (sandboxId, options) =>
+    e2b("connect", () => Sandbox.connect(sandboxId, options)),
+  create: (options) => e2b("create", () => Sandbox.create(options)),
+  kill: (sandboxId, options) =>
+    e2b("kill", () => Sandbox.kill(sandboxId, options)),
+  pause: (sandboxId, options) =>
+    e2b("pause", () => Sandbox.pause(sandboxId, options)),
   isNotFound: (cause) => cause instanceof SandboxNotFoundError,
 };
 
@@ -520,32 +521,24 @@ export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
       );
     });
 
-  const resolveUnlocked = Effect.fn("resolveExecutionWorkspace")(function* (
+  /**
+   * Resolution under the Thread's lease: one lifecycle check alongside one
+   * state read, at most one provider status read, then create or connect.
+   */
+  const resolveLocked = Effect.fn("resolveExecutionWorkspace")(function* (
     {
-      id,
       requirements,
       stateStore,
       existingOnly,
-      coordination,
       authorizeResolution,
       observeResolution,
       observeOpening,
       observeResidency,
       observePhase,
     }: ResolveExecutionWorkspaceOptions,
-    fastPath?: {
-      readonly threadId: ThreadId;
-      readonly record: ExecutionWorkspaceRecord;
-      readonly info: SandboxInfo;
-    },
-    coordinationLeaseHeld = false,
+    threadId: ThreadId,
   ) {
     const startedAt = Date.now();
-    const threadId =
-      fastPath?.threadId ??
-      (yield* Schema.decodeEffect(ThreadId)(id).pipe(
-        Effect.mapError(unavailable),
-      ));
     const notify = (observation: ExecutionWorkspaceResolution) =>
       observeResolution === undefined
         ? Effect.void
@@ -594,11 +587,7 @@ export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
     let observedInfo: SandboxInfo | undefined;
 
     const connectPersisted = Effect.fn("connectPersistedExecutionWorkspace")(
-      function* (
-        record: ExecutionWorkspaceRecord,
-        info?: SandboxInfo,
-        fallbackOnNotFound = false,
-      ) {
+      function* (record: ExecutionWorkspaceRecord, info?: SandboxInfo) {
         if (record.providerSandboxId === null) return yield* unavailable();
         let residencyInfo = info;
         if (observeResidency !== undefined && residencyInfo === undefined) {
@@ -644,12 +633,10 @@ export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
         }).pipe(
           Effect.catch((cause) =>
             api.isNotFound(cause)
-              ? fallbackOnNotFound
-                ? Effect.fail(new FastPathFallback())
-                : transitionState(stateStore, threadId, record, {
-                    ...record,
-                    state: "lost",
-                  }).pipe(Effect.andThen(Effect.fail(unavailable(cause))))
+              ? transitionState(stateStore, threadId, record, {
+                  ...record,
+                  state: "lost",
+                }).pipe(Effect.andThen(Effect.fail(unavailable(cause))))
               : Effect.fail(unavailable(cause)),
           ),
         );
@@ -742,11 +729,7 @@ export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
     ) {
       switch (record.state) {
         case "initialized":
-          return yield* connectPersisted(
-            record,
-            fastPath?.info,
-            fastPath !== undefined,
-          );
+          return yield* connectPersisted(record);
         case "provisioning":
         case "legacy":
           return yield* reconcile(record);
@@ -788,6 +771,11 @@ export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
                   provisioning.initializationAttemptId as string,
                 ),
                 allowInternetAccess: true,
+                // Nothing reaches a Thread's guest ports from outside: Files,
+                // Terminal, Portals, and the Desktop ride the resident
+                // daemon's outbound session, and E2B would otherwise expose
+                // (and auto-resume for) every port, loopback ones included.
+                network: { allowPublicTraffic: false },
                 lifecycle: {
                   onTimeout: { action: "pause", keepMemory: true },
                   autoResume: true,
@@ -844,7 +832,14 @@ export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
       }
     });
 
-    const state = fastPath?.record ?? (yield* readState(stateStore, threadId));
+    const authorize =
+      authorizeResolution === undefined
+        ? Effect.void
+        : Effect.tryPromise({ try: authorizeResolution, catch: unavailable });
+    const [, state] = yield* Effect.all(
+      [authorize, readState(stateStore, threadId)],
+      { concurrency: "unbounded" },
+    );
     try {
       observePhase?.("workspace_state_resolved");
     } catch {
@@ -853,8 +848,6 @@ export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
     const sandbox = yield* resolveState(state).pipe(
       Effect.catch((error) =>
         Effect.gen(function* () {
-          if (error instanceof FastPathFallback)
-            return yield* Effect.fail(error);
           const outcome =
             error instanceof ExecutionWorkspaceConflict ? "conflict" : "error";
           executionWorkspaceLogger.error("E2B workspace resolution failed.", {
@@ -869,34 +862,6 @@ export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
         }),
       ),
     );
-
-    if (fastPath !== undefined && authorizeResolution !== undefined) {
-      const authorizeFastPath = Effect.tryPromise({
-        try: authorizeResolution,
-        catch: () => unavailable(),
-      }).pipe(
-        Effect.as(true),
-        Effect.catch(() => Effect.succeed(false)),
-      );
-      const authorized = yield* coordination === undefined ||
-      coordinationLeaseHeld
-        ? authorizeFastPath
-        : Effect.acquireUseRelease(
-            Effect.tryPromise({
-              try: () =>
-                coordination.acquire(`${requirements.dxEnv}:${threadId}`),
-              catch: unavailable,
-            }),
-            () => authorizeFastPath,
-            (lease) =>
-              Effect.tryPromise({
-                try: () => lease.release(),
-                catch: () => undefined,
-              }).pipe(Effect.ignore),
-          );
-      if (!authorized)
-        return yield* Effect.fail(new FastPathAuthorizationRejected(sandbox));
-    }
 
     executionWorkspaceLogger.info("E2B workspace resolved.", {
       event: "execution_workspace_resolution",
@@ -917,17 +882,8 @@ export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
     );
     const key = `${options.requirements.dxEnv}:${threadId}`;
     const coordinator = options.coordination;
-    const authorize =
-      options.authorizeResolution === undefined
-        ? Effect.void
-        : Effect.tryPromise({
-            try: options.authorizeResolution,
-            catch: unavailable,
-          });
-    const authorizedResolve = authorize.pipe(
-      Effect.andThen(resolveUnlocked(options)),
-    );
-    const lockedResolve =
+    const resolve = resolveLocked(options, threadId);
+    const locked =
       coordinator === undefined
         ? Effect.sync(() => {
             try {
@@ -935,7 +891,7 @@ export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
             } catch {
               // Startup instrumentation is passive.
             }
-          }).pipe(Effect.andThen(authorizedResolve))
+          }).pipe(Effect.andThen(resolve))
         : Effect.gen(function* () {
             const lease = yield* Effect.tryPromise({
               try: () => coordinator.acquire(key),
@@ -947,7 +903,7 @@ export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
               // Startup instrumentation is passive.
             }
             return yield* Effect.ensuring(
-              authorizedResolve,
+              resolve,
               Effect.tryPromise({
                 try: () => lease.release(),
                 catch: () => {
@@ -965,139 +921,7 @@ export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
               }).pipe(Effect.catch(() => Effect.void)),
             );
           });
-    const bestEffortPause = (record: ExecutionWorkspaceRecord) =>
-      record.state !== "initialized" || record.providerSandboxId === null
-        ? Effect.void
-        : Effect.tryPromise({
-            try: () =>
-              api.pause(record.providerSandboxId as string, {
-                apiKey: Redacted.value(options.requirements.apiKey),
-                requestTimeoutMs: REQUEST_TIMEOUT_MS,
-                keepMemory: true,
-              }),
-            catch: (cause) => cause,
-          }).pipe(
-            Effect.catch((cause) =>
-              api.isNotFound(cause)
-                ? transitionState(options.stateStore, threadId, record, {
-                    ...record,
-                    state: "lost",
-                  }).pipe(Effect.ignore)
-                : Effect.void,
-            ),
-            Effect.asVoid,
-          );
-    const repairRejectedFastPath = (
-      rejected: FastPathAuthorizationRejected,
-      record: ExecutionWorkspaceRecord,
-    ) => {
-      const repair = Effect.tryPromise({
-        try: options.authorizeResolution as () => Promise<void>,
-        catch: () => unavailable(),
-      }).pipe(
-        Effect.as(true),
-        Effect.catch(() => Effect.succeed(false)),
-        Effect.flatMap((authorized) =>
-          authorized
-            ? Effect.succeed(rejected.sandbox)
-            : readState(options.stateStore, threadId).pipe(
-                Effect.flatMap((current) => bestEffortPause(current)),
-                Effect.andThen(Effect.fail(unavailable())),
-              ),
-        ),
-      );
-      if (coordinator === undefined) return repair;
-      return Effect.tryPromise({
-        try: () => coordinator.acquire(key),
-        catch: () => undefined,
-      }).pipe(
-        Effect.flatMap((lease) =>
-          lease === undefined
-            ? bestEffortPause(record).pipe(
-                Effect.andThen(Effect.fail(unavailable())),
-              )
-            : Effect.ensuring(
-                repair,
-                Effect.tryPromise({
-                  try: () => lease.release(),
-                  catch: () => undefined,
-                }).pipe(Effect.ignore),
-              ),
-        ),
-      );
-    };
-    const fastPath =
-      options.authorizeResolution === undefined
-        ? lockedResolve
-        : authorize.pipe(
-            Effect.andThen(readState(options.stateStore, threadId)),
-            Effect.flatMap((record) => {
-              if (
-                record.state !== "initialized" ||
-                record.providerSandboxId === null
-              )
-                return Effect.fail(new FastPathFallback());
-              return Effect.tryPromise({
-                try: () =>
-                  api.getInfo(record.providerSandboxId as string, {
-                    apiKey: Redacted.value(options.requirements.apiKey),
-                    requestTimeoutMs: REQUEST_TIMEOUT_MS,
-                  }),
-                catch: () => new FastPathFallback(),
-              }).pipe(
-                Effect.flatMap((info) =>
-                  info.state === "running" &&
-                  info.sandboxId === record.providerSandboxId
-                    ? authorize
-                        .pipe(
-                          Effect.andThen(
-                            readState(options.stateStore, threadId),
-                          ),
-                          Effect.flatMap((current) =>
-                            current.state === "initialized" &&
-                            current.providerSandboxId ===
-                              record.providerSandboxId
-                              ? resolveUnlocked(
-                                  options,
-                                  { threadId, record: current, info },
-                                  coordinator !== undefined,
-                                )
-                              : Effect.fail(new FastPathFallback()),
-                          ),
-                          (resolveCurrent) =>
-                            coordinator === undefined
-                              ? resolveCurrent
-                              : Effect.acquireUseRelease(
-                                  Effect.tryPromise({
-                                    try: () => coordinator.acquire(key),
-                                    catch: unavailable,
-                                  }),
-                                  () => resolveCurrent,
-                                  (lease) =>
-                                    Effect.tryPromise({
-                                      try: () => lease.release(),
-                                      catch: () => undefined,
-                                    }).pipe(Effect.ignore),
-                                ),
-                        )
-                        .pipe(
-                          Effect.catch((error) =>
-                            error instanceof FastPathAuthorizationRejected
-                              ? repairRejectedFastPath(error, record)
-                              : Effect.fail(error),
-                          ),
-                        )
-                    : Effect.fail(new FastPathFallback()),
-                ),
-              );
-            }),
-            Effect.catch((error) =>
-              error instanceof FastPathFallback
-                ? lockedResolve
-                : Effect.fail(error),
-            ),
-          );
-    return yield* withResolutionLock(key, fastPath);
+    return yield* withResolutionLock(key, locked);
   });
 };
 

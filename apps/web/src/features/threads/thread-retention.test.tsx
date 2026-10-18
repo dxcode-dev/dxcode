@@ -158,7 +158,6 @@ import {
 import { ThreadSessionProvider } from "./thread-session-provider.js";
 import {
   createThreadAgentClient,
-  retainSubmissionImages,
   ThreadSessionRegistry,
 } from "./thread-session-registry.js";
 import { ThreadSession } from "./thread-workspace.js";
@@ -238,6 +237,8 @@ it("initializes the first Flue candidate with its stable delivery identity", asy
   expect(network.send.mock.calls[2]?.[0]).toEqual({
     idempotencyKey: "next-input",
     message,
+    // Each attempt is bounded by its own timeout.
+    signal: expect.any(AbortSignal),
   });
 });
 
@@ -551,59 +552,12 @@ it("releases an in-flight image exactly once when its retained entry is cleared"
       { type: "image/png" },
     ),
   ]);
-  entry.pendingSubmissionImages = entry.images.take();
+  // The composer holds its files until the server has the message.
 
   registry.clear();
   await entry.images.settle();
 
-  expect(entry.pendingSubmissionImages).toBeUndefined();
   expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:in-flight-image");
-});
-
-it("keeps newer composer state when an older retained send fails", () => {
-  const registry = new ThreadSessionRegistry(new QueryClient(), userId);
-  const entry = registry.prepare("A" as ThreadId, "A");
-  registry.activate(entry);
-  const disposeOld = vi.fn();
-  const oldImages = [
-    {
-      id: "old",
-      size: 5,
-      upload: idleUpload,
-      mimeType: "image/png",
-      filename: "old.png",
-      previewUrl: "blob:old",
-      disposePreview: disposeOld,
-    } satisfies PendingAttachment,
-  ];
-  const disposeNew = vi.fn();
-  const newerImages = [
-    {
-      id: "newer",
-      size: 5,
-      upload: idleUpload,
-      mimeType: "image/png",
-      filename: "newer.png",
-      previewUrl: "blob:newer",
-      disposePreview: disposeNew,
-    } satisfies PendingAttachment,
-  ];
-  const setPending = (pending: boolean) =>
-    entry.presentation.set("submission-pending", pending);
-  const retention = retainSubmissionImages(entry, setPending);
-  expect(retention.retain(oldImages)).toBe(true);
-  entry.images.addImage(newerImages[0]);
-  entry.presentation.set("draft", "newer draft");
-  entry.presentation.set("pending-images", newerImages);
-
-  expect(retention.restore(oldImages, "older failed draft")).toBe(true);
-
-  expect(entry.presentation.get("draft")).toBe("newer draft");
-  expect(entry.presentation.get("pending-images")).toBe(newerImages);
-  expect(entry.presentation.get("submission-pending")).toBe(false);
-  expect(disposeOld).toHaveBeenCalledOnce();
-  registry.clear();
-  expect(disposeNew).toHaveBeenCalledOnce();
 });
 
 it("delivers late presentation receipts to the replacement mount and ignores them after eviction", async () => {

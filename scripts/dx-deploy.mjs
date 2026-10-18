@@ -30,6 +30,13 @@ import {
   SIGN_IN_ADMISSIONS,
   validateSelfhostConfig,
 } from "../deploy/selfhost/config.mjs";
+import {
+  ALCHEMY_OAUTH_RELOGIN,
+  listPortalZoneCandidates,
+  missingPortalOAuthScopes,
+  PORTAL_OAUTH_SCOPES,
+  preflightPortalZone,
+} from "../deploy/selfhost/portals.mjs";
 import { createHiddenPrompt } from "./hidden-prompt.mjs";
 
 export const WORKER_TRACES_PROMPT =
@@ -296,6 +303,96 @@ export const collectSignIn = async ({
   };
 };
 
+export const PORTALS_PROMPT =
+  "Enable Portals (open web apps running in a Thread at their own URLs; needs a Cloudflare zone of its own in this account, on a domain separate from the app's)";
+export const PORTAL_SKIP_PROMPT =
+  "Portal domain (number or zone name, blank to leave Portals off)";
+
+const portalZoneUse = (inUse) => {
+  if (inUse === false) return "";
+  if (inUse === undefined)
+    return " (could not read its DNS records, Worker routes, or custom domains)";
+  const parts = [
+    [inUse.dnsRecords, "DNS record"],
+    [inUse.workerRoutes, "Worker route"],
+    [inUse.customDomains, "Worker custom domain"],
+  ]
+    .filter(([count]) => count > 0)
+    .map(([count, noun]) => `${count} ${noun}${count === 1 ? "" : "s"}`);
+  return ` (already has ${parts.join(", ")})`;
+};
+
+/**
+ * Chooses the Portal domain among the account's active zones that are
+ * registrable domains separate from the app's. A zone that already serves
+ * hostnames needs explicit confirmation: the Portal route `*.<zone>/*` takes
+ * over its proxied subdomains and the wildcard record answers every unused
+ * name. The `current` Portal zone of a deployment needs no confirmation. The
+ * chosen zone passes the Portal permission preflight. Returns
+ * undefined when Portals stay off.
+ */
+export const collectPortalDomain = async ({
+  answer,
+  yes,
+  log,
+  auth,
+  appDomain,
+  current,
+  fetch = globalThis.fetch,
+}) => {
+  const candidates = await listPortalZoneCandidates({ auth, appDomain, fetch });
+  if (candidates.length === 0) {
+    log(
+      `Portals stay off: no active zone in this Cloudflare account is a registrable domain separate from ${appDomain ?? "the app"} (workers.dev cannot serve the wildcard route Portals need). Add one, then run pnpm dx:deploy -- --portals.\n`,
+    );
+    return undefined;
+  }
+  log(
+    "Portals are served at https://t-<thread>-p<port>.<portal domain>/ through a Worker route *.<portal domain>/* and a wildcard DNS record. Zones that can serve them:\n",
+  );
+  candidates.forEach((zone, index) => {
+    log(
+      `  ${index + 1}. ${zone.name}${zone.name === current ? " (current Portal zone)" : portalZoneUse(zone.inUse)}\n`,
+    );
+  });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const choice = ((await answer(PORTAL_SKIP_PROMPT, "")) ?? "")
+      .trim()
+      .toLowerCase();
+    if (choice === "") break;
+    const zone = /^\d+$/.test(choice)
+      ? candidates[Number(choice) - 1]
+      : candidates.find(({ name }) => name === choice);
+    if (zone === undefined) {
+      log(`${choice} is not one of the listed zones.\n`);
+      continue;
+    }
+    if (
+      zone.inUse !== false &&
+      zone.name !== current &&
+      !(await yes(
+        `${zone.name}${zone.inUse === undefined ? " may already serve hostnames" : " already serves hostnames"}: the route *.${zone.name}/* would take over its proxied subdomains and the wildcard record every unused name. Use it for Portals anyway`,
+        false,
+      ))
+    )
+      continue;
+    const { editConfirmed } = await preflightPortalZone({
+      auth,
+      portalDomain: zone.name,
+      zoneId: zone.id,
+      fetch,
+    });
+    log(
+      editConfirmed
+        ? `Portal zone ${zone.name} prerequisites passed.\n`
+        : `Portal zone ${zone.name}: Zone, DNS, and Workers Routes are readable; this token cannot read its own policies, so Edit is confirmed at apply.\n`,
+    );
+    return zone.name;
+  }
+  log("Portals stay off.\n");
+  return undefined;
+};
+
 export const collectDeploymentConfig = async ({
   answer,
   yes,
@@ -305,6 +402,7 @@ export const collectDeploymentConfig = async ({
   authEmailFrom: providedAuthEmailFrom,
   magicLink,
   cloudflareAuth,
+  portals,
 }) => {
   const name = defaults.name ?? (await answer("Deployment name", "my-dx"));
   const hostedAuthentication =
@@ -317,6 +415,8 @@ export const collectDeploymentConfig = async ({
   const zone =
     defaults.zone ??
     (customDomain ? await answer("Cloudflare zone") : undefined);
+  const portalDomain =
+    portals === undefined ? undefined : await portals(domain);
   const adminEmail = await answer("First administrator email");
   const authEmailFrom =
     providedAuthEmailFrom ??
@@ -376,6 +476,7 @@ export const collectDeploymentConfig = async ({
     cloudflareAccountId: defaults.cloudflareAccountId,
     adminEmail,
     ...(domain ? { domain, zone } : {}),
+    ...(portalDomain ? { portalDomain } : {}),
     ...(authEmailFrom ? { authEmailFrom } : {}),
     ...(cloudflareAuth === undefined ? {} : { cloudflareAuth }),
     integrations,
@@ -484,16 +585,74 @@ export const runDxDeploy = async ({
   }
   if (environment.CLOUDFLARE_API_TOKEN && !environment.CLOUDFLARE_ACCOUNT_ID)
     environment.CLOUDFLARE_ACCOUNT_ID = await answer("Cloudflare account ID");
-  if (!environment.CLOUDFLARE_API_TOKEN) {
+  // Portals need DNS edit, which Alchemy's default OAuth login does not
+  // request, so a new deployment decides before signing in.
+  const portalsFlag = flags.has("--portals");
+  let portalsWanted =
+    existing === undefined
+      ? await yes(PORTALS_PROMPT, false)
+      : portalsFlag
+        ? await yes(PORTALS_PROMPT, existing.portalDomain !== undefined)
+        : existing.portalDomain !== undefined;
+  const alchemyLogin = (configure = false) => {
     const login = spawnSync(
       "pnpm",
-      ["exec", "alchemy", "login", "--profile", "dx-selfhost"],
-      { stdio: "inherit" },
+      [
+        "exec",
+        "alchemy",
+        "login",
+        "--profile",
+        "dx-selfhost",
+        ...(configure ? ["--configure"] : []),
+      ],
+      {
+        stdio: "inherit",
+        env: {
+          ...process.env,
+          ...(portalsWanted
+            ? {
+                ALCHEMY_CLOUDFLARE_OAUTH_EXTRA_SCOPES:
+                  PORTAL_OAUTH_SCOPES.join(" "),
+              }
+            : {}),
+        },
+      },
     );
     if (login.error) throw login.error;
     if (login.status !== 0) throw new Error("Alchemy Cloudflare login failed.");
+  };
+  if (!environment.CLOUDFLARE_API_TOKEN) alchemyLogin();
+  let cloudflareAuth = loadAlchemyCloudflareAuth({ environment });
+  // An existing Alchemy login keeps the scopes it was granted.
+  const missingScopes = () =>
+    missingPortalOAuthScopes(cloudflareAuth)
+      .map(({ scope }) => scope)
+      .join(", ");
+  if (portalsWanted && missingScopes() !== "") {
+    stdout.write(
+      `Portals need the Alchemy Cloudflare login to include ${missingScopes()}, which this login was not granted.\n`,
+    );
+    if (
+      await yes(
+        "Sign in to Cloudflare again now with Portal access (choose OAuth and the same account)",
+        true,
+      )
+    ) {
+      alchemyLogin(true);
+      cloudflareAuth = loadAlchemyCloudflareAuth({ environment });
+      if (missingScopes() !== "")
+        throw new Error(
+          `The new Alchemy Cloudflare login still lacks ${missingScopes()}. To sign in again, ${ALCHEMY_OAUTH_RELOGIN}.`,
+        );
+    } else if (existing?.portalDomain !== undefined)
+      throw new Error(
+        `This deployment serves Portals at ${existing.portalDomain}, which needs ${missingScopes()}. To sign in again, ${ALCHEMY_OAUTH_RELOGIN}.`,
+      );
+    else {
+      stdout.write("Portals stay off.\n");
+      portalsWanted = false;
+    }
   }
-  const cloudflareAuth = loadAlchemyCloudflareAuth({ environment });
   if (
     existing?.cloudflareAccountId !== undefined &&
     existing.cloudflareAccountId !== cloudflareAuth.accountId
@@ -521,6 +680,26 @@ export const runDxDeploy = async ({
     log: (message) => stdout.write(message),
   });
   stdout.write("Cloudflare prerequisites passed.\n");
+  if (existing?.portalDomain !== undefined && !portalsFlag) {
+    const { editConfirmed } = await preflightPortalZone({
+      auth: cloudflareAuth,
+      portalDomain: existing.portalDomain,
+    });
+    stdout.write(
+      editConfirmed
+        ? "Portal zone prerequisites passed.\n"
+        : "Portal zone is readable; this token cannot read its own policies, so DNS and Workers Routes Edit are confirmed at apply.\n",
+    );
+  }
+  const choosePortalDomain = (appDomain, current) =>
+    collectPortalDomain({
+      answer,
+      yes,
+      log: (message) => stdout.write(message),
+      auth: cloudflareAuth,
+      appDomain,
+      current,
+    });
 
   let config = existing;
   // A sender entered for an existing deployment is saved with it, and the
@@ -552,6 +731,7 @@ export const runDxDeploy = async ({
       authEmailFrom,
       magicLink: newSender ? newMagicLink : undefined,
       cloudflareAuth: cloudflareAuthChoice.record,
+      portals: portalsWanted ? choosePortalDomain : undefined,
     });
   else if (flags.has("--rotate")) {
     if (config.orbProviders.includes("e2b"))
@@ -575,6 +755,18 @@ export const runDxDeploy = async ({
       environment.DX_GOOGLE_CLIENT_SECRET = await secret(
         "New Google OAuth client secret",
       );
+  }
+  // `--portals` turns Portals on, moves them to another zone, or turns them
+  // off (redeploying without portalDomain removes the Portal resources).
+  if (existing !== undefined && portalsFlag) {
+    const { portalDomain: _previous, ...rest } = config;
+    const portalDomain = portalsWanted
+      ? await choosePortalDomain(config.domain, existing.portalDomain)
+      : undefined;
+    config = validateSelfhostConfig({
+      ...rest,
+      ...(portalDomain === undefined ? {} : { portalDomain }),
+    });
   }
   // Deployments created before a plugin existed were never asked about it.
   if (

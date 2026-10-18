@@ -30,7 +30,6 @@ import { MarkdownFileLinkContext } from "../../shared/ui/markdown-file-link-cont
 import { useMobile } from "../../shared/use-mobile.js";
 import { projectQueryOptions } from "../projects/project-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
-import type { TranscriptFocus } from "./thread-transcript.js";
 import { AgentPanel } from "./agent-panel.js";
 import { ChangesPane } from "./changes/changes-pane.js";
 import { CenterFilePane } from "./files/center-file-pane.js";
@@ -39,6 +38,7 @@ import {
   ThreadFilesPanel,
 } from "./files/files-panel.js";
 import type { PendingAttachment } from "./image-attachments.js";
+import { ThreadPortalsPane } from "./portals/portals-pane.js";
 import {
   useThreadPresence,
   useThreadWorkspaceStatus,
@@ -71,9 +71,9 @@ import {
   type OptimisticThreadCreation,
   type PendingSubmissionControl,
   type RetainedThread,
-  retainSubmissionImages,
   type ThreadSessionRegistry,
 } from "./thread-session-registry.js";
+import type { TranscriptFocus } from "./thread-transcript.js";
 import {
   absolutePathFor,
   type FileReveal,
@@ -177,12 +177,14 @@ const useRetainedThread = (
 
 export function ThreadWorkspace({
   Terminal,
+  Desktop,
 }: {
   readonly Terminal?: React.ComponentType<{
     readonly active?: boolean;
     readonly threadId: ThreadId;
     readonly onWorkspaceStatusChange?: (status?: string) => void;
   }>;
+  readonly Desktop?: ThreadDesktopComponent;
 }) {
   const { threadId } = useParams({ from: "/_product/threads/$threadId" });
   const navigate = useNavigate();
@@ -327,6 +329,7 @@ export function ThreadWorkspace({
       }
       {...(focus === undefined ? {} : { focus, onFocusHandled })}
       Terminal={Terminal}
+      Desktop={Desktop}
     />
   );
 }
@@ -393,6 +396,43 @@ function OpenThreadFilePane({
 type ThreadProject = Pick<ProjectData, "name"> &
   Partial<Pick<ProjectData, "workspaceId">>;
 
+/** The Thread's remote desktop viewer, composed by the router. */
+type ThreadDesktopComponent = React.ComponentType<{
+  readonly active?: boolean;
+  readonly threadId: ThreadId;
+}>;
+
+/**
+ * The Preview tool: absent without a Portal domain, a note for a view-only
+ * member (Portals and the Desktop take input), otherwise the Portals pane.
+ */
+const previewTool = (
+  thread: ThreadDetailData,
+  portalDomain: string | undefined,
+) =>
+  portalDomain === undefined ? undefined : thread.access === "view" ? (
+    <div className="thread-files-state" role="note">
+      Only contributors can open Portals in a shared thread.
+    </div>
+  ) : (
+    (active: boolean) => (
+      <ThreadPortalsPane active={active} threadId={thread.id} />
+    )
+  );
+
+/** The Desktop tool, gated like Preview; absent when the router gives none. */
+const desktopTool = (
+  thread: ThreadDetailData,
+  Desktop: ThreadDesktopComponent | undefined,
+) =>
+  Desktop === undefined ? undefined : thread.access === "view" ? (
+    <div className="thread-files-state" role="note">
+      Only contributors can use the desktop in a shared thread.
+    </div>
+  ) : (
+    (active: boolean) => <Desktop active={active} threadId={thread.id} />
+  );
+
 type ThreadSessionProps = {
   readonly thread: ThreadDetailData;
   /** Already activated by the page that loaded it. */
@@ -412,6 +452,7 @@ type ThreadSessionProps = {
     readonly threadId: ThreadId;
     readonly onWorkspaceStatusChange?: (status?: string) => void;
   }>;
+  readonly Desktop?: ThreadDesktopComponent;
 };
 
 export function ThreadSession(props: ThreadSessionProps) {
@@ -619,10 +660,6 @@ function useRetainedImageProps() {
         submissionPending,
         submissionControl,
         onSubmissionPendingChange: setSubmissionPending,
-        submissionImageRetention: retainSubmissionImages(
-          retainedThread,
-          setSubmissionPending,
-        ),
       };
 }
 
@@ -735,6 +772,7 @@ function ThreadSessionContent({
   focus,
   onFocusHandled,
   Terminal,
+  Desktop,
   agentSource,
 }: ThreadSessionProps & {
   readonly agentSource: ThreadAgentSource;
@@ -917,6 +955,8 @@ function ThreadSessionContent({
             )
           )
         }
+        preview={previewTool(thread, settingsQuery.data?.portalDomain)}
+        desktop={desktopTool(thread, Desktop)}
         changes={
           <>
             {fileNavigationError === undefined ? null : (

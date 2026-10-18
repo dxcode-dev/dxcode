@@ -140,11 +140,21 @@ export const resolveMcpAgentConnections = Effect.fn(
     Effect.mapError(() => new McpExecutionUnavailable()),
   );
   const thread = yield* readThread(db, rawThreadId);
-  const connections = yield* approvedConnections(
-    db,
+  return yield* resolveMcpAgentConnectionsFor(
+    binding,
     thread.ownerUserId,
     thread.projectId,
   );
+});
+
+/** The same connections for a Thread that is not persisted yet. */
+export const resolveMcpAgentConnectionsFor = Effect.fn(
+  "resolveMcpAgentConnectionsFor",
+)(function* (binding: unknown, ownerUserId: UserId, projectId: ProjectId) {
+  const db = yield* decodeD1Binding(binding).pipe(
+    Effect.mapError(() => new McpExecutionUnavailable()),
+  );
+  const connections = yield* approvedConnections(db, ownerUserId, projectId);
   return connections
     .filter(({ tools }) => tools.length > 0)
     .map(({ server, tools }) => ({

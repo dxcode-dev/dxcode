@@ -20,6 +20,10 @@ import {
   notificationUnsubscribeRoutes,
 } from "./notifications/routes.js";
 import { installFlueObservation } from "./observability/flue.js";
+import { installRuntimeTracing } from "./observability/platform-tracing.js";
+import { portalAuthRoutes } from "./portals/auth-routes.js";
+import { portalHostRouting } from "./portals/host-routing.js";
+import { threadPortalRoutes } from "./portals/routes.js";
 import { projectRoutes } from "./projects/routes.js";
 import { readinessHandler } from "./readiness/handler.js";
 import { realtimeRoutes } from "./realtime/realtime-hub.js";
@@ -37,6 +41,7 @@ import {
   githubWebhookRoutes,
 } from "./source-control/github/routes.js";
 import { threadChangesRoutes } from "./thread-changes/routes.js";
+import { threadDesktopRoutes } from "./thread-desktop/routes.js";
 import { threadFilesRoutes } from "./thread-files/routes.js";
 import { threadSandboxFileRoutes } from "./thread-files/sandbox.js";
 import { threadSearchRoutes } from "./thread-search/routes.js";
@@ -51,10 +56,12 @@ import { threadRoutes } from "./threads/routes.js";
 import { threadTerminalRoutes } from "./threads/terminal-route.js";
 import { workloadIdentityRoutes } from "./workload-identity/routes.js";
 
+installRuntimeTracing();
 installFlueObservation();
 
 const app = new Hono<AppEnv>();
 
+app.use("*", portalHostRouting);
 app.use("*", requestId);
 app.use("*", requestLogging);
 
@@ -69,6 +76,8 @@ app.route("/api/notifications/unsubscribe", notificationUnsubscribeRoutes);
 app.route("/api/source/bitbucket/git", bitbucketGitGatewayRoutes);
 app.route("/v1/integrations/github", githubWebhookRoutes);
 app.route("/v1", threadDaemonRoutes);
+// Navigated to, not fetched: it redirects to sign-in instead of answering 401.
+app.route("/v1/portal-auth", portalAuthRoutes);
 app.use("/v1/*", authenticate);
 app.use("/v1/*", authorizeApiTokenScope);
 app.route("/v1/attachments", attachmentRoutes);
@@ -103,6 +112,13 @@ app.route("/v1/threads", threadSandboxFileRoutes);
 app.use("/v1/threads/:threadId/terminal", authorizeThread);
 app.use("/v1/threads/:threadId/terminal", enforceThreadActive);
 app.route("/v1/threads", threadTerminalRoutes);
+// `/portals/*` also matches `/portals`; authorizing twice would see the
+// owner a contributor is impersonating.
+app.use("/v1/threads/:threadId/portals/*", authorizeThread);
+app.route("/v1/threads", threadPortalRoutes);
+app.use("/v1/threads/:threadId/desktop/*", authorizeThread);
+app.use("/v1/threads/:threadId/desktop/*", enforceThreadActive);
+app.route("/v1/threads", threadDesktopRoutes);
 app.route("/v1/agents/dx", dxAgentRoutes);
 
 app.notFound(notFoundHandler);

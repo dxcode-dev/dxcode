@@ -70,7 +70,8 @@ const mocks = vi.hoisted(() => {
         }
       : sql.includes("JOIN github_user_authorization a")
         ? { bind: vi.fn(() => ({ first: firstGithubConnection })) }
-        : sql.includes("thread_source_snapshot")
+        : sql.includes("thread_source_snapshot") &&
+            !sql.includes("project_binding_revision")
           ? {
               bind: vi.fn(() => ({ first: firstSourceWorkspace })),
             }
@@ -204,11 +205,11 @@ vi.mock("./e2b/resolver.js", () => ({
 vi.mock("../thread-changes/coordinator.js", () => ({
   makeThreadChangesCoordinator: mocks.makeChangesCoordinator,
 }));
-vi.mock("./e2b/daemon-release.js", () => ({
+vi.mock("./guest/daemon-release.js", () => ({
   loadDaemonRelease: mocks.loadDaemonRelease,
   loadDaemonReleaseMetadata: mocks.loadDaemonReleaseMetadata,
 }));
-vi.mock("./e2b/daemon-installer.js", () => ({
+vi.mock("./guest/daemon-installer.js", () => ({
   ensureDaemonInGuest: mocks.ensureDaemonInGuest,
 }));
 vi.mock("../source-control/tools.js", () => ({
@@ -515,6 +516,88 @@ describe("execution workspace admission", () => {
     ]);
   });
 
+  it("does not wait for status publishes and keeps waking before ready", async () => {
+    const threadId = thread("thr_00000000-0000-4000-8000-000000000290");
+    const pending: Array<() => void> = [];
+    mocks.publishRealtimeWorkspaceStatus.mockImplementation(
+      () =>
+        new Promise<undefined>((resolve) =>
+          pending.push(() => resolve(undefined)),
+        ),
+    );
+    mocks.resolveWorkspace.mockImplementationOnce(
+      (options) =>
+        Effect.promise(async () => {
+          await options.observeResidency?.("paused");
+          return {
+            commands: {
+              run: vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 })),
+            },
+            files: { write: vi.fn(async () => undefined) },
+            setTimeout: vi.fn(async () => undefined),
+          };
+        }) as never,
+    );
+
+    const activation = ExecutionWorkspaces.sandboxFactory.createSandbox({
+      id: threadId,
+    });
+    try {
+      // Every publish hangs; activation must not wait for any of them.
+      await expect(
+        Promise.race([
+          activation.then(() => "activated"),
+          new Promise((resolve) => setTimeout(resolve, 1_000, "waiting")),
+        ]),
+      ).resolves.toBe("activated");
+      expect(mocks.publishRealtimeWorkspaceStatus.mock.calls).toEqual([
+        [mocks.workerEnv, threadId, "waking"],
+      ]);
+      pending.shift()?.();
+      await vi.waitFor(() =>
+        expect(mocks.publishRealtimeWorkspaceStatus.mock.calls).toEqual([
+          [mocks.workerEnv, threadId, "waking"],
+          [mocks.workerEnv, threadId, "ready"],
+        ]),
+      );
+    } finally {
+      mocks.publishRealtimeWorkspaceStatus.mockImplementation(
+        async () => undefined,
+      );
+      for (const resolve of pending) resolve();
+      await activation.catch(() => undefined);
+    }
+  });
+
+  it("still publishes ready after waking when activation fails", async () => {
+    const threadId = thread("thr_00000000-0000-4000-8000-000000000291");
+    mocks.resolveWorkspace.mockImplementationOnce(
+      (options) =>
+        Effect.promise(async () => {
+          await options.observeResidency?.("paused");
+          return {
+            commands: {
+              run: vi.fn(async () => {
+                throw new Error("guest unavailable");
+              }),
+            },
+            files: { write: vi.fn(async () => undefined) },
+            setTimeout: vi.fn(async () => undefined),
+          };
+        }) as never,
+    );
+
+    await expect(
+      ExecutionWorkspaces.sandboxFactory.createSandbox({ id: threadId }),
+    ).rejects.toBeDefined();
+    await vi.waitFor(() =>
+      expect(mocks.publishRealtimeWorkspaceStatus.mock.calls).toEqual([
+        [mocks.workerEnv, threadId, "waking"],
+        [mocks.workerEnv, threadId, "ready"],
+      ]),
+    );
+  });
+
   it("does not skip first readiness for a confirmed running workspace", async () => {
     const threadId = thread("thr_00000000-0000-4000-8000-000000000293");
     const sourceRun = vi.fn(async () => ({
@@ -620,6 +703,33 @@ describe("execution workspace admission", () => {
     expect(mocks.firstThreadLifecycle).toHaveBeenCalled();
   });
 
+  it("never reaches the workspace to record activity that may not wake it", async () => {
+    const threadId = thread("thr_00000000-0000-4000-8000-000000000296");
+    // Nothing in this isolate tracks the Thread's deadline (a fresh
+    // isolate), and the workspace may have paused since: a proxied
+    // WebSocket message must not resume it to start tracking.
+    await expect(
+      ExecutionWorkspaces.recordResidentTerminalInput(threadId, {
+        wake: false,
+      }),
+    ).resolves.toBeUndefined();
+    expect(mocks.resolveProfile).not.toHaveBeenCalled();
+    expect(mocks.connectWorkspace).not.toHaveBeenCalled();
+
+    // Terminal input may wake: it connects to start tracking.
+    mocks.connectWorkspace.mockReturnValueOnce(
+      Effect.succeed({
+        commands: { run: vi.fn() },
+        files: { write: vi.fn() },
+        setTimeout: vi.fn(async () => undefined),
+      }) as never,
+    );
+    await ExecutionWorkspaces.recordResidentTerminalInput(threadId).catch(
+      () => undefined,
+    );
+    expect(mocks.connectWorkspace).toHaveBeenCalledOnce();
+  });
+
   it("wakes a self-registering daemon without any guest command", async () => {
     const threadId = thread("thr_00000000-0000-4000-8000-000000000295");
     const run = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
@@ -640,7 +750,10 @@ describe("execution workspace admission", () => {
         mintCredential,
         awaitRegistration,
       }),
-    ).resolves.toEqual({ bootstrapped: false, provider: "e2b" });
+    ).resolves.toEqual({ bootstrapped: false });
+    await expect(ExecutionWorkspaces.pinnedProvider(threadId)).resolves.toBe(
+      "e2b",
+    );
 
     expect(mocks.connectWorkspace).toHaveBeenCalledOnce();
     expect(awaitRegistration).toHaveBeenCalledWith(3_000);

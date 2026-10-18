@@ -48,6 +48,11 @@ is `pnpm deploy:selfhost:dxd` with `dxdBinary` set in
 and its release record disagree. Deploy from an unmodified release tag, whose
 record names the `dxd` version in `apps/dxd/Cargo.toml`.
 
+**Desktop isn't available in this workspace**, or a Terminal without tmux,
+means the thread's sandbox comes from an image older than v0.2.22. Rebuild
+the E2B template with `pnpm deploy:selfhost:template` and deploy; threads
+created afterwards have both. A thread keeps the sandbox it started with.
+
 ## Cloudflare Containers image build and push
 
 When Cloudflare Containers is an Orb provider, the deploy builds the Orb image

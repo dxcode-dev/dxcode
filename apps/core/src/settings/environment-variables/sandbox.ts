@@ -1,10 +1,32 @@
 import type { Sandbox, SandboxFactory } from "@flue/runtime";
 import { Redacted } from "effect";
-import type { ExecutionEnvironmentSnapshot } from "./execution.js";
+import {
+  type ExecutionEnvironmentRevision,
+  type ExecutionEnvironmentSnapshot,
+  executionEnvironmentRevisionsEqual,
+} from "./execution.js";
 
 // Process environments cannot contain NUL, so this delimiter cannot contain or
 // join surrounding output into any admitted secret value.
 export const ENVIRONMENT_SECRET_REDACTION = "\0";
+
+/**
+ * How long operations other than commands reuse the resolved environment
+ * before checking its revision again. A command checks it every time, so an
+ * edit reaches the next command at once and every other operation, such as
+ * the reads Claude Code polls a run with, within this long.
+ */
+export const ENVIRONMENT_REVALIDATE_MS = 5_000;
+
+/**
+ * A secret as JSON text carries it, once and nested: Claude Code's
+ * stream-json escapes a `"`, `\`, or control character in a tool result,
+ * and a streamed tool input is JSON inside a JSON string.
+ */
+const jsonForms = (secret: string) => {
+  const once = JSON.stringify(secret).slice(1, -1);
+  return [secret, once, JSON.stringify(once).slice(1, -1)];
+};
 
 const admittedValues = (snapshot: ExecutionEnvironmentSnapshot) => {
   const env: Record<string, string> = {};
@@ -12,13 +34,19 @@ const admittedValues = (snapshot: ExecutionEnvironmentSnapshot) => {
   for (const value of snapshot.values) {
     const plaintext = Redacted.value(value.value);
     env[value.name] = plaintext;
-    if (value.kind === "secret") secrets.add(plaintext);
+    if (value.kind === "secret")
+      for (const form of jsonForms(plaintext)) secrets.add(form);
   }
+  const sorted = [...secrets].sort((left, right) => right.length - left.length);
+  const encoder = new TextEncoder();
   return {
     env,
-    secrets: [...secrets].sort((left, right) => right.length - left.length),
+    secrets: sorted,
+    secretBytes: sorted.map((secret) => encoder.encode(secret)),
   };
 };
+
+type Admitted = ReturnType<typeof admittedValues>;
 
 const redactText = (value: string, secrets: ReadonlyArray<string>) => {
   let redacted = "";
@@ -47,10 +75,12 @@ const matchesAt = (
   return true;
 };
 
-const redactBytes = (value: Uint8Array, secrets: ReadonlyArray<string>) => {
-  const encoder = new TextEncoder();
-  const replacement = encoder.encode(ENVIRONMENT_SECRET_REDACTION);
-  const candidates = secrets.map((secret) => encoder.encode(secret));
+const replacement = new TextEncoder().encode(ENVIRONMENT_SECRET_REDACTION);
+
+const redactBytes = (
+  value: Uint8Array,
+  candidates: ReadonlyArray<Uint8Array>,
+) => {
   const output: Array<number> = [];
   for (let offset = 0; offset < value.length; ) {
     const matched = candidates.find((candidate) =>
@@ -87,10 +117,62 @@ const withRedactedFailure = async <A>(
   }
 };
 
+/**
+ * The environment for one decorated sandbox. Without a revision source every
+ * operation resolves it again; with one, the resolved values are kept and
+ * resolved again only when the revision changed.
+ */
+const environmentFor = (
+  resolve: () => Promise<ExecutionEnvironmentSnapshot>,
+  revision: (() => Promise<ExecutionEnvironmentRevision>) | undefined,
+) => {
+  let kept:
+    | {
+        readonly admitted: Admitted;
+        readonly revision: ExecutionEnvironmentRevision;
+        checkedAt: number;
+      }
+    | undefined;
+  /** The check other operations share, so a burst of reads makes one. */
+  let checking: Promise<Admitted> | undefined;
+  const check = async (): Promise<Admitted> => {
+    const current = kept;
+    if (current !== undefined) {
+      const latest = await revision?.();
+      if (
+        latest !== undefined &&
+        executionEnvironmentRevisionsEqual(latest, current.revision)
+      ) {
+        current.checkedAt = Date.now();
+        return current.admitted;
+      }
+    }
+    const snapshot = await resolve();
+    const admitted = admittedValues(snapshot);
+    kept = { admitted, revision: snapshot.revision, checkedAt: Date.now() };
+    return admitted;
+  };
+  return (operation: "command" | "other"): Promise<Admitted> => {
+    if (revision === undefined) return resolve().then(admittedValues);
+    if (operation === "command") return check();
+    if (
+      kept !== undefined &&
+      Date.now() - kept.checkedAt < ENVIRONMENT_REVALIDATE_MS
+    )
+      return Promise.resolve(kept.admitted);
+    checking ??= check().finally(() => {
+      checking = undefined;
+    });
+    return checking;
+  };
+};
+
 const decorateSandbox = (
   sandbox: Sandbox,
   resolve: () => Promise<ExecutionEnvironmentSnapshot>,
+  revision?: () => Promise<ExecutionEnvironmentRevision>,
 ): Sandbox => {
+  const environment = environmentFor(resolve, revision);
   const snapshotWorkspaceContext = sandbox.snapshotWorkspaceContext;
   return {
     cwd: sandbox.cwd,
@@ -99,7 +181,7 @@ const decorateSandbox = (
       ? {}
       : {
           snapshotWorkspaceContext: async (root: string) => {
-            const admitted = admittedValues(await resolve());
+            const admitted = await environment("other");
             const result = await withRedactedFailure(admitted.secrets, () =>
               snapshotWorkspaceContext(root),
             );
@@ -146,7 +228,7 @@ const decorateSandbox = (
           },
         }),
     exec: async (command, options) => {
-      const admitted = admittedValues(await resolve());
+      const admitted = await environment("command");
       const result = await withRedactedFailure(admitted.secrets, () =>
         sandbox.exec(command, {
           ...options,
@@ -160,48 +242,48 @@ const decorateSandbox = (
       };
     },
     readFile: async (path) => {
-      const admitted = admittedValues(await resolve());
+      const admitted = await environment("other");
       const contents = await withRedactedFailure(admitted.secrets, () =>
         sandbox.readFile(path),
       );
       return redactText(contents, admitted.secrets);
     },
     readFileBuffer: async (path) => {
-      const admitted = admittedValues(await resolve());
+      const admitted = await environment("other");
       const contents = await withRedactedFailure(admitted.secrets, () =>
         sandbox.readFileBuffer(path),
       );
-      return redactBytes(contents, admitted.secrets);
+      return redactBytes(contents, admitted.secretBytes);
     },
     readdir: async (path) => {
-      const admitted = admittedValues(await resolve());
+      const admitted = await environment("other");
       const entries = await withRedactedFailure(admitted.secrets, () =>
         sandbox.readdir(path),
       );
       return entries.map((entry) => redactText(entry, admitted.secrets));
     },
     writeFile: async (path, content) => {
-      const admitted = admittedValues(await resolve());
+      const admitted = await environment("other");
       return withRedactedFailure(admitted.secrets, () =>
         sandbox.writeFile(path, content),
       );
     },
     stat: async (path) => {
-      const admitted = admittedValues(await resolve());
+      const admitted = await environment("other");
       return withRedactedFailure(admitted.secrets, () => sandbox.stat(path));
     },
     exists: async (path) => {
-      const admitted = admittedValues(await resolve());
+      const admitted = await environment("other");
       return withRedactedFailure(admitted.secrets, () => sandbox.exists(path));
     },
     mkdir: async (path, options) => {
-      const admitted = admittedValues(await resolve());
+      const admitted = await environment("other");
       return withRedactedFailure(admitted.secrets, () =>
         sandbox.mkdir(path, options),
       );
     },
     rm: async (path, options) => {
-      const admitted = admittedValues(await resolve());
+      const admitted = await environment("other");
       return withRedactedFailure(admitted.secrets, () =>
         sandbox.rm(path, options),
       );
@@ -212,8 +294,13 @@ const decorateSandbox = (
 export const withExecutionEnvironment = (
   factory: SandboxFactory,
   resolve: (id: string) => Promise<ExecutionEnvironmentSnapshot>,
+  revision?: (id: string) => Promise<ExecutionEnvironmentRevision>,
 ): SandboxFactory => ({
   createSandbox: async ({ id }) =>
-    decorateSandbox(await factory.createSandbox({ id }), () => resolve(id)),
+    decorateSandbox(
+      await factory.createSandbox({ id }),
+      () => resolve(id),
+      revision === undefined ? undefined : () => revision(id),
+    ),
   ...(factory.tools === undefined ? {} : { tools: factory.tools }),
 });

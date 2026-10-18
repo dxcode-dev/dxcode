@@ -16,9 +16,11 @@ use crate::files::{FilesContext, FilesDone, FilesOperation, FilesResult, FilesWo
 use crate::files_sandbox::{self, SandboxReadResult};
 use crate::observer::Observer;
 use crate::protocol::{
-    Capabilities, ClientMessage, EnvironmentOperation, OperationResult, RequestOperation,
-    ServerMessage, UpdateStatus, WorkloadIdentityResult,
+    Capabilities, ClientMessage, EnvironmentOperation, OperationResult, PortalOperation,
+    PortalResult, RequestOperation, ServerMessage, UpdateStatus, WorkloadIdentityResult,
 };
+use crate::proxy::{self, DesktopStart, Outbound, Proxy};
+use crate::services::{ServicePaths, Services};
 use crate::terminal::{TerminalOutbound, TerminalRuntime};
 use crate::update::{self, UpdateRequest, Updater};
 use crate::workload_identity::{LocalRequest, Relay};
@@ -142,6 +144,11 @@ pub struct Daemon {
     workload_identity: Relay,
     workload_identity_epoch: Arc<AtomicU64>,
     connected: Arc<AtomicBool>,
+    /// Declared services this daemon started; they outlive its sessions.
+    services: Services,
+    /// Held by the one running Desktop start, which can outlive the
+    /// session that asked; Core asks again after a reconnect.
+    desktop_start: Arc<std::sync::Mutex<()>>,
 }
 
 impl Daemon {
@@ -156,6 +163,7 @@ impl Daemon {
         workload_identity: Relay,
         workload_identity_epoch: Arc<AtomicU64>,
         connected: Arc<AtomicBool>,
+        services: Services,
     ) -> std::io::Result<Self> {
         let (files, files_results) = FilesWorkers::new(files);
         let (changes_results_tx, changes_results) = channel(4);
@@ -181,6 +189,8 @@ impl Daemon {
             workload_identity,
             workload_identity_epoch,
             connected,
+            services,
+            desktop_start: Arc::default(),
         })
     }
 
@@ -370,6 +380,8 @@ impl Daemon {
         let (bulk, bulk_rx) = tokio::sync::mpsc::unbounded_channel::<BulkFrame>();
         let window = Arc::new(tokio::sync::Semaphore::new(SANDBOX_CHUNK_WINDOW));
         let mut writer = tokio::spawn(write_loop(sink, control_rx, bulk_rx, Arc::clone(&window)));
+        // Proxy streams belong to this connection: Core fails them when it ends.
+        let mut proxy = Proxy::default();
         // A stale socket (a resumed VM) can hold a write for its whole TCP
         // timeout; it must not outlive the session it served.
         let _writer_guard = AbortOnDrop(writer.abort_handle());
@@ -485,12 +497,21 @@ impl Daemon {
                                 &mut pending_workload_identity,
                                 &mut environment_task,
                                 &workspace_root,
+                                &mut proxy,
                             )
                             .await?;
                         }
                         Some(Ok(Message::Binary(bytes))) => {
                             last_activity = Instant::now();
                             last_feature_activity = last_activity;
+                            if proxy::is_frame(&bytes) {
+                                // Only a malformed header ends the session;
+                                // a stream that overruns its window fails alone.
+                                proxy
+                                    .input(&bytes)
+                                    .map_err(|_| SessionExit::Protocol("invalid proxy frame"))?;
+                                continue;
+                            }
                             let output = self.terminal.input(&bytes).map_err(SessionExit::Terminal)?;
                             send_terminal_output(&control, output).await?;
                             let output = self.terminal.drain_input().map_err(SessionExit::Terminal)?;
@@ -540,6 +561,7 @@ impl Daemon {
                     }
                     let output = self.terminal.reap_exited().map_err(SessionExit::Terminal)?;
                     send_terminal_output(&control, output).await?;
+                    self.services.reap();
                     send_json(
                         &control,
                         &ClientMessage::Heartbeat {
@@ -551,7 +573,9 @@ impl Daemon {
                     pending_workload_identity.expire(Instant::now());
                     self.updater.retry_due(Instant::now());
                     if self.update_due(
-                        environment_task.is_some() || !pending_workload_identity.requests.is_empty(),
+                        environment_task.is_some()
+                            || !pending_workload_identity.requests.is_empty()
+                            || !proxy.is_empty(),
                         last_feature_activity,
                     ) && self.install_update(&control, &generation).await?
                     {
@@ -594,6 +618,21 @@ impl Daemon {
                             let _ = results.blocking_send(CompletedRefresh { sequence, request, outcome });
                         });
                     }
+                }
+
+                outbound = proxy.next() => {
+                    last_feature_activity = Instant::now();
+                    let message = match outbound {
+                        Outbound::Text(text) => Message::Text(text.into()),
+                        Outbound::Binary(bytes) => Message::Binary(bytes),
+                        Outbound::Finished(..) => continue,
+                    };
+                    bulk.send(BulkFrame {
+                        message,
+                        windowed: false,
+                        _admission: None,
+                    })
+                    .map_err(|_| SessionExit::Socket)?;
                 }
 
                 () = self.observer.dirty() => {
@@ -651,6 +690,23 @@ impl Daemon {
         }
     }
 
+    fn service_paths(&self, workspace_root: &Path) -> ServicePaths {
+        match &self.config.local_runtime {
+            Some(local) => ServicePaths {
+                workspace_root: workspace_root.to_owned(),
+                home: PathBuf::from(&local.home_directory),
+                user: std::env::var("USER").unwrap_or_else(|_| "user".into()),
+                log_directory: PathBuf::from(&local.state_directory).join("services"),
+            },
+            None => ServicePaths {
+                workspace_root: workspace_root.to_owned(),
+                home: PathBuf::from("/home/user"),
+                user: "user".into(),
+                log_directory: PathBuf::from("/home/user/.local/state/dx-services"),
+            },
+        }
+    }
+
     /// A verified release swaps only while nothing is in flight and every
     /// feature has been quiet for `update::QUIET`.
     fn update_due(&self, session_busy: bool, last_feature_activity: Instant) -> bool {
@@ -700,12 +756,17 @@ impl Daemon {
     }
 
     fn reexec_after_update(&mut self) -> ! {
-        let handoff = self
+        let mut handoff: Vec<(&str, String)> = self
             .terminal
             .prepare_handoff()
-            .map(|encoded| (crate::terminal::HANDOFF_VARIABLE, encoded));
+            .map(|encoded| (crate::terminal::HANDOFF_VARIABLE, encoded))
+            .into_iter()
+            .collect();
+        // Services stay this process's children across exec; the new image
+        // reaps them.
+        handoff.push((crate::services::HANDOFF_VARIABLE, self.services.handoff()));
         eprintln!("dxd restarting into the updated release");
-        let error = update::reexec(self.updater.current_exe(), handoff);
+        let error = update::reexec(self.updater.current_exe(), &handoff);
         eprintln!("dxd re-exec failed: {error}");
         std::process::exit(1);
     }
@@ -718,6 +779,7 @@ impl Daemon {
         pending_workload_identity: &mut PendingWorkloadIdentity,
         environment_task: &mut Option<(String, JoinHandle<Materialized>)>,
         workspace_root: &Path,
+        proxy: &mut Proxy,
     ) -> Result<(), SessionExit> {
         match message {
             ServerMessage::HeartbeatAck { generation: seen } if seen == generation => {}
@@ -803,6 +865,77 @@ impl Daemon {
                         )
                         .await?;
                     }
+                    RequestOperation::Portal(PortalOperation::Ports {}) => {
+                        send_json(
+                            control,
+                            &ClientMessage::Response {
+                                generation,
+                                request_id: &request_id,
+                                result: OperationResult::Portal(PortalResult::Ports {
+                                    ports: proxy::listening_ports(),
+                                }),
+                            },
+                        )
+                        .await?;
+                    }
+                    RequestOperation::Portal(PortalOperation::ServicesEnsure { services }) => {
+                        // A manifest Core should have refused fails this
+                        // request (or that service), never the session.
+                        let result = if services.len() > crate::services::MAX_SERVICES {
+                            PortalResult::Unavailable { reason: "invalid" }
+                        } else {
+                            let paths = self.service_paths(workspace_root);
+                            PortalResult::Services {
+                                services: self.services.ensure(
+                                    &services,
+                                    &paths,
+                                    proxy::is_listening,
+                                ),
+                            }
+                        };
+                        send_json(
+                            control,
+                            &ClientMessage::Response {
+                                generation,
+                                request_id: &request_id,
+                                result: OperationResult::Portal(result),
+                            },
+                        )
+                        .await?;
+                    }
+                    RequestOperation::Portal(PortalOperation::DesktopEnsure {}) => {
+                        // The start script can take seconds; its answer
+                        // returns through the proxy's lane.
+                        let sender = proxy.sender();
+                        let generation = generation.to_owned();
+                        let local = self.config.local_runtime.is_some();
+                        let single_flight = Arc::clone(&self.desktop_start);
+                        tokio::task::spawn_blocking(move || {
+                            let result = match if local {
+                                DesktopStart::Unsupported
+                            } else {
+                                proxy::ensure_desktop(
+                                    Path::new(proxy::DESKTOP_START),
+                                    &single_flight,
+                                )
+                            } {
+                                DesktopStart::Ready => PortalResult::Ready,
+                                DesktopStart::Unsupported => PortalResult::Unavailable {
+                                    reason: "unsupported",
+                                },
+                                DesktopStart::Failed => {
+                                    PortalResult::Unavailable { reason: "failed" }
+                                }
+                            };
+                            if let Ok(text) = serde_json::to_string(&ClientMessage::Response {
+                                generation: &generation,
+                                request_id: &request_id,
+                                result: OperationResult::Portal(result),
+                            }) {
+                                let _ = sender.send(Outbound::Text(text));
+                            }
+                        });
+                    }
                     RequestOperation::Environment(EnvironmentOperation::Activate(operation)) => {
                         let outcome = if environment_task.is_some() {
                             Err(EnvironmentOutcome::Unavailable)
@@ -855,6 +988,19 @@ impl Daemon {
                     release,
                 });
             }
+            // A request that breaks a bound fails its stream with
+            // `proxy.error`; only a stream id of 0 or a duplicate open ends
+            // the session.
+            ServerMessage::ProxyOpen(open) => proxy
+                .open(open)
+                .map_err(|_| SessionExit::Protocol("invalid proxy stream"))?,
+            ServerMessage::ProxyEnd { stream_id } => proxy.end(stream_id),
+            ServerMessage::ProxyClose {
+                stream_id,
+                code,
+                reason,
+            } => proxy.close(stream_id, code, reason.unwrap_or_default()),
+            ServerMessage::ProxyAck { stream_id } => proxy.ack(stream_id),
             ServerMessage::TerminalOpen {
                 terminal_version,
                 terminal: terminal_name,
@@ -1430,7 +1576,7 @@ pub fn decode_server(text: &str) -> Result<ServerMessage, SessionExit> {
             operation: RequestOperation::Environment(EnvironmentOperation::Activate(_)),
             ..
         } => MAX_ENVIRONMENT_REQUEST_FRAME_BYTES,
-        ServerMessage::Request { .. } => MAX_REQUEST_FRAME_BYTES,
+        ServerMessage::Request { .. } | ServerMessage::ProxyOpen(_) => MAX_REQUEST_FRAME_BYTES,
         ServerMessage::WorkloadIdentityResponse { .. } => MAX_WORKLOAD_IDENTITY_FRAME_BYTES,
         _ => MAX_CONTROL_FRAME_BYTES,
     };

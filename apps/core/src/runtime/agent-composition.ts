@@ -56,7 +56,13 @@ const resolvePromptData =
         signal: context.signal,
       });
     if (!response.ok) {
-      const { code } = await response.json<{ code: string }>();
+      const { code, message } = await response.json<{
+        code: string;
+        message?: string;
+      }>();
+      // The Claude plan's limit text is what the Thread's limit card shows.
+      if (code === "CLAUDE_PLAN_LIMIT" && message !== undefined)
+        throw new Error(message);
       throw new Error(
         code.startsWith("MODEL_NOT_SERVED:")
           ? `Model ${code.slice("MODEL_NOT_SERVED:".length).trim()} is not served. Add or enable a connection, then retry.`

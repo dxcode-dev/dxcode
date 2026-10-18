@@ -14,6 +14,7 @@ import migrationManifest from "./apps/core/migration-manifest.json" with {
 import productionBindingContract from "./apps/core/production-bindings.json" with {
   type: "json",
 };
+import { portalDomainSharesSite } from "./apps/core/src/portals/portal-site.ts";
 import {
   E2BProfiles,
   e2bRecipeHash,
@@ -365,6 +366,19 @@ export default Alchemy.Stack(
         Config.boolean("DX_DEPLOYMENT_WORKER_TRACES"),
         false,
       ),
+      // Portals: a dedicated zone (never the app's registrable domain) whose
+      // first-level labels `t-<uuid>-p<port>` serve guest ports. Universal
+      // SSL covers one wildcard level, so the domain is the zone apex.
+      portalDomain: Config.option(
+        Config.nonEmptyString("DX_DEPLOYMENT_PORTAL_DOMAIN"),
+      ),
+      portalZoneId: Config.option(
+        Config.nonEmptyString("DX_DEPLOYMENT_PORTAL_ZONE_ID"),
+      ),
+      // The deployment runner names it within the 63-character script limit.
+      portalWorkerName: Config.option(
+        Config.nonEmptyString("DX_DEPLOYMENT_PORTAL_WORKER_NAME"),
+      ),
     });
 
     const hostedAuthentication = Option.isSome(configuration.authEmailFrom);
@@ -549,6 +563,35 @@ export default Alchemy.Stack(
     }
 
     const deploymentHostname = new URL(configuration.origin).hostname;
+    const portals = yield* Option.isNone(configuration.portalDomain) &&
+    Option.isNone(configuration.portalZoneId)
+      ? Effect.succeed(undefined)
+      : Effect.gen(function* () {
+          if (
+            Option.isNone(configuration.portalDomain) ||
+            Option.isNone(configuration.portalZoneId)
+          )
+            return yield* Effect.die(
+              "DX_DEPLOYMENT_PORTAL_DOMAIN and DX_DEPLOYMENT_PORTAL_ZONE_ID are set together.",
+            );
+          const domain = configuration.portalDomain.value.toLowerCase();
+          // A separate registrable domain: same-site guest pages could set
+          // cookies dx reads (apps/core/src/portals/portal-site.ts).
+          if (
+            !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(
+              domain,
+            ) ||
+            portalDomainSharesSite(deploymentHostname, domain)
+          )
+            return yield* Effect.die(
+              "DX_DEPLOYMENT_PORTAL_DOMAIN must be a separate registrable domain from the app.",
+            );
+          if (!/^[a-f0-9]{32}$/.test(configuration.portalZoneId.value))
+            return yield* Effect.die(
+              "DX_DEPLOYMENT_PORTAL_ZONE_ID must be a Cloudflare zone ID.",
+            );
+          return { domain, zoneId: configuration.portalZoneId.value };
+        });
     // A resumed guest's daemon reconnects through a dependency-free Worker on
     // the account's workers.dev subdomain. Its isolate starts in milliseconds,
     // where the Core bundle's cold start (about a second) otherwise sits on
@@ -678,6 +721,7 @@ export default Alchemy.Stack(
           : { DX_TURNSTILE_SITE_KEY: turnstile.sitekey }),
         DX_AUTH_URL: configuration.origin,
         DX_AUTH_TRUSTED_ORIGINS: configuration.origin,
+        ...(portals === undefined ? {} : { DX_PORTAL_DOMAIN: portals.domain }),
         ...(attachmentSigning === undefined
           ? { DX_ATTACHMENT_TRANSFER: "core" }
           : { DX_ATTACHMENT_R2_ENDPOINT: attachmentSigning.endpoint }),
@@ -941,6 +985,45 @@ export default Alchemy.Stack(
           logs: { enabled: true, invocationLogs: true },
         },
       });
+
+    // Portals run in their own Worker: Core's static assets answer before its
+    // code, so a Portal path would get the dx app. Workers Custom Domains do
+    // not take wildcards, so a zone route plus a proxied wildcard record.
+    if (portals !== undefined) {
+      yield* Cloudflare.Worker("PortalWorker", {
+        name: Option.getOrElse(
+          configuration.portalWorkerName,
+          () => `${configuration.workerName}-portals`,
+        ),
+        main: "apps/core/src/portals/worker.ts",
+        compatibility: { date: "2026-08-20", flags: ["nodejs_compat"] },
+        env: {
+          DX_ENV: configuration.environment,
+          DX_AUTH_URL: configuration.origin,
+          DX_PORTAL_DOMAIN: portals.domain,
+          BETTER_AUTH_SECRET: authSecret.text,
+          DB: database,
+          THREAD_EXECUTION: Cloudflare.DurableObject("THREAD_EXECUTION", {
+            className: "ThreadExecutionObject",
+            scriptName: worker.workerName,
+          }),
+        },
+        workersDev: false,
+        routes: [{ pattern: `*.${portals.domain}/*`, zoneId: portals.zoneId }],
+        observability: {
+          enabled: true,
+          logs: { enabled: true, invocationLogs: true },
+        },
+      });
+      yield* Cloudflare.DNS.Record("PortalDns", {
+        zoneId: portals.zoneId,
+        name: `*.${portals.domain}`,
+        type: "AAAA",
+        content: "100::",
+        proxied: true,
+        comment: "dx Portals: served by the Portal Worker route",
+      });
+    }
 
     if (!selfhost)
       yield* Command.Exec("Verify", {

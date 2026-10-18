@@ -1,4 +1,7 @@
-import { MAX_PERSONAL_AGENT_INSTRUCTIONS_LENGTH } from "@dx/domain";
+import {
+  MAX_MCP_SERVERS_PER_THREAD,
+  MAX_PERSONAL_AGENT_INSTRUCTIONS_LENGTH,
+} from "@dx/domain";
 import * as v from "valibot";
 
 export const DxAgentInitialDataSchema = v.object({
@@ -65,7 +68,7 @@ export const DxAgentInitialDataSchema = v.object({
           ),
         }),
       ),
-      v.maxLength(20),
+      v.maxLength(MAX_MCP_SERVERS_PER_THREAD),
     ),
     [],
   ),

@@ -7,6 +7,7 @@ import {
   type DeliveredMessage,
   InputTooLargeError,
   type ModelResolutionContext,
+  type SandboxFactory,
   type ToolDefinition,
   useAgentFinish,
   useAgentStart,
@@ -15,17 +16,20 @@ import {
   usePromptData,
   useResponseStart,
   useSandbox,
+  useSkill,
   useTool,
 } from "@flue/runtime";
 import { claudeCodeDxTools } from "../claude-code/dx-tools.js";
 import { rememberClaudeCodeSandbox } from "../claude-code/runs.js";
 import { claudeCodeMirrorTools } from "../claude-code/tools.js";
+import { traceSpan } from "../observability/tracing.js";
 import {
   agentPluginHostContext,
   agentThreadToolsContext,
   resolveAgentPluginTools,
 } from "../plugins/agent-context.js";
 import { firstPartyPluginTools } from "../plugins/tools.js";
+import { threadPortalPrompt } from "../portals/prompt.js";
 import {
   agentRuntimeComposition,
   type DxPromptData,
@@ -42,6 +46,7 @@ import {
 import {
   composeClaudeCodePrompt,
   composeDxAgentPrompt,
+  dxWorkspaceSkill,
 } from "./dx-agent-prompt.js";
 
 /** Per-submission data from `resolvePromptData`. */
@@ -129,6 +134,43 @@ const dxTools = (
   return tools;
 };
 
+type AgentSandbox = Awaited<ReturnType<SandboxFactory["createSandbox"]>>;
+
+/**
+ * Each attempt starts its Thread's workspace activation in
+ * `resolvePromptData`, so the provider's create or connect overlaps model
+ * routing; the attempt's first `createSandbox` takes that activation and
+ * fails with its error. Only agent initialization creates a workspace.
+ */
+const startedActivations = new Map<string, Promise<AgentSandbox>>();
+const execution = agentRuntimeComposition.execution;
+
+const startActivation = (threadId: string) => {
+  if (
+    agentRuntimeComposition.capabilities !== "workspace" ||
+    execution === undefined
+  )
+    return undefined;
+  const started = execution.createSandbox({ id: threadId });
+  // The attempt's createSandbox surfaces the failure.
+  started.catch(() => undefined);
+  startedActivations.set(threadId, started);
+  return started;
+};
+
+const agentSandbox: SandboxFactory | undefined =
+  execution === undefined
+    ? undefined
+    : {
+        ...execution,
+        createSandbox: (request) => {
+          const started = startedActivations.get(request.id);
+          if (started === undefined) return execution.createSandbox(request);
+          startedActivations.delete(request.id);
+          return started;
+        },
+      };
+
 /** Installed plugins' agent-start and agent-finish hooks. */
 const usePluginLifecycle = (
   threadId: string,
@@ -176,7 +218,8 @@ export function DxAgent(props: AgentProps) {
   const skills = initialData?.skills ?? [];
   const plugins = initialData?.plugins ?? [];
   if (agentRuntimeComposition.capabilities === "workspace") {
-    useSandbox(agentRuntimeComposition.execution);
+    // A workspace composition always has an execution factory.
+    useSandbox(agentSandbox as SandboxFactory);
     usePluginLifecycle(props.id, plugins);
     // Claude Code mode: the CLI in the workspace runs the loop and its own
     // tools; Flue records each call through a mirror of the same name. dx's
@@ -198,14 +241,24 @@ export function DxAgent(props: AgentProps) {
       return composeClaudeCodePrompt(
         initialData?.personalInstructions ?? "",
         skills,
+        threadPortalPrompt(props.id),
       );
     }
     for (const tool of dxTools(props.id, initialData, promptData))
       useTool(tool);
+    // Flue lists it in the Available Skills catalog and loads it on demand
+    // through activate_skill, like a repository's .agents/skills.
+    useSkill(dxWorkspaceSkill);
   }
   if (agentRuntimeComposition.capabilities === "model-only")
     return localModelPreviewPrompt;
-  return composeDxAgentPrompt(initialData?.personalInstructions ?? "", skills);
+  return composeDxAgentPrompt(
+    initialData?.personalInstructions ?? "",
+    skills,
+    agentRuntimeComposition.capabilities === "workspace"
+      ? threadPortalPrompt(props.id)
+      : "",
+  );
 }
 
 DxAgent.agentName = "dx-agent";
@@ -222,13 +275,28 @@ DxAgent.resolvePromptData = async (
   context: ModelResolutionContext,
 ): Promise<DxAgentPromptData | undefined> => {
   const scope = context.scope;
-  const [route, plugins] = await Promise.all([
-    agentRuntimeComposition.model.resolvePromptData(context),
-    agentRuntimeComposition.capabilities === "workspace" &&
-    scope?.kind === "prompt"
-      ? resolveAgentPluginTools(context.instanceId, scope.submissionId)
-      : Promise.resolve(undefined),
-  ]);
+  const activation = startActivation(context.instanceId);
+  const [route, plugins] = await traceSpan(
+    "agent.resolvePromptData",
+    "phase",
+    {
+      "dx.thread_id": context.instanceId,
+      "dx.submission_id":
+        scope?.kind === "prompt" ? scope.submissionId : undefined,
+    },
+    () =>
+      Promise.all([
+        agentRuntimeComposition.model.resolvePromptData(context),
+        agentRuntimeComposition.capabilities === "workspace" &&
+        scope?.kind === "prompt"
+          ? resolveAgentPluginTools(context.instanceId, scope.submissionId)
+          : Promise.resolve(undefined),
+      ]),
+  ).catch((error: unknown) => {
+    if (startedActivations.get(context.instanceId) === activation)
+      startedActivations.delete(context.instanceId);
+    throw error;
+  });
   if (route === undefined && plugins === undefined) return undefined;
   return {
     ...(route === undefined ? {} : { route }),

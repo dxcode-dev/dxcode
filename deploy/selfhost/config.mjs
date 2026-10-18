@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { portalDomainProblem } from "./portals.mjs";
 
 const CONFIG_KEYS = new Set([
   "version",
@@ -7,6 +8,7 @@ const CONFIG_KEYS = new Set([
   "cloudflareAccountId",
   "domain",
   "zone",
+  "portalDomain",
   "authEmailFrom",
   "adminEmail",
   "allowSignup",
@@ -232,6 +234,18 @@ export const validateSelfhostConfig = (input) => {
     )
       throw new Error("domain must be a bare hostname inside zone.");
   }
+  // Portals: the apex of an active zone of its own in the same account, on a
+  // registrable domain separate from the app's (deploy/selfhost/portals.mjs).
+  const portalDomain = optionalString(
+    input.portalDomain,
+    "portalDomain",
+  )?.toLowerCase();
+  const portalProblem =
+    portalDomain === undefined
+      ? undefined
+      : portalDomainProblem(portalDomain, domain?.toLowerCase());
+  if (portalProblem !== undefined)
+    throw new Error(`portalDomain ${portalProblem}.`);
   const authEmailFrom = optionalString(input.authEmailFrom, "authEmailFrom");
   const authEmailDomain = authEmailFrom?.split("@")[1]?.toLowerCase();
   if (
@@ -326,6 +340,7 @@ export const validateSelfhostConfig = (input) => {
     ...(cloudflareAccountId === undefined ? {} : { cloudflareAccountId }),
     adminEmail: adminEmail.toLowerCase(),
     ...(domain === undefined ? {} : { domain, zone }),
+    ...(portalDomain === undefined ? {} : { portalDomain }),
     ...(authEmailFrom === undefined
       ? {}
       : { authEmailFrom: authEmailFrom.toLowerCase() }),

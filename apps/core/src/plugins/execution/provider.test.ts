@@ -376,7 +376,11 @@ describe("Execution provider contract", () => {
       credential: undefined,
     });
     expect(e2bPipeline?.activate).toHaveBeenCalledOnce();
-    // The daemon installation reports the Thread's pinned provider.
+    // Each Thread names its pinned provider, before any installation.
+    await expect(workspaces.pinnedProvider(threadId)).resolves.toBe(
+      "cloudflare",
+    );
+    await expect(workspaces.pinnedProvider(other)).resolves.toBe("e2b");
     await expect(
       workspaces.ensureDaemon({
         threadId,
@@ -384,7 +388,7 @@ describe("Execution provider contract", () => {
         mintCredential: vi.fn(),
         awaitRegistration: vi.fn(),
       }),
-    ).resolves.toEqual({ bootstrapped: false, provider: "cloudflare" });
+    ).resolves.toEqual({ bootstrapped: false });
     // Terminal input for a known Thread goes to its provider's pipeline.
     await workspaces.recordResidentTerminalInput(threadId);
     expect(

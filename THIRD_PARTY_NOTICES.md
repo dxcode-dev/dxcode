@@ -97,3 +97,23 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## tmux (Orb image Terminal)
+
+The standard Orb image (`deploy/orb/Dockerfile`) ships tmux 3.7c as an
+unmodified, statically linked binary at `/opt/dx/bin/tmux`, downloaded from
+the tmux project's own build repository and checked by SHA-256. The license
+texts of tmux and every library linked into it ship next to it in
+`/opt/dx/share/licenses/tmux/` (the release's `LICENSES.tar.gz`).
+
+- Binary: <https://github.com/tmux/tmux-builds/releases/download/v3.7c/tmux-3.7c-linux-x86_64.tar.gz>
+  (SHA-256 `cc56bd1cc873eb6089c615f0496b072385bda8a6d944069f38564a5d49c128aa`)
+- License texts: <https://github.com/tmux/tmux-builds/releases/download/v3.7c/LICENSES.tar.gz>
+  (SHA-256 `094905d3ba42397c65fecd817dc29736dd14bd35e75600441403a365125f47d1`)
+- Build recipe: <https://github.com/tmux/tmux-builds> (`versions.env` at `v3.7c`)
+- tmux: ISC license, copyright (c) various authors; source <https://github.com/tmux/tmux>
+- Linked libraries (versions from `versions.env`): musl 1.2.5 (MIT),
+  libevent 2.1.12 (3-clause BSD), ncurses 6.5 (MIT/X11-style), utf8proc
+  2.11.2 (MIT, with Unicode data under the Unicode license)
+
+`deploy/orb/tmux.conf` is dx's own configuration file.

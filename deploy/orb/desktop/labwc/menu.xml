@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The desktop's right-click menu. No Exit entry: exiting labwc ends the
+     session until the next start. -->
+<openbox_menu>
+  <menu id="root-menu" label="">
+    <item label="Terminal">
+      <action name="Execute" command="foot" />
+    </item>
+    <item label="Chromium">
+      <action name="Execute" command="/opt/dx/desktop/chromium" />
+    </item>
+    <item label="Reconfigure">
+      <action name="Reconfigure" />
+    </item>
+  </menu>
+</openbox_menu>

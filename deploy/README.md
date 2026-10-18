@@ -8,10 +8,11 @@ pnpm install
 pnpm dx:deploy
 ```
 
-The wizard asks whether to send sign-in email from your domain, signs in to
-Cloudflare, collects the first administrator, the sign-in methods and
-admission policy, and the E2B key, offers optional deployment integrations,
-prints a redacted review, and asks once before apply. When the deployment
+The wizard asks whether to send sign-in email from your domain and whether to
+enable [Portals](#portals), signs in to Cloudflare, collects the first
+administrator, the Portal zone, the sign-in methods and admission policy, and
+the E2B key, offers optional deployment integrations, prints a redacted
+review, and asks once before apply. When the deployment
 offers email and password, it confirms an entered administrator password or
 generates one from an empty prompt. It writes only nonsecrets to
 `deploy.selfhost.json`.
@@ -78,12 +79,81 @@ mandatory. The final public release downloads anonymously. The explicit local
 fallback remains `pnpm deploy:selfhost:dxd` with `dxdBinary` set to
 `.dx/alchemy/dxd-linux-x64/dxd`.
 
+## Portals
+
+Portals serve a web app running in a Thread's workspace at
+`https://t-<thread>-p<port>.<portal domain>/`, behind dx sign-in. They are off
+by default.
+
+The wizard asks `Enable Portals` (default no) before it signs in to
+Cloudflare. On yes, it lists the account's active zones that can serve them
+and asks for a number or zone name; a blank answer leaves Portals off. A zone
+that already has DNS records, Worker routes, or Worker custom domains is
+flagged and needs a second yes, because the Portal route `*.<zone>/*` takes
+over its proxied subdomains and the wildcard record answers every unused
+name. When no zone qualifies, the wizard says so in one line and the deploy
+continues without Portals. The choice is saved as `portalDomain` in
+`deploy.selfhost.json`:
+
+```json
+{ "portalDomain": "example-portals.dev" }
+```
+
+`pnpm dx:deploy -- --portals` turns Portals on, moves them to another zone,
+or turns them off on an existing deployment. Removing `portalDomain` and
+redeploying removes the Portal resources.
+
+The Portal domain must be the apex of an active zone in the same account, on
+a registrable domain (eTLD+1, by the Public Suffix List) different from the
+app's. With the app at `dx.example.com`, `example-portals.dev` works, but
+`example.com`, `portals.example.com`, and `portals.dx.example.com` are
+refused, and so is any `workers.dev` name. A same-site Portal host would let
+code running in a Thread set `Domain=example.com` cookies the app reads
+(session fixation, login CSRF) and would count as same-site for the app's
+`SameSite` cookies. An app on `workers.dev` can still serve Portals from a
+zone of its own. Without one, Portals stay off: `workers.dev` gives each
+Worker one fixed hostname and no wildcard route.
+
+Portal hosts share the Portal domain as their registrable domain, so one
+Portal could set cookies for another. Submitting the Portal domain to the
+[Public Suffix List](https://publicsuffix.org/submit/) makes each Portal host
+its own site in browsers that ship the updated list.
+
+`DX_DEPLOYMENT_PORTAL_DOMAIN` overrides the file for one deploy. The deploy
+looks up that zone's ID (or takes `DX_DEPLOYMENT_PORTAL_ZONE_ID`) and adds
+a Portal Worker on the route `*.<portal domain>/*` and a proxied
+`*.<portal domain>` `AAAA 100::` record. Universal SSL covers that one
+wildcard level.
+
+Before anything is planned, the wizard and
+[`run-alchemy-deployment.mjs`](../scripts/run-alchemy-deployment.mjs) check
+the Portal zone through read-only calls
+([`selfhost/portals.mjs`](selfhost/portals.mjs)) and stop with the missing
+permission and zone:
+
+| Permission (Zone scope, on the Portal zone) | API token | Alchemy OAuth scope |
+| --- | --- | --- |
+| Zone → Zone → Read | lists the zone | `zone:read` |
+| Zone → DNS → Edit | lists DNS records | `dns_records:edit` |
+| Zone → Workers Routes → Edit | lists Worker routes | `workers_routes:write` |
+
+A read call proves Read access only. When the token can read its own
+policies (an account-owned token, which a deployment that holds Account API
+Tokens can read), the check also confirms Edit on the zone. Otherwise it
+says that Edit is confirmed at apply. Alchemy's default OAuth login lacks
+`dns_records:edit`; the wizard requests it when Portals are on (through
+`ALCHEMY_CLOUDFLARE_OAUTH_EXTRA_SCOPES`, added by dx's Alchemy patch). An
+existing login without it is offered a new sign-in with `alchemy login
+--configure`: choose OAuth and the same account, and keep the default
+scopes.
+
 ## Upgrade and rotation
 
 ```bash
 pnpm dx:deploy                    # repeatable upgrade
 pnpm dx:deploy -- --rotate        # rotate supplied integration, E2B, and Google secrets
 pnpm dx:deploy -- --reset-admin   # replace the first admin password (password sign-in only)
+pnpm dx:deploy -- --portals       # turn Portals on or off, or choose another Portal zone
 ```
 
 GitHub, Bitbucket, Sarvam, Copilot, and other deployment integrations are

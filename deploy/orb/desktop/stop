@@ -1,0 +1,92 @@
+#!/bin/bash
+# Stops the dx Desktop session started by ./start: every process in its
+# session (labwc, Xwayland, the gateway and encoder, Chromium, terminals) and
+# every process that carries its DX_DESKTOP_SESSION marker, which reaches the
+# programs labwc launches in sessions of their own (menu entries), and every
+# Chromium process on the desktop's profile, which reaches Chromium opened by
+# ./chromium from elsewhere. Chromium's browser gets TERM
+# first, then everything gets TERM, then KILL. An optional argument limits
+# the whole stop to that many seconds (default 8.5). Exits 0 when no session
+# runs.
+set -u
+
+state="${HOME:?HOME is not set}/.local/state/dx-desktop"
+pidfile="$state/session.pid"
+
+budget_ds=85
+if [ $# -gt 0 ]; then
+  case "$1" in
+    [0-9]* | [0-9]*.[0-9]*)
+      budget_ds=$(awk -v s="$1" 'BEGIN { d = int(s * 10); print (d < 1 ? 1 : d) }')
+      ;;
+  esac
+fi
+
+[ -f "$pidfile" ] || exit 0
+sid=$(cat "$pidfile")
+case "$sid" in
+  '' | *[!0-9]* | 0)
+    rm -f "$pidfile"
+    exit 0
+    ;;
+esac
+
+# Run from inside the desktop (its terminal, say), this script is one of the
+# processes it ends. Continue in a session of its own, without the marker.
+own_sid=$(ps -o sid= -p $$ | tr -d ' ')
+if [ -z "${DX_DESKTOP_DETACHED:-}" ] &&
+  { [ -n "${DX_DESKTOP_SESSION:-}" ] || [ "$own_sid" = "$sid" ]; }; then
+  exec env -u DX_DESKTOP_SESSION DX_DESKTOP_DETACHED=1 setsid -w "$0" "$@" \
+    </dev/null >>"$state/session.log" 2>&1
+fi
+
+# Session members count only while the session still runs the desktop: the
+# kernel does not reuse an ID while a session holds it, so a match is this
+# session. The marker is the session's own ID, set by ./session.
+in_session=
+if pgrep -s "$sid" -f '^(dbus-run-session -- )?/opt/dx/desktop/|^labwc --config-dir /opt/dx/desktop/' >/dev/null; then
+  in_session=1
+fi
+targets() {
+  {
+    [ -n "$in_session" ] && ps -o pid= -s "$sid"
+    grep -lzx "DX_DESKTOP_SESSION=$sid" /proc/[0-9]*/environ 2>/dev/null |
+      cut -d / -f 3
+    # Chromium overwrites its environment with its process title, so its
+    # processes are found by the desktop's profile instead.
+    pgrep -u "$UID" -f -- "--user-data-dir=$state/chromium( |\$)"
+  } | awk -v self=$$ '$1 != self && $1 ~ /^[0-9]+$/ { print $1 + 0 }' | sort -un
+}
+
+pids=$(targets)
+if [ -n "$pids" ]; then
+  # Chromium's browser process first, so it saves its profile and shuts its
+  # renderers down itself instead of reporting a crash on the next start.
+  browsers=$(ps -o pid=,args= -p "$(echo "$pids" | paste -s -d ,)" |
+    awk '$2 ~ /\/chromium$/ && !/ --type=/ { print $1 }')
+  browser_ds=$((budget_ds / 3 < 30 ? budget_ds / 3 : 30))
+  if [ -n "$browsers" ]; then
+    # shellcheck disable=SC2086
+    kill -TERM $browsers 2>/dev/null
+    for _ in $(seq 1 "$browser_ds"); do
+      # shellcheck disable=SC2086
+      kill -0 $browsers 2>/dev/null || break
+      sleep 0.1
+    done
+  else
+    browser_ds=0
+  fi
+  pids=$(targets)
+  # shellcheck disable=SC2086
+  [ -n "$pids" ] && kill -TERM $pids 2>/dev/null
+  for _ in $(seq 1 $((budget_ds - browser_ds > 1 ? budget_ds - browser_ds : 1))); do
+    pids=$(targets)
+    [ -n "$pids" ] || break
+    sleep 0.1
+  done
+  pids=$(targets)
+  # shellcheck disable=SC2086
+  [ -n "$pids" ] && kill -KILL $pids 2>/dev/null
+fi
+rm -f "$pidfile" "$state/environment"
+exit 0

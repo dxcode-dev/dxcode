@@ -1,4 +1,5 @@
 import { Redacted, Schema } from "effect";
+import { observeExternal } from "../../observability/boundaries.js";
 import type { GitHubAppConfiguration } from "./configuration.js";
 
 const API_ORIGIN = "https://api.github.com";
@@ -226,11 +227,13 @@ export const createGitHubProvider = (
       throw new GitHubProviderError({ category: "invalid-response" });
     const endpoint = url === TOKEN_URL ? "oauth-token" : "rest-api";
     try {
-      const response = await fetcher(url, {
-        ...init,
-        redirect: "manual",
-        signal: AbortSignal.timeout(10_000),
-      });
+      const response = await observeExternal("github", endpoint, url, () =>
+        fetcher(url, {
+          ...init,
+          redirect: "manual",
+          signal: AbortSignal.timeout(10_000),
+        }),
+      );
       if (!response.ok) throw responseError(response, clock(), endpoint);
       return response;
     } catch (cause) {

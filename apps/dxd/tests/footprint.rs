@@ -9,8 +9,12 @@
 //!
 //! `DXD_BIN` measures another binary (e.g. a release build copied to an E2B
 //! guest together with this test binary), `DX_FOOTPRINT_IDLE_SECS` sets the
-//! idle window (default 300), and `DX_FOOTPRINT_GUEST=1` uses the guest
-//! layout (`/home/user/.local/state/dxd/config.json`, no `localRuntime`).
+//! idle window (default 300), `DX_FOOTPRINT_TERMINAL_IDLE_SECS` the idle
+//! window with an attached Terminal (default 30), and `DX_FOOTPRINT_GUEST=1`
+//! uses the guest layout (`/home/user/.local/state/dxd/config.json`, no
+//! `localRuntime`). `DXD_TMUX`, `DXD_TMUX_CONF`, and `TMUX_TMPDIR` pass
+//! through to the daemon to measure the shared tmux Terminal; its server
+//! outlives the bench, so end it with `tmux -L dx kill-server`.
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -322,78 +326,9 @@ where
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "resource measurement; run with --ignored --nocapture"]
-async fn footprint() {
-    let binary = std::env::var("DXD_BIN").unwrap_or_else(|_| env!("CARGO_BIN_EXE_dxd").into());
-    let guest = std::env::var("DX_FOOTPRINT_GUEST").is_ok_and(|value| value == "1");
-    let idle = Duration::from_secs(
-        std::env::var("DX_FOOTPRINT_IDLE_SECS")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(300),
-    );
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let root = tempfile::tempdir().unwrap();
-    let (config, repo, baseline) = fixture(root.path(), port, guest);
-    eprintln!(
-        "footprint: binary {} bytes",
-        std::fs::metadata(&binary).unwrap().len()
-    );
-
-    let started = Instant::now();
-    let mut command = Command::new(&binary);
-    command
-        .env_clear()
-        .env("PATH", std::env::var("PATH").unwrap())
-        .env("USER", "user")
-        .env("HOME", "/home/user")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::inherit());
-    if !guest {
-        command.arg("--config").arg(&config).env(
-            "DX_WORKLOAD_IDENTITY_SOCKET",
-            root.path().join("runtime/workload-identity.sock"),
-        );
-    }
-    let daemon = Daemon(command.spawn().unwrap());
-    let pid = daemon.0.id();
-
-    let (stream, _) = tokio::time::timeout(Duration::from_secs(20), listener.accept())
-        .await
-        .unwrap()
-        .unwrap();
-    stream.set_nodelay(true).unwrap();
-    let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
-    let Some(Ok(Message::Text(register))) = socket.next().await else {
-        panic!("no register frame")
-    };
-    let register_ms = started.elapsed().as_secs_f64() * 1_000.0;
-    assert!(register.as_str().contains("\"register\""));
-    let mut mock = Mock {
-        socket,
-        generation: format!("gen-{}", rand::random::<u32>()),
-    };
+/// Answer heartbeats for `idle` and print the daemon's CPU and wakeups.
+async fn idle_window(label: &str, pid: u32, mock: &mut Mock, idle: Duration) {
     let generation = mock.generation.clone();
-    mock.send(json!({
-        "type": "registered", "generation": generation,
-        "heartbeatIntervalMs": 2000, "heartbeatLeaseMs": 15000,
-    }))
-    .await;
-    eprintln!("footprint: start → register frame {register_ms:.1} ms");
-
-    // Core answers the first dirty hint with a capture.
-    let outcome = mock
-        .refresh("footprint-token-0000", &baseline, &Value::Null)
-        .await;
-    assert_eq!(outcome["kind"], "complete");
-    let mut fingerprint = outcome["capture"]["fingerprint"].clone();
-    tokio::time::sleep(Duration::from_secs(5)).await;
-    snapshot("idle after registration", pid);
-
-    // Idle: only heartbeats. Count the daemon's wakeups and CPU.
     let (cpu_before, _) = cpu_ms(pid);
     let switches_before = switches(pid);
     let idle_started = Instant::now();
@@ -440,13 +375,96 @@ async fn footprint() {
         ));
     }
     eprintln!(
-        "footprint: idle {seconds:.0} s: CPU {:.1} ms ({:.4}%), voluntary switches {:.2}/s [{}], involuntary {:.3}/s, dirty hints {dirty}, other frames {stray}",
+        "footprint: {label} {seconds:.0} s: CPU {:.1} ms ({:.4}%), voluntary switches {:.2}/s [{}], involuntary {:.3}/s, dirty hints {dirty}, other frames {stray}",
         cpu_after - cpu_before,
         (cpu_after - cpu_before) / (seconds * 10.0),
         voluntary as f64 / seconds,
         per_thread.join(", "),
         involuntary as f64 / seconds,
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "resource measurement; run with --ignored --nocapture"]
+async fn footprint() {
+    let binary = std::env::var("DXD_BIN").unwrap_or_else(|_| env!("CARGO_BIN_EXE_dxd").into());
+    let guest = std::env::var("DX_FOOTPRINT_GUEST").is_ok_and(|value| value == "1");
+    let idle = Duration::from_secs(
+        std::env::var("DX_FOOTPRINT_IDLE_SECS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(300),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let root = tempfile::tempdir().unwrap();
+    let (config, repo, baseline) = fixture(root.path(), port, guest);
+    eprintln!(
+        "footprint: binary {} bytes",
+        std::fs::metadata(&binary).unwrap().len()
+    );
+
+    let started = Instant::now();
+    let mut command = Command::new(&binary);
+    command
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap())
+        .env("USER", "user")
+        .env("HOME", "/home/user")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit());
+    // The Terminal's tmux, when set (otherwise the daemon looks for the Orb
+    // image's /opt/dx/bin/tmux).
+    let tmux = std::env::var_os("DXD_TMUX").filter(|value| !value.is_empty());
+    for name in ["DXD_TMUX", "DXD_TMUX_CONF", "TMUX_TMPDIR"] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    if !guest {
+        command.arg("--config").arg(&config).env(
+            "DX_WORKLOAD_IDENTITY_SOCKET",
+            root.path().join("runtime/workload-identity.sock"),
+        );
+    }
+    let daemon = Daemon(command.spawn().unwrap());
+    let pid = daemon.0.id();
+
+    let (stream, _) = tokio::time::timeout(Duration::from_secs(20), listener.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    stream.set_nodelay(true).unwrap();
+    let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+    let Some(Ok(Message::Text(register))) = socket.next().await else {
+        panic!("no register frame")
+    };
+    let register_ms = started.elapsed().as_secs_f64() * 1_000.0;
+    assert!(register.as_str().contains("\"register\""));
+    let mut mock = Mock {
+        socket,
+        generation: format!("gen-{}", rand::random::<u32>()),
+    };
+    let generation = mock.generation.clone();
+    mock.send(json!({
+        "type": "registered", "generation": generation,
+        "heartbeatIntervalMs": 2000, "heartbeatLeaseMs": 15000,
+    }))
+    .await;
+    eprintln!("footprint: start → register frame {register_ms:.1} ms");
+
+    // Core answers the first dirty hint with a capture.
+    let outcome = mock
+        .refresh("footprint-token-0000", &baseline, &Value::Null)
+        .await;
+    assert_eq!(outcome["kind"], "complete");
+    let mut fingerprint = outcome["capture"]["fingerprint"].clone();
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    snapshot("idle after registration", pid);
+
+    // Idle: only heartbeats. Count the daemon's wakeups and CPU.
+    idle_window("idle", pid, &mut mock, idle).await;
     snapshot("after idle", pid);
 
     measure(
@@ -570,7 +588,12 @@ async fn footprint() {
             ))
             .await
             .unwrap();
-        let expected = format!("{marker}\r\n");
+        // tmux draws the line and moves the cursor itself.
+        let expected = if tmux.is_some() {
+            marker.clone()
+        } else {
+            format!("{marker}\r\n")
+        };
         let mut seen = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(10);
         while !String::from_utf8_lossy(&seen).contains(&expected) {
@@ -585,5 +608,39 @@ async fn footprint() {
     })
     .await;
     snapshot("after load", pid);
+
+    // Idle with an attached Terminal: heartbeats now probe the foreground
+    // command (the PTY's group without tmux, the panes' `/proc` with it).
+    let terminal_idle = Duration::from_secs(
+        std::env::var("DX_FOOTPRINT_TERMINAL_IDLE_SECS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(30),
+    );
+    let server_before = tmux.as_ref().and_then(|tmux| tmux_server(tmux));
+    idle_window("terminal idle", pid, &mut mock, terminal_idle).await;
+    if let (Some(tmux), Some((server, cpu_before))) = (&tmux, server_before) {
+        let (cpu_after, _) = cpu_ms(server);
+        eprintln!(
+            "footprint: tmux server ({}): VmRSS {} KiB, RssAnon {} KiB, CPU {:.1} ms over terminal idle",
+            tmux.to_string_lossy(),
+            status_kib(server, "VmRSS"),
+            status_kib(server, "RssAnon"),
+            cpu_after - cpu_before,
+        );
+    }
     drop(daemon);
+}
+
+/// The tmux server's PID and CPU so far.
+fn tmux_server(tmux: &std::ffi::OsStr) -> Option<(u32, f64)> {
+    let output = Command::new(tmux)
+        .args(["-L", "dx", "display-message", "-p", "#{pid}"])
+        .output()
+        .ok()?;
+    let server = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .ok()?;
+    Some((server, cpu_ms(server).0))
 }

@@ -72,10 +72,7 @@ import {
   getBrowserNewThreadDraftStore,
   type NewThreadDraftSnapshot,
 } from "./new-thread-draft-store.js";
-import {
-  type InitialThreadCreationAttempt,
-  submitNewThread,
-} from "./new-thread-submission.js";
+import { submitNewThread } from "./new-thread-submission.js";
 import { createThreadMutationOptions } from "./thread-mutations.js";
 import { ThreadSessionRegistryContext } from "./thread-session-context.js";
 
@@ -264,6 +261,11 @@ const useNewThreadDraft = (
       store.getSnapshot,
       store.getServerSnapshot,
     ),
+    creation: React.useSyncExternalStore(
+      store.subscribe,
+      store.getCreation,
+      store.getCreation,
+    ),
   };
 };
 
@@ -286,6 +288,17 @@ function NewThreadDraftWarning({
       {warning === "too-large"
         ? "This prompt is over the 64 KiB draft limit. It remains open but is not saved."
         : "This draft could not be saved in this browser. It remains available while this composer stays open."}
+    </div>
+  );
+}
+
+function NewThreadStillCreating({ onRetry }: { readonly onRetry: () => void }) {
+  return (
+    <div className="notice" role="status">
+      Still creating…
+      <Button type="button" variant="secondary" onClick={onRetry}>
+        Retry
+      </Button>
     </div>
   );
 }
@@ -570,10 +583,11 @@ function ScopedNewThreadModal({
   const routingGraphQuery = useQuery(
     modelRoutingGraphQueryOptions({ scope: "personal" }, identity.id),
   );
-  const { store: draftStore, snapshot: draft } = useNewThreadDraft(
-    identity.id,
-    workspaceId,
-  );
+  const {
+    store: draftStore,
+    snapshot: draft,
+    creation,
+  } = useNewThreadDraft(identity.id, workspaceId);
   const prompt = draft.text;
   // The draft store keeps the files when the composer closes, as it keeps
   // the prompt.
@@ -584,11 +598,9 @@ function ScopedNewThreadModal({
     draftStore.getImages,
   );
   const setImages = draftStore.setImages;
-  const [sending, setSending] = React.useState(false);
   const [runnerProfileOverride, setRunnerProfileOverride] = React.useState<
     RunnerProfileId | undefined
   >();
-  const submittingRef = React.useRef(false);
   // A send outlives this composer when the user leaves the page mid-create.
   const composerOpen = React.useRef(true);
   useMountEffect(() => {
@@ -597,9 +609,6 @@ function ScopedNewThreadModal({
       composerOpen.current = false;
     };
   });
-  const initialCreationAttempt = React.useRef<
-    InitialThreadCreationAttempt | undefined
-  >(undefined);
   const [error, setError] = React.useState<string>();
   const [acceptedNavigationTarget, setAcceptedNavigationTarget] =
     React.useState<ThreadId>();
@@ -619,11 +628,11 @@ function ScopedNewThreadModal({
     remembered: remembered.runnerProfileId,
     override: runnerProfileOverride,
   });
-  const submitting = sending || createThreadMutation.isPending;
+  // The draft store owns the send, so a composer reopened mid-send shows it.
+  const submitting = creation.sending;
   const visibleError =
     error ??
     firstErrorMessage([
-      createThreadMutation.error,
       projectsQuery.error,
       selectedProjectQuery.error,
       defaultsQuery.error,
@@ -631,13 +640,11 @@ function ScopedNewThreadModal({
 
   const submit = async (submittedPrompt = prompt) => {
     if (
-      submittingRef.current ||
+      draftStore.getCreation().sending ||
       (!submittedPrompt.trim() && images.length === 0) ||
       attachmentsUploading(images)
     )
       return;
-    submittingRef.current = true;
-    setSending(true);
     setError(undefined);
     try {
       if (registry === undefined)
@@ -659,7 +666,6 @@ function ScopedNewThreadModal({
         onAccepted,
         onAcceptedNavigationFailure: setAcceptedNavigationTarget,
         composerOpen: () => composerOpen.current,
-        initialCreationAttempt,
       });
     } catch (cause) {
       setError(
@@ -667,9 +673,6 @@ function ScopedNewThreadModal({
           ? cause.message
           : "The thread could not be started.",
       );
-    } finally {
-      submittingRef.current = false;
-      setSending(false);
     }
   };
 
@@ -697,9 +700,9 @@ function ScopedNewThreadModal({
       setError,
     );
 
+  // A send in flight carries on after the composer closes: Core finishes
+  // it, and the sidebar keeps showing the Thread as being created.
   const close = () => {
-    // Leaving would hide a Thread that is still being created.
-    if (submitting) return;
     draftStore.flush();
     onClose();
   };
@@ -770,6 +773,9 @@ function ScopedNewThreadModal({
           footer={
             <>
               <NewThreadDraftWarning warning={draft.warning} />
+              {creation.stalled && creation.retry !== undefined ? (
+                <NewThreadStillCreating onRetry={creation.retry} />
+              ) : null}
               {visibleError === undefined ? null : (
                 <NewThreadError
                   message={visibleError}

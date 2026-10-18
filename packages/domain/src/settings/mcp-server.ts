@@ -6,6 +6,8 @@ import { EnvironmentVariableConfigReference } from "./environment-variable.js";
 import { WorkspaceId, WorkspaceRole } from "./workspace.js";
 
 export const MAX_MCP_SERVERS_PER_SCOPE = 20;
+/** A Thread runs with its owner's personal and workspace servers. */
+export const MAX_MCP_SERVERS_PER_THREAD = 2 * MAX_MCP_SERVERS_PER_SCOPE;
 export const MAX_MCP_TOOLS_PER_SERVER = 64;
 export const MAX_MCP_TOOL_SCHEMA_BYTES = 32_768;
 export const MIN_MCP_TIMEOUT_MS = 1_000;

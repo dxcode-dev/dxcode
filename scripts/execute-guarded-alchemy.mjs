@@ -22,6 +22,7 @@ import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import {
   applyValidatedAlchemyPlan,
   configureHostedDeploymentPolicy,
+  deploymentPortals,
   deploymentSelection,
   emptyBranchPreviewBucket,
   parseOrbProviders,
@@ -42,23 +43,29 @@ if (target !== "selfhost")
 const branch = process.env.DX_DEPLOYMENT_BRANCH ?? "";
 const stage = required("DX_DEPLOYMENT_STAGE");
 const applyStartedFile = required("DX_ALCHEMY_APPLY_STARTED_FILE");
+const targetSelection = deploymentSelection({
+  branch,
+  stage,
+  target,
+  selfhost:
+    target === "selfhost"
+      ? {
+          name: required("DX_DEPLOYMENT_NAME"),
+          accountId: required("CLOUDFLARE_ACCOUNT_ID"),
+          domain: required("DX_DEPLOYMENT_DOMAIN"),
+          zone: process.env.DX_DEPLOYMENT_ZONE?.trim() || undefined,
+        }
+      : undefined,
+});
 const selection = {
   ...(target === "selfhost"
     ? {}
     : { authEmailFrom: required("DX_DEPLOYMENT_AUTH_EMAIL_FROM") }),
-  ...deploymentSelection({
-    branch,
-    stage,
-    target,
-    selfhost:
-      target === "selfhost"
-        ? {
-            name: required("DX_DEPLOYMENT_NAME"),
-            accountId: required("CLOUDFLARE_ACCOUNT_ID"),
-            domain: required("DX_DEPLOYMENT_DOMAIN"),
-            zone: process.env.DX_DEPLOYMENT_ZONE?.trim() || undefined,
-          }
-        : undefined,
+  ...targetSelection,
+  portals: deploymentPortals({
+    domain: process.env.DX_DEPLOYMENT_PORTAL_DOMAIN,
+    zoneId: process.env.DX_DEPLOYMENT_PORTAL_ZONE_ID,
+    appDomain: targetSelection.domain,
   }),
   ...(target === "selfhost"
     ? {

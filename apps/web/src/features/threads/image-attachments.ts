@@ -119,6 +119,7 @@ export interface PendingAttachmentCollection {
     create: () => Promise<File>,
   ) => Promise<ReadonlyArray<PendingAttachment>>;
   readonly remove: (id: string) => ReadonlyArray<PendingAttachment>;
+  readonly list: () => ReadonlyArray<PendingAttachment>;
   readonly take: () => ReadonlyArray<PendingAttachment>;
   readonly restore: (
     attachments: ReadonlyArray<PendingAttachment>,
@@ -177,6 +178,7 @@ export const createPendingAttachmentCollection = (
       attachments = attachments.filter((attachment) => attachment.id !== id);
       return attachments;
     },
+    list: () => attachments,
     take: () => {
       const taken = attachments;
       attachments = [];

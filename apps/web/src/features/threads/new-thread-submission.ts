@@ -11,26 +11,38 @@ import {
   type ThreadId,
 } from "@dx/domain";
 import type { useNavigate } from "@tanstack/react-router";
-import type { RefObject } from "react";
 import {
   messageWithAttachments,
   type PendingAttachment,
   type PendingAttachmentCollection,
 } from "./image-attachments.js";
+import type {
+  InitialThreadCreationAttempt,
+  NewThreadDraftStore,
+} from "./new-thread-draft-store.js";
 import { reasoningModeId } from "./new-thread-modal-utils.js";
 import type { CreateThreadMutationInput } from "./thread-mutations.js";
 import type { ThreadSessionRegistry } from "./thread-session-registry.js";
 
-export interface InitialThreadCreationAttempt {
-  readonly threadId: ThreadId;
-  readonly projectId?: ProjectId;
-  readonly profile: ModeId;
-  readonly model?: string;
-  readonly effort?: ClaudeCodeEffort;
-  readonly runnerProfileId?: RunnerProfileId;
-  readonly body: string;
-  readonly attachmentIds: ReadonlyArray<string>;
-}
+/** After this long the composer says the Thread is still being created. */
+export const NEW_THREAD_STALL_AFTER_MS = 15_000;
+
+const sameRequest = (
+  previous: InitialThreadCreationAttempt | undefined,
+  next: Omit<InitialThreadCreationAttempt, "threadId">,
+): previous is InitialThreadCreationAttempt =>
+  previous !== undefined &&
+  previous.projectId === next.projectId &&
+  previous.profile === next.profile &&
+  previous.model === next.model &&
+  previous.effort === next.effort &&
+  previous.runnerProfileId === next.runnerProfileId &&
+  previous.body === next.body &&
+  previous.attachmentIds.length === next.attachmentIds.length &&
+  previous.attachmentIds.every((id, index) => id === next.attachmentIds[index]);
+
+/** `fetch` rejects with a TypeError when no response arrived. */
+const lostResponse = (cause: unknown) => cause instanceof TypeError;
 
 /**
  * Creates the Thread and admits its first message on the server, then opens
@@ -55,7 +67,6 @@ export async function submitNewThread({
   onAccepted,
   onAcceptedNavigationFailure,
   composerOpen,
-  initialCreationAttempt,
 }: {
   readonly submittedPrompt: string;
   readonly effectiveProjectId: ProjectId | "";
@@ -72,17 +83,23 @@ export async function submitNewThread({
     readonly initialSubmission?: { readonly submissionId: string };
   }>;
   readonly navigate: ReturnType<typeof useNavigate>;
-  readonly draftStore: { readonly clear: () => void };
+  readonly draftStore: Pick<
+    NewThreadDraftStore,
+    "clear" | "getCreation" | "setCreation"
+  >;
   readonly onAccepted: () => void;
   readonly onAcceptedNavigationFailure: (threadId: ThreadId) => void;
-  /** False once the composer is gone, e.g. the user went Back mid-create. */
+  /** False once the composer is gone, e.g. the user closed it mid-create. */
   readonly composerOpen: () => boolean;
-  readonly initialCreationAttempt: RefObject<
-    InitialThreadCreationAttempt | undefined
-  >;
 }) {
   let stagedImages: ReadonlyArray<PendingAttachment> | undefined;
   let pendingThreadId: ThreadId | undefined;
+  const { attempt: previousAttempt } = draftStore.getCreation();
+  draftStore.setCreation({
+    ...(previousAttempt === undefined ? {} : { attempt: previousAttempt }),
+    sending: true,
+    stalled: false,
+  });
   try {
     const project = projects.find(({ id }) => id === effectiveProjectId);
     if (effectiveProjectId !== "" && project === undefined)
@@ -106,25 +123,7 @@ export async function submitNewThread({
     // so a recovered attempt without one still matches.
     const claudeEffort =
       model !== undefined && isClaudeCodeModel(model) ? effort : undefined;
-    const previousAttempt = initialCreationAttempt.current;
-    // A retry of the same request reuses its Thread, so a creation whose
-    // response was lost is not created twice.
-    const threadId =
-      previousAttempt !== undefined &&
-      previousAttempt.projectId === project?.id &&
-      previousAttempt.profile === selectedProfile &&
-      previousAttempt.model === model &&
-      previousAttempt.effort === claudeEffort &&
-      previousAttempt.runnerProfileId === runnerProfileId &&
-      previousAttempt.body === body &&
-      previousAttempt.attachmentIds.length === attachmentIds.length &&
-      previousAttempt.attachmentIds.every(
-        (id, index) => id === attachmentIds[index],
-      )
-        ? previousAttempt.threadId
-        : newThreadId();
-    initialCreationAttempt.current = {
-      threadId,
+    const request = {
       projectId: project?.id,
       profile: selectedProfile,
       model,
@@ -133,6 +132,15 @@ export async function submitNewThread({
       body,
       attachmentIds,
     };
+    // Resending the same request reuses its Thread, even from a composer
+    // opened since, so a creation whose response was lost is not made twice.
+    const attempt: InitialThreadCreationAttempt = {
+      ...request,
+      threadId: sameRequest(previousAttempt, request)
+        ? previousAttempt.threadId
+        : newThreadId(),
+    };
+    const threadId = attempt.threadId;
     const title = generateThreadTitle(submittedPrompt);
     registry.beginCreation({
       id: threadId,
@@ -147,7 +155,7 @@ export async function submitNewThread({
       startedAt: Date.now(),
     });
     pendingThreadId = threadId;
-    const response = await create({
+    const input = {
       project,
       title,
       selection:
@@ -164,7 +172,46 @@ export async function submitNewThread({
         body: sentBody,
         attachments: [],
       },
-    });
+    } satisfies CreateThreadMutationInput;
+    // The same Thread ID makes every send idempotent: Core answers a resend
+    // with the receipt of a message it already admitted.
+    let resentAfterLostResponse = false;
+    let response: Awaited<ReturnType<typeof create>> | undefined;
+    while (response === undefined) {
+      const controller = new AbortController();
+      draftStore.setCreation({
+        attempt,
+        sending: true,
+        stalled: false,
+        retry: () => controller.abort(),
+      });
+      const stall = setTimeout(
+        () =>
+          draftStore.setCreation({
+            ...draftStore.getCreation(),
+            stalled: true,
+          }),
+        NEW_THREAD_STALL_AFTER_MS,
+      );
+      try {
+        response = await create({ ...input, signal: controller.signal });
+      } catch (cause) {
+        // The person asked to send it again.
+        if (controller.signal.aborted) continue;
+        if (lostResponse(cause) && !resentAfterLostResponse) {
+          resentAfterLostResponse = true;
+          continue;
+        }
+        if (lostResponse(cause))
+          throw new Error(
+            "dx could not be reached. Send again to retry; it will not start a second Thread.",
+            { cause },
+          );
+        throw cause;
+      } finally {
+        clearTimeout(stall);
+      }
+    }
     const submissionId = response.initialSubmission?.submissionId;
     if (submissionId === undefined)
       throw new Error("The initial message receipt was missing.");
@@ -186,6 +233,13 @@ export async function submitNewThread({
     }
     onAccepted();
   } catch (cause) {
+    // The request is kept: sending it again reuses its Thread.
+    const { attempt } = draftStore.getCreation();
+    draftStore.setCreation({
+      ...(attempt === undefined ? {} : { attempt }),
+      sending: false,
+      stalled: false,
+    });
     if (pendingThreadId !== undefined) registry.failCreation(pendingThreadId);
     // Nothing was admitted: the draft keeps the prompt and its files, so
     // they are there when the composer opens again.

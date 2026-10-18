@@ -1,0 +1,61 @@
+#!/bin/bash
+# Opens Chromium in the dx Desktop. One shared instance: DevTools listens on
+# 127.0.0.1:9222, so an agent drives the browser the user watches (for
+# example `agent-browser --cdp 9222`). Run again with a URL to open a window
+# in the running browser. It returns at once: Chromium runs detached, in a
+# session of its own, carrying the desktop's DX_DESKTOP_SESSION marker so
+# ./stop ends it with the desktop. Outside the session it reads the display
+# variables from ~/.local/state/dx-desktop/environment. ./session runs it
+# with --foreground, so the session's own browser stays in its session.
+set -u
+
+state="${HOME:?HOME is not set}/.local/state/dx-desktop"
+foreground=
+if [ "${1:-}" = "--foreground" ]; then
+  foreground=1
+  shift
+fi
+if [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  [ -f "$state/environment" ] || {
+    echo "dx desktop: not running (run /opt/dx/desktop/start)" >&2
+    exit 1
+  }
+  # shellcheck disable=SC1091
+  . "$state/environment"
+fi
+if [ -z "${DX_DESKTOP_SESSION:-}" ]; then
+  DX_DESKTOP_SESSION=$(cat "$state/session.pid" 2>/dev/null) || {
+    echo "dx desktop: not running (run /opt/dx/desktop/start)" >&2
+    exit 1
+  }
+  export DX_DESKTOP_SESSION
+fi
+
+flags=(
+  --ozone-platform=wayland
+  --remote-debugging-address=127.0.0.1
+  --remote-debugging-port=9222
+  --user-data-dir="$state/chromium"
+  --no-first-run
+  --no-default-browser-check
+  --disable-default-apps
+  --disable-dev-shm-usage
+  --password-store=basic
+  --hide-crash-restore-bubble
+  --start-maximized
+  # No GPU in the sandbox: without this, Chromium blocklists WebGL instead of
+  # falling back to its SwiftShader software renderer, and WebGL pages fail.
+  --enable-unsafe-swiftshader
+)
+# Chromium's sandbox needs unprivileged user namespaces. Sandbox hosts (E2B,
+# Cloudflare Containers) provide them; a plain Docker container's default
+# seccomp profile does not.
+if ! unshare --user --map-root-user true 2>/dev/null; then
+  flags+=(--no-sandbox --test-type)
+fi
+if [ -n "$foreground" ]; then
+  exec chromium "${flags[@]}" "$@"
+fi
+# A running browser takes the URL and this process exits; otherwise this one
+# becomes the browser. Either way the caller does not wait for it.
+setsid -f chromium "${flags[@]}" "$@" </dev/null >>"$state/chromium.log" 2>&1

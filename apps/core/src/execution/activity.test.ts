@@ -117,6 +117,40 @@ describe("workspace activity coordinator", () => {
     }
   });
 
+  it("lets a foreground command keep the workspace awake only shortly after the last use", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = host();
+      const activity = createWorkspaceActivity(provider, undefined, 300_000);
+      // A dev server runs in a pane; nobody touches the Terminal afterwards.
+      activity.attachTerminal(async () => true);
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      const renewalsWhileRecent = provider.setDeadline.mock.calls.length;
+      expect(renewalsWhileRecent).toBeGreaterThanOrEqual(8);
+      // Past five minutes since the last use: one final deadline, then none.
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+      const afterCap = provider.setDeadline.mock.calls.length;
+      expect(provider.setDeadline.mock.calls.at(-1)).toEqual([300_000]);
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(provider.setDeadline).toHaveBeenCalledTimes(afterCap);
+      expect(await activity.isActive()).toBe(false);
+      // Typing in the Terminal opens the window again.
+      activity.recordTerminalInput();
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      expect(provider.setDeadline.mock.calls.length).toBeGreaterThan(
+        afterCap + 4,
+      );
+      // So does an agent command.
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      const idle = provider.setDeadline.mock.calls.length;
+      activity.acquireCommand(1_000).release();
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+      expect(provider.setDeadline.mock.calls.length).toBeGreaterThan(idle + 2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("terminal input qualifies but provider failures stay contained", async () => {
     vi.useFakeTimers();
     try {

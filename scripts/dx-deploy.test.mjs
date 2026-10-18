@@ -3,15 +3,17 @@ import { validateSelfhostConfig } from "../deploy/selfhost/config.mjs";
 import {
   assertInstallerDefaults,
   BROWSER_LOGIN_SWITCH_PROMPT,
-  chooseCloudflareAuth,
   CLOUDFLARE_ORB_PROMPT,
+  chooseCloudflareAuth,
   collectDeploymentConfig,
   collectOrbProviders,
   collectPluginChoices,
+  collectPortalDomain,
   collectSenderUpgrade,
   E2B_ORB_PROMPT,
   EMAIL_SENDING_PROMPT,
   PASSWORD_PROMPT,
+  PORTAL_SKIP_PROMPT,
   SENDER_EMAIL_PROMPT,
   WORKER_TRACES_PROMPT,
 } from "./dx-deploy.mjs";
@@ -426,5 +428,185 @@ describe("Orb provider choice", () => {
     expect(
       await choose({ existing: undefined, sender: false, magicLink: false }),
     ).toEqual(browser);
+  });
+});
+
+describe("Portal domain choice", () => {
+  const accountId = "a".repeat(32);
+  const auth = {
+    accountId,
+    headers: { Authorization: "Bearer x" },
+    method: "api-token",
+  };
+  const fullAccess = {
+    policies: [
+      {
+        effect: "allow",
+        permission_groups: [
+          { name: "Zone Read" },
+          { name: "DNS Write" },
+          { name: "Workers Routes Write" },
+        ],
+        resources: { "com.cloudflare.api.account.zone.*": "*" },
+      },
+    ],
+  };
+  // An account with the app's zone, an unused zone, and a zone that already
+  // serves hostnames.
+  const account = (overrides = {}) => {
+    const zone = (id, name) => ({
+      id,
+      name,
+      status: "active",
+      account: { id: accountId },
+    });
+    const results = {
+      [`/zones?account.id=${accountId}&status=active&per_page=50&page=1`]: [
+        zone("app", "example.com"),
+        zone("fresh", "example-portals.dev"),
+        zone("busy", "busy.dev"),
+      ],
+      "/zones/fresh": zone("fresh", "example-portals.dev"),
+      "/zones/busy": zone("busy", "busy.dev"),
+      "/zones/fresh/dns_records?per_page=1": [],
+      "/zones/fresh/workers/routes": [],
+      [`/accounts/${accountId}/workers/domains?zone_id=fresh`]: [],
+      "/zones/busy/dns_records?per_page=1": [{}],
+      "/zones/busy/workers/routes": [],
+      [`/accounts/${accountId}/workers/domains?zone_id=busy`]: [{}],
+      [`/accounts/${accountId}/tokens/verify`]: { id: "token" },
+      [`/accounts/${accountId}/tokens/token`]: fullAccess,
+      ...overrides,
+    };
+    return vi.fn(async (url) => {
+      const parsed = new URL(url);
+      const path = parsed.pathname.replace("/client/v4", "") + parsed.search;
+      if (!(path in results))
+        throw new Error(`Unexpected Cloudflare request: ${path}`);
+      return results[path] === 403
+        ? Response.json({ success: false }, { status: 403 })
+        : Response.json({ success: true, result: results[path] });
+    });
+  };
+  const run = async ({ answers, confirm = [], fetch = account(), current }) => {
+    const log = vi.fn();
+    const confirmations = [];
+    const portalDomain = await collectPortalDomain({
+      answer: vi.fn(async (label) => {
+        expect(label).toBe(PORTAL_SKIP_PROMPT);
+        return answers.shift() ?? "";
+      }),
+      yes: async (label, fallback) => {
+        confirmations.push([label, fallback]);
+        return confirm.shift() ?? false;
+      },
+      log,
+      auth,
+      appDomain: "dx.example.com",
+      current,
+      fetch,
+    });
+    return {
+      portalDomain,
+      confirmations,
+      output: log.mock.calls.map(([message]) => message).join(""),
+    };
+  };
+
+  it("offers the account's separate zones and flags one already in use", async () => {
+    const chosen = await run({ answers: ["1"] });
+    expect(chosen.portalDomain).toBe("example-portals.dev");
+    expect(chosen.output).toContain("  1. example-portals.dev\n");
+    expect(chosen.output).toContain(
+      "  2. busy.dev (already has 1 DNS record, 1 Worker custom domain)\n",
+    );
+    // The app's own registrable domain is never offered.
+    expect(chosen.output).not.toContain("example.com");
+    expect(chosen.output).toContain(
+      "Portal zone example-portals.dev prerequisites passed.",
+    );
+    expect(chosen.confirmations).toEqual([]);
+
+    // A zone in use needs an explicit yes, which defaults to no.
+    const declined = await run({ answers: ["busy.dev", "2", ""] });
+    expect(declined.portalDomain).toBeUndefined();
+    expect(declined.confirmations).toHaveLength(2);
+    expect(declined.confirmations[0][0]).toContain(
+      "busy.dev already serves hostnames: the route *.busy.dev/* would take over its proxied subdomains",
+    );
+    expect(declined.confirmations[0][1]).toBe(false);
+    expect(declined.output).toContain("Portals stay off.");
+    const confirmed = await run({ answers: ["busy.dev"], confirm: [true] });
+    expect(confirmed.portalDomain).toBe("busy.dev");
+    // A deployment's own Portal zone holds its Portal records already.
+    const kept = await run({ answers: ["2"], current: "busy.dev" });
+    expect(kept.portalDomain).toBe("busy.dev");
+    expect(kept.confirmations).toEqual([]);
+    expect(kept.output).toContain("  2. busy.dev (current Portal zone)\n");
+  });
+
+  it("stays off on a blank answer, an unknown zone, or an account without a separate zone", async () => {
+    expect((await run({ answers: [""] })).portalDomain).toBeUndefined();
+    const unknown = await run({
+      answers: ["example.com", "portals.example.com", "9"],
+    });
+    expect(unknown.portalDomain).toBeUndefined();
+    expect(unknown.output).toContain(
+      "example.com is not one of the listed zones.",
+    );
+    const appOnly = await run({
+      answers: [],
+      fetch: account({
+        [`/zones?account.id=${accountId}&status=active&per_page=50&page=1`]: [
+          { id: "app", name: "example.com" },
+        ],
+      }),
+    });
+    expect(appOnly.portalDomain).toBeUndefined();
+    expect(appOnly.output).toBe(
+      "Portals stay off: no active zone in this Cloudflare account is a registrable domain separate from dx.example.com (workers.dev cannot serve the wildcard route Portals need). Add one, then run pnpm dx:deploy -- --portals.\n",
+    );
+  });
+
+  it("refuses a chosen zone the credential cannot manage", async () => {
+    await expect(
+      run({
+        answers: ["1"],
+        // An unreadable zone is flagged too; the operator confirms it.
+        confirm: [true],
+        fetch: account({ "/zones/fresh/workers/routes": 403 }),
+      }),
+    ).rejects.toThrow(
+      "The Cloudflare API token lacks Workers Routes Edit on the Portal zone example-portals.dev.",
+    );
+  });
+
+  it("records the chosen Portal domain for the app's domain", async () => {
+    const portals = vi.fn(async () => "example-portals.dev");
+    const config = await collectDeploymentConfig({
+      answer: async (label) => {
+        if (label === "First administrator email") return "owner@example.com";
+        if (label.startsWith("Who can create an account")) return "invite";
+        if (label.startsWith("Allowed email domains")) return "";
+        throw new Error(`Unexpected answer prompt: ${label}`);
+      },
+      yes: async (label, fallback = false) =>
+        label === E2B_ORB_PROMPT || label === PASSWORD_PROMPT
+          ? true
+          : label === "Enable Workers AI"
+            ? fallback
+            : false,
+      secret: async (label) =>
+        label === "E2B API key" ? "fixture-e2b-key" : "",
+      environment: {},
+      defaults: {
+        name: "mine",
+        domain: "dx.example.com",
+        zone: "example.com",
+      },
+      portals,
+    });
+    expect(portals).toHaveBeenCalledWith("dx.example.com");
+    expect(config.portalDomain).toBe("example-portals.dev");
   });
 });

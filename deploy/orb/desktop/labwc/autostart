@@ -1,0 +1,10 @@
+# Run by labwc (sh) once the compositor and its Xwayland socket exist, with
+# the compositor's environment. ../session waits for this file; other
+# programs source it to open windows on the desktop.
+{
+  for name in WAYLAND_DISPLAY DISPLAY XDG_RUNTIME_DIR XDG_SESSION_TYPE XDG_CURRENT_DESKTOP DBUS_SESSION_BUS_ADDRESS; do
+    eval "value=\${$name:-}"
+    [ -n "$value" ] && printf "export %s='%s'\n" "$name" "$value"
+  done
+} >"$DX_DESKTOP_STATE/environment.next" &&
+  mv -f "$DX_DESKTOP_STATE/environment.next" "$DX_DESKTOP_STATE/environment"

@@ -264,7 +264,9 @@ export class ClaudeCodeStream {
   /**
    * Claude Code falls back to a non-streaming request when streaming fails;
    * that response arrives only as complete assistant messages, one or more
-   * per response, and its tool calls end the segment once Claude runs them.
+   * per response. A message that calls tools and says the response stopped
+   * for them ends the segment, since a dx tool's result waits on Flue
+   * running that segment; otherwise the segment ends once Claude runs them.
    */
   #completeMessage(message: Json | undefined) {
     if (message === undefined || this.finished) return;
@@ -297,6 +299,8 @@ export class ClaudeCodeStream {
         this.#fallbackCallsTools = true;
       }
     }
+    if (this.#fallbackCallsTools && message.stop_reason === "tool_use")
+      this.#closeFallback();
   }
 
   #closeFallback() {

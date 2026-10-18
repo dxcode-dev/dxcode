@@ -10,7 +10,7 @@ import { Context, DateTime, Effect, Layer, Schema } from "effect";
 import {
   SOURCE_TOOL_VERSION_CONTRACT,
   SourceRuntimeToolUnavailable,
-} from "../execution/e2b/source-tool-requirements.js";
+} from "../execution/guest/source-tool-requirements.js";
 import type { WorkspacePreparation } from "../execution/workspace-preparation.js";
 import { sourceControlLogger } from "../logging.js";
 import {
@@ -237,7 +237,7 @@ export const verifySourceWorkspaceAssets = Effect.fn(
     return yield* new SourceRuntimeToolUnavailable({
       tool: broken.tool,
       reason: broken.status,
-      action: "update-e2b-template",
+      action: "update-orb-template",
     });
   if (verdictResult.exitCode === 43)
     return yield* new SourceWorkspaceInitializationFailed();

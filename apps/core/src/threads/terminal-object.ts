@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import {
   THREAD_CHANGES_SUBPROTOCOL,
   THREAD_TERMINAL_SUBPROTOCOL,
+  ThreadFilesPath,
   type ThreadTerminalServerPhase,
 } from "@dx/api";
 import { ThreadId, WorkloadIdentityUnauthorized } from "@dx/domain";
@@ -37,6 +38,8 @@ import {
   DXD_MAX_RESPONSE_FRAME_BYTES,
   DXD_MAX_WORKLOAD_IDENTITY_FRAME_BYTES,
   DXD_PROTOCOL_MAJOR,
+  DXD_PROXY_MAX_HEAD_FRAME_BYTES,
+  DXD_PROXY_MAX_STREAM_ID,
   DXD_RELEASE,
   DXD_SANDBOX_CHUNK_HEADER,
   DXD_TERMINAL_MAX_FRAME_BYTES,
@@ -50,22 +53,29 @@ import {
   DxdClientControlMessage,
   type DxdClientTerminalControl,
   type DxdCoreTerminalControl,
+  DxdDesktopEnsureResult,
   DxdEnvironmentActivateResult,
   DxdFilesOperation,
+  DxdFilesReadResult,
   type DxdOperation,
+  DxdProxyClientMessage,
+  DxdProxyPortsResult,
   DxdResponseEnvelope,
+  DxdServicesEnsureResult,
   type DxdTerminalHeartbeat,
   DxdUpdateMessage,
   type DxdWorkloadIdentityRequest,
   DxdWorkloadIdentityRequestMessage,
   decodeDxdSandboxChunkFrame,
   environmentActivationDigest,
+  isDxdProxyFrame,
   isDxdSandboxChunkFrame,
 } from "../execution/dxd/protocol.js";
-import { loadDaemonReleaseMetadata } from "../execution/e2b/daemon-release.js";
 import { ExecutionWorkspaces } from "../execution/execution-workspaces.js";
+import { loadDaemonReleaseMetadata } from "../execution/guest/daemon-release.js";
 import type { Bindings } from "../http/types.js";
 import { threadDaemonLogger } from "../logging.js";
+import { traceInvocation } from "../observability/boundaries.js";
 import {
   StartupRequestId,
   StartupSubmissionId,
@@ -78,7 +88,6 @@ import {
 } from "../observability/startup-runtime.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
 import { publishRealtimeInvalidation } from "../realtime/publication.js";
-import { loadRuntimeConfiguration } from "../runtime/composition.js";
 import { environmentActivationOperation } from "../settings/environment-variables/activation.js";
 import {
   executionEnvironmentRevisionsEqual,
@@ -103,6 +112,10 @@ import {
   type ThreadChangesSource,
 } from "../thread-changes/repository-d1.js";
 import { publishThreadChangesResidentCandidate } from "../thread-changes/resident-publisher.js";
+import {
+  parseServicesManifest,
+  SERVICES_MANIFEST_PATH,
+} from "../thread-services/manifest.js";
 import { workloadIdentityBroker } from "../workload-identity/broker.js";
 import {
   type DaemonActivationMilestones,
@@ -110,6 +123,14 @@ import {
   daemonFailureResponse,
   residentThreadDaemonEndpoint,
 } from "./daemon-client.js";
+import {
+  HOP_BY_HOP_HEADERS,
+  type ProxyBrowserAttachment,
+  proxyBrowserTag,
+  proxyFailure,
+  proxyFailureReason,
+  ResidentProxyRelay,
+} from "./resident-proxy-relay.js";
 import {
   type ResidentTerminalMetadata,
   ResidentTerminalRelay,
@@ -121,6 +142,10 @@ const TRANSIENT_ACTIVATION_RETRY_MS = 250;
 export const DAEMON_ACTIVATION_DEADLINE_MS = 90_000;
 export const DAEMON_ACTIVATION_GRACE_MS = 90_000;
 const DAEMON_REQUEST_TIMEOUT_MS = 5_000;
+/** The image's desktop start script waits up to 45 s for its gateway. */
+const DESKTOP_ENSURE_TIMEOUT_MS = 50_000;
+/** How long a request waits for a service it started to listen. */
+const SERVICE_START_WAIT_MS = 30_000;
 const READINESS_PROBE_TIMEOUT_MS = 1_000;
 /** How late a heartbeat may be before a browser's liveness miss is probed. */
 const TERMINAL_LIVENESS_GRACE_MS = 500;
@@ -291,6 +316,8 @@ interface DaemonAuthority {
   readonly daemonRelease?: string;
   /** The connected daemon waits for a `chunk-ack` per `DXF1` frame. */
   readonly chunkAcks?: boolean;
+  /** The connected daemon serves `proxy.open` streams (Portals, Desktop). */
+  readonly proxy?: boolean;
 }
 
 interface DaemonAttachment {
@@ -318,7 +345,8 @@ interface ChangesBrowserAttachment {
 type SocketAttachment =
   | DaemonAttachment
   | ResidentBrowserAttachment
-  | ChangesBrowserAttachment;
+  | ChangesBrowserAttachment
+  | ProxyBrowserAttachment;
 
 interface PendingDaemonRequest {
   readonly authority: Pick<DaemonAuthority, "threadId" | "generation">;
@@ -364,6 +392,40 @@ const isTerminalControl = (
 
 export class ThreadExecutionObject extends DurableObject<Bindings> {
   readonly #residentRelay = new ResidentTerminalRelay();
+  readonly #proxyRelay = new ResidentProxyRelay({
+    daemon: () => {
+      const socket = this.#currentDaemonSocket();
+      const authority = this.#authority;
+      if (
+        socket === undefined ||
+        authority?.proxy !== true ||
+        authority.attachmentNonce === undefined
+      )
+        return undefined;
+      return { socket, nonce: authority.attachmentNonce };
+    },
+    acceptBrowser: (server, attachment) => {
+      this.ctx.acceptWebSocket(server, [proxyBrowserTag(attachment.streamId)]);
+      server.serializeAttachment(attachment);
+    },
+    browsers: (streamId) =>
+      streamId === undefined
+        ? this.ctx
+            .getWebSockets()
+            .filter(
+              (socket) =>
+                (socket.deserializeAttachment() as SocketAttachment | undefined)
+                  ?.kind === "proxy-browser",
+            )
+        : this.ctx.getWebSockets(proxyBrowserTag(streamId)),
+    activity: (wake) => this.#recordProxyActivity(wake),
+  });
+  /** When proxied traffic last renewed the workspace's inactivity deadline. */
+  #proxyActivityAt = 0;
+  /** In-flight `services.ensure` attempts by guest port. */
+  readonly #serviceEnsures = new Map<number, Promise<boolean>>();
+  /** The in-flight `desktop.ensure`, shared by the Desktop's channels. */
+  #desktopEnsure?: Promise<DxdDesktopEnsureResult | undefined>;
   #authority?: DaemonAuthority;
   #activation?: DaemonActivation;
   #activationId?: string;
@@ -572,7 +634,13 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     });
   }
 
-  async fetch(request: Request): Promise<Response> {
+  fetch(request: Request): Promise<Response> {
+    return traceInvocation("ThreadExecutionObject.fetch", request, () =>
+      this.#fetch(request),
+    );
+  }
+
+  async #fetch(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
     if (path === "/daemon/activate") return this.#activate(request);
     if (path === "/daemon/request") return this.#requestDaemon(request);
@@ -584,6 +652,12 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       return this.#refreshEnvironment(request);
     if (path === "/changes/refresh") return this.#queueChangesRefresh(request);
     if (path === "/changes/events") return this.#acceptChangesObserver(request);
+    if (
+      path === "/proxy/http" ||
+      path === "/proxy/websocket" ||
+      path === "/proxy/ports"
+    )
+      return this.#proxy(request, path);
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
       return new Response(null, { status: 404 });
     const threadId = Schema.decodeUnknownOption(ThreadId)(
@@ -683,7 +757,13 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     });
   }
 
-  async alarm() {
+  alarm() {
+    return traceInvocation("ThreadExecutionObject.alarm", undefined, () =>
+      this.#alarm(),
+    );
+  }
+
+  async #alarm() {
     const now = Date.now();
     this.#leaseCheckAt = undefined;
     const expired = await this.#expiredDaemonSocket(now);
@@ -717,6 +797,242 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           ),
         ),
       );
+  }
+
+  /**
+   * Portal and Desktop traffic for an already authorized caller. A request
+   * that may wake (`x-dx-proxy-wake: 1`) goes through the same wake gate as
+   * Files reads; one that may not answers `workspace-paused` instead.
+   */
+  async #proxy(request: Request, path: string): Promise<Response> {
+    const threadId = Schema.decodeUnknownOption(ThreadId)(
+      request.headers.get("x-dx-thread-id"),
+    );
+    if (Option.isNone(threadId)) return new Response(null, { status: 404 });
+    const wake = request.headers.get("x-dx-proxy-wake") === "1";
+    const websocket = path === "/proxy/websocket";
+    if (
+      websocket !==
+      (request.headers.get("upgrade")?.toLowerCase() === "websocket")
+    )
+      return proxyFailure("invalid-request");
+    let target = "/";
+    let port = 0;
+    if (path !== "/proxy/ports") {
+      const portHeader = request.headers.get("x-dx-proxy-port") ?? "";
+      port = /^[1-9][0-9]{0,4}$/.test(portHeader) ? Number(portHeader) : 0;
+      target = request.headers.get("x-dx-proxy-target") ?? "";
+      if (
+        port < 1 ||
+        port > 65_535 ||
+        !target.startsWith("/") ||
+        target.length > 8_192 ||
+        !/^[\x21-\x7e]+$/.test(target)
+      )
+        return proxyFailure("invalid-request");
+    }
+    const available = wake
+      ? await this.#activateForFilesRead(threadId.value)
+      : this.#authority?.threadId === threadId.value &&
+        this.#isTransportReady() &&
+        this.#isHeartbeatFresh();
+    if (!available)
+      return proxyFailure(wake ? "workspace-unavailable" : "workspace-paused");
+    const authority = this.#authority;
+    if (authority?.threadId !== threadId.value || authority.proxy !== true)
+      return proxyFailure("workspace-unavailable");
+    if (path === "/proxy/ports") {
+      const response = await this.#dispatchDaemonOperation(
+        authority,
+        { operation: "proxy.ports" },
+        DXD_MAX_REQUEST_FRAME_BYTES,
+        DAEMON_REQUEST_TIMEOUT_MS,
+      );
+      if (!response.ok) return proxyFailure("workspace-unavailable");
+      const result = Schema.decodeUnknownOption(DxdProxyPortsResult)(
+        await response.json(),
+        { onExcessProperty: "error" },
+      );
+      if (Option.isNone(result)) return proxyFailure("workspace-unavailable");
+      return Response.json(
+        { ports: result.value.ports },
+        { headers: { "cache-control": "no-store" } },
+      );
+    }
+    if (request.headers.get("x-dx-proxy-prepare") === "desktop") {
+      const desktop = await this.#ensureDesktop(authority);
+      if (desktop?.kind !== "ready")
+        return proxyFailure(
+          desktop?.reason === "unsupported"
+            ? "desktop-unsupported"
+            : "desktop-unavailable",
+        );
+    }
+    const host =
+      request.headers.get("x-dx-proxy-host") ?? `localhost:${String(port)}`;
+    const headers: Array<readonly [string, string]> = [["Host", host]];
+    for (const [name, value] of request.headers) {
+      const lower = name.toLowerCase();
+      if (
+        lower === "host" ||
+        lower.startsWith("x-dx-") ||
+        lower.startsWith("cf-") ||
+        HOP_BY_HOP_HEADERS.has(lower) ||
+        (websocket && lower.startsWith("sec-websocket-"))
+      )
+        continue;
+      headers.push([name, value]);
+    }
+    if (websocket)
+      return this.#proxyRelay.websocket({
+        port,
+        target,
+        headers,
+        protocols: (request.headers.get("sec-websocket-protocol") ?? "")
+          .split(",")
+          .map((protocol) => protocol.trim())
+          .filter((protocol) => protocol.length > 0),
+        wake,
+      });
+    const idempotent = request.method === "GET" || request.method === "HEAD";
+    const exchange = () =>
+      this.#proxyRelay.http({
+        port,
+        target,
+        method: request.method,
+        headers,
+        body: idempotent ? null : request.body,
+        wake,
+      });
+    const response = await exchange();
+    // Nothing listens: a declared service for this port starts, and the
+    // request is served once it listens. Only a request without a body can
+    // be sent again. The relay's own failure is known without a header, so
+    // a guest cannot trigger this.
+    if (
+      !idempotent ||
+      proxyFailureReason(response) !== "upstream-unreachable" ||
+      !(await this.#ensureService(authority, port))
+    )
+      return response;
+    const deadline = Date.now() + SERVICE_START_WAIT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const retried = await exchange();
+      if (proxyFailureReason(retried) !== "upstream-unreachable")
+        return retried;
+    }
+    return proxyFailure("service-starting");
+  }
+
+  /**
+   * Start the service the Thread's `.dx/services.yaml` declares for `port`;
+   * false when none is declared or it cannot start. Concurrent requests for
+   * one port share the attempt.
+   */
+  #ensureService(authority: DaemonAuthority, port: number) {
+    const inFlight = this.#serviceEnsures.get(port);
+    if (inFlight !== undefined) return inFlight;
+    const ensure = (async () => {
+      const read = await this.#dispatchDaemonOperation(
+        authority,
+        {
+          operation: "files.read",
+          path: Schema.decodeUnknownSync(ThreadFilesPath)(
+            SERVICES_MANIFEST_PATH,
+          ),
+        },
+        DXD_MAX_REQUEST_FRAME_BYTES,
+        DAEMON_REQUEST_TIMEOUT_MS,
+      );
+      if (!read.ok) return false;
+      const manifest = Schema.decodeUnknownOption(DxdFilesReadResult)(
+        await read.json(),
+      );
+      if (Option.isNone(manifest) || manifest.value.kind !== "editable")
+        return false;
+      const service = parseServicesManifest(manifest.value.content)?.find(
+        (candidate) => candidate.port === port,
+      );
+      if (service === undefined) return false;
+      const ensured = await this.#dispatchDaemonOperation(
+        authority,
+        {
+          operation: "services.ensure",
+          services: [
+            {
+              name: service.name,
+              command: service.command,
+              ...(service.cwd === undefined ? {} : { cwd: service.cwd }),
+              port: service.port,
+              env: service.env,
+            },
+          ],
+        },
+        DXD_MAX_REQUEST_FRAME_BYTES,
+        DAEMON_REQUEST_TIMEOUT_MS,
+      );
+      if (!ensured.ok) return false;
+      const result = Schema.decodeUnknownOption(DxdServicesEnsureResult)(
+        await ensured.json(),
+      );
+      return (
+        Option.isSome(result) &&
+        result.value.kind === "services" &&
+        result.value.services.some((status) => status.state !== "failed")
+      );
+    })()
+      .catch(() => false)
+      .finally(() => {
+        this.#serviceEnsures.delete(port);
+      });
+    this.#serviceEnsures.set(port, ensure);
+    return ensure;
+  }
+
+  /** Concurrent Desktop channels share one start; a later one checks again. */
+  #ensureDesktop(authority: DaemonAuthority) {
+    if (this.#desktopEnsure !== undefined) return this.#desktopEnsure;
+    const ensure = this.#dispatchDaemonOperation(
+      authority,
+      { operation: "desktop.ensure" },
+      DXD_MAX_REQUEST_FRAME_BYTES,
+      DESKTOP_ENSURE_TIMEOUT_MS,
+    )
+      .then(async (response) => {
+        if (!response.ok) return undefined;
+        return Option.getOrUndefined(
+          Schema.decodeUnknownOption(DxdDesktopEnsureResult)(
+            await response.json(),
+            { onExcessProperty: "error" },
+          ),
+        );
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.#desktopEnsure === ensure) this.#desktopEnsure = undefined;
+      });
+    this.#desktopEnsure = ensure;
+    return ensure;
+  }
+
+  /**
+   * Proxied traffic renews the inactivity deadline, at most twice a minute.
+   * Traffic that may not wake the workspace (a WebSocket and its messages)
+   * renews only a deadline this isolate already tracks: reaching the
+   * provider to start tracking could resume a workspace that just paused.
+   */
+  #recordProxyActivity(wake: boolean) {
+    const threadId = this.#authority?.threadId;
+    const now = Date.now();
+    if (threadId === undefined || now - this.#proxyActivityAt < 30_000) return;
+    this.#proxyActivityAt = now;
+    this.ctx.waitUntil(
+      ExecutionWorkspaces.recordResidentTerminalInput(
+        Schema.decodeUnknownSync(ThreadId)(threadId),
+        { wake },
+      ).catch(() => undefined),
+    );
   }
 
   #acceptChangesObserver(request: Request): Response {
@@ -1423,7 +1739,9 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     let stage: "credential" | "install" | "registration" | "environment" =
       "credential";
     try {
-      const runtime = Effect.runSync(loadRuntimeConfiguration(this.env));
+      // The provider the Thread was created on, never a deployment default.
+      const runtimeProvider =
+        await ExecutionWorkspaces.pinnedProvider(threadId);
       const existing = this.#authority;
       let credential:
         | { id: string; key: Redacted.Redacted<string> }
@@ -1438,13 +1756,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           protocolMajor: DXD_PROTOCOL_MAJOR,
           terminalVersion: DXD_TERMINAL_VERSION,
           workloadIdentityVersion: DXD_WORKLOAD_IDENTITY_VERSION,
-          // Deployed: the pinned provider, corrected after installation.
-          runtimeProvider:
-            runtime.executionAdapter === "local"
-              ? "local"
-              : existing.runtimeProvider === "local"
-                ? runtime.executionAdapter
-                : existing.runtimeProvider,
+          runtimeProvider,
         };
         if (authority !== existing) {
           this.#authority = authority;
@@ -1467,12 +1779,15 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           protocolMajor: DXD_PROTOCOL_MAJOR,
           terminalVersion: DXD_TERMINAL_VERSION,
           workloadIdentityVersion: DXD_WORKLOAD_IDENTITY_VERSION,
-          runtimeProvider: runtime.executionAdapter,
+          runtimeProvider,
           runtimeAssurance: "dx_dxd_channel_v1",
         };
         this.#authority = authority;
         await this.ctx.storage.put(AUTHORITY_STORAGE_KEY, authority);
         this.#failAllPending();
+        // The superseded socket's close no longer matches this authority,
+        // so its proxy streams end here.
+        this.#proxyRelay.daemonUnavailable();
         this.#fenceDaemonSockets();
         if (existing !== undefined)
           await revokeThreadDaemonApiKey(this.env, existing.apiKeyId);
@@ -1506,20 +1821,6 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       if (epoch !== this.#drainEpoch)
         throw new Error("activation cancelled by drain");
       this.#processesStartedAt = installation.processesStartedAt;
-      // A deployment may run several Orb providers; workload identity names
-      // the one this Thread's workspace is pinned to.
-      const pinned = this.#authority;
-      if (
-        installation.provider !== undefined &&
-        pinned?.threadId === threadId &&
-        pinned.runtimeProvider !== installation.provider
-      ) {
-        this.#authority = {
-          ...pinned,
-          runtimeProvider: installation.provider,
-        };
-        await this.ctx.storage.put(AUTHORITY_STORAGE_KEY, this.#authority);
-      }
       stage = "registration";
       if (!this.#isTransportReady()) {
         await new Promise<void>((resolve, reject) => {
@@ -1952,6 +2253,9 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           pending.operation.operation !== "files.list" &&
           pending.operation.operation !== "files.read" &&
           pending.operation.operation !== "files.readSandbox" &&
+          pending.operation.operation !== "proxy.ports" &&
+          pending.operation.operation !== "desktop.ensure" &&
+          pending.operation.operation !== "services.ensure" &&
           !this.#isReady())
       )
         continue;
@@ -2215,6 +2519,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     );
     this.#authority = undefined;
     this.#failAllPending();
+    this.#proxyRelay.daemonUnavailable();
     this.#fenceDaemonSockets();
     for (const resolve of this.#readinessWaiters) resolve();
     this.#readinessWaiters.clear();
@@ -2900,6 +3205,10 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       await this.#residentRelay.receiveBrowser(socket, frame);
       return;
     }
+    if (attachment?.kind === "proxy-browser") {
+      this.#proxyRelay.receiveBrowser(socket, attachment, frame);
+      return;
+    }
     const currentIdentity =
       authority !== undefined &&
       attachment?.kind === "daemon" &&
@@ -2915,6 +3224,14 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         return;
       }
       if (!current) return;
+      if (isDxdProxyFrame(new Uint8Array(frame, 0, Math.min(12, frameBytes)))) {
+        try {
+          this.#proxyRelay.receiveDaemonFrame(socket, frame);
+        } catch {
+          socket.close(1008, "Invalid daemon message.");
+        }
+        return;
+      }
       if (
         isDxdSandboxChunkFrame(
           new Uint8Array(frame, 0, Math.min(8, frameBytes)),
@@ -2952,6 +3269,42 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       typeof decoded === "object" && decoded !== null && "type" in decoded
         ? decoded.type
         : undefined;
+    if (typeof messageType === "string" && messageType.startsWith("proxy.")) {
+      const proxyMessage =
+        frameBytes > DXD_PROXY_MAX_HEAD_FRAME_BYTES
+          ? Option.none()
+          : Schema.decodeUnknownOption(DxdProxyClientMessage)(decoded, {
+              onExcessProperty: "error",
+            });
+      if (Option.isNone(proxyMessage)) {
+        // A message for one stream that Core cannot use fails that stream;
+        // only one that names no stream ends the daemon connection.
+        const streamId =
+          typeof decoded === "object" &&
+          decoded !== null &&
+          "streamId" in decoded
+            ? decoded.streamId
+            : undefined;
+        if (
+          typeof streamId !== "number" ||
+          !Number.isInteger(streamId) ||
+          streamId < 1 ||
+          streamId > DXD_PROXY_MAX_STREAM_ID
+        ) {
+          socket.close(1008, "Invalid daemon message.");
+          return;
+        }
+        if (current) this.#proxyRelay.rejectDaemonMessage(socket, streamId);
+        return;
+      }
+      if (currentIdentity && !current) {
+        await this.#loseDaemonConnection(socket, true);
+        return;
+      }
+      if (current)
+        this.#proxyRelay.receiveDaemonMessage(socket, proxyMessage.value);
+      return;
+    }
     if (
       ((messageType === "register" ||
         messageType === "heartbeat" ||
@@ -3016,6 +3369,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         lastSeen: Date.now(),
         daemonRelease: control.value.release,
         chunkAcks: control.value.capabilities.files !== undefined,
+        proxy: control.value.capabilities.proxy !== undefined,
       };
       this.#authority = next;
       this.#lastPersistedHeartbeatAt = next.lastSeen;
@@ -3026,6 +3380,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       this.#appliedEnvironment = undefined;
       this.#terminalResetRequired = true;
       this.#residentRelay.daemonConnectionReset(this.#inPlannedHandoff());
+      this.#proxyRelay.daemonUnavailable(nonce);
       this.#plannedHandoffUntil = undefined;
       this.#fenceDaemonSockets(socket);
       await Promise.all([
@@ -3223,11 +3578,25 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     );
   }
 
-  async webSocketClose(socket: WebSocket) {
+  async webSocketClose(socket: WebSocket, code = 1005, reason = "") {
+    const attachment = socket.deserializeAttachment() as
+      | SocketAttachment
+      | undefined;
+    if (attachment?.kind === "proxy-browser") {
+      this.#proxyRelay.browserClosed(attachment, code, reason);
+      return;
+    }
     await this.#clearCurrentAttachment(socket);
   }
 
   async webSocketError(socket: WebSocket) {
+    const attachment = socket.deserializeAttachment() as
+      | SocketAttachment
+      | undefined;
+    if (attachment?.kind === "proxy-browser") {
+      this.#proxyRelay.browserClosed(attachment, 1001, "");
+      return;
+    }
     await this.#clearCurrentAttachment(socket);
   }
 
@@ -3290,6 +3659,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     this.#environmentReady = false;
     this.#appliedEnvironment = undefined;
     this.#disconnectPendingForSocket(socket, true);
+    this.#proxyRelay.daemonUnavailable();
     const notifiedBrowsers = this.#residentRelay.daemonUnavailable(
       this.#inPlannedHandoff(),
     );

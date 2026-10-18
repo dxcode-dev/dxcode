@@ -12,6 +12,7 @@ import {
 } from "@tanstack/react-router";
 import { Option, Schema } from "effect";
 import {
+  isServerPath,
   safeNextPath,
   validateSignInSearch,
 } from "./features/authentication/sign-in-paths.js";
@@ -291,8 +292,14 @@ const joinWorkspaceRoute = createRoute({
 // Signing in lands on the sign-in page with a session; continue to `next`,
 // which safeNextPath limits to a same-origin path.
 const signedInRedirect = ({ search }: { search: { next?: string } }) => {
+  const next = safeNextPath(search.next) ?? "/";
   // react-doctor-disable-next-line react-doctor/clickjacking-redirect-risk
-  throw redirect({ href: safeNextPath(search.next) ?? "/", replace: true });
+  throw redirect({
+    href: next,
+    replace: true,
+    // A server route (the Portal sign-in) continues as a document load.
+    ...(isServerPath(next) ? { reloadDocument: true } : {}),
+  });
 };
 
 const signInRoute = createRoute({

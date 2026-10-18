@@ -42,12 +42,24 @@ const systemClock: Clock = {
   clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
 };
 
+/**
+ * A Terminal command running in the foreground (a build, a dev server) keeps
+ * the workspace awake only this long after the Terminal or the agent was last
+ * used; then the ordinary inactivity deadline runs out. A forgotten
+ * `npm run dev` therefore costs at most this plus the inactivity window.
+ */
 export const createWorkspaceActivity = (
   host: ActivityHost,
   clock: Clock = systemClock,
   inactivityMs = DEFAULT_WORKSPACE_INACTIVITY_MS,
+  foregroundKeepAliveMs = inactivityMs,
 ): WorkspaceActivity => {
   const commands = new Map<symbol, number>();
+  /** The last Terminal input or agent command; creation is a use (a wake). */
+  let lastUse = clock.now();
+  const used = () => {
+    lastUse = clock.now();
+  };
   const retainers = new Set<symbol>();
   let terminalInputUntil = 0;
   let terminal:
@@ -77,7 +89,10 @@ export const createWorkspaceActivity = (
     deadlines.push(inactivityMs);
     if (!publishing) void publishDeadlines();
   };
-  const renewing = () => commands.size > 0 || retainers.size > 0 || foreground;
+  const foregroundRenews = () =>
+    foreground && clock.now() - lastUse < foregroundKeepAliveMs;
+  const renewing = () =>
+    commands.size > 0 || retainers.size > 0 || foregroundRenews();
   const retained = () => renewing() || terminalInputUntil > clock.now();
   const publish = () => {
     if (renewing()) {
@@ -153,6 +168,7 @@ export const createWorkspaceActivity = (
       }
     },
     acquireCommand(timeoutMs) {
+      used();
       const id = Symbol();
       commands.set(id, clock.now() + Math.max(1, timeoutMs));
       publish();
@@ -162,6 +178,7 @@ export const createWorkspaceActivity = (
         release() {
           if (released) return;
           released = true;
+          used();
           commands.delete(id);
           publish();
           schedule();
@@ -204,6 +221,7 @@ export const createWorkspaceActivity = (
       };
     },
     recordTerminalInput() {
+      used();
       terminalInputUntil = clock.now() + inactivityMs;
       if (!renewing()) {
         wasActive = false;

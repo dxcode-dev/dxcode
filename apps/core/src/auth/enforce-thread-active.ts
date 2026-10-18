@@ -9,9 +9,14 @@ export const enforceThreadActive: MiddlewareHandler<AppEnv> = async (
 ) => {
   const threadId = context.req.param("threadId") ?? "";
   const agentPath = `/v1/agents/dx/${threadId}`;
+  const threadPath = `/v1/threads/${threadId}`;
+  // Each of these wakes the workspace or runs something in it; the Desktop
+  // (its status check and sockets) also starts the desktop session.
   const executionCapable =
-    context.req.path === `/v1/threads/${threadId}/terminal` ||
-    context.req.path.startsWith(`/v1/threads/${threadId}/files`) ||
+    context.req.path === `${threadPath}/terminal` ||
+    context.req.path.startsWith(`${threadPath}/files`) ||
+    context.req.path === `${threadPath}/desktop` ||
+    context.req.path.startsWith(`${threadPath}/desktop/`) ||
     (context.req.method === "POST" &&
       [agentPath, `${agentPath}/abort`].includes(context.req.path));
   if (executionCapable && context.get("threadLifecycleState") === "archived")

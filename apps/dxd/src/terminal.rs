@@ -1,10 +1,13 @@
-//! Resident terminal: one login shell on a daemon-owned PTY, a bounded replay
-//! ring, up to eight browser attachments, and FIFO input.
+//! Resident terminal: one daemon-owned PTY, a bounded replay ring, up to
+//! eight browser attachments, and FIFO input.
 //!
-//! dxd owns the PTY directly (`openpty`, a session-leading login shell).
+//! dxd owns the PTY directly (`openpty`, a session-leading child). On an
+//! image that bundles tmux the child is a tmux client of the shared session
+//! `main` (see `tmux.rs`), whose server and shells outlive dxd; otherwise it
+//! is a login Bash that lives exactly as long as dxd.
 //! Output volume never ends the session: when the outbound path is slow the
 //! bounded channel blocks the reader thread and the kernel PTY buffer blocks
-//! the shell, which is ordinary terminal back-pressure.
+//! the child, which is ordinary terminal back-pressure.
 
 use crate::environment::base_environment_for;
 use crate::protocol::{
@@ -12,6 +15,7 @@ use crate::protocol::{
     TerminalClientMessage, TerminalFrame, TerminalGeneration, TerminalHeartbeat, U64String,
     decode_terminal_frame, encode_terminal_frame,
 };
+use crate::tmux::{Join, Tmux};
 use bytes::Bytes;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{self, Read, Write};
@@ -53,7 +57,8 @@ struct OutputChunk {
 pub struct ResidentProcess {
     /// The PTY master; absent only in tests without a terminal.
     master: Option<OwnedFd>,
-    /// The login shell: spawned here, or inherited across a self-update exec.
+    /// The PTY's child (the login shell or the tmux client): spawned here,
+    /// or inherited across a self-update exec.
     shell: Option<Shell>,
     writer: Box<dyn Write + Send>,
     output: Receiver<ReaderEvent>,
@@ -171,6 +176,14 @@ pub struct TerminalRuntime {
     environment_values: BTreeMap<String, String>,
     profile: ShellProfile,
     record: Option<PathBuf>,
+    /// The bundled tmux, when the resident is its shared session.
+    tmux: Option<Tmux>,
+    /// First output sequence of the current tmux client while the replay
+    /// ring still holds everything it wrote; `None` once any of it was
+    /// evicted (or is unknown after an update from an older image).
+    client_output_from: Option<u64>,
+    /// The resident is a tmux client (a handed-off login shell is not).
+    resident_tmux: bool,
     #[cfg(test)]
     resize_observer: Option<std::sync::mpsc::SyncSender<Dimensions>>,
     #[cfg(test)]
@@ -204,6 +217,9 @@ impl TerminalRuntime {
             environment_values: BTreeMap::new(),
             profile,
             record: None,
+            tmux: None,
+            client_output_from: None,
+            resident_tmux: false,
             #[cfg(test)]
             resize_observer: None,
             #[cfg(test)]
@@ -221,6 +237,7 @@ impl TerminalRuntime {
             },
         )
         .recorded_in(state_root)
+        .with_tmux(Tmux::detect())
     }
 
     pub fn local(root: PathBuf, home: PathBuf, state_root: PathBuf) -> Self {
@@ -235,13 +252,20 @@ impl TerminalRuntime {
             },
         )
         .recorded_in(&state_root)
+        .with_tmux(Tmux::detect())
     }
 
-    /// Recover the resident a previous daemon process recorded. The shell
-    /// died with that process (crash, `kill -9`, panic abort, or a restart),
-    /// so it is reported as exited: the browser offers Restart instead of
-    /// Core silently opening a new shell that looks like the old one. A
-    /// successful self-update handoff replaces this with the live shell.
+    fn with_tmux(mut self, tmux: Option<Tmux>) -> Self {
+        self.tmux = tmux;
+        self
+    }
+
+    /// Recover the resident a previous daemon process recorded. A login
+    /// shell died with that process (crash, `kill -9`, panic abort, or a
+    /// restart), so it is reported as exited: the browser offers Restart
+    /// instead of Core silently opening a new shell that looks like the old
+    /// one. A successful self-update handoff replaces this with the live
+    /// shell, and `reattach_session` with a tmux session that survived.
     fn recorded_in(mut self, state_root: &Path) -> Self {
         let path = state_root.join(RESIDENT_RECORD);
         if let Some(generation) = std::fs::read(&path)
@@ -253,6 +277,80 @@ impl TerminalRuntime {
         }
         self.record = Some(path);
         self
+    }
+
+    /// Reattach the recorded resident when its tmux session outlived the
+    /// previous daemon process. The tmux server is not dxd's child, so a
+    /// crash, `kill -9`, or restart only lost that process's client: a new
+    /// client joins the same session under the same identity, and tmux
+    /// repaints it. Only a session the recorded resident's own client
+    /// marked counts; without one (a login-Bash resident, a session that
+    /// ended, one the agent opened since) the resident stays exited.
+    /// Runs once at startup, after any update handoff, and may wait up to
+    /// two seconds for tmux.
+    pub fn reattach_session(&mut self) {
+        if self.state != ResidentState::Exited || self.process.is_some() {
+            return;
+        }
+        let (Some(tmux), Some(generation)) = (self.tmux.as_ref(), self.generation) else {
+            return;
+        };
+        let Some(dimensions) = tmux.surviving_session(generation) else {
+            return;
+        };
+        let generation = Some(generation);
+        self.reset_resident_state();
+        self.generation = generation;
+        self.dimensions = dimensions;
+        match self.spawn_resident(Join::Existing, dimensions) {
+            Ok(process) => {
+                self.process = Some(process);
+                self.state = ResidentState::Starting;
+                self.first_output_deadline = Some(Instant::now() + FIRST_OUTPUT_TIMEOUT);
+                eprintln!("dxd reattached the surviving terminal session");
+            }
+            Err(error) => {
+                self.state = ResidentState::Exited;
+                eprintln!("dxd could not reattach the terminal session: {error}");
+            }
+        }
+    }
+
+    /// Start the PTY child: a tmux client joining the shared session, or a
+    /// login shell without tmux.
+    fn spawn_resident(
+        &mut self,
+        join: Join,
+        dimensions: Dimensions,
+    ) -> io::Result<ResidentProcess> {
+        let environment = base_environment_for(
+            &self.environment_values,
+            &self.profile.home,
+            &self.profile.user,
+        );
+        let command = match (&self.tmux, self.generation) {
+            (Some(tmux), Some(generation)) => tmux.client(
+                join,
+                generation,
+                &self.root,
+                &environment,
+                self.profile.rcfile.as_ref().map(|rcfile| {
+                    format!(
+                        "exec /bin/bash --rcfile {} -i",
+                        crate::tmux::shell_quote(rcfile)
+                    )
+                }),
+            ),
+            (Some(_), None) => return Err(io::Error::other("tmux client without a resident")),
+            (None, _) => shell_command(&self.root, &environment, &self.profile),
+        };
+        let process = spawn_on_pty(command, dimensions)?;
+        self.resident_tmux = self.tmux.is_some();
+        if let (Some(tmux), Some(client)) = (&self.tmux, process.shell.as_ref()) {
+            self.client_output_from = Some(self.next_output_sequence);
+            tmux.learn_server(client.pid);
+        }
+        Ok(process)
     }
 
     /// Write the current resident generation before its shell starts.
@@ -351,7 +449,7 @@ impl TerminalRuntime {
         dimensions: Dimensions,
     ) -> io::Result<Vec<TerminalOutbound>> {
         self.validate_common(terminal_version, terminal, dimensions)?;
-        match mode {
+        let join = match mode {
             "open-if-absent" if expected_resident_generation.is_none() => {
                 if self.state != ResidentState::Absent {
                     return Ok(self
@@ -360,6 +458,9 @@ impl TerminalRuntime {
                         .map(TerminalOutbound::Control)
                         .collect());
                 }
+                // A session the agent (or an earlier resident) left is the
+                // Terminal's: join it.
+                Join::AttachOrCreate
             }
             "restart-exited" => {
                 let Some(expected) = expected_resident_generation else {
@@ -374,12 +475,26 @@ impl TerminalRuntime {
                         .map(TerminalOutbound::Control)
                         .collect());
                 }
+                // An exited resident's session is usually gone (its last
+                // shell exited); one still there lost only its client (a
+                // detach), so Restart rejoins it. A failed resident's
+                // session may be what failed, so it starts over.
+                let join = if self.state == ResidentState::Failed {
+                    Join::Fresh
+                } else {
+                    Join::AttachOrCreate
+                };
                 self.stop_process();
                 self.reset_resident_state();
+                join
             }
             _ => return Err(invalid_control()),
-        }
+        };
+        Ok(self.start_resident(join, dimensions))
+    }
 
+    /// Start a new resident generation: record it, then spawn its PTY child.
+    fn start_resident(&mut self, join: Join, dimensions: Dimensions) -> Vec<TerminalOutbound> {
         let generation = TerminalGeneration::random();
         self.generation = Some(generation);
         self.state = ResidentState::Starting;
@@ -387,28 +502,23 @@ impl TerminalRuntime {
         self.dimensions = dimensions;
         if self.applied_environment_generation == 0 {
             self.state = ResidentState::Failed;
-            return Ok(vec![TerminalOutbound::Control(
+            return vec![TerminalOutbound::Control(
                 self.resident_state().expect("failed resident has state"),
-            )]);
+            )];
         }
-        self.process = match spawn_shell(
-            &self.root,
-            dimensions,
-            &self.environment_values,
-            &self.profile,
-        ) {
+        self.process = match self.spawn_resident(join, dimensions) {
             Ok(process) => Some(process),
             Err(_) => {
                 self.state = ResidentState::Failed;
-                return Ok(vec![TerminalOutbound::Control(
+                return vec![TerminalOutbound::Control(
                     self.resident_state().expect("failed resident has state"),
-                )]);
+                )];
             }
         };
         self.first_output_deadline = Some(Instant::now() + FIRST_OUTPUT_TIMEOUT);
-        Ok(vec![TerminalOutbound::Control(
+        vec![TerminalOutbound::Control(
             self.resident_state().expect("starting resident has state"),
-        )])
+        )]
     }
 
     pub fn restart(
@@ -433,13 +543,8 @@ impl TerminalRuntime {
         self.reset_resident_state();
         self.shell_environment_generation = Some(self.applied_environment_generation);
         self.restart_required = false;
-        self.open(
-            terminal_version,
-            terminal,
-            "open-if-absent",
-            None,
-            dimensions,
-        )
+        // Every shell takes the new environment: a tmux session starts over.
+        Ok(self.start_resident(Join::Fresh, dimensions))
     }
 
     pub fn environment_shell(&self) -> crate::environment::EnvironmentShell {
@@ -453,14 +558,25 @@ impl TerminalRuntime {
         }
     }
 
-    /// Record a newly applied environment. Future shells receive it directly;
-    /// a running shell keeps its values until the owner confirms a restart.
+    /// Record a newly applied environment. Future shells receive it directly
+    /// (new tmux panes through the server's global environment); a running
+    /// shell keeps its values until the owner confirms a restart.
     pub fn refresh_environment(
         &mut self,
         values: &BTreeMap<String, String>,
         generation: u64,
         changed: bool,
     ) {
+        // A daemon's first activation pushes too: a surviving server may hold
+        // values from before it started.
+        if let Some(tmux) = &self.tmux
+            && (*values != self.environment_values || self.applied_environment_generation == 0)
+        {
+            tmux.push_environment(
+                base_environment_for(values, &self.profile.home, &self.profile.user),
+                generation,
+            );
+        }
         self.environment_values = values.clone();
         let shell_running = self.process.is_some()
             && matches!(self.state, ResidentState::Starting | ResidentState::Ready);
@@ -533,12 +649,19 @@ impl TerminalRuntime {
             return self.fail_resident("terminal-unavailable");
         }
 
-        let first = self
+        let replay_from = self.replay_from_client();
+        let replay = self
             .replay
-            .front()
+            .iter()
+            .filter(|chunk| replay_from.is_none_or(|from| chunk.sequence >= from))
+            .collect::<Vec<_>>();
+        let first = replay
+            .first()
             .map_or(self.next_output_sequence, |chunk| chunk.sequence);
+        let replay_bytes = replay.iter().map(|chunk| chunk.payload.len()).sum();
+        let truncated = self.replay_truncated || replay.len() < self.replay.len();
         let through = self.next_output_sequence - 1;
-        let mut outbound = Vec::with_capacity(self.replay.len() + 3);
+        let mut outbound = Vec::with_capacity(replay.len() + 3);
         outbound.push(TerminalOutbound::Control(
             TerminalClientMessage::Dimensions {
                 terminal_version: TERMINAL_VERSION,
@@ -555,11 +678,11 @@ impl TerminalRuntime {
                 attachment_generation,
                 first_output_sequence: U64String(first),
                 through_output_sequence: U64String(through),
-                replay_bytes: self.replay_bytes,
-                truncated: self.replay_truncated,
+                replay_bytes,
+                truncated,
             },
         ));
-        for chunk in &self.replay {
+        for chunk in replay {
             outbound.push(TerminalOutbound::Binary(
                 encode_terminal_frame(&TerminalFrame {
                     kind: 2,
@@ -920,21 +1043,12 @@ impl TerminalRuntime {
         self.attachment_input_bytes.clear();
     }
 
+    /// Hang up the PTY's child. A login shell ends with its jobs; a tmux
+    /// client only detaches, and the session lives on.
     fn stop_process(&mut self) {
-        let Some(mut process) = self.process.take() else {
-            return;
-        };
-        let Some(shell) = process.shell.take() else {
-            return;
-        };
-        // The PTY closes only after the hangup, so the shell sees SIGHUP
-        // rather than a closed terminal. The wait runs on its own thread: the
-        // connection loop never waits for a shell, even one stuck in the
-        // kernel.
-        run_detached("dxd-hangup", move || {
-            shell.hang_up();
-            drop(process);
-        });
+        if let Some(process) = self.process.take() {
+            hang_up(process);
+        }
     }
 
     fn reset_resident_state(&mut self) {
@@ -952,6 +1066,36 @@ impl TerminalRuntime {
         self.replay_bytes = 0;
         self.replay_lines = 0;
         self.replay_truncated = false;
+        self.client_output_from = None;
+        self.resident_tmux = false;
+    }
+
+    /// Where a new attachment's replay starts under tmux. Every browser
+    /// shares dxd's one tmux client, and a browser rebuilds its screen from
+    /// the replay after a reset, so the replay must hold that client's whole
+    /// output (its terminal setup, then every redraw since); a replay that
+    /// starts mid-stream leaves modes such as bracketed paste, mouse, and
+    /// the alternate screen unset. When the ring still holds it all, replay
+    /// from the client's start. When some was evicted, start a new client:
+    /// tmux sets the terminal up again and repaints from its grid, and that
+    /// output follows the replay as live output. `None` replays the ring.
+    fn replay_from_client(&mut self) -> Option<u64> {
+        if !self.resident_tmux {
+            return None;
+        }
+        if let Some(from) = self.client_output_from {
+            // A client with no output yet writes all of it after this replay.
+            return (from < self.next_output_sequence).then_some(from);
+        }
+        match self.spawn_resident(Join::Existing, self.dimensions) {
+            Ok(process) => {
+                if let Some(previous) = self.process.replace(process) {
+                    hang_up(previous);
+                }
+            }
+            Err(error) => eprintln!("dxd could not start a new tmux client: {error}"),
+        }
+        None
     }
 
     fn foreground_command(&self) -> bool {
@@ -961,6 +1105,11 @@ impl TerminalRuntime {
         #[cfg(test)]
         if let Some(foreground) = self.foreground_observer {
             return foreground;
+        }
+        if self.resident_tmux
+            && let Some(tmux) = &self.tmux
+        {
+            return tmux.foreground_command();
         }
         let Some(process) = self.process.as_ref() else {
             return false;
@@ -1043,6 +1192,12 @@ impl TerminalRuntime {
             self.replay_bytes -= removed.payload.len();
             self.replay_lines -= removed.lines;
             self.replay_truncated = true;
+            if self
+                .client_output_from
+                .is_some_and(|from| removed.sequence >= from)
+            {
+                self.client_output_from = None;
+            }
         }
         Ok(())
     }
@@ -1067,6 +1222,19 @@ impl Drop for TerminalRuntime {
     fn drop(&mut self) {
         self.stop_process();
     }
+}
+
+fn hang_up(mut process: ResidentProcess) {
+    let Some(shell) = process.shell.take() else {
+        return;
+    };
+    // The PTY closes only after the hangup, so the child sees SIGHUP rather
+    // than a closed terminal. The wait runs on its own thread: the
+    // connection loop never waits for a shell, even one stuck in the kernel.
+    run_detached("dxd-hangup", move || {
+        shell.hang_up();
+        drop(process);
+    });
 }
 
 /// Run `work` on its own thread, or inline when no thread can be spawned (see
@@ -1112,7 +1280,7 @@ fn foreground_differs_from_shell(process: &ResidentProcess) -> bool {
 
 fn shell_command(
     root: &Path,
-    values: &BTreeMap<String, String>,
+    environment: &BTreeMap<String, String>,
     profile: &ShellProfile,
 ) -> Command {
     let mut command = Command::new("/bin/bash");
@@ -1123,7 +1291,7 @@ fn shell_command(
     command
         .current_dir(root)
         .env_clear()
-        .envs(base_environment_for(values, &profile.home, &profile.user))
+        .envs(environment)
         .env("TERM", "xterm-256color");
     command
 }
@@ -1155,12 +1323,8 @@ fn open_pty(dimensions: Dimensions) -> io::Result<(OwnedFd, OwnedFd)> {
     Ok(pair)
 }
 
-fn spawn_shell(
-    root: &Path,
-    dimensions: Dimensions,
-    values: &BTreeMap<String, String>,
-    profile: &ShellProfile,
-) -> io::Result<ResidentProcess> {
+/// Run `command` as a session leader on a new PTY of `dimensions`.
+fn spawn_on_pty(mut command: Command, dimensions: Dimensions) -> io::Result<ResidentProcess> {
     let (master, slave) = open_pty(dimensions)?;
     // Everything that can fail happens before the shell exists, so a failure
     // never leaves an unowned shell behind.
@@ -1168,7 +1332,6 @@ fn spawn_shell(
     let writer = std::fs::File::from(master.try_clone()?);
     let (sender, output) = channel(OUTPUT_CHANNEL_CAPACITY);
     spawn_reader(Box::new(reader), sender)?;
-    let mut command = shell_command(root, values, profile);
     command
         .stdin(Stdio::from(slave.try_clone()?))
         .stdout(Stdio::from(slave.try_clone()?))
@@ -1224,6 +1387,14 @@ pub struct Handoff {
     /// the swap redraws the same screen. Absent from older images.
     #[serde(default)]
     replay: String,
+    /// The replay holds the tmux client's whole output (see
+    /// `replay_from_client`). Absent from older images.
+    #[serde(default)]
+    client_replay: bool,
+    /// The PTY's child is a tmux client rather than a login shell. Absent
+    /// (a login shell) from older images.
+    #[serde(default)]
+    tmux: bool,
 }
 
 pub const HANDOFF_VARIABLE: &str = "DXD_TERMINAL_HANDOFF";
@@ -1257,10 +1428,16 @@ impl TerminalRuntime {
                 let bytes = self
                     .replay
                     .iter()
+                    .filter(|chunk| {
+                        self.client_output_from
+                            .is_none_or(|from| chunk.sequence >= from)
+                    })
                     .flat_map(|chunk| chunk.payload.iter().copied())
                     .collect::<Vec<_>>();
                 base64::engine::general_purpose::STANDARD.encode(bytes)
             },
+            client_replay: self.client_output_from.is_some(),
+            tmux: self.resident_tmux,
         };
         serde_json::to_string(&handoff).ok()
     }
@@ -1316,6 +1493,17 @@ impl TerminalRuntime {
         self.applied_environment_generation = handoff.applied_environment_generation;
         self.shell_environment_generation = handoff.shell_environment_generation;
         self.restart_required = handoff.restart_required;
+        if handoff.tmux
+            && let Some(tmux) = &self.tmux
+        {
+            self.resident_tmux = true;
+            self.client_output_from = self
+                .replay
+                .front()
+                .filter(|_| handoff.client_replay)
+                .map(|chunk| chunk.sequence);
+            tmux.learn_server(pid);
+        }
         Ok(())
     }
 }

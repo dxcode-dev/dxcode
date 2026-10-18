@@ -94,6 +94,8 @@ export const impersonateThreadOwner = (
  */
 export const viewerMayRequest = (method: string, path: string) =>
   (["GET", "HEAD", "OPTIONS"].includes(method) &&
-    !/\/terminal\/?$/.test(path)) ||
+    !/\/terminal\/?$/.test(path) &&
+    // The Desktop's sockets carry keyboard and pointer input.
+    !/\/desktop\/[a-z]+\/?$/.test(path)) ||
   // Following changes only the viewer's own sidebar.
   (["PUT", "DELETE"].includes(method) && /\/follow\/?$/.test(path));

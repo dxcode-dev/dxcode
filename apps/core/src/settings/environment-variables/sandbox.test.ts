@@ -23,6 +23,7 @@ import {
 import { local, start } from "@flue/runtime/node";
 import { Redacted, Schema } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ClaudeCodeStream } from "../../claude-code/stream.js";
 import type { ExecutionEnvironmentSnapshot } from "./execution.js";
 import {
   ENVIRONMENT_SECRET_REDACTION,
@@ -60,9 +61,10 @@ const value = (
 
 const snapshot = (
   values: ExecutionEnvironmentSnapshot["values"],
+  personalRevision = 0,
 ): ExecutionEnvironmentSnapshot => ({
   revision: {
-    personal: { targetId: "user", revision: 0 },
+    personal: { targetId: "user", revision: personalRevision },
     project: { targetId: "project", revision: 0 },
     workspace: { targetId: null, revision: 0 },
   },
@@ -138,6 +140,128 @@ describe("Flue execution environment", () => {
         .stdout,
     ).toBe(`after|${ENVIRONMENT_SECRET_REDACTION}`);
     expect(resolve.mock.calls.length).toBeGreaterThanOrEqual(7);
+  });
+
+  it("reuses the resolved environment while its revision holds: commands check the revision every time, other operations every 5 s", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    let current = snapshot([
+      value("BUILD_CHANNEL", "variable", "before"),
+      value("API_SECRET", "secret", "first-secret"),
+    ]);
+    const resolve = vi.fn(async () => current);
+    const revision = vi.fn(async () => current.revision);
+    const directory = await mkdtemp(join(tmpdir(), "dx-environment-test-"));
+    temporaryDirectories.push(directory);
+    const sandbox = await withExecutionEnvironment(
+      local({ cwd: directory }),
+      resolve,
+      revision,
+    ).createSandbox({ id: "thread" });
+
+    // Claude Code polls a run's output several times a second.
+    await sandbox.writeFile("out.txt", "first-secret second-secret");
+    for (let read = 0; read < 100; read += 1)
+      expect(await sandbox.readFile("out.txt")).toBe(
+        `${ENVIRONMENT_SECRET_REDACTION} second-secret`,
+      );
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(revision).toHaveBeenCalledTimes(0);
+
+    // A command proves the revision first and reuses the values.
+    const channel = `printf '%s' "$BUILD_CHANNEL"`;
+    expect((await sandbox.exec(channel)).stdout).toBe("before");
+    expect(revision).toHaveBeenCalledTimes(1);
+    expect(resolve).toHaveBeenCalledTimes(1);
+
+    // An edit reaches the next command at once.
+    current = snapshot(
+      [
+        value("BUILD_CHANNEL", "variable", "after"),
+        value("API_SECRET", "secret", "second-secret"),
+      ],
+      1,
+    );
+    expect((await sandbox.exec(channel)).stdout).toBe("after");
+    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(await sandbox.readFile("out.txt")).toBe(
+      `first-secret ${ENVIRONMENT_SECRET_REDACTION}`,
+    );
+
+    // Other operations see an edit within 5 s.
+    current = snapshot([value("API_SECRET", "secret", "first-secret")], 2);
+    vi.setSystemTime(Date.now() + 4_000);
+    expect(await sandbox.readFile("out.txt")).toBe(
+      `first-secret ${ENVIRONMENT_SECRET_REDACTION}`,
+    );
+    vi.setSystemTime(Date.now() + 1_000);
+    expect(await sandbox.readFile("out.txt")).toBe(
+      `${ENVIRONMENT_SECRET_REDACTION} second-secret`,
+    );
+    expect(resolve).toHaveBeenCalledTimes(3);
+
+    // An unchanged revision costs only its check, and a failed check fails
+    // closed instead of serving the old values.
+    vi.setSystemTime(Date.now() + 5_000);
+    await sandbox.readFile("out.txt");
+    expect(resolve).toHaveBeenCalledTimes(3);
+    revision.mockRejectedValueOnce(new Error("revision unavailable"));
+    await expect(sandbox.exec(channel)).rejects.toThrow("revision unavailable");
+  });
+
+  it("redacts secrets as JSON escapes them, so Claude Code's stream-json never shows one", async () => {
+    const secret = 'pa"ss\\word\nnext\tline';
+    const { sandbox } = await localSandbox(async () =>
+      snapshot([value("API_SECRET", "secret", secret)]),
+    );
+    const escaped = JSON.stringify(secret).slice(1, -1);
+    const twice = JSON.stringify(escaped).slice(1, -1);
+    // A tool result, and a tool input streamed as JSON inside JSON.
+    const output = [
+      JSON.stringify({
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_1",
+              content: `token=${secret}`,
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+      }),
+      JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: {
+            type: "input_json_delta",
+            partial_json: JSON.stringify({ command: `curl -u ${secret}` }),
+          },
+        },
+        parent_tool_use_id: null,
+      }),
+    ].join("\n");
+    await sandbox.writeFile("stream.jsonl", output);
+    expect(output).toContain(escaped);
+    expect(output).toContain(twice);
+    const reads = [
+      await sandbox.readFile("stream.jsonl"),
+      new TextDecoder().decode(await sandbox.readFileBuffer("stream.jsonl")),
+      (await sandbox.exec("cat stream.jsonl")).stdout,
+    ];
+    for (const read of reads) {
+      expect(read).not.toContain("word");
+      expect(read).not.toContain("pa\\");
+    }
+    const [first] = reads;
+    const stream = new ClaudeCodeStream();
+    for (const line of first?.split("\n") ?? []) stream.push(line);
+    expect(stream.toolResults.get("toolu_1")?.text).toBe(
+      `token=${ENVIRONMENT_SECRET_REDACTION}`,
+    );
   });
 
   it("fails closed before an operation, preserves AbortError, sanitizes failures, and preserves custom tools", async () => {

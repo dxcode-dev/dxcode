@@ -297,57 +297,62 @@ threadChangesRoutes.get("/:threadId/changes/diff", async (context) => {
         throw new InvalidChangesRequest();
       }
     }
-    const capture = await readCapture(context);
-    if (
-      capture.state?.latestCaptureId === undefined ||
-      capture.manifest === undefined
-    )
-      return error(context, "invalid");
-    // A diff follows the newest capture, since publication retires older
-    // objects. The response names its capture so the client can see the move.
-    const selected = capture.manifest.ranges.find((candidate) =>
-      sameRange(candidate.range, range),
-    );
-    const file = selected?.files.find(
-      (candidate) =>
-        candidate.path === path &&
-        (candidate.worktree ?? "primary") === worktree,
-    );
-    if (file === undefined)
-      return error(
-        context,
-        expectedCaptureId !== undefined &&
-          expectedCaptureId !== capture.manifest.captureId
-          ? "conflict"
-          : "invalid",
+    let capture = await readCapture(context);
+    for (let attempt = 0; ; attempt += 1) {
+      if (
+        capture.state?.latestCaptureId === undefined ||
+        capture.manifest === undefined
+      )
+        return error(context, "invalid");
+      // A diff follows the newest capture, since publication retires older
+      // objects. The response names its capture so the client can see the move.
+      const selected = capture.manifest.ranges.find((candidate) =>
+        sameRange(candidate.range, range),
       );
-    const { patch: _reference, ...fileMetadata } = file;
-    const metadata = { ...fileMetadata, worktree };
-    let patch: string;
-    try {
-      patch = await loadThreadChangesPatch(
-        context.env.DX_STORAGE as R2Bucket,
-        capture.threadId,
-        capture.manifest.captureId,
+      const file = selected?.files.find(
+        (candidate) =>
+          candidate.path === path &&
+          (candidate.worktree ?? "primary") === worktree,
+      );
+      if (file === undefined)
+        return error(
+          context,
+          expectedCaptureId !== undefined &&
+            expectedCaptureId !== capture.manifest.captureId
+            ? "conflict"
+            : "invalid",
+        );
+      const { patch: _reference, ...fileMetadata } = file;
+      const metadata = { ...fileMetadata, worktree };
+      let patch: string;
+      try {
+        patch = await loadThreadChangesPatch(
+          context.env.DX_STORAGE as R2Bucket,
+          capture.threadId,
+          capture.manifest.captureId,
+          range,
+          path,
+          worktree,
+          capture.manifest,
+        );
+      } catch (cause) {
+        // Publication can retire this immutable object between the index and
+        // patch read; follow the capture that replaced it.
+        const latest = await readCapture(context);
+        if (latest.manifest?.captureId === capture.manifest.captureId)
+          throw cause;
+        if (attempt >= 2) return error(context, "conflict");
+        capture = latest;
+        continue;
+      }
+      return success(context, GetThreadChangesDiffResponseSchema, {
+        kind: "diff",
+        ...freshnessFields(capture.state, capture.manifest),
         range,
-        path,
-        worktree,
-        capture.manifest,
-      );
-    } catch (cause) {
-      // Publication can retire this immutable object between the index and patch read.
-      const latest = await readCapture(context);
-      if (latest.manifest?.captureId !== capture.manifest.captureId)
-        return error(context, "conflict");
-      throw cause;
+        file: metadata,
+        patch,
+      });
     }
-    return success(context, GetThreadChangesDiffResponseSchema, {
-      kind: "diff",
-      ...freshnessFields(capture.state, capture.manifest),
-      range,
-      file: metadata,
-      patch,
-    });
   } catch (cause) {
     return error(
       context,

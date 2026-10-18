@@ -6,7 +6,11 @@ import {
   ArchiveThreadPersistenceUnavailableResponseSchema,
   ArchiveThreadRequestSchema,
   ArchiveThreadResponseSchema,
+  CreateThreadAlreadyStartedResponseSchema,
   CreateThreadInitialAdmissionUnavailableResponseSchema,
+  CreateThreadInitialMessageRejectedResponseSchema,
+  CreateThreadInitialMessageTooLargeResponseSchema,
+  CreateThreadInitialSubmissionConflictResponseSchema,
   CreateThreadInvalidRequestResponseSchema,
   CreateThreadModelRouteUnavailableResponseSchema,
   CreateThreadOrbUnavailableResponseSchema,
@@ -56,11 +60,14 @@ import {
   ModelNotServed,
   type PageCursor,
   PersistenceUnavailable,
+  type ProjectId,
+  type RunnerProfileId,
   SourceControlAccessDenied,
   SourceControlGrantId,
   SourceControlProviderFailure,
   type Thread,
   type ThreadColor,
+  type ThreadExecutionPin,
   type ThreadId,
   UNTITLED_THREAD_TITLE,
   type UserId,
@@ -68,10 +75,18 @@ import {
   WorkspaceRepository,
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
-import { dispatch, getAgentInstance } from "@flue/runtime";
+import { dispatch, FlueError, getAgentInstance } from "@flue/runtime";
 import { Effect, Layer, Match, Option, Result, Schema } from "effect";
 import { Hono } from "hono";
+import * as v from "valibot";
 import { DxAgent } from "../agents/dx-agent.js";
+import { DxAgentInitialDataSchema } from "../agents/dx-agent-initial-data.js";
+import {
+  linkMessageAttachments,
+  MessageAttachmentsRejected,
+  messageAttachmentBody,
+  resolveMessageAttachments,
+} from "../attachments/message.js";
 import { currentOrbTemplateRecipe } from "../execution/e2b/team-templates.js";
 import { ExecutionWorkspaces } from "../execution/execution-workspaces.js";
 import {
@@ -85,6 +100,7 @@ import {
   decodeRequestInput,
 } from "../http/request-decoding.js";
 import type { AppEnv } from "../http/types.js";
+import { threadPersistenceLogger } from "../logging.js";
 import { StartupTraceCorrelation } from "../observability/startup-phase.js";
 import {
   recordStartupPhases,
@@ -99,17 +115,15 @@ import {
   resolveThreadExecutionPin,
 } from "../plugins/execution/orb-providers.js";
 import { ProjectRepositoryD1 } from "../projects/repository-d1.js";
-import {
-  admitMessageAttachments,
-  MessageAttachmentsRejected,
-  resolveMessageAttachments,
-} from "../attachments/message.js";
 import { scheduleRealtimeInvalidation } from "../realtime/publication.js";
 import { PersonalAgentInstructionsRepositoryD1 } from "../settings/agent-instructions/repository-d1.js";
 import { SettingsAudit } from "../settings/audit.js";
 import { EnvironmentVariableRepositoryD1 } from "../settings/environment-variables/repository-d1.js";
 import { signingBackendCapabilities } from "../settings/keys/backend.js";
-import { resolveMcpAgentConnections } from "../settings/mcp-servers/execution.js";
+import {
+  resolveMcpAgentConnections,
+  resolveMcpAgentConnectionsFor,
+} from "../settings/mcp-servers/execution.js";
 import { McpServerRepositoryD1 } from "../settings/mcp-servers/repository-d1.js";
 import { resolveSelectionForUser } from "../settings/model-routing/submission.js";
 import { resolvePluginAgentData } from "../settings/plugins/execution.js";
@@ -160,6 +174,43 @@ class ThreadInitialAdmissionUnavailable extends Schema.TaggedError<ThreadInitial
   "ThreadInitialAdmissionUnavailable",
   {},
 ) {}
+
+// Flue's permanent refusals of a first message: retrying it unchanged fails
+// the same way, so none of them answers "Please retry".
+class InitialMessageRejected extends Schema.TaggedError<InitialMessageRejected>()(
+  "InitialMessageRejected",
+  {},
+) {}
+
+class InitialMessageTooLarge extends Schema.TaggedError<InitialMessageTooLarge>()(
+  "InitialMessageTooLarge",
+  {},
+) {}
+
+class InitialSubmissionConflict extends Schema.TaggedError<InitialSubmissionConflict>()(
+  "InitialSubmissionConflict",
+  {},
+) {}
+
+class ThreadAlreadyStarted extends Schema.TaggedError<ThreadAlreadyStarted>()(
+  "ThreadAlreadyStarted",
+  {},
+) {}
+
+const initialDispatchFailure = (cause: unknown) => {
+  if (cause instanceof FlueError)
+    switch (cause.type) {
+      case "invalid_request":
+        return new InitialMessageRejected();
+      case "input_too_large":
+        return new InitialMessageTooLarge();
+      case "submission_conflict":
+        return new InitialSubmissionConflict();
+      case "agent_instance_exists":
+        return new ThreadAlreadyStarted();
+    }
+  return new ThreadInitialAdmissionUnavailable();
+};
 
 /** A child's parent's chosen color, which it shows until it has its own. */
 const parentColorField = (
@@ -213,10 +264,15 @@ const withoutOwnerConfiguration = <
   },
 });
 
+/** A Thread that was just created: no workspace yet and no messages. */
+const NEW_THREAD_WORKSPACE = { ready: false, preparationStatus: null };
+
 export const threadDetailData = Effect.fn("threadDetailData")(function* (
   binding: unknown,
   db: D1Database,
   thread: Thread,
+  /** Creation resolves the detail before it inserts the Thread's row. */
+  unpersisted = false,
 ) {
   const [
     mcpConnections,
@@ -227,7 +283,14 @@ export const threadDetailData = Effect.fn("threadDetailData")(function* (
     inboundMessages,
   ] = yield* Effect.all(
     [
-      resolveMcpAgentConnections(binding, thread.id).pipe(
+      (unpersisted
+        ? resolveMcpAgentConnectionsFor(
+            binding,
+            thread.ownerUserId,
+            thread.projectId,
+          )
+        : resolveMcpAgentConnections(binding, thread.id)
+      ).pipe(
         Effect.mapError(
           () => new PersistenceUnavailable({ operation: "resolve MCP policy" }),
         ),
@@ -248,13 +311,15 @@ export const threadDetailData = Effect.fn("threadDetailData")(function* (
             }),
         ),
       ),
-      Effect.tryPromise({
-        try: () => readExecutionWorkspaceReadiness(db, thread.id),
-        catch: () =>
-          new PersistenceUnavailable({
-            operation: "resolve execution workspace readiness",
+      unpersisted
+        ? Effect.succeed(NEW_THREAD_WORKSPACE)
+        : Effect.tryPromise({
+            try: () => readExecutionWorkspaceReadiness(db, thread.id),
+            catch: () =>
+              new PersistenceUnavailable({
+                operation: "resolve execution workspace readiness",
+              }),
           }),
-      }),
       Effect.tryPromise({
         try: () =>
           readParentColors(
@@ -266,13 +331,15 @@ export const threadDetailData = Effect.fn("threadDetailData")(function* (
             operation: "resolve parent Thread color",
           }),
       }),
-      Effect.tryPromise({
-        try: () => readInboundMessages(db, thread.id),
-        catch: () =>
-          new PersistenceUnavailable({
-            operation: "resolve inbound Thread messages",
+      unpersisted
+        ? Effect.succeed([])
+        : Effect.tryPromise({
+            try: () => readInboundMessages(db, thread.id),
+            catch: () =>
+              new PersistenceUnavailable({
+                operation: "resolve inbound Thread messages",
+              }),
           }),
-      }),
     ],
     { concurrency: 4 },
   );
@@ -348,7 +415,8 @@ const dispatchInitialThreadMessage: InitialThreadDispatcher = (request) =>
 
 /**
  * Starts the Thread's agent Durable Object without changing it, so its cold
- * start overlaps model resolution and persistence instead of following them.
+ * start overlaps the dispatch preparation. It is Flue's instance lookup:
+ * `null` means Flue holds no agent for the Thread.
  */
 type InitialThreadAgentWarmer = (threadId: ThreadId) => Promise<unknown>;
 
@@ -388,6 +456,104 @@ const resolveCreationResponseDetail = <
   );
 };
 
+type AuthorizedProjectSource = NonNullable<
+  Awaited<ReturnType<typeof authorizeProjectSource>>
+>;
+
+/** The source a new Thread freezes: an exact snapshot, or anonymous intent. */
+const threadSourceDraft = (
+  projectId: ProjectId,
+  authorizedSource: AuthorizedProjectSource,
+) =>
+  authorizedSource.kind === "anonymous"
+    ? {
+        kind: "pending" as const,
+        intent: {
+          version: 1 as const,
+          projectId,
+          bindingRevision: authorizedSource.bindingRevision,
+          provider: authorizedSource.provider,
+          repositoryName: authorizedSource.repositoryName,
+          cloneUrl: authorizedSource.cloneUrl,
+        },
+      }
+    : {
+        kind: "finalized" as const,
+        snapshot: {
+          version: 2 as const,
+          projectId,
+          bindingRevision: authorizedSource.bindingRevision,
+          provider: authorizedSource.provider,
+          repositoryName: authorizedSource.fullName,
+          cloneUrl: authorizedSource.cloneUrl,
+          defaultBranch: authorizedSource.defaultBranch,
+          sourceRevision: authorizedSource.commitSha,
+          initialRef: `refs/heads/${authorizedSource.defaultBranch}`,
+        },
+        authority: {
+          grantId: Schema.decodeUnknownSync(SourceControlGrantId)(
+            authorizedSource.grantId,
+          ),
+          installationId: authorizedSource.installationId,
+          providerWorkspaceId: authorizedSource.providerWorkspaceId,
+          providerRepositoryId: authorizedSource.providerRepositoryId,
+          authorizationEpoch: authorizedSource.authorizationEpoch,
+          installationEpoch: authorizedSource.installationEpoch,
+          policyRevision: authorizedSource.policyRevision,
+          privateSubmoduleRepositoryIds: [],
+        },
+      };
+
+/**
+ * After a failed first dispatch, removes the Thread this request inserted
+ * when Flue holds no agent for it: nothing was admitted, and an empty Thread
+ * would otherwise appear in the sidebar. When Flue has the agent, or the
+ * lookup fails, the Thread stays because it may hold the message; a same-ID
+ * retry then returns its receipt. Succeeds with whether the Thread remains.
+ */
+const discardUnadmittedThread = (
+  db: D1Database,
+  thread: Thread,
+  lookup: InitialThreadAgentWarmer,
+) =>
+  Effect.promise(async () => {
+    const kept = (event: string, error: unknown) => {
+      threadPersistenceLogger.warn("Unadmitted Thread kept.", {
+        event,
+        threadId: thread.id,
+        code: error instanceof Error ? error.name : "UNKNOWN",
+      });
+      return true;
+    };
+    let instance: unknown;
+    try {
+      instance = await lookup(thread.id);
+    } catch (error) {
+      return kept("thread_creation_instance_lookup_failed", error);
+    }
+    if (instance !== null) return true;
+    try {
+      // Files are linked only after admission, so none point at this row.
+      await db
+        .prepare("DELETE FROM threads WHERE id = ? AND owner_user_id = ?")
+        .bind(thread.id, thread.ownerUserId)
+        .run();
+    } catch (error) {
+      return kept("thread_creation_discard_failed", error);
+    }
+    threadPersistenceLogger.info("Unadmitted Thread removed.", {
+      event: "thread_creation_discarded",
+      threadId: thread.id,
+    });
+    return false;
+  }).pipe(createPhase("discard"));
+
+/** One `phase` span of `POST /v1/threads`, for the span harness and traces. */
+const createPhase = (name: string) =>
+  Effect.withSpan(`threads.create.${name}`, {
+    attributes: { "dx.kind": "phase" },
+  });
+
 export const createThreadRoutes = (
   dispatchInitialMessage: InitialThreadDispatcher = dispatchInitialThreadMessage,
   titleAgent: DxTitleAgentRunner = runDxTitleAgent,
@@ -414,7 +580,6 @@ export const createThreadRoutes = (
       }
     })();
     let settleTitlePersisted: ((persisted: boolean) => void) | undefined;
-    let recoveredConcurrentCreation = false;
     const operation = Effect.gen(function* () {
       const input = yield* decodeJsonBody(
         context.req,
@@ -429,41 +594,52 @@ export const createThreadRoutes = (
       const serviceLayer = threadServiceLayer(db);
       const principal = context.get("principal");
       const requestedThreadId = input.threadId;
-      // Check the first message's files before anything is created, so a
-      // refused file never leaves an empty Thread behind.
-      const initialAttachments =
-        input.initialMessage === undefined
-          ? undefined
-          : yield* Effect.tryPromise({
-              try: () =>
-                resolveMessageAttachments(context.env, {
-                  senderUserId: principal.userId,
-                  body: input.initialMessage?.body ?? "",
-                }),
-              catch: (cause) =>
-                cause instanceof MessageAttachmentsRejected
-                  ? new InvalidThreadRequest()
-                  : new ThreadInitialAdmissionUnavailable(),
-            });
+      const initialMessage = input.initialMessage;
+      // These reads are independent: the first message's files, checked
+      // before anything is created so a refused file never leaves an empty
+      // Thread behind; the Thread an earlier attempt of this request made;
+      // and the author of the first message.
+      const [initialAttachments, existingThread, author] = yield* Effect.all(
+        [
+          initialMessage === undefined
+            ? Effect.succeed(undefined)
+            : Effect.tryPromise({
+                try: () =>
+                  resolveMessageAttachments(context.env, {
+                    senderUserId: principal.userId,
+                    body: initialMessage.body,
+                  }),
+                catch: (cause) =>
+                  cause instanceof MessageAttachmentsRejected
+                    ? new InvalidThreadRequest()
+                    : new ThreadInitialAdmissionUnavailable(),
+              }).pipe(createPhase("attachments")),
+          requestedThreadId === undefined
+            ? Effect.succeed(undefined)
+            : Effect.gen(function* () {
+                const service = yield* ThreadService;
+                return yield* service
+                  .get(principal, requestedThreadId)
+                  .pipe(
+                    Effect.catchTag("ThreadNotFound", () =>
+                      Effect.succeed(undefined),
+                    ),
+                  );
+              }).pipe(Effect.provide(serviceLayer), createPhase("existing")),
+          initialMessage === undefined
+            ? Effect.succeed(undefined)
+            : Effect.tryPromise({
+                try: () => userIdentity(db, principal.userId),
+                catch: () => new ThreadInitialAdmissionUnavailable(),
+              }),
+        ] as const,
+        { concurrency: "unbounded" },
+      );
       // DxTitleAgent needs an execution context to outlive the response.
       const titleExecution = execution;
-      const existingThread =
-        requestedThreadId === undefined
-          ? undefined
-          : yield* Effect.gen(function* () {
-              const service = yield* ThreadService;
-              return yield* service
-                .get(principal, requestedThreadId)
-                .pipe(
-                  Effect.catchTag("ThreadNotFound", () =>
-                    Effect.succeed(undefined),
-                  ),
-                );
-            }).pipe(Effect.provide(serviceLayer));
       // DxTitleAgent starts as soon as creation of a new Thread begins, beside
       // model resolution, persistence, and dispatch. It waits for the row only
-      // to store the title, and keeps it even if the first message is not
-      // admitted; a retry reuses this Thread and its title.
+      // to store the title; a retry that finds the Thread reuses its title.
       // The title comes from what the person wrote, not the file list.
       const titleMessage = initialAttachments?.text;
       const titlePending =
@@ -485,310 +661,388 @@ export const createThreadRoutes = (
             }),
           }),
         );
-      const thread =
-        existingThread ??
-        (yield* Effect.gen(function* () {
-          yield* Effect.tryPromise({
-            try: () =>
-              resolveSelectionForUser(
-                context.env,
-                principal.userId,
-                input.selection ?? defaultThreadModelSelection(),
-              ),
-            catch: (cause) => {
-              if (cause instanceof ModelNotServed) return cause;
-              return PersistenceUnavailable.new(
-                { operation: "thread.resolveModelSelection" },
-                cause,
-              );
-            },
+      // Admission of a runner profile: the requested one, or for a first
+      // message the Project's, which the Thread's Orb pin also uses.
+      const admitRunnerProfile = (runnerProfileId: RunnerProfileId) =>
+        Effect.gen(function* () {
+          const catalog = yield* loadRunnerProfileCatalog(context.env);
+          const profile = yield* selectRunnerProfile(catalog, runnerProfileId);
+          const policy = yield* WorkspacePolicyService;
+          yield* policy.evaluateForUser(principal.userId, {
+            kind: "execution.admit",
+            runnerProfileId: profile.id,
+            runnerAdapter: profile.adapter,
           });
-          const projectId = input.projectId;
-          const requestedRunnerProfileId = input.runnerProfileId;
-          const runnerProfileId =
-            requestedRunnerProfileId === undefined
-              ? undefined
-              : yield* Effect.gen(function* () {
-                  const catalog = yield* loadRunnerProfileCatalog(context.env);
-                  const profile = yield* selectRunnerProfile(
-                    catalog,
-                    requestedRunnerProfileId,
-                  );
-                  const policy = yield* WorkspacePolicyService;
-                  yield* policy.evaluateForUser(principal.userId, {
-                    kind: "execution.admit",
-                    runnerProfileId: profile.id,
-                    runnerAdapter: profile.adapter,
-                  });
-                  return profile.id;
-                });
-          const project =
-            projectId === undefined
-              ? yield* Effect.gen(function* () {
-                  const membership = yield* Effect.gen(function* () {
-                    const repository = yield* WorkspaceRepository;
-                    return yield* repository.findByUser(principal.userId);
-                  }).pipe(Effect.provide(workspace));
-                  const catalog = yield* loadRunnerProfileCatalog(context.env);
-                  const signingCapabilities = yield* signingBackendCapabilities(
-                    context.env,
-                  );
-                  const defaults = yield* ProjectDefaultsService;
-                  const snapshot = yield* defaults.snapshotForProject(
-                    principal,
-                    catalog,
-                    {
-                      ...(Option.isNone(membership)
-                        ? {}
-                        : {
-                            workspaceSlug: membership.value.workspace.shortName,
-                          }),
-                      publicCodeEnabled: false,
-                      deploymentSigningAvailable: signingCapabilities.some(
-                        ({ source, state }) =>
-                          source === "deployment" && state === "available",
-                      ),
-                    },
-                  );
-                  return { kind: "projectless" as const, snapshot };
-                }).pipe(Effect.provide(projectDefaultsLayersFor(db)))
-              : { kind: "project" as const, projectId };
-          const authorizedSource =
-            projectId === undefined
-              ? undefined
-              : yield* Effect.tryPromise({
-                  try: () =>
-                    authorizeProjectSource({
-                      db,
-                      bindings: context.env,
-                      projectId,
-                      ownerUserId: principal.userId,
-                      waitUntil: (promise) =>
-                        context.executionCtx.waitUntil(promise),
-                    }),
-                  catch: (cause) =>
-                    cause instanceof SourceControlAccessDenied ||
-                    cause instanceof SourceControlProviderFailure
-                      ? cause
-                      : new SourceControlProviderFailure({
-                          provider: "github",
-                          retryable: true,
-                        }),
-                });
-          sourceAuthorizedAt = Date.now();
-          const source =
-            projectId === undefined || authorizedSource === undefined
-              ? undefined
-              : authorizedSource.kind === "anonymous"
-                ? {
-                    kind: "pending" as const,
-                    intent: {
-                      version: 1 as const,
-                      projectId,
-                      bindingRevision: authorizedSource.bindingRevision,
-                      provider: authorizedSource.provider,
-                      repositoryName: authorizedSource.repositoryName,
-                      cloneUrl: authorizedSource.cloneUrl,
-                    },
-                  }
-                : {
-                    kind: "finalized" as const,
-                    snapshot: {
-                      version: 2 as const,
-                      projectId,
-                      bindingRevision: authorizedSource.bindingRevision,
-                      provider: authorizedSource.provider,
-                      repositoryName: authorizedSource.fullName,
-                      cloneUrl: authorizedSource.cloneUrl,
-                      defaultBranch: authorizedSource.defaultBranch,
-                      sourceRevision: authorizedSource.commitSha,
-                      initialRef: `refs/heads/${authorizedSource.defaultBranch}`,
-                    },
-                    authority: {
-                      grantId: Schema.decodeUnknownSync(SourceControlGrantId)(
-                        authorizedSource.grantId,
-                      ),
-                      installationId: authorizedSource.installationId,
-                      providerWorkspaceId: authorizedSource.providerWorkspaceId,
-                      providerRepositoryId:
-                        authorizedSource.providerRepositoryId,
-                      authorizationEpoch: authorizedSource.authorizationEpoch,
-                      installationEpoch: authorizedSource.installationEpoch,
-                      policyRevision: authorizedSource.policyRevision,
-                      privateSubmoduleRepositoryIds: [],
-                    },
-                  };
-          // The Thread pins its Orb (provider, size, and whose key pays)
-          // in the same write; the provider set resolves only here.
-          const executionPin = yield* Effect.tryPromise({
-            try: async () =>
-              resolveThreadExecutionPin({
-                db,
-                bindings: context.env,
-                userId: principal.userId,
-                projectId:
-                  project.kind === "project" ? project.projectId : null,
-                runnerProfileId,
-                ...(project.kind === "projectless"
-                  ? {
-                      projectlessRunnerProfileId:
-                        project.snapshot.configuration.runnerProfileId,
-                    }
-                  : {}),
-                recipe: await currentOrbTemplateRecipe(),
-              }),
-            catch: (cause) =>
-              cause instanceof OrbUnavailable
-                ? cause
-                : PersistenceUnavailable.new(
-                    { operation: "thread.resolveOrb" },
-                    cause,
-                  ),
-          });
-          const service = yield* ThreadService;
-          return yield* service
-            .create(
-              principal,
-              project,
-              input.title ?? UNTITLED_THREAD_TITLE,
-              input.selection,
-              source,
-              requestedThreadId,
-              runnerProfileId,
-              titlePending,
-              executionPin,
-              input.parentThreadId,
-            )
-            .pipe(
-              // Only the parent lookup reports a missing Thread here.
-              Effect.catchTag("ThreadNotFound", () =>
-                Effect.fail(new InvalidThreadRequest()),
-              ),
-              Effect.catchTag("PersistenceUnavailable", (failure) =>
-                requestedThreadId === undefined
-                  ? Effect.fail(failure)
-                  : service.get(principal, requestedThreadId).pipe(
-                      // A concurrent request created this row; its own
-                      // title job owns the title.
-                      Effect.tap(() =>
-                        Effect.sync(() => {
-                          recoveredConcurrentCreation = true;
-                        }),
-                      ),
-                      Effect.catchTag("ThreadNotFound", () =>
-                        Effect.fail(failure),
+          return profile.id;
+        });
+      // A new Thread passes every gate that can refuse it before its row is
+      // written; each gate that does not depend on another runs beside it.
+      const target: {
+        readonly thread: Thread;
+        readonly detail: ThreadDetailData;
+        /** What a new Thread writes with its row; absent for a retry. */
+        readonly insert?: {
+          readonly source?: ReturnType<typeof threadSourceDraft>;
+          readonly pin?: ThreadExecutionPin;
+        };
+      } =
+        existingThread !== undefined
+          ? {
+              thread: existingThread,
+              detail: yield* resolveCreationResponseDetail(
+                threadDetailData(context.env.DB, db, existingThread),
+                // A retry still checks the Thread's runner before dispatch.
+                initialMessage === undefined
+                  ? undefined
+                  : resolveExecutionRunnerProfile(
+                      context.env,
+                      existingThread.id,
+                    ).pipe(
+                      Effect.catchTag("ExecutionRunnerProfileUnavailable", () =>
+                        Effect.fail(new ThreadInitialAdmissionUnavailable()),
                       ),
                     ),
-              ),
-            );
-        }).pipe(Effect.provide(serviceLayer)));
-      threadPersistedAt = Date.now();
-      settleTitlePersisted?.(!recoveredConcurrentCreation);
-      const initialMessage = input.initialMessage;
-      // The Thread now exists, so its agent is real: start it while the
-      // detail and author are read, ahead of the dispatch below.
-      if (initialMessage !== undefined)
-        void warmInitialAgent(thread.id).then(
-          () => {
-            agentWarmedAt = Date.now();
-          },
-          () => undefined,
-        );
-      // The author identity is read beside the detail, not after it.
-      const ownerIdentity =
-        initialMessage === undefined
-          ? undefined
-          : userIdentity(db, thread.ownerUserId).then(
-              (identity) => ({ identity }),
-              () => ({ identity: undefined }),
-            );
-      const detail = yield* resolveCreationResponseDetail(
-        threadDetailData(context.env.DB, db, thread),
-        initialMessage === undefined
-          ? undefined
-          : resolveExecutionRunnerProfile(context.env, thread.id).pipe(
-              Effect.catchTag("ExecutionRunnerProfileUnavailable", () =>
-                Effect.fail(new ThreadInitialAdmissionUnavailable()),
-              ),
-            ),
-      );
+              ).pipe(createPhase("detail")),
+            }
+          : yield* Effect.gen(function* () {
+              const projectId = input.projectId;
+              const requestedRunnerProfileId = input.runnerProfileId;
+              const service = yield* ThreadService;
+              const modelRoute = Effect.tryPromise({
+                try: () =>
+                  resolveSelectionForUser(
+                    context.env,
+                    principal.userId,
+                    input.selection ?? defaultThreadModelSelection(),
+                  ),
+                catch: (cause) => {
+                  if (cause instanceof ModelNotServed) return cause;
+                  return PersistenceUnavailable.new(
+                    { operation: "thread.resolveModelSelection" },
+                    cause,
+                  );
+                },
+              }).pipe(createPhase("model"));
+              const requestedRunner =
+                requestedRunnerProfileId === undefined
+                  ? Effect.succeed(undefined)
+                  : admitRunnerProfile(requestedRunnerProfileId).pipe(
+                      createPhase("runner"),
+                    );
+              const authorizedSource =
+                projectId === undefined
+                  ? Effect.succeed(undefined)
+                  : Effect.tryPromise({
+                      try: () =>
+                        authorizeProjectSource({
+                          db,
+                          bindings: context.env,
+                          projectId,
+                          ownerUserId: principal.userId,
+                          waitUntil: (promise) =>
+                            context.executionCtx.waitUntil(promise),
+                        }),
+                      catch: (cause) =>
+                        cause instanceof SourceControlAccessDenied ||
+                        cause instanceof SourceControlProviderFailure
+                          ? cause
+                          : new SourceControlProviderFailure({
+                              provider: "github",
+                              retryable: true,
+                            }),
+                    }).pipe(createPhase("source"));
+              const projectSelection =
+                projectId === undefined
+                  ? Effect.gen(function* () {
+                      const membership = yield* Effect.gen(function* () {
+                        const repository = yield* WorkspaceRepository;
+                        return yield* repository.findByUser(principal.userId);
+                      }).pipe(Effect.provide(workspace));
+                      const catalog = yield* loadRunnerProfileCatalog(
+                        context.env,
+                      );
+                      const signingCapabilities =
+                        yield* signingBackendCapabilities(context.env);
+                      const defaults = yield* ProjectDefaultsService;
+                      const snapshot = yield* defaults.snapshotForProject(
+                        principal,
+                        catalog,
+                        {
+                          ...(Option.isNone(membership)
+                            ? {}
+                            : {
+                                workspaceSlug:
+                                  membership.value.workspace.shortName,
+                              }),
+                          publicCodeEnabled: false,
+                          deploymentSigningAvailable: signingCapabilities.some(
+                            ({ source, state }) =>
+                              source === "deployment" && state === "available",
+                          ),
+                        },
+                      );
+                      return { kind: "projectless" as const, snapshot };
+                    }).pipe(
+                      Effect.provide(projectDefaultsLayersFor(db)),
+                      createPhase("project-defaults"),
+                    )
+                  : Effect.succeed({ kind: "project" as const, projectId });
+              const thread = Effect.gen(function* () {
+                const project = yield* projectSelection;
+                // The Thread pins its Orb (provider, size, and whose key pays)
+                // in the same write; the provider set resolves only here.
+                const executionPin = Effect.tryPromise({
+                  try: () =>
+                    resolveThreadExecutionPin({
+                      db,
+                      bindings: context.env,
+                      userId: principal.userId,
+                      projectId:
+                        project.kind === "project" ? project.projectId : null,
+                      runnerProfileId: requestedRunnerProfileId,
+                      ...(project.kind === "projectless"
+                        ? {
+                            projectlessRunnerProfileId:
+                              project.snapshot.configuration.runnerProfileId,
+                          }
+                        : {}),
+                      recipe: currentOrbTemplateRecipe,
+                    }),
+                  catch: (cause) =>
+                    cause instanceof OrbUnavailable
+                      ? cause
+                      : PersistenceUnavailable.new(
+                          { operation: "thread.resolveOrb" },
+                          cause,
+                        ),
+                }).pipe(createPhase("orb-pin"));
+                const [pin, prepared] = yield* Effect.all(
+                  [
+                    executionPin,
+                    service
+                      .prepare(
+                        principal,
+                        project,
+                        input.title ?? UNTITLED_THREAD_TITLE,
+                        input.selection,
+                        requestedThreadId,
+                        requestedRunnerProfileId,
+                        titlePending,
+                        input.parentThreadId,
+                      )
+                      .pipe(
+                        // Only the parent lookup reports a missing Thread here.
+                        Effect.catchTag("ThreadNotFound", () =>
+                          Effect.fail(new InvalidThreadRequest()),
+                        ),
+                        createPhase("prepare"),
+                      ),
+                  ] as const,
+                  { concurrency: "unbounded" },
+                );
+                // The first message runs on the Project's size when none was
+                // requested: admit it now rather than at the Orb's start.
+                const projectRunnerProfileId =
+                  requestedRunnerProfileId !== undefined ||
+                  initialMessage === undefined
+                    ? undefined
+                    : project.kind === "projectless"
+                      ? project.snapshot.configuration.runnerProfileId
+                      : prepared.project?.configuration.runnerProfileId;
+                const [detail] = yield* Effect.all(
+                  [
+                    threadDetailData(
+                      context.env.DB,
+                      db,
+                      prepared.thread,
+                      true,
+                    ).pipe(createPhase("detail")),
+                    projectRunnerProfileId === undefined
+                      ? Effect.succeed(undefined)
+                      : admitRunnerProfile(projectRunnerProfileId).pipe(
+                          createPhase("runner"),
+                        ),
+                  ] as const,
+                  { concurrency: "unbounded" },
+                );
+                return { thread: prepared.thread, pin, detail };
+              });
+              const [, , source, next] = yield* Effect.all(
+                [
+                  modelRoute,
+                  requestedRunner,
+                  authorizedSource,
+                  thread,
+                ] as const,
+                { concurrency: "unbounded" },
+              );
+              sourceAuthorizedAt = Date.now();
+              return {
+                thread: next.thread,
+                detail: next.detail,
+                insert: {
+                  pin: next.pin,
+                  source:
+                    projectId === undefined || source === undefined
+                      ? undefined
+                      : threadSourceDraft(projectId, source),
+                },
+              };
+            }).pipe(Effect.provide(serviceLayer));
+      const detail = target.detail;
       detailResolvedAt = Date.now();
-      let initialSubmission: { readonly submissionId: string } | undefined;
-      const messageSourceThreadId = context.get("messageSourceThreadId");
-      if (initialMessage !== undefined && ownerIdentity !== undefined) {
-        const owner = yield* Effect.flatMap(
-          Effect.promise(() => ownerIdentity),
-          ({ identity }) =>
-            identity === undefined
-              ? Effect.fail(new ThreadInitialAdmissionUnavailable())
-              : Effect.succeed(identity),
-        );
-        const admitted = yield* Effect.tryPromise({
-          try: () =>
-            admitMessageAttachments(context.env, {
-              threadId: thread.id,
-              senderUserId: principal.userId,
-              body: initialMessage.body,
-              requestUrl: context.req.url,
-              ...(initialAttachments === undefined
-                ? {}
-                : { resolved: initialAttachments }),
-            }),
-          catch: (cause) =>
-            cause instanceof MessageAttachmentsRejected
-              ? new InvalidThreadRequest()
-              : new ThreadInitialAdmissionUnavailable(),
-        });
-        const receipt = yield* Effect.tryPromise({
-          try: () =>
-            dispatchInitialMessage({
-              id: thread.id,
-              uid: null,
-              initialData: detail.agentInitialization,
-              message: {
-                kind: "user",
-                body: withMessageAuthor(
-                  {
-                    author: {
-                      role: "owner",
-                      userId: thread.ownerUserId,
-                      ...owner,
-                    },
-                    // Set only by the in-process Thread tools.
-                    ...(messageSourceThreadId === undefined
-                      ? {}
-                      : { sourceThreadId: messageSourceThreadId }),
-                  },
-                  admitted.body,
-                ),
-                attachments: [...initialMessage.attachments],
-              },
-              idempotencyKey: "initial",
-            }),
-          catch: () => new ThreadInitialAdmissionUnavailable(),
-        });
-        initialSubmission = { submissionId: receipt.submissionId };
-        initialMessageAdmittedAt = Date.now();
-        const observations = submissionStartupObservations(
-          requestId,
-          thread.id,
-          receipt,
-          startedAt,
-        );
-        if (observations !== undefined)
-          yield* Effect.promise(() =>
-            scheduleStartupPersistence(
-              () => context.executionCtx,
-              recordStartupPhases(context.env.DB, observations),
-            ),
-          );
+      // Flue checks the same limits at admission; checking here refuses the
+      // message before an empty Thread exists.
+      if (
+        initialMessage !== undefined &&
+        !v.is(DxAgentInitialDataSchema, detail.agentInitialization)
+      )
+        return yield* new InitialMessageRejected();
+      // The files are linked to the Thread only once Flue admits the message.
+      const admitted =
+        initialAttachments === undefined
+          ? undefined
+          : messageAttachmentBody(
+              context.env,
+              initialAttachments,
+              context.req.url,
+            );
+      let insertedThread = false;
+      const insert = target.insert;
+      const thread =
+        insert === undefined
+          ? target.thread
+          : yield* Effect.gen(function* () {
+              const service = yield* ThreadService;
+              return yield* service
+                .insert(target.thread, insert.source, insert.pin)
+                .pipe(
+                  Effect.tap(() =>
+                    Effect.sync(() => {
+                      insertedThread = true;
+                    }),
+                  ),
+                  Effect.catchTag("PersistenceUnavailable", (failure) =>
+                    requestedThreadId === undefined
+                      ? Effect.fail(failure)
+                      : // A concurrent request created this row; its own
+                        // title job owns the title.
+                        service
+                          .get(principal, requestedThreadId)
+                          .pipe(
+                            Effect.catchTag("ThreadNotFound", () =>
+                              Effect.fail(failure),
+                            ),
+                          ),
+                  ),
+                  createPhase("persist"),
+                );
+            }).pipe(Effect.provide(serviceLayer));
+      threadPersistedAt = Date.now();
+      // A concurrent attempt inserted the row first: dispatch what it stored.
+      const dispatchDetail =
+        insert !== undefined && !insertedThread
+          ? yield* threadDetailData(context.env.DB, db, thread).pipe(
+              createPhase("detail"),
+            )
+          : detail;
+      if (
+        initialMessage === undefined ||
+        admitted === undefined ||
+        author === undefined
+      ) {
+        settleTitlePersisted?.(insertedThread);
+        const body = yield* Schema.encodeUnknownEffect(
+          CreateThreadResponseSchema,
+        )({ status: "success", data: dispatchDetail });
+        return { body, threadId: thread.id };
       }
+      // The Thread now exists, so its agent is real: start it while the
+      // dispatch is prepared.
+      void warmInitialAgent(thread.id).then(
+        () => {
+          agentWarmedAt = Date.now();
+        },
+        () => undefined,
+      );
+      const messageSourceThreadId = context.get("messageSourceThreadId");
+      const receipt = yield* Effect.tryPromise({
+        try: () =>
+          dispatchInitialMessage({
+            id: thread.id,
+            uid: null,
+            initialData: dispatchDetail.agentInitialization,
+            message: {
+              kind: "user",
+              body: withMessageAuthor(
+                {
+                  author: {
+                    role: "owner",
+                    userId: thread.ownerUserId,
+                    ...author,
+                  },
+                  // Set only by the in-process Thread tools.
+                  ...(messageSourceThreadId === undefined
+                    ? {}
+                    : { sourceThreadId: messageSourceThreadId }),
+                },
+                admitted.body,
+              ),
+              attachments: [...initialMessage.attachments],
+            },
+            idempotencyKey: "initial",
+          }),
+        catch: initialDispatchFailure,
+      }).pipe(
+        createPhase("dispatch"),
+        Effect.tapError(() =>
+          insertedThread
+            ? discardUnadmittedThread(db, thread, warmInitialAgent).pipe(
+                Effect.tap((kept) =>
+                  Effect.sync(() => settleTitlePersisted?.(kept)),
+                ),
+              )
+            : Effect.void,
+        ),
+      );
+      settleTitlePersisted?.(insertedThread);
+      initialMessageAdmittedAt = Date.now();
+      if (initialAttachments !== undefined)
+        yield* Effect.promise(() =>
+          linkMessageAttachments(context.env.DB as D1Database, {
+            threadId: thread.id,
+            senderUserId: principal.userId,
+            rows: initialAttachments.rows,
+          }).catch((cause) =>
+            threadPersistenceLogger.warn(
+              "Message attachments were not recorded.",
+              {
+                event: "message_attachments_record_failed",
+                threadId: thread.id,
+                code: cause instanceof Error ? cause.name : "UNKNOWN",
+              },
+            ),
+          ),
+        ).pipe(createPhase("attachments-link"));
+      const observations = submissionStartupObservations(
+        requestId,
+        thread.id,
+        receipt,
+        startedAt,
+      );
+      if (observations !== undefined)
+        yield* Effect.promise(() =>
+          scheduleStartupPersistence(
+            () => context.executionCtx,
+            recordStartupPhases(context.env.DB, observations),
+          ),
+        );
       const body = yield* Schema.encodeUnknownEffect(
         CreateThreadResponseSchema,
       )({
         status: "success",
-        data: detail,
-        ...(initialSubmission === undefined ? {} : { initialSubmission }),
+        data: dispatchDetail,
+        initialSubmission: { submissionId: receipt.submissionId },
       });
       return { body, threadId: thread.id };
     });
@@ -927,6 +1181,60 @@ export const createThreadRoutes = (
               },
             }),
             503,
+          ),
+        InitialMessageRejected: () =>
+          context.json(
+            Schema.encodeUnknownSync(
+              CreateThreadInitialMessageRejectedResponseSchema,
+            )({
+              status: "error",
+              data: {
+                code: "INITIAL_MESSAGE_REJECTED",
+                message: "The first message could not be accepted.",
+                requestId,
+              },
+            }),
+            422,
+          ),
+        InitialMessageTooLarge: () =>
+          context.json(
+            Schema.encodeUnknownSync(
+              CreateThreadInitialMessageTooLargeResponseSchema,
+            )({
+              status: "error",
+              data: {
+                code: "INITIAL_MESSAGE_TOO_LARGE",
+                message: "The first message is too large.",
+                requestId,
+              },
+            }),
+            413,
+          ),
+        InitialSubmissionConflict: () =>
+          context.json(
+            Schema.encodeUnknownSync(
+              CreateThreadInitialSubmissionConflictResponseSchema,
+            )({
+              status: "error",
+              data: {
+                code: "INITIAL_SUBMISSION_CONFLICT",
+                message: "This Thread already has a different first message.",
+                requestId,
+              },
+            }),
+            409,
+          ),
+        ThreadAlreadyStarted: () =>
+          context.json(
+            Schema.encodeUnknownSync(CreateThreadAlreadyStartedResponseSchema)({
+              status: "error",
+              data: {
+                code: "THREAD_ALREADY_STARTED",
+                message: "This Thread has already started.",
+                requestId,
+              },
+            }),
+            409,
           ),
         WorkspacePolicyDenied: (denial: WorkspacePolicyDenied) =>
           context.json(

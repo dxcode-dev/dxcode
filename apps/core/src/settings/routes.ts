@@ -11,6 +11,7 @@ import { notificationPreferenceRoutes } from "../notifications/routes.js";
 import type { AppEnv } from "../http/types.js";
 import { authorizationLogger, dictationLogger } from "../logging.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
+import { portalConfiguration } from "../portals/host.js";
 import {
   personalOrbProviderRoutes,
   workspaceOrbProviderRoutes,
@@ -61,10 +62,12 @@ import { workspacePolicyRoutes } from "./workspace-policy/routes.js";
 const responseData = (
   access: SettingsAccessContext,
   dictation: DictationProviderData | undefined,
+  portalDomain: string | undefined,
 ) => ({
   activeScope: access.activeScope,
   dictationAvailable: dictation !== undefined,
   ...(dictation === undefined ? {} : { dictation }),
+  ...(portalDomain === undefined ? {} : { portalDomain }),
   workspace:
     access.workspace === undefined
       ? undefined
@@ -110,7 +113,11 @@ const handlePersonalSettingsContext = async (context: Context<AppEnv>) => {
     );
     return yield* Schema.encodeUnknownEffect(GetSettingsContextResponseSchema)({
       status: "success",
-      data: responseData(access, dictation),
+      data: responseData(
+        access,
+        dictation,
+        portalConfiguration(context.env)?.domain,
+      ),
     });
   });
 

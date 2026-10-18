@@ -1,7 +1,10 @@
 import { env } from "cloudflare:test";
+import { parseClaudePlanLimit } from "@dx/domain";
+import type { SandboxFactory } from "@flue/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import app from "../../src/app.js";
 import type { Bindings } from "../../src/http/types.js";
+import { makeAgentRuntimeComposition } from "../../src/runtime/agent-composition.js";
 import { claudeCodeTokenFetch } from "../../src/settings/model-routing/claude-code-token.js";
 import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
 
@@ -470,5 +473,95 @@ describe("Claude Pro/Max plan usage", () => {
     });
     expect((await title(opus, userId)).status).toBe(200);
     expect(messageCalls).toEqual([{ model: "claude-haiku-5-5" }]);
+  });
+
+  it("refuses a new Claude Code submission at /resolve while the plan is blocked, before the Orb wakes", async () => {
+    const { cookie, userId } = await signup(
+      "claude-plan-resolve@example.com",
+      173,
+    );
+    expect(
+      (
+        await call(`${base}/connections`, cookie, "POST", {
+          name: "Claude Pro/Max",
+          kind: "provider",
+          providerId: "claude-code",
+          apiKey: TOKEN,
+        })
+      ).status,
+    ).toBe(200);
+    const threadId = "claude-plan-resolve-thread";
+    await seedThread(userId, threadId);
+    const running = {
+      threadId,
+      submissionId: "claude-plan-resolve-running",
+      recovery: false,
+    };
+    expect((await post(threadId, "/resolve", running)).status).toBe(200);
+    // The run reports the 5-hour window used up on extra usage.
+    const reset = now() + 2 * hour;
+    expect(
+      (
+        await post(threadId, "/claude-code-usage", {
+          threadId,
+          submissionId: running.submissionId,
+          canonical: MODEL,
+          reading: {
+            status: "rejected",
+            limit: { id: "five_hour", resetsAt: reset },
+            windows: [{ id: "five_hour", utilization: 1, resetsAt: reset }],
+            extraUsage: { status: "allowed", inUse: true },
+          },
+          observedAt: now(),
+        })
+      ).body,
+    ).toMatchObject({ plan: { blockedUntil: reset } });
+
+    // The running submission keeps its route; a new one is refused with the
+    // text the limit card shows.
+    expect((await post(threadId, "/resolve", running)).status).toBe(200);
+    const refused = await post(threadId, "/resolve", {
+      threadId,
+      submissionId: "claude-plan-resolve-next",
+      recovery: false,
+    });
+    expect(refused.status).toBe(400);
+    const limit = {
+      window: "five_hour",
+      resetsAt: Math.floor(reset / 60) * 60,
+      cause: "not-started",
+    };
+    expect(
+      parseClaudePlanLimit((refused.body as { message: string }).message),
+    ).toEqual(limit);
+
+    // The agent's prompt data resolution fails with that text, before any
+    // workspace is created.
+    const createSandbox = () => {
+      throw new Error("The workspace must not wake.");
+    };
+    const runtime = makeAgentRuntimeComposition(
+      {
+        DB: env.DB,
+        DX_RUNTIME_MODE: "local",
+        DX_LOCAL_CLAUDE_CODE: "1",
+        BYOK_CREDENTIAL_COORDINATOR: env.BYOK_CREDENTIAL_COORDINATOR,
+      },
+      { createSandbox } as unknown as SandboxFactory,
+    );
+    const failure = await runtime.model
+      .resolvePromptData({
+        instanceId: threadId,
+        agentName: "dx",
+        scope: { kind: "prompt", submissionId: "claude-plan-resolve-third" },
+        signal: new AbortController().signal,
+        recovery: false,
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(Error);
+    expect(parseClaudePlanLimit((failure as Error).message)).toEqual(limit);
   });
 });

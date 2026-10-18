@@ -24,7 +24,7 @@ import {
 } from "../../thread-changes/candidate.js";
 
 export const DXD_PROTOCOL_MAJOR = 2;
-export const DXD_RELEASE = "0.9.0";
+export const DXD_RELEASE = "0.10.0";
 export const DXD_TERMINAL_VERSION = 1;
 export const DXD_WORKLOAD_IDENTITY_VERSION = 1;
 export const DXD_HEARTBEAT_INTERVAL_MS = 2_000;
@@ -93,6 +93,11 @@ export const DxdTerminalCapability = Schema.Struct({
    * only a few unacknowledged, so Core answers each frame with `chunk-ack`.
    */
   files: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
+  /**
+   * Version 1: Core may open `proxy.open` streams to guest loopback ports
+   * and send the `proxy.ports` and `desktop.ensure` operations.
+   */
+  proxy: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
 });
 
 export const DxdTerminalHeartbeat = Schema.Union([
@@ -706,10 +711,37 @@ export const DxdEnvironmentActivateResult = Schema.Struct({
 export type DxdEnvironmentActivateResult =
   typeof DxdEnvironmentActivateResult.Type;
 
+/** The guest's TCP listeners owned by the workspace user. */
+export const DxdProxyPortsOperation = Schema.Struct({
+  operation: Schema.Literal("proxy.ports"),
+});
+
+/** Start the image's desktop, or confirm it runs. */
+export const DxdDesktopEnsureOperation = Schema.Struct({
+  operation: Schema.Literal("desktop.ensure"),
+});
+
+/** Start declared services that are not serving; see `thread-services`. */
+export const DxdServicesEnsureOperation = Schema.Struct({
+  operation: Schema.Literal("services.ensure"),
+  services: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      command: Schema.String,
+      cwd: Schema.optional(Schema.String),
+      port: Schema.Int,
+      env: Schema.Record(Schema.String, Schema.String),
+    }),
+  ),
+});
+
 export const DxdOperation = Schema.Union([
   DxdFilesOperation,
   DxdEnvironmentActivateOperation,
   DxdEnvironmentCheckOperation,
+  DxdProxyPortsOperation,
+  DxdDesktopEnsureOperation,
+  DxdServicesEnsureOperation,
 ]);
 export type DxdOperation = typeof DxdOperation.Type;
 
@@ -870,6 +902,241 @@ export const decodeDxdSandboxChunkFrame = (
     throw new Error("Invalid DXF1 frame.");
   return { header, bytes: payload };
 };
+
+export const DxdProxyPortsResult = Schema.Struct({
+  kind: Schema.Literal("ports"),
+  ports: Schema.Array(
+    Schema.Struct({
+      port: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 })),
+      address: Schema.String.check(Schema.isMaxLength(64)),
+    }),
+  ).check(Schema.isMaxLength(64)),
+});
+export type DxdProxyPortsResult = typeof DxdProxyPortsResult.Type;
+
+export const DxdDesktopEnsureResult = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("ready") }),
+  Schema.Struct({
+    kind: Schema.Literal("unavailable"),
+    reason: Schema.Literals(["unsupported", "failed"]),
+  }),
+]);
+export type DxdDesktopEnsureResult = typeof DxdDesktopEnsureResult.Type;
+
+/** An invalid service is `failed`; too many services is `unavailable`. */
+export const DxdServicesEnsureResult = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("services"),
+    services: Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        state: Schema.Literals(["running", "starting", "started", "failed"]),
+      }),
+    ),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("unavailable"),
+    reason: Schema.Literal("invalid"),
+  }),
+]);
+
+/**
+ * `DXP1` proxy frames: `DXP1 | u32 BE stream | u8 kind | 3 zero bytes |
+ * payload`. Kind 0 is bytes (an HTTP body chunk or a binary WebSocket
+ * message); kind 1 is a text WebSocket message.
+ */
+export const DXD_PROXY_FRAME_MAGIC = [0x44, 0x58, 0x50, 0x31] as const;
+export const DXD_PROXY_FRAME_HEADER_BYTES = 12;
+export const DXD_PROXY_KIND_BYTES = 0;
+export const DXD_PROXY_KIND_TEXT = 1;
+/** Unacknowledged data frames per stream in each direction. */
+export const DXD_PROXY_STREAM_WINDOW = 16;
+export const DXD_PROXY_MAX_BODY_CHUNK_BYTES = 256 * 1024;
+export const DXD_PROXY_MAX_WEBSOCKET_MESSAGE_BYTES = 4 * 1024 * 1024;
+export const DXD_PROXY_MAX_FRAME_BYTES =
+  DXD_PROXY_FRAME_HEADER_BYTES + DXD_PROXY_MAX_WEBSOCKET_MESSAGE_BYTES;
+/** Bound on a `proxy.response` or `proxy.open` message with its headers. */
+export const DXD_PROXY_MAX_HEAD_FRAME_BYTES = 96 * 1024;
+export const DXD_PROXY_MAX_STREAM_ID = 0xffff_ffff;
+// Request and response head bounds, in UTF-8 bytes. dxd's `proxy.rs` carries
+// the same values; Core refuses a request that breaks one before sending it,
+// and dxd fails only that stream when one still does.
+export const DXD_PROXY_MAX_METHOD_BYTES = 16;
+export const DXD_PROXY_MAX_TARGET_BYTES = 8 * 1024;
+export const DXD_PROXY_MAX_HEADERS = 128;
+export const DXD_PROXY_MAX_HEADER_NAME_BYTES = 256;
+export const DXD_PROXY_MAX_HEADER_VALUE_BYTES = 16 * 1024;
+/** Every header's name and value plus 4 bytes for `: ` and CRLF. */
+export const DXD_PROXY_MAX_HEADER_BYTES = 64 * 1024;
+export const DXD_PROXY_MAX_PROTOCOLS = 16;
+
+/** An RFC 9110 token: methods, header names, and subprotocols. */
+const PROXY_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+/**
+ * HTAB, visible ASCII, space, and any non-ASCII character. A lone surrogate
+ * has no UTF-8 form, so dxd could not decode it.
+ */
+const PROXY_HEADER_VALUE = /^[\t\x20-\x7e\u0080-\ud7ff\ue000-\u{10ffff}]*$/u;
+const PROXY_TARGET = /^\/[\x21-\x7e]*$/;
+
+const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
+
+/**
+ * Why dxd would refuse this `proxy.open`, or `undefined` when it accepts it:
+ * `invalid` for the method, target, or subprotocols, `headers` when the
+ * headers break a bound. Mirrors `ProxyOpen::valid` in dxd's `proxy.rs`.
+ */
+export const dxdProxyOpenProblem = (open: {
+  readonly mode: "http" | "websocket";
+  readonly method: string;
+  readonly target: string;
+  readonly headers: ReadonlyArray<readonly [string, string]>;
+  readonly protocols: readonly string[];
+  readonly body: boolean;
+}): "invalid" | "headers" | undefined => {
+  if (
+    !PROXY_TOKEN.test(open.method) ||
+    open.method.length > DXD_PROXY_MAX_METHOD_BYTES ||
+    (open.mode === "websocket" && (open.method !== "GET" || open.body)) ||
+    !PROXY_TARGET.test(open.target) ||
+    open.target.length > DXD_PROXY_MAX_TARGET_BYTES ||
+    open.protocols.length > DXD_PROXY_MAX_PROTOCOLS ||
+    !open.protocols.every(
+      (protocol) =>
+        PROXY_TOKEN.test(protocol) &&
+        protocol.length <= DXD_PROXY_MAX_HEADER_NAME_BYTES,
+    )
+  )
+    return "invalid";
+  if (open.headers.length > DXD_PROXY_MAX_HEADERS) return "headers";
+  let total = 0;
+  for (const [name, value] of open.headers) {
+    const valueBytes = utf8Bytes(value);
+    if (
+      !PROXY_TOKEN.test(name) ||
+      name.length > DXD_PROXY_MAX_HEADER_NAME_BYTES ||
+      valueBytes > DXD_PROXY_MAX_HEADER_VALUE_BYTES ||
+      !PROXY_HEADER_VALUE.test(value)
+    )
+      return "headers";
+    total += name.length + valueBytes + 4;
+  }
+  return total > DXD_PROXY_MAX_HEADER_BYTES ? "headers" : undefined;
+};
+
+export const isDxdProxyFrame = (bytes: Uint8Array) =>
+  bytes.byteLength >= DXD_PROXY_FRAME_HEADER_BYTES &&
+  DXD_PROXY_FRAME_MAGIC.every((byte, index) => bytes[index] === byte);
+
+export const encodeDxdProxyFrame = (
+  streamId: number,
+  kind: typeof DXD_PROXY_KIND_BYTES | typeof DXD_PROXY_KIND_TEXT,
+  payload: Uint8Array,
+): Uint8Array<ArrayBuffer> => {
+  const frame = new Uint8Array(
+    DXD_PROXY_FRAME_HEADER_BYTES + payload.byteLength,
+  );
+  frame.set(DXD_PROXY_FRAME_MAGIC, 0);
+  new DataView(frame.buffer).setUint32(4, streamId);
+  frame[8] = kind;
+  frame.set(payload, DXD_PROXY_FRAME_HEADER_BYTES);
+  return frame;
+};
+
+/** The payload is a view into the frame; it is never copied. */
+export const decodeDxdProxyFrame = (
+  source: ArrayBuffer | ArrayBufferView,
+): {
+  readonly streamId: number;
+  readonly kind: typeof DXD_PROXY_KIND_BYTES | typeof DXD_PROXY_KIND_TEXT;
+  readonly payload: Uint8Array;
+} => {
+  const bytes =
+    source instanceof ArrayBuffer
+      ? new Uint8Array(source)
+      : new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+  if (
+    !isDxdProxyFrame(bytes) ||
+    bytes.byteLength > DXD_PROXY_MAX_FRAME_BYTES ||
+    bytes[9] !== 0 ||
+    bytes[10] !== 0 ||
+    bytes[11] !== 0
+  )
+    throw new Error("Invalid DXP1 frame.");
+  const streamId = new DataView(
+    bytes.buffer,
+    bytes.byteOffset,
+    bytes.byteLength,
+  ).getUint32(4);
+  const kind = bytes[8];
+  if (
+    streamId === 0 ||
+    (kind !== DXD_PROXY_KIND_BYTES && kind !== DXD_PROXY_KIND_TEXT)
+  )
+    throw new Error("Invalid DXP1 frame.");
+  return {
+    streamId,
+    kind,
+    payload: bytes.subarray(DXD_PROXY_FRAME_HEADER_BYTES),
+  };
+};
+
+const DxdProxyStreamId = Schema.Int.check(
+  Schema.isBetween({ minimum: 1, maximum: DXD_PROXY_MAX_STREAM_ID }),
+);
+
+const DxdProxyHeaderList = Schema.Array(
+  Schema.Tuple([
+    Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+    Schema.String.check(Schema.isMaxLength(16 * 1024)),
+  ]),
+).check(Schema.isMaxLength(128));
+
+/** Stream messages dxd sends, in order with the stream's `DXP1` frames. */
+export const DxdProxyClientMessage = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("proxy.response"),
+    streamId: DxdProxyStreamId,
+    status: Schema.Int.check(Schema.isBetween({ minimum: 100, maximum: 999 })),
+    headers: DxdProxyHeaderList,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("proxy.accepted"),
+    streamId: DxdProxyStreamId,
+    protocol: Schema.NullOr(
+      Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+    ),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("proxy.end"),
+    streamId: DxdProxyStreamId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("proxy.closed"),
+    streamId: DxdProxyStreamId,
+    code: Schema.Int.check(Schema.isBetween({ minimum: 1000, maximum: 4999 })),
+    reason: Schema.String.check(Schema.isMaxLength(123)),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("proxy.error"),
+    streamId: DxdProxyStreamId,
+    reason: Schema.Literals([
+      "upstream-unreachable",
+      "upstream-timeout",
+      "upstream-reset",
+      "upstream-rejected",
+      "invalid-request",
+      "invalid-response",
+      "too-many-streams",
+      "closed",
+    ]),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("proxy.ack"),
+    streamId: DxdProxyStreamId,
+  }),
+]);
+export type DxdProxyClientMessage = typeof DxdProxyClientMessage.Type;
 
 export const DxdFilesResult = Schema.Union([
   DxdTreeResult,

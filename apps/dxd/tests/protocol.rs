@@ -95,8 +95,15 @@ fn spawn_daemon(fixture: &Fixture) -> Child {
     spawn_daemon_at(fixture, Path::new(DXD))
 }
 
+/// A daemon without tmux: its Terminal is a login Bash, as on local
+/// development guests and images without `/opt/dx/bin/tmux`.
 fn spawn_daemon_at(fixture: &Fixture, binary: &Path) -> Child {
-    Command::new(binary)
+    spawn_daemon_with(fixture, binary, None)
+}
+
+fn spawn_daemon_with(fixture: &Fixture, binary: &Path, tmux: Option<&TmuxFixture>) -> Child {
+    let mut command = Command::new(binary);
+    command
         .arg("--config")
         .arg(&fixture.config)
         .env_clear()
@@ -108,9 +115,76 @@ fn spawn_daemon_at(fixture: &Fixture, binary: &Path) -> Child {
         )
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .unwrap()
+        .stderr(Stdio::inherit());
+    match tmux {
+        Some(tmux) => command
+            .env("DXD_TMUX", &tmux.binary)
+            .env("DXD_TMUX_CONF", &tmux.config)
+            .env("TMUX_TMPDIR", tmux.sockets.path()),
+        None => command.env("DXD_TMUX", ""),
+    };
+    command.spawn().unwrap()
+}
+
+/// The tmux the daemon runs (`DXD_TEST_TMUX`, else the system's), the Orb
+/// image's configuration, and a socket directory of its own. The server
+/// outlives the daemon by design, so dropping this ends it.
+struct TmuxFixture {
+    binary: PathBuf,
+    config: PathBuf,
+    sockets: tempfile::TempDir,
+}
+
+impl TmuxFixture {
+    fn new() -> Self {
+        let binary = std::env::var_os("DXD_TEST_TMUX")
+            .map(PathBuf::from)
+            .or_else(|| {
+                ["/opt/dx/bin/tmux", "/usr/bin/tmux", "/usr/local/bin/tmux"]
+                    .into_iter()
+                    .map(PathBuf::from)
+                    .find(|path| path.is_file())
+            })
+            .expect("these tests need tmux: install it or set DXD_TEST_TMUX");
+        let version = Command::new(&binary).arg("-V").output().unwrap();
+        eprintln!(
+            "tmux under test: {} ({})",
+            binary.display(),
+            String::from_utf8_lossy(&version.stdout).trim()
+        );
+        Self {
+            binary,
+            config: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/orb/tmux.conf"),
+            sockets: tempfile::tempdir().unwrap(),
+        }
+    }
+
+    /// A tmux command on the dx socket, as the agent runs one.
+    fn run(&self, arguments: &[&str]) -> std::process::Output {
+        Command::new(&self.binary)
+            .args(["-L", "dx"])
+            .args(arguments)
+            .env("TMUX_TMPDIR", self.sockets.path())
+            .env_remove("TMUX")
+            .output()
+            .unwrap()
+    }
+
+    fn stdout(&self, arguments: &[&str]) -> String {
+        let output = self.run(arguments);
+        assert!(
+            output.status.success(),
+            "tmux {arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    }
+}
+
+impl Drop for TmuxFixture {
+    fn drop(&mut self) {
+        let _ = self.run(&["kill-server"]);
+    }
 }
 
 struct DaemonGuard(Child);
@@ -854,6 +928,18 @@ async fn release_server(body: &'static [u8]) -> (tokio::task::JoinHandle<()>, St
 /// resident identity and screen.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_daemon_updates_itself_in_place_and_keeps_the_shell() {
+    updates_itself_in_place_and_keeps_the_shell(None).await;
+}
+
+/// The same self-update with the shared tmux session: the new image adopts
+/// the tmux client on the PTY and the replay that holds its whole output.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_daemon_updates_itself_in_place_and_keeps_the_tmux_client() {
+    let tmux = TmuxFixture::new();
+    updates_itself_in_place_and_keeps_the_shell(Some(&tmux)).await;
+}
+
+async fn updates_itself_in_place_and_keeps_the_shell(tmux: Option<&TmuxFixture>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let fixture = fixture(port);
@@ -870,7 +956,7 @@ async fn real_daemon_updates_itself_in_place_and_keeps_the_shell() {
         use sha2::Digest;
         format!("{:x}", sha2::Sha256::digest(release_bytes))
     };
-    let _daemon = DaemonGuard(spawn_daemon_at(&fixture, &binary));
+    let _daemon = DaemonGuard(spawn_daemon_with(&fixture, &binary, tmux));
     let mut socket = accept(&listener).await;
     let generation = register(&mut socket).await;
 
@@ -1179,20 +1265,28 @@ async fn type_and_expect(
     sequence: u64,
     input: &str,
     expected: &str,
-) {
+) -> String {
     socket
         .send(Message::Binary(
             terminal_frame(1, resident, Some(attachment), sequence, input.as_bytes()).into(),
         ))
         .await
         .unwrap();
+    expect_live(socket, &[expected]).await
+}
+
+/// Collect live output until every one of `expected` appeared; returns it.
+async fn expect_live(socket: &mut Socket, expected: &[&str]) -> String {
     let mut seen = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(10);
-    while !String::from_utf8_lossy(&seen).contains(expected) {
+    loop {
+        let text = String::from_utf8_lossy(&seen).into_owned();
+        if expected.iter().all(|expected| text.contains(expected)) {
+            return text;
+        }
         assert!(
             Instant::now() < deadline,
-            "expected {expected:?} in shell output: {}",
-            String::from_utf8_lossy(&seen)
+            "expected {expected:?} in shell output: {text}"
         );
         if let Message::Binary(bytes) = next_frame(socket).await
             && bytes.starts_with(b"DXT1")
@@ -1521,4 +1615,489 @@ async fn real_daemon_is_quiet_while_idle_and_publishes_writes_promptly() {
         samples[2]
     );
     assert!(samples[2] < 1_000);
+}
+
+fn environment_operation_with(generation: u64, value: &str) -> Value {
+    let mut operation = environment_operation(generation);
+    operation["entries"][0]["valueBase64Url"] = json!(b64(value));
+    operation
+}
+
+async fn wait_for_ready(socket: &mut Socket, resident: Option<&str>) -> String {
+    let ready = wait_for(socket, |value| {
+        value["type"] == "terminal.resident-state"
+            && value["state"] == "ready"
+            && resident.is_none_or(|resident| value["residentGeneration"] == resident)
+    })
+    .await;
+    ready["residentGeneration"].as_str().unwrap().to_owned()
+}
+
+/// Poll an agent-side tmux query until `accept` holds.
+fn poll_tmux(tmux: &TmuxFixture, arguments: &[&str], accept: impl Fn(&str) -> bool) -> String {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let output = tmux.run(arguments);
+        let text = String::from_utf8_lossy(&output.stdout).into_owned();
+        if output.status.success() && accept(&text) {
+            return text;
+        }
+        assert!(Instant::now() < deadline, "tmux {arguments:?}: {text}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn process_alive(pid: u32) -> bool {
+    Path::new(&format!("/proc/{pid}")).exists()
+}
+
+/// The first number printed after `label=` (the typed command line itself
+/// shows `label=$...`).
+fn printed_number(text: &str, label: &str) -> u32 {
+    text.match_indices(&format!("{label}="))
+        .find_map(|(index, matched)| {
+            let digits = text[index + matched.len()..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>();
+            digits.parse().ok()
+        })
+        .unwrap_or_else(|| panic!("no {label}=<number> in {text}"))
+}
+
+/// The Terminal on an image with tmux: the resident PTY is a client of tmux
+/// session `main` on socket `dx`, which the agent reads and types into too.
+/// The session is not the daemon's child, so a crashed or stopped daemon
+/// leaves it running and the next daemon rejoins it under the same identity
+/// with the shell's state and jobs intact. Restart after an environment
+/// change starts a new session; the last shell exiting ends the resident.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_daemon_shares_a_tmux_session_that_outlives_the_daemon() {
+    let tmux = TmuxFixture::new();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fixture = fixture(port);
+    let mut daemon = DaemonGuard(spawn_daemon_with(&fixture, Path::new(DXD), Some(&tmux)));
+    let mut socket = accept(&listener).await;
+    let mut generation = register(&mut socket).await;
+    let applied = request(&mut socket, &generation, "env-1", environment_operation(1)).await;
+    assert_eq!(applied["kind"], "applied");
+    let resident = open_terminal(&mut socket).await;
+
+    // The Terminal is session `main` in the workspace root, and a browser's
+    // replay starts with tmux setting the terminal up.
+    assert_eq!(
+        tmux.stdout(&["list-sessions", "-F", "#{session_name}"]),
+        "main\n"
+    );
+    let root = std::fs::canonicalize(&fixture.repo).unwrap();
+    poll_tmux(
+        &tmux,
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            "=main:",
+            "#{pane_current_path}",
+        ],
+        |path| path.trim() == root.to_str().unwrap(),
+    );
+    let (attachment, replayed) = reattach(&mut socket, &resident).await;
+    assert!(
+        String::from_utf8_lossy(&replayed).contains("\x1b[?1049h"),
+        "replay holds the terminal setup"
+    );
+    type_and_expect(
+        &mut socket,
+        &resident,
+        &attachment,
+        1,
+        "export DX_MARK=kept; sleep 600 & SLEEP_PID=$!; echo started-$((1+1))\n",
+        "started-2",
+    )
+    .await;
+
+    // The agent reads the person's terminal and types into it; the person
+    // sees what it typed and its output.
+    poll_tmux(
+        &tmux,
+        &["capture-pane", "-p", "-J", "-S", "-200", "-t", "main"],
+        |screen| screen.contains("started-2"),
+    );
+    tmux.stdout(&["send-keys", "-t", "main", "-l", "echo agent-$((3+4))"]);
+    tmux.stdout(&["send-keys", "-t", "main", "Enter"]);
+    expect_live(&mut socket, &["agent-7"]).await;
+
+    // A command running in the session's shell is foreground activity.
+    socket
+        .send(Message::Binary(
+            terminal_frame(1, &resident, Some(&attachment), 2, b"sleep 30\n").into(),
+        ))
+        .await
+        .unwrap();
+    wait_for(&mut socket, |value| {
+        value["type"] == "heartbeat" && value["terminal"]["foregroundCommand"] == true
+    })
+    .await;
+    socket
+        .send(Message::Binary(
+            terminal_frame(1, &resident, Some(&attachment), 3, b"\x03").into(),
+        ))
+        .await
+        .unwrap();
+    wait_for(&mut socket, |value| {
+        value["type"] == "heartbeat" && value["terminal"]["foregroundCommand"] == false
+    })
+    .await;
+
+    // A crash and a stop: the next daemon rejoins the surviving session
+    // under the same resident identity, tmux repaints the screen, and the
+    // shell kept its variables and jobs.
+    for (signal, label) in [("-KILL", "crash"), ("-TERM", "stop")] {
+        let status = Command::new("kill")
+            .args([signal, &daemon.0.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let _ = daemon.0.wait();
+        let restarted = Instant::now();
+        daemon = DaemonGuard(spawn_daemon_with(&fixture, Path::new(DXD), Some(&tmux)));
+        let (mut next, next_generation, terminal) =
+            first_terminal_state(&listener, restarted).await;
+        assert!(
+            matches!(terminal["state"].as_str(), Some("starting" | "ready")),
+            "{label}: {terminal}"
+        );
+        assert_eq!(terminal["residentGeneration"], resident, "{label}");
+        if terminal["state"] == "starting" {
+            wait_for_ready(&mut next, Some(&resident)).await;
+        }
+        eprintln!(
+            "measured: daemon {label} to reattached ready {} ms",
+            restarted.elapsed().as_millis()
+        );
+        // tmux repaints the screen: in the replay, or right after it when
+        // the attachment came before the whole repaint.
+        let (attachment, replayed) = reattach(&mut next, &resident).await;
+        if !String::from_utf8_lossy(&replayed).contains("agent-7") {
+            expect_live(&mut next, &["agent-7"]).await;
+        }
+        type_and_expect(
+            &mut next,
+            &resident,
+            &attachment,
+            1,
+            &format!(
+                "echo {label} mark=$DX_MARK sleep=$(kill -0 $SLEEP_PID 2>/dev/null && echo alive || echo gone)\n"
+            ),
+            &format!("{label} mark=kept sleep=alive"),
+        )
+        .await;
+        socket = next;
+        generation = next_generation;
+    }
+
+    // Once the replay ring no longer holds the client's whole output, an
+    // attachment gets a new client: tmux sets the terminal up again and
+    // repaints the screen from its grid. tmux only draws what reaches the
+    // screen, so the output is paced to make it draw more than the ring holds.
+    let (attachment, _) = reattach(&mut socket, &resident).await;
+    type_and_expect(
+        &mut socket,
+        &resident,
+        &attachment,
+        1,
+        "for i in $(seq 60); do head -c 3000 /dev/urandom | base64 -w 150; sleep 0.02; done; echo filled-$((2+2))\n",
+        "filled-4",
+    )
+    .await;
+    let (_, replayed) = reattach(&mut socket, &resident).await;
+    assert!(
+        !String::from_utf8_lossy(&replayed).contains("\x1b[?1049h"),
+        "the ring no longer holds the client's terminal setup"
+    );
+    expect_live(&mut socket, &["\x1b[?1049h", "filled-4"]).await;
+
+    // Restart after an environment change: future panes already have the
+    // new value, and Restart replaces the whole session.
+    let (attachment, _) = reattach(&mut socket, &resident).await;
+    let printed = type_and_expect(
+        &mut socket,
+        &resident,
+        &attachment,
+        1,
+        "echo shell=$$ printed-$((1+2))\n",
+        "printed-3",
+    )
+    .await;
+    let old_shell = printed_number(&printed, "shell");
+    assert!(process_alive(old_shell));
+    let changed = request(
+        &mut socket,
+        &generation,
+        "env-2",
+        environment_operation_with(2, "changed"),
+    )
+    .await;
+    assert_eq!(changed["kind"], "applied");
+    assert_eq!(changed["shell"], "restart-required");
+    poll_tmux(
+        &tmux,
+        &["show-environment", "-g", "DX_TEST_VALUE"],
+        |line| line == "DX_TEST_VALUE=changed\n",
+    );
+    send(
+        &mut socket,
+        json!({
+            "type": "terminal.restart", "terminalVersion": 1, "terminal": "default",
+            "expectedResidentGeneration": resident,
+            "dimensions": {"columns": 80, "rows": 24},
+        }),
+    )
+    .await;
+    let fresh = wait_for_ready(&mut socket, None).await;
+    assert_ne!(fresh, resident);
+    let (attachment, _) = reattach(&mut socket, &fresh).await;
+    type_and_expect(
+        &mut socket,
+        &fresh,
+        &attachment,
+        1,
+        "echo restarted value=$DX_TEST_VALUE mark=${DX_MARK:-unset}\n",
+        "restarted value=changed mark=unset",
+    )
+    .await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while process_alive(old_shell) {
+        assert!(
+            Instant::now() < deadline,
+            "the old session's shell survived Restart"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // The session's last shell exiting ends the resident; Restart then opens
+    // a new session.
+    socket
+        .send(Message::Binary(
+            terminal_frame(1, &fresh, Some(&attachment), 2, b"exit\n").into(),
+        ))
+        .await
+        .unwrap();
+    let exited = wait_for(&mut socket, |value| {
+        value["type"] == "terminal.resident-state" && value["state"] != "ready"
+    })
+    .await;
+    assert_eq!(exited["state"], "exited");
+    assert_eq!(exited["residentGeneration"], fresh);
+    assert!(!tmux.run(&["has-session", "-t", "=main"]).status.success());
+    send(
+        &mut socket,
+        json!({
+            "type": "terminal.open", "terminalVersion": 1, "terminal": "default",
+            "mode": "restart-exited", "expectedResidentGeneration": fresh,
+            "dimensions": {"columns": 80, "rows": 24},
+        }),
+    )
+    .await;
+    let reopened = wait_for_ready(&mut socket, None).await;
+    assert_ne!(reopened, fresh);
+    let (attachment, _) = reattach(&mut socket, &reopened).await;
+    type_and_expect(
+        &mut socket,
+        &reopened,
+        &attachment,
+        1,
+        "echo reopened-$((5+5))\n",
+        "reopened-10",
+    )
+    .await;
+    assert_eq!(
+        tmux.stdout(&["list-sessions", "-F", "#{session_name}"]),
+        "main\n"
+    );
+}
+
+/// Whether one of the next two heartbeats reports a foreground command.
+async fn foreground_reported(socket: &mut Socket) -> bool {
+    for _ in 0..2 {
+        let heartbeat = wait_for(socket, |value| value["type"] == "heartbeat").await;
+        if heartbeat["terminal"]["foregroundCommand"] == true {
+            return true;
+        }
+    }
+    false
+}
+
+/// Run a long command in the resident's shell, check that heartbeats report
+/// it as foreground activity, then interrupt it.
+async fn assert_foreground_activity(socket: &mut Socket, resident: &str, label: &str) {
+    let (attachment, _) = reattach(socket, resident).await;
+    type_and_expect(
+        socket,
+        resident,
+        &attachment,
+        1,
+        &format!("echo {label}-$((6*7)); sleep 30\n"),
+        &format!("{label}-42"),
+    )
+    .await;
+    assert!(
+        foreground_reported(socket).await,
+        "{label}: a command running in the new session is foreground activity"
+    );
+    socket
+        .send(Message::Binary(
+            terminal_frame(1, resident, Some(&attachment), 2, b"\x03").into(),
+        ))
+        .await
+        .unwrap();
+    wait_for(socket, |value| {
+        value["type"] == "heartbeat" && value["terminal"]["foregroundCommand"] == false
+    })
+    .await;
+}
+
+/// Every new client of a new session keeps foreground detection on the
+/// tmux server that client is attached to: Restart after an environment
+/// change (which ends the session and creates another), and Restart after
+/// the agent ended the whole server (the new client starts a new server).
+/// Without it a build running in the new session never counts as activity
+/// and the workspace can pause under it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_daemon_reports_foreground_commands_after_a_tmux_restart() {
+    let tmux = TmuxFixture::new();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fixture = fixture(port);
+    let _daemon = DaemonGuard(spawn_daemon_with(&fixture, Path::new(DXD), Some(&tmux)));
+    let mut socket = accept(&listener).await;
+    let generation = register(&mut socket).await;
+    let applied = request(&mut socket, &generation, "env-1", environment_operation(1)).await;
+    assert_eq!(applied["kind"], "applied");
+    let mut resident = open_terminal(&mut socket).await;
+    for round in 1..=3_u64 {
+        let changed = request(
+            &mut socket,
+            &generation,
+            &format!("env-{}", round + 1),
+            environment_operation_with(round + 1, &format!("round-{round}")),
+        )
+        .await;
+        assert_eq!(changed["shell"], "restart-required", "round {round}");
+        send(
+            &mut socket,
+            json!({
+                "type": "terminal.restart", "terminalVersion": 1, "terminal": "default",
+                "expectedResidentGeneration": resident,
+                "dimensions": {"columns": 80, "rows": 24},
+            }),
+        )
+        .await;
+        let fresh = wait_for_ready(&mut socket, None).await;
+        assert_ne!(fresh, resident);
+        resident = fresh;
+        assert_foreground_activity(&mut socket, &resident, &format!("restart-{round}")).await;
+    }
+
+    // The agent ends the server; Restart's client starts a new one.
+    let old_server = tmux.stdout(&["display-message", "-p", "#{pid}"]);
+    tmux.stdout(&["kill-server"]);
+    let exited = wait_for(&mut socket, |value| {
+        value["type"] == "terminal.resident-state" && value["state"] != "ready"
+    })
+    .await;
+    assert_eq!(exited["state"], "exited");
+    send(
+        &mut socket,
+        json!({
+            "type": "terminal.open", "terminalVersion": 1, "terminal": "default",
+            "mode": "restart-exited", "expectedResidentGeneration": resident,
+            "dimensions": {"columns": 80, "rows": 24},
+        }),
+    )
+    .await;
+    let reopened = wait_for_ready(&mut socket, None).await;
+    assert_ne!(reopened, resident);
+    assert_ne!(
+        tmux.stdout(&["display-message", "-p", "#{pid}"]),
+        old_server
+    );
+    assert_foreground_activity(&mut socket, &reopened, "new-server").await;
+}
+
+/// A daemon that lost its resident rejoins a surviving tmux session only
+/// when that session is the one the lost resident's client was attached to.
+/// A login-Bash resident (an image without tmux, or one handed off from
+/// such an image) never had a session, and a tmux resident whose session
+/// ended has none: a session the agent opened since then stays the agent's,
+/// and the lost resident is reported exited.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_daemon_never_passes_another_tmux_session_off_as_the_lost_resident() {
+    let tmux = TmuxFixture::new();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fixture = fixture(port);
+
+    // A login-Bash resident; the daemon crashes after the agent opened its
+    // own session `main`.
+    let mut daemon = DaemonGuard(spawn_daemon_with(&fixture, Path::new(DXD), None));
+    let mut socket = accept(&listener).await;
+    let generation = register(&mut socket).await;
+    let applied = request(&mut socket, &generation, "env-1", environment_operation(1)).await;
+    assert_eq!(applied["kind"], "applied");
+    let bash_resident = open_terminal(&mut socket).await;
+    tmux.stdout(&["new-session", "-d", "-s", "main"]);
+    let status = Command::new("kill")
+        .args(["-KILL", &daemon.0.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let _ = daemon.0.wait();
+    let restarted = Instant::now();
+    daemon = DaemonGuard(spawn_daemon_with(&fixture, Path::new(DXD), Some(&tmux)));
+    let (mut socket, generation, terminal) = first_terminal_state(&listener, restarted).await;
+    assert_eq!(terminal["residentGeneration"], bash_resident);
+    assert_eq!(terminal["state"], "exited", "{terminal}");
+    assert_eq!(tmux.stdout(&["list-clients", "-F", "#{client_pid}"]), "");
+
+    // Restart joins the agent's session as a new tmux resident.
+    let applied = request(&mut socket, &generation, "env-1", environment_operation(1)).await;
+    assert!(matches!(
+        applied["kind"].as_str(),
+        Some("applied" | "unchanged")
+    ));
+    send(
+        &mut socket,
+        json!({
+            "type": "terminal.open", "terminalVersion": 1, "terminal": "default",
+            "mode": "restart-exited", "expectedResidentGeneration": bash_resident,
+            "dimensions": {"columns": 80, "rows": 24},
+        }),
+    )
+    .await;
+    let tmux_resident = wait_for_ready(&mut socket, None).await;
+    assert_ne!(tmux_resident, bash_resident);
+
+    // The session ends, which ends the resident; the agent opens a new one
+    // and the daemon crashes.
+    tmux.stdout(&["kill-session", "-t", "=main"]);
+    let exited = wait_for(&mut socket, |value| {
+        value["type"] == "terminal.resident-state" && value["state"] != "ready"
+    })
+    .await;
+    assert_eq!(exited["state"], "exited");
+    tmux.stdout(&["new-session", "-d", "-s", "main"]);
+    let status = Command::new("kill")
+        .args(["-KILL", &daemon.0.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let _ = daemon.0.wait();
+    let restarted = Instant::now();
+    let _daemon = DaemonGuard(spawn_daemon_with(&fixture, Path::new(DXD), Some(&tmux)));
+    let (_socket, _, terminal) = first_terminal_state(&listener, restarted).await;
+    assert_eq!(terminal["residentGeneration"], tmux_resident);
+    assert_eq!(terminal["state"], "exited", "{terminal}");
+    assert_eq!(tmux.stdout(&["list-clients", "-F", "#{client_pid}"]), "");
 }

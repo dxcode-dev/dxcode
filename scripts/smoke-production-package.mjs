@@ -126,6 +126,7 @@ export const smokeProductionPackage = async (packageRoot) => {
     DX_GOOGLE_CLIENT_SECRET: "",
     DX_TERMS_URL: "",
     DX_PRIVACY_URL: "",
+    DX_PORTAL_DOMAIN: "",
     DX_SOURCE_CONTROL_SCHEMA_VERSION: sourceControlSchemaVersion(migrations),
     DX_SOURCE_SHALLOW_CLONE: "false",
     DX_WORKLOAD_IDENTITY_AUDIENCE_POLICIES: JSON.stringify({

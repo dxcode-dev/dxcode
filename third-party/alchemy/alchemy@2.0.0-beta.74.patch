@@ -1,5 +1,38 @@
+diff --git a/lib/Cloudflare/Auth/AuthProvider.js b/lib/Cloudflare/Auth/AuthProvider.js
+index 88b712c5c36e4124c2b6806f3669c97250b9e336..40a4d870a8266a22c3b77ec9a68d8f28af8c49ee 100644
+--- a/lib/Cloudflare/Auth/AuthProvider.js
++++ b/lib/Cloudflare/Auth/AuthProvider.js
+@@ -93,15 +93,26 @@ const promptAccountId = () => getEnv("CLOUDFLARE_ACCOUNT_ID").pipe(Effect.flatMa
+         ? undefined
+         : "Expected a 32-character hex account ID (Workers & Pages → Account details)",
+ }).pipe(retryOnce)));
++// dx: a deployment that serves Portals also needs DNS edit on its Portal
++// zone. dx's installer names the extra scopes it needs here, so the default
++// login requests them without the operator customizing scopes.
++const defaultOAuthScopes = () => [
++    ...new Set([
++        ...DEFAULT_SCOPES,
++        ...(process.env.ALCHEMY_CLOUDFLARE_OAUTH_EXTRA_SCOPES ?? "")
++            .split(/[\s,]+/)
++            .filter((scope) => Object.hasOwn(ALL_SCOPES, scope)),
++    ]),
++];
+ const promptOAuthScopes = () => Clank.confirm({
+     message: "Customize OAuth scopes? (default covers typical use cases)",
+     initialValue: false,
+ }).pipe(retryOnce, Effect.flatMap((customize) => {
+     if (!customize)
+-        return Effect.succeed([...DEFAULT_SCOPES]);
++        return Effect.succeed(defaultOAuthScopes());
+     return Clank.multiselect({
+         message: "Select OAuth scopes",
+-        initialValues: DEFAULT_SCOPES,
++        initialValues: defaultOAuthScopes(),
+         options: Object.entries(ALL_SCOPES).map(([value, hint]) => ({
+             value: value,
+             label: value,
 diff --git a/lib/Cloudflare/StateStore/State.js b/lib/Cloudflare/StateStore/State.js
-index a226ab1fa2670ca319a9b675baca73ca89c1241b..fa71fa7536181cc9789893f1c674d48939424822 100644
+index a226ab1fa2670ca319a9b675baca73ca89c1241b..4caeb30affd4446ec5f133783af7f98a846a7dda 100644
 --- a/lib/Cloudflare/StateStore/State.js
 +++ b/lib/Cloudflare/StateStore/State.js
 @@ -513,13 +513,25 @@ export const loginWithCloudflare = (profileName, force) => Effect.gen(function*
@@ -32,6 +65,42 @@ index a226ab1fa2670ca319a9b675baca73ca89c1241b..fa71fa7536181cc9789893f1c674d489
          }));
      }
      // 2. Fetch the auth-token from Secrets Store with a temporary edge-preview worker
+diff --git a/src/Cloudflare/Auth/AuthProvider.ts b/src/Cloudflare/Auth/AuthProvider.ts
+index 95df9e267eed0a66e040cc914343894c901877fa..dc1251bcebe60fb98c48337f560b7279933fd3bd 100644
+--- a/src/Cloudflare/Auth/AuthProvider.ts
++++ b/src/Cloudflare/Auth/AuthProvider.ts
+@@ -179,6 +179,18 @@ const promptAccountId = () =>
+     ),
+   );
+ 
++// dx: a deployment that serves Portals also needs DNS edit on its Portal
++// zone. dx's installer names the extra scopes it needs here, so the default
++// login requests them without the operator customizing scopes.
++const defaultOAuthScopes = (): string[] => [
++  ...new Set<string>([
++    ...DEFAULT_SCOPES,
++    ...(process.env.ALCHEMY_CLOUDFLARE_OAUTH_EXTRA_SCOPES ?? "")
++      .split(/[\s,]+/)
++      .filter((scope) => Object.hasOwn(ALL_SCOPES, scope)),
++  ]),
++];
++
+ const promptOAuthScopes = () =>
+   Clank.confirm({
+     message: "Customize OAuth scopes? (default covers typical use cases)",
+@@ -186,10 +198,10 @@ const promptOAuthScopes = () =>
+   }).pipe(
+     retryOnce,
+     Effect.flatMap((customize) => {
+-      if (!customize) return Effect.succeed([...DEFAULT_SCOPES]);
++      if (!customize) return Effect.succeed(defaultOAuthScopes());
+       return Clank.multiselect({
+         message: "Select OAuth scopes",
+-        initialValues: DEFAULT_SCOPES as string[],
++        initialValues: defaultOAuthScopes(),
+         options: Object.entries(ALL_SCOPES).map(([value, hint]) => ({
+           value: value as string,
+           label: value,
 diff --git a/src/Cloudflare/StateStore/State.ts b/src/Cloudflare/StateStore/State.ts
 index 2be16eb514ee165c4dc7aabf487f12719c25137a..4fb092265c4c260eda3fa20e640ad0bd68603194 100644
 --- a/src/Cloudflare/StateStore/State.ts

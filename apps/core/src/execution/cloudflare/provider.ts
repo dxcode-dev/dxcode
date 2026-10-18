@@ -20,11 +20,11 @@ import { DEFAULT_WORKSPACE_INACTIVITY_MS } from "../activity.js";
 import {
   type DaemonGuest,
   ensureDaemonInGuest,
-} from "../e2b/daemon-installer.js";
+} from "../guest/daemon-installer.js";
 import {
   loadDaemonRelease,
   loadDaemonReleaseMetadata,
-} from "../e2b/daemon-release.js";
+} from "../guest/daemon-release.js";
 import {
   cloudflareGuest,
   cloudflareSandbox,

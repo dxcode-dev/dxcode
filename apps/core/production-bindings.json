@@ -172,6 +172,12 @@
       "optional": true
     },
     {
+      "name": "DX_PORTAL_DOMAIN",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
       "name": "DX_PRIVACY_URL",
       "type": "text",
       "provenance": "alchemy",

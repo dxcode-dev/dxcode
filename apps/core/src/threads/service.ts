@@ -6,6 +6,7 @@ import {
   PersistenceUnavailable,
   PersonalAgentInstructionsRepository,
   type Principal,
+  type Project,
   type ProjectId,
   type ProjectNotFound,
   ProjectRepository,
@@ -15,7 +16,6 @@ import {
   type ThreadExecutionPin,
   type ThreadId,
   type ThreadListRequest,
-  type ThreadUpdate,
   type ThreadModelSelection,
   type ThreadNotFound,
   ThreadRepository,
@@ -24,6 +24,7 @@ import {
   ThreadSourceIntent,
   ThreadSourceSnapshot,
   type ThreadTitle,
+  type ThreadUpdate,
   type WorkspacePolicyDenied,
 } from "@dx/domain";
 import { Context, DateTime, Effect, Layer, Schema } from "effect";
@@ -49,20 +50,29 @@ type ThreadProjectSelection =
       readonly snapshot: ProjectCreationSnapshot;
     };
 
+/** A Thread checked and snapshotted for creation, not yet persisted. */
+export interface PreparedThread {
+  readonly thread: Thread;
+  /** The Project's row; absent for a Thread created with No Project. */
+  readonly project?: Project;
+}
+
 interface ThreadServiceShape {
-  readonly create: (
+  /**
+   * Reads and checks everything a new Thread snapshots, without writing it
+   * (a No Project Thread ensures its scope's Project).
+   */
+  readonly prepare: (
     principal: Principal,
     project: ThreadProjectSelection,
     title: ThreadTitle,
     selection?: ThreadModelSelection,
-    source?: ThreadSourceDraft,
     threadId?: ThreadId,
     runnerProfileId?: RunnerProfileId,
     titlePending?: boolean,
-    executionPin?: ThreadExecutionPin,
     parentThreadId?: ThreadId,
   ) => Effect.Effect<
-    Thread,
+    PreparedThread,
     | Schema.SchemaError
     | PersistenceUnavailable
     | ProjectNotFound
@@ -70,6 +80,11 @@ interface ThreadServiceShape {
     | SettingsMembershipInvariantViolation
     | WorkspacePolicyDenied
   >;
+  readonly insert: (
+    thread: Thread,
+    source?: ThreadSourceDraft,
+    executionPin?: ThreadExecutionPin,
+  ) => Effect.Effect<Thread, Schema.SchemaError | PersistenceUnavailable>;
   readonly get: (
     principal: Principal,
     threadId: ThreadId,
@@ -121,41 +136,27 @@ export class ThreadService extends Context.Service<
       const projects = yield* ProjectRepository;
       const threads = yield* ThreadRepository;
       const instructions = yield* PersonalAgentInstructionsRepository;
-      const plugins = yield* PluginService;
-      const skills = yield* SkillService;
+      const pluginService = yield* PluginService;
+      const skillService = yield* SkillService;
 
       return ThreadService.of({
-        create: Effect.fn("ThreadService.create")(
+        prepare: Effect.fn("ThreadService.prepare")(
           function* (
             principal,
             project,
             title,
             selection,
-            source,
             threadId,
             runnerProfileId,
             titlePending,
-            executionPin,
             parentThreadId,
           ) {
             // Children never nest: a child's child becomes its sibling.
             const parent =
               parentThreadId === undefined
-                ? undefined
-                : yield* threads.findOwnedById(
-                    parentThreadId,
-                    principal.userId,
-                  );
-            const projectId =
-              project.kind === "project"
-                ? project.projectId
-                : yield* projects.ensureProjectless(
-                    principal.userId,
-                    project.snapshot,
-                  );
-            if (project.kind === "project")
-              yield* projects.findOwnedById(projectId, principal.userId);
-            const currentInstructions = yield* instructions
+                ? Effect.succeed(undefined)
+                : threads.findOwnedById(parentThreadId, principal.userId);
+            const currentInstructions = instructions
               .findOwnedByUser(principal.userId)
               .pipe(
                 Effect.catchTag("PersonalAgentInstructionsNotFound", (cause) =>
@@ -167,25 +168,62 @@ export class ThreadService extends Context.Service<
                   ),
                 ),
               );
+            const projectId =
+              project.kind === "project"
+                ? project.projectId
+                : yield* projects.ensureProjectless(
+                    principal.userId,
+                    project.snapshot,
+                  );
+            // Every read below is independent once the Project is known.
+            const [
+              parentThread,
+              ownedProject,
+              agentInstructions,
+              plugins,
+              skills,
+            ] = yield* Effect.all(
+              [
+                parent,
+                project.kind === "project"
+                  ? projects.findOwnedById(projectId, principal.userId)
+                  : Effect.succeed(undefined),
+                currentInstructions,
+                pluginService.resolveForThread(principal, projectId),
+                skillService.resolveForThread(principal, projectId),
+              ],
+              { concurrency: "unbounded" },
+            );
             const thread = yield* createThread({
               ...(threadId === undefined ? {} : { id: threadId }),
               title,
               projectId,
               ownerUserId: principal.userId,
               agentInstructions: {
-                content: currentInstructions.content,
-                revision: currentInstructions.revision,
-                version: currentInstructions.version,
+                content: agentInstructions.content,
+                revision: agentInstructions.revision,
+                version: agentInstructions.version,
               },
               selection: selection ?? defaultThreadModelSelection(),
               ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
               ...(titlePending === true ? { titlePending } : {}),
-              ...(parent === undefined
+              ...(parentThread === undefined
                 ? {}
-                : { parentThreadId: parent.parentThreadId ?? parent.id }),
-              plugins: yield* plugins.resolveForThread(principal, projectId),
-              skills: yield* skills.resolveForThread(principal, projectId),
+                : {
+                    parentThreadId:
+                      parentThread.parentThreadId ?? parentThread.id,
+                  }),
+              plugins,
+              skills,
             });
+            return {
+              thread,
+              ...(ownedProject === undefined ? {} : { project: ownedProject }),
+            };
+          },
+        ),
+        insert: Effect.fn("ThreadService.insert")(
+          function* (thread, source, executionPin) {
             let admission: ThreadSourceAdmission | undefined;
             if (source?.kind === "pending") {
               admission = {

@@ -37,9 +37,11 @@ const mocks = vi.hoisted(() => {
   const db = {
     prepare: vi.fn((sql: string) => ({
       bind: vi.fn(() => ({
-        first: sql.includes("thread_source_snapshot")
-          ? firstSource
-          : firstLifecycle,
+        first:
+          sql.includes("thread_source_snapshot") &&
+          !sql.includes("project_binding_revision")
+            ? firstSource
+            : firstLifecycle,
         run: vi.fn(async () => ({ meta: { changes: 1 } })),
       })),
     })),
@@ -188,8 +190,8 @@ vi.mock("../thread-changes/coordinator.js", () => ({
   })),
 }));
 
-import { executeTrustedSourceCommand } from "./e2b/source-command-admission.js";
 import { ExecutionWorkspaces } from "./execution-workspaces.js";
+import { executeTrustedSourceCommand } from "./guest/source-command-admission.js";
 
 beforeEach(() => {
   mocks.firstLifecycle.mockClear();

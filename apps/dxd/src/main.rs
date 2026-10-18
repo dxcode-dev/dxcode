@@ -9,8 +9,11 @@ mod files;
 mod files_sandbox;
 mod observer;
 mod protocol;
+mod proxy;
+mod services;
 mod session;
 mod terminal;
+mod tmux;
 mod update;
 mod workload_identity;
 mod worktrees;
@@ -177,6 +180,18 @@ fn start() -> Result<(), StartExit> {
             Err(error) => eprintln!("dxd could not adopt the shell after update: {error}"),
         }
     }
+    // Without a handoff, rejoin a tmux session the previous process left.
+    terminal.reattach_session();
+    let services = match std::env::var(services::HANDOFF_VARIABLE) {
+        Ok(encoded) => {
+            // SAFETY: single-threaded at this point; nothing reads the variable concurrently.
+            unsafe {
+                std::env::remove_var(services::HANDOFF_VARIABLE);
+            }
+            services::Services::adopt(&encoded)
+        }
+        Err(_) => services::Services::default(),
+    };
     let workload_identity_epoch = Arc::new(AtomicU64::new(0));
     let workload_identity_socket = match &config.local_runtime {
         Some(_) => std::env::var("DX_WORKLOAD_IDENTITY_SOCKET")
@@ -218,6 +233,7 @@ fn start() -> Result<(), StartExit> {
             relay,
             workload_identity_epoch,
             connected,
+            services,
         )
         .map_err(StartExit::Files)?;
         eprintln!("dxd {RELEASE} started");
@@ -378,7 +394,7 @@ mod tests {
             })
             .unwrap(),
             format!(
-                r#"{{"type":"register","protocolMajor":2,"release":"{RELEASE}","capabilities":{{"terminal":{{"version":1}},"workloadIdentity":{{"version":1}},"files":{{"version":1}}}}}}"#
+                r#"{{"type":"register","protocolMajor":2,"release":"{RELEASE}","capabilities":{{"terminal":{{"version":1}},"workloadIdentity":{{"version":1}},"files":{{"version":1}},"proxy":{{"version":1}}}}}}"#
             )
         );
         assert_eq!(

@@ -430,7 +430,8 @@ export const resolveThreadExecutionPin = async (input: {
   readonly runnerProfileId: string | undefined;
   /** A projectless Thread's project defaults to this size. */
   readonly projectlessRunnerProfileId?: string;
-  readonly recipe: string;
+  /** Read only for a pin on a person's or workspace's key. */
+  readonly recipe: () => Promise<string>;
 }): Promise<ThreadExecutionPin | undefined> => {
   // Without a catalog no size resolves, and activation fails closed as
   // before; creation itself does not depend on it.
@@ -454,8 +455,33 @@ export const resolveThreadExecutionPin = async (input: {
     (profile.adapter !== "e2b" && profile.adapter !== "cloudflare")
   )
     return undefined;
+  const deploymentProviders = resolveExecutionProviders(input.bindings);
+  const localRuntime = isLocalRuntime(input.bindings);
+  const deploymentPin: ThreadExecutionPin = {
+    provider: profile.adapter,
+    runnerProfileId: profile.id,
+    credentialScope: "deployment",
+    credentialOwnerId: null,
+    credentialAccount: null,
+    providerTemplate: null,
+  };
+  // A size whose provider does not resolve keeps the pre-4b behavior: the
+  // Thread is created and its first activation fails closed. Without a key
+  // for that provider the Thread runs on the deployment's account, so no team
+  // template (or its recipe) is involved.
+  if (
+    localRuntime ||
+    ![...scope.personal, ...scope.workspace].some(
+      ({ providerId }) => providerId === profile.adapter,
+    )
+  )
+    return deploymentProviders.some(
+      ({ providerId }) => providerId === profile.adapter,
+    )
+      ? deploymentPin
+      : undefined;
   const member = orbProviderSet({
-    deploymentProviders: resolveExecutionProviders(input.bindings),
+    deploymentProviders,
     profileAdapters: new Set(
       catalog.configuration.profiles.map(({ adapter }) => adapter as string),
     ),
@@ -463,26 +489,16 @@ export const resolveThreadExecutionPin = async (input: {
     workspace: scope.workspace,
     projectWorkspaceId: scope.projectWorkspaceId,
     policy: scope.policy,
-    localRuntime: isLocalRuntime(input.bindings),
-    recipe: input.recipe,
+    localRuntime,
+    recipe: await input.recipe(),
   }).find(({ providerId }) => providerId === profile.adapter);
-  // A size whose provider does not resolve keeps the pre-4b behavior: the
-  // Thread is created and its first activation fails closed.
   if (member === undefined) return undefined;
   if (member.status !== "ready")
     throw new OrbUnavailable({
       reason:
         member.status === "failed" ? "template-failed" : "template-building",
     });
-  if (member.scope === "deployment")
-    return {
-      provider: profile.adapter,
-      runnerProfileId: profile.id,
-      credentialScope: "deployment",
-      credentialOwnerId: null,
-      credentialAccount: null,
-      providerTemplate: null,
-    };
+  if (member.scope === "deployment") return deploymentPin;
   const template = member.templates?.get(profile.id);
   if (
     template === undefined ||

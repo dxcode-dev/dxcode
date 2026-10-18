@@ -1,6 +1,7 @@
 import {
   type ProjectData,
   type ThreadAgentInitializationData,
+  threadAgentName,
   threadAgentUrl,
 } from "@dx/api";
 import type {
@@ -13,8 +14,14 @@ import type {
   UserId,
 } from "@dx/domain";
 import { createFlueAgentSession, type FlueAgentSession } from "@flue/react";
-import { createFlueClient, type FlueClient } from "@flue/sdk";
+import {
+  type AgentConversationObservation,
+  type AgentSendResult,
+  createFlueClient,
+  type FlueClient,
+} from "@flue/sdk";
 import { type QueryClient, QueryObserver } from "@tanstack/react-query";
+import { Option, Schema } from "effect";
 import { sameOriginFetch } from "../../shared/same-origin-fetch.js";
 import { projectQueryOptions } from "../projects/project-queries.js";
 import { DictationRecoverySession } from "./dictation/dictation-session.js";
@@ -24,33 +31,195 @@ import {
   disposeAttachments,
   type PendingAttachment,
 } from "./image-attachments.js";
+import { sendRefusal } from "./send-failure.js";
 import { threadQueryOptions } from "./thread-queries.js";
 
-/** The first send creates the agent with `initialData` once it is known. */
+/** Attempts per keyed send; the server deduplicates them by key. */
+const SEND_ATTEMPTS = 3;
+const ATTEMPT_TIMEOUT_MS = 15_000;
+const RETRY_BACKOFF_MS = 500;
+
+const AdmissionLookupSchema = Schema.Struct({
+  state: Schema.Literal("accepted"),
+  receipt: Schema.Struct({
+    streamUrl: Schema.String,
+    offset: Schema.String,
+    submissionId: Schema.String,
+    uid: Schema.String,
+  }),
+});
+
+/** Flue's receipt for a key it already admitted, or `undefined`. */
+const admittedReceipt = async (
+  agentUrl: string,
+  idempotencyKey: string,
+): Promise<AgentSendResult | undefined> => {
+  const url = new URL(agentUrl);
+  url.searchParams.set("view", "admission");
+  url.searchParams.set("idempotencyKey", idempotencyKey);
+  try {
+    const response = await sameOriginFetch(url, {
+      signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
+    });
+    if (!response.ok) return undefined;
+    const lookup = Schema.decodeUnknownOption(AdmissionLookupSchema)(
+      await response.json(),
+    );
+    return Option.isSome(lookup) ? lookup.value.receipt : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * The submission ID Flue derives from a keyed send, so a send can recognize
+ * its own message in the conversation before its 202. Mirrors
+ * `deriveKeyedSubmissionId` in Flue's runtime `ids.ts`, a frozen wire format.
+ */
+const keyedSubmissionId = async (agentUrl: string, idempotencyKey: string) => {
+  const instanceId = decodeURIComponent(
+    new URL(agentUrl).pathname.split("/").at(-1) ?? "",
+  );
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(
+      `flue-submission-key\n${threadAgentName}\n${instanceId}\n${idempotencyKey}`,
+    ),
+  );
+  const hex = Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  return `sub_ik_${hex.slice(0, 32)}`;
+};
+
+/**
+ * Resolves once the observed conversation holds the user message of
+ * `submissionId`: the server has it, whatever became of the 202.
+ */
+const observedSubmission = (
+  observation: AgentConversationObservation | undefined,
+  submissionId: string,
+  signal: AbortSignal,
+) =>
+  new Promise<string | undefined>((resolve) => {
+    if (observation === undefined || signal.aborted) return;
+    const check = () => {
+      const { conversation, offset } = observation.getSnapshot();
+      if (
+        conversation?.messages.some(
+          (message) =>
+            message.role === "user" && message.submissionId === submissionId,
+        )
+      ) {
+        release();
+        resolve(offset);
+      }
+    };
+    const unsubscribe = observation.subscribe(check);
+    const release = () => {
+      unsubscribe();
+      signal.removeEventListener("abort", release);
+    };
+    signal.addEventListener("abort", release);
+    check();
+  });
+
+/**
+ * Sends create the agent with `initialData` until its instance is known to
+ * exist. A send whose outcome is unknown asks Flue whether it admitted the
+ * key before trying again, so a lost 202 never becomes a failed send. The
+ * send's own message arriving in the conversation is a receipt too, so a slow
+ * 202 does not hold a message the server already has.
+ */
 export const createThreadAgentClient = (
   agentUrl: string,
   initialData: () => ThreadAgentInitializationData | undefined,
+  instanceObserved: () => boolean = () => false,
 ): FlueClient => {
   const client = createFlueClient({ url: agentUrl, fetch: sameOriginFetch });
   const send = client.send.bind(client);
-  let initializing = true;
-  client.send = async (options) => {
+  const observe = client.observe;
+  let observation: AgentConversationObservation | undefined;
+  client.observe = (options) => {
+    observation = observe.call(client, options);
+    return observation;
+  };
+  let instanceKnown = false;
+  let instanceUid: string | undefined;
+  const deliver: FlueClient["send"] = async (options) => {
     const data = initialData();
-    if (!initializing || data === undefined) return send(options);
+    if (instanceKnown || instanceObserved() || data === undefined)
+      return send(options);
     try {
-      const receipt = await send({
-        ...options,
-        uid: null,
-        initialData: data,
-      });
-      initializing = false;
-      return receipt;
+      return await send({ ...options, uid: null, initialData: data });
     } catch (cause) {
       const uid = existingAgentUid(cause);
       if (uid === undefined) throw cause;
-      const receipt = await send({ ...options, uid });
-      initializing = false;
-      return receipt;
+      instanceKnown = true;
+      return send({ ...options, uid });
+    }
+  };
+  const sendWithRetries: FlueClient["send"] = async (options) => {
+    const key = options.idempotencyKey;
+    for (let attempt = 1; ; attempt++) {
+      const timeout = AbortSignal.timeout(ATTEMPT_TIMEOUT_MS);
+      try {
+        const receipt = await deliver({
+          ...options,
+          signal:
+            options.signal === undefined
+              ? timeout
+              : AbortSignal.any([options.signal, timeout]),
+        });
+        instanceKnown = true;
+        instanceUid = receipt.uid;
+        return receipt;
+      } catch (cause) {
+        if (
+          key === undefined ||
+          options.signal?.aborted === true ||
+          sendRefusal(cause) !== undefined
+        )
+          throw cause;
+        const receipt = await admittedReceipt(client.url, key);
+        if (receipt !== undefined) {
+          instanceKnown = true;
+          instanceUid = receipt.uid;
+          return receipt;
+        }
+        if (attempt === SEND_ATTEMPTS) throw cause;
+        await new Promise((resolve) =>
+          setTimeout(resolve, RETRY_BACKOFF_MS * attempt),
+        );
+      }
+    }
+  };
+  client.send = async (options) => {
+    const key = options.idempotencyKey;
+    if (key === undefined) return sendWithRetries(options);
+    const delivery = sendWithRetries(options);
+    const received = new AbortController();
+    const streamed = async (): Promise<AgentSendResult> => {
+      const submissionId = await keyedSubmissionId(client.url, key);
+      const offset = await observedSubmission(
+        observation,
+        submissionId,
+        received.signal,
+      );
+      instanceKnown = true;
+      return {
+        streamUrl: client.url,
+        offset: offset ?? "-1",
+        submissionId,
+        // Flue's session reads only a receipt's submission ID.
+        uid: instanceUid ?? "",
+      };
+    };
+    try {
+      // Whichever receipt comes first; the 202 that loses changes nothing.
+      return await Promise.race([delivery, streamed().catch(() => delivery)]);
+    } finally {
+      received.abort();
     }
   };
   return client;
@@ -71,17 +240,7 @@ export interface RetainedThread {
   readonly presentation: Map<string, unknown>;
   readonly presentationListeners: Set<() => void>;
   readonly images: ReturnType<typeof createPendingAttachmentCollection>;
-  pendingSubmissionImages?: ReadonlyArray<PendingAttachment>;
   disposed: boolean;
-}
-
-export interface PendingSubmissionImageRetention {
-  readonly retain: (images: ReadonlyArray<PendingAttachment>) => boolean;
-  readonly complete: (images: ReadonlyArray<PendingAttachment>) => boolean;
-  readonly restore: (
-    images: ReadonlyArray<PendingAttachment>,
-    draft: string,
-  ) => boolean;
 }
 
 export interface PendingSubmissionControl {
@@ -103,46 +262,6 @@ export interface OptimisticThreadCreation {
   readonly startedAt: number;
   readonly submissionId?: string;
 }
-
-export const retainSubmissionImages = (
-  entry: RetainedThread,
-  setPending: (pending: boolean) => void,
-): PendingSubmissionImageRetention => ({
-  retain: (images) => {
-    if (entry.disposed || entry.pendingSubmissionImages !== undefined)
-      return false;
-    entry.pendingSubmissionImages = images;
-    setPending(true);
-    return true;
-  },
-  complete: (images) => {
-    if (entry.disposed || entry.pendingSubmissionImages !== images)
-      return false;
-    entry.pendingSubmissionImages = undefined;
-    setPending(false);
-    return true;
-  },
-  restore: (images, draft) => {
-    if (entry.disposed || entry.pendingSubmissionImages !== images)
-      return false;
-    entry.pendingSubmissionImages = undefined;
-    const currentDraft = entry.presentation.get("draft");
-    const currentImages = entry.presentation.get("pending-images");
-    if (
-      currentDraft === "" &&
-      Array.isArray(currentImages) &&
-      currentImages.length === 0
-    ) {
-      entry.images.restore(images);
-      entry.presentation.set("draft", draft);
-      entry.presentation.set("pending-images", images);
-    } else {
-      disposeAttachments(images);
-    }
-    setPending(false);
-    return true;
-  },
-});
 
 /** Stores capabilities, never Flue history or dx HTTP entities. Selection is a
  * committed route activation, not a preload, hover, render or query refresh. */
@@ -227,6 +346,8 @@ export class ThreadSessionRegistry {
     const client = createThreadAgentClient(
       agentUrl,
       () => entry.agentInitialization,
+      // History read the instance: every Thread made with a first message.
+      () => entry.session.getSnapshot().incarnation !== undefined,
     );
     const entry: RetainedThread = {
       id,
@@ -304,8 +425,6 @@ export class ThreadSessionRegistry {
     entry.dictation.clear();
     entry.session.dispose();
     entry.images.dispose();
-    disposeAttachments(entry.pendingSubmissionImages ?? []);
-    entry.pendingSubmissionImages = undefined;
     void entry.images.settle().then(() => entry.images.dispose());
   }
 

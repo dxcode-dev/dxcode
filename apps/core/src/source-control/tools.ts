@@ -9,7 +9,7 @@ import { Effect, Layer, Schema } from "effect";
 import {
   executeTrustedLocalCommand,
   executeTrustedSourceCommand,
-} from "../execution/e2b/source-command-admission.js";
+} from "../execution/guest/source-command-admission.js";
 import type { Bindings } from "../http/types.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
 import {

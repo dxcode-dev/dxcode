@@ -1,8 +1,17 @@
 import { E2B_ORB_PROFILES, type E2BOrbProfile } from "@dx/domain";
 import { ApiClient, ConnectionConfig, Template, waitForFile } from "e2b";
 import orbDockerfile from "../../../../../deploy/orb/Dockerfile?raw";
+import desktopFfmpeg from "../../../../../deploy/orb/desktop/bin/ffmpeg?raw";
+import desktopChromium from "../../../../../deploy/orb/desktop/chromium?raw";
+import labwcAutostart from "../../../../../deploy/orb/desktop/labwc/autostart?raw";
+import labwcMenu from "../../../../../deploy/orb/desktop/labwc/menu.xml?raw";
+import labwcRc from "../../../../../deploy/orb/desktop/labwc/rc.xml?raw";
+import desktopSession from "../../../../../deploy/orb/desktop/session?raw";
+import desktopStart from "../../../../../deploy/orb/desktop/start?raw";
+import desktopStop from "../../../../../deploy/orb/desktop/stop?raw";
 import orbHostname from "../../../../../deploy/orb/dx-orb-hostname.sh?raw";
 import orbInit from "../../../../../deploy/orb/dx-orb-init?raw";
+import orbTmuxConfig from "../../../../../deploy/orb/tmux.conf?raw";
 import terminalStub from "../../../../dxd/assets/dx-terminal-stub.sh?raw";
 
 /**
@@ -19,6 +28,15 @@ const COPIED_FILES: Readonly<Record<string, string>> = {
   "apps/dxd/assets/dx-terminal-stub.sh": terminalStub,
   "deploy/orb/dx-orb-init": orbInit,
   "deploy/orb/dx-orb-hostname.sh": orbHostname,
+  "deploy/orb/tmux.conf": orbTmuxConfig,
+  "deploy/orb/desktop/start": desktopStart,
+  "deploy/orb/desktop/stop": desktopStop,
+  "deploy/orb/desktop/session": desktopSession,
+  "deploy/orb/desktop/chromium": desktopChromium,
+  "deploy/orb/desktop/bin/ffmpeg": desktopFfmpeg,
+  "deploy/orb/desktop/labwc/autostart": labwcAutostart,
+  "deploy/orb/desktop/labwc/rc.xml": labwcRc,
+  "deploy/orb/desktop/labwc/menu.xml": labwcMenu,
 };
 
 const START_COMMAND = "/usr/local/bin/dx-orb-init";

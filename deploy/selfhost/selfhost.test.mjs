@@ -4,7 +4,10 @@ import { join } from "node:path";
 import * as Redacted from "effect/Redacted";
 import { describe, expect, it, vi } from "vitest";
 import { reconcileHeldSecret } from "./alchemy-resources.ts";
-import { preflightCloudflareDeployment } from "./cloudflare-auth.mjs";
+import {
+  loadAlchemyCloudflareAuth,
+  preflightCloudflareDeployment,
+} from "./cloudflare-auth.mjs";
 import { validateSelfhostConfig } from "./config.mjs";
 import {
   downloadDxdRelease,
@@ -12,6 +15,12 @@ import {
   verifyDxdBytes,
 } from "./dxd-release.mjs";
 import { hashE2BRecipe, reconcileE2BProfiles } from "./e2b.mjs";
+import {
+  listPortalZoneCandidates,
+  missingPortalOAuthScopes,
+  PORTAL_OAUTH_SCOPES,
+  preflightPortalZone,
+} from "./portals.mjs";
 
 describe("exportable self-host configuration", () => {
   it("rejects secrets and private policy in the nonsecret file", () => {
@@ -41,6 +50,79 @@ describe("exportable self-host configuration", () => {
         zone: "example.com",
       }),
     ).toThrow("inside zone");
+  });
+
+  it("serves Portals only from a bare domain separate from the app", () => {
+    const base = {
+      name: "mine",
+      adminEmail: "me@example.com",
+      domain: "dx.example.com",
+      zone: "example.com",
+    };
+    const config = validateSelfhostConfig({
+      ...base,
+      portalDomain: "Example-Portals.dev",
+    });
+    expect(config.portalDomain).toBe("example-portals.dev");
+    expect(validateSelfhostConfig(config)).toEqual(config);
+    expect(validateSelfhostConfig(base).portalDomain).toBeUndefined();
+    // A workers.dev app takes any separate Portal zone.
+    expect(
+      validateSelfhostConfig({
+        name: "mine",
+        adminEmail: "me@example.com",
+        portalDomain: "example-portals.dev",
+      }).portalDomain,
+    ).toBe("example-portals.dev");
+    for (const portalDomain of [
+      "https://example-portals.dev",
+      "*.example-portals.dev",
+      "localhost",
+      "",
+    ])
+      expect(() => validateSelfhostConfig({ ...base, portalDomain })).toThrow(
+        "portalDomain",
+      );
+  });
+
+  it("refuses a Portal domain on the app's registrable domain", () => {
+    const config = (domain, zone, portalDomain) => () =>
+      validateSelfhostConfig({
+        name: "mine",
+        adminEmail: "me@example.com",
+        domain,
+        zone,
+        portalDomain,
+      });
+    // The app's host, its parent, its child, or a sibling: one site, so guest
+    // pages could set cookies for the app's site.
+    for (const portalDomain of [
+      "dx.example.com",
+      "example.com",
+      "portals.dx.example.com",
+      "portals.example.com",
+      "example-portals.example.com",
+    ])
+      expect(config("dx.example.com", "example.com", portalDomain)).toThrow(
+        "portalDomain must be its own registrable domain, not on the app's site example.com",
+      );
+    // Multi-label public suffixes: the registrable domain is example.co.uk.
+    for (const portalDomain of ["example.co.uk", "portals.example.co.uk"])
+      expect(config("dx.example.co.uk", "example.co.uk", portalDomain)).toThrow(
+        "not on the app's site example.co.uk",
+      );
+    expect(
+      config("dx.example.co.uk", "example.co.uk", "other.co.uk")().portalDomain,
+    ).toBe("other.co.uk");
+    expect(
+      config("dx.example.com", "example.com", "example-portals.dev")()
+        .portalDomain,
+    ).toBe("example-portals.dev");
+    // workers.dev gives a script one hostname and no wildcard route.
+    for (const portalDomain of ["workers.dev", "portals.acct.workers.dev"])
+      expect(config("dx.example.com", "example.com", portalDomain)).toThrow(
+        "portalDomain cannot be on workers.dev",
+      );
   });
 
   it("accepts its normalized versioned output on repeat deploy", () => {
@@ -490,5 +572,344 @@ describe("dxd release integrity", () => {
         sha256: "0".repeat(64),
       }),
     ).toThrow("No deployment changes were made");
+  });
+});
+
+describe("Portal zone preflight", () => {
+  const accountId = "a".repeat(32);
+  const zoneId = "b".repeat(32);
+  const portalDomain = "example-portals.dev";
+  const zone = {
+    id: zoneId,
+    name: portalDomain,
+    status: "active",
+    account: { id: accountId },
+  };
+  const tokenAuth = {
+    accountId,
+    headers: { Authorization: "Bearer x" },
+    method: "api-token",
+  };
+  const policy = (groups, resources) => ({
+    effect: "allow",
+    permission_groups: groups.map((name) => ({ name })),
+    resources: resources ?? {
+      [`com.cloudflare.api.account.zone.${zoneId}`]: "*",
+    },
+  });
+  const allPermissions = [
+    policy(["Zone Read", "DNS Write", "Workers Routes Write"]),
+  ];
+  // A Cloudflare API whose answers can each be replaced or refused (403).
+  const cloudflare = (overrides = {}) => {
+    const results = {
+      [`/zones?account.id=${accountId}&name=${portalDomain}`]: [zone],
+      [`/zones/${zoneId}`]: zone,
+      [`/zones/${zoneId}/dns_records?per_page=1`]: [],
+      [`/zones/${zoneId}/workers/routes`]: [],
+      [`/accounts/${accountId}/tokens/verify`]: { id: "token" },
+      [`/accounts/${accountId}/tokens/token`]: { policies: allPermissions },
+      ...overrides,
+    };
+    return vi.fn(async (url, init) => {
+      // Every probe is a read.
+      expect(init?.method ?? "GET").toBe("GET");
+      const parsed = new URL(url);
+      const path = parsed.pathname.replace("/client/v4", "") + parsed.search;
+      if (!(path in results))
+        throw new Error(`Unexpected Cloudflare request: ${path}`);
+      const result = results[path];
+      return result === 403
+        ? Response.json({ success: false }, { status: 403 })
+        : Response.json({ success: true, result });
+    });
+  };
+
+  it("passes with Zone Read, DNS Edit, and Workers Routes Edit on the zone", async () => {
+    await expect(
+      preflightPortalZone({
+        auth: tokenAuth,
+        portalDomain,
+        fetch: cloudflare(),
+      }),
+    ).resolves.toEqual({ zoneId, editConfirmed: true });
+    // The runner knows the zone ID; an account-wide zone grant counts.
+    await expect(
+      preflightPortalZone({
+        auth: tokenAuth,
+        portalDomain,
+        zoneId,
+        fetch: cloudflare({
+          [`/accounts/${accountId}/tokens/token`]: {
+            policies: [
+              policy(["Zone Read", "DNS Write", "Workers Routes Write"], {
+                [`com.cloudflare.api.account.${accountId}`]: {
+                  "com.cloudflare.api.account.zone.*": "*",
+                },
+              }),
+            ],
+          },
+        }),
+      }),
+    ).resolves.toEqual({ zoneId, editConfirmed: true });
+  });
+
+  it("names each missing permission and the zone", async () => {
+    const otherZone = { "com.cloudflare.api.account.zone.other": "*" };
+    for (const [overrides, message] of [
+      [
+        { [`/zones?account.id=${accountId}&name=${portalDomain}`]: [] },
+        `Zone ${portalDomain} is not visible in Cloudflare account ${accountId}. The Portal domain must be the apex of a zone in this account, and the Cloudflare API token needs Zone Read on it.`,
+      ],
+      [
+        { [`/zones/${zoneId}/dns_records?per_page=1`]: 403 },
+        `The Cloudflare API token lacks DNS Edit on the Portal zone ${portalDomain}. Add Zone → DNS → Edit for ${portalDomain} to the token, then rerun.`,
+      ],
+      [
+        { [`/zones/${zoneId}/workers/routes`]: 403 },
+        `The Cloudflare API token lacks Workers Routes Edit on the Portal zone ${portalDomain}. Add Zone → Workers Routes → Edit for ${portalDomain} to the token, then rerun.`,
+      ],
+      // Read access alone: the token's policies grant no Edit.
+      [
+        {
+          [`/accounts/${accountId}/tokens/token`]: {
+            policies: [
+              policy(["Zone Read", "DNS Read", "Workers Routes Write"]),
+            ],
+          },
+        },
+        `The Cloudflare API token lacks DNS Edit on the Portal zone ${portalDomain}.`,
+      ],
+      [
+        {
+          [`/accounts/${accountId}/tokens/token`]: {
+            policies: [policy(["Zone Read", "DNS Write"])],
+          },
+        },
+        `The Cloudflare API token lacks Workers Routes Edit on the Portal zone ${portalDomain}.`,
+      ],
+      // A grant on another zone, or one a deny policy cancels, is no grant.
+      [
+        {
+          [`/accounts/${accountId}/tokens/token`]: {
+            policies: [
+              policy(["Zone Read"]),
+              policy(["DNS Write", "Workers Routes Write"], otherZone),
+            ],
+          },
+        },
+        `lacks DNS Edit on the Portal zone ${portalDomain}. Add Zone → DNS → Edit for ${portalDomain} to the token, then rerun.\nThe Cloudflare API token lacks Workers Routes Edit`,
+      ],
+      [
+        {
+          [`/accounts/${accountId}/tokens/token`]: {
+            policies: [
+              ...allPermissions,
+              { ...policy(["DNS Write"]), effect: "deny" },
+            ],
+          },
+        },
+        `The Cloudflare API token lacks DNS Edit on the Portal zone ${portalDomain}.`,
+      ],
+      [
+        {
+          [`/zones?account.id=${accountId}&name=${portalDomain}`]: [
+            { ...zone, status: "pending" },
+          ],
+        },
+        `Portal zone ${portalDomain} is pending; wait until Cloudflare shows it active, then rerun.`,
+      ],
+      [
+        {
+          [`/zones?account.id=${accountId}&name=${portalDomain}`]: [
+            { ...zone, account: { id: "f".repeat(32) } },
+          ],
+        },
+        `Portal domain ${portalDomain} must be the apex of its own zone in this Cloudflare account.`,
+      ],
+    ])
+      await expect(
+        preflightPortalZone({
+          auth: tokenAuth,
+          portalDomain,
+          fetch: cloudflare(overrides),
+        }),
+      ).rejects.toThrow(message);
+    // With a zone ID, an unreadable zone is a missing Zone Read.
+    await expect(
+      preflightPortalZone({
+        auth: tokenAuth,
+        portalDomain,
+        zoneId,
+        fetch: cloudflare({ [`/zones/${zoneId}`]: 403 }),
+      }),
+    ).rejects.toThrow(
+      `The Cloudflare API token lacks Zone Read on the Portal zone ${portalDomain} (${zoneId}). Add Zone → Zone → Read`,
+    );
+    await expect(
+      preflightPortalZone({
+        auth: tokenAuth,
+        portalDomain,
+        zoneId,
+        fetch: cloudflare({
+          [`/zones/${zoneId}`]: { ...zone, name: "other-portals.dev" },
+        }),
+      }),
+    ).rejects.toThrow("must be the apex of its own zone");
+  });
+
+  it("falls back to read probes when the token cannot read its policies", async () => {
+    await expect(
+      preflightPortalZone({
+        auth: tokenAuth,
+        portalDomain,
+        fetch: cloudflare({
+          [`/accounts/${accountId}/tokens/verify`]: 403,
+          "/user/tokens/verify": { id: "user-token" },
+          "/user/tokens/user-token": 403,
+        }),
+      }),
+    ).resolves.toEqual({ zoneId, editConfirmed: false });
+    // A user-owned token that can read itself is checked too.
+    await expect(
+      preflightPortalZone({
+        auth: tokenAuth,
+        portalDomain,
+        fetch: cloudflare({
+          [`/accounts/${accountId}/tokens/verify`]: 403,
+          "/user/tokens/verify": { id: "user-token" },
+          "/user/tokens/user-token": { policies: [policy(["Zone Read"])] },
+        }),
+      }),
+    ).rejects.toThrow("lacks DNS Edit");
+  });
+
+  it("asks an Alchemy OAuth login without the Portal scopes to sign in again", async () => {
+    const oauth = (scopes) => ({
+      accountId,
+      headers: { Authorization: "Bearer x" },
+      method: "alchemy-oauth",
+      scopes,
+    });
+    const fetch = cloudflare();
+    for (const [missing, label] of [
+      ["zone:read", "Zone Read"],
+      ["dns_records:edit", "DNS Edit"],
+      ["workers_routes:write", "Workers Routes Edit"],
+    ]) {
+      const error = await preflightPortalZone({
+        auth: oauth(PORTAL_OAUTH_SCOPES.filter((scope) => scope !== missing)),
+        portalDomain,
+        fetch,
+      }).catch((cause) => cause);
+      expect(error.message).toContain(
+        `The Alchemy Cloudflare login was not granted ${missing}, needed for ${label} on the Portal zone ${portalDomain}.`,
+      );
+      expect(error.message).toContain("Sign in again with Portal access");
+      expect(error.message.split("\n")).toHaveLength(2);
+    }
+    expect(fetch).not.toHaveBeenCalled();
+    // OAuth grants are scopes, not token policies: no introspection.
+    await expect(
+      preflightPortalZone({
+        auth: oauth([...PORTAL_OAUTH_SCOPES, "workers_scripts:write"]),
+        portalDomain,
+        fetch,
+      }),
+    ).resolves.toEqual({ zoneId, editConfirmed: true });
+    expect(fetch).not.toHaveBeenCalledWith(
+      expect.stringContaining("/tokens/"),
+      expect.anything(),
+    );
+  });
+
+  it("reads the scopes an Alchemy OAuth login was granted", () => {
+    const home = mkdtempSync(join(tmpdir(), "dx-alchemy-home-"));
+    mkdirSync(join(home, ".alchemy/credentials/dx-selfhost"), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(home, ".alchemy/profiles.json"),
+      JSON.stringify({
+        profiles: {
+          "dx-selfhost": { Cloudflare: { method: "oauth", accountId } },
+        },
+      }),
+    );
+    writeFileSync(
+      join(home, ".alchemy/credentials/dx-selfhost/cf-oauth.json"),
+      JSON.stringify({
+        type: "oauth",
+        access: "access",
+        expires: Date.now() + 3_600_000,
+        scopes: ["zone:read", "workers_routes:write"],
+      }),
+    );
+    const auth = loadAlchemyCloudflareAuth({ environment: {}, home });
+    expect(auth).toMatchObject({
+      method: "alchemy-oauth",
+      accountId,
+      scopes: ["zone:read", "workers_routes:write"],
+    });
+    expect(missingPortalOAuthScopes(auth).map(({ scope }) => scope)).toEqual([
+      "dns_records:edit",
+    ]);
+  });
+
+  it("lists the account's zones that can serve Portals and what each already serves", async () => {
+    const results = {
+      [`/zones?account.id=${accountId}&status=active&per_page=50&page=1`]: {
+        result: [
+          { id: "app", name: "example.com" },
+          { id: "fresh", name: "example-portals.dev" },
+          { id: "busy", name: "busy.dev" },
+          { id: "locked", name: "locked.dev" },
+        ],
+        result_info: { total_pages: 1 },
+      },
+      "/zones/fresh/dns_records?per_page=1": {
+        result: [],
+        result_info: { total_count: 0 },
+      },
+      "/zones/fresh/workers/routes": { result: [] },
+      [`/accounts/${accountId}/workers/domains?zone_id=fresh`]: { result: [] },
+      "/zones/busy/dns_records?per_page=1": {
+        result: [{}],
+        result_info: { total_count: 3 },
+      },
+      "/zones/busy/workers/routes": { result: [{}] },
+      [`/accounts/${accountId}/workers/domains?zone_id=busy`]: { result: [] },
+      "/zones/locked/dns_records?per_page=1": 403,
+      "/zones/locked/workers/routes": { result: [] },
+      [`/accounts/${accountId}/workers/domains?zone_id=locked`]: {
+        result: [],
+      },
+    };
+    const fetch = vi.fn(async (url) => {
+      const parsed = new URL(url);
+      const path = parsed.pathname.replace("/client/v4", "") + parsed.search;
+      const result = results[path];
+      if (result === undefined)
+        throw new Error(`Unexpected Cloudflare request: ${path}`);
+      return result === 403
+        ? Response.json({ success: false }, { status: 403 })
+        : Response.json({ success: true, ...result });
+    });
+    // example.com is the app's own site and never offered.
+    await expect(
+      listPortalZoneCandidates({
+        auth: tokenAuth,
+        appDomain: "dx.example.com",
+        fetch,
+      }),
+    ).resolves.toEqual([
+      { id: "fresh", name: "example-portals.dev", inUse: false },
+      {
+        id: "busy",
+        name: "busy.dev",
+        inUse: { dnsRecords: 3, workerRoutes: 1, customDomains: 0 },
+      },
+      { id: "locked", name: "locked.dev", inUse: undefined },
+    ]);
   });
 });

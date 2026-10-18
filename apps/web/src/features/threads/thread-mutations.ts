@@ -42,9 +42,11 @@ const createThread = async (
   runnerProfileId?: RunnerProfileId,
   initialMessage?: InitialThreadMessage,
   threadId?: ThreadId,
+  signal?: AbortSignal,
 ): Promise<typeof CreateThreadResponseSchema.Type> =>
   request("/v1/threads", CreateThreadResponseSchema, {
     method: "POST",
+    ...(signal === undefined ? {} : { signal }),
     body: JSON.stringify({
       ...(projectId === undefined ? {} : { projectId }),
       title,
@@ -196,6 +198,7 @@ export const createThreadMutationOptions = (
               input.runnerProfileId,
               input.initialMessage,
               input.threadId,
+              input.signal,
             )
           : await createThread(
               input.project?.id,
@@ -226,6 +229,8 @@ interface CreateThreadWithInitialMessageMutationInput
   extends CreateBlankThreadMutationInput {
   readonly initialMessage: InitialThreadMessage;
   readonly threadId: ThreadId;
+  /** Abandons this send; the server still finishes what it admitted. */
+  readonly signal?: AbortSignal;
 }
 
 export type CreateThreadMutationInput =

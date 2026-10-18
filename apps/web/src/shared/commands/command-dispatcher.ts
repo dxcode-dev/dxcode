@@ -8,7 +8,9 @@ import type {
 
 const SEQUENCE_TIMEOUT_MS = 700;
 
-const EDITABLE_SELECTOR = "input, textarea, select, [role='textbox']";
+// An application surface (the remote Desktop) handles every key itself.
+const EDITABLE_SELECTOR =
+  "input, textarea, select, [role='textbox'], [role='application']";
 
 const isEditableEvent = (event: KeyboardEvent) => {
   const origin = [...event.composedPath(), event.target].find(

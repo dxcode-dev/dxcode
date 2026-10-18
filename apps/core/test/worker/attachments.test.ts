@@ -283,7 +283,7 @@ const seedDaemonAuthority = async (threadId: string, ownerId: string) => {
       generation: 1,
       apiKeyId: keyId,
       apiKeyHash: createHash("sha256").update(DAEMON_KEY).digest("hex"),
-      release: "0.9.0",
+      release: "0.10.0",
       protocolMajor: 2,
       terminalVersion: 1,
       workloadIdentityVersion: 1,

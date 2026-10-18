@@ -6,6 +6,10 @@ import { loadMigrationManifest } from "../../scripts/migration-manifest.mjs";
 export default defineConfig({
   define: {
     __DX_CORE_DEV_FIXTURES__: "true",
+    // DX_RECORD_SPAN_BASELINE=1 (with -u) rewrites artifacts/message-journey/baseline.json.
+    __DX_RECORD_SPAN_BASELINE__: JSON.stringify(
+      process.env.DX_RECORD_SPAN_BASELINE === "1",
+    ),
   },
   plugins: [
     cloudflareTest(async () => ({

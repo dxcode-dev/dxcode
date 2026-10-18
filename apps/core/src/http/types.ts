@@ -23,6 +23,12 @@ export interface Bindings {
   readonly DX_WORKSPACE_INACTIVITY_MS?: string;
   readonly DX_DXD_PUBLIC_URL?: string;
   /**
+   * The Portal domain: guest port N of a Thread is served at
+   * `https://t-<uuid>-pN.<domain>/`. Absent turns Portals off. `localhost:<port>`
+   * serves them over HTTP for local development.
+   */
+  readonly DX_PORTAL_DOMAIN?: string;
+  /**
    * R2's S3 endpoint for the storage bucket and the JSON
    * `{ accessKeyId, secretAccessKey }` Core signs attachment URLs with.
    * Deployed stages have attachments only with both.

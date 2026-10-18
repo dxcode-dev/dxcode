@@ -1,4 +1,5 @@
 import type { Sandbox } from "@flue/runtime";
+import { encodeBase64 } from "../encoding/base64.js";
 import { CLAUDE_CODE_MCP_SERVER } from "./mcp-server.js";
 import { CHUNK_END_LINE, ClaudeCodeStream } from "./stream.js";
 
@@ -36,6 +37,16 @@ const HEARTBEAT_OBSERVED_MS = 15_000;
 const KEEP_ALIVE_MS = 60_000;
 /** Settled run directories kept for tool-call lookups after a restart. */
 const KEPT_RUNS = 20;
+/**
+ * A failed read of a run's status says nothing about the run; this long
+ * without one that succeeds fails its reader.
+ */
+const UNREADABLE_MS = 60_000;
+/**
+ * A command line is one argument of at most 128 KiB, so a launch whose files
+ * are larger writes them as one file first.
+ */
+const INLINE_LAUNCH_BYTES = 96 * 1024;
 
 export const CLAUDE_CODE_DISALLOWED_TOOLS = [
   "AskUserQuestion",
@@ -160,7 +171,30 @@ export const claudeCodeAttemptNumber = (turn: string, name: string) => {
 
 const chunkName = (index: number) => `c${String(index).padStart(6, "0")}`;
 
-const launchScript = (dir: string, launch: ClaudeCodeLaunch) => {
+/**
+ * Shell that writes each file into the attempt directory `$D`; base64, so
+ * no content is ever read as shell or rewritten by the local runtime's
+ * command-text path mapping.
+ */
+const launchFiles = (files: Readonly<Record<string, string>>) =>
+  Object.entries(files)
+    .map(
+      ([name, content]) =>
+        `base64 -d > "$D/${name}" <<'DX_FILE'\n${(
+          encodeBase64(new TextEncoder().encode(content)).match(/.{1,76}/g) ??
+            []
+        ).join("\n")}\nDX_FILE`,
+    )
+    .join("\n");
+
+const LAUNCH_FILES = "launch-files.sh";
+
+const launchScript = (
+  dir: string,
+  launch: ClaudeCodeLaunch,
+  /** The files' shell, or undefined when it was written to LAUNCH_FILES. */
+  files: string | undefined,
+) => {
   const args = [
     "--output-format",
     "stream-json",
@@ -191,6 +225,15 @@ mkdir -p "$D"
 if [ -e "$D/pid" ]; then echo running; exit 0; fi
 # Stopped before it started: never start it.
 if [ -e "$D/exit" ]; then echo stopped; exit 0; fi
+# A launch that fails before the CLI starts records its exit code, so the
+# next call starts another attempt instead of waiting on this one.
+launched=""
+finish() {
+  code=$?
+  if [ -z "$launched" ] && [ "$code" -ne 0 ] && [ ! -e "$D/exit" ]; then echo "$code" > "$D/exit"; fi
+}
+trap finish EXIT
+${files ?? `. "$D/${LAUNCH_FILES}"`}
 # A recorded PID is killed only while it is still that run's runner: after a
 # container restart the number can belong to any process.
 ours() { tr '\\0' ' ' < "/proc/$2/cmdline" 2>/dev/null | grep -qF "$1/runner.sh"; }
@@ -213,8 +256,11 @@ done
 CLAUDE="$(command -v claude || true)"
 if [ -z "$CLAUDE" ] && [ -x "$HOME/.local/bin/claude" ]; then CLAUDE="$HOME/.local/bin/claude"; fi
 if [ -z "$CLAUDE" ]; then
-  curl -fsSL https://claude.ai/install.sh | bash > "$D/install.log" 2>&1 || { echo "Claude Code could not be installed." >&2; tail -n 20 "$D/install.log" >&2; exit 3; }
   CLAUDE="$HOME/.local/bin/claude"
+  if ! (set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash) > "$D/install.log" 2>&1 || [ ! -x "$CLAUDE" ]; then
+    { echo "Claude Code could not be installed."; tail -n 20 "$D/install.log"; } | tee "$D/stderr.log" >&2
+    exit 3
+  fi
 fi
 RESUME=""
 if [ -s "$S/session" ]; then RESUME="--resume $(cat "$S/session")"; : > "$D/resumed"; fi
@@ -237,6 +283,7 @@ unset NODE_TLS_REJECT_UNAUTHORIZED NODE_EXTRA_CA_CERTS CLAUDE_CONFIG_DIR
 cd ${quote(WORKSPACE)}
 setsid nohup bash "$D/runner.sh" "$CLAUDE" ${args} $RESUME > /dev/null 2>&1 < /dev/null &
 echo $! > "$D/pid"
+launched=1
 echo started`;
 };
 
@@ -303,8 +350,10 @@ else
 fi
 # mawk, the sandbox image's awk, reads a pipe in large blocks unless
 # interactive; Claude's output would then arrive only when the run exits.
+# The banner is read whole: under pipefail, \`grep -q\` stopping at its first
+# line can fail the version command with SIGPIPE and miss mawk.
 AWK=(awk)
-if awk -W version 2>&1 | grep -q mawk; then AWK=(awk -W interactive); fi
+case "$(awk -W version 2>&1)" in *mawk*) AWK=(awk -W interactive) ;; esac
 run "$@" "\${MCP[@]}" < "$D/input.jsonl" 2> "$D/stderr.log" |
   "\${AWK[@]}" -v dir="$D" -v end='${CHUNK_END_LINE}' 'BEGIN { n = 0; size = 0; f = sprintf("%s/c%06d", dir, n) }
     { print > f; fflush(f); size += length($0) + 1
@@ -328,6 +377,8 @@ export class ClaudeCodeRun {
   #beatChangedAt = Date.now();
   #beatCheckedAt = 0;
   #keptAliveAt = 0;
+  /** When the current run of failed status reads began. */
+  #unreadableSince: number | undefined;
 
   constructor(
     readonly key: string,
@@ -336,6 +387,21 @@ export class ClaudeCodeRun {
   ) {
     this.dir = `${claudeCodeRunsRoot}/${key}`;
     this.#base = base;
+  }
+
+  /** Nothing of this run has been read yet. */
+  get unread() {
+    return this.#chunk === 0 && this.#lines === 0;
+  }
+
+  /**
+   * A separate reader of this run that starts at chunk `index`, for a
+   * lookup that needs only what Claude wrote from there on.
+   */
+  readerFrom(index: number) {
+    const reader = new ClaudeCodeRun(this.key, this.sandbox, this.#base);
+    reader.#chunk = index;
+    return reader;
   }
 
   /** The turn's Flue segment this attempt's first segment answers. */
@@ -358,38 +424,34 @@ export class ClaudeCodeRun {
     return this.#dead;
   }
 
-  /** Whether an earlier attempt already launched this run. */
-  launched() {
-    return this.sandbox.exists(`${this.dir}/pid`);
-  }
-
+  /**
+   * Writes the attempt's files and starts the CLI in one command; an attempt
+   * an earlier call already launched is left alone.
+   */
   async launch(launch: ClaudeCodeLaunch, signal?: AbortSignal) {
-    if (await this.launched()) return;
-    await this.sandbox.mkdir(this.dir, { recursive: true });
-    await this.sandbox.writeFile(`${this.dir}/base`, String(this.#base ?? 0));
-    await this.sandbox.writeFile(`${this.dir}/prompt.txt`, launch.systemPrompt);
-    await this.sandbox.writeFile(`${this.dir}/runner.sh`, RUNNER);
-    if (launch.tools.length > 0) {
-      await this.sandbox.writeFile(
-        `${this.dir}/dx-tools.json`,
-        JSON.stringify(launch.tools),
-      );
-      await this.sandbox.writeFile(
-        `${this.dir}/dx-mcp.py`,
-        CLAUDE_CODE_MCP_SERVER,
-      );
-    }
-    await this.sandbox.writeFile(
-      `${this.dir}/input.jsonl`,
-      `${JSON.stringify({
+    let files: string | undefined = launchFiles({
+      base: String(this.#base ?? 0),
+      "prompt.txt": launch.systemPrompt,
+      "runner.sh": RUNNER,
+      ...(launch.tools.length > 0
+        ? {
+            "dx-tools.json": JSON.stringify(launch.tools),
+            "dx-mcp.py": CLAUDE_CODE_MCP_SERVER,
+          }
+        : {}),
+      "input.jsonl": `${JSON.stringify({
         type: "user",
         message: { role: "user", content: launch.input },
         parent_tool_use_id: null,
         session_id: "",
       })}\n`,
-    );
+    });
+    if (files.length > INLINE_LAUNCH_BYTES) {
+      await this.sandbox.writeFile(`${this.dir}/${LAUNCH_FILES}`, files);
+      files = undefined;
+    }
     const result = await this.sandbox.exec(
-      `bash -c ${quote(launchScript(this.dir, launch))}`,
+      `bash -c ${quote(launchScript(this.dir, launch, files))}`,
       {
         env: { ...CLI_ENVIRONMENT, CLAUDE_CODE_OAUTH_TOKEN: launch.token },
         timeoutMs: 180_000,
@@ -446,9 +508,13 @@ export class ClaudeCodeRun {
       this.#chunk += 1;
       this.#lines = 0;
     }
+    if (progressed) this.#unreadableSince = undefined;
     if (!progressed && !this.#exited && !this.stream.finished) {
-      this.#exited = await this.sandbox.exists(`${this.dir}/exit`);
-      if (!this.#exited) await this.#checkHeartbeat();
+      const exited = await this.#status(() =>
+        this.sandbox.exists(`${this.dir}/exit`),
+      );
+      if (exited !== undefined) this.#exited = exited;
+      if (exited === false) await this.#checkHeartbeat();
     }
     if (
       !this.#exited &&
@@ -472,6 +538,28 @@ export class ClaudeCodeRun {
   }
 
   /**
+   * Reads part of the run's status. A failed read is no answer, never a
+   * stale or missing one; failures that last UNREADABLE_MS fail the reader.
+   */
+  async #status<A>(read: () => Promise<A>): Promise<A | undefined> {
+    try {
+      const value = await read();
+      this.#unreadableSince = undefined;
+      return value;
+    } catch (error) {
+      const now = Date.now();
+      this.#unreadableSince ??= now;
+      if (now - this.#unreadableSince >= UNREADABLE_MS)
+        throw new Error(
+          `Claude Code's run could not be read for a minute: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      return undefined;
+    }
+  }
+
+  /**
    * A process lost with its sandbox (a container restart keeps only files)
    * never writes its exit marker; a heartbeat that stays old marks it dead.
    */
@@ -479,9 +567,17 @@ export class ClaudeCodeRun {
     const now = Date.now();
     if (now - this.#beatCheckedAt < HEARTBEAT_CHECK_MS) return;
     this.#beatCheckedAt = now;
-    const beat = (
-      await this.sandbox.readFile(`${this.dir}/alive`).catch(() => "")
-    ).trim();
+    const path = `${this.dir}/alive`;
+    const beat = await this.#status(async () => {
+      try {
+        return (await this.sandbox.readFile(path)).trim();
+      } catch (error) {
+        // Only a heartbeat known to be missing reads as none.
+        if (await this.sandbox.exists(path)) throw error;
+        return "";
+      }
+    });
+    if (beat === undefined) return;
     if (beat !== this.#beat) {
       this.#beat = beat;
       this.#beatChangedAt = now;
@@ -504,7 +600,9 @@ export class ClaudeCodeRun {
   async settle() {
     while (await this.poll()) {}
     if (!this.#exited && !this.stream.finished)
-      this.#exited = await this.sandbox.exists(`${this.dir}/exit`);
+      this.#exited =
+        (await this.#status(() => this.sandbox.exists(`${this.dir}/exit`))) ??
+        false;
     // The last lines can land just before the exit marker that ended the
     // loop above; one more read keeps a finished run from looking lost.
     if (this.#exited) while (await this.poll()) {}
@@ -567,23 +665,34 @@ export class ClaudeCodeRun {
     }
   }
 
-  async stop() {
-    await this.sandbox
+  /**
+   * Stops the run unless it already exited. Given a tool call id, also
+   * answers with the first chunk that names it.
+   */
+  async stop(locate?: string) {
+    const find =
+      locate !== undefined && /^[A-Za-z0-9_-]+$/.test(locate)
+        ? `\ngrep -l -F -- ${quote(locate)} "$D"/c[0-9]* 2>/dev/null | head -n 1`
+        : "";
+    const result = await this.sandbox
       .exec(
         `bash -c ${quote(`D=${quote(this.dir)}
-[ -f "$D/exit" ] && exit 0
-: > "$D/stopped"
-pid=$(cat "$D/pid" 2>/dev/null || true)
-if [ -n "$pid" ] && tr '\\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -qF "$D/runner.sh"; then
-  kill -TERM -- "-$pid" 2>/dev/null || true
-  sleep 1
-  kill -KILL -- "-$pid" 2>/dev/null || true
-fi
-[ -f "$D/exit" ] || echo 143 > "$D/exit"`)}`,
+if [ ! -f "$D/exit" ]; then
+  : > "$D/stopped"
+  pid=$(cat "$D/pid" 2>/dev/null || true)
+  if [ -n "$pid" ] && tr '\\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -qF "$D/runner.sh"; then
+    kill -TERM -- "-$pid" 2>/dev/null || true
+    sleep 1
+    kill -KILL -- "-$pid" 2>/dev/null || true
+  fi
+  [ -f "$D/exit" ] || echo 143 > "$D/exit"
+fi${find}`)}`,
         { timeoutMs: 15_000 },
       )
       .catch(() => undefined);
     this.#exited = true;
+    const chunk = /\/c(\d{6})\s*$/.exec(result?.stdout ?? "")?.[1];
+    return chunk === undefined ? undefined : Number(chunk);
   }
 
   /**

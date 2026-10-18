@@ -84,8 +84,6 @@ interface ThreadRow {
   readonly activity_status: "idle" | "working";
   readonly last_activity_at: string | null;
   readonly created_at: string;
-  readonly conversation_mode: string;
-  readonly workspace_access: string | null;
 }
 
 /** What the tools report for one Thread. */
@@ -189,8 +187,7 @@ export const createThreadTools = (
     const rows = await context.db
       .prepare(
         `SELECT id, title, title_pending_until, project_id, parent_thread_id, color,
-           lifecycle_state, activity_status, last_activity_at, created_at,
-           conversation_mode, workspace_access
+           lifecycle_state, activity_status, last_activity_at, created_at
          FROM threads
          WHERE owner_user_id = ? AND lifecycle_state != 'deleted'
            AND id IN (${threadIds.map(() => "?").join(", ")})${
@@ -518,14 +515,6 @@ export const createThreadTools = (
           if (thread.lifecycle_state !== "active")
             throw new Error(`Thread ${data.thread} is archived.`);
           const working = thread.activity_status === "working";
-          // In a shared Thread in chat mode an untagged message would stay
-          // chat between members; this one is for the agent.
-          const body =
-            thread.workspace_access !== null &&
-            thread.workspace_access !== "none" &&
-            thread.conversation_mode === "chat"
-              ? `@dx ${data.message}`
-              : data.message;
           signal?.throwIfAborted();
           const { response, payload } = await ownerRequest(
             context,
@@ -534,7 +523,7 @@ export const createThreadTools = (
             `/v1/agents/dx/${encodeURIComponent(data.thread)}`,
             {
               kind: "user",
-              body,
+              body: data.message,
               idempotencyKey: await sha256Hex(`${callSeed(toolCallId)}:send`),
             },
           );

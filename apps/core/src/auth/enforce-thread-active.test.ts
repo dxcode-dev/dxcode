@@ -16,6 +16,7 @@ const createApp = (lifecycleState: "active" | "archived") => {
   app.use("/v1/threads/:threadId/terminal", enforceThreadActive);
   app.use("/v1/threads/:threadId/files", enforceThreadActive);
   app.use("/v1/threads/:threadId/files/*", enforceThreadActive);
+  app.use("/v1/threads/:threadId/desktop/*", enforceThreadActive);
   app.use("/v1/agents/dx/:threadId", enforceThreadActive);
   app.use("/v1/agents/dx/:threadId/:subpath{.+}", enforceThreadActive);
   app.all("*", (context) => context.body(null, 204));
@@ -27,11 +28,14 @@ describe("archived Thread execution admission", () => {
     ["terminal open", `/v1/threads/${threadId}/terminal`],
     ["Files tree read", `/v1/threads/${threadId}/files`],
     ["Files content read", `/v1/threads/${threadId}/files/src%2Findex.ts`],
+    ["Desktop status check", `/v1/threads/${threadId}/desktop`],
+    ["Desktop control socket", `/v1/threads/${threadId}/desktop/control`],
+    ["Desktop stream socket", `/v1/threads/${threadId}/desktop/stream`],
     ["Flue submission", `/v1/agents/dx/${threadId}`],
     ["Flue abort", `/v1/agents/dx/${threadId}/abort`],
   ])("blocks archived %s before execution", async (_label, path) => {
     const response = await createApp("archived").request(path, {
-      method: path.includes("/files") ? "GET" : "POST",
+      method: path.startsWith("/v1/threads/") ? "GET" : "POST",
     });
 
     expect(response.status).toBe(409);

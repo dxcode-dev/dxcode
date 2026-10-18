@@ -67,6 +67,27 @@ describe("central command dispatcher", () => {
     expect(actions.navigateHome).toHaveBeenCalledOnce();
   });
 
+  it("leaves every key to an application surface such as the remote Desktop", () => {
+    const actions = runtime();
+    const handler = createCommandKeydownHandler({
+      registry: createCommandRegistry({ platform: "linux" }),
+      runtime: actions,
+      getContext: () => "app",
+      document,
+    });
+    const surface = document.body.appendChild(document.createElement("div"));
+    surface.setAttribute("role", "application");
+    const canvas = surface.appendChild(document.createElement("canvas"));
+    canvas.addEventListener("keydown", handler);
+    const first = key("g");
+    canvas.dispatchEvent(first);
+    canvas.dispatchEvent(key("g"));
+    canvas.dispatchEvent(key("k", { ctrlKey: true }));
+    expect(actions.navigateHome).not.toHaveBeenCalled();
+    expect(actions.openCommandPalette).not.toHaveBeenCalled();
+    expect(first.defaultPrevented).toBe(false);
+  });
+
   it("records g g for home without dispatching any shortcut while recording", () => {
     const actions = runtime();
     const registry = createCommandRegistry({ platform: "linux" });

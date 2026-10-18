@@ -27,12 +27,15 @@ export const PersonalSettingsContextDataSchema = Schema.Struct({
   /** Derived from Speech plugin resolution; present with `dictation`. */
   dictationAvailable: Schema.optional(Schema.Boolean),
   dictation: Schema.optional(DictationProviderDataSchema),
+  /** The deployment's Portal domain; absent when Portals are off. */
+  portalDomain: Schema.optional(Schema.String),
 });
 
 export const WorkspaceSettingsContextDataSchema = Schema.Struct({
   activeScope: Schema.Literal("workspace"),
   workspace: SettingsWorkspaceDataSchema,
   dictationAvailable: Schema.optional(Schema.Boolean),
+  portalDomain: Schema.optional(Schema.String),
 });
 
 export const SettingsContextDataSchema = Schema.Union([

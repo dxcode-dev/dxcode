@@ -9,11 +9,7 @@ import {
   claudePlanWindowName,
   parseClaudePlanLimit,
 } from "@dx/domain";
-import {
-  type FailedSend,
-  isInputTooLargeError,
-  type UseFlueAgentResult,
-} from "@flue/react";
+import type { FailedSend, UseFlueAgentResult } from "@flue/react";
 import {
   AlertCircle,
   ArrowUp,
@@ -46,6 +42,7 @@ import {
 } from "./image-attachments-ui.js";
 import { useImageDropTarget } from "./image-drop-target.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
+import { sendRefusal } from "./send-failure.js";
 import {
   type ComposerMentions,
   useComposerMentions,
@@ -55,7 +52,6 @@ import { draftMode } from "./sharing/thread-chat.js";
 import type {
   OptimisticThreadCreation,
   PendingSubmissionControl,
-  PendingSubmissionImageRetention,
 } from "./thread-session-registry.js";
 import {
   INBOUND_MESSAGE_PREFIX,
@@ -66,6 +62,7 @@ import { deriveTranscriptViewModel } from "./transcript-view-model.js";
 import {
   type PresentationValue,
   usePresentationValue,
+  useThreadPresentation,
   useThreadPresentationValue,
 } from "./use-thread-presentation.js";
 
@@ -243,6 +240,17 @@ const isModelRoutingError = (error: unknown) => {
   );
 };
 
+/** Core refused the run at Orb start because its source grant changed. */
+const sourceAccessDenial = (error: unknown) => {
+  if (typeof error !== "object" || error === null) return undefined;
+  const { type, message, details } = error as Record<string, unknown>;
+  if (type !== "source_authorization_denied") return undefined;
+  return {
+    title: typeof message === "string" ? message : "Source access needed",
+    message: typeof details === "string" ? details : "",
+  };
+};
+
 const threadErrorPresentation = (
   agent: UseFlueAgentResult,
   dismissed: ReadonlySet<string>,
@@ -281,6 +289,15 @@ const threadErrorPresentation = (
         `settlement:${latestSettlement.submissionId}`,
         claudePlanLimit,
       );
+    const sourceDenied = latestSettlementFailed
+      ? sourceAccessDenial(latestSettlement.error)
+      : undefined;
+    if (sourceDenied !== undefined)
+      return {
+        id: `settlement:${latestSettlement.submissionId}`,
+        ...sourceDenied,
+        action: "resume",
+      };
     if (latestSettlementFailed && isModelRoutingError(latestSettlement.error)) {
       return {
         id: `settlement:${latestSettlement.submissionId}`,
@@ -422,6 +439,7 @@ function AgentThreadErrorCard({
   archived,
   onActionErrorChange,
   onOpenModelRouting,
+  onRetrySend,
 }: {
   readonly agent: UseFlueAgentResult;
   readonly actionError?: ThreadErrorPresentation;
@@ -430,6 +448,7 @@ function AgentThreadErrorCard({
     error: ThreadErrorPresentation | undefined,
   ) => void;
   readonly onOpenModelRouting?: () => void;
+  readonly onRetrySend: (failedSend: FailedSend) => Promise<void>;
 }) {
   const [dismissed, setDismissed] = React.useState(() => new Set<string>());
   const [retrying, setRetrying] = React.useState(false);
@@ -458,11 +477,7 @@ function AgentThreadErrorCard({
     setRetrying(true);
     try {
       if (error.action === "retry-send" && error.failedSend !== undefined) {
-        if (error.failedSend.retry === "resend") {
-          await agent.resendPrompt(error.failedSend.id);
-        } else {
-          await agent.retrySend(error.failedSend.id);
-        }
+        await onRetrySend(error.failedSend);
       } else if (error.action === "refresh") {
         agent.refresh();
         return;
@@ -596,6 +611,7 @@ function AgentComposer({
           aria-label="Message"
           data-command-target="thread-composer"
           disabled={draftLocked}
+          readOnly={draftLocked}
           placeholder="Message"
           value={draft}
           {...composerMentions.textareaProps}
@@ -646,13 +662,23 @@ function AgentComposer({
               aria-label={
                 agentActive ? "Send steering message" : "Send message"
               }
+              aria-busy={draftLocked || undefined}
+              data-submitting={draftLocked ? "" : undefined}
               disabled={
                 draftLocked ||
                 uploading ||
                 (!dictation.active && !draft.trim() && images.length === 0)
               }
             >
-              <ArrowUp />
+              {draftLocked ? (
+                // The New Thread composer's mark while it creates.
+                <span
+                  className="processing-dot dictation-processing-dot"
+                  aria-hidden="true"
+                />
+              ) : (
+                <ArrowUp />
+              )}
             </Button>
           )}
           {stopAvailable ? (
@@ -687,38 +713,14 @@ const isReadOnlyRejection = (cause: unknown) =>
   "code" in cause.body.data &&
   cause.body.data.code === "THREAD_READ_ONLY";
 
-/**
- * Core refused the message itself, for example an attachment that is no
- * longer available: its reason, so the person can fix the message.
- */
-const admissionRejection = (cause: unknown) => {
-  if (
-    !(cause instanceof Error) ||
-    !("status" in cause) ||
-    cause.status !== 400 ||
-    !("body" in cause) ||
-    typeof cause.body !== "object" ||
-    cause.body === null ||
-    !("data" in cause.body) ||
-    typeof cause.body.data !== "object" ||
-    cause.body.data === null ||
-    !("code" in cause.body.data) ||
-    cause.body.data.code !== "INVALID_REQUEST" ||
-    !("message" in cause.body.data) ||
-    typeof cause.body.data.message !== "string"
-  )
-    return undefined;
-  return cause.body.data.message;
-};
-
 function useAgentSubmission({
   agent,
   mentions,
-  setDraft,
+  draftValue,
   images,
   setImages,
   imageCollection,
-  submissionImageRetention,
+  discardSends,
   submissionPending,
   submissionControl,
   onSubmissionPendingChange,
@@ -727,21 +729,24 @@ function useAgentSubmission({
   readonly onAccessChanged?: () => void;
   readonly agent: UseFlueAgentResult;
   readonly mentions?: ComposerMentions;
-  readonly setDraft: (draft: string) => void;
+  readonly draftValue: PresentationValue<string>;
   readonly images: ReadonlyArray<PendingAttachment>;
   readonly setImages: (images: ReadonlyArray<PendingAttachment>) => void;
   readonly imageCollection: PendingAttachmentCollection;
-  readonly submissionImageRetention?: PendingSubmissionImageRetention;
+  /** Failed sends an edited message replaced; Flue has no discard. */
+  readonly discardSends: (ids: ReadonlyArray<string>) => void;
   readonly submissionPending: boolean;
   readonly submissionControl: PendingSubmissionControl;
   readonly onSubmissionPendingChange?: (pending: boolean) => void;
 }) {
   const [admissionPending, setAdmissionPending] = React.useState(false);
+  // The latest send failed. The rendered Flue snapshot is up to a frame
+  // behind, so it can still show that send's echo as pending.
+  const [sendFailed, setSendFailed] = React.useState(false);
   // A chat message being admitted has no run to stop.
   const [admittingChat, setAdmittingChat] = React.useState(false);
   const submitInFlight = React.useRef(false);
   const submitGeneration = React.useRef(0);
-  const composerMounted = React.useRef(false);
   const [actionError, setActionError] =
     React.useState<ThreadErrorPresentation>();
   const finishAdmission = () => {
@@ -768,6 +773,70 @@ function useAgentSubmission({
       submissionControl.stopRequested = true;
     await stopAgent();
   };
+  const modeOf = (message: string) =>
+    mentions?.mode === "members"
+      ? draftMode(
+          message,
+          mentions.members,
+          mentions.viewerId,
+          mentions.conversationMode,
+        )
+      : "agent";
+  /**
+   * Holds the composer's message, read-only, while `deliver` sends a message,
+   * and lets go of it only once the server has that message. `deliver` gets
+   * the composer's message with its attachments and returns the one it sent.
+   * A refusal or a lost connection leaves the composer as it was.
+   */
+  const admit = (
+    mode: ReturnType<typeof modeOf>,
+    text: string,
+    deliver: (held: string) => Promise<string>,
+  ) => {
+    if (submitInFlight.current || submissionPending) return Promise.resolve();
+    submitInFlight.current = true;
+    submissionControl.stopRequested = false;
+    onSubmissionPendingChange?.(true);
+    const generation = ++submitGeneration.current;
+    setAdmittingChat(mode === "chat");
+    setAdmissionPending(true);
+    setSendFailed(false);
+    setActionError(undefined);
+    const runAdmission = async () => {
+      try {
+        await imageCollection.settle();
+        if (generation !== submitGeneration.current) return;
+        const held = await messageWithAttachments(text, imageCollection.list());
+        const sent = await deliver(held);
+        if (mentions?.mode === "members") mentions.onSent(mode);
+        if (submissionControl.stopRequested) await stopAgent();
+        if (sent === held) {
+          draftValue.set("");
+          disposeAttachments(imageCollection.take());
+          setImages([]);
+        }
+      } catch (cause) {
+        // A refused message stays in the composer with its reason. One the
+        // server may hold stays there too, and in Flue's failed send, whose
+        // key an unedited Send or Retry reuses, so it cannot duplicate.
+        const refusal = sendRefusal(cause);
+        if (isReadOnlyRejection(cause)) onAccessChanged?.();
+        setSendFailed(true);
+        setActionError({
+          // A Retry card for a failed send replaces only the generic error.
+          id: refusal === undefined ? "action:send" : "action:send-refused",
+          title: "Message not sent",
+          message: refusal ?? "Check your connection.",
+          action: "none",
+        });
+      }
+    };
+    return runAdmission().finally(finishAdmission);
+  };
+  const deliverFailedSend = (failed: FailedSend) =>
+    failed.retry === "resend"
+      ? agent.resendPrompt(failed.id)
+      : agent.retrySend(failed.id);
   const submit = async (submittedDraft: string) => {
     const message = submittedDraft.trim();
     if (
@@ -789,15 +858,7 @@ function useAgentSubmission({
       });
       return;
     }
-    const mode =
-      mentions?.mode === "members"
-        ? draftMode(
-            message,
-            mentions.members,
-            mentions.viewerId,
-            mentions.conversationMode,
-          )
-        : "agent";
+    const mode = modeOf(message);
     if (mode === "chat" && images.length > 0) {
       setActionError({
         id: "action:send",
@@ -808,89 +869,35 @@ function useAgentSubmission({
       });
       return;
     }
-    submitInFlight.current = true;
-    submissionControl.stopRequested = false;
-    onSubmissionPendingChange?.(true);
-    const generation = ++submitGeneration.current;
-    setAdmittingChat(mode === "chat");
-    setAdmissionPending(true);
-    const runAdmission = async () => {
-      let submittedImages: ReadonlyArray<PendingAttachment> | undefined;
-      let imagesRetained = false;
-      try {
-        await imageCollection.settle();
-        if (generation !== submitGeneration.current) return;
-        submittedImages = imageCollection.take();
-        imagesRetained =
-          submissionImageRetention?.retain(submittedImages) ?? false;
-        setDraft("");
-        setImages([]);
-        setActionError(undefined);
-        await agent.sendMessage(
-          await messageWithAttachments(message, submittedImages),
-        );
-        if (mentions?.mode === "members") mentions.onSent(mode);
-        if (submissionControl.stopRequested) await stopAgent();
-        if (
-          !imagesRetained ||
-          submissionImageRetention?.complete(submittedImages)
-        )
-          disposeAttachments(submittedImages);
-      } catch (cause) {
-        const rejection = admissionRejection(cause);
-        if (
-          submittedImages !== undefined &&
-          (isInputTooLargeError(cause) || rejection !== undefined) &&
-          composerMounted.current
-        ) {
-          if (imagesRetained)
-            submissionImageRetention?.complete(submittedImages);
-          setDraft(message);
-          setImages(imageCollection.restore(submittedImages));
-        } else if (submittedImages !== undefined) {
-          if (imagesRetained)
-            submissionImageRetention?.complete(submittedImages);
-          disposeAttachments(submittedImages);
-        }
-        if (isReadOnlyRejection(cause)) {
-          // Refresh access so the composer gives way to the viewer notice.
-          onAccessChanged?.();
-          if (!composerMounted.current) return;
-          setDraft(message);
-          setActionError({
-            id: "action:send",
-            title: "Message not sent",
-            message: "Multiplayer ended. You can still view this thread.",
-            action: "none",
-          });
-          return;
-        }
-        if (!composerMounted.current) return;
-        // Refused messages keep their text so the person can correct them.
-        if (rejection !== undefined && submittedImages === undefined)
-          setDraft(message);
-        setActionError({
-          id: "action:send",
-          title: "Message not sent",
-          message:
-            rejection ??
-            (isInputTooLargeError(cause)
-              ? "The message or attachments are too large."
-              : "Check your connection."),
-          action: "none",
-        });
+    await admit(mode, message, async (held) => {
+      // Unedited since it failed: send it under its key again. Edited: the
+      // new message replaces the failed one.
+      const failed = agent.failedSends.findLast(
+        ({ message: sent }) => sent === held,
+      );
+      if (failed !== undefined) await deliverFailedSend(failed);
+      else {
+        discardSends(agent.failedSends.map(({ id }) => id));
+        await agent.sendMessage(held);
       }
-    };
-    return runAdmission().finally(finishAdmission);
+      return held;
+    });
   };
+  /** The failed-send card's Retry; clears the composer if it held that one. */
+  const retrySend = (failed: FailedSend) =>
+    admit(modeOf(failed.message), draftValue.get().trim(), async () => {
+      await deliverFailedSend(failed);
+      return failed.message;
+    });
   return {
     actionError,
-    composerMounted,
     admissionPending,
+    sendFailed,
     admittingChat,
     setActionError,
     stop,
     submit,
+    retrySend,
   };
 }
 
@@ -920,7 +927,6 @@ interface AgentPanelProps {
   readonly images?: ReadonlyArray<PendingAttachment>;
   readonly onImagesChange?: (images: ReadonlyArray<PendingAttachment>) => void;
   readonly imageCollection?: PendingAttachmentCollection;
-  readonly submissionImageRetention?: PendingSubmissionImageRetention;
   readonly submissionPending?: boolean;
   readonly submissionControl?: PendingSubmissionControl;
   readonly onSubmissionPendingChange?: (pending: boolean) => void;
@@ -1066,6 +1072,57 @@ const withInboundMessages = (
   ];
 };
 
+/**
+ * Flue keeps a failed echo for every rejected send and offers no discard. A
+ * refused send is in the composer with its reason, and one an edited message
+ * replaced is gone, so both leave the transcript, the Retry card, and the
+ * session error.
+ */
+const withoutDroppedSends = <Agent extends UseFlueAgentResult>(
+  agent: Agent,
+  discarded: ReadonlySet<string>,
+): Agent => {
+  const dropped = agent.failedSends.filter(
+    ({ id, error }) => discarded.has(id) || sendRefusal(error) !== undefined,
+  );
+  if (dropped.length === 0) return agent;
+  const ids = new Set(dropped.map(({ id }) => id));
+  return {
+    ...agent,
+    failedSends: agent.failedSends.filter(({ id }) => !ids.has(id)),
+    messages: agent.messages.filter(({ id }) => !ids.has(id)),
+    error: dropped.some(({ error }) => error === agent.error)
+      ? undefined
+      : agent.error,
+  };
+};
+
+/**
+ * Flue echoes a message into the transcript before the server has it. dx
+ * shows a message once it is durable: until then, and after its send fails,
+ * the composer holds it. So the transcript leaves out failed echoes and, until
+ * the latest send is confirmed, the newest echo Flue has not admitted.
+ */
+const withoutUnsentEchoes = <Agent extends UseFlueAgentResult>(
+  agent: Agent,
+  unconfirmed: boolean,
+): Agent => {
+  const failed = new Set(agent.failedSends.map(({ id }) => id));
+  const pending = unconfirmed
+    ? agent.messages.findLast(
+        ({ id, role, submissionId }) =>
+          role === "user" && submissionId === undefined && !failed.has(id),
+      )
+    : undefined;
+  if (failed.size === 0 && pending === undefined) return agent;
+  return {
+    ...agent,
+    messages: agent.messages.filter(
+      ({ id }) => !failed.has(id) && id !== pending?.id,
+    ),
+  };
+};
+
 /** The transcript model and run state the panel derives from Flue. */
 function useAgentRunState({
   agent,
@@ -1128,10 +1185,12 @@ function useAgentRunState({
       chatEcho,
     ],
   );
-  // Only chat is on its way and nothing runs: the agent is not working.
+  // Only chat is on its way and nothing runs: the agent is not working. The
+  // composer's pending message has no row yet, so its own mode counts.
   const sendingOnlyChat =
     agent.status === "submitted" &&
-    model.rows.some((row) => row.kind === "user-prompt" && !row.admitted) &&
+    ((admissionPending && admittingChat) ||
+      model.rows.some((row) => row.kind === "user-prompt" && !row.admitted)) &&
     model.rows.every(
       (row) => row.kind !== "user-prompt" || row.admitted || row.chat === true,
     ) &&
@@ -1150,7 +1209,7 @@ function useAgentRunState({
 }
 
 export function AgentPanel({
-  agent,
+  agent: observedAgent,
   agentInitialization,
   archived = false,
   showArchivedNotice = false,
@@ -1161,7 +1220,6 @@ export function AgentPanel({
   images: controlledImages,
   onImagesChange,
   imageCollection: retainedImageCollection,
-  submissionImageRetention,
   submissionPending = false,
   submissionControl: retainedSubmissionControl,
   onSubmissionPendingChange,
@@ -1179,6 +1237,13 @@ export function AgentPanel({
   onFocusHandled,
   onFocusRequested,
 }: AgentPanelProps) {
+  const [discardedSends, setDiscardedSends] = useThreadPresentation<
+    ReadonlySet<string>
+  >("discarded-sends", () => new Set());
+  const agent = React.useMemo(
+    () => withoutDroppedSends(observedAgent, discardedSends),
+    [observedAgent, discardedSends],
+  );
   const retainedDraft = useThreadPresentationValue("draft", "");
   const draftValue = ownerDraft ?? retainedDraft;
   const { images, setImages, imageCollection } = usePendingImages(
@@ -1194,28 +1259,40 @@ export function AgentPanel({
   const submissionControl = retainedSubmissionControl ?? localSubmissionControl;
   const {
     actionError,
-    composerMounted,
     admissionPending,
+    sendFailed,
     admittingChat,
     setActionError,
     stop,
     submit,
+    retrySend,
   } = useAgentSubmission({
     agent,
     mentions,
-    setDraft: draftValue.set,
+    draftValue,
     images,
     setImages,
     imageCollection,
-    submissionImageRetention,
+    discardSends: (ids) => {
+      if (ids.length > 0)
+        setDiscardedSends((current) => new Set([...current, ...ids]));
+    },
     submissionPending,
     submissionControl,
     onSubmissionPendingChange,
     onAccessChanged,
   });
+  const shownAgent = React.useMemo(
+    () =>
+      withoutUnsentEchoes(
+        agent,
+        admissionPending || submissionPending || sendFailed,
+      ),
+    [agent, admissionPending, submissionPending, sendFailed],
+  );
   const { model, agentActive, draftLocked, stopAvailable, statusMessage } =
     useAgentRunState({
-      agent,
+      agent: shownAgent,
       inboundMessages,
       mentions,
       admissionPending,
@@ -1259,15 +1336,11 @@ export function AgentPanel({
 
   const composerLifetimeRef = React.useCallback(
     (node: HTMLFormElement | null) => {
-      if (node === null) return;
-      composerMounted.current = true;
-      return () => {
-        composerMounted.current = false;
-        if (retainedImageCollection === undefined)
-          void imageCollection.settle().then(() => imageCollection.dispose());
-      };
+      if (node === null || retainedImageCollection !== undefined) return;
+      return () =>
+        void imageCollection.settle().then(() => imageCollection.dispose());
     },
-    [composerMounted, imageCollection, retainedImageCollection],
+    [imageCollection, retainedImageCollection],
   );
   const errorCard = (
     <AgentThreadErrorCard
@@ -1276,6 +1349,7 @@ export function AgentPanel({
       archived={archived}
       onActionErrorChange={setActionError}
       onOpenModelRouting={onOpenModelRouting}
+      onRetrySend={retrySend}
     />
   );
 
@@ -1313,7 +1387,7 @@ export function AgentPanel({
               archived={archived}
               historyReady={agent.historyReady}
               messageCount={
-                agent.messages.length +
+                shownAgent.messages.length +
                 (optimisticCreation !== undefined && !initialSubmissionObserved
                   ? 1
                   : 0)

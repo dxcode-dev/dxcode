@@ -174,6 +174,30 @@ export const CreateThreadInitialAdmissionUnavailableResponseSchema =
     "The initial prompt could not be accepted. Please retry.",
   );
 
+/** Flue refused the first message itself; retrying it unchanged fails again. */
+export const CreateThreadInitialMessageRejectedResponseSchema = errorResponse(
+  "INITIAL_MESSAGE_REJECTED",
+  "The first message could not be accepted.",
+);
+
+export const CreateThreadInitialMessageTooLargeResponseSchema = errorResponse(
+  "INITIAL_MESSAGE_TOO_LARGE",
+  "The first message is too large.",
+);
+
+/** The Thread's agent already holds a different first message. */
+export const CreateThreadInitialSubmissionConflictResponseSchema =
+  errorResponse(
+    "INITIAL_SUBMISSION_CONFLICT",
+    "This Thread already has a different first message.",
+  );
+
+/** The Thread's agent was already started by another request. */
+export const CreateThreadAlreadyStartedResponseSchema = errorResponse(
+  "THREAD_ALREADY_STARTED",
+  "This Thread has already started.",
+);
+
 export const CreateThreadPolicyDeniedResponseSchema = Schema.Struct({
   status: Schema.Literal("error"),
   data: Schema.Struct({

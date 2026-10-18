@@ -1,11 +1,11 @@
 import {
-  sandboxFromDriver,
   type FileStat,
   type OrphanedExecSettlement,
   type Sandbox,
   type SandboxDriver,
   type SandboxFactory,
   type ShellResult,
+  sandboxFromDriver,
 } from "@flue/runtime";
 
 const ORPHAN_RESULT = "delayed-signal-deaf-command-result";
@@ -20,6 +20,7 @@ interface InstanceState {
 }
 
 const instances = new Map<string, InstanceState>();
+const failingActivations = new Set<string>();
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -113,6 +114,8 @@ const observeOrphan =
 
 export const fixtureSandboxFactory: SandboxFactory = {
   async createSandbox({ id }): Promise<Sandbox> {
+    if (failingActivations.delete(id))
+      throw new Error("Fixture workspace activation failed.");
     const state = stateFor(id);
     if (state.sandbox !== undefined) return state.sandbox;
     state.initializationCount += 1;
@@ -134,6 +137,11 @@ export const fixtureSandboxFactory: SandboxFactory = {
 
 export const settleDelayedCommand = (id: string) => {
   stateFor(id).settleDelayedExec?.();
+};
+
+/** Fails the instance's next workspace activation, before any model call. */
+export const failNextActivation = (id: string) => {
+  failingActivations.add(id);
 };
 
 export { ORPHAN_RESULT };

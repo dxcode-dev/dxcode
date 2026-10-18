@@ -6,12 +6,10 @@ const RuntimeMode = Schema.Literals(["local", "deployed"]);
 export type RuntimeConfiguration =
   | {
       readonly mode: "local";
-      readonly executionAdapter: "local";
       readonly modelAdapter: "fixture";
     }
   | {
       readonly mode: "deployed";
-      readonly executionAdapter: "e2b";
       readonly modelAdapter: "cloudflare";
     };
 
@@ -30,13 +28,11 @@ export const loadRuntimeConfiguration = Effect.fn("loadRuntimeConfiguration")(
       case "local":
         return {
           mode,
-          executionAdapter: "local",
           modelAdapter: "fixture",
         } satisfies RuntimeConfiguration;
       case "deployed":
         return {
           mode,
-          executionAdapter: "e2b",
           modelAdapter: "cloudflare",
         } satisfies RuntimeConfiguration;
       default: {

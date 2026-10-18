@@ -1,4 +1,5 @@
 import {
+  MAX_MCP_SERVERS_PER_THREAD,
   McpServerEndpoint,
   McpServerId,
   McpServerTimeoutMs,
@@ -45,6 +46,13 @@ export type ThreadAgentUrl = typeof ThreadAgentUrlSchema.Type;
 
 export const threadAgentUrl = (threadId: ThreadId): ThreadAgentUrl =>
   `/v1/agents/dx/${threadId}`;
+
+/**
+ * The Flue agent Core serves at a Thread's agent URL, `DxAgent.agentName`,
+ * which Flue's build reads as a literal. Flue derives a keyed send's
+ * submission ID from it, so it is part of the wire format.
+ */
+export const threadAgentName = "dx-agent";
 
 export const ThreadDataSchema = Schema.Struct({
   id: ThreadIdSchema,
@@ -170,7 +178,7 @@ export const ThreadAgentInitializationDataSchema = Schema.Struct({
   settingsVersion: PersonalAgentInstructionsVersion,
   selection: ThreadModelSelection,
   mcpConnections: Schema.Array(ThreadMcpConnectionDataSchema).check(
-    Schema.isMaxLength(20),
+    Schema.isMaxLength(MAX_MCP_SERVERS_PER_THREAD),
   ),
   plugins: Schema.Array(ThreadPluginDataSchema).check(Schema.isMaxLength(40)),
   skills: Schema.Array(ThreadSkillDataSchema).check(Schema.isMaxLength(20)),

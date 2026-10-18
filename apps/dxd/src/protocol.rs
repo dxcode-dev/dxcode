@@ -127,12 +127,20 @@ pub struct FilesCapability {
     pub version: u8,
 }
 
+/// Version 1: Core may open `proxy.open` streams to guest loopback ports and
+/// ask for `proxy.ports` and `desktop.ensure`; see [`crate::proxy`].
+#[derive(Serialize)]
+pub struct ProxyCapability {
+    pub version: u8,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capabilities {
     pub terminal: TerminalCapability,
     pub workload_identity: WorkloadIdentityCapability,
     pub files: FilesCapability,
+    pub proxy: ProxyCapability,
 }
 
 impl Capabilities {
@@ -143,6 +151,7 @@ impl Capabilities {
             },
             workload_identity: WorkloadIdentityCapability { version: 1 },
             files: FilesCapability { version: 1 },
+            proxy: ProxyCapability { version: 1 },
         }
     }
 }
@@ -387,6 +396,37 @@ pub enum UpdateStatus {
 pub enum OperationResult {
     Files(FilesResult),
     Environment(EnvironmentResult),
+    Portal(PortalResult),
+}
+
+/// Requests that serve Portals and the Desktop rather than one stream.
+#[derive(Deserialize)]
+#[serde(tag = "operation", deny_unknown_fields)]
+pub enum PortalOperation {
+    #[serde(rename = "proxy.ports")]
+    Ports {},
+    #[serde(rename = "desktop.ensure")]
+    DesktopEnsure {},
+    /// Start declared services that are not serving; Core validated them.
+    #[serde(rename = "services.ensure")]
+    ServicesEnsure {
+        services: Vec<crate::services::ServiceSpec>,
+    },
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum PortalResult {
+    Ports {
+        ports: Vec<crate::proxy::ListeningPort>,
+    },
+    Ready,
+    Unavailable {
+        reason: &'static str,
+    },
+    Services {
+        services: Vec<crate::services::ServiceStatus>,
+    },
 }
 
 #[derive(Deserialize)]
@@ -394,6 +434,7 @@ pub enum OperationResult {
 pub enum RequestOperation {
     Files(FilesOperation),
     Environment(EnvironmentOperation),
+    Portal(PortalOperation),
 }
 
 #[derive(Deserialize)]
@@ -409,7 +450,7 @@ impl RequestOperation {
     pub fn refresh(&self) -> Option<crate::changes::RefreshRequest> {
         match self {
             Self::Files(operation) => operation.refresh(),
-            Self::Environment(_) => None,
+            Self::Environment(_) | Self::Portal(_) => None,
         }
     }
 }
@@ -463,6 +504,29 @@ pub enum ServerMessage {
         #[serde(rename = "requestId")]
         request_id: String,
         result: WorkloadIdentityResult,
+    },
+    #[serde(rename = "proxy.open")]
+    ProxyOpen(crate::proxy::ProxyOpen),
+    /// Core sent every request body frame of an HTTP stream.
+    #[serde(rename = "proxy.end")]
+    ProxyEnd {
+        #[serde(rename = "streamId")]
+        stream_id: u32,
+    },
+    /// Core closed a stream: a WebSocket closes with `code`; an HTTP exchange
+    /// is abandoned.
+    #[serde(rename = "proxy.close")]
+    ProxyClose {
+        #[serde(rename = "streamId")]
+        stream_id: u32,
+        code: Option<u16>,
+        reason: Option<String>,
+    },
+    /// Core consumed one `DXP1` frame of the stream.
+    #[serde(rename = "proxy.ack")]
+    ProxyAck {
+        #[serde(rename = "streamId")]
+        stream_id: u32,
     },
     #[serde(rename = "terminal.open")]
     TerminalOpen {
@@ -565,6 +629,10 @@ impl ServerMessage {
                     && release
                         .bytes()
                         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+            }
+            Self::ProxyClose { code, reason, .. } => {
+                code.is_none_or(|code| (1000..=4999).contains(&code))
+                    && reason.as_ref().is_none_or(|reason| reason.len() <= 123)
             }
             _ => true,
         }

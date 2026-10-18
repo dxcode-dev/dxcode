@@ -11,6 +11,10 @@ export const safeNextPath = (value: unknown) => {
   return value;
 };
 
+/** A path Core serves itself, which the client router cannot render. */
+export const isServerPath = (path: string) =>
+  path.startsWith("/v1/portal-auth/");
+
 export const signInHref = (
   page: "/signin" | "/signup",
   next: string | undefined,

@@ -1,6 +1,6 @@
 import { parseMessageAuthor } from "@dx/api";
-import { createFlueClient } from "@flue/sdk";
 import { newThreadId, ProjectNameInput } from "@dx/domain";
+import { createFlueClient } from "@flue/sdk";
 import { Redacted, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import { runReferenceLifecycle } from "../../src/dev/reference-lifecycle/workflow.js";
@@ -370,5 +370,92 @@ describe("generated Flue Worker lifecycle", () => {
         }),
       ]),
     );
+  });
+
+  it("keeps a follow-up whose workspace activation fails, and Retry answers it once", async () => {
+    const projectResponse = await fixtureRequest("/v1/projects", {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify({ name: "activation-lifecycle" }),
+    });
+    expect(projectResponse.status).toBe(201);
+    const project = await projectResponse.json<{ data: { id: string } }>();
+    const threadId = newThreadId();
+    const created = await fixtureRequest("/v1/threads", {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.data.id,
+        title: "Activation failure",
+        threadId,
+        initialMessage: {
+          body: "Start the activation journey.",
+          attachments: [],
+        },
+      }),
+    });
+    expect(created.status).toBe(201);
+    const client = createFlueClient({
+      url: new URL(`/v1/agents/dx/${threadId}`, BASE_URL).toString(),
+      fetch: fetchFixture,
+      headers: authorization,
+    });
+    // The follow-up must claim an idle Thread, not join the first turn.
+    for (let attempt = 0; ; attempt += 1) {
+      if ((await client.history()).settlements.length > 0) break;
+      if (attempt === 100) throw new Error("The first turn never settled.");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    const followUp = "Keep this follow-up when activation fails.";
+    const userTexts = async () =>
+      (await client.history()).messages.flatMap((message) =>
+        message.role === "user"
+          ? message.parts.flatMap((part) =>
+              part.type === "text" ? [parseMessageAuthor(part.text).text] : [],
+            )
+          : [],
+      );
+    expect(
+      (
+        await fixtureRequest(`/__fixture/fail-next-activation/${threadId}`, {
+          method: "POST",
+        })
+      ).status,
+    ).toBe(204);
+    const failed = await client.send({
+      message: { kind: "user", body: followUp },
+      idempotencyKey: "activation-failure-follow-up",
+    });
+    await expect(client.wait(failed)).rejects.toThrow();
+    // Before the fix the message vanished here, and Retry re-ran the first turn.
+    expect(await userTexts()).toEqual([
+      "Start the activation journey.",
+      followUp,
+    ]);
+
+    const retry = { idempotencyKey: "activation-failure-retry" };
+    const resumed = await client.resume(retry);
+    // A lost acknowledgement resends the same key and admits nothing new.
+    expect((await client.resume(retry)).submissionId).toBe(
+      resumed.submissionId,
+    );
+    await client.wait(resumed);
+    const history = await client.history();
+    expect(await userTexts()).toEqual([
+      "Start the activation journey.",
+      followUp,
+    ]);
+    const answers = history.messages.flatMap((message) =>
+      message.role === "assistant"
+        ? message.parts.flatMap((part) =>
+            part.type === "text" ? [part.text] : [],
+          )
+        : [],
+    );
+    expect(answers).toEqual([
+      "activation-first-complete",
+      "activation-resume-complete",
+    ]);
   });
 });

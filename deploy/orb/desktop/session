@@ -1,0 +1,130 @@
+#!/bin/bash
+# The dx Desktop session. ./start runs it under dbus-run-session as the leader
+# of a new session; ./stop signals that whole session. It runs a headless
+# labwc, the Waymote gateway on 127.0.0.1:5900 (restarted when it exits), a
+# foot terminal, and Chromium with DevTools on 127.0.0.1:9222. The session
+# ends when labwc exits. stdout and stderr go to session.log.
+set -u
+
+desktop=/opt/dx/desktop
+state="$HOME/.local/state/dx-desktop"
+runtime="$state/runtime"
+
+log() {
+  printf '%s session: %s\n' "$(date -u +%FT%TZ)" "$*"
+}
+
+failed() {
+  printf '%s\n' "$1" >"$state/session.failed"
+  log "$1"
+  exit 1
+}
+
+# Record the session ID (the dbus-run-session leader) for ./start and ./stop.
+# Every program in the desktop inherits it as DX_DESKTOP_SESSION, so ./stop
+# also finds those that labwc starts in sessions of their own.
+sid=$(ps -o sid= -p "$$" | tr -d ' ')
+printf '%s\n' "$sid" >"$state/session.pid"
+export DX_DESKTOP_SESSION="$sid"
+
+case "${LANG:-}" in
+  *.UTF-8 | *.utf8 | *.utf-8 | *.UTF8) ;;
+  *) export LANG=C.UTF-8 ;;
+esac
+export XDG_RUNTIME_DIR="$runtime"
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=labwc:wlroots
+export WLR_BACKENDS=headless
+export WLR_HEADLESS_OUTPUTS=1
+export WLR_LIBINPUT_NO_DEVICES=1
+export WLR_RENDERER=pixman
+export DX_DESKTOP_STATE="$state"
+unset DISPLAY WAYLAND_DISPLAY
+
+rm -rf "$runtime" "$state/environment"
+mkdir -m 0700 "$runtime" || failed "cannot create $runtime"
+for name in waymote chromium foot; do
+  file="$state/$name.log"
+  if [ -f "$file" ] && [ "$(stat -c %s "$file")" -gt 1048576 ]; then
+    mv -f "$file" "$file.1"
+  fi
+done
+
+stopping=
+started=
+# shellcheck disable=SC2329 # invoked by the traps below
+cleanup() {
+  [ -n "$stopping" ] && return
+  stopping=1
+  # Any exit before the gateway launched (a failed command, an unset
+  # variable) is a failed start, which ./start reports at once.
+  if [ -z "$started" ] && [ ! -f "$state/session.failed" ]; then
+    printf 'the session exited during startup: %s\n' \
+      "$(tail -n 1 "$state/session.log" 2>/dev/null | cut -c 1-200)" \
+      >"$state/session.failed"
+  fi
+  trap '' TERM INT HUP
+  log "stopping"
+  # Every process this script started shares its process group.
+  kill -TERM 0 2>/dev/null
+  wait
+}
+trap 'cleanup; exit 0' TERM INT HUP
+trap cleanup EXIT
+
+log "starting labwc"
+labwc --config-dir "$desktop/labwc" &
+labwc_pid=$!
+
+# labwc's autostart (labwc/autostart) writes the display variables once the
+# compositor and its Xwayland socket exist.
+for _ in $(seq 1 100); do
+  [ -f "$state/environment" ] && break
+  kill -0 "$labwc_pid" 2>/dev/null || failed "labwc exited during startup"
+  sleep 0.1
+done
+[ -f "$state/environment" ] || failed "labwc did not start within 10s"
+# shellcheck disable=SC1091
+. "$state/environment"
+[ -n "${WAYLAND_DISPLAY:-}" ] || failed "labwc started without a Wayland display"
+log "labwc ready: WAYLAND_DISPLAY=$WAYLAND_DISPLAY DISPLAY=${DISPLAY:-}"
+
+# The headless output starts at 1280x720; the viewer may resize it. 30 Hz
+# matches the encoder frame rate, so clients render no faster than streamed.
+wlr-randr --output HEADLESS-1 --custom-mode 1280x720@30Hz ||
+  log "wlr-randr could not set the initial mode"
+
+(
+  # No audio source: the gateway then runs no Opus encoder, and the session
+  # needs no PulseAudio (deploy/orb/README.md#desktop).
+  # bin/ffmpeg keeps the encoder's RTP sockets on loopback.
+  export PATH="$desktop/bin:$PATH"
+  backoff=1
+  while :; do
+    started=$SECONDS
+    "$desktop/waymote/bin/waymote-gateway" \
+      -listen 127.0.0.1:5900 \
+      -streamd "$desktop/waymote/bin/waymote-streamd" \
+      -bitrate 4000 \
+      -frame-rate 30 \
+      >>"$state/waymote.log" 2>&1 </dev/null
+    status=$?
+    if [ $((SECONDS - started)) -gt 60 ]; then
+      backoff=1
+    fi
+    log "waymote-gateway exited with status $status; restarting in ${backoff}s"
+    sleep "$backoff"
+    backoff=$((backoff * 2 > 30 ? 30 : backoff * 2))
+  done
+) &
+
+started=1
+
+foot --working-directory="$HOME" >>"$state/foot.log" 2>&1 </dev/null &
+"$desktop/chromium" --foreground about:blank >>"$state/chromium.log" 2>&1 </dev/null &
+
+while kill -0 "$labwc_pid" 2>/dev/null; do
+  wait "$labwc_pid"
+done
+log "labwc exited"
+exit 0

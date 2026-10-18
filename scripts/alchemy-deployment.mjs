@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, normalize, relative, resolve, sep } from "node:path";
 import * as Output from "alchemy/Output";
 import { validateSelfhostConfig } from "../deploy/selfhost/config.mjs";
+import { portalDomainProblem } from "../deploy/selfhost/portals.mjs";
 import { alchemyStage } from "./alchemy-stage.mjs";
 import {
   attachmentBucketCors,
@@ -168,15 +169,23 @@ export const parseOrbProviders = (value = "e2b") => {
   return [...providers].sort();
 };
 
-const deploymentResourceTypes = (
+const deploymentResourceTypes = ({
   target,
   integrations = [],
   turnstileTestKeys = false,
   workersDevSubdomain = undefined,
   orbProviders = ["e2b"],
   attachmentSigning = "token",
-) =>
+  portals = undefined,
+}) =>
   new Map([
+    // Portals: their own Worker on a zone route plus a proxied wildcard record.
+    ...(portals === undefined
+      ? []
+      : [
+          ["PortalWorker", "Cloudflare.Worker"],
+          ["PortalDns", "Cloudflare.DNS.Record"],
+        ]),
     // The bucket-scoped token Core signs attachment URLs with; Alchemy OAuth
     // self-hosts cannot mint it and carry attachment bytes through Core.
     ...(attachmentSigning === "token"
@@ -235,9 +244,11 @@ const retiredWorkerBindings = new Map([
 const cloudflareResourceIds = new Set([
   "DaemonIngress",
   "Database",
+  "PortalWorker",
   "Storage",
   "Worker",
 ]);
+const portalResourceIds = new Set(["PortalDns", "PortalWorker"]);
 const dictationMigrationAlias = Object.freeze({
   legacyName: "0079_dictation_jobs.sql",
   currentName: "0045_dictation_jobs.sql",
@@ -788,6 +799,9 @@ export const loadSelfhostConfig = ({ environment, workspaceRoot }) => {
     ...(environment.DX_DEPLOYMENT_ZONE?.trim()
       ? { zone: environment.DX_DEPLOYMENT_ZONE.trim() }
       : {}),
+    ...(environment.DX_DEPLOYMENT_PORTAL_DOMAIN?.trim()
+      ? { portalDomain: environment.DX_DEPLOYMENT_PORTAL_DOMAIN.trim() }
+      : {}),
     ...(environment.DX_ADMIN_EMAIL?.trim()
       ? { adminEmail: environment.DX_ADMIN_EMAIL.trim() }
       : {}),
@@ -1089,9 +1103,10 @@ const validateWorkerProps = (
   const extraEnvironmentNames = environmentNames.filter(
     (name) => !workerBindingNames.includes(name),
   );
-  // Workers from before Cloudflare Containers have no ORB_CONTAINER.
+  // Workers from before Cloudflare Containers have no ORB_CONTAINER, and
+  // Workers without Portals no DX_PORTAL_DOMAIN.
   const missingBeforeContainers = missingEnvironmentNames.filter(
-    (name) => name !== "ORB_CONTAINER",
+    (name) => name !== "ORB_CONTAINER" && name !== "DX_PORTAL_DOMAIN",
   );
   const destroyWorkerBindingOmissionsMatch =
     allowDestroyWorkerBindingOmissions &&
@@ -1290,6 +1305,11 @@ const validateWorkerProps = (
             props.env?.DX_TURNSTILE_SITE_KEY === undefined,
     ],
     ["dxd", current ? !dxdCurrent : !dxdPersisted],
+    // Core answers Portal hosts only for the domain the Portal Worker serves.
+    [
+      "portal-domain",
+      current && props.env?.DX_PORTAL_DOMAIN !== selection.portals?.domain,
+    ],
     [
       "orb-e2b",
       current &&
@@ -1452,6 +1472,150 @@ const assertExactDaemonIngressIdentity = (node, operation, selection) => {
     validateDaemonIngressProps(node.state.props, selection, "persisted");
   if (node.state?.old?.props !== undefined)
     validateDaemonIngressProps(node.state.old.props, selection, "prior");
+};
+
+// Cloudflare caps Worker script names at 63 characters; `<app>-portals`
+// would exceed it on a long branch stage.
+export const portalWorkerName = (stage) => resourceName("portals", stage);
+
+/**
+ * Portal settings: a dedicated zone's apex and that zone's ID, set together.
+ * Returns undefined when Portals are off. The domain must be a registrable
+ * domain separate from the app's (alchemy.run.ts and Core refuse it too). A
+ * self-host may omit the zone ID (`zoneIdOptional`); the runner then resolves
+ * it in the deployment account.
+ */
+export const deploymentPortals = ({
+  domain,
+  zoneId,
+  appDomain,
+  zoneIdOptional = false,
+}) => {
+  const portalDomain = domain?.trim().toLowerCase() || undefined;
+  const portalZoneId = zoneId?.trim() || undefined;
+  if (portalDomain === undefined && portalZoneId === undefined)
+    return undefined;
+  if (
+    portalDomain === undefined ||
+    (portalZoneId === undefined && !zoneIdOptional)
+  )
+    throw new Error(
+      "DX_DEPLOYMENT_PORTAL_DOMAIN and DX_DEPLOYMENT_PORTAL_ZONE_ID must be set together.",
+    );
+  const problem = portalDomainProblem(portalDomain, appDomain.toLowerCase());
+  if (problem !== undefined)
+    throw new Error(`DX_DEPLOYMENT_PORTAL_DOMAIN ${problem}.`);
+  if (portalZoneId !== undefined && !/^[a-f0-9]{32}$/.test(portalZoneId))
+    throw new Error(
+      "DX_DEPLOYMENT_PORTAL_ZONE_ID must be a Cloudflare zone ID.",
+    );
+  return { domain: portalDomain, zoneId: portalZoneId };
+};
+
+// The Portal Worker: the Portal handler only, bound to the app's D1, auth
+// secret, and the Core Worker's Thread execution namespace, reachable only
+// through its zone route.
+const validatePortalWorkerProps = (props, selection, representation) => {
+  const { domain, zoneId } = selection.portals;
+  const environment = props?.env;
+  const binding = environment?.THREAD_EXECUTION;
+  const scriptName = binding?.scriptName;
+  const issues = [
+    exactKeys(props, [
+      "compatibility",
+      "env",
+      "isExternal",
+      "main",
+      "name",
+      "observability",
+      "routes",
+      "workersDev",
+    ]) && props.isExternal === true
+      ? undefined
+      : `keys[${Object.keys(props ?? {})
+          .sort()
+          .join("|")}]`,
+    props?.name === portalWorkerName(selection.stage) ? undefined : "name",
+    props?.main === "apps/core/src/portals/worker.ts" ? undefined : "main",
+    JSON.stringify(props?.compatibility) ===
+    JSON.stringify({ date: "2026-08-20", flags: ["nodejs_compat"] })
+      ? undefined
+      : "compatibility",
+    props?.workersDev === false ? undefined : "workersDev",
+    JSON.stringify(props?.routes) ===
+    JSON.stringify([{ pattern: `*.${domain}/*`, zoneId }])
+      ? undefined
+      : "routes",
+    JSON.stringify(props?.observability) ===
+    JSON.stringify({
+      enabled: true,
+      logs: { enabled: true, invocationLogs: true },
+    })
+      ? undefined
+      : "observability",
+    exactKeys(environment, [
+      "BETTER_AUTH_SECRET",
+      "DB",
+      "DX_AUTH_URL",
+      "DX_ENV",
+      "DX_PORTAL_DOMAIN",
+      "THREAD_EXECUTION",
+    ]) &&
+    environment.DX_ENV === selection.environment &&
+    environment.DX_AUTH_URL === selection.origin &&
+    environment.DX_PORTAL_DOMAIN === domain
+      ? undefined
+      : `env[${Object.keys(environment ?? {})
+          .sort()
+          .join("|")}]`,
+    binding?.className === "ThreadExecutionObject" &&
+    (scriptName === selection.workerName ||
+      // On a new stage the Worker is created in the same plan.
+      (["desired", "evaluated"].includes(representation) &&
+        dependsExactlyOn(scriptName, "Worker", "workerName")))
+      ? undefined
+      : "thread-execution",
+  ].filter((issue) => issue !== undefined);
+  if (issues.length > 0)
+    throw new Error(
+      `PortalWorker ${representation} plan identity is outside the exact allowlist (${issues.join(", ")}).`,
+    );
+};
+
+// The wildcard record that sends every Portal host to the Portal Worker's
+// route: proxied, pointing at the discard prefix, nothing else.
+const validatePortalDnsProps = (props, selection, representation) => {
+  const { domain, zoneId } = selection.portals;
+  if (
+    !exactKeys(props, [
+      "comment",
+      "content",
+      "name",
+      "proxied",
+      "type",
+      "zoneId",
+    ]) ||
+    props.zoneId !== zoneId ||
+    props.name !== `*.${domain}` ||
+    props.type !== "AAAA" ||
+    props.content !== "100::" ||
+    props.proxied !== true ||
+    props.comment !== "dx Portals: served by the Portal Worker route"
+  )
+    throw new Error(
+      `PortalDns ${representation} plan identity is outside the exact allowlist.`,
+    );
+};
+
+const assertExactPortalIdentity = (node, operation, selection, validate) => {
+  if (operation === "deploy") {
+    validate(node.resource?.Props, selection, "desired");
+    if (node.props !== undefined) validate(node.props, selection, "evaluated");
+  }
+  if (node.state?.props !== undefined)
+    validate(node.state.props, selection, "persisted");
+  if (node.state?.old?.props !== undefined)
+    validate(node.state.old.props, selection, "prior");
 };
 
 const assertInterruptedWorkerAttr = (attr, selection) => {
@@ -2144,20 +2308,15 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
     !id ||
     fqn !== id ||
     nodeFqn !== id ||
-    deploymentResourceTypes(
-      selection.target,
-      selection.integrations,
-      selection.turnstileTestKeys,
-      selection.workersDevSubdomain,
-      selection.orbProviders,
-      selection.attachmentSigning,
-    ).get(id) !== type
+    deploymentResourceTypes(selection).get(id) !== type
   )
     throw new Error(`Alchemy plan selected an unapproved resource: ${id}.`);
   if (cloudflareResourceIds.has(id) && node.mode !== "live")
     throw new Error(`Alchemy plan selected a non-live provider for ${id}.`);
   if (
-    (id === "AccessTurnstile" || id === "AttachmentSigningToken") &&
+    (id === "AccessTurnstile" ||
+      id === "AttachmentSigningToken" ||
+      id === "PortalDns") &&
     node.mode !== undefined
   )
     throw new Error(
@@ -2187,6 +2346,20 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
   if (id === "Worker") assertExactWorkerIdentity(node, operation, selection);
   if (id === "DaemonIngress")
     assertExactDaemonIngressIdentity(node, operation, selection);
+  if (id === "PortalWorker")
+    assertExactPortalIdentity(
+      node,
+      operation,
+      selection,
+      validatePortalWorkerProps,
+    );
+  if (id === "PortalDns")
+    assertExactPortalIdentity(
+      node,
+      operation,
+      selection,
+      validatePortalDnsProps,
+    );
   if (
     id === "BetterAuthSecret" ||
     id === "ConfigEncryptionKey" ||
@@ -2218,16 +2391,18 @@ export const validateAlchemyPlan = (plan, operation, selection) => {
     throw new Error("Unknown Alchemy operation; no write is safe.");
   const deployResourceIds = Object.keys(plan.resources).sort();
   const expectedDeployResourceIds = [
-    ...deploymentResourceTypes(
-      selection.target,
-      selection.integrations,
-      selection.turnstileTestKeys,
-      selection.workersDevSubdomain,
-      selection.orbProviders,
-      selection.attachmentSigning,
-    ).keys(),
+    ...deploymentResourceTypes(selection).keys(),
   ].sort();
   const deletionIds = Object.keys(plan.deletions);
+  if (
+    selection.portals === undefined &&
+    deletionIds.some((id) => portalResourceIds.has(id))
+  )
+    throw new Error(
+      operation === "deploy"
+        ? "This stage serves Portals; deploy it with the DX_DEPLOYMENT_PORTAL_DOMAIN and DX_DEPLOYMENT_PORTAL_ZONE_ID it was deployed with (turning Portals off needs a destroy)."
+        : "This stage serves Portals; destroy it with the DX_DEPLOYMENT_PORTAL_DOMAIN and DX_DEPLOYMENT_PORTAL_ZONE_ID it was deployed with.",
+    );
   const onlyRetiredRandomDeletions = deletionIds.every((id) =>
     retiredRandomResourceIds.has(id),
   );
@@ -2351,6 +2526,10 @@ export const isolatedAlchemyEnvironment = (inherited, deployment) => ({
           "DX_ADMIN_PASSWORD_RESET",
           "DX_INTEGRATION_GITHUB_APP",
           "DX_INTEGRATION_BITBUCKET_OAUTH",
+          // The runner forwards validated Portal settings itself.
+          "DX_DEPLOYMENT_PORTAL_DOMAIN",
+          "DX_DEPLOYMENT_PORTAL_WORKER_NAME",
+          "DX_DEPLOYMENT_PORTAL_ZONE_ID",
           "DX_DEPLOYMENT_REVIEWER_EMAIL",
           "DX_DEPLOYMENT_REVIEWER_PASSWORD",
           "DX_STAGING_TEST_PASSWORD",

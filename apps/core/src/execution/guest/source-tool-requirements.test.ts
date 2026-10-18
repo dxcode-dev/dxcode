@@ -47,7 +47,7 @@ describe("GitHub runtime tool requirements", () => {
       _tag: "SourceRuntimeToolUnavailable",
       tool: "gh",
       reason: "unsupported-version",
-      action: "update-e2b-template",
+      action: "update-orb-template",
     });
   });
 });

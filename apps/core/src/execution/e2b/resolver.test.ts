@@ -103,6 +103,27 @@ const paginator = (pages: readonly (readonly unknown[])[]) => {
 
 const notFound = new Error("sandbox was deleted");
 
+/** A lease that admits one holder at a time, like the D1 coordinator. */
+const exclusiveCoordination = () => {
+  let locked = false;
+  const waiters: Array<() => void> = [];
+  return {
+    acquire: vi.fn(async () => {
+      while (locked)
+        await new Promise<void>((resolveAcquire) =>
+          waiters.push(resolveAcquire),
+        );
+      locked = true;
+      return {
+        release: async () => {
+          locked = false;
+          waiters.shift()?.();
+        },
+      };
+    }),
+  };
+};
+
 const provider = (
   options: {
     pages?: readonly (readonly unknown[])[];
@@ -188,6 +209,7 @@ describe("resolveExecutionWorkspace", () => {
         initializationAttempt: expect.any(String),
       },
       allowInternetAccess: true,
+      network: { allowPublicTraffic: false },
       lifecycle: {
         onTimeout: { action: "pause", keepMemory: true },
         autoResume: true,
@@ -253,6 +275,7 @@ describe("resolveExecutionWorkspace", () => {
     });
     expect(observeOpening).toHaveBeenCalledWith("waking");
     expect(observePhase.mock.calls.map(([phase]) => phase)).toEqual([
+      "workspace_lock_acquired",
       "workspace_state_resolved",
       "provider_connected",
     ]);
@@ -267,15 +290,16 @@ describe("resolveExecutionWorkspace", () => {
       providerCreates: fake.create.mock.calls.length,
       authorizations: authorizeResolution.mock.calls.length,
     }).toEqual({
-      stateReads: 2,
+      stateReads: 1,
       stateTransitions: 0,
       leaseAcquires: 1,
       leaseReleases: 1,
-      providerGetInfo: 1,
+      // Without a residency observer nothing needs the provider's status.
+      providerGetInfo: 0,
       providerConnects: 1,
       providerLists: 0,
       providerCreates: 0,
-      authorizations: 3,
+      authorizations: 1,
     });
   });
 
@@ -299,47 +323,73 @@ describe("resolveExecutionWorkspace", () => {
     expect(events).toEqual(["reported", "connect"]);
   });
 
-  it.each([
-    [
-      "paused provider state",
-      info("immutable-sandbox", currentMetadata, "paused"),
-    ],
-    ["mismatched provider identity", info("different-sandbox")],
-  ])("falls back to the lease for %s", async (_case, providerInfo) => {
-    const fake = provider({ getInfo: async () => providerInfo });
-    const store = stateStore(initialized("immutable-sandbox"));
-    const release = vi.fn(async () => undefined);
-    const acquire = vi.fn(async () => ({ release }));
-    const authorizeResolution = vi.fn(async () => undefined);
+  it.each(["running", "paused"] as const)(
+    "resolves a %s workspace with one status read under one lease",
+    async (state) => {
+      const events: string[] = [];
+      const fake = provider({
+        getInfo: async (sandboxId) => {
+          events.push("getInfo");
+          return info(sandboxId, currentMetadata, state);
+        },
+        connect: async (sandboxId) => {
+          events.push("connect");
+          return { sandboxId } as never;
+        },
+      });
+      const store = stateStore(initialized("immutable-sandbox"));
+      const release = vi.fn(async () => {
+        events.push("release");
+      });
+      const acquire = vi.fn(async () => {
+        events.push("acquire");
+        return { release };
+      });
+      const authorizeResolution = vi.fn(async () => {
+        events.push("authorize");
+      });
+      const observeResidency = vi.fn(async (residency: string) => {
+        events.push(`residency:${residency}`);
+      });
 
-    await expect(
-      resolve(fake, store, {
-        coordination: { acquire },
-        authorizeResolution,
-      }),
-    ).resolves.toEqual({ sandboxId: "immutable-sandbox" });
+      await expect(
+        resolve(fake, store, {
+          coordination: { acquire },
+          authorizeResolution,
+          observeResidency,
+        }),
+      ).resolves.toEqual({ sandboxId: "immutable-sandbox" });
 
-    expect({
-      stateReads: store.read.mock.calls.length,
-      leaseAcquires: acquire.mock.calls.length,
-      leaseReleases: release.mock.calls.length,
-      providerGetInfo: fake.getInfo.mock.calls.length,
-      providerConnects: fake.connect.mock.calls.length,
-      authorizations: authorizeResolution.mock.calls.length,
-    }).toEqual({
-      stateReads: 2,
-      leaseAcquires: 1,
-      leaseReleases: 1,
-      providerGetInfo: 1,
-      providerConnects: 1,
-      authorizations: 2,
-    });
-    expect(fake.connect).toHaveBeenCalledWith("immutable-sandbox", {
-      apiKey: "e2b-test-credential",
-      requestTimeoutMs: 30_000,
-      timeoutMs: 600_000,
-    });
-  });
+      expect({
+        stateReads: store.read.mock.calls.length,
+        leaseAcquires: acquire.mock.calls.length,
+        leaseReleases: release.mock.calls.length,
+        providerGetInfo: fake.getInfo.mock.calls.length,
+        providerConnects: fake.connect.mock.calls.length,
+        authorizations: authorizeResolution.mock.calls.length,
+      }).toEqual({
+        stateReads: 1,
+        leaseAcquires: 1,
+        leaseReleases: 1,
+        providerGetInfo: 1,
+        providerConnects: 1,
+        authorizations: 1,
+      });
+      expect(events).toEqual([
+        "acquire",
+        "authorize",
+        "getInfo",
+        `residency:${state}`,
+        "connect",
+        "release",
+      ]);
+      expect(fake.connect).toHaveBeenCalledWith("immutable-sandbox", {
+        apiKey: "e2b-test-credential",
+        requestTimeoutMs: 30_000,
+        timeoutMs: 600_000,
+      });
+    },
+  );
 
   it("reports paused and unknown residency conservatively", async () => {
     const paused = provider({
@@ -515,7 +565,7 @@ describe("resolveExecutionWorkspace", () => {
     expect(fake.list).not.toHaveBeenCalled();
   });
 
-  it("falls back to the lease when connect reports not-found, then marks the workspace lost", async () => {
+  it("marks the workspace lost when connect reports not-found, and never replaces it", async () => {
     const fake = provider({
       connect: async () => {
         throw notFound;
@@ -543,12 +593,12 @@ describe("resolveExecutionWorkspace", () => {
       providerGetInfo: fake.getInfo.mock.calls.length,
       providerConnects: fake.connect.mock.calls.length,
     }).toEqual({
-      stateReads: 3,
+      stateReads: 1,
       stateTransitions: 1,
-      leaseAcquires: 2,
-      leaseReleases: 2,
-      providerGetInfo: 1,
-      providerConnects: 2,
+      leaseAcquires: 1,
+      leaseReleases: 1,
+      providerGetInfo: 0,
+      providerConnects: 1,
     });
 
     fake.connect.mockClear();
@@ -651,7 +701,7 @@ describe("resolveExecutionWorkspace", () => {
     expect(incompatible.create).not.toHaveBeenCalled();
   });
 
-  it("rejects an archived Thread before acquiring the distributed lease", async () => {
+  it("rejects an archived Thread under the lease before any provider call", async () => {
     const fake = provider();
     const store = stateStore(initialized("existing"));
     const release = vi.fn(async () => undefined);
@@ -674,14 +724,17 @@ describe("resolveExecutionWorkspace", () => {
 
     expect(error).toBeInstanceOf(ExecutionWorkspaceUnavailable);
     expect(authorizeResolution).toHaveBeenCalledOnce();
-    expect(acquire).not.toHaveBeenCalled();
-    expect(release).not.toHaveBeenCalled();
-    expect(store.read).not.toHaveBeenCalled();
+    expect(acquire).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(fake.getInfo).not.toHaveBeenCalled();
     expect(fake.connect).not.toHaveBeenCalled();
+    expect(fake.create).not.toHaveBeenCalled();
+    expect(store.transition).not.toHaveBeenCalled();
   });
 
-  it("does not connect when archive commits after provider status lookup", async () => {
-    let active = true;
+  it("pauses only after the connect when archive commits during resolution", async () => {
+    const events: string[] = [];
+    const coordination = exclusiveCoordination();
     let statusStarted: (() => void) | undefined;
     const checkingStatus = new Promise<void>((resolveStarted) => {
       statusStarted = resolveStarted;
@@ -696,21 +749,25 @@ describe("resolveExecutionWorkspace", () => {
         await statusRelease;
         return info(sandboxId);
       },
+      connect: async (sandboxId) => {
+        events.push("connect");
+        return { sandboxId } as never;
+      },
+      pause: async () => {
+        events.push("pause");
+        return true;
+      },
     });
     const store = stateStore(initialized("archive-race"));
-    const release = vi.fn(async () => undefined);
-    const acquire = vi.fn(async () => ({ release }));
-    const coordination = { acquire };
 
     const resolving = resolve(fake, store, {
       coordination,
-      authorizeResolution: async () => {
-        if (!active) throw new Error("Thread is archived");
-      },
+      authorizeResolution: async () => undefined,
+      observeResidency: vi.fn(),
     });
     await checkingStatus;
-    active = false;
-    await Effect.runPromise(
+    // Archive commits its lifecycle, then pauses under the same lease.
+    const pausing = Effect.runPromise(
       makePauseExecutionWorkspace(fake.value)({
         id: threadId,
         requirements,
@@ -719,46 +776,17 @@ describe("resolveExecutionWorkspace", () => {
         authorizePause: async () => undefined,
       }),
     );
+    await Promise.resolve();
+    expect(fake.pause).not.toHaveBeenCalled();
     finishStatus?.();
 
-    await expect(resolving).rejects.toBeInstanceOf(
-      ExecutionWorkspaceUnavailable,
-    );
-    expect({
-      stateReads: store.read.mock.calls.length,
-      leaseAcquires: acquire.mock.calls.length,
-      leaseReleases: release.mock.calls.length,
-      providerGetInfo: fake.getInfo.mock.calls.length,
-      providerConnects: fake.connect.mock.calls.length,
-      providerPauses: fake.pause.mock.calls.length,
-    }).toEqual({
-      stateReads: 2,
-      leaseAcquires: 2,
-      leaseReleases: 2,
-      providerGetInfo: 1,
-      providerConnects: 0,
-      providerPauses: 1,
-    });
+    await expect(resolving).resolves.toEqual({ sandboxId: "archive-race" });
+    await expect(pausing).resolves.toBe(1);
+    expect(events).toEqual(["connect", "pause"]);
   });
 
-  it("serializes the fast-path authorization with an archive pause", async () => {
-    let locked = false;
-    const waiters: Array<() => void> = [];
-    const coordination = {
-      acquire: vi.fn(async () => {
-        if (locked)
-          await new Promise<void>((resolveAcquire) =>
-            waiters.push(resolveAcquire),
-          );
-        locked = true;
-        return {
-          release: async () => {
-            locked = false;
-            waiters.shift()?.();
-          },
-        };
-      }),
-    };
+  it("serializes resolution authorization with an archive pause", async () => {
+    const coordination = exclusiveCoordination();
     let authorizationCount = 0;
     let signalFinalAuthorization: (() => void) | undefined;
     const finalAuthorizationStarted = new Promise<void>((resolveStarted) => {
@@ -772,7 +800,7 @@ describe("resolveExecutionWorkspace", () => {
     );
     const authorizeResolution = async () => {
       authorizationCount += 1;
-      if (authorizationCount !== 2) return;
+      if (authorizationCount !== 1) return;
       signalFinalAuthorization?.();
       await finalAuthorizationRelease;
     };

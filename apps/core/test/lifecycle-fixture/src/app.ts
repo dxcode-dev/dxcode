@@ -21,7 +21,7 @@ import { projectRoutes } from "../../../src/projects/routes.js";
 import { settingsRoutes } from "../../../src/settings/routes.js";
 import { createThreadRoutes } from "../../../src/threads/routes.js";
 import { FixtureLifecycleAgent } from "./agents/fixture-lifecycle-agent.js";
-import { settleDelayedCommand } from "./sandbox.js";
+import { failNextActivation, settleDelayedCommand } from "./sandbox.js";
 
 const faux = fauxProvider();
 faux.setResponses([
@@ -57,6 +57,8 @@ faux.setResponses([
   fauxAssistantMessage([fauxText("post-abort-complete")]),
   fauxAssistantMessage("retry-admission-complete"),
   fauxAssistantMessage("follow-up-image-complete"),
+  fauxAssistantMessage("activation-first-complete"),
+  fauxAssistantMessage("activation-resume-complete"),
 ]);
 setProvider(faux.provider);
 installFlueObservation();
@@ -195,6 +197,10 @@ app.get("/__fixture/state/:threadId", async (context) => {
 });
 app.post("/__fixture/reject-next-initial-admission", (context) => {
   rejectNextInitialDispatch = true;
+  return context.body(null, 204);
+});
+app.post("/__fixture/fail-next-activation/:threadId", (context) => {
+  failNextActivation(context.req.param("threadId"));
   return context.body(null, 204);
 });
 app.post("/__fixture/seed-cross-owner", async (context) => {

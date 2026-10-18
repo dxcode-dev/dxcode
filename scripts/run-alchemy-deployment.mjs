@@ -24,6 +24,7 @@ import {
   loadDxdRelease,
   verifyDxdBytes,
 } from "../deploy/selfhost/dxd-release.mjs";
+import { preflightPortalZone } from "../deploy/selfhost/portals.mjs";
 import e2bOrbProfiles from "../packages/domain/e2b-orb-profiles.json" with {
   type: "json",
 };
@@ -37,6 +38,7 @@ import {
   deploymentBitbucketOAuth,
   deploymentGitHubApp,
   deploymentGitStatusArguments,
+  deploymentPortals,
   deploymentSelection,
   isolatedAlchemyEnvironment,
   isolatedDeploymentBuildEnvironment,
@@ -44,6 +46,7 @@ import {
   orbWorkerName,
   parseDeploymentRevisionArgument,
   parseOrbProviders,
+  portalWorkerName,
   prepareDeploymentCredentials,
   prepareDeploymentPackage,
   reconcileDeploymentMigrationAliases,
@@ -353,6 +356,39 @@ const selection = deploymentSelection({
       : undefined,
 });
 
+// Portals: hosted targets take the domain and zone ID together; a self-host
+// records its domain and resolves the zone in its account. Before planning,
+// the zone must be the domain's active apex in this account and the
+// credential must hold Zone Read, DNS Edit, and Workers Routes Edit on it.
+const portalSettings = deploymentPortals({
+  domain:
+    target === "selfhost"
+      ? selfhostConfig.portalDomain
+      : process.env.DX_DEPLOYMENT_PORTAL_DOMAIN,
+  zoneId: process.env.DX_DEPLOYMENT_PORTAL_ZONE_ID,
+  appDomain: selection.domain,
+  zoneIdOptional: target === "selfhost",
+});
+const portals =
+  portalSettings === undefined
+    ? undefined
+    : await (async () => {
+        const preflight = await preflightPortalZone({
+          auth: selfhostCloudflareAuth ?? {
+            accountId,
+            headers: cloudflareHeaders,
+            method: "api-token",
+          },
+          portalDomain: portalSettings.domain,
+          zoneId: portalSettings.zoneId,
+        });
+        if (!preflight.editConfirmed)
+          console.log(
+            `Portal zone ${portalSettings.domain}: Zone Read, DNS, and Workers Routes are readable; this token cannot read its own policies, so Edit is confirmed at apply.`,
+          );
+        return { domain: portalSettings.domain, zoneId: preflight.zoneId };
+      })();
+
 let dxdBinary;
 let dxdChecksum = "0".repeat(64);
 let dxdReleaseUrl = "https://destroy.invalid/dxd";
@@ -579,6 +615,9 @@ console.log(`Worker: ${selection.workerName}`);
 console.log(`URL: https://${selection.domain}`);
 console.log(`Orb providers: ${orbProviders.join(", ")}`);
 console.log(
+  `Portals: ${portals === undefined ? "off" : `https://t-<thread>-p<port>.${portals.domain} (${portalWorkerName(stage)})`}`,
+);
+console.log(
   `Attachments: ${attachmentSigning === "token" ? "direct to R2 (bucket-scoped signing token)" : "through Core (Alchemy OAuth cannot mint a signing token)"}`,
 );
 if (operation === "deploy" && e2bInstalled)
@@ -647,6 +686,13 @@ const environment = {
   DX_DEPLOYMENT_DOMAIN: selection.domain,
   DX_DEPLOYMENT_ZONE: selection.zone ?? "",
   DX_DEPLOYMENT_WORKERS_DEV_SUBDOMAIN: workersDevSubdomain,
+  ...(portals === undefined
+    ? {}
+    : {
+        DX_DEPLOYMENT_PORTAL_DOMAIN: portals.domain,
+        DX_DEPLOYMENT_PORTAL_ZONE_ID: portals.zoneId,
+        DX_DEPLOYMENT_PORTAL_WORKER_NAME: portalWorkerName(stage),
+      }),
   DX_DEPLOYMENT_DAEMON_INGRESS_NAME: daemonIngressWorkerName(stage),
   DX_DEPLOYMENT_NAME: selfhostConfig?.name ?? "",
   ...(selfhostConfig !== undefined

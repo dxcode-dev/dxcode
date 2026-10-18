@@ -16,7 +16,7 @@ export class SourceRuntimeToolUnavailable extends Schema.TaggedError<SourceRunti
       "unsupported-version",
       "invalid-output",
     ]),
-    action: Schema.Literal("update-e2b-template"),
+    action: Schema.Literal("update-orb-template"),
   },
 ) {}
 
@@ -51,7 +51,7 @@ const inspect = (
       new SourceRuntimeToolUnavailable({
         tool,
         reason: "missing",
-        action: "update-e2b-template",
+        action: "update-orb-template",
       }),
   }).pipe(
     Effect.flatMap((result) => {
@@ -60,7 +60,7 @@ const inspect = (
           new SourceRuntimeToolUnavailable({
             tool,
             reason: "missing",
-            action: "update-e2b-template",
+            action: "update-orb-template",
           }),
         );
       const version = parse(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
@@ -69,7 +69,7 @@ const inspect = (
           new SourceRuntimeToolUnavailable({
             tool,
             reason: "invalid-output",
-            action: "update-e2b-template",
+            action: "update-orb-template",
           }),
         );
       if (
@@ -80,7 +80,7 @@ const inspect = (
           new SourceRuntimeToolUnavailable({
             tool,
             reason: "unsupported-version",
-            action: "update-e2b-template",
+            action: "update-orb-template",
           }),
         );
       return Effect.succeed(version);

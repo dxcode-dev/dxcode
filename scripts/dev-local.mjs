@@ -158,6 +158,9 @@ const generatedBindings = {
   DX_LOCAL_RUNTIME_URL: localRuntimeOrigin,
   DX_LOCAL_RUNTIME_TOKEN: runtimeToken,
   DX_WORKLOAD_IDENTITY_ISSUER: `${coreOrigin}/api/workload-identity`,
+  // Portals: guest port N of a Thread at http://t-<uuid>-pN.localhost:<core>/.
+  // Browsers and curl resolve *.localhost to loopback, where Core listens.
+  DX_PORTAL_DOMAIN: `localhost:${ports.core}`,
   // Every first-party plugin is installed locally; local runtime substitutes
   // fixtures for external providers; built-in providers need no credit.
   DX_INSTALLED_PLUGINS: "search,speech",
@@ -362,6 +365,9 @@ const ensureLocalAccount = async () => {
 try {
   const accountStatus = await ensureLocalAccount();
   console.log(`\nLocal dx is available at ${webOrigin}`);
+  console.log(
+    `Portals: http://t-<thread uuid>-p<port>.localhost:${ports.core}/`,
+  );
   console.log(
     `Local login ${process.env.DX_LOCAL_AUTH_EMAIL} is ${accountStatus}; its stable password is in apps/core/.dev.vars.\n`,
   );

@@ -385,11 +385,11 @@ fn set_executable(path: &Path) -> io::Result<()> {
 
 /// Replace this process with the freshly installed binary, passing the same
 /// arguments plus any handoff state through the environment.
-pub fn reexec(current: &Path, handoff: Option<(&str, String)>) -> io::Error {
+pub fn reexec(current: &Path, handoff: &[(&str, String)]) -> io::Error {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
     let mut command = std::process::Command::new(current);
     command.args(&arguments);
-    if let Some((name, value)) = handoff {
+    for (name, value) in handoff {
         command.env(name, value);
     }
     use std::os::unix::process::CommandExt;

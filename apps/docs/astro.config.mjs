@@ -27,6 +27,10 @@ export default defineConfig({
               slug: "get-started/first-project",
             },
             {
+              label: "Terminal, Desktop, and Preview",
+              slug: "get-started/workspace-tools",
+            },
+            {
               label: "Workspace members",
               slug: "get-started/workspace-members",
             },

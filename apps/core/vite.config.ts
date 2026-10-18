@@ -19,8 +19,10 @@ const checkoutLocalVariableNames = [
   "DX_LOCAL_RUNTIME_TOKEN",
   "DX_INSTALLED_PLUGINS",
 ] as const;
-// Optional: preview other sign-in providers locally (see development-workflow.md).
-const checkoutLocalSignInVariableNames = [
+// Optional: preview other sign-in providers locally (see development-workflow.md),
+// and Portals, which `pnpm dev` serves under `localhost:<core port>`.
+const checkoutLocalOptionalVariableNames = [
+  "DX_PORTAL_DOMAIN",
   "DX_SIGN_IN_PROVIDERS",
   "DX_SIGN_IN_ADMISSION",
   "DX_SIGN_IN_ALLOWED_EMAIL_DOMAINS",
@@ -165,7 +167,7 @@ export default defineConfig(({ mode }) => ({
               }),
             ),
             ...Object.fromEntries(
-              checkoutLocalSignInVariableNames.flatMap((name) => {
+              checkoutLocalOptionalVariableNames.flatMap((name) => {
                 const value = process.env[name]?.trim();
                 return value ? [[name, value]] : [];
               }),
