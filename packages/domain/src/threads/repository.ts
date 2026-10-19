@@ -90,6 +90,20 @@ export interface ThreadRepositoryShape {
     Page<Thread>,
     Schema.SchemaError | PersistenceUnavailable | InvalidPageCursor
   >;
+  /**
+   * The child Threads that list under these roots, as the children list
+   * filters them: unpinned, in the given lifecycle state, in reachable
+   * projects. At most `perParent` per parent, most recent activity first.
+   */
+  readonly listChildrenOwned: (
+    ownerUserId: UserId,
+    parentThreadIds: ReadonlyArray<ThreadId>,
+    lifecycleState: "active" | "archived",
+    perParent: number,
+  ) => Effect.Effect<
+    ReadonlyArray<Thread>,
+    Schema.SchemaError | PersistenceUnavailable
+  >;
 }
 
 export class ThreadRepository extends Context.Service<

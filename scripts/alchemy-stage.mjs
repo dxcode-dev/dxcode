@@ -18,3 +18,11 @@ export const alchemyStage = (branch) => {
     .slice(0, 12);
   return `branch-${readable}-${identity}`;
 };
+
+// `node scripts/alchemy-stage.mjs <branch>` prints the stage a branch deploys
+// to, for CI to pass back as DX_DEPLOYMENT_STAGE.
+if (
+  process.argv[1] &&
+  import.meta.url === new URL(process.argv[1], "file:").href
+)
+  console.log(alchemyStage(process.argv[2] ?? ""));

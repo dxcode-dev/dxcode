@@ -48,6 +48,12 @@ export const RealtimeNotificationsEvent = Schema.Struct({
   revision: Revision,
 });
 
+/** The user's sidebar layout changed on another device; refetch it. */
+export const RealtimeSidebarLayoutEvent = Schema.Struct({
+  type: Schema.Literal("sidebar.invalidated"),
+  revision: Revision,
+});
+
 export const RealtimePresenceSnapshotEvent = Schema.Struct({
   type: Schema.Literal("presence.snapshot"),
   topic: PresenceTopic,
@@ -69,6 +75,7 @@ export const RealtimeServerEvent = Schema.Union([
   RealtimeInvalidationEvent,
   RealtimeWorkspaceStatusEvent,
   RealtimeNotificationsEvent,
+  RealtimeSidebarLayoutEvent,
   RealtimePresenceSnapshotEvent,
   Schema.Struct({
     type: Schema.Literal("presence.heartbeat"),

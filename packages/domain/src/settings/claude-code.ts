@@ -102,6 +102,10 @@ export const ClaudePlanReading = Schema.Struct({
     status: Schema.optional(ClaudePlanLimitStatus),
     resetsAt: Schema.optional(EpochSeconds),
     inUse: Schema.Boolean,
+    /** Anthropic's `overage-disabled-reason`, such as `org_level_disabled`. */
+    disabledReason: Schema.optional(
+      Schema.String.check(Schema.isMaxLength(64)),
+    ),
   }),
 });
 
@@ -114,6 +118,60 @@ export const ClaudePlanUsage = Schema.Struct({
 });
 
 export type ClaudePlanUsage = typeof ClaudePlanUsage.Type;
+
+/**
+ * Disabled reasons that mean extra usage is on but its credits or spend cap
+ * are used up, as the Claude Code CLI reads them. Every other reason means
+ * the account cannot use extra usage at all.
+ */
+const EXTRA_USAGE_USED_UP_REASONS = new Set([
+  "out_of_credits",
+  "org_level_disabled_until",
+  "org_spend_cap_reached",
+]);
+
+/**
+ * The account's paid extra usage as Anthropic last reported it: in use, on,
+ * on but used up for now, or off, which no dx choice can change.
+ */
+export type ClaudePlanExtraUsage = "in-use" | "on" | "used-up" | "off";
+
+export const claudePlanExtraUsage = (
+  reading: ClaudePlanReading | undefined,
+): ClaudePlanExtraUsage | undefined => {
+  const extraUsage = reading?.extraUsage;
+  if (extraUsage === undefined) return undefined;
+  if (extraUsage.inUse) return "in-use";
+  if (extraUsage.status === undefined) return undefined;
+  if (extraUsage.status !== "rejected") return "on";
+  return extraUsage.disabledReason !== undefined &&
+    EXTRA_USAGE_USED_UP_REASONS.has(extraUsage.disabledReason)
+    ? "used-up"
+    : "off";
+};
+
+/** Why the account has no extra usage, from Anthropic's disabled reason. */
+export const claudePlanExtraUsageOffReason = (
+  reason: string | undefined,
+): string => {
+  switch (reason) {
+    case "org_level_disabled":
+    case "org_service_level_disabled":
+      return "Your Claude organization turned extra usage off.";
+    case "member_level_disabled":
+      return "Your Claude organization turned extra usage off for your account.";
+    case "seat_tier_level_disabled":
+    case "seat_tier_zero_credit_limit":
+    case "member_zero_credit_limit":
+    case "group_zero_credit_limit":
+      return "Your Claude plan does not include extra usage.";
+    case "overage_not_provisioned":
+    case "no_limits_configured":
+      return "Extra usage is not set up on your Claude account.";
+    default:
+      return "Your Claude account has no extra usage.";
+  }
+};
 
 /** Whether the response that carried the reading drew on extra usage. */
 export const claudePlanUsesExtraUsage = (reading: ClaudePlanReading) =>
@@ -175,10 +233,10 @@ const windowLimits = (id: ClaudePlanWindowId, model: string | undefined) => {
 };
 
 /**
- * When dx keeps Claude Code off the plan's paid extra usage, the time (epoch
- * seconds) until which the plan is used up for `model` (a Claude model id
- * such as `claude-opus-5-5`; omitted, the account-wide windows), or
- * undefined while it has room.
+ * When Claude Code cannot fall back to paid extra usage, because dx keeps it
+ * off or the account has it off, the time (epoch seconds) until which the
+ * plan is used up for `model` (a Claude model id such as `claude-opus-5-5`;
+ * omitted, the account-wide windows), or undefined while it has room.
  */
 export const claudePlanBlockedUntil = (
   usage: ClaudePlanUsage | undefined,
@@ -186,7 +244,9 @@ export const claudePlanBlockedUntil = (
   now: number,
   model?: string,
 ): number | undefined => {
-  if (allowExtraUsage || usage === undefined) return undefined;
+  if (usage === undefined) return undefined;
+  if (allowExtraUsage && claudePlanExtraUsage(usage) !== "off")
+    return undefined;
   if (usage.status !== "rejected" && !claudePlanUsesExtraUsage(usage))
     return undefined;
   const usedUp = Math.max(

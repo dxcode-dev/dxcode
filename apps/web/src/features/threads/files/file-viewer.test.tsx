@@ -221,6 +221,10 @@ describe("Thread file viewer", () => {
     expect(button("Reload remote")?.type).toBe("button");
     expect(button("Preserve local")?.closest('[role="alert"]')).not.toBeNull();
     expect(button("Reload remote")?.closest('[role="alert"]')).not.toBeNull();
+    expect(container.querySelector("textarea")?.value).toBe(
+      "# Local draft\n\nunsaved proof",
+    );
+    await React.act(() => button("Preview")?.click());
     expect(
       container.querySelector(".thread-file-preview")?.textContent,
     ).toContain("Local draft");

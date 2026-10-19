@@ -1,7 +1,7 @@
 {
   "name": "@dx/core",
   "private": true,
-  "version": "0.2.22",
+  "version": "0.2.23",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -33,7 +33,6 @@
     "hono": "4.12.32",
     "jose": "6.2.3",
     "quickjs-emscripten-core": "0.32.0",
-    "sarvamai": "1.1.10",
     "tldts": "7.4.11",
     "valibot": "1.4.2",
     "yaml": "2.9.0",

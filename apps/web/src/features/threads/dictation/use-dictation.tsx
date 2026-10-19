@@ -16,6 +16,11 @@ import {
   DictationRecoverySession,
   downloadDictation,
 } from "./dictation-session.js";
+import {
+  type LiveDictation,
+  type LiveRecording,
+  liveRecording,
+} from "./dictation-stream.js";
 
 const CaretMarker = ({
   textarea,
@@ -153,6 +158,7 @@ export const useDictation = ({
   const abort = React.useRef<AbortController | undefined>(undefined);
   const jobId = React.useRef<string | undefined>(undefined);
   const finishing = React.useRef(false);
+  const recording = React.useRef<LiveRecording | undefined>(undefined);
   const insert = (text: string, intent: DictationIntent) => {
     if (lockedRef.current) return false;
     const textarea = textareaRef.current;
@@ -175,6 +181,7 @@ export const useDictation = ({
     audio: Blob,
     intent: DictationIntent,
     ownGeneration: number,
+    live?: LiveDictation,
   ) => {
     const id = crypto.randomUUID();
     const controller = new AbortController();
@@ -182,7 +189,7 @@ export const useDictation = ({
     jobId.current = id;
     setProcessingIntent(intent);
     mutation.mutate(
-      { audio, id, signal: controller.signal },
+      { audio, id, live, signal: controller.signal },
       {
         onSuccess: (text) => {
           if (
@@ -222,15 +229,24 @@ export const useDictation = ({
     setProcessingIntent(intent);
     const ownGeneration = generation.current;
     const audio = await capture.finish();
+    const live = recording.current?.take();
     if (audio.size > 44) recovery.retain(audio, intent);
     if (ownGeneration !== generation.current || audio.size <= 44) {
+      live?.close();
       finishing.current = false;
       if (audio.size > 44)
         recovery.fail(audio, "Dictation was saved after leaving the composer.");
       if (ownGeneration === generation.current) setProcessingIntent(undefined);
       return;
     }
-    transcribe(audio, intent, ownGeneration);
+    transcribe(audio, intent, ownGeneration, live);
+  };
+
+  const record = () => {
+    recording.current?.take()?.close();
+    const live = liveRecording();
+    recording.current = live;
+    void capture.start(() => void finish("insert"), live.push);
   };
 
   const preserveOnExit = React.useCallback(
@@ -252,6 +268,7 @@ export const useDictation = ({
       if (capture.getSnapshot().state === "recording" && !finishing.current) {
         finishing.current = true;
         void capture.finish().then((audio) => {
+          recording.current?.take()?.close();
           if (audio.size > 44)
             recovery.retain(
               audio,
@@ -261,7 +278,10 @@ export const useDictation = ({
         });
         return;
       }
-      if (!finishing.current) void capture.cancel();
+      if (!finishing.current) {
+        recording.current?.take()?.close();
+        void capture.cancel();
+      }
     },
     [capture, recovery],
   );
@@ -312,7 +332,7 @@ export const useDictation = ({
     }
     generation.current += 1;
     mutation.reset();
-    void capture.start(() => void finish("insert"));
+    record();
   };
   const recordNew = () => {
     if (
@@ -328,7 +348,7 @@ export const useDictation = ({
     recovery.release(recoverySnapshot.audio);
     generation.current += 1;
     mutation.reset();
-    void capture.start(() => void finish("insert"));
+    record();
   };
 
   const interceptSubmit = () => {

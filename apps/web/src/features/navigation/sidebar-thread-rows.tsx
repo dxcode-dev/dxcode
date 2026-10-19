@@ -12,10 +12,18 @@ import {
 
 export interface SidebarThreadRowsProps extends SidebarThreadListProps {
   readonly threads: ReadonlyArray<ThreadListClientItem>;
+  /** Each root's child Threads, loaded with the roots. */
+  readonly childThreads?: ReadonlyMap<
+    ThreadListClientItem["id"],
+    ReadonlyArray<ThreadListClientItem>
+  >;
 }
+
+const noChildren: ReadonlyArray<ThreadListClientItem> = [];
 
 export function SidebarThreadRows({
   threads,
+  childThreads,
   activeThreadId,
   projectNames,
   onThreadNavigate,
@@ -71,7 +79,11 @@ export function SidebarThreadRows({
               onUnfollow={onUnfollow}
             />
             {expanded ? (
-              <SidebarChildThreadRows parent={thread} {...rowProps} />
+              <SidebarChildThreadRows
+                parent={thread}
+                loaded={childThreads?.get(thread.id) ?? noChildren}
+                {...rowProps}
+              />
             ) : null}
           </React.Fragment>
         );

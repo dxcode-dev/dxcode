@@ -75,6 +75,15 @@ vi.mock("./thread-hover-preview.js", () => ({
   ),
 }));
 
+// These cases cover preview intent; the synced layout has its own journey.
+vi.mock("./sidebar-layout.js", async (importOriginal) => {
+  const layout = await importOriginal<typeof import("./sidebar-layout.js")>();
+  return {
+    ...layout,
+    useSyncedSidebarLayout: () => layout.useLocalSidebarLayout(),
+  };
+});
+
 import { AppSidebar } from "./app-sidebar.js";
 
 const act = React.act;

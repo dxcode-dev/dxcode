@@ -31,6 +31,7 @@ import { AppSidebar } from "./app-sidebar.js";
 import { shouldOpenMobileSidebarByDefault } from "./mobile-sidebar.js";
 import { SidebarExtensionRegion } from "./sidebar-extensions.js";
 import { SidebarPanelIcon } from "./sidebar-panel-icon.js";
+import { childThreadsByParent } from "./sidebar-thread-utils.js";
 import { ThreadSearchDialog } from "./thread-search-dialog.js";
 
 const PRODUCT_SIDEBAR_MIN_SIZE = 250;
@@ -58,6 +59,10 @@ export function ProductShell() {
   const projects =
     projectsQuery.data?.pages.flatMap((page) => page.items) ?? [];
   const threads = threadsQuery.data?.pages.flatMap((page) => page.items) ?? [];
+  const childThreads = React.useMemo(
+    () => childThreadsByParent(threadsQuery.data?.pages),
+    [threadsQuery.data?.pages],
+  );
   // An empty active list can still have archived Threads. Reuse the archive
   // cache so checking availability does not hide the only path to those rows.
   const checkEmptyArchive = threadsQuery.isSuccess && threads.length === 0;
@@ -124,6 +129,7 @@ export function ProductShell() {
       projects={projects}
       projectsComplete={projectsQuery.isSuccess && !projectsQuery.hasNextPage}
       threads={threads}
+      childThreads={childThreads}
       sharedThreads={sharedThreadsQuery.data}
       onUnfollow={unfollowThread}
       personalAccount={personalAccountQuery.data}

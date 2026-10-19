@@ -1,6 +1,7 @@
 import { ArrowUp, Paperclip, Square } from "lucide-react";
 import * as React from "react";
 import { Button } from "../../shared/ui/button.js";
+import { useComposerEnterKey } from "./composer-enter-key.js";
 import { useDictation } from "./dictation/use-dictation.js";
 import { ImageAttachmentPreviews } from "./image-attachments-ui.js";
 
@@ -35,6 +36,7 @@ export function ThreadComposer({
 }) {
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const imageInputRef = React.useRef<HTMLInputElement>(null);
+  const enterKey = useComposerEnterKey();
   const dictation = useDictation({
     enabled: dictationAvailable,
     onChange: onDraftChange,
@@ -73,14 +75,11 @@ export function ThreadComposer({
         ref={textareaRef}
         aria-label="Message"
         data-command-target="thread-composer"
+        enterKeyHint={enterKey.enterKeyHint}
         value={draft}
         onChange={(event) => onDraftChange(event.target.value)}
         onKeyDown={(event) => {
-          if (
-            event.key === "Enter" &&
-            !event.shiftKey &&
-            !event.nativeEvent.isComposing
-          ) {
+          if (enterKey.sends(event)) {
             event.preventDefault();
             event.currentTarget.form?.requestSubmit();
           }

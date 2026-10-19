@@ -151,9 +151,16 @@ const commonDeploymentResourceTypes = new Map([
 /** The Cloudflare Containers Orb Worker; see deploy/orb/containers.mjs. */
 export const orbWorkerName = (stage) => resourceName("orb", stage, 54);
 const ORB_PROVIDER_IDS = new Set(["e2b", "cloudflare"]);
-/** Default Orb size a new deployment's first project uses. */
-const defaultOrbProfileId = (orbProviders = ["e2b"]) =>
-  orbProviders.includes("e2b") ? "a1.medium" : "cf.standard-2";
+/**
+ * Default Orb size a new deployment's first project uses. Hosted stages run
+ * on Cloudflare Containers whenever they install it (E2B stays available for
+ * provider testing); a self-host keeps E2B first.
+ */
+const defaultOrbProfileId = (orbProviders = ["e2b"], target = "selfhost") =>
+  orbProviders.includes("e2b") &&
+  !(target !== "selfhost" && orbProviders.includes("cloudflare"))
+    ? "a1.medium"
+    : "cf.standard-2";
 const bootstrapRunnerProfileIds = new Set(["a1.medium", "cf.standard-2"]);
 
 export const parseOrbProviders = (value = "e2b") => {
@@ -391,6 +398,19 @@ export const assertDeploymentTarget = ({ branch, stage, target, selfhost }) => {
     throw new Error("Branch deployment must use its exact derived stage.");
 };
 
+/**
+ * CI names the stage it means to change (DX_DEPLOYMENT_STAGE). Every resource
+ * name and the hostname derive from the stage, and the plan check admits only
+ * those exact names, so a mismatch stops before any provider call.
+ */
+export const assertRequestedStage = ({ requested, stage }) => {
+  const value = requested?.trim();
+  if (value && value !== stage)
+    throw new Error(
+      `DX_DEPLOYMENT_STAGE is ${value}, but this checkout deploys ${stage}; nothing was deployed.`,
+    );
+};
+
 export const assertE2BTemplate = (template) => {
   if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(template)) {
     throw new Error("DX_E2B_TEMPLATE is not a valid E2B template name.");
@@ -401,8 +421,12 @@ export const assertE2BTemplate = (template) => {
 
 export const resolveE2BTemplateEvidence = async (template, listTemplates) => {
   assertE2BTemplate(template);
-  const matches = (await listTemplates()).filter(({ names }) =>
-    names.includes(template),
+  // E2B lists templates as `team/name` with the bare name as an alias.
+  const matches = (await listTemplates()).filter(
+    ({ names = [], aliases = [] }) =>
+      names.includes(template) ||
+      aliases.includes(template) ||
+      names.some((name) => name.endsWith(`/${template}`)),
   );
   if (matches.length !== 1)
     throw new Error(
@@ -616,7 +640,14 @@ export const prepareDeploymentCredentials = ({
     target,
   });
   if (existing !== undefined) return existing;
-  if (databaseId !== undefined)
+  // CI deploys each push from a fresh machine. Branch preview and staging
+  // credentials derive entirely from the stage and the reviewer or staging
+  // test login secrets, so CI may rebuild them. A self-host must recover its
+  // exact private file.
+  const rebuildFromEnvironment =
+    (target === "branch" || target === "staging") &&
+    environment.DX_DEPLOYMENT_CREDENTIALS_SOURCE === "environment";
+  if (databaseId !== undefined && !rebuildFromEnvironment)
     throw new Error(
       `The ${target} stage already has a D1 database, but its private credentials file is missing. Recover the exact credentials before deploying.`,
     );
@@ -1326,6 +1357,7 @@ const validateWorkerProps = (
       !validOrbContainerBinding(props.env?.ORB_CONTAINER, selection, {
         current,
         representation,
+        interrupted: allowedMissingEnvironmentNames.size > 0,
       }),
     ],
     [
@@ -1351,7 +1383,13 @@ const validateWorkerProps = (
   ].flatMap(([issue, invalid]) => (invalid ? [issue] : []));
   if (issues.length > 0)
     throw new Error(
-      `Worker ${representation} plan identity is outside the exact allowlist (${issues.join(", ")}).`,
+      `Worker ${representation} plan identity is outside the exact allowlist (${issues.join(", ")}).${
+        // The binding names a class and a script, never a secret; show it so
+        // an interrupted apply can be diagnosed from the log.
+        issues.includes("orb-cloudflare")
+          ? ` ORB_CONTAINER: ${JSON.stringify(props.env?.ORB_CONTAINER ?? null).slice(0, 400)}`
+          : ""
+      }`,
     );
 };
 
@@ -1367,7 +1405,7 @@ const E2B_WORKER_BINDINGS = [
 const validOrbContainerBinding = (
   binding,
   selection,
-  { current, representation },
+  { current, representation, interrupted },
 ) => {
   const installed = (selection.orbProviders ?? ["e2b"]).includes("cloudflare");
   if (binding === undefined) return !current || !installed;
@@ -1379,7 +1417,15 @@ const validOrbContainerBinding = (
     binding.className === "OrbContainerObject" &&
     (scriptName === orbWorkerName(selection.stage) ||
       (["desired", "evaluated"].includes(representation) &&
-        dependsExactlyOn(scriptName, "OrbContainers", "workerName")))
+        dependsExactlyOn(scriptName, "OrbContainers", "workerName")) ||
+      // A create interrupted before the Orb Worker existed persisted the
+      // binding without its unresolved script.
+      (interrupted &&
+        representation === "persisted" &&
+        installed &&
+        exactKeys(binding, ["className", "kind", "name"]) &&
+        binding.kind === "Cloudflare.DurableObject" &&
+        binding.name === "ORB_CONTAINER"))
   );
 };
 
@@ -1409,7 +1455,12 @@ export const daemonIngressWorkerName = (stage) =>
 // The dxd ingress Worker: dependency-free source, one cross-script binding to
 // the Core Worker's Thread execution namespace, served on workers.dev only.
 // Nothing else may change.
-const validateDaemonIngressProps = (props, selection, representation) => {
+const validateDaemonIngressProps = (
+  props,
+  selection,
+  representation,
+  interrupted = false,
+) => {
   const binding = props?.env?.THREAD_EXECUTION;
   const scriptName = binding?.scriptName;
   const issues = [
@@ -1450,7 +1501,14 @@ const validateDaemonIngressProps = (props, selection, representation) => {
       // On a new stage the Worker is created in the same plan, so even the
       // evaluated binding still references it.
       (["desired", "evaluated"].includes(representation) &&
-        dependsExactlyOn(scriptName, "Worker", "workerName")))
+        dependsExactlyOn(scriptName, "Worker", "workerName")) ||
+      // A create interrupted before the Worker existed persisted the binding
+      // without its unresolved script.
+      (interrupted &&
+        representation === "persisted" &&
+        exactKeys(binding, ["className", "kind", "name"]) &&
+        binding.kind === "Cloudflare.DurableObject" &&
+        binding.name === "THREAD_EXECUTION"))
       ? undefined
       : `env[${Object.keys(binding ?? {})
           .sort()
@@ -1469,7 +1527,12 @@ const assertExactDaemonIngressIdentity = (node, operation, selection) => {
       validateDaemonIngressProps(node.props, selection, "evaluated");
   }
   if (node.state?.props !== undefined)
-    validateDaemonIngressProps(node.state.props, selection, "persisted");
+    validateDaemonIngressProps(
+      node.state.props,
+      selection,
+      "persisted",
+      node.state.status === "creating",
+    );
   if (node.state?.old?.props !== undefined)
     validateDaemonIngressProps(node.state.old.props, selection, "prior");
 };
@@ -1830,12 +1893,15 @@ const isExactStorageProps = (props, selection, persisted) => {
   );
 };
 
-const assertExactStorageIdentity = (node, selection, kind) => {
+const assertExactStorageIdentity = (node, selection, kind, operation) => {
   const expectedName =
     kind === "Database" ? selection.databaseName : selection.bucketName;
+  // A destroy plan replays the props the stage recorded, which may predate
+  // the attachment CORS rule; a deploy must still produce the current shape.
+  const recorded = operation === "destroy";
   for (const [props, persisted] of [
-    [node.resource?.Props, false],
-    [node.props, false],
+    [node.resource?.Props, recorded],
+    [node.props, recorded],
     [node.state?.props, true],
     [node.state?.old?.props, true],
   ].filter(([props]) => Boolean(props))) {
@@ -2057,7 +2123,8 @@ const assertBootstrapCommand = (props, role, selection, context) => {
     (bootstrapRunnerProfileIds.has(runnerProfileId) &&
       (role === "persisted" ||
         role === "prior" ||
-        runnerProfileId === defaultOrbProfileId(selection.orbProviders)) &&
+        runnerProfileId ===
+          defaultOrbProfileId(selection.orbProviders, selection.target)) &&
       exactKeys(props.env, [
         ...bootstrapEnvKeys,
         "DX_BOOTSTRAP_RUNNER_PROFILE_ID",
@@ -2378,7 +2445,7 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
   if (id === "OrbContainers")
     assertExactOrbContainersIdentity(node, operation, selection);
   if (id === "Database" || id === "Storage")
-    assertExactStorageIdentity(node, selection, id);
+    assertExactStorageIdentity(node, selection, id, operation);
   if (id === "AccessTurnstile") assertExactTurnstileIdentity(node, selection);
   if (id === "AttachmentSigningToken")
     assertExactAttachmentSigningTokenIdentity(node, selection);

@@ -1017,6 +1017,53 @@ export const ThreadRepositoryD1 = Layer.effect(
             return { items, nextCursor };
           }),
         ),
+
+      listChildrenOwned: (
+        ownerUserId,
+        parentThreadIds,
+        lifecycleState,
+        perParent,
+      ) =>
+        observe(
+          "thread.listChildrenOwned",
+          { parents: parentThreadIds.length },
+          Effect.forEach(
+            // D1 binds at most 100 parameters per statement.
+            Array.from(
+              { length: Math.ceil(parentThreadIds.length / 90) },
+              (_, index) => parentThreadIds.slice(index * 90, index * 90 + 90),
+            ),
+            (parents) =>
+              sql<ThreadRow>`
+                SELECT id, title, project_id, owner_user_id, agent_instructions,
+                  agent_instructions_revision, agent_instructions_version,
+                  model_selection, runner_profile_id, title_pending_until, color,
+                  parent_thread_id, plugin_snapshot_json, skill_snapshot_json,
+                  visibility, created_at, updated_at, last_activity_at,
+                  activity_status, lifecycle_state, pinned_at
+                FROM (
+                  SELECT thread.*, ROW_NUMBER() OVER (
+                    PARTITION BY thread.parent_thread_id
+                    ORDER BY thread.last_activity_at DESC, thread.id DESC
+                  ) AS position
+                  FROM threads AS thread
+                  WHERE ${sql.in("thread.parent_thread_id", parents)}
+                    AND thread.owner_user_id = ${ownerUserId}
+                    AND thread.pinned_at IS NULL
+                    AND thread.lifecycle_state = ${lifecycleState}
+                    AND ${inReachableScope("thread.project_id", ownerUserId)}
+                )
+                WHERE position <= ${perParent}
+                ORDER BY last_activity_at DESC, id DESC
+              `.pipe(
+                Effect.catchTag("SqlError", (cause) =>
+                  Effect.fail(unavailable("thread.listChildrenOwned")(cause)),
+                ),
+                Effect.flatMap(decodeThreadRows),
+              ),
+            { concurrency: "unbounded" },
+          ).pipe(Effect.map((pages) => pages.flat())),
+        ),
     });
   }),
 );

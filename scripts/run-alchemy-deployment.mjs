@@ -33,6 +33,7 @@ import {
   assertDeploymentAccount,
   assertDxdChecksum,
   assertPostApplyVerification,
+  assertRequestedStage,
   configureHostedDeploymentPolicy,
   daemonIngressWorkerName,
   deploymentBitbucketOAuth,
@@ -146,6 +147,7 @@ const stage =
     : target === "selfhost"
       ? selfhostStage(selfhostConfig.name)
       : alchemyStage(branch);
+assertRequestedStage({ requested: process.env.DX_DEPLOYMENT_STAGE, stage });
 const githubApp =
   target === "selfhost" && !selfhostConfig.integrations.includes("github")
     ? undefined

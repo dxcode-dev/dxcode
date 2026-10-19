@@ -20,6 +20,20 @@ export const DictationJobSchema = Schema.Union([
 ]);
 export type DictationJob = typeof DictationJobSchema.Type;
 
+/**
+ * Live dictation socket: `GET /v1/dictation/:id/stream` upgraded with this
+ * subprotocol. The client sends binary frames of canonical PCM (16 kHz mono
+ * 16-bit little-endian) while recording, then one `{"type":"finish"}` text
+ * frame. The server answers with one `DictationStreamResult` and closes.
+ */
+export const DICTATION_STREAM_SUBPROTOCOL = "dx.dictation.v1";
+
+export const DictationStreamResultSchema = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("completed"), text: Schema.String }),
+  Schema.Struct({ type: Schema.Literal("failed"), error: Schema.String }),
+]);
+export type DictationStreamResult = typeof DictationStreamResultSchema.Type;
+
 export const DictationErrorSchema = Schema.Struct({ error: Schema.String });
 
 /**

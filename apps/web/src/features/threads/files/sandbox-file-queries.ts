@@ -104,6 +104,8 @@ export const sandboxFilePreviewOptions = (
 export interface SandboxFileMetadata {
   readonly sizeBytes: number;
   readonly mediaType: string;
+  /** Content version; a new value means the bytes changed. */
+  readonly version?: string;
 }
 
 /** HEAD the download form, which is never refused for size. */
@@ -118,9 +120,11 @@ export const fetchSandboxFileMetadata = async (
     ...(signal === undefined ? {} : { signal }),
   });
   if (!head.ok) throw failure(head.status);
+  const version = head.headers.get("x-dx-file-version");
   return {
     sizeBytes: Number(head.headers.get("content-length") ?? "0"),
     mediaType: head.headers.get("content-type") ?? "application/octet-stream",
+    ...(version === null ? {} : { version }),
   };
 };
 
@@ -140,6 +144,68 @@ export const sandboxFileMetadataOptions = (
     refetchOnReconnect: "always",
     refetchOnWindowFocus: "always",
   });
+
+export class SandboxPdfInvalid extends Error {
+  constructor() {
+    super("This file is not a valid PDF.");
+    this.name = "SandboxPdfInvalid";
+  }
+}
+
+/**
+ * The whole PDF as a typed Blob. The sandbox route forbids rendering its
+ * responses as documents, so the viewer loads a local copy instead. Only
+ * bytes that start like a PDF are typed as one.
+ */
+export const fetchSandboxPdf = async (
+  threadId: ThreadId,
+  path: ThreadSandboxFilePath,
+  signal?: AbortSignal,
+  fetcher: typeof fetch = sameOriginFetch,
+): Promise<Blob> => {
+  const response = await fetcher(
+    sandboxFileUrl(threadId, path),
+    signal === undefined ? {} : { signal },
+  );
+  if (!response.ok) throw failure(response.status);
+  const bytes = await response.arrayBuffer();
+  const magic = new TextDecoder().decode(bytes.slice(0, 5));
+  if (magic !== "%PDF-") throw new SandboxPdfInvalid();
+  return new Blob([bytes], { type: "application/pdf" });
+};
+
+/** Keyed by content version, so a focus refresh never reloads the viewer. */
+export const sandboxPdfOptions = (
+  threadId: ThreadId,
+  path: ThreadSandboxFilePath,
+  version: string | undefined,
+  active = true,
+) =>
+  queryOptions({
+    queryKey: [
+      ...threadFilesKeys.all(threadId),
+      "sandbox-pdf",
+      path,
+      version ?? null,
+    ] as const,
+    queryFn: ({ signal }) => fetchSandboxPdf(threadId, path, signal),
+    enabled: active,
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: 30_000,
+    retry: (count, error) =>
+      count < 2 &&
+      !(error instanceof SandboxPdfInvalid) &&
+      !(error instanceof SandboxFileError && error.status < 500),
+    retryDelay: (attempt) => 250 * 2 ** attempt,
+  });
+
+/** Shows a Blob in a frame until the returned disposer releases it. */
+export const showBlobInFrame = (frame: HTMLIFrameElement, blob: Blob) => {
+  const { createObjectURL, revokeObjectURL } = URL;
+  const url = createObjectURL(blob);
+  frame.src = url;
+  return () => revokeObjectURL(url);
+};
 
 export const formatBytes = (bytes: number) => {
   if (bytes < 1_024) return `${bytes} B`;

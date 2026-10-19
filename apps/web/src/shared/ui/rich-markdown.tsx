@@ -14,6 +14,7 @@ import { settledMarkdownBlocks } from "./markdown-blocks.js";
 import {
   MarkdownFileLinkContext,
   type MarkdownFileLinkResolver,
+  MarkdownImageSourceContext,
 } from "./markdown-file-link-context.js";
 import { loadKatex, normalizeMathDelimiters } from "./markdown-math.js";
 import {
@@ -409,6 +410,10 @@ const remarkPlugins: React.ComponentProps<
   // rewrites the math ones to double dollars.
   [remarkMath, { singleDollarTextMath: false }],
 ];
+// A file is hard-wrapped prose: a single newline is a space, not a break.
+const documentRemarkPlugins: React.ComponentProps<
+  typeof ReactMarkdown
+>["remarkPlugins"] = [remarkGfm, [remarkMath, { singleDollarTextMath: false }]];
 const rehypePlugins: React.ComponentProps<
   typeof ReactMarkdown
 >["rehypePlugins"] = [
@@ -445,8 +450,12 @@ function MarkdownImage({
   title,
 }: Pick<React.ComponentProps<"img">, "alt" | "src" | "title">) {
   const insideLink = React.useContext(InsideMarkdownLink);
+  const resolveImage = React.useContext(MarkdownImageSourceContext);
   const name = accessibleName(alt, "Markdown image");
   const url = typeof src === "string" && src !== "" ? src : undefined;
+  const documentImage = url === undefined ? undefined : resolveImage?.(url);
+  if (documentImage !== undefined)
+    return <img src={documentImage} alt={name} title={title} loading="lazy" />;
   if (url !== undefined && sameOriginImage(url))
     return <img src={url} alt={name} title={title} loading="lazy" />;
   const label = (
@@ -569,9 +578,11 @@ const markdownComponents = (
 const MarkdownDocument = React.memo(function MarkdownDocument({
   children,
   unsettled,
+  hardWrapped,
 }: {
   readonly children: string;
   readonly unsettled: boolean;
+  readonly hardWrapped: boolean;
 }) {
   const resolveFile = React.useContext(MarkdownFileLinkContext);
   const mentions = React.useContext(MarkdownMentionContext);
@@ -580,13 +591,12 @@ const MarkdownDocument = React.memo(function MarkdownDocument({
     [resolveFile, mentions],
   );
   const handles = mentions?.handles;
-  const plugins = React.useMemo(
-    () =>
-      handles === undefined || handles.length === 0
-        ? remarkPlugins
-        : [...remarkPlugins, remarkMentions(handles)],
-    [handles],
-  );
+  const plugins = React.useMemo(() => {
+    const base = hardWrapped ? documentRemarkPlugins : remarkPlugins;
+    return handles === undefined || handles.length === 0
+      ? base
+      : [...(base ?? []), remarkMentions(handles)];
+  }, [handles, hardWrapped]);
   return (
     <UnsettledMarkdown value={unsettled}>
       <ReactMarkdown
@@ -611,9 +621,12 @@ const MarkdownDocument = React.memo(function MarkdownDocument({
 export const RichMarkdown = React.memo(function RichMarkdown({
   children,
   streaming = false,
+  document = false,
 }: {
   readonly children: string;
   readonly streaming?: boolean;
+  /** A Markdown file rather than a message: soft line breaks are spaces. */
+  readonly document?: boolean;
 }) {
   const blocks = streaming ? settledMarkdownBlocks(children) : [children];
   // Key each block by its source offset: settled blocks never move.
@@ -624,9 +637,12 @@ export const RichMarkdown = React.memo(function RichMarkdown({
     return { start, block };
   });
   return (
-    <div className="markdown transcript-markdown">
+    <div
+      className={`markdown transcript-markdown${document ? " markdown-file" : ""}`}
+    >
       {keyed.map(({ start, block }, index) => (
         <MarkdownDocument
+          hardWrapped={document}
           key={start}
           unsettled={streaming && index === keyed.length - 1}
         >

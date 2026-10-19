@@ -191,12 +191,44 @@ const IMAGE_EXTENSIONS = new Set([
   "ico",
   "svg",
 ]);
-const VIDEO_EXTENSIONS = new Set(["mp4", "m4v", "webm", "mov", "ogv"]);
+const VIDEO_EXTENSIONS = new Set([
+  "mp4",
+  "m4v",
+  "webm",
+  "mov",
+  "ogv",
+  "mkv",
+  "avi",
+  "mpeg",
+  "mpg",
+  "3gp",
+]);
+const AUDIO_EXTENSIONS = new Set([
+  "mp3",
+  "wav",
+  "ogg",
+  "oga",
+  "opus",
+  "m4a",
+  "aac",
+  "flac",
+  "weba",
+  "aif",
+  "aiff",
+]);
 
-export const fileMediaKind = (path: string): "image" | "video" | undefined => {
+/**
+ * How a file is shown when it is opened. Media and PDFs stream from the
+ * sandbox; every other file opens as text.
+ */
+export type FileMediaKind = "image" | "video" | "audio" | "pdf";
+
+export const fileMediaKind = (path: string): FileMediaKind | undefined => {
   const extension = path.split("/").at(-1)?.split(".").at(-1)?.toLowerCase();
   if (extension === undefined) return undefined;
   if (IMAGE_EXTENSIONS.has(extension)) return "image";
   if (VIDEO_EXTENSIONS.has(extension)) return "video";
+  if (AUDIO_EXTENSIONS.has(extension)) return "audio";
+  if (extension === "pdf") return "pdf";
   return undefined;
 };

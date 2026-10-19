@@ -2,6 +2,7 @@ import type {
   ThreadChangedFile,
   ThreadFilesPath,
   ThreadFilesWorktreeId,
+  ThreadFileTreeData,
   ThreadFileTreeEntry,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
@@ -11,7 +12,12 @@ import type {
   FileTree as TreeModel,
 } from "@pierre/trees";
 import { FileTree, useFileTree } from "@pierre/trees/react";
-import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  type InfiniteData,
+  notifyManager,
+  useInfiniteQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { Download, FileText } from "lucide-react";
 import * as React from "react";
 import { downloadFromUrl } from "../../../shared/download-from-url.js";
@@ -36,9 +42,6 @@ const toTreePaths = (entries: readonly ThreadFileTreeEntry[]) => {
   }
   return [...paths].sort();
 };
-
-const treeKey = (entries: readonly ThreadFileTreeEntry[]) =>
-  entries.map((entry) => `${entry.kind}:${entry.path}`).join("\0");
 
 const toTreeGitStatus = (
   gitStatus: ReadonlyMap<string, ThreadChangedFile["status"]>,
@@ -76,23 +79,23 @@ const serializeCssString = (value: string) => {
   return `${serialized}"`;
 };
 
-const loadingPresentation = (
-  entries: readonly ThreadFileTreeEntry[],
-  loadingPaths: readonly string[],
-) => {
-  const loading = new Set(loadingPaths);
-  const attributes: Record<string, "true"> = {};
-  let rules = "";
-  let directoryIndex = 0;
-  for (const path of toTreePaths(entries)) {
-    if (!path.endsWith("/")) continue;
-    const attribute = `data-loading-directory-${directoryIndex}`;
-    if (loading.has(path)) attributes[attribute] = "true";
-    rules += `
-:host([${attribute}="true"]) [data-item-path=${serializeCssString(path)}] > [data-item-section="icon"] > svg {
+const LOADING_STYLE_ATTRIBUTE = "data-thread-files-loading";
+
+/** A blinking dot replaces the folder icon of each directory still loading. */
+const loadingCss = (loadingPaths: readonly string[]) =>
+  loadingPaths.length === 0
+    ? ""
+    : `
+@keyframes thread-files-blink {
+  50% { opacity: 0; }
+}
+${loadingPaths
+  .map((path) => {
+    const row = `[data-item-path=${serializeCssString(path)}] > [data-item-section="icon"]`;
+    return `${row} > svg {
   display: none;
 }
-:host([${attribute}="true"]) [data-item-path=${serializeCssString(path)}] > [data-item-section="icon"]::before {
+${row}::before {
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -100,19 +103,33 @@ const loadingPresentation = (
   animation: thread-files-blink 2.4s ease-in-out infinite;
   content: "";
 }`;
-    directoryIndex += 1;
-  }
-  return {
-    attributes,
-    css: `
-@keyframes thread-files-blink {
-  50% { opacity: 0; }
-}
-${rules}
+  })
+  .join("\n")}
 @media (prefers-reduced-motion: reduce) {
   [data-item-section="icon"]::before { animation: none !important; }
-}`,
-  };
+}`;
+
+/**
+ * The tree reads its stylesheet once, when it is created. The loading rules
+ * change while it stays mounted, so they live in a style dx owns inside the
+ * tree's shadow root.
+ */
+const syncLoadingStyle = (host: Element | null, css: string) => {
+  const shadowRoot = host?.shadowRoot;
+  if (shadowRoot === null || shadowRoot === undefined) return;
+  const existing = shadowRoot.querySelector(
+    `style[${LOADING_STYLE_ATTRIBUTE}]`,
+  );
+  if (css === "") {
+    existing?.remove();
+    return;
+  }
+  const style = existing ?? document.createElement("style");
+  if (existing === null) {
+    style.setAttribute(LOADING_STYLE_ATTRIBUTE, "");
+    shadowRoot.append(style);
+  }
+  if (style.textContent !== css) style.textContent = css;
 };
 
 const expandedPaths = (model: TreeModel) => {
@@ -129,7 +146,10 @@ const useLoadingPaths = (
 ) => {
   const queryClient = useQueryClient();
   const subscribe = React.useCallback(
-    (notify: () => void) => queryClient.getQueryCache().subscribe(notify),
+    // Observers notify the cache while they render; defer like useIsFetching
+    // so this component never updates during another component's render.
+    (notify: () => void) =>
+      queryClient.getQueryCache().subscribe(notifyManager.batchCalls(notify)),
     [queryClient],
   );
   const snapshot = React.useCallback(
@@ -156,37 +176,49 @@ const useLoadingPaths = (
   return paths === "" ? [] : paths.split("\0");
 };
 
+interface TreeLatest {
+  readonly entries: readonly ThreadFileTreeEntry[];
+  readonly onOpenFile: (path: ThreadFilesPath) => void;
+}
+
 const treeOptions = (
-  entries: readonly ThreadFileTreeEntry[],
+  paths: readonly string[],
   selectedPath: ThreadFilesPath | undefined,
   initiallyExpanded: readonly string[],
   gitStatus: readonly GitStatusEntry[],
-  unsafeCSS: string,
-  onOpenFile: (path: ThreadFilesPath) => void,
-): FileTreeOptions => {
-  const byPath = new Map(entries.map((entry) => [entry.path, entry]));
-  return {
-    density: "compact",
-    flattenEmptyDirectories: false,
-    initialExpansion: "closed",
-    initialExpandedPaths: initiallyExpanded,
-    initialSelectedPaths: selectedPath === undefined ? [] : [selectedPath],
-    initialVisibleRowCount: 24,
-    paths: toTreePaths(entries),
-    gitStatus,
-    unsafeCSS,
-    composition: {
-      contextMenu: { enabled: true, triggerMode: "right-click" },
-    },
-    onSelectionChange: (paths) => {
-      const selected = paths.at(-1);
-      if (selected === undefined) return;
-      const entry = byPath.get(plainPath(selected) as ThreadFilesPath);
-      if (entry?.kind === "file") onOpenFile(entry.path);
-    },
-  };
-};
+  latest: React.RefObject<TreeLatest>,
+): FileTreeOptions => ({
+  density: "compact",
+  flattenEmptyDirectories: false,
+  initialExpansion: "closed",
+  initialExpandedPaths: initiallyExpanded,
+  initialSelectedPaths: selectedPath === undefined ? [] : [selectedPath],
+  initialVisibleRowCount: 24,
+  paths,
+  gitStatus,
+  composition: {
+    contextMenu: { enabled: true, triggerMode: "right-click" },
+  },
+  onSelectionChange: (selection) => {
+    const selected = selection.at(-1);
+    if (selected === undefined) return;
+    const path = plainPath(selected);
+    const entry = latest.current.entries.find(
+      (candidate) => candidate.path === path,
+    );
+    if (entry?.kind === "file") latest.current.onOpenFile(entry.path);
+  },
+});
 
+const samePaths = (left: readonly string[], right: readonly string[]) =>
+  left.length === right.length &&
+  left.every((path, index) => path === right[index]);
+
+/**
+ * One tree model lives as long as the worktree's tree. A refresh, a new
+ * file, or a status change updates it in place, so rows, scroll position,
+ * and expansion never flash through a remount.
+ */
 const TreeView = ({
   entries,
   expanded,
@@ -206,38 +238,48 @@ const TreeView = ({
   readonly onOpenFile: (path: ThreadFilesPath) => void;
   readonly downloadUrlFor?: (path: ThreadFilesPath) => string | undefined;
 }) => {
+  const paths = React.useMemo(() => toTreePaths(entries), [entries]);
   const statusEntries = React.useMemo(
     () => toTreeGitStatus(gitStatus),
     [gitStatus],
   );
-  const loading = React.useMemo(
-    () => loadingPresentation(entries, loadingPaths),
-    [entries, loadingPaths],
+  const loading = loadingCss(loadingPaths);
+  const latest = React.useRef<TreeLatest>({ entries, onOpenFile });
+  // The model reads its options once; later renders sync it in `attach`.
+  const [initialOptions] = React.useState(() =>
+    treeOptions(paths, selectedPath, expanded, statusEntries, latest),
   );
-  const model = useFileTree(
-    treeOptions(
-      entries,
-      selectedPath,
-      expanded,
-      statusEntries,
-      loading.css,
-      onOpenFile,
-    ),
-  ).model;
-  const previousSelectedPath = React.useRef(selectedPath);
+  const model = useFileTree(initialOptions).model;
+  const applied = React.useRef({
+    paths,
+    statusEntries,
+    selectedPath,
+  });
   const attach = React.useCallback(
     (node: HTMLDivElement | null) => {
       if (node === null) return;
-      model.setGitStatus(statusEntries);
-      const previousSelection = previousSelectedPath.current;
-      if (previousSelection !== selectedPath) {
-        if (previousSelection !== undefined)
-          model.getItem(previousSelection)?.deselect();
+      latest.current = { entries, onOpenFile };
+      const current = applied.current;
+      if (current.paths !== paths && !samePaths(current.paths, paths))
+        model.resetPaths(paths, { initialExpandedPaths: expandedPaths(model) });
+      if (current.statusEntries !== statusEntries)
+        model.setGitStatus(statusEntries);
+      if (current.selectedPath !== selectedPath) {
+        if (current.selectedPath !== undefined)
+          model.getItem(current.selectedPath)?.deselect();
         if (selectedPath !== undefined) model.getItem(selectedPath)?.select();
-        previousSelectedPath.current = selectedPath;
       }
+      applied.current = { paths, statusEntries, selectedPath };
+      syncLoadingStyle(node.querySelector("file-tree-container"), loading);
+      const syncHeight = () =>
+        node.style.setProperty(
+          "--thread-files-tree-content-height",
+          `${model.getVisibleCount() * model.getItemHeight()}px`,
+        );
+      syncHeight();
       let previous = expandedPaths(model).join("\0");
       return model.subscribe(() => {
+        syncHeight();
         const nextPaths = expandedPaths(model);
         const next = nextPaths.join("\0");
         if (next === previous) return;
@@ -245,7 +287,16 @@ const TreeView = ({
         onExpandedChange(nextPaths);
       });
     },
-    [model, onExpandedChange, selectedPath, statusEntries],
+    [
+      entries,
+      loading,
+      model,
+      onExpandedChange,
+      onOpenFile,
+      paths,
+      selectedPath,
+      statusEntries,
+    ],
   );
   return (
     <div
@@ -264,12 +315,10 @@ const TreeView = ({
           "--trees-padding-inline-override": "8px",
           "--trees-item-padding-x-override": "6px",
           "--trees-font-size-override": "12px",
-          "--thread-files-tree-content-height": `${model.getVisibleCount() * model.getItemHeight()}px`,
         } as React.CSSProperties
       }
     >
       <FileTree
-        {...loading.attributes}
         aria-busy={loadingPaths.length > 0 ? "true" : "false"}
         aria-label="Workspace files"
         model={model}
@@ -318,44 +367,24 @@ const TreeView = ({
   );
 };
 
-const ChildQueries = ({
+/** Keeps one expanded directory's listing live and offers its next page. */
+const DirectoryQuery = ({
   api,
   active,
   threadId,
   worktree,
-  rootEntries,
-  expanded,
-  gitStatus,
-  index,
-  loaded,
-  loadingPaths,
-  selectedPath,
-  onExpandedChange,
-  onOpenFile,
-  downloadUrlFor,
+  path,
 }: {
   readonly api: ThreadFilesApi;
   readonly active: boolean;
   readonly threadId: ThreadId;
   readonly worktree: ThreadFilesWorktreeId;
-  readonly rootEntries: readonly ThreadFileTreeEntry[];
-  readonly expanded: readonly string[];
-  readonly gitStatus: ReadonlyMap<string, ThreadChangedFile["status"]>;
-  readonly index: number;
-  readonly loaded: readonly (readonly ThreadFileTreeEntry[])[];
-  readonly loadingPaths: readonly string[];
-  readonly selectedPath?: ThreadFilesPath;
-  readonly onExpandedChange: (paths: readonly string[]) => void;
-  readonly onOpenFile: (path: ThreadFilesPath) => void;
-  readonly downloadUrlFor?: (path: ThreadFilesPath) => string | undefined;
+  readonly path: ThreadFilesPath;
 }) => {
-  const path = plainPath(expanded[index] ?? "") as ThreadFilesPath;
   const query = useInfiniteQuery(
     threadFileTreeOptions(api, threadId, worktree, path, active),
   );
-  const entries = query.data?.pages.flatMap((page) => page.entries) ?? [];
-  const nextLoaded = [...loaded, entries];
-  const more = query.hasNextPage ? (
+  return query.hasNextPage ? (
     <button
       className="thread-files-more"
       disabled={query.isFetchingNextPage}
@@ -365,47 +394,49 @@ const ChildQueries = ({
       {query.isFetchingNextPage ? "Loading…" : `More in ${path}`}
     </button>
   ) : null;
-  if (index + 1 < expanded.length)
-    return (
-      <>
-        <ChildQueries
-          api={api}
-          active={active}
-          expanded={expanded}
-          gitStatus={gitStatus}
-          index={index + 1}
-          loaded={nextLoaded}
-          loadingPaths={loadingPaths}
-          onExpandedChange={onExpandedChange}
-          onOpenFile={onOpenFile}
-          {...(downloadUrlFor === undefined ? {} : { downloadUrlFor })}
-          rootEntries={rootEntries}
-          selectedPath={selectedPath}
-          threadId={threadId}
-          worktree={worktree}
-        />
-        {more}
-      </>
+};
+
+type DirectoryData = InfiniteData<ThreadFileTreeData> | undefined;
+
+/**
+ * The cached listings of the expanded directories. The snapshot keeps its
+ * identity until one of them changes, so unrelated cache traffic never
+ * re-renders the tree.
+ */
+const useExpandedDirectoryData = (
+  threadId: ThreadId,
+  worktree: ThreadFilesWorktreeId,
+  expanded: readonly string[],
+) => {
+  const queryClient = useQueryClient();
+  const last = React.useRef<readonly DirectoryData[]>([]);
+  const subscribe = React.useCallback(
+    // Observers notify the cache while they render; defer like useIsFetching
+    // so this component never updates during another component's render.
+    (notify: () => void) =>
+      queryClient.getQueryCache().subscribe(notifyManager.batchCalls(notify)),
+    [queryClient],
+  );
+  const snapshot = React.useCallback(() => {
+    const next = expanded.map((path) =>
+      queryClient.getQueryData<InfiniteData<ThreadFileTreeData>>(
+        threadFilesKeys.tree(
+          threadId,
+          worktree,
+          plainPath(path) as ThreadFilesPath,
+        ),
+      ),
     );
-  const byPath = new Map(
-    [rootEntries, ...nextLoaded].flat().map((entry) => [entry.path, entry]),
-  );
-  return (
-    <>
-      <TreeView
-        entries={[...byPath.values()]}
-        expanded={expanded}
-        gitStatus={gitStatus}
-        key={treeKey([...byPath.values()])}
-        loadingPaths={loadingPaths}
-        onExpandedChange={onExpandedChange}
-        onOpenFile={onOpenFile}
-        {...(downloadUrlFor === undefined ? {} : { downloadUrlFor })}
-        selectedPath={selectedPath}
-      />
-      {more}
-    </>
-  );
+    const previous = last.current;
+    if (
+      previous.length === next.length &&
+      next.every((data, index) => data === previous[index])
+    )
+      return previous;
+    last.current = next;
+    return next;
+  }, [expanded, queryClient, threadId, worktree]);
+  return React.useSyncExternalStore(subscribe, snapshot, snapshot);
 };
 
 export const ThreadFilesTree = ({
@@ -432,38 +463,37 @@ export const ThreadFilesTree = ({
 }) => {
   const [expanded, setExpanded] = React.useState<readonly string[]>([]);
   const loadingPaths = useLoadingPaths(threadId, worktree, expanded);
+  const directories = useExpandedDirectoryData(threadId, worktree, expanded);
+  const merged = React.useMemo(() => {
+    if (directories.every((data) => data === undefined)) return entries;
+    const byPath = new Map(entries.map((entry) => [entry.path, entry]));
+    for (const data of directories)
+      for (const page of data?.pages ?? [])
+        for (const entry of page.entries) byPath.set(entry.path, entry);
+    return [...byPath.values()];
+  }, [directories, entries]);
   return (
     <>
-      {expanded.length === 0 ? (
-        <TreeView
-          entries={entries}
-          expanded={expanded}
-          gitStatus={gitStatus}
-          key={treeKey(entries)}
-          loadingPaths={loadingPaths}
-          onExpandedChange={setExpanded}
-          onOpenFile={onOpenFile}
-          {...(downloadUrlFor === undefined ? {} : { downloadUrlFor })}
-          selectedPath={selectedPath}
-        />
-      ) : (
-        <ChildQueries
-          api={api}
+      <TreeView
+        entries={merged}
+        expanded={expanded}
+        gitStatus={gitStatus}
+        loadingPaths={loadingPaths}
+        onExpandedChange={setExpanded}
+        onOpenFile={onOpenFile}
+        {...(downloadUrlFor === undefined ? {} : { downloadUrlFor })}
+        selectedPath={selectedPath}
+      />
+      {expanded.map((path) => (
+        <DirectoryQuery
           active={active}
-          expanded={expanded}
-          gitStatus={gitStatus}
-          index={0}
-          loaded={[]}
-          loadingPaths={loadingPaths}
-          onExpandedChange={setExpanded}
-          onOpenFile={onOpenFile}
-          {...(downloadUrlFor === undefined ? {} : { downloadUrlFor })}
-          rootEntries={entries}
-          selectedPath={selectedPath}
+          api={api}
+          key={path}
+          path={plainPath(path) as ThreadFilesPath}
           threadId={threadId}
           worktree={worktree}
         />
-      )}
+      ))}
       <span className="sr-only" role="status">
         {loadingPaths.length > 0
           ? `Loading ${loadingPaths.map(plainPath).join(", ")}…`

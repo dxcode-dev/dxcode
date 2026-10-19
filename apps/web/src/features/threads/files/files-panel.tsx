@@ -1,4 +1,5 @@
 import type {
+  ThreadChangedFile,
   ThreadChangesWorktree,
   ThreadFilesPath,
   ThreadFilesWorktreeId,
@@ -58,6 +59,8 @@ const loadingFiles = (
 const message = (error: unknown) =>
   error instanceof Error ? error.message : "Files are temporarily unavailable.";
 const PRIMARY_WORKTREE = "primary" as ThreadFilesWorktreeId;
+const NO_GIT_STATUS: ReadonlyMap<string, ThreadChangedFile["status"]> =
+  new Map();
 const subscribeToOnlineState = (listener: () => void) =>
   onlineManager.subscribe(listener);
 const onlineSnapshot = () => onlineManager.isOnline();
@@ -90,10 +93,7 @@ function FilesWorktreeRoot({
   readonly worktree: Pick<ThreadChangesWorktree, "id" | "branch">;
   readonly label: string;
   readonly grouped: boolean;
-  readonly gitStatus: ReadonlyMap<
-    string,
-    "added" | "deleted" | "modified" | "untracked"
-  >;
+  readonly gitStatus: ReadonlyMap<string, ThreadChangedFile["status"]>;
   readonly selectedPath?: ThreadFilesPath;
   readonly onOpenFile: (location: ThreadFileLocation) => void;
   readonly transport: ThreadFilesApi;
@@ -103,7 +103,36 @@ function FilesWorktreeRoot({
   const query = useInfiniteQuery(
     threadFileTreeOptions(transport, threadId, worktree.id, undefined, active),
   );
-  const entries = query.data?.pages.flatMap((page) => page.entries) ?? [];
+  const pages = query.data?.pages;
+  const entries = React.useMemo(
+    () => pages?.flatMap((page) => page.entries) ?? [],
+    [pages],
+  );
+  const worktreeId = worktree.id;
+  const openFile = React.useCallback(
+    (path: ThreadFilesPath) =>
+      onOpenFile({
+        worktree: worktreeId,
+        ...(grouped ? { worktreeLabel: label } : {}),
+        path,
+      }),
+    [grouped, label, onOpenFile, worktreeId],
+  );
+  const downloadUrlFor = React.useCallback(
+    (path: ThreadFilesPath) => {
+      const absolute = absolutePathFor({
+        kind: "workspace",
+        worktree: worktreeId,
+        path,
+      });
+      return absolute === undefined
+        ? undefined
+        : sandboxFileUrl(threadId, absolute, true);
+    },
+    [threadId, worktreeId],
+  );
+  // A background refresh keeps the cached tree on screen without a notice;
+  // only a lost connection is worth a row.
   const content =
     query.data === undefined && query.isPending ? (
       loadingFiles
@@ -124,10 +153,6 @@ function FilesWorktreeRoot({
           <div className="thread-files-recovery" role="status">
             Reconnecting…
           </div>
-        ) : query.isFetching && !query.isFetchingNextPage ? (
-          <div className="thread-files-recovery" role="status">
-            Refreshing…
-          </div>
         ) : query.isError ? (
           <div className="thread-files-recovery" role="alert">
             Disconnected. Files will reconnect automatically.
@@ -140,23 +165,8 @@ function FilesWorktreeRoot({
             entries={entries}
             gitStatus={gitStatus}
             key={worktree.id}
-            onOpenFile={(path) =>
-              onOpenFile({
-                worktree: worktree.id,
-                ...(grouped ? { worktreeLabel: label } : {}),
-                path,
-              })
-            }
-            downloadUrlFor={(path) => {
-              const absolute = absolutePathFor({
-                kind: "workspace",
-                worktree: worktree.id,
-                path,
-              });
-              return absolute === undefined
-                ? undefined
-                : sandboxFileUrl(threadId, absolute, true);
-            }}
+            onOpenFile={openFile}
+            downloadUrlFor={downloadUrlFor}
             selectedPath={selectedPath}
             threadId={threadId}
             worktree={worktree.id}
@@ -231,6 +241,22 @@ export const ThreadFilesPanel = ({
     },
   ];
   const grouped = worktrees.length > 1;
+  // The latest capture's statuses stay on screen while the next one is taken;
+  // a stale capture is still the best known state of the worktree.
+  const files = captured?.files;
+  const gitStatusByWorktree = React.useMemo(() => {
+    const byWorktree = new Map<
+      string,
+      Map<string, ThreadChangedFile["status"]>
+    >();
+    for (const file of files ?? []) {
+      const worktree = file.worktree ?? PRIMARY_WORKTREE;
+      const statuses = byWorktree.get(worktree) ?? new Map();
+      statuses.set(file.path, file.status);
+      byWorktree.set(worktree, statuses);
+    }
+    return byWorktree;
+  }, [files]);
   return (
     <section className="thread-files-panel">
       <header>
@@ -240,17 +266,7 @@ export const ThreadFilesPanel = ({
         {worktrees.map((worktree) => (
           <FilesWorktreeRoot
             active={active}
-            gitStatus={
-              new Map(
-                captured?.freshness === "complete"
-                  ? captured.files.flatMap((file) =>
-                      (file.worktree ?? PRIMARY_WORKTREE) === worktree.id
-                        ? [[file.path, file.status] as const]
-                        : [],
-                    )
-                  : [],
-              )
-            }
+            gitStatus={gitStatusByWorktree.get(worktree.id) ?? NO_GIT_STATUS}
             grouped={grouped}
             key={worktree.id}
             label={
@@ -300,6 +316,13 @@ export const ThreadFilePane = ({
   const mutation = useMutation(
     saveThreadFileOptions(transport, threadId, worktree, queryClient),
   );
+  const references = React.useMemo(
+    () => ({
+      threadId,
+      location: { kind: "workspace" as const, worktree, path },
+    }),
+    [path, threadId, worktree],
+  );
   if (query.isPending)
     return (
       <div className="thread-files-state" role="status">
@@ -334,11 +357,9 @@ export const ThreadFilePane = ({
             ? "Disconnected"
             : query.isFetching && query.failureCount > 0
               ? "Reconnecting…"
-              : query.isFetching
-                ? "Refreshing…"
-                : query.error !== null
-                  ? "Disconnected. This file will reconnect automatically."
-                  : undefined
+              : query.error !== null
+                ? "Disconnected. This file will reconnect automatically."
+                : undefined
         }
         file={query.data}
         key={`${worktree}:${path}:${reloadGeneration}`}
@@ -358,6 +379,7 @@ export const ThreadFilePane = ({
           });
         }}
         onSave={(input, callbacks) => mutation.mutate(input, callbacks)}
+        references={references}
         {...(reveal === undefined ? {} : { reveal })}
         {...(revealSequence === undefined ? {} : { revealSequence })}
         saveError={

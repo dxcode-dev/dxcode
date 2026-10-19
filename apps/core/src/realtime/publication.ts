@@ -132,13 +132,20 @@ const publishRealtimeThreadEvent = async (
   }
 };
 
+/** An event for one user's open apps only. */
+export type UserInvalidationType =
+  | "notifications.invalidated"
+  | "sidebar.invalidated";
+
 /**
- * Tells a user's open apps that their notification inbox changed. It goes
- * only to that user, on their own revision stream in their home hub.
+ * Tells a user's open apps that their notification inbox or sidebar layout
+ * changed. It goes only to that user, on their own revision stream in their
+ * home hub.
  */
-export const publishNotificationsInvalidation = async (
+export const publishUserInvalidation = async (
   bindings: Pick<Bindings, "DB" | "REALTIME_HUB">,
   userId: UserId,
+  type: UserInvalidationType,
 ): Promise<void> => {
   if (bindings.DB === undefined || bindings.REALTIME_HUB === undefined) return;
   try {
@@ -153,18 +160,24 @@ export const publishNotificationsInvalidation = async (
           [PARTICIPANT_HEADER]: userId,
           [CLIENT_HEADER]: crypto.randomUUID(),
         },
-        body: JSON.stringify({ type: "notifications.invalidated", userId }),
+        body: JSON.stringify({ type, userId }),
       },
     );
     if (!response.ok)
       throw new Error(`Realtime hub returned ${response.status}.`);
   } catch (cause) {
-    realtimeLogger.warn("Realtime notification event publication failed.", {
-      event: "realtime_notification_event_publication_failed",
+    realtimeLogger.warn("Realtime user event publication failed.", {
+      event: "realtime_user_event_publication_failed",
+      type,
       cause,
     });
   }
 };
+
+export const publishNotificationsInvalidation = (
+  bindings: Pick<Bindings, "DB" | "REALTIME_HUB">,
+  userId: UserId,
+) => publishUserInvalidation(bindings, userId, "notifications.invalidated");
 
 const missingExecutionContextMessage = "This context has no ExecutionContext";
 
@@ -183,6 +196,28 @@ export const scheduleRealtimeInvalidation = async (
     type,
     recipients,
   );
+  try {
+    executionContext().waitUntil(publication);
+  } catch (cause) {
+    if (
+      cause instanceof Error &&
+      cause.message === missingExecutionContextMessage
+    )
+      return publication;
+    throw cause;
+  }
+};
+
+/** Publishes a user event after the response, or now without a context. */
+export const scheduleUserInvalidation = async (
+  executionContext: () => {
+    readonly waitUntil: (promise: Promise<unknown>) => void;
+  },
+  bindings: Pick<Bindings, "DB" | "REALTIME_HUB">,
+  userId: UserId,
+  type: UserInvalidationType,
+): Promise<void> => {
+  const publication = publishUserInvalidation(bindings, userId, type);
   try {
     executionContext().waitUntil(publication);
   } catch (cause) {

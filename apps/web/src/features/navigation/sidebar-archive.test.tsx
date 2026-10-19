@@ -39,6 +39,8 @@ function Navigation({
     <SidebarThreadNavigation
       {...rowProps}
       collapsedGroups={new Set(collapsed ? ["archived"] : [])}
+      expandedThreads={new Set()}
+      onToggleThread={vi.fn()}
       onToggleGroup={toggle}
       onLoadMore={vi.fn()}
       hasMore={false}

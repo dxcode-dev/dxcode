@@ -1,0 +1,95 @@
+name: Deploy
+
+# Deploys a dx release to your Cloudflare account, on demand. Made for forks:
+# it fetches release tags from upstream, checks out the one you name (the
+# newest by default), and deploys it with the fork's own settings. See
+# https://dxcode.dev/docs/deployment/fork/ for the setup.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to deploy (empty for the newest vX.Y.Z)
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out the release tag
+        id: tag
+        env:
+          REQUESTED: ${{ inputs.tag }}
+          UPSTREAM: ${{ vars.DX_UPSTREAM_REPOSITORY || 'dxcode-dev/dxcode' }}
+          # Only while the upstream repository is private.
+          UPSTREAM_TOKEN: ${{ secrets.DX_UPSTREAM_TOKEN }}
+        run: |
+          auth=()
+          [ -z "$UPSTREAM_TOKEN" ] || auth=(-c "http.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$UPSTREAM_TOKEN" | base64 -w0)")
+          git "${auth[@]}" fetch --quiet --force "https://github.com/$UPSTREAM.git" 'refs/tags/v*:refs/tags/v*'
+          tag="${REQUESTED:-$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)}"
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || ! git rev-parse --verify --quiet "refs/tags/$tag" > /dev/null; then
+            echo "::error::Upstream has no release tag $tag."
+            exit 1
+          fi
+          git checkout --quiet --detach "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Restore the deployment configuration and credentials
+        id: config
+        env:
+          SELFHOST_CONFIG: ${{ vars.DX_SELFHOST_CONFIG_JSON }}
+          SELFHOST_CREDENTIALS: ${{ secrets.DX_SELFHOST_CREDENTIALS_JSON }}
+        run: |
+          [ -n "$SELFHOST_CONFIG" ] || { echo "::error::Set the DX_SELFHOST_CONFIG_JSON variable."; exit 1; }
+          umask 077
+          mkdir -p .dx
+          printf '%s\n' "$SELFHOST_CONFIG" > .dx/deploy.selfhost.json
+          name="$(jq -er .name .dx/deploy.selfhost.json)"
+          # Required once the deployment exists: the deploy will not reset an
+          # existing administrator.
+          if [ -n "$SELFHOST_CREDENTIALS" ]; then
+            mkdir -p ".dx/alchemy/selfhost-$name"
+            printf '%s\n' "$SELFHOST_CREDENTIALS" > ".dx/alchemy/selfhost-$name/credentials.json"
+          fi
+          echo "domain=$(jq -r '.domain // empty' .dx/deploy.selfhost.json)" >> "$GITHUB_OUTPUT"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Deploy ${{ steps.tag.outputs.tag }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          DX_ADMIN_PASSWORD: ${{ secrets.DX_ADMIN_PASSWORD }}
+          DX_DXD_GITHUB_TOKEN: ${{ secrets.DX_UPSTREAM_TOKEN }}
+          DX_SELFHOST_CONFIG: .dx/deploy.selfhost.json
+          DX_DEPLOY_APPROVE: "1"
+        run: node scripts/run-alchemy-deployment.mjs deploy selfhost
+      - name: Check /healthz and /readyz
+        if: steps.config.outputs.domain != ''
+        env:
+          DOMAIN: ${{ steps.config.outputs.domain }}
+        run: |
+          for path in healthz readyz; do
+            curl -fsS --retry 6 --retry-delay 10 --retry-all-errors --max-time 20 "https://$DOMAIN/$path" > /dev/null
+            echo "/$path answers."
+          done

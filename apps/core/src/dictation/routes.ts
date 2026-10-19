@@ -1,5 +1,11 @@
-import type { DictationJob, DictationUnavailable } from "@dx/api";
-import { SpeechProviderError } from "@dx/domain";
+import {
+  DICTATION_MAX_BYTES,
+  DICTATION_STREAM_SUBPROTOCOL,
+  type DictationJob,
+  type DictationStreamResult,
+  type DictationUnavailable,
+} from "@dx/api";
+import { SpeechProviderError, type SpeechSession } from "@dx/domain";
 import { Effect } from "effect";
 import { type Context, Hono } from "hono";
 import { createAuth } from "../auth/better-auth.js";
@@ -24,18 +30,13 @@ const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const HOUR = 3_600_000;
 const STALE_AFTER = 120_000;
-const PROVIDER_IDLE_AFTER = 300_000;
+/** A live session refreshes its admission lock well before it goes stale. */
+const STREAM_HEARTBEAT = 30_000;
+const TRANSCRIBE_TIMEOUT = 90_000;
+const MAX_STREAM_PCM_BYTES = DICTATION_MAX_BYTES - 44;
+const MAX_STREAM_FRAME_BYTES = 64 * 1024;
 const genericError = "Dictation could not be completed.";
 const unavailableError = "Dictation is not available.";
-type Row = {
-  id: string;
-  state: string;
-  provider_job_id: string | null;
-  provider_id: string | null;
-  credential_scope: string | null;
-  local_reads: number;
-  expires_at: number;
-};
 
 /** Speech resolves no provider for this user: fail closed. */
 const unavailable = (c: Context<AppEnv>) =>
@@ -55,7 +56,7 @@ const safeDiagnostic = (value: string) =>
 
 const logUnexpectedRouteError = (
   context: Context<AppEnv>,
-  operation: "create" | "read" | "delete",
+  operation: "create" | "stream" | "read" | "delete",
   cause: unknown,
 ) => {
   const error = cause instanceof Error ? cause : undefined;
@@ -69,6 +70,28 @@ const logUnexpectedRouteError = (
     ...(error?.stack ? { errorStack: safeDiagnostic(error.stack) } : {}),
   });
 };
+
+const logTranscriptionFailure = (
+  bindings: Bindings,
+  id: string,
+  configuration: AdmittedConfiguration,
+  mode: "recording" | "stream",
+  error: unknown,
+) =>
+  dictationLogger.warn("Dictation transcription failed.", {
+    event: "dictation_transcription_failed",
+    id,
+    mode,
+    providerId: effectiveSpeechProviderId(configuration, bindings),
+    credentialScope: configuration.scope,
+    category: error instanceof SpeechProviderError ? "provider" : "internal",
+    reason:
+      error instanceof SpeechProviderError
+        ? error.reason
+        : safeDiagnostic(
+            error instanceof Error ? error.message : String(error),
+          ),
+  });
 
 async function authorize(c: Context<AppEnv>) {
   const requirements = await Effect.runPromise(
@@ -85,99 +108,6 @@ async function authorize(c: Context<AppEnv>) {
   return { db, owner, workspace: "personal" };
 }
 
-async function dispatch(
-  db: D1Database,
-  bindings: Bindings,
-  id: string,
-  owner: string,
-  wav: Uint8Array,
-  configuration: AdmittedConfiguration,
-) {
-  const claimed = await db
-    .prepare(
-      "UPDATE dictation_job SET state='dispatching', updated_at=? WHERE id=? AND owner_id=? AND state='reserved'",
-    )
-    .bind(Date.now(), id, owner)
-    .run();
-  if (!claimed.meta.changes) return;
-  let reached = false;
-  const startedAt = Date.now();
-  const meter = (outcome: "success" | "error") =>
-    reached
-      ? recordTranscription({ db, bindings }, owner, configuration, {
-          units: audioSeconds(wav),
-          outcome,
-          durationMs: Date.now() - startedAt,
-        })
-      : Promise.resolve();
-  try {
-    const provider = speechProviderFor(configuration, bindings, () => {
-      reached = true;
-    });
-    await provider.startTranscription(
-      wav,
-      {
-        created: async (providerJobId) => {
-          const persisted = await db
-            .prepare(
-              "UPDATE dictation_job SET provider_job_id=?,updated_at=? WHERE id=? AND owner_id=? AND state='dispatching' AND expires_at>?",
-            )
-            .bind(providerJobId, Date.now(), id, owner, Date.now())
-            .run();
-          return persisted.meta.changes === 1;
-        },
-        active: async (providerJobId) => {
-          const active = await db
-            .prepare(
-              "SELECT 1 AS active FROM dictation_job WHERE id=? AND owner_id=? AND provider_job_id=? AND state='dispatching' AND expires_at>?",
-            )
-            .bind(id, owner, providerJobId, Date.now())
-            .first<{ active: number }>();
-          return active?.active === 1;
-        },
-      },
-      AbortSignal.timeout(90_000),
-    );
-    await db
-      .prepare(
-        "UPDATE dictation_job SET state='provider',updated_at=? WHERE id=? AND owner_id=? AND state='dispatching' AND expires_at>?",
-      )
-      .bind(Date.now(), id, owner, Date.now())
-      .run();
-    await meter("success");
-  } catch (error) {
-    await db
-      .prepare(
-        "UPDATE dictation_job SET state='failed', updated_at=? WHERE id=? AND owner_id=? AND state IN ('dispatching','provider')",
-      )
-      .bind(Date.now(), id, owner)
-      .run();
-    await meter("error");
-    dictationLogger.warn("Dictation dispatch failed.", {
-      event: "dictation_dispatch_failed",
-      id,
-      providerId: effectiveSpeechProviderId(configuration, bindings),
-      credentialScope: configuration.scope,
-      category: error instanceof SpeechProviderError ? "provider" : "internal",
-      reason:
-        error instanceof SpeechProviderError
-          ? error.reason
-          : "Unexpected error",
-      stage:
-        error instanceof SpeechProviderError &&
-        error.reason === "Dictation was canceled"
-          ? "persistence"
-          : "dispatch",
-    });
-  }
-}
-
-export const dictationRoutes = new Hono<AppEnv>();
-dictationRoutes.use("*", async (c, next) => {
-  noStore(c);
-  await next();
-});
-
 const retireOwnerJobs = async (db: D1Database, owner: string, now: number) => {
   await db.batch([
     db
@@ -185,17 +115,264 @@ const retireOwnerJobs = async (db: D1Database, owner: string, now: number) => {
       .bind(owner, now),
     db
       .prepare(
-        "UPDATE dictation_job SET state='failed',updated_at=? WHERE owner_id=? AND state IN ('reserved','dispatching') AND updated_at<=?",
+        "UPDATE dictation_job SET state='failed',updated_at=? WHERE owner_id=? AND state IN ('reserved','dispatching','provider') AND updated_at<=?",
       )
       .bind(now, owner, now - STALE_AFTER),
-    db
-      .prepare(
-        "UPDATE dictation_job SET state='failed',updated_at=? WHERE owner_id=? AND state='provider' AND updated_at<=?",
-      )
-      .bind(now, owner, now - PROVIDER_IDLE_AFTER),
   ]);
 };
 
+/**
+ * Admits one active transcription per owner (`dictation_job_owner_active`):
+ * a recording upload is `dispatching`, a live session is `provider` (held
+ * open at the provider). An upload supersedes the owner's live session,
+ * which is how a composer recovers from a session that broke. The row fences
+ * cancellation: a transcript is returned only while its job is still active.
+ */
+const reserve = async (
+  db: D1Database,
+  bindings: Bindings,
+  id: string,
+  owner: string,
+  workspace: string,
+  configuration: AdmittedConfiguration,
+  state: "dispatching" | "provider",
+) => {
+  const now = Date.now();
+  await retireOwnerJobs(db, owner, now);
+  const insert = db
+    .prepare(`INSERT INTO dictation_job(id,owner_id,workspace_id,state,provider_id,credential_scope,created_at,updated_at,expires_at)
+      SELECT ?,?,?,?,?,?,?,?,? WHERE
+      NOT EXISTS(SELECT 1 FROM dictation_job WHERE owner_id=? AND state IN ('reserved','dispatching','provider'))
+      ON CONFLICT(id) DO NOTHING`)
+    .bind(
+      id,
+      owner,
+      workspace,
+      state,
+      effectiveSpeechProviderId(configuration, bindings),
+      configuration.scope,
+      now,
+      now,
+      now + HOUR,
+      owner,
+    );
+  const results =
+    state === "provider"
+      ? [await insert.run()]
+      : await db.batch([
+          db
+            .prepare(
+              "UPDATE dictation_job SET state='failed',updated_at=? WHERE owner_id=? AND state='provider' AND id<>?",
+            )
+            .bind(now, owner, id),
+          insert,
+        ]);
+  return results.at(-1)?.meta.changes === 1;
+};
+
+const settleJob = async (
+  db: D1Database,
+  id: string,
+  owner: string,
+  state: "completed" | "failed" | "canceled",
+) => {
+  const settled = await db
+    .prepare(
+      "UPDATE dictation_job SET state=?,updated_at=? WHERE id=? AND owner_id=? AND state IN ('dispatching','provider') AND expires_at>?",
+    )
+    .bind(state, Date.now(), id, owner, Date.now())
+    .run();
+  return settled.meta.changes === 1;
+};
+
+const existingJob = async (
+  c: Context<AppEnv>,
+  db: D1Database,
+  id: string,
+  owner: string,
+  workspace: string,
+) => {
+  const existing = await db
+    .prepare(
+      "SELECT state FROM dictation_job WHERE id=? AND owner_id=? AND workspace_id=?",
+    )
+    .bind(id, owner, workspace)
+    .first<{ state: string }>();
+  if (!existing)
+    return c.json({ error: "Dictation is temporarily unavailable." }, 429);
+  return ["reserved", "dispatching", "provider"].includes(existing.state)
+    ? c.json<DictationJob>({ id, state: "processing" }, 202)
+    : c.json<DictationJob>({ id, state: "failed", error: genericError });
+};
+
+export const dictationRoutes = new Hono<AppEnv>();
+dictationRoutes.use("*", async (c, next) => {
+  noStore(c);
+  await next();
+});
+
+/**
+ * Live dictation. The composer streams PCM while the user speaks; the
+ * provider transcribes each stretch of speech as it ends, so the transcript
+ * is ready moments after `finish`.
+ */
+dictationRoutes.get("/:id/stream", async (c) => {
+  const request = c.req.raw;
+  const offered = (request.headers.get("sec-websocket-protocol") ?? "")
+    .split(",")
+    .map((protocol) => protocol.trim());
+  if (
+    request.headers.get("upgrade")?.toLowerCase() !== "websocket" ||
+    request.headers.get("origin") !== new URL(request.url).origin ||
+    !offered.includes(DICTATION_STREAM_SUBPROTOCOL)
+  )
+    return c.json({ error: "Not found." }, 404);
+  try {
+    const { db, owner, workspace } = await authorize(c);
+    const id = c.req.param("id");
+    if (!UUID.test(id)) return c.json({ error: "Invalid request." }, 400);
+    const admission = await admitSpeech({ db, bindings: c.env }, owner);
+    if (!admission.admitted) return unavailable(c);
+    const { configuration } = admission;
+    if (
+      !(await reserve(
+        db,
+        c.env,
+        id,
+        owner,
+        workspace,
+        configuration,
+        "provider",
+      ))
+    )
+      return c.json({ error: "Dictation is temporarily unavailable." }, 429);
+
+    let reached = false;
+    const abort = new AbortController();
+    let session: SpeechSession;
+    try {
+      session = speechProviderFor(configuration, c.env, () => {
+        reached = true;
+      }).openSession(abort.signal);
+    } catch (error) {
+      await settleJob(db, id, owner, "failed");
+      logTranscriptionFailure(c.env, id, configuration, "stream", error);
+      return c.json({ error: genericError }, 500);
+    }
+
+    const { 0: client, 1: server } = new WebSocketPair();
+    server.accept();
+    // Binary frames otherwise arrive as Blobs, which cannot be read in order.
+    server.binaryType = "arraybuffer";
+    const startedAt = Date.now();
+    let bytes = 0;
+    let heartbeatAt = startedAt;
+    let settled = false;
+    let done: () => void = () => undefined;
+    const lifetime = new Promise<void>((resolve) => {
+      done = resolve;
+    });
+    const settle = async (
+      outcome:
+        | { readonly state: "completed"; readonly text: string }
+        | { readonly state: "failed"; readonly error: unknown }
+        | { readonly state: "canceled" },
+    ) => {
+      if (settled) return;
+      settled = true;
+      abort.abort();
+      if (outcome.state !== "completed") session.close();
+      try {
+        const current = await settleJob(db, id, owner, outcome.state);
+        const result: DictationStreamResult =
+          outcome.state === "completed" && current
+            ? { type: "completed", text: outcome.text }
+            : { type: "failed", error: genericError };
+        if (outcome.state === "failed")
+          logTranscriptionFailure(
+            c.env,
+            id,
+            configuration,
+            "stream",
+            outcome.error,
+          );
+        if (outcome.state !== "canceled") {
+          try {
+            server.send(JSON.stringify(result));
+            server.close(1000, "done");
+          } catch {}
+        }
+        if (reached)
+          await recordTranscription(
+            { db, bindings: c.env },
+            owner,
+            configuration,
+            {
+              units: audioSeconds(bytes),
+              outcome: outcome.state === "completed" ? "success" : "error",
+              durationMs: Date.now() - startedAt,
+            },
+          );
+      } finally {
+        done();
+      }
+    };
+    const fail = (error: unknown) => void settle({ state: "failed", error });
+
+    server.addEventListener("message", (event) => {
+      if (settled) return;
+      if (typeof event.data === "string") {
+        if (event.data !== JSON.stringify({ type: "finish" })) return;
+        session
+          .finish()
+          .then((text) => settle({ state: "completed", text }), fail);
+        return;
+      }
+      const pcm = new Uint8Array(event.data);
+      bytes += pcm.byteLength;
+      if (
+        pcm.byteLength > MAX_STREAM_FRAME_BYTES ||
+        pcm.byteLength % 2 !== 0 ||
+        bytes > MAX_STREAM_PCM_BYTES
+      ) {
+        fail(new InvalidDictationAudio("Invalid dictation audio"));
+        return;
+      }
+      session.send(pcm);
+      const now = Date.now();
+      if (now - heartbeatAt >= STREAM_HEARTBEAT) {
+        heartbeatAt = now;
+        void db
+          .prepare(
+            "UPDATE dictation_job SET updated_at=? WHERE id=? AND owner_id=? AND state='provider'",
+          )
+          .bind(now, id, owner)
+          .run()
+          .catch(() => undefined);
+      }
+    });
+    server.addEventListener("close", () => void settle({ state: "canceled" }));
+    server.addEventListener("error", () => void settle({ state: "canceled" }));
+    try {
+      c.executionCtx.waitUntil(lifetime);
+    } catch {}
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+      headers: {
+        "sec-websocket-protocol": DICTATION_STREAM_SUBPROTOCOL,
+        "cache-control": "no-store",
+      },
+    });
+  } catch (error) {
+    if (error instanceof BrowserSessionRequired)
+      return c.json({ error: genericError }, 403);
+    logUnexpectedRouteError(c, "stream", error);
+    return c.json({ error: genericError }, 500);
+  }
+});
+
+/** Transcribes a saved recording in one request. */
 dictationRoutes.post("/:id", async (c) => {
   try {
     const { db, owner, workspace } = await authorize(c);
@@ -205,40 +382,50 @@ dictationRoutes.post("/:id", async (c) => {
     const admission = await admitSpeech({ db, bindings: c.env }, owner);
     if (!admission.admitted) return unavailable(c);
     const { configuration } = admission;
-    const now = Date.now();
-    await retireOwnerJobs(db, owner, now);
-    const result = await db
-      .prepare(`INSERT INTO dictation_job(id,owner_id,workspace_id,state,provider_id,credential_scope,created_at,updated_at,expires_at)
-      SELECT ?,?,?,'reserved',?,?,?,?,? WHERE
-      NOT EXISTS(SELECT 1 FROM dictation_job WHERE owner_id=? AND state IN ('reserved','dispatching','provider'))
-      ON CONFLICT(id) DO NOTHING`)
-      .bind(
+    if (
+      !(await reserve(
+        db,
+        c.env,
         id,
         owner,
         workspace,
-        effectiveSpeechProviderId(configuration, c.env),
-        configuration.scope,
-        now,
-        now,
-        now + HOUR,
-        owner,
-      )
-      .run();
-    if (!result.meta.changes) {
-      const existing = await db
-        .prepare(
-          "SELECT state FROM dictation_job WHERE id=? AND owner_id=? AND workspace_id=?",
-        )
-        .bind(id, owner, workspace)
-        .first<{ state: string }>();
-      if (existing)
-        return existing.state === "canceled" || existing.state === "failed"
-          ? c.json<DictationJob>({ id, state: "failed", error: genericError })
-          : c.json<DictationJob>({ id, state: "processing" }, 202);
-      return c.json({ error: "Dictation is temporarily unavailable." }, 429);
+        configuration,
+        "dispatching",
+      ))
+    )
+      return existingJob(c, db, id, owner, workspace);
+    let reached = false;
+    const startedAt = Date.now();
+    const meter = (outcome: "success" | "error") =>
+      reached
+        ? recordTranscription({ db, bindings: c.env }, owner, configuration, {
+            units: audioSeconds(wav.byteLength - 44),
+            outcome,
+            durationMs: Date.now() - startedAt,
+          })
+        : Promise.resolve();
+    let text: string;
+    try {
+      text = await speechProviderFor(configuration, c.env, () => {
+        reached = true;
+      }).transcribe(
+        wav,
+        AbortSignal.any([
+          c.req.raw.signal,
+          AbortSignal.timeout(TRANSCRIBE_TIMEOUT),
+        ]),
+      );
+    } catch (error) {
+      await settleJob(db, id, owner, "failed");
+      await meter("error");
+      logTranscriptionFailure(c.env, id, configuration, "recording", error);
+      return c.json<DictationJob>({ id, state: "failed", error: genericError });
     }
-    await dispatch(db, c.env, id, owner, wav, configuration);
-    return c.json<DictationJob>({ id, state: "processing" }, 202);
+    await meter("success");
+    // A job canceled meanwhile never returns its transcript.
+    if (!(await settleJob(db, id, owner, "completed")))
+      return c.json<DictationJob>({ id, state: "failed", error: genericError });
+    return c.json<DictationJob>({ id, state: "completed", text });
   } catch (error) {
     if (error instanceof InvalidDictationAudio)
       return c.json({ error: "Invalid WAV audio." }, 400);
@@ -249,6 +436,10 @@ dictationRoutes.post("/:id", async (c) => {
   }
 });
 
+/**
+ * Transcripts are returned only by the request that produced them and are
+ * never stored, so a job read later is still processing or has failed.
+ */
 dictationRoutes.get("/:id", async (c) => {
   try {
     const { db, owner, workspace } = await authorize(c);
@@ -258,123 +449,15 @@ dictationRoutes.get("/:id", async (c) => {
     await retireOwnerJobs(db, owner, now);
     const row = await db
       .prepare(
-        "SELECT id,state,provider_job_id,provider_id,credential_scope,local_reads,expires_at FROM dictation_job WHERE id=? AND owner_id=? AND workspace_id=?",
+        "SELECT state,expires_at FROM dictation_job WHERE id=? AND owner_id=? AND workspace_id=?",
       )
       .bind(id, owner, workspace)
-      .first<Row>();
+      .first<{ state: string; expires_at: number }>();
     if (!row || row.expires_at <= now || row.state === "canceled")
       return c.json({ error: "Not found." }, 404);
-    if (row.state === "failed")
-      return c.json<DictationJob>({ id, state: "failed", error: genericError });
-    // Every poll resolves the user's current Speech configuration. A job
-    // dispatched with another provider or credential scope fails closed
-    // rather than reading its result with a different credential.
-    const admission = await admitSpeech({ db, bindings: c.env }, owner);
-    if (
-      !admission.admitted ||
-      row.provider_id !==
-        effectiveSpeechProviderId(admission.configuration, c.env) ||
-      row.credential_scope !== admission.configuration.scope
-    ) {
-      await db
-        .prepare(
-          "UPDATE dictation_job SET state='failed',updated_at=? WHERE id=? AND owner_id=? AND state<>'canceled'",
-        )
-        .bind(Date.now(), id, owner)
-        .run();
-      return c.json<DictationJob>({
-        id,
-        state: "failed",
-        error: unavailableError,
-      });
-    }
-    const provider = speechProviderFor(admission.configuration, c.env);
-    if (row.provider_id === "fixture" && row.provider_job_id !== null) {
-      // The fixture reports processing once so local runs exercise polling.
-      if (row.local_reads === 0) {
-        await db
-          .prepare(
-            "UPDATE dictation_job SET local_reads=1 WHERE id=? AND owner_id=? AND local_reads=0",
-          )
-          .bind(id, owner)
-          .run();
-        return c.json<DictationJob>({ id, state: "processing" });
-      }
-      const completed = await db
-        .prepare(
-          "UPDATE dictation_job SET state='completed',updated_at=? WHERE id=? AND owner_id=? AND state IN ('provider','completed') AND expires_at>?",
-        )
-        .bind(Date.now(), id, owner, Date.now())
-        .run();
-      if (!completed.meta.changes) return c.json({ error: "Not found." }, 404);
-      const result = await provider.readTranscription(row.provider_job_id);
-      return typeof result === "object"
-        ? c.json<DictationJob>({ id, state: "completed", text: result.text })
-        : c.json<DictationJob>({ id, state: "failed", error: genericError });
-    }
-    if (!["provider", "completed"].includes(row.state) || !row.provider_job_id)
-      return c.json<DictationJob>({ id, state: "processing" });
-    const token = crypto.randomUUID();
-    const leased = await db
-      .prepare(
-        "UPDATE dictation_job SET lease_token=?,lease_until=?,updated_at=? WHERE id=? AND owner_id=? AND state IN ('provider','completed') AND expires_at>? AND (lease_until IS NULL OR lease_until<?)",
-      )
-      .bind(
-        token,
-        Date.now() + 45_000,
-        Date.now(),
-        id,
-        owner,
-        Date.now(),
-        Date.now(),
-      )
-      .run();
-    if (!leased.meta.changes)
-      return c.json<DictationJob>({ id, state: "processing" });
-    let result: "processing" | { text: string } | "failed";
-    try {
-      result = await provider.readTranscription(
-        row.provider_job_id,
-        AbortSignal.timeout(30_000),
-      );
-    } catch {
-      const released = await db
-        .prepare(
-          "UPDATE dictation_job SET lease_token=NULL,lease_until=? WHERE id=? AND owner_id=? AND state IN ('provider','completed') AND lease_token=? AND expires_at>?",
-        )
-        .bind(Date.now() + 3_000, id, owner, token, Date.now())
-        .run();
-      if (!released.meta.changes) return c.json({ error: "Not found." }, 404);
-      return c.json<DictationJob>({ id, state: "processing" });
-    }
-    if (result === "processing") {
-      const released = await db
-        .prepare(
-          "UPDATE dictation_job SET lease_token=NULL,lease_until=? WHERE id=? AND owner_id=? AND state IN ('provider','completed') AND lease_token=? AND expires_at>?",
-        )
-        .bind(Date.now() + 3_000, id, owner, token, Date.now())
-        .run();
-      if (!released.meta.changes) return c.json({ error: "Not found." }, 404);
-      return c.json<DictationJob>({ id, state: "processing" });
-    }
-    if (result === "failed") {
-      const failed = await db
-        .prepare(
-          "UPDATE dictation_job SET state='failed',updated_at=? WHERE id=? AND owner_id=? AND state IN ('provider','completed') AND lease_token=? AND expires_at>?",
-        )
-        .bind(Date.now(), id, owner, token, Date.now())
-        .run();
-      if (!failed.meta.changes) return c.json({ error: "Not found." }, 404);
-      return c.json<DictationJob>({ id, state: "failed", error: genericError });
-    }
-    const completed = await db
-      .prepare(
-        "UPDATE dictation_job SET state='completed',lease_token=NULL,lease_until=?,updated_at=? WHERE id=? AND owner_id=? AND state IN ('provider','completed') AND lease_token=? AND expires_at>?",
-      )
-      .bind(Date.now() + 3_000, Date.now(), id, owner, token, Date.now())
-      .run();
-    if (!completed.meta.changes) return c.json({ error: "Not found." }, 404);
-    return c.json<DictationJob>({ id, state: "completed", text: result.text });
+    return ["reserved", "dispatching", "provider"].includes(row.state)
+      ? c.json<DictationJob>({ id, state: "processing" })
+      : c.json<DictationJob>({ id, state: "failed", error: genericError });
   } catch (error) {
     if (error instanceof BrowserSessionRequired)
       return c.json({ error: genericError }, 403);

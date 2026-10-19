@@ -24,6 +24,7 @@ import { Badge } from "../../shared/ui/badge.js";
 import { Button } from "../../shared/ui/button.js";
 import { buttonVariants } from "../../shared/ui/button-variants.js";
 import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
+import { useComposerEnterKey } from "./composer-enter-key.js";
 import { useDictation } from "./dictation/use-dictation.js";
 import {
   attachmentsUploading,
@@ -590,6 +591,7 @@ function AgentComposer({
     setDraft: onChangeDraft,
     textareaRef,
   });
+  const enterKey = useComposerEnterKey();
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     if (!dictation.interceptSubmit()) onSubmit(draft);
@@ -610,6 +612,7 @@ function AgentComposer({
           ref={textareaRef}
           aria-label="Message"
           data-command-target="thread-composer"
+          enterKeyHint={enterKey.enterKeyHint}
           disabled={draftLocked}
           readOnly={draftLocked}
           placeholder="Message"
@@ -631,11 +634,7 @@ function AgentComposer({
               event.preventDefault();
               return;
             }
-            if (
-              event.key === "Enter" &&
-              !event.shiftKey &&
-              !event.nativeEvent.isComposing
-            ) {
+            if (enterKey.sends(event)) {
               event.preventDefault();
               event.currentTarget.form?.requestSubmit();
             }

@@ -47,10 +47,9 @@ export {
   ResolvedPluginProvider,
 } from "./plugins/plugin.js";
 export {
-  type SpeechJobCheckpoints,
   type SpeechProvider,
   SpeechProviderError,
-  SpeechTranscriptionStatus,
+  type SpeechSession,
 } from "./plugins/speech.js";
 export {
   ReadWebPageInput,
@@ -95,6 +94,7 @@ export {
   CLAUDE_CODE_PROVIDER_ID,
   type ClaudeCodeEffort,
   type ClaudeCodeModel,
+  type ClaudePlanExtraUsage,
   type ClaudePlanLimit,
   type ClaudePlanLimitCause,
   ClaudePlanLimitStatus,
@@ -104,6 +104,8 @@ export {
   ClaudePlanWindowId,
   claudeCodeEffort,
   claudePlanBlockedUntil,
+  claudePlanExtraUsage,
+  claudePlanExtraUsageOffReason,
   claudePlanLimitText,
   claudePlanUsesExtraUsage,
   claudePlanWindowFamily,

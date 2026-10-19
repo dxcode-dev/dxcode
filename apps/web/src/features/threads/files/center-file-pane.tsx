@@ -2,25 +2,31 @@ import type { ThreadSandboxFilePath } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { File } from "@pierre/diffs/react";
 import { useQuery } from "@tanstack/react-query";
-import { Download } from "lucide-react";
+import { AudioLines, Download } from "lucide-react";
 import * as React from "react";
 import { downloadFromUrl } from "../../../shared/download-from-url.js";
 import { useTheme } from "../../../shared/theme/theme-provider.js";
 import type { CenterFileTab } from "../thread-center-tabs.js";
 import {
   absolutePathFor,
+  type FileMediaKind,
   type FileReveal,
   fileMediaKind,
   resolveReveal,
   sandboxFileUrl,
 } from "../transcript-file-link.js";
+import { FilePreview } from "./file-preview.js";
+import { filePreviewKind } from "./file-preview-model.js";
 import { ThreadFilePane } from "./files-panel.js";
 import { RevealLine } from "./reveal-line.js";
 import {
   exceedsPreviewLimit,
   formatBytes,
+  SandboxPdfInvalid,
   sandboxFileMetadataOptions,
+  showBlobInFrame,
   sandboxFilePreviewOptions,
+  sandboxPdfOptions,
 } from "./sandbox-file-queries.js";
 
 const errorMessage = (error: unknown) =>
@@ -55,14 +61,17 @@ function Toolbar({
   threadId,
   path,
   label,
+  children,
 }: {
   readonly threadId: ThreadId;
   readonly path: ThreadSandboxFilePath;
   readonly label: string;
+  readonly children?: React.ReactNode;
 }) {
   return (
     <header className="thread-file-toolbar">
       <span title={path}>{label}</span>
+      {children}
       <button
         type="button"
         onClick={() => downloadFromUrl(sandboxFileUrl(threadId, path, true))}
@@ -74,7 +83,73 @@ function Toolbar({
   );
 }
 
-/** Image or video rendered from the streaming route; video fills the pane. */
+/**
+ * The sandbox route forbids rendering its responses as documents, so the
+ * browser's PDF viewer reads a local copy for as long as the frame shows it.
+ */
+function PdfFrame({
+  blob,
+  label,
+}: {
+  readonly blob: Blob;
+  readonly label: string;
+}) {
+  const attach = React.useCallback(
+    (frame: HTMLIFrameElement | null) =>
+      frame === null ? undefined : showBlobInFrame(frame, blob),
+    [blob],
+  );
+  return <iframe className="thread-file-pdf" ref={attach} title={label} />;
+}
+
+function PdfView({
+  active,
+  threadId,
+  path,
+  label,
+  version,
+}: {
+  readonly active: boolean;
+  readonly threadId: ThreadId;
+  readonly path: ThreadSandboxFilePath;
+  readonly label: string;
+  readonly version: string | undefined;
+}) {
+  const pdf = useQuery(sandboxPdfOptions(threadId, path, version, active));
+  if (pdf.data !== undefined)
+    return (
+      <div className="thread-file-media thread-file-media-pdf">
+        <PdfFrame blob={pdf.data} label={label} />
+      </div>
+    );
+  if (pdf.isPending)
+    return (
+      <div className="thread-files-state" role="status">
+        Loading file…
+      </div>
+    );
+  if (pdf.error instanceof SandboxPdfInvalid)
+    return (
+      <DownloadCard
+        threadId={threadId}
+        path={path}
+        title="This PDF cannot be displayed"
+        detail="Download it to open it on your device."
+      />
+    );
+  return (
+    <div className="thread-files-state" role="alert">
+      <span>{errorMessage(pdf.error)}</span>
+      <button type="button" onClick={() => void pdf.refetch()}>
+        Retry
+      </button>
+    </div>
+  );
+}
+
+const mediaNoun = { image: "image", video: "video", audio: "audio file" };
+
+/** Media and PDFs rendered from the streaming route; they fill the pane. */
 function SandboxMediaView({
   active,
   threadId,
@@ -86,7 +161,7 @@ function SandboxMediaView({
   readonly threadId: ThreadId;
   readonly path: ThreadSandboxFilePath;
   readonly label: string;
-  readonly kind: "image" | "video";
+  readonly kind: FileMediaKind;
 }) {
   const metadata = useQuery(sandboxFileMetadataOptions(threadId, path, active));
   const [failed, setFailed] = React.useState(false);
@@ -115,14 +190,46 @@ function SandboxMediaView({
         detail={`${formatBytes(metadata.data.sizeBytes)} exceeds the 100 MiB preview limit.`}
       />
     );
+  else if (kind === "pdf")
+    body = (
+      <PdfView
+        active={active}
+        label={label}
+        path={path}
+        threadId={threadId}
+        version={metadata.data.version}
+      />
+    );
   else if (failed)
     body = (
       <DownloadCard
         threadId={threadId}
         path={path}
-        title={`This ${kind} cannot be played in the browser`}
+        title={
+          kind === "image"
+            ? "This image cannot be displayed in the browser"
+            : `This ${mediaNoun[kind]} cannot be played in the browser`
+        }
         detail="Download it to open it on your device."
       />
+    );
+  else if (kind === "audio")
+    body = (
+      <div className="thread-file-media thread-file-media-audio">
+        <figure>
+          <AudioLines aria-hidden="true" />
+          <figcaption title={path}>{path.split("/").at(-1)}</figcaption>
+          {/* biome-ignore lint/a11y/useMediaCaption: sandbox audio has no caption track. */}
+          <audio
+            aria-label={label}
+            controls
+            onError={() => setFailed(true)}
+            preload="metadata"
+            src={sandboxFileUrl(threadId, path)}
+          />
+          <span>{formatBytes(metadata.data.sizeBytes)}</span>
+        </figure>
+      </div>
     );
   else if (kind === "image")
     body = (
@@ -173,11 +280,23 @@ function SandboxTextView({
   const { resolvedAppearance } = useTheme();
   const host = React.useRef<HTMLDivElement>(null);
   const preview = useQuery(sandboxFilePreviewOptions(threadId, path, active));
+  const previewKind = filePreviewKind(path);
+  const [mode, setMode] = React.useState<"preview" | "source" | null>(null);
+  const references = React.useMemo(
+    () => ({ threadId, location: { kind: "sandbox" as const, path } }),
+    [path, threadId],
+  );
   const content = preview.data?.kind === "text" ? preview.data.content : "";
   const file = React.useMemo(
     () => ({ name: path, contents: content }),
     [path, content],
   );
+  // A highlighted range is only visible in source; show it there by default.
+  const viewMode =
+    mode ??
+    (previewKind !== undefined && resolveReveal(content, reveal) === undefined
+      ? "preview"
+      : "source");
   let body: React.ReactNode;
   if (preview.isPending)
     body = (
@@ -205,6 +324,15 @@ function SandboxTextView({
             : "This file is too large to display"
         }
         detail={formatBytes(preview.data.sizeBytes)}
+      />
+    );
+  else if (previewKind !== undefined && viewMode === "preview")
+    body = (
+      <FilePreview
+        content={content}
+        kind={previewKind}
+        path={path}
+        references={references}
       />
     );
   else {
@@ -237,7 +365,28 @@ function SandboxTextView({
   }
   return (
     <section className="thread-file-viewer" aria-label={`File ${path}`}>
-      <Toolbar threadId={threadId} path={path} label={path} />
+      <Toolbar threadId={threadId} path={path} label={path}>
+        {previewKind === undefined || preview.data?.kind !== "text" ? null : (
+          <div role="tablist" aria-label="File view mode">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewMode === "preview"}
+              onClick={() => setMode("preview")}
+            >
+              Preview
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewMode === "source"}
+              onClick={() => setMode("source")}
+            >
+              Source
+            </button>
+          </div>
+        )}
+      </Toolbar>
       {body}
     </section>
   );

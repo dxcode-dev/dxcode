@@ -35,6 +35,20 @@ import { threadKeys } from "./thread-queries.js";
 type ThreadListData = InfiniteData<ThreadPage, unknown>;
 const optimisticCreation = "__dxOptimisticCreation" as const;
 
+/** Changes a list page's Threads, both its roots and the children they carry. */
+const flatMapListedThreads = (
+  page: ThreadPage,
+  change: (
+    thread: ThreadPage["items"][number],
+  ) => ReadonlyArray<ThreadPage["items"][number]>,
+): ThreadPage => ({
+  ...page,
+  items: page.items.flatMap(change),
+  ...(page.children === undefined
+    ? {}
+    : { children: page.children.flatMap(change) }),
+});
+
 const createThread = async (
   projectId: ProjectId | undefined,
   title: ThreadTitle,
@@ -311,9 +325,8 @@ export const setThreadArchivedMutationOptions = (
             ? current
             : {
                 ...current,
-                pages: current.pages.map((page) => ({
-                  ...page,
-                  items: page.items.flatMap((thread) => {
+                pages: current.pages.map((page) =>
+                  flatMapListedThreads(page, (thread) => {
                     if (thread.id !== threadId) return [thread];
                     const scope = query.queryKey[3] as
                       | { readonly lifecycleState?: string | null }
@@ -331,7 +344,7 @@ export const setThreadArchivedMutationOptions = (
                       },
                     ];
                   }),
-                })),
+                ),
               },
         );
       }
@@ -425,14 +438,13 @@ export const updateThreadMutationOptions = (
             ? current
             : {
                 ...current,
-                pages: current.pages.map((page) => ({
-                  ...page,
-                  items: page.items.map((thread) =>
+                pages: current.pages.map((page) =>
+                  flatMapListedThreads(page, (thread) => [
                     thread.id === threadId
                       ? withThreadUpdate(thread, update)
                       : thread,
-                  ),
-                })),
+                  ]),
+                ),
               },
       );
       return { previousDetail, previousLists };

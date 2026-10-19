@@ -213,6 +213,9 @@ const initialDispatchFailure = (cause: unknown) => {
 };
 
 /** A child's parent's chosen color, which it shows until it has its own. */
+/** How many of a root's children its list item carries. */
+const CHILDREN_PER_ROOT = 100;
+
 const parentColorField = (
   parentColors: ReadonlyMap<ThreadId, ThreadColor>,
   thread: Pick<Thread, "parentThreadId">,
@@ -1391,9 +1394,10 @@ export const createThreadRoutes = (
         () => new InvalidThreadRequest(),
       );
       const db = yield* decodeD1Binding(context.env.DB);
+      const principal = context.get("principal");
       const page = yield* Effect.gen(function* () {
         const service = yield* ThreadService;
-        return yield* service.list(context.get("principal"), query.projectId, {
+        return yield* service.list(principal, query.projectId, {
           cursor: query.cursor,
           limit: query.limit,
           lifecycleState: query.lifecycleState,
@@ -1410,21 +1414,12 @@ export const createThreadRoutes = (
         });
       }).pipe(Effect.provide(threadServiceLayer(db)));
       const ids = page.items.map(({ id }) => id);
-      const [projection, sharing, childCounts, parentColors] =
-        yield* Effect.tryPromise({
+      const decorate = (threadIds: ReadonlyArray<ThreadId>) =>
+        Effect.tryPromise({
           try: () =>
             Promise.all([
-              readThreadListProjection(db, ids),
-              threadSharingDecorations(db, ids),
-              query.roots === undefined
-                ? new Map<ThreadId, number>()
-                : readThreadChildCounts(db, ids),
-              readParentColors(
-                db,
-                page.items.flatMap(({ parentThreadId }) =>
-                  parentThreadId === undefined ? [] : [parentThreadId],
-                ),
-              ),
+              readThreadListProjection(db, threadIds),
+              threadSharingDecorations(db, threadIds),
             ]),
           catch: (cause) =>
             PersistenceUnavailable.new(
@@ -1432,6 +1427,69 @@ export const createThreadRoutes = (
               cause,
             ),
         });
+      // Roots carry the children listed under them, so a parent expands
+      // without another request.
+      const listChildren = Effect.gen(function* () {
+        if (query.roots === undefined) return [];
+        const service = yield* ThreadService;
+        // A child lists under its parent while both share a lifecycle state.
+        const children = yield* Effect.forEach(
+          (["active", "archived"] as const).flatMap((lifecycleState) => {
+            const parents = page.items.flatMap((thread) =>
+              thread.lifecycleState === lifecycleState ? [thread.id] : [],
+            );
+            return parents.length === 0 ? [] : [{ lifecycleState, parents }];
+          }),
+          ({ lifecycleState, parents }) =>
+            service.listChildren(
+              principal,
+              parents,
+              lifecycleState,
+              CHILDREN_PER_ROOT,
+            ),
+          { concurrency: "unbounded" },
+        );
+        return children.flat();
+      }).pipe(Effect.provide(threadServiceLayer(db)));
+      const [children, [projection, sharing], [childCounts, parentColors]] =
+        yield* Effect.all(
+          [
+            listChildren,
+            decorate(ids),
+            Effect.tryPromise({
+              try: () =>
+                Promise.all([
+                  query.roots === undefined
+                    ? new Map<ThreadId, number>()
+                    : readThreadChildCounts(db, ids),
+                  readParentColors(
+                    db,
+                    page.items.flatMap(({ parentThreadId }) =>
+                      parentThreadId === undefined ? [] : [parentThreadId],
+                    ),
+                  ),
+                ]),
+              catch: (cause) =>
+                PersistenceUnavailable.new(
+                  { operation: "thread.listProjection" },
+                  cause,
+                ),
+            }),
+          ],
+          { concurrency: "unbounded" },
+        );
+      const [childProjection, childSharing] =
+        children.length === 0
+          ? [new Map(), new Map()]
+          : yield* decorate(children.map(({ id }) => id));
+      // A child's parent is a root on this page.
+      const rootColors = new Map(
+        page.items.flatMap((thread) =>
+          thread.color === undefined
+            ? []
+            : [[thread.id, thread.color] as const],
+        ),
+      );
       return yield* Schema.encodeUnknownEffect(ListThreadsResponseSchema)({
         status: "success",
         data: {
@@ -1443,6 +1501,15 @@ export const createThreadRoutes = (
               : {}),
             ...parentColorField(parentColors, thread),
           })),
+          ...(query.roots === undefined
+            ? {}
+            : {
+                children: children.map((thread) => ({
+                  ...threadListItem(thread, childProjection.get(thread.id)),
+                  ...childSharing.get(thread.id),
+                  ...parentColorField(rootColors, thread),
+                })),
+              }),
           nextCursor: page.nextCursor,
         },
       });

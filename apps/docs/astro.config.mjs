@@ -68,6 +68,7 @@ export default defineConfig({
               label: "Claude Pro/Max",
               slug: "deployment/claude-code",
             },
+            { label: "Deploy from a fork", slug: "deployment/fork" },
             {
               label: "Upgrade and recovery",
               slug: "operations/upgrade-recovery",

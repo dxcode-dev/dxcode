@@ -100,6 +100,16 @@ interface ThreadServiceShape {
     Page<Thread>,
     Schema.SchemaError | PersistenceUnavailable | InvalidPageCursor
   >;
+  /** The child Threads listed under these roots; see the repository. */
+  readonly listChildren: (
+    principal: Principal,
+    parentThreadIds: ReadonlyArray<ThreadId>,
+    lifecycleState: "active" | "archived",
+    perParent: number,
+  ) => Effect.Effect<
+    ReadonlyArray<Thread>,
+    Schema.SchemaError | PersistenceUnavailable
+  >;
   readonly setPinned: (
     principal: Principal,
     threadId: ThreadId,
@@ -260,6 +270,15 @@ export class ThreadService extends Context.Service<
         ),
         list: Effect.fn("ThreadService.list")((principal, projectId, request) =>
           threads.listOwned(principal.userId, projectId, request),
+        ),
+        listChildren: Effect.fn("ThreadService.listChildren")(
+          (principal, parentThreadIds, lifecycleState, perParent) =>
+            threads.listChildrenOwned(
+              principal.userId,
+              parentThreadIds,
+              lifecycleState,
+              perParent,
+            ),
         ),
         setPinned: Effect.fn("ThreadService.setPinned")(
           function* (principal, threadId, pinned) {

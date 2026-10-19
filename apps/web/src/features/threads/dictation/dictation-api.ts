@@ -5,6 +5,7 @@ import {
 } from "@dx/api";
 import { Option, Schema } from "effect";
 import { sameOriginFetch } from "../../../shared/same-origin-fetch.js";
+import type { LiveDictation } from "./dictation-stream.js";
 
 const decodeJob = Schema.decodeUnknownPromise(DictationJobSchema);
 
@@ -25,15 +26,27 @@ const readJob = async (response: Response): Promise<DictationJob> => {
   });
 };
 
+/**
+ * The live session's transcript when it has one; otherwise the recording is
+ * uploaded and transcribed in one request.
+ */
 export const runDictation = async ({
   audio,
   id,
+  live,
   signal,
 }: {
   readonly audio: Blob;
   readonly id: string;
+  readonly live?: LiveDictation;
   readonly signal: AbortSignal;
 }) => {
+  const streamed = await live?.finish(signal);
+  signal.throwIfAborted();
+  if (streamed !== undefined) {
+    if (!streamed.trim()) throw new Error("Dictation returned no speech.");
+    return streamed;
+  }
   const deadline = AbortSignal.timeout(59 * 60 * 1_000);
   const combined = AbortSignal.any([signal, deadline]);
   let job = await readJob(

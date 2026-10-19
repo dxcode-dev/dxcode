@@ -1,6 +1,5 @@
 import { type SpeechProvider, SpeechProviderError } from "@dx/domain";
 
-export const FIXTURE_SPEECH_JOB_ID = "local-fixture";
 export const FIXTURE_TRANSCRIPT = "This is a local dictation fixture.";
 
 /**
@@ -9,12 +8,20 @@ export const FIXTURE_TRANSCRIPT = "This is a local dictation fixture.";
  * exercises dictation without spending credits.
  */
 export const createFixtureSpeechProvider = (): SpeechProvider => ({
-  async startTranscription(_wav, checkpoints) {
-    if (!(await checkpoints.created(FIXTURE_SPEECH_JOB_ID)))
-      throw new SpeechProviderError({ reason: "Dictation was canceled" });
-    return FIXTURE_SPEECH_JOB_ID;
-  },
-  async readTranscription() {
-    return { text: FIXTURE_TRANSCRIPT };
+  transcribe: async () => FIXTURE_TRANSCRIPT,
+  openSession: () => {
+    let closed = false;
+    return {
+      send: () => undefined,
+      finish: async () => {
+        if (closed)
+          throw new SpeechProviderError({ reason: "Dictation was canceled" });
+        closed = true;
+        return FIXTURE_TRANSCRIPT;
+      },
+      close: () => {
+        closed = true;
+      },
+    };
   },
 });

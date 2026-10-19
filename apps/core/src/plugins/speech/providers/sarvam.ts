@@ -1,290 +1,388 @@
 import {
   type SpeechProvider,
   SpeechProviderError,
-  type SpeechTranscriptionStatus,
+  type SpeechSession,
 } from "@dx/domain";
-import { Effect, Option, Redacted, Schema } from "effect";
-import { SarvamAIClient } from "sarvamai";
+import { Option, Redacted, Schema } from "effect";
 
-const SDK_TIMEOUT_MILLIS = 30_000;
-const MAX_TRANSCRIPT_BYTES = 256 * 1024;
-const INPUT_FILENAME = "dictation.wav";
-const identifier = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/;
+const API = "https://api.sarvam.ai";
+const MODEL = "saaras:v3";
+// Translate mode turns any spoken language into English text.
+const MODE = "translate";
+const BYTES_PER_SECOND = 32_000;
+/** Sarvam's synchronous API rejects audio longer than 30 seconds. */
+const MAX_CHUNK_BYTES = 29 * BYTES_PER_SECOND;
+/** A long recording is cut at its quietest 50 ms in the last 4 s of a chunk. */
+const CUT_SEARCH_BYTES = 4 * BYTES_PER_SECOND;
+const CUT_FRAME_BYTES = 1_600;
+/** Shorter than Sarvam's voice detection reacts to, so never speech. */
+const MIN_CHUNK_BYTES = BYTES_PER_SECOND / 4;
+const PARALLEL_CHUNKS = 4;
+const REQUEST_TIMEOUT_MILLIS = 30_000;
+/**
+ * Sarvam's voice detection reports speech about 300 ms after it starts. After
+ * the flush, a session waits this long for speech it has not reported yet.
+ */
+const SETTLE_QUIET_MILLIS = 350;
+const FINISH_TIMEOUT_MILLIS = 8_000;
 
-type ProviderOptions = {
-  readonly fetch?: typeof fetch;
-  readonly signal?: AbortSignal;
-};
+const fail = (reason: string) => new SpeechProviderError({ reason });
 
 const runtimeFetch: typeof fetch = (input, init) =>
   globalThis.fetch(input, init);
 
-const fail = (reason: string) => new SpeechProviderError({ reason });
+const TranscriptResponse = Schema.Struct({ transcript: Schema.String });
+const decodeTranscript = Schema.decodeUnknownOption(TranscriptResponse);
 
-const validIdentifier = (value: unknown): value is string =>
-  typeof value === "string" && identifier.test(value);
+const StreamMessage = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("data"),
+    data: Schema.Struct({ transcript: Schema.String }),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("events"),
+    data: Schema.Struct({ signal_type: Schema.optional(Schema.String) }),
+  }),
+  Schema.Struct({ type: Schema.Literal("error") }),
+]);
+const decodeStreamMessage = Schema.decodeUnknownOption(
+  Schema.fromJsonString(StreamMessage),
+);
 
-const signedUrl = (value: unknown): string => {
-  if (typeof value !== "object" || value === null)
-    throw fail("Invalid provider response");
-  const candidate =
-    (value as { file_url?: unknown; url?: unknown }).file_url ??
-    (value as { url?: unknown }).url;
-  if (typeof candidate !== "string") throw fail("Invalid provider response");
-  const url = new URL(candidate);
-  // Sarvam currently issues Azure Blob SAS URLs. This intentionally permits any
-  // Azure public blob account, rather than claiming a fixed provider host allowlist.
-  if (
-    url.protocol !== "https:" ||
-    url.username !== "" ||
-    url.password !== "" ||
-    url.port !== "" ||
-    !url.hostname.endsWith(".blob.core.windows.net")
-  )
-    throw fail("Invalid provider response");
-  return url.href;
+const wavOf = (pcm: Uint8Array) => {
+  const wav = new Uint8Array(44 + pcm.byteLength);
+  const view = new DataView(wav.buffer);
+  const text = (offset: number, value: string) => {
+    for (let index = 0; index < value.length; index += 1)
+      wav[offset + index] = value.charCodeAt(index);
+  };
+  text(0, "RIFF");
+  view.setUint32(4, 36 + pcm.byteLength, true);
+  text(8, "WAVE");
+  text(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 16_000, true);
+  view.setUint32(28, BYTES_PER_SECOND, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  text(36, "data");
+  view.setUint32(40, pcm.byteLength, true);
+  wav.set(pcm, 44);
+  return wav;
 };
-
-const providerFetch = (fetchImpl: typeof fetch): typeof fetch =>
-  ((input: RequestInfo | URL, init?: RequestInit) => {
-    const workerInit = { ...init, redirect: "manual" } as RequestInit & {
-      duplex?: unknown;
-    };
-    delete workerInit.duplex;
-    return fetchImpl(input, workerInit);
-  }) as typeof fetch;
-
-const requestSignal = (effectSignal: AbortSignal, supplied?: AbortSignal) =>
-  supplied ? AbortSignal.any([effectSignal, supplied]) : effectSignal;
-
-const requestFailure = (cause: unknown) => {
-  const statusCode =
-    typeof cause === "object" && cause !== null && "statusCode" in cause
-      ? (cause as { statusCode?: unknown }).statusCode
-      : undefined;
-  const message =
-    cause instanceof Error
-      ? cause.message
-          .replaceAll(/https?:\/\/\S+/g, "[url]")
-          .replaceAll(/[A-Za-z0-9_-]{24,}/g, "[value]")
-          .slice(0, 200)
-      : "";
-  return fail(
-    typeof statusCode === "number"
-      ? `Provider request failed (${statusCode})`
-      : `Provider request failed (${cause instanceof Error ? cause.name : "unknown"}${message ? `: ${message}` : ""})`,
-  );
-};
-
-const attempt = <A>(work: (signal: AbortSignal) => PromiseLike<A>) =>
-  Effect.tryPromise({
-    try: work,
-    catch: requestFailure,
-  });
-
-const clientFor = (secret: string, options: ProviderOptions) => {
-  if (secret.length === 0) throw fail("Provider key is unavailable");
-  return new SarvamAIClient({
-    apiSubscriptionKey: secret,
-    maxRetries: 0,
-    timeoutInSeconds: SDK_TIMEOUT_MILLIS / 1000,
-    fetch: providerFetch(options.fetch ?? runtimeFetch),
-  });
-};
-
-export function dispatchSarvam(
-  secret: string,
-  wav: Uint8Array,
-  providerJobCreated: (jobId: string) => Promise<boolean>,
-  providerJobActive: (jobId: string) => Promise<boolean>,
-  options: ProviderOptions = {},
-): Effect.Effect<string, SpeechProviderError> {
-  return Effect.fn("dispatchSarvam")(function* () {
-    const client = clientFor(secret, options);
-    const initial = yield* attempt((signal) =>
-      client.speechToTextJob.initialise(
-        {
-          job_parameters: {
-            model: "saaras:v3",
-            mode: "translate",
-            language_code: "unknown",
-          },
-        },
-        { abortSignal: requestSignal(signal, options.signal), maxRetries: 0 },
-      ),
-    );
-    if (!validIdentifier(initial.job_id))
-      yield* Effect.fail(fail("Invalid provider response"));
-    const jobId = initial.job_id;
-    if (!(yield* attempt(() => providerJobCreated(jobId))))
-      yield* Effect.fail(fail("Dictation was canceled"));
-
-    const links = yield* attempt((signal) =>
-      client.speechToTextJob.getUploadLinks(
-        { job_id: jobId, files: [INPUT_FILENAME] },
-        { abortSignal: requestSignal(signal, options.signal), maxRetries: 0 },
-      ),
-    );
-    if (!(yield* attempt(() => providerJobActive(jobId))))
-      yield* Effect.fail(fail("Dictation was canceled"));
-    const upload = signedUrl(links.upload_urls?.[INPUT_FILENAME]);
-    const response = yield* attempt((signal) =>
-      (options.fetch ?? runtimeFetch)(upload, {
-        method: "PUT",
-        body: wav.slice().buffer as ArrayBuffer,
-        redirect: "manual",
-        headers: {
-          "content-type": "audio/wav",
-          "x-ms-blob-type": "BlockBlob",
-        },
-        signal: requestSignal(signal, options.signal),
-      }),
-    );
-    if (!response.ok) yield* Effect.fail(fail("Provider transfer failed"));
-    if (!(yield* attempt(() => providerJobActive(jobId))))
-      yield* Effect.fail(fail("Dictation was canceled"));
-    yield* attempt((signal) =>
-      client.speechToTextJob.start(
-        jobId,
-        {},
-        { maxRetries: 0, abortSignal: requestSignal(signal, options.signal) },
-      ),
-    );
-    return jobId;
-  })();
-}
-
-export function pollSarvam(
-  secret: string,
-  jobId: string,
-  options: ProviderOptions = {},
-): Effect.Effect<
-  "processing" | { text: string } | "failed",
-  SpeechProviderError
-> {
-  return Effect.fn("pollSarvam")(function* () {
-    if (!validIdentifier(jobId))
-      yield* Effect.fail(fail("Invalid provider job id"));
-    const client = clientFor(secret, options);
-    const status = yield* attempt((signal) =>
-      client.speechToTextJob.getStatus(jobId, {
-        abortSignal: requestSignal(signal, options.signal),
-        maxRetries: 0,
-      }),
-    );
-    if (
-      ["Accepted", "Pending", "Running", "InProgress"].includes(
-        status.job_state as string,
-      )
-    )
-      return "processing" as const;
-    if (
-      (status.job_state as string) !== "Completed" ||
-      !Array.isArray(status.job_details)
-    )
-      return "failed" as const;
-
-    const matching = status.job_details.filter(
-      (detail) =>
-        detail.state === "Success" &&
-        detail.inputs?.some((input) => input.file_name === INPUT_FILENAME),
-    );
-    const outputs = matching[0]?.outputs;
-    if (
-      matching.length !== 1 ||
-      outputs?.length !== 1 ||
-      !validIdentifier(outputs[0]?.file_name)
-    )
-      return "failed" as const;
-    const filename = outputs[0].file_name;
-    const links = yield* attempt((signal) =>
-      client.speechToTextJob.getDownloadLinks(
-        { job_id: jobId, files: [filename] },
-        { abortSignal: requestSignal(signal, options.signal), maxRetries: 0 },
-      ),
-    );
-    let download: string;
-    try {
-      download = signedUrl(links.download_urls?.[filename]);
-    } catch {
-      return "failed" as const;
-    }
-    const response = yield* attempt((signal) =>
-      (options.fetch ?? runtimeFetch)(download, {
-        redirect: "manual",
-        signal: requestSignal(signal, options.signal),
-      }),
-    );
-    if (!response.ok || !response.body) return "failed" as const;
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let length = 0;
-    while (true) {
-      const chunk = yield* attempt((signal) => {
-        const abort = () => void reader.cancel().catch(() => undefined);
-        signal.addEventListener("abort", abort, { once: true });
-        return reader
-          .read()
-          .finally(() => signal.removeEventListener("abort", abort));
-      });
-      if (chunk.done) break;
-      length += chunk.value.byteLength;
-      if (length > MAX_TRANSCRIPT_BYTES) {
-        yield* attempt(() => reader.cancel());
-        return "failed" as const;
-      }
-      chunks.push(chunk.value);
-    }
-    const bytes = new Uint8Array(length);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    let body: unknown;
-    try {
-      body = JSON.parse(new TextDecoder().decode(bytes));
-    } catch {
-      return "failed" as const;
-    }
-    const decoded = Schema.decodeUnknownOption(
-      Schema.Struct({ transcript: Schema.NonEmptyString }),
-    )(body);
-    return Option.isNone(decoded)
-      ? ("failed" as const)
-      : { text: decoded.value.transcript };
-  })();
-}
 
 /**
- * Sarvam implements the Speech plugin's API (`speech.transcribe`) with its
- * batch speech-to-text job: `saaras:v3` in translate mode, so any spoken
- * language becomes English text. One API key; no SDK retries.
+ * Splits PCM into chunks Sarvam's synchronous API accepts, cutting each at
+ * its quietest frame so a word is rarely split.
+ */
+export const splitAtQuietPoints = (pcm: Uint8Array): Uint8Array[] => {
+  const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+  const chunks: Uint8Array[] = [];
+  let start = 0;
+  while (pcm.byteLength - start > MAX_CHUNK_BYTES) {
+    const limit = start + MAX_CHUNK_BYTES;
+    let cut = limit;
+    let quietest = Number.POSITIVE_INFINITY;
+    for (
+      let frame = limit - CUT_SEARCH_BYTES;
+      frame + CUT_FRAME_BYTES <= limit;
+      frame += CUT_FRAME_BYTES
+    ) {
+      let energy = 0;
+      for (let at = frame; at < frame + CUT_FRAME_BYTES; at += 2)
+        energy += view.getInt16(at, true) ** 2;
+      if (energy < quietest) {
+        quietest = energy;
+        cut = frame + CUT_FRAME_BYTES / 2;
+      }
+    }
+    chunks.push(pcm.subarray(start, cut));
+    start = cut;
+  }
+  chunks.push(pcm.subarray(start));
+  return chunks.filter((chunk) => chunk.byteLength >= MIN_CHUNK_BYTES);
+};
+
+const requestFailure = (cause: unknown) =>
+  cause instanceof SpeechProviderError
+    ? cause
+    : fail(
+        `Provider request failed (${cause instanceof Error ? cause.name : "unknown"})`,
+      );
+
+const transcribeChunk = async (
+  key: string,
+  transport: typeof fetch,
+  pcm: Uint8Array,
+  signal: AbortSignal,
+) => {
+  const form = new FormData();
+  form.append(
+    "file",
+    new Blob([wavOf(pcm)], { type: "audio/wav" }),
+    "dictation.wav",
+  );
+  form.append("model", MODEL);
+  form.append("mode", MODE);
+  const response = await transport(`${API}/speech-to-text`, {
+    method: "POST",
+    headers: { "api-subscription-key": key },
+    body: form,
+    redirect: "manual",
+    signal: AbortSignal.any([
+      signal,
+      AbortSignal.timeout(REQUEST_TIMEOUT_MILLIS),
+    ]),
+  });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw fail(`Provider request failed (${response.status})`);
+  }
+  const decoded = decodeTranscript(await response.json().catch(() => null));
+  if (Option.isNone(decoded)) throw fail("Invalid provider response");
+  return decoded.value.transcript.trim();
+};
+
+const transcribeRecording = async (
+  key: string,
+  transport: typeof fetch,
+  wav: Uint8Array,
+  signal: AbortSignal = new AbortController().signal,
+) => {
+  const chunks = splitAtQuietPoints(wav.subarray(44));
+  const transcripts: string[] = Array(chunks.length).fill("");
+  const failed = new AbortController();
+  const combined = AbortSignal.any([signal, failed.signal]);
+  let next = 0;
+  const worker = async () => {
+    while (next < chunks.length) {
+      const index = next++;
+      transcripts[index] = await transcribeChunk(
+        key,
+        transport,
+        chunks[index] as Uint8Array,
+        combined,
+      );
+    }
+  };
+  try {
+    await Promise.all(
+      Array.from({ length: Math.min(PARALLEL_CHUNKS, chunks.length) }, () =>
+        worker().catch((cause: unknown) => {
+          failed.abort();
+          throw cause;
+        }),
+      ),
+    );
+  } catch (cause) {
+    throw requestFailure(cause);
+  }
+  return transcripts.filter(Boolean).join(" ");
+};
+
+const base64 = (bytes: Uint8Array) => {
+  let binary = "";
+  for (let at = 0; at < bytes.byteLength; at += 0x8000)
+    binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+  return btoa(binary);
+};
+
+const streamQuery = new URLSearchParams({
+  "language-code": "unknown",
+  model: MODEL,
+  mode: MODE,
+  sample_rate: "16000",
+  input_audio_codec: "pcm_s16le",
+  vad_signals: "true",
+  flush_signal: "true",
+}).toString();
+
+/**
+ * One Sarvam streaming session. Sarvam's voice detection reports each
+ * stretch of speech (`START_SPEECH`, `END_SPEECH`) and sends its transcript
+ * once the speech ends, so most of the text is ready before the user stops.
+ * `finish` flushes and resolves once every reported stretch has its
+ * transcript and no new speech was reported within the quiet window.
+ */
+const openSarvamSession = (
+  key: string,
+  transport: typeof fetch,
+  signal?: AbortSignal,
+): SpeechSession => {
+  const queued: string[] = [];
+  const transcripts: string[] = [];
+  const closer = new AbortController();
+  let socket: WebSocket | undefined;
+  let broken: SpeechProviderError | undefined;
+  let speaking = false;
+  let ended = 0;
+  let received = 0;
+  let flushedAt: number | undefined;
+  let speakingAtFlush = false;
+  let quietTimer: ReturnType<typeof setTimeout> | undefined;
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  let finishing:
+    | {
+        readonly resolve: (text: string) => void;
+        readonly reject: (error: SpeechProviderError) => void;
+      }
+    | undefined;
+
+  const release = () => {
+    clearTimeout(quietTimer);
+    clearTimeout(deadline);
+    closer.abort();
+    const open = socket;
+    socket = undefined;
+    try {
+      open?.close(1000, "done");
+    } catch {}
+  };
+  const breakWith = (error: SpeechProviderError) => {
+    broken ??= error;
+    const waiting = finishing;
+    finishing = undefined;
+    release();
+    waiting?.reject(broken);
+  };
+  const deliver = (message: string) => {
+    if (broken) return;
+    if (socket) socket.send(message);
+    else queued.push(message);
+  };
+  const flush = () => {
+    flushedAt = Date.now();
+    speakingAtFlush = speaking;
+    deliver(JSON.stringify({ type: "flush" }));
+    settle();
+  };
+  const settle = () => {
+    if (!finishing || flushedAt === undefined || !socket) return;
+    if (speaking || received < ended) return;
+    const quietFor = Date.now() - flushedAt;
+    if (speakingAtFlush || quietFor >= SETTLE_QUIET_MILLIS) {
+      const done = finishing;
+      finishing = undefined;
+      release();
+      done.resolve(transcripts.join(" "));
+      return;
+    }
+    clearTimeout(quietTimer);
+    quietTimer = setTimeout(settle, SETTLE_QUIET_MILLIS - quietFor);
+  };
+  const receive = (raw: unknown) => {
+    if (typeof raw !== "string") return;
+    const decoded = decodeStreamMessage(raw);
+    if (Option.isNone(decoded)) return;
+    const message = decoded.value;
+    if (message.type === "error") {
+      breakWith(fail("Provider stream failed"));
+      return;
+    }
+    if (message.type === "data") {
+      received += 1;
+      const text = message.data.transcript.trim();
+      if (text) transcripts.push(text);
+    } else if (message.data.signal_type === "START_SPEECH") {
+      speaking = true;
+      // Speech reported after the flush is not covered by it.
+      if (flushedAt !== undefined) {
+        speakingAtFlush = true;
+        deliver(JSON.stringify({ type: "flush" }));
+      }
+    } else if (message.data.signal_type === "END_SPEECH") {
+      speaking = false;
+      ended += 1;
+    }
+    settle();
+  };
+
+  signal?.addEventListener(
+    "abort",
+    () => breakWith(fail("Dictation was canceled")),
+    {
+      once: true,
+    },
+  );
+  void (async () => {
+    const response = await transport(
+      `${API}/speech-to-text/ws?${streamQuery}`,
+      {
+        headers: { upgrade: "websocket", "api-subscription-key": key },
+        signal: closer.signal,
+      },
+    );
+    const upstream = response.webSocket;
+    if (response.status !== 101 || !upstream) {
+      await response.body?.cancel();
+      throw fail(`Provider request failed (${response.status})`);
+    }
+    upstream.accept();
+    if (broken) {
+      upstream.close(1000, "done");
+      return;
+    }
+    upstream.addEventListener("message", (event) => receive(event.data));
+    upstream.addEventListener("close", () =>
+      breakWith(fail("Provider stream closed")),
+    );
+    upstream.addEventListener("error", () =>
+      breakWith(fail("Provider stream failed")),
+    );
+    socket = upstream;
+    for (const message of queued.splice(0)) upstream.send(message);
+    settle();
+  })().catch((cause: unknown) => breakWith(requestFailure(cause)));
+
+  return {
+    send: (pcm) => {
+      if (flushedAt === undefined && pcm.byteLength > 0)
+        deliver(
+          JSON.stringify({
+            audio: {
+              data: base64(pcm),
+              sample_rate: 16_000,
+              encoding: "audio/wav",
+            },
+          }),
+        );
+    },
+    finish: () =>
+      new Promise<string>((resolve, reject) => {
+        if (broken) return reject(broken);
+        if (finishing || flushedAt !== undefined)
+          return reject(fail("Session already finished"));
+        finishing = { resolve, reject };
+        deadline = setTimeout(
+          () => breakWith(fail("Provider timed out")),
+          FINISH_TIMEOUT_MILLIS,
+        );
+        flush();
+      }),
+    close: () => breakWith(fail("Dictation was canceled")),
+  };
+};
+
+/**
+ * Sarvam implements the Speech plugin's API (`speech.transcribe`) with
+ * `saaras:v3` in translate mode, so any spoken language becomes English text:
+ * its streaming API for live dictation and its synchronous API, in parallel
+ * chunks of at most 29 s, for a saved recording. One API key; no retries.
  */
 export const createSarvamSpeechProvider = (
   key: Redacted.Redacted<string>,
-  transport?: typeof fetch,
+  transport: typeof fetch = runtimeFetch,
 ): SpeechProvider => {
-  const options = (signal?: AbortSignal) => ({
-    ...(transport === undefined ? {} : { fetch: transport }),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const secret = () => {
+    const value = Redacted.value(key);
+    if (value.length === 0) throw fail("Provider key is unavailable");
+    return value;
+  };
   return {
-    startTranscription: (wav, checkpoints, signal) =>
-      Effect.runPromise(
-        dispatchSarvam(
-          Redacted.value(key),
-          wav,
-          checkpoints.created,
-          checkpoints.active,
-          options(signal),
-        ),
-        { signal },
-      ),
-    readTranscription: (jobId, signal): Promise<SpeechTranscriptionStatus> =>
-      Effect.runPromise(
-        pollSarvam(Redacted.value(key), jobId, options(signal)),
-        { signal },
-      ),
+    transcribe: async (wav, signal) =>
+      transcribeRecording(secret(), transport, wav, signal),
+    openSession: (signal) => openSarvamSession(secret(), transport, signal),
   };
 };

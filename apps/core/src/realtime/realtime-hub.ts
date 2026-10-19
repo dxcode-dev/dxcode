@@ -372,7 +372,7 @@ export class RealtimeHub extends DurableObject<Bindings> {
     return Response.json({ revision });
   }
 
-  /** An event for one user only, such as a change to their inbox. */
+  /** An event for one user only: their inbox or sidebar layout changed. */
   async #publishUserEvent(
     request: Request,
     audience: AudienceKey,
@@ -388,10 +388,12 @@ export class RealtimeHub extends DurableObject<Bindings> {
       typeof body !== "object" ||
       body === null ||
       !("type" in body) ||
-      body.type !== "notifications.invalidated" ||
+      (body.type !== "notifications.invalidated" &&
+        body.type !== "sidebar.invalidated") ||
       Object.keys(body).length !== 2
     )
       return new Response(null, { status: 400 });
+    const type = body.type;
     const key = revisionKey(userId.value);
     const revision = await this.ctx.storage.transaction(async (transaction) => {
       const next = ((await transaction.get<number>(key)) ?? 0) + 1;
@@ -408,9 +410,7 @@ export class RealtimeHub extends DurableObject<Bindings> {
       )
         continue;
       try {
-        socket.send(
-          JSON.stringify({ type: "notifications.invalidated", revision }),
-        );
+        socket.send(JSON.stringify({ type, revision }));
       } catch {
         // The hub is a hint channel. HTTP state remains authoritative.
       }

@@ -1,10 +1,12 @@
 import {
+  type ClaudePlanLimitCause,
   ClaudePlanLimitStatus,
   ClaudePlanReading,
   ClaudePlanUsage,
   type ClaudePlanWindow,
   ClaudePlanWindowId,
   claudePlanBlockedUntil,
+  claudePlanExtraUsage,
   claudePlanWindowFamily,
   mergeClaudePlanUsage,
 } from "@dx/domain";
@@ -14,8 +16,9 @@ import { Option, Schema } from "effect";
  * A Claude Pro/Max plan's limits as Anthropic reports them. The OAuth token
  * from `claude setup-token` carries only the `user:inference` scope, so dx
  * cannot ask Anthropic's usage endpoint. Instead, every response on the plan
- * carries `anthropic-ratelimit-unified-*` headers: the title call reads them
- * directly, and the Claude Code CLI reports them as `rate_limit_event` lines
+ * carries `anthropic-ratelimit-unified-*` headers: the title call and the
+ * connection's access check read them directly, and the Claude Code CLI
+ * reports them as `rate_limit_event` lines
  * on its stream-json output.
  */
 
@@ -37,6 +40,11 @@ const seconds = (value: unknown) => {
     ? Math.floor(number)
     : undefined;
 };
+
+const reason = (value: unknown) =>
+  typeof value === "string" && /^[a-z_]{1,64}$/.test(value)
+    ? { disabledReason: value }
+    : {};
 
 const fraction = (value: unknown) => {
   const number = typeof value === "string" ? Number(value) : value;
@@ -89,6 +97,7 @@ export const claudePlanReadingFromEvent = (
         ? {}
         : { resetsAt: seconds(value.overageResetsAt) }),
       inUse: value.isUsingOverage === true || value.overageInUse === true,
+      ...reason(value.overageDisabledReason),
     },
   });
 };
@@ -120,6 +129,7 @@ export const claudePlanReadingFromHeaders = (
       ...(isStatus(overageStatus) ? { status: overageStatus } : {}),
       ...(overageReset === undefined ? {} : { resetsAt: overageReset }),
       inUse: header("overage-in-use") === "true",
+      ...reason(header("overage-disabled-reason")),
     },
   });
 };
@@ -172,7 +182,8 @@ const limitWindowFor = (
 
 /**
  * The plan state for one launch on `model` (a Claude model id): the extra
- * usage choice and, when the plan is used up for that model, until when.
+ * usage choice, whether the account has extra usage off, which no choice
+ * changes, and, when the plan is used up for that model, until when.
  */
 export const claudePlanAccess = (state: ClaudePlanState, model: string) => {
   const blockedUntil = claudePlanBlockedUntil(
@@ -184,10 +195,30 @@ export const claudePlanAccess = (state: ClaudePlanState, model: string) => {
   const limitWindow = limitWindowFor(state.usage, model);
   return {
     allowExtraUsage: state.allowExtraUsage,
+    ...(claudePlanExtraUsage(state.usage) === "off"
+      ? { extraUsageOff: true }
+      : {}),
     ...(blockedUntil === undefined ? {} : { blockedUntil }),
     ...(limitWindow === undefined ? {} : { limitWindow }),
   };
 };
+
+/**
+ * Why dx does not start Claude Code on a blocked plan: its owner keeps it
+ * off extra usage, or the account has none to keep it off.
+ */
+export const claudePlanBlockedCause = (
+  plan: ClaudePlanAccess,
+): ClaudePlanLimitCause => (plan.extraUsageOff ? "exhausted" : "not-started");
+
+/**
+ * Whether a one-token Messages call may read the plan's limits now. While
+ * the plan is used up, a call could draw on paid extra usage unless the
+ * account has none, so dx waits for the limit to reset.
+ */
+export const claudePlanReadable = (state: ClaudePlanState) =>
+  claudePlanExtraUsage(state.usage) === "off" ||
+  claudePlanBlockedUntil(state.usage, false, nowSeconds()) === undefined;
 
 export type ClaudePlanAccess = ReturnType<typeof claudePlanAccess>;
 

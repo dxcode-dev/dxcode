@@ -3,12 +3,17 @@ import type {
   ThreadFilesPath,
   ThreadFileVersion,
 } from "@dx/api";
+import type { ThreadId } from "@dx/domain";
 import * as React from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { type FileReveal, resolveReveal } from "../transcript-file-link.js";
+import {
+  type FileReveal,
+  resolveReveal,
+  type ThreadFileTarget,
+} from "../transcript-file-link.js";
 import type { FileEditorHandle } from "./file-editor.js";
 import { ThreadFileEditor } from "./file-editor.js";
+import { FilePreview } from "./file-preview.js";
+import { filePreviewKind } from "./file-preview-model.js";
 
 type AcceptedEdit = {
   readonly content: string;
@@ -48,8 +53,14 @@ export const ThreadFileViewer = ({
   onDirtyChange,
   reveal,
   revealSequence,
+  references,
 }: {
   readonly file: ThreadFileData;
+  /** Where the file lives, so a rendered document's references resolve. */
+  readonly references?: {
+    readonly threadId: ThreadId;
+    readonly location: ThreadFileTarget;
+  };
   readonly reveal?: FileReveal;
   readonly revealSequence?: number;
   readonly saving: boolean;
@@ -103,7 +114,8 @@ export const ThreadFileViewer = ({
   const remoteChanged =
     accepted !== null &&
     (!file.editable || file.contentVersion !== accepted.contentVersion);
-  const markdown = file.mediaType === "text/markdown";
+  const previewKind = filePreviewKind(file.path, file.mediaType);
+  const previewable = previewKind !== undefined;
   const revealLines = resolveReveal(displayedContent, reveal);
   // A new reveal on an already-open Markdown tab shows the source again, even
   // if the user switched this tab to Preview; ordinary reopening keeps it.
@@ -115,7 +127,7 @@ export const ThreadFileViewer = ({
   }
   // A highlighted range is only visible in source; show it there by default.
   const viewMode =
-    mode ?? (markdown && revealLines === undefined ? "preview" : "source");
+    mode ?? (previewable && revealLines === undefined ? "preview" : "source");
   const change = React.useCallback(
     (next: string) => {
       const currentAccepted =
@@ -202,7 +214,7 @@ export const ThreadFileViewer = ({
     >
       <header className="thread-file-toolbar">
         <span title={file.path}>{file.path}</span>
-        {markdown && editing ? (
+        {previewable && editing ? (
           <div role="tablist" aria-label="File view mode">
             <button
               type="button"
@@ -254,18 +266,18 @@ export const ThreadFileViewer = ({
             </button>
           </>
         ) : null}
+        {connectionMessage === undefined ? null : (
+          <span
+            className="thread-file-connection"
+            role={connectionError ? "alert" : "status"}
+          >
+            {connectionMessage}
+          </span>
+        )}
         <span role="status">
           {editing ? (dirty ? "Unsaved changes" : "Saved") : ""}
         </span>
       </header>
-      {connectionMessage === undefined ? null : (
-        <div
-          className="thread-file-notice"
-          role={connectionError ? "alert" : "status"}
-        >
-          {connectionMessage}
-        </div>
-      )}
       {conflict || preserveReadOnly || (remoteChanged && !saving) ? (
         <div className="thread-file-notice" role="alert">
           <span>
@@ -291,25 +303,24 @@ export const ThreadFileViewer = ({
         </div>
       ) : null}
       {!editing && !file.editable ? (
-        <div className="thread-file-notice" role="status">
+        <div className="thread-files-state" role="status">
           <strong>Read-only file</strong>
           <span>{readonlyMessage(file)}</span>
         </div>
       ) : (
         <>
-          {markdown ? (
-            <article
-              className="thread-file-preview"
-              hidden={viewMode !== "preview"}
-            >
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {displayedContent}
-              </ReactMarkdown>
-            </article>
-          ) : null}
+          {/* Mounted only while shown: Source edits must not re-render it. */}
+          {previewKind === undefined || viewMode !== "preview" ? null : (
+            <FilePreview
+              content={displayedContent}
+              kind={previewKind}
+              path={file.path}
+              {...(references === undefined ? {} : { references })}
+            />
+          )}
           <div
             className="thread-file-source"
-            hidden={markdown && viewMode !== "source"}
+            hidden={previewable && viewMode !== "source"}
           >
             <ThreadFileEditor
               content={displayedContent}

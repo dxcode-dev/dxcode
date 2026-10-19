@@ -1,11 +1,13 @@
 import type { UserId } from "@dx/domain";
 import { useInfiniteQuery } from "@tanstack/react-query";
+import * as React from "react";
 import { Button } from "../../shared/ui/button.js";
 import { threadsQueryOptions } from "../threads/thread-queries.js";
 import {
   SidebarThreadRows,
   type SidebarThreadRowsProps,
 } from "./sidebar-thread-rows.js";
+import { childThreadsByParent } from "./sidebar-thread-utils.js";
 
 // Mounted only while Archived is expanded. Query retains pages across collapses.
 export function SidebarArchive({
@@ -16,6 +18,10 @@ export function SidebarArchive({
     threadsQueryOptions(userId, undefined, "archived", "roots"),
   );
   const threads = query.data?.pages.flatMap((page) => page.items) ?? [];
+  const childThreads = React.useMemo(
+    () => childThreadsByParent(query.data?.pages),
+    [query.data?.pages],
+  );
   return (
     <div className="sidebar-archive-content">
       {query.isPending ? (
@@ -23,7 +29,11 @@ export function SidebarArchive({
           Loading archived threads…
         </div>
       ) : null}
-      <SidebarThreadRows {...rowProps} threads={threads} />
+      <SidebarThreadRows
+        {...rowProps}
+        threads={threads}
+        childThreads={childThreads}
+      />
       {query.isSuccess && threads.length === 0 ? (
         <div className="sidebar-empty">No archived threads</div>
       ) : null}

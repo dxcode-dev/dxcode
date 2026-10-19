@@ -2,6 +2,7 @@ import { RealtimeServerEvent } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import type { QueryClient } from "@tanstack/react-query";
 import { Option, Schema } from "effect";
+import { invalidateSidebarLayout } from "../../navigation/sidebar-layout-queries.js";
 import { invalidateNotifications } from "../../notifications/notifications-queries.js";
 import {
   invalidateAllChanges,
@@ -35,6 +36,7 @@ const invalidateAllRealtimeState = (
   void invalidateAllThreadQueries(queryClient, userId);
   void invalidateAllChanges(queryClient);
   void invalidateNotifications(queryClient, userId);
+  void invalidateSidebarLayout(queryClient, userId);
 };
 
 export class RealtimeClient {
@@ -212,6 +214,8 @@ export class RealtimeClient {
       void invalidateThreadLists(this.#queryClient, this.#userId);
     } else if (event.type === "notifications.invalidated") {
       void invalidateNotifications(this.#queryClient, this.#userId);
+    } else if (event.type === "sidebar.invalidated") {
+      void invalidateSidebarLayout(this.#queryClient, this.#userId);
     } else if (event.type === "workspace.status") {
       if (event.status === "waking")
         this.#workspaceStatuses.set(event.threadId, "waking");

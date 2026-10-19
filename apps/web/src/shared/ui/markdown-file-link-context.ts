@@ -19,3 +19,13 @@ export type MarkdownFileLinkResolver = (
 export const MarkdownFileLinkContext = createContext<
   MarkdownFileLinkResolver | undefined
 >(undefined);
+
+/**
+ * Resolves an image a Markdown document references by a relative path to a
+ * same-origin URL. Transcripts have no document location, so they omit it.
+ */
+export type MarkdownImageSourceResolver = (src: string) => string | undefined;
+
+export const MarkdownImageSourceContext = createContext<
+  MarkdownImageSourceResolver | undefined
+>(undefined);

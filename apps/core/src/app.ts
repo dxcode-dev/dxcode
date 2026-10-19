@@ -34,6 +34,7 @@ import {
 import { settingsRoutes } from "./settings/routes.js";
 import { pluginTriggerIngressRoutes } from "./settings/triggers/routes.js";
 import { scheduleUsageRetention } from "./settings/usage/retention.js";
+import { sidebarLayoutRoutes } from "./sidebar-layout/routes.js";
 import { bitbucketGitGatewayRoutes } from "./source-control/bitbucket/git-gateway.js";
 import { bitbucketControlPlaneRoutes } from "./source-control/bitbucket/routes.js";
 import {
@@ -90,6 +91,7 @@ app.route("/v1/projects", projectRoutes);
 app.route("/v1/realtime", realtimeRoutes);
 app.route("/v1/settings", settingsRoutes);
 app.route("/v1/shared-threads", sharedThreadRoutes);
+app.route("/v1/sidebar-layout", sidebarLayoutRoutes);
 app.route("/v1/thread-search", threadSearchRoutes);
 app.use("/v1/threads/:threadId", shareThreadReads);
 app.use("/v1/threads/:threadId/readiness", shareThreadReads);

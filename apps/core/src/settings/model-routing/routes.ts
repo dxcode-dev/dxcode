@@ -134,9 +134,14 @@ const checkAccessProbe =
   async (target, connectionId) => {
     const namespace = env.BYOK_CREDENTIAL_COORDINATOR;
     if (namespace === undefined) throw new ModelRoutingUnavailableError();
-    const name = `check-${target.scope}-${target.id}-${connectionId}`;
+    // An access check calls the provider from wherever its object lives, and
+    // Anthropic refuses some Cloudflare locations ("Request not allowed").
+    // The objects keep no state, so they start in North America instead of
+    // next to whoever checked first; the `access-` names leave behind the
+    // earlier, unhinted ones.
+    const name = `access-check-${target.scope}-${target.id}-${connectionId}`;
     const response = await namespace
-      .get(namespace.idFromName(name))
+      .get(namespace.idFromName(name), { locationHint: "enam" })
       .fetch("https://dx-byok.invalid/check", {
         method: "POST",
         headers: { "content-type": "application/json" },

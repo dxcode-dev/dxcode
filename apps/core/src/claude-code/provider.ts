@@ -28,7 +28,7 @@ import {
   claudeCodeDxToolList,
   deliverClaudeCodeDxToolResults,
 } from "./dx-tools.js";
-import type { ClaudePlanAccess } from "./plan.js";
+import { type ClaudePlanAccess, claudePlanBlockedCause } from "./plan.js";
 import { claudeCodeRuns } from "./runs.js";
 import type { ClaudeCodeBlock, ClaudeCodeSegment } from "./stream.js";
 import { mirroredToolCall } from "./tools.js";
@@ -609,7 +609,7 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
                   ? {}
                   : { window: credential.plan.limitWindow }),
                 resetsAt: credential.plan.blockedUntil,
-                cause: "not-started",
+                cause: claudePlanBlockedCause(credential.plan),
               }),
             );
           const next = claudeCodeRuns.create(

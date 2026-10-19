@@ -22,7 +22,8 @@ export const ListThreadsQuerySchema = Schema.Struct({
   limit: Schema.optional(PageLimitQuerySchema),
   /**
    * `true` lists only Threads not listed under a parent, each with its
-   * `childCount`. Not combined with `parentThreadId`.
+   * `childCount`, and the response's `children` lists their children. Not
+   * combined with `parentThreadId`.
    */
   roots: Schema.optional(Schema.Literal("true")),
   /** Lists one parent's child Threads. */
@@ -38,6 +39,12 @@ export const ListThreadsQuerySchema = Schema.Struct({
 export const ListThreadsResponseSchema = successResponse(
   Schema.Struct({
     items: Schema.Array(ThreadListItemSchema),
+    /**
+     * Roots only: the child Threads listed under this page's roots, up to
+     * 100 per root, most recent activity first. A root whose `childCount`
+     * is larger pages the rest with `parentThreadId`.
+     */
+    children: Schema.optional(Schema.Array(ThreadListItemSchema)),
     nextCursor: Schema.optional(PageCursor),
   }),
 );

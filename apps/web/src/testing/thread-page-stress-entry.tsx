@@ -280,6 +280,10 @@ const startTurn = (n: number) => {
   publish();
 };
 
+// Every request and Flue send, for proofs that assert what a page sent.
+const requests: { method: string; url: string }[] = [];
+const sends: unknown[] = [];
+Object.assign(window, { __requests: requests, __sends: sends });
 const client = {
   url: `${location.origin}${thread.agentUrl}`,
   observe: () => ({
@@ -294,7 +298,10 @@ const client = {
     close: () => observers.clear(),
     loadOlder: () => Promise.resolve(),
   }),
-  send: async () => ({ submissionId: `s-sent-${Date.now()}` }),
+  send: async (...args: unknown[]) => {
+    sends.push(args);
+    return { submissionId: `s-sent-${Date.now()}` };
+  },
 } as unknown as FlueClient;
 
 class PerfRegistry extends ThreadSessionRegistry {
@@ -317,6 +324,10 @@ const pending = (_input: RequestInfo | URL, init?: RequestInit) =>
   );
 window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
+  requests.push({
+    method: init?.method ?? (input instanceof Request ? input.method : "GET"),
+    url: `${url.pathname}${url.search}`,
+  });
   if (url.pathname === "/v1/threads" && !url.searchParams.has("lifecycleState"))
     return Promise.resolve(Response.json(threadListJson()));
   if (

@@ -201,19 +201,13 @@ describe("ThreadFilesTree presentation", () => {
     expect(container.querySelector('[role="status"]')).toBe(loadingStatus);
     expect(loadingStatus?.textContent).toBe('Loading odd"[x]…');
     expect(loadingHost?.getAttribute("aria-busy")).toBe("true");
-    expect(
-      [...(loadingHost?.attributes ?? [])].some((attribute) =>
-        attribute.name.startsWith("data-loading-directory-"),
-      ),
-    ).toBe(true);
-    expect(loadingHost?.shadowRoot?.textContent).toContain(
-      "thread-files-blink",
-    );
-    const unsafeStyle =
-      loadingHost?.shadowRoot?.querySelector<HTMLStyleElement>(
-        "style[data-file-tree-unsafe-css]",
-      );
-    expect(unsafeStyle?.textContent).toContain('data-item-path="odd\\"[x]/"');
+    const loadingStyle = () =>
+      [...(loadingHost?.shadowRoot?.querySelectorAll("style") ?? [])]
+        .map((style) => style.textContent ?? "")
+        .filter((css) => css.includes("thread-files-blink"))
+        .join("\n");
+    expect(loadingStyle()).toContain('data-item-path="odd\\"[x]/"');
+    expect(loadingStyle()).not.toContain('data-item-path="src/"');
 
     await React.act(() =>
       resolveChildren?.({
@@ -229,6 +223,7 @@ describe("ThreadFilesTree presentation", () => {
     );
     expect(loadedHost).toBe(loadingHost);
     expect(loadedHost?.getAttribute("aria-busy")).toBe("false");
+    expect(loadingStyle()).not.toContain("data-item-path");
     expect(container.querySelector('[role="status"]')).toBe(loadingStatus);
     expect(loadingStatus?.textContent).toBe("");
     await React.act(() => root.unmount());

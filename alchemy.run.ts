@@ -509,9 +509,12 @@ export default Alchemy.Stack(
         : yield* Effect.die(
             "DX_DEPLOYMENT_ORB_WORKER_NAME is required for Cloudflare Containers.",
           );
-    const defaultOrbProfileId = e2bInstalled
-      ? defaultE2BOrbProfile.id
-      : defaultCloudflareOrbProfile.id;
+    // Hosted stages run on Containers whenever they install it; a self-host
+    // keeps E2B first (scripts/alchemy-deployment.mjs checks the same rule).
+    const defaultOrbProfileId =
+      e2bInstalled && (selfhost || !cloudflareInstalled)
+        ? defaultE2BOrbProfile.id
+        : defaultCloudflareOrbProfile.id;
     const runnerProfileCatalog = (e2bProfiles: ReadonlyArray<unknown>) =>
       JSON.stringify({
         version: 1,

@@ -66,6 +66,21 @@
   text-align: center;
 }
 
+/* A notice is a row above the file; it never takes the file's space. */
+.thread-file-notice {
+  flex: none;
+  padding: 8px 10px;
+}
+
+.thread-file-toolbar > .thread-file-connection {
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+.thread-file-toolbar > .thread-file-connection[role="alert"] {
+  color: var(--destructive);
+}
+
 .thread-files-recovery {
   flex: none;
   justify-content: flex-start;
@@ -231,24 +246,92 @@
   display: none;
 }
 
-.thread-file-preview pre,
-.thread-file-preview code {
-  border-radius: 4px;
-  background: var(--secondary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+.thread-file-preview > .markdown-file {
+  font-size: 14px;
+  line-height: 22px;
 }
 
-.thread-file-preview pre {
-  padding: 12px;
+.thread-file-preview > .markdown-file > :first-child > :first-child {
+  margin-top: 0;
+}
+
+.thread-file-table-host {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.thread-file-table {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.thread-file-table-scroll {
+  flex: 1;
+  min-height: 0;
   overflow: auto;
 }
 
-.thread-file-preview code {
-  padding: 0.12em 0.3em;
+.thread-file-table table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 18px;
 }
 
-.thread-file-preview pre code {
-  padding: 0;
+.thread-file-table th,
+.thread-file-table td {
+  max-width: 420px;
+  padding: 4px 10px;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: pre;
+  vertical-align: top;
+}
+
+.thread-file-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--secondary);
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.thread-file-table tbody th {
+  color: var(--muted-foreground);
+  font-weight: 400;
+  text-align: right;
+}
+
+.thread-file-table th:first-child {
+  position: sticky;
+  left: 0;
+  background: var(--secondary);
+}
+
+.thread-file-table thead th:first-child {
+  z-index: 2;
+}
+
+.thread-file-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--secondary) 60%, transparent);
+}
+
+.thread-file-table > footer {
+  flex: none;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 12px;
 }
 
 .thread-file-viewer[data-zen] {
@@ -410,4 +493,50 @@
 .thread-files-tree-menu > button:hover,
 .thread-files-tree-menu > button:focus-visible {
   background: var(--accent);
+}
+
+.thread-file-media-audio {
+  padding: 24px;
+}
+
+.thread-file-media-audio figure {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: min(480px, 100%);
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.thread-file-media-audio figure > svg {
+  width: 32px;
+  height: 32px;
+  color: var(--foreground);
+}
+
+.thread-file-media-audio figcaption {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-file-media-audio audio {
+  width: 100%;
+}
+
+.thread-file-media-pdf {
+  align-items: stretch;
+  background: var(--secondary);
+}
+
+.thread-file-pdf {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
 }

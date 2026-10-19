@@ -66,18 +66,23 @@ export const readThreadListProjection = async (
   threadIds: readonly ThreadId[],
 ) => {
   if (threadIds.length === 0) return new Map<ThreadId, ThreadChangesSummary>();
-  const placeholders = threadIds.map(() => "?").join(", ");
-  const result = await db
-    .prepare(
-      `SELECT thread_id, latest_capture_id, dirty_since,
-              summary_additions, summary_deletions, summary_files
-         FROM thread_changes_state
-        WHERE thread_id IN (${placeholders})`,
-    )
-    .bind(...threadIds)
-    .all();
+  // D1 binds at most 100 parameters per statement.
+  const results = await Promise.all(
+    Array.from({ length: Math.ceil(threadIds.length / 100) }, (_, index) => {
+      const ids = threadIds.slice(index * 100, index * 100 + 100);
+      return db
+        .prepare(
+          `SELECT thread_id, latest_capture_id, dirty_since,
+                  summary_additions, summary_deletions, summary_files
+             FROM thread_changes_state
+            WHERE thread_id IN (${ids.map(() => "?").join(", ")})`,
+        )
+        .bind(...ids)
+        .all();
+    }),
+  );
   const rows = Schema.decodeUnknownSync(Schema.Array(SummaryRowSchema))(
-    result.results,
+    results.flatMap((result) => result.results),
   );
   return new Map(
     rows.flatMap((row) => {

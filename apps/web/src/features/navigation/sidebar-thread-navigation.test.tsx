@@ -87,6 +87,8 @@ describe("sidebar selection and pending titles", () => {
         <SidebarThreadNavigation
           activeThreadId={activeThreadId}
           collapsedGroups={new Set()}
+          expandedThreads={new Set()}
+          onToggleThread={vi.fn()}
           hasMore={false}
           loadingMore={false}
           projectNames={new Map([[projectId, "Project"]])}
@@ -166,6 +168,8 @@ describe("sidebar selection and pending titles", () => {
         <SidebarThreadNavigation
           activeThreadId={pendingId}
           collapsedGroups={new Set()}
+          expandedThreads={new Set()}
+          onToggleThread={vi.fn()}
           hasMore={false}
           loadingMore={false}
           projectNames={projectNames}
@@ -252,6 +256,8 @@ describe("sidebar selection and pending titles", () => {
         <SidebarThreadNavigation
           activeThreadId={pending.id}
           collapsedGroups={new Set()}
+          expandedThreads={new Set()}
+          onToggleThread={vi.fn()}
           hasMore={false}
           loadingMore={false}
           projectNames={new Map([[projectId, "Project"]])}
@@ -342,6 +348,8 @@ describe("sidebar archive hover actions", () => {
       root.render(
         <SidebarThreadNavigation
           collapsedGroups={new Set()}
+          expandedThreads={new Set()}
+          onToggleThread={vi.fn()}
           hasMore={false}
           loadingMore={false}
           projectNames={new Map([[active.projectId, "Project"]])}

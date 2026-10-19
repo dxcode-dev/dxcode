@@ -10,6 +10,8 @@ import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
 import { Effect, Option, Schema } from "effect";
 import {
   claudePlanAccess,
+  claudePlanBlockedCause,
+  claudePlanReadable,
   claudePlanReadingFromHeaders,
   loadClaudePlan,
   recordClaudePlanReading,
@@ -35,10 +37,13 @@ import {
   IN_DO_APIS,
 } from "../model-routing/catalog.js";
 import {
+  CLAUDE_CODE_IDENTITY,
+  CLAUDE_CODE_SMALL_MODEL,
   checkClaudeCodeToken,
   claudeCodeTokenFetch,
   claudeCodeTokenHeaders,
   claudeCodeTokenHealth,
+  readClaudePlanWithToken,
 } from "../model-routing/claude-code-token.js";
 import {
   loadConnectionForTarget,
@@ -175,10 +180,7 @@ const isCompleteEnvelope = (value: unknown): value is CompleteEnvelope => {
 
 const COMPLETE_TIMEOUT_MS = 25_000;
 
-const CLAUDE_CODE_IDENTITY =
-  "You are Claude Code, Anthropic's official CLI for Claude.";
-/** Titles stay cheap whatever model the Thread runs. */
-const CLAUDE_CODE_TITLE_MODEL = "claude-haiku-5-5";
+const CLAUDE_CODE_TITLE_MODEL = CLAUDE_CODE_SMALL_MODEL;
 
 const completionRequest = (envelope: CompleteEnvelope) =>
   JSON.stringify([
@@ -311,7 +313,7 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       claudePlanLimitText({
         ...(plan.limitWindow === undefined ? {} : { window: plan.limitWindow }),
         resetsAt: plan.blockedUntil,
-        cause: "not-started",
+        cause: claudePlanBlockedCause(plan),
       }),
     );
   }
@@ -1275,7 +1277,9 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       if (apiKey === undefined) {
         health = { state: "unhealthy", code: "CREDENTIAL_UNAVAILABLE" };
       } else if (connection.providerId === CLAUDE_CODE_PROVIDER_ID) {
-        health = claudeCodeTokenHealth(await checkClaudeCodeToken(apiKey));
+        health = claudeCodeTokenHealth(
+          await this.#checkClaudePlan(connection.id, apiKey),
+        );
       } else if (connection.providerId === "amazon-bedrock") {
         health = await this.#probeBedrock(connection, apiKey);
       } else if (connection.providerId === "google") {
@@ -1321,6 +1325,27 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     }
     await updateConnectionHealth(this.#db(), connection, health);
     return jsonResponse({ health }, 200);
+  }
+
+  /**
+   * Checks a Claude Pro/Max token and, unless that could spend paid extra
+   * usage, records the plan's current limits from the same call.
+   */
+  async #checkClaudePlan(connectionId: string, token: string) {
+    const state = await loadClaudePlan(this.#db(), connectionId);
+    if (!claudePlanReadable(state)) return checkClaudeCodeToken(token);
+    const { check, reading, refusal } = await readClaudePlanWithToken(token);
+    if (refusal !== undefined)
+      settingsPersistenceLogger.warn("Claude plan reading was refused.", {
+        event: "claude_plan_read_refused",
+        connectionId,
+        refusal,
+      });
+    if (reading !== undefined)
+      await recordClaudePlanReading(this.#db(), connectionId, reading);
+    // Anthropic also answers 403 for a location it does not serve; the free
+    // model list, which judged the token when it was saved, decides.
+    return check === "rejected" ? checkClaudeCodeToken(token) : check;
   }
 
   async #probeJsonGet(

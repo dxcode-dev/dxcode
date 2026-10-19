@@ -1,5 +1,9 @@
 import type { ProjectData, ThreadData } from "@dx/api";
 import { PROJECTLESS_PROJECT_NAME, type ProjectId } from "@dx/domain";
+import type {
+  ThreadListClientItem,
+  ThreadPage,
+} from "../../shared/api/client.js";
 import type { PendingThreadCreation } from "../../shared/new-thread-surface.js";
 import { optimisticThreadData } from "../threads/thread-mutations.js";
 
@@ -56,6 +60,23 @@ export function withPendingThreads(
     ),
     ...threads,
   ];
+}
+
+/** A roots list's child Threads by parent, in the order Core listed them. */
+export function childThreadsByParent(
+  pages: ReadonlyArray<ThreadPage> | undefined,
+): ReadonlyMap<ThreadData["id"], ReadonlyArray<ThreadListClientItem>> {
+  const byParent = new Map<ThreadData["id"], Array<ThreadListClientItem>>();
+  for (const page of pages ?? []) {
+    for (const child of page.children ?? []) {
+      if (child.parentThreadId === undefined) continue;
+      const siblings = byParent.get(child.parentThreadId) ?? [];
+      // A root that pages moved between lists can repeat its children.
+      if (!siblings.some(({ id }) => id === child.id)) siblings.push(child);
+      byParent.set(child.parentThreadId, siblings);
+    }
+  }
+  return byParent;
 }
 
 const INACTIVE_AFTER_MS = 72 * 60 * 60 * 1_000;

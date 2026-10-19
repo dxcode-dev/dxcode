@@ -20,6 +20,7 @@ interface ListedThread {
   readonly parentThreadId?: string;
   readonly childCount?: number;
   readonly color?: string;
+  readonly parentColor?: string;
 }
 
 const createChild = (
@@ -46,6 +47,20 @@ const list = async (query: string) => {
   expect(response.status).toBe(200);
   const body = await response.json<{ data: { items: ListedThread[] } }>();
   return body.data.items;
+};
+
+const listWithChildren = async (query: string) => {
+  const response = await createProductApp().request(
+    `/threads?${query}`,
+    {},
+    bindings,
+  );
+  expect(response.status).toBe(200);
+  return (
+    await response.json<{
+      data: { items: ListedThread[]; children?: ListedThread[] };
+    }>()
+  ).data;
 };
 
 // The archive route also stops the Orb, which these tests do not run.
@@ -151,6 +166,78 @@ describe("Child Threads", () => {
     expect(
       (await list("lifecycleState=active&roots=true")).map(({ id }) => id),
     ).toEqual([second.data.id]);
+  });
+
+  it("carries each root's children in the roots list, as the children list returns them", async () => {
+    const project = await createProjectViaApi("children-embedded");
+    const parent = await createThreadViaApi(project.data.id);
+    const lone = await createThreadViaApi(project.data.id);
+    const children = [];
+    for (let index = 0; index < 3; index += 1)
+      children.push(
+        await (
+          await createChild(project.data.id, parent.data.id)
+        ).json<CreateThreadResponse>(),
+      );
+    const [archived, pinned, kept] = children;
+    await archive(archived?.data.id ?? "");
+    await createProductApp().request(
+      `/threads/${pinned?.data.id}/pin`,
+      {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ pinned: true }),
+      },
+      bindings,
+    );
+    await createProductApp().request(
+      `/threads/${parent.data.id}`,
+      {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ color: "green" }),
+      },
+      bindings,
+    );
+
+    const active = await listWithChildren("lifecycleState=active&roots=true");
+    const listed = await list(
+      `lifecycleState=active&parentThreadId=${parent.data.id}`,
+    );
+    expect(listed.map(({ id }) => id)).toEqual([kept?.data.id]);
+    expect(active.children?.map(({ id }) => id)).toEqual(
+      listed.map(({ id }) => id),
+    );
+    expect(active.children?.[0]).toMatchObject({
+      parentThreadId: parent.data.id,
+      parentColor: "green",
+    });
+    expect(
+      active.items.find(({ id }) => id === parent.data.id)?.childCount,
+    ).toBe(active.children?.length);
+    expect(active.items.map(({ id }) => id)).toContain(lone.data.id);
+
+    // The archived child is an archived root, with no children to carry.
+    const archivedRoots = await listWithChildren(
+      "lifecycleState=archived&roots=true",
+    );
+    expect(archivedRoots.items.map(({ id }) => id)).toEqual([
+      archived?.data.id,
+    ]);
+    expect(archivedRoots.children).toEqual([]);
+
+    // Archiving the parent brings the archived child under it there.
+    await archive(parent.data.id);
+    expect(
+      (
+        await listWithChildren("lifecycleState=archived&roots=true")
+      ).children?.map(({ id }) => id),
+    ).toEqual([archived?.data.id]);
+
+    // Only roots lists carry children.
+    expect(await listWithChildren("lifecycleState=active")).not.toHaveProperty(
+      "children",
+    );
   });
 
   it("rejects roots combined with a parent filter", async () => {

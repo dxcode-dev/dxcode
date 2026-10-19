@@ -600,12 +600,40 @@
   justify-content: space-between;
   gap: 8px;
 }
+.claude-plan-refresh {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin: -4px -6px -4px 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  align-self: center;
+}
+.claude-plan-refresh:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  color: var(--foreground);
+}
+.claude-plan-refresh:disabled {
+  cursor: default;
+}
+.claude-plan-refresh svg {
+  width: 14px;
+  height: 14px;
+}
 .claude-plan-heading h3,
 .claude-plan-choice legend {
   margin: 0;
   padding: 0;
   font-size: 13px;
   font-weight: 500;
+}
+.claude-plan-heading h3 {
+  margin-right: auto;
 }
 .claude-plan-choice legend {
   float: left;
@@ -691,6 +719,10 @@
 .claude-plan-option-description {
   color: var(--muted-foreground);
   font-size: 12px;
+}
+.claude-plan-choice:disabled .claude-plan-option {
+  cursor: default;
+  opacity: 0.5;
 }
 @media (max-width: 639px) {
   .claude-plan-windows {

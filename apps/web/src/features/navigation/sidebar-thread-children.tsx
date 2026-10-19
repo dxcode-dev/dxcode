@@ -1,7 +1,8 @@
 import type { ThreadData } from "@dx/api";
 import { PROJECTLESS_PROJECT_NAME } from "@dx/domain";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
+import type { ThreadListClientItem } from "../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { threadsQueryOptions } from "../threads/thread-queries.js";
 import {
@@ -20,29 +21,24 @@ const ThreadChildrenExpansionContext = React.createContext<
   ThreadChildrenExpansion | undefined
 >(undefined);
 
-/**
- * Which parent Threads show their child Threads. Shared by every section
- * and the archive, so a parent stays expanded when it moves between them.
- */
 const noThreads: ReadonlySet<ThreadData["id"]> = new Set();
 
+/**
+ * Which parent Threads show their child Threads, from the sidebar layout.
+ * Shared by every section and the archive, so a parent stays expanded when
+ * it moves between them.
+ */
 export function SidebarThreadChildrenProvider({
   listed = noThreads,
+  expanded,
+  toggle,
   children,
 }: {
   readonly listed?: ReadonlySet<ThreadData["id"]>;
+  readonly expanded: ReadonlySet<ThreadData["id"]>;
+  readonly toggle: (threadId: ThreadData["id"]) => void;
   readonly children: React.ReactNode;
 }) {
-  const [expanded, setExpanded] = React.useState<ReadonlySet<ThreadData["id"]>>(
-    () => new Set(),
-  );
-  const toggle = React.useCallback((threadId: ThreadData["id"]) => {
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (!next.delete(threadId)) next.add(threadId);
-      return next;
-    });
-  }, []);
   const value = React.useMemo(
     () => ({ expanded, toggle, listed }),
     [expanded, toggle, listed],
@@ -58,33 +54,50 @@ export function SidebarThreadChildrenProvider({
 export const useThreadChildrenExpansion = () =>
   React.useContext(ThreadChildrenExpansionContext);
 
-/** A parent's child Threads, loaded when the parent is expanded. */
+/**
+ * A parent's child Threads. They arrive with the roots list, so expanding
+ * shows them without a request; only a parent with more children than the
+ * list carries pages the rest on demand.
+ */
 export function SidebarChildThreadRows({
   parent,
+  loaded,
   activeThreadId,
   projectNames,
   archivingThreadId,
   pinningThreadId,
   ...handlers
 }: SidebarThreadListProps & {
-  readonly parent: ThreadData;
+  readonly parent: ThreadListClientItem;
+  readonly loaded: ReadonlyArray<ThreadListClientItem>;
 }) {
   const { identity } = useAuthenticatedIdentity();
+  const queryClient = useQueryClient();
   const listed = useThreadChildrenExpansion()?.listed;
-  const query = useInfiniteQuery(
-    threadsQueryOptions(
-      identity.id,
-      undefined,
-      parent.lifecycleState,
-      parent.id,
-    ),
+  const options = threadsQueryOptions(
+    identity.id,
+    undefined,
+    parent.lifecycleState === "archived" ? "archived" : "active",
+    parent.id,
   );
+  const [pagingRest, setPagingRest] = React.useState(false);
+  const paged = useInfiniteQuery({ ...options, enabled: pagingRest });
+  const pages = pagingRest ? paged.data?.pages : undefined;
   // The two lists refresh separately: a child that moved to the sections,
   // such as one just pinned, must not show twice, nor be selected twice.
-  const children =
-    query.data?.pages.flatMap((page) =>
-      page.items.filter((thread) => listed?.has(thread.id) !== true),
-    ) ?? [];
+  const children = (pages?.flatMap((page) => page.items) ?? loaded).filter(
+    (thread) => listed?.has(thread.id) !== true,
+  );
+  const hasMore =
+    pages === undefined
+      ? (parent.childCount ?? 0) > loaded.length
+      : paged.hasNextPage;
+  const loadMore = () => {
+    if (pages !== undefined) return void paged.fetchNextPage();
+    setPagingRest(true);
+    // The first page repeats what the roots list carried.
+    void queryClient.prefetchInfiniteQuery({ ...options, pages: 2 });
+  };
   return (
     <div className="thread-children">
       {children.map((thread) => (
@@ -101,26 +114,28 @@ export function SidebarChildThreadRows({
           {...handlers}
         />
       ))}
-      {query.isError ? (
+      {pagingRest && paged.isError ? (
         <button
           type="button"
           className="thread-children-more"
           onClick={() =>
-            void (query.isFetchNextPageError
-              ? query.fetchNextPage()
-              : query.refetch())
+            void (paged.isFetchNextPageError
+              ? paged.fetchNextPage()
+              : paged.refetch())
           }
         >
           Could not load threads. Retry
         </button>
-      ) : query.hasNextPage ? (
+      ) : hasMore ? (
         <button
           type="button"
           className="thread-children-more"
-          disabled={query.isFetchingNextPage}
-          onClick={() => void query.fetchNextPage()}
+          disabled={pagingRest && (paged.isFetching || paged.isPending)}
+          onClick={loadMore}
         >
-          {query.isFetchingNextPage ? "Loading…" : "Load more threads"}
+          {pagingRest && (paged.isFetching || paged.isPending)
+            ? "Loading…"
+            : "Load more threads"}
         </button>
       ) : null}
     </div>

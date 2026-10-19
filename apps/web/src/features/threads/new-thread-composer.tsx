@@ -13,6 +13,7 @@ import type {
   RunnerProviderPresentation,
 } from "@dx/domain";
 import type * as React from "react";
+import { useComposerEnterKey } from "./composer-enter-key.js";
 import { type PendingAttachment, pastedFiles } from "./image-attachments.js";
 import {
   AttachmentMenu,
@@ -96,6 +97,7 @@ export function NewThreadComposer({
   readonly footer: React.ReactNode;
 }) {
   const uploading = useAttachmentsUploading(images);
+  const enterKey = useComposerEnterKey();
   const dropTarget = useImageDropTarget({
     disabled: submitting || uploading,
     onFiles,
@@ -122,17 +124,14 @@ export function NewThreadComposer({
             onFiles(files);
           }}
           onKeyDown={(event) => {
-            if (
-              event.key === "Enter" &&
-              !event.shiftKey &&
-              !event.nativeEvent.isComposing
-            ) {
+            if (enterKey.sends(event)) {
               event.preventDefault();
               event.currentTarget.form?.requestSubmit();
             }
           }}
           placeholder="Write prompt…"
           aria-label="Prompt"
+          enterKeyHint={enterKey.enterKeyHint}
         />
         <div className="new-thread-attachment-row">
           <AttachmentMenu

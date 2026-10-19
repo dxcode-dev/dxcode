@@ -38,6 +38,7 @@ const treeHarness = vi.hoisted(() => {
     let gitStatus = new Map(
       options.gitStatus?.map((entry) => [entry.path, entry.status]),
     );
+    let paths = options.paths;
     let revision = 0;
     const listeners = new Set<() => void>();
     const notify = () => {
@@ -48,9 +49,9 @@ const treeHarness = vi.hoisted(() => {
       getGitStatus: (path: string) => gitStatus.get(path),
       getItemHeight: () => 30,
       getRevision: () => revision,
-      getVisibleCount: () => options.paths.length,
+      getVisibleCount: () => paths.length,
       getVisibleRows: () =>
-        options.paths.map((path) => ({
+        paths.map((path) => ({
           kind: path.endsWith("/") ? "directory" : "file",
           path,
           isExpanded: expanded.includes(path),
@@ -61,6 +62,14 @@ const treeHarness = vi.hoisted(() => {
       },
       setGitStatus: (entries: readonly { path: string; status: string }[]) => {
         gitStatus = new Map(entries.map((entry) => [entry.path, entry.status]));
+        notify();
+      },
+      resetPaths: (
+        next: readonly string[],
+        reset?: { initialExpandedPaths?: readonly string[] },
+      ) => {
+        paths = next;
+        expanded = [...(reset?.initialExpandedPaths ?? [])];
         notify();
       },
       expand: (path: string) => {
@@ -459,7 +468,7 @@ describe("Thread Files lazy reads", () => {
     await React.act(() => root.unmount());
   });
 
-  it("keeps cached Files visible while a normal focus refresh is in flight", async () => {
+  it("refreshes cached Files in the background without a notice or remount", async () => {
     let refresh: ((tree: ThreadFileTreeData) => void) | undefined;
     const pendingRefresh = new Promise<ThreadFileTreeData>((resolve) => {
       refresh = resolve;
@@ -489,19 +498,34 @@ describe("Thread Files lazy reads", () => {
       ),
     );
     await settle();
+    const tree = container.querySelector('[aria-label="Workspace files"]');
+    const height = container.querySelector(".thread-files-worktrees")?.innerHTML
+      .length;
 
     await React.act(async () => {
       void client.refetchQueries({ queryKey: ["thread-files", threadId] });
     });
     await settle();
 
+    expect(client.isFetching({ queryKey: ["thread-files", threadId] })).toBe(1);
     expect(container.textContent).toContain("README.md");
-    expect(container.textContent).toContain("Refreshing…");
+    expect(container.textContent).not.toContain("Refreshing…");
     expect(container.textContent).not.toContain("Reconnecting…");
+    expect(container.querySelector('[aria-label="Workspace files"]')).toBe(
+      tree,
+    );
+    expect(
+      container.querySelector(".thread-files-worktrees")?.innerHTML.length,
+    ).toBe(height);
 
     await React.act(async () => refresh?.(rootTree));
     await vi.waitFor(() =>
-      expect(container.textContent).not.toContain("Refreshing…"),
+      expect(client.isFetching({ queryKey: ["thread-files", threadId] })).toBe(
+        0,
+      ),
+    );
+    expect(container.querySelector('[aria-label="Workspace files"]')).toBe(
+      tree,
     );
     await React.act(() => root.unmount());
   });
@@ -929,7 +953,7 @@ describe("Thread Files lazy reads", () => {
     await React.act(() => root.unmount());
   });
 
-  it("suppresses badges from a stale changes capture", async () => {
+  it("keeps badges from a stale capture while the next one is taken", async () => {
     const transport: ThreadFilesApi = {
       list: vi.fn(async () => rootTree),
       read: vi.fn(),
@@ -963,7 +987,7 @@ describe("Thread Files lazy reads", () => {
     const directory = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "src/",
     );
-    expect(directory?.getAttribute("data-git-status")).toBeNull();
+    expect(directory?.getAttribute("data-git-status")).toBe("modified");
     await React.act(() => root.unmount());
   });
 });

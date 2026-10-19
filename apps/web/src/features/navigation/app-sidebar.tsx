@@ -9,6 +9,7 @@ import { useDebouncer } from "@tanstack/react-pacer";
 import { Link, useLocation } from "@tanstack/react-router";
 import { Search, SquarePen } from "lucide-react";
 import * as React from "react";
+import type { ThreadListClientItem } from "../../shared/api/client.js";
 import {
   type PendingThreadCreation,
   useNewThreadSurface,
@@ -19,6 +20,11 @@ import { NotificationInbox } from "./notification-inbox.js";
 import { SidebarAccountMenu } from "./sidebar-account-menu.js";
 import { SidebarArchive } from "./sidebar-archive.js";
 import { ProjectsIcon } from "./sidebar-icons.js";
+import {
+  type SidebarLayout,
+  useLocalSidebarLayout,
+  useSyncedSidebarLayout,
+} from "./sidebar-layout.js";
 import { SidebarPanelIcon } from "./sidebar-panel-icon.js";
 import { SidebarThreadNavigation } from "./sidebar-thread-navigation.js";
 import {
@@ -159,29 +165,7 @@ const usePendingCreations = (
   );
 };
 
-export function AppSidebar({
-  userId,
-  archiveAvailable = userId !== undefined,
-  projects,
-  projectsComplete = false,
-  threads,
-  sharedThreads,
-  personalAccount,
-  settingsContext,
-  onCollapse,
-  collapseLabel = "Collapse sidebar",
-  onNavigate,
-  onOpenSearch = noop,
-  searchTriggerRef,
-  onLoadMore,
-  loadingMore,
-  hasMore,
-  loadMoreError,
-  onSetPinned = noop,
-  onUnfollow,
-  pinningThreadId,
-  extensionRegion,
-}: {
+export interface AppSidebarProps {
   readonly userId?: UserId;
   readonly archiveAvailable?: boolean;
   readonly projects: ReadonlyArray<ProjectData>;
@@ -205,7 +189,62 @@ export function AppSidebar({
   readonly onSetPinned?: (threadId: ThreadData["id"], pinned: boolean) => void;
   readonly pinningThreadId?: ThreadData["id"];
   readonly extensionRegion?: React.ReactNode;
-}) {
+  /** Each listed root's child Threads, loaded with the roots. */
+  readonly childThreads?: ReadonlyMap<
+    ThreadData["id"],
+    ReadonlyArray<ThreadListClientItem>
+  >;
+}
+
+/** The sidebar, with the person's synced layout when signed in. */
+export function AppSidebar(props: AppSidebarProps) {
+  return props.userId === undefined ? (
+    <LocalLayoutSidebar {...props} />
+  ) : (
+    <SyncedLayoutSidebar {...props} userId={props.userId} />
+  );
+}
+
+function SyncedLayoutSidebar(
+  props: AppSidebarProps & { readonly userId: UserId },
+) {
+  return (
+    <AppSidebarContent
+      {...props}
+      layout={useSyncedSidebarLayout(props.userId)}
+    />
+  );
+}
+
+function LocalLayoutSidebar(props: AppSidebarProps) {
+  return <AppSidebarContent {...props} layout={useLocalSidebarLayout()} />;
+}
+
+function AppSidebarContent({
+  userId,
+  archiveAvailable = userId !== undefined,
+  projects,
+  projectsComplete = false,
+  threads,
+  sharedThreads,
+  personalAccount,
+  settingsContext,
+  onCollapse,
+  collapseLabel = "Collapse sidebar",
+  onNavigate,
+  onOpenSearch = noop,
+  searchTriggerRef,
+  onLoadMore,
+  loadingMore,
+  hasMore,
+  loadMoreError,
+  onSetPinned = noop,
+  onUnfollow,
+  pinningThreadId,
+  extensionRegion,
+  childThreads,
+  layout,
+}: AppSidebarProps & { readonly layout: SidebarLayout }) {
   const newThreadSurface = useNewThreadSurface();
   const { openNewThread } = newThreadSurface;
   const archive = useThreadArchive();
@@ -214,9 +253,6 @@ export function AppSidebar({
     ? pathname.slice("/threads/".length)
     : undefined;
   const pendingCreations = usePendingCreations(newThreadSurface);
-  const [collapsedGroups, setCollapsedGroups] = React.useState<
-    ReadonlySet<string>
-  >(() => new Set(["inactive", "archived"]));
   const {
     dismissPreviewForNavigation,
     keepPreviewOpen,
@@ -263,14 +299,6 @@ export function AppSidebar({
     sharedThreads,
   );
 
-  const toggleGroup = (groupId: string) => {
-    setCollapsedGroups((current) => {
-      const next = new Set(current);
-      if (next.has(groupId)) next.delete(groupId);
-      else next.add(groupId);
-      return next;
-    });
-  };
   return (
     <aside
       className="sidebar product-sidebar"
@@ -347,7 +375,9 @@ export function AppSidebar({
           )
         }
         activeThreadId={activeThreadId}
-        collapsedGroups={collapsedGroups}
+        childThreads={childThreads}
+        collapsedGroups={layout.collapsedSections}
+        expandedThreads={layout.expandedThreads}
         hasMore={hasMore}
         loadingMore={loadingMore}
         loadMoreError={loadMoreError}
@@ -361,7 +391,8 @@ export function AppSidebar({
         onThreadPointerEnter={openPreview}
         onThreadPointerLeave={leaveThreadRow}
         onThreadMenuOpen={dismissPreviewForNavigation}
-        onToggleGroup={toggleGroup}
+        onToggleGroup={layout.toggleSection}
+        onToggleThread={layout.toggleThread}
         onUnfollow={onUnfollow}
         onSetArchived={archive.setArchived}
         onSetPinned={onSetPinned}

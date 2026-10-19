@@ -1,7 +1,7 @@
 {
   "name": "@dx/web",
   "private": true,
-  "version": "0.2.22",
+  "version": "0.2.23",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -13,7 +13,10 @@
     "test:changes-proof": "node test/changes-live-proof.mjs",
     "test:sign-in-journey": "node test/sign-in-journey.mjs",
     "test:sidebar-composer": "node test/sidebar-composer-proof.mjs",
+    "test:dictation-proof": "node test/dictation-latency-proof.mjs",
+    "test:composer-enter-key": "node test/composer-enter-key-proof.mjs",
     "test:markdown-rendering": "node test/markdown-rendering-proof.mjs",
+    "test:files-panel": "node test/files-panel-proof.mjs",
     "test:thread-perf": "node test/thread-page-stress.mjs",
     "test:stale-chunk": "node test/stale-chunk-proof.mjs",
     "preview": "vite preview",

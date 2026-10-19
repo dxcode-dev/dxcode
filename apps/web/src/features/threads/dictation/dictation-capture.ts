@@ -74,7 +74,8 @@ export class DictationCapture {
     });
   }
 
-  async start(onLimit: () => void) {
+  /** `onPcm` receives every captured chunk as it is recorded. */
+  async start(onLimit: () => void, onPcm?: (pcm: Int16Array) => void) {
     const generation = ++this.generation;
     this.publish({ state: "permission", waveform: emptyWaveform() });
     try {
@@ -108,6 +109,7 @@ export class DictationCapture {
         const chunk = pcm.length > remaining ? pcm.slice(0, remaining) : pcm;
         this.chunks.push(chunk);
         this.samples += chunk.length;
+        onPcm?.(chunk);
         const now = performance.now();
         if (now - lastPublish >= 50) {
           lastPublish = now;

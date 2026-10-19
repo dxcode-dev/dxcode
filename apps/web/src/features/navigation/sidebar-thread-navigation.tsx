@@ -2,6 +2,7 @@ import type { ThreadData } from "@dx/api";
 import { ChevronDown, FolderGit2 } from "lucide-react";
 import type { ReactNode } from "react";
 import * as React from "react";
+import type { ThreadListClientItem } from "../../shared/api/client.js";
 import { useNewThreadSurface } from "../../shared/new-thread-surface.js";
 import { Button } from "../../shared/ui/button.js";
 import { SidebarThreadChildrenProvider } from "./sidebar-thread-children.js";
@@ -11,7 +12,9 @@ import type { ThreadSection } from "./sidebar-thread-utils.js";
 export function SidebarThreadNavigation({
   archiveContent,
   activeThreadId,
+  childThreads,
   collapsedGroups,
+  expandedThreads,
   hasMore,
   loadingMore,
   loadMoreError,
@@ -26,6 +29,7 @@ export function SidebarThreadNavigation({
   onThreadPointerLeave,
   onThreadMenuOpen,
   onToggleGroup,
+  onToggleThread,
   onSetArchived,
   onSetPinned,
   onUnfollow,
@@ -34,7 +38,12 @@ export function SidebarThreadNavigation({
 }: {
   readonly archiveContent?: ReactNode;
   readonly activeThreadId?: string;
+  readonly childThreads?: ReadonlyMap<
+    ThreadData["id"],
+    ReadonlyArray<ThreadListClientItem>
+  >;
   readonly collapsedGroups: ReadonlySet<string>;
+  readonly expandedThreads: ReadonlySet<ThreadData["id"]>;
   readonly hasMore: boolean;
   readonly loadingMore: boolean;
   readonly loadMoreError?: string;
@@ -53,6 +62,7 @@ export function SidebarThreadNavigation({
   readonly onThreadPointerLeave: (threadId: ThreadData["id"]) => void;
   readonly onThreadMenuOpen?: (threadId: ThreadData["id"]) => void;
   readonly onToggleGroup: (groupId: string) => void;
+  readonly onToggleThread: (threadId: ThreadData["id"]) => void;
   /** `includeChildren` also archives or restores the Thread's children. */
   readonly onSetArchived: (
     threadId: ThreadData["id"],
@@ -80,7 +90,11 @@ export function SidebarThreadNavigation({
       className={`sidebar-scroll ${empty && query.length === 0 ? "sidebar-scroll-empty" : ""}`}
       aria-label="Threads"
     >
-      <SidebarThreadChildrenProvider listed={listed}>
+      <SidebarThreadChildrenProvider
+        listed={listed}
+        expanded={expandedThreads}
+        toggle={onToggleThread}
+      >
         {empty ? (
           query.length === 0 ? (
             <div className="sidebar-first-thread">
@@ -145,6 +159,7 @@ export function SidebarThreadNavigation({
               ) : (
                 <SidebarThreadRows
                   threads={section.threads}
+                  childThreads={childThreads}
                   activeThreadId={activeThreadId}
                   projectNames={projectNames}
                   onThreadNavigate={onThreadNavigate}

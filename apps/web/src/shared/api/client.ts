@@ -183,6 +183,8 @@ import {
   type SetFirstPartyPluginConfigurationRequest,
   type SettingsContextData,
   type SettingsFieldError,
+  type SidebarLayoutEntry,
+  SidebarLayoutResponseSchema,
   type SigningKeySetupGuidance,
   type SigningKeysData,
   SigningKeysErrorResponseSchema,
@@ -417,6 +419,8 @@ export type ThreadListTree = "roots" | ThreadId;
 
 export interface ThreadPage {
   readonly items: ReadonlyArray<ThreadListClientItem>;
+  /** Roots lists only: the children listed under this page's roots. */
+  readonly children?: ReadonlyArray<ThreadListClientItem>;
   readonly nextCursor?: PageCursor;
 }
 
@@ -2560,6 +2564,20 @@ export const markNotificationsRead = async (ids: ReadonlyArray<string>) =>
         body: JSON.stringify({ ids }),
       },
     )
+  ).data;
+
+/** The signed-in person's sidebar layout, shared by their devices. */
+export const getSidebarLayout = async (signal?: AbortSignal) =>
+  (await request("/v1/sidebar-layout", SidebarLayoutResponseSchema, { signal }))
+    .data;
+
+/** Records one sidebar choice and returns the whole layout. */
+export const putSidebarLayoutEntry = async (entry: SidebarLayoutEntry) =>
+  (
+    await request("/v1/sidebar-layout", SidebarLayoutResponseSchema, {
+      method: "PUT",
+      body: JSON.stringify(entry),
+    })
   ).data;
 
 export const markAllNotificationsRead = async () =>

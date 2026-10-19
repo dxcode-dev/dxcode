@@ -30,10 +30,10 @@ const runtimeFetch: typeof fetch = (input, init) =>
   globalThis.fetch(input, init);
 
 const unavailable: SpeechProvider = {
-  startTranscription: () =>
-    Promise.reject(new Error("Speech provider is unavailable")),
-  readTranscription: () =>
-    Promise.reject(new Error("Speech provider is unavailable")),
+  transcribe: () => Promise.reject(new Error("Speech provider is unavailable")),
+  openSession: () => {
+    throw new Error("Speech provider is unavailable");
+  },
 };
 
 /**
@@ -51,11 +51,14 @@ export const speechProviderFor = (
     case "fixture": {
       const fixture = createFixtureSpeechProvider();
       return {
-        startTranscription: (wav, checkpoints, signal) => {
+        transcribe: (wav, signal) => {
           onRequest();
-          return fixture.startTranscription(wav, checkpoints, signal);
+          return fixture.transcribe(wav, signal);
         },
-        readTranscription: fixture.readTranscription,
+        openSession: (signal) => {
+          onRequest();
+          return fixture.openSession(signal);
+        },
       };
     }
     case "sarvam":
@@ -77,15 +80,14 @@ export const speechProviderFor = (
   }
 };
 
-/** Seconds of canonical 16 kHz mono 16-bit audio, rounded up, at least 1. */
-export const audioSeconds = (wav: Uint8Array) =>
-  Math.max(1, Math.ceil(Math.max(0, wav.byteLength - 44) / 32_000));
+/** Seconds of canonical 16 kHz mono 16-bit PCM, rounded up, at least 1. */
+export const audioSeconds = (pcmBytes: number) =>
+  Math.max(1, Math.ceil(Math.max(0, pcmBytes) / 32_000));
 
 /**
- * One row per transcription that reached the provider, recorded when the
- * dispatch settles: `success` once the provider accepted the job, `error`
- * when the dispatch failed after reaching it. Units are the audio seconds
- * sent; polling is not metered.
+ * One row per transcription that reached the provider, recorded when it
+ * settles: `success` with a transcript, `error` when it failed after
+ * reaching the provider. Units are the audio seconds sent.
  */
 export const recordTranscription = (
   context: PluginHostContext,

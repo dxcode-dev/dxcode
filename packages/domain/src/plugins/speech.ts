@@ -1,43 +1,36 @@
 import { Schema } from "effect";
 
 /**
- * The Speech plugin's API (`speech.transcribe`). Composer dictation sends one
- * canonical WAV (16 kHz, mono, 16-bit PCM) and polls for its transcript.
- * Every speech provider implements the same two functions, so swapping the
- * provider never changes the dictation routes or the composer.
+ * The Speech plugin's API (`speech.transcribe`). Composer dictation streams
+ * canonical PCM (16 kHz, mono, 16-bit little-endian) through a live session
+ * while the user speaks and reads the whole transcript when they stop. A
+ * saved recording is transcribed in one call. Every speech provider
+ * implements both, so swapping the provider never changes the dictation
+ * routes or the composer.
  */
-export const SpeechTranscriptionStatus = Schema.Union([
-  Schema.Literal("processing"),
-  Schema.Literal("failed"),
-  Schema.Struct({ text: Schema.NonEmptyString }),
-]);
-
-export type SpeechTranscriptionStatus = typeof SpeechTranscriptionStatus.Type;
-
 export class SpeechProviderError extends Schema.TaggedError<SpeechProviderError>()(
   "SpeechProviderError",
   { reason: Schema.String },
 ) {}
 
-/**
- * Persistence checkpoints a provider calls while it starts a job, so the
- * caller can record the provider job ID and stop work for a job canceled
- * meanwhile. Either returning false cancels the start.
- */
-export interface SpeechJobCheckpoints {
-  readonly created: (jobId: string) => Promise<boolean>;
-  readonly active: (jobId: string) => Promise<boolean>;
+export interface SpeechSession {
+  /** Queues the next PCM chunk; chunks reach the provider in order. */
+  readonly send: (pcm: Uint8Array) => void;
+  /**
+   * Ends the audio and resolves the whole transcript, empty when nobody
+   * spoke. Rejects with `SpeechProviderError` when the session broke.
+   */
+  readonly finish: () => Promise<string>;
+  /** Abandons the session without a transcript. */
+  readonly close: () => void;
 }
 
 export interface SpeechProvider {
-  /** Starts transcribing the WAV and returns the provider job ID. */
-  readonly startTranscription: (
+  /** Transcribes one canonical WAV; empty when nobody spoke. */
+  readonly transcribe: (
     wav: Uint8Array,
-    checkpoints: SpeechJobCheckpoints,
     signal?: AbortSignal,
   ) => Promise<string>;
-  readonly readTranscription: (
-    jobId: string,
-    signal?: AbortSignal,
-  ) => Promise<SpeechTranscriptionStatus>;
+  /** Opens a live session. Audio sent before it connects is kept. */
+  readonly openSession: (signal?: AbortSignal) => SpeechSession;
 }
