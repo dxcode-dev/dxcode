@@ -1,8 +1,19 @@
 import type { ThreadId } from "@dx/domain";
-import type { WaymoteSession, WaymoteSessionState } from "@rockorager/waymote";
+import type {
+  SurfaceHandle,
+  WaymoteSession,
+  WaymoteSessionState,
+} from "@rockorager/waymote";
 import { Monitor, Play, RefreshCw } from "lucide-react";
 import * as React from "react";
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
+import { useMobile } from "../../shared/use-mobile.js";
+import {
+  codeForCharacter,
+  type DesktopModifier,
+  pressChord,
+} from "./desktop-keyboard.js";
+import { DesktopKeys } from "./desktop-keys.js";
 import {
   desktopPath,
   checkDesktop as requestDesktop,
@@ -47,6 +58,13 @@ const STABLE_SOCKET_MS = 30_000;
  * code cannot replace the local clipboard on its own.
  */
 const CLIPBOARD_GESTURE_MS = 2_000;
+/** How long an on-screen key waits for desktop control before it is dropped. */
+const CONTROL_WAIT_MS = 2_000;
+/**
+ * Kept in the text input so a phone keyboard's Backspace always has
+ * something to delete, and so always reports it.
+ */
+const TEXT_INPUT_SENTINEL = " ";
 
 // The remote output follows the viewer's size at its pixel density, at least
 // a usable laptop-sized desktop (the canvas letterboxes when the pane is
@@ -141,6 +159,7 @@ function DesktopSession({
     lastInput: Date.now(),
     lastGesture: Number.NEGATIVE_INFINITY,
   });
+  const keyboard = usePhoneKeyboard(input);
   const attach = React.useCallback(
     (surface: HTMLDivElement | null) => {
       const display = canvas.current;
@@ -270,12 +289,14 @@ function DesktopSession({
             return;
           navigator.clipboard?.writeText(text).catch(() => undefined);
         });
-        current.attachSurface({
+        const handle = current.attachSurface({
           canvas: display,
           inputElement: surface,
+          textInputElement: keyboard.textInput.current ?? undefined,
           controlOnFocus: true,
           clipboardAutoSync: false,
         });
+        keyboard.remote.current = { session: current, surface: handle };
         input.current.lastInput = Date.now();
         watchIdle(DESKTOP_IDLE_PAUSE_MS);
         current.connect();
@@ -284,10 +305,11 @@ function DesktopSession({
       return () => {
         controller.abort();
         clearTimeout(idleTimer);
+        keyboard.remote.current = undefined;
         void session?.dispose();
       };
     },
-    [loadClient, onIdle, threadId],
+    [keyboard.remote, keyboard.textInput, loadClient, onIdle, threadId],
   );
   const noteInput = () => {
     input.current.lastInput = Date.now();
@@ -297,8 +319,22 @@ function DesktopSession({
     input.current.lastInput = now;
     input.current.lastGesture = now;
   };
+  const mobile = useMobile();
   return (
     <>
+      {/* Before the surface, so it exists when the surface attaches. */}
+      <textarea
+        ref={keyboard.attachTextInput}
+        className="thread-desktop-text-input"
+        aria-label="Type on the remote desktop"
+        autoCapitalize="off"
+        autoComplete="off"
+        autoCorrect="off"
+        spellCheck={false}
+        tabIndex={-1}
+        onFocus={keyboard.onTextInputFocus}
+        onBlur={keyboard.onTextInputBlur}
+      />
       <div
         className="thread-desktop-surface"
         ref={attach}
@@ -317,6 +353,19 @@ function DesktopSession({
       >
         <canvas className="thread-desktop-canvas" ref={canvas} />
       </div>
+      {mobile &&
+      (status.phase === "starting" ||
+        status.phase === "live" ||
+        status.phase === "reconnecting") ? (
+        <DesktopKeys
+          disabled={status.phase !== "live"}
+          keyboardOpen={keyboard.open}
+          modifiers={keyboard.modifiers}
+          onToggleKeyboard={keyboard.toggle}
+          onToggleModifier={keyboard.toggleModifier}
+          onPress={keyboard.press}
+        />
+      ) : null}
       {status.phase === "starting" ? (
         <div
           className="thread-desktop-loading"
@@ -368,6 +417,147 @@ function DesktopSession({
     </>
   );
 }
+
+interface RemoteKeyboardTarget {
+  readonly session: WaymoteSession;
+  readonly surface: SurfaceHandle;
+}
+
+/**
+ * Typing on the desktop from a phone: the phone keyboard writes into
+ * Waymote's text input, and on-screen keys press what a phone keyboard
+ * lacks. A latched modifier applies to the next key from either.
+ */
+function usePhoneKeyboard(input: React.RefObject<DesktopInput>) {
+  const textInput = React.useRef<HTMLTextAreaElement | null>(null);
+  const remote = React.useRef<RemoteKeyboardTarget | undefined>(undefined);
+  const [open, setOpen] = React.useState(false);
+  const [modifiers, setModifiers] = React.useState<
+    ReadonlySet<DesktopModifier>
+  >(() => new Set());
+  // Read by the text input's listeners, which outlive a render.
+  const latched = React.useRef<ReadonlySet<DesktopModifier>>(modifiers);
+  const latch = React.useCallback((next: ReadonlySet<DesktopModifier>) => {
+    latched.current = next;
+    setModifiers(next);
+  }, []);
+  // Keys reach the desktop only while this viewer holds control.
+  const withControl = React.useCallback((send: () => void) => {
+    const target = remote.current;
+    if (target === undefined) return;
+    if (target.session.state.input.state === "active") {
+      send();
+      return;
+    }
+    if (document.activeElement !== textInput.current) target.surface.focus();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stop = target.session.on("state", (state) => {
+      if (state.input.state !== "active") return;
+      stop();
+      clearTimeout(timer);
+      send();
+    });
+    timer = setTimeout(stop, CONTROL_WAIT_MS);
+  }, []);
+  const press = React.useCallback(
+    (codes: readonly string[]) => {
+      const chord = [
+        ...latched.current,
+        ...codes.filter(
+          (code) => !latched.current.has(code as DesktopModifier),
+        ),
+      ];
+      if (latched.current.size > 0) latch(new Set());
+      const now = Date.now();
+      input.current.lastInput = now;
+      input.current.lastGesture = now;
+      withControl(() => {
+        if (textInput.current !== null) pressChord(textInput.current, chord);
+      });
+    },
+    [input, latch, withControl],
+  );
+  const attachTextInput = React.useCallback(
+    (node: HTMLTextAreaElement | null) => {
+      textInput.current = node;
+      if (node === null) return;
+      // A phone keyboard reports Backspace and Return without a key code,
+      // which Waymote cannot map; press the real keys instead.
+      const softKey = (event: KeyboardEvent) => {
+        if (event.code !== "" || event.isComposing) return;
+        if (event.key !== "Backspace" && event.key !== "Enter") return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        press([event.key]);
+      };
+      const beforeInput = (event: InputEvent) => {
+        let codes: readonly string[] | undefined;
+        if (event.inputType === "deleteContentBackward") codes = ["Backspace"];
+        else if (
+          event.inputType === "insertLineBreak" ||
+          event.inputType === "insertParagraph"
+        )
+          codes = ["Enter"];
+        else if (
+          event.inputType === "insertText" &&
+          latched.current.size > 0 &&
+          event.data?.length === 1
+        ) {
+          const key = codeForCharacter(event.data);
+          if (key !== undefined)
+            codes = key.shift ? ["ShiftLeft", key.code] : [key.code];
+        }
+        if (codes === undefined) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        press(codes);
+      };
+      return listenAll(node, [
+        ["keydown", softKey],
+        ["beforeinput", beforeInput],
+      ]);
+    },
+    [press],
+  );
+  return {
+    textInput,
+    remote,
+    open,
+    modifiers,
+    attachTextInput,
+    press,
+    toggle: () => {
+      if (open) textInput.current?.blur();
+      else remote.current?.surface.focusTextInput();
+    },
+    toggleModifier: (modifier: DesktopModifier) => {
+      const next = new Set(latched.current);
+      if (!next.delete(modifier)) next.add(modifier);
+      latch(next);
+    },
+    onTextInputFocus: (event: React.FocusEvent<HTMLTextAreaElement>) => {
+      event.currentTarget.value = TEXT_INPUT_SENTINEL;
+      setOpen(true);
+    },
+    onTextInputBlur: () => setOpen(false),
+  };
+}
+
+/** Listens to each event until the returned function is called. */
+const listenAll = (
+  target: HTMLElement,
+  listeners: ReadonlyArray<
+    | readonly ["keydown", (event: KeyboardEvent) => void]
+    | readonly ["beforeinput", (event: InputEvent) => void]
+  >,
+) => {
+  for (const [type, listener] of listeners)
+    target.addEventListener(type, listener as EventListener);
+  return () => {
+    for (const [type, listener] of listeners)
+      target.removeEventListener(type, listener as EventListener);
+  };
+};
 
 /** Ends one grace period after `DESKTOP_HIDDEN_GRACE_MS`. */
 function HiddenGrace({

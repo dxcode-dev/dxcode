@@ -1482,3 +1482,88 @@ async fn services_beyond_the_shared_bounds_fail_without_ending_the_session() {
     assert_eq!(result, json!({"kind": "unavailable", "reason": "invalid"}));
     assert_serves(&mut socket, 1).await;
 }
+
+/// A guest that, like Node's HTTP server (`httpAllowHalfOpen: false`), ends
+/// its side of the connection when the client half-closes, and writes its
+/// response head and body in separate writes, as every streaming server does.
+/// It reads the request (through a chunked body's last chunk) first.
+async fn half_close_guest(listener: TcpListener) {
+    let (mut stream, _) = listener.accept().await.unwrap();
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let read = stream.read(&mut buffer).await.unwrap();
+        request.extend_from_slice(&buffer[..read]);
+        let text = String::from_utf8_lossy(&request);
+        if let Some(end) = text.find("\r\n\r\n") {
+            let head = text[..end].to_ascii_lowercase();
+            if !head.contains("transfer-encoding: chunked") || text.ends_with("0\r\n\r\n") {
+                break;
+            }
+        }
+        assert!(read > 0, "request cut short");
+    }
+    stream
+        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n")
+        .await
+        .unwrap();
+    tokio::select! {
+        _ = tokio::time::sleep(Duration::from_millis(50)) => {
+            stream.write_all(b"later").await.unwrap();
+        }
+        read = stream.read(&mut buffer) => {
+            assert_eq!(read.unwrap(), 0, "bytes after the request");
+        }
+    }
+    let _ = stream.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn proxy_keeps_the_request_side_open_until_the_response_ends() {
+    let (_fixture, _daemon, mut socket, _generation) = connect_daemon().await;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(half_close_guest(listener));
+    send(
+        &mut socket,
+        json!({"type": "proxy.open", "streamId": 1, "port": port, "mode": "http",
+               "method": "GET", "target": "/", "headers": [], "body": false}),
+    )
+    .await;
+    let (head, body) = collect_http(&mut socket, 1).await;
+    assert_eq!(head["status"], 200);
+    assert_eq!(body, b"later");
+
+    // The same once a request body has been written in full.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(half_close_guest(listener));
+    send(
+        &mut socket,
+        json!({"type": "proxy.open", "streamId": 2, "port": port, "mode": "http",
+               "method": "POST", "target": "/", "headers": [], "body": true}),
+    )
+    .await;
+    send_frame(&mut socket, 2, 0, b"abc").await;
+    send(&mut socket, json!({"type": "proxy.end", "streamId": 2})).await;
+    let mut head = None;
+    let mut body = Vec::new();
+    loop {
+        match next_event(&mut socket).await {
+            Event::Text(value) => match value["type"].as_str() {
+                Some("proxy.ack") => {}
+                Some("proxy.response") => head = Some(value),
+                Some("proxy.end") => break,
+                other => panic!("unexpected {other:?}: {value}"),
+            },
+            Event::Data(2, 0, payload) => {
+                body.extend_from_slice(&payload);
+                send(&mut socket, json!({"type": "proxy.ack", "streamId": 2})).await;
+            }
+            Event::Data(..) => panic!("frame for another stream"),
+        }
+    }
+    assert_eq!(head.unwrap()["status"], 200);
+    assert_eq!(body, b"later");
+}

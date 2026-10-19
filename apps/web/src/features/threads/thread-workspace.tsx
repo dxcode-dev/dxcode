@@ -58,6 +58,12 @@ import {
 } from "./thread-file-navigation.js";
 import { ThreadHeader } from "./thread-header.js";
 import {
+  MobileThreadTabs,
+  MobileToolPanels,
+  type MobileWorkspaceTools,
+  useMobileThreadTool,
+} from "./thread-mobile-layout.js";
+import {
   invalidateThreadQueries,
   threadQueryOptions,
 } from "./thread-queries.js";
@@ -760,6 +766,106 @@ function useCenterFileTabs(threadId: ThreadId) {
   };
 }
 
+/** Each workspace tool's content, shared by the phone and desktop layouts. */
+function useWorkspaceTools({
+  thread,
+  project,
+  Terminal,
+  Desktop,
+  portalDomain,
+  onReviewPrompt,
+  onWorkspaceStatusChange,
+  centerFiles: { files, setFiles, activeFile, openFile },
+}: {
+  readonly thread: ThreadDetailData;
+  readonly project: ThreadProject;
+  readonly Terminal: ThreadSessionProps["Terminal"];
+  readonly Desktop: ThreadDesktopComponent | undefined;
+  readonly portalDomain: string | undefined;
+  readonly onReviewPrompt: React.ComponentProps<
+    typeof ChangesPane
+  >["onReviewPrompt"];
+  readonly onWorkspaceStatusChange: (status?: string) => void;
+  readonly centerFiles: ReturnType<typeof useCenterFileTabs>;
+}) {
+  const [fileNavigationError, setFileNavigationError] =
+    React.useState<string>();
+  const workspaceTools: MobileWorkspaceTools = {
+    terminal:
+      Terminal === undefined ? undefined : thread.access === "view" ? (
+        <div className="thread-files-state" role="note">
+          Only contributors can use the terminal in a shared thread.
+        </div>
+      ) : (
+        (active: boolean) => (
+          <Terminal
+            active={active}
+            threadId={thread.id}
+            onWorkspaceStatusChange={onWorkspaceStatusChange}
+          />
+        )
+      ),
+    preview: previewTool(thread, portalDomain),
+    desktop: desktopTool(thread, Desktop),
+    changes: (
+      <>
+        {fileNavigationError === undefined ? null : (
+          <div className="thread-files-state" role="alert">
+            {fileNavigationError}
+          </div>
+        )}
+        <ChangesPane
+          threadId={thread.id}
+          projectName={project.name}
+          onReviewPrompt={onReviewPrompt}
+          onOpenFile={(worktree, path, worktreeLabel) => {
+            const validated = filesPath(path);
+            if (validated === undefined) {
+              setFileNavigationError("This changed path cannot be opened.");
+              return;
+            }
+            setFileNavigationError(undefined);
+            openFile({
+              worktree,
+              ...(worktreeLabel === undefined ? {} : { worktreeLabel }),
+              path: validated,
+            });
+          }}
+        />
+      </>
+    ),
+    files: (active: boolean) => (
+      <ThreadFilesPanel
+        active={active}
+        threadId={thread.id}
+        projectName={project.name}
+        selectedFile={(() => {
+          const file = files.find(
+            (candidate) => fileTargetKey(candidate) === activeFile,
+          );
+          return file === undefined || file.kind !== "workspace"
+            ? undefined
+            : {
+                worktree: file.worktree,
+                path: file.path,
+              };
+        })()}
+        onOpenFile={openFile}
+      />
+    ),
+  };
+  const openFilePanes = files.map((file) => (
+    <OpenThreadFilePane
+      active={activeFile === fileTargetKey(file)}
+      file={file}
+      key={fileTargetKey(file)}
+      setFiles={setFiles}
+      threadId={thread.id}
+    />
+  ));
+  return { workspaceTools, openFilePanes };
+}
+
 function ThreadSessionContent({
   thread,
   project,
@@ -791,16 +897,15 @@ function ThreadSessionContent({
     shareOpen,
     onShareOpenChange: setShareOpen,
   };
+  const centerFiles = useCenterFileTabs(thread.id);
   const {
     files,
-    setFiles,
     activeFile,
     setActiveFile,
-    openFile,
     closeFile,
     fileNavigation,
     resolveFileLink,
-  } = useCenterFileTabs(thread.id);
+  } = centerFiles;
   // A notification opens the transcript at a message, so it comes forward
   // from an open file tab.
   const onFocusRequested = React.useCallback(
@@ -844,8 +949,6 @@ function ThreadSessionContent({
   const [rightPaneCollapsed, setRightPaneCollapsed] = React.useState(true);
   const [liveWorkspaceStatus, setLiveWorkspaceStatus] =
     React.useState<string>();
-  const [fileNavigationError, setFileNavigationError] =
-    React.useState<string>();
   const workspaceStatus =
     liveWorkspaceStatus ??
     realtimeWorkspaceStatus ??
@@ -855,30 +958,88 @@ function ThreadSessionContent({
     () => setRightPaneCollapsed((collapsed) => !collapsed),
     [],
   );
+  const mobileTool = useMobileThreadTool();
+
+  const { workspaceTools, openFilePanes } = useWorkspaceTools({
+    thread,
+    project,
+    Terminal,
+    Desktop,
+    portalDomain: settingsQuery.data?.portalDomain,
+    onReviewPrompt: draft.set,
+    onWorkspaceStatusChange: setLiveWorkspaceStatus,
+    centerFiles,
+  });
 
   if (mobile) {
+    // Archived or still-preparing Threads have no workspace to show.
+    const toolsAvailable = !archived && thread.executionWorkspace.ready;
+    const panel = (
+      <ThreadAgentPanel
+        {...retainedImageProps}
+        source={agentSource}
+        agentInitialization={thread.agentInitialization}
+        onOpenModelRouting={openModelRouting}
+        archived={archived}
+        dictationAvailable={dictationAvailable}
+        showArchivedNotice={archived}
+        active={
+          !toolsAvailable ||
+          (activeFile === undefined && mobileTool.tool === "agent")
+        }
+        additionalPanels={
+          toolsAvailable ? (
+            <>
+              <MobileToolPanels
+                tools={workspaceTools}
+                activeTool={mobileTool.tool}
+                opened={mobileTool.opened}
+                fileActive={activeFile !== undefined}
+              />
+              {openFilePanes}
+            </>
+          ) : undefined
+        }
+        draft={draft}
+        workspaceReady={thread.executionWorkspace.ready}
+        workspaceStatus={workspaceStatus}
+        optimisticCreation={optimisticCreation}
+        onInitialSubmissionObserved={onInitialSubmissionObserved}
+        {...sharedPanelProps}
+        renderHeader={(model) => (
+          <>
+            <ThreadHeader {...headerProps} model={model} />
+            {toolsAvailable ? (
+              <MobileThreadTabs
+                tools={workspaceTools}
+                activeTool={mobileTool.tool}
+                files={files}
+                activeFile={activeFile}
+                onSelectTool={(tool) => {
+                  setActiveFile(undefined);
+                  mobileTool.select(tool);
+                }}
+                onSelectFile={setActiveFile}
+                onCloseFile={closeFile}
+              />
+            ) : null}
+          </>
+        )}
+      />
+    );
     return (
       <div className="mobile-thread-region">
         <ThreadRefreshError message={refreshError} onRetry={onRefreshRetry} />
         <main className="mobile-pane-content">
-          <ThreadAgentPanel
-            {...retainedImageProps}
-            source={agentSource}
-            agentInitialization={thread.agentInitialization}
-            onOpenModelRouting={openModelRouting}
-            archived={archived}
-            dictationAvailable={dictationAvailable}
-            showArchivedNotice={archived}
-            draft={draft}
-            workspaceReady={thread.executionWorkspace.ready}
-            workspaceStatus={workspaceStatus}
-            optimisticCreation={optimisticCreation}
-            onInitialSubmissionObserved={onInitialSubmissionObserved}
-            {...sharedPanelProps}
-            renderHeader={(model) => (
-              <ThreadHeader {...headerProps} model={model} />
-            )}
-          />
+          {toolsAvailable ? (
+            <ThreadFileNavigationContext value={fileNavigation}>
+              <MarkdownFileLinkContext value={resolveFileLink}>
+                {panel}
+              </MarkdownFileLinkContext>
+            </ThreadFileNavigationContext>
+          ) : (
+            panel
+          )}
         </main>
       </div>
     );
@@ -940,69 +1101,7 @@ function ThreadSessionContent({
       <ThreadRefreshError message={refreshError} onRetry={onRefreshRetry} />
       <ThreadDesktopLayout
         rightPaneCollapsed={rightPaneCollapsed}
-        terminal={
-          Terminal === undefined ? undefined : thread.access === "view" ? (
-            <div className="thread-files-state" role="note">
-              Only contributors can use the terminal in a shared thread.
-            </div>
-          ) : (
-            (active) => (
-              <Terminal
-                active={active}
-                threadId={thread.id}
-                onWorkspaceStatusChange={setLiveWorkspaceStatus}
-              />
-            )
-          )
-        }
-        preview={previewTool(thread, settingsQuery.data?.portalDomain)}
-        desktop={desktopTool(thread, Desktop)}
-        changes={
-          <>
-            {fileNavigationError === undefined ? null : (
-              <div className="thread-files-state" role="alert">
-                {fileNavigationError}
-              </div>
-            )}
-            <ChangesPane
-              threadId={thread.id}
-              projectName={project.name}
-              onReviewPrompt={draft.set}
-              onOpenFile={(worktree, path, worktreeLabel) => {
-                const validated = filesPath(path);
-                if (validated === undefined) {
-                  setFileNavigationError("This changed path cannot be opened.");
-                  return;
-                }
-                setFileNavigationError(undefined);
-                openFile({
-                  worktree,
-                  ...(worktreeLabel === undefined ? {} : { worktreeLabel }),
-                  path: validated,
-                });
-              }}
-            />
-          </>
-        }
-        files={(active) => (
-          <ThreadFilesPanel
-            active={active}
-            threadId={thread.id}
-            projectName={project.name}
-            selectedFile={(() => {
-              const file = files.find(
-                (candidate) => fileTargetKey(candidate) === activeFile,
-              );
-              return file === undefined || file.kind !== "workspace"
-                ? undefined
-                : {
-                    worktree: file.worktree,
-                    path: file.path,
-                  };
-            })()}
-            onOpenFile={openFile}
-          />
-        )}
+        {...workspaceTools}
         main={
           <ThreadFileNavigationContext value={fileNavigation}>
             <MarkdownFileLinkContext value={resolveFileLink}>
@@ -1013,15 +1112,7 @@ function ThreadSessionContent({
                 onOpenModelRouting={openModelRouting}
                 dictationAvailable={dictationAvailable}
                 active={activeFile === undefined}
-                additionalPanels={files.map((file) => (
-                  <OpenThreadFilePane
-                    active={activeFile === fileTargetKey(file)}
-                    file={file}
-                    key={fileTargetKey(file)}
-                    setFiles={setFiles}
-                    threadId={thread.id}
-                  />
-                ))}
+                additionalPanels={openFilePanes}
                 draft={draft}
                 workspaceReady={thread.executionWorkspace.ready}
                 workspaceStatus={workspaceStatus}

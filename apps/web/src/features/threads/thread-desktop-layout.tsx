@@ -1,40 +1,26 @@
 import { Menu } from "@base-ui/react/menu";
 import {
-  AppWindow,
   EllipsisVertical,
-  Files,
-  GitCompareArrows,
   Maximize2,
   Minimize2,
-  Monitor,
   RefreshCw,
-  SquareTerminal,
 } from "lucide-react";
 import * as React from "react";
+import {
+  renderTool,
+  type ToolContent,
+  toolPresentation,
+  WORKSPACE_TOOLS,
+  type WorkspaceTool,
+} from "./workspace-tools.js";
 
 const RIGHT_PANE_MAX_VIEWPORT_RATIO = 0.46;
 const RIGHT_PANE_DEFAULT_WIDTH = 360;
 const RIGHT_PANE_MIN_WIDTH = 260;
 const RESIZE_HANDLE_WIDTH = 1;
-const WORKSPACE_TOOLS = [
-  "changes",
-  "files",
-  "terminal",
-  "preview",
-  "desktop",
-] as const;
-
-type WorkspaceTool = (typeof WORKSPACE_TOOLS)[number];
 
 const toolTabId = (tool: WorkspaceTool) => `thread-workspace-tab-${tool}`;
 const toolPanelId = (tool: WorkspaceTool) => `thread-${tool}-panel`;
-const toolPresentation = {
-  changes: { label: "Changes", Icon: GitCompareArrows },
-  files: { label: "Files", Icon: Files },
-  terminal: { label: "Terminal", Icon: SquareTerminal },
-  preview: { label: "Preview", Icon: AppWindow },
-  desktop: { label: "Desktop", Icon: Monitor },
-} as const;
 
 function WorkspaceToolbar({
   tools,
@@ -153,14 +139,6 @@ function WorkspaceToolbar({
     </header>
   );
 }
-
-type ToolContent =
-  | React.ReactNode
-  | ((active: boolean) => React.ReactNode)
-  | undefined;
-
-const renderTool = (content: ToolContent, active: boolean) =>
-  typeof content === "function" ? content(active) : content;
 
 function WorkspaceToolPanel({
   tool,

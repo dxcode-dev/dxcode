@@ -1,0 +1,71 @@
+.thread-desktop-shell:has(> .desktop-keys) {
+  flex-direction: column;
+}
+.desktop-keys {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 4px;
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+  overflow-x: auto;
+  border-top: 1px solid var(--divider);
+  background: var(--surface);
+  scrollbar-width: none;
+  touch-action: pan-x;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.desktop-keys::-webkit-scrollbar {
+  display: none;
+}
+.desktop-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  gap: 4px;
+  min-width: 34px;
+  height: 32px;
+  padding: 0 9px;
+  color: var(--chat-foreground);
+  border: 1px solid var(--outline);
+  border-radius: 7px;
+  background: var(--secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+.desktop-key svg {
+  width: 14px;
+  height: 14px;
+}
+.desktop-key-keyboard span {
+  font-size: 10px;
+}
+.desktop-key-shortcut {
+  font-size: 11px;
+}
+.desktop-key:active,
+.desktop-key[aria-pressed="true"] {
+  color: var(--background);
+  border-color: var(--foreground);
+  background: var(--foreground);
+}
+.desktop-key:disabled {
+  opacity: 0.5;
+}
+/* Waymote's text input: focusable for the phone keyboard, never seen. */
+.thread-desktop-text-input {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  resize: none;
+  pointer-events: none;
+  /* At least 16px, or iOS Safari zooms the page when it takes focus. */
+  font-size: 16px;
+}

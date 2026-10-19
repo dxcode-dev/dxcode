@@ -1,7 +1,7 @@
 {
   "name": "@dx/web",
   "private": true,
-  "version": "0.2.23",
+  "version": "0.2.24",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -15,6 +15,7 @@
     "test:sidebar-composer": "node test/sidebar-composer-proof.mjs",
     "test:dictation-proof": "node test/dictation-latency-proof.mjs",
     "test:composer-enter-key": "node test/composer-enter-key-proof.mjs",
+    "test:composer-focus-zoom": "node test/composer-focus-zoom-proof.mjs",
     "test:markdown-rendering": "node test/markdown-rendering-proof.mjs",
     "test:files-panel": "node test/files-panel-proof.mjs",
     "test:thread-perf": "node test/thread-page-stress.mjs",

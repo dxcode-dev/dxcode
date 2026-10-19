@@ -10,6 +10,8 @@ import { RefreshCw, SquareTerminal } from "lucide-react";
 import * as React from "react";
 import { wakingExecutionEnvironmentMessage } from "../../shared/execution-environment-copy.js";
 import { useTheme } from "../../shared/theme/theme-provider.js";
+import { useMobile } from "../../shared/use-mobile.js";
+import { TerminalKeys } from "./terminal-keys.js";
 import { terminalThemeFor } from "./terminal-themes.js";
 
 const terminalUrl = (threadId: ThreadId) => {
@@ -209,6 +211,10 @@ const useTerminalConnection = ({
   const recoverDisconnected = React.useRef<() => void>(() => {});
   const setActivity = React.useRef<(active: boolean) => void>(() => {});
   const activeRef = React.useRef(false);
+  /** Sends bytes as if typed, for the on-screen keys. */
+  const sendInput = React.useRef<(data: string) => void>(() => {});
+  /** Rewrites typed input, so a latched on-screen Ctrl applies to it. */
+  const transformInput = React.useRef<(data: string) => string>((data) => data);
   const mount = React.useCallback(
     (element: HTMLDivElement | null) => {
       if (element === null) return;
@@ -228,6 +234,10 @@ const useTerminalConnection = ({
               socket.send(JSON.stringify({ v: 1, type: "restart" }));
           };
           refreshEnvironment.current = sendEnvironmentRefresh;
+          sendInput.current = (data) => {
+            if (ready && socket.readyState === WebSocket.OPEN)
+              socket.send(new TextEncoder().encode(data));
+          };
           const listeners = new AbortController();
           let emulator:
             | Awaited<ReturnType<typeof mountBrowserTerminal>>
@@ -371,7 +381,9 @@ const useTerminalConnection = ({
             element,
             (data) => {
               if (ready && socket.readyState === WebSocket.OPEN)
-                socket.send(new TextEncoder().encode(data));
+                socket.send(
+                  new TextEncoder().encode(transformInput.current(data)),
+                );
             },
             terminalTheme,
             // A hidden Terminal keeps its size, so its scrollback survives.
@@ -561,8 +573,10 @@ const useTerminalConnection = ({
     refreshEnvironment,
     restartRequired,
     retry,
+    sendInput,
     setActivity,
     status,
+    transformInput,
   };
 };
 
@@ -575,9 +589,12 @@ function ThreadTerminalSession(props: ThreadTerminalSessionProps) {
     refreshEnvironment,
     restartRequired,
     retry,
+    sendInput,
     setActivity,
     status,
+    transformInput,
   } = useTerminalConnection(props);
+  const mobile = useMobile();
   const active = props.active ?? true;
   const recoverOnActivation = React.useCallback(
     (element: HTMLSpanElement | null) => {
@@ -634,6 +651,13 @@ function ThreadTerminalSession(props: ThreadTerminalSessionProps) {
         restartRequired={restartRequired}
         retry={retry}
       />
+      {mobile && !failed ? (
+        <TerminalKeys
+          disabled={loading}
+          sendInput={sendInput}
+          transformInput={transformInput}
+        />
+      ) : null}
     </form>
   );
 }

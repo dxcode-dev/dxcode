@@ -175,6 +175,27 @@ textarea,
 select {
   font: inherit;
 }
+/* iOS Safari zooms the page into a focused field by 16px / its font size, so
+   touch devices keep every text field at 16px or larger. It overrides the
+   smaller sizes that feature styles give their fields. */
+@media (pointer: coarse) {
+  input:not(
+    [type="checkbox"],
+    [type="radio"],
+    [type="range"],
+    [type="color"],
+    [type="file"],
+    [type="button"],
+    [type="submit"],
+    [type="reset"],
+    [type="image"],
+    [type="hidden"]
+  ),
+  textarea,
+  select {
+    font-size: max(16px, 1em) !important;
+  }
+}
 button,
 select {
   cursor: pointer;
@@ -8458,6 +8479,12 @@ div.claude-code-mode-main {
   font-size: 16px;
   font-weight: 500;
 }
+/* A touch keyboard has no shortcuts to show. */
+@media (pointer: coarse) and (max-width: 767px) {
+  .command-palette-item .shortcut-keycaps {
+    display: none;
+  }
+}
 .command-palette-item small {
   overflow: hidden;
   color: var(--muted-foreground);
@@ -8623,6 +8650,12 @@ div.claude-code-mode-main {
   overflow-y: auto;
   font-size: 13px;
   line-height: 20px;
+}
+@media (pointer: coarse) {
+  .agent-composer textarea,
+  .mobile-pane-content .agent-composer textarea {
+    line-height: 22px;
+  }
 }
 .mobile-pane-content .thread-error-row {
   padding-right: 64px;
@@ -10922,17 +10955,22 @@ div.claude-code-mode-main {
 .product-sidebar .thread-row strong[data-overflowing] {
   mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
 }
-.product-sidebar .thread-row-shell[data-actions]:hover .thread-row strong {
-  --thread-actions-start: calc(
-    var(--thread-actions-end) +
-    var(--thread-actions-width) -
-    var(--thread-row-end)
-  );
-  mask-image: linear-gradient(
-    to right,
-    #000 calc(100% - var(--thread-actions-start) - 18px),
-    transparent calc(100% - var(--thread-actions-start) + 4px)
-  );
+/* Hover actions are for a mouse. On a touch screen a tap that reveals
+   them is spent on hover, so Safari needs a second tap to open the row;
+   touch opens the same actions with a long press. */
+@media (hover: hover) {
+  .product-sidebar .thread-row-shell[data-actions]:hover .thread-row strong {
+    --thread-actions-start: calc(
+      var(--thread-actions-end) +
+      var(--thread-actions-width) -
+      var(--thread-row-end)
+    );
+    mask-image: linear-gradient(
+      to right,
+      #000 calc(100% - var(--thread-actions-start) - 18px),
+      transparent calc(100% - var(--thread-actions-start) + 4px)
+    );
+  }
 }
 .thread-hover-actions {
   position: absolute;
@@ -10946,8 +10984,10 @@ div.claude-code-mode-main {
   padding: 0;
   background: transparent;
 }
-.thread-row-shell:hover .thread-hover-actions {
-  display: flex;
+@media (hover: hover) {
+  .thread-row-shell:hover .thread-hover-actions {
+    display: flex;
+  }
 }
 .thread-hover-actions button {
   display: grid;
@@ -12170,11 +12210,14 @@ div.claude-code-mode-main {
   padding-left: 42px;
 }
 @media (max-width: 767px) {
+  /* A phone shows the app edge to edge, like a native app. */
   .product-shell {
-    padding: 8px;
+    padding: 0;
   }
   .product-shell .dx-app-frame {
-    border-radius: 12px;
+    border-radius: 0;
+    outline: 0;
+    box-shadow: none;
   }
   .product-shell-content {
     overflow: auto;
@@ -12356,6 +12399,20 @@ div.claude-code-mode-main {
     height: 20px;
     min-height: 20px;
     padding-block: 0;
+  }
+}
+/* The phone drawer keeps the web rows, in slightly larger text. */
+@media (max-width: 767px) {
+  .mobile-sidebar-drawer .product-sidebar {
+    --sidebar-text-sm: 12px;
+    --sidebar-text-md: 13px;
+    --sidebar-text-base: 14px;
+  }
+  .mobile-sidebar-drawer .product-sidebar .thread-row {
+    /* A long press opens the Thread menu, not Safari's link preview. */
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
 }
 

@@ -169,7 +169,10 @@ a { font-size: .85rem; color: inherit; }
         "form-action 'self'",
         "frame-ancestors 'none'",
       ].join("; "),
-      "referrer-policy": "no-referrer",
+      // Under `no-referrer` a browser posts Continue with `Origin: null`,
+      // which the same-origin check refuses; `same-origin` still sends
+      // nothing to other sites.
+      "referrer-policy": "same-origin",
       "x-content-type-options": "nosniff",
       "x-frame-options": "DENY",
       "x-robots-tag": "noindex",

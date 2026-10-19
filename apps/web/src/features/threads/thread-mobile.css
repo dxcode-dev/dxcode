@@ -1,0 +1,100 @@
+.thread-mobile-tabs {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 2px;
+  min-width: 0;
+  padding: 4px 8px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border-bottom: 1px solid var(--divider);
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.thread-mobile-tabs::-webkit-scrollbar {
+  display: none;
+}
+.thread-mobile-tab {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 5px;
+  height: 30px;
+  padding: 0 10px;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+.thread-mobile-tab svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.thread-mobile-tab[data-active] {
+  color: var(--chat-foreground);
+  background: var(--secondary);
+}
+.thread-mobile-tab:focus-visible,
+.thread-mobile-file-close:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.thread-mobile-file-tab {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  border-radius: 7px;
+}
+.thread-mobile-file-tab[data-active] {
+  background: var(--secondary);
+}
+.thread-mobile-file-tab .thread-mobile-tab {
+  padding-right: 4px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+.thread-mobile-file-tab .thread-mobile-tab[data-active] {
+  background: transparent;
+}
+.thread-mobile-file-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 30px;
+  padding: 0;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: 0 7px 7px 0;
+  background: transparent;
+}
+.thread-mobile-file-close svg {
+  width: 13px;
+  height: 13px;
+}
+.agent-panel-stack > .thread-mobile-tool {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding-bottom: env(safe-area-inset-bottom);
+  background: var(--surface);
+}
+.agent-panel-stack > .thread-mobile-tool[hidden] {
+  display: none;
+}
+.thread-mobile-tool > * {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.thread-mobile-tool > .thread-files-state {
+  flex: none;
+}

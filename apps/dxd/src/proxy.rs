@@ -550,10 +550,13 @@ async fn http(
         head.push_str("Transfer-Encoding: chunked\r\n");
     }
     head.push_str("Connection: close\r\n\r\n");
-    let (read_half, write_half) = upstream.into_split();
+    // The write half lives as long as the exchange: dropping it sends FIN,
+    // and a server that ends its side on FIN (Node's default) would cut off
+    // a response it writes in more than one piece.
+    let (read_half, mut write_half) = upstream.into_split();
     let (body, body_rx) = mpsc::unbounded_channel();
     let writer = write_request(
-        write_half,
+        &mut write_half,
         head,
         RequestBody {
             present: open.body,
@@ -684,7 +687,7 @@ struct RequestBody {
 /// Write the request head and body upstream, acknowledging each body frame
 /// once written. `None` on the channel is Core's `proxy.end`.
 async fn write_request(
-    mut upstream: OwnedWriteHalf,
+    upstream: &mut OwnedWriteHalf,
     head: String,
     body: RequestBody,
     mut frames: mpsc::UnboundedReceiver<Option<Bytes>>,

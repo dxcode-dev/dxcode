@@ -6,7 +6,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { Outlet, useLocation, useNavigate } from "@tanstack/react-router";
+import { Outlet, useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 import { Group, Panel, usePanelRef } from "react-resizable-panels";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
@@ -28,7 +28,6 @@ import {
   threadsQueryOptions,
 } from "../threads/thread-queries.js";
 import { AppSidebar } from "./app-sidebar.js";
-import { shouldOpenMobileSidebarByDefault } from "./mobile-sidebar.js";
 import { SidebarExtensionRegion } from "./sidebar-extensions.js";
 import { SidebarPanelIcon } from "./sidebar-panel-icon.js";
 import { childThreadsByParent } from "./sidebar-thread-utils.js";
@@ -38,7 +37,6 @@ const PRODUCT_SIDEBAR_MIN_SIZE = 250;
 const PRODUCT_SIDEBAR_MAX_SIZE = 480;
 
 export function ProductShell() {
-  const pathname = useLocation({ select: (location) => location.pathname });
   const navigate = useNavigate();
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
@@ -81,9 +79,8 @@ export function ProductShell() {
   const expandedSidebarGrowRef = React.useRef("20");
   const mobile = useMobile();
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
-  const [mobileSidebarOpen, setMobileSidebarOpen] = React.useState(() =>
-    shouldOpenMobileSidebarByDefault(mobile, pathname),
-  );
+  // A phone opens on the page itself; the sidebar button shows the drawer.
+  const [mobileSidebarOpen, setMobileSidebarOpen] = React.useState(false);
   const [threadSearchOpen, setThreadSearchOpen] = React.useState(false);
   const sharedThreadsQuery = useQuery(sharedThreadsQueryOptions(identity.id));
   const sidebarSearchTriggerRef = React.useRef<HTMLButtonElement>(null);

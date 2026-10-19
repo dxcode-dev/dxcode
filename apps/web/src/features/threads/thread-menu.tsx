@@ -14,12 +14,17 @@ import {
   Hash,
   Link2,
   Pencil,
+  Pin,
+  PinOff,
   Share2,
   X,
 } from "lucide-react";
 import * as React from "react";
 import { useOptionalThreadArchive } from "../../shared/thread-archive.js";
-import { useOptionalThreadEditing } from "../../shared/thread-editing.js";
+import {
+  type ThreadEditingController,
+  useOptionalThreadEditing,
+} from "../../shared/thread-editing.js";
 import { absoluteThreadUrl } from "../../shared/thread-url.js";
 import { Button } from "../../shared/ui/button.js";
 import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
@@ -196,6 +201,9 @@ export function ThreadMenu({
               )}
               {editable ? (
                 <>
+                  {thread.lifecycleState === "active" ? (
+                    <PinMenuItem threadId={thread.id} editing={editing} />
+                  ) : null}
                   <Menu.Item
                     className="thread-menu-item"
                     onClick={() => editing.openRename(thread)}
@@ -252,5 +260,26 @@ export function ThreadMenu({
         ) : null}
       </span>
     </>
+  );
+}
+
+/** Pins the Thread to the top of its sidebar group, as its row's menu does. */
+function PinMenuItem({
+  threadId,
+  editing,
+}: {
+  readonly threadId: ThreadDetailData["id"];
+  readonly editing: ThreadEditingController;
+}) {
+  // Read as the menu opens, so it follows a pin made since the last open.
+  const pinned = editing.pinned(threadId);
+  return (
+    <Menu.Item
+      className="thread-menu-item"
+      onClick={() => editing.setPinned(threadId, !pinned)}
+    >
+      {pinned ? <PinOff /> : <Pin />}
+      <span>{pinned ? "Unpin" : "Pin"}</span>
+    </Menu.Item>
   );
 }

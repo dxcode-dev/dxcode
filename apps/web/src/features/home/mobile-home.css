@@ -1,0 +1,107 @@
+.mobile-home {
+  --pull-distance: 0px;
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+.mobile-home-content {
+  height: 100%;
+  overflow: hidden;
+  transform: translateY(var(--pull-distance));
+  transition:
+    transform 360ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 200ms ease;
+}
+.mobile-home[data-pull-stage] .mobile-home-content {
+  opacity: 0.3;
+}
+.mobile-pull-handle {
+  position: absolute;
+  z-index: 2;
+  top: calc(env(safe-area-inset-top) + 6px);
+  left: 50%;
+  width: 32px;
+  height: 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted-foreground) 32%, transparent);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.mobile-pull-indicator {
+  position: absolute;
+  z-index: 1;
+  /* The line runs down from under the handle. */
+  top: calc(env(safe-area-inset-top) + 15px);
+  right: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  height: var(--pull-distance);
+  overflow: hidden;
+  padding-bottom: 12px;
+  pointer-events: none;
+  transition: height 360ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.mobile-pull-line {
+  flex: 1;
+  width: 0;
+  margin-bottom: 8px;
+  border-left: 1px dashed
+    color-mix(in srgb, var(--muted-foreground) 60%, transparent);
+}
+.mobile-pull-card {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 9px;
+  padding: 7px 12px 7px 10px;
+  color: var(--foreground);
+  border: 1px solid var(--outline);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  animation: mobile-pull-card-in 160ms ease-out both;
+}
+.mobile-pull-card > svg {
+  width: 14px;
+  height: 14px;
+  color: var(--muted-foreground);
+}
+.mobile-pull-card strong,
+.mobile-pull-card small {
+  display: block;
+  white-space: nowrap;
+}
+.mobile-pull-card strong {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+.mobile-pull-card small {
+  color: var(--muted-foreground);
+  font-size: 10px;
+  line-height: 14px;
+}
+@keyframes mobile-pull-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.96);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mobile-home-content,
+  .mobile-pull-indicator {
+    transition: none;
+  }
+  .mobile-pull-card {
+    animation: none;
+  }
+}
+/* The list follows the finger exactly; it eases only on release. */
+.mobile-home[data-pulling] .mobile-home-content,
+.mobile-home[data-pulling] .mobile-pull-indicator {
+  transition: none;
+}

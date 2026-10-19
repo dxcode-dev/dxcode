@@ -27,6 +27,9 @@ import {
 import { observeTitleOverflow } from "./sidebar-title-overflow.js";
 import { ThreadContextMenu } from "./thread-context-menu.js";
 
+/** A row click this soon after its menu opened is the long press lifting. */
+const LONG_PRESS_CLICK_MS = 1_000;
+
 function SidebarThreadTitle({ thread }: { readonly thread: ThreadData }) {
   if (isOptimisticThread(thread)) return <PendingThreadTitle />;
   return <ThreadTitleText thread={thread} />;
@@ -105,6 +108,7 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
   onSetPinned,
   onUnfollow,
 }: SidebarThreadRowProps) {
+  const menuOpenedAt = React.useRef(Number.NEGATIVE_INFINITY);
   const activityStatus =
     thread.lifecycleState === "archived" ? "idle" : thread.activityStatus;
   const hasChildren = childCount > 0 && onToggleChildren !== undefined;
@@ -143,7 +147,9 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
       pinning={pinning}
       creating={isOptimisticThread(thread)}
       onOpenChange={(open) => {
-        if (open) onThreadMenuOpen?.(thread.id);
+        if (!open) return;
+        menuOpenedAt.current = Date.now();
+        onThreadMenuOpen?.(thread.id);
       }}
       subthreads={
         hasChildren
@@ -174,9 +180,11 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
         data-actions={actionCount === 0 ? undefined : actionCount}
         data-children={hasChildren ? "" : undefined}
         data-child={child ? "" : undefined}
-        onPointerEnter={(event) =>
-          onThreadPointerEnter(thread, projectName, event.currentTarget)
-        }
+        onPointerEnter={(event) => {
+          // A tap is not a hover: touch opens the Thread, not its preview.
+          if (event.pointerType === "touch") return;
+          onThreadPointerEnter(thread, projectName, event.currentTarget);
+        }}
         onPointerLeave={() => onThreadPointerLeave(thread.id)}
       >
         <Link
@@ -191,7 +199,15 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
           onContextMenu={(event) =>
             clearSidebarContextPress(event.currentTarget)
           }
-          onClick={() => onThreadNavigate(thread.id)}
+          onClick={(event) => {
+            // Lifting the finger after a long press clicks the row; that
+            // press opened the menu, so it must not also open the Thread.
+            if (Date.now() - menuOpenedAt.current < LONG_PRESS_CLICK_MS) {
+              event.preventDefault();
+              return;
+            }
+            onThreadNavigate(thread.id);
+          }}
         >
           {child ? (
             <CornerDownRight className="thread-child-marker" aria-hidden />

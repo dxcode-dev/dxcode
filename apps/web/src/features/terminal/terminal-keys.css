@@ -1,0 +1,49 @@
+.thread-terminal-shell:has(> .terminal-keys) {
+  flex-direction: column;
+}
+.terminal-keys {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 4px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  border-top: 1px solid var(--divider);
+  background: var(--surface);
+  scrollbar-width: none;
+  touch-action: pan-x;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.terminal-keys::-webkit-scrollbar {
+  display: none;
+}
+.terminal-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  min-width: 34px;
+  height: 32px;
+  padding: 0 8px;
+  color: var(--chat-foreground);
+  border: 1px solid var(--outline);
+  border-radius: 7px;
+  background: var(--secondary);
+  font-family: var(--font-mono-family);
+  font-size: 12px;
+  -webkit-tap-highlight-color: transparent;
+}
+.terminal-key svg {
+  width: 14px;
+  height: 14px;
+}
+.terminal-key:active,
+.terminal-key[aria-pressed="true"] {
+  color: var(--background);
+  border-color: var(--foreground);
+  background: var(--foreground);
+}
+.terminal-key:disabled {
+  opacity: 0.5;
+}

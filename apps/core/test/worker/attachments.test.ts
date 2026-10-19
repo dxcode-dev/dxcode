@@ -22,6 +22,7 @@ import {
   resolveMessageAttachments,
 } from "../../src/attachments/message.js";
 import { attachmentRoutes } from "../../src/attachments/routes.js";
+import { DXD_RELEASE } from "../../src/execution/dxd/protocol.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
 import { forwardDaemonAttachment } from "../../src/threads/daemon-ingress.js";
@@ -283,7 +284,7 @@ const seedDaemonAuthority = async (threadId: string, ownerId: string) => {
       generation: 1,
       apiKeyId: keyId,
       apiKeyHash: createHash("sha256").update(DAEMON_KEY).digest("hex"),
-      release: "0.10.0",
+      release: DXD_RELEASE,
       protocolMajor: 2,
       terminalVersion: 1,
       workloadIdentityVersion: 1,

@@ -1090,6 +1090,7 @@ describe("Public Portal links in workerd", () => {
     origin: string,
     body: string,
     from = origin,
+    site = from === origin ? "same-origin" : "cross-site",
   ) =>
     app.request(
       `${origin}/__dx_portal/public`,
@@ -1098,7 +1099,7 @@ describe("Public Portal links in workerd", () => {
         headers: {
           "content-type": "application/x-www-form-urlencoded",
           origin: from,
-          "sec-fetch-site": from === origin ? "same-origin" : "cross-site",
+          "sec-fetch-site": site,
           "sec-fetch-mode": "navigate",
           "sec-fetch-dest": "document",
         },
@@ -1177,10 +1178,14 @@ describe("Public Portal links in workerd", () => {
     expect(offsite.status).toBe(303);
     expect(offsite.headers.get("location")).toBe("/");
 
+    // The browser posts Continue from the notice page with the Origin its
+    // referrer policy allows: `null` under `no-referrer`.
     const accepted = await acknowledge(
       bindings,
       origin,
       `return=${encodeURIComponent("/app?x=1")}`,
+      notice.headers.get("referrer-policy") === "no-referrer" ? "null" : origin,
+      "same-origin",
     );
     expect(accepted.status).toBe(303);
     expect(accepted.headers.get("location")).toBe("/app?x=1");

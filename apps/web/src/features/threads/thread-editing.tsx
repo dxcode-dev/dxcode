@@ -14,7 +14,11 @@ import {
   ModalSurfaceClose,
   ModalSurfaceHeader,
 } from "../../shared/ui/modal-surface.js";
-import { updateThreadMutationOptions } from "./thread-mutations.js";
+import {
+  setThreadPinnedMutationOptions,
+  updateThreadMutationOptions,
+} from "./thread-mutations.js";
+import { threadsQueryOptions } from "./thread-queries.js";
 
 type RenameTarget = Pick<ThreadData, "id" | "title">;
 
@@ -28,6 +32,9 @@ export function ThreadEditingProvider({
   const { mutate } = useMutation(
     updateThreadMutationOptions(queryClient, identity.id),
   );
+  const { mutate: pin } = useMutation(
+    setThreadPinnedMutationOptions(queryClient, identity.id),
+  );
   const [renaming, setRenaming] = React.useState<RenameTarget>();
 
   const controller = React.useMemo<ThreadEditingController>(
@@ -35,8 +42,21 @@ export function ThreadEditingProvider({
       openRename: (thread) =>
         setRenaming({ id: thread.id, title: thread.title }),
       setColor: (threadId, color) => mutate({ threadId, update: { color } }),
+      // A Thread's detail has no pin; the sidebar's list does.
+      pinned: (threadId) =>
+        queryClient
+          .getQueryData(
+            threadsQueryOptions(identity.id, undefined, "active", "roots")
+              .queryKey,
+          )
+          ?.pages.some((page) =>
+            page.items.some(
+              (item) => item.id === threadId && item.pinnedAt !== undefined,
+            ),
+          ) === true,
+      setPinned: (threadId, pinned) => pin({ threadId, pinned }),
     }),
-    [mutate],
+    [identity.id, mutate, pin, queryClient],
   );
 
   return (
