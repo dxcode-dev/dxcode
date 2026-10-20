@@ -38,6 +38,7 @@ interface ThreadEvent {
   readonly threadId: ThreadId;
   readonly ownerUserId: UserId;
   readonly status?: WorkspaceStatus;
+  readonly summaryChanged?: true;
   readonly recipients: RealtimeRecipients;
 }
 
@@ -75,9 +76,14 @@ const decodeThreadEvent = (input: unknown): ThreadEvent | undefined => {
   if (
     Object.keys(value).some(
       (key) =>
-        !["type", "threadId", "ownerUserId", "status", "recipients"].includes(
-          key,
-        ),
+        ![
+          "type",
+          "threadId",
+          "ownerUserId",
+          "status",
+          "summaryChanged",
+          "recipients",
+        ].includes(key),
     )
   )
     return undefined;
@@ -96,6 +102,9 @@ const decodeThreadEvent = (input: unknown): ThreadEvent | undefined => {
       value.status !== "waking" &&
       value.status !== "ready") ||
     (value.type !== "workspace.status" && value.status !== undefined) ||
+    (value.summaryChanged !== undefined &&
+      (value.type !== "changes.invalidated" ||
+        value.summaryChanged !== true)) ||
     (value.recipients !== undefined &&
       value.recipients !== "thread" &&
       value.recipients !== "audience")
@@ -109,6 +118,7 @@ const decodeThreadEvent = (input: unknown): ThreadEvent | undefined => {
     ...(value.type === "workspace.status"
       ? { status: value.status as WorkspaceStatus }
       : {}),
+    ...(value.summaryChanged === true ? { summaryChanged: true } : {}),
   };
 };
 
@@ -361,6 +371,9 @@ export class RealtimeHub extends DurableObject<Bindings> {
             ...(threadEvent.status === undefined
               ? {}
               : { status: threadEvent.status }),
+            ...(threadEvent.summaryChanged === undefined
+              ? {}
+              : { summaryChanged: threadEvent.summaryChanged }),
             revision,
           }),
         );

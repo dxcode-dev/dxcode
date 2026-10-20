@@ -1,15 +1,43 @@
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import * as Redacted from "effect/Redacted";
 
-const readJson = (path, label) => {
+const alchemyHome = (environment, home) =>
+  environment.ALCHEMY_HOME?.trim() || resolve(home, ".alchemy");
+
+/** Where Alchemy 2.0.0-beta.83 keeps a profile's Cloudflare login. */
+const cloudflareProfilePath = (environment, home, profile) =>
+  resolve(
+    alchemyHome(environment, home),
+    "profiles",
+    profile,
+    "cloudflare.json",
+  );
+
+/**
+ * Whether the profile has a Cloudflare login to refresh, rather than one to
+ * add. A login from Alchemy beta.82 or older sits in the old `profiles.json`
+ * until the next Alchemy command migrates it.
+ */
+export const alchemyCloudflareConnected = ({
+  profile = "dx-selfhost",
+  environment = process.env,
+  home = homedir(),
+} = {}) => {
+  if (existsSync(cloudflareProfilePath(environment, home, profile)))
+    return true;
   try {
-    return JSON.parse(readFileSync(path, "utf8"));
-  } catch (cause) {
-    throw new Error(`Could not read ${label}. Run Alchemy login again.`, {
-      cause,
-    });
+    const legacy = JSON.parse(
+      readFileSync(
+        resolve(alchemyHome(environment, home), "profiles.json"),
+        "utf8",
+      ),
+    );
+    return legacy?.profiles?.[profile]?.Cloudflare !== undefined;
+  } catch {
+    return false;
   }
 };
 
@@ -189,6 +217,74 @@ export const preflightCloudflareContainers = async ({
     );
 };
 
+/**
+ * Alchemy's CLI entry. The `bin/cli.js` launcher refuses Node before 24.11.1,
+ * which it needs only to load TypeScript through Oxc; dx supports Node 22,
+ * whose built-in type stripping loads `alchemy.run.ts`.
+ */
+export const ALCHEMY_CLI = resolve(
+  import.meta.dirname,
+  "../../node_modules/alchemy/bin/alchemy.js",
+);
+
+/**
+ * Runs an Alchemy CLI command in this terminal and reports whether it
+ * succeeded. Alchemy turns its prompts off when it detects CI or a coding
+ * agent in the environment; a person at a terminal still gets them.
+ */
+export const runAlchemyCli = (args, environment = process.env) => {
+  const result = spawnSync(process.execPath, [ALCHEMY_CLI, ...args], {
+    stdio: "inherit",
+    env: {
+      ...environment,
+      ...(process.stdin.isTTY && process.stdout.isTTY
+        ? { ALCHEMY_TUI: "1" }
+        : {}),
+    },
+  });
+  if (result.error) throw result.error;
+  return result.status === 0;
+};
+
+/**
+ * The `alchemy profile` commands that sign a profile in to Cloudflare:
+ * refresh an existing login, or reconfigure it when `configure` is set, and
+ * otherwise create the profile when needed and add Cloudflare to it.
+ */
+export const alchemyCloudflareLoginCommands = ({
+  profile = "dx-selfhost",
+  configure = false,
+  environment = process.env,
+  home = homedir(),
+} = {}) => {
+  if (alchemyCloudflareConnected({ profile, environment, home }))
+    return [
+      configure
+        ? [
+            "profile",
+            "edit",
+            "--profile",
+            profile,
+            "--reconfigure",
+            "Cloudflare",
+          ]
+        : [
+            "profile",
+            "refresh",
+            "--profile",
+            profile,
+            "--provider",
+            "Cloudflare",
+          ],
+    ];
+  return [
+    ...(existsSync(resolve(alchemyHome(environment, home), "profiles", profile))
+      ? []
+      : [["profile", "create", profile]]),
+    ["profile", "edit", "--profile", profile, "--add", "Cloudflare"],
+  ];
+};
+
 export const loadAlchemyCloudflareAuth = ({
   profile = "dx-selfhost",
   environment = process.env,
@@ -202,34 +298,39 @@ export const loadAlchemyCloudflareAuth = ({
       accountId,
       apiToken: Redacted.make(apiToken),
     });
-  const profiles = readJson(
-    resolve(home, ".alchemy/profiles.json"),
-    "Alchemy profiles",
-  );
-  const config = profiles?.profiles?.[profile]?.Cloudflare;
-  if (config?.method !== "oauth" || typeof config.accountId !== "string")
-    throw new Error(
-      `Alchemy profile '${profile}' must use Cloudflare OAuth, or set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN.`,
+  const relogin = `Sign in again with \`node node_modules/alchemy/bin/alchemy.js profile edit --profile ${profile} --reconfigure Cloudflare\`, or set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN.`;
+  let document;
+  try {
+    document = JSON.parse(
+      readFileSync(cloudflareProfilePath(environment, home, profile), "utf8"),
     );
-  const oauth = readJson(
-    resolve(home, `.alchemy/credentials/${profile}/cf-oauth.json`),
-    "Alchemy Cloudflare OAuth credentials",
-  );
+  } catch (cause) {
+    throw new Error(
+      `Alchemy profile '${profile}' has no Cloudflare login. ${relogin}`,
+      { cause },
+    );
+  }
+  const config = document?.values;
+  // Alchemy beta.83 issues OAuth to a new client and migrates an older login
+  // to a bare `{ method: "oauth" }`, which holds no token or scopes.
   if (
-    oauth?.type !== "oauth" ||
-    typeof oauth.access !== "string" ||
-    typeof oauth.expires !== "number" ||
-    oauth.expires <= Date.now() + 10_000
+    config?.method !== "oauth" ||
+    typeof config.accountId !== "string" ||
+    typeof config.access !== "string" ||
+    typeof config.expires !== "number" ||
+    !Array.isArray(config.scopes)
   )
     throw new Error(
-      `Alchemy profile '${profile}' has no current Cloudflare OAuth access token. Run Alchemy login to refresh it.`,
+      `Alchemy profile '${profile}' must hold a current Cloudflare OAuth login. ${relogin}`,
+    );
+  if (config.expires <= Date.now() + 10_000)
+    throw new Error(
+      `Alchemy profile '${profile}' has an expired Cloudflare OAuth access token. Refresh it with \`node node_modules/alchemy/bin/alchemy.js profile refresh --profile ${profile}\`.`,
     );
   return cloudflareRequestAuth({
     type: "oauth",
     accountId: config.accountId,
-    accessToken: Redacted.make(oauth.access),
-    scopes: Array.isArray(oauth.scopes)
-      ? oauth.scopes.filter((scope) => typeof scope === "string")
-      : [],
+    accessToken: Redacted.make(config.access),
+    scopes: config.scopes.filter((scope) => typeof scope === "string"),
   });
 };

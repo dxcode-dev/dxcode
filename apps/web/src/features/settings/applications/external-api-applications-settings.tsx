@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { settle } from "../../../shared/settle.js";
 import { Badge } from "../../../shared/ui/badge.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
@@ -111,7 +112,7 @@ function ScopeSelector({
     scopes: ReadonlyArray<ExternalApiApplicationScope>,
   ) => void;
 }) {
-  const selected = React.useMemo(() => new Set(scopes), [scopes]);
+  const selected = new Set(scopes);
   const toggle = (scope: ExternalApiApplicationScope) =>
     onChange(
       selected.has(scope)
@@ -244,7 +245,7 @@ function ApplicationEditorDialog({
   const submit = async () => {
     if (mutation.isPending) return;
     setError(undefined);
-    try {
+    const outcome = await settle(async () => {
       const input = { name, scopes, rateLimitPerMinute: rateLimit };
       if (application === undefined) {
         const result = await mutation.mutateAsync({ kind: "create", input });
@@ -258,11 +259,13 @@ function ApplicationEditorDialog({
         saved();
       }
       close();
-    } catch (cause) {
-      setError(errorMessage(cause, "The application could not be saved."));
-    } finally {
-      mutation.reset();
+    });
+    if (!outcome.ok) {
+      setError(
+        errorMessage(outcome.error, "The application could not be saved."),
+      );
     }
+    mutation.reset();
   };
 
   return (
@@ -356,7 +359,7 @@ function ApplicationActionDialog({
   const mutate = async () => {
     if (mutation.isPending) return;
     setError(undefined);
-    try {
+    const outcome = await settle(async () => {
       if (action.kind === "rotate") {
         const result = await mutation.mutateAsync({
           kind: "rotate",
@@ -379,11 +382,13 @@ function ApplicationActionDialog({
         completed();
       }
       close();
-    } catch (cause) {
-      setError(errorMessage(cause, "The application could not be updated."));
-    } finally {
-      mutation.reset();
+    });
+    if (!outcome.ok) {
+      setError(
+        errorMessage(outcome.error, "The application could not be updated."),
+      );
     }
+    mutation.reset();
   };
   const title =
     action.kind === "rotate"

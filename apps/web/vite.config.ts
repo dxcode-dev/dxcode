@@ -4,6 +4,9 @@ import react from "@vitejs/plugin-react";
 import { defineConfig, loadEnv } from "vite";
 import { localAllowedHosts, localTranscriptCapture } from "./vite-local.js";
 
+// The browser test project compiles components with these same plugins.
+export const appPlugins = () => [tailwindcss(), react({ compiler: true })];
+
 export default defineConfig(({ mode }) => {
   const productionPackage = mode === "dx-production";
   const env = productionPackage ? {} : loadEnv(mode, process.cwd(), "DX_");
@@ -20,7 +23,7 @@ export default defineConfig(({ mode }) => {
     define: {
       "import.meta.env.DX_ENV": JSON.stringify(dxEnvironment),
     },
-    plugins: [tailwindcss(), react(), localTranscriptCapture],
+    plugins: [...appPlugins(), localTranscriptCapture],
     build: {
       manifest: true,
       // Shiki grammars (cpp, emacs-lisp) and the terminal emulator are large

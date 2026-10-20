@@ -210,17 +210,6 @@ export function ThreadDesktopLayout({
   /** Portals; the tab exists only when the deployment serves them. */
   readonly preview?: ToolContent;
 }) {
-  const previewAvailable = preview !== undefined;
-  const desktopAvailable = desktop !== undefined;
-  const tools = React.useMemo<ReadonlyArray<WorkspaceTool>>(
-    () =>
-      WORKSPACE_TOOLS.filter(
-        (tool) =>
-          (tool !== "preview" || previewAvailable) &&
-          (tool !== "desktop" || desktopAvailable),
-      ),
-    [previewAvailable, desktopAvailable],
-  );
   const [rightPaneWidth, setRightPaneWidth] = React.useState(
     RIGHT_PANE_DEFAULT_WIDTH,
   );
@@ -228,9 +217,9 @@ export function ThreadDesktopLayout({
   const [selectedTool, setActiveTool] = React.useState<WorkspaceTool>(() =>
     changes === undefined && terminal !== undefined ? "terminal" : "changes",
   );
-  const activeTool = tools.includes(selectedTool) ? selectedTool : "changes";
+  // Terminal is always a tool, so the selection is the active tool here.
   const [terminalActivated, setTerminalActivated] = React.useState(
-    activeTool === "terminal",
+    selectedTool === "terminal",
   );
   const [filesActivated, setFilesActivated] = React.useState(false);
   const [previewActivated, setPreviewActivated] = React.useState(false);
@@ -241,9 +230,17 @@ export function ThreadDesktopLayout({
   const [rightPaneMaximum, setRightPaneMaximum] = React.useState(() =>
     maximumRightPaneWidth(window.innerWidth, window.innerWidth),
   );
+  const previewAvailable = preview !== undefined;
+  const desktopAvailable = desktop !== undefined;
+  const tools: ReadonlyArray<WorkspaceTool> = WORKSPACE_TOOLS.filter(
+    (tool) =>
+      (tool !== "preview" || previewAvailable) &&
+      (tool !== "desktop" || desktopAvailable),
+  );
+  const activeTool = tools.includes(selectedTool) ? selectedTool : "changes";
   const effectivelyCollapsed = rightPaneCollapsed && !rightPaneFocused;
 
-  const observePanelGroup = React.useCallback((node: HTMLDivElement | null) => {
+  const observePanelGroup = (node: HTMLDivElement | null) => {
     if (node === null) return;
     const synchronizeWidth = () => {
       const workspaceWidth = node.getBoundingClientRect().width;
@@ -255,9 +252,9 @@ export function ThreadDesktopLayout({
     };
     synchronizeWidth();
     return observeElementResize(node, synchronizeWidth);
-  }, []);
+  };
 
-  const resizeRightPaneBy = React.useCallback((delta: number) => {
+  const resizeRightPaneBy = (delta: number) => {
     setRightPaneWidth((currentWidth) => {
       const workspaceWidth =
         document
@@ -269,42 +266,42 @@ export function ThreadDesktopLayout({
         window.innerWidth,
       );
     });
-  }, []);
+  };
 
-  const selectTool = React.useCallback((tool: WorkspaceTool) => {
+  const selectTool = (tool: WorkspaceTool) => {
     if (tool === "files") setFilesActivated(true);
     if (tool === "terminal") setTerminalActivated(true);
     if (tool === "preview") setPreviewActivated(true);
     if (tool === "desktop") setDesktopActivated(true);
     setActiveTool(tool);
-  }, []);
+  };
 
-  const handleToolKeyDown = React.useCallback(
-    (event: React.KeyboardEvent<HTMLButtonElement>, tool: WorkspaceTool) => {
-      const currentIndex = tools.indexOf(tool);
-      let nextIndex: number | undefined;
-      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-        nextIndex = (currentIndex + 1) % tools.length;
-      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-        nextIndex = (currentIndex - 1 + tools.length) % tools.length;
-      } else if (event.key === "Home") {
-        nextIndex = 0;
-      } else if (event.key === "End") {
-        nextIndex = tools.length - 1;
-      }
-      const nextTool = nextIndex === undefined ? undefined : tools[nextIndex];
-      if (nextTool === undefined) return;
-      event.preventDefault();
-      selectTool(nextTool);
-      event.currentTarget
-        .closest('[role="tablist"]')
-        ?.querySelector<HTMLButtonElement>(`#${toolTabId(nextTool)}`)
-        ?.focus();
-    },
-    [selectTool, tools],
-  );
+  const handleToolKeyDown = (
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    tool: WorkspaceTool,
+  ) => {
+    const currentIndex = tools.indexOf(tool);
+    let nextIndex: number | undefined;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      nextIndex = (currentIndex + 1) % tools.length;
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      nextIndex = (currentIndex - 1 + tools.length) % tools.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = tools.length - 1;
+    }
+    const nextTool = nextIndex === undefined ? undefined : tools[nextIndex];
+    if (nextTool === undefined) return;
+    event.preventDefault();
+    selectTool(nextTool);
+    event.currentTarget
+      .closest('[role="tablist"]')
+      ?.querySelector<HTMLButtonElement>(`#${toolTabId(nextTool)}`)
+      ?.focus();
+  };
 
-  const toggleRightPaneFocus = React.useCallback(() => {
+  const toggleRightPaneFocus = () => {
     if (rightPaneFocused) {
       const target = focusRestoreTarget.current;
       focusRestoreTarget.current = null;
@@ -324,15 +321,15 @@ export function ThreadDesktopLayout({
           : null;
     }
     setRightPaneFocused(true);
-  }, [rightPaneCollapsed, rightPaneFocused]);
+  };
 
-  const captureFocusRestoreTarget = React.useCallback(() => {
+  const captureFocusRestoreTarget = () => {
     if (rightPaneFocused) return;
     focusRestoreTarget.current =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
-  }, [rightPaneFocused]);
+  };
 
   return (
     <div
@@ -359,6 +356,7 @@ export function ThreadDesktopLayout({
         aria-valuemin={Math.min(RIGHT_PANE_MIN_WIDTH, rightPaneMaximum)}
         aria-valuemax={Math.round(rightPaneMaximum)}
         aria-valuenow={effectivelyCollapsed ? undefined : rightPaneWidth}
+        data-collapsed={effectivelyCollapsed || undefined}
         data-resize-handle-active={rightPaneResizing || undefined}
         tabIndex={effectivelyCollapsed || rightPaneFocused ? -1 : 0}
         onKeyDown={(event) => {

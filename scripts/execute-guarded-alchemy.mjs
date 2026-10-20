@@ -1,24 +1,12 @@
 import { writeFileSync } from "node:fs";
-import { AdoptPolicy } from "alchemy/AdoptPolicy";
-import { AlchemyContext, AlchemyContextLive } from "alchemy/AlchemyContext";
+import * as Alchemist from "alchemy/Alchemist";
 import { apply } from "alchemy/Apply";
-import { ArtifactStore, createArtifactStore } from "alchemy/Artifacts";
-import { AuthProviders } from "alchemy/Auth/AuthProvider";
-import { CredentialsStoreLive } from "alchemy/Auth/Credentials";
-import { ProfileLive } from "alchemy/Auth/Profile";
-import { importStack } from "alchemy/Cli/commands/_shared";
 import { LoggingCli } from "alchemy/Cli/LoggingCli";
 import * as Plan from "alchemy/Plan";
-import { Stage } from "alchemy/Stage";
-import { fileLogger } from "alchemy/Util/FileLogger";
-import { PlatformServices, runMain } from "alchemy/Util/PlatformServices";
-import * as ConfigProvider from "effect/ConfigProvider";
+import { runMain } from "alchemy/Util/PlatformServices";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Logger from "effect/Logger";
-import * as Option from "effect/Option";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import {
   applyValidatedAlchemyPlan,
   configureHostedDeploymentPolicy,
@@ -129,81 +117,50 @@ const cloudflareR2Request = async (method, path, body) => {
 };
 
 const program = Effect.gen(function* () {
-  const stackEffect = yield* importStack("alchemy.run.ts");
-  const runServices = Layer.mergeAll(
-    Layer.effect(
-      AlchemyContext,
-      AlchemyContext.pipe(
-        Effect.map((context) => ({
-          ...context,
-          adopt: false,
-          dev: false,
-          updateStateStore: target === "selfhost",
-        })),
-      ),
-    ),
-    Layer.succeed(AdoptPolicy, false),
-    Layer.succeed(ArtifactStore, createArtifactStore()),
-    Layer.succeed(
-      AuthProviders,
-      yield* Effect.serviceOption(AuthProviders).pipe(
-        Effect.map(Option.getOrElse(() => ({}))),
-      ),
-    ),
-    ConfigProvider.layer(ConfigProvider.fromEnv()),
-    Logger.layer([fileLogger("out")], { mergeWithExisting: true }),
-    Layer.succeed(Stage, stage),
+  // Alchemy's own session: the stack, its providers and state store, and the
+  // stage, adopt and state-store settings below, without the CLI's prompts.
+  const session = yield* Alchemist.open(
+    { entrypoint: "alchemy.run.ts", stage },
+    { adopt: false, dev: false, updateStateStore: target === "selfhost" },
   );
-
   yield* Effect.gen(function* () {
-    const stack = yield* stackEffect;
-    yield* Effect.gen(function* () {
-      const exactPlan =
-        operation === "destroy"
-          ? yield* Plan.destroy(stack)
-          : yield* Plan.make(stack);
-      const outputs = yield* applyValidatedAlchemyPlan({
-        operation,
-        plan: exactPlan,
-        selection,
-        apply: (validatedPlan) =>
-          Effect.sync(() =>
-            writeFileSync(applyStartedFile, "validated\n"),
-          ).pipe(
-            Effect.andThen(
-              Effect.tryPromise(() =>
-                emptyBranchPreviewBucket({
-                  operation,
-                  target,
-                  accountId: required("CLOUDFLARE_ACCOUNT_ID"),
-                  bucketName: selection.bucketName,
-                  request: cloudflareR2Request,
-                }),
-              ),
+    const exactPlan =
+      operation === "destroy"
+        ? yield* Plan.destroy(session.stack)
+        : yield* Plan.make(session.stack);
+    const outputs = yield* applyValidatedAlchemyPlan({
+      operation,
+      plan: exactPlan,
+      selection,
+      apply: (validatedPlan) =>
+        Effect.sync(() => writeFileSync(applyStartedFile, "validated\n")).pipe(
+          Effect.andThen(
+            Effect.tryPromise(() =>
+              emptyBranchPreviewBucket({
+                operation,
+                target,
+                accountId: required("CLOUDFLARE_ACCOUNT_ID"),
+                bucketName: selection.bucketName,
+                request: cloudflareR2Request,
+              }),
             ),
-            Effect.tap((deleted) =>
-              deleted > 0
-                ? Console.log(
-                    `Emptied ${deleted} objects from ${selection.bucketName}.`,
-                  )
-                : Effect.void,
-            ),
-            Effect.andThen(apply(validatedPlan)),
           ),
-      });
-      if (outputs !== undefined) yield* Console.log(outputs);
-    }).pipe(Effect.provide(stack.services));
-  }).pipe(Effect.provide(runServices));
+          Effect.tap((deleted) =>
+            deleted > 0
+              ? Console.log(
+                  `Emptied ${deleted} objects from ${selection.bucketName}.`,
+                )
+              : Effect.void,
+          ),
+          Effect.andThen(apply(validatedPlan)),
+        ),
+    });
+    if (outputs !== undefined) yield* Console.log(outputs);
+  }).pipe(Effect.provide(session.context));
 });
 
-const baseServices = Layer.mergeAll(
-  Layer.provideMerge(AlchemyContextLive, PlatformServices),
-  Layer.provide(ProfileLive, PlatformServices),
-  Layer.provide(CredentialsStoreLive, PlatformServices),
-  Layer.succeed(ArtifactStore, createArtifactStore()),
-  FetchHttpClient.layer,
-  ConfigProvider.layer(ConfigProvider.fromEnv()),
-  LoggingCli,
+program.pipe(
+  Effect.provide(Layer.mergeAll(Alchemist.layer(), LoggingCli)),
+  Effect.scoped,
+  runMain,
 );
-
-program.pipe(Effect.provide(baseServices), Effect.scoped, runMain);

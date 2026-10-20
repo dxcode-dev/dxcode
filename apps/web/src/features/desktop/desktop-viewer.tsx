@@ -131,6 +131,8 @@ interface DesktopViewerProps {
   readonly active?: boolean;
   readonly threadId: ThreadId;
   readonly loadClient?: typeof loadWaymote;
+  /** Reloads the page, the only way to fetch a viewer chunk that failed. */
+  readonly reloadPage?: () => void;
 }
 
 interface DesktopInput {
@@ -143,11 +145,13 @@ interface DesktopInput {
 function DesktopSession({
   threadId,
   loadClient,
+  reloadPage,
   onRetry,
   onIdle,
 }: {
   readonly threadId: ThreadId;
   readonly loadClient: typeof loadWaymote;
+  readonly reloadPage: () => void;
   readonly onRetry: () => void;
   readonly onIdle: () => void;
 }) {
@@ -155,176 +159,184 @@ function DesktopSession({
     phase: "starting",
   });
   const canvas = React.useRef<HTMLCanvasElement | null>(null);
-  const input = React.useRef<DesktopInput>({
+  const inputRef = React.useRef<DesktopInput>({
     lastInput: Date.now(),
     lastGesture: Number.NEGATIVE_INFINITY,
   });
-  const keyboard = usePhoneKeyboard(input);
-  const attach = React.useCallback(
-    (surface: HTMLDivElement | null) => {
-      const display = canvas.current;
-      if (surface === null || display === null) return;
-      const controller = new AbortController();
-      const disposed = () => controller.signal.aborted;
-      let session: WaymoteSession | undefined;
-      let idleTimer: ReturnType<typeof setTimeout> | undefined;
-      // Set once the viewer gives up; the SDK's own states no longer show.
-      let halted = false;
-      const stop = (next: DesktopStatus) => {
-        if (disposed()) return;
-        halted = true;
-        clearTimeout(idleTimer);
+  const {
+    remoteRef,
+    textInputRef,
+    open: keyboardOpen,
+    modifiers,
+    attachTextInput,
+    press,
+    toggle: toggleKeyboard,
+    toggleModifier,
+    onTextInputFocus,
+    onTextInputBlur,
+  } = usePhoneKeyboard(inputRef);
+  const attach = (surface: HTMLDivElement | null) => {
+    const display = canvas.current;
+    if (surface === null || display === null) return;
+    const controller = new AbortController();
+    const disposed = () => controller.signal.aborted;
+    let session: WaymoteSession | undefined;
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    // Set once the viewer gives up; the SDK's own states no longer show.
+    let halted = false;
+    const stop = (next: DesktopStatus) => {
+      if (disposed()) return;
+      halted = true;
+      clearTimeout(idleTimer);
+      session?.disconnect();
+      setStatus(next);
+    };
+    // Unmounting (the paused state replaces this session) disposes it.
+    const watchIdle = (delay: number) => {
+      idleTimer = setTimeout(() => {
+        const idle = Date.now() - inputRef.current.lastInput;
+        if (idle >= DESKTOP_IDLE_PAUSE_MS) onIdle();
+        else watchIdle(DESKTOP_IDLE_PAUSE_MS - idle);
+      }, delay);
+    };
+
+    const start = async () => {
+      if (!("VideoDecoder" in window)) {
+        setStatus({
+          phase: "failed",
+          message:
+            "This browser can't decode the desktop: it lacks the WebCodecs VideoDecoder API.",
+        });
+        return;
+      }
+      // Load the viewer while Core starts the desktop.
+      const client = loadClient().then(
+        (module) => module,
+        () => undefined,
+      );
+      const desktop = await checkDesktop(threadId, controller.signal);
+      if (disposed()) return;
+      if (desktop !== "ready") {
+        setStatus(desktop);
+        return;
+      }
+      const waymote = await client;
+      if (disposed()) return;
+      if (waymote === undefined) {
+        setStatus({
+          phase: "failed",
+          message: "Desktop viewer failed to load.",
+          reload: true,
+        });
+        return;
+      }
+
+      // Core answers a refused upgrade (desktop or workspace unavailable)
+      // with an error status, which the SDK sees as a dropped socket and
+      // retries forever. Count sockets that never open; after a run of
+      // them, ask Core again and stop unless the desktop is ready.
+      let failures = 0;
+      let recoveries = 0;
+      let recovering = false;
+      const recover = async () => {
+        recovering = true;
         session?.disconnect();
-        setStatus(next);
-      };
-      // Unmounting (the paused state replaces this session) disposes it.
-      const watchIdle = (delay: number) => {
-        idleTimer = setTimeout(() => {
-          const idle = Date.now() - input.current.lastInput;
-          if (idle >= DESKTOP_IDLE_PAUSE_MS) onIdle();
-          else watchIdle(DESKTOP_IDLE_PAUSE_MS - idle);
-        }, delay);
-      };
-
-      const start = async () => {
-        if (!("VideoDecoder" in window)) {
-          setStatus({
-            phase: "failed",
-            message:
-              "This browser can't decode the desktop: it lacks the WebCodecs VideoDecoder API.",
-          });
-          return;
-        }
-        // Load the viewer while Core starts the desktop.
-        const client = loadClient().then(
-          (module) => module,
-          () => undefined,
-        );
-        const desktop = await checkDesktop(threadId, controller.signal);
+        setStatus({ phase: "reconnecting" });
+        const again = await checkDesktop(threadId, controller.signal);
         if (disposed()) return;
-        if (desktop !== "ready") {
-          setStatus(desktop);
-          return;
-        }
-        const waymote = await client;
-        if (disposed()) return;
-        if (waymote === undefined) {
-          setStatus({
+        if (again !== "ready") return stop(again);
+        if (recoveries >= RECOVERY_LIMIT)
+          return stop({
             phase: "failed",
-            message: "Desktop viewer failed to load.",
-            reload: true,
+            message: "The desktop stopped responding.",
           });
-          return;
-        }
-
-        // Core answers a refused upgrade (desktop or workspace unavailable)
-        // with an error status, which the SDK sees as a dropped socket and
-        // retries forever. Count sockets that never open; after a run of
-        // them, ask Core again and stop unless the desktop is ready.
-        let failures = 0;
-        let recoveries = 0;
-        let recovering = false;
-        const recover = async () => {
-          recovering = true;
-          session?.disconnect();
-          setStatus({ phase: "reconnecting" });
-          const again = await checkDesktop(threadId, controller.signal);
-          if (disposed()) return;
-          if (again !== "ready") return stop(again);
-          if (recoveries >= RECOVERY_LIMIT)
-            return stop({
-              phase: "failed",
-              message: "The desktop stopped responding.",
-            });
-          recoveries += 1;
+        recoveries += 1;
+        failures = 0;
+        recovering = false;
+        session?.connect();
+      };
+      const socketFor = (channel: DesktopChannel) => {
+        const socket = new WebSocket(desktopChannelUrl(threadId, channel));
+        let openedAt: number | undefined;
+        socket.addEventListener("open", () => {
+          openedAt = Date.now();
           failures = 0;
-          recovering = false;
-          session?.connect();
-        };
-        const socketFor = (channel: DesktopChannel) => {
-          const socket = new WebSocket(desktopChannelUrl(threadId, channel));
-          let openedAt: number | undefined;
-          socket.addEventListener("open", () => {
-            openedAt = Date.now();
-            failures = 0;
-          });
-          socket.addEventListener("close", () => {
-            if (disposed() || recovering) return;
-            if (openedAt !== undefined) {
-              if (Date.now() - openedAt >= STABLE_SOCKET_MS) recoveries = 0;
-              return;
-            }
-            failures += 1;
-            if (failures >= SOCKET_FAILURE_LIMIT) void recover();
-          });
-          return socket;
-        };
-
-        let connectedOnce = false;
-        session = new waymote.WaymoteSession({
-          audio: false,
-          remoteDisplay: remoteDisplay(),
-          createWebSocket: (path) => socketFor(path.slice(1) as DesktopChannel),
         });
-        const current = session;
-        current.on("state", (state) => {
-          if (recovering || halted) return;
-          if (state.video.state === "connected") connectedOnce = true;
-          setStatus(nextStatus(state, connectedOnce));
-        });
-        // The SDK's automatic sync writes every remote clipboard change to
-        // the local clipboard while the page has focus, so guest code could
-        // replace what the person pastes next. Copy only what follows their
-        // own key press or click on the desktop while they hold control.
-        // Pasting (local to remote) is the SDK's native paste handling.
-        current.on("clipboard", ({ text, status: clipboard }) => {
-          if (
-            clipboard !== "Remote clipboard ready" ||
-            !text ||
-            current.state.input.state !== "active" ||
-            Date.now() - input.current.lastGesture > CLIPBOARD_GESTURE_MS ||
-            document.hidden ||
-            !document.hasFocus()
-          )
+        socket.addEventListener("close", () => {
+          if (disposed() || recovering) return;
+          if (openedAt !== undefined) {
+            if (Date.now() - openedAt >= STABLE_SOCKET_MS) recoveries = 0;
             return;
-          navigator.clipboard?.writeText(text).catch(() => undefined);
+          }
+          failures += 1;
+          if (failures >= SOCKET_FAILURE_LIMIT) void recover();
         });
-        const handle = current.attachSurface({
-          canvas: display,
-          inputElement: surface,
-          textInputElement: keyboard.textInput.current ?? undefined,
-          controlOnFocus: true,
-          clipboardAutoSync: false,
-        });
-        keyboard.remote.current = { session: current, surface: handle };
-        input.current.lastInput = Date.now();
-        watchIdle(DESKTOP_IDLE_PAUSE_MS);
-        current.connect();
+        return socket;
       };
-      void start();
-      return () => {
-        controller.abort();
-        clearTimeout(idleTimer);
-        keyboard.remote.current = undefined;
-        void session?.dispose();
-      };
-    },
-    [keyboard.remote, keyboard.textInput, loadClient, onIdle, threadId],
-  );
+
+      let connectedOnce = false;
+      session = new waymote.WaymoteSession({
+        audio: false,
+        remoteDisplay: remoteDisplay(),
+        createWebSocket: (path) => socketFor(path.slice(1) as DesktopChannel),
+      });
+      const current = session;
+      current.on("state", (state) => {
+        if (recovering || halted) return;
+        if (state.video.state === "connected") connectedOnce = true;
+        setStatus(nextStatus(state, connectedOnce));
+      });
+      // The SDK's automatic sync writes every remote clipboard change to
+      // the local clipboard while the page has focus, so guest code could
+      // replace what the person pastes next. Copy only what follows their
+      // own key press or click on the desktop while they hold control.
+      // Pasting (local to remote) is the SDK's native paste handling.
+      current.on("clipboard", ({ text, status: clipboard }) => {
+        if (
+          clipboard !== "Remote clipboard ready" ||
+          !text ||
+          current.state.input.state !== "active" ||
+          Date.now() - inputRef.current.lastGesture > CLIPBOARD_GESTURE_MS ||
+          document.hidden ||
+          !document.hasFocus()
+        )
+          return;
+        navigator.clipboard?.writeText(text).catch(() => undefined);
+      });
+      const handle = current.attachSurface({
+        canvas: display,
+        inputElement: surface,
+        textInputElement: textInputRef.current ?? undefined,
+        controlOnFocus: true,
+        clipboardAutoSync: false,
+      });
+      remoteRef.current = { session: current, surface: handle };
+      inputRef.current.lastInput = Date.now();
+      watchIdle(DESKTOP_IDLE_PAUSE_MS);
+      current.connect();
+    };
+    void start();
+    return () => {
+      controller.abort();
+      clearTimeout(idleTimer);
+      remoteRef.current = undefined;
+      void session?.dispose();
+    };
+  };
   const noteInput = () => {
-    input.current.lastInput = Date.now();
+    inputRef.current.lastInput = Date.now();
   };
   const noteGesture = () => {
     const now = Date.now();
-    input.current.lastInput = now;
-    input.current.lastGesture = now;
+    inputRef.current.lastInput = now;
+    inputRef.current.lastGesture = now;
   };
   const mobile = useMobile();
   return (
     <>
       {/* Before the surface, so it exists when the surface attaches. */}
       <textarea
-        ref={keyboard.attachTextInput}
+        ref={attachTextInput}
         className="thread-desktop-text-input"
         aria-label="Type on the remote desktop"
         autoCapitalize="off"
@@ -332,8 +344,8 @@ function DesktopSession({
         autoCorrect="off"
         spellCheck={false}
         tabIndex={-1}
-        onFocus={keyboard.onTextInputFocus}
-        onBlur={keyboard.onTextInputBlur}
+        onFocus={onTextInputFocus}
+        onBlur={onTextInputBlur}
       />
       <div
         className="thread-desktop-surface"
@@ -359,11 +371,11 @@ function DesktopSession({
         status.phase === "reconnecting") ? (
         <DesktopKeys
           disabled={status.phase !== "live"}
-          keyboardOpen={keyboard.open}
-          modifiers={keyboard.modifiers}
-          onToggleKeyboard={keyboard.toggle}
-          onToggleModifier={keyboard.toggleModifier}
-          onPress={keyboard.press}
+          keyboardOpen={keyboardOpen}
+          modifiers={modifiers}
+          onToggleKeyboard={toggleKeyboard}
+          onToggleModifier={toggleModifier}
+          onPress={press}
         />
       ) : null}
       {status.phase === "starting" ? (
@@ -405,7 +417,7 @@ function DesktopSession({
               onClick={
                 // A failed dynamic import stays failed for this page (and a
                 // new deployment renames the chunk): reload to fetch it.
-                status.reload ? () => window.location.reload() : onRetry
+                status.reload ? reloadPage : onRetry
               }
             >
               <RefreshCw aria-hidden="true" />
@@ -428,7 +440,7 @@ interface RemoteKeyboardTarget {
  * Waymote's text input, and on-screen keys press what a phone keyboard
  * lacks. A latched modifier applies to the next key from either.
  */
-function usePhoneKeyboard(input: React.RefObject<DesktopInput>) {
+function usePhoneKeyboard(inputRef: React.RefObject<DesktopInput>) {
   const textInput = React.useRef<HTMLTextAreaElement | null>(null);
   const remote = React.useRef<RemoteKeyboardTarget | undefined>(undefined);
   const [open, setOpen] = React.useState(false);
@@ -437,12 +449,12 @@ function usePhoneKeyboard(input: React.RefObject<DesktopInput>) {
   >(() => new Set());
   // Read by the text input's listeners, which outlive a render.
   const latched = React.useRef<ReadonlySet<DesktopModifier>>(modifiers);
-  const latch = React.useCallback((next: ReadonlySet<DesktopModifier>) => {
+  const latch = (next: ReadonlySet<DesktopModifier>) => {
     latched.current = next;
     setModifiers(next);
-  }, []);
+  };
   // Keys reach the desktop only while this viewer holds control.
-  const withControl = React.useCallback((send: () => void) => {
+  const withControl = (send: () => void) => {
     const target = remote.current;
     if (target === undefined) return;
     if (target.session.state.input.state === "active") {
@@ -458,70 +470,62 @@ function usePhoneKeyboard(input: React.RefObject<DesktopInput>) {
       send();
     });
     timer = setTimeout(stop, CONTROL_WAIT_MS);
-  }, []);
-  const press = React.useCallback(
-    (codes: readonly string[]) => {
-      const chord = [
-        ...latched.current,
-        ...codes.filter(
-          (code) => !latched.current.has(code as DesktopModifier),
-        ),
-      ];
-      if (latched.current.size > 0) latch(new Set());
-      const now = Date.now();
-      input.current.lastInput = now;
-      input.current.lastGesture = now;
-      withControl(() => {
-        if (textInput.current !== null) pressChord(textInput.current, chord);
-      });
-    },
-    [input, latch, withControl],
-  );
-  const attachTextInput = React.useCallback(
-    (node: HTMLTextAreaElement | null) => {
-      textInput.current = node;
-      if (node === null) return;
-      // A phone keyboard reports Backspace and Return without a key code,
-      // which Waymote cannot map; press the real keys instead.
-      const softKey = (event: KeyboardEvent) => {
-        if (event.code !== "" || event.isComposing) return;
-        if (event.key !== "Backspace" && event.key !== "Enter") return;
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        press([event.key]);
-      };
-      const beforeInput = (event: InputEvent) => {
-        let codes: readonly string[] | undefined;
-        if (event.inputType === "deleteContentBackward") codes = ["Backspace"];
-        else if (
-          event.inputType === "insertLineBreak" ||
-          event.inputType === "insertParagraph"
-        )
-          codes = ["Enter"];
-        else if (
-          event.inputType === "insertText" &&
-          latched.current.size > 0 &&
-          event.data?.length === 1
-        ) {
-          const key = codeForCharacter(event.data);
-          if (key !== undefined)
-            codes = key.shift ? ["ShiftLeft", key.code] : [key.code];
-        }
-        if (codes === undefined) return;
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        press(codes);
-      };
-      return listenAll(node, [
-        ["keydown", softKey],
-        ["beforeinput", beforeInput],
-      ]);
-    },
-    [press],
-  );
+  };
+  const press = (codes: readonly string[]) => {
+    const chord = [
+      ...latched.current,
+      ...codes.filter((code) => !latched.current.has(code as DesktopModifier)),
+    ];
+    if (latched.current.size > 0) latch(new Set());
+    const now = Date.now();
+    inputRef.current.lastInput = now;
+    inputRef.current.lastGesture = now;
+    withControl(() => {
+      if (textInput.current !== null) pressChord(textInput.current, chord);
+    });
+  };
+  const attachTextInput = (node: HTMLTextAreaElement | null) => {
+    textInput.current = node;
+    if (node === null) return;
+    // A phone keyboard reports Backspace and Return without a key code,
+    // which Waymote cannot map; press the real keys instead.
+    const softKey = (event: KeyboardEvent) => {
+      if (event.code !== "" || event.isComposing) return;
+      if (event.key !== "Backspace" && event.key !== "Enter") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      press([event.key]);
+    };
+    const beforeInput = (event: InputEvent) => {
+      let codes: readonly string[] | undefined;
+      if (event.inputType === "deleteContentBackward") codes = ["Backspace"];
+      else if (
+        event.inputType === "insertLineBreak" ||
+        event.inputType === "insertParagraph"
+      )
+        codes = ["Enter"];
+      else if (
+        event.inputType === "insertText" &&
+        latched.current.size > 0 &&
+        event.data?.length === 1
+      ) {
+        const key = codeForCharacter(event.data);
+        if (key !== undefined)
+          codes = key.shift ? ["ShiftLeft", key.code] : [key.code];
+      }
+      if (codes === undefined) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      press(codes);
+    };
+    return listenAll(node, [
+      ["keydown", softKey],
+      ["beforeinput", beforeInput],
+    ]);
+  };
   return {
-    textInput,
-    remote,
+    textInputRef: textInput,
+    remoteRef: remote,
     open,
     modifiers,
     attachTextInput,
@@ -577,10 +581,13 @@ function HiddenGrace({
   return null;
 }
 
+const reloadWindow = () => window.location.reload();
+
 export function DesktopViewer({
   active = true,
   threadId,
   loadClient = loadWaymote,
+  reloadPage = reloadWindow,
 }: DesktopViewerProps) {
   const visible = React.useSyncExternalStore(
     subscribeVisibility,
@@ -590,11 +597,8 @@ export function DesktopViewer({
   const [attempt, setAttempt] = React.useState(0);
   const [pausedSession, setPausedSession] = React.useState<string>();
   const sessionKey = `${threadId}:${attempt}`;
-  const retry = React.useCallback(() => setAttempt((value) => value + 1), []);
-  const pause = React.useCallback(
-    () => setPausedSession(sessionKey),
-    [sessionKey],
-  );
+  const retry = () => setAttempt((value) => value + 1);
+  const pause = () => setPausedSession(sessionKey);
   const shown = active && visible;
   // Each time the Desktop leaves the screen starts a grace period; the
   // stream disconnects only once that period's timer runs out.
@@ -605,10 +609,7 @@ export function DesktopViewer({
     setPreviouslyShown(shown);
     if (!shown) setHidden((value) => value + 1);
   }
-  const expire = React.useCallback(
-    (generation: number) => setExpired(generation),
-    [],
-  );
+  const expire = (generation: number) => setExpired(generation);
   if (!shown && expired === hidden)
     return <div className="thread-desktop-shell" />;
   return (
@@ -636,6 +637,7 @@ export function DesktopViewer({
           key={sessionKey}
           threadId={threadId}
           loadClient={loadClient}
+          reloadPage={reloadPage}
           onRetry={retry}
           onIdle={pause}
         />

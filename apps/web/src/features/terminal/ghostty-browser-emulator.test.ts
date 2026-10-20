@@ -30,6 +30,7 @@ vi.mock("ghostty-web", () => ({
     attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) {
       ghostty.customKeyHandler = handler;
     }
+    setRenderPaused() {}
     hasSelection() {
       return true;
     }

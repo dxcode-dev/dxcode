@@ -392,10 +392,14 @@
   font-size: 11px;
 }
 
+/* Offscreen diffs skip style and layout, so expanding one file does not lay
+   out every diff already open. The browser keeps each diff's last size. */
 .changes-diff-region {
   min-width: 0;
   overflow: hidden;
   background: var(--surface);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 320px;
 }
 
 .changes-diff-view {

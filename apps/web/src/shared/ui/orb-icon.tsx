@@ -1,9 +1,4 @@
-import {
-  type ComponentProps,
-  useCallback,
-  useLayoutEffect,
-  useRef,
-} from "react";
+import { type ComponentProps, useLayoutEffect, useRef } from "react";
 import {
   mountOrbMotion,
   ORB_IDLE_ARTWORK,
@@ -25,7 +20,7 @@ export const OrbIcon = ({
   ...props
 }: OrbIconProps) => {
   const renderer = useRef<ReturnType<typeof mountOrbMotion>>(undefined);
-  const attach = useCallback((node: SVGGElement | null) => {
+  const attach = (node: SVGGElement | null) => {
     if (!node) return;
     const motion = mountOrbMotion(node);
     renderer.current = motion;
@@ -33,7 +28,7 @@ export const OrbIcon = ({
       motion?.dispose();
       renderer.current = undefined;
     };
-  }, []);
+  };
   // Synchronize the persistent imperative SVG renderer before paint. Keeping
   // its DOM node across status changes preserves angular position and velocity.
   useLayoutEffect(() => {

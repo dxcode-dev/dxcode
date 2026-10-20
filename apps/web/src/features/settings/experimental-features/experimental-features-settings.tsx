@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, FlaskConical, ShieldX } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
   SettingsBackgroundError,
@@ -221,7 +222,7 @@ export function ExperimentalFeaturesSettings() {
     if (updateFeature.isPending) return;
     setMessage(undefined);
     setError(undefined);
-    try {
+    const outcome = await settle(async () => {
       const saved = await updateFeature.mutateAsync([
         flag.registration.id,
         !flag.personalEnabled,
@@ -235,15 +236,15 @@ export function ExperimentalFeaturesSettings() {
           ? `${flag.registration.title} enabled. ${activationLabel(flag.registration.activation)}.`
           : `${flag.registration.title} disabled.`,
       );
-    } catch (cause) {
+    });
+    if (!outcome.ok) {
       setError(
-        cause instanceof Error
-          ? cause.message
+        outcome.error instanceof Error
+          ? outcome.error.message
           : "The experimental feature preference could not be saved.",
       );
-    } finally {
-      updateFeature.reset();
     }
+    updateFeature.reset();
   };
 
   return (

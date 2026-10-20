@@ -1,6 +1,5 @@
 import { parseDiffFromFile } from "@pierre/diffs";
 import { File, FileDiff } from "@pierre/diffs/react";
-import * as React from "react";
 import { useTheme } from "../../shared/theme/theme-provider.js";
 import {
   parseTranscriptPatch,
@@ -27,6 +26,28 @@ const diffOptions = {
   hunkSeparators: "line-info-basic",
 } as const;
 
+const parseEditDiff = (source: TranscriptEditSource) => {
+  const version = stableTranscriptPreviewVersion(
+    `${source.before}\u0000${source.after}`,
+  );
+  try {
+    return parseDiffFromFile(
+      {
+        name: source.path,
+        contents: source.before,
+        cacheKey: `transcript-edit:${source.path}:${version}:before`,
+      },
+      {
+        name: source.path,
+        contents: source.after,
+        cacheKey: `transcript-edit:${source.path}:${version}:after`,
+      },
+    );
+  } catch {
+    return undefined;
+  }
+};
+
 /** Render an edit tool call as a diff of the replaced region. */
 export function TranscriptEditDiff({
   source,
@@ -34,27 +55,7 @@ export function TranscriptEditDiff({
   readonly source: TranscriptEditSource;
 }) {
   const { resolvedAppearance } = useTheme();
-  const fileDiff = React.useMemo(() => {
-    const version = stableTranscriptPreviewVersion(
-      `${source.before}\u0000${source.after}`,
-    );
-    try {
-      return parseDiffFromFile(
-        {
-          name: source.path,
-          contents: source.before,
-          cacheKey: `transcript-edit:${source.path}:${version}:before`,
-        },
-        {
-          name: source.path,
-          contents: source.after,
-          cacheKey: `transcript-edit:${source.path}:${version}:after`,
-        },
-      );
-    } catch {
-      return undefined;
-    }
-  }, [source]);
+  const fileDiff = parseEditDiff(source);
   if (fileDiff === undefined)
     return <pre className="transcript-edit-output">{source.after}</pre>;
   return (
@@ -87,18 +88,13 @@ function CodePreview({
   readonly kind: "file" | "patch";
 }) {
   const { resolvedAppearance } = useTheme();
-  const file = React.useMemo(
-    () => ({
-      name: path,
-      contents: stripToolLineNumbers(contents),
-      cacheKey: `transcript:${path}:${stableTranscriptPreviewVersion(contents)}`,
-    }),
-    [path, contents],
-  );
-  const fileDiffs = React.useMemo(
-    () => (kind === "patch" ? parseTranscriptPatch(contents, path) : []),
-    [contents, kind, path],
-  );
+  const file = {
+    name: path,
+    contents: stripToolLineNumbers(contents),
+    cacheKey: `transcript:${path}:${stableTranscriptPreviewVersion(contents)}`,
+  };
+  const fileDiffs =
+    kind === "patch" ? parseTranscriptPatch(contents, path) : [];
   const theme = resolvedAppearance === "light" ? "pierre-light" : "pierre-dark";
   const codeOptions = {
     theme,

@@ -8,7 +8,13 @@
     "rootDir": ".",
     "tsBuildInfoFile": "../../node_modules/.cache/tsbuildinfo/web.tsbuildinfo"
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts", "vite-local.ts"],
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "vite.config.ts",
+    "vite-local.ts",
+    "vitest.browser.config.ts"
+  ],
   "references": [
     { "path": "../../packages/domain" },
     { "path": "../../packages/api" }

@@ -44,19 +44,19 @@ const keepFocus = (event: React.PointerEvent | React.MouseEvent) =>
 export function TerminalKeys({
   disabled,
   sendInput,
-  transformInput,
+  transformInputRef,
 }: {
   readonly disabled: boolean;
   readonly sendInput: KeyRef<(data: string) => void>;
-  readonly transformInput: { current: (data: string) => string };
+  readonly transformInputRef: { current: (data: string) => string };
 }) {
   const [control, setControl] = React.useState(false);
   const latchControl = (latched: boolean) => {
     setControl(latched);
-    transformInput.current = latched
+    transformInputRef.current = latched
       ? (data) => {
           // The next typed key takes Ctrl, then the latch lets go.
-          transformInput.current = (next) => next;
+          transformInputRef.current = (next) => next;
           setControl(false);
           return controlByte(data);
         }

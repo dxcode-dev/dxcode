@@ -961,37 +961,31 @@ export function NewThreadConfigurationStrip({
 }) {
   const [modePickerOpen, setModePickerOpen] = React.useState(false);
   const projectTriggerRef = React.useRef<HTMLButtonElement>(null);
-  const openAndFocusModePicker = React.useCallback(() => {
+  const openAndFocusModePicker = () => {
     setModePickerOpen(true);
     focusModeDial();
-  }, []);
-  const shortcutHandler = React.useCallback(
-    (event: KeyboardEvent) => {
-      if (
-        locked ||
-        event.defaultPrevented ||
-        event.repeat ||
-        event.isComposing ||
-        !event.ctrlKey ||
-        event.metaKey ||
-        event.altKey ||
-        event.shiftKey ||
-        !["s", "j"].includes(event.key.toLowerCase())
-      )
-        return;
-      event.preventDefault();
-      if (event.key.toLowerCase() === "j") projectTriggerRef.current?.click();
-      else openAndFocusModePicker();
-    },
-    [locked, openAndFocusModePicker],
-  );
-  const subscribeToShortcut = React.useCallback(
-    (_onStoreChange: () => void) => {
-      window.addEventListener("keydown", shortcutHandler);
-      return () => window.removeEventListener("keydown", shortcutHandler);
-    },
-    [shortcutHandler],
-  );
+  };
+  const shortcutHandler = (event: KeyboardEvent) => {
+    if (
+      locked ||
+      event.defaultPrevented ||
+      event.repeat ||
+      event.isComposing ||
+      !event.ctrlKey ||
+      event.metaKey ||
+      event.altKey ||
+      event.shiftKey ||
+      !["s", "j"].includes(event.key.toLowerCase())
+    )
+      return;
+    event.preventDefault();
+    if (event.key.toLowerCase() === "j") projectTriggerRef.current?.click();
+    else openAndFocusModePicker();
+  };
+  const subscribeToShortcut = (_onStoreChange: () => void) => {
+    window.addEventListener("keydown", shortcutHandler);
+    return () => window.removeEventListener("keydown", shortcutHandler);
+  };
   React.useSyncExternalStore(
     subscribeToShortcut,
     shortcutSnapshot,
@@ -1019,13 +1013,10 @@ export function NewThreadConfigurationStrip({
       ? ""
       : `Orb: ${selectedRunnerProvider === undefined ? "" : `${orbProviderName(selectedRunnerProvider)} `}${selectedRunnerProfile.label}${selectedOrbOwner === undefined ? "" : `, ${selectedOrbOwner.toLowerCase()}`}`;
   const canRetryRunnerProfiles = onRunnerProfileRetry !== undefined;
-  const allowedRunnerProfileIdSet = React.useMemo(
-    () =>
-      allowedRunnerProfileIds === null || allowedRunnerProfileIds === undefined
-        ? undefined
-        : new Set(allowedRunnerProfileIds),
-    [allowedRunnerProfileIds],
-  );
+  const allowedRunnerProfileIdSet =
+    allowedRunnerProfileIds === null || allowedRunnerProfileIds === undefined
+      ? undefined
+      : new Set(allowedRunnerProfileIds);
 
   return (
     <footer className="new-thread-config-strip">

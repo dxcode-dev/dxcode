@@ -47,14 +47,33 @@ export function useMobileThreadTool() {
   const [opened, setOpened] = React.useState<ReadonlySet<MobileThreadTool>>(
     () => new Set(["agent"]),
   );
-  const select = React.useCallback((next: MobileThreadTool) => {
+  const select = (next: MobileThreadTool) => {
     setTool(next);
     setOpened((current) =>
       current.has(next) ? current : new Set([...current, next]),
     );
-  }, []);
+  };
   return { tool, opened, select };
 }
+
+/**
+ * Scrolls a newly chosen tab fully into view. An intersection observer
+ * reports after the browser lays out, so choosing a tab never forces a
+ * layout of the tool it shows, and a tab already in full view stays put.
+ */
+const revealSelectedTab = (node: HTMLButtonElement | null) => {
+  if (node === null) return;
+  const observer = new IntersectionObserver(
+    ([entry]) => {
+      observer.disconnect();
+      if (entry !== undefined && entry.intersectionRatio < 1)
+        node.scrollIntoView({ block: "nearest", inline: "nearest" });
+    },
+    { root: node.closest('[role="tablist"]'), threshold: 1 },
+  );
+  observer.observe(node);
+  return () => observer.disconnect();
+};
 
 const availableTools = (tools: MobileWorkspaceTools) =>
   MOBILE_TOOLS.filter(
@@ -63,6 +82,9 @@ const availableTools = (tools: MobileWorkspaceTools) =>
       (tool !== "preview" || tools.preview !== undefined) &&
       (tool !== "desktop" || tools.desktop !== undefined),
   );
+
+const scrollSelectedIntoView = (node: HTMLButtonElement | null) =>
+  node?.scrollIntoView({ block: "nearest", inline: "nearest" });
 
 export function MobileThreadTabs({
   tools,
@@ -81,11 +103,6 @@ export function MobileThreadTabs({
   readonly onSelectFile: (key: string) => void;
   readonly onCloseFile: (file: CenterFileTab) => void;
 }) {
-  const scrollSelectedIntoView = React.useCallback(
-    (node: HTMLButtonElement | null) =>
-      node?.scrollIntoView({ block: "nearest", inline: "nearest" }),
-    [],
-  );
   return (
     <div
       className="thread-mobile-tabs"
@@ -102,7 +119,7 @@ export function MobileThreadTabs({
           <button
             key={tool}
             id={tabId(tool)}
-            ref={selected ? scrollSelectedIntoView : undefined}
+            ref={selected ? revealSelectedTab : undefined}
             type="button"
             role="tab"
             className="thread-mobile-tab"
@@ -127,7 +144,7 @@ export function MobileThreadTabs({
             data-active={selected || undefined}
           >
             <button
-              ref={selected ? scrollSelectedIntoView : undefined}
+              ref={selected ? revealSelectedTab : undefined}
               type="button"
               role="tab"
               className="thread-mobile-tab"

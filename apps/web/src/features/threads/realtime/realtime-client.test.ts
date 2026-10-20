@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { changesKeys } from "../changes/changes-queries.js";
 import { threadFilesKeys } from "../files/files-queries.js";
 import { threadKeys } from "../thread-queries.js";
+import { THREAD_ROW_COALESCE_MS } from "../thread-row-queries.js";
 import { RealtimeClient } from "./realtime-client.js";
 
 class FakeSocket {
@@ -40,6 +41,7 @@ afterEach(() => vi.useRealTimers());
 
 describe("RealtimeClient", () => {
   it("uses one socket and invalidates existing Thread, readiness, and Changes queries", () => {
+    vi.useFakeTimers();
     const queryClient = new QueryClient();
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
     const sockets: FakeSocket[] = [];
@@ -68,10 +70,14 @@ describe("RealtimeClient", () => {
       threadId,
       revision: 3,
     });
+    // Hints for one Thread coalesce; no list holds this one, so the lists
+    // refetch.
+    vi.advanceTimersByTime(THREAD_ROW_COALESCE_MS);
 
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: threadKeys.lists(userId),
-    });
+    expect(invalidate).toHaveBeenCalledWith(
+      { queryKey: threadKeys.lists(userId) },
+      { cancelRefetch: false },
+    );
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: threadKeys.detail(userId, threadId),
     });
@@ -116,26 +122,38 @@ describe("RealtimeClient", () => {
     client.stop();
   });
 
-  it("refreshes sidebar summaries when Changes are invalidated", () => {
+  it("ignores a socket that closes or speaks after the client restarted", () => {
+    vi.useFakeTimers();
     const queryClient = new QueryClient();
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
-    const socket = new FakeSocket();
-    const client = new RealtimeClient(queryClient, userId, () => socket);
-    client.start();
-    socket.receive({ type: "ready", revision: 0 });
-    socket.receive({
-      type: "changes.invalidated",
-      threadId,
-      revision: 1,
+    const sockets: FakeSocket[] = [];
+    const client = new RealtimeClient(queryClient, userId, () => {
+      const socket = new FakeSocket();
+      sockets.push(socket);
+      return socket;
     });
 
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: threadKeys.lists(userId),
+    // A quick provider remount: the first socket's close lands after the
+    // second socket is already live.
+    client.start();
+    client.stop();
+    client.start();
+    sockets[1]?.receive({ type: "ready", revision: 4 });
+    sockets[1]?.receive({
+      type: "workspace.status",
+      threadId,
+      status: "waking",
+      revision: 5,
     });
-    expect(invalidate).toHaveBeenCalledWith(
-      { queryKey: changesKeys.ranges(threadId) },
-      { cancelRefetch: false },
-    );
+    sockets[0]?.receive({ type: "notifications.invalidated", revision: 9 });
+    sockets[0]?.onclose?.(new CloseEvent("close", { code: 1000 }));
+    vi.advanceTimersByTime(60_000);
+
+    expect(sockets).toHaveLength(2);
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(client.workspaceStatus(threadId)).toBe("waking");
+    sockets[1]?.receive({ type: "notifications.invalidated", revision: 6 });
+    expect(invalidate).toHaveBeenCalledTimes(1);
     client.stop();
   });
 

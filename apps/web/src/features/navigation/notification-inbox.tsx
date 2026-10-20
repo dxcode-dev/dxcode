@@ -14,9 +14,10 @@ import {
   notificationInboxQueryOptions,
 } from "../notifications/notifications-queries.js";
 import "./notification-inbox.css";
+import { TimeText } from "../../shared/ui/time-text.js";
 
 /** `now`, `5m ago`, `3h ago`, `2d ago`, `1mo ago`. */
-const age = (iso: string, now = Date.now()) => {
+const age = (iso: string, now: number) => {
   const minutes = Math.floor((now - Date.parse(iso)) / 60_000);
   if (!Number.isFinite(minutes) || minutes < 1) return "now";
   if (minutes < 60) return `${minutes}m ago`;
@@ -88,7 +89,7 @@ function NotificationRow({
             dateTime={notification.createdAt}
             title={exactTime.format(new Date(notification.createdAt))}
           >
-            {age(notification.createdAt)}
+            <TimeText text={(now) => age(notification.createdAt, now)} />
           </time>
         </span>
         <Excerpt text={notification.excerpt} />

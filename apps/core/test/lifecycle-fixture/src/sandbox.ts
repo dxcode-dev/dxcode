@@ -7,6 +7,7 @@ import {
   type ShellResult,
   sandboxFromDriver,
 } from "@flue/runtime";
+import { fixtureText } from "./heavy-history.js";
 
 const ORPHAN_RESULT = "delayed-signal-deaf-command-result";
 
@@ -92,6 +93,13 @@ class FixtureSandboxDriver implements SandboxDriver {
   }
 
   async exec(command: string): Promise<ShellResult> {
+    const output = /^fixture-output (\d+) (\d+)$/.exec(command);
+    if (output !== null)
+      return {
+        stdout: fixtureText(Number(output[1]), Number(output[2])),
+        stderr: "",
+        exitCode: 0,
+      };
     if (command !== "delayed-reference-command") {
       return { stdout: "", stderr: "", exitCode: 0 };
     }

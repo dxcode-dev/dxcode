@@ -35,6 +35,7 @@ import { ThreadSearchDialog } from "./thread-search-dialog.js";
 
 const PRODUCT_SIDEBAR_MIN_SIZE = 250;
 const PRODUCT_SIDEBAR_MAX_SIZE = 480;
+const sidebarExtensionRegion = <SidebarExtensionRegion />;
 
 export function ProductShell() {
   const navigate = useNavigate();
@@ -54,13 +55,12 @@ export function ProductShell() {
     personalAccountQueryOptions(identity.id),
   );
   const settingsQuery = useQuery(settingsContextQueryOptions(identity.id));
-  const projects =
-    projectsQuery.data?.pages.flatMap((page) => page.items) ?? [];
-  const threads = threadsQuery.data?.pages.flatMap((page) => page.items) ?? [];
-  const childThreads = React.useMemo(
-    () => childThreadsByParent(threadsQuery.data?.pages),
-    [threadsQuery.data?.pages],
-  );
+  // Flattened once per page change so the sidebar's list memos hold.
+  const projectPages = projectsQuery.data?.pages;
+  const projects = projectPages?.flatMap((page) => page.items) ?? [];
+  const threadPages = threadsQuery.data?.pages;
+  const threads = threadPages?.flatMap((page) => page.items) ?? [];
+  const childThreads = childThreadsByParent(threadPages);
   // An empty active list can still have archived Threads. Reuse the archive
   // cache so checking availability does not hide the only path to those rows.
   const checkEmptyArchive = threadsQuery.isSuccess && threads.length === 0;
@@ -81,15 +81,24 @@ export function ProductShell() {
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
   // A phone opens on the page itself; the sidebar button shows the drawer.
   const [mobileSidebarOpen, setMobileSidebarOpen] = React.useState(false);
+  // The drawer's sidebar mounts on first open and then stays mounted, so
+  // later opens slide it in without rebuilding every row.
+  const [mobileSidebarKept, setMobileSidebarKept] = React.useState(false);
+  const setMobileSidebar = (open: boolean) => {
+    setMobileSidebarOpen(open);
+    if (open) setMobileSidebarKept(true);
+  };
   const [threadSearchOpen, setThreadSearchOpen] = React.useState(false);
   const sharedThreadsQuery = useQuery(sharedThreadsQueryOptions(identity.id));
   const sidebarSearchTriggerRef = React.useRef<HTMLButtonElement>(null);
   const mobileSidebarTriggerRef = React.useRef<HTMLButtonElement>(null);
   const mobileSidebarPopupRef = React.useRef<HTMLDivElement>(null);
 
-  const toggleSidebar = React.useCallback(() => {
-    if (mobile) setMobileSidebarOpen((open) => !open);
-    else {
+  const toggleSidebar = () => {
+    if (mobile) {
+      setMobileSidebarOpen((open) => !open);
+      setMobileSidebarKept(true);
+    } else {
       const panel = document.querySelector<HTMLElement>(
         ".product-panel-group > :first-child",
       );
@@ -107,18 +116,20 @@ export function ProductShell() {
         );
       }
     }
-  }, [mobile, sidebarCollapsed, sidebarRef]);
+  };
 
   // Stable: memoized sidebar rows receive these handlers.
-  const closeMobileSidebar = React.useCallback(
-    () => setMobileSidebarOpen(false),
-    [],
-  );
+  const closeMobileSidebar = () => setMobileSidebarOpen(false);
   const pinThread = pinMutation.mutate;
-  const setThreadPinned = React.useCallback(
-    (threadId: ThreadId, pinned: boolean) => pinThread({ threadId, pinned }),
-    [pinThread],
-  );
+  const setThreadPinned = (threadId: ThreadId, pinned: boolean) =>
+    pinThread({ threadId, pinned });
+  const openThreadSearch = () => setThreadSearchOpen(true);
+  const fetchNextThreads = threadsQuery.fetchNextPage;
+  const loadMoreThreads = () => void fetchNextThreads();
+  const selectSearchedThread = (threadId: string) => {
+    setMobileSidebarOpen(false);
+    void navigate({ to: "/threads/$threadId", params: { threadId } });
+  };
   const sidebar = (
     <AppSidebar
       userId={identity.id}
@@ -134,9 +145,9 @@ export function ProductShell() {
       onCollapse={toggleSidebar}
       collapseLabel={mobile ? "Close sidebar" : "Collapse sidebar"}
       onNavigate={closeMobileSidebar}
-      onOpenSearch={() => setThreadSearchOpen(true)}
+      onOpenSearch={openThreadSearch}
       searchTriggerRef={sidebarSearchTriggerRef}
-      onLoadMore={() => void threadsQuery.fetchNextPage()}
+      onLoadMore={loadMoreThreads}
       loadingMore={
         threadsQuery.isPending ||
         threadsQuery.isFetchingNextPage ||
@@ -152,7 +163,7 @@ export function ProductShell() {
       pinningThreadId={
         pinMutation.isPending ? pinMutation.variables.threadId : undefined
       }
-      extensionRegion={<SidebarExtensionRegion />}
+      extensionRegion={sidebarExtensionRegion}
     />
   );
 
@@ -160,9 +171,9 @@ export function ProductShell() {
     <AppFrame className="product-shell">
       <Dialog.Root
         open={mobile && mobileSidebarOpen}
-        onOpenChange={setMobileSidebarOpen}
+        onOpenChange={setMobileSidebar}
       >
-        <Dialog.Portal>
+        <Dialog.Portal keepMounted={mobile && mobileSidebarKept}>
           <Dialog.Backdrop className="mobile-sidebar-scrim" />
           <Dialog.Popup
             ref={mobileSidebarPopupRef}
@@ -241,13 +252,7 @@ export function ProductShell() {
         userId={identity.id}
         finalFocus={mobile ? mobileSidebarTriggerRef : sidebarSearchTriggerRef}
         onOpenChange={setThreadSearchOpen}
-        onSelectThread={(threadId) => {
-          setMobileSidebarOpen(false);
-          void navigate({
-            to: "/threads/$threadId",
-            params: { threadId },
-          });
-        }}
+        onSelectThread={selectSearchedThread}
       />
     </AppFrame>
   );

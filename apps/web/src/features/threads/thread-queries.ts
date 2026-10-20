@@ -1,5 +1,6 @@
 import type { PageCursor, ProjectId, ThreadId, UserId } from "@dx/domain";
 import {
+  type InvalidateOptions,
   infiniteQueryOptions,
   type QueryClient,
   queryOptions,
@@ -57,10 +58,14 @@ export const invalidateAllThreadQueries = (
   userId: UserId,
 ) => client.invalidateQueries({ queryKey: threadKeys.all(userId) });
 
-export const invalidateThreadLists = (client: QueryClient, userId: UserId) =>
+export const invalidateThreadLists = (
+  client: QueryClient,
+  userId: UserId,
+  options?: InvalidateOptions,
+) =>
   Promise.all([
-    client.invalidateQueries({ queryKey: threadKeys.lists(userId) }),
-    client.invalidateQueries({ queryKey: threadKeys.shared(userId) }),
+    client.invalidateQueries({ queryKey: threadKeys.lists(userId) }, options),
+    client.invalidateQueries({ queryKey: threadKeys.shared(userId) }, options),
   ]);
 
 export const invalidateThreadQueries = async (

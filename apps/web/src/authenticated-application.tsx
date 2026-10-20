@@ -1,6 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
-import { lazy, Suspense, useMemo } from "react";
+import { lazy, Suspense } from "react";
 import { RealtimeProvider } from "./features/threads/realtime/realtime-provider.js";
 import { ThreadSessionProvider } from "./features/threads/thread-session-provider.js";
 import { createAppRouter } from "./router.js";
@@ -25,14 +25,10 @@ export function AuthenticatedApplication({
     throw new Error(
       "AuthenticatedApplication must be rendered inside AuthGate.",
     );
-  const router = useMemo(
-    () =>
-      createAppRouter({
-        queryClient,
-        userId: auth.identity.id,
-      }),
-    [auth.identity.id, queryClient],
-  );
+  const router = createAppRouter({
+    queryClient,
+    userId: auth.identity.id,
+  });
   return (
     <ThreadSessionProvider
       key={auth.identity.id}

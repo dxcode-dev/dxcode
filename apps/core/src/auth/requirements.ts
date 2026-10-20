@@ -25,10 +25,10 @@ const parseUrl = (value: string, reason: AuthenticationConfigurationReason) =>
   Effect.try({ try: () => new URL(value), catch: () => fail(reason) });
 
 const configuration = Config.all({
-  environment: Config.nonEmptyString("DX_ENV"),
-  authUrl: Config.nonEmptyString("DX_AUTH_URL"),
-  trustedOrigins: Config.nonEmptyString("DX_AUTH_TRUSTED_ORIGINS"),
-  secret: Config.redacted("BETTER_AUTH_SECRET"),
+  environment: Config.NonEmptyString("DX_ENV"),
+  authUrl: Config.NonEmptyString("DX_AUTH_URL"),
+  trustedOrigins: Config.NonEmptyString("DX_AUTH_TRUSTED_ORIGINS"),
+  secret: Config.Redacted("BETTER_AUTH_SECRET"),
 });
 
 export interface AuthenticationRequirements {

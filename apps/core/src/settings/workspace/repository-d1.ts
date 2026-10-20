@@ -12,7 +12,7 @@ import {
   WorkspaceShortNameUnavailable,
 } from "@dx/domain";
 import { Effect, Layer, Option, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/sql/SqlClient";
 import { settingsPersistenceLogger } from "../../logging.js";
 
 const WorkspaceMembershipRow = Schema.Struct({

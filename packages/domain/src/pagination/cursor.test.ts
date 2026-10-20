@@ -1,4 +1,5 @@
-import { DateTime, Effect, Encoding, Schema } from "effect";
+import { DateTime, Effect, Schema } from "effect";
+import * as Base64Url from "effect/encoding/Base64Url";
 import { describe, expect, it } from "vitest";
 import { ProjectId } from "../projects/project-id.js";
 import { ThreadId } from "../threads/thread-id.js";
@@ -41,7 +42,7 @@ describe("cursor pagination", () => {
       lifecycleState: "archived",
     });
 
-    const deployed = Encoding.encodeBase64Url(
+    const deployed = Base64Url.encode(
       JSON.stringify({
         v: 2,
         snapshotSequence: 9,
@@ -62,14 +63,14 @@ describe("cursor pagination", () => {
     const invalid = [
       "not base64!",
       "a".repeat(MAX_PAGE_CURSOR_LENGTH + 1),
-      Encoding.encodeBase64Url(
+      Base64Url.encode(
         JSON.stringify({
           v: 2,
           createdAt: "2026-08-20T12:00:00.000Z",
           id: projectId,
         }),
       ),
-      Encoding.encodeBase64Url(
+      Base64Url.encode(
         JSON.stringify({
           v: 1,
           createdAt: "2026-08-20T12:00:00.000Z",

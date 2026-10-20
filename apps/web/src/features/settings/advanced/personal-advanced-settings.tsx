@@ -8,6 +8,7 @@ import { DateTime } from "effect";
 import { AlertTriangle, RotateCcw } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
 import { Textarea } from "../../../shared/ui/textarea.js";
 import {
@@ -148,7 +149,7 @@ export function PersonalAgentInstructionsForm({
     if (busy) return;
     setReloading(true);
     setReloadError(undefined);
-    try {
+    const reloaded = await settle(async () => {
       const latest = await onReload();
       if (latest === undefined) {
         setReloadError("Latest agent instructions could not be loaded.");
@@ -159,11 +160,10 @@ export function PersonalAgentInstructionsForm({
       setConflictRevision(undefined);
       dispatch({ type: "reset" });
       onDirtyChange(false);
-    } catch {
+    });
+    if (!reloaded.ok)
       setReloadError("Latest agent instructions could not be loaded.");
-    } finally {
-      setReloading(false);
-    }
+    setReloading(false);
   };
 
   return (

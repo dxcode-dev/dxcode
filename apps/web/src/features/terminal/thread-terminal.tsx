@@ -215,351 +215,350 @@ const useTerminalConnection = ({
   const sendInput = React.useRef<(data: string) => void>(() => {});
   /** Rewrites typed input, so a latched on-screen Ctrl applies to it. */
   const transformInput = React.useRef<(data: string) => string>((data) => data);
-  const mount = React.useCallback(
-    (element: HTMLDivElement | null) => {
-      if (element === null) return;
-      const abort = new AbortController();
-      let dispose = () => {};
-      let ready = false;
-      void loadEmulator().then(
-        async ({ mountBrowserTerminal }) => {
-          if (abort.signal.aborted) return;
-          const socket = new WebSocket(
-            terminalUrl(threadId),
-            THREAD_TERMINAL_SUBPROTOCOL,
-          );
-          socket.binaryType = "arraybuffer";
-          const sendEnvironmentRefresh = () => {
-            if (ready && socket.readyState === WebSocket.OPEN)
-              socket.send(JSON.stringify({ v: 1, type: "restart" }));
-          };
-          refreshEnvironment.current = sendEnvironmentRefresh;
-          sendInput.current = (data) => {
-            if (ready && socket.readyState === WebSocket.OPEN)
-              socket.send(new TextEncoder().encode(data));
-          };
-          const listeners = new AbortController();
-          let emulator:
-            | Awaited<ReturnType<typeof mountBrowserTerminal>>
-            | undefined;
-          let socketOpened = false;
-          let attachSent = false;
-          let safeCloseAnnounced = false;
-          let unavailableObserved = false;
-          let workspaceWakeActive = false;
-          let applyingDimensions = false;
-          let reconnecting = false;
-          let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-          let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
-          let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
-          let socketUnanswered = false;
-          const browserPresent = () =>
-            activeRef.current &&
-            document.visibilityState === "visible" &&
-            navigator.onLine;
-          const clearHeartbeat = () => {
-            if (heartbeatTimer !== undefined) clearTimeout(heartbeatTimer);
-            heartbeatTimer = undefined;
-          };
-          const clearRecovery = () => {
-            if (recoveryTimer !== undefined) clearTimeout(recoveryTimer);
+  const mount = (element: HTMLDivElement | null) => {
+    if (element === null) return;
+    const abort = new AbortController();
+    let dispose = () => {};
+    let ready = false;
+    void loadEmulator().then(
+      async ({ mountBrowserTerminal }) => {
+        if (abort.signal.aborted) return;
+        const socket = new WebSocket(
+          terminalUrl(threadId),
+          THREAD_TERMINAL_SUBPROTOCOL,
+        );
+        socket.binaryType = "arraybuffer";
+        const sendEnvironmentRefresh = () => {
+          if (ready && socket.readyState === WebSocket.OPEN)
+            socket.send(JSON.stringify({ v: 1, type: "restart" }));
+        };
+        refreshEnvironment.current = sendEnvironmentRefresh;
+        sendInput.current = (data) => {
+          if (ready && socket.readyState === WebSocket.OPEN)
+            socket.send(new TextEncoder().encode(data));
+        };
+        const listeners = new AbortController();
+        let emulator:
+          | Awaited<ReturnType<typeof mountBrowserTerminal>>
+          | undefined;
+        let socketOpened = false;
+        let attachSent = false;
+        let safeCloseAnnounced = false;
+        let unavailableObserved = false;
+        let workspaceWakeActive = false;
+        let applyingDimensions = false;
+        let reconnecting = false;
+        let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+        let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
+        let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+        let socketUnanswered = false;
+        const browserPresent = () =>
+          activeRef.current &&
+          document.visibilityState === "visible" &&
+          navigator.onLine;
+        const clearHeartbeat = () => {
+          if (heartbeatTimer !== undefined) clearTimeout(heartbeatTimer);
+          heartbeatTimer = undefined;
+        };
+        const clearRecovery = () => {
+          if (recoveryTimer !== undefined) clearTimeout(recoveryTimer);
+          recoveryTimer = undefined;
+        };
+        const reconnect = () => {
+          if (
+            abort.signal.aborted ||
+            !unavailableObserved ||
+            reconnecting ||
+            !browserPresent() ||
+            automaticReconnectAttempt.current >= reconnectDelays.length
+          )
+            return;
+          reconnecting = true;
+          if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
+          reconnectTimer = undefined;
+          automaticReconnectAttempt.current += 1;
+          nextRestartResident.current = false;
+          setStatus({ v: 1, type: "progress", phase: "waking" });
+          setAttempt((value) => value + 1);
+        };
+        const startReconnect = () => {
+          if (unavailableObserved) return;
+          unavailableObserved = true;
+          ready = false;
+          clearHeartbeat();
+          clearRecovery();
+          setStatus(disconnected);
+          const delay = reconnectDelays[automaticReconnectAttempt.current];
+          if (delay === 0) reconnect();
+          else if (delay !== undefined && browserPresent())
+            reconnectTimer = setTimeout(reconnect, delay);
+        };
+        const replaceSocket = () => {
+          if (unavailableObserved) reconnect();
+          else startReconnect();
+        };
+        // Recovery stays on this socket while it is open: Core checks the
+        // daemon, or wakes a waiting attachment, and answers here.
+        const requestRecovery = () => {
+          if (recoveryTimer !== undefined) return;
+          if (
+            !attachSent ||
+            socketUnanswered ||
+            socket.readyState !== WebSocket.OPEN
+          ) {
+            replaceSocket();
+            return;
+          }
+          socket.send(JSON.stringify({ v: 1, type: "recover" }));
+          recoveryTimer = setTimeout(() => {
             recoveryTimer = undefined;
-          };
-          const reconnect = () => {
-            if (
-              abort.signal.aborted ||
-              !unavailableObserved ||
-              reconnecting ||
-              !browserPresent() ||
-              automaticReconnectAttempt.current >= reconnectDelays.length
-            )
-              return;
-            reconnecting = true;
-            if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
-            reconnectTimer = undefined;
-            automaticReconnectAttempt.current += 1;
-            nextRestartResident.current = false;
-            setStatus({ v: 1, type: "progress", phase: "waking" });
-            setAttempt((value) => value + 1);
-          };
-          const startReconnect = () => {
-            if (unavailableObserved) return;
-            unavailableObserved = true;
-            ready = false;
+            socketUnanswered = true;
+            replaceSocket();
+          }, recoveryAnswerTimeoutMs);
+        };
+        const expectHeartbeat = () => {
+          clearHeartbeat();
+          if (!ready || !browserPresent()) return;
+          heartbeatTimer = setTimeout(
+            requestRecovery,
+            terminalHeartbeatTimeoutMs,
+          );
+        };
+        const resumeOnUserPresence = () => {
+          if (!browserPresent()) {
             clearHeartbeat();
-            clearRecovery();
-            setStatus(disconnected);
-            const delay = reconnectDelays[automaticReconnectAttempt.current];
-            if (delay === 0) reconnect();
-            else if (delay !== undefined && browserPresent())
-              reconnectTimer = setTimeout(reconnect, delay);
-          };
-          const replaceSocket = () => {
-            if (unavailableObserved) reconnect();
-            else startReconnect();
-          };
-          // Recovery stays on this socket while it is open: Core checks the
-          // daemon, or wakes a waiting attachment, and answers here.
-          const requestRecovery = () => {
-            if (recoveryTimer !== undefined) return;
-            if (
-              !attachSent ||
-              socketUnanswered ||
-              socket.readyState !== WebSocket.OPEN
-            ) {
-              replaceSocket();
-              return;
-            }
-            socket.send(JSON.stringify({ v: 1, type: "recover" }));
-            recoveryTimer = setTimeout(() => {
-              recoveryTimer = undefined;
-              socketUnanswered = true;
-              replaceSocket();
-            }, recoveryAnswerTimeoutMs);
-          };
-          const expectHeartbeat = () => {
+            return;
+          }
+          if (unavailableObserved) requestRecovery();
+          else expectHeartbeat();
+        };
+        recoverDisconnected.current = resumeOnUserPresence;
+        const updateActivity = (active: boolean) => {
+          // Called while React commits, so a revealed Terminal draws its
+          // latest output before the browser paints it.
+          emulator?.setVisible(active);
+          if (!active) {
             clearHeartbeat();
-            if (!ready || !browserPresent()) return;
-            heartbeatTimer = setTimeout(
-              requestRecovery,
-              terminalHeartbeatTimeoutMs,
-            );
-          };
-          const resumeOnUserPresence = () => {
-            if (!browserPresent()) {
-              clearHeartbeat();
-              return;
-            }
-            if (unavailableObserved) requestRecovery();
-            else expectHeartbeat();
-          };
-          recoverDisconnected.current = resumeOnUserPresence;
-          const updateActivity = (active: boolean) => {
-            if (!active) {
-              clearHeartbeat();
-              return;
-            }
-            resumeOnUserPresence();
-          };
-          setActivity.current = updateActivity;
-          document.addEventListener("visibilitychange", resumeOnUserPresence, {
-            signal: listeners.signal,
-          });
-          window.addEventListener("focus", resumeOnUserPresence, {
-            signal: listeners.signal,
-          });
-          window.addEventListener("online", resumeOnUserPresence, {
-            signal: listeners.signal,
-          });
-          const sendAttach = () => {
-            if (emulator === undefined || attachSent) return;
-            attachSent = true;
-            const restartResident = nextRestartResident.current;
-            nextRestartResident.current = false;
+            return;
+          }
+          resumeOnUserPresence();
+        };
+        setActivity.current = updateActivity;
+        document.addEventListener("visibilitychange", resumeOnUserPresence, {
+          signal: listeners.signal,
+        });
+        window.addEventListener("focus", resumeOnUserPresence, {
+          signal: listeners.signal,
+        });
+        window.addEventListener("online", resumeOnUserPresence, {
+          signal: listeners.signal,
+        });
+        const sendAttach = () => {
+          if (emulator === undefined || attachSent) return;
+          attachSent = true;
+          const restartResident = nextRestartResident.current;
+          nextRestartResident.current = false;
+          socket.send(
+            JSON.stringify({
+              v: 1,
+              type: "attach",
+              terminal: "default",
+              dimensions: {
+                columns: terminalDimension(emulator.terminal.cols),
+                rows: terminalDimension(emulator.terminal.rows),
+              },
+              ...(restartResident ? { restartResident: true } : {}),
+            }),
+          );
+        };
+        socket.addEventListener(
+          "open",
+          () => {
+            socketOpened = true;
+            sendAttach();
+          },
+          { signal: listeners.signal },
+        );
+        emulator = await mountBrowserTerminal(
+          element,
+          (data) => {
+            if (ready && socket.readyState === WebSocket.OPEN)
+              socket.send(
+                new TextEncoder().encode(transformInput.current(data)),
+              );
+          },
+          terminalTheme,
+          // A hidden Terminal keeps its size, so its scrollback survives.
+          () => activeRef.current,
+        ).catch(() => {
+          listeners.abort();
+          socket.close();
+          return undefined;
+        });
+        if (emulator === undefined) return;
+        if (socketOpened || socket.readyState === WebSocket.OPEN) sendAttach();
+        const resize = emulator.terminal.onResize(({ cols, rows }) => {
+          if (
+            !applyingDimensions &&
+            attachSent &&
+            socket.readyState === WebSocket.OPEN
+          )
             socket.send(
               JSON.stringify({
                 v: 1,
-                type: "attach",
-                terminal: "default",
+                type: "resize",
                 dimensions: {
-                  columns: terminalDimension(emulator.terminal.cols),
-                  rows: terminalDimension(emulator.terminal.rows),
+                  columns: terminalDimension(cols),
+                  rows: terminalDimension(rows),
                 },
-                ...(restartResident ? { restartResident: true } : {}),
               }),
             );
-          };
-          socket.addEventListener(
-            "open",
-            () => {
-              socketOpened = true;
-              sendAttach();
-            },
-            { signal: listeners.signal },
-          );
-          emulator = await mountBrowserTerminal(
-            element,
-            (data) => {
-              if (ready && socket.readyState === WebSocket.OPEN)
-                socket.send(
-                  new TextEncoder().encode(transformInput.current(data)),
-                );
-            },
-            terminalTheme,
-            // A hidden Terminal keeps its size, so its scrollback survives.
-            () => activeRef.current,
-          ).catch(() => {
-            listeners.abort();
-            socket.close();
-            return undefined;
-          });
-          if (emulator === undefined) return;
-          if (socketOpened || socket.readyState === WebSocket.OPEN)
-            sendAttach();
-          const resize = emulator.terminal.onResize(({ cols, rows }) => {
-            if (
-              !applyingDimensions &&
-              attachSent &&
-              socket.readyState === WebSocket.OPEN
-            )
-              socket.send(
-                JSON.stringify({
-                  v: 1,
-                  type: "resize",
-                  dimensions: {
-                    columns: terminalDimension(cols),
-                    rows: terminalDimension(rows),
-                  },
-                }),
-              );
-          });
-          socket.addEventListener(
-            "message",
-            (event) => {
-              if (event.data instanceof ArrayBuffer) {
-                emulator.terminal.write(new Uint8Array(event.data));
-                return;
-              }
-              const decoded = decodeControl(event.data);
-              if (Option.isNone(decoded)) return;
-              const control = decoded.value;
-              // Any control answers a pending recovery request.
-              clearRecovery();
-              socketUnanswered = false;
-              if (control.type === "heartbeat") {
-                if (ready) expectHeartbeat();
-                return;
-              }
-              if (
-                control.type === "progress" &&
-                control.phase === "resident-restarting"
-              ) {
-                // Core lost the daemon and keeps this socket waiting: a
-                // present Terminal asks it to recover here; a retained hidden
-                // one waits for presence or for anything else to wake it.
-                ready = false;
-                clearHeartbeat();
-                unavailableObserved = true;
-                setStatus(control);
-                if (browserPresent()) requestRecovery();
-                return;
-              }
-              if (control.type === "progress" && control.phase === "waking") {
-                workspaceWakeActive = true;
-                onWorkspaceStatusChange?.(wakingExecutionEnvironmentMessage);
-              } else if (control.type === "ready" || control.type === "error") {
-                workspaceWakeActive = false;
-                onWorkspaceStatusChange?.(undefined);
-              }
-              if (control.type === "replay-start") {
-                ready = false;
-                unavailableObserved = false;
-                emulator.terminal.reset();
-              } else if (control.type === "ready") {
-                // The same socket can recover: a retained Terminal told the
-                // workspace paused becomes ready when anything else wakes it.
-                ready = true;
-                unavailableObserved = false;
-                safeCloseAnnounced = false;
-                expectHeartbeat();
-                setRestartRequired(control.restartRequired);
-                immediateReconnectAvailable.current = true;
-                automaticReconnectAttempt.current = 0;
-              } else if (control.type === "progress") {
-                // Core is already recovering this attachment.
-                ready = false;
-                unavailableObserved = false;
-              } else if (control.type === "restart-required")
-                setRestartRequired(true);
-              else if (control.type === "error") {
-                ready = false;
-                safeCloseAnnounced = true;
-                // A paused workspace keeps this socket open; Terminal
-                // activation or user presence is the intent to wake it.
-                if (control.retry === "on-focus") unavailableObserved = true;
-                if (
-                  control.retry === "on-focus" &&
-                  document.hasFocus() &&
-                  element.contains(document.activeElement)
-                ) {
-                  nextRestartResident.current = false;
-                  requestRecovery();
-                } else if (
-                  control.retry === "immediate-once" &&
-                  document.visibilityState === "visible" &&
-                  immediateReconnectAvailable.current
-                ) {
-                  immediateReconnectAvailable.current = false;
-                  nextRestartResident.current = false;
-                  setAttempt((value) => value + 1);
-                }
-              }
-              if (control.type === "ready" || control.type === "dimensions") {
-                applyingDimensions = true;
-                emulator.terminal.resize(
-                  control.dimensions.columns,
-                  control.dimensions.rows,
-                );
-                applyingDimensions = false;
-              }
-              setStatus(control);
-            },
-            { signal: listeners.signal },
-          );
-          const clearWorkspaceWake = () => {
-            if (!workspaceWakeActive) return;
-            workspaceWakeActive = false;
-            onWorkspaceStatusChange?.(undefined);
-          };
-          const unavailable = () => {
-            if (abort.signal.aborted || reconnecting) return;
-            // A socket that closes under a recovery request never answers it.
-            const recovering = recoveryTimer !== undefined;
-            clearRecovery();
-            if (safeCloseAnnounced && !recovering) return;
-            clearWorkspaceWake();
-            if (!unavailableObserved) {
-              startReconnect();
+        });
+        socket.addEventListener(
+          "message",
+          (event) => {
+            if (event.data instanceof ArrayBuffer) {
+              emulator.terminal.write(new Uint8Array(event.data));
               return;
             }
-            setStatus(disconnected);
-            if (recovering) reconnect();
-          };
-          socket.addEventListener("close", unavailable, {
-            signal: listeners.signal,
-          });
-          socket.addEventListener("error", unavailable, {
-            signal: listeners.signal,
-          });
-          dispose = () => {
-            listeners.abort();
-            if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
-            clearHeartbeat();
+            const decoded = decodeControl(event.data);
+            if (Option.isNone(decoded)) return;
+            const control = decoded.value;
+            // Any control answers a pending recovery request.
             clearRecovery();
-            clearWorkspaceWake();
-            resize.dispose();
-            emulator.dispose();
-            if (socket.readyState === WebSocket.OPEN)
-              socket.send(JSON.stringify({ v: 1, type: "detach" }));
-            socket.close();
-            if (refreshEnvironment.current === sendEnvironmentRefresh)
-              refreshEnvironment.current = () => {};
-            if (recoverDisconnected.current === resumeOnUserPresence)
-              recoverDisconnected.current = () => {};
-            if (setActivity.current === updateActivity)
-              setActivity.current = () => {};
-          };
-          if (abort.signal.aborted) dispose();
-        },
-        () => {},
-      );
-      return () => {
-        abort.abort();
-        dispose();
-      };
-    },
-    [loadEmulator, onWorkspaceStatusChange, terminalTheme, threadId],
-  );
+            socketUnanswered = false;
+            if (control.type === "heartbeat") {
+              if (ready) expectHeartbeat();
+              return;
+            }
+            if (
+              control.type === "progress" &&
+              control.phase === "resident-restarting"
+            ) {
+              // Core lost the daemon and keeps this socket waiting: a
+              // present Terminal asks it to recover here; a retained hidden
+              // one waits for presence or for anything else to wake it.
+              ready = false;
+              clearHeartbeat();
+              unavailableObserved = true;
+              setStatus(control);
+              if (browserPresent()) requestRecovery();
+              return;
+            }
+            if (control.type === "progress" && control.phase === "waking") {
+              workspaceWakeActive = true;
+              onWorkspaceStatusChange?.(wakingExecutionEnvironmentMessage);
+            } else if (control.type === "ready" || control.type === "error") {
+              workspaceWakeActive = false;
+              onWorkspaceStatusChange?.(undefined);
+            }
+            if (control.type === "replay-start") {
+              ready = false;
+              unavailableObserved = false;
+              emulator.terminal.reset();
+            } else if (control.type === "ready") {
+              // The same socket can recover: a retained Terminal told the
+              // workspace paused becomes ready when anything else wakes it.
+              ready = true;
+              unavailableObserved = false;
+              safeCloseAnnounced = false;
+              expectHeartbeat();
+              setRestartRequired(control.restartRequired);
+              immediateReconnectAvailable.current = true;
+              automaticReconnectAttempt.current = 0;
+            } else if (control.type === "progress") {
+              // Core is already recovering this attachment.
+              ready = false;
+              unavailableObserved = false;
+            } else if (control.type === "restart-required")
+              setRestartRequired(true);
+            else if (control.type === "error") {
+              ready = false;
+              safeCloseAnnounced = true;
+              // A paused workspace keeps this socket open; Terminal
+              // activation or user presence is the intent to wake it.
+              if (control.retry === "on-focus") unavailableObserved = true;
+              if (
+                control.retry === "on-focus" &&
+                document.hasFocus() &&
+                element.contains(document.activeElement)
+              ) {
+                nextRestartResident.current = false;
+                requestRecovery();
+              } else if (
+                control.retry === "immediate-once" &&
+                document.visibilityState === "visible" &&
+                immediateReconnectAvailable.current
+              ) {
+                immediateReconnectAvailable.current = false;
+                nextRestartResident.current = false;
+                setAttempt((value) => value + 1);
+              }
+            }
+            if (control.type === "ready" || control.type === "dimensions") {
+              applyingDimensions = true;
+              emulator.terminal.resize(
+                control.dimensions.columns,
+                control.dimensions.rows,
+              );
+              applyingDimensions = false;
+            }
+            setStatus(control);
+          },
+          { signal: listeners.signal },
+        );
+        const clearWorkspaceWake = () => {
+          if (!workspaceWakeActive) return;
+          workspaceWakeActive = false;
+          onWorkspaceStatusChange?.(undefined);
+        };
+        const unavailable = () => {
+          if (abort.signal.aborted || reconnecting) return;
+          // A socket that closes under a recovery request never answers it.
+          const recovering = recoveryTimer !== undefined;
+          clearRecovery();
+          if (safeCloseAnnounced && !recovering) return;
+          clearWorkspaceWake();
+          if (!unavailableObserved) {
+            startReconnect();
+            return;
+          }
+          setStatus(disconnected);
+          if (recovering) reconnect();
+        };
+        socket.addEventListener("close", unavailable, {
+          signal: listeners.signal,
+        });
+        socket.addEventListener("error", unavailable, {
+          signal: listeners.signal,
+        });
+        dispose = () => {
+          listeners.abort();
+          if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
+          clearHeartbeat();
+          clearRecovery();
+          clearWorkspaceWake();
+          resize.dispose();
+          emulator.dispose();
+          if (socket.readyState === WebSocket.OPEN)
+            socket.send(JSON.stringify({ v: 1, type: "detach" }));
+          socket.close();
+          if (refreshEnvironment.current === sendEnvironmentRefresh)
+            refreshEnvironment.current = () => {};
+          if (recoverDisconnected.current === resumeOnUserPresence)
+            recoverDisconnected.current = () => {};
+          if (setActivity.current === updateActivity)
+            setActivity.current = () => {};
+        };
+        if (abort.signal.aborted) dispose();
+      },
+      () => {},
+    );
+    return () => {
+      abort.abort();
+      dispose();
+    };
+  };
   const retry = (restart = true) => {
     nextRestartResident.current = restart;
     setStatus({ v: 1, type: "progress", phase: "waking" });
@@ -596,14 +595,11 @@ function ThreadTerminalSession(props: ThreadTerminalSessionProps) {
   } = useTerminalConnection(props);
   const mobile = useMobile();
   const active = props.active ?? true;
-  const recoverOnActivation = React.useCallback(
-    (element: HTMLSpanElement | null) => {
-      activeRef.current = element !== null;
-      setActivity.current(element !== null);
-      if (element !== null) recoverDisconnected.current();
-    },
-    [activeRef, recoverDisconnected, setActivity],
-  );
+  const recoverOnActivation = (element: HTMLSpanElement | null) => {
+    activeRef.current = element !== null;
+    setActivity.current(element !== null);
+    if (element !== null) recoverDisconnected.current();
+  };
   const wakeOnFocus = () => {
     if (
       status === disconnected ||
@@ -655,7 +651,7 @@ function ThreadTerminalSession(props: ThreadTerminalSessionProps) {
         <TerminalKeys
           disabled={loading}
           sendInput={sendInput}
-          transformInput={transformInput}
+          transformInputRef={transformInput}
         />
       ) : null}
     </form>

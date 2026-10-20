@@ -16,7 +16,7 @@ export interface GitHubAppConfiguration
   readonly webhookSecret: Redacted.Redacted<string>;
 }
 
-const encodedConfiguration = Config.redacted("DX_INTEGRATION_GITHUB_APP");
+const encodedConfiguration = Config.Redacted("DX_INTEGRATION_GITHUB_APP");
 
 export const loadGitHubAppConfiguration = Effect.fn(
   "loadGitHubAppConfiguration",

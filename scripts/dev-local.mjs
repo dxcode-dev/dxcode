@@ -204,7 +204,12 @@ for (const name of [
   delete coreEnvironment[name];
 }
 
-const pnpm = (...args) => [process.execPath, [pnpmCli, ...args]];
+// pnpm 9 points npm_execpath at a JavaScript entry point; pnpm 12 points it at
+// a native binary that Node cannot load.
+const pnpm = (...args) =>
+  /\.[cm]?js$/.test(pnpmCli)
+    ? [process.execPath, [pnpmCli, ...args]]
+    : [pnpmCli, args];
 const [migrationCommand, migrationArgs] = pnpm(
   "--filter",
   "@dx/core",

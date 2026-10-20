@@ -1,6 +1,5 @@
-import { type NotFoundRouteProps, Link } from "@tanstack/react-router";
+import { Link, type NotFoundRouteProps } from "@tanstack/react-router";
 import { AlertTriangle, Check } from "lucide-react";
-import * as React from "react";
 import { AppFrame } from "../../shared/layout/app-frame.js";
 
 const isInvalidSettingsScope = (data: unknown) =>
@@ -9,11 +8,12 @@ const isInvalidSettingsScope = (data: unknown) =>
   "code" in data &&
   data.code === "INVALID_SETTINGS_SCOPE";
 
+const focusHeading = (node: HTMLHeadingElement | null) => {
+  node?.focus();
+};
+
 export function SettingsRouteNotFound({ data }: NotFoundRouteProps) {
   const invalidScope = isInvalidSettingsScope(data);
-  const focusHeading = React.useCallback((node: HTMLHeadingElement | null) => {
-    node?.focus();
-  }, []);
   return (
     <AppFrame className="settings-stage">
       <main className="settings-shell settings-failure-shell">

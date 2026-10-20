@@ -78,6 +78,7 @@ import {
   GetSettingsContextErrorResponseSchema,
   GetSettingsContextResponseSchema,
   GetSigningKeysResponseSchema,
+  GetThreadListItemResponseSchema,
   GetThreadMembersResponseSchema,
   GetThreadReadinessResponseSchema,
   GetThreadResponseSchema,
@@ -1429,6 +1430,19 @@ export const setThreadArchived = async (
       : { changedChildThreadIds: response.changedChildThreadIds }),
   };
 };
+
+/** One Thread's sidebar row, exactly as the requester's lists hold it. */
+export const getThreadListItem = async (
+  threadId: ThreadId,
+  signal?: AbortSignal,
+): Promise<ThreadListClientItem> =>
+  (
+    await request(
+      `/v1/threads/${encodeURIComponent(threadId)}/list-item`,
+      GetThreadListItemResponseSchema,
+      { signal },
+    )
+  ).data;
 
 export const getThreadReadiness = async (
   threadId: ThreadId,

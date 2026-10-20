@@ -13,7 +13,7 @@ import {
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
 import { DateTime, Effect, Layer, Match, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/sql/SqlClient";
 import { projectPersistenceLogger } from "../logging.js";
 
 const ProjectRow = Schema.Struct({

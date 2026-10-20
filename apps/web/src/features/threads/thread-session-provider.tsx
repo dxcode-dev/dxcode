@@ -19,19 +19,16 @@ export function ThreadSessionProvider({
     () => new ThreadSessionRegistry(queryClient, userId),
   );
   const auth = useIdentity();
-  const retainedAuth = React.useMemo(
-    () =>
-      auth === undefined
-        ? undefined
-        : {
-            ...auth,
-            logout: () => {
-              registry.clear();
-              auth.logout();
-            },
+  const retainedAuth =
+    auth === undefined
+      ? undefined
+      : {
+          ...auth,
+          logout: () => {
+            registry.clear();
+            auth.logout();
           },
-    [auth, registry],
-  );
+        };
   useMountEffect(() => {
     // StrictMode immediately reacquires the same provider before the microtask.
     const lease = { live: true };

@@ -1,0 +1,18 @@
+{
+  "scenario": "60 changes.invalidated hints in a minute for one working Thread, one loaded Thread list",
+  "before": "PR 913 refetched each list holding the Thread when its totals moved: 0, 10, and 60 list refetches",
+  "perMinute": {
+    "noTotalsMoved": {
+      "listRefetches": 0,
+      "rowReads": 0
+    },
+    "tenTotalsMoved": {
+      "listRefetches": 0,
+      "rowReads": 10
+    },
+    "everyTotalsMoved": {
+      "listRefetches": 0,
+      "rowReads": 60
+    }
+  }
+}

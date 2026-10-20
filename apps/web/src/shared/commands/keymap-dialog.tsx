@@ -1,4 +1,4 @@
-import { useLocation, useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { Pencil } from "lucide-react";
 import { settingsNavigationState } from "../navigation/settings-return.js";
 import { CommandSurfaceDialog } from "../ui/command-surface-dialog.js";
@@ -20,7 +20,7 @@ export function KeymapDialog({
   readonly commands: ReadonlyArray<CommandView<CommandId>>;
 }) {
   const navigate = useNavigate();
-  const returnTo = useLocation({ select: (location) => location.href });
+  const router = useRouter();
   const visible = commands.filter(
     (command) => command.available && command.displayedBindings.length > 0,
   );
@@ -40,7 +40,7 @@ export function KeymapDialog({
             void navigate({
               to: "/settings/$section",
               params: { section: "keyboard-shortcuts" },
-              state: settingsNavigationState(returnTo),
+              state: settingsNavigationState(router.state.location.href),
             });
           }}
         >

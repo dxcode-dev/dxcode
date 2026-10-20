@@ -34,14 +34,14 @@ export function ThreadArchiveProvider({
   const dismissTimer = React.useRef<number | undefined>(undefined);
   const mutationPending = React.useRef(false);
 
-  const dismiss = React.useCallback(() => {
+  const dismiss = () => {
     if (dismissTimer.current !== undefined)
       window.clearTimeout(dismissTimer.current);
     dismissTimer.current = undefined;
     setNotice(undefined);
-  }, []);
+  };
 
-  const showTemporary = React.useCallback((next: ArchiveNotice) => {
+  const showTemporary = (next: ArchiveNotice) => {
     if (dismissTimer.current !== undefined)
       window.clearTimeout(dismissTimer.current);
     setNotice(next);
@@ -49,97 +49,91 @@ export function ThreadArchiveProvider({
       dismissTimer.current = undefined;
       setNotice(undefined);
     }, 6_000);
-  }, []);
+  };
 
-  const noticeLifetimeRef = React.useCallback((node: HTMLDivElement | null) => {
+  const noticeLifetimeRef = (node: HTMLDivElement | null) => {
     if (node === null) return;
     return () => {
       if (dismissTimer.current !== undefined)
         window.clearTimeout(dismissTimer.current);
       dismissTimer.current = undefined;
     };
-  }, []);
+  };
 
   /**
    * `children`: true for every child in the parent's former state, or the
    * exact children an Undo restores.
    */
-  const changeArchived = React.useCallback(
-    (
-      threadId: ThreadId,
-      archived: boolean,
-      children?: true | ReadonlyArray<ThreadId>,
-    ) => {
-      const includeChildren = children !== undefined;
-      if (mutationPending.current) return;
-      mutationPending.current = true;
-      if (dismissTimer.current !== undefined)
-        window.clearTimeout(dismissTimer.current);
-      dismissTimer.current = undefined;
-      setNotice({
-        kind: "progress",
-        message: archived
-          ? includeChildren
-            ? "Archiving threads…"
-            : "Archiving thread…"
-          : "Unarchiving thread…",
-      });
-      mutate(
-        children === undefined
-          ? { threadId, archived }
-          : { threadId, archived, children },
-        {
-          onSuccess: ({ thread, changedChildThreadIds }: ArchivedThread) =>
-            showTemporary({
-              kind: "success",
-              message: archived
-                ? includeChildren
-                  ? "Archived threads"
-                  : "Archived thread"
-                : "Unarchived thread",
-              ...(archived
-                ? {
-                    undoThreadId: thread.id,
-                    ...(changedChildThreadIds === undefined ||
-                    changedChildThreadIds.length === 0
-                      ? {}
-                      : { undoChildThreadIds: changedChildThreadIds }),
-                  }
-                : {}),
-            }),
-          onError: (cause) =>
-            showTemporary({
-              kind: "error",
-              message:
-                cause instanceof Error
-                  ? cause.message
-                  : archived
-                    ? "Thread could not be archived."
-                    : "Thread could not be unarchived.",
-            }),
-          onSettled: () => {
-            mutationPending.current = false;
-          },
+  const changeArchived = (
+    threadId: ThreadId,
+    archived: boolean,
+    children?: true | ReadonlyArray<ThreadId>,
+  ) => {
+    const includeChildren = children !== undefined;
+    if (mutationPending.current) return;
+    mutationPending.current = true;
+    if (dismissTimer.current !== undefined)
+      window.clearTimeout(dismissTimer.current);
+    dismissTimer.current = undefined;
+    setNotice({
+      kind: "progress",
+      message: archived
+        ? includeChildren
+          ? "Archiving threads…"
+          : "Archiving thread…"
+        : "Unarchiving thread…",
+    });
+    mutate(
+      children === undefined
+        ? { threadId, archived }
+        : { threadId, archived, children },
+      {
+        onSuccess: ({ thread, changedChildThreadIds }: ArchivedThread) =>
+          showTemporary({
+            kind: "success",
+            message: archived
+              ? includeChildren
+                ? "Archived threads"
+                : "Archived thread"
+              : "Unarchived thread",
+            ...(archived
+              ? {
+                  undoThreadId: thread.id,
+                  ...(changedChildThreadIds === undefined ||
+                  changedChildThreadIds.length === 0
+                    ? {}
+                    : { undoChildThreadIds: changedChildThreadIds }),
+                }
+              : {}),
+          }),
+        onError: (cause) =>
+          showTemporary({
+            kind: "error",
+            message:
+              cause instanceof Error
+                ? cause.message
+                : archived
+                  ? "Thread could not be archived."
+                  : "Thread could not be unarchived.",
+          }),
+        onSettled: () => {
+          mutationPending.current = false;
         },
-      );
-    },
-    [mutate, showTemporary],
-  );
+      },
+    );
+  };
 
-  const setArchived = React.useCallback(
-    (threadId: ThreadId, archived: boolean, includeChildren = false) =>
-      changeArchived(threadId, archived, includeChildren ? true : undefined),
-    [changeArchived],
-  );
+  const setArchived = (
+    threadId: ThreadId,
+    archived: boolean,
+    includeChildren = false,
+  ) => changeArchived(threadId, archived, includeChildren ? true : undefined);
 
-  const controller = React.useMemo<ThreadArchiveController>(
-    () => ({
-      setArchived,
-      pendingThreadId: isPending ? variables.threadId : undefined,
-      pendingArchived: isPending ? variables.archived : undefined,
-    }),
-    [isPending, setArchived, variables],
-  );
+  const controller: ThreadArchiveController = {
+    setArchived,
+    pendingThreadId: isPending ? variables.threadId : undefined,
+    pendingArchived: isPending ? variables.archived : undefined,
+  };
 
   return (
     <ThreadArchiveContext.Provider value={controller}>

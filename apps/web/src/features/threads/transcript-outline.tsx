@@ -1,6 +1,5 @@
 import { Menu } from "@base-ui/react/menu";
 import { List } from "lucide-react";
-import * as React from "react";
 import type {
   TranscriptOutlineAnchor,
   TranscriptRowId,
@@ -11,24 +10,31 @@ const timestampFormatter = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
 });
 
+interface TranscriptOutlineProps {
+  readonly anchors: ReadonlyArray<TranscriptOutlineAnchor>;
+  readonly visibleRowIds: ReadonlySet<TranscriptRowId>;
+  readonly onNavigate: (anchor: TranscriptOutlineAnchor) => void;
+  readonly onOpen: () => void;
+}
+
+const currentItemRef = (element: HTMLElement | null) => {
+  if (element === null) return;
+  requestAnimationFrame(() => element.scrollIntoView?.({ block: "start" }));
+};
+
+/**
+ * The outline changes when a prompt is added or scrolls into view, not when
+ * a reply streams: the transcript keeps its anchors and handlers stable.
+ */
 export function TranscriptOutline({
   anchors,
   visibleRowIds,
   onNavigate,
   onOpen,
-}: {
-  readonly anchors: ReadonlyArray<TranscriptOutlineAnchor>;
-  readonly visibleRowIds: ReadonlySet<TranscriptRowId>;
-  readonly onNavigate: (rowId: TranscriptRowId) => void;
-  readonly onOpen: () => void;
-}) {
+}: TranscriptOutlineProps) {
   const currentRowId = anchors.find((anchor) =>
     visibleRowIds.has(anchor.rowId),
   )?.rowId;
-  const currentItemRef = React.useCallback((element: HTMLElement | null) => {
-    if (element === null) return;
-    requestAnimationFrame(() => element.scrollIntoView?.({ block: "start" }));
-  }, []);
   if (anchors.length <= 1) return null;
 
   return (
@@ -56,7 +62,7 @@ export function TranscriptOutline({
                 }
                 ref={anchor.rowId === currentRowId ? currentItemRef : undefined}
                 key={anchor.id}
-                onClick={() => onNavigate(anchor.rowId)}
+                onClick={() => onNavigate(anchor)}
               >
                 <span>{anchor.label}</span>
                 {anchor.timestamp ? (

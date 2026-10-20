@@ -1,0 +1,15 @@
+{
+  "scenario": "One turn of a Thread in a sidebar of 100 roots: thread.invalidated when queued and settled, three changes.invalidated of which two moved totals",
+  "before": {
+    "list": 4,
+    "shared": 2,
+    "row": 0,
+    "threadRowsReturned": 400
+  },
+  "after": {
+    "list": 0,
+    "shared": 0,
+    "row": 4,
+    "threadRowsReturned": 4
+  }
+}

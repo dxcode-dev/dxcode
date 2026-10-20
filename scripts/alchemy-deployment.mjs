@@ -2623,19 +2623,20 @@ export const isolatedAlchemyEnvironment = (inherited, deployment) => ({
   XDG_CONFIG_HOME: `${deployment.authHome}/.config`,
 });
 
+/**
+ * Gives Alchemy an empty `dx-deployment` profile in the isolated home.
+ * Alchemy 2.0.0-beta.83 reads environment credentials ahead of any profile,
+ * so the profile holds no provider; it only has to exist.
+ */
 export const writeDeploymentAlchemyProfile = (authHome) => {
   const alchemyDirectory = resolve(authHome, ".alchemy");
-  mkdirSync(alchemyDirectory, { recursive: true, mode: 0o700 });
-  chmodSync(authHome, 0o700);
-  chmodSync(alchemyDirectory, 0o700);
-  const profilePath = resolve(alchemyDirectory, "profiles.json");
-  writeFileSync(
-    profilePath,
-    `${JSON.stringify({
-      version: 0,
-      profiles: { "dx-deployment": { Cloudflare: { method: "env" } } },
-    })}\n`,
-    { mode: 0o600 },
-  );
-  chmodSync(profilePath, 0o600);
+  const profileDirectory = resolve(alchemyDirectory, "profiles/dx-deployment");
+  mkdirSync(profileDirectory, { recursive: true, mode: 0o700 });
+  for (const directory of [
+    authHome,
+    alchemyDirectory,
+    resolve(alchemyDirectory, "profiles"),
+    profileDirectory,
+  ])
+    chmodSync(directory, 0o700);
 };

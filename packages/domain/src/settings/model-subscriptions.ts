@@ -3,19 +3,19 @@ import { Timestamp } from "../persistence/timestamp.js";
 import { UserId } from "../users/user-id.js";
 import { BrowserSessionId } from "./personal-security.js";
 
-const identifier = (brand: string) =>
-  Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)).pipe(
-    Schema.brand(brand),
-  );
+const Identifier = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(128),
+);
 
-export const PersonalModelSubscriptionConnectionId = identifier(
-  "@dx/PersonalModelSubscriptionConnectionId",
+export const PersonalModelSubscriptionConnectionId = Identifier.pipe(
+  Schema.brand("@dx/PersonalModelSubscriptionConnectionId"),
 );
 export type PersonalModelSubscriptionConnectionId =
   typeof PersonalModelSubscriptionConnectionId.Type;
 
-export const PersonalModelSubscriptionAuthorizationId = identifier(
-  "@dx/PersonalModelSubscriptionAuthorizationId",
+export const PersonalModelSubscriptionAuthorizationId = Identifier.pipe(
+  Schema.brand("@dx/PersonalModelSubscriptionAuthorizationId"),
 );
 export type PersonalModelSubscriptionAuthorizationId =
   typeof PersonalModelSubscriptionAuthorizationId.Type;

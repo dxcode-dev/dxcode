@@ -16,6 +16,10 @@
         "name": "@effect/language-service",
         "diagnostics": true,
         "diagnosticSeverity": {},
+        "allowedUnstableApis": [
+          "@effect/sql-d1/D1Client",
+          "effect/sql/SqlClient"
+        ],
         "includeSuggestionsInTsc": true,
         "ignoreEffectSuggestionsInTscExitCode": true,
         "ignoreEffectWarningsInTscExitCode": false,

@@ -70,12 +70,13 @@ function Submenu({
 export function ThreadMenu({
   thread,
   project,
-  model,
+  transcript,
   onOpenShare,
 }: {
   readonly thread: ThreadDetailData;
   readonly project?: Pick<ProjectData, "name">;
-  readonly model: TranscriptViewModel;
+  /** Reads the shown transcript when an export runs. */
+  readonly transcript: () => TranscriptViewModel;
   readonly onOpenShare?: () => void;
 }) {
   const archive = useOptionalThreadArchive();
@@ -94,6 +95,7 @@ export function ThreadMenu({
   };
   const download = (format: "markdown" | "json") => {
     const markdown = format === "markdown";
+    const model = transcript();
     const contents = markdown
       ? serializeThreadMarkdown({ thread, project, model })
       : serializeThreadJson({ thread, project, model });

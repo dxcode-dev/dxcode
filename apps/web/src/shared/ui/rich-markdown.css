@@ -43,7 +43,8 @@
 .markdown.transcript-markdown ol {
   list-style-type: decimal;
 }
-.markdown.transcript-markdown li:has(> input[type="checkbox"]) {
+/* GFM marks task items; a :has() rule restyled the whole page per insertion. */
+.markdown.transcript-markdown li.task-list-item {
   list-style: none;
 }
 .markdown.transcript-markdown blockquote {

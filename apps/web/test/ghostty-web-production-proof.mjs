@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { readFile, stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { chromium } from "playwright-core";
@@ -28,6 +28,15 @@ assert.equal(
   0,
   "production build failed",
 );
+
+const assets = await readdir(join(root, "assets"));
+for (const name of assets.filter((asset) => asset.endsWith(".js")))
+  assert(
+    !(await readFile(join(root, "assets", name), "utf8")).includes(
+      "data:application/wasm",
+    ),
+    `${name} embeds the Terminal's WebAssembly as a data URL`,
+  );
 
 const server = createServer(async (request, response) => {
   if (request.url === "/favicon.ico") return response.writeHead(204).end();
@@ -158,6 +167,66 @@ try {
     "link activation did not open the detected URL target",
   );
 
+  const rendering = await page.evaluate(async () => {
+    const terminal = window.ghosttyProof.terminal;
+    const canvas = window.ghosttyProof.element.querySelector("canvas");
+    let draws = 0;
+    const prototype = CanvasRenderingContext2D.prototype;
+    const restore = ["fillRect", "fillText", "clearRect"].map((name) => {
+      const draw = prototype[name];
+      prototype[name] = function (...args) {
+        if (this.canvas === canvas) draws++;
+        return draw.apply(this, args);
+      };
+      return () => {
+        prototype[name] = draw;
+      };
+    });
+    const frames = (count) =>
+      new Promise((resolve) => {
+        const step = (left) =>
+          left === 0 ? resolve() : requestAnimationFrame(() => step(left - 1));
+        step(count);
+      });
+    await frames(5);
+    draws = 0;
+    await frames(30);
+    const idleDraws = draws;
+    terminal.write("output\r\n");
+    await frames(2);
+    const outputDraws = draws - idleDraws;
+    window.ghosttyProof.setVisible(false);
+    draws = 0;
+    terminal.write("hidden output\r\n");
+    await frames(5);
+    const hiddenDraws = draws;
+    window.ghosttyProof.setVisible(true);
+    const revealDraws = draws - hiddenDraws;
+    for (const undo of restore) undo();
+    return {
+      idleDraws,
+      outputDraws,
+      hiddenDraws,
+      revealDraws,
+      wasmAssets: performance
+        .getEntriesByType("resource")
+        .map(({ name }) => name)
+        .filter((name) => name.endsWith(".wasm")).length,
+    };
+  });
+  assert.equal(rendering.idleDraws, 0, "an idle Terminal kept drawing");
+  assert(rendering.outputDraws > 0, "the Terminal did not draw its output");
+  assert.equal(rendering.hiddenDraws, 0, "a hidden Terminal drew output");
+  assert(
+    rendering.revealDraws > 0,
+    "showing the Terminal did not draw its output before the next paint",
+  );
+  assert.equal(
+    rendering.wasmAssets,
+    1,
+    "the WebAssembly did not load as one separate asset",
+  );
+
   const accessibility = await page.locator("#terminal").evaluate((element) => ({
     role: element.getAttribute("role"),
     label: element.getAttribute("aria-label"),
@@ -285,6 +354,7 @@ try {
         browser: await browser.version(),
         csp,
         ...result,
+        rendering,
         observerCleaned,
         remounted,
       },

@@ -27,10 +27,10 @@ const CaretMarker = ({
 }: {
   readonly textarea: HTMLTextAreaElement;
 }) => {
-  const form = textarea.closest("form");
   const markerRef = React.useRef<HTMLSpanElement>(null);
   useMountEffect(() => {
     const marker = markerRef.current;
+    const form = textarea.closest("form");
     if (!marker || !form) return;
     const previousPosition = form.style.position;
     if (getComputedStyle(form).position === "static")
@@ -104,6 +104,7 @@ const CaretMarker = ({
       form.style.position = previousPosition;
     };
   });
+  const form = textarea.closest("form");
   return form
     ? createPortal(
         <span
@@ -116,6 +117,19 @@ const CaretMarker = ({
         form,
       )
     : null;
+};
+
+/** Render must not read the textarea ref, so the marker waits for mount. */
+const DictationCaret = ({
+  textareaRef,
+}: {
+  readonly textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+}) => {
+  const [textarea, setTextarea] = React.useState<HTMLTextAreaElement | null>(
+    null,
+  );
+  useMountEffect(() => setTextarea(textareaRef.current));
+  return textarea === null ? null : <CaretMarker textarea={textarea} />;
 };
 
 export const useDictation = ({
@@ -249,65 +263,56 @@ export const useDictation = ({
     void capture.start(() => void finish("insert"), live.push);
   };
 
-  const preserveOnExit = React.useCallback(
-    (deferPublication = false) => {
-      generation.current += 1;
-      abort.current?.abort();
-      if (jobId.current) void cancelDictationJob(jobId.current);
-      jobId.current = undefined;
-      const retained = recovery.getSnapshot();
-      if (retained.state === "retained") {
-        const fail = () =>
-          recovery.fail(
-            retained.audio,
+  const preserveOnExit = (deferPublication = false) => {
+    generation.current += 1;
+    abort.current?.abort();
+    if (jobId.current) void cancelDictationJob(jobId.current);
+    jobId.current = undefined;
+    const retained = recovery.getSnapshot();
+    if (retained.state === "retained") {
+      const fail = () =>
+        recovery.fail(
+          retained.audio,
+          "Dictation was saved after leaving the composer.",
+        );
+      if (deferPublication) queueMicrotask(fail);
+      else fail();
+    }
+    if (capture.getSnapshot().state === "recording" && !finishing.current) {
+      finishing.current = true;
+      void capture.finish().then((audio) => {
+        recording.current?.take()?.close();
+        if (audio.size > 44)
+          recovery.retain(
+            audio,
+            "insert",
             "Dictation was saved after leaving the composer.",
           );
-        if (deferPublication) queueMicrotask(fail);
-        else fail();
-      }
-      if (capture.getSnapshot().state === "recording" && !finishing.current) {
-        finishing.current = true;
-        void capture.finish().then((audio) => {
-          recording.current?.take()?.close();
-          if (audio.size > 44)
-            recovery.retain(
-              audio,
-              "insert",
-              "Dictation was saved after leaving the composer.",
-            );
-        });
-        return;
-      }
-      if (!finishing.current) {
-        recording.current?.take()?.close();
-        void capture.cancel();
-      }
-    },
-    [capture, recovery],
-  );
+      });
+      return;
+    }
+    if (!finishing.current) {
+      recording.current?.take()?.close();
+      void capture.cancel();
+    }
+  };
 
-  const sendRef = React.useCallback(
-    (node: HTMLButtonElement | null) => {
-      if (node === null) return;
-      send.current = onSend;
-      if (locked && !lockedRef.current) {
-        preserveOnExit();
-        mutation.reset();
-        finishing.current = false;
-        setProcessingIntent(undefined);
-      }
-      lockedRef.current = locked;
-    },
-    [locked, mutation, onSend, preserveOnExit],
-  );
+  const sendRef = (node: HTMLButtonElement | null) => {
+    if (node === null) return;
+    send.current = onSend;
+    if (locked && !lockedRef.current) {
+      preserveOnExit();
+      mutation.reset();
+      finishing.current = false;
+      setProcessingIntent(undefined);
+    }
+    lockedRef.current = locked;
+  };
 
-  const lifetimeRef = React.useCallback(
-    (node: HTMLSpanElement | null) => {
-      if (node === null) return;
-      return () => preserveOnExit(true);
-    },
-    [preserveOnExit],
-  );
+  const lifetimeRef = (node: HTMLSpanElement | null) => {
+    if (node === null) return;
+    return () => preserveOnExit(true);
+  };
   const start = () => {
     if (!enabled || locked) return;
     if (
@@ -484,9 +489,7 @@ export const useDictation = ({
         </span>
       ) : null}
       {snapshot.state === "recording" && processingIntent === undefined ? (
-        textareaRef.current ? (
-          <CaretMarker textarea={textareaRef.current} />
-        ) : null
+        <DictationCaret textareaRef={textareaRef} />
       ) : null}
     </span>
   ) : undefined;

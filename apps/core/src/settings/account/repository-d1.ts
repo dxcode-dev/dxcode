@@ -8,7 +8,7 @@ import {
   type UserId,
 } from "@dx/domain";
 import { Effect, Layer, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/sql/SqlClient";
 import { settingsPersistenceLogger } from "../../logging.js";
 
 const PersonalAccountRow = Schema.Struct({

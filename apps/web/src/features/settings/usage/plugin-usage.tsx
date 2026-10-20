@@ -191,7 +191,7 @@ function PluginUsageRangeForm({
   readonly onApply: (range: PluginUsageRange) => void;
 }) {
   const formId = React.useId();
-  const initial = React.useMemo(initialRange, []);
+  const [initial] = React.useState(initialRange);
   const [from, setFrom] = React.useState(initial.from);
   const [to, setTo] = React.useState(initial.to);
   return (

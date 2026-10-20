@@ -4,13 +4,20 @@ import { splitMentions } from "@dx/api";
 import { Check, Code, Copy, Image, WrapText } from "lucide-react";
 import * as React from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
-import rehypeHighlight from "rehype-highlight";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { useTheme } from "../theme/theme-provider.js";
+import {
+  codeLanguage,
+  type HighlightedLines,
+  type HighlightNode,
+  highlightClosedCode,
+  highlightCode,
+  highlightStreamingCode,
+} from "./code-highlight.js";
 import { FileContextMenu } from "./file-context-menu.js";
-import { settledMarkdownBlocks } from "./markdown-blocks.js";
+import { codeFenceBlock, settledMarkdownBlocks } from "./markdown-blocks.js";
 import {
   MarkdownFileLinkContext,
   type MarkdownFileLinkResolver,
@@ -62,13 +69,13 @@ function CopyButton({
     undefined,
   );
   const button = React.useRef<HTMLButtonElement | null>(null);
-  const attach = React.useCallback((element: HTMLButtonElement | null) => {
+  const attach = (element: HTMLButtonElement | null) => {
     button.current = element;
     return () => {
       button.current = null;
       clearTimeout(timer.current);
     };
-  }, []);
+  };
   const copy = async () => {
     clearTimeout(timer.current);
     setStatus("idle");
@@ -125,9 +132,16 @@ const codeLanguages = (content: React.ReactNode) => {
     : [];
 };
 
-function CodeBlock({ content }: { readonly content: React.ReactNode }) {
+function CodeBlock({
+  content,
+  source = nodeText(content),
+}: {
+  readonly content: React.ReactNode;
+  /** The text of `content`, when the caller already has it. */
+  readonly source?: string;
+}) {
   const [wrap, setWrap] = React.useState(false);
-  const text = nodeText(content).replace(/\n$/, "");
+  const text = source.replace(/\n$/, "");
   const diagram = codeLanguages(content).includes("language-diagram");
   return (
     <div
@@ -183,11 +197,17 @@ const UnsettledMarkdown = React.createContext(false);
  * A ```mermaid fence as a diagram. The source block stays mounted while the
  * diagram renders and when it cannot, so its copy and wrap state survive.
  */
-function MermaidBlock({ content }: { readonly content: React.ReactNode }) {
+function MermaidBlock({
+  content,
+  text = nodeText(content),
+}: {
+  readonly content: React.ReactNode;
+  readonly text?: string;
+}) {
   const unsettled = React.useContext(UnsettledMarkdown);
   const { resolvedAppearance } = useTheme();
   const [showSource, setShowSource] = React.useState(false);
-  const source = nodeText(content).replace(/\n$/, "");
+  const source = text.replace(/\n$/, "");
   const renders = !unsettled && source.trim() !== "";
   if (renders) requestMermaid(source, resolvedAppearance);
   const image = React.useSyncExternalStore(
@@ -198,7 +218,7 @@ function MermaidBlock({ content }: { readonly content: React.ReactNode }) {
   if (!image || showSource)
     return (
       <div className="markdown-mermaid-source">
-        <CodeBlock content={content} />
+        <CodeBlock content={content} source={text} />
         {image && (
           <button
             type="button"
@@ -247,26 +267,23 @@ function KatexFormula({
   const unsettled = React.useContext(UnsettledMarkdown);
   // KaTeX writes into an element React leaves empty, so React never
   // reconciles its output.
-  const render = React.useCallback(
-    (element: HTMLElement | null) => {
-      if (element === null || katex === undefined) return;
-      const options = {
-        displayMode: display,
-        strict: "ignore",
-        trust: false,
-        output: "htmlAndMathml",
-      } as const;
-      try {
-        katex.render(source, element, { ...options, throwOnError: true });
-      } catch {
-        // A formula still streaming is often incomplete; show its source
-        // until it settles. Settled invalid TeX shows KaTeX's error.
-        if (unsettled) element.textContent = source;
-        else katex.render(source, element, { ...options, throwOnError: false });
-      }
-    },
-    [katex, source, display, unsettled],
-  );
+  const render = (element: HTMLElement | null) => {
+    if (element === null || katex === undefined) return;
+    const options = {
+      displayMode: display,
+      strict: "ignore",
+      trust: false,
+      output: "htmlAndMathml",
+    } as const;
+    try {
+      katex.render(source, element, { ...options, throwOnError: true });
+    } catch {
+      // A formula still streaming is often incomplete; show its source
+      // until it settles. Settled invalid TeX shows KaTeX's error.
+      if (unsettled) element.textContent = source;
+      else katex.render(source, element, { ...options, throwOnError: false });
+    }
+  };
   if (katex === undefined) return fallback;
   return display ? (
     <div className="markdown-math-display" ref={render} />
@@ -399,6 +416,143 @@ function MarkdownLink({
   );
 }
 
+/**
+ * Code, highlighted as rehype-highlight did with `detect: false`. Highlighting
+ * here rather than in the syntax tree keeps react-markdown from walking and
+ * converting every highlighted token.
+ */
+function MarkdownCode({
+  node: _node,
+  className,
+  children: content,
+  ...props
+}: React.ComponentProps<"code"> & { readonly node?: unknown }) {
+  if (className?.split(" ").includes("math-inline"))
+    return <MathFormula source={nodeText(content)} display={false} />;
+  const language = codeLanguage(className);
+  if (!language)
+    return (
+      <code className={className} {...props}>
+        {content}
+      </code>
+    );
+  const highlighted =
+    typeof content === "string" ? highlightCode(language, content) : undefined;
+  return (
+    <code className={`hljs ${className}`} {...props}>
+      {highlighted === undefined || highlighted.length === 0
+        ? content
+        : highlightNodes(highlighted).elements}
+    </code>
+  );
+}
+
+function MarkdownPre({
+  children: content,
+  text,
+}: {
+  readonly children?: React.ReactNode;
+  /** The text of `children`, when the caller already has it. */
+  readonly text?: string;
+}) {
+  const languages = codeLanguages(content);
+  if (languages.includes("math-display"))
+    return (
+      <MathFormula
+        source={(text ?? nodeText(content)).replace(/\n$/, "")}
+        display={true}
+      />
+    );
+  if (languages.includes("language-mermaid"))
+    return <MermaidBlock content={content} text={text} />;
+  return <CodeBlock content={content} source={text} />;
+}
+
+/** Highlighted spans, keyed by the code offset where each starts. */
+const highlightNodes = (
+  nodes: ReadonlyArray<HighlightNode>,
+  start = 0,
+): { readonly elements: React.ReactNode[]; readonly end: number } => {
+  let offset = start;
+  const elements = nodes.map((node) => {
+    if (typeof node === "string") {
+      offset += node.length;
+      return node;
+    }
+    const at = offset;
+    const children = highlightNodes(node.children, at);
+    offset = children.end;
+    return (
+      <span key={at} className={node.className}>
+        {children.elements}
+      </span>
+    );
+  });
+  return { elements, end: offset };
+};
+
+// biome-ignore lint/plugin: each chunk re-maps every run of the fence; memo skips the runs that kept their lines.
+const HighlightedRun = React.memo(function HighlightedRun({
+  lines,
+}: {
+  readonly lines: HighlightedLines;
+}) {
+  return highlightNodes(lines.nodes, lines.start).elements;
+});
+
+/**
+ * A block that is one fenced code block while its reply streams, rendered as
+ * react-markdown renders it without parsing it on every chunk. While open,
+ * lines highlighted on an earlier chunk keep their output and only the
+ * newest lines are highlighted again. Once closed it shows the exact
+ * highlighting of settled Markdown, keeping the lines whose output did not
+ * change, its wrap state, and its copy button.
+ */
+// biome-ignore lint/plugin: each chunk re-maps every block; memo skips fences above the streaming tail.
+const StreamingCodeFence = React.memo(function StreamingCodeFence({
+  language,
+  code,
+  closed,
+}: {
+  readonly language: string | undefined;
+  readonly code: string;
+  readonly closed: boolean;
+}) {
+  // remark-rehype ends non-empty code with a newline.
+  const source = code === "" ? "" : `${code}\n`;
+  const next = closed ? highlightClosedCode : highlightStreamingCode;
+  const [highlight, setHighlight] = React.useState(() =>
+    next(undefined, language, source),
+  );
+  let current = highlight;
+  // Each chunk extends the previous highlight: adjust state during render.
+  if (
+    current.source !== source ||
+    current.language !== language ||
+    current.exact !== closed
+  ) {
+    current = next(current, language, source);
+    setHighlight(current);
+  }
+  const runs = current.settled.map((lines) => (
+    <HighlightedRun key={lines.start} lines={lines} />
+  ));
+  return (
+    <UnsettledMarkdown value={!closed}>
+      <MarkdownPre text={source}>
+        <code
+          className={
+            language === undefined ? undefined : `hljs language-${language}`
+          }
+        >
+          {runs}
+          {highlightNodes(current.tail, current.settledLength).elements}
+        </code>
+      </MarkdownPre>
+    </UnsettledMarkdown>
+  );
+});
+
 // Stable across renders so react-markdown does not rebuild its processor
 // configuration on every parse.
 const remarkPlugins: React.ComponentProps<
@@ -414,11 +568,6 @@ const remarkPlugins: React.ComponentProps<
 const documentRemarkPlugins: React.ComponentProps<
   typeof ReactMarkdown
 >["remarkPlugins"] = [remarkGfm, [remarkMath, { singleDollarTextMath: false }]];
-const rehypePlugins: React.ComponentProps<
-  typeof ReactMarkdown
->["rehypePlugins"] = [
-  [rehypeHighlight, { detect: false, ignoreMissing: true }],
-];
 const urlTransform = (url: string) =>
   url.startsWith("file:///") || fileLineReference.test(url)
     ? url
@@ -550,31 +699,13 @@ const markdownComponents = (
       aria-label={props.checked ? "Completed task" : "Incomplete task"}
     />
   ),
-  code: ({ node: _node, className, children: content, ...props }) =>
-    className?.split(" ").includes("math-inline") ? (
-      <MathFormula source={nodeText(content)} display={false} />
-    ) : (
-      <code className={className} {...props}>
-        {content}
-      </code>
-    ),
-  pre: ({ children: content }) => {
-    const languages = codeLanguages(content);
-    if (languages.includes("math-display"))
-      return (
-        <MathFormula
-          source={nodeText(content).replace(/\n$/, "")}
-          display={true}
-        />
-      );
-    if (languages.includes("language-mermaid"))
-      return <MermaidBlock content={content} />;
-    return <CodeBlock content={content} />;
-  },
+  code: MarkdownCode,
+  pre: MarkdownPre,
   table: ({ children: content }) => <MarkdownTable content={content} />,
 });
 
 /** One parsed Markdown document; memoized on its source text. */
+// biome-ignore lint/plugin: streaming re-maps every block on each chunk; memo keeps settled blocks from re-parsing.
 const MarkdownDocument = React.memo(function MarkdownDocument({
   children,
   unsettled,
@@ -586,22 +717,17 @@ const MarkdownDocument = React.memo(function MarkdownDocument({
 }) {
   const resolveFile = React.useContext(MarkdownFileLinkContext);
   const mentions = React.useContext(MarkdownMentionContext);
-  const components = React.useMemo(
-    () => markdownComponents(resolveFile, mentions),
-    [resolveFile, mentions],
-  );
+  const components = markdownComponents(resolveFile, mentions);
   const handles = mentions?.handles;
-  const plugins = React.useMemo(() => {
-    const base = hardWrapped ? documentRemarkPlugins : remarkPlugins;
-    return handles === undefined || handles.length === 0
+  const base = hardWrapped ? documentRemarkPlugins : remarkPlugins;
+  const plugins =
+    handles === undefined || handles.length === 0
       ? base
       : [...(base ?? []), remarkMentions(handles)];
-  }, [handles, hardWrapped]);
   return (
     <UnsettledMarkdown value={unsettled}>
       <ReactMarkdown
         remarkPlugins={plugins}
-        rehypePlugins={rehypePlugins}
         skipHtml
         urlTransform={urlTransform}
         components={components}
@@ -612,13 +738,24 @@ const MarkdownDocument = React.memo(function MarkdownDocument({
   );
 });
 
+// Key each block by its source offset: settled blocks never move.
+const keyedBlocks = (blocks: ReadonlyArray<string>) => {
+  let offset = 0;
+  return blocks.map((block) => {
+    const start = offset;
+    offset += block.length + 1;
+    return { start, block };
+  });
+};
+
 /**
- * Parsing and highlighting is the dominant transcript cost. Memoize on the
- * source text so a re-rendering parent never re-parses unchanged Markdown.
+ * Parsing and highlighting is the dominant transcript cost. The compiler
+ * caches the blocks on the source text, and each block is a memoized
+ * document, so a re-rendering parent never re-parses unchanged Markdown.
  * While text is still streaming, parse only its unsettled tail: settled
  * blocks keep their parsed output. Settled text renders as one document.
  */
-export const RichMarkdown = React.memo(function RichMarkdown({
+export function RichMarkdown({
   children,
   streaming = false,
   document = false,
@@ -628,27 +765,34 @@ export const RichMarkdown = React.memo(function RichMarkdown({
   /** A Markdown file rather than a message: soft line breaks are spaces. */
   readonly document?: boolean;
 }) {
-  const blocks = streaming ? settledMarkdownBlocks(children) : [children];
-  // Key each block by its source offset: settled blocks never move.
-  let offset = 0;
-  const keyed = blocks.map((block) => {
-    const start = offset;
-    offset += block.length + 1;
-    return { start, block };
-  });
+  const keyed = keyedBlocks(
+    streaming ? settledMarkdownBlocks(children) : [children],
+  );
   return (
     <div
       className={`markdown transcript-markdown${document ? " markdown-file" : ""}`}
     >
-      {keyed.map(({ start, block }, index) => (
-        <MarkdownDocument
-          hardWrapped={document}
-          key={start}
-          unsettled={streaming && index === keyed.length - 1}
-        >
-          {block}
-        </MarkdownDocument>
-      ))}
+      {keyed.map(({ start, block }, index) => {
+        const fence = streaming ? codeFenceBlock(block) : undefined;
+        if (fence !== undefined)
+          return (
+            <StreamingCodeFence
+              key={start}
+              language={fence.language}
+              code={fence.code}
+              closed={fence.closed}
+            />
+          );
+        return (
+          <MarkdownDocument
+            hardWrapped={document}
+            key={start}
+            unsettled={streaming && index === keyed.length - 1}
+          >
+            {block}
+          </MarkdownDocument>
+        );
+      })}
     </div>
   );
-});
+}

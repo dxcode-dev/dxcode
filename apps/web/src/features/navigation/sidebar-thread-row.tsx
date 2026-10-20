@@ -90,6 +90,7 @@ export interface SidebarThreadRowProps
  * handlers take a thread id, so a row re-renders only when its own thread,
  * selection, or pending action changes, not when another row or the list does.
  */
+// biome-ignore lint/plugin: the list re-maps every row when one Thread changes; memo skips rows whose props kept their identity.
 export const SidebarThreadRow = React.memo(function SidebarThreadRow({
   thread,
   projectName,

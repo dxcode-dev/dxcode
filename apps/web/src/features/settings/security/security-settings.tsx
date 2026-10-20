@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { settle } from "../../../shared/settle.js";
 import { Badge } from "../../../shared/ui/badge.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
@@ -176,7 +177,7 @@ function CreateTokenDialog({
   const [scopes, setScopes] = React.useState<
     ReadonlyArray<PersonalApiTokenScope>
   >([]);
-  const selectedScopes = React.useMemo(() => new Set(scopes), [scopes]);
+  const selectedScopes = new Set(scopes);
   const [error, setError] = React.useState<string>();
   const close = () => {
     setName("");
@@ -193,14 +194,16 @@ function CreateTokenDialog({
   const create = async () => {
     if (createToken.isPending) return;
     setError(undefined);
-    try {
+    const outcome = await settle(async () => {
       await createToken.mutateAsync({ name, scopes });
       close();
-    } catch (cause) {
-      setError(securityErrorMessage(cause, "The token could not be created."));
-    } finally {
-      createToken.reset();
+    });
+    if (!outcome.ok) {
+      setError(
+        securityErrorMessage(outcome.error, "The token could not be created."),
+      );
     }
+    createToken.reset();
   };
   return (
     <DialogRoot
@@ -288,18 +291,20 @@ function TokenList() {
   const mutate = async () => {
     if (action === undefined || busy) return;
     setError(undefined);
-    try {
+    const outcome = await settle(async () => {
       if (action.kind === "rotate") {
         await rotateToken.mutateAsync(action.token.id);
       } else {
         await revokeToken.mutateAsync(action.token.id);
       }
       setAction(undefined);
-    } catch (cause) {
-      setError(securityErrorMessage(cause, "The token could not be updated."));
-    } finally {
-      if (action.kind === "rotate") rotateToken.reset();
+    });
+    if (!outcome.ok) {
+      setError(
+        securityErrorMessage(outcome.error, "The token could not be updated."),
+      );
     }
+    if (action.kind === "rotate") rotateToken.reset();
   };
   return (
     <SettingsCard title="Personal API tokens">

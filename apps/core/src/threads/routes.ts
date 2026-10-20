@@ -22,6 +22,11 @@ import {
   CreateThreadResponseSchema,
   CreateThreadRunnerUnavailableResponseSchema,
   GetThreadInvalidRequestResponseSchema,
+  GetThreadListItemInvalidRequestResponseSchema,
+  GetThreadListItemNotFoundResponseSchema,
+  GetThreadListItemParamsSchema,
+  GetThreadListItemPersistenceUnavailableResponseSchema,
+  GetThreadListItemResponseSchema,
   GetThreadNotFoundResponseSchema,
   GetThreadParamsSchema,
   GetThreadPersistenceUnavailableResponseSchema,
@@ -69,6 +74,7 @@ import {
   type ThreadColor,
   type ThreadExecutionPin,
   type ThreadId,
+  ThreadNotFound,
   UNTITLED_THREAD_TITLE,
   type UserId,
   type WorkspacePolicyDenied,
@@ -140,6 +146,7 @@ import { WorkspacePolicyRepositoryD1 } from "../settings/workspace-policy/reposi
 import { WorkspacePolicyService } from "../settings/workspace-policy/service.js";
 import { authorizeProjectSource } from "../source-control/admission.js";
 import { scheduleThreadSearchIndex } from "../thread-search/enqueue.js";
+import { canUseSharedThreads } from "../thread-sharing/access.js";
 import {
   threadSharingDecorations,
   threadSharingDetail,
@@ -154,6 +161,7 @@ import {
   readInboundMessages,
   readParentColors,
   readThreadChildCounts,
+  readThreadListItem,
   readThreadListProjection,
   threadListItem,
 } from "./list-projection-d1.js";
@@ -1962,6 +1970,93 @@ export const createThreadRoutes = (
           throw error;
         },
         ConfigError: (error) => {
+          throw error;
+        },
+        SchemaError: (error) => {
+          throw error;
+        },
+      }),
+      Match.exhaustive,
+    );
+  });
+
+  // One sidebar row, so a realtime hint patches it instead of refetching
+  // every loaded list.
+  threadRoutes.get("/:threadId/list-item", async (context) => {
+    const requestId = context.get("requestId");
+    const operation = Effect.gen(function* () {
+      const params = yield* decodeRequestInput(
+        GetThreadListItemParamsSchema,
+        { threadId: context.req.param("threadId") },
+        () => new InvalidThreadRequest(),
+      );
+      const db = yield* decodeD1Binding(context.env.DB);
+      const principal = context.get("principal");
+      const item = yield* Effect.tryPromise({
+        try: () =>
+          readThreadListItem(db, params.threadId, {
+            userId: principal.userId as UserId,
+            sharedThreads: canUseSharedThreads(principal),
+          }),
+        catch: (cause) =>
+          PersistenceUnavailable.new(
+            { operation: "thread.listProjection" },
+            cause,
+          ),
+      });
+      if (item === undefined)
+        return yield* Effect.fail(
+          new ThreadNotFound({ threadId: params.threadId }),
+        );
+      return yield* Schema.encodeUnknownEffect(GetThreadListItemResponseSchema)(
+        { status: "success", data: item },
+      );
+    });
+    const result = await Effect.runPromise(Effect.result(operation));
+    if (Result.isSuccess(result)) return context.json(result.success, 200);
+    return Match.value(result.failure).pipe(
+      Match.tags({
+        InvalidThreadRequest: () =>
+          context.json(
+            Schema.encodeUnknownSync(
+              GetThreadListItemInvalidRequestResponseSchema,
+            )({
+              status: "error",
+              data: {
+                code: "INVALID_REQUEST",
+                message: "Request validation failed.",
+                requestId,
+              },
+            }),
+            400,
+          ),
+        ThreadNotFound: () =>
+          context.json(
+            Schema.encodeUnknownSync(GetThreadListItemNotFoundResponseSchema)({
+              status: "error",
+              data: {
+                code: "THREAD_NOT_FOUND",
+                message: "Thread not found.",
+                requestId,
+              },
+            }),
+            404,
+          ),
+        PersistenceUnavailable: () =>
+          context.json(
+            Schema.encodeUnknownSync(
+              GetThreadListItemPersistenceUnavailableResponseSchema,
+            )({
+              status: "error",
+              data: {
+                code: "PERSISTENCE_UNAVAILABLE",
+                message: "Persistence is temporarily unavailable.",
+                requestId,
+              },
+            }),
+            503,
+          ),
+        D1BindingUnavailable: (error) => {
           throw error;
         },
         SchemaError: (error) => {

@@ -11,6 +11,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { useState } from "react";
 import type { ModelRoutingTarget } from "../../../shared/api/client.js";
+import { useNowMinute } from "../../../shared/hooks/use-clock.js";
 import {
   apiMessage,
   connectionMutationOptions,
@@ -122,13 +123,14 @@ export const ClaudePlanPanel = ({
   // The clicked choice shows until the saved one is back, so the controlled
   // radio does not snap back while the request is in flight.
   const [chosen, setChosen] = useState<boolean>();
+  const nowMs = useNowMinute();
   const usage = plan.usage;
   const extraUsage = claudePlanExtraUsage(usage);
   const extraUsageOff = extraUsage === "off";
   // Without extra usage on the account, Claude Code stops at a limit
   // whatever was saved.
   const allowExtraUsage = !extraUsageOff && (chosen ?? plan.allowExtraUsage);
-  const now = new Date();
+  const now = new Date(nowMs);
   const nowSeconds = Math.floor(now.getTime() / 1000);
   const blockedUntil = claudePlanBlockedUntil(
     usage,

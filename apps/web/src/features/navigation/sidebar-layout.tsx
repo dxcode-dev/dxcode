@@ -89,58 +89,39 @@ export const useSyncedSidebarLayout = (userId: UserId): SidebarLayout => {
   );
   // Stable: memoized sidebar rows receive these handlers, so they read the
   // layout when clicked rather than when rendered.
-  const toggle = React.useCallback(
-    (kind: SidebarLayoutEntry["kind"], id: string) => {
-      const entries = [
-        ...(queryClient.getQueryData(sidebarLayoutQueryOptions(userId).queryKey)
-          ?.entries ?? noEntries),
-        ...queryClient
-          .getMutationCache()
-          .findAll({
-            mutationKey: sidebarLayoutKeys.update(userId),
-            status: "pending",
-          })
-          .map((mutation) => mutation.state.variables as SidebarLayoutEntry),
-      ];
-      const entry = toggleEntry(entries, kind, id);
-      if (entry !== undefined) mutate(entry);
-    },
-    [mutate, queryClient, userId],
-  );
+  const toggle = (kind: SidebarLayoutEntry["kind"], id: string) => {
+    const entries = [
+      ...(queryClient.getQueryData(sidebarLayoutQueryOptions(userId).queryKey)
+        ?.entries ?? noEntries),
+      ...queryClient
+        .getMutationCache()
+        .findAll({
+          mutationKey: sidebarLayoutKeys.update(userId),
+          status: "pending",
+        })
+        .map((mutation) => mutation.state.variables as SidebarLayoutEntry),
+    ];
+    const entry = toggleEntry(entries, kind, id);
+    if (entry !== undefined) mutate(entry);
+  };
+  const toggleThread = (id: ThreadData["id"]) => toggle("thread", id);
+  const toggleSection = (id: string) => toggle("section", id);
   // Both are structurally shared, so they change only with the layout.
-  const layout = React.useMemo(
-    () => layoutFrom([...(saved ?? noEntries), ...pending]),
-    [saved, pending],
-  );
-  return useLayoutHandlers(layout, toggle);
+  const layout = layoutFrom([...(saved ?? noEntries), ...pending]);
+  return { ...layout, toggleThread, toggleSection };
 };
 
 /** This mount only; for a sidebar without a signed-in person. */
 export const useLocalSidebarLayout = (): SidebarLayout => {
   const [entries, setEntries] =
     React.useState<ReadonlyArray<SidebarLayoutEntry>>(noEntries);
-  const toggle = React.useCallback(
-    (kind: SidebarLayoutEntry["kind"], id: string) =>
-      setEntries((current) => {
-        const entry = toggleEntry(current, kind, id);
-        return entry === undefined ? current : [...current, entry];
-      }),
-    [],
-  );
-  const layout = React.useMemo(() => layoutFrom(entries), [entries]);
-  return useLayoutHandlers(layout, toggle);
-};
-
-const useLayoutHandlers = (
-  layout: ReturnType<typeof layoutFrom>,
-  toggle: (kind: SidebarLayoutEntry["kind"], id: string) => void,
-): SidebarLayout => {
-  const handlers = React.useMemo(
-    () => ({
-      toggleThread: (id: ThreadData["id"]) => toggle("thread", id),
-      toggleSection: (id: string) => toggle("section", id),
-    }),
-    [toggle],
-  );
-  return React.useMemo(() => ({ ...layout, ...handlers }), [layout, handlers]);
+  const toggle = (kind: SidebarLayoutEntry["kind"], id: string) =>
+    setEntries((current) => {
+      const entry = toggleEntry(current, kind, id);
+      return entry === undefined ? current : [...current, entry];
+    });
+  const toggleThread = (id: ThreadData["id"]) => toggle("thread", id);
+  const toggleSection = (id: string) => toggle("section", id);
+  const layout = layoutFrom(entries);
+  return { ...layout, toggleThread, toggleSection };
 };

@@ -1,5 +1,4 @@
 import "@fontsource/dm-sans/700-italic.css";
-import { useCallback } from "react";
 import { effect, frameLoop, init, sampler, surface } from "vgpu";
 import shaderSource from "./dx-mark.wgsl?raw";
 import "./brand.css";
@@ -37,6 +36,8 @@ function mountDxMark(
 ) {
   let disposed = false;
   let teardown: () => void = () => undefined;
+  // The mark shows its text fallback until this canvas draws a frame.
+  const mark = canvas.parentElement;
   const pointer = { x: 0.5, y: 0.5 };
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   const handlePointerMove = (event: PointerEvent) => {
@@ -133,6 +134,7 @@ function mountDxMark(
             pass.draw(shader),
           );
           canvas.dataset.ready = "true";
+          if (mark !== null) mark.dataset.ready = "true";
         },
         { fps: reducedMotion.matches ? 1 : 30 },
       );
@@ -151,6 +153,7 @@ function mountDxMark(
 
   return () => {
     disposed = true;
+    if (mark !== null) delete mark.dataset.ready;
     canvas.removeEventListener("pointermove", handlePointerMove);
     canvas.removeEventListener("pointerleave", handlePointerLeave);
     teardown();
@@ -169,11 +172,8 @@ export function DxMark({
   readonly className?: string;
   readonly interactive?: boolean;
 }) {
-  const ref = useCallback(
-    (canvas: HTMLCanvasElement | null) =>
-      canvas === null ? undefined : mountDxMark(canvas, state, interactive),
-    [interactive, state],
-  );
+  const ref = (canvas: HTMLCanvasElement | null) =>
+    canvas === null ? undefined : mountDxMark(canvas, state, interactive);
   return (
     <span
       className={`dx-brand-mark ${className}`.trim()}

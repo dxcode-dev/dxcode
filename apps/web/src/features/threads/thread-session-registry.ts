@@ -34,6 +34,13 @@ import {
 import { sendRefusal } from "./send-failure.js";
 import { threadQueryOptions } from "./thread-queries.js";
 
+/**
+ * Each history page holds the newest prompts that fit in 1 MiB of encoded
+ * JSON, at most two and always at least one whole prompt, so a Thread with
+ * large tool outputs does not paint megabytes. Older pages load on scroll.
+ */
+export const THREAD_HISTORY_PAGE = { promptLimit: 2, maxBytes: 1_048_576 };
+
 /** Attempts per keyed send; the server deduplicates them by key. */
 const SEND_ATTEMPTS = 3;
 const ATTEMPT_TIMEOUT_MS = 15_000;
@@ -243,9 +250,30 @@ export interface RetainedThread {
   disposed: boolean;
 }
 
+/** Records the Thread detail's agent initialization unless one is set. */
+export const initializeRetainedThread = (
+  entry: RetainedThread,
+  agentInitialization: ThreadAgentInitializationData,
+): RetainedThread => {
+  entry.agentInitialization ??= agentInitialization;
+  return entry;
+};
+
+/** Whether Stop was pressed while a send is being admitted. */
 export interface PendingSubmissionControl {
-  stopRequested: boolean;
+  readonly stopRequested: () => boolean;
+  readonly setStopRequested: (requested: boolean) => void;
 }
+
+export const createPendingSubmissionControl = (): PendingSubmissionControl => {
+  let requested = false;
+  return {
+    stopRequested: () => requested,
+    setStopRequested: (next) => {
+      requested = next;
+    },
+  };
+};
 
 export interface OptimisticThreadCreation {
   readonly id: ThreadId;
@@ -352,7 +380,11 @@ export class ThreadSessionRegistry {
     const entry: RetainedThread = {
       id,
       client,
-      session: createFlueAgentSession({ client, live: "sse", promptLimit: 2 }),
+      session: createFlueAgentSession({
+        client,
+        live: "sse",
+        ...THREAD_HISTORY_PAGE,
+      }),
       dictation: new DictationRecoverySession(),
       presentation: new Map(),
       presentationListeners: new Set(),

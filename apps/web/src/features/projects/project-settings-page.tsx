@@ -19,6 +19,7 @@ import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
 import { settingsNavigationState } from "../../shared/navigation/settings-return.js";
+import { settle } from "../../shared/settle.js";
 import { Button } from "../../shared/ui/button.js";
 import { Input } from "../../shared/ui/input.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
@@ -227,21 +228,21 @@ function GeneralProjectSettings({
   };
   const upload = async (file: File) => {
     setError(undefined);
-    try {
-      const saved = await iconMutation.mutateAsync({
-        revision: baseline.revision,
-        file,
-      });
-      setBaseline(saved);
-      setName(saved.name);
-      setDescription(saved.description ?? "");
-    } catch (cause) {
+    const saved = await settle(() =>
+      iconMutation.mutateAsync({ revision: baseline.revision, file }),
+    );
+    if (saved.ok) {
+      setBaseline(saved.value);
+      setName(saved.value.name);
+      setDescription(saved.value.description ?? "");
+    } else {
       setError(
-        cause instanceof Error ? cause.message : "Icon could not be uploaded.",
+        saved.error instanceof Error
+          ? saved.error.message
+          : "Icon could not be uploaded.",
       );
-    } finally {
-      iconMutation.reset();
     }
+    iconMutation.reset();
   };
   return (
     <div className="project-settings-content project-settings-general">
@@ -669,15 +670,16 @@ function OrbProjectSettings({
   readonly settingsPending: boolean;
   readonly userId: UserId;
 }) {
-  const defaultsTarget = React.useMemo(
-    () =>
-      project.workspaceId !== undefined && workspace?.id === project.workspaceId
-        ? { scope: "workspace" as const, workspaceSlug: workspace.shortName }
-        : project.workspaceId === undefined
-          ? { scope: "personal" as const }
-          : undefined,
-    [project.workspaceId, workspace?.id, workspace?.shortName],
-  );
+  const workspaceId = workspace?.id;
+  const workspaceSlug = workspace?.shortName;
+  const defaultsTarget =
+    project.workspaceId !== undefined &&
+    workspaceId === project.workspaceId &&
+    workspaceSlug !== undefined
+      ? { scope: "workspace" as const, workspaceSlug }
+      : project.workspaceId === undefined
+        ? { scope: "personal" as const }
+        : undefined;
   const workspaceUnavailable =
     project.workspaceId !== undefined && workspace?.id !== project.workspaceId;
   if (workspaceUnavailable && settingsPending)
@@ -719,10 +721,9 @@ function ResolvedOrbProjectSettings({
   );
   // The provider sections the person opened; until then, the saved default's.
   const [openSections, setOpenSections] = React.useState<Array<string>>();
-  const allowedRunnerProfileIds = React.useMemo(() => {
-    const ids = defaults.data?.restrictions.allowedRunnerProfileIds;
-    return ids == null ? undefined : new Set(ids);
-  }, [defaults.data?.restrictions.allowedRunnerProfileIds]);
+  const allowedIds = defaults.data?.restrictions.allowedRunnerProfileIds;
+  const allowedRunnerProfileIds =
+    allowedIds == null ? undefined : new Set(allowedIds);
   const saving = updateMutation.isPending;
   const dirty = runnerProfileId !== baseline.configuration.runnerProfileId;
   const savedSection = defaults.data?.catalog.profiles.find(

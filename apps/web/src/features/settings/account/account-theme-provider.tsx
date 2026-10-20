@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import * as React from "react";
+import type * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { ThemeProvider } from "../../../shared/theme/theme-provider.js";
 import { Button } from "../../../shared/ui/button.js";
@@ -20,21 +20,15 @@ export function AccountThemeProvider({
     updatePersonalAppearanceMutationOptions(queryClient, identity.id),
   );
   const account = accountQuery.data;
-  const setAppearance = React.useCallback(
-    (appearance: NonNullable<typeof account>["appearance"]) =>
-      mutation.mutate({ appearance }),
-    [mutation.mutate],
-  );
-  const setPalette = React.useCallback(
-    (palette: NonNullable<typeof account>["palette"]) =>
-      mutation.mutate({ palette }),
-    [mutation.mutate],
-  );
-  const setTerminalTheme = React.useCallback(
-    (terminalTheme: NonNullable<typeof account>["terminalTheme"]) =>
-      mutation.mutate({ terminalTheme }),
-    [mutation.mutate],
-  );
+  const { mutate } = mutation;
+  const setAppearance = (
+    appearance: NonNullable<typeof account>["appearance"],
+  ) => mutate({ appearance });
+  const setPalette = (palette: NonNullable<typeof account>["palette"]) =>
+    mutate({ palette });
+  const setTerminalTheme = (
+    terminalTheme: NonNullable<typeof account>["terminalTheme"],
+  ) => mutate({ terminalTheme });
 
   if (accountQuery.isPending) return null;
   if (accountQuery.isError || account === undefined)

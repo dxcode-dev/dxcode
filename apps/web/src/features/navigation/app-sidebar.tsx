@@ -10,6 +10,7 @@ import { Link, useLocation } from "@tanstack/react-router";
 import { Search, SquarePen } from "lucide-react";
 import * as React from "react";
 import type { ThreadListClientItem } from "../../shared/api/client.js";
+import { useNowMinute } from "../../shared/hooks/use-clock.js";
 import {
   type PendingThreadCreation,
   useNewThreadSurface,
@@ -79,62 +80,54 @@ const useThreadPreviewIntent = () => {
       trailing: true,
     },
   );
-  const cancelPreviewIntent = React.useCallback(() => {
+  const cancelPreviewIntent = () => {
     openPreviewAfterIntent.cancel();
     closePreviewAfterGrace.cancel();
-  }, [closePreviewAfterGrace, openPreviewAfterIntent]);
-  const sidebarLifecycleRef = React.useCallback(
-    (node: HTMLElement | null) => {
-      if (node === null) cancelPreviewIntent();
-      return cancelPreviewIntent;
-    },
-    [cancelPreviewIntent],
-  );
+  };
+  const sidebarLifecycleRef = (node: HTMLElement | null) => {
+    if (node === null) cancelPreviewIntent();
+    return cancelPreviewIntent;
+  };
   // Stable: memoized sidebar rows receive these handlers.
-  const openPreview = React.useCallback(
-    (thread: ThreadData, projectName: string, element: HTMLElement) => {
-      hoveredThreadId.current = thread.id;
-      closePreviewAfterGrace.cancel();
-      openPreviewAfterIntent.cancel();
-      if (suppressedThreadId.current === thread.id) return;
+  const openPreview = (
+    thread: ThreadData,
+    projectName: string,
+    element: HTMLElement,
+  ) => {
+    hoveredThreadId.current = thread.id;
+    closePreviewAfterGrace.cancel();
+    openPreviewAfterIntent.cancel();
+    if (suppressedThreadId.current === thread.id) return;
+    suppressedThreadId.current = undefined;
+    const bounds = element.getBoundingClientRect();
+    const nextPreview = {
+      anchor: { right: bounds.right, top: bounds.top },
+      projectName,
+      thread,
+    };
+    if (previewPrimed.current) {
+      previewPrimed.current = true;
+      setPreview(nextPreview);
+      return;
+    }
+    openPreviewAfterIntent.maybeExecute(nextPreview);
+  };
+  const leaveThreadRow = (threadId: ThreadData["id"]) => {
+    if (hoveredThreadId.current === threadId)
+      hoveredThreadId.current = undefined;
+    if (suppressedThreadId.current === threadId)
       suppressedThreadId.current = undefined;
-      const bounds = element.getBoundingClientRect();
-      const nextPreview = {
-        anchor: { right: bounds.right, top: bounds.top },
-        projectName,
-        thread,
-      };
-      if (previewPrimed.current) {
-        previewPrimed.current = true;
-        setPreview(nextPreview);
-        return;
-      }
-      openPreviewAfterIntent.maybeExecute(nextPreview);
-    },
-    [closePreviewAfterGrace, openPreviewAfterIntent],
-  );
-  const leaveThreadRow = React.useCallback(
-    (threadId: ThreadData["id"]) => {
-      if (hoveredThreadId.current === threadId)
-        hoveredThreadId.current = undefined;
-      if (suppressedThreadId.current === threadId)
-        suppressedThreadId.current = undefined;
-      openPreviewAfterIntent.cancel();
-      closePreviewAfterGrace.maybeExecute();
-    },
-    [closePreviewAfterGrace, openPreviewAfterIntent],
-  );
-  const dismissPreviewForNavigation = React.useCallback(
-    (threadId: ThreadData["id"]) => {
-      openPreviewAfterIntent.cancel();
-      closePreviewAfterGrace.cancel();
-      previewPrimed.current = false;
-      suppressedThreadId.current =
-        hoveredThreadId.current === threadId ? threadId : undefined;
-      setPreview(undefined);
-    },
-    [closePreviewAfterGrace, openPreviewAfterIntent],
-  );
+    openPreviewAfterIntent.cancel();
+    closePreviewAfterGrace.maybeExecute();
+  };
+  const dismissPreviewForNavigation = (threadId: ThreadData["id"]) => {
+    openPreviewAfterIntent.cancel();
+    closePreviewAfterGrace.cancel();
+    previewPrimed.current = false;
+    suppressedThreadId.current =
+      hoveredThreadId.current === threadId ? threadId : undefined;
+    setPreview(undefined);
+  };
 
   return {
     preview,
@@ -163,6 +156,47 @@ const usePendingCreations = (
     read,
     read,
   );
+};
+
+// Names projects only when the projects or shared Threads change.
+const createProjectNamesCache = () => {
+  let last:
+    | {
+        readonly projects: ReadonlyArray<ProjectData>;
+        readonly sharedThreads: ReadonlyArray<ThreadData> | undefined;
+        readonly names: ReadonlyMap<string, string>;
+      }
+    | undefined;
+  return (
+    projects: ReadonlyArray<ProjectData>,
+    sharedThreads: ReadonlyArray<ThreadData> | undefined,
+  ) => {
+    if (last?.projects === projects && last.sharedThreads === sharedThreads)
+      return last.names;
+    const names = new Map<string, string>([
+      ...(sharedThreads ?? []).flatMap((thread) =>
+        thread.projectName === undefined
+          ? []
+          : [[thread.projectId, thread.projectName] as const],
+      ),
+      ...projects.map((project) => [project.id, project.name] as const),
+    ]);
+    last = { projects, sharedThreads, names };
+    return names;
+  };
+};
+
+/**
+ * Project names by id. A hook, so the sidebar receives them frozen: the
+ * pending-thread merge reads them, which would otherwise cache them with the
+ * Thread list and give every row new names on each list change.
+ */
+const useProjectNames = (
+  projects: ReadonlyArray<ProjectData>,
+  sharedThreads: ReadonlyArray<ThreadData> | undefined,
+) => {
+  const [namesFor] = React.useState(createProjectNamesCache);
+  return namesFor(projects, sharedThreads);
 };
 
 export interface AppSidebarProps {
@@ -222,7 +256,7 @@ function LocalLayoutSidebar(props: AppSidebarProps) {
 
 function AppSidebarContent({
   userId,
-  archiveAvailable = userId !== undefined,
+  archiveAvailable: archiveAvailableProp,
   projects,
   projectsComplete = false,
   threads,
@@ -245,6 +279,7 @@ function AppSidebarContent({
   childThreads,
   layout,
 }: AppSidebarProps & { readonly layout: SidebarLayout }) {
+  const archiveAvailable = archiveAvailableProp ?? userId !== undefined;
   const newThreadSurface = useNewThreadSurface();
   const { openNewThread } = newThreadSurface;
   const archive = useThreadArchive();
@@ -262,39 +297,22 @@ function AppSidebarContent({
     schedulePreviewClose,
     sidebarLifecycleRef,
   } = useThreadPreviewIntent();
-  const projectNames = React.useMemo(
-    () =>
-      new Map<string, string>([
-        ...(sharedThreads ?? []).flatMap((thread) =>
-          thread.projectName === undefined
-            ? []
-            : [[thread.projectId, thread.projectName] as const],
-        ),
-        ...projects.map((project) => [project.id, project.name] as const),
-      ]),
-    [projects, sharedThreads],
-  );
-  const onThreadNavigate = React.useCallback(
-    (threadId: ThreadData["id"]) => {
-      dismissPreviewForNavigation(threadId);
-      onNavigate();
-    },
-    [dismissPreviewForNavigation, onNavigate],
-  );
-  const listedThreads = React.useMemo(
-    () =>
-      withPendingThreads(
-        threads,
-        pendingCreations,
-        projectNames,
-        projectsComplete,
-      ),
-    [threads, pendingCreations, projectNames, projectsComplete],
+  const now = useNowMinute();
+  const projectNames = useProjectNames(projects, sharedThreads);
+  const onThreadNavigate = (threadId: ThreadData["id"]) => {
+    dismissPreviewForNavigation(threadId);
+    onNavigate();
+  };
+  const listedThreads = withPendingThreads(
+    threads,
+    pendingCreations,
+    projectNames,
+    projectsComplete,
   );
   const sections = buildThreadSections(
     projects,
     listedThreads,
-    Date.now(),
+    now,
     archiveAvailable,
     sharedThreads,
   );

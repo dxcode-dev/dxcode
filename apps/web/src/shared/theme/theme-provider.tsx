@@ -26,21 +26,15 @@ const ThemeContext = React.createContext<ThemeContextValue>({
 });
 
 const useSystemPrefersDark = () => {
-  const query = React.useMemo(
-    () =>
-      typeof window === "undefined" || window.matchMedia === undefined
-        ? undefined
-        : window.matchMedia("(prefers-color-scheme: dark)"),
-    [],
-  );
+  const query =
+    typeof window === "undefined" || window.matchMedia === undefined
+      ? undefined
+      : window.matchMedia("(prefers-color-scheme: dark)");
   return React.useSyncExternalStore(
-    React.useCallback(
-      (listener) => {
-        query?.addEventListener("change", listener);
-        return () => query?.removeEventListener("change", listener);
-      },
-      [query],
-    ),
+    (listener) => {
+      query?.addEventListener("change", listener);
+      return () => query?.removeEventListener("change", listener);
+    },
     () => query?.matches ?? true,
     () => true,
   );
@@ -80,36 +74,22 @@ export function ThemeProvider({
   readonly children: React.ReactNode;
 }) {
   const systemPrefersDark = useSystemPrefersDark();
-  const preferences = React.useMemo(
-    () => ({
-      appearance,
-      resolvedAppearance: resolveAppearance(appearance, systemPrefersDark),
-      palette,
-      terminalTheme,
-    }),
-    [appearance, palette, systemPrefersDark, terminalTheme],
-  );
+  const preferences = {
+    appearance,
+    resolvedAppearance: resolveAppearance(appearance, systemPrefersDark),
+    palette,
+    terminalTheme,
+  };
   useApplyTheme(preferences);
-  const value = React.useMemo(
-    () => ({
-      appearance,
-      resolvedAppearance: preferences.resolvedAppearance,
-      palette,
-      terminalTheme,
-      setAppearance: onAppearanceChange,
-      setPalette: onPaletteChange,
-      setTerminalTheme: onTerminalThemeChange,
-    }),
-    [
-      appearance,
-      onAppearanceChange,
-      onPaletteChange,
-      onTerminalThemeChange,
-      palette,
-      preferences.resolvedAppearance,
-      terminalTheme,
-    ],
-  );
+  const value = {
+    appearance,
+    resolvedAppearance: preferences.resolvedAppearance,
+    palette,
+    terminalTheme,
+    setAppearance: onAppearanceChange,
+    setPalette: onPaletteChange,
+    setTerminalTheme: onTerminalThemeChange,
+  };
 
   return (
     <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>

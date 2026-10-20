@@ -128,29 +128,26 @@ export const ThreadFileViewer = ({
   // A highlighted range is only visible in source; show it there by default.
   const viewMode =
     mode ?? (previewable && revealLines === undefined ? "preview" : "source");
-  const change = React.useCallback(
-    (next: string) => {
-      const currentAccepted =
-        accepted ?? (file.editable ? acceptedEdit(file) : null);
-      if (currentAccepted === null) return;
-      liveContent.current = next;
-      const nextDirty = next !== currentAccepted.content;
-      if (
-        !nextDirty &&
-        !inFlight.current &&
-        file.editable &&
-        file.contentVersion === currentAccepted.contentVersion
-      ) {
-        setAccepted(null);
-        setContent("");
-      } else {
-        setAccepted(currentAccepted);
-        setContent(next);
-      }
-      onDirtyChange(nextDirty);
-    },
-    [accepted, file, onDirtyChange],
-  );
+  const change = (next: string) => {
+    const currentAccepted =
+      accepted ?? (file.editable ? acceptedEdit(file) : null);
+    if (currentAccepted === null) return;
+    liveContent.current = next;
+    const nextDirty = next !== currentAccepted.content;
+    if (
+      !nextDirty &&
+      !inFlight.current &&
+      file.editable &&
+      file.contentVersion === currentAccepted.contentVersion
+    ) {
+      setAccepted(null);
+      setContent("");
+    } else {
+      setAccepted(currentAccepted);
+      setContent(next);
+    }
+    onDirtyChange(nextDirty);
+  };
   const save = () => {
     if (
       accepted === null ||

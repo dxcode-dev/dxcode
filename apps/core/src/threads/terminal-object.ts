@@ -87,7 +87,7 @@ import {
   startupServerTiming,
 } from "../observability/startup-runtime.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
-import { publishRealtimeInvalidation } from "../realtime/publication.js";
+import { publishChangesInvalidation } from "../realtime/publication.js";
 import { environmentActivationOperation } from "../settings/environment-variables/activation.js";
 import {
   executionEnvironmentRevisionsEqual,
@@ -1208,14 +1208,14 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         threadId,
         candidate,
         ...(capture === undefined ? {} : { capture }),
-        onCommitted: (fingerprint) => {
+        onCommitted: (fingerprint, summaryChanged) => {
           this.#changesFingerprint = fingerprint;
           this.#notifyChanges(threadId);
           this.ctx.waitUntil(
-            publishRealtimeInvalidation(
+            publishChangesInvalidation(
               this.env,
               threadId,
-              "changes.invalidated",
+              summaryChanged,
             ).catch(() => undefined),
           );
         },

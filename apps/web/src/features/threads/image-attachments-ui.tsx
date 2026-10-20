@@ -29,30 +29,24 @@ const idle = () => false;
 export function useAttachmentsUploading(
   attachments: ReadonlyArray<PendingAttachment>,
 ) {
-  const subscribe = React.useMemo(
-    () =>
-      attachments.length === 0
-        ? noUploads
-        : (listener: () => void) => {
-            const unsubscribe = attachments.map(({ upload }) =>
-              upload.subscribe(listener),
-            );
-            return () => {
-              for (const stop of unsubscribe) stop();
-            };
-          },
-    [attachments],
-  );
-  const snapshot = React.useMemo(
-    () =>
-      attachments.length === 0
-        ? idle
-        : () =>
-            attachments.some(
-              ({ upload }) => upload.getSnapshot().status === "uploading",
-            ),
-    [attachments],
-  );
+  const subscribe =
+    attachments.length === 0
+      ? noUploads
+      : (listener: () => void) => {
+          const unsubscribe = attachments.map(({ upload }) =>
+            upload.subscribe(listener),
+          );
+          return () => {
+            for (const stop of unsubscribe) stop();
+          };
+        };
+  const snapshot =
+    attachments.length === 0
+      ? idle
+      : () =>
+          attachments.some(
+            ({ upload }) => upload.getSnapshot().status === "uploading",
+          );
   return React.useSyncExternalStore(subscribe, snapshot, snapshot);
 }
 

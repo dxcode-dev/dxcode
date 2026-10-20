@@ -60,7 +60,7 @@ const record = (bindings: Bindings, activity: ThreadActivityInput) =>
       activity.occurredAt,
     );
     const eventKey = `submission:${activity.submissionId}:${activity.kind}`;
-    yield* Effect.tryPromise({
+    const [, recorded, projected] = yield* Effect.tryPromise({
       try: () =>
         db.batch([
           db
@@ -110,37 +110,57 @@ const record = (bindings: Bindings, activity: ThreadActivityInput) =>
               activity.threadId,
               activity.submissionId,
             ),
+          // Compare-and-set: the row changes, and counts as changed, only
+          // when its status or last activity moves.
           db
             .prepare(
-              `UPDATE threads
-               SET last_activity_at = MAX(
-                     last_activity_at,
-                     COALESCE(
-                       (SELECT occurred_at
-                        FROM thread_activity
-                        WHERE thread_id = ? AND event_key = ?),
-                       last_activity_at
-                     )
-                   ),
-                   activity_status = CASE
-                     WHEN EXISTS (
-                       SELECT 1
-                       FROM thread_activity_submission
-                       WHERE thread_id = ? AND state = 'working'
-                     ) THEN 'working'
-                     ELSE 'idle'
-                   END
-               WHERE id = ?`,
+              `WITH next AS (
+                 SELECT MAX(
+                          last_activity_at,
+                          COALESCE(
+                            (SELECT occurred_at
+                             FROM thread_activity
+                             WHERE thread_id = ? AND event_key = ?),
+                            last_activity_at
+                          )
+                        ) AS last_activity_at,
+                        CASE
+                          WHEN EXISTS (
+                            SELECT 1
+                            FROM thread_activity_submission
+                            WHERE thread_id = ? AND state = 'working'
+                          ) THEN 'working'
+                          ELSE 'idle'
+                        END AS activity_status
+                 FROM threads
+                 WHERE id = ?
+               )
+               UPDATE threads
+               SET last_activity_at = (SELECT last_activity_at FROM next),
+                   activity_status = (SELECT activity_status FROM next)
+               WHERE id = ?
+                 AND (last_activity_at, activity_status) IS NOT (
+                   SELECT last_activity_at, activity_status FROM next
+                 )`,
             )
             .bind(
               activity.threadId,
               eventKey,
               activity.threadId,
               activity.threadId,
+              activity.threadId,
             ),
         ]),
       catch: (cause) => new ThreadActivityPersistenceError({ cause }),
     });
+    // A repeated observation, such as running after queued or a retried
+    // settlement, records no event and leaves the Thread row as it was:
+    // there is nothing for a client to refetch.
+    if (
+      (recorded?.meta.changes ?? 0) === 0 &&
+      (projected?.meta.changes ?? 0) === 0
+    )
+      return;
     yield* Effect.promise(() =>
       publishRealtimeInvalidation(
         bindings,

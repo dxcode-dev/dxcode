@@ -235,13 +235,10 @@ export function IntegrationsSettings({
   workspaceSlug,
 }: SettingsSectionProps) {
   const [status, setStatus] = React.useState<string>();
-  const target = React.useMemo<McpServersTarget>(
-    () =>
-      workspaceSlug === undefined
-        ? { scope: "personal" }
-        : { scope: "workspace", workspaceSlug },
-    [workspaceSlug],
-  );
+  const target: McpServersTarget =
+    workspaceSlug === undefined
+      ? { scope: "personal" }
+      : { scope: "workspace", workspaceSlug };
   return (
     <div className="integrations-settings">
       <header className="integrations-page-heading">

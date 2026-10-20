@@ -775,6 +775,10 @@ export const createCommandRegistry = <Id extends string = CommandId>(
     recording: null,
   });
   let snapshot: CommandRegistrySnapshot<Id> = buildSnapshot(initialOverrides);
+  let commandViews: {
+    snapshot: CommandRegistrySnapshot<Id>;
+    byContext: Map<CommandContext, ReadonlyArray<CommandView<Id>>>;
+  } = { snapshot, byContext: new Map() };
   const listeners = new Set<() => void>();
   let unsubscribeFromStorage: (() => void) | undefined;
   const stored = safeRead(environment.storage);
@@ -1126,8 +1130,14 @@ export const createCommandRegistry = <Id extends string = CommandId>(
     getBinding,
     getDefaultBinding,
     getDisplayedKeycaps,
-    getCommands: (context) =>
-      definitions.map((definition) => {
+    getCommands: (context) => {
+      // Views are rebuilt only when the bindings snapshot changes, so readers
+      // keep the same command objects across renders and keydowns.
+      if (commandViews.snapshot !== snapshot)
+        commandViews = { snapshot, byContext: new Map() };
+      const cached = commandViews.byContext.get(context);
+      if (cached !== undefined) return cached;
+      const views = definitions.map((definition): CommandView<Id> => {
         const binding = getBinding(definition.id);
         const customized = Object.hasOwn(snapshot.overrides, definition.id);
         const sequence = sequenceFor(definition.id);
@@ -1164,7 +1174,10 @@ export const createCommandRegistry = <Id extends string = CommandId>(
           customized,
           contextLabel: commandContextLabel(definition.scope),
         };
-      }),
+      });
+      commandViews.byContext.set(context, views);
+      return views;
+    },
     validateBinding,
     setBinding: (id, binding) => {
       const result = validateBinding(id, binding);

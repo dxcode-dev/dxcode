@@ -8,9 +8,19 @@ import {
   type Thread,
   type ThreadColor,
   type ThreadId,
+  type UserId,
 } from "@dx/domain";
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { activeMemberSql } from "../settings/members/membership-sql.js";
+import {
+  sharedThreadAccessSql,
+  sharedThreadVisibleSql,
+} from "../thread-sharing/access.js";
+import {
+  decorateSharingRows,
+  type SharingRow,
+} from "../thread-sharing/service.js";
+import { decodeThreadRows } from "./repository-d1.js";
 
 const SummaryRowSchema = Schema.Struct({
   thread_id: Schema.String,
@@ -95,6 +105,16 @@ export const readThreadListProjection = async (
 };
 
 /**
+ * SQL predicate over `child`, its `parent`, and `child_project`: the child
+ * lists under its parent, as the children list returns it.
+ */
+const listedUnderParentSql = `child.owner_user_id = parent.owner_user_id
+          AND child.lifecycle_state = parent.lifecycle_state
+          AND child.pinned_at IS NULL
+          AND (child_project.workspace_id IS NULL
+            OR ${activeMemberSql("child_project.workspace_id", "child.owner_user_id")})`;
+
+/**
  * How many child Threads list under each root: unpinned children that
  * share their parent's lifecycle state, in projects their owner still
  * reaches (as the Thread repository's reachable scope decides), as the
@@ -115,11 +135,7 @@ export const readThreadChildCounts = async (
          JOIN threads AS parent ON parent.id = child.parent_thread_id
          JOIN projects AS child_project ON child_project.id = child.project_id
         WHERE child.parent_thread_id IN (${placeholders})
-          AND child.owner_user_id = parent.owner_user_id
-          AND child.lifecycle_state = parent.lifecycle_state
-          AND child.pinned_at IS NULL
-          AND (child_project.workspace_id IS NULL
-            OR ${activeMemberSql("child_project.workspace_id", "child.owner_user_id")})
+          AND ${listedUnderParentSql}
         GROUP BY child.parent_thread_id`,
     )
     .bind(...threadIds)
@@ -144,6 +160,107 @@ export const readParentColors = async (
     .bind(...ids)
     .all<{ id: ThreadId; color: ThreadColor }>();
   return new Map(result.results.map(({ id, color }) => [id, color]));
+};
+
+/**
+ * One Thread's row as the requester's sidebar lists it, in one statement (two
+ * when the Thread is shared): the owner's row as the Thread lists return it,
+ * or, for a member following another member's shared Thread, its row in the
+ * shared list. `childCount` is present when children list under it, as a
+ * roots list counts them. Undefined when neither list could hold it.
+ */
+export const readThreadListItem = async (
+  db: D1Database,
+  threadId: ThreadId,
+  requester: { readonly userId: UserId; readonly sharedThreads: boolean },
+  now = new Date(),
+): Promise<ThreadListItem | undefined> => {
+  const row = await db
+    .prepare(
+      `SELECT thread.id, thread.title, thread.project_id, thread.owner_user_id,
+              thread.agent_instructions, thread.agent_instructions_revision,
+              thread.agent_instructions_version, thread.model_selection,
+              thread.runner_profile_id, thread.title_pending_until, thread.color,
+              thread.parent_thread_id,
+              thread.plugin_snapshot_json, thread.skill_snapshot_json,
+              thread.visibility, thread.created_at, thread.updated_at,
+              COALESCE(thread.last_activity_at, thread.updated_at) AS last_activity_at,
+              thread.activity_status, thread.lifecycle_state,
+              CASE WHEN thread.owner_user_id = ?2 THEN thread.pinned_at END AS pinned_at,
+              thread.workspace_access, thread.contribute_until,
+              thread.owner_user_id = ?2 AS owned,
+              ${sharedThreadAccessSql("thread", "?3")} AS access,
+              project.name AS project_name,
+              summary.latest_capture_id, summary.dirty_since,
+              summary.summary_additions, summary.summary_deletions,
+              summary.summary_files,
+              (SELECT parent.color FROM threads AS parent
+                WHERE parent.id = thread.parent_thread_id) AS parent_color,
+              (SELECT COUNT(*) FROM threads AS child
+                 JOIN threads AS parent ON parent.id = child.parent_thread_id
+                 JOIN projects AS child_project ON child_project.id = child.project_id
+                WHERE child.parent_thread_id = thread.id
+                  AND ${listedUnderParentSql}) AS child_count
+         FROM threads AS thread
+         JOIN projects AS project ON project.id = thread.project_id
+         LEFT JOIN thread_changes_state AS summary ON summary.thread_id = thread.id
+        WHERE thread.id = ?1
+          AND thread.lifecycle_state != 'deleted'
+          AND ((thread.owner_user_id = ?2
+                AND (project.workspace_id IS NULL
+                  OR ${activeMemberSql("project.workspace_id", "?2")}))
+            OR (?4 = 1
+                AND thread.lifecycle_state = 'active'
+                AND EXISTS (SELECT 1 FROM thread_follower AS follower
+                             WHERE follower.thread_id = thread.id
+                               AND follower.user_id = ?2)
+                AND ${sharedThreadVisibleSql("thread", "project", "?2")}))`,
+    )
+    .bind(
+      threadId,
+      requester.userId,
+      now.toISOString(),
+      requester.sharedThreads ? 1 : 0,
+    )
+    .first<
+      Record<string, unknown> &
+        SharingRow &
+        typeof SummaryRowSchema.Encoded & {
+          readonly owned: number;
+          readonly access: "contribute" | "view";
+          readonly project_name: string;
+          readonly parent_color: ThreadColor | null;
+          readonly child_count: number;
+        }
+    >();
+  if (row === null) return undefined;
+  const [thread] = await Effect.runPromise(decodeThreadRows([row]));
+  if (thread === undefined) return undefined;
+  const decoration = (await decorateSharingRows(db, [row], { now })).get(
+    thread.id,
+  );
+  // As the shared list returns it: no totals, pin, or tree decoration.
+  if (row.owned !== 1)
+    return {
+      ...threadListItem(thread),
+      access: row.access,
+      projectName: row.project_name.slice(0, 256),
+      ...decoration,
+    };
+  return {
+    ...threadListItem(
+      thread,
+      summaryFrom(
+        Schema.decodeUnknownSync(SummaryRowSchema)({
+          ...row,
+          thread_id: row.id,
+        }),
+      ),
+    ),
+    ...decoration,
+    ...(row.child_count > 0 ? { childCount: row.child_count } : {}),
+    ...(row.parent_color === null ? {} : { parentColor: row.parent_color }),
+  };
 };
 
 /**

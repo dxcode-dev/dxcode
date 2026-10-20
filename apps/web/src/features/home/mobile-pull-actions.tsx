@@ -58,64 +58,61 @@ export function MobilePullActions({
     pulling: boolean;
     current: PullStage | undefined;
   }>({ startY: undefined, pulling: false, current: undefined });
-  const attach = React.useCallback(
-    (node: HTMLDivElement | null) => {
-      if (node === null) return;
-      const state = gesture.current;
-      const show = (distance: number) => {
-        node.style.setProperty("--pull-distance", `${distance}px`);
-        const next = stageFor(distance);
-        if (next === state.current) return;
-        if (next !== undefined) navigator.vibrate?.(8);
-        state.current = next;
-        setStage(next);
-      };
-      const settle = () => {
-        state.startY = undefined;
-        state.pulling = false;
-        node.removeAttribute("data-pulling");
-        show(0);
-      };
-      const start = (event: TouchEvent) => {
-        const touch = event.touches[0];
-        if (event.touches.length !== 1 || touch === undefined) {
-          settle();
-          return;
-        }
-        state.startY = touch.clientY;
-      };
-      const move = (event: TouchEvent) => {
-        const touch = event.touches[0];
-        if (state.startY === undefined || touch === undefined) return;
-        const travel = touch.clientY - state.startY;
-        if (!state.pulling) {
-          if (travel < -SLOP) state.startY = undefined;
-          if (travel < SLOP) return;
-          state.pulling = true;
-          node.setAttribute("data-pulling", "");
-        }
-        event.preventDefault();
-        show(resisted(Math.max(0, travel - SLOP)));
-      };
-      const release = () => {
-        const action = state.pulling ? state.current : undefined;
+  const attach = (node: HTMLDivElement | null) => {
+    if (node === null) return;
+    const state = gesture.current;
+    const show = (distance: number) => {
+      node.style.setProperty("--pull-distance", `${distance}px`);
+      const next = stageFor(distance);
+      if (next === state.current) return;
+      if (next !== undefined) navigator.vibrate?.(8);
+      state.current = next;
+      setStage(next);
+    };
+    const settle = () => {
+      state.startY = undefined;
+      state.pulling = false;
+      node.removeAttribute("data-pulling");
+      show(0);
+    };
+    const start = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (event.touches.length !== 1 || touch === undefined) {
         settle();
-        if (action === "new-thread") openNewThread();
-        else if (action === "palette") openPalette();
-      };
-      const stops = [
-        listen(node, "touchstart", start, { passive: true }),
-        // Not passive: a claimed pull stops the page from panning.
-        listen(node, "touchmove", move, { passive: false }),
-        listen(node, "touchend", release),
-        listen(node, "touchcancel", settle),
-      ];
-      return () => {
-        for (const stop of stops) stop();
-      };
-    },
-    [openNewThread, openPalette],
-  );
+        return;
+      }
+      state.startY = touch.clientY;
+    };
+    const move = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (state.startY === undefined || touch === undefined) return;
+      const travel = touch.clientY - state.startY;
+      if (!state.pulling) {
+        if (travel < -SLOP) state.startY = undefined;
+        if (travel < SLOP) return;
+        state.pulling = true;
+        node.setAttribute("data-pulling", "");
+      }
+      event.preventDefault();
+      show(resisted(Math.max(0, travel - SLOP)));
+    };
+    const release = () => {
+      const action = state.pulling ? state.current : undefined;
+      settle();
+      if (action === "new-thread") openNewThread();
+      else if (action === "palette") openPalette();
+    };
+    const stops = [
+      listen(node, "touchstart", start, { passive: true }),
+      // Not passive: a claimed pull stops the page from panning.
+      listen(node, "touchmove", move, { passive: false }),
+      listen(node, "touchend", release),
+      listen(node, "touchcancel", settle),
+    ];
+    return () => {
+      for (const stop of stops) stop();
+    };
+  };
   const presentation =
     stage === undefined ? undefined : stagePresentation[stage];
   return (

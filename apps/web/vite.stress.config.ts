@@ -7,7 +7,7 @@ import { defineConfig } from "vite";
 const root = import.meta.dirname;
 export default defineConfig({
   root,
-  plugins: [tailwindcss(), react()],
+  plugins: [tailwindcss(), react({ compiler: true })],
   define: { "import.meta.env.DX_ENV": JSON.stringify("") },
   build: {
     // Keep component names readable for render counting and profiles.

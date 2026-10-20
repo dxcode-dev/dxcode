@@ -43,10 +43,7 @@ function SignInUnavailable({
 function SignedOut() {
   const queryClient = useQueryClient();
   const options = useQuery(signInOptionsQueryOptions);
-  const router = React.useMemo(
-    () => createPublicRouter(queryClient),
-    [queryClient],
-  );
+  const router = createPublicRouter(queryClient);
   if (options.isPending)
     return (
       <React.Suspense fallback={null}>
@@ -75,26 +72,23 @@ export function AuthGate({
   readonly onBeforeSignOut?: (userId: UserId) => void;
 }) {
   const session = useQuery(sessionQueryOptions);
-  const identity = React.useMemo(
-    () =>
-      session.data == null
-        ? undefined
-        : {
-            id: Schema.decodeUnknownSync(UserId)(session.data.user.id),
-            name: session.data.user.name,
-            email: session.data.user.email,
-          },
-    [session.data],
-  );
+  // Keyed on primitives: Better Auth revives the user's timestamps as Dates,
+  // which structural sharing cannot reuse, so every focus refetch returns a
+  // new user object even when nobody changed.
+  const user = session.data?.user;
+  const userId = user?.id;
+  const name = user?.name ?? "";
+  const email = user?.email ?? "";
+  const identity =
+    userId === undefined
+      ? undefined
+      : { id: Schema.decodeUnknownSync(UserId)(userId), name, email };
   const signOut = useSignOut(() => {
     if (identity !== undefined) onBeforeSignOut?.(identity.id);
   });
   const logout = signOut.mutate;
-  const context = React.useMemo(
-    () =>
-      identity === undefined ? undefined : { identity, logout: () => logout() },
-    [identity, logout],
-  );
+  const context =
+    identity === undefined ? undefined : { identity, logout: () => logout() };
 
   if (session.isPending)
     return (

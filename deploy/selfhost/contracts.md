@@ -7,9 +7,10 @@ runner directly with the same environment and `deploy.selfhost.json`.
 ## Authentication
 
 The deployment uses Alchemy's Cloudflare profile for both preflight requests
-and apply. Alchemy 2.0.0-beta.74 refreshes its browser OAuth credential before
-returning it from `CloudflareAuth.read`; the Cloudflare provider reads the same
-profile. `CLOUDFLARE_API_TOKEN` plus `CLOUDFLARE_ACCOUNT_ID` is the supported
+and apply. `pnpm dx:deploy` refreshes the profile's browser OAuth credential
+with `alchemy profile refresh` first; preflight reads it from
+`~/.alchemy/profiles/dx-selfhost/cloudflare.json` (Alchemy 2.0.0-beta.83's
+layout), and the Cloudflare provider reads the same profile outside CI mode. `CLOUDFLARE_API_TOKEN` plus `CLOUDFLARE_ACCOUNT_ID` is the supported
 noninteractive fallback. Wrangler OAuth is a separate credential system and is
 never read, copied, or refreshed by dx.
 

@@ -4,6 +4,8 @@ import ghosttyWasmUrl from "ghostty-web/ghostty-vt.wasm?url";
 export interface BrowserTerminalEmulator {
   readonly element: HTMLElement;
   readonly terminal: Terminal;
+  /** A hidden Terminal draws nothing; showing it draws before the next paint. */
+  setVisible(visible: boolean): void;
   dispose(): void;
 }
 
@@ -35,6 +37,7 @@ const FIT_DEBOUNCE_MS = 100;
  * `visible` gates fitting: a hidden Terminal keeps its size. Fitting a
  * collapsed pane would shrink the emulator and the shell's PTY to two
  * columns, and the shell's redraws at that width and back erase its output.
+ * It also starts drawing paused when the Terminal mounts hidden.
  */
 export async function mountBrowserTerminal(
   element: HTMLElement,
@@ -71,6 +74,7 @@ export async function mountBrowserTerminal(
   const previousBackgroundColor = element.style.backgroundColor;
   const previousCaretColor = element.style.caretColor;
   terminal.open(element);
+  terminal.setRenderPaused(!visible());
   if (theme.background !== undefined)
     element.style.setProperty("background-color", theme.background);
   element.style.setProperty("caret-color", "transparent");
@@ -98,6 +102,9 @@ export async function mountBrowserTerminal(
   return {
     element,
     terminal,
+    setVisible(visible) {
+      terminal.setRenderPaused(!visible);
+    },
     dispose() {
       if (disposed) return;
       disposed = true;

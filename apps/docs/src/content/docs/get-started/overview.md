@@ -17,7 +17,7 @@ account, or both.
   - E2B: an E2B account and API key.
   - Cloudflare Containers: the Workers Paid plan, and a running Docker daemon
     with buildx on the deploying machine to build the Orb image.
-- Git, Node.js 22.19 or newer, and pnpm 9.15.
+- Git, Node.js 22.19 or newer, and pnpm 12.14.
 - Rust, zig (`pip install ziglang`), and `cargo install --locked
   cargo-zigbuild` only when you build `dxd` locally instead of using the
   release asset.

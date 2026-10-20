@@ -18,7 +18,12 @@ import {
   adminCredentialPath,
   writeAdminCredentialFile,
 } from "../deploy/selfhost/admin-credentials.mjs";
-import { loadAlchemyCloudflareAuth } from "../deploy/selfhost/cloudflare-auth.mjs";
+import {
+  ALCHEMY_CLI,
+  alchemyCloudflareConnected,
+  loadAlchemyCloudflareAuth,
+  runAlchemyCli,
+} from "../deploy/selfhost/cloudflare-auth.mjs";
 import {
   downloadDxdRelease,
   loadDxdRelease,
@@ -127,8 +132,29 @@ assertCleanRevision({
   target,
 });
 
+// An Alchemy OAuth access token lasts an hour; renew an expired one with the
+// profile's refresh token before giving up.
+const loadSelfhostCloudflareAuth = () => {
+  try {
+    return loadAlchemyCloudflareAuth();
+  } catch (error) {
+    if (
+      !alchemyCloudflareConnected() ||
+      !runAlchemyCli([
+        "profile",
+        "refresh",
+        "--profile",
+        "dx-selfhost",
+        "--provider",
+        "Cloudflare",
+      ])
+    )
+      throw error;
+    return loadAlchemyCloudflareAuth();
+  }
+};
 const selfhostCloudflareAuth =
-  target === "selfhost" ? loadAlchemyCloudflareAuth() : undefined;
+  target === "selfhost" ? loadSelfhostCloudflareAuth() : undefined;
 const selfhostConfig =
   target === "selfhost"
     ? loadSelfhostConfig({
@@ -649,7 +675,9 @@ const environment = {
         ? "dx-selfhost"
         : "dx-deployment",
   }),
-  CI: "1",
+  // Alchemy reads only environment credentials in CI, so an OAuth profile
+  // deploys outside CI mode.
+  CI: selfhostCloudflareAuth?.method === "alchemy-oauth" ? "false" : "1",
   ...(e2bApiKey ? { E2B_API_KEY: e2bApiKey } : {}),
   ...(githubApp === undefined ? {} : { DX_INTEGRATION_GITHUB_APP: githubApp }),
   ...(bitbucketOAuth === undefined
@@ -766,14 +794,7 @@ const result =
   target === "selfhost"
     ? spawnSync(
         process.execPath,
-        [
-          "node_modules/alchemy/bin/cli.js",
-          operation,
-          "alchemy.run.ts",
-          "--stage",
-          stage,
-          "--yes",
-        ],
+        [ALCHEMY_CLI, operation, "alchemy.run.ts", "--stage", stage, "--yes"],
         {
           cwd: workspaceRoot,
           env: environment,

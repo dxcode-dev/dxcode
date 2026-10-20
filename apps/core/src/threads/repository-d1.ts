@@ -14,7 +14,7 @@ import {
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Match, Schema, SchemaTransformation } from "effect";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/sql/SqlClient";
 import { threadPersistenceLogger } from "../logging.js";
 
 const ThreadRow = Schema.Struct({

@@ -100,7 +100,7 @@ export const userIdentity = async (db: D1Database, userId: UserId) => {
   };
 };
 
-interface SharingRow {
+export interface SharingRow {
   readonly id: string;
   readonly workspace_access: "none" | "view" | "contribute";
   readonly contribute_until: string | null;
@@ -166,56 +166,79 @@ export const threadSharingDecorations = async (
       )
       .bind(...ids)
       .all<SharingRow>();
-    const sharedIds = new Set<string>();
-    for (const row of sharing.results) {
-      const data = sharingData(row, now);
-      if (data !== undefined) sharedIds.add(row.id);
-      decorations.set(
-        row.id as ThreadId,
-        data === undefined ? {} : { sharing: data },
-      );
-    }
-    const participantIds = includeParticipants
-      ? ids
-      : ids.filter((id) => sharedIds.has(id));
-    if (participantIds.length === 0) continue;
-    const participants = await db
-      .prepare(
-        `SELECT thread.id AS thread_id, "user".id AS user_id,
-                ${displayNameSql('"user"', "account")} AS name,
-                account.username AS handle, "user".image, 1 AS owner,
-                0 AS rank, '' AS seen
-           FROM threads AS thread
-           JOIN "user" ON "user".id = thread.owner_user_id
-           LEFT JOIN personal_account AS account ON account.user_id = "user".id
-          WHERE thread.id IN (${placeholders(participantIds.length)})
-         UNION ALL
-         SELECT participant.thread_id, "user".id,
-                ${displayNameSql('"user"', "account")}, account.username,
-                "user".image, 0, 1,
-                COALESCE(participant.last_message_at, participant.last_seen_at)
-           FROM thread_participant AS participant
-           JOIN threads AS thread ON thread.id = participant.thread_id
-           JOIN "user" ON "user".id = participant.user_id
-           LEFT JOIN personal_account AS account ON account.user_id = "user".id
-          WHERE participant.thread_id IN (${placeholders(participantIds.length)})
-            AND participant.user_id != thread.owner_user_id
-         ORDER BY thread_id, rank, seen DESC`,
-      )
-      .bind(...participantIds)
-      .all<ParticipantRow>();
-    const byThread = new Map<string, Array<ThreadParticipantData>>();
-    for (const row of participants.results) {
-      const list = byThread.get(row.thread_id) ?? [];
-      if (list.length < 50) list.push(participantData(row));
-      byThread.set(row.thread_id, list);
-    }
-    for (const [threadId, list] of byThread) {
-      const id = threadId as ThreadId;
-      if (!includeParticipants && list.length < 2 && !sharedIds.has(threadId))
-        continue;
-      decorations.set(id, { ...decorations.get(id), participants: list });
-    }
+    const decorated = await decorateSharingRows(db, sharing.results, {
+      includeParticipants,
+      now,
+    });
+    for (const [id, decoration] of decorated) decorations.set(id, decoration);
+  }
+  return decorations;
+};
+
+/**
+ * Decorations for at most 50 Threads whose sharing columns the caller already
+ * read; reads participants only for shared Threads unless
+ * `includeParticipants` is set.
+ */
+export const decorateSharingRows = async (
+  db: D1Database,
+  rows: ReadonlyArray<SharingRow>,
+  {
+    includeParticipants = false,
+    now = new Date(),
+  }: { readonly includeParticipants?: boolean; readonly now?: Date } = {},
+): Promise<ReadonlyMap<ThreadId, ThreadSharingDecoration>> => {
+  const decorations = new Map<ThreadId, ThreadSharingDecoration>();
+  const sharedIds = new Set<string>();
+  for (const row of rows) {
+    const data = sharingData(row, now);
+    if (data !== undefined) sharedIds.add(row.id);
+    decorations.set(
+      row.id as ThreadId,
+      data === undefined ? {} : { sharing: data },
+    );
+  }
+  const ids = rows.map(({ id }) => id);
+  const participantIds = includeParticipants
+    ? ids
+    : ids.filter((id) => sharedIds.has(id));
+  if (participantIds.length === 0) return decorations;
+  const participants = await db
+    .prepare(
+      `SELECT thread.id AS thread_id, "user".id AS user_id,
+              ${displayNameSql('"user"', "account")} AS name,
+              account.username AS handle, "user".image, 1 AS owner,
+              0 AS rank, '' AS seen
+         FROM threads AS thread
+         JOIN "user" ON "user".id = thread.owner_user_id
+         LEFT JOIN personal_account AS account ON account.user_id = "user".id
+        WHERE thread.id IN (${placeholders(participantIds.length)})
+       UNION ALL
+       SELECT participant.thread_id, "user".id,
+              ${displayNameSql('"user"', "account")}, account.username,
+              "user".image, 0, 1,
+              COALESCE(participant.last_message_at, participant.last_seen_at)
+         FROM thread_participant AS participant
+         JOIN threads AS thread ON thread.id = participant.thread_id
+         JOIN "user" ON "user".id = participant.user_id
+         LEFT JOIN personal_account AS account ON account.user_id = "user".id
+        WHERE participant.thread_id IN (${placeholders(participantIds.length)})
+          AND participant.user_id != thread.owner_user_id
+       ORDER BY thread_id, rank, seen DESC`,
+    )
+    .bind(...participantIds)
+    .all<ParticipantRow>();
+  const byThread = new Map<string, Array<ThreadParticipantData>>();
+  for (const row of participants.results) {
+    const list = byThread.get(row.thread_id) ?? [];
+    if (list.length < 50) list.push(participantData(row));
+    byThread.set(row.thread_id, list);
+  }
+  for (const [threadId, list] of byThread) {
+    const id = threadId as ThreadId;
+    if (!includeParticipants && list.length < 2 && !sharedIds.has(threadId))
+      continue;
+    decorations.set(id, { ...decorations.get(id), participants: list });
   }
   return decorations;
 };

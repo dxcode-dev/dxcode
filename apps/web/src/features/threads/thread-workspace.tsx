@@ -30,7 +30,7 @@ import { MarkdownFileLinkContext } from "../../shared/ui/markdown-file-link-cont
 import { useMobile } from "../../shared/use-mobile.js";
 import { projectQueryOptions } from "../projects/project-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
-import { AgentPanel } from "./agent-panel.js";
+import { AgentPanel, type AgentPanelOptions } from "./agent-panel.js";
 import { ChangesPane } from "./changes/changes-pane.js";
 import { CenterFilePane } from "./files/center-file-pane.js";
 import {
@@ -72,7 +72,9 @@ import {
   ThreadSessionRegistryContext,
 } from "./thread-session-context.js";
 import {
+  createPendingSubmissionControl,
   createThreadAgentClient,
+  initializeRetainedThread,
   isAuthorizationError,
   type OptimisticThreadCreation,
   type PendingSubmissionControl,
@@ -88,7 +90,7 @@ import {
   sandboxFileUrl,
   type ThreadFileTarget,
 } from "./transcript-file-link.js";
-import { useFrameCoalescedAgentSession } from "./use-frame-coalesced-agent-session.js";
+import { useFrameCoalescedAgentSource } from "./use-frame-coalesced-agent-session.js";
 import {
   useThreadPresentation,
   useThreadPresentationValue,
@@ -106,15 +108,9 @@ const useOptimisticThreadCreation = (
   registry: ThreadSessionRegistry | undefined,
   threadId: ThreadId,
 ) => {
-  const subscribe = React.useCallback(
-    (listener: () => void) =>
-      registry?.subscribeCreations(listener) ?? (() => {}),
-    [registry],
-  );
-  const snapshot = React.useCallback(
-    () => registry?.creation(threadId),
-    [registry, threadId],
-  );
+  const subscribe = (listener: () => void) =>
+    registry?.subscribeCreations(listener) ?? (() => {});
+  const snapshot = () => registry?.creation(threadId);
   return React.useSyncExternalStore(subscribe, snapshot, snapshot);
 };
 
@@ -142,33 +138,27 @@ const useRetainedThread = (
   threadId: ThreadId,
   authorized: boolean,
 ) => {
-  const entry = React.useMemo(
-    () =>
-      authorized && isThreadId(threadId)
-        ? registry?.prepare(threadId)
-        : undefined,
-    [registry, threadId, authorized],
-  );
-  const subscribe = React.useCallback(
-    (listener: () => void) => {
-      if (registry === undefined || entry === undefined) return () => {};
-      const deactivate = registry.activate(entry);
-      const observe = () => {
-        if (historySettledNow(entry.session))
-          entry.presentation.set(HISTORY_SETTLED, true);
-      };
+  const entry =
+    authorized && isThreadId(threadId)
+      ? registry?.prepare(threadId)
+      : undefined;
+  const subscribe = (listener: () => void) => {
+    if (registry === undefined || entry === undefined) return () => {};
+    const deactivate = registry.activate(entry);
+    const observe = () => {
+      if (historySettledNow(entry.session))
+        entry.presentation.set(HISTORY_SETTLED, true);
+    };
+    observe();
+    const unsubscribe = entry.session.subscribe(() => {
       observe();
-      const unsubscribe = entry.session.subscribe(() => {
-        observe();
-        listener();
-      });
-      return () => {
-        unsubscribe();
-        deactivate();
-      };
-    },
-    [registry, entry],
-  );
+      listener();
+    });
+    return () => {
+      unsubscribe();
+      deactivate();
+    };
+  };
   const snapshot = () =>
     entry === undefined ||
     entry.presentation.get(HISTORY_SETTLED) === true ||
@@ -211,23 +201,17 @@ export function ThreadWorkspace({
     select: (location) =>
       location.state?.__TSR_key ?? location.state?.key ?? location.href,
   });
-  const focus = React.useMemo(
-    () =>
-      focusMessageId === undefined
-        ? undefined
-        : { messageId: focusMessageId, requestKey: String(focusRequestKey) },
-    [focusMessageId, focusRequestKey],
-  );
-  const onFocusHandled = React.useCallback(
-    () =>
-      void navigate({
-        to: "/threads/$threadId",
-        params: { threadId },
-        search: {},
-        replace: true,
-      }),
-    [navigate, threadId],
-  );
+  const focus =
+    focusMessageId === undefined
+      ? undefined
+      : { messageId: focusMessageId, requestKey: String(focusRequestKey) };
+  const onFocusHandled = () =>
+    void navigate({
+      to: "/threads/$threadId",
+      params: { threadId },
+      search: {},
+      replace: true,
+    });
   const { identity } = useAuthenticatedIdentity();
   const registry = React.useContext(ThreadSessionRegistryContext);
   const id = threadId as ThreadId;
@@ -371,17 +355,12 @@ function OpenThreadFilePane({
     React.SetStateAction<readonly CenterFileTab[]>
   >;
 }) {
-  const onDirtyChange = React.useCallback(
-    (dirty: boolean) =>
-      setFiles((current) =>
-        current.map((item) =>
-          fileTargetKey(item) === fileTargetKey(file)
-            ? { ...item, dirty }
-            : item,
-        ),
+  const onDirtyChange = (dirty: boolean) =>
+    setFiles((current) =>
+      current.map((item) =>
+        fileTargetKey(item) === fileTargetKey(file) ? { ...item, dirty } : item,
       ),
-    [file, setFiles],
-  );
+    );
   return (
     <section
       className="thread-file-center-panel"
@@ -493,30 +472,20 @@ function useComposerMentions(
   });
   const members = membersQuery.data;
   const conversationMode = thread.conversationMode ?? "agent";
-  return React.useMemo((): ComposerMentions | undefined => {
-    if (access === "view") return undefined;
-    if (shared)
-      return {
-        mode: "members",
-        members: members ?? [],
-        viewerId,
-        conversationMode,
-        onSent: (mode) =>
-          setConversationMode(queryClient, viewerId, thread.id, mode),
-      };
-    return access === "owner"
-      ? { mode: "share", onOpenShare: openShare }
-      : undefined;
-  }, [
-    access,
-    shared,
-    members,
-    viewerId,
-    conversationMode,
-    openShare,
-    queryClient,
-    thread.id,
-  ]);
+  const threadId = thread.id;
+  if (access === "view") return undefined;
+  if (shared)
+    return {
+      mode: "members",
+      members: members ?? [],
+      viewerId,
+      conversationMode,
+      onSent: (mode) =>
+        setConversationMode(queryClient, viewerId, threadId, mode),
+    };
+  return access === "owner"
+    ? { mode: "share", onOpenShare: openShare }
+    : undefined;
 }
 
 /** Opening another member's shared Thread follows it. */
@@ -552,13 +521,9 @@ const sharedAgentPanelProps = (thread: ThreadDetailData) => {
 };
 
 function RouteScopedThreadSession(props: ThreadSessionProps) {
-  const client = React.useMemo(
-    () =>
-      createThreadAgentClient(
-        props.thread.agentUrl,
-        () => props.thread.agentInitialization,
-      ),
-    [props.thread.agentInitialization, props.thread.agentUrl],
+  const client = createThreadAgentClient(
+    props.thread.agentUrl,
+    () => props.thread.agentInitialization,
   );
   const agent = useFlueAgent({ client, live: "sse" });
   return <ThreadSessionContent {...props} agentSource={{ agent }} />;
@@ -568,23 +533,20 @@ function RetainedThreadSession({
   registry,
   ...props
 }: ThreadSessionProps & { readonly registry: ThreadSessionRegistry }) {
-  const [entry] = React.useState(() => {
-    const entry =
+  const [entry] = React.useState(() =>
+    initializeRetainedThread(
       props.retained ??
-      registry.prepare(props.thread.id, props.thread.agentUrl);
-    entry.agentInitialization ??= props.thread.agentInitialization;
-    return entry;
-  });
+        registry.prepare(props.thread.id, props.thread.agentUrl),
+      props.thread.agentInitialization,
+    ),
+  );
   useMountEffect(() =>
     props.retained === undefined ? registry.activate(entry) : undefined,
   );
-  const subscribe = React.useCallback(
-    (listener: () => void) => {
-      entry.presentationListeners.add(listener);
-      return () => entry.presentationListeners.delete(listener);
-    },
-    [entry],
-  );
+  const subscribe = (listener: () => void) => {
+    entry.presentationListeners.add(listener);
+    return () => entry.presentationListeners.delete(listener);
+  };
   const disposed = React.useSyncExternalStore(
     subscribe,
     () => entry.disposed,
@@ -620,10 +582,9 @@ function RetainedThreadSessionContent(props: ThreadSessionProps) {
 type ThreadAgentSource =
   | { readonly session: FlueAgentSession }
   | { readonly agent: UseFlueAgentResult };
-type ThreadAgentPanelProps = Omit<
-  React.ComponentProps<typeof AgentPanel>,
-  "agent"
-> & { readonly source: ThreadAgentSource };
+type ThreadAgentPanelProps = AgentPanelOptions & {
+  readonly source: ThreadAgentSource;
+};
 
 function ThreadAgentPanel({ source, ...props }: ThreadAgentPanelProps) {
   return "session" in source ? (
@@ -639,8 +600,8 @@ function SessionAgentPanel({
 }: Omit<ThreadAgentPanelProps, "source"> & {
   readonly session: FlueAgentSession;
 }) {
-  const agent = useFrameCoalescedAgentSession(session);
-  return <AgentPanel agent={agent} {...props} />;
+  const source = useFrameCoalescedAgentSource(session);
+  return <AgentPanel source={source} {...props} />;
 }
 
 /** A retained Thread's pending images and submission state, for its panel. */
@@ -655,7 +616,7 @@ function useRetainedImageProps() {
   );
   const [submissionControl] = useThreadPresentation<PendingSubmissionControl>(
     "submission-control",
-    () => ({ stopRequested: false }),
+    createPendingSubmissionControl,
   );
   return retainedThread === undefined
     ? {}
@@ -677,36 +638,33 @@ function useRetainedImageProps() {
 function useCenterFileTabs(threadId: ThreadId) {
   const [files, setFiles] = React.useState<readonly CenterFileTab[]>([]);
   const [activeFile, setActiveFile] = React.useState<string>();
-  const openTarget = React.useCallback(
-    (target: ThreadFileTarget, reveal?: FileReveal) => {
-      const key = fileTargetKey(target);
-      setFiles((current) => {
-        const existing = current.find((file) => fileTargetKey(file) === key);
-        if (existing === undefined)
-          return [
-            ...current,
-            {
-              ...target,
-              dirty: false,
-              ...(reveal === undefined ? {} : { reveal, revealSequence: 1 }),
-            },
-          ];
-        // Reopening an open tab keeps its draft and moves the highlight.
-        if (reveal === undefined) return current;
-        return current.map((file) =>
-          fileTargetKey(file) === key
-            ? {
-                ...file,
-                reveal,
-                revealSequence: (file.revealSequence ?? 0) + 1,
-              }
-            : file,
-        );
-      });
-      setActiveFile(key);
-    },
-    [],
-  );
+  const openTarget = (target: ThreadFileTarget, reveal?: FileReveal) => {
+    const key = fileTargetKey(target);
+    setFiles((current) => {
+      const existing = current.find((file) => fileTargetKey(file) === key);
+      if (existing === undefined)
+        return [
+          ...current,
+          {
+            ...target,
+            dirty: false,
+            ...(reveal === undefined ? {} : { reveal, revealSequence: 1 }),
+          },
+        ];
+      // Reopening an open tab keeps its draft and moves the highlight.
+      if (reveal === undefined) return current;
+      return current.map((file) =>
+        fileTargetKey(file) === key
+          ? {
+              ...file,
+              reveal,
+              revealSequence: (file.revealSequence ?? 0) + 1,
+            }
+          : file,
+      );
+    });
+    setActiveFile(key);
+  };
   const openFile = (location: ThreadFileLocation) =>
     openTarget({ kind: "workspace", ...location });
   const closeFile = (file: CenterFileTab) => {
@@ -723,37 +681,31 @@ function useCenterFileTabs(threadId: ThreadId) {
             ),
       );
   };
-  const fileDownloadUrl = React.useCallback(
-    (target: ThreadFileTarget) => {
-      const absolute = absolutePathFor(target);
-      return absolute === undefined
-        ? undefined
-        : sandboxFileUrl(threadId, absolute, true);
-    },
-    [threadId],
-  );
-  const fileNavigation = React.useMemo<ThreadFileNavigation>(
-    () => ({ open: openTarget, downloadUrl: fileDownloadUrl }),
-    [openTarget, fileDownloadUrl],
-  );
-  const resolveFileLink = React.useCallback(
-    (href: string) => {
-      const resolved = resolveTranscriptFileLink(href);
-      if (resolved === undefined) return undefined;
-      const downloadUrl = fileDownloadUrl(resolved.target);
-      return {
-        open: () =>
-          openTarget(
-            resolved.target,
-            resolved.lines === undefined
-              ? undefined
-              : { kind: "lines", lines: resolved.lines },
-          ),
-        ...(downloadUrl === undefined ? {} : { downloadUrl }),
-      };
-    },
-    [openTarget, fileDownloadUrl],
-  );
+  const fileDownloadUrl = (target: ThreadFileTarget) => {
+    const absolute = absolutePathFor(target);
+    return absolute === undefined
+      ? undefined
+      : sandboxFileUrl(threadId, absolute, true);
+  };
+  const fileNavigation: ThreadFileNavigation = {
+    open: openTarget,
+    downloadUrl: fileDownloadUrl,
+  };
+  const resolveFileLink = (href: string) => {
+    const resolved = resolveTranscriptFileLink(href);
+    if (resolved === undefined) return undefined;
+    const downloadUrl = fileDownloadUrl(resolved.target);
+    return {
+      open: () =>
+        openTarget(
+          resolved.target,
+          resolved.lines === undefined
+            ? undefined
+            : { kind: "lines", lines: resolved.lines },
+        ),
+      ...(downloadUrl === undefined ? {} : { downloadUrl }),
+    };
+  };
   return {
     files,
     setFiles,
@@ -888,7 +840,7 @@ function ThreadSessionContent({
   const archived = thread.lifecycleState === "archived";
   const queryClient = useQueryClient();
   const [shareOpen, setShareOpen] = React.useState(false);
-  const openShare = React.useCallback(() => setShareOpen(true), []);
+  const openShare = () => setShareOpen(true);
   const mentions = useComposerMentions(thread, identity.id, openShare);
   useFollowOnOpen(thread, identity.id);
   const headerProps = {
@@ -908,10 +860,7 @@ function ThreadSessionContent({
   } = centerFiles;
   // A notification opens the transcript at a message, so it comes forward
   // from an open file tab.
-  const onFocusRequested = React.useCallback(
-    () => setActiveFile(undefined),
-    [setActiveFile],
-  );
+  const onFocusRequested = () => setActiveFile(undefined);
   const sharedPanelProps = {
     mentions,
     ...(focus === undefined
@@ -954,10 +903,8 @@ function ThreadSessionContent({
     realtimeWorkspaceStatus ??
     thread.executionWorkspace.preparationStatus ??
     undefined;
-  const toggleRightPane = React.useCallback(
-    () => setRightPaneCollapsed((collapsed) => !collapsed),
-    [],
-  );
+  const toggleRightPane = () =>
+    setRightPaneCollapsed((collapsed) => !collapsed);
   const mobileTool = useMobileThreadTool();
 
   const { workspaceTools, openFilePanes } = useWorkspaceTools({
@@ -974,6 +921,26 @@ function ThreadSessionContent({
   if (mobile) {
     // Archived or still-preparing Threads have no workspace to show.
     const toolsAvailable = !archived && thread.executionWorkspace.ready;
+    // Built here, not in renderHeader, so a streamed frame that renders the
+    // header with a new model reuses this element and skips the tabs.
+    const tabs = toolsAvailable ? (
+      <MobileThreadTabs
+        tools={workspaceTools}
+        activeTool={mobileTool.tool}
+        files={files}
+        activeFile={activeFile}
+        onSelectTool={(tool) => {
+          // Showing a tool can render a whole hidden transcript; a
+          // transition lets that render yield to input.
+          React.startTransition(() => {
+            setActiveFile(undefined);
+            mobileTool.select(tool);
+          });
+        }}
+        onSelectFile={setActiveFile}
+        onCloseFile={closeFile}
+      />
+    ) : null;
     const panel = (
       <ThreadAgentPanel
         {...retainedImageProps}
@@ -1006,23 +973,10 @@ function ThreadSessionContent({
         optimisticCreation={optimisticCreation}
         onInitialSubmissionObserved={onInitialSubmissionObserved}
         {...sharedPanelProps}
-        renderHeader={(model) => (
+        renderHeader={(transcript) => (
           <>
-            <ThreadHeader {...headerProps} model={model} />
-            {toolsAvailable ? (
-              <MobileThreadTabs
-                tools={workspaceTools}
-                activeTool={mobileTool.tool}
-                files={files}
-                activeFile={activeFile}
-                onSelectTool={(tool) => {
-                  setActiveFile(undefined);
-                  mobileTool.select(tool);
-                }}
-                onSelectFile={setActiveFile}
-                onCloseFile={closeFile}
-              />
-            ) : null}
+            <ThreadHeader {...headerProps} transcript={transcript} />
+            {tabs}
           </>
         )}
       />
@@ -1061,8 +1015,8 @@ function ThreadSessionContent({
             optimisticCreation={optimisticCreation}
             onInitialSubmissionObserved={onInitialSubmissionObserved}
             {...sharedPanelProps}
-            renderHeader={(model) => (
-              <ThreadHeader {...headerProps} model={model} />
+            renderHeader={(transcript) => (
+              <ThreadHeader {...headerProps} transcript={transcript} />
             )}
           />
         </section>
@@ -1087,8 +1041,8 @@ function ThreadSessionContent({
             optimisticCreation={optimisticCreation}
             onInitialSubmissionObserved={onInitialSubmissionObserved}
             {...sharedPanelProps}
-            renderHeader={(model) => (
-              <ThreadHeader {...headerProps} model={model} />
+            renderHeader={(transcript) => (
+              <ThreadHeader {...headerProps} transcript={transcript} />
             )}
           />
         </section>
@@ -1119,11 +1073,11 @@ function ThreadSessionContent({
                 optimisticCreation={optimisticCreation}
                 onInitialSubmissionObserved={onInitialSubmissionObserved}
                 {...sharedPanelProps}
-                renderHeader={(model) => (
+                renderHeader={(transcript) => (
                   <>
                     <ThreadHeader
                       {...headerProps}
-                      model={model}
+                      transcript={transcript}
                       rightPaneCollapsed={rightPaneCollapsed}
                       onToggleRightPane={toggleRightPane}
                     />

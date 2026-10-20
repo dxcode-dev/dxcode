@@ -12,6 +12,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FileCode2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { settle } from "../../../shared/settle.js";
 import { Badge } from "../../../shared/ui/badge.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
@@ -426,13 +427,10 @@ function PluginCard({
 export function CustomPluginsSettings({ workspaceSlug }: SettingsSectionProps) {
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
-  const target = React.useMemo<PluginsTarget>(
-    () =>
-      workspaceSlug === undefined
-        ? { scope: "personal" }
-        : { scope: "workspace", workspaceSlug },
-    [workspaceSlug],
-  );
+  const target: PluginsTarget =
+    workspaceSlug === undefined
+      ? { scope: "personal" }
+      : { scope: "workspace", workspaceSlug };
   const resource = useQuery(pluginsQueryOptions(identity.id, target));
   const environment = useQuery(
     environmentVariablesQueryOptions(identity.id, target),
@@ -455,35 +453,32 @@ export function CustomPluginsSettings({ workspaceSlug }: SettingsSectionProps) {
   const run = async (action: PluginsMutationAction, success: string) => {
     setBusy(true);
     setMessage(undefined);
-    try {
+    const outcome = await settle(async () => {
       await mutation.mutateAsync(action);
       setMessage(success);
-      return true;
-    } catch (error) {
-      setMessage(errorMessage(error));
-      return false;
-    } finally {
-      setBusy(false);
-      mutation.reset();
-    }
+    });
+    if (!outcome.ok) setMessage(errorMessage(outcome.error));
+    setBusy(false);
+    mutation.reset();
+    return outcome.ok;
   };
   const select = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
     if (files.length === 0) return;
-    try {
+    const outcome = await settle(async () => {
       const bundle = await browserBundle(files);
       setReview({
         preview: await previewMutation.mutateAsync(bundle),
         bundle,
         updating,
       });
-    } catch (error) {
-      setMessage(errorMessage(error));
+    });
+    if (!outcome.ok) {
+      setMessage(errorMessage(outcome.error));
       setUpdating(undefined);
-    } finally {
-      previewMutation.reset();
     }
+    previewMutation.reset();
   };
   const choose = (plugin?: PluginData) => {
     setUpdating(plugin);

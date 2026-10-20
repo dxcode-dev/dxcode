@@ -21,9 +21,13 @@ import { projectRoutes } from "../../../src/projects/routes.js";
 import { settingsRoutes } from "../../../src/settings/routes.js";
 import { createThreadRoutes } from "../../../src/threads/routes.js";
 import { FixtureLifecycleAgent } from "./agents/fixture-lifecycle-agent.js";
+import { heavyTurnResponses } from "./heavy-history.js";
 import { failNextActivation, settleDelayedCommand } from "./sandbox.js";
 
-const faux = fauxProvider();
+// A context window large enough that the heavy-history Thread never compacts.
+const faux = fauxProvider({
+  models: [{ id: "faux-1", contextWindow: 100_000_000 }],
+});
 faux.setResponses([
   fauxAssistantMessage(
     [
@@ -194,6 +198,13 @@ app.get("/__fixture/state/:threadId", async (context) => {
     startupPhases: startupPhases.results,
     tables: schema.results.map(({ name }) => name),
   });
+});
+// Queues the model steps for one heavy-history turn once the queue is empty.
+app.post("/__fixture/heavy-turn/:turn", (context) => {
+  if (faux.getPendingResponseCount() !== 0)
+    return context.json({ pending: faux.getPendingResponseCount() }, 409);
+  faux.appendResponses(heavyTurnResponses(Number(context.req.param("turn"))));
+  return context.body(null, 204);
 });
 app.post("/__fixture/reject-next-initial-admission", (context) => {
   rejectNextInitialDispatch = true;

@@ -66,9 +66,9 @@ jobs:
             printf '%s\n' "$SELFHOST_CREDENTIALS" > ".dx/alchemy/selfhost-$name/credentials.json"
           fi
           echo "domain=$(jq -r '.domain // empty' .dx/deploy.selfhost.json)" >> "$GITHUB_OUTPUT"
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6.1.0
         with:
-          version: 9.15.0
+          version: 12.14.0
       - uses: actions/setup-node@v4
         with:
           node-version: 22.19.0

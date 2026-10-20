@@ -1,9 +1,12 @@
 import { parseMessageAuthor } from "@dx/api";
 import { newThreadId, ProjectNameInput } from "@dx/domain";
 import { createFlueClient } from "@flue/sdk";
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { Redacted, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import { runReferenceLifecycle } from "../../src/dev/reference-lifecycle/workflow.js";
+import { HEAVY_TURNS } from "./src/heavy-history.js";
 import { ORPHAN_RESULT } from "./src/sandbox.js";
 
 const fixtureUrl = process.env.DX_LIFECYCLE_FIXTURE_URL;
@@ -14,6 +17,8 @@ const TOKEN = "dxu_fixture-token-0000000000000000000";
 const authorization = { authorization: `Bearer ${TOKEN}` };
 const PERSONAL_INSTRUCTION = "PRIVATE-LIFECYCLE-PERSONAL-INSTRUCTION";
 const fetchFixture: typeof fetch = fetch.bind(globalThis);
+const HISTORY_PAGE_BYTES = 1_048_576;
+const UNBOUNDED_FIRST_PAGE_BYTES = 2_768_397;
 
 const fixtureRequest = (path: string, init?: RequestInit) =>
   fetch(new Request(new URL(path, BASE_URL), init));
@@ -458,4 +463,138 @@ describe("generated Flue Worker lifecycle", () => {
       "activation-resume-complete",
     ]);
   });
+
+  // Byte budget for opening a long, tool-heavy Thread (src/heavy-history.ts):
+  // 40 turns, two 50 KB tool outputs each, and eight outputs of 240 KB to
+  // 2 MB. Measures raw JSON bodies only: not compressed size, not browser
+  // memory or parse time (test/history-first-paint-proof.mjs in apps/web).
+  it("keeps the first history page of a tool-heavy Thread within its byte budget", async () => {
+    const projectResponse = await fixtureRequest("/v1/projects", {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify({ name: "heavy-history" }),
+    });
+    expect(projectResponse.status).toBe(201);
+    const project = await projectResponse.json<{ data: { id: string } }>();
+    const queueTurn = async (turn: number) =>
+      expect(
+        (
+          await fixtureRequest(`/__fixture/heavy-turn/${turn}`, {
+            method: "POST",
+          })
+        ).status,
+      ).toBe(204);
+    const threadId = newThreadId();
+    await queueTurn(0);
+    const created = await fixtureRequest("/v1/threads", {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.data.id,
+        title: "Heavy history",
+        threadId,
+        initialMessage: { body: "Heavy turn 0", attachments: [] },
+      }),
+    });
+    expect(created.status).toBe(201);
+    const agentPath = `/v1/agents/dx/${threadId}`;
+    const client = createFlueClient({
+      url: new URL(agentPath, BASE_URL).toString(),
+      fetch: fetchFixture,
+      headers: authorization,
+    });
+    for (let attempt = 0; ; attempt += 1) {
+      if ((await client.history({ promptLimit: 1 })).settlements.length > 0)
+        break;
+      if (attempt === 200) throw new Error("The first turn never settled.");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    for (let turn = 1; turn < HEAVY_TURNS; turn += 1) {
+      await queueTurn(turn);
+      const sent = await client.send({
+        message: { kind: "user", body: `Heavy turn ${turn}` },
+        idempotencyKey: `heavy-turn-${turn}`,
+      });
+      await client.wait(sent);
+    }
+
+    const read = async (query: string) => {
+      const response = await fixtureRequest(`${agentPath}?${query}`, {
+        headers: authorization,
+      });
+      expect(response.status).toBe(200);
+      return Buffer.from(await response.arrayBuffer());
+    };
+    const prompts = (page: Buffer) =>
+      (
+        JSON.parse(page.toString()) as {
+          messages: Array<{
+            role: string;
+            parts: Array<{ type: string; text?: string }>;
+          }>;
+        }
+      ).messages.flatMap((message) =>
+        message.role === "user"
+          ? message.parts.flatMap((part) =>
+              part.type === "text" && part.text !== undefined
+                ? [parseMessageAuthor(part.text).text]
+                : [],
+            )
+          : [],
+      );
+    // Every page from the newest, following `before` cursors.
+    const walk = async (query: string) => {
+      const pages: Buffer[] = [];
+      let before = "";
+      for (;;) {
+        const page = await read(`${query}${before}`);
+        pages.push(page);
+        const cursor = (
+          JSON.parse(page.toString()) as { olderCursor: string | null }
+        ).olderCursor;
+        if (cursor === null) return pages;
+        before = `&before=${encodeURIComponent(cursor)}`;
+      }
+    };
+    const all = Array.from(
+      { length: HEAVY_TURNS },
+      (_, turn) => `Heavy turn ${turn}`,
+    );
+    const unbounded = await walk("view=history&promptLimit=2");
+    // The web client's page: two prompts within 1 MiB (THREAD_HISTORY_PAGE).
+    const bounded = await walk(
+      `view=history&promptLimit=2&maxBytes=${HISTORY_PAGE_BYTES}`,
+    );
+    for (const pages of [unbounded, bounded])
+      expect(pages.toReversed().flatMap(prompts)).toEqual(all);
+    for (const page of bounded)
+      expect(
+        page.byteLength <= HISTORY_PAGE_BYTES || prompts(page).length === 1,
+      ).toBe(true);
+    const first = unbounded[0]!.byteLength;
+    const firstBounded = bounded[0]!.byteLength;
+    const artifacts = process.env.DX_HISTORY_BUDGET_ARTIFACTS;
+    if (artifacts !== undefined)
+      for (const [name, pages] of [
+        ["unbounded", unbounded],
+        ["bounded", bounded],
+      ] as const) {
+        mkdirSync(path.join(artifacts, name), { recursive: true });
+        for (const [index, page] of pages.entries())
+          writeFileSync(path.join(artifacts, name, `page-${index}.json`), page);
+      }
+
+    // Pinned: the two-prompt page before the byte budget. Only each tool
+    // part's `durationMs` varies between runs, by a digit or two.
+    expect(Math.abs(first - UNBOUNDED_FIRST_PAGE_BYTES)).toBeLessThanOrEqual(
+      64,
+    );
+    // The newest two turns exceed the budget, so the page holds the newest
+    // turn alone and whole, with its 900 KB tool output.
+    expect(prompts(bounded[0]!)).toEqual(["Heavy turn 39"]);
+    // Ceiling: the newest turn of this Thread, 1.0 MiB today.
+    expect(firstBounded).toBeLessThanOrEqual(1.1 * 1024 * 1024);
+    // Ratio against the unbounded page (0.38 today).
+    expect(firstBounded / first).toBeLessThanOrEqual(0.4);
+  }, 600_000);
 });

@@ -1,10 +1,15 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ProfileStore, ProfileStoreLive } from "alchemy/Auth/Profile";
+import { PlatformServices } from "alchemy/Util/PlatformServices";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import { describe, expect, it, vi } from "vitest";
 import { reconcileHeldSecret } from "./alchemy-resources.ts";
 import {
+  alchemyCloudflareConnected,
   loadAlchemyCloudflareAuth,
   preflightCloudflareDeployment,
 } from "./cloudflare-auth.mjs";
@@ -793,9 +798,9 @@ describe("Portal zone preflight", () => {
     });
     const fetch = cloudflare();
     for (const [missing, label] of [
-      ["zone:read", "Zone Read"],
-      ["dns_records:edit", "DNS Edit"],
-      ["workers_routes:write", "Workers Routes Edit"],
+      ["zone.read", "Zone Read"],
+      ["dns.write", "DNS Edit"],
+      ["workers-routes.write", "Workers Routes Edit"],
     ]) {
       const error = await preflightPortalZone({
         auth: oauth(PORTAL_OAUTH_SCOPES.filter((scope) => scope !== missing)),
@@ -812,7 +817,7 @@ describe("Portal zone preflight", () => {
     // OAuth grants are scopes, not token policies: no introspection.
     await expect(
       preflightPortalZone({
-        auth: oauth([...PORTAL_OAUTH_SCOPES, "workers_scripts:write"]),
+        auth: oauth([...PORTAL_OAUTH_SCOPES, "workers-scripts.edit"]),
         portalDomain,
         fetch,
       }),
@@ -823,7 +828,57 @@ describe("Portal zone preflight", () => {
     );
   });
 
-  it("reads the scopes an Alchemy OAuth login was granted", () => {
+  // Alchemy itself writes and migrates these profiles, so a change to its
+  // layout fails here rather than at an operator's deploy.
+  const withAlchemyHome = async (home, use) => {
+    const previous = process.env.ALCHEMY_HOME;
+    process.env.ALCHEMY_HOME = join(home, ".alchemy");
+    try {
+      return await Effect.runPromise(
+        Effect.flatMap(ProfileStore, use).pipe(
+          Effect.provide(
+            ProfileStoreLive.pipe(Layer.provide(PlatformServices)),
+          ),
+        ),
+      );
+    } finally {
+      if (previous === undefined) delete process.env.ALCHEMY_HOME;
+      else process.env.ALCHEMY_HOME = previous;
+    }
+  };
+
+  it("reads the scopes an Alchemy OAuth login was granted", async () => {
+    const home = mkdtempSync(join(tmpdir(), "dx-alchemy-home-"));
+    expect(alchemyCloudflareConnected({ environment: {}, home })).toBe(false);
+    await withAlchemyHome(home, (profiles) =>
+      Effect.andThen(
+        profiles.createProfile("dx-selfhost"),
+        profiles.setProviderConfig("dx-selfhost", "Cloudflare", {
+          method: "oauth",
+          accountId,
+          clientId: "client",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 3_600_000,
+          scopes: ["zone.read", "workers-routes.write", "offline_access"],
+        }),
+      ),
+    );
+    expect(alchemyCloudflareConnected({ environment: {}, home })).toBe(true);
+    const auth = loadAlchemyCloudflareAuth({ environment: {}, home });
+    expect(auth).toMatchObject({
+      method: "alchemy-oauth",
+      accountId,
+      headers: { Authorization: "Bearer access" },
+      scopes: ["zone.read", "workers-routes.write", "offline_access"],
+    });
+    expect(missingPortalOAuthScopes(auth).map(({ scope }) => scope)).toEqual([
+      "dns.write",
+    ]);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("asks a login from an older Alchemy to sign in again", async () => {
     const home = mkdtempSync(join(tmpdir(), "dx-alchemy-home-"));
     mkdirSync(join(home, ".alchemy/credentials/dx-selfhost"), {
       recursive: true,
@@ -831,8 +886,11 @@ describe("Portal zone preflight", () => {
     writeFileSync(
       join(home, ".alchemy/profiles.json"),
       JSON.stringify({
+        version: 0,
         profiles: {
-          "dx-selfhost": { Cloudflare: { method: "oauth", accountId } },
+          "dx-selfhost": {
+            Cloudflare: { method: "oauth", accountId, scopes: ["zone:read"] },
+          },
         },
       }),
     );
@@ -840,20 +898,23 @@ describe("Portal zone preflight", () => {
       join(home, ".alchemy/credentials/dx-selfhost/cf-oauth.json"),
       JSON.stringify({
         type: "oauth",
-        access: "access",
+        access: "old-client-access",
+        refresh: "old-client-refresh",
         expires: Date.now() + 3_600_000,
-        scopes: ["zone:read", "workers_routes:write"],
+        scopes: ["zone:read"],
       }),
     );
-    const auth = loadAlchemyCloudflareAuth({ environment: {}, home });
-    expect(auth).toMatchObject({
-      method: "alchemy-oauth",
-      accountId,
-      scopes: ["zone:read", "workers_routes:write"],
-    });
-    expect(missingPortalOAuthScopes(auth).map(({ scope }) => scope)).toEqual([
-      "dns_records:edit",
-    ]);
+    // Before migration the wizard refreshes the login rather than adding one.
+    expect(alchemyCloudflareConnected({ environment: {}, home })).toBe(true);
+    expect(() => loadAlchemyCloudflareAuth({ environment: {}, home })).toThrow(
+      "has no Cloudflare login",
+    );
+    await withAlchemyHome(home, (profiles) => profiles.readManifest);
+    expect(alchemyCloudflareConnected({ environment: {}, home })).toBe(true);
+    expect(() => loadAlchemyCloudflareAuth({ environment: {}, home })).toThrow(
+      "must hold a current Cloudflare OAuth login",
+    );
+    rmSync(home, { recursive: true, force: true });
   });
 
   it("lists the account's zones that can serve Portals and what each already serves", async () => {

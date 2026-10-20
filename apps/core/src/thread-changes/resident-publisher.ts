@@ -63,9 +63,10 @@ export const publishThreadChangesResidentCandidate = async (input: {
   readonly capture?: ThreadChangesCaptureLease;
   /**
    * Runs with the committed fingerprint as soon as D1 holds the outcome,
-   * before cleanup and lease release.
+   * before cleanup and lease release. `summaryChanged` is whether the totals
+   * Thread lists show differ from the previous capture's.
    */
-  readonly onCommitted?: (fingerprint: string) => void;
+  readonly onCommitted?: (fingerprint: string, summaryChanged: boolean) => void;
 }): Promise<ThreadChangesResidentPublication> => {
   const decoded = Schema.decodeUnknownOption(DxdChangesCandidateMessage)(
     input.candidate,
@@ -120,7 +121,7 @@ export const publishThreadChangesResidentCandidate = async (input: {
           ? "unchanged"
           : "raced";
       if (publication === "unchanged")
-        input.onCommitted?.(candidate.outcome.fingerprint);
+        input.onCommitted?.(candidate.outcome.fingerprint, false);
     } else if (source === undefined) {
       publication = "source-missing";
     } else if (candidate.outcome.capture.baseline !== source.baseline) {
@@ -166,10 +167,10 @@ export const publishThreadChangesResidentCandidate = async (input: {
         );
       }
       let published: boolean;
+      const summary = manifest.ranges.find(
+        ({ range }) => range.kind === "all",
+      )?.summary;
       try {
-        const summary = manifest.ranges.find(
-          ({ range }) => range.kind === "all",
-        )?.summary;
         published = await repository.publish({
           threadId: input.threadId,
           generation: manifest.generation,
@@ -198,7 +199,12 @@ export const publishThreadChangesResidentCandidate = async (input: {
         publication = "raced";
       } else {
         mark("publish");
-        input.onCommitted?.(manifest.fingerprint);
+        input.onCommitted?.(
+          manifest.fingerprint,
+          summary?.additions !== state.summary?.additions ||
+            summary?.deletions !== state.summary?.deletions ||
+            summary?.files !== state.summary?.files,
+        );
         if (
           state.latestCaptureId !== undefined &&
           state.latestCaptureId !== manifest.captureId

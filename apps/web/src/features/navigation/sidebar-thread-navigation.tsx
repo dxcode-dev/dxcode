@@ -1,7 +1,6 @@
 import type { ThreadData } from "@dx/api";
 import { ChevronDown, FolderGit2 } from "lucide-react";
 import type { ReactNode } from "react";
-import * as React from "react";
 import type { ThreadListClientItem } from "../../shared/api/client.js";
 import { useNewThreadSurface } from "../../shared/new-thread-surface.js";
 import { Button } from "../../shared/ui/button.js";
@@ -75,10 +74,8 @@ export function SidebarThreadNavigation({
   readonly pinningThreadId?: ThreadData["id"];
 }) {
   const { openNewThread } = useNewThreadSurface();
-  const listed = React.useMemo(
-    () =>
-      new Set(sections.flatMap(({ threads }) => threads.map(({ id }) => id))),
-    [sections],
+  const listed = new Set(
+    sections.flatMap(({ threads }) => threads.map(({ id }) => id)),
   );
   const empty =
     visibleThreadCount === 0 &&

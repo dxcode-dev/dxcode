@@ -9,8 +9,8 @@ const Sha256 = Schema.String.check(
 );
 
 const releaseConfiguration = Config.all({
-  url: Config.string("DX_DXD_RELEASE_URL"),
-  sha256: Config.string("DX_DXD_RELEASE_SHA256"),
+  url: Config.String("DX_DXD_RELEASE_URL"),
+  sha256: Config.String("DX_DXD_RELEASE_SHA256"),
 });
 
 const hex = (bytes: ArrayBuffer) =>

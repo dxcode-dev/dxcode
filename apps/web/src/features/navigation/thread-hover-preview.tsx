@@ -7,6 +7,7 @@ import { modelDisplayName } from "../../shared/model-display-name.js";
 import { threadColorAttributes } from "../../shared/thread-color.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { ThreadTitleText } from "../../shared/ui/thread-title.js";
+import { TimeText } from "../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../shared/utils.js";
 
 export interface ThreadPreviewAnchor {
@@ -84,8 +85,11 @@ export function ThreadHoverPreview({
             <ThreadTitleText thread={currentThread} />
           </strong>
           <span>
-            Created {formatRelativeTime(currentThread.createdAt)}, updated{" "}
-            {formatRelativeTime(currentThread.updatedAt)}
+            <TimeText
+              text={(now) =>
+                `Created ${formatRelativeTime(currentThread.createdAt, now)}, updated ${formatRelativeTime(currentThread.updatedAt, now)}`
+              }
+            />
           </span>
         </div>
         <span

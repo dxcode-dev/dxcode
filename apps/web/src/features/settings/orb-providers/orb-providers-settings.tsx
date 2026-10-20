@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Settings } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
   DialogContent,
@@ -187,13 +188,10 @@ export function OrbProvidersSettings({
 }: SettingsSectionProps) {
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
-  const target = React.useMemo<PluginsTarget>(
-    () =>
-      workspaceSlug === undefined
-        ? { scope: "personal" }
-        : { scope: "workspace", workspaceSlug },
-    [workspaceSlug],
-  );
+  const target: PluginsTarget =
+    workspaceSlug === undefined
+      ? { scope: "personal" }
+      : { scope: "workspace", workspaceSlug };
   const resource = useQuery(orbProvidersQueryOptions(identity.id, target));
   const mutation = useMutation(
     orbProvidersMutationOptions(queryClient, identity.id, target),
@@ -205,17 +203,14 @@ export function OrbProvidersSettings({
   const run: Run = async (action, success) => {
     setBusy(true);
     setMessage(undefined);
-    try {
+    const outcome = await settle(async () => {
       await mutation.mutateAsync(action);
       setMessage(success);
-      return undefined;
-    } catch (error) {
-      setMessage(errorMessage(error));
-      return errorMessage(error);
-    } finally {
-      setBusy(false);
-      mutation.reset();
-    }
+    });
+    if (!outcome.ok) setMessage(errorMessage(outcome.error));
+    setBusy(false);
+    mutation.reset();
+    return outcome.ok ? undefined : errorMessage(outcome.error);
   };
   const close = () => {
     setEditing(undefined);

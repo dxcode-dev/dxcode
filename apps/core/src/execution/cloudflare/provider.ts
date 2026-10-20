@@ -53,7 +53,7 @@ const InactivityMs = Schema.Finite.check(
 
 const inactivityMs = (bindings: Bindings) =>
   Effect.runPromise(
-    Config.number("DX_WORKSPACE_INACTIVITY_MS")
+    Config.Number("DX_WORKSPACE_INACTIVITY_MS")
       .pipe(Config.withDefault(DEFAULT_WORKSPACE_INACTIVITY_MS))
       .parse(ConfigProvider.fromUnknown(bindings))
       .pipe(

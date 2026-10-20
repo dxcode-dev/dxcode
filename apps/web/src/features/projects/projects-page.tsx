@@ -12,6 +12,7 @@ import { DxLoading } from "../../shared/brand/dx-loading.js";
 import { PageShell } from "../../shared/layout/page-shell.js";
 import { Button } from "../../shared/ui/button.js";
 import { Input } from "../../shared/ui/input.js";
+import { TimeText } from "../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../shared/utils.js";
 import {
   bitbucketConnectionQueryOptions,
@@ -25,6 +26,12 @@ import {
 import { createProjectMutationOptions } from "./project-mutations.js";
 import { projectsQueryOptions } from "./project-queries.js";
 import { sourceGrantsQueryOptions } from "./source-grant-queries.js";
+
+const updatedText =
+  (updatedAt: { readonly epochMilliseconds: number }) => (now: number) => {
+    const relative = formatRelativeTime(updatedAt, now);
+    return relative === "just now" ? "now" : relative;
+  };
 
 export function ProjectsPage() {
   const { identity } = useAuthenticatedIdentity();
@@ -268,7 +275,6 @@ export function ProjectsPage() {
           </div>
         ) : null}
         {visible.map((project) => {
-          const relativeUpdate = formatRelativeTime(project.updatedAt);
           return (
             <Link
               className="project-list-row"
@@ -287,8 +293,7 @@ export function ProjectsPage() {
                 <strong>{project.name}</strong>
                 <span className="project-row-meta">
                   <small>
-                    Updated{" "}
-                    {relativeUpdate === "just now" ? "now" : relativeUpdate}
+                    Updated <TimeText text={updatedText(project.updatedAt)} />
                   </small>
                   <small title="One project owner">
                     <Users /> 1

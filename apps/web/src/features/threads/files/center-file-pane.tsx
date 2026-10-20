@@ -94,11 +94,8 @@ function PdfFrame({
   readonly blob: Blob;
   readonly label: string;
 }) {
-  const attach = React.useCallback(
-    (frame: HTMLIFrameElement | null) =>
-      frame === null ? undefined : showBlobInFrame(frame, blob),
-    [blob],
-  );
+  const attach = (frame: HTMLIFrameElement | null) =>
+    frame === null ? undefined : showBlobInFrame(frame, blob);
   return <iframe className="thread-file-pdf" ref={attach} title={label} />;
 }
 
@@ -282,15 +279,9 @@ function SandboxTextView({
   const preview = useQuery(sandboxFilePreviewOptions(threadId, path, active));
   const previewKind = filePreviewKind(path);
   const [mode, setMode] = React.useState<"preview" | "source" | null>(null);
-  const references = React.useMemo(
-    () => ({ threadId, location: { kind: "sandbox" as const, path } }),
-    [path, threadId],
-  );
+  const references = { threadId, location: { kind: "sandbox" as const, path } };
   const content = preview.data?.kind === "text" ? preview.data.content : "";
-  const file = React.useMemo(
-    () => ({ name: path, contents: content }),
-    [path, content],
-  );
+  const file = { name: path, contents: content };
   // A highlighted range is only visible in source; show it there by default.
   const viewMode =
     mode ??

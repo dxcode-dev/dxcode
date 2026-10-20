@@ -6,6 +6,7 @@ import type {
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import {
+  keepPreviousData,
   mutationOptions,
   type QueryClient,
   queryOptions,
@@ -130,6 +131,8 @@ export const changesDiffQueryOptions = (
     },
     staleTime: Infinity,
     retry: false,
+    // A new capture keeps the open diff on screen until its own diff loads.
+    placeholderData: keepPreviousData,
   });
 
 export const pushChangesMutationOptions = (

@@ -1,0 +1,147 @@
+diff --git a/lib/Cloudflare/Auth/AuthProvider.js b/lib/Cloudflare/Auth/AuthProvider.js
+index 9e72fc9dd121fcd820a5b70a0a76c6581d313bfc..690949bf3b04aad1fa8393385df5bdd3ef012187 100644
+--- a/lib/Cloudflare/Auth/AuthProvider.js
++++ b/lib/Cloudflare/Auth/AuthProvider.js
+@@ -114,6 +114,18 @@ const storedFields = [
+ const configureMethods = [
+     { method: "stored", fields: storedFields },
+ ];
++// dx: a deployment that serves Portals also needs DNS Write on its Portal
++// zone, which Basic Scopes omits. dx's installer names the extra scopes it
++// needs here, so Basic and Custom include them without the operator picking
++// each scope.
++const withExtraOAuthScopes = (scopes) => [
++    ...new Set([
++        ...scopes,
++        ...(process.env.ALCHEMY_CLOUDFLARE_OAUTH_EXTRA_SCOPES ?? "")
++            .split(/[\s,]+/)
++            .filter((scope) => ALL_SCOPE_IDS.includes(scope)),
++    ]),
++];
+ const promptOAuthScopes = (currentConfig) => Effect.gen(function* () {
+     const interaction = yield* Interaction.Interaction;
+     const mode = yield* interaction.prompt
+@@ -140,13 +152,13 @@ const promptOAuthScopes = (currentConfig) => Effect.gen(function* () {
+     })
+         .pipe(mapPromptCancellation);
+     if (mode === "basic")
+-        return [...BASIC_SCOPES];
++        return withExtraOAuthScopes(BASIC_SCOPES);
+     if (mode === "all")
+         return [...ALL_SCOPE_IDS];
+     return yield* interaction.prompt
+         .multiSelect({
+         message: "Select OAuth scopes",
+-        initialValues: customOAuthScopeDefaults(currentConfig),
++        initialValues: withExtraOAuthScopes(customOAuthScopeDefaults(currentConfig)),
+         searchable: true,
+         descriptionPlacement: "inline",
+         options: OAUTH_SCOPE_GROUPS.flatMap((group) => group.scopes.map((value) => ({
+diff --git a/lib/Cloudflare/StateStore/State.js b/lib/Cloudflare/StateStore/State.js
+index dc3922ffd2a7460475d5caf0a49141663f35f0d7..760667b1a2d30f9b749ea1e1fd0a5e0a33986701 100644
+--- a/lib/Cloudflare/StateStore/State.js
++++ b/lib/Cloudflare/StateStore/State.js
+@@ -533,13 +533,25 @@ export const loginWithCloudflare = Effect.fn("state_store.login", {
+     }
+     const interaction = yield* Interaction.Interaction;
+     const credentials = yield* interaction.task({ label: "Refreshing Cloudflare State Store credentials" }, Effect.gen(function* () {
+-        // 1. Locate the single Secrets Store on the account.
+-        const store = yield* SecretsStore.listStores
++        // 1. Locate the Secrets Store that contains the state-store token.
++        // dx: an account may contain unrelated stores, so selecting the first
++        // store can build an invalid edge-preview binding.
++        const stores = yield* SecretsStore.listStores
+             .items({ accountId })
+-            .pipe(Stream.runHead, Effect.map(Option.getOrUndefined));
++            .pipe(Stream.runCollect, Effect.map((chunk) => Array.from(chunk)));
++        let store;
++        for (const candidate of stores) {
++            const secrets = yield* SecretsStore.listStoreSecrets
++                .items({ accountId, storeId: candidate.id })
++                .pipe(Stream.runCollect, Effect.map((chunk) => Array.from(chunk)));
++            if (secrets.some((secret) => secret.name === AuthTokenSecretName)) {
++                store = candidate;
++                break;
++            }
++        }
+         if (!store) {
+             return yield* AuthError.make({
+-                message: "No Secrets Store found on this account. Deploy the state store first.",
++                message: "No Secrets Store containing the Alchemy state-store token was found on this account. Deploy the state store first.",
+             });
+         }
+         // 2. Fetch the auth-token from Secrets Store with a temporary edge-preview worker.
+diff --git a/src/Cloudflare/Auth/AuthProvider.ts b/src/Cloudflare/Auth/AuthProvider.ts
+index cf3935e991418f8ab051e6075f648ab1ac9cae07..0d61ebec25be50486f0d89898ac73330d4680816 100644
+--- a/src/Cloudflare/Auth/AuthProvider.ts
++++ b/src/Cloudflare/Auth/AuthProvider.ts
+@@ -183,6 +183,19 @@ const configureMethods: ReadonlyArray<ConfigureMethod> = [
+   { method: "stored", fields: storedFields },
+ ];
+ 
++// dx: a deployment that serves Portals also needs DNS Write on its Portal
++// zone, which Basic Scopes omits. dx's installer names the extra scopes it
++// needs here, so Basic and Custom include them without the operator picking
++// each scope.
++const withExtraOAuthScopes = (scopes: ReadonlyArray<string>): string[] => [
++  ...new Set<string>([
++    ...scopes,
++    ...(process.env.ALCHEMY_CLOUDFLARE_OAUTH_EXTRA_SCOPES ?? "")
++      .split(/[\s,]+/)
++      .filter((scope) => (ALL_SCOPE_IDS as ReadonlyArray<string>).includes(scope)),
++  ]),
++];
++
+ const promptOAuthScopes = (currentConfig?: CloudflareAuthConfig) =>
+   Effect.gen(function* () {
+     const interaction = yield* Interaction.Interaction;
+@@ -209,12 +222,12 @@ const promptOAuthScopes = (currentConfig?: CloudflareAuthConfig) =>
+         ],
+       })
+       .pipe(mapPromptCancellation);
+-    if (mode === "basic") return [...BASIC_SCOPES];
++    if (mode === "basic") return withExtraOAuthScopes(BASIC_SCOPES);
+     if (mode === "all") return [...ALL_SCOPE_IDS];
+     return yield* interaction.prompt
+       .multiSelect({
+         message: "Select OAuth scopes",
+-        initialValues: customOAuthScopeDefaults(currentConfig),
++        initialValues: withExtraOAuthScopes(customOAuthScopeDefaults(currentConfig)),
+         searchable: true,
+         descriptionPlacement: "inline",
+         options: OAUTH_SCOPE_GROUPS.flatMap((group) =>
+diff --git a/src/Cloudflare/StateStore/State.ts b/src/Cloudflare/StateStore/State.ts
+index f44948ace9466d44c04e808ecd0726f7a0016d72..59b3acedf12899b37ee52c7664d2636cc0c5a7d9 100644
+--- a/src/Cloudflare/StateStore/State.ts
++++ b/src/Cloudflare/StateStore/State.ts
+@@ -735,13 +735,26 @@ export const loginWithCloudflare = Effect.fn("state_store.login", {
+     const credentials = yield* interaction.task(
+       { label: "Refreshing Cloudflare State Store credentials" },
+       Effect.gen(function* () {
+-        // 1. Locate the single Secrets Store on the account.
+-        const store = yield* SecretsStore.listStores
++        // 1. Locate the Secrets Store that contains the state-store token.
++        // dx: an account may contain unrelated stores, so selecting the first
++        // store can build an invalid edge-preview binding.
++        const stores = yield* SecretsStore.listStores
+           .items({ accountId })
+-          .pipe(Stream.runHead, Effect.map(Option.getOrUndefined));
++          .pipe(Stream.runCollect, Effect.map((chunk) => Array.from(chunk)));
++        let store: (typeof stores)[number] | undefined;
++        for (const candidate of stores) {
++          const secrets = yield* SecretsStore.listStoreSecrets
++            .items({ accountId, storeId: candidate.id })
++            .pipe(Stream.runCollect, Effect.map((chunk) => Array.from(chunk)));
++          if (secrets.some((secret) => secret.name === AuthTokenSecretName)) {
++            store = candidate;
++            break;
++          }
++        }
+         if (!store) {
+           return yield* AuthError.make({
+-            message: "No Secrets Store found on this account. Deploy the state store first.",
++            message:
++              "No Secrets Store containing the Alchemy state-store token was found on this account. Deploy the state store first.",
+           });
+         }
+ 

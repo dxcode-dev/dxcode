@@ -1,24 +1,13 @@
 {
   "name": "dx",
   "private": true,
-  "version": "0.2.25",
+  "version": "0.2.26",
   "license": "FSL-1.1-ALv2",
   "type": "module",
-  "packageManager": "pnpm@9.15.0",
+  "packageManager": "pnpm@12.14.0",
   "engines": {
     "node": ">=22.19.0",
-    "pnpm": ">=9.15.0 <10"
-  },
-  "pnpm": {
-    "overrides": {
-      "@opentelemetry/api": "1.9.0",
-      "@better-auth/utils": "0.4.2",
-      "@earendil-works/pi-ai": "0.85.1",
-      "@flue/runtime": "file:third-party/flue/runtime-56db2a40ca0e69d97adc53098874ea33c5b617c9.tgz"
-    },
-    "patchedDependencies": {
-      "alchemy@2.0.0-beta.74": "third-party/alchemy/alchemy@2.0.0-beta.74.patch"
-    }
+    "pnpm": ">=12.14.0 <13"
   },
   "scripts": {
     "build": "pnpm --filter @dx/web build && pnpm --filter @dx/core build && pnpm --filter @dx/docs build",
@@ -56,12 +45,13 @@
     "@babel/parser": "8.0.4",
     "@babel/traverse": "8.0.4",
     "@biomejs/biome": "2.5.9",
-    "@effect/platform-node": "4.0.0-rc.110",
-    "@effect/tsgo": "0.36.5",
+    "@effect/platform-node": "4.0.5",
+    "@effect/tsgo": "0.53.4",
     "@types/node": "26.2.0",
-    "alchemy": "2.0.0-beta.74",
+    "alchemy": "2.0.0-beta.83",
     "e2b": "2.44.0",
-    "effect": "4.0.0-rc.110",
+    "effect": "4.0.5",
+    "happy-dom": "^20.11.6",
     "jsonc-parser": "3.3.1",
     "msw": "^2.14.0",
     "tldts": "7.4.11",

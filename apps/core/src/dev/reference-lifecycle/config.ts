@@ -24,10 +24,10 @@ export interface ReferenceLifecycleConfig {
 }
 
 const configuration = Config.all({
-  baseUrl: Config.string("DX_BASE_URL"),
-  apiToken: Config.redacted("DX_TEMP_API_TOKEN"),
-  projectName: Config.option(Config.string("DX_REFERENCE_PROJECT_NAME")),
-  projectId: Config.option(Config.string("DX_REFERENCE_PROJECT_ID")),
+  baseUrl: Config.String("DX_BASE_URL"),
+  apiToken: Config.Redacted("DX_TEMP_API_TOKEN"),
+  projectName: Config.option(Config.String("DX_REFERENCE_PROJECT_NAME")),
+  projectId: Config.option(Config.String("DX_REFERENCE_PROJECT_ID")),
 });
 
 const decodeBaseUrl = Effect.fn("decodeReferenceBaseUrl")(function* (

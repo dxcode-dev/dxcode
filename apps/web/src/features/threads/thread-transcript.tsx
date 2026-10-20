@@ -1,14 +1,13 @@
 import {
   elementScroll,
   measureElement as measureObservedElement,
-  useVirtualizer,
   type VirtualItem,
 } from "@tanstack/react-virtual";
 import { ArrowDown } from "lucide-react";
 import * as React from "react";
 import { Button } from "../../shared/ui/button.js";
-import { TranscriptRowContent } from "./message-parts.js";
 import { MessageImageTiles } from "./message-attachments-ui.js";
+import { TranscriptRowContent } from "./message-parts.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
 import {
   MessageAuthorLabel,
@@ -18,6 +17,7 @@ import { ThreadSourceMessage } from "./thread-source-message.js";
 import { TranscriptOutline } from "./transcript-outline.js";
 import {
   sameTranscriptRow,
+  type TranscriptOutlineAnchor,
   type TranscriptRow,
   type TranscriptRowId,
   type TranscriptViewModel,
@@ -25,6 +25,7 @@ import {
 } from "./transcript-view-model.js";
 import { TranscriptTurn } from "./transcript-work.js";
 import { useThreadPresentation } from "./use-thread-presentation.js";
+import { useTranscriptVirtualizer } from "./use-transcript-virtualizer.js";
 
 const ROW_ESTIMATE_PX = 56;
 /** Message IDs the panel gives messages other Threads sent, not yet joined. */
@@ -40,6 +41,41 @@ interface TranscriptPosition {
   measurements: VirtualItem[];
   anchor?: { key: VirtualItem["key"]; within: number };
 }
+
+/**
+ * The scroll position a remounted transcript restores. Scrolling writes it
+ * without notifying anyone: only the next mount reads it.
+ */
+interface TranscriptPositionStore {
+  readonly saved: () => TranscriptPosition | undefined;
+  readonly save: (position: TranscriptPosition) => void;
+  readonly setWidth: (width: number) => void;
+}
+
+const createTranscriptPositionStore = (): TranscriptPositionStore => {
+  let saved: TranscriptPosition | undefined;
+  return {
+    saved: () => saved,
+    save: (position) => {
+      saved = position;
+    },
+    setWidth: (width) => {
+      if (saved !== undefined) saved.width = width;
+    },
+  };
+};
+
+/** Turn sizes measured at the current width, seeded from the restore. */
+const measuredTurnSizes = (
+  sizes: React.RefObject<Map<VirtualItem["key"], number> | undefined>,
+  restored: TranscriptPosition | undefined,
+) => {
+  if (sizes.current === undefined)
+    sizes.current = new Map(
+      restored?.measurements.map((item) => [item.key, item.size]),
+    );
+  return sizes.current;
+};
 
 interface TranscriptRowShellProps {
   readonly measureElement: (element: HTMLElement | null) => void;
@@ -177,7 +213,7 @@ function useOlderHistoryDrain({
     restored: boolean;
     generation: number;
   }>({ restored: false, generation: 0, retryAttempt: 0 });
-  const disconnect = React.useCallback(() => {
+  const disconnect = () => {
     state.current.generation += 1;
     state.current.releaseObservers?.();
     state.current.releaseObservers = undefined;
@@ -187,8 +223,8 @@ function useOlderHistoryDrain({
     if (state.current.retryTimer !== undefined)
       window.clearTimeout(state.current.retryTimer);
     state.current.retryTimer = undefined;
-  }, []);
-  const schedule = React.useCallback(() => {
+  };
+  const schedule = () => {
     if (state.current.frame !== undefined) return;
     const generation = state.current.generation;
     state.current.frame = requestAnimationFrame(() => {
@@ -261,8 +297,8 @@ function useOlderHistoryDrain({
       }
       void options.loadOlder();
     });
-  }, []);
-  const reconnect = React.useCallback(() => {
+  };
+  const reconnect = () => {
     disconnect();
     const current = state.current;
     if (
@@ -278,61 +314,46 @@ function useOlderHistoryDrain({
     );
     schedule();
     return disconnect;
-  }, [disconnect, schedule]);
-  const viewportRef = React.useCallback(
-    (element: HTMLDivElement | null) => {
-      if (element === null) return;
-      if (state.current.viewport !== element) state.current.restored = false;
-      state.current.viewport = element;
-      const releaseObservers = reconnect();
-      return () => {
-        if (state.current.viewport !== element) return;
-        releaseObservers();
-        state.current.viewport = undefined;
-        state.current.restored = false;
-      };
-    },
-    [reconnect],
-  );
-  const sentinelRef = React.useCallback(
-    (element: HTMLDivElement | null) => {
-      if (element === null) return;
-      // Commit the render's eligibility together with the sentinel. React 19
-      // cleans up the previous callback ref before installing this one, so a
-      // discarded render can never alter an active observer's configuration.
-      state.current.configuration = {
-        active,
-        historyReady,
-        oldestTurnId,
-        hasMore,
-        loadingOlder,
-        olderError,
-        loadOlder,
-      };
-      state.current.sentinel = element;
-      const releaseObservers = reconnect();
-      return () => {
-        if (state.current.sentinel !== element) return;
-        releaseObservers();
-        state.current.sentinel = undefined;
-        state.current.configuration = undefined;
-      };
-    },
-    [
+  };
+  const viewportRef = (element: HTMLDivElement | null) => {
+    if (element === null) return;
+    if (state.current.viewport !== element) state.current.restored = false;
+    state.current.viewport = element;
+    const releaseObservers = reconnect();
+    return () => {
+      if (state.current.viewport !== element) return;
+      releaseObservers();
+      state.current.viewport = undefined;
+      state.current.restored = false;
+    };
+  };
+  const sentinelRef = (element: HTMLDivElement | null) => {
+    if (element === null) return;
+    // Commit the render's eligibility together with the sentinel. React 19
+    // cleans up the previous callback ref before installing this one, so a
+    // discarded render can never alter an active observer's configuration.
+    state.current.configuration = {
       active,
-      hasMore,
       historyReady,
-      loadOlder,
-      loadingOlder,
       oldestTurnId,
+      hasMore,
+      loadingOlder,
       olderError,
-      reconnect,
-    ],
-  );
-  const markRestored = React.useCallback(() => {
+      loadOlder,
+    };
+    state.current.sentinel = element;
+    const releaseObservers = reconnect();
+    return () => {
+      if (state.current.sentinel !== element) return;
+      releaseObservers();
+      state.current.sentinel = undefined;
+      state.current.configuration = undefined;
+    };
+  };
+  const markRestored = () => {
     state.current.restored = true;
     schedule();
-  }, [schedule]);
+  };
   return { viewportRef, sentinelRef, schedule, markRestored };
 }
 
@@ -361,8 +382,6 @@ export interface TranscriptFocus {
  */
 function useMessageFocus({
   focus,
-  active,
-  onRequested,
   model,
   virtualizer,
   historyReady,
@@ -373,8 +392,6 @@ function useMessageFocus({
   onHandled,
 }: {
   readonly focus?: TranscriptFocus;
-  readonly active: boolean;
-  readonly onRequested?: () => void;
   readonly model: TranscriptViewModel;
   readonly virtualizer: {
     scrollToIndex: (
@@ -395,7 +412,6 @@ function useMessageFocus({
     pages: number;
     retries: number;
     retriedError?: Error;
-    requested?: boolean;
   }>({ handled: false, pages: 0, retries: 0 });
   const messageId = focus?.messageId;
   const requestKey = focus?.requestKey;
@@ -410,132 +426,106 @@ function useMessageFocus({
       ? -1
       : model.turns.findIndex((turn) => turn.id === target.turnId);
   const targetRowId = target?.id;
-  return React.useCallback(
-    (anchor: HTMLSpanElement | null) => {
-      if (anchor === null || requestKey === undefined) return;
-      if (state.current.requestKey !== requestKey)
-        state.current = { requestKey, handled: false, pages: 0, retries: 0 };
-      const current = state.current;
-      if (current.handled) return;
-      // Hidden behind a file tab: ask to come forward, then continue once
-      // this transcript is shown.
-      if (!active) {
-        if (!current.requested) {
-          current.requested = true;
-          onRequested?.();
-        }
-        return;
-      }
-      if (!historyReady) return;
-      // The request ended: the person left the Thread or opened another.
-      const live = () =>
-        anchor.isConnected && state.current.requestKey === requestKey;
-      if (targetRowId !== undefined && targetIndex >= 0) {
-        current.handled = true;
-        // The list anchors to its end and measures turns as they render, so
-        // one scroll does not stick: keep the row in view until it stays.
-        let frames = 0;
-        let steady = 0;
-        let interrupted = false;
-        let viewport: Element | undefined;
-        const interrupt = () => {
-          interrupted = true;
-        };
-        const finish = (row: HTMLElement | null) => {
-          viewport?.removeEventListener("wheel", interrupt);
-          viewport?.removeEventListener("touchstart", interrupt);
-          viewport?.removeEventListener("keydown", interrupt);
-          if (!live()) return;
-          if (row !== null) {
-            row.focus({ preventScroll: true });
-            row.setAttribute("data-notification-target", "");
-            window.setTimeout(
-              () => row.removeAttribute("data-notification-target"),
-              FOCUS_HIGHLIGHT_MS,
-            );
-          }
-          onHandled?.();
-        };
-        const settle = () => {
-          if (!live()) return finish(null);
-          frames += 1;
-          const row = document.getElementById(targetRowId);
-          const view = row?.closest(".transcript-viewport") ?? undefined;
-          if (row === null || view === undefined) {
-            virtualizer.scrollToIndex(targetIndex, {
-              align: "center",
-              behavior: "auto",
-            });
-          } else {
-            if (viewport === undefined) {
-              // Scrolling by hand ends the request where the person is.
-              viewport = view;
-              const options = { passive: true } as const;
-              view.addEventListener("wheel", interrupt, options);
-              view.addEventListener("touchstart", interrupt, options);
-              view.addEventListener("keydown", interrupt, options);
-            }
-            if (interrupted) return finish(row);
-            const rowRect = row.getBoundingClientRect();
-            const viewRect = view.getBoundingClientRect();
-            // A row taller than the transcript is shown from its top.
-            const tall = rowRect.height > viewRect.height;
-            const inView = tall
-              ? rowRect.top >= viewRect.top - 1 &&
-                rowRect.top <= viewRect.top + 64
-              : rowRect.top >= viewRect.top - 1 &&
-                rowRect.bottom <= viewRect.bottom + 1;
-            steady = inView ? steady + 1 : 0;
-            if (!inView)
-              row.scrollIntoView({ block: tall ? "start" : "center" });
-            if (steady >= FOCUS_STEADY_FRAMES || frames >= FOCUS_MAX_FRAMES)
-              return finish(row);
-          }
-          if (frames < FOCUS_MAX_FRAMES) requestAnimationFrame(settle);
-          else finish(null);
-        };
-        requestAnimationFrame(settle);
-        return;
-      }
-      if (loadingOlder) return;
-      const canLoad = hasMore && loadOlder !== undefined;
-      if (canLoad && olderError !== undefined) {
-        // This failure already has a retry scheduled or in flight.
-        if (current.retriedError === olderError) return;
-        // A failed page is retried a few times with backoff, then the
-        // request gives up rather than hammering history.
-        current.retriedError = olderError;
-        if (current.retries < MAX_FOCUS_LOAD_RETRIES) {
-          const delay = 1_000 * 2 ** current.retries;
-          current.retries += 1;
-          window.setTimeout(() => {
-            if (live() && !state.current.handled) void loadOlder?.();
-          }, delay);
-          return;
-        }
-      } else if (canLoad && current.pages < MAX_FOCUS_PAGES) {
-        current.pages += 1;
-        void loadOlder?.();
-        return;
-      }
+  return (anchor: HTMLSpanElement | null) => {
+    if (anchor === null || requestKey === undefined) return;
+    if (state.current.requestKey !== requestKey)
+      state.current = { requestKey, handled: false, pages: 0, retries: 0 };
+    const current = state.current;
+    if (current.handled) return;
+    if (!historyReady) return;
+    // The request ended: the person left the Thread or opened another.
+    const live = () =>
+      anchor.isConnected && state.current.requestKey === requestKey;
+    if (targetRowId !== undefined && targetIndex >= 0) {
       current.handled = true;
-      onHandled?.();
-    },
-    [
-      active,
-      hasMore,
-      historyReady,
-      loadOlder,
-      loadingOlder,
-      olderError,
-      onHandled,
-      onRequested,
-      requestKey,
-      targetIndex,
-      targetRowId,
-      virtualizer,
-    ],
-  );
+      // The list anchors to its end and measures turns as they render, so
+      // one scroll does not stick: keep the row in view until it stays.
+      let frames = 0;
+      let steady = 0;
+      let interrupted = false;
+      let viewport: Element | undefined;
+      const interrupt = () => {
+        interrupted = true;
+      };
+      const finish = (row: HTMLElement | null) => {
+        viewport?.removeEventListener("wheel", interrupt);
+        viewport?.removeEventListener("touchstart", interrupt);
+        viewport?.removeEventListener("keydown", interrupt);
+        if (!live()) return;
+        if (row !== null) {
+          row.focus({ preventScroll: true });
+          row.setAttribute("data-notification-target", "");
+          window.setTimeout(
+            () => row.removeAttribute("data-notification-target"),
+            FOCUS_HIGHLIGHT_MS,
+          );
+        }
+        onHandled?.();
+      };
+      const settle = () => {
+        if (!live()) return finish(null);
+        frames += 1;
+        const row = document.getElementById(targetRowId);
+        const view = row?.closest(".transcript-viewport") ?? undefined;
+        if (row === null || view === undefined) {
+          virtualizer.scrollToIndex(targetIndex, {
+            align: "center",
+            behavior: "auto",
+          });
+        } else {
+          if (viewport === undefined) {
+            // Scrolling by hand ends the request where the person is.
+            viewport = view;
+            const options = { passive: true } as const;
+            view.addEventListener("wheel", interrupt, options);
+            view.addEventListener("touchstart", interrupt, options);
+            view.addEventListener("keydown", interrupt, options);
+          }
+          if (interrupted) return finish(row);
+          const rowRect = row.getBoundingClientRect();
+          const viewRect = view.getBoundingClientRect();
+          // A row taller than the transcript is shown from its top.
+          const tall = rowRect.height > viewRect.height;
+          const inView = tall
+            ? rowRect.top >= viewRect.top - 1 &&
+              rowRect.top <= viewRect.top + 64
+            : rowRect.top >= viewRect.top - 1 &&
+              rowRect.bottom <= viewRect.bottom + 1;
+          steady = inView ? steady + 1 : 0;
+          if (!inView) row.scrollIntoView({ block: tall ? "start" : "center" });
+          if (steady >= FOCUS_STEADY_FRAMES || frames >= FOCUS_MAX_FRAMES)
+            return finish(row);
+        }
+        if (frames < FOCUS_MAX_FRAMES) requestAnimationFrame(settle);
+        else finish(null);
+      };
+      requestAnimationFrame(settle);
+      return;
+    }
+    if (loadingOlder) return;
+    const canLoad = hasMore && loadOlder !== undefined;
+    if (canLoad && olderError !== undefined) {
+      // This failure already has a retry scheduled or in flight.
+      if (current.retriedError === olderError) return;
+      // A failed page is retried a few times with backoff, then the
+      // request gives up rather than hammering history.
+      current.retriedError = olderError;
+      if (current.retries < MAX_FOCUS_LOAD_RETRIES) {
+        const delay = 1_000 * 2 ** current.retries;
+        current.retries += 1;
+        window.setTimeout(() => {
+          if (live() && !state.current.handled) void loadOlder?.();
+        }, delay);
+        return;
+      }
+    } else if (canLoad && current.pages < MAX_FOCUS_PAGES) {
+      current.pages += 1;
+      void loadOlder?.();
+      return;
+    }
+    current.handled = true;
+    onHandled?.();
+  };
 }
 
 function useTranscriptViewport({
@@ -566,11 +556,11 @@ function useTranscriptViewport({
   /** The focus was applied, or the message is not in this Thread. */
   readonly onFocusHandled?: () => void;
 }) {
-  const [position] = useThreadPresentation<{ saved?: TranscriptPosition }>(
+  const [position] = useThreadPresentation(
     "transcriptPosition",
-    () => ({}),
+    createTranscriptPositionStore,
   );
-  const [restored] = React.useState(() => position.saved);
+  const [restored] = React.useState(() => position.saved());
   const [scrollMargin, setScrollMargin] = React.useState(restored?.margin ?? 0);
   const [scrollElement, setScrollElement] =
     React.useState<HTMLDivElement | null>(null);
@@ -592,14 +582,20 @@ function useTranscriptViewport({
     olderError,
     loadOlder,
   });
-  const lastReadRef = React.useRef(restored?.lastRead ?? model.rows.at(-1)?.id);
-  const [measuredTurnSizes] = React.useState(
-    () =>
-      new Map<VirtualItem["key"], number>(
-        restored?.measurements.map((item) => [item.key, item.size]),
-      ),
+  const [initialLastRead] = React.useState(
+    () => restored?.lastRead ?? model.rows.at(-1)?.id,
   );
-  const refreshVisiblePromptRows = React.useCallback(() => {
+  // The last row seen at the live edge, and its value when the reader last
+  // left the edge, which is all the unread marker renders.
+  const lastReadRef = React.useRef(initialLastRead);
+  const [readBeforeLeaving, setReadBeforeLeaving] =
+    React.useState(initialLastRead);
+  const turnSizesRef = React.useRef<Map<VirtualItem["key"], number>>(undefined);
+  // Whether the viewport has attached before: it attaches again each time a
+  // hidden transcript is shown.
+  const attachedRef = React.useRef(false);
+
+  const refreshVisiblePromptRows = () => {
     const nextVisible = new Set<TranscriptRowId>();
     const viewportRect = scrollElement?.getBoundingClientRect();
     if (viewportRect !== undefined) {
@@ -621,9 +617,9 @@ function useTranscriptViewport({
         ? current
         : nextVisible,
     );
-  }, [model.outline, scrollElement]);
+  };
 
-  const virtualizer = useVirtualizer({
+  const { virtualizer, virtualItems, totalSize } = useTranscriptVirtualizer({
     count: model.turns.length,
     getScrollElement: () => scrollElement,
     getItemKey: (index) => model.turns[index]?.id ?? index,
@@ -664,7 +660,7 @@ function useTranscriptViewport({
       const key = instance.options.getItemKey(index);
       // Never cache an estimate as a measurement: native prepend anchoring
       // distinguishes the first measurement from later row resizes.
-      const cached = measuredTurnSizes.get(key);
+      const cached = measuredTurnSizes(turnSizesRef, restored).get(key);
       if (
         entry === undefined &&
         cached !== undefined &&
@@ -673,24 +669,25 @@ function useTranscriptViewport({
       )
         return cached;
       const size = measureObservedElement(element, entry, instance);
-      measuredTurnSizes.set(key, size);
+      measuredTurnSizes(turnSizesRef, restored).set(key, size);
       return size;
     },
     onChange: (instance) => {
       const nextAtEnd = instance.isAtEnd();
       setAtEnd((current) => (current === nextAtEnd ? current : nextAtEnd));
       if (nextAtEnd) lastReadRef.current = model.rows.at(-1)?.id;
+      else setReadBeforeLeaving(lastReadRef.current);
       const element = instance.scrollElement;
+      const saved = position.saved();
       if (
         element !== null &&
-        (position.saved === undefined ||
-          position.saved.width === element.clientWidth)
+        (saved === undefined || saved.width === element.clientWidth)
       ) {
         const offset = instance.scrollOffset ?? element.scrollTop;
         const anchor = instance
           .getVirtualItems()
           .find((item) => item.end > offset);
-        position.saved = {
+        position.save({
           offset,
           margin: scrollMargin,
           width: element.clientWidth,
@@ -701,151 +698,156 @@ function useTranscriptViewport({
             anchor === undefined
               ? undefined
               : { key: anchor.key, within: offset - anchor.start },
-        };
+        });
       }
       refreshVisiblePromptRows();
       scheduleHistoryDrain();
     },
   });
 
-  const measureTurn = React.useCallback(
-    (element: HTMLDivElement | null) => {
-      // Native resize anchoring synchronously commits grown transforms with
-      // its scroll adjustment. Register outside React's commit so that flush
-      // is allowed, including the first measurement of a prepended turn.
-      if (element !== null)
-        queueMicrotask(() => {
-          if (element.isConnected) {
-            virtualizer.measureElement(element);
-            scheduleHistoryDrain();
-          }
-        });
-      else virtualizer.measureElement(null);
-    },
-    [scheduleHistoryDrain, virtualizer],
-  );
+  const measureTurn = (element: HTMLDivElement | null) => {
+    // Native resize anchoring synchronously commits grown transforms with
+    // its scroll adjustment. Register outside React's commit so that flush
+    // is allowed, including the first measurement of a prepended turn.
+    if (element !== null)
+      queueMicrotask(() => {
+        if (element.isConnected) {
+          virtualizer.measureElement(element);
+          scheduleHistoryDrain();
+        }
+      });
+    else virtualizer.measureElement(null);
+  };
 
-  const listRef = React.useCallback(
-    (element: HTMLDivElement | null) => {
-      if (element === null) return;
-      const viewport = element.closest<HTMLElement>(".transcript-viewport");
-      if (viewport === null) return;
-      const measureMargin = () => {
-        setScrollMargin(
-          element.getBoundingClientRect().top -
-            viewport.getBoundingClientRect().top +
-            viewport.scrollTop,
+  const listRef = (element: HTMLDivElement | null) => {
+    if (element === null) return;
+    const viewport = element.closest<HTMLElement>(".transcript-viewport");
+    if (viewport === null) return;
+    const measureMargin = () => {
+      setScrollMargin(
+        element.getBoundingClientRect().top -
+          viewport.getBoundingClientRect().top +
+          viewport.scrollTop,
+      );
+      scheduleHistoryDrain();
+    };
+    // Shown again, the margin is unchanged; the observer's first report,
+    // after the browser lays out, confirms it without forcing a layout.
+    if (!attachedRef.current) measureMargin();
+    return observeTranscriptResize([element, viewport], measureMargin);
+  };
+
+  const hasUnread = !atEnd && model.rows.at(-1)?.id !== readBeforeLeaving;
+  const viewportRef = (element: HTMLDivElement | null) => {
+    setScrollElement(element);
+    if (element !== null) {
+      const reappeared = attachedRef.current;
+      attachedRef.current = true;
+      // Read before the virtualizer measures what arrived while hidden.
+      const followEnd = position.saved()?.atEnd ?? true;
+      const releaseHistoryViewport = historyViewportRef(element);
+      let frame = 0;
+      let width = reappeared
+        ? element.clientWidth
+        : (restored?.width ?? element.clientWidth);
+      const restoreAnchor = (saved: TranscriptPosition) => {
+        cancelAnimationFrame(frame);
+        if (saved.atEnd) {
+          position.setWidth(element.clientWidth);
+          virtualizer.scrollToEnd();
+          markHistoryRestored();
+          return;
+        }
+        const index = Array.from(
+          { length: virtualizer.options.count },
+          (_, index) => index,
+        ).find(
+          (index) =>
+            virtualizer.options.getItemKey(index) === saved.anchor?.key,
         );
-        scheduleHistoryDrain();
-      };
-      measureMargin();
-      return observeTranscriptResize([element, viewport], measureMargin);
-    },
-    [scheduleHistoryDrain],
-  );
-
-  const hasUnread = !atEnd && model.rows.at(-1)?.id !== lastReadRef.current;
-  const viewportRef = React.useCallback(
-    (element: HTMLDivElement | null) => {
-      setScrollElement(element);
-      if (element !== null) {
-        const releaseHistoryViewport = historyViewportRef(element);
-        let frame = 0;
-        let width = restored?.width ?? element.clientWidth;
-        const restoreAnchor = (saved: TranscriptPosition) => {
-          cancelAnimationFrame(frame);
-          if (saved.atEnd) {
-            if (position.saved !== undefined)
-              position.saved.width = element.clientWidth;
-            virtualizer.scrollToEnd();
-            markHistoryRestored();
-            return;
-          }
-          const index = Array.from(
-            { length: virtualizer.options.count },
-            (_, index) => index,
-          ).find(
-            (index) =>
-              virtualizer.options.getItemKey(index) === saved.anchor?.key,
-          );
-          if (index === undefined) {
-            element.scrollTo({ top: saved.offset });
-            markHistoryRestored();
-            return;
-          }
-          virtualizer.scrollToIndex(index, {
-            align: "start",
-            behavior: "auto",
-          });
-          frame = requestAnimationFrame(() => {
-            const offset = virtualizer.getOffsetForIndex(index, "start")?.[0];
-            if (offset !== undefined)
-              virtualizer.scrollToOffset(offset + (saved.anchor?.within ?? 0));
-            if (position.saved !== undefined)
-              position.saved.width = element.clientWidth;
-            markHistoryRestored();
-          });
-        };
-        const disconnect = observeTranscriptResize([element], () => {
-          if (width === element.clientWidth || element.clientWidth === 0)
-            return;
-          const saved = position.saved ?? restored;
-          width = element.clientWidth;
-          measuredTurnSizes.clear();
-          if (saved !== undefined) restoreAnchor(saved);
+        if (index === undefined) {
+          element.scrollTo({ top: saved.offset });
+          markHistoryRestored();
+          return;
+        }
+        virtualizer.scrollToIndex(index, {
+          align: "start",
+          behavior: "auto",
         });
         frame = requestAnimationFrame(() => {
-          if (restored === undefined || restored.atEnd) {
-            virtualizer.scrollToEnd();
-            markHistoryRestored();
-          } else {
-            restoreAnchor(restored);
-          }
+          const offset = virtualizer.getOffsetForIndex(index, "start")?.[0];
+          if (offset !== undefined)
+            virtualizer.scrollToOffset(offset + (saved.anchor?.within ?? 0));
+          position.setWidth(element.clientWidth);
+          markHistoryRestored();
         });
-        return () => {
-          cancelAnimationFrame(frame);
-          disconnect();
-          releaseHistoryViewport?.();
-        };
-      }
+      };
+      const disconnect = observeTranscriptResize([element], () => {
+        if (width === element.clientWidth || element.clientWidth === 0) return;
+        const saved = position.saved() ?? restored;
+        width = element.clientWidth;
+        measuredTurnSizes(turnSizesRef, restored).clear();
+        if (saved !== undefined) restoreAnchor(saved);
+      });
+      frame = requestAnimationFrame(() => {
+        // Shown again: the browser kept the scroll offset and the turns
+        // stayed mounted. Follow what streamed in while it was hidden.
+        if (reappeared) {
+          if (followEnd) virtualizer.scrollToEnd();
+          markHistoryRestored();
+        } else if (restored === undefined || restored.atEnd) {
+          virtualizer.scrollToEnd();
+          markHistoryRestored();
+        } else {
+          restoreAnchor(restored);
+        }
+      });
+      return () => {
+        cancelAnimationFrame(frame);
+        disconnect();
+        releaseHistoryViewport?.();
+      };
+    }
+  };
+  // Stable, so the jump control re-renders only when what it shows changes.
+  const [jumpToEnd] = React.useState(
+    () => (lastRowId: TranscriptRowId | undefined) => {
+      virtualizer.scrollToEnd({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "auto"
+          : "smooth",
+      });
+      setAtEnd(true);
+      lastReadRef.current = lastRowId;
     },
-    [
-      historyViewportRef,
-      markHistoryRestored,
-      measuredTurnSizes,
-      position,
-      restored,
-      virtualizer,
-    ],
   );
-  const jumpToEnd = () => {
-    virtualizer.scrollToEnd({
-      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
-        ? "auto"
-        : "smooth",
-    });
-    setAtEnd(true);
-    lastReadRef.current = model.rows.at(-1)?.id;
-  };
-  const navigateToRow = (rowId: TranscriptRowId) => {
-    const turnId = model.outline.find(
-      (anchor) => anchor.rowId === rowId,
-    )?.turnId;
-    const index = model.turns.findIndex((turn) => turn.id === turnId);
-    if (index < 0) return;
-    virtualizer.scrollToIndex(index, {
-      align: "start",
-      behavior: "auto",
-    });
-    window.requestAnimationFrame(() => {
-      document.getElementById(rowId)?.focus({ preventScroll: true });
-    });
-  };
+  // The virtualizer keeps its identity, so navigation never changes and the
+  // outline need not re-render while a reply streams.
+  const [navigateToRow] = React.useState(
+    () => (anchor: TranscriptOutlineAnchor) => {
+      const index = Array.from(
+        { length: virtualizer.options.count },
+        (_, index) => index,
+      ).find(
+        (index) => virtualizer.options.getItemKey(index) === anchor.turnId,
+      );
+      if (index === undefined) return;
+      virtualizer.scrollToIndex(index, {
+        align: "start",
+        behavior: "auto",
+      });
+      window.requestAnimationFrame(() => {
+        document.getElementById(anchor.rowId)?.focus({ preventScroll: true });
+      });
+    },
+  );
   return {
     viewportRef,
     listRef,
     measureTurn,
     virtualizer,
+    virtualItems,
+    totalSize,
     scrollMargin,
     atEnd,
     hasUnread,
@@ -856,6 +858,39 @@ function useTranscriptViewport({
     jumpToEnd,
     navigateToRow,
   };
+}
+
+interface TranscriptJumpControlProps {
+  readonly atEnd: boolean;
+  readonly hasUnread: boolean;
+  readonly lastRowId: TranscriptRowId | undefined;
+  readonly onJump: (lastRowId: TranscriptRowId | undefined) => void;
+}
+
+/** Changes when the reader leaves or reaches the end, or a row arrives. */
+function TranscriptJumpControl({
+  atEnd,
+  hasUnread,
+  lastRowId,
+  onJump,
+}: TranscriptJumpControlProps) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      className={`transcript-control transcript-jump ${hasUnread ? "has-unread" : ""}`}
+      data-visible={!atEnd || undefined}
+      aria-hidden={atEnd}
+      aria-label={hasUnread ? "Jump to new messages" : "Jump to bottom"}
+      disabled={atEnd}
+      tabIndex={atEnd ? -1 : 0}
+      onClick={() => onJump(lastRowId)}
+    >
+      <ArrowDown />
+      {hasUnread ? <span className="unread-dot" /> : null}
+    </Button>
+  );
 }
 
 export function TranscriptViewport(
@@ -875,14 +910,14 @@ export function TranscriptViewport(
     olderError,
     focus,
     onFocusHandled,
-    onFocusRequested,
-    active = true,
   } = props;
   const {
     viewportRef,
     listRef,
     measureTurn,
     virtualizer,
+    virtualItems,
+    totalSize,
     scrollMargin,
     atEnd,
     hasUnread,
@@ -894,8 +929,6 @@ export function TranscriptViewport(
   } = useTranscriptViewport(props);
   const focusRef = useMessageFocus({
     focus,
-    active,
-    onRequested: onFocusRequested,
     model,
     virtualizer,
     historyReady,
@@ -907,7 +940,7 @@ export function TranscriptViewport(
   });
   // A message another Thread sent that has not joined yet is its own
   // turn; the work in progress is the turn before it.
-  const rowsByTurn = React.useMemo(() => transcriptRowsByTurn(model), [model]);
+  const rowsByTurn = transcriptRowsByTurn(model);
   const processingTurnId = model.turns.findLast((turn) => {
     if (turn.status !== "active") return false;
     const rows = rowsByTurn.get(turn.id) ?? [];
@@ -950,11 +983,11 @@ export function TranscriptViewport(
             className="transcript-virtual-list"
             data-transcript-entry-list=""
             style={{
-              height: `${virtualizer.getTotalSize()}px`,
+              height: `${totalSize}px`,
               transitionProperty: "none",
             }}
           >
-            {virtualizer.getVirtualItems().map((item) => {
+            {virtualItems.map((item) => {
               const turn = model.turns[item.index];
               if (turn === undefined) return null;
               const rows = rowsByTurn.get(turn.id) ?? [];
@@ -993,29 +1026,66 @@ export function TranscriptViewport(
           onNavigate={navigateToRow}
           onOpen={refreshVisiblePromptRows}
         />
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className={`transcript-control transcript-jump ${hasUnread ? "has-unread" : ""}`}
-          data-visible={!atEnd || undefined}
-          aria-hidden={atEnd}
-          aria-label={hasUnread ? "Jump to new messages" : "Jump to bottom"}
-          disabled={atEnd}
-          tabIndex={atEnd ? -1 : 0}
-          onClick={jumpToEnd}
-        >
-          <ArrowDown />
-          {hasUnread ? <span className="unread-dot" /> : null}
-        </Button>
+        <TranscriptJumpControl
+          atEnd={atEnd}
+          hasUnread={hasUnread}
+          lastRowId={model.rows.at(-1)?.id}
+          onJump={jumpToEnd}
+        />
       </div>
       {focus === undefined ? null : <span hidden ref={focusRef} />}
     </>
   );
 }
 
+/**
+ * Hidden behind another tab, the transcript asks once to come forward to show
+ * the message a notification links to.
+ */
+function TranscriptFocusRequest({
+  onRequested,
+}: {
+  readonly onRequested?: () => void;
+}) {
+  const requested = React.useRef(false);
+  return (
+    <span
+      hidden
+      ref={(node) => {
+        if (node === null || requested.current) return;
+        requested.current = true;
+        onRequested?.();
+      }}
+    />
+  );
+}
+
+/**
+ * A hidden transcript keeps its turns mounted and its scroll offset, so
+ * showing it again re-parses nothing and keeps the reading position. While
+ * hidden it keeps the element it was hidden with: streamed updates do no work
+ * until it is shown, then render once.
+ */
 export function ThreadTranscript(
   props: React.ComponentProps<typeof TranscriptViewport>,
 ) {
-  return <TranscriptViewport {...props} />;
+  const active = props.active ?? true;
+  const viewport = <TranscriptViewport {...props} />;
+  const [hiddenViewport, setHiddenViewport] =
+    React.useState<React.ReactElement>();
+  if (active && hiddenViewport !== undefined) setHiddenViewport(undefined);
+  if (!active && hiddenViewport === undefined) setHiddenViewport(viewport);
+  return (
+    <>
+      <React.Activity mode={active ? "visible" : "hidden"}>
+        {active ? viewport : (hiddenViewport ?? viewport)}
+      </React.Activity>
+      {active || props.focus === undefined ? null : (
+        <TranscriptFocusRequest
+          key={props.focus.requestKey}
+          onRequested={props.onFocusRequested}
+        />
+      )}
+    </>
+  );
 }

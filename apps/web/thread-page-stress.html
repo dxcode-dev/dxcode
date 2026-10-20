@@ -5,19 +5,123 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>dx thread page stress</title>
     <script>
+      // The harness entry answers every request through window.__dxFetch.
+      // This forwarder exists before any module loads because some clients
+      // (Better Auth) capture `fetch` when they are created. Only built
+      // assets and the recorded-history proof reach the harness's own server,
+      // through __networkFetch.
+      window.__networkFetch = window.fetch.bind(window);
+      window.fetch = (input, init) =>
+        window.__dxFetch === undefined
+          ? Promise.reject(new TypeError("The harness network is not ready."))
+          : window.__dxFetch(input, init);
+    </script>
+    <script>
       // Minimal React DevTools hook: counts components whose render function
-      // ran in each commit (PerformedWork flag), keyed by component name.
+      // ran in each commit (PerformedWork flag), keyed by component name, and
+      // records why each one rendered:
+      //   mount                       first render
+      //   state#N / store#N           hook slot N (0-based, all hooks) changed:
+      //                               useState/useReducer, useSyncExternalStore
+      //   props:a,b                   these props changed (Object.is)
+      //   context                     a consumed context value changed
+      //   parent-same-props<-Parent   new props object, every value identical
+      //   other                       none of the above (forced or replayed)
       (() => {
         const counts = new Map();
+        const causes = new Map();
         let recording = false;
-        const nameOf = (fiber) => {
-          let type = fiber.type;
+        const unwrap = (type) => {
           if (type && typeof type === "object" && type.type) type = type.type;
           if (type && typeof type === "object" && type.render)
             type = type.render;
+          return type;
+        };
+        const ownName = (fiber) => {
+          const wrapper = fiber.type;
+          if (wrapper && typeof wrapper === "object" && wrapper.displayName)
+            return wrapper.displayName;
+          const type = unwrap(wrapper);
           return typeof type === "function"
-            ? type.displayName || type.name || "(anonymous)"
+            ? type.displayName || type.name || ""
             : undefined;
+        };
+        // Anonymous components (forwardRef arrows, library internals) are
+        // named after their nearest named component ancestor.
+        const nameOf = (fiber) => {
+          const own = ownName(fiber);
+          if (own === undefined || own !== "") return own;
+          for (let up = fiber.return; up; up = up.return) {
+            const parent = ownName(up);
+            if (parent) return `${parent}>(anonymous)`;
+          }
+          return "(anonymous)";
+        };
+        const renderingParent = (fiber) => {
+          let named;
+          for (let up = fiber.return; up; up = up.return) {
+            const name = ownName(up);
+            if (!name) continue;
+            if (up.flags & 1) return name;
+            named ??= name;
+          }
+          return named ?? "root";
+        };
+        const isStateQueue = (queue) =>
+          queue !== null &&
+          typeof queue === "object" &&
+          ("lastRenderedReducer" in queue || "getSnapshot" in queue);
+        const changedHook = (fiber, previous) => {
+          // Only function components keep a hook list; class state is one object.
+          if (typeof unwrap(fiber.type) !== "function") return undefined;
+          if (fiber.tag === 1)
+            return fiber.memoizedState !== previous.memoizedState
+              ? "state#0"
+              : undefined;
+          let hook = fiber.memoizedState;
+          let before = previous.memoizedState;
+          for (let slot = 0; hook && before; slot++) {
+            if (
+              isStateQueue(hook.queue) &&
+              !Object.is(hook.memoizedState, before.memoizedState)
+            )
+              return `${"getSnapshot" in hook.queue ? "store" : "state"}#${slot}`;
+            hook = hook.next;
+            before = before.next;
+          }
+          return undefined;
+        };
+        const contextChanged = (fiber, previous) => {
+          let item = fiber.dependencies?.firstContext;
+          let before = previous.dependencies?.firstContext;
+          for (; item; item = item.next, before = before?.next) {
+            if (!before || !Object.is(item.memoizedValue, before.memoizedValue))
+              return item.context?.displayName
+                ? `context:${item.context.displayName}`
+                : "context";
+          }
+          return undefined;
+        };
+        const causeOf = (fiber) => {
+          const previous = fiber.alternate;
+          if (previous === null) return "mount";
+          const state = changedHook(fiber, previous);
+          if (state) return state;
+          const props = fiber.memoizedProps;
+          const before = previous.memoizedProps;
+          if (props !== before && props && before && typeof props === "object") {
+            const keys = new Set([...Object.keys(props), ...Object.keys(before)]);
+            const changed = [...keys].filter(
+              (key) => key !== "children" && !Object.is(props[key], before[key]),
+            );
+            if (!Object.is(props.children, before.children))
+              changed.push("children");
+            if (changed.length) return `props:${changed.sort().join(",")}`;
+          }
+          const context = contextChanged(fiber, previous);
+          if (context) return context;
+          if (props !== before) return `parent-same-props<-${renderingParent(fiber)}`;
+          return "other";
         };
         const walk = (fiber) => {
           // Descend only where React reconciled children in this commit;
@@ -26,14 +130,25 @@
           while (stack.length) {
             const node = stack.pop();
             if (!node) continue;
-            if (node.flags & 1) {
+            const rendered = (node.flags & 1) !== 0;
+            if (rendered) {
               const name = nameOf(node);
-              if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+              if (name) {
+                counts.set(name, (counts.get(name) ?? 0) + 1);
+                const cause = causeOf(node);
+                const byCause = causes.get(name) ?? new Map();
+                causes.set(name, byCause);
+                byCause.set(cause, (byCause.get(cause) ?? 0) + 1);
+              }
             }
             if (node.sibling) stack.push(node.sibling);
             if (
               node.child &&
-              (node.alternate === null || node.child !== node.alternate.child)
+              !(
+                node.alternate !== null &&
+                node.child === node.alternate.child &&
+                !rendered
+              )
             )
               stack.push(node.child);
           }
@@ -60,12 +175,22 @@
         window.dxRenders = {
           start() {
             counts.clear();
+            causes.clear();
             commits = 0;
             recording = true;
           },
           stop() {
             recording = false;
-            return { commits, counts: Object.fromEntries(counts) };
+            return {
+              commits,
+              counts: Object.fromEntries(counts),
+              causes: Object.fromEntries(
+                [...causes].map(([name, byCause]) => [
+                  name,
+                  Object.fromEntries(byCause),
+                ]),
+              ),
+            };
           },
         };
       })();

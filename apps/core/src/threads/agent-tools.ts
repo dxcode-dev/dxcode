@@ -17,6 +17,7 @@ import * as v from "valibot";
 import { loadRunnerProfileCatalog } from "../execution/runner-profiles/catalog.js";
 import type { Bindings } from "../http/types.js";
 import { publishRealtimeInvalidation } from "../realtime/publication.js";
+import { listenForThreadHints } from "../realtime/thread-hints.js";
 import { threadProjectReachableSql } from "../settings/members/membership-sql.js";
 import { createThreadSearchTools } from "../thread-search/agent-tools.js";
 import { resolveOrbChoice } from "./agent-orbs.js";
@@ -33,6 +34,10 @@ export interface ThreadToolsContext {
 
 /** The longest `wait_for_threads` blocks. */
 const WAIT_MAX_SECONDS = 300;
+/** How often `wait_for_threads` reads D1 without realtime hints. */
+const WAIT_POLL_MS = 2_000;
+/** How long a hinted wait trusts the hub before reading D1 anyway. */
+const WAIT_HINT_RECHECK_MS = 10_000;
 const WAIT_MAX_THREADS = 20;
 /** How much of a Thread's latest agent message the tools return. */
 const MESSAGE_PREVIEW_CHARS = 4_000;
@@ -611,8 +616,7 @@ export const createThreadTools = (
           if (ids.includes(callingThreadId))
             throw new Error("A Thread cannot wait for itself.");
           const deadline = Date.now() + (data.timeout_seconds ?? 120) * 1_000;
-          let rows = await readThreads(context, owner, ids);
-          const settled = () =>
+          const isSettled = (rows: ReadonlyMap<string, ThreadRow>) =>
             ids.every((id) => {
               const row = rows.get(id);
               return (
@@ -621,13 +625,46 @@ export const createThreadTools = (
                 row.lifecycle_state !== "active"
               );
             });
-          while (!settled() && Date.now() + 2_000 <= deadline) {
-            await pause(2_000, signal);
-            rows = await readThreads(context, owner, ids);
+          let rows = await readThreads(context, owner, ids);
+          // Threads already settled need no hub connection. Otherwise
+          // subscribe, then read again, so a Thread that settled before the
+          // subscription is seen and one that settles after sends this wait
+          // a hint. Without the hub, poll D1.
+          const hints = isSettled(rows)
+            ? undefined
+            : await listenForThreadHints(
+                context.bindings,
+                owner.ownerUserId,
+                ids,
+              );
+          let listening = hints !== undefined;
+          try {
+            if (hints !== undefined)
+              rows = await readThreads(context, owner, ids);
+            while (!isSettled(rows)) {
+              const remaining = deadline - Date.now();
+              if (listening && hints !== undefined) {
+                if (remaining <= 0) break;
+                // A hint wakes the wait; D1 decides. The periodic read
+                // covers a hint the best-effort hub dropped.
+                const wake = await hints.next(
+                  Math.min(remaining, WAIT_HINT_RECHECK_MS),
+                  signal,
+                );
+                if (wake === "closed") listening = false;
+              } else {
+                if (remaining < WAIT_POLL_MS) break;
+                await pause(WAIT_POLL_MS, signal);
+              }
+              rows = await readThreads(context, owner, ids);
+            }
+          } finally {
+            hints?.close();
           }
+          const settled = isSettled(rows);
           return {
             output: {
-              settled: settled(),
+              settled,
               threads: await Promise.all(
                 ids.map(async (id) => {
                   const row = rows.get(id);

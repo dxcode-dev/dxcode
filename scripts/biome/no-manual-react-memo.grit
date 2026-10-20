@@ -1,0 +1,32 @@
+engine biome(1.0)
+language js(typescript, jsx)
+
+or {
+  or {
+    `useMemo($...)` as $match,
+    `useCallback($...)` as $match,
+    `React.useMemo($...)` as $match,
+    `React.useCallback($...)` as $match
+  } where {
+    register_diagnostic(span=$match, message="Do not memoize by hand; the React Compiler caches every value and function on its inputs. Write a plain value or function. If the compiler leaves a derivation uncached, move it into a small hook or put its plain uses before the next hook call. For a listener or subscription that must call the latest handler without resubscribing, use React.useEffectEvent.", severity="error")
+  },
+  JsDirective() as $match where {
+    $match <: or {
+      `"use memo"`,
+      `"use no memo"`,
+      `'use memo'`,
+      `'use no memo'`
+    },
+    register_diagnostic(span=$match, message="Do not steer the React Compiler with a directive. Fix the pattern that blocks caching: move the derivation into a small hook, or put a value's plain uses before the next hook call.", severity="error")
+  },
+  or {
+    `memo($component)` as $match,
+    `React.memo($component)` as $match
+  } where {
+    not $match <: or {
+      `memo($wrapped, $compare)`,
+      `React.memo($wrapped, $compare)`
+    },
+    register_diagnostic(span=$match, message="The React Compiler already skips a child whose props keep their identity, so memo without a comparator is usually redundant. Remove it, or keep it with `// biome-ignore lint/plugin: <why the compiler cannot replace it>`.", severity="error")
+  }
+}

@@ -151,25 +151,25 @@ export type ReadinessRequirements =
     };
 
 const deploymentReadinessRequirements = Config.all({
-  dxEnv: Config.nonEmptyString("DX_ENV"),
-  runtimeMode: Config.nonEmptyString("DX_RUNTIME_MODE"),
-  revision: Config.nonEmptyString("DX_DEPLOYMENT_REVISION"),
+  dxEnv: Config.NonEmptyString("DX_ENV"),
+  runtimeMode: Config.NonEmptyString("DX_RUNTIME_MODE"),
+  revision: Config.NonEmptyString("DX_DEPLOYMENT_REVISION"),
   // Only an E2B deployment has a template build; see the E2B check below.
-  e2bTemplateBuildId: Config.string("DX_E2B_TEMPLATE_BUILD_ID").pipe(
+  e2bTemplateBuildId: Config.String("DX_E2B_TEMPLATE_BUILD_ID").pipe(
     Config.withDefault(""),
   ),
-  migrationManifestVersion: Config.nonEmptyString(
+  migrationManifestVersion: Config.NonEmptyString(
     "DX_MIGRATION_MANIFEST_VERSION",
   ),
-  dxdPublicUrl: Config.nonEmptyString("DX_DXD_PUBLIC_URL"),
-  dxdReleaseUrl: Config.nonEmptyString("DX_DXD_RELEASE_URL"),
-  dxdReleaseSha256: Config.nonEmptyString("DX_DXD_RELEASE_SHA256"),
+  dxdPublicUrl: Config.NonEmptyString("DX_DXD_PUBLIC_URL"),
+  dxdReleaseUrl: Config.NonEmptyString("DX_DXD_RELEASE_URL"),
+  dxdReleaseSha256: Config.NonEmptyString("DX_DXD_RELEASE_SHA256"),
 });
 
 const decodeEnvironment = Effect.fn("decodeReadinessEnvironment")(function* (
   bindings: Bindings,
 ) {
-  return yield* Config.nonEmptyString("DX_ENV")
+  return yield* Config.NonEmptyString("DX_ENV")
     .parse(ConfigProvider.fromUnknown(bindings))
     .pipe(
       Effect.mapError(() => new ReadinessError({ category: "configuration" })),

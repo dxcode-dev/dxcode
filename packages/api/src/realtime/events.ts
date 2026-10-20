@@ -38,6 +38,11 @@ export const RealtimeInvalidationEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("changes.invalidated"),
     threadId: ThreadId,
+    /**
+     * The totals Thread lists show moved. Absent, only the Thread's own
+     * Changes and files changed.
+     */
+    summaryChanged: Schema.optional(Schema.Literal(true)),
     revision: Revision,
   }),
 ]);

@@ -37,27 +37,23 @@ export function ThreadEditingProvider({
   );
   const [renaming, setRenaming] = React.useState<RenameTarget>();
 
-  const controller = React.useMemo<ThreadEditingController>(
-    () => ({
-      openRename: (thread) =>
-        setRenaming({ id: thread.id, title: thread.title }),
-      setColor: (threadId, color) => mutate({ threadId, update: { color } }),
-      // A Thread's detail has no pin; the sidebar's list does.
-      pinned: (threadId) =>
-        queryClient
-          .getQueryData(
-            threadsQueryOptions(identity.id, undefined, "active", "roots")
-              .queryKey,
-          )
-          ?.pages.some((page) =>
-            page.items.some(
-              (item) => item.id === threadId && item.pinnedAt !== undefined,
-            ),
-          ) === true,
-      setPinned: (threadId, pinned) => pin({ threadId, pinned }),
-    }),
-    [identity.id, mutate, pin, queryClient],
-  );
+  const controller: ThreadEditingController = {
+    openRename: (thread) => setRenaming({ id: thread.id, title: thread.title }),
+    setColor: (threadId, color) => mutate({ threadId, update: { color } }),
+    // A Thread's detail has no pin; the sidebar's list does.
+    pinned: (threadId) =>
+      queryClient
+        .getQueryData(
+          threadsQueryOptions(identity.id, undefined, "active", "roots")
+            .queryKey,
+        )
+        ?.pages.some((page) =>
+          page.items.some(
+            (item) => item.id === threadId && item.pinnedAt !== undefined,
+          ),
+        ) === true,
+    setPinned: (threadId, pinned) => pin({ threadId, pinned }),
+  };
 
   return (
     <ThreadEditingContext.Provider value={controller}>

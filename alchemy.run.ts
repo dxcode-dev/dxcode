@@ -250,134 +250,134 @@ export default Alchemy.Stack(
   Effect.gen(function* () {
     const stack = yield* Stack;
     const configuration = yield* Config.all({
-      environment: Config.string("DX_DEPLOYMENT_ENVIRONMENT"),
-      deploymentTarget: Config.string("DX_DEPLOYMENT_TARGET"),
-      deploymentLabel: Config.string("DX_DEPLOYMENT_LABEL"),
+      environment: Config.String("DX_DEPLOYMENT_ENVIRONMENT"),
+      deploymentTarget: Config.String("DX_DEPLOYMENT_TARGET"),
+      deploymentLabel: Config.String("DX_DEPLOYMENT_LABEL"),
       deploymentName: Config.option(
-        Config.nonEmptyString("DX_DEPLOYMENT_NAME"),
+        Config.NonEmptyString("DX_DEPLOYMENT_NAME"),
       ),
-      adminEmail: Config.option(Config.nonEmptyString("DX_ADMIN_EMAIL")),
-      adminPassword: Config.option(Config.redacted("DX_ADMIN_PASSWORD")),
+      adminEmail: Config.option(Config.NonEmptyString("DX_ADMIN_EMAIL")),
+      adminPassword: Config.option(Config.Redacted("DX_ADMIN_PASSWORD")),
       adminPasswordReset: Config.withDefault(
-        Config.boolean("DX_ADMIN_PASSWORD_RESET"),
+        Config.Boolean("DX_ADMIN_PASSWORD_RESET"),
         false,
       ),
       integrations: Config.withDefault(
-        Config.string("DX_DEPLOYMENT_INTEGRATIONS"),
+        Config.String("DX_DEPLOYMENT_INTEGRATIONS"),
         "",
       ),
-      origin: Config.string("DX_DEPLOYMENT_ORIGIN"),
+      origin: Config.String("DX_DEPLOYMENT_ORIGIN"),
       authEmailFrom: Config.option(
-        Config.nonEmptyString("DX_DEPLOYMENT_AUTH_EMAIL_FROM"),
+        Config.NonEmptyString("DX_DEPLOYMENT_AUTH_EMAIL_FROM"),
       ),
-      revision: Config.string("DX_DEPLOYMENT_REVISION"),
-      workerName: Config.string("DX_DEPLOYMENT_WORKER_NAME"),
-      databaseName: Config.string("DX_DEPLOYMENT_DATABASE_NAME"),
-      bucketName: Config.string("DX_DEPLOYMENT_BUCKET_NAME"),
-      credentialsFile: Config.string("DX_DEPLOYMENT_CREDENTIALS_FILE"),
+      revision: Config.String("DX_DEPLOYMENT_REVISION"),
+      workerName: Config.String("DX_DEPLOYMENT_WORKER_NAME"),
+      databaseName: Config.String("DX_DEPLOYMENT_DATABASE_NAME"),
+      bucketName: Config.String("DX_DEPLOYMENT_BUCKET_NAME"),
+      credentialsFile: Config.String("DX_DEPLOYMENT_CREDENTIALS_FILE"),
       bootstrapRepository: Config.withDefault(
-        Config.string("DX_DEPLOYMENT_BOOTSTRAP_REPOSITORY"),
+        Config.String("DX_DEPLOYMENT_BOOTSTRAP_REPOSITORY"),
         "",
       ),
-      packageDirectory: Config.string("DX_DEPLOYMENT_PACKAGE_DIR"),
-      e2bTemplate: Config.string("DX_DEPLOYMENT_E2B_TEMPLATE"),
-      e2bTemplateBuildId: Config.string("DX_DEPLOYMENT_E2B_TEMPLATE_BUILD_ID"),
-      dxdChecksum: Config.string("DX_DEPLOYMENT_DXD_CHECKSUM"),
-      dxdReleaseUrl: Config.string("DX_DEPLOYMENT_DXD_RELEASE_URL"),
+      packageDirectory: Config.String("DX_DEPLOYMENT_PACKAGE_DIR"),
+      e2bTemplate: Config.String("DX_DEPLOYMENT_E2B_TEMPLATE"),
+      e2bTemplateBuildId: Config.String("DX_DEPLOYMENT_E2B_TEMPLATE_BUILD_ID"),
+      dxdChecksum: Config.String("DX_DEPLOYMENT_DXD_CHECKSUM"),
+      dxdReleaseUrl: Config.String("DX_DEPLOYMENT_DXD_RELEASE_URL"),
       sourceShallowClone: Config.withDefault(
-        Config.boolean("DX_DEPLOYMENT_SOURCE_SHALLOW_CLONE"),
+        Config.Boolean("DX_DEPLOYMENT_SOURCE_SHALLOW_CLONE"),
         true,
       ),
       workspaceInactivityMs: Config.option(
-        Config.number("DX_DEPLOYMENT_WORKSPACE_INACTIVITY_MS"),
+        Config.Number("DX_DEPLOYMENT_WORKSPACE_INACTIVITY_MS"),
       ),
       turnstileTestKeys: Config.withDefault(
-        Config.boolean("DX_DEPLOYMENT_TURNSTILE_TEST_KEYS"),
+        Config.Boolean("DX_DEPLOYMENT_TURNSTILE_TEST_KEYS"),
         false,
       ),
       // Self-host only: whether magic link needs a Turnstile widget. Hosted
       // targets derive it from their sender.
-      turnstile: Config.option(Config.boolean("DX_DEPLOYMENT_TURNSTILE")),
-      e2bApiKey: Config.option(Config.redacted("E2B_API_KEY")),
-      githubApp: Config.option(Config.redacted("DX_INTEGRATION_GITHUB_APP")),
-      sarvamApiKey: Config.option(Config.redacted("SARVAM_API_KEY")),
+      turnstile: Config.option(Config.Boolean("DX_DEPLOYMENT_TURNSTILE")),
+      e2bApiKey: Config.option(Config.Redacted("E2B_API_KEY")),
+      githubApp: Config.option(Config.Redacted("DX_INTEGRATION_GITHUB_APP")),
+      sarvamApiKey: Config.option(Config.Redacted("SARVAM_API_KEY")),
       // How attachment bytes move: "token" deployments mint a bucket-scoped
       // R2 token Core signs direct URLs with; "core" deployments (Alchemy
       // OAuth, which cannot create tokens) carry the bytes through Core.
       attachmentSigning: Config.withDefault(
-        Config.literals(
+        Config.Literals(
           ["token", "core"] as const,
           "DX_DEPLOYMENT_ATTACHMENT_SIGNING",
         ),
         "token",
       ),
       cloudflareAccountId: Config.option(
-        Config.nonEmptyString("CLOUDFLARE_ACCOUNT_ID"),
+        Config.NonEmptyString("CLOUDFLARE_ACCOUNT_ID"),
       ),
-      exaApiKey: Config.option(Config.redacted("EXA_API_KEY")),
+      exaApiKey: Config.option(Config.Redacted("EXA_API_KEY")),
       // Self-host sign-in providers and admission, validated by the runner.
-      signIn: Config.option(Config.nonEmptyString("DX_DEPLOYMENT_SIGN_IN")),
+      signIn: Config.option(Config.NonEmptyString("DX_DEPLOYMENT_SIGN_IN")),
       googleClientSecret: Config.option(
-        Config.redacted("DX_GOOGLE_CLIENT_SECRET"),
+        Config.Redacted("DX_GOOGLE_CLIENT_SECRET"),
       ),
-      plugins: Config.withDefault(Config.string("DX_DEPLOYMENT_PLUGINS"), ""),
+      plugins: Config.withDefault(Config.String("DX_DEPLOYMENT_PLUGINS"), ""),
       // Orb providers the deployment installs: e2b, cloudflare, or both.
       orbProviders: Config.withDefault(
-        Config.string("DX_DEPLOYMENT_ORB_PROVIDERS"),
+        Config.String("DX_DEPLOYMENT_ORB_PROVIDERS"),
         "e2b",
       ),
       orbWorkerName: Config.option(
-        Config.nonEmptyString("DX_DEPLOYMENT_ORB_WORKER_NAME"),
+        Config.NonEmptyString("DX_DEPLOYMENT_ORB_WORKER_NAME"),
       ),
       workloadIdentitySigningKeys: Config.option(
-        Config.redacted("DX_WORKLOAD_IDENTITY_SIGNING_KEYS"),
+        Config.Redacted("DX_WORKLOAD_IDENTITY_SIGNING_KEYS"),
       ),
       bitbucketOAuth: Config.option(
-        Config.redacted("DX_INTEGRATION_BITBUCKET_OAUTH"),
+        Config.Redacted("DX_INTEGRATION_BITBUCKET_OAUTH"),
       ),
       deploymentZone: Config.option(
-        Config.nonEmptyString("DX_DEPLOYMENT_ZONE"),
+        Config.NonEmptyString("DX_DEPLOYMENT_ZONE"),
       ),
       workersDevSubdomain: Config.option(
-        Config.nonEmptyString("DX_DEPLOYMENT_WORKERS_DEV_SUBDOMAIN"),
+        Config.NonEmptyString("DX_DEPLOYMENT_WORKERS_DEV_SUBDOMAIN"),
       ),
       daemonIngressName: Config.withDefault(
-        Config.nonEmptyString("DX_DEPLOYMENT_DAEMON_INGRESS_NAME"),
+        Config.NonEmptyString("DX_DEPLOYMENT_DAEMON_INGRESS_NAME"),
         "dx-dxd",
       ),
       signupEnabled: Config.withDefault(
-        Config.boolean("DX_SIGNUP_ENABLED"),
+        Config.Boolean("DX_SIGNUP_ENABLED"),
         false,
       ),
       githubCopilotClientId: Config.option(
-        Config.nonEmptyString("DX_GITHUB_COPILOT_CLIENT_ID"),
+        Config.NonEmptyString("DX_GITHUB_COPILOT_CLIENT_ID"),
       ),
       modelDeploymentProviders: Config.option(
-        Config.nonEmptyString("DX_MODEL_DEPLOYMENT_PROVIDERS"),
+        Config.NonEmptyString("DX_MODEL_DEPLOYMENT_PROVIDERS"),
       ),
       modelEndpointAllowlist: Config.option(
-        Config.nonEmptyString("DX_MODEL_ENDPOINT_ALLOWLIST"),
+        Config.NonEmptyString("DX_MODEL_ENDPOINT_ALLOWLIST"),
       ),
       workersAiEnabled: Config.withDefault(
-        Config.boolean("DX_MODEL_WORKERS_AI_ENABLED"),
+        Config.Boolean("DX_MODEL_WORKERS_AI_ENABLED"),
         true,
       ),
       workerTraces: Config.withDefault(
-        Config.boolean("DX_DEPLOYMENT_WORKER_TRACES"),
+        Config.Boolean("DX_DEPLOYMENT_WORKER_TRACES"),
         false,
       ),
       // Portals: a dedicated zone (never the app's registrable domain) whose
       // first-level labels `t-<uuid>-p<port>` serve guest ports. Universal
       // SSL covers one wildcard level, so the domain is the zone apex.
       portalDomain: Config.option(
-        Config.nonEmptyString("DX_DEPLOYMENT_PORTAL_DOMAIN"),
+        Config.NonEmptyString("DX_DEPLOYMENT_PORTAL_DOMAIN"),
       ),
       portalZoneId: Config.option(
-        Config.nonEmptyString("DX_DEPLOYMENT_PORTAL_ZONE_ID"),
+        Config.NonEmptyString("DX_DEPLOYMENT_PORTAL_ZONE_ID"),
       ),
       // The deployment runner names it within the 63-character script limit.
       portalWorkerName: Config.option(
-        Config.nonEmptyString("DX_DEPLOYMENT_PORTAL_WORKER_NAME"),
+        Config.NonEmptyString("DX_DEPLOYMENT_PORTAL_WORKER_NAME"),
       ),
     });
 

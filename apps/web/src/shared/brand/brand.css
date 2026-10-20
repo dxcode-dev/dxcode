@@ -45,7 +45,9 @@
   letter-spacing: -0.145em;
 }
 
-.dx-brand-mark:has(canvas[data-ready="true"]) .dx-brand-mark-fallback {
+/* The mark carries readiness itself: a :has() rule restyled the whole page
+   on every DOM insertion. */
+.dx-brand-mark[data-ready="true"] .dx-brand-mark-fallback {
   visibility: hidden;
 }
 

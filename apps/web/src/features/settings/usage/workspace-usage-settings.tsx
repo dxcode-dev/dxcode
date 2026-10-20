@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { settle } from "../../../shared/settle.js";
 import { Badge } from "../../../shared/ui/badge.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
@@ -339,21 +340,21 @@ export function PrivateInspection({
       return;
     const dialogToken = inspectionDialogToken.current;
     setInspectionError(undefined);
-    try {
+    const outcome = await settle(async () => {
       await inspection.mutateAsync({ threadId, reason });
       if (dialogToken === inspectionDialogToken.current)
         closeInspectionDialog();
-    } catch (cause) {
+    });
+    if (!outcome.ok) {
       if (dialogToken === inspectionDialogToken.current)
         setInspectionError(
           errorMessage(
-            cause,
+            outcome.error,
             "Private Thread inspection could not be authorized.",
           ),
         );
-    } finally {
-      inspection.reset();
     }
+    inspection.reset();
   };
   return (
     <SettingsCard>
@@ -463,7 +464,7 @@ function WorkspaceUsageFilterForm({
   readonly onApply: (filters: WorkspaceUsageFilters) => void;
 }) {
   const formId = React.useId();
-  const initial = React.useMemo(initialRange, []);
+  const [initial] = React.useState(initialRange);
   const [from, setFrom] = React.useState(initial.from);
   const [to, setTo] = React.useState(initial.to);
   const [userId, setUserId] = React.useState("");
@@ -601,10 +602,11 @@ function WorkspaceUsageSettingsForSlug({
     workspaceUsageQueryOptions(identity.id, workspaceSlug, filters),
   );
   const data = combineWorkspaceUsagePages(resource.data?.pages ?? []);
-  const auditFilters = React.useMemo<WorkspaceUsageAuditFilters>(
-    () => ({ from: filters.from, to: filters.to, limit: 20 }),
-    [filters.from, filters.to],
-  );
+  const auditFilters: WorkspaceUsageAuditFilters = {
+    from: filters.from,
+    to: filters.to,
+    limit: 20,
+  };
   const audit = useInfiniteQuery(
     workspaceUsageAuditQueryOptions(identity.id, workspaceSlug, auditFilters),
   );

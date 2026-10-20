@@ -12,6 +12,7 @@ import {
 import { Plus } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
 import { SettingsCard } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
@@ -97,15 +98,12 @@ function useEnvironmentVariableController({
   };
   const execute = async (action: EnvironmentVariablesMutationAction) => {
     updateEditor({ error: undefined });
-    try {
-      const result = await mutation.mutateAsync(action);
-      return { success: true as const, result };
-    } catch (cause) {
-      handleError(cause);
-      return { success: false as const };
-    } finally {
-      mutation.reset();
-    }
+    const outcome = await settle(() => mutation.mutateAsync(action));
+    if (!outcome.ok) handleError(outcome.error);
+    mutation.reset();
+    return outcome.ok
+      ? { success: true as const, result: outcome.value }
+      : { success: false as const };
   };
   const create = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -122,7 +120,7 @@ function useEnvironmentVariableController({
       return;
     }
     updateEditor({ error: undefined });
-    try {
+    const outcome = await settle(async () => {
       await createMutation.mutateAsync({
         name: editor.name,
         value: editor.value,
@@ -130,41 +128,42 @@ function useEnvironmentVariableController({
       });
       updateEditor({ name: "", value: "", editorMode: undefined });
       onDirtyChange(false);
-    } catch (cause) {
-      handleError(cause);
-    } finally {
-      createMutation.reset();
+    });
+    if (!outcome.ok) {
+      handleError(outcome.error);
     }
+    createMutation.reset();
   };
   const previewBulk = async () => {
     updateEditor({ error: undefined });
-    try {
+    const outcome = await settle(async () => {
       const preview = await previewMutation.mutateAsync({
         kind: editor.kind,
         contents: editor.bulk,
       });
       updateEditor({ preview });
-    } catch (cause) {
-      handleError(cause);
-    } finally {
-      previewMutation.reset();
+    });
+    if (!outcome.ok) {
+      handleError(outcome.error);
     }
+    previewMutation.reset();
   };
   const applyBulk = async () => {
     let nextPreview = editor.preview;
     if (nextPreview === undefined) {
       updateEditor({ error: undefined });
-      try {
-        nextPreview = await previewMutation.mutateAsync({
+      const outcome = await settle(() =>
+        previewMutation.mutateAsync({
           kind: editor.kind,
           contents: editor.bulk,
-        });
-      } catch (cause) {
-        handleError(cause);
+        }),
+      );
+      previewMutation.reset();
+      if (!outcome.ok) {
+        handleError(outcome.error);
         return;
-      } finally {
-        previewMutation.reset();
       }
+      nextPreview = outcome.value;
       updateEditor({ preview: nextPreview });
     }
     if (!nextPreview.canApply) return;
@@ -253,10 +252,7 @@ export function ProjectEnvironmentVariablesSettings({
   readonly projectId: ProjectId;
   readonly onDirtyChange: (dirty: boolean) => void;
 }) {
-  const target = React.useMemo(
-    () => ({ scope: "project" as const, projectId }),
-    [projectId],
-  );
+  const target = { scope: "project" as const, projectId };
   return (
     <EnvironmentVariablesContent
       key={`${target.scope}:${projectId}`}
@@ -278,7 +274,7 @@ function EnvironmentVariablesContent({
     workspace,
     onDirtyChange,
   });
-  const { editor } = controller;
+  const { editor, dialogTriggerRef } = controller;
   const historyItemsById = new Map<
     EnvironmentVariableAuditEventData["id"],
     EnvironmentVariableAuditEventData
@@ -345,7 +341,7 @@ function EnvironmentVariablesContent({
         canMutate={controller.canMutate}
         onReload={() => void controller.list.refetch()}
         onRotate={(item, trigger) => {
-          controller.dialogTriggerRef.current = trigger;
+          dialogTriggerRef.current = trigger;
           controller.updateEditor({ rotate: item });
         }}
         onToggle={(item) =>
@@ -356,7 +352,7 @@ function EnvironmentVariablesContent({
           })
         }
         onDelete={(item, trigger) => {
-          controller.dialogTriggerRef.current = trigger;
+          dialogTriggerRef.current = trigger;
           controller.updateEditor({ remove: item });
         }}
       />

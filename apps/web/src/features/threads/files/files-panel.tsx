@@ -71,6 +71,22 @@ const useOnline = () =>
     onlineSnapshot,
   );
 
+const groupGitStatusByWorktree = (
+  files: readonly ThreadChangedFile[] | undefined,
+) => {
+  const byWorktree = new Map<
+    string,
+    Map<string, ThreadChangedFile["status"]>
+  >();
+  for (const file of files ?? []) {
+    const worktree = file.worktree ?? PRIMARY_WORKTREE;
+    const statuses = byWorktree.get(worktree) ?? new Map();
+    statuses.set(file.path, file.status);
+    byWorktree.set(worktree, statuses);
+  }
+  return byWorktree;
+};
+
 export interface ThreadFileLocation {
   readonly worktree: ThreadFilesWorktreeId;
   readonly worktreeLabel?: string;
@@ -104,33 +120,24 @@ function FilesWorktreeRoot({
     threadFileTreeOptions(transport, threadId, worktree.id, undefined, active),
   );
   const pages = query.data?.pages;
-  const entries = React.useMemo(
-    () => pages?.flatMap((page) => page.entries) ?? [],
-    [pages],
-  );
+  const entries = pages?.flatMap((page) => page.entries) ?? [];
   const worktreeId = worktree.id;
-  const openFile = React.useCallback(
-    (path: ThreadFilesPath) =>
-      onOpenFile({
-        worktree: worktreeId,
-        ...(grouped ? { worktreeLabel: label } : {}),
-        path,
-      }),
-    [grouped, label, onOpenFile, worktreeId],
-  );
-  const downloadUrlFor = React.useCallback(
-    (path: ThreadFilesPath) => {
-      const absolute = absolutePathFor({
-        kind: "workspace",
-        worktree: worktreeId,
-        path,
-      });
-      return absolute === undefined
-        ? undefined
-        : sandboxFileUrl(threadId, absolute, true);
-    },
-    [threadId, worktreeId],
-  );
+  const openFile = (path: ThreadFilesPath) =>
+    onOpenFile({
+      worktree: worktreeId,
+      ...(grouped ? { worktreeLabel: label } : {}),
+      path,
+    });
+  const downloadUrlFor = (path: ThreadFilesPath) => {
+    const absolute = absolutePathFor({
+      kind: "workspace",
+      worktree: worktreeId,
+      path,
+    });
+    return absolute === undefined
+      ? undefined
+      : sandboxFileUrl(threadId, absolute, true);
+  };
   // A background refresh keeps the cached tree on screen without a notice;
   // only a lost connection is worth a row.
   const content =
@@ -244,19 +251,7 @@ export const ThreadFilesPanel = ({
   // The latest capture's statuses stay on screen while the next one is taken;
   // a stale capture is still the best known state of the worktree.
   const files = captured?.files;
-  const gitStatusByWorktree = React.useMemo(() => {
-    const byWorktree = new Map<
-      string,
-      Map<string, ThreadChangedFile["status"]>
-    >();
-    for (const file of files ?? []) {
-      const worktree = file.worktree ?? PRIMARY_WORKTREE;
-      const statuses = byWorktree.get(worktree) ?? new Map();
-      statuses.set(file.path, file.status);
-      byWorktree.set(worktree, statuses);
-    }
-    return byWorktree;
-  }, [files]);
+  const gitStatusByWorktree = groupGitStatusByWorktree(files);
   return (
     <section className="thread-files-panel">
       <header>
@@ -316,13 +311,10 @@ export const ThreadFilePane = ({
   const mutation = useMutation(
     saveThreadFileOptions(transport, threadId, worktree, queryClient),
   );
-  const references = React.useMemo(
-    () => ({
-      threadId,
-      location: { kind: "workspace" as const, worktree, path },
-    }),
-    [path, threadId, worktree],
-  );
+  const references = {
+    threadId,
+    location: { kind: "workspace" as const, worktree, path },
+  };
   if (query.isPending)
     return (
       <div className="thread-files-state" role="status">

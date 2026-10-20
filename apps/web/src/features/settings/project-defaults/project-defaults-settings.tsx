@@ -197,13 +197,10 @@ function RunnerProfileSettingsCard({
   readonly disabled: boolean;
   readonly onChange: (runnerProfileId: RunnerProfileId | null) => void;
 }) {
-  const allowedProfileIds = React.useMemo(
-    () =>
-      allowedRunnerProfileIds === null || allowedRunnerProfileIds === undefined
-        ? undefined
-        : new Set(allowedRunnerProfileIds),
-    [allowedRunnerProfileIds],
-  );
+  const allowedProfileIds =
+    allowedRunnerProfileIds === null || allowedRunnerProfileIds === undefined
+      ? undefined
+      : new Set(allowedRunnerProfileIds);
   const hasAvailableProfile = profiles.some(
     ({ availability }) => availability === "available",
   );
@@ -438,14 +435,11 @@ export function ProjectDefaultsSettings({
   workspaceSlug,
   onDirtyChange,
 }: SettingsSectionProps) {
-  const target = React.useMemo<ProjectDefaultsTarget>(
-    () =>
-      workspaceSlug === undefined
-        ? { scope: "personal" }
-        : { scope: "workspace", workspaceSlug },
-    [workspaceSlug],
-  );
   const { identity } = useAuthenticatedIdentity();
+  const target: ProjectDefaultsTarget =
+    workspaceSlug === undefined
+      ? { scope: "personal" }
+      : { scope: "workspace", workspaceSlug };
   const resource = useQuery(projectDefaultsQueryOptions(identity.id, target));
 
   if (resource.isPending && resource.data === undefined) {

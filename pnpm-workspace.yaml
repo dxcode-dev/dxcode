@@ -3,3 +3,26 @@ packages:
   - internal
   - packages/*
   - tooling/*
+
+overrides:
+  "@opentelemetry/api": 1.9.0
+  "@better-auth/utils": 0.4.2
+  "@earendil-works/pi-ai": 0.85.1
+  "@flue/runtime": file:third-party/flue/runtime-e7bef20be3c74f4ffdeeed83b1fe161a1fb5f0c8.tgz
+
+patchedDependencies:
+  alchemy@2.0.0-beta.83: third-party/alchemy/alchemy@2.0.0-beta.83.patch
+  ghostty-web@0.4.0: third-party/ghostty-web/ghostty-web@0.4.0.patch
+
+# Dependency install scripts. pnpm fails the install when a package with a
+# script is missing here. esbuild and workerd link their platform binaries; the
+# rest are optional downloads, messages, or no-ops dx does not need.
+allowBuilds:
+  esbuild: true
+  workerd: true
+  "@google/genai": false
+  "@vgpu/adapter-node": false
+  core-js-pure: false
+  msw: false
+  protobufjs: false
+  webgpu: false

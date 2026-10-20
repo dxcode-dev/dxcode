@@ -78,6 +78,7 @@ export * from "./threads/create-thread.js";
 export * from "./threads/desktop.js";
 export * from "./threads/files.js";
 export * from "./threads/get-thread.js";
+export * from "./threads/get-thread-list-item.js";
 export * from "./threads/get-thread-readiness.js";
 export * from "./threads/list-threads.js";
 export * from "./threads/message-author.js";

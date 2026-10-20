@@ -22,7 +22,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useLocation, useNavigate, useSearch } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Option, Schema } from "effect";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
@@ -82,7 +82,6 @@ export function NewThreadProvider({
   readonly children: React.ReactNode;
 }) {
   const { identity } = useAuthenticatedIdentity();
-  const _pathname = useLocation({ select: (location) => location.pathname });
   const registry = React.useContext(ThreadSessionRegistryContext);
   useQuery(projectDefaultsQueryOptions(identity.id, { scope: "personal" }));
   useQuery(composerDefaultsQueryOptions(identity.id));
@@ -93,35 +92,32 @@ export function NewThreadProvider({
     readonly element: HTMLElement | null;
     readonly mobileDrawer: boolean;
   }>({ element: null, mobileDrawer: false });
-  const finalFocus = React.useCallback(() => {
+  const finalFocus = () => {
     if (returnFocus.current.element?.isConnected)
       return returnFocus.current.element;
     return returnFocus.current.mobileDrawer
       ? document.querySelector<HTMLElement>('[aria-label="Open sidebar"]')
       : null;
-  }, []);
-  const value = React.useMemo<NewThreadSurfaceValue>(
-    () => ({
-      openNewThread: (projectId) => {
-        const element =
-          document.activeElement instanceof HTMLElement
-            ? document.activeElement
-            : null;
-        returnFocus.current = {
-          element: element === document.body ? null : element,
-          mobileDrawer: element?.closest(".mobile-sidebar-drawer") !== null,
-        };
-        setInvocation({ key: Date.now(), projectId });
-      },
-      pendingCreations: registry?.pendingCreations,
-      subscribePendingCreations: registry?.subscribeCreations,
-    }),
-    [registry],
-  );
+  };
+  const value: NewThreadSurfaceValue = {
+    openNewThread: (projectId) => {
+      const element =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      returnFocus.current = {
+        element: element === document.body ? null : element,
+        mobileDrawer: element?.closest(".mobile-sidebar-drawer") !== null,
+      };
+      setInvocation({ key: Date.now(), projectId });
+    },
+    pendingCreations: registry?.pendingCreations,
+    subscribePendingCreations: registry?.subscribeCreations,
+  };
 
   return (
     <NewThreadSurfaceContext.Provider value={value}>
-      <CommandProvider onOpenNewThread={() => value.openNewThread()}>
+      <CommandProvider onOpenNewThread={value.openNewThread}>
         {children}
       </CommandProvider>
       {invocation === undefined ? null : (
@@ -250,10 +246,7 @@ const useNewThreadDraft = (
   userId: UserId,
   workspaceId: WorkspaceId | "personal",
 ) => {
-  const store = React.useMemo(
-    () => getBrowserNewThreadDraftStore({ userId, workspaceId }),
-    [userId, workspaceId],
-  );
+  const store = getBrowserNewThreadDraftStore({ userId, workspaceId });
   return {
     store,
     snapshot: React.useSyncExternalStore(
@@ -646,9 +639,11 @@ function ScopedNewThreadModal({
     )
       return;
     setError(undefined);
+    if (registry === undefined) {
+      setError("The Thread session registry is unavailable.");
+      return;
+    }
     try {
-      if (registry === undefined)
-        throw new Error("The Thread session registry is unavailable.");
       await submitNewThread({
         submittedPrompt,
         effectiveProjectId,

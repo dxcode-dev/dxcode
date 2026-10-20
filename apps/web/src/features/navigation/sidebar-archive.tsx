@@ -1,6 +1,5 @@
 import type { UserId } from "@dx/domain";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import * as React from "react";
 import { Button } from "../../shared/ui/button.js";
 import { threadsQueryOptions } from "../threads/thread-queries.js";
 import {
@@ -18,10 +17,7 @@ export function SidebarArchive({
     threadsQueryOptions(userId, undefined, "archived", "roots"),
   );
   const threads = query.data?.pages.flatMap((page) => page.items) ?? [];
-  const childThreads = React.useMemo(
-    () => childThreadsByParent(query.data?.pages),
-    [query.data?.pages],
-  );
+  const childThreads = childThreadsByParent(query.data?.pages);
   return (
     <div className="sidebar-archive-content">
       {query.isPending ? (

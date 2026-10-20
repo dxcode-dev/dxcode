@@ -6,7 +6,7 @@ import type {
   GraphData,
 } from "@dx/api";
 import { GitBranch, Mic, Unplug } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import { GitHubIcon } from "../../../shared/ui/github-icon.js";
 import {
   highlightedSources,
@@ -125,59 +125,55 @@ export function ModelRoutingGraph({
         g.rows.map((r) => [r.id, r.destination, r.name]),
       ]),
     ) + JSON.stringify(destinations);
-  const measureRef = useCallback(
-    (node: HTMLElement | null) => {
-      if (!node || !geometryKey) return;
-      let disposed = false;
-      const measure = () => {
-        if (disposed) return;
-        const bounds = node.getBoundingClientRect();
-        const providers = new Map(
-          Array.from(
-            node.querySelectorAll<HTMLElement>("[data-routing-destination]"),
-            (e) => [e.dataset.routingDestination, e.getBoundingClientRect()],
-          ),
-        );
-        const measured: MeasuredEdge[] = [];
-        for (const source of node.querySelectorAll<HTMLElement>(
-          "[data-routing-source]",
-        )) {
-          const target = providers.get(source.dataset.destination);
-          if (!target) continue;
-          const r = source.getBoundingClientRect(),
-            x = r.right - bounds.left,
-            y = r.top + r.height / 2 - bounds.top,
-            tx = target.left - bounds.left,
-            ty = target.top + target.height / 2 - bounds.top;
-          const bend = Math.min(96, Math.max(24, (tx - x) / 2));
-          measured.push({
-            id: source.dataset.routingSource ?? "",
-            group:
-              source.closest<HTMLElement>("[data-mode]")?.dataset.mode ??
-              "other",
-            destination: source.dataset.destination ?? "",
-            x,
-            y,
-            path: `M ${x} ${y} C ${x + bend} ${y}, ${tx - bend} ${ty}, ${tx} ${ty}`,
-          });
-        }
-        setEdges((previous) =>
-          JSON.stringify(previous) === JSON.stringify(measured)
-            ? previous
-            : measured,
-        );
-      };
-      measure();
-      const disconnect = observeGraphSize(node, measure);
-      void document.fonts?.ready.then(measure);
-      return () => {
-        disposed = true;
-        disconnect();
-      };
-      // Reattach measurement when the rendered source/destination geometry changes.
-    },
-    [geometryKey],
-  );
+  const measureRef = (node: HTMLElement | null) => {
+    if (!node || !geometryKey) return;
+    let disposed = false;
+    const measure = () => {
+      if (disposed) return;
+      const bounds = node.getBoundingClientRect();
+      const providers = new Map(
+        Array.from(
+          node.querySelectorAll<HTMLElement>("[data-routing-destination]"),
+          (e) => [e.dataset.routingDestination, e.getBoundingClientRect()],
+        ),
+      );
+      const measured: MeasuredEdge[] = [];
+      for (const source of node.querySelectorAll<HTMLElement>(
+        "[data-routing-source]",
+      )) {
+        const target = providers.get(source.dataset.destination);
+        if (!target) continue;
+        const r = source.getBoundingClientRect(),
+          x = r.right - bounds.left,
+          y = r.top + r.height / 2 - bounds.top,
+          tx = target.left - bounds.left,
+          ty = target.top + target.height / 2 - bounds.top;
+        const bend = Math.min(96, Math.max(24, (tx - x) / 2));
+        measured.push({
+          id: source.dataset.routingSource ?? "",
+          group:
+            source.closest<HTMLElement>("[data-mode]")?.dataset.mode ?? "other",
+          destination: source.dataset.destination ?? "",
+          x,
+          y,
+          path: `M ${x} ${y} C ${x + bend} ${y}, ${tx - bend} ${ty}, ${tx} ${ty}`,
+        });
+      }
+      setEdges((previous) =>
+        JSON.stringify(previous) === JSON.stringify(measured)
+          ? previous
+          : measured,
+      );
+    };
+    measure();
+    const disconnect = observeGraphSize(node, measure);
+    void document.fonts?.ready.then(measure);
+    return () => {
+      disposed = true;
+      disconnect();
+    };
+    // Reattach measurement when the rendered source/destination geometry changes.
+  };
   return (
     <section
       className="routing-graph"

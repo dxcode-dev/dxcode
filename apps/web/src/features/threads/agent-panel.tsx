@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import * as React from "react";
+import { settle } from "../../shared/settle.js";
 import { Badge } from "../../shared/ui/badge.js";
 import { Button } from "../../shared/ui/button.js";
 import { buttonVariants } from "../../shared/ui/button-variants.js";
@@ -50,16 +51,25 @@ import {
 } from "./sharing/chat-composer.js";
 import { UserMessageText } from "./sharing/message-authors.js";
 import { draftMode } from "./sharing/thread-chat.js";
-import type {
-  OptimisticThreadCreation,
-  PendingSubmissionControl,
+import {
+  createPendingSubmissionControl,
+  type OptimisticThreadCreation,
+  type PendingSubmissionControl,
 } from "./thread-session-registry.js";
 import {
   INBOUND_MESSAGE_PREFIX,
   ThreadTranscript,
   type TranscriptFocus,
 } from "./thread-transcript.js";
-import { deriveTranscriptViewModel } from "./transcript-view-model.js";
+import {
+  deriveTranscriptViewModel,
+  type TranscriptViewModel,
+} from "./transcript-view-model.js";
+import {
+  type AgentSource,
+  agentValueSource,
+  useAgentSelection,
+} from "./use-frame-coalesced-agent-session.js";
 import {
   type PresentationValue,
   usePresentationValue,
@@ -434,15 +444,32 @@ function ThreadErrorCard({
   );
 }
 
+const sameErrorPresentation = (
+  previous: ThreadErrorPresentation | undefined,
+  next: ThreadErrorPresentation | undefined,
+) =>
+  previous === next ||
+  (previous !== undefined &&
+    next !== undefined &&
+    previous.id === next.id &&
+    previous.title === next.title &&
+    previous.message === next.message &&
+    previous.action === next.action &&
+    previous.failedSend === next.failedSend &&
+    previous.claudePlan === next.claudePlan);
+
+/** Subscribes only to the error it shows, not to every streamed frame. */
 function AgentThreadErrorCard({
-  agent,
+  source,
+  discardedSends,
   actionError,
   archived,
   onActionErrorChange,
   onOpenModelRouting,
   onRetrySend,
 }: {
-  readonly agent: UseFlueAgentResult;
+  readonly source: AgentSource<PanelAgent>;
+  readonly discardedSends: ReadonlySet<string>;
   readonly actionError?: ThreadErrorPresentation;
   readonly archived: boolean;
   readonly onActionErrorChange: (
@@ -453,7 +480,12 @@ function AgentThreadErrorCard({
 }) {
   const [dismissed, setDismissed] = React.useState(() => new Set<string>());
   const [retrying, setRetrying] = React.useState(false);
-  const agentError = threadErrorPresentation(agent, dismissed);
+  const agentError = useAgentSelection(
+    source,
+    (agent) =>
+      threadErrorPresentation(keptSends(agent, discardedSends), dismissed),
+    sameErrorPresentation,
+  );
   // A send that Flue retained as a failed send carries its own Retry. The
   // generic "Message not sent" from the rejected sendMessage would hide it,
   // so the retryable card wins. Oversized input has no failed send to retry
@@ -476,7 +508,8 @@ function AgentThreadErrorCard({
   const retry = async () => {
     onActionErrorChange(undefined);
     setRetrying(true);
-    try {
+    const agent = source.getSnapshot();
+    const retried = await settle(async () => {
       if (error.action === "retry-send" && error.failedSend !== undefined) {
         await onRetrySend(error.failedSend);
       } else if (error.action === "refresh") {
@@ -486,16 +519,15 @@ function AgentThreadErrorCard({
         await agent.resume();
       }
       setDismissed((current) => new Set(current).add(error.id));
-    } catch {
+    });
+    if (!retried.ok)
       onActionErrorChange({
         id: "action:retry",
         title: "Retry failed",
         message: "Check your connection.",
         action: "none",
       });
-    } finally {
-      setRetrying(false);
-    }
+    setRetrying(false);
   };
 
   return (
@@ -516,14 +548,13 @@ const observeComposerDock = (node: HTMLDivElement) => {
   const composer = node.querySelector<HTMLElement>(".agent-composer");
   if (pane === null || composer === null) return;
   const updateHeight = () => {
-    pane.style.setProperty(
-      "--agent-composer-dock-height",
-      `${node.offsetHeight}px`,
-    );
-    pane.style.setProperty(
-      "--agent-composer-height",
-      `${composer.offsetHeight}px`,
-    );
+    // Read both before writing, so one layout serves both. A hidden pane
+    // measures zero; keep its heights so showing it changes nothing.
+    const dockHeight = node.offsetHeight;
+    const composerHeight = composer.offsetHeight;
+    if (dockHeight === 0 && composerHeight === 0) return;
+    pane.style.setProperty("--agent-composer-dock-height", `${dockHeight}px`);
+    pane.style.setProperty("--agent-composer-height", `${composerHeight}px`);
   };
   updateHeight();
   const observer = new ResizeObserver(updateHeight);
@@ -713,7 +744,7 @@ const isReadOnlyRejection = (cause: unknown) =>
   cause.body.data.code === "THREAD_READ_ONLY";
 
 function useAgentSubmission({
-  agent,
+  currentAgent,
   mentions,
   draftValue,
   images,
@@ -726,7 +757,8 @@ function useAgentSubmission({
   onAccessChanged,
 }: {
   readonly onAccessChanged?: () => void;
-  readonly agent: UseFlueAgentResult;
+  /** The agent as the panel shows it, read when a handler runs. */
+  readonly currentAgent: () => UseFlueAgentResult;
   readonly mentions?: ComposerMentions;
   readonly draftValue: PresentationValue<string>;
   readonly images: ReadonlyArray<PendingAttachment>;
@@ -750,13 +782,13 @@ function useAgentSubmission({
     React.useState<ThreadErrorPresentation>();
   const finishAdmission = () => {
     submitInFlight.current = false;
-    submissionControl.stopRequested = false;
+    submissionControl.setStopRequested(false);
     onSubmissionPendingChange?.(false);
     setAdmissionPending(false);
   };
   const stopAgent = async () => {
     try {
-      await agent.abort();
+      await currentAgent().abort();
     } catch {
       setActionError({
         id: "action:stop",
@@ -769,7 +801,7 @@ function useAgentSubmission({
   const stop = async () => {
     submitGeneration.current += 1;
     if (submitInFlight.current || submissionPending)
-      submissionControl.stopRequested = true;
+      submissionControl.setStopRequested(true);
     await stopAgent();
   };
   const modeOf = (message: string) =>
@@ -794,7 +826,7 @@ function useAgentSubmission({
   ) => {
     if (submitInFlight.current || submissionPending) return Promise.resolve();
     submitInFlight.current = true;
-    submissionControl.stopRequested = false;
+    submissionControl.setStopRequested(false);
     onSubmissionPendingChange?.(true);
     const generation = ++submitGeneration.current;
     setAdmittingChat(mode === "chat");
@@ -808,7 +840,7 @@ function useAgentSubmission({
         const held = await messageWithAttachments(text, imageCollection.list());
         const sent = await deliver(held);
         if (mentions?.mode === "members") mentions.onSent(mode);
-        if (submissionControl.stopRequested) await stopAgent();
+        if (submissionControl.stopRequested()) await stopAgent();
         if (sent === held) {
           draftValue.set("");
           disposeAttachments(imageCollection.take());
@@ -834,8 +866,8 @@ function useAgentSubmission({
   };
   const deliverFailedSend = (failed: FailedSend) =>
     failed.retry === "resend"
-      ? agent.resendPrompt(failed.id)
-      : agent.retrySend(failed.id);
+      ? currentAgent().resendPrompt(failed.id)
+      : currentAgent().retrySend(failed.id);
   const submit = async (submittedDraft: string) => {
     const message = submittedDraft.trim();
     if (
@@ -871,6 +903,7 @@ function useAgentSubmission({
     await admit(mode, message, async (held) => {
       // Unedited since it failed: send it under its key again. Edited: the
       // new message replaces the failed one.
+      const agent = currentAgent();
       const failed = agent.failedSends.findLast(
         ({ message: sent }) => sent === held,
       );
@@ -900,26 +933,28 @@ function useAgentSubmission({
   };
 }
 
-interface AgentPanelProps {
+type PanelAgent = UseFlueAgentResult & {
+  readonly hasMore?: boolean;
+  readonly loadingOlder?: boolean;
+  readonly olderError?: Error;
+  readonly loadOlder?: () => Promise<void>;
+};
+
+export interface AgentPanelOptions {
   /** What `@` does in the composer; absent for people who cannot send. */
   readonly mentions?: ComposerMentions;
   /** A send found the user's access changed; refresh the Thread. */
   readonly onAccessChanged?: () => void;
   /** Replaces the composer for people who can only view this Thread. */
   readonly readOnlyNotice?: React.ReactNode;
-  readonly agent: UseFlueAgentResult & {
-    readonly hasMore?: boolean;
-    readonly loadingOlder?: boolean;
-    readonly olderError?: Error;
-    readonly loadOlder?: () => Promise<void>;
-  };
   readonly agentInitialization: ThreadAgentInitializationData;
   readonly archived?: boolean;
   readonly showArchivedNotice?: boolean;
   readonly active?: boolean;
   readonly additionalPanels?: React.ReactNode;
+  /** The header; `transcript` reads the shown transcript when asked. */
   readonly renderHeader?: (
-    model: ReturnType<typeof deriveTranscriptViewModel>,
+    transcript: () => TranscriptViewModel,
   ) => React.ReactNode;
   /** The owner's draft; defaults to this Thread's retained composer draft. */
   readonly draft?: PresentationValue<string>;
@@ -943,6 +978,17 @@ interface AgentPanelProps {
   /** The transcript is hidden behind another tab and must come forward. */
   readonly onFocusRequested?: () => void;
 }
+
+/**
+ * The conversation. With a `source`, only the transcript renders each
+ * streamed frame; the header, composer, and error card subscribe to the
+ * values they show. An `agent` re-renders with its owner instead.
+ */
+type AgentPanelConversation =
+  | { readonly source: AgentSource<PanelAgent>; readonly agent?: undefined }
+  | { readonly agent: PanelAgent; readonly source?: undefined };
+
+type AgentPanelProps = AgentPanelOptions & AgentPanelConversation;
 
 /** Pending composer images, owned here unless the caller retains them. */
 function usePendingImages(
@@ -1013,10 +1059,10 @@ function useImageActions(
 const PENDING_INBOUND_TEXT = "…";
 
 const withInboundMessages = (
-  messages: AgentPanelProps["agent"]["messages"],
-  inbound: AgentPanelProps["inboundMessages"],
+  messages: PanelAgent["messages"],
+  inbound: AgentPanelOptions["inboundMessages"],
   olderHistory: boolean,
-): AgentPanelProps["agent"]["messages"] => {
+): PanelAgent["messages"] => {
   if (inbound === undefined || inbound.length === 0) return messages;
   const joined = new Set(
     messages.flatMap(({ submissionId }) =>
@@ -1066,7 +1112,7 @@ const withInboundMessages = (
               state: "done",
             },
           ],
-        }) as AgentPanelProps["agent"]["messages"][number],
+        }) as PanelAgent["messages"][number],
     ),
   ];
 };
@@ -1074,10 +1120,9 @@ const withInboundMessages = (
 /**
  * Flue keeps a failed echo for every rejected send and offers no discard. A
  * refused send is in the composer with its reason, and one an edited message
- * replaced is gone, so both leave the transcript, the Retry card, and the
- * session error.
+ * replaced is gone, so both leave the Retry card and the session error.
  */
-const withoutDroppedSends = <Agent extends UseFlueAgentResult>(
+const keptSends = <Agent extends UseFlueAgentResult>(
   agent: Agent,
   discarded: ReadonlySet<string>,
 ): Agent => {
@@ -1089,10 +1134,26 @@ const withoutDroppedSends = <Agent extends UseFlueAgentResult>(
   return {
     ...agent,
     failedSends: agent.failedSends.filter(({ id }) => !ids.has(id)),
-    messages: agent.messages.filter(({ id }) => !ids.has(id)),
     error: dropped.some(({ error }) => error === agent.error)
       ? undefined
       : agent.error,
+  };
+};
+
+/** Dropped sends also leave the transcript. */
+const withoutDroppedSends = <Agent extends UseFlueAgentResult>(
+  agent: Agent,
+  discarded: ReadonlySet<string>,
+): Agent => {
+  const kept = keptSends(agent, discarded);
+  if (kept === agent) return agent;
+  const keptIds = new Set(kept.failedSends.map(({ id }) => id));
+  const droppedIds = new Set(
+    agent.failedSends.flatMap(({ id }) => (keptIds.has(id) ? [] : [id])),
+  );
+  return {
+    ...kept,
+    messages: agent.messages.filter(({ id }) => !droppedIds.has(id)),
   };
 };
 
@@ -1122,93 +1183,205 @@ const withoutUnsentEchoes = <Agent extends UseFlueAgentResult>(
   };
 };
 
-/** The transcript model and run state the panel derives from Flue. */
-function useAgentRunState({
-  agent,
-  inboundMessages,
-  mentions,
-  admissionPending,
-  admittingChat,
-  submissionPending,
-  workspaceReady,
-  workspaceStatus,
-}: {
-  readonly agent: AgentPanelProps["agent"];
-  readonly inboundMessages: AgentPanelProps["inboundMessages"];
-  readonly mentions: ComposerMentions | undefined;
-  readonly admissionPending: boolean;
-  readonly admittingChat: boolean;
-  readonly submissionPending: boolean;
-  readonly workspaceReady: boolean;
-  readonly workspaceStatus: string | undefined;
-}) {
-  // A message being sent as chat starts no run; recognize its local echo.
-  const chatEcho = React.useMemo(
-    () =>
-      mentions?.mode === "members"
-        ? (text: string) =>
-            draftMode(
-              text,
-              mentions.members,
-              mentions.viewerId,
-              mentions.conversationMode,
-            ) === "chat"
-        : undefined,
-    [mentions],
-  );
-  // Derive only when Flue history changes, not on composer or layout state.
-  const { messages, settlements, finalOutputs } = agent;
-  const model = React.useMemo(
-    () =>
-      deriveTranscriptViewModel({
-        // After history loads: a pending message ahead of it would move
-        // once history arrives.
-        messages: agent.historyReady
-          ? withInboundMessages(
-              messages,
-              inboundMessages,
-              agent.hasMore === true,
-            )
-          : messages,
-        settlements,
-        finalOutputs,
-        chatEcho,
-      }),
-    [
-      messages,
-      agent.historyReady,
-      agent.hasMore,
-      inboundMessages,
-      settlements,
-      finalOutputs,
-      chatEcho,
-    ],
-  );
-  // Only chat is on its way and nothing runs: the agent is not working. The
-  // composer's pending message has no row yet, so its own mode counts.
-  const sendingOnlyChat =
-    agent.status === "submitted" &&
-    ((admissionPending && admittingChat) ||
-      model.rows.some((row) => row.kind === "user-prompt" && !row.admitted)) &&
-    model.rows.every(
-      (row) => row.kind !== "user-prompt" || row.admitted || row.chat === true,
-    ) &&
-    !model.turns.some((turn) => turn.status === "active");
-  const agentActive =
-    (agent.status === "submitted" && !sendingOnlyChat) ||
-    agent.status === "streaming";
-  const draftLocked = admissionPending || submissionPending;
-  const stopAvailable = agentActive || (admissionPending && !admittingChat);
-  const statusMessage =
-    workspaceStatus ??
-    (agent.status === "submitted" && !sendingOnlyChat && !workspaceReady
-      ? "Preparing workspace…"
-      : undefined);
-  return { model, agentActive, draftLocked, stopAvailable, statusMessage };
+/** What the transcript leaves out or adds to Flue's history. */
+interface TranscriptView {
+  readonly discardedSends: ReadonlySet<string>;
+  /** The latest send is not confirmed; its echo stays in the composer. */
+  readonly unconfirmed: boolean;
+  readonly inboundMessages: AgentPanelOptions["inboundMessages"];
+  readonly chatEcho: ((text: string) => boolean) | undefined;
 }
 
+interface ShownTranscript {
+  readonly agent: PanelAgent;
+  readonly model: TranscriptViewModel;
+}
+
+const EMPTY_TRANSCRIPT = deriveTranscriptViewModel({
+  messages: [],
+  settlements: [],
+});
+
+/**
+ * Derives the shown transcript once per Flue snapshot and view, shared by
+ * the transcript and the run state. Each derivation reuses the previous
+ * model's unchanged turns and rows, so a streamed frame rebuilds only what
+ * changed; `current` reads the latest model for an export.
+ */
+const createTranscriptDerivation = () => {
+  let last:
+    | {
+        readonly agent: PanelAgent;
+        readonly view: TranscriptView;
+        readonly shown: ShownTranscript;
+      }
+    | undefined;
+  let model: TranscriptViewModel | undefined;
+  let modelInputs: ReadonlyArray<unknown> = [];
+  const sameView = (previous: TranscriptView, next: TranscriptView) =>
+    previous.discardedSends === next.discardedSends &&
+    previous.unconfirmed === next.unconfirmed &&
+    previous.inboundMessages === next.inboundMessages &&
+    previous.chatEcho === next.chatEcho;
+  const derive = (observed: PanelAgent, view: TranscriptView) => {
+    if (
+      last !== undefined &&
+      last.agent === observed &&
+      sameView(last.view, view)
+    )
+      return last.shown;
+    const agent = withoutUnsentEchoes(
+      withoutDroppedSends(observed, view.discardedSends),
+      view.unconfirmed,
+    );
+    const inputs = [
+      agent.messages,
+      agent.settlements,
+      agent.finalOutputs,
+      agent.historyReady,
+      agent.hasMore,
+      view.inboundMessages,
+      view.chatEcho,
+    ];
+    if (
+      model === undefined ||
+      inputs.some((input, index) => input !== modelInputs[index])
+    ) {
+      model = deriveTranscriptViewModel(
+        {
+          // After history loads: a pending message ahead of it would move
+          // once history arrives.
+          messages: agent.historyReady
+            ? withInboundMessages(
+                agent.messages,
+                view.inboundMessages,
+                agent.hasMore === true,
+              )
+            : agent.messages,
+          settlements: agent.settlements,
+          finalOutputs: agent.finalOutputs,
+          chatEcho: view.chatEcho,
+        },
+        model,
+      );
+      modelInputs = inputs;
+    }
+    const shown = { agent, model };
+    last = { agent: observed, view, shown };
+    return shown;
+  };
+  return { derive, current: () => model ?? EMPTY_TRANSCRIPT };
+};
+
+/**
+ * Only chat is on its way and nothing runs: the agent is not working. The
+ * composer's pending message has no row yet, so its own mode counts.
+ */
+const sendingOnlyChat = (model: TranscriptViewModel, admittingChat: boolean) =>
+  (admittingChat ||
+    model.rows.some((row) => row.kind === "user-prompt" && !row.admitted)) &&
+  model.rows.every(
+    (row) => row.kind !== "user-prompt" || row.admitted || row.chat === true,
+  ) &&
+  !model.turns.some((turn) => turn.status === "active");
+
+/** The transcript, the one part of the panel that renders every frame. */
+function AgentConversation({
+  source,
+  transcripts,
+  view,
+  agentInitialization,
+  archived,
+  active,
+  showProcessingIndicator,
+  footer,
+  optimisticCreation,
+  onInitialSubmissionObserved,
+  focus,
+  onFocusHandled,
+  onFocusRequested,
+}: {
+  readonly source: AgentSource<PanelAgent>;
+  readonly transcripts: ReturnType<typeof createTranscriptDerivation>;
+  readonly view: TranscriptView;
+  readonly agentInitialization: ThreadAgentInitializationData;
+  readonly archived: boolean;
+  readonly active: boolean;
+  readonly showProcessingIndicator: boolean;
+  readonly footer: React.ReactNode;
+  readonly optimisticCreation?: OptimisticThreadCreation;
+  readonly onInitialSubmissionObserved?: (submissionId: string) => void;
+  readonly focus?: TranscriptFocus;
+  readonly onFocusHandled?: () => void;
+  readonly onFocusRequested?: () => void;
+}) {
+  const observed = React.useSyncExternalStore(
+    source.subscribe,
+    source.getSnapshot,
+    source.getSnapshot,
+  );
+  const { agent, model } = transcripts.derive(observed, view);
+  const initialSubmissionObserved =
+    optimisticCreation?.submissionId !== undefined &&
+    agent.messages.some(
+      (message) =>
+        message.role === "user" &&
+        message.submissionId === optimisticCreation.submissionId,
+    );
+  const initialSubmissionId = optimisticCreation?.submissionId;
+  const reconcileInitialSubmission = (node: HTMLSpanElement | null) => {
+    if (
+      node === null ||
+      initialSubmissionId === undefined ||
+      onInitialSubmissionObserved === undefined
+    )
+      return;
+    queueMicrotask(() => onInitialSubmissionObserved(initialSubmissionId));
+  };
+  return (
+    <ThreadTranscript
+      model={model}
+      active={active}
+      historyReady={agent.historyReady}
+      hasMore={agent.hasMore}
+      loadingOlder={agent.loadingOlder}
+      olderError={agent.olderError}
+      loadOlder={agent.loadOlder}
+      {...(focus === undefined
+        ? {}
+        : { focus, onFocusHandled, onFocusRequested })}
+      showProcessingIndicator={showProcessingIndicator}
+      header={
+        <AgentTranscriptHeader
+          agentInitialization={agentInitialization}
+          archived={archived}
+          historyReady={agent.historyReady}
+          messageCount={
+            agent.messages.length +
+            (optimisticCreation !== undefined && !initialSubmissionObserved
+              ? 1
+              : 0)
+          }
+        />
+      }
+      pinnedContent={
+        optimisticCreation === undefined ? null : initialSubmissionObserved ? (
+          <span hidden ref={reconcileInitialSubmission} />
+        ) : (
+          <OptimisticInitialMessage creation={optimisticCreation} />
+        )
+      }
+      footer={footer}
+    />
+  );
+}
+
+const composerDockRef = (node: HTMLDivElement | null) =>
+  node === null ? undefined : observeComposerDock(node);
+
 export function AgentPanel({
-  agent: observedAgent,
+  source: retainedSource,
+  agent: renderedAgent,
   agentInitialization,
   archived = false,
   showArchivedNotice = false,
@@ -1236,13 +1409,11 @@ export function AgentPanel({
   onFocusHandled,
   onFocusRequested,
 }: AgentPanelProps) {
+  const source =
+    retainedSource ?? agentValueSource(renderedAgent as PanelAgent);
   const [discardedSends, setDiscardedSends] = useThreadPresentation<
     ReadonlySet<string>
   >("discarded-sends", () => new Set());
-  const agent = React.useMemo(
-    () => withoutDroppedSends(observedAgent, discardedSends),
-    [observedAgent, discardedSends],
-  );
   const retainedDraft = useThreadPresentationValue("draft", "");
   const draftValue = ownerDraft ?? retainedDraft;
   const { images, setImages, imageCollection } = usePendingImages(
@@ -1250,10 +1421,8 @@ export function AgentPanel({
     onImagesChange,
     retainedImageCollection,
   );
-  const [localSubmissionControl] = React.useState<PendingSubmissionControl>(
-    () => ({
-      stopRequested: false,
-    }),
+  const [localSubmissionControl] = React.useState(
+    createPendingSubmissionControl,
   );
   const submissionControl = retainedSubmissionControl ?? localSubmissionControl;
   const {
@@ -1266,7 +1435,8 @@ export function AgentPanel({
     submit,
     retrySend,
   } = useAgentSubmission({
-    agent,
+    currentAgent: () =>
+      withoutDroppedSends(source.getSnapshot(), discardedSends),
     mentions,
     draftValue,
     images,
@@ -1281,45 +1451,44 @@ export function AgentPanel({
     onSubmissionPendingChange,
     onAccessChanged,
   });
-  const shownAgent = React.useMemo(
-    () =>
-      withoutUnsentEchoes(
-        agent,
-        admissionPending || submissionPending || sendFailed,
+  // A message being sent as chat starts no run; recognize its local echo.
+  const chatEcho =
+    mentions?.mode === "members"
+      ? (text: string) =>
+          draftMode(
+            text,
+            mentions.members,
+            mentions.viewerId,
+            mentions.conversationMode,
+          ) === "chat"
+      : undefined;
+  const [transcripts] = React.useState(createTranscriptDerivation);
+  const view: TranscriptView = {
+    discardedSends,
+    unconfirmed: admissionPending || submissionPending || sendFailed,
+    inboundMessages,
+    chatEcho,
+  };
+  // The run state changes a few times per reply, not per streamed frame.
+  const status = useAgentSelection(source, (agent) => agent.status);
+  const onlyChat = useAgentSelection(
+    source,
+    (agent) =>
+      agent.status === "submitted" &&
+      sendingOnlyChat(
+        transcripts.derive(agent, view).model,
+        admissionPending && admittingChat,
       ),
-    [agent, admissionPending, submissionPending, sendFailed],
   );
-  const { model, agentActive, draftLocked, stopAvailable, statusMessage } =
-    useAgentRunState({
-      agent: shownAgent,
-      inboundMessages,
-      mentions,
-      admissionPending,
-      admittingChat,
-      submissionPending,
-      workspaceReady,
-      workspaceStatus,
-    });
-  const initialSubmissionObserved =
-    optimisticCreation?.submissionId !== undefined &&
-    agent.messages.some(
-      (message) =>
-        message.role === "user" &&
-        message.submissionId === optimisticCreation.submissionId,
-    );
-  const reconcileInitialSubmission = React.useCallback(
-    (node: HTMLSpanElement | null) => {
-      if (
-        node === null ||
-        optimisticCreation?.submissionId === undefined ||
-        onInitialSubmissionObserved === undefined
-      )
-        return;
-      const submissionId = optimisticCreation.submissionId;
-      queueMicrotask(() => onInitialSubmissionObserved(submissionId));
-    },
-    [onInitialSubmissionObserved, optimisticCreation?.submissionId],
-  );
+  const agentActive =
+    (status === "submitted" && !onlyChat) || status === "streaming";
+  const draftLocked = admissionPending || submissionPending;
+  const stopAvailable = agentActive || (admissionPending && !admittingChat);
+  const statusMessage =
+    workspaceStatus ??
+    (status === "submitted" && !onlyChat && !workspaceReady
+      ? "Preparing workspace…"
+      : undefined);
 
   const { addImages, takeScreenshot } = useImageActions(
     imageCollection,
@@ -1327,23 +1496,15 @@ export function AgentPanel({
     setActionError,
   );
 
-  const composerDockRef = React.useCallback(
-    (node: HTMLDivElement | null) =>
-      node === null ? undefined : observeComposerDock(node),
-    [],
-  );
-
-  const composerLifetimeRef = React.useCallback(
-    (node: HTMLFormElement | null) => {
-      if (node === null || retainedImageCollection !== undefined) return;
-      return () =>
-        void imageCollection.settle().then(() => imageCollection.dispose());
-    },
-    [imageCollection, retainedImageCollection],
-  );
+  const composerLifetimeRef = (node: HTMLFormElement | null) => {
+    if (node === null || retainedImageCollection !== undefined) return;
+    return () =>
+      void imageCollection.settle().then(() => imageCollection.dispose());
+  };
   const errorCard = (
     <AgentThreadErrorCard
-      agent={agent}
+      source={source}
+      discardedSends={discardedSends}
       actionError={actionError}
       archived={archived}
       onActionErrorChange={setActionError}
@@ -1357,7 +1518,7 @@ export function AgentPanel({
       className="agent-panel-stack"
       data-archived={archived ? "" : undefined}
     >
-      {renderHeader?.(model)}
+      {renderHeader?.(transcripts.current)}
       {showArchivedNotice ? (
         <div className="archived-thread-warning" role="note">
           Archived. Unarchive to resume or run commands.
@@ -1368,39 +1529,14 @@ export function AgentPanel({
         aria-label="Agent chat"
         hidden={!active}
       >
-        <ThreadTranscript
-          model={model}
+        <AgentConversation
+          source={source}
+          transcripts={transcripts}
+          view={view}
+          agentInitialization={agentInitialization}
+          archived={archived}
           active={active}
-          historyReady={agent.historyReady}
-          hasMore={agent.hasMore}
-          loadingOlder={agent.loadingOlder}
-          olderError={agent.olderError}
-          loadOlder={agent.loadOlder}
-          {...(focus === undefined
-            ? {}
-            : { focus, onFocusHandled, onFocusRequested })}
           showProcessingIndicator={!archived && statusMessage === undefined}
-          header={
-            <AgentTranscriptHeader
-              agentInitialization={agentInitialization}
-              archived={archived}
-              historyReady={agent.historyReady}
-              messageCount={
-                shownAgent.messages.length +
-                (optimisticCreation !== undefined && !initialSubmissionObserved
-                  ? 1
-                  : 0)
-              }
-            />
-          }
-          pinnedContent={
-            optimisticCreation ===
-            undefined ? null : initialSubmissionObserved ? (
-              <span hidden ref={reconcileInitialSubmission} />
-            ) : (
-              <OptimisticInitialMessage creation={optimisticCreation} />
-            )
-          }
           footer={
             archived ? (
               errorCard
@@ -1408,6 +1544,11 @@ export function AgentPanel({
               <AgentTranscriptFooter statusMessage={statusMessage} />
             )
           }
+          optimisticCreation={optimisticCreation}
+          onInitialSubmissionObserved={onInitialSubmissionObserved}
+          focus={focus}
+          onFocusHandled={onFocusHandled}
+          onFocusRequested={onFocusRequested}
         />
 
         {archived ? null : readOnlyNotice !== undefined ? (

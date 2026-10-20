@@ -5,7 +5,8 @@ import {
   ThreadRepository,
   UserId,
 } from "@dx/domain";
-import { Effect, Encoding, Schema } from "effect";
+import { Effect, Schema } from "effect";
+import * as Base64Url from "effect/encoding/Base64Url";
 import { describe, expect, it, vi } from "vitest";
 import { threadPersistenceLogger } from "../../src/logging.js";
 import { project, thread } from "./fixtures.js";
@@ -608,7 +609,7 @@ describe("ThreadRepository D1", () => {
         });
         const position = first.items[0];
         if (position === undefined) throw new Error("Expected a first page.");
-        const legacyCursor = Encoding.encodeBase64Url(
+        const legacyCursor = Base64Url.encode(
           JSON.stringify({
             v: 2,
             snapshotSequence: Number.MAX_SAFE_INTEGER,

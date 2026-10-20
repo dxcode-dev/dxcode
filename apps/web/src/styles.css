@@ -503,7 +503,9 @@ a {
   inset: 0 -4px;
   content: "";
 }
-.right-pane-resize-handle:has(+ .right-pane-panel[data-collapsed]) {
+/* An attribute, not :has(): a :has() rule here restyled the whole page on
+   every DOM insertion, such as opening a diff or streaming a reply. */
+.right-pane-resize-handle[data-collapsed] {
   cursor: default;
 }
 /* The title shows whole, up to its 60 characters, while the header chips

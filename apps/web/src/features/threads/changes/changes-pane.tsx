@@ -9,7 +9,8 @@ import type {
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { parsePatchFiles } from "@pierre/diffs";
-import { FileDiff } from "@pierre/diffs/react";
+import { FileDiff, WorkerPoolContextProvider } from "@pierre/diffs/react";
+import highlightWorkerUrl from "@pierre/diffs/worker/worker-portable.js?url&no-inline";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDownAZ,
@@ -43,6 +44,20 @@ import {
   pushChangesMutationOptions,
 } from "./changes-queries.js";
 import "./changes.css";
+
+/**
+ * Syntax highlighting runs in workers: a diff renders plain lines at once and
+ * its colors arrive from a worker, so compiling a grammar or tokenizing a
+ * large diff never blocks the page. The pool starts with the first open diff
+ * and stops when the last one closes.
+ */
+const highlightWorkers = {
+  poolOptions: {
+    workerFactory: () => new Worker(highlightWorkerUrl, { type: "module" }),
+    poolSize: 2,
+  },
+  highlighterOptions: {},
+};
 
 export const REVIEW_CHANGES_PROMPT =
   "Review all changes since the Thread's initial source commit, including untracked files.";
@@ -149,18 +164,18 @@ export function ChangesPane({
     setRangeMenuOpen(false);
   };
 
-  const toggleFile = (
-    worktree: ThreadChangesWorktreeId,
-    path: ThreadChangesPath,
-  ) => {
-    const identity = `${worktree}:${path}`;
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (next.has(identity)) next.delete(identity);
-      else next.add(identity);
-      return next;
-    });
-  };
+  // Stable, so expanding one file re-renders that row only.
+  const [toggleFile] = React.useState(
+    () => (worktree: ThreadChangesWorktreeId, path: ThreadChangesPath) => {
+      const identity = `${worktree}:${path}`;
+      setExpanded((current) => {
+        const next = new Set(current);
+        if (next.has(identity)) next.delete(identity);
+        else next.add(identity);
+        return next;
+      });
+    },
+  );
 
   const confirmPush = () => {
     if (!canPush || changes === undefined) return;
@@ -445,26 +460,20 @@ function ChangesFileList({
   ) => {
     const identity = `${worktree}:${file.path}`;
     return (
-      <ChangedFile
+      <ChangedFileRow
         key={identity}
         file={file}
         worktree={worktree}
+        worktreeLabel={worktreeLabel}
         expanded={expanded.has(identity)}
-        onToggle={() => onToggleFile(worktree, file.path)}
+        onToggle={onToggleFile}
         transport={transport}
         threadId={threadId}
         range={range}
         captureId={captureId}
         diffStyle={diffStyle}
         overflow={overflow}
-        onOpenFile={
-          openFile === undefined
-            ? undefined
-            : (path) =>
-                worktreeLabel === undefined
-                  ? openFile(worktree, path)
-                  : openFile(worktree, path, worktreeLabel)
-        }
+        onOpenFile={openFile}
       />
     );
   };
@@ -696,9 +705,37 @@ function ChangesToolbar({
   );
 }
 
+interface ChangedFileProps {
+  readonly file: ThreadChangedFile;
+  readonly worktree: ThreadChangesWorktreeId;
+  /** Names the worktree when the file opens; absent for a lone worktree. */
+  readonly worktreeLabel?: string;
+  readonly expanded: boolean;
+  readonly onToggle: (
+    worktree: ThreadChangesWorktreeId,
+    path: ThreadChangesPath,
+  ) => void;
+  readonly transport: ChangesTransport;
+  readonly threadId: ThreadId;
+  readonly range: ThreadChangesRange;
+  readonly captureId: ThreadChangesData["captureId"];
+  readonly diffStyle: "unified" | "split";
+  readonly overflow: "scroll" | "wrap";
+  readonly onOpenFile?: (
+    worktree: ThreadChangesWorktreeId,
+    path: ThreadChangesPath,
+    worktreeLabel?: string,
+  ) => void;
+}
+
+/** A row takes only its own values and stable handlers, so it renders alone. */
+// biome-ignore lint/plugin: the file list re-maps every row when one file changes; memo skips the rest.
+const ChangedFileRow = React.memo(ChangedFile);
+
 function ChangedFile({
   file,
   worktree,
+  worktreeLabel,
   expanded,
   onToggle,
   transport,
@@ -708,31 +745,19 @@ function ChangedFile({
   diffStyle,
   overflow,
   onOpenFile,
-}: {
-  readonly file: ThreadChangedFile;
-  readonly worktree: ThreadChangesWorktreeId;
-  readonly expanded: boolean;
-  readonly onToggle: () => void;
-  readonly transport: ChangesTransport;
-  readonly threadId: ThreadId;
-  readonly range: ThreadChangesRange;
-  readonly captureId: ThreadChangesData["captureId"];
-  readonly diffStyle: "unified" | "split";
-  readonly overflow: "scroll" | "wrap";
-  readonly onOpenFile?: (path: ThreadChangesPath) => void;
-}) {
+}: ChangedFileProps) {
   const [copyStatus, setCopyStatus] = React.useState<string>();
   const copyTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
   const mounted = React.useRef(false);
-  const attach = React.useCallback((element: HTMLElement | null) => {
+  const attach = (element: HTMLElement | null) => {
     mounted.current = element !== null;
     return () => {
       mounted.current = false;
       clearTimeout(copyTimer.current);
     };
-  }, []);
+  };
   const copyPath = async () => {
     clearTimeout(copyTimer.current);
     setCopyStatus(undefined);
@@ -759,7 +784,7 @@ function ChangedFile({
           className="changes-file-trigger"
           aria-expanded={expanded}
           title={file.path}
-          onClick={onToggle}
+          onClick={() => onToggle(worktree, file.path)}
         >
           <ChevronDown data-open={expanded || undefined} aria-hidden="true" />
           <strong>{name}</strong>
@@ -800,7 +825,12 @@ function ChangedFile({
                 <Menu.Item
                   disabled={!canOpenFile}
                   onClick={
-                    canOpenFile ? () => onOpenFile(file.path) : undefined
+                    canOpenFile
+                      ? () =>
+                          worktreeLabel === undefined
+                            ? onOpenFile(worktree, file.path)
+                            : onOpenFile(worktree, file.path, worktreeLabel)
+                      : undefined
                   }
                 >
                   <SquareArrowOutUpRight aria-hidden="true" />
@@ -871,20 +901,29 @@ function ChangedFileDiff({
       useQueryClient(),
     ),
   );
-  const parsed = React.useMemo(
-    () =>
-      query.data?.patch
-        ? parseDiff(
-            query.data.patch,
-            path,
-            `${threadId}:${captureId}:${worktree}:${JSON.stringify(range)}`,
-          )
-        : undefined,
-    [query.data?.patch, path, threadId, captureId, worktree, range],
-  );
   const highlight = useQuery(
     changesHighlightQueryOptions(path, resolvedAppearance),
   );
+  const patch = query.data?.patch;
+  // Keyed by content, not capture: a capture that leaves this file unchanged
+  // keeps the same parsed diff, so it neither remounts nor re-highlights.
+  const parsed = useParsedPatch(
+    patch,
+    path,
+    `${threadId}:${worktree}:${JSON.stringify(range)}:${patch}`,
+  );
+  // FileDiff compares options by content, so this saves the comparison, not a
+  // highlight; one object serves every file in the patch.
+  const diffOptions = {
+    theme: resolvedAppearance === "light" ? "pierre-light" : "pierre-dark",
+    themeType: resolvedAppearance,
+    diffStyle,
+    overflow,
+    lineDiffType: "word-alt",
+    hunkSeparators: "line-info-basic",
+    disableFileHeader: true,
+    stickyHeader: false,
+  } as const;
   if (query.isPending) return <ChangesState>Loading diff…</ChangesState>;
   if (query.error !== null)
     return <ChangesState>{errorMessage(query.error)}</ChangesState>;
@@ -916,32 +955,23 @@ function ChangedFileDiff({
       </div>
     );
   return (
-    <div className="changes-diff-view" data-display-only="true">
-      {parsed.map((fileDiff) => (
-        <FileDiff
-          key={`${data.captureId}:${fileDiff.name}`}
-          fileDiff={fileDiff}
-          className="changes-pierre-diff"
-          disableWorkerPool
-          options={{
-            theme:
-              resolvedAppearance === "light" ? "pierre-light" : "pierre-dark",
-            themeType: resolvedAppearance,
-            diffStyle,
-            overflow,
-            lineDiffType: "word-alt",
-            hunkSeparators: "line-info-basic",
-            disableFileHeader: true,
-            stickyHeader: false,
-          }}
-        />
-      ))}
-      {data.file.truncated ? (
-        <div className="changes-diff-truncated">
-          Diff truncated at the capture limit.
-        </div>
-      ) : null}
-    </div>
+    <WorkerPoolContextProvider {...highlightWorkers}>
+      <div className="changes-diff-view" data-display-only="true">
+        {parsed.map((fileDiff) => (
+          <FileDiff
+            key={fileDiff.name}
+            fileDiff={fileDiff}
+            className="changes-pierre-diff"
+            options={diffOptions}
+          />
+        ))}
+        {data.file.truncated ? (
+          <div className="changes-diff-truncated">
+            Diff truncated at the capture limit.
+          </div>
+        ) : null}
+      </div>
+    </WorkerPoolContextProvider>
   );
 }
 
@@ -999,6 +1029,43 @@ const parseDiff = (
   } catch {
     return undefined;
   }
+};
+
+// Parses a patch only when it, its path, or its cache key changes.
+const createPatchParseCache = () => {
+  let last:
+    | {
+        readonly inputs: readonly [string, ThreadChangesPath, string];
+        readonly parsed: ReturnType<typeof parseDiff>;
+      }
+    | undefined;
+  return (patch: string, path: ThreadChangesPath, cacheKey: string) => {
+    if (
+      last !== undefined &&
+      last.inputs[0] === patch &&
+      last.inputs[1] === path &&
+      last.inputs[2] === cacheKey
+    )
+      return last.parsed;
+    last = {
+      inputs: [patch, path, cacheKey],
+      parsed: parseDiff(patch, path, cacheKey),
+    };
+    return last.parsed;
+  };
+};
+
+/**
+ * The parsed files of a patch. A hook, so the diff receives them frozen: the
+ * compiler would otherwise cache the parse with the views that map them.
+ */
+const useParsedPatch = (
+  patch: string | undefined,
+  path: ThreadChangesPath,
+  cacheKey: string,
+) => {
+  const [parse] = React.useState(createPatchParseCache);
+  return patch ? parse(patch, path, cacheKey) : undefined;
 };
 
 const stableVersion = (value: string) => {

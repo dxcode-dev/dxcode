@@ -2,7 +2,9 @@ import {
   ModeProfileOverride,
   ModeProfileOverrideRepository,
   PersistenceUnavailable,
+  type ProfileId,
   Timestamp,
+  type UserId,
 } from "@dx/domain";
 import { Effect, Layer, Option, Schema } from "effect";
 
@@ -42,7 +44,7 @@ export const ModeProfileOverrideRepositoryD1 = (db: D1Database) =>
 
       const listOverrides = Effect.fn(
         "ModeProfileOverrideRepository.listOverrides",
-      )(function* (userId, profileId) {
+      )(function* (userId: UserId, profileId: ProfileId) {
         const result = yield* Effect.tryPromise({
           try: () =>
             db

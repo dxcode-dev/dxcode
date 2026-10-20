@@ -14,42 +14,31 @@ export function useThreadPresentation<T>(
     entry?.presentation.set(key, value);
     return value;
   });
-  const subscribe = React.useCallback(
-    (listener: () => void) => {
-      entry?.presentationListeners.add(listener);
-      return () => entry?.presentationListeners.delete(listener);
-    },
-    [entry],
-  );
-  const snapshot = React.useCallback(
-    () =>
-      entry !== undefined && !entry.disposed
-        ? (entry.presentation.get(key) as T)
-        : value,
-    [entry, key, value],
-  );
+  const subscribe = (listener: () => void) => {
+    entry?.presentationListeners.add(listener);
+    return () => entry?.presentationListeners.delete(listener);
+  };
+  const snapshot = () =>
+    entry !== undefined && !entry.disposed
+      ? (entry.presentation.get(key) as T)
+      : value;
   const retainedValue = React.useSyncExternalStore(
     subscribe,
     snapshot,
     snapshot,
   );
-  const update = React.useCallback<React.Dispatch<React.SetStateAction<T>>>(
-    (next) => {
-      if (entry === undefined) {
-        setValue(next);
-        return;
-      }
-      if (entry.disposed) return;
-      const current = entry.presentation.get(key) as T;
-      const value =
-        typeof next === "function"
-          ? (next as (current: T) => T)(current)
-          : next;
-      entry.presentation.set(key, value);
-      for (const listener of entry.presentationListeners) listener();
-    },
-    [entry, key],
-  );
+  const update: React.Dispatch<React.SetStateAction<T>> = (next) => {
+    if (entry === undefined) {
+      setValue(next);
+      return;
+    }
+    if (entry.disposed) return;
+    const current = entry.presentation.get(key) as T;
+    const value =
+      typeof next === "function" ? (next as (current: T) => T)(current) : next;
+    entry.presentation.set(key, value);
+    for (const listener of entry.presentationListeners) listener();
+  };
   return [retainedValue, update];
 }
 
@@ -80,6 +69,30 @@ export const createPresentationValue = <T>(
   };
 };
 
+const retainedPresentationValue = <T>(
+  entry: React.ContextType<typeof ThreadPresentationContext>,
+  key: string,
+  seed: { readonly initial: T; readonly local?: PresentationValue<T> },
+): PresentationValue<T> => {
+  if (entry === undefined)
+    return seed.local ?? createPresentationValue(seed.initial);
+  if (!entry.presentation.has(key)) entry.presentation.set(key, seed.initial);
+  return {
+    get: () =>
+      entry.disposed ? seed.initial : (entry.presentation.get(key) as T),
+    set: (next) => {
+      if (entry.disposed || Object.is(entry.presentation.get(key), next))
+        return;
+      entry.presentation.set(key, next);
+      for (const listener of entry.presentationListeners) listener();
+    },
+    subscribe: (listener) => {
+      entry.presentationListeners.add(listener);
+      return () => entry.presentationListeners.delete(listener);
+    },
+  };
+};
+
 /**
  * Returns a stable handle to one retained presentation value without
  * subscribing the caller. Only components that render the value should read it
@@ -96,25 +109,7 @@ export function useThreadPresentationValue<T>(
     initial,
     local: entry === undefined ? createPresentationValue(initial) : undefined,
   }));
-  return React.useMemo(() => {
-    if (entry === undefined)
-      return seed.local ?? createPresentationValue(seed.initial);
-    if (!entry.presentation.has(key)) entry.presentation.set(key, seed.initial);
-    return {
-      get: () =>
-        entry.disposed ? seed.initial : (entry.presentation.get(key) as T),
-      set: (next) => {
-        if (entry.disposed || Object.is(entry.presentation.get(key), next))
-          return;
-        entry.presentation.set(key, next);
-        for (const listener of entry.presentationListeners) listener();
-      },
-      subscribe: (listener) => {
-        entry.presentationListeners.add(listener);
-        return () => entry.presentationListeners.delete(listener);
-      },
-    };
-  }, [entry, key, seed]);
+  return retainedPresentationValue(entry, key, seed);
 }
 
 /** Subscribes the calling component to a presentation value. */

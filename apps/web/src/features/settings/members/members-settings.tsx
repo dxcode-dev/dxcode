@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Ellipsis, Plus, Search } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
   DialogContent,
@@ -14,6 +15,7 @@ import {
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
 import { Input } from "../../../shared/ui/input.js";
+import { TimeText } from "../../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../../shared/utils.js";
 import { SettingsCard } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
@@ -33,12 +35,13 @@ const roleBadge = (role: WorkspaceMemberData["role"]) =>
       ? "Workspace Admin"
       : undefined;
 
-const activity = (member: WorkspaceMemberData) =>
+const activity = (member: WorkspaceMemberData, now: number) =>
   member.lastActiveAt === undefined
     ? "Not active yet"
-    : `Active ${formatRelativeTime({
-        epochMilliseconds: Date.parse(member.lastActiveAt),
-      })}`;
+    : `Active ${formatRelativeTime(
+        { epochMilliseconds: Date.parse(member.lastActiveAt) },
+        now,
+      )}`;
 
 const dateLabel = (iso: string) =>
   new Date(iso).toLocaleDateString(undefined, {
@@ -68,14 +71,14 @@ function ConfirmDialog({
     if (confirmation === undefined) return;
     setPending(true);
     setError(undefined);
-    try {
+    const outcome = await settle(async () => {
       await confirmation.run();
       onClose();
-    } catch (cause) {
-      setError(message(cause));
-    } finally {
-      setPending(false);
+    });
+    if (!outcome.ok) {
+      setError(message(outcome.error));
     }
+    setPending(false);
   };
   return (
     <DialogRoot
@@ -245,7 +248,7 @@ function CreateInviteLinkForm({
   const submit = async () => {
     setPending(true);
     setError(undefined);
-    try {
+    const outcome = await settle(async () => {
       await onCreate({
         title,
         ...(expiresAt === ""
@@ -253,11 +256,11 @@ function CreateInviteLinkForm({
           : { expiresAt: new Date(expiresAt).toISOString() }),
       });
       onCancel();
-    } catch (cause) {
-      setError(message(cause));
-    } finally {
-      setPending(false);
+    });
+    if (!outcome.ok) {
+      setError(message(outcome.error));
     }
+    setPending(false);
   };
   return (
     <form
@@ -474,7 +477,9 @@ function MembersList({
                 </div>
                 <span>{member.name}</span>
               </div>
-              <span className="members-activity">{activity(member)}</span>
+              <span className="members-activity">
+                <TimeText text={(now) => activity(member, now)} />
+              </span>
               <div className="members-row-actions">
                 {isAdmin &&
                 member.role !== "owner" &&

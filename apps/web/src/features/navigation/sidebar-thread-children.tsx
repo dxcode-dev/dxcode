@@ -39,10 +39,7 @@ export function SidebarThreadChildrenProvider({
   readonly toggle: (threadId: ThreadData["id"]) => void;
   readonly children: React.ReactNode;
 }) {
-  const value = React.useMemo(
-    () => ({ expanded, toggle, listed }),
-    [expanded, toggle, listed],
-  );
+  const value = { expanded, toggle, listed };
   return (
     <ThreadChildrenExpansionContext.Provider value={value}>
       {children}

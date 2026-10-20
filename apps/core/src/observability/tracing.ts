@@ -2,13 +2,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import {
   Cause,
   Context,
-  Encoding,
+  Effect,
   Exit,
   Fiber,
   Option,
   Predicate,
   Tracer,
 } from "effect";
+import * as Hex from "effect/encoding/Hex";
 import { traceLogger } from "../logging.js";
 
 /**
@@ -212,8 +213,8 @@ export class DxSpan implements Tracer.Span {
     readonly sampled: boolean,
   ) {
     const parentSpan = Option.getOrUndefined(parent);
-    this.traceId = parentSpan?.traceId ?? Encoding.randomHex(32);
-    this.spanId = Encoding.randomHex(16);
+    this.traceId = parentSpan?.traceId ?? Hex.random(32);
+    this.spanId = Hex.random(16);
     this.parentSpanId = parentSpan?.spanId;
     this.budget = isDxSpan(parentSpan)
       ? parentSpan.budget
@@ -300,7 +301,7 @@ export class DxSpan implements Tracer.Span {
 
 /** The span new work should parent to: the running Effect span, then the async context. */
 const currentParent = (): Tracer.AnySpan | undefined => {
-  const fiberSpan = Fiber.getCurrent()?.currentSpan;
+  const fiberSpan = Fiber.getCurrent()?.cache.span;
   return fiberSpan ?? activeSpan.getStore();
 };
 
@@ -329,6 +330,9 @@ const createSpan = (
   return span;
 };
 
+/** Set while `installTracing` checks that Effect spans reach dx. */
+let probing = false;
+
 const dxTracer = Tracer.make({
   span: (options) =>
     createSpan(
@@ -339,7 +343,7 @@ const dxTracer = Tracer.make({
           ? options.parent
           : Option.fromNullishOr(activeSpan.getStore()),
       },
-      true,
+      !probing,
     ),
 });
 
@@ -553,12 +557,21 @@ const logSink: SpanSink = {
 
 /**
  * Effect 4 has no public global tracer setting, and dx runs Effect programs
- * through `Effect.runPromise` at about 200 call sites. The `Tracer.Tracer`
- * reference caches its default under this key on first read; seeding the
- * cache makes every fiber without an explicit tracer use dx's. The install
- * check below detects an Effect upgrade that changes this.
+ * through `Effect.runPromise` at about 200 call sites. A fiber with no
+ * explicit tracer creates its spans with `Tracer.nativeTracer`, an exported
+ * plain object, so dx points that object's `span` at its own tracer. Effect
+ * does not promise the object stays mutable; the probe in `installTracing`
+ * opens a span through a fiber and warns when dx did not create it.
  */
-const referenceDefaultKey = "~effect/Context/defaultValue";
+const effectSpansReachDx = () => {
+  probing = true;
+  try {
+    // The probe span never ends, so no sink records it.
+    return isDxSpan(Effect.runSync(Effect.makeSpan("dx.tracer_install_check")));
+  } finally {
+    probing = false;
+  }
+};
 
 let installed = false;
 
@@ -572,13 +585,13 @@ export const installTracing = () => {
   state.logSink ??= logSink;
   sinks.add(state.logSink);
   try {
-    Object.defineProperty(Tracer.Tracer, referenceDefaultKey, {
-      value: dxTracer,
+    Object.defineProperty(Tracer.nativeTracer, "span", {
+      value: dxTracer.span,
       configurable: true,
       writable: true,
     });
-    if (Context.get(Context.empty(), Tracer.Tracer) !== dxTracer)
-      throw new Error("Effect default tracer was not replaced.");
+    if (!effectSpansReachDx())
+      throw new Error("Effect spans do not reach the dx tracer.");
   } catch {
     traceLogger.warn("Effect tracer installation failed.", {
       event: "effect_tracer_install_failed",

@@ -15,6 +15,7 @@ import { PageShell } from "../../shared/layout/page-shell.js";
 import { useNewThreadSurface } from "../../shared/new-thread-surface.js";
 import { buttonVariants } from "../../shared/ui/button-variants.js";
 import { ThreadTitleText } from "../../shared/ui/thread-title.js";
+import { TimeText } from "../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../shared/utils.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { threadsQueryOptions } from "../threads/thread-queries.js";
@@ -210,7 +211,11 @@ export function ProjectPage() {
                       thread.lastActivityAt.epochMilliseconds,
                     ).toISOString()}
                   >
-                    {formatRelativeTime(thread.lastActivityAt)}
+                    <TimeText
+                      text={(now) =>
+                        formatRelativeTime(thread.lastActivityAt, now)
+                      }
+                    />
                   </time>
                 </Link>
               ))

@@ -44,15 +44,15 @@ export interface E2BRequirements {
 }
 
 const e2bConfiguration = Config.all({
-  apiKey: Config.redacted("E2B_API_KEY"),
-  dxEnv: Config.string("DX_ENV"),
-  template: Config.string("DX_E2B_TEMPLATE").pipe(
+  apiKey: Config.Redacted("E2B_API_KEY"),
+  dxEnv: Config.String("DX_ENV"),
+  template: Config.String("DX_E2B_TEMPLATE").pipe(
     Config.withDefault(DEFAULT_E2B_TEMPLATE),
   ),
-  timeoutMs: Config.number("DX_E2B_TIMEOUT_MS").pipe(
+  timeoutMs: Config.Number("DX_E2B_TIMEOUT_MS").pipe(
     Config.withDefault(DEFAULT_E2B_TIMEOUT_MS),
   ),
-  inactivityMs: Config.number("DX_WORKSPACE_INACTIVITY_MS").pipe(
+  inactivityMs: Config.Number("DX_WORKSPACE_INACTIVITY_MS").pipe(
     Config.withDefault(DEFAULT_WORKSPACE_INACTIVITY_MS),
   ),
 });

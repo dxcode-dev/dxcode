@@ -17,6 +17,7 @@ import {
 import { conciseAge } from "./sharing-format.js";
 import { threadMembersQueryOptions } from "./thread-chat-queries.js";
 import "./thread-sharing.css";
+import { TimeText } from "../../../shared/ui/time-text.js";
 
 /** How dx shows a person: their current name, handle, and picture. */
 interface Person {
@@ -32,6 +33,17 @@ interface MessageAuthorsValue {
   readonly ownerId?: string;
   readonly people: ReadonlyMap<string, Person>;
 }
+
+const peopleById = (
+  participants: readonly Person[],
+  members: readonly Person[] | undefined,
+) => {
+  const people = new Map<string, Person>(
+    participants.map((person) => [person.userId, person]),
+  );
+  for (const member of members ?? []) people.set(member.userId, member);
+  return people;
+};
 
 const MessageAuthorsContext = React.createContext<
   MessageAuthorsValue | undefined
@@ -61,18 +73,13 @@ export function MessageAuthorsProvider({
     enabled: sharing !== undefined,
   });
   const members = membersQuery.data;
-  const value = React.useMemo<MessageAuthorsValue | undefined>(() => {
-    if (!multiplayer) return undefined;
-    const people = new Map<string, Person>(
-      participants.map((person) => [person.userId, person]),
-    );
-    for (const member of members ?? []) people.set(member.userId, member);
-    return {
-      viewerId,
-      ownerId: participants.find((person) => person.owner)?.userId,
-      people,
-    };
-  }, [multiplayer, participants, members, viewerId]);
+  const value: MessageAuthorsValue | undefined = multiplayer
+    ? {
+        viewerId,
+        ownerId: participants.find((person) => person.owner)?.userId,
+        people: peopleById(participants, members),
+      }
+    : undefined;
   return (
     <MessageAuthorsContext value={value}>{children}</MessageAuthorsContext>
   );
@@ -116,6 +123,7 @@ export function MessageAuthorLabel({
 }: {
   readonly author: ResolvedMessageAuthor;
 }) {
+  const sentAt = author.sentAt;
   return (
     <div className="message-author">
       <MemberCard person={author}>
@@ -124,12 +132,9 @@ export function MessageAuthorLabel({
           {author.mine ? "You" : author.name}
         </span>
       </MemberCard>
-      {author.sentAt === undefined ? null : (
-        <time
-          dateTime={author.sentAt}
-          title={new Date(author.sentAt).toLocaleString()}
-        >
-          {conciseAge(author.sentAt)}
+      {sentAt === undefined ? null : (
+        <time dateTime={sentAt} title={new Date(sentAt).toLocaleString()}>
+          <TimeText text={(now) => conciseAge(sentAt, now)} />
         </time>
       )}
     </div>
@@ -227,6 +232,29 @@ export function UserMessageText({
   );
 }
 
+const mentionsOf = (people: ReadonlyMap<string, Person>): MarkdownMentions => {
+  const byHandle = new Map(
+    [...people.values()].flatMap((person) =>
+      person.handle === undefined
+        ? []
+        : [[person.handle.toLowerCase(), person] as const],
+    ),
+  );
+  return {
+    handles: [...byHandle.keys()],
+    render: (handle, text) => {
+      const person = byHandle.get(handle);
+      return person === undefined ? (
+        text
+      ) : (
+        <MemberCard person={person} className="message-mention">
+          @{person.handle ?? person.name}
+        </MemberCard>
+      );
+    },
+  };
+};
+
 /**
  * The agent tags people the way they do, as `@handle`: in a Thread more than
  * one person uses, its replies show those tags as pills too.
@@ -238,29 +266,7 @@ export function AgentMentions({
 }) {
   const context = React.use(MessageAuthorsContext);
   const people = context?.people;
-  const mentions = React.useMemo((): MarkdownMentions | undefined => {
-    if (people === undefined) return undefined;
-    const byHandle = new Map(
-      [...people.values()].flatMap((person) =>
-        person.handle === undefined
-          ? []
-          : [[person.handle.toLowerCase(), person] as const],
-      ),
-    );
-    return {
-      handles: [...byHandle.keys()],
-      render: (handle, text) => {
-        const person = byHandle.get(handle);
-        return person === undefined ? (
-          text
-        ) : (
-          <MemberCard person={person} className="message-mention">
-            @{person.handle ?? person.name}
-          </MemberCard>
-        );
-      },
-    };
-  }, [people]);
+  const mentions = people === undefined ? undefined : mentionsOf(people);
   return mentions === undefined ? (
     children
   ) : (

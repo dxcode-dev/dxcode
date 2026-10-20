@@ -79,6 +79,21 @@ export const publishRealtimeInvalidation = async (
   });
 };
 
+/**
+ * Tells the Thread's viewers its Changes committed. `summaryChanged` also
+ * tells their Thread lists that the totals they show moved.
+ */
+export const publishChangesInvalidation = async (
+  bindings: Pick<Bindings, "DB" | "REALTIME_HUB">,
+  threadId: ThreadId,
+  summaryChanged: boolean,
+): Promise<void> => {
+  await publishRealtimeThreadEvent(bindings, threadId, {
+    type: "changes.invalidated",
+    ...(summaryChanged ? { summaryChanged: true } : {}),
+  });
+};
+
 export const publishRealtimeWorkspaceStatus = async (
   bindings: Pick<Bindings, "DB" | "REALTIME_HUB">,
   threadId: ThreadId,
@@ -97,6 +112,7 @@ const publishRealtimeThreadEvent = async (
     | {
         readonly type: InvalidationType;
         readonly recipients?: RealtimeRecipients;
+        readonly summaryChanged?: true;
       }
     | { readonly type: "workspace.status"; readonly status: WorkspaceStatus },
 ): Promise<void> => {

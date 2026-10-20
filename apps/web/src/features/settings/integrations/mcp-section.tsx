@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Settings } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
   DialogContent,
@@ -559,16 +560,13 @@ export function McpSection({
   const run: Run = async (action, message) => {
     setBusy(true);
     onStatus(undefined);
-    try {
+    const outcome = await settle(async () => {
       await mutation.mutateAsync(action);
       onStatus(message);
-      return true;
-    } catch (cause) {
-      onStatus(errorMessage(cause));
-      return false;
-    } finally {
-      setBusy(false);
-    }
+    });
+    if (!outcome.ok) onStatus(errorMessage(outcome.error));
+    setBusy(false);
+    return outcome.ok;
   };
   const close = () => {
     setAdding(false);

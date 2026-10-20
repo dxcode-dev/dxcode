@@ -33,8 +33,10 @@ authentication](../apps/docs/src/content/docs/deployment/authentication.md).
 
 Alchemy browser OAuth is the default Cloudflare login. Alchemy and Wrangler
 have separate OAuth clients and token stores. dx does not read Wrangler tokens.
-Alchemy refreshes its credential during `alchemy login`; preflight and apply
-use that same profile and access token. For unattended deployment, set
+`pnpm dx:deploy` signs in or refreshes the `dx-selfhost` Alchemy profile with
+`alchemy profile edit` or `alchemy profile refresh` (run through
+`node_modules/alchemy/bin/alchemy.js`, since Alchemy's `alchemy` launcher needs
+Node 24); preflight and apply use that same profile and access token. For unattended deployment, set
 `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, the first-run secrets, and
 `DX_DEPLOY_APPROVE=1`, then run:
 
@@ -133,19 +135,19 @@ permission and zone:
 
 | Permission (Zone scope, on the Portal zone) | API token | Alchemy OAuth scope |
 | --- | --- | --- |
-| Zone → Zone → Read | lists the zone | `zone:read` |
-| Zone → DNS → Edit | lists DNS records | `dns_records:edit` |
-| Zone → Workers Routes → Edit | lists Worker routes | `workers_routes:write` |
+| Zone → Zone → Read | lists the zone | `zone.read` |
+| Zone → DNS → Edit | lists DNS records | `dns.write` |
+| Zone → Workers Routes → Edit | lists Worker routes | `workers-routes.write` |
 
 A read call proves Read access only. When the token can read its own
 policies (an account-owned token, which a deployment that holds Account API
 Tokens can read), the check also confirms Edit on the zone. Otherwise it
-says that Edit is confirmed at apply. Alchemy's default OAuth login lacks
-`dns_records:edit`; the wizard requests it when Portals are on (through
-`ALCHEMY_CLOUDFLARE_OAUTH_EXTRA_SCOPES`, added by dx's Alchemy patch). An
-existing login without it is offered a new sign-in with `alchemy login
---configure`: choose OAuth and the same account, and keep the default
-scopes.
+says that Edit is confirmed at apply. Alchemy's All Scopes login includes
+`dns.write`, and its Basic Scopes login does not; the wizard adds it when
+Portals are on (through `ALCHEMY_CLOUDFLARE_OAUTH_EXTRA_SCOPES`, added by dx's
+Alchemy patch). An existing login without it is offered a new sign-in with
+`alchemy profile edit --reconfigure Cloudflare`: choose OAuth, All Scopes or
+Basic Scopes, and the same account.
 
 ## Upgrade and rotation
 

@@ -2,13 +2,27 @@
 
 ## Alchemy Cloudflare state-store selection
 
-`third-party/alchemy/alchemy@2.0.0-beta.74.patch` modifies Alchemy's Cloudflare
+`third-party/alchemy/alchemy@2.0.0-beta.83.patch` modifies Alchemy's Cloudflare
 state-store login to select the Secrets Store containing Alchemy's token rather
-than an unrelated account store.
+than an unrelated account store, and adds the scopes named in
+`ALCHEMY_CLOUDFLARE_OAUTH_EXTRA_SCOPES` to its Basic and Custom OAuth scope
+choices.
 
 - Source: <https://github.com/alchemy-run/alchemy>
 - License: Apache-2.0
 - License text: <https://github.com/alchemy-run/alchemy/blob/main/LICENSE>
+
+## Ghostty Web rendering
+
+`third-party/ghostty-web/ghostty-web@0.4.0.patch` modifies Ghostty Web's
+renderer to read the terminal viewport once per frame, its resize to
+allocate the canvas once, its Terminal to draw only when something changed
+and not while hidden, and its WebAssembly loader to fetch the module by URL
+without a second, embedded copy.
+
+- Source: <https://github.com/coder/ghostty-web>
+- License: MIT
+- License text: <https://github.com/coder/ghostty-web/blob/main/LICENSE>
 
 ## ElevenLabs UI waveform
 

@@ -462,7 +462,7 @@ export function UsageDashboard({
 export function PersonalUsageSettings(_props: SettingsSectionProps) {
   const { identity } = useAuthenticatedIdentity();
   const formId = React.useId();
-  const initial = React.useMemo(initialRange, []);
+  const [initial] = React.useState(initialRange);
   const [from, setFrom] = React.useState(initial.from);
   const [to, setTo] = React.useState(initial.to);
   const [projectId, setProjectId] = React.useState("");

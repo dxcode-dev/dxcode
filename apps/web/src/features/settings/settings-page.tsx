@@ -265,24 +265,21 @@ type SettingsPageProps =
 const settingsEscapeSnapshot = () => 0;
 
 const useCloseSettingsOnEscape = (closeSettings: () => void) => {
-  const subscribe = React.useCallback(
-    (_onStoreChange: () => void) => {
-      const close = (event: KeyboardEvent) => {
-        if (
-          event.key !== "Escape" ||
-          event.defaultPrevented ||
-          document.querySelector(
-            "[role='dialog'], [role='menu'], .shortcut-recording",
-          ) !== null
-        )
-          return;
-        closeSettings();
-      };
-      window.addEventListener("keydown", close);
-      return () => window.removeEventListener("keydown", close);
-    },
-    [closeSettings],
-  );
+  const subscribe = (_onStoreChange: () => void) => {
+    const close = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Escape" ||
+        event.defaultPrevented ||
+        document.querySelector(
+          "[role='dialog'], [role='menu'], .shortcut-recording",
+        ) !== null
+      )
+        return;
+      closeSettings();
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  };
   React.useSyncExternalStore(
     subscribe,
     settingsEscapeSnapshot,
@@ -290,30 +287,34 @@ const useCloseSettingsOnEscape = (closeSettings: () => void) => {
   );
 };
 
-export function SettingsPage(props: SettingsPageProps) {
-  const { scope, registration } = props;
-  const { identity } = useAuthenticatedIdentity();
-  const queryClient = useQueryClient();
-  const location = useLocation();
-  const navigate = useNavigate();
-  const routeReturnTo = settingsReturnToFromState(location.state);
+/** Where closing settings returns: the opener's link, or GitHub's install callback. */
+const settingsReturnToFor = (location: {
+  readonly state: unknown;
+  readonly searchStr: string;
+}) => {
   const callbackSearch = new URLSearchParams(location.searchStr);
   const callbackReturnTo =
     callbackSearch.get("github") === "installed"
       ? callbackSearch.get("return_to")
       : undefined;
-  const settingsReturnTo =
-    routeReturnTo ??
-    (isValidSettingsReturnTo(callbackReturnTo) ? callbackReturnTo : undefined);
+  return (
+    settingsReturnToFromState(location.state) ??
+    (isValidSettingsReturnTo(callbackReturnTo) ? callbackReturnTo : undefined)
+  );
+};
+
+export function SettingsPage(props: SettingsPageProps) {
+  const { scope, registration } = props;
+  const { identity } = useAuthenticatedIdentity();
+  const queryClient = useQueryClient();
+  const settingsReturnTo = useLocation({ select: settingsReturnToFor });
+  const navigate = useNavigate();
   const workspaceSlug =
     props.scope === "workspace" ? props.workspaceSlug : undefined;
-  const contextRequest = React.useMemo(
-    () =>
-      workspaceSlug === undefined
-        ? ({ scope: "personal" } as const)
-        : ({ scope: "workspace", workspaceSlug } as const),
-    [workspaceSlug],
-  );
+  const contextRequest =
+    workspaceSlug === undefined
+      ? ({ scope: "personal" } as const)
+      : ({ scope: "workspace", workspaceSlug } as const);
   const contextQuery = useQuery(
     settingsContextQueryOptions(identity.id, contextRequest),
   );
@@ -359,22 +360,19 @@ export function SettingsPage(props: SettingsPageProps) {
         : contextQuery.error instanceof Error
           ? contextQuery.error.message
           : "The requested settings could not be loaded.";
-  const workspaceChanged = React.useCallback(
-    (nextWorkspace: SettingsWorkspaceData) => {
-      queryClient.setQueryData(
-        settingsKeys.context(identity.id, contextRequest),
-        {
-          activeScope: scope,
-          workspace: nextWorkspace,
-        },
-      );
-    },
-    [contextRequest, identity.id, queryClient, scope],
-  );
-  const closeSettings = React.useCallback(() => {
+  const workspaceChanged = (nextWorkspace: SettingsWorkspaceData) => {
+    queryClient.setQueryData(
+      settingsKeys.context(identity.id, contextRequest),
+      {
+        activeScope: scope,
+        workspace: nextWorkspace,
+      },
+    );
+  };
+  const closeSettings = () => {
     const destination = settingsReturnTo ?? "/";
     void navigate({ href: destination, replace: true });
-  }, [navigate, settingsReturnTo]);
+  };
   useCloseSettingsOnEscape(closeSettings);
 
   return (

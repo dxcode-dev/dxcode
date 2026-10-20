@@ -61,27 +61,27 @@ export const PORTAL_PERMISSIONS = Object.freeze([
   {
     label: "Zone Read",
     groups: ["Zone Read", "Zone Write", "Zone Edit"],
-    scope: "zone:read",
+    scope: "zone.read",
   },
   {
     label: "DNS Edit",
     groups: ["DNS Write", "DNS Edit"],
-    scope: "dns_records:edit",
+    scope: "dns.write",
   },
   {
     label: "Workers Routes Edit",
     groups: ["Workers Routes Write", "Workers Routes Edit"],
-    scope: "workers_routes:write",
+    scope: "workers-routes.write",
   },
 ]);
 
-/** OAuth scopes `alchemy login` must request for a deployment with Portals. */
+/** OAuth scopes the Alchemy login must request for a deployment with Portals. */
 export const PORTAL_OAUTH_SCOPES = Object.freeze(
   PORTAL_PERMISSIONS.map(({ scope }) => scope),
 );
 
 export const ALCHEMY_OAUTH_RELOGIN =
-  "rerun pnpm dx:deploy, which offers to sign in again, or run `ALCHEMY_CLOUDFLARE_OAUTH_EXTRA_SCOPES=dns_records:edit pnpm exec alchemy login --profile dx-selfhost --configure`, choose OAuth and the same account, and keep the default scopes";
+  "rerun pnpm dx:deploy, which offers to sign in again, or run `ALCHEMY_CLOUDFLARE_OAUTH_EXTRA_SCOPES=dns.write node node_modules/alchemy/bin/alchemy.js profile edit --profile dx-selfhost --reconfigure Cloudflare`, choose OAuth, All Scopes or Basic Scopes, and the same account";
 
 /** The Portal OAuth scopes the Alchemy login was not granted. */
 export const missingPortalOAuthScopes = (auth) =>

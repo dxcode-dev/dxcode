@@ -4,6 +4,7 @@ import { DateTime } from "effect";
 import { Pause, Play, Plus, RefreshCw, RotateCw, Trash2 } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { settle } from "../../../shared/settle.js";
 import { Badge } from "../../../shared/ui/badge.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
@@ -409,16 +410,14 @@ export function PluginTriggersSettings() {
   const run = async (action: TriggersMutationAction, success: string) => {
     setBusy(true);
     setMessage(undefined);
-    try {
+    const outcome = await settle(async () => {
       const result = await mutation.mutateAsync(action);
       setMessage(success);
       return result;
-    } catch (error) {
-      setMessage(errorMessage(error));
-      return undefined;
-    } finally {
-      setBusy(false);
-    }
+    });
+    if (!outcome.ok) setMessage(errorMessage(outcome.error));
+    setBusy(false);
+    return outcome.ok ? outcome.value : undefined;
   };
   const runCapability = async (
     action: TriggerCapabilityAction,
@@ -426,18 +425,15 @@ export function PluginTriggersSettings() {
   ) => {
     setBusy(true);
     setMessage(undefined);
-    try {
+    const outcome = await settle(async () => {
       const result = await capabilityMutation.mutateAsync(action);
       setCapability(result.capability);
       setMessage(success);
-      return true;
-    } catch (error) {
-      setMessage(errorMessage(error));
-      return false;
-    } finally {
-      setBusy(false);
-      capabilityMutation.reset();
-    }
+    });
+    if (!outcome.ok) setMessage(errorMessage(outcome.error));
+    setBusy(false);
+    capabilityMutation.reset();
+    return outcome.ok;
   };
   const confirm = () => {
     if (confirmation === undefined) return;

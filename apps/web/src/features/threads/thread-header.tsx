@@ -70,7 +70,7 @@ export function ThreadHeader({
   project,
   rightPaneCollapsed = false,
   onToggleRightPane,
-  model,
+  transcript,
   shareOpen: controlledShareOpen,
   onShareOpenChange,
 }: {
@@ -78,7 +78,8 @@ export function ThreadHeader({
   readonly project?: Pick<ProjectData, "name">;
   readonly rightPaneCollapsed?: boolean;
   readonly onToggleRightPane?: () => void;
-  readonly model?: TranscriptViewModel;
+  /** Reads the shown transcript, for an export. */
+  readonly transcript?: () => TranscriptViewModel;
   /** The Share dialog, when the Thread page also opens it (from `@`). */
   readonly shareOpen?: boolean;
   readonly onShareOpenChange?: (open: boolean) => void;
@@ -138,11 +139,11 @@ export function ThreadHeader({
           <ThreadTitleText thread={thread} maxCharacters={60} />
         </strong>
         {own ? null : <FollowButton thread={thread} />}
-        {model ? (
+        {transcript ? (
           <ThreadMenu
             thread={thread}
             project={project}
-            model={model}
+            transcript={transcript}
             onOpenShare={openShare}
           />
         ) : null}

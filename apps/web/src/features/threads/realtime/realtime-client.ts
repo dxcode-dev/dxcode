@@ -12,9 +12,8 @@ import { invalidateThreadFileTrees } from "../files/files-queries.js";
 import {
   invalidateAllThreadQueries,
   invalidateReadinessQuery,
-  invalidateThreadLists,
-  invalidateThreadQueries,
 } from "../thread-queries.js";
+import { ThreadListRows } from "../thread-row-queries.js";
 
 interface RealtimeSocket {
   readonly readyState: number;
@@ -44,6 +43,7 @@ export class RealtimeClient {
   readonly #queryClient: QueryClient;
   readonly #userId: UserId;
   readonly #socketFactory: SocketFactory;
+  readonly #rows: ThreadListRows;
   #socket?: RealtimeSocket;
   #cursor?: number;
   #reconnect?: ReturnType<typeof setTimeout>;
@@ -66,6 +66,7 @@ export class RealtimeClient {
     this.#queryClient = queryClient;
     this.#userId = userId;
     this.#socketFactory = socketFactory;
+    this.#rows = new ThreadListRows(queryClient, userId);
   }
 
   start() {
@@ -82,6 +83,7 @@ export class RealtimeClient {
     this.#heartbeat = undefined;
     this.#socket?.close(1000, "provider-unmounted");
     this.#socket = undefined;
+    this.#rows.stop();
     this.#clearWorkspaceStatuses();
   }
 
@@ -136,13 +138,20 @@ export class RealtimeClient {
       url.searchParams.set("cursor", String(this.#cursor));
     const socket = this.#socketFactory(url.toString());
     this.#socket = socket;
-    socket.onmessage = (event) => this.#receive(event.data);
+    // stop() closes a socket, but its close and any frame already queued can
+    // arrive after start() opened the next one. A replaced socket must not
+    // reconnect, clear the live socket's heartbeat or statuses, or advance
+    // the cursor into a false revision gap.
+    socket.onmessage = (event) => {
+      if (this.#socket === socket) this.#receive(event.data);
+    };
     socket.onopen = () => {
-      this.#attempt = 0;
+      if (this.#socket === socket) this.#attempt = 0;
     };
     socket.onerror = () => socket.close();
     socket.onclose = () => {
-      if (this.#socket === socket) this.#socket = undefined;
+      if (this.#socket !== socket) return;
+      this.#socket = undefined;
       this.#clearWorkspaceStatuses();
       if (this.#heartbeat !== undefined) clearInterval(this.#heartbeat);
       this.#heartbeat = undefined;
@@ -197,11 +206,7 @@ export class RealtimeClient {
         this.#deniedTopic = undefined;
         this.#send("presence.join", `thread:${event.threadId}`);
       }
-      void invalidateThreadQueries(
-        this.#queryClient,
-        this.#userId,
-        event.threadId,
-      );
+      this.#rows.threadChanged(event.threadId);
     } else if (event.type === "readiness.invalidated") {
       void invalidateReadinessQuery(
         this.#queryClient,
@@ -211,7 +216,7 @@ export class RealtimeClient {
     } else if (event.type === "changes.invalidated") {
       void invalidateChangesRanges(this.#queryClient, event.threadId);
       void invalidateThreadFileTrees(this.#queryClient, event.threadId);
-      void invalidateThreadLists(this.#queryClient, this.#userId);
+      this.#rows.changesChanged(event.threadId, event.summaryChanged === true);
     } else if (event.type === "notifications.invalidated") {
       void invalidateNotifications(this.#queryClient, this.#userId);
     } else if (event.type === "sidebar.invalidated") {
@@ -239,7 +244,7 @@ export class RealtimeClient {
           (userId) => userId !== this.#userId && !previous.has(userId),
         )
       )
-        void invalidateThreadQueries(this.#queryClient, this.#userId, threadId);
+        this.#rows.threadChanged(threadId);
       this.#presenceListeners.get(threadId)?.forEach((listener) => {
         listener();
       });

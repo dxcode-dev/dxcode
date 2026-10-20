@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, FileText, Plus, RefreshCw, Trash2 } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { settle } from "../../../shared/settle.js";
 import { Badge } from "../../../shared/ui/badge.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
@@ -304,13 +305,10 @@ function SkillCard({
 export function SkillsSettings({ workspaceSlug }: SettingsSectionProps) {
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
-  const target = React.useMemo<SkillsTarget>(
-    () =>
-      workspaceSlug === undefined
-        ? { scope: "personal" }
-        : { scope: "workspace", workspaceSlug },
-    [workspaceSlug],
-  );
+  const target: SkillsTarget =
+    workspaceSlug === undefined
+      ? { scope: "personal" }
+      : { scope: "workspace", workspaceSlug };
   const state = useQuery(skillsQueryOptions(identity.id, target));
   const mutation = useMutation(
     skillsMutationOptions(queryClient, identity.id, target),
@@ -332,27 +330,28 @@ export function SkillsSettings({ workspaceSlug }: SettingsSectionProps) {
   const run = async (action: SkillsMutationAction, success: string) => {
     setBusy(true);
     setMessage(undefined);
-    try {
+    const outcome = await settle(async () => {
       await mutation.mutateAsync(action);
       setMessage(success);
-    } catch (error) {
-      setMessage(errorMessage(error));
-    } finally {
-      setBusy(false);
-      mutation.reset();
+    });
+    if (!outcome.ok) {
+      setMessage(errorMessage(outcome.error));
     }
+    setBusy(false);
+    mutation.reset();
   };
   const selectFiles = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (!event.target.files?.length) return;
-    try {
-      const nextBundle = await filesBundle(event.target.files);
+    const files = event.target.files;
+    if (!files?.length) return;
+    const outcome = await settle(async () => {
+      const nextBundle = await filesBundle(files);
       bundle.current = nextBundle;
       setPreview(await previewMutation.mutateAsync(nextBundle));
-    } catch (error) {
-      setMessage(errorMessage(error));
-    } finally {
-      previewMutation.reset();
+    });
+    if (!outcome.ok) {
+      setMessage(errorMessage(outcome.error));
     }
+    previewMutation.reset();
     event.target.value = "";
   };
   const confirm = async () => {
@@ -483,11 +482,12 @@ export function SkillsSettings({ workspaceSlug }: SettingsSectionProps) {
                 onAction={(action, success) => void run(action, success)}
                 onChooseUpdate={choose}
                 onExport={async (skill) => {
-                  try {
-                    return await exportMutation.mutateAsync(skill.id);
-                  } finally {
-                    exportMutation.reset();
-                  }
+                  const outcome = await settle(() =>
+                    exportMutation.mutateAsync(skill.id),
+                  );
+                  exportMutation.reset();
+                  if (!outcome.ok) throw outcome.error;
+                  return outcome.value;
                 }}
               />
             ))}

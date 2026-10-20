@@ -3,7 +3,7 @@ import type { Timestamp } from "@dx/domain";
 const at = (timestamp: Timestamp) => timestamp.epochMilliseconds;
 
 /** "6d 23h", "2h 5m", or "12m" until `until`. */
-export const formatRemaining = (until: Timestamp, now = Date.now()) => {
+export const formatRemaining = (until: Timestamp, now: number) => {
   const minutes = Math.max(0, Math.floor((at(until) - now) / 60_000));
   const days = Math.floor(minutes / (24 * 60));
   const hours = Math.floor((minutes % (24 * 60)) / 60);
@@ -24,7 +24,7 @@ export const formatUntil = (until: Timestamp) =>
   untilFormat.format(new Date(at(until)));
 
 /** `now`, `10m`, `3h`, `2d`, `5w`: how long ago, in one short unit. */
-export const conciseAge = (iso: string, now = Date.now()) => {
+export const conciseAge = (iso: string, now: number) => {
   const minutes = Math.floor((now - Date.parse(iso)) / 60_000);
   if (!Number.isFinite(minutes) || minutes < 1) return "now";
   if (minutes < 60) return `${minutes}m`;

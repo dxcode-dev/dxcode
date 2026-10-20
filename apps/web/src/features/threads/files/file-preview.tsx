@@ -64,25 +64,15 @@ const DocumentReferences = ({
   readonly children: React.ReactNode;
 }) => {
   const resolveWorkspaceLink = React.useContext(MarkdownFileLinkContext);
-  const resolveImage = React.useCallback(
-    (src: string) => {
-      const file = referencedFile(location, src);
-      return file === undefined
-        ? undefined
-        : sandboxFileUrl(threadId, file.path);
-    },
-    [location, threadId],
-  );
-  const resolveLink = React.useMemo(
-    () =>
-      resolveWorkspaceLink === undefined
-        ? undefined
-        : (href: string) =>
-            resolveWorkspaceLink(
-              referencedFile(location, href)?.fileUrl ?? href,
-            ),
-    [location, resolveWorkspaceLink],
-  );
+  const resolveImage = (src: string) => {
+    const file = referencedFile(location, src);
+    return file === undefined ? undefined : sandboxFileUrl(threadId, file.path);
+  };
+  const resolveLink =
+    resolveWorkspaceLink === undefined
+      ? undefined
+      : (href: string) =>
+          resolveWorkspaceLink(referencedFile(location, href)?.fileUrl ?? href);
   return (
     <MarkdownImageSourceContext value={resolveImage}>
       <MarkdownFileLinkContext value={resolveLink}>
@@ -102,10 +92,7 @@ const DelimitedTable = ({
   readonly path: string;
   readonly content: string;
 }) => {
-  const rows = React.useMemo(
-    () => parseDelimited(content, delimiterFor(path, content)),
-    [content, path],
-  );
+  const rows = parseDelimited(content, delimiterFor(path, content));
   if (rows.length === 0)
     return (
       <div className="thread-files-state" role="status">

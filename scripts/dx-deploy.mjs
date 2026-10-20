@@ -21,9 +21,12 @@ import {
   collectAdminPassword,
 } from "../deploy/selfhost/admin-credentials.mjs";
 import {
+  alchemyCloudflareConnected,
+  alchemyCloudflareLoginCommands,
   loadAlchemyCloudflareAuth,
   preflightCloudflareContainers,
   preflightCloudflareDeployment,
+  runAlchemyCli,
 } from "../deploy/selfhost/cloudflare-auth.mjs";
 import {
   FIRST_PARTY_PLUGIN_IDS,
@@ -594,32 +597,45 @@ export const runDxDeploy = async ({
       : portalsFlag
         ? await yes(PORTALS_PROMPT, existing.portalDomain !== undefined)
         : existing.portalDomain !== undefined;
+  // Alchemy's prompts own the terminal while they run.
+  const alchemy = (args) => {
+    rl.close();
+    try {
+      return runAlchemyCli(args, {
+        ...process.env,
+        ...(portalsWanted
+          ? {
+              ALCHEMY_CLOUDFLARE_OAUTH_EXTRA_SCOPES:
+                PORTAL_OAUTH_SCOPES.join(" "),
+            }
+          : {}),
+      });
+    } finally {
+      rl = createInterface({ input: stdin, output: stdout });
+    }
+  };
   const alchemyLogin = (configure = false) => {
-    const login = spawnSync(
-      "pnpm",
-      [
-        "exec",
-        "alchemy",
-        "login",
-        "--profile",
-        "dx-selfhost",
-        ...(configure ? ["--configure"] : []),
-      ],
-      {
-        stdio: "inherit",
-        env: {
-          ...process.env,
-          ...(portalsWanted
-            ? {
-                ALCHEMY_CLOUDFLARE_OAUTH_EXTRA_SCOPES:
-                  PORTAL_OAUTH_SCOPES.join(" "),
-              }
-            : {}),
-        },
-      },
-    );
-    if (login.error) throw login.error;
-    if (login.status !== 0) throw new Error("Alchemy Cloudflare login failed.");
+    for (const args of alchemyCloudflareLoginCommands({
+      configure,
+      environment,
+    })) {
+      if (alchemy(args)) continue;
+      // A refresh fails for a login Alchemy can no longer renew, such as one
+      // from before its beta.83 OAuth client; sign in again instead.
+      if (
+        args[1] === "refresh" &&
+        alchemy(
+          alchemyCloudflareLoginCommands({ configure: true, environment })[0],
+        )
+      )
+        continue;
+      throw new Error("Alchemy Cloudflare login failed.");
+    }
+    // Cancelling the browser step still exits 0.
+    if (!alchemyCloudflareConnected({ environment }))
+      throw new Error(
+        "Cloudflare sign-in did not finish. Run pnpm dx:deploy again and complete the browser authorization.",
+      );
   };
   if (!environment.CLOUDFLARE_API_TOKEN) alchemyLogin();
   let cloudflareAuth = loadAlchemyCloudflareAuth({ environment });

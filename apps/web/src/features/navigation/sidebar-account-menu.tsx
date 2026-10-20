@@ -1,6 +1,6 @@
 import { Menu } from "@base-ui/react/menu";
 import type { PersonalAccountData, SettingsContextData } from "@dx/api";
-import { useLocation, useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import {
   Building2,
   ChevronsUpDown,
@@ -25,7 +25,8 @@ export function SidebarAccountMenu({
   readonly onNavigate: () => void;
 }) {
   const auth = useIdentity();
-  const returnTo = useLocation({ select: (location) => location.href });
+  // Read when a menu item runs, so navigating does not re-render the menu.
+  const router = useRouter();
   const navigate = useNavigate();
   const commandSurfaces = useCommandPaletteSurface();
   const workspace = settingsContext?.workspace;
@@ -98,7 +99,9 @@ export function SidebarAccountMenu({
                     void navigate({
                       to: "/workspaces/$workspaceSlug",
                       params: { workspaceSlug: workspace.shortName },
-                      state: settingsNavigationState(returnTo),
+                      state: settingsNavigationState(
+                        router.state.location.href,
+                      ),
                     });
                   }}
                 >
@@ -111,7 +114,7 @@ export function SidebarAccountMenu({
                   onNavigate();
                   void navigate({
                     to: "/settings",
-                    state: settingsNavigationState(returnTo),
+                    state: settingsNavigationState(router.state.location.href),
                   });
                 }}
               >

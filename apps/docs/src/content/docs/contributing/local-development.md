@@ -3,7 +3,7 @@ title: Local development
 description: Run dx locally with deterministic fixtures and no billable calls.
 ---
 
-Local development requires Node.js 22.19 or newer and pnpm 9.15.
+Local development requires Node.js 22.19 or newer and pnpm 12.14.
 
 ```sh
 pnpm install --frozen-lockfile

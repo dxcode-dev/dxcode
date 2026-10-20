@@ -68,7 +68,7 @@ export const SourceAuthorityRepositoryD1 = (db: D1Database) =>
     SourceAuthorityRepository.of({
       resolve: (threadId, actorUserId, _request, targetProviderRepositoryId) =>
         Effect.tryPromise({
-          try: async () => {
+          try: async (): Promise<RuntimeSourceAuthority> => {
             const row = await db
               .prepare(`
                 SELECT thread.project_id, project.owner_user_id,

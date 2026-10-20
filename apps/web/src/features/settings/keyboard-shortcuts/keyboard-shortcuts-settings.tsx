@@ -252,16 +252,13 @@ export function KeyboardShortcutsSettings({
   );
   // Unmounting (or leaving the shortcuts screen) ends any recording session so
   // the global dispatcher stops capturing keys.
-  const subscribe = React.useCallback(
-    (onStoreChange: () => void) => {
-      const unsubscribe = registry.subscribe(onStoreChange);
-      return () => {
-        registry.cancelRecording();
-        unsubscribe();
-      };
-    },
-    [registry],
-  );
+  const subscribe = (onStoreChange: () => void) => {
+    const unsubscribe = registry.subscribe(onStoreChange);
+    return () => {
+      registry.cancelRecording();
+      unsubscribe();
+    };
+  };
   const snapshot = React.useSyncExternalStore(
     subscribe,
     registry.getSnapshot,

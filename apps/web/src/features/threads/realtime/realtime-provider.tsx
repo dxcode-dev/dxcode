@@ -31,40 +31,25 @@ const presenceSnapshot = () => undefined;
 
 export const useThreadPresence = (threadId: ThreadId) => {
   const client = React.use(RealtimeContext);
-  const subscribe = React.useCallback(
-    (_onStoreChange: () => void) =>
-      client?.observeThread(threadId) ?? (() => undefined),
-    [client, threadId],
-  );
+  const subscribe = (_onStoreChange: () => void) =>
+    client?.observeThread(threadId) ?? (() => undefined);
   React.useSyncExternalStore(subscribe, presenceSnapshot, presenceSnapshot);
 };
 
 export const useThreadWorkspaceStatus = (threadId: ThreadId) => {
   const client = React.use(RealtimeContext);
-  const subscribe = React.useCallback(
-    (onStoreChange: () => void) =>
-      client?.observeWorkspaceStatus(threadId, onStoreChange) ??
-      (() => undefined),
-    [client, threadId],
-  );
-  const snapshot = React.useCallback(
-    () => client?.workspaceStatus(threadId),
-    [client, threadId],
-  );
+  const subscribe = (onStoreChange: () => void) =>
+    client?.observeWorkspaceStatus(threadId, onStoreChange) ??
+    (() => undefined);
+  const snapshot = () => client?.workspaceStatus(threadId);
   return React.useSyncExternalStore(subscribe, snapshot, snapshot);
 };
 
 /** Users who have this Thread open now; subscribes without joining. */
 export const useThreadPresentUsers = (threadId: ThreadId) => {
   const client = React.use(RealtimeContext);
-  const subscribe = React.useCallback(
-    (onStoreChange: () => void) =>
-      client?.observePresentUsers(threadId, onStoreChange) ?? (() => undefined),
-    [client, threadId],
-  );
-  const snapshot = React.useCallback(
-    () => client?.presentUsers(threadId),
-    [client, threadId],
-  );
+  const subscribe = (onStoreChange: () => void) =>
+    client?.observePresentUsers(threadId, onStoreChange) ?? (() => undefined);
+  const snapshot = () => client?.presentUsers(threadId);
   return React.useSyncExternalStore(subscribe, snapshot, snapshot);
 };

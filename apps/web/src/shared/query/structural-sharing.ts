@@ -8,13 +8,29 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   Object.getPrototypeOf(value) === Object.prototype;
 
 /**
+ * An array's records by `id`, when every item is a record with a unique
+ * string `id`, so a reordered list keeps each moved record.
+ */
+const recordsById = (items: unknown[]) => {
+  const byId = new Map<string, unknown>();
+  for (const item of items) {
+    if (!isPlainObject(item) || typeof item.id !== "string") return undefined;
+    if (byId.has(item.id)) return undefined;
+    byId.set(item.id, item);
+  }
+  return byId;
+};
+
+/**
  * TanStack Query's structural sharing, extended to Effect values.
  *
  * Responses are decoded with Effect Schema, so timestamps arrive as `DateTime`
  * instances. TanStack's `replaceEqualDeep` only reuses plain objects and
  * arrays, so every refetch of unchanged data produced new objects all the way
  * up and re-rendered every consumer. This keeps the previous value wherever the
- * new one is deeply equal, comparing Effect values with `Equal.equals`.
+ * new one is deeply equal, comparing Effect values with `Equal.equals`. Arrays
+ * of records with IDs pair records by ID, so a row that moves keeps the
+ * records it passed.
  */
 export const shareEqualData = <T>(previous: unknown, next: T, depth = 0): T => {
   if (previous === next) return previous as T;
@@ -32,10 +48,16 @@ export const shareEqualData = <T>(previous: unknown, next: T, depth = 0): T => {
     string | number,
     unknown
   >;
+  const byId = array ? recordsById(previous as unknown[]) : undefined;
   let equalItems = 0;
   for (let index = 0; index < keys.length; index++) {
     const key = array ? index : (keys[index] as string);
-    const shared = shareEqualData(before[key], after[key], depth + 1);
+    const item = after[key];
+    const counterpart =
+      byId !== undefined && isPlainObject(item) && typeof item.id === "string"
+        ? byId.get(item.id)
+        : before[key];
+    const shared = shareEqualData(counterpart, item, depth + 1);
     // Define rather than assign: JSON may carry an own "__proto__" key, and
     // assignment would invoke Object.prototype's setter instead.
     Object.defineProperty(copy, key, {

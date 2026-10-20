@@ -10,7 +10,7 @@ import {
   WorkspaceProjectDefaults,
 } from "@dx/domain";
 import { DateTime, Effect, Layer, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/sql/SqlClient";
 
 const PersonalDefaultsRow = Schema.Struct({
   user_id: Schema.String,

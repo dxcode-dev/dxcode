@@ -6,6 +6,7 @@ import * as React from "react";
 import { Avatar } from "../../shared/ui/avatar.js";
 import { Button } from "../../shared/ui/button.js";
 import { CommandSurfaceDialog } from "../../shared/ui/command-surface-dialog.js";
+import { TimeText } from "../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../shared/utils.js";
 import { threadSearchQueryOptions } from "../threads/thread-queries.js";
 
@@ -135,9 +136,14 @@ function ThreadSearchResult({
           />
           {item.ownerName}
           <span aria-hidden="true">·</span>
-          {formatRelativeTime({
-            epochMilliseconds: Date.parse(item.lastActivityAt),
-          })}
+          <TimeText
+            text={(now) =>
+              formatRelativeTime(
+                { epochMilliseconds: Date.parse(item.lastActivityAt) },
+                now,
+              )
+            }
+          />
           <span className="thread-search-badge">
             {item.visibility === "private" ? (
               <>
@@ -192,10 +198,10 @@ export function ThreadSearchDialog({
     undefined,
   );
   const inputRef = React.useRef<HTMLInputElement | null>(null);
-  const focusCombobox = React.useCallback((node: HTMLInputElement | null) => {
+  const focusCombobox = (node: HTMLInputElement | null) => {
     inputRef.current = node;
     node?.focus();
-  }, []);
+  };
   const query = submitted.trim() === "" ? EMPTY_QUERY : submitted.trim();
   const search = useInfiniteQuery({
     ...threadSearchQueryOptions(userId, query),

@@ -72,7 +72,7 @@ const workerRuntimeDependencies = [
   "better-auth/plugins",
   "e2b",
   "effect",
-  "effect/unstable/sql/SqlClient",
+  "effect/sql/SqlClient",
   "hono",
   "hono/route",
   "jose",

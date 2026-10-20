@@ -46,9 +46,10 @@ function TranscriptTurnContent({
   turn,
   rows,
   renderRow,
-  processing = turn.status === "active",
+  processing: processingProp,
   defaultWorkExpanded = false,
 }: TranscriptTurnProps) {
+  const processing = processingProp ?? turn.status === "active";
   const [workExpanded, setWorkExpanded] = useThreadPresentation(
     `work:${turn.id}`,
     defaultWorkExpanded,

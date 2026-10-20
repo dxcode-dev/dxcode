@@ -5,6 +5,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
 import type { ModelRoutingTarget } from "../../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { settle } from "../../../shared/settle.js";
 import {
   modelRoutingChoicesQueryOptions,
   modeProfileQueryOptions,
@@ -58,8 +59,9 @@ export const ModeDialSettings = ({
   const dirty = dirtyModes.length > 0;
   const updateDrafts = (
     next: Partial<Record<ModeId, ModeDraft>>,
-    baseline = profile.data,
+    savedProfile?: typeof profile.data,
   ) => {
+    const baseline = savedProfile ?? profile.data;
     setDrafts(next);
     onDirtyChange(
       MODES.some((mode) => {
@@ -101,7 +103,7 @@ export const ModeDialSettings = ({
     const baseline = profile.data;
     setSaving(true);
     setError(undefined);
-    try {
+    const outcome = await settle(async () => {
       // Profile responses contain all modes, so apply writes sequentially.
       let remaining = { ...drafts };
       const saveDraft = async (mode: ModeId) => {
@@ -122,11 +124,11 @@ export const ModeDialSettings = ({
         (previous, mode) => previous.then(() => saveDraft(mode)),
         Promise.resolve(),
       );
-    } catch (cause) {
-      setError(message(cause));
-    } finally {
-      setSaving(false);
+    });
+    if (!outcome.ok) {
+      setError(message(outcome.error));
     }
+    setSaving(false);
   };
   const reset = async () => {
     setError(undefined);

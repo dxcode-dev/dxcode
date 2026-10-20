@@ -8,6 +8,7 @@ import type { UserId } from "@dx/domain";
 import { ChevronRight, Settings2, UserRoundX, UsersRound } from "lucide-react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Avatar, ParticipantStack } from "../../../shared/ui/avatar.js";
+import { TimeText } from "../../../shared/ui/time-text.js";
 import { useThreadPresentUsers } from "../realtime/realtime-provider.js";
 import { formatRemaining } from "./sharing-format.js";
 import { useUpdateThreadSharing } from "./sharing-mutations.js";
@@ -53,6 +54,7 @@ export function ThreadParticipants({
   if (participants.length === 0 && thread.sharing === undefined) return null;
   const own = thread.access === undefined || thread.access === "owner";
   const multiplayer = thread.sharing?.workspaceAccess === "contribute";
+  const contributeUntil = thread.sharing?.contributeUntil;
   const liveCount = participants.filter(({ userId }) =>
     present.has(userId),
   ).length;
@@ -113,11 +115,14 @@ export function ThreadParticipants({
               ))}
             </Menu.Group>
             {own ? <Menu.Separator className="thread-menu-separator" /> : null}
-            {own && multiplayer && thread.sharing?.contributeUntil ? (
+            {own && multiplayer && contributeUntil ? (
               <Menu.SubmenuRoot>
                 <Menu.SubmenuTrigger className="thread-menu-item">
                   <span>
-                    Remaining: {formatRemaining(thread.sharing.contributeUntil)}
+                    Remaining:{" "}
+                    <TimeText
+                      text={(now) => formatRemaining(contributeUntil, now)}
+                    />
                   </span>
                   <ChevronRight />
                 </Menu.SubmenuTrigger>

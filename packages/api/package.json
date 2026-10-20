@@ -1,7 +1,7 @@
 {
   "name": "@dx/api",
   "private": true,
-  "version": "0.2.25",
+  "version": "0.2.26",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "exports": {
@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@dx/domain": "workspace:^",
-    "effect": "4.0.0-rc.110"
+    "effect": "4.0.5"
   },
   "repository": {
     "type": "git",
