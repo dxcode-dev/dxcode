@@ -245,6 +245,39 @@ export const assertDockerReady = (
     );
 };
 
+// Wrangler's wording when the Worker version is live but the container
+// application settings were not applied; it asks for the same deploy again.
+const containerSettingsInterrupted =
+  "could not finish applying its Durable Object-managed Container application settings";
+
+const sleep = (milliseconds) =>
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+
+/**
+ * Runs `deploy` again, up to three runs in all, only while Wrangler reports
+ * that it could not finish the container settings. Any other result returns.
+ */
+export const retryContainerSettings = ({
+  deploy,
+  wait = sleep,
+  runs = 3,
+  delayMilliseconds = 20_000,
+}) => {
+  for (let run = 1; ; run += 1) {
+    const result = deploy();
+    if (
+      result.status === 0 ||
+      run === runs ||
+      !`${result.stdout}${result.stderr}`.includes(containerSettingsInterrupted)
+    )
+      return result;
+    process.stderr.write(
+      `Wrangler did not finish the Orb Worker's container settings; running the same deploy again (${run + 1} of ${runs}).\n`,
+    );
+    wait(delayMilliseconds * run);
+  }
+};
+
 /** Builds the image and deploys the Orb Worker; idempotent. */
 export const deployOrbWorker = ({
   workerName,
@@ -264,11 +297,14 @@ export const deployOrbWorker = ({
     `${JSON.stringify(orbWorkerConfig({ workerName, workspaceRoot }), null, 2)}\n`,
     { mode: 0o600 },
   );
-  const result = wrangler(
-    workspaceRoot,
-    ["deploy", "--config", configPath],
-    dockerEnvironment,
-  );
+  const result = retryContainerSettings({
+    deploy: () =>
+      wrangler(
+        workspaceRoot,
+        ["deploy", "--config", configPath],
+        dockerEnvironment,
+      ),
+  });
   if (result.status !== 0)
     throw new Error(
       `Orb Worker deployment failed (wrangler exit ${result.status}).\n${result.stderr.slice(-4000)}`,
@@ -276,7 +312,12 @@ export const deployOrbWorker = ({
   return { workerName };
 };
 
-const cloudflareApi = async ({ accountId, apiToken, fetch }, path, init) => {
+const cloudflareApi = async (
+  { accountId, apiToken, fetch },
+  path,
+  init,
+  { missing = init?.method === "DELETE" } = {},
+) => {
   const response = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${accountId}${path}`,
     {
@@ -284,7 +325,7 @@ const cloudflareApi = async ({ accountId, apiToken, fetch }, path, init) => {
       headers: { Authorization: `Bearer ${apiToken}`, ...init?.headers },
     },
   );
-  if (init?.method === "DELETE" && response.status === 404) return undefined;
+  if (missing && response.status === 404) return undefined;
   const body = await response.json();
   if (!response.ok || body.success !== true)
     throw new Error(
@@ -292,6 +333,24 @@ const cloudflareApi = async ({ accountId, apiToken, fetch }, path, init) => {
     );
   return body.result;
 };
+
+/**
+ * Whether the Orb Worker script exists. A create that Wrangler interrupted
+ * after uploading the Worker leaves it without recorded attributes; this lets
+ * a destroy still find and remove it.
+ */
+export const orbWorkerExists = async ({
+  workerName,
+  accountId,
+  apiToken,
+  fetch = globalThis.fetch,
+}) =>
+  (await cloudflareApi(
+    { accountId, apiToken, fetch },
+    `/workers/scripts/${workerName}/settings`,
+    undefined,
+    { missing: true },
+  )) !== undefined;
 
 /**
  * Removes the Orb Worker: its container application (which stops every

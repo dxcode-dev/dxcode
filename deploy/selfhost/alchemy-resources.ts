@@ -8,6 +8,7 @@ import {
   deployOrbWorker,
   destroyOrbWorker,
   orbRecipeHash,
+  orbWorkerExists,
 } from "../orb/containers.mjs";
 import { e2bRecipeHash, reconcileE2BProfiles } from "./e2b.mjs";
 
@@ -35,12 +36,14 @@ type E2BProfilesResource = Alchemy.Resource<
 /**
  * The Cloudflare Containers Orb provider's Worker (deploy/orb/containers.mjs).
  * It is redeployed only when its recipe (Worker source, image, wrangler)
- * changes, because a redeploy restarts every Orb container object.
+ * changes, because a redeploy restarts every Orb container object. An
+ * interrupted create recovers only the Worker's name, never a recipe, so the
+ * next deploy finishes it and a destroy removes it.
  */
 type OrbContainersResource = Alchemy.Resource<
   "Dx.OrbContainers",
   { workerName: string; recipeHash: string },
-  { workerName: string; recipeHash: string }
+  { workerName: string; recipeHash?: string }
 >;
 
 export const HeldSecret = Alchemy.Resource<HeldSecretResource>("Dx.HeldSecret");
@@ -125,6 +128,26 @@ const e2bProfilesProvider = () =>
 
 const workspaceRoot = resolve(import.meta.dirname, "../..");
 
+/**
+ * Recorded attributes pass through. Without them (an interrupted create),
+ * the Orb Worker is recovered by name when its script exists, never with a
+ * recipe, so a destroy removes it and a deploy redeploys it.
+ */
+export const readOrbContainers = async ({
+  output,
+  olds,
+  exists,
+}: {
+  output?: { workerName: string; recipeHash?: string };
+  olds?: { workerName?: unknown };
+  exists: (workerName: string) => Promise<boolean>;
+}) => {
+  if (output !== undefined) return output;
+  const workerName = olds?.workerName;
+  if (typeof workerName !== "string") return undefined;
+  return (await exists(workerName)) ? { workerName } : undefined;
+};
+
 const orbContainersProvider = () =>
   Provider.succeed(OrbContainers, {
     reconcile: ({ output, news }) =>
@@ -161,7 +184,21 @@ const orbContainersProvider = () =>
           }),
         catch: (cause) => new Error("Orb Worker removal failed.", { cause }),
       }),
-    read: ({ output }) => Effect.succeed(output),
+    read: ({ output, olds }) =>
+      Effect.tryPromise({
+        try: () =>
+          readOrbContainers({
+            output,
+            olds,
+            exists: (workerName) =>
+              orbWorkerExists({
+                workerName,
+                accountId: process.env.CLOUDFLARE_ACCOUNT_ID ?? "",
+                apiToken: process.env.CLOUDFLARE_API_TOKEN ?? "",
+              }),
+          }),
+        catch: (cause) => new Error("Orb Worker lookup failed.", { cause }),
+      }),
   });
 
 export const selfhostProviders = () =>

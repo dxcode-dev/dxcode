@@ -1446,6 +1446,20 @@ const assertExactOrbContainersIdentity = (node, operation, selection) => {
       !/^[a-f0-9]{64}$/.test(props.recipeHash ?? "")
     )
       throw new Error("OrbContainers plan is outside the exact allowlist.");
+  // Only an interrupted create's lookup recovers the Worker's name alone.
+  for (const [attr, interrupted] of [
+    [node.state?.attr, node.state?.status === "creating"],
+    [node.state?.old?.attr, false],
+  ].filter(([value]) => value !== undefined))
+    if (
+      !(
+        (interrupted && exactKeys(attr, ["workerName"])) ||
+        (exactKeys(attr, ["recipeHash", "workerName"]) &&
+          /^[a-f0-9]{64}$/.test(attr.recipeHash ?? ""))
+      ) ||
+      attr.workerName !== orbWorkerName(selection.stage)
+    )
+      throw new Error("OrbContainers plan is outside the exact allowlist.");
 };
 
 // workers.dev previews cap script names at 54 characters.
@@ -1681,11 +1695,18 @@ const assertExactPortalIdentity = (node, operation, selection, validate) => {
     validate(node.state.old.props, selection, "prior");
 };
 
-const assertInterruptedWorkerAttr = (attr, selection) => {
+// The identity every recorded attribute shape of an interrupted Worker create
+// must carry: this account, Worker name, and ID, exactly this stage's
+// ownership tags, and one namespace per app Durable Object class. A Worker
+// read back from Cloudflare also lists the Orb Worker's cross-script class.
+const isExactInterruptedWorkerIdentity = (attr, selection, read) => {
   const durableObjectNamespaces = attr?.durableObjectNamespaces;
-  const expectedDurableObjectClasses = workerDurableObjectBindings
-    .map(([, className]) => className)
-    .sort();
+  const expectedDurableObjectClasses = [
+    ...workerDurableObjectBindings.map(([, className]) => className),
+    ...(read && selection.orbProviders?.includes("cloudflare")
+      ? ["OrbContainerObject"]
+      : []),
+  ].sort();
   const durableObjectClasses = Object.keys(
     durableObjectNamespaces ?? {},
   ).sort();
@@ -1697,8 +1718,50 @@ const assertInterruptedWorkerAttr = (attr, selection) => {
       .map(([name, className]) => `${name}=${className}`)
       .join(";")}`,
   ];
-  if (
-    !exactKeys(attr, [
+  return (
+    attr.accountId === selection.accountId &&
+    attr.workerName === selection.workerName &&
+    /^[a-f0-9]{32}$/.test(attr.workerId ?? "") &&
+    JSON.stringify(attr.routes) === "[]" &&
+    JSON.stringify(attr.tags) === JSON.stringify(expectedTags) &&
+    JSON.stringify(durableObjectClasses) ===
+      JSON.stringify(expectedDurableObjectClasses) &&
+    durableObjectClasses.every((className) =>
+      /^[a-f0-9]{32}$/.test(durableObjectNamespaces[className] ?? ""),
+    )
+  );
+};
+
+// The placeholder Worker a precreate records.
+const isPrecreatedWorkerAttr = (attr, selection) =>
+  exactKeys(attr, [
+    "accountId",
+    "crons",
+    "durableObjectNamespaces",
+    "routes",
+    "tags",
+    "urls",
+    "workerId",
+    "workerName",
+  ]) &&
+  isExactInterruptedWorkerIdentity(attr, selection, false) &&
+  JSON.stringify(attr.crons) === "[]" &&
+  (JSON.stringify(attr.urls) === "[]" ||
+    (selection.target === "selfhost" &&
+      JSON.stringify(attr.urls) ===
+        JSON.stringify([`https://${selection.domain}`])));
+
+// What Alchemy's Worker read returns for an existing Worker whose tags prove
+// it is this stage's. Planning puts it in the interrupted row, and a retried
+// create records it. Unset caches stay undefined; the domain and schedule
+// may or may not be attached yet.
+const isRecoveredWorkerAttr = (attr, selection) => {
+  if (attr === null || typeof attr !== "object") return false;
+  const recorded = Object.keys(attr).filter((key) => attr[key] !== undefined);
+  const url = `https://${selection.domain}`;
+  const domain = attr.domain;
+  return (
+    [
       "accountId",
       "crons",
       "durableObjectNamespaces",
@@ -1707,37 +1770,64 @@ const assertInterruptedWorkerAttr = (attr, selection) => {
       "urls",
       "workerId",
       "workerName",
-    ]) ||
-    attr.accountId !== selection.accountId ||
-    attr.workerName !== selection.workerName ||
-    !/^[a-f0-9]{32}$/.test(attr.workerId ?? "") ||
-    JSON.stringify(attr.crons) !== "[]" ||
-    JSON.stringify(attr.routes) !== "[]" ||
-    !(
-      JSON.stringify(attr.urls) === "[]" ||
-      (selection.target === "selfhost" &&
-        JSON.stringify(attr.urls) ===
-          JSON.stringify([`https://${selection.domain}`]))
-    ) ||
-    JSON.stringify(attr.tags) !== JSON.stringify(expectedTags) ||
-    JSON.stringify(durableObjectClasses) !==
-      JSON.stringify(expectedDurableObjectClasses) ||
-    durableObjectClasses.some(
-      (className) =>
-        !/^[a-f0-9]{32}$/.test(durableObjectNamespaces[className] ?? ""),
-    )
+    ].every((key) => recorded.includes(key)) &&
+    recorded.every((key) =>
+      new Set([
+        "accountId",
+        "crons",
+        "domain",
+        "durableObjectNamespaces",
+        "logpush",
+        "routes",
+        "tags",
+        "tailConsumers",
+        "url",
+        "urls",
+        "workerId",
+        "workerName",
+      ]).has(key),
+    ) &&
+    isExactInterruptedWorkerIdentity(attr, selection, true) &&
+    (JSON.stringify(attr.crons) === "[]" ||
+      (selection.environment === "staging" &&
+        JSON.stringify(attr.crons) === JSON.stringify(["17 3 * * *"]))) &&
+    (JSON.stringify(attr.urls) === "[]" ||
+      JSON.stringify(attr.urls) === JSON.stringify([url])) &&
+    (attr.url === undefined || attr.url === url) &&
+    (attr.url === undefined) === (attr.urls.length === 0) &&
+    (domain === undefined ||
+      (selection.zone !== undefined &&
+        exactKeys(domain, ["aliases", "name", "redirects"]) &&
+        domain.name === selection.domain &&
+        JSON.stringify(domain.aliases) === "[]" &&
+        JSON.stringify(domain.redirects) === "[]")) &&
+    (attr.logpush === undefined || typeof attr.logpush === "boolean") &&
+    (attr.tailConsumers === undefined ||
+      JSON.stringify(attr.tailConsumers) === "[]")
+  );
+};
+
+const assertInterruptedWorkerAttr = (attr, selection) => {
+  if (
+    !isPrecreatedWorkerAttr(attr, selection) &&
+    !isRecoveredWorkerAttr(attr, selection)
   )
     throw new Error(
       "Interrupted Worker identity is outside the exact allowlist.",
     );
 };
 
+// An interrupted Worker create records the precreate attributes, the owned
+// Worker a plan or retry read back, or, when it failed while still waiting on
+// an upstream such as the Orb Worker, no attributes at all. Without attributes
+// Alchemy finds the Worker by its persisted name and touches it only if its
+// tags prove it is this stack's, stage's, and logical ID's. Every shape is
+// admitted only with exact persisted props.
 const assertExactWorkerIdentity = (node, operation, selection) => {
   const interruptedCreate = node.state?.status === "creating";
   if (
     interruptedCreate &&
     (node.state.old !== undefined ||
-      node.state.attr === undefined ||
       !(
         (operation === "deploy" && node.action === "create") ||
         (operation === "destroy" && node.action === "delete")
@@ -1783,7 +1873,8 @@ const assertExactWorkerIdentity = (node, operation, selection) => {
   if (node.state?.old?.props !== undefined)
     validateWorkerProps(node.state.old.props, selection, false, "prior");
   if (interruptedCreate) {
-    assertInterruptedWorkerAttr(node.state.attr, selection);
+    if (node.state.attr !== undefined)
+      assertInterruptedWorkerAttr(node.state.attr, selection);
     return;
   }
   const attr = node.state?.attr ?? node.state?.old?.attr;

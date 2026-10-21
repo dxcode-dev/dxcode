@@ -11,12 +11,26 @@ export function assertDockerReady(
   environment?: NodeJS.ProcessEnv,
   options?: { daemon?: (environment: NodeJS.ProcessEnv) => boolean },
 ): void;
+export function retryContainerSettings<
+  Result extends { status: number | null; stdout?: string; stderr?: string },
+>(input: {
+  deploy: () => Result;
+  wait?: (milliseconds: number) => void;
+  runs?: number;
+  delayMilliseconds?: number;
+}): Result;
 export function deployOrbWorker(input: {
   workerName: string;
   workspaceRoot: string;
   stateDirectory: string;
   environment?: NodeJS.ProcessEnv;
 }): { workerName: string };
+export function orbWorkerExists(input: {
+  workerName: string;
+  accountId: string;
+  apiToken: string;
+  fetch?: typeof globalThis.fetch;
+}): Promise<boolean>;
 export function destroyOrbWorker(input: {
   workerName: string;
   accountId: string;

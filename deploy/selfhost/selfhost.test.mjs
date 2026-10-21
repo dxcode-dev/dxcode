@@ -7,7 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import { describe, expect, it, vi } from "vitest";
-import { reconcileHeldSecret } from "./alchemy-resources.ts";
+import { readOrbContainers, reconcileHeldSecret } from "./alchemy-resources.ts";
 import {
   alchemyCloudflareConnected,
   loadAlchemyCloudflareAuth,
@@ -972,5 +972,48 @@ describe("Portal zone preflight", () => {
       },
       { id: "locked", name: "locked.dev", inUse: undefined },
     ]);
+  });
+});
+
+describe("Orb Worker state after an interrupted create", () => {
+  const workerName = "dx-orb-test";
+
+  it("passes recorded attributes through without a lookup", async () => {
+    const exists = vi.fn();
+    const output = { workerName, recipeHash: "f".repeat(64) };
+    await expect(
+      readOrbContainers({ output, olds: { workerName }, exists }),
+    ).resolves.toBe(output);
+    expect(exists).not.toHaveBeenCalled();
+  });
+
+  it("recovers only the name of an Orb Worker that exists", async () => {
+    // No recipe, so a deploy redeploys it and a destroy deletes it.
+    await expect(
+      readOrbContainers({
+        olds: { workerName, recipeHash: "f".repeat(64) },
+        exists: async (name) => name === workerName,
+      }),
+    ).resolves.toEqual({ workerName });
+    await expect(
+      readOrbContainers({ olds: { workerName }, exists: async () => false }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("looks nothing up without a recorded name, and surfaces lookup failures", async () => {
+    const exists = vi.fn();
+    await expect(
+      readOrbContainers({ olds: {}, exists }),
+    ).resolves.toBeUndefined();
+    await expect(readOrbContainers({ exists })).resolves.toBeUndefined();
+    expect(exists).not.toHaveBeenCalled();
+    await expect(
+      readOrbContainers({
+        olds: { workerName },
+        exists: async () => {
+          throw new Error("Cloudflare request failed (500).");
+        },
+      }),
+    ).rejects.toThrow("Cloudflare request failed (500).");
   });
 });

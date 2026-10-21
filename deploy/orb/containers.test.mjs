@@ -14,6 +14,8 @@ import {
   assertDockerReady,
   destroyOrbWorker,
   orbDockerEnvironment,
+  orbWorkerExists,
+  retryContainerSettings,
 } from "./containers.mjs";
 
 const workspaceRoot = resolve(import.meta.dirname, "../..");
@@ -73,6 +75,97 @@ describe("Cloudflare Containers Orb Worker deployment", () => {
       "dx-orb-test-orb-orbcontainerobject:a",
       "dx-orb-test-orb-orbcontainerobject:rootfs-snapshot-b",
     ]);
+  });
+});
+
+describe("Orb Worker lookup after an interrupted create", () => {
+  const lookup = (response) => {
+    const fetch = vi.fn(async () => response);
+    return {
+      fetch,
+      exists: () =>
+        orbWorkerExists({
+          workerName: "dx-orb-test",
+          accountId: "a".repeat(32),
+          apiToken: "token",
+          fetch,
+        }),
+    };
+  };
+
+  it("finds the script by name, and reports a missing one as absent", async () => {
+    const found = lookup(Response.json({ success: true, result: {} }));
+    await expect(found.exists()).resolves.toBe(true);
+    const [url, init] = found.fetch.mock.calls[0];
+    expect(new URL(url).pathname).toBe(
+      `/client/v4/accounts/${"a".repeat(32)}/workers/scripts/dx-orb-test/settings`,
+    );
+    expect(init.headers.Authorization).toBe("Bearer token");
+    await expect(
+      lookup(
+        Response.json(
+          { success: false, errors: [{ code: 10007 }] },
+          { status: 404 },
+        ),
+      ).exists(),
+    ).resolves.toBe(false);
+  });
+
+  it("fails on any other Cloudflare error instead of guessing", async () => {
+    for (const response of [
+      Response.json({ success: false }, { status: 403 }),
+      Response.json({ success: false }, { status: 500 }),
+      Response.json({ success: false, result: null }),
+    ])
+      await expect(lookup(response).exists()).rejects.toThrow(
+        "Cloudflare request GET /workers/scripts/dx-orb-test/settings failed",
+      );
+  });
+});
+
+describe("Wrangler's interrupted container settings", () => {
+  // Wrangler's own words when the Worker version is live but the container
+  // application settings were not applied (preview runs 39445094840 and
+  // 39523973423).
+  const interrupted = {
+    status: 1,
+    stdout: "",
+    stderr:
+      "✘ [ERROR] The Worker version was deployed, but Wrangler could not finish applying its Durable Object-managed Container application settings. Re-run the same `wrangler deploy` command to retry and finish deployment.",
+  };
+  const run = (...results) => {
+    const deploy = vi.fn(() => results.shift());
+    const wait = vi.fn();
+    return { deploy, wait };
+  };
+
+  it("re-runs the same deploy until Wrangler finishes, waiting between runs", () => {
+    const { deploy, wait } = run(interrupted, interrupted, {
+      status: 0,
+      stdout: "",
+      stderr: "",
+    });
+    expect(retryContainerSettings({ deploy, wait }).status).toBe(0);
+    expect(deploy).toHaveBeenCalledTimes(3);
+    expect(wait).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops after three runs and returns Wrangler's failure", () => {
+    const { deploy, wait } = run(interrupted, interrupted, interrupted, {
+      status: 0,
+    });
+    expect(retryContainerSettings({ deploy, wait })).toBe(interrupted);
+    expect(deploy).toHaveBeenCalledTimes(3);
+  });
+
+  it("never repeats a successful deploy or any other failure", () => {
+    const failed = { status: 1, stdout: "", stderr: "image build failed" };
+    for (const result of [{ status: 0, stdout: "", stderr: "" }, failed]) {
+      const { deploy, wait } = run(result, { status: 0 });
+      expect(retryContainerSettings({ deploy, wait })).toBe(result);
+      expect(deploy).toHaveBeenCalledTimes(1);
+      expect(wait).not.toHaveBeenCalled();
+    }
   });
 });
 
