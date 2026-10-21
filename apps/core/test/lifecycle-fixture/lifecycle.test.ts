@@ -18,7 +18,9 @@ const authorization = { authorization: `Bearer ${TOKEN}` };
 const PERSONAL_INSTRUCTION = "PRIVATE-LIFECYCLE-PERSONAL-INSTRUCTION";
 const fetchFixture: typeof fetch = fetch.bind(globalThis);
 const HISTORY_PAGE_BYTES = 1_048_576;
-const UNBOUNDED_FIRST_PAGE_BYTES = 2_768_397;
+// Flue 2.2 added a server `timestamp` to assistant messages and settlements
+// (+156 bytes on this two-prompt page).
+const UNBOUNDED_FIRST_PAGE_BYTES = 2_768_553;
 
 const fixtureRequest = (path: string, init?: RequestInit) =>
   fetch(new Request(new URL(path, BASE_URL), init));

@@ -9,7 +9,7 @@
 // pushes the image, waits until Cloudflare has prepared it, uploads the Worker
 // with its image map, and creates the application. Docker must be running,
 // with Buildx.
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -21,6 +21,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 export const ORB_CONTAINER_CLASS = "OrbContainerObject";
 export const ORB_IMAGE_NAME = "orb";
@@ -101,10 +102,81 @@ const orbWorkerConfig = ({ workerName, workspaceRoot }) => ({
   ],
 });
 
-const wrangler = (workspaceRoot, args, environment) => {
-  const result = spawnSync(
+// Output kept per stream: enough for the retry match, JSON listings, and
+// the tail an error reports, without holding a whole image build in memory.
+const OUTPUT_LIMIT = 1024 * 1024;
+
+/**
+ * Signals a command and everything it started: Wrangler runs Docker, and an
+ * interrupted deploy must not leave either running.
+ */
+const signalCommand = (child, signal) => {
+  try {
+    if (process.platform === "win32") child.kill(signal);
+    else process.kill(-child.pid, signal);
+  } catch {
+    // Already gone.
+  }
+};
+
+/**
+ * Runs a command without blocking the event loop, so other deploy steps'
+ * timers stay accurate while a slow image build runs. Resolves with its exit
+ * status and output; with `echo`, its output also streams to stderr. The
+ * command runs in its own process group, which `signal` or this process
+ * exiting terminates.
+ */
+const runCommand = (command, args, { cwd, env, echo = false, signal } = {}) =>
+  new Promise((resolvePromise, reject) => {
+    signal?.throwIfAborted();
+    const child = spawn(command, args, {
+      cwd,
+      env,
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const terminate = () => signalCommand(child, "SIGTERM");
+    const abort = () => {
+      terminate();
+      setTimeout(() => signalCommand(child, "SIGKILL"), 5_000).unref();
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    process.once("exit", terminate);
+    const settle = () => {
+      signal?.removeEventListener("abort", abort);
+      process.removeListener("exit", terminate);
+    };
+    const output = { stdout: "", stderr: "" };
+    for (const stream of ["stdout", "stderr"]) {
+      child[stream].setEncoding("utf8");
+      child[stream].on("data", (chunk) => {
+        output[stream] = `${output[stream]}${chunk}`.slice(-OUTPUT_LIMIT);
+        if (echo) process.stderr.write(chunk);
+      });
+    }
+    child.on("error", (error) => {
+      settle();
+      reject(error);
+    });
+    child.on("close", (status, exitSignal) => {
+      settle();
+      if (signal?.aborted) reject(signal.reason);
+      else resolvePromise({ status, signal: exitSignal, ...output });
+    });
+  });
+
+const wrangler = (
+  workspaceRoot,
+  args,
+  environment,
+  { echo = false, reportApiErrors = false, signal } = {},
+) =>
+  runCommand(
     process.execPath,
     [
+      ...(reportApiErrors
+        ? ["--import", resolve(import.meta.dirname, "wrangler-api-errors.mjs")]
+        : []),
       resolve(
         workspaceRoot,
         "node_modules/wrangler-containers/bin/wrangler.js",
@@ -114,14 +186,10 @@ const wrangler = (workspaceRoot, args, environment) => {
     {
       cwd: workspaceRoot,
       env: { ...environment, CI: "1", WRANGLER_SEND_METRICS: "false" },
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
+      echo,
+      signal,
     },
   );
-  if (result.error) throw result.error;
-  return result;
-};
 
 /** The operator's own Docker configuration directory, before the deploy's. */
 const operatorDockerDirectory = (environment) => {
@@ -213,33 +281,36 @@ export const orbDockerEnvironment = ({
   };
 };
 
-const dockerDaemonRunning = (environment) => {
-  const result = spawnSync(
-    "docker",
-    ["info", "--format", "{{.ServerVersion}}"],
-    { env: environment, encoding: "utf8" },
+const dockerSucceeds = (environment, args, signal) =>
+  runCommand("docker", args, { env: environment, signal }).then(
+    ({ status }) => status === 0,
+    (error) => {
+      if (signal?.aborted) throw error;
+      return false;
+    },
   );
-  return !result.error && result.status === 0;
-};
+
+const dockerDaemonRunning = (environment, signal) =>
+  dockerSucceeds(
+    environment,
+    ["info", "--format", "{{.ServerVersion}}"],
+    signal,
+  );
 
 /**
  * Checks, in the environment the build will use, that Docker can build the
  * Orb image: a running engine and Buildx, which `wrangler deploy` needs for
  * `docker build --load`. Run it before anything changes in Cloudflare.
  */
-export const assertDockerReady = (
+export const assertDockerReady = async (
   environment = process.env,
-  { daemon = dockerDaemonRunning } = {},
+  { daemon = dockerDaemonRunning, signal } = {},
 ) => {
-  if (!daemon(environment))
+  if (!(await daemon(environment, signal)))
     throw new Error(
       "Cloudflare Containers needs a running Docker daemon to build the Orb image. Start Docker and retry.",
     );
-  const buildx = spawnSync("docker", ["buildx", "version"], {
-    env: environment,
-    encoding: "utf8",
-  });
-  if (buildx.error || buildx.status !== 0)
+  if (!(await dockerSucceeds(environment, ["buildx", "version"], signal)))
     throw new Error(
       "Cloudflare Containers builds the Orb image with Docker Buildx, which this Docker does not have. Docker Desktop and OrbStack include it; otherwise install the docker-buildx plugin (for example `brew install docker-buildx`) and retry.",
     );
@@ -250,21 +321,22 @@ export const assertDockerReady = (
 const containerSettingsInterrupted =
   "could not finish applying its Durable Object-managed Container application settings";
 
-const sleep = (milliseconds) =>
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
-
 /**
  * Runs `deploy` again, up to three runs in all, only while Wrangler reports
  * that it could not finish the container settings. Any other result returns.
  */
-export const retryContainerSettings = ({
+export const retryContainerSettings = async ({
   deploy,
   wait = sleep,
   runs = 3,
   delayMilliseconds = 20_000,
 }) => {
   for (let run = 1; ; run += 1) {
-    const result = deploy();
+    const started = Date.now();
+    const result = await deploy();
+    process.stderr.write(
+      `[OrbContainers] wrangler deploy run ${run} of ${runs} exited ${result.status ?? result.signal} after ${Math.round((Date.now() - started) / 1000)} s.\n`,
+    );
     if (
       result.status === 0 ||
       run === runs ||
@@ -272,42 +344,45 @@ export const retryContainerSettings = ({
     )
       return result;
     process.stderr.write(
-      `Wrangler did not finish the Orb Worker's container settings; running the same deploy again (${run + 1} of ${runs}).\n`,
+      `[OrbContainers] Wrangler did not finish the Orb Worker's container settings; running the same deploy again in ${(delayMilliseconds * run) / 1000} s (${run + 1} of ${runs}).\n`,
     );
-    wait(delayMilliseconds * run);
+    await wait(delayMilliseconds * run);
   }
 };
 
 /** Builds the image and deploys the Orb Worker; idempotent. */
-export const deployOrbWorker = ({
+export const deployOrbWorker = async ({
   workerName,
   workspaceRoot,
   stateDirectory,
   environment = process.env,
+  signal,
 }) => {
   mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
   const dockerEnvironment = orbDockerEnvironment({
     environment,
     stateDirectory,
   });
-  assertDockerReady(dockerEnvironment);
+  await assertDockerReady(dockerEnvironment, { signal });
   const configPath = resolve(stateDirectory, "wrangler.json");
   writeFileSync(
     configPath,
     `${JSON.stringify(orbWorkerConfig({ workerName, workspaceRoot }), null, 2)}\n`,
     { mode: 0o600 },
   );
-  const result = retryContainerSettings({
+  const result = await retryContainerSettings({
     deploy: () =>
       wrangler(
         workspaceRoot,
         ["deploy", "--config", configPath],
         dockerEnvironment,
+        { echo: true, reportApiErrors: true, signal },
       ),
+    wait: (milliseconds) => sleep(milliseconds, undefined, { signal }),
   });
   if (result.status !== 0)
     throw new Error(
-      `Orb Worker deployment failed (wrangler exit ${result.status}).\n${result.stderr.slice(-4000)}`,
+      `Orb Worker deployment failed (wrangler exit ${result.status ?? result.signal}).\n${result.stderr.slice(-4000)}`,
     );
   return { workerName };
 };
@@ -364,10 +439,11 @@ export const destroyOrbWorker = async ({
   workspaceRoot,
   environment = process.env,
   fetch = globalThis.fetch,
-  run = (args) => wrangler(workspaceRoot, args, environment),
+  signal,
+  run = (args) => wrangler(workspaceRoot, args, environment, { signal }),
 }) => {
   const api = (path, init) =>
-    cloudflareApi({ accountId, apiToken, fetch }, path, init);
+    cloudflareApi({ accountId, apiToken, fetch }, path, { ...init, signal });
   const namespaces =
     (await api("/workers/durable_objects/namespaces?per_page=1000")) ?? [];
   const namespace = namespaces.find(
@@ -385,12 +461,18 @@ export const destroyOrbWorker = async ({
       });
   }
   await api(`/workers/scripts/${workerName}?force=true`, { method: "DELETE" });
-  const listed = run(["containers", "images", "list", "--json"]);
+  const listed = await run(["containers", "images", "list", "--json"]);
   if (listed.status !== 0) return;
   const images = JSON.parse(listed.stdout || "[]");
   for (const image of images.filter(({ name }) =>
     name.startsWith(`${workerName}-`),
   ))
     for (const tag of image.tags ?? [])
-      run(["containers", "images", "delete", `${image.name}:${tag}`, "-y"]);
+      await run([
+        "containers",
+        "images",
+        "delete",
+        `${image.name}:${tag}`,
+        "-y",
+      ]);
 };

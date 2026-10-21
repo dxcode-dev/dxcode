@@ -1,4 +1,7 @@
-import { GITHUB_COPILOT_CATALOG } from "../model-subscriptions/github-copilot/catalog.js";
+import {
+  type CopilotCatalogModel,
+  GITHUB_COPILOT_CATALOG,
+} from "../model-subscriptions/github-copilot/catalog.js";
 import { findCatalogModel } from "./catalog.js";
 
 /**
@@ -51,6 +54,8 @@ export interface CopilotServedModel {
     readonly reasoning: boolean;
     readonly vision: boolean;
   };
+  readonly compatibility: CopilotCatalogModel["compatibility"];
+  readonly thinkingLevelMap?: CopilotCatalogModel["thinkingLevelMap"];
 }
 
 /**
@@ -73,6 +78,10 @@ export const COPILOT_SERVED_MODELS: ReadonlyMap<string, CopilotServedModel> =
           reasoning: model.capabilities.reasoning,
           vision: model.capabilities.vision,
         },
+        compatibility: model.compatibility,
+        ...(model.thinkingLevelMap === undefined
+          ? {}
+          : { thinkingLevelMap: model.thinkingLevelMap }),
       } satisfies CopilotServedModel,
     ]),
   );

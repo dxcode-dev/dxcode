@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -7,11 +7,13 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   assertDockerReady,
+  deployOrbWorker,
   destroyOrbWorker,
   orbDockerEnvironment,
   orbWorkerExists,
@@ -139,33 +141,268 @@ describe("Wrangler's interrupted container settings", () => {
     return { deploy, wait };
   };
 
-  it("re-runs the same deploy until Wrangler finishes, waiting between runs", () => {
+  it("re-runs the same deploy until Wrangler finishes, waiting between runs", async () => {
     const { deploy, wait } = run(interrupted, interrupted, {
       status: 0,
       stdout: "",
       stderr: "",
     });
-    expect(retryContainerSettings({ deploy, wait }).status).toBe(0);
+    expect((await retryContainerSettings({ deploy, wait })).status).toBe(0);
     expect(deploy).toHaveBeenCalledTimes(3);
     expect(wait).toHaveBeenCalledTimes(2);
   });
 
-  it("stops after three runs and returns Wrangler's failure", () => {
+  it("stops after three runs and returns Wrangler's failure", async () => {
     const { deploy, wait } = run(interrupted, interrupted, interrupted, {
       status: 0,
     });
-    expect(retryContainerSettings({ deploy, wait })).toBe(interrupted);
+    expect(await retryContainerSettings({ deploy, wait })).toBe(interrupted);
     expect(deploy).toHaveBeenCalledTimes(3);
   });
 
-  it("never repeats a successful deploy or any other failure", () => {
+  it("never repeats a successful deploy or any other failure", async () => {
     const failed = { status: 1, stdout: "", stderr: "image build failed" };
     for (const result of [{ status: 0, stdout: "", stderr: "" }, failed]) {
       const { deploy, wait } = run(result, { status: 0 });
-      expect(retryContainerSettings({ deploy, wait })).toBe(result);
+      expect(await retryContainerSettings({ deploy, wait })).toBe(result);
       expect(deploy).toHaveBeenCalledTimes(1);
       expect(wait).not.toHaveBeenCalled();
     }
+  });
+});
+
+/**
+ * A Cloudflare API that has no container application yet, and refuses every
+ * other request the way the Containers API refuses an application over the
+ * account's limits.
+ */
+const refusingCloudflareApi = async (run) => {
+  const server = createServer((request, response) => {
+    const lookup =
+      request.method === "GET" &&
+      /\/containers\/applications\/[^/]+$/.test(request.url);
+    response.writeHead(lookup ? 404 : 400, {
+      "content-type": "application/json",
+    });
+    response.end(
+      JSON.stringify({
+        success: false,
+        errors: [
+          lookup
+            ? { code: 1001, message: "application not found" }
+            : { code: 1000, message: "account container limit reached" },
+        ],
+        result: null,
+        messages: [],
+      }),
+    );
+  });
+  await new Promise((done) => server.listen(0, "127.0.0.1", done));
+  try {
+    return await run(`http://127.0.0.1:${server.address().port}/client/v4`);
+  } finally {
+    server.close();
+  }
+};
+
+/**
+ * A workspace whose Wrangler takes `seconds` to deploy, printing a line at
+ * the start, and a PATH whose Docker has a running engine and Buildx. With
+ * an `api`, Wrangler first calls it as its container settings step does:
+ * it looks the application up, then creates it. Like the real one starting
+ * Docker, Wrangler starts a long-lived child; `pids` records both.
+ */
+const slowWranglerWorkspace = ({ seconds, exitCode = 0, api }) => {
+  const root = mkdtempSync(join(tmpdir(), "dx-orb-slow-"));
+  const bin = join(root, "bin");
+  const wranglerBin = join(root, "node_modules/wrangler-containers/bin");
+  const pids = join(root, "pids");
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(wranglerBin, { recursive: true });
+  writeFileSync(join(bin, "docker"), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(bin, "docker"), 0o755);
+  const calls =
+    api === undefined
+      ? []
+      : [
+          `await fetch(${JSON.stringify(`${api}/accounts/a/containers/applications/namespace`)});`,
+          `await fetch(${JSON.stringify(`${api}/accounts/a/containers/applications`)}, { method: "POST" });`,
+        ];
+  writeFileSync(
+    join(wranglerBin, "wrangler.js"),
+    [
+      'import { spawn } from "node:child_process";',
+      'import { writeFileSync } from "node:fs";',
+      'const build = spawn("sleep", ["60"], { stdio: "ignore" });',
+      `writeFileSync(${JSON.stringify(pids)}, \`\${process.pid} \${build.pid}\`);`,
+      'process.stdout.write("building the Orb image\\n");',
+      ...calls,
+      "setTimeout(() => {",
+      "  build.kill();",
+      `  process.stderr.write("wrangler finished ${exitCode}\\n");`,
+      `  process.exit(${exitCode});`,
+      `}, ${seconds * 1000});`,
+    ].join("\n"),
+  );
+  return {
+    pids,
+    workspaceRoot: root,
+    stateDirectory: join(root, "state"),
+    environment: { PATH: `${bin}:${process.env.PATH}`, HOME: root },
+  };
+};
+
+// These tests start Node and Wrangler processes, which take seconds on a
+// loaded CI runner.
+describe("Orb Worker deploy alongside other deploy steps", {
+  timeout: 30_000,
+}, () => {
+  // Staging run 39536695999: a 326 s synchronous deploy froze Alchemy's
+  // event loop, so Bootstrap's 3-minute timer fired as soon as it returned.
+  it("keeps other steps' timers on schedule and streams Wrangler's output", async () => {
+    const workspace = slowWranglerWorkspace({ seconds: 2 });
+    const written = [];
+    const write = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk) => written.push(String(chunk)) > 0);
+    const lateness = [];
+    let streamedWhileRunning = false;
+    let settled = false;
+    let previous = Date.now();
+    const timer = setInterval(() => {
+      const now = Date.now();
+      lateness.push(now - previous - 50);
+      previous = now;
+      if (!settled && written.join("").includes("building the Orb image"))
+        streamedWhileRunning = true;
+    }, 50);
+    try {
+      const started = Date.now();
+      const deploying = deployOrbWorker({
+        workerName: "dx-orb-test",
+        ...workspace,
+      });
+      expect(deploying).toBeInstanceOf(Promise);
+      await expect(deploying).resolves.toEqual({ workerName: "dx-orb-test" });
+      settled = true;
+      expect(Date.now() - started).toBeGreaterThanOrEqual(2000);
+    } finally {
+      clearInterval(timer);
+      write.mockRestore();
+    }
+    expect(lateness.length).toBeGreaterThanOrEqual(20);
+    expect(Math.max(...lateness)).toBeLessThan(500);
+    expect(streamedWhileRunning).toBe(true);
+    expect(written.join("")).toContain("wrangler finished 0");
+  });
+
+  it("fails with Wrangler's exit status and the Cloudflare API's answer", async () => {
+    const write = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      await refusingCloudflareApi(async (api) => {
+        const workspace = slowWranglerWorkspace({
+          seconds: 0,
+          exitCode: 7,
+          api,
+        });
+        const failure = deployOrbWorker({
+          workerName: "dx-orb-test",
+          ...workspace,
+        });
+        await expect(failure).rejects.toThrow(/wrangler exit 7\)\./);
+        await expect(failure).rejects.toThrow(
+          "Cloudflare API POST /client/v4/accounts/a/containers/applications answered 400",
+        );
+        await expect(failure).rejects.toThrow(
+          "account container limit reached",
+        );
+        // The lookup's 404 is the expected "no application yet".
+        await expect(failure).rejects.not.toThrow("answered 404");
+      });
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it("stops Wrangler and what it started when the deploy is interrupted", async () => {
+    const workspace = slowWranglerWorkspace({ seconds: 30 });
+    const alive = (pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const write = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      const controller = new AbortController();
+      const deploying = deployOrbWorker({
+        workerName: "dx-orb-test",
+        ...workspace,
+        signal: controller.signal,
+      });
+      for (let wait = 0; wait < 100 && !existsSync(workspace.pids); wait += 1)
+        await new Promise((done) => setTimeout(done, 50));
+      const pids = readFileSync(workspace.pids, "utf8").split(" ").map(Number);
+      expect(pids.every(alive)).toBe(true);
+      controller.abort(new Error("deploy interrupted"));
+      await expect(deploying).rejects.toThrow("deploy interrupted");
+      for (let wait = 0; wait < 40 && pids.some(alive); wait += 1)
+        await new Promise((done) => setTimeout(done, 50));
+      expect(pids.filter(alive)).toEqual([]);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  // Wrangler 4.147 keeps the Containers API's answer as an unprinted cause
+  // of "could not finish applying its ... Container application settings"
+  // (preview run 39538154170), so the deploy prints it from Wrangler's fetch.
+  it("prints the API's answer from the pinned Wrangler's Containers client", async () => {
+    const result = await refusingCloudflareApi((api) => {
+      const home = mkdtempSync(join(tmpdir(), "dx-orb-wrangler-"));
+      return new Promise((done) => {
+        const child = spawn(
+          process.execPath,
+          [
+            "--import",
+            join(import.meta.dirname, "wrangler-api-errors.mjs"),
+            join(
+              workspaceRoot,
+              "node_modules/wrangler-containers/bin/wrangler.js",
+            ),
+            "containers",
+            "list",
+          ],
+          {
+            cwd: home,
+            env: {
+              PATH: process.env.PATH,
+              HOME: home,
+              CI: "1",
+              WRANGLER_SEND_METRICS: "false",
+              CLOUDFLARE_API_BASE_URL: api,
+              CLOUDFLARE_API_TOKEN: "token",
+              CLOUDFLARE_ACCOUNT_ID: "a".repeat(32),
+            },
+          },
+        );
+        let stderr = "";
+        child.stderr.on("data", (chunk) => {
+          stderr += chunk;
+        });
+        child.on("close", (status) => done({ status, stderr }));
+      });
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(
+      /\[OrbContainers\] Cloudflare API GET \/client\/v4\/accounts\/a{32}\/containers\/\S+ answered 400: .*account container limit reached/,
+    );
   });
 });
 
@@ -256,11 +493,20 @@ ${buildx === "broken" ? 'echo "buildx is broken" >&2; exit 1' : 'echo "buildx v0
   };
 };
 
+// Public CI run 39549404683: on a GitHub-hosted runner, under the whole
+// suite, the Buildx test took 10.7 s where earlier runs took about 0.5 s,
+// past Vitest's 5 s default. The tests below allow for a slow Docker call;
+// a hung one still fails here.
 const docker = (environment, args) =>
-  spawnSync("docker", args, { env: environment, encoding: "utf8" });
+  spawnSync("docker", args, {
+    env: environment,
+    encoding: "utf8",
+    timeout: 20_000,
+  });
 
 describe.skipIf(!dockerCli)(
   "Docker for the Orb image under the deploy's isolated HOME",
+  { timeout: 60_000 },
   () => {
     it("stores the registry login in its own file, never the OS keychain", () => {
       const machine = operatorMachine();
@@ -361,18 +607,18 @@ describe.skipIf(!dockerCli)(
       expect(existsSync(machine.helperCalls)).toBe(false);
     });
 
-    it("refuses to start when Buildx cannot run, naming what to install", () => {
+    it("refuses to start when Buildx cannot run, naming what to install", async () => {
       const machine = operatorMachine({ buildx: "broken" });
       const environment = orbDockerEnvironment({
         environment: machine.deployEnvironment,
         stateDirectory: machine.stateDirectory,
       });
-      expect(() =>
+      await expect(
         assertDockerReady(environment, {
           // The daemon check is separate; this machine has no engine.
-          daemon: () => true,
+          daemon: async () => true,
         }),
-      ).toThrow(/Buildx/);
+      ).rejects.toThrow(/Buildx/);
     });
   },
 );

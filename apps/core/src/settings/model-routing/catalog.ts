@@ -7,15 +7,17 @@ import {
 } from "@earendil-works/pi-ai/providers/all";
 import { Schema } from "effect";
 
-export const MODEL_CATALOG_SOURCE = "flue-2.0.7-pi-0.85.1" as const;
+export const MODEL_CATALOG_SOURCE = "flue-2.3.0-pi-1.1.0" as const;
 
 /**
  * Canonical dx provider id → pi-ai catalog provider id. dx calls the
- * Workers AI deployment catalog `cloudflare`; every other provider keeps
- * its pi-ai id.
+ * Workers AI deployment catalog `cloudflare`, and keeps the pre-pi-1.0
+ * `azure-openai-responses` id that stored connections and model profiles
+ * use; every other provider keeps its pi-ai id.
  */
 const PI_PROVIDER_IDS: Record<string, string> = {
   cloudflare: "cloudflare-workers-ai",
+  "azure-openai-responses": "azure",
 };
 
 export const piCatalogProviderId = (providerId: string): string =>

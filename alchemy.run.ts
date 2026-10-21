@@ -1038,7 +1038,12 @@ export default Alchemy.Stack(
           ...(configuration.environment !== "staging"
             ? { DX_PREVIEW_DXD_SHA256: configuration.dxdChecksum }
             : {}),
-          DX_PREVIEW_WORKER_ID: worker.workerId,
+          // Alchemy knows a Worker's ID before an update deploys it; pairing
+          // it with the hash makes Verify wait for the new version.
+          DX_PREVIEW_WORKER_ID: Output.map(
+            Output.all(worker.workerId, worker.hash),
+            ([workerId]) => workerId,
+          ),
           DX_PREVIEW_BOOTSTRAP: Output.map(bootstrap.hash.input, () => "ready"),
         },
         memo: false,

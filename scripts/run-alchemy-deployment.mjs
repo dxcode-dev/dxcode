@@ -256,7 +256,7 @@ const e2bInstalled = orbProviders.includes("e2b");
 const cloudflareInstalled = orbProviders.includes("cloudflare");
 // Check Docker as the Orb image build will see it, before Cloudflare changes.
 if (operation === "deploy" && cloudflareInstalled)
-  assertDockerReady(
+  await assertDockerReady(
     orbDockerEnvironment({
       environment: process.env,
       stateDirectory: resolve(workspaceRoot, ".dx/alchemy/docker-preflight"),

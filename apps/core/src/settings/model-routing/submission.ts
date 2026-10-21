@@ -88,13 +88,16 @@ export interface SubmissionRoute {
  * Catalog compat describes the provider's own endpoint. A custom URL promises
  * only the standard API format, so drop features that need Anthropic's
  * first-party transport: effort-only mid-conversation messages with thinking
- * binding controls, server-side fallback, and client tool references. Model
- * traits such as adaptive thinking or no temperature still apply.
+ * binding controls, server-side fallback, mid-conversation system messages
+ * and inline tool changes, and client tool references. Model traits such as
+ * adaptive thinking or no temperature still apply.
  */
 const customEndpointCompat = (compat: Model<Api>["compat"]) => {
   const {
     supportsMidConvoEffort: _midConversationEffort,
     allowedFallbackModels: _serverSideFallback,
+    supportsMidConvoSystemMessages: _midConversationSystemMessages,
+    supportsMidConvoToolChanges: _inlineToolChanges,
     ...traits
   } = (compat ?? {}) as Record<string, unknown>;
   return { ...traits, supportsToolReferences: false };
@@ -140,6 +143,10 @@ const servingModel = (
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: copilot.capabilities.contextWindow,
       maxTokens: copilot.capabilities.maxOutputTokens,
+      // Selects adaptive thinking for Claude 4.7+; Copilot passes Anthropic's
+      // 400 for budget-based thinking straight back.
+      compat: copilot.compatibility,
+      thinkingLevelMap: copilot.thinkingLevelMap,
     } as Model<Api>;
   }
   if (entry === undefined && connection.kind === "custom") {

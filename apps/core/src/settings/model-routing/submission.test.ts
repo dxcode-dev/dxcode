@@ -1,5 +1,5 @@
 import type { StoredModelConnection } from "@dx/domain";
-import type { Model, Tool } from "@earendil-works/pi-ai";
+import { type Model, normalizeContext, type Tool } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { describe, expect, it } from "vitest";
 import { connectionModel, withEffectiveContextWindow } from "./submission.js";
@@ -70,7 +70,7 @@ describe("connectionModel", () => {
     };
     const events = streamSimple(
       model as Model<"anthropic-messages">,
-      {
+      normalizeContext({
         systemPrompt: "Be terse.",
         tools: [
           {
@@ -113,7 +113,7 @@ describe("connectionModel", () => {
           },
           { role: "user", content: "Summarize.", timestamp: now },
         ],
-      },
+      }),
       {
         apiKey: "test-key",
         reasoning: "medium",
@@ -144,6 +144,40 @@ describe("connectionModel", () => {
     expect(body.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(body.output_config).toEqual({ effort: "medium" });
     expect(body.temperature).toBeUndefined();
+  });
+
+  // Copilot passes Anthropic's 400 for `thinking.type: "enabled"` straight
+  // back; Opus 4.7 and later accept only adaptive thinking.
+  it("sends adaptive thinking to Claude Opus 5 through a Copilot subscription", async () => {
+    const model = connectionModel(
+      connection("subscription"),
+      "anthropic/claude-opus-5",
+    );
+    const bodies: AnthropicBody[] = [];
+    for (const reasoning of ["low", "medium"] as const) {
+      const events = streamSimple(
+        model as Model<"anthropic-messages">,
+        normalizeContext({
+          systemPrompt: "Be terse.",
+          messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+        }),
+        {
+          apiKey: "copilot-token",
+          reasoning,
+          maxRetries: 0,
+          fetch: async (_url, init) => {
+            bodies.push(JSON.parse(String(init?.body)));
+            return new Response("{}", { status: 400 });
+          },
+        },
+      );
+      for await (const _event of events);
+    }
+
+    expect(bodies.map((body) => [body.thinking, body.output_config])).toEqual([
+      [{ type: "adaptive", display: "summarized" }, { effort: "low" }],
+      [{ type: "adaptive", display: "summarized" }, { effort: "medium" }],
+    ]);
   });
 });
 

@@ -2140,6 +2140,26 @@ const dependsExactlyOn = (value, id, property) =>
   JSON.stringify(Object.keys(Output.upstreamAny(value)).sort()) ===
     JSON.stringify([id]);
 
+// The map must hand Verify the Worker's ID itself, not a constant or the hash.
+const yieldsWorkerId = (map) => {
+  const workerId = Symbol("workerId");
+  try {
+    return map([workerId, Symbol("hash")]) === workerId;
+  } catch {
+    return false;
+  }
+};
+
+// Verify's Worker ID, carried with the Worker's hash: Alchemy resolves the ID
+// before an update deploys the Worker, and only the hash waits for it.
+const dependsOnDeployedWorkerId = (value) =>
+  Output.isApplyExpr(value) &&
+  Output.isAllExpr(value.expr) &&
+  value.expr.outs.length === 2 &&
+  dependsExactlyOn(value.expr.outs[0], "Worker", "workerId") &&
+  dependsExactlyOn(value.expr.outs[1], "Worker", "hash") &&
+  yieldsWorkerId(value.f);
+
 const deploymentLabel = (selection, revision) =>
   selection.target === "staging"
     ? `Staging · ${revision.slice(0, 12)}`
@@ -2312,12 +2332,11 @@ const assertVerifyCommand = (props, role, selection, context) => {
     props.env.DX_PREVIEW_URL !== selection.origin ||
     invalidPackagedDxd ||
     (role === "desired" &&
-      (!dependsExactlyOn(workerId, "Worker", "workerId") ||
+      (!dependsOnDeployedWorkerId(workerId) ||
         !dependsOnlyOn(bootstrapReady, "Bootstrap"))) ||
     (role === "evaluated" &&
       (!(
-        context.workerIds.has(workerId) ||
-        dependsExactlyOn(workerId, "Worker", "workerId")
+        context.workerIds.has(workerId) || dependsOnDeployedWorkerId(workerId)
       ) ||
         !(
           (bootstrapReady === "ready" && context.commandIds.has("Bootstrap")) ||

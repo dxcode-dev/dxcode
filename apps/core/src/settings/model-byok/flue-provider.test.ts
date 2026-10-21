@@ -1,4 +1,4 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { type Api, type Model, normalizeContext } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
 const adapter = vi.hoisted(() => ({ options: [] as unknown[] }));
@@ -59,7 +59,7 @@ describe("dx model routing transport", () => {
 
     for await (const _event of provider.streamSimple(
       model,
-      {
+      normalizeContext({
         messages: [
           { role: "user", content: "Open a pull request.", timestamp: 1 },
           {
@@ -88,7 +88,7 @@ describe("dx model routing transport", () => {
             timestamp: 3,
           },
         ],
-      },
+      }),
       {} as never,
     ));
 

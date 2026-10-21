@@ -1,4 +1,7 @@
-import type { AssistantMessageEvent, Context } from "@earendil-works/pi-ai";
+import {
+  type AssistantMessageEvent,
+  normalizeContext,
+} from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   createLocalModelFixtureProvider,
@@ -7,15 +10,16 @@ import {
   localModelFixtureForPrompt,
 } from "./model-fixtures.js";
 
-const context = (prompt: string): Context => ({
-  messages: [
-    {
-      role: "user",
-      content: [{ type: "text", text: prompt }],
-      timestamp: 0,
-    },
-  ],
-});
+const context = (prompt: string) =>
+  normalizeContext({
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: prompt }],
+        timestamp: 0,
+      },
+    ],
+  });
 
 describe("local model fixtures", () => {
   it("fails unknown prompts closed before any provider transport", () => {
@@ -66,20 +70,23 @@ describe("local model fixtures", () => {
     });
 
     const continued: AssistantMessageEvent[] = [];
-    for await (const event of provider.stream(model, {
-      messages: [
-        ...context(LOCAL_MODEL_FIXTURE_PROMPTS.toolContinuation).messages,
-        toolUse.message,
-        {
-          role: "toolResult",
-          toolCallId: "dx-local-fixture-write",
-          toolName: "create_file",
-          content: [{ type: "text", text: "Successfully wrote 25 bytes" }],
-          isError: false,
-          timestamp: 0,
-        },
-      ],
-    }))
+    for await (const event of provider.stream(
+      model,
+      normalizeContext({
+        messages: [
+          ...context(LOCAL_MODEL_FIXTURE_PROMPTS.toolContinuation).messages,
+          toolUse.message,
+          {
+            role: "toolResult",
+            toolCallId: "dx-local-fixture-write",
+            toolName: "create_file",
+            content: [{ type: "text", text: "Successfully wrote 25 bytes" }],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      }),
+    ))
       continued.push(event);
     expect(continued.at(-1)).toMatchObject({
       type: "done",
@@ -95,20 +102,23 @@ describe("local model fixtures", () => {
     });
 
     expect(() =>
-      provider.stream(model, {
-        messages: [
-          ...context(LOCAL_MODEL_FIXTURE_PROMPTS.toolContinuation).messages,
-          toolUse.message,
-          {
-            role: "toolResult",
-            toolCallId: "dx-local-fixture-write",
-            toolName: "create_file",
-            content: [{ type: "text", text: "write failed" }],
-            isError: true,
-            timestamp: 0,
-          },
-        ],
-      }),
+      provider.stream(
+        model,
+        normalizeContext({
+          messages: [
+            ...context(LOCAL_MODEL_FIXTURE_PROMPTS.toolContinuation).messages,
+            toolUse.message,
+            {
+              role: "toolResult",
+              toolCallId: "dx-local-fixture-write",
+              toolName: "create_file",
+              content: [{ type: "text", text: "write failed" }],
+              isError: true,
+              timestamp: 0,
+            },
+          ],
+        }),
+      ),
     ).toThrow(LocalModelFixtureMismatch);
   });
 });

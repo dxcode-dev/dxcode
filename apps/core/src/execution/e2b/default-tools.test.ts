@@ -1,3 +1,4 @@
+import { getCurrentTools } from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -13,7 +14,7 @@ it("exposes only dx's workspace tools to the model", async () => {
   let toolNames: string[] = [];
   provider.setResponses([
     (context) => {
-      toolNames = context.tools?.map((tool) => tool.name) ?? [];
+      toolNames = getCurrentTools(context.messages).map((tool) => tool.name);
       return fauxAssistantMessage("done");
     },
   ]);

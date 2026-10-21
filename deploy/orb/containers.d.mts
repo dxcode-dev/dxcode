@@ -9,22 +9,29 @@ export function orbDockerEnvironment(input: {
 }): NodeJS.ProcessEnv;
 export function assertDockerReady(
   environment?: NodeJS.ProcessEnv,
-  options?: { daemon?: (environment: NodeJS.ProcessEnv) => boolean },
-): void;
+  options?: {
+    daemon?: (
+      environment: NodeJS.ProcessEnv,
+      signal?: AbortSignal,
+    ) => boolean | Promise<boolean>;
+    signal?: AbortSignal;
+  },
+): Promise<void>;
 export function retryContainerSettings<
   Result extends { status: number | null; stdout?: string; stderr?: string },
 >(input: {
-  deploy: () => Result;
-  wait?: (milliseconds: number) => void;
+  deploy: () => Result | Promise<Result>;
+  wait?: (milliseconds: number) => unknown;
   runs?: number;
   delayMilliseconds?: number;
-}): Result;
+}): Promise<Result>;
 export function deployOrbWorker(input: {
   workerName: string;
   workspaceRoot: string;
   stateDirectory: string;
   environment?: NodeJS.ProcessEnv;
-}): { workerName: string };
+  signal?: AbortSignal;
+}): Promise<{ workerName: string }>;
 export function orbWorkerExists(input: {
   workerName: string;
   accountId: string;
@@ -38,5 +45,10 @@ export function destroyOrbWorker(input: {
   workspaceRoot: string;
   environment?: NodeJS.ProcessEnv;
   fetch?: typeof globalThis.fetch;
-  run?: (args: string[]) => { status: number | null; stdout: string };
+  signal?: AbortSignal;
+  run?: (
+    args: string[],
+  ) =>
+    | { status: number | null; stdout: string }
+    | Promise<{ status: number | null; stdout: string }>;
 }): Promise<void>;

@@ -54,8 +54,11 @@ if (
     ...getBuiltinProviders(),
     "cloudflare",
     "github-copilot",
+    "azure-openai-responses",
   ]) {
-    if (providerId === "cloudflare-workers-ai") continue;
+    // dx's canonical ids for these pi providers are registered above.
+    if (providerId === "cloudflare-workers-ai" || providerId === "azure")
+      continue;
     const { provider, options } = createDxModelRoutingProvider(
       providerId,
       deps,

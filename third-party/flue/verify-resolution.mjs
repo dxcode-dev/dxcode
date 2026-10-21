@@ -17,19 +17,19 @@ const agentCore = realpathSync(
 );
 assert.equal(realpathSync(resolve(agentCore, "../pi-ai")), pi);
 for (const [path, version] of [
-  [pi, "0.85.1"],
-  [agentCore, "0.83.0"],
+  [pi, "1.1.0"],
+  [agentCore, "1.1.0"],
 ]) {
   assert.equal(
     JSON.parse(readFileSync(resolve(path, "package.json"))).version,
     version,
   );
 }
-const revision = "e7bef20be3c74f4ffdeeed83b1fe161a1fb5f0c8";
+const revision = "33a2cf7e3796a7f3960a24455f3c5bb57537ee13";
 const artifact = readFileSync(resolve(here, `runtime-${revision}.tgz`));
 assert.equal(
   createHash("sha256").update(artifact).digest("hex"),
-  "23c4e58816b53b9de775222a117f1b3e75414a267824da48130a098fdaac54e9",
+  "5cffb446243361c2dc55fcb1fd5edab3fa0d64cca8ea785e5852f607b5079b57",
 );
 assert.ok(
   readFileSync(resolve(runtime, "DX_SOURCE_REVISION"), "utf8").includes(
@@ -44,17 +44,17 @@ for (const [name, directory, hash] of [
   [
     "sdk",
     sdk,
-    "4b5cf38ffb5a4f4c3b531c3805dadc75228a76496b8525d8a6452fc772f13fd8",
+    "1dc0bb17f30fab87948c2d1de4ab2044c113c57c558628411aa883731c5002e2",
   ],
   [
     "react",
     react,
-    "a0f91c402e2f0b850a97bc05f46003a5b56dd04b15f7aeb6383acd70fc4d1b62",
+    "63bcfe43edf87119b47e2845ea325655909974a699a541a9c5a6c06703674e06",
   ],
   [
     "vite",
     vite,
-    "bb230d67371253c56ad6da1df21a55f1be2e21e33c6b5a1e5d04020bb9ee236e",
+    "b4be437d5a7fe0121bec7a803440c0d4dff5abc980dfcf63a942efeae676d7e3",
   ],
 ]) {
   assert.ok(
@@ -198,5 +198,5 @@ try {
 }
 assert.equal(api.getModelInvocationContext(), undefined);
 console.log(
-  "One exact Flue runtime for core and vite; one Pi ai 0.85.1 / agent-core 0.83.0 graph; all four artifact identities and hashes, retained React session exports, dispatch-only context and awaited undeclared model lookup verified.",
+  "One exact Flue runtime for core and vite; one Pi ai 1.1.0 / agent-core 1.1.0 graph; all four artifact identities and hashes, retained React session exports, dispatch-only context and awaited undeclared model lookup verified.",
 );

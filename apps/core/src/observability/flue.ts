@@ -30,6 +30,42 @@ const correlations = (event: FlueObservation) => ({
     : { submissionId: event.submissionId }),
 });
 
+// Failure text from the provider or runtime, never model output. Bounded so
+// a provider that echoes a large request cannot flood the log.
+const ERROR_TEXT_LIMIT = 2_000;
+const bounded = (text: string | undefined) =>
+  text === undefined || text === ""
+    ? undefined
+    : text.slice(0, ERROR_TEXT_LIMIT);
+
+const failure = (error: {
+  type?: string;
+  name?: string;
+  code?: string;
+  message?: string;
+  details?: string;
+}) => {
+  const fields = {
+    errorType: error.type,
+    errorName: error.name,
+    errorCode: error.code,
+    errorMessage: bounded(error.message),
+    errorDetails: bounded(error.details),
+  };
+  return Object.fromEntries(
+    Object.entries(fields).filter(([, value]) => value !== undefined),
+  );
+};
+
+const unknownFailure = (error: unknown) =>
+  error instanceof Error
+    ? failure({ name: error.name, message: error.message })
+    : typeof error === "string"
+      ? failure({ message: error })
+      : error === undefined
+        ? {}
+        : failure({ message: JSON.stringify(error) });
+
 const observeFlueEvent = (
   event: FlueObservation,
   context: FlueEventContext,
@@ -154,10 +190,30 @@ const observeFlueEvent = (
       });
       return persistence;
     case "submission_settled":
-      agentLifecycleLogger.info("Flue submission settled.", {
+      if (event.outcome === "failed")
+        agentLifecycleLogger.error("Flue submission failed.", {
+          event: event.type,
+          ...correlations(event),
+          outcome: event.outcome,
+          ...(event.error === undefined ? {} : failure(event.error)),
+        });
+      else
+        agentLifecycleLogger.info("Flue submission settled.", {
+          event: event.type,
+          ...correlations(event),
+          outcome: event.outcome,
+        });
+      return persistence;
+    case "submission_recovery":
+      agentLifecycleLogger.warn("Flue submission recovery step failed.", {
         event: event.type,
         ...correlations(event),
+        kind: event.kind,
+        operation: event.operation,
         outcome: event.outcome,
+        attemptCount: event.attemptCount,
+        maxAttempts: event.maxAttempts,
+        ...(event.error === undefined ? {} : failure(event.error)),
       });
       return persistence;
     case "turn_start":
@@ -182,7 +238,7 @@ const observeFlueEvent = (
       return persistence;
     case "turn": {
       const usage = event.response.usage;
-      agentModelLogger.info("Flue model turn completed.", {
+      const fields = {
         event: event.type,
         ...correlations(event),
         turnId: event.turnId,
@@ -191,6 +247,17 @@ const observeFlueEvent = (
         requestedModel: event.request.requestedModel,
         durationMs: event.durationMs,
         isError: event.isError,
+        ...(event.isError
+          ? {
+              finishReason: event.response.finishReason,
+              providerFinishReason: event.response.providerFinishReason,
+              // Flue copies an in-band failure, such as Claude Code's, from
+              // the assistant message into this error.
+              ...(event.response.error === undefined
+                ? {}
+                : failure(event.response.error)),
+            }
+          : {}),
         ...(usage === undefined
           ? {}
           : {
@@ -200,7 +267,10 @@ const observeFlueEvent = (
               cacheWriteTokens: usage.cacheWrite,
               totalTokens: usage.totalTokens,
             }),
-      });
+      };
+      if (event.isError)
+        agentModelLogger.error("Flue model turn failed.", fields);
+      else agentModelLogger.info("Flue model turn completed.", fields);
       return persistence;
     }
     case "compaction_start":
@@ -211,16 +281,23 @@ const observeFlueEvent = (
         estimatedTokens: event.estimatedTokens,
       });
       return persistence;
-    case "compaction":
-      agentModelLogger.info("Flue compaction completed.", {
+    case "compaction": {
+      const fields = {
         event: event.type,
         ...correlations(event),
         isError: event.isError,
         messagesBefore: event.messagesBefore,
         messagesAfter: event.messagesAfter,
         durationMs: event.durationMs,
-      });
+      };
+      if (event.isError)
+        agentModelLogger.error("Flue compaction failed.", {
+          ...fields,
+          ...unknownFailure(event.error),
+        });
+      else agentModelLogger.info("Flue compaction completed.", fields);
       return persistence;
+    }
     case "tool_start":
       agentToolLogger.info("Flue tool execution started.", {
         event: event.type,

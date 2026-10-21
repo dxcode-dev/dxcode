@@ -7,8 +7,10 @@ packages:
 overrides:
   "@opentelemetry/api": 1.9.0
   "@better-auth/utils": 0.4.2
-  "@earendil-works/pi-ai": 0.85.1
-  "@flue/runtime": file:third-party/flue/runtime-e7bef20be3c74f4ffdeeed83b1fe161a1fb5f0c8.tgz
+  "@earendil-works/pi-ai": 1.1.0
+  "@earendil-works/pi-agent-core": 1.1.0
+  "@earendil-works/pi-telemetry": 1.1.0
+  "@flue/runtime": file:third-party/flue/runtime-33a2cf7e3796a7f3960a24455f3c5bb57537ee13.tgz
 
 patchedDependencies:
   alchemy@2.0.0-beta.83: third-party/alchemy/alchemy@2.0.0-beta.83.patch

@@ -6,7 +6,10 @@ import {
   type StoredModelConnection,
   ThreadModelSelection,
 } from "@dx/domain";
-import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
+import {
+  type AssistantMessageEvent,
+  normalizeContext,
+} from "@earendil-works/pi-ai";
 import { Effect, Option, Schema } from "effect";
 import {
   claudePlanAccess,
@@ -974,13 +977,14 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       return this.#completeClaudeCode(pin, envelope, signal, started);
     // Low effort is supported across the catalog, unlike "off" (GLM 5.3 Flash).
     const reasoning = "low";
-    const context = {
+    // pi's API adapters read the prompt only from the transcript's leading
+    // system message; a raw `systemPrompt` field is ignored.
+    const context = normalizeContext({
       systemPrompt: envelope.systemPrompt,
       messages: [
         { role: "user", content: envelope.message, timestamp: Date.now() },
       ],
-      tools: [],
-    };
+    });
     let final: AssistantMessageEvent | undefined;
     if (
       IN_DO_APIS.has(route.model.api) ||

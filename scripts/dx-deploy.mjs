@@ -840,7 +840,7 @@ export const runDxDeploy = async ({
     });
   if (config.orbProviders.includes("cloudflare")) {
     await preflightCloudflareContainers({ auth: cloudflareAuth });
-    assertDockerReady(
+    await assertDockerReady(
       orbDockerEnvironment({
         environment,
         stateDirectory: resolve(".dx/alchemy/docker-preflight"),

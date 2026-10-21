@@ -9,10 +9,11 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type {
-  AssistantMessage,
-  AssistantMessageEvent,
-  Context,
+import {
+  type AssistantMessage,
+  type AssistantMessageEvent,
+  type Context,
+  normalizeContext,
 } from "@earendil-works/pi-ai";
 import type { Sandbox } from "@flue/runtime";
 import { local } from "@flue/runtime/node";
@@ -261,9 +262,11 @@ const claudeCode = (
     /** One Flue model call; resolves with its final event. */
     answer: async (context: Context, signal?: AbortSignal) => {
       const events: AssistantMessageEvent[] = [];
-      for await (const next of provider.streamSimple(model, context, {
-        ...(signal === undefined ? {} : { signal }),
-      }))
+      for await (const next of provider.streamSimple(
+        model,
+        normalizeContext(context),
+        { ...(signal === undefined ? {} : { signal }) },
+      ))
         events.push(next);
       const last = events.at(-1);
       if (last === undefined) throw new Error("Expected an event.");

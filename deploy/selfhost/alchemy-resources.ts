@@ -154,9 +154,10 @@ const orbContainersProvider = () =>
       output?.recipeHash === news.recipeHash &&
       output.workerName === news.workerName
         ? Effect.succeed(output)
-        : Effect.try({
-            try: () => {
-              deployOrbWorker({
+        : Effect.tryPromise({
+            try: async (signal) => {
+              await deployOrbWorker({
+                signal,
                 workerName: news.workerName,
                 workspaceRoot,
                 stateDirectory: resolve(
@@ -175,8 +176,9 @@ const orbContainersProvider = () =>
           }),
     delete: ({ output }) =>
       Effect.tryPromise({
-        try: () =>
+        try: (signal) =>
           destroyOrbWorker({
+            signal,
             workerName: output.workerName,
             accountId: process.env.CLOUDFLARE_ACCOUNT_ID ?? "",
             apiToken: process.env.CLOUDFLARE_API_TOKEN ?? "",

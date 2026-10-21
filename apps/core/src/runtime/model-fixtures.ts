@@ -5,6 +5,7 @@ import {
   type Model,
   type SimpleStreamOptions,
   type StreamOptions,
+  type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import {
   createFauxCore,
@@ -217,12 +218,12 @@ export const createLocalModelFixtureProvider = () => {
   };
   const stream = (
     requestModel: Model<typeof LOCAL_MODEL_FIXTURE_AUDIT_MARKER>,
-    context: Context,
+    context: TranscriptContext,
     options?: StreamOptions,
   ) => fixtureCore(context).stream(requestModel, context, options);
   const streamSimple = (
     requestModel: Model<typeof LOCAL_MODEL_FIXTURE_AUDIT_MARKER>,
-    context: Context,
+    context: TranscriptContext,
     options?: SimpleStreamOptions,
   ) => fixtureCore(context).streamSimple(requestModel, context, options);
   return createProvider({

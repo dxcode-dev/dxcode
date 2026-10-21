@@ -14,6 +14,8 @@ import {
   type Context,
   createAssistantMessageEventStream,
   createProvider,
+  getCurrentSystemPrompt,
+  type JsonObject,
   type Model,
   type SimpleStreamOptions,
   type Usage,
@@ -133,7 +135,7 @@ const contentFor = (block: ClaudeCodeBlock): Content => {
         type: "toolCall",
         id: block.id,
         name: call.name,
-        arguments: call.arguments,
+        arguments: call.arguments as JsonObject,
       };
     }
   }
@@ -628,7 +630,8 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
               effort: claudeCodeEffort(
                 options?.reasoning ?? CLAUDE_CODE_DEFAULT_EFFORT,
               ),
-              systemPrompt: context.systemPrompt ?? "",
+              // pi carries the prompt as transcript system messages.
+              systemPrompt: getCurrentSystemPrompt(context.messages),
               input: input(),
               token: credential.token,
               tools: claudeCodeDxToolList(threadId),

@@ -25,6 +25,17 @@ describe("copilot canonical mapping", () => {
     );
   });
 
+  it("serves pi's Copilot models with their thinking traits", () => {
+    const opus = copilotModelForCanonical("anthropic/claude-opus-5-5");
+    expect(opus?.upstream).toBe("claude-opus-5.5");
+    expect(opus?.compatibility).toEqual({
+      forceAdaptiveThinking: true,
+      supportsTemperature: false,
+    });
+    expect(copilotUpstreamFor("openai/gpt-6.1-sol")).toBe("gpt-6.1-sol");
+    expect(copilotUpstreamFor("openai/gpt-4.1")).toBe("gpt-4.1");
+  });
+
   it("round-trips canonical lookups", () => {
     for (const model of COPILOT_SERVED_MODELS.values()) {
       expect(copilotCanonicalFor(model.upstream)).toBe(model.canonical);
