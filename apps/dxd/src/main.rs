@@ -7,6 +7,7 @@ mod child;
 mod environment;
 mod files;
 mod files_sandbox;
+mod memory;
 mod observer;
 mod protocol;
 mod proxy;
@@ -394,7 +395,7 @@ mod tests {
             })
             .unwrap(),
             format!(
-                r#"{{"type":"register","protocolMajor":2,"release":"{RELEASE}","capabilities":{{"terminal":{{"version":1}},"workloadIdentity":{{"version":1}},"files":{{"version":1}},"proxy":{{"version":1}}}}}}"#
+                r#"{{"type":"register","protocolMajor":2,"release":"{RELEASE}","capabilities":{{"terminal":{{"version":1}},"workloadIdentity":{{"version":1}},"files":{{"version":1}},"proxy":{{"version":1}},"memory":{{"version":1}}}}}}"#
             )
         );
         assert_eq!(
@@ -405,9 +406,26 @@ mod tests {
                     Path::new("/nonexistent")
                 )
                 .heartbeat(),
+                memory: None,
             })
             .unwrap(),
             r#"{"type":"heartbeat","generation":"gen_1","terminal":{"state":"absent","terminalVersion":1,"terminal":"default"}}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&ClientMessage::Heartbeat {
+                generation: "gen_1",
+                terminal: TerminalRuntime::guest(
+                    PathBuf::from("/tmp/work"),
+                    Path::new("/nonexistent")
+                )
+                .heartbeat(),
+                memory: Some(crate::memory::MemoryUsage {
+                    used_bytes: 6_000,
+                    total_bytes: 8_000,
+                }),
+            })
+            .unwrap(),
+            r#"{"type":"heartbeat","generation":"gen_1","terminal":{"state":"absent","terminalVersion":1,"terminal":"default"},"memory":{"usedBytes":6000,"totalBytes":8000}}"#
         );
         assert_eq!(
             serde_json::to_string(&ClientMessage::ChangesDirty).unwrap(),

@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { SourceControlAccessDenied, ThreadId } from "@dx/domain";
 import { FlueError, type SandboxFactory } from "@flue/runtime";
 import { Effect, Schema } from "effect";
+import { RESERVED_SKILL_NAMES } from "../agents/built-in-skill-names.js";
 import type { Bindings } from "../http/types.js";
 import { executionWorkspaceLogger, threadDaemonLogger } from "../logging.js";
 import {
@@ -48,6 +49,7 @@ import {
   ensureGithubCliWrapper,
   withSourceRuntimeAdmission,
 } from "./source-preparation.js";
+import { withoutReservedSkills } from "./workspace-context.js";
 import {
   markExecutionWorkspaceReady,
   readExecutionWorkspaceReadiness,
@@ -538,19 +540,30 @@ export const makeExecutionActivation =
           authorize,
         ).createSandbox({ id });
         const snapshotWorkspaceContext = flueSandbox.snapshotWorkspaceContext;
-        if (snapshotWorkspaceContext === undefined) return flueSandbox;
+        // Flue lists repository skills from this snapshot, or from readdir
+        // when the snapshot declines; neither may shadow a skill dx mounts.
+        const skillsDirectory = `${flueSandbox.cwd.replace(/\/$/, "")}/.agents/skills`;
+        const readdir = async (path: string) => {
+          const entries = await flueSandbox.readdir(path);
+          return flueSandbox.resolvePath(path) === skillsDirectory
+            ? entries.filter((entry) => !RESERVED_SKILL_NAMES.has(entry))
+            : entries;
+        };
+        if (snapshotWorkspaceContext === undefined)
+          return { ...flueSandbox, readdir };
         return {
           ...flueSandbox,
+          readdir,
           async snapshotWorkspaceContext(root: string) {
             const snapshot = await snapshotWorkspaceContext(root);
-            if (!("kind" in snapshot))
-              void recordActiveSubmissionPhase(
-                bindings,
-                id,
-                "context_discovered",
-                { operationCount: 1 },
-              );
-            return snapshot;
+            if ("kind" in snapshot) return snapshot;
+            void recordActiveSubmissionPhase(
+              bindings,
+              id,
+              "context_discovered",
+              { operationCount: 1 },
+            );
+            return withoutReservedSkills(snapshot, RESERVED_SKILL_NAMES);
           },
         };
       } catch (cause) {

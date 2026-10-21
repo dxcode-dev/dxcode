@@ -967,6 +967,8 @@ export interface AgentPanelOptions {
   readonly dictationAvailable?: boolean;
   readonly workspaceReady?: boolean;
   readonly workspaceStatus?: string;
+  /** Shown above the error card, such as the Orb memory notice. */
+  readonly composerNotice?: React.ReactNode;
   readonly optimisticCreation?: OptimisticThreadCreation;
   readonly onInitialSubmissionObserved?: (submissionId: string) => void;
   readonly onOpenModelRouting?: () => void;
@@ -1387,6 +1389,7 @@ export function AgentPanel({
   dictationAvailable = false,
   workspaceReady = false,
   workspaceStatus,
+  composerNotice,
   optimisticCreation,
   onInitialSubmissionObserved,
   onOpenModelRouting,
@@ -1491,15 +1494,18 @@ export function AgentPanel({
       void imageCollection.settle().then(() => imageCollection.dispose());
   };
   const errorCard = (
-    <AgentThreadErrorCard
-      source={source}
-      discardedSends={discardedSends}
-      actionError={actionError}
-      archived={archived}
-      onActionErrorChange={setActionError}
-      onOpenModelRouting={onOpenModelRouting}
-      onRetrySend={retrySend}
-    />
+    <>
+      {composerNotice}
+      <AgentThreadErrorCard
+        source={source}
+        discardedSends={discardedSends}
+        actionError={actionError}
+        archived={archived}
+        onActionErrorChange={setActionError}
+        onOpenModelRouting={onOpenModelRouting}
+        onRetrySend={retrySend}
+      />
+    </>
   );
 
   return (

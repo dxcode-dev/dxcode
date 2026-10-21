@@ -45,6 +45,12 @@ export const RealtimeInvalidationEvent = Schema.Union([
     summaryChanged: Schema.optional(Schema.Literal(true)),
     revision: Revision,
   }),
+  /** The Thread's Orb came under memory pressure; refetch its memory. */
+  Schema.Struct({
+    type: Schema.Literal("memory.invalidated"),
+    threadId: ThreadId,
+    revision: Revision,
+  }),
 ]);
 
 /** The user's notification inbox changed; refetch it. */

@@ -39,6 +39,11 @@ configureSync({
 
 export const readinessLogger = getLogger(["dx", "readiness"]);
 export const claudeCodeLogger = getLogger(["dx", "claude-code"]);
+export const builtInSkillsLogger = getLogger([
+  "dx",
+  "agents",
+  "built-in-skills",
+]);
 export const requestLogger = getLogger(["dx", "http", "request"]);
 export const httpErrorLogger = getLogger(["dx", "http", "error"]);
 export const authenticationLogger = getLogger(["dx", "auth", "authentication"]);

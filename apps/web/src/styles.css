@@ -8613,11 +8613,14 @@ div.claude-code-mode-main {
   min-width: 0;
   padding-top: env(safe-area-inset-top);
 }
+/* The pane runs to the screen's bottom edge; what sits at the bottom (the
+   composer dock, the Files and Terminal tools, an archived transcript)
+   clears the home indicator itself, once. */
 .mobile-pane-content {
+  --agent-composer-dock-bottom: calc(9px + env(safe-area-inset-bottom));
   min-height: 0;
   flex: 1;
   overflow: hidden;
-  padding-bottom: env(safe-area-inset-bottom);
 }
 .mobile-pane-content > * {
   height: 100%;
@@ -8656,15 +8659,20 @@ div.claude-code-mode-main {
   padding: 16px 16px calc(var(--agent-composer-dock-height, 162px) + 16px);
   font-size: 13px;
 }
+/* Above the composer and the dock's bottom space, as on desktop. */
 .mobile-pane-content .transcript-controls {
-  bottom: calc(var(--agent-composer-height, 92px) + 16px);
+  bottom: calc(
+    var(--agent-composer-height, 92px) +
+    var(--agent-composer-dock-bottom) +
+    8px
+  );
 }
 .mobile-pane-content .agent-panel-stack[data-archived] .agent-transcript {
-  padding-bottom: 16px;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
 }
 .mobile-pane-content .agent-composer-dock {
   padding-right: 9px;
-  padding-bottom: calc(9px + env(safe-area-inset-bottom));
+  padding-bottom: var(--agent-composer-dock-bottom);
   padding-left: 9px;
 }
 .mobile-pane-content .agent-composer {

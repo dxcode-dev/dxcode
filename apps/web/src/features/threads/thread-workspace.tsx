@@ -38,6 +38,7 @@ import {
   ThreadFilesPanel,
 } from "./files/files-panel.js";
 import type { PendingAttachment } from "./image-attachments.js";
+import { OrbMemoryNotice } from "./orb-memory/orb-memory-notice.js";
 import { ThreadPortalsPane } from "./portals/portals-pane.js";
 import {
   useThreadPresence,
@@ -905,6 +906,11 @@ function ThreadSessionContent({
     undefined;
   const toggleRightPane = () =>
     setRightPaneCollapsed((collapsed) => !collapsed);
+  // Process names and commands are Terminal-level detail: contributors only.
+  const composerNotice =
+    !archived && thread.executionWorkspace.ready && thread.access !== "view" ? (
+      <OrbMemoryNotice key={thread.id} threadId={thread.id} />
+    ) : undefined;
   const mobileTool = useMobileThreadTool();
 
   const { workspaceTools, openFilePanes } = useWorkspaceTools({
@@ -970,6 +976,7 @@ function ThreadSessionContent({
         draft={draft}
         workspaceReady={thread.executionWorkspace.ready}
         workspaceStatus={workspaceStatus}
+        composerNotice={composerNotice}
         optimisticCreation={optimisticCreation}
         onInitialSubmissionObserved={onInitialSubmissionObserved}
         {...sharedPanelProps}
@@ -1070,6 +1077,7 @@ function ThreadSessionContent({
                 draft={draft}
                 workspaceReady={thread.executionWorkspace.ready}
                 workspaceStatus={workspaceStatus}
+                composerNotice={composerNotice}
                 optimisticCreation={optimisticCreation}
                 onInitialSubmissionObserved={onInitialSubmissionObserved}
                 {...sharedPanelProps}

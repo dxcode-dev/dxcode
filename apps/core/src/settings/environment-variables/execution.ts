@@ -1,14 +1,20 @@
 import {
+  EnvironmentVariableName,
   isReservedEnvironmentVariableName,
   ProjectId,
   ThreadId,
   UserId,
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Redacted, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
 import { settingsPersistenceLogger } from "../../logging.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
+import {
+  PORTAL_HOST_SUFFIX_VARIABLE,
+  portalConfiguration,
+  portalHostSuffix,
+} from "../../portals/host.js";
 import { SettingsAudit } from "../audit.js";
 import { WorkspaceRepositoryD1 } from "../workspace/repository-d1.js";
 import { loadConfigEncryptionKeyring } from "./encryption.js";
@@ -22,6 +28,10 @@ const ExecutionThreadRow = Schema.Struct({
   project_id: ProjectId,
   owner_user_id: UserId,
 });
+
+const portalHostSuffixName = Schema.decodeSync(EnvironmentVariableName)(
+  PORTAL_HOST_SUFFIX_VARIABLE,
+);
 
 const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 const RevisionRow = Schema.Struct({
@@ -44,8 +54,14 @@ export interface ExecutionEnvironmentRevision {
   };
 }
 
+/** A variable an execution receives: a resolved setting or one dx provides. */
+export type ExecutionEnvironmentValue = Pick<
+  ResolvedEnvironmentVariable,
+  "name" | "kind" | "value"
+>;
+
 export interface ExecutionEnvironmentSnapshot {
-  readonly values: ReadonlyArray<ResolvedEnvironmentVariable>;
+  readonly values: ReadonlyArray<ExecutionEnvironmentValue>;
   readonly revision: ExecutionEnvironmentRevision;
 }
 
@@ -230,10 +246,27 @@ export const resolveExecutionEnvironment = Effect.fn(
       "Reserved legacy environment configuration was excluded from execution.",
       { event: "environment_variable_legacy_validation_failed" },
     );
+  // The deployment chooses its Portal domain, so the workspace learns it here
+  // instead of from a hostname written into a project's dev-server config.
+  const portals = portalConfiguration(bindings);
+  const values: ReadonlyArray<ExecutionEnvironmentValue> =
+    resolved.snapshot.filter(
+      ({ name }) =>
+        !isReservedEnvironmentVariableName(name) &&
+        (portals === undefined || name !== PORTAL_HOST_SUFFIX_VARIABLE),
+    );
   return {
-    values: resolved.snapshot.filter(
-      ({ name }) => !isReservedEnvironmentVariableName(name),
-    ),
+    values:
+      portals === undefined
+        ? values
+        : [
+            ...values,
+            {
+              name: portalHostSuffixName,
+              kind: "variable",
+              value: Redacted.make(portalHostSuffix(portals)),
+            },
+          ],
     revision: resolved.revision,
   } satisfies ExecutionEnvironmentSnapshot;
 });

@@ -86,8 +86,15 @@ import {
   startupObservation,
   startupServerTiming,
 } from "../observability/startup-runtime.js";
+import {
+  OrbMemoryMonitor,
+  serveOrbMemory,
+} from "../orb-memory/execution-object.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
-import { publishChangesInvalidation } from "../realtime/publication.js";
+import {
+  publishChangesInvalidation,
+  publishRealtimeInvalidation,
+} from "../realtime/publication.js";
 import { environmentActivationOperation } from "../settings/environment-variables/activation.js";
 import {
   executionEnvironmentRevisionsEqual,
@@ -318,6 +325,8 @@ interface DaemonAuthority {
   readonly chunkAcks?: boolean;
   /** The connected daemon serves `proxy.open` streams (Portals, Desktop). */
   readonly proxy?: boolean;
+  /** The connected daemon reports memory and serves `memory.*` operations. */
+  readonly memory?: boolean;
 }
 
 interface DaemonAttachment {
@@ -422,6 +431,22 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   });
   /** When proxied traffic last renewed the workspace's inactivity deadline. */
   #proxyActivityAt = 0;
+  /** Tells the Thread's viewers when its Orb comes under memory pressure. */
+  readonly #orbMemory = new OrbMemoryMonitor((threadId, usage) => {
+    threadDaemonLogger.info("Thread Orb memory pressure.", {
+      event: "orb_memory_pressure",
+      threadId,
+      usedBytes: usage.usedBytes,
+      totalBytes: usage.totalBytes,
+    });
+    this.ctx.waitUntil(
+      publishRealtimeInvalidation(
+        this.env,
+        threadId,
+        "memory.invalidated",
+      ).catch(() => undefined),
+    );
+  });
   /** In-flight `services.ensure` attempts by guest port. */
   readonly #serviceEnsures = new Map<number, Promise<boolean>>();
   /** The in-flight `desktop.ensure`, shared by the Desktop's channels. */
@@ -658,6 +683,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       path === "/proxy/ports"
     )
       return this.#proxy(request, path);
+    if (path === "/orb/memory" || path === "/orb/memory/stop")
+      return this.#serveOrbMemory(request, path);
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
       return new Response(null, { status: 404 });
     const threadId = Schema.decodeUnknownOption(ThreadId)(
@@ -797,6 +824,33 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           ),
         ),
       );
+  }
+
+  /**
+   * Orb memory for an already authorized caller: a snapshot or a stop,
+   * relayed only to a live daemon. Neither wakes a paused workspace nor
+   * renews its inactivity deadline.
+   */
+  #serveOrbMemory(request: Request, path: "/orb/memory" | "/orb/memory/stop") {
+    const threadId = Schema.decodeUnknownOption(ThreadId)(
+      request.headers.get("x-dx-thread-id"),
+    );
+    if (Option.isNone(threadId)) return new Response(null, { status: 404 });
+    const authority = this.#authority;
+    return serveOrbMemory(request, path, threadId.value, {
+      threadId: authority?.threadId,
+      running: this.#isTransportReady() && this.#isHeartbeatFresh(),
+      memory: authority?.memory === true,
+      dispatch: (operation) =>
+        authority === undefined
+          ? Promise.resolve(daemonFailureResponse("known"))
+          : this.#dispatchDaemonOperation(
+              authority,
+              operation,
+              DXD_MAX_REQUEST_FRAME_BYTES,
+              DAEMON_REQUEST_TIMEOUT_MS,
+            ),
+    });
   }
 
   /**
@@ -2256,6 +2310,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           pending.operation.operation !== "proxy.ports" &&
           pending.operation.operation !== "desktop.ensure" &&
           pending.operation.operation !== "services.ensure" &&
+          pending.operation.operation !== "memory.snapshot" &&
+          pending.operation.operation !== "memory.stop" &&
           !this.#isReady())
       )
         continue;
@@ -3370,7 +3426,9 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         daemonRelease: control.value.release,
         chunkAcks: control.value.capabilities.files !== undefined,
         proxy: control.value.capabilities.proxy !== undefined,
+        memory: control.value.capabilities.memory !== undefined,
       };
+      this.#orbMemory.reset();
       this.#authority = next;
       this.#lastPersistedHeartbeatAt = next.lastSeen;
       this.#lastHeartbeatAt = next.lastSeen;
@@ -3557,6 +3615,11 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     this.#authority = next;
     this.#lastHeartbeatAt = now;
     this.#armDaemonLease();
+    this.#orbMemory.observe(
+      Schema.decodeUnknownSync(ThreadId)(authority.threadId),
+      control.value.memory,
+      now,
+    );
     socket.serializeAttachment({
       kind: "daemon",
       generation: authority.generation,
@@ -3655,6 +3718,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       runtimeAssurance: authority.runtimeAssurance,
     };
     this.#authority = disconnected;
+    this.#orbMemory.reset();
     this.#terminalHeartbeat = undefined;
     this.#environmentReady = false;
     this.#appliedEnvironment = undefined;

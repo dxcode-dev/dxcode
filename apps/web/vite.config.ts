@@ -17,6 +17,13 @@ export default defineConfig(({ mode }) => {
     : (process.env.DX_ENV ?? env.DX_ENV ?? "");
   const includeGhosttyProof =
     !productionPackage && process.env.GHOSTTY_PROOF === "1";
+  // A dx workspace names its deployment's Portal domain (`.ondx.dev`, or a
+  // self-host's own), so the dev server answers its Portal URL there.
+  const portalHostSuffix = process.env.DX_PORTAL_HOST_SUFFIX;
+  const allowedHosts =
+    portalHostSuffix?.startsWith(".") === true
+      ? [...localAllowedHosts, portalHostSuffix]
+      : localAllowedHosts;
 
   return {
     envDir: productionPackage ? false : undefined,
@@ -45,7 +52,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: 3000,
-      allowedHosts: localAllowedHosts,
+      allowedHosts,
       proxy: {
         "/api/auth": {
           target: apiTarget,

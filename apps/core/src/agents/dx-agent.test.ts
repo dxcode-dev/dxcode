@@ -78,6 +78,7 @@ vi.mock("../settings/plugins/flue.js", () => ({
   createPluginTool: plugins.createPluginTool,
 }));
 
+import { BUILT_IN_SKILL_NAMES } from "./built-in-skill-names.js";
 import { DxAgent } from "./dx-agent.js";
 import { DxAgentInitialDataSchema } from "./dx-agent-initial-data.js";
 import { dxAgentPrompt } from "./dx-agent-prompt.js";
@@ -172,13 +173,13 @@ describe("DxAgent", () => {
     expect(disabledPrompt).not.toMatch(/web_search|read_web_page|web search/i);
   });
 
-  it("mounts dx's workspace skill through Flue in a workspace Thread only", () => {
+  it("mounts dx's workspace and built-in skills through Flue in a workspace Thread only", () => {
     const prompt = DxAgent({ id: "thr_workspace" });
     expect(
       hooks.useSkill.mock.calls.map(
         ([skill]) => (skill as { name: string }).name,
       ),
-    ).toEqual(["dx-workspace"]);
+    ).toEqual(["dx-workspace", ...BUILT_IN_SKILL_NAMES]);
     expect(prompt).toContain("activate the dx-workspace skill");
 
     hooks.useSkill.mockReset();

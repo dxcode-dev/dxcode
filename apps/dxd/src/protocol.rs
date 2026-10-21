@@ -134,6 +134,13 @@ pub struct ProxyCapability {
     pub version: u8,
 }
 
+/// Version 1: heartbeats carry `memory`, and Core may send the
+/// `memory.snapshot` and `memory.stop` operations; see [`crate::memory`].
+#[derive(Serialize)]
+pub struct MemoryCapability {
+    pub version: u8,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capabilities {
@@ -141,6 +148,7 @@ pub struct Capabilities {
     pub workload_identity: WorkloadIdentityCapability,
     pub files: FilesCapability,
     pub proxy: ProxyCapability,
+    pub memory: MemoryCapability,
 }
 
 impl Capabilities {
@@ -152,6 +160,7 @@ impl Capabilities {
             workload_identity: WorkloadIdentityCapability { version: 1 },
             files: FilesCapability { version: 1 },
             proxy: ProxyCapability { version: 1 },
+            memory: MemoryCapability { version: 1 },
         }
     }
 }
@@ -358,6 +367,8 @@ pub enum ClientMessage<'a> {
     Heartbeat {
         generation: &'a str,
         terminal: TerminalHeartbeat,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        memory: Option<crate::memory::MemoryUsage>,
     },
     ReadinessPong {
         generation: &'a str,
@@ -397,6 +408,7 @@ pub enum OperationResult {
     Files(FilesResult),
     Environment(EnvironmentResult),
     Portal(PortalResult),
+    Memory(crate::memory::MemoryResult),
 }
 
 /// Requests that serve Portals and the Desktop rather than one stream.
@@ -429,12 +441,23 @@ pub enum PortalResult {
     },
 }
 
+/// The Orb's memory: a snapshot, or stopping one listed process.
+#[derive(Deserialize)]
+#[serde(tag = "operation", deny_unknown_fields)]
+pub enum MemoryOperation {
+    #[serde(rename = "memory.snapshot")]
+    Snapshot {},
+    #[serde(rename = "memory.stop")]
+    Stop { process: String },
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 pub enum RequestOperation {
     Files(FilesOperation),
     Environment(EnvironmentOperation),
     Portal(PortalOperation),
+    Memory(MemoryOperation),
 }
 
 #[derive(Deserialize)]
@@ -450,7 +473,7 @@ impl RequestOperation {
     pub fn refresh(&self) -> Option<crate::changes::RefreshRequest> {
         match self {
             Self::Files(operation) => operation.refresh(),
-            Self::Environment(_) | Self::Portal(_) => None,
+            Self::Environment(_) | Self::Portal(_) | Self::Memory(_) => None,
         }
     }
 }

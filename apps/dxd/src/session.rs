@@ -14,10 +14,12 @@ use crate::changes::{
 use crate::environment::{EnvironmentOutcome, EnvironmentResult, EnvironmentRuntime, Materialized};
 use crate::files::{FilesContext, FilesDone, FilesOperation, FilesResult, FilesWorkers};
 use crate::files_sandbox::{self, SandboxReadResult};
+use crate::memory::{self, Memory};
 use crate::observer::Observer;
 use crate::protocol::{
-    Capabilities, ClientMessage, EnvironmentOperation, OperationResult, PortalOperation,
-    PortalResult, RequestOperation, ServerMessage, UpdateStatus, WorkloadIdentityResult,
+    Capabilities, ClientMessage, EnvironmentOperation, MemoryOperation, OperationResult,
+    PortalOperation, PortalResult, RequestOperation, ServerMessage, UpdateStatus,
+    WorkloadIdentityResult,
 };
 use crate::proxy::{self, DesktopStart, Outbound, Proxy};
 use crate::services::{ServicePaths, Services};
@@ -149,6 +151,9 @@ pub struct Daemon {
     /// Held by the one running Desktop start, which can outlive the
     /// session that asked; Core asks again after a reconnect.
     desktop_start: Arc<std::sync::Mutex<()>>,
+    /// Processes a person asked to stop; snapshots and stops outlive a
+    /// session.
+    memory: Memory,
 }
 
 impl Daemon {
@@ -167,6 +172,12 @@ impl Daemon {
     ) -> std::io::Result<Self> {
         let (files, files_results) = FilesWorkers::new(files);
         let (changes_results_tx, changes_results) = channel(4);
+        let memory = Memory::new(
+            config
+                .local_runtime
+                .as_ref()
+                .map(|local| PathBuf::from(&local.home_directory)),
+        );
         Ok(Self {
             changes_workspace: PathBuf::from(&config.workspace_root),
             changes_cache: CaptureCache::default(),
@@ -191,6 +202,7 @@ impl Daemon {
             connected,
             services,
             desktop_start: Arc::default(),
+            memory,
         })
     }
 
@@ -435,6 +447,7 @@ impl Daemon {
             &ClientMessage::Heartbeat {
                 generation: &generation,
                 terminal: self.terminal.heartbeat(),
+                memory: memory::usage(),
             },
         )
         .await?;
@@ -562,11 +575,13 @@ impl Daemon {
                     let output = self.terminal.reap_exited().map_err(SessionExit::Terminal)?;
                     send_terminal_output(&control, output).await?;
                     self.services.reap();
+                    self.memory.enforce_stops();
                     send_json(
                         &control,
                         &ClientMessage::Heartbeat {
                             generation: &generation,
                             terminal: self.terminal.heartbeat(),
+                            memory: memory::usage(),
                         },
                     )
                     .await?;
@@ -931,6 +946,26 @@ impl Daemon {
                                 generation: &generation,
                                 request_id: &request_id,
                                 result: OperationResult::Portal(result),
+                            }) {
+                                let _ = sender.send(Outbound::Text(text));
+                            }
+                        });
+                    }
+                    RequestOperation::Memory(operation) => {
+                        // A snapshot reads every process's /proc entries:
+                        // its answer returns through the proxy's lane.
+                        let sender = proxy.sender();
+                        let generation = generation.to_owned();
+                        let memory = self.memory.clone();
+                        tokio::task::spawn_blocking(move || {
+                            let result = match operation {
+                                MemoryOperation::Snapshot {} => memory.snapshot(),
+                                MemoryOperation::Stop { process } => memory.stop(&process),
+                            };
+                            if let Ok(text) = serde_json::to_string(&ClientMessage::Response {
+                                generation: &generation,
+                                request_id: &request_id,
+                                result: OperationResult::Memory(result),
                             }) {
                                 let _ = sender.send(Outbound::Text(text));
                             }

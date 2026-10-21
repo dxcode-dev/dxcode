@@ -1,4 +1,5 @@
 import type { Sandbox } from "@flue/runtime";
+import { BUILT_IN_SKILL_NAMES } from "../agents/built-in-skill-names.js";
 import { encodeBase64 } from "../encoding/base64.js";
 import { CLAUDE_CODE_MCP_SERVER } from "./mcp-server.js";
 import { CHUNK_END_LINE, ClaudeCodeStream } from "./stream.js";
@@ -265,11 +266,19 @@ fi
 RESUME=""
 if [ -s "$S/session" ]; then RESUME="--resume $(cat "$S/session")"; : > "$D/resumed"; fi
 # Claude Code reads skills from ~/.claude/skills, not the repository's .agents.
+# dx's built-in skills come first; a repository skill with a built-in name is
+# skipped, as for the dx agent. Links are relative, so they resolve inside the
+# local runtime's namespace too.
+mkdir -p "$HOME/.claude/skills"
+find "$HOME/.claude/skills" -maxdepth 1 -xtype l -delete
+for skill in "$HOME/.local/share/dx/skills"/*/; do
+  name=$(basename "$skill")
+  [ -f "$skill/SKILL.md" ] && ln -sfn "../../.local/share/dx/skills/$name" "$HOME/.claude/skills/$name"
+done
 if [ -d ${quote(`${WORKSPACE}/.agents/skills`)} ]; then
-  mkdir -p "$HOME/.claude/skills"
   for skill in ${quote(`${WORKSPACE}/.agents/skills`)}/*/; do
     name=$(basename "$skill")
-    # Relative, so the link resolves inside the local runtime's namespace too.
+    case " ${[...BUILT_IN_SKILL_NAMES].join(" ")} " in *" $name "*) continue ;; esac
     [ -f "$skill/SKILL.md" ] && ln -sfn "../../workspace/repo/.agents/skills/$name" "$HOME/.claude/skills/$name"
   done
 fi

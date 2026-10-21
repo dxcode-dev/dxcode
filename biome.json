@@ -9,7 +9,8 @@
       "!**/.alchemy",
       "!**/.dx",
       "!**/.wrangler",
-      "!**/.astro"
+      "!**/.astro",
+      "!wiki/raw"
     ]
   },
   "formatter": {

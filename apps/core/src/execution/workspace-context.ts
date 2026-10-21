@@ -2,6 +2,7 @@ import type {
   WorkspaceContextSnapshot,
   WorkspaceContextSnapshotResult,
 } from "@flue/runtime";
+import { parse } from "yaml";
 
 /**
  * Flue's workspace-context snapshot over one guest command, shared by every
@@ -224,3 +225,31 @@ export const decodeWorkspaceContextSnapshot = (
     return declined;
   return snapshot;
 };
+
+const frontmatterName = (content: string) => {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content);
+  if (match === null) return undefined;
+  try {
+    const name = parse(match[1] ?? "")?.name;
+    return typeof name === "string" ? name : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * The snapshot without repository skills whose directory or declared name is
+ * reserved, so a repository can never shadow a skill dx mounts itself.
+ */
+export const withoutReservedSkills = (
+  snapshot: WorkspaceContextSnapshot,
+  reserved: ReadonlySet<string>,
+): WorkspaceContextSnapshot => ({
+  ...snapshot,
+  skillFiles: snapshot.skillFiles.filter((file) => {
+    if (reserved.has(file.directoryName)) return false;
+    const name =
+      file.kind === "file" ? frontmatterName(file.content) : undefined;
+    return name === undefined || !reserved.has(name);
+  }),
+});

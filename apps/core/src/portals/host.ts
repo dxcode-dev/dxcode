@@ -75,6 +75,17 @@ const resolveConfiguration = (
   };
 };
 
+/**
+ * The workspace variable holding what every Portal host ends with, such as
+ * `.ondx.dev`: the form a dev server's host allowlist takes. Each deployment
+ * chooses its own Portal domain, so guest configuration reads it from here.
+ */
+export const PORTAL_HOST_SUFFIX_VARIABLE = "DX_PORTAL_HOST_SUFFIX";
+
+/** Hosts drop the port before an allowlist compares them. */
+export const portalHostSuffix = (configuration: PortalConfiguration) =>
+  `.${configuration.domain.split(":", 1)[0] ?? configuration.domain}`;
+
 export const threadPortalLabel = (threadId: ThreadId, port: number) =>
   `t-${threadId.slice("thr_".length)}-p${port}`;
 

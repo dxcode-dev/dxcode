@@ -40,6 +40,10 @@ import { createPluginTool } from "../settings/plugins/flue.js";
 import { createSkillResourceTool } from "../settings/skills/execution.js";
 import { createThreadTools } from "../threads/agent-tools.js";
 import {
+  builtInSkillDefinitions,
+  installBuiltInSkills,
+} from "./built-in-skills.js";
+import {
   type DxAgentInitialData,
   DxAgentInitialDataSchema,
 } from "./dx-agent-initial-data.js";
@@ -171,7 +175,12 @@ const agentSandbox: SandboxFactory | undefined =
         },
       };
 
-/** Installed plugins' agent-start and agent-finish hooks. */
+/**
+ * Installed plugins' agent-start and agent-finish hooks. The agent-start
+ * hook first writes dx's built-in skills into the workspace, for the dx
+ * agent and Claude Code alike; Flue runs separate start hooks concurrently,
+ * so both stay in one.
+ */
 const usePluginLifecycle = (
   threadId: string,
   plugins: DxAgentInitialData["plugins"],
@@ -202,7 +211,10 @@ const usePluginLifecycle = (
         }
       }
     };
-  useAgentStart(hook("agent-start"));
+  useAgentStart(async (context) => {
+    await installBuiltInSkills(context.harness.sandbox);
+    await hook("agent-start")(context);
+  });
   if (plugins.some(({ lifecycle }) => lifecycle.includes("agent-finish")))
     useAgentFinish(hook("agent-finish"));
 };
@@ -246,9 +258,10 @@ export function DxAgent(props: AgentProps) {
     }
     for (const tool of dxTools(props.id, initialData, promptData))
       useTool(tool);
-    // Flue lists it in the Available Skills catalog and loads it on demand
-    // through activate_skill, like a repository's .agents/skills.
+    // Flue lists them in the Available Skills catalog and loads each on
+    // demand through activate_skill, like a repository's .agents/skills.
     useSkill(dxWorkspaceSkill);
+    for (const skill of builtInSkillDefinitions) useSkill(skill);
   }
   if (agentRuntimeComposition.capabilities === "model-only")
     return localModelPreviewPrompt;

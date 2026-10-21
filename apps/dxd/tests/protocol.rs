@@ -2101,3 +2101,281 @@ async fn real_daemon_never_passes_another_tmux_session_off_as_the_lost_resident(
     assert_eq!(terminal["state"], "exited", "{terminal}");
     assert_eq!(tmux.stdout(&["list-clients", "-F", "#{client_pid}"]), "");
 }
+
+/// A request's result, answering heartbeats with a ping as Core keeps the
+/// daemon's lease alive.
+async fn memory_request(
+    socket: &mut Socket,
+    generation: &str,
+    id: &str,
+    operation: Value,
+) -> Value {
+    send(
+        socket,
+        json!({"type": "request", "generation": generation, "requestId": id, "operation": operation}),
+    )
+    .await;
+    loop {
+        let value = next_text(socket).await;
+        if value["type"] == "heartbeat" {
+            socket.send(Message::Ping(Vec::new().into())).await.unwrap();
+        }
+        if value["type"] == "response" && value["requestId"] == id {
+            return value["result"].clone();
+        }
+    }
+}
+
+struct ProcessGuard(Child);
+
+impl Drop for ProcessGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn listed<'a>(snapshot: &'a Value, pid: u32) -> Option<&'a Value> {
+    snapshot["processes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["pid"] == pid)
+}
+
+/// Orb memory: heartbeats carry usage, a snapshot lists the largest
+/// processes working in the Thread's home (never dx's own), and a stop
+/// signals only the  ct process it names, escalating to `SIGKILL`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_daemon_reports_memory_and_stops_listed_processes() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fixture = fixture(port);
+    let daemon = DaemonGuard(spawn_daemon(&fixture));
+    let mut socket = accept(&listener).await;
+    let generation = register(&mut socket).await;
+
+    let heartbeat = wait_for(&mut socket, |value| value["type"] == "heartbeat").await;
+    let used = heartbeat["memory"]["usedBytes"]
+        .as_u64()
+        .expect("usedBytes");
+    let total = heartbeat["memory"]["totalBytes"]
+        .as_u64()
+        .expect("totalBytes");
+    assert!(total > 0 && used <= total, "{heartbeat}");
+
+    // About 48 MiB held in a shell that ignores SIGTERM, a plain sleeper,
+    // and a stand-in Claude Code run: the runner and the CLI it starts.
+    let hog = ProcessGuard(
+        Command::new("bash")
+            .args([
+                "-c",
+                "trap '' TERM; x=$(head -c 50000000 /dev/zero | tr '\\0' a); echo held; while :; do sleep 1; done",
+            ])
+            .current_dir(&fixture.repo)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let sleeper = ProcessGuard(
+        Command::new("sleep")
+            .arg("600")
+            .current_dir(&fixture.repo)
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let run = fixture.home.join(".local/state/dx-claude-code/runs/turn.1");
+    std::fs::create_dir_all(&run).unwrap();
+    std::fs::write(
+        run.join("runner.sh"),
+        "sleep 600 &\necho $! > \"$1\"\nwait\n",
+    )
+    .unwrap();
+    let cli_pid_file = run.join("cli.pid");
+    let runner = ProcessGuard(
+        Command::new("bash")
+            .arg(run.join("runner.sh"))
+            .arg(&cli_pid_file)
+            .current_dir(&fixture.repo)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let hog_pid = hog.0.id();
+    let sleeper_pid = sleeper.0.id();
+    let runner_pid = runner.0.id();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let cli_pid = loop {
+        assert!(Instant::now() < deadline, "the stand-in CLI never started");
+        if let Some(pid) = std::fs::read_to_string(&cli_pid_file)
+            .ok()
+            .and_then(|text| text.trim().parse::<u32>().ok())
+        {
+            break pid;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    // The runner's child is not ours to wait on: end it with the test.
+    struct Orphan(u32);
+    impl Drop for Orphan {
+        fn drop(&mut self) {
+            let _ = Command::new("kill").arg(self.0.to_string()).status();
+        }
+    }
+    let _cli = Orphan(cli_pid);
+
+    let mut attempt = 0;
+    let snapshot = loop {
+        attempt += 1;
+        assert!(attempt < 100, "the hog was never listed with its memory");
+        let snapshot = memory_request(
+            &mut socket,
+            &generation,
+            &format!("memory-{attempt}"),
+            json!({"operation": "memory.snapshot"}),
+        )
+        .await;
+        assert_eq!(snapshot["kind"], "snapshot", "{snapshot}");
+        if listed(&snapshot, hog_pid)
+            .is_some_and(|entry| entry["memoryBytes"].as_u64().unwrap() >= 45_000_000)
+        {
+            break snapshot;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    let entries = snapshot["processes"].as_array().unwrap();
+    assert!(entries.len() <= 5, "{snapshot}");
+    assert!(snapshot["totalBytes"].as_u64().unwrap() > 0);
+    // Largest first, every one running, and only processes in the Thread's
+    // home: never this daemon, the test harness, or the Claude Code run.
+    assert_eq!(entries[0]["pid"], hog_pid, "{snapshot}");
+    assert_eq!(entries[0]["name"], "bash");
+    assert!(
+        entries[0]["command"]
+            .as_str()
+            .unwrap()
+            .starts_with("bash -c trap")
+    );
+    for entry in entries {
+        let pid = entry["pid"].as_u64().unwrap() as u32;
+        assert_eq!(entry["state"], "running", "{snapshot}");
+        assert!(
+            ![daemon.0.id(), std::process::id(), runner_pid, cli_pid].contains(&pid),
+            "{snapshot}"
+        );
+        let cwd = std::fs::read_link(format!("/proc/{pid}/cwd")).unwrap();
+        assert!(cwd.starts_with(&fixture.home), "{pid} works in {cwd:?}");
+    }
+    let hog_id = entries[0]["id"].as_str().unwrap().to_owned();
+    let sleeper_id = listed(&snapshot, sleeper_pid).expect("sleeper listed")["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // A forged start time (a reused PID) is never signalled, and dx's own
+    // processes cannot be stopped.
+    let (pid, start) = hog_id.split_once('-').unwrap();
+    let forged = format!("{pid}-{}", start.parse::<u64>().unwrap() + 1);
+    let result = memory_request(
+        &mut socket,
+        &generation,
+        "stop-forged",
+        json!({"operation": "memory.stop", "process": forged}),
+    )
+    .await;
+    assert_eq!(
+        result,
+        json!({"kind": "unavailable", "reason": "not-found"})
+    );
+    let runner_start = std::fs::read_to_string(format!("/proc/{runner_pid}/stat")).unwrap();
+    let runner_start = runner_start[runner_start.rfind(')').unwrap() + 1..]
+        .split_whitespace()
+        .nth(19)
+        .unwrap()
+        .to_owned();
+    let result = memory_request(
+        &mut socket,
+        &generation,
+        "stop-runner",
+        json!({"operation": "memory.stop", "process": format!("{runner_pid}-{runner_start}")}),
+    )
+    .await;
+    assert_eq!(
+        result,
+        json!({"kind": "unavailable", "reason": "protected"})
+    );
+    assert!(process_alive(runner_pid) && process_alive(hog_pid));
+
+    // The sleeper ends on SIGTERM; the hog ignores it until SIGKILL.
+    let result = memory_request(
+        &mut socket,
+        &generation,
+        "stop-sleeper",
+        json!({"operation": "memory.stop", "process": sleeper_id}),
+    )
+    .await;
+    assert_eq!(result, json!({"kind": "stop", "state": "stopping"}));
+    let stopped_at = Instant::now();
+    let result = memory_request(
+        &mut socket,
+        &generation,
+        "stop-hog",
+        json!({"operation": "memory.stop", "process": hog_id}),
+    )
+    .await;
+    assert_eq!(result, json!({"kind": "stop", "state": "stopping"}));
+    let result = memory_request(
+        &mut socket,
+        &generation,
+        "stop-hog-again",
+        json!({"operation": "memory.stop", "process": hog_id}),
+    )
+    .await;
+    assert_eq!(result, json!({"kind": "stop", "state": "stopping"}));
+
+    let mut sleeper = sleeper;
+    let mut hog = hog;
+    let mut attempt = 0;
+    let mut saw_hog_stopping = false;
+    loop {
+        attempt += 1;
+        assert!(attempt < 150, "the stops never completed");
+        let snapshot = memory_request(
+            &mut socket,
+            &generation,
+            &format!("after-stop-{attempt}"),
+            json!({"operation": "memory.snapshot"}),
+        )
+        .await;
+        let hog_state = listed(&snapshot, hog_pid).expect("hog stays listed")["state"].clone();
+        let sleeper_state =
+            listed(&snapshot, sleeper_pid).expect("sleeper stays listed")["state"].clone();
+        if hog_state == "stopping" {
+            saw_hog_stopping = true;
+            assert!(hog.0.try_wait().unwrap().is_none());
+        }
+        // Reap our children so they read as gone rather than zombies.
+        let _ = sleeper.0.try_wait();
+        let _ = hog.0.try_wait();
+        if hog_state == "stopped" && sleeper_state == "stopped" {
+            // The stopped hog keeps the memory it held, so the list stays
+            // in place; it was killed only after the grace period.
+            assert!(
+                listed(&snapshot, hog_pid).unwrap()["memoryBytes"]
+                    .as_u64()
+                    .unwrap()
+                    >= 45_000_000
+            );
+            assert!(stopped_at.elapsed() >= Duration::from_secs(5));
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(saw_hog_stopping, "the hog outlived SIGTERM");
+    assert!(sleeper.0.try_wait().unwrap().is_some());
+    assert!(hog.0.try_wait().unwrap().is_some());
+    assert!(process_alive(runner_pid) && process_alive(cli_pid));
+}

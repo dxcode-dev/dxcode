@@ -1,6 +1,8 @@
 import {
   IssueWorkloadIdentityRequestSchema,
   IssueWorkloadIdentityResultSchema,
+  OrbProcessIdSchema,
+  OrbProcessSchema,
   THREAD_FILES_MAX_EDITABLE_BYTES,
   THREAD_FILES_MAX_TREE_PAGE_SIZE,
   THREAD_SANDBOX_FILE_MAX_CHUNK_BYTES,
@@ -24,7 +26,7 @@ import {
 } from "../../thread-changes/candidate.js";
 
 export const DXD_PROTOCOL_MAJOR = 2;
-export const DXD_RELEASE = "0.10.1";
+export const DXD_RELEASE = "0.11.0";
 export const DXD_TERMINAL_VERSION = 1;
 export const DXD_WORKLOAD_IDENTITY_VERSION = 1;
 export const DXD_HEARTBEAT_INTERVAL_MS = 2_000;
@@ -98,6 +100,11 @@ export const DxdTerminalCapability = Schema.Struct({
    * and send the `proxy.ports` and `desktop.ensure` operations.
    */
   proxy: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
+  /**
+   * Version 1: heartbeats carry `memory`, and Core may send the
+   * `memory.snapshot` and `memory.stop` operations.
+   */
+  memory: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
 });
 
 export const DxdTerminalHeartbeat = Schema.Union([
@@ -215,10 +222,22 @@ export const DxdUpdateMessage = Schema.Struct({
 });
 export type DxdUpdateMessage = typeof DxdUpdateMessage.Type;
 
+const DxdBytes = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+);
+
+/** The guest's memory in use, measured by dxd on every provider. */
+export const DxdMemoryUsage = Schema.Struct({
+  usedBytes: DxdBytes,
+  totalBytes: DxdBytes,
+});
+export type DxdMemoryUsage = typeof DxdMemoryUsage.Type;
+
 export const DxdHeartbeatMessage = Schema.Struct({
   type: Schema.Literal("heartbeat"),
   generation: DaemonGeneration,
   terminal: DxdTerminalHeartbeat,
+  memory: Schema.optional(DxdMemoryUsage),
 });
 
 const TerminalControlBase = {
@@ -735,6 +754,17 @@ export const DxdServicesEnsureOperation = Schema.Struct({
   ),
 });
 
+/** The guest's memory and its largest processes; see `orb-memory`. */
+export const DxdMemorySnapshotOperation = Schema.Struct({
+  operation: Schema.Literal("memory.snapshot"),
+});
+
+/** Stop one listed process: `SIGTERM`, then `SIGKILL` after five seconds. */
+export const DxdMemoryStopOperation = Schema.Struct({
+  operation: Schema.Literal("memory.stop"),
+  process: OrbProcessIdSchema,
+});
+
 export const DxdOperation = Schema.Union([
   DxdFilesOperation,
   DxdEnvironmentActivateOperation,
@@ -742,6 +772,8 @@ export const DxdOperation = Schema.Union([
   DxdProxyPortsOperation,
   DxdDesktopEnsureOperation,
   DxdServicesEnsureOperation,
+  DxdMemorySnapshotOperation,
+  DxdMemoryStopOperation,
 ]);
 export type DxdOperation = typeof DxdOperation.Type;
 
@@ -913,6 +945,32 @@ export const DxdProxyPortsResult = Schema.Struct({
   ).check(Schema.isMaxLength(64)),
 });
 export type DxdProxyPortsResult = typeof DxdProxyPortsResult.Type;
+
+export const DxdMemorySnapshotResult = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("snapshot"),
+    usedBytes: DxdBytes,
+    totalBytes: DxdBytes,
+    processes: Schema.Array(OrbProcessSchema).check(Schema.isMaxLength(16)),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("unavailable"),
+    reason: Schema.Literal("unreadable"),
+  }),
+]);
+export type DxdMemorySnapshotResult = typeof DxdMemorySnapshotResult.Type;
+
+export const DxdMemoryStopResult = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("stop"),
+    state: Schema.Literals(["stopping", "stopped"]),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("unavailable"),
+    reason: Schema.Literals(["invalid", "not-found", "protected"]),
+  }),
+]);
+export type DxdMemoryStopResult = typeof DxdMemoryStopResult.Type;
 
 export const DxdDesktopEnsureResult = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("ready") }),

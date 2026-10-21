@@ -11,6 +11,7 @@ export type RealtimeThreadEventType =
   | "thread.invalidated"
   | "readiness.invalidated"
   | "changes.invalidated"
+  | "memory.invalidated"
   | "workspace.status";
 export type InvalidationType = Exclude<
   RealtimeThreadEventType,

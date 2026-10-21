@@ -10,6 +10,10 @@ import {
 } from "../changes/changes-queries.js";
 import { invalidateThreadFileTrees } from "../files/files-queries.js";
 import {
+  invalidateAllOrbMemory,
+  invalidateOrbMemory,
+} from "../orb-memory/orb-memory-queries.js";
+import {
   invalidateAllThreadQueries,
   invalidateReadinessQuery,
 } from "../thread-queries.js";
@@ -34,6 +38,7 @@ const invalidateAllRealtimeState = (
 ) => {
   void invalidateAllThreadQueries(queryClient, userId);
   void invalidateAllChanges(queryClient);
+  void invalidateAllOrbMemory(queryClient);
   void invalidateNotifications(queryClient, userId);
   void invalidateSidebarLayout(queryClient, userId);
 };
@@ -217,6 +222,8 @@ export class RealtimeClient {
       void invalidateChangesRanges(this.#queryClient, event.threadId);
       void invalidateThreadFileTrees(this.#queryClient, event.threadId);
       this.#rows.changesChanged(event.threadId, event.summaryChanged === true);
+    } else if (event.type === "memory.invalidated") {
+      void invalidateOrbMemory(this.#queryClient, event.threadId);
     } else if (event.type === "notifications.invalidated") {
       void invalidateNotifications(this.#queryClient, this.#userId);
     } else if (event.type === "sidebar.invalidated") {

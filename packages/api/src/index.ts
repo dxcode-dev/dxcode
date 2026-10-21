@@ -82,6 +82,7 @@ export * from "./threads/get-thread-list-item.js";
 export * from "./threads/get-thread-readiness.js";
 export * from "./threads/list-threads.js";
 export * from "./threads/message-author.js";
+export * from "./threads/orb-memory.js";
 export * from "./threads/pin-thread.js";
 export * from "./threads/portals.js";
 export * from "./threads/search-threads.js";

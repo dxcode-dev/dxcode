@@ -12,8 +12,10 @@ import type { RunnerCapability } from "../settings/runner-profile.js";
  *   environment, created on first activation and reconnected afterwards.
  * - `execution.resident-daemon`: the provider runs dx's static Linux dxd
  *   binary as a long-lived process that reaches Core. dxd serves Terminal,
- *   Files, resident Changes refresh, environment refresh, and workload
- *   identity; the dxd protocol itself is core, not part of any provider.
+ *   Files, resident Changes refresh, environment refresh, workload identity,
+ *   and Orb memory (usage, the largest processes, stopping one); the dxd
+ *   protocol itself is core, not part of any provider, so a new provider
+ *   that runs dxd has all of them.
  * - `execution.pause-resume`: the workspace survives idleness and archive,
  *   and the next activation resumes it. Its `preserves` trait says how much
  *   survives (see `ExecutionPauseResumePreserves`).

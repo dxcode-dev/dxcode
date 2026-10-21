@@ -304,6 +304,39 @@ try {
     path: join(output, "iphone-installed-sidebar.png"),
   });
   await installedPage.keyboard.press("Escape");
+  // The thread composer clears the home indicator once, not twice, and the
+  // prompt outline and jump controls sit above it, not on it.
+  await installedPage.waitForTimeout(500);
+  const bottomLayout = await installedPage.evaluate(() => {
+    const box = (selector) => {
+      const rect = document.querySelector(selector)?.getBoundingClientRect();
+      return rect === undefined || rect.height === 0
+        ? undefined
+        : { top: rect.top, bottom: rect.bottom };
+    };
+    return {
+      composer: box(".agent-composer"),
+      controls: box(".transcript-controls"),
+      viewportHeight: window.innerHeight,
+    };
+  });
+  const composerGap =
+    bottomLayout.viewportHeight - (bottomLayout.composer?.bottom ?? 0);
+  check(
+    "the thread composer sits just above the home indicator",
+    composerGap >= insets.bottom && composerGap <= insets.bottom + 12,
+    { composerGap, ...bottomLayout },
+  );
+  check(
+    "the prompt outline does not overlap the composer",
+    bottomLayout.controls !== undefined &&
+      bottomLayout.composer !== undefined &&
+      bottomLayout.controls.bottom <= bottomLayout.composer.top - 4,
+    bottomLayout,
+  );
+  await installedPage.screenshot({
+    path: join(output, "iphone-installed-composer.png"),
+  });
   // The sidebar drawer drags like a native one: it follows the finger and
   // settles on release; a touch that does not travel sideways does nothing.
   const touch = await installed.newCDPSession(installedPage);
