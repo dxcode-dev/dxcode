@@ -10,6 +10,43 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#0b0d0b" />
+    <!-- `only` stops Samsung Internet and Chrome from recolouring dx. -->
+    <meta name="color-scheme" content="dark light only" />
+    <script>
+      // Paints the saved theme before any script or stylesheet loads, so the
+      // installed app opens in its own colours instead of flashing white.
+      // shared/theme/theme-store.ts writes it; anything unexpected is ignored.
+      (() => {
+        try {
+          const saved = JSON.parse(localStorage.getItem("dx:boot-theme:v1"));
+          const resolved =
+            saved.appearance === "system"
+              ? matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light"
+              : saved.appearance;
+          const colour = saved.surface[resolved];
+          if (
+            saved.version !== 1 ||
+            (resolved !== "light" && resolved !== "dark") ||
+            (saved.palette !== "daydream" && saved.palette !== "deadpan") ||
+            !/^rgb\(\d{1,3}, \d{1,3}, \d{1,3}\)$/.test(colour)
+          )
+            return;
+          const root = document.documentElement;
+          root.dataset.appearance = saved.appearance;
+          root.dataset.resolvedAppearance = resolved;
+          root.dataset.palette = saved.palette;
+          root.dataset.themed = "";
+          root.style.background = colour;
+          document
+            .querySelector('meta[name="theme-color"]')
+            .setAttribute("content", colour);
+        } catch {
+          // No saved theme yet, or storage is blocked: keep the defaults.
+        }
+      })();
+    </script>
     <meta
       name="description"
       content="Cloud agents, on your terms. A personal computer for every agent, with threads, files, changes, and terminal in one workspace."
@@ -36,6 +73,9 @@
     <meta name="twitter:image:alt" content="dx — Cloud agents, on your terms" />
     <link rel="canonical" href="https://dxcode.dev/" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="dx" />
     <title>dx</title>
   </head>
   <body>

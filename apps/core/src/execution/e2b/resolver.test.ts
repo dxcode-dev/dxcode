@@ -211,8 +211,8 @@ describe("resolveExecutionWorkspace", () => {
       allowInternetAccess: true,
       network: { allowPublicTraffic: false },
       lifecycle: {
-        onTimeout: { action: "pause", keepMemory: true },
-        autoResume: true,
+        onTimeout: { action: "pause", keepMemory: false },
+        autoResume: false,
       },
     });
     expect(observeOpening).toHaveBeenCalledWith("starting");
@@ -618,6 +618,8 @@ describe("resolveExecutionWorkspace", () => {
       connect: async () => {
         throw new Error("provider outage");
       },
+      // Already paused: no cold snapshot was taken, so no second connect.
+      pause: async () => false,
     });
     const store = stateStore(initialized("still-authoritative"));
 
@@ -625,7 +627,36 @@ describe("resolveExecutionWorkspace", () => {
       ExecutionWorkspaceUnavailable,
     );
 
+    expect(fake.connect).toHaveBeenCalledOnce();
     expect(store.current()).toEqual(initialized("still-authoritative"));
+    expect(fake.create).not.toHaveBeenCalled();
+  });
+
+  it("cold-boots the same sandbox when a running guest cannot be reached", async () => {
+    let attempts = 0;
+    const fake = provider({
+      connect: async (sandboxId) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("request timed out");
+        return { sandboxId };
+      },
+    });
+    const store = stateStore(initialized("out-of-memory"));
+
+    await expect(resolve(fake, store)).resolves.toEqual({
+      sandboxId: "out-of-memory",
+    });
+
+    expect(fake.pause).toHaveBeenCalledWith("out-of-memory", {
+      apiKey: "e2b-test-credential",
+      requestTimeoutMs: 30_000,
+      keepMemory: false,
+    });
+    expect(fake.connect.mock.calls.map(([id]) => id)).toEqual([
+      "out-of-memory",
+      "out-of-memory",
+    ]);
+    expect(store.current()).toEqual(initialized("out-of-memory"));
     expect(fake.create).not.toHaveBeenCalled();
   });
 
@@ -883,7 +914,7 @@ describe("pauseExecutionWorkspace", () => {
     expect(fake.pause).toHaveBeenCalledWith("immutable-sandbox", {
       apiKey: "e2b-test-credential",
       requestTimeoutMs: 30_000,
-      keepMemory: true,
+      keepMemory: false,
     });
     expect(fake.list).not.toHaveBeenCalled();
     expect(fake.connect).not.toHaveBeenCalled();

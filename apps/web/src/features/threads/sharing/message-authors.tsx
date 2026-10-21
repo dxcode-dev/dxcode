@@ -6,7 +6,7 @@ import {
   splitMentions,
   type ThreadDetailData,
 } from "@dx/api";
-import type { UserId } from "@dx/domain";
+import { isDefaultPersonalAccountUsername, type UserId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
 import { Avatar } from "../../../shared/ui/avatar.js";
@@ -15,6 +15,7 @@ import {
   type MarkdownMentions,
 } from "../../../shared/ui/markdown-mention-context.js";
 import { conciseAge } from "./sharing-format.js";
+import { mentionLabel } from "./thread-chat.js";
 import { threadMembersQueryOptions } from "./thread-chat-queries.js";
 import "./thread-sharing.css";
 import { TimeText } from "../../../shared/ui/time-text.js";
@@ -141,7 +142,10 @@ export function MessageAuthorLabel({
   );
 }
 
-/** A person's card: picture, name, handle, and email. */
+/**
+ * A person's card: picture, name, handle, and email. A placeholder handle from
+ * sign-up is left out: the name already says who they are.
+ */
 function MemberCard({
   person,
   className,
@@ -171,7 +175,8 @@ function MemberCard({
             />
             <div>
               <strong>{person.name}</strong>
-              {person.handle === undefined ? null : (
+              {person.handle === undefined ||
+              isDefaultPersonalAccountUsername(person.handle) ? null : (
                 <span>@{person.handle}</span>
               )}
               {person.email === undefined ? null : <span>{person.email}</span>}
@@ -185,8 +190,8 @@ function MemberCard({
 
 /**
  * What a person wrote, as plain text: never Markdown. Each `@handle` it
- * tagged shows the member's current handle (or name, without one) and opens
- * their card; `@dx` shows as the agent.
+ * tagged shows the member's current handle (or name, without a chosen one)
+ * and opens their card; `@dx` shows as the agent.
  */
 export function UserMessageText({
   text,
@@ -224,7 +229,7 @@ export function UserMessageText({
           );
         return (
           <MemberCard key={key} person={person} className="message-mention">
-            @{person.handle ?? person.name}
+            {mentionLabel(person)}
           </MemberCard>
         );
       })}
@@ -248,7 +253,7 @@ const mentionsOf = (people: ReadonlyMap<string, Person>): MarkdownMentions => {
         text
       ) : (
         <MemberCard person={person} className="message-mention">
-          @{person.handle ?? person.name}
+          {mentionLabel(person)}
         </MemberCard>
       );
     },

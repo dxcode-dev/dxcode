@@ -122,3 +122,12 @@ export const normalizePersonalAccountDisplayName = (value: string): string =>
 
 export const normalizePersonalAccountUsername = (value: string): string =>
   value.trim().toLowerCase().replace(/^@/, "");
+
+/**
+ * Whether a username is the placeholder dx assigned at sign-up
+ * (`'user-' || lower(hex(randomblob(12)))` in the `personal_account` insert
+ * trigger) rather than one the person chose. People see such a person by
+ * name instead.
+ */
+export const isDefaultPersonalAccountUsername = (username: string): boolean =>
+  /^user-[0-9a-f]{24}$/i.test(username);

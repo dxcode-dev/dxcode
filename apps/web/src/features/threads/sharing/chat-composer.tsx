@@ -10,9 +10,23 @@ import {
   activeMention,
   draftMode,
   type MentionOption,
+  mentionLabel,
   mentionOptions,
 } from "./thread-chat.js";
 import "./thread-sharing.css";
+
+/** A member's tag, and their name beside it unless the tag already is. */
+function MemberOptionLabel({ member }: { readonly member: ThreadMemberData }) {
+  const label = mentionLabel(member);
+  return (
+    <>
+      <span className="composer-mention-handle">{label}</span>
+      {label === `@${member.name}` ? null : (
+        <span className="composer-mention-name">{member.name}</span>
+      )}
+    </>
+  );
+}
 
 /**
  * What `@` does in the composer: in a shared Thread it tags workspace members
@@ -171,14 +185,16 @@ export const useComposerMentions = ({
               seed={option.member.userId}
             />
           )}
-          <span className="composer-mention-handle">@{option.handle}</span>
-          <span className="composer-mention-name">
-            {option.kind === "member"
-              ? option.member.name
-              : chatMode
-                ? "Exit chat mode"
-                : "Ask the agent"}
-          </span>
+          {option.kind === "agent" ? (
+            <>
+              <span className="composer-mention-handle">@{option.handle}</span>
+              <span className="composer-mention-name">
+                {chatMode ? "Exit chat mode" : "Ask the agent"}
+              </span>
+            </>
+          ) : (
+            <MemberOptionLabel member={option.member} />
+          )}
         </div>
       ))}
     </div>

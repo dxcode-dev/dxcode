@@ -63,8 +63,8 @@ import {
 } from "./composer-start.js";
 import { useDictation } from "./dictation/use-dictation.js";
 import {
+  addScreenshot,
   attachmentsUploading,
-  captureScreenshot,
   type PendingAttachment,
 } from "./image-attachments.js";
 import { NewThreadComposer } from "./new-thread-composer.js";
@@ -687,13 +687,11 @@ function ScopedNewThreadModal({
       setError,
     );
 
-  const takeScreenshot = () =>
-    updatePendingImages(
-      () => imageCollection.addGenerated(captureScreenshot),
-      "The screenshot could not be captured.",
-      setImages,
-      setError,
-    );
+  // Never sets the composer's error notice: an uncaptured screenshot is not
+  // an error. See addScreenshot.
+  const takeScreenshot = async () => {
+    setImages(await addScreenshot(imageCollection));
+  };
 
   // A send in flight carries on after the composer closes: Core finishes
   // it, and the sidebar keeps showing the Thread as being created.

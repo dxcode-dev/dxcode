@@ -28,8 +28,8 @@ import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
 import { useComposerEnterKey } from "./composer-enter-key.js";
 import { useDictation } from "./dictation/use-dictation.js";
 import {
+  addScreenshot,
   attachmentsUploading,
-  captureScreenshot,
   createPendingAttachmentCollection,
   disposeAttachments,
   messageWithAttachments,
@@ -1031,21 +1031,10 @@ function useImageActions(
     }
   };
 
+  // Never shows an error card: an uncaptured screenshot is not an error.
+  // See addScreenshot.
   const takeScreenshot = async () => {
-    setActionError(undefined);
-    try {
-      setImages(await imageCollection.addGenerated(captureScreenshot));
-    } catch (cause) {
-      setActionError({
-        id: "action:screenshot",
-        title: "Screenshot not captured",
-        message:
-          cause instanceof Error
-            ? cause.message
-            : "The screenshot could not be captured.",
-        action: "none",
-      });
-    }
+    setImages(await addScreenshot(imageCollection));
   };
   return { addImages, takeScreenshot };
 }

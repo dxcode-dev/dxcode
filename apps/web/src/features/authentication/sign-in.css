@@ -1,7 +1,7 @@
 /* Signed-out pages follow the system appearance until an account theme exists. */
 /* Outranks the stored :root[data-resolved-appearance] scheme. */
 :root[data-resolved-appearance]:has(.sign-in-page) {
-  color-scheme: light dark;
+  color-scheme: light dark only;
 }
 
 .sign-in-page {

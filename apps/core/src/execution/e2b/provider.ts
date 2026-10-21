@@ -188,7 +188,8 @@ const resolversFor = (api: E2BResolverApi | undefined): E2BResolvers =>
 
 /**
  * The first Execution provider: E2B sandboxes. It claims
- * `execution.pause-resume` (processes and memory survive): archiving pauses
+ * `execution.pause-resume` (the filesystem survives; a resume cold-boots):
+ * archiving pauses
  * the sandbox, and destroying kills it. Tests pass a fake control-plane API.
  */
 export const makeE2BExecutionProvider = (

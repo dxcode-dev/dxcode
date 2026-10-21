@@ -42,9 +42,9 @@ export type ExecutionCapabilityId = typeof ExecutionCapabilityId.Type;
 
 /**
  * What `execution.pause-resume` keeps across a pause, shown next to the
- * provider: `processes` (warm: processes and memory survive, as on E2B) or
- * `filesystem` (cold: the filesystem survives and processes restart from the
- * image entrypoint, as with Cloudflare Containers snapshots). Each provider
+ * provider: `processes` (warm: processes and memory survive) or
+ * `filesystem` (cold: the filesystem survives and processes restart, as with
+ * E2B sandboxes and Cloudflare Containers snapshots). Each provider
  * that claims `execution.pause-resume` declares it in the plugin registry,
  * and the Orb picker shows it next to the provider.
  */

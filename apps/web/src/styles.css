@@ -25,7 +25,7 @@
 }
 
 :root {
-  color-scheme: dark;
+  color-scheme: only dark;
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --shell: #0b0d0b;
@@ -87,10 +87,10 @@
 }
 
 :root[data-resolved-appearance="light"] {
-  color-scheme: light;
+  color-scheme: only light;
 }
 :root[data-resolved-appearance="dark"] {
-  color-scheme: dark;
+  color-scheme: only dark;
 }
 
 :root[data-palette="daydream"] {
@@ -223,10 +223,12 @@ a {
   border-radius: 20px;
 }
 
+/* Fixed and opaque: an installed iOS app paints its status bar from a fixed
+   element at the top edge and then draws no blur over the page. Fixed to
+   the viewport, the shell also never scrolls the document. */
 .dx-app-shell {
-  position: relative;
-  width: 100vw;
-  height: 100dvh;
+  position: fixed;
+  inset: 0;
   padding: 12px;
   background: var(--shell);
 }
@@ -252,6 +254,7 @@ a {
 }
 :root[data-window-layout="full-window"] .dx-app-shell {
   padding: 0;
+  background: var(--surface);
 }
 :root[data-window-layout="full-window"] .dx-app-frame,
 :root[data-window-layout="full-window"] .settings-stage > .dx-app-frame {
@@ -8559,8 +8562,10 @@ div.claude-code-mode-main {
 .mobile-sidebar-drawer {
   position: fixed;
   z-index: 101;
-  inset: 8px auto 8px 8px;
-  width: min(312px, calc(100vw - 16px));
+  /* Clear the notch, home indicator, and rounded screen corners. */
+  inset: max(8px, env(safe-area-inset-top)) auto
+    max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+  width: min(312px, calc(100vw - 16px - env(safe-area-inset-left)));
   overflow: hidden;
   border-radius: 12px;
   outline: 1px solid var(--outline);
@@ -8577,6 +8582,27 @@ div.claude-code-mode-main {
 .mobile-sidebar-drawer[data-ending-style] {
   opacity: 0;
   transform: translateX(calc(-100% - 8px));
+}
+.mobile-sidebar-drawer {
+  /* Horizontal drags belong to the drawer; its list still scrolls. */
+  touch-action: pan-y;
+}
+/* While a finger drags the drawer, it and its scrim follow the finger
+   (sidebar-drawer-drag.ts sets their transform and opacity inline). */
+:root[data-sidebar-drag] .mobile-sidebar-drawer {
+  opacity: 1;
+  transition: none;
+}
+:root[data-sidebar-drag] .mobile-sidebar-scrim {
+  transition: none;
+}
+/* Let go short of halfway: it slides back from where the finger left it. */
+:root[data-sidebar-settle="closed"] .mobile-sidebar-drawer {
+  opacity: 1;
+  transform: translateX(calc(-100% - 8px));
+}
+:root[data-sidebar-settle="closed"] .mobile-sidebar-scrim {
+  opacity: 0;
 }
 .mobile-thread-region {
   position: relative;
@@ -10401,6 +10427,21 @@ div.claude-code-mode-main {
 .product-shell-content {
   width: 100%;
   height: 100%;
+}
+/* iOS 26 tints an installed app's status bar from the page behind the app.
+   The installed app starts at "/", whose landing stylesheet makes the body
+   beige; every signed-in layout (the main shell, Settings) covers it. */
+body:has(.dx-app-shell) {
+  background: var(--surface);
+}
+/* The update and install bars sit above the panels and push them down. */
+.product-shell .dx-app-frame {
+  display: flex;
+  flex-direction: column;
+}
+.product-shell .dx-app-frame > .product-panel-group {
+  flex: 1 1 0;
+  min-height: 0;
 }
 .product-shell-content {
   position: relative;

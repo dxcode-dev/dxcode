@@ -2,7 +2,7 @@
   :scope {
     font-size: 16px;
     line-height: normal;
-    color-scheme: light;
+    color-scheme: only light;
   }
   h1 {
     margin-bottom: 0.67em;

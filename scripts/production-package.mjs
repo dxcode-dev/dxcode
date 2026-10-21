@@ -558,9 +558,13 @@ export const createProductionPackage = async ({
     nonGraphFiles: ["wrangler.json"],
   });
   const webStaticFiles = [
+    "apple-touch-icon.png",
     "deployment-bootstrap.json",
     "favicon.svg",
+    "icon-192.png",
+    "icon-512.png",
     "index.html",
+    "manifest.webmanifest",
     "robots.txt",
     "social-card.png",
   ];
@@ -872,9 +876,13 @@ export const validateProductionPackage = async (root) => {
     ),
     ...validateGraph(manifest.graph?.web, "index.html", "assets"),
     ...(manifest.graph?.docs ?? []).map((path) => `assets/docs/${path}`),
+    "assets/apple-touch-icon.png",
     "assets/deployment-bootstrap.json",
     "assets/favicon.svg",
+    "assets/icon-192.png",
+    "assets/icon-512.png",
     "assets/index.html",
+    "assets/manifest.webmanifest",
     "assets/robots.txt",
     "assets/social-card.png",
     "assets/dxd",

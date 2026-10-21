@@ -93,8 +93,20 @@ const worker = spawn(
     "--config",
     fixtureConfig,
   ],
-  { stdio: "inherit" },
+  // Its own process group: `pnpm` may be a launcher that exits on SIGTERM
+  // without passing it on, which would leave wrangler and workerd listening.
+  { stdio: "inherit", detached: true },
 );
+const stopWorker = (signal) => {
+  try {
+    process.kill(-worker.pid, signal);
+  } catch {}
+};
+for (const signal of ["SIGINT", "SIGTERM"])
+  process.once(signal, () => {
+    stopWorker(signal);
+    process.exit(1);
+  });
 
 try {
   const fixtureUrl = `http://127.0.0.1:${port}/`;
@@ -125,8 +137,19 @@ try {
   if (result.status !== 0) process.exitCode = result.status ?? 1;
 } finally {
   if (worker.exitCode === null) {
-    worker.kill("SIGTERM");
-    await new Promise((resolve) => worker.once("exit", resolve));
+    const exited = new Promise((resolve) => worker.once("exit", resolve));
+    stopWorker("SIGTERM");
+    await exited;
   }
+  // The launcher can exit before the group; wait until nothing in it is left.
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      process.kill(-worker.pid, 0);
+    } catch {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  stopWorker("SIGKILL");
   await rm(persistencePath, { recursive: true, force: true });
 }

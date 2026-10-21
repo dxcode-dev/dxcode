@@ -1,0 +1,53 @@
+.install-app-banner {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface), var(--foreground) 4%);
+}
+.install-app-banner-icon {
+  flex: none;
+  border-radius: 5px;
+}
+.install-app-banner p {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+}
+.install-app-banner-dismiss {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+}
+.install-app-banner-dismiss:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.install-app-banner-dismiss svg {
+  width: 16px;
+  height: 16px;
+}
+.install-app-guide ol {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.install-app-guide li svg {
+  display: inline;
+  width: 16px;
+  height: 16px;
+  vertical-align: -3px;
+}

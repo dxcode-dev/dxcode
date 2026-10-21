@@ -10,6 +10,7 @@ import { Link, useLocation } from "@tanstack/react-router";
 import { Search, SquarePen } from "lucide-react";
 import * as React from "react";
 import type { ThreadListClientItem } from "../../shared/api/client.js";
+import { AppUpdateRow } from "../../shared/app-update/app-update-row.js";
 import { useNowMinute } from "../../shared/hooks/use-clock.js";
 import {
   type PendingThreadCreation,
@@ -431,6 +432,7 @@ function AppSidebarContent({
         </Link>
       </nav>
 
+      <AppUpdateRow />
       <SidebarAccountMenu
         personalAccount={personalAccount}
         settingsContext={settingsContext}

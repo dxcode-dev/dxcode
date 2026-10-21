@@ -9,6 +9,7 @@ import {
 import { Outlet, useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 import { Group, Panel, usePanelRef } from "react-resizable-panels";
+import { AppUpdateDot } from "../../shared/app-update/app-update-row.js";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { AppFrame } from "../../shared/layout/app-frame.js";
 import { ResizableDivider } from "../../shared/layout/resizable-divider.js";
@@ -28,6 +29,7 @@ import {
   threadsQueryOptions,
 } from "../threads/thread-queries.js";
 import { AppSidebar } from "./app-sidebar.js";
+import { sidebarDrawerDrag } from "./sidebar-drawer-drag.js";
 import { SidebarExtensionRegion } from "./sidebar-extensions.js";
 import { SidebarPanelIcon } from "./sidebar-panel-icon.js";
 import { childThreadsByParent } from "./sidebar-thread-utils.js";
@@ -37,7 +39,15 @@ const PRODUCT_SIDEBAR_MIN_SIZE = 250;
 const PRODUCT_SIDEBAR_MAX_SIZE = 480;
 const sidebarExtensionRegion = <SidebarExtensionRegion />;
 
-export function ProductShell() {
+/**
+ * The signed-in layout. `notices` are full-width bars above the panels, such
+ * as the new-version and install banners the application composes in.
+ */
+export function ProductShell({
+  notices,
+}: {
+  readonly notices?: React.ReactNode;
+}) {
   const navigate = useNavigate();
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
@@ -93,6 +103,24 @@ export function ProductShell() {
   const sidebarSearchTriggerRef = React.useRef<HTMLButtonElement>(null);
   const mobileSidebarTriggerRef = React.useRef<HTMLButtonElement>(null);
   const mobileSidebarPopupRef = React.useRef<HTMLDivElement>(null);
+
+  // On a phone the drawer drags like a native one: pulled out from the left
+  // half of the page, pushed back from the drawer or its scrim.
+  const openSidebar = () => setMobileSidebar(true);
+  const closeSidebar = () => setMobileSidebarOpen(false);
+  const keepSidebarMounted = () => setMobileSidebarKept(true);
+  const pullSidebar = mobile
+    ? sidebarDrawerDrag(true, openSidebar, closeSidebar, keepSidebarMounted)
+    : undefined;
+  const pushSidebar = sidebarDrawerDrag(false, openSidebar, closeSidebar);
+  const attachMobileSidebarPopup = (node: HTMLDivElement | null) => {
+    mobileSidebarPopupRef.current = node;
+    const detach = pushSidebar(node);
+    return () => {
+      mobileSidebarPopupRef.current = null;
+      detach?.();
+    };
+  };
 
   const toggleSidebar = () => {
     if (mobile) {
@@ -169,14 +197,15 @@ export function ProductShell() {
 
   return (
     <AppFrame className="product-shell">
+      {notices}
       <Dialog.Root
         open={mobile && mobileSidebarOpen}
         onOpenChange={setMobileSidebar}
       >
         <Dialog.Portal keepMounted={mobile && mobileSidebarKept}>
-          <Dialog.Backdrop className="mobile-sidebar-scrim" />
+          <Dialog.Backdrop className="mobile-sidebar-scrim" ref={pushSidebar} />
           <Dialog.Popup
-            ref={mobileSidebarPopupRef}
+            ref={attachMobileSidebarPopup}
             initialFocus={mobileSidebarPopupRef}
             className="mobile-sidebar-drawer"
           >
@@ -210,7 +239,7 @@ export function ProductShell() {
           </Panel>
           <ResizableDivider label="Resize navigation" />
           <Panel id="product-content" minSize="50%">
-            <main className="product-shell-content">
+            <main className="product-shell-content" ref={pullSidebar}>
               {mobile || sidebarCollapsed ? (
                 mobile ? (
                   <Dialog.Trigger
@@ -227,6 +256,7 @@ export function ProductShell() {
                     }
                   >
                     <SidebarPanelIcon />
+                    <AppUpdateDot />
                   </Dialog.Trigger>
                 ) : (
                   <Button
@@ -239,6 +269,7 @@ export function ProductShell() {
                     onClick={toggleSidebar}
                   >
                     <SidebarPanelIcon />
+                    <AppUpdateDot />
                   </Button>
                 )
               ) : null}

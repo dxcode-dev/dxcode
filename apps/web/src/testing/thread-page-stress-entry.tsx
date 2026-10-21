@@ -23,6 +23,7 @@ import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { DateTime, Schema } from "effect";
 import { createRoot } from "react-dom/client";
 import { AuthGate } from "../features/authentication/auth-gate.js";
+import "../features/install-app/install-prompt-capture.js";
 import { sessionQueryOptions } from "../features/authentication/sign-in-queries.js";
 import { projectKeys } from "../features/projects/project-queries.js";
 import { composerDefaultsQueryOptions } from "../features/settings/account/composer-defaults-queries.js";
@@ -625,8 +626,12 @@ const answer = (input: RequestInfo | URL, init?: RequestInit) => {
         }),
       );
   }
-  // Built assets fetched at runtime, such as the Terminal's WebAssembly.
-  if (url.origin === location.origin && url.pathname.startsWith("/assets/"))
+  // Built assets fetched at runtime, such as the Terminal's WebAssembly, and
+  // the HTML entry the new-version check reads.
+  if (
+    url.origin === location.origin &&
+    (url.pathname.startsWith("/assets/") || url.pathname === "/")
+  )
     return networkFetch(input, init);
   if (url.pathname === "/api/auth/get-session") return json(sessionJson());
   if (url.pathname === "/v1/threads") return json(threadListJson());

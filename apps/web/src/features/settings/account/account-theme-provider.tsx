@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type * as React from "react";
+import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { ThemeProvider } from "../../../shared/theme/theme-provider.js";
 import { Button } from "../../../shared/ui/button.js";
@@ -7,6 +7,14 @@ import {
   personalAccountQueryOptions,
   updatePersonalAppearanceMutationOptions,
 } from "./personal-account-queries.js";
+
+// The auth gate already loaded this; it stays the one loading screen from
+// launch until the account's theme applies, so nothing flashes between.
+const DxLoading = React.lazy(() =>
+  import("../../../shared/brand/dx-loading.js").then((module) => ({
+    default: module.DxLoading,
+  })),
+);
 
 export function AccountThemeProvider({
   children,
@@ -30,7 +38,12 @@ export function AccountThemeProvider({
     terminalTheme: NonNullable<typeof account>["terminalTheme"],
   ) => mutate({ terminalTheme });
 
-  if (accountQuery.isPending) return null;
+  if (accountQuery.isPending)
+    return (
+      <React.Suspense fallback={null}>
+        <DxLoading label="Loading dx…" variant="screen" />
+      </React.Suspense>
+    );
   if (accountQuery.isError || account === undefined)
     return (
       <main className="empty-state" role="alert">

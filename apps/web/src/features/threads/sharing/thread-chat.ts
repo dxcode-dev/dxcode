@@ -4,6 +4,7 @@ import {
   type ThreadConversationMode,
   type ThreadMemberData,
 } from "@dx/api";
+import { isDefaultPersonalAccountUsername } from "@dx/domain";
 
 /**
  * The mode a message would be sent in (the server decides the same way):
@@ -24,6 +25,17 @@ export const draftMode = (
         )
       ? "chat"
       : current;
+
+/**
+ * How a tag of someone reads: `@username`, or `@Name` when they have no
+ * username or still have the placeholder dx assigned at sign-up. The message
+ * text keeps the username; only what people see changes.
+ */
+export const mentionLabel = (person: {
+  readonly name: string;
+  readonly handle?: string;
+}) =>
+  `@${person.handle === undefined || isDefaultPersonalAccountUsername(person.handle) ? person.name : person.handle}`;
 
 /** The `@` word the caret is in, if any: where it starts and what follows. */
 export const activeMention = (
@@ -47,7 +59,8 @@ export type MentionOption =
 
 /**
  * Options for the `@` word being typed: the agent, then other members whose
- * handle or name starts a word with the query. Tagging yourself means nothing.
+ * name or chosen handle starts a word with the query. Tagging yourself means
+ * nothing.
  */
 export const mentionOptions = (
   query: string,
@@ -67,7 +80,9 @@ export const mentionOptions = (
       : []),
     ...members.flatMap((member) =>
       member.userId !== viewerId &&
-      (matches(member.handle) || matches(member.name))
+      ((!isDefaultPersonalAccountUsername(member.handle) &&
+        matches(member.handle)) ||
+        matches(member.name))
         ? [{ kind: "member" as const, handle: member.handle, member }]
         : [],
     ),

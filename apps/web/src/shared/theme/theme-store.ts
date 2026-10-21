@@ -3,6 +3,7 @@ import type {
   PersonalPalette,
   PersonalTerminalTheme,
 } from "@dx/domain";
+import { Schema } from "effect";
 
 export type Appearance = PersonalAppearance;
 export type ResolvedAppearance = Exclude<Appearance, "system">;
@@ -52,3 +53,38 @@ export const resolveAppearance = (
   systemPrefersDark: boolean,
 ): ResolvedAppearance =>
   appearance === "system" ? (systemPrefersDark ? "dark" : "light") : appearance;
+
+/**
+ * The last applied theme, kept on this device so the next launch paints in
+ * it before any script or stylesheet loads (the inline script in
+ * index.html reads it). It holds the surface colour for both schemes so a
+ * "system" appearance can follow the device at launch.
+ */
+export const bootThemeStorageKey = "dx:boot-theme:v1";
+
+const SurfaceColour = Schema.String.check(
+  Schema.isPattern(/^rgb\(\d{1,3}, \d{1,3}, \d{1,3}\)$/),
+);
+
+const BootTheme = Schema.Struct({
+  version: Schema.Literal(1),
+  appearance: Schema.Literals(["system", "light", "dark"]),
+  palette: Schema.Literals(["daydream", "deadpan"]),
+  surface: Schema.Struct({ light: SurfaceColour, dark: SurfaceColour }),
+});
+
+export const rememberBootTheme = (theme: {
+  readonly appearance: Appearance;
+  readonly palette: Palette;
+  readonly surface: { readonly light: string; readonly dark: string };
+}) => {
+  try {
+    const envelope = Schema.decodeUnknownSync(BootTheme)({
+      version: 1,
+      ...theme,
+    });
+    window.localStorage.setItem(bootThemeStorageKey, JSON.stringify(envelope));
+  } catch {
+    // Storage may be full or disabled; the next launch uses the defaults.
+  }
+};

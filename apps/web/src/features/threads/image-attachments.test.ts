@@ -114,7 +114,7 @@ describe("file attachments", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
-  it("reports denial and stops every acquired track", async () => {
+  it("treats a closed picker as no screenshot and stops every acquired track", async () => {
     const stop = vi.fn();
     const stream = {
       getVideoTracks: () => [],
@@ -133,6 +133,6 @@ describe("file attachments", () => {
           .mockRejectedValue(new DOMException("denied", "NotAllowedError")),
       },
     });
-    await expect(captureScreenshot()).rejects.toThrow("cancelled or denied");
+    await expect(captureScreenshot()).resolves.toBeUndefined();
   });
 });

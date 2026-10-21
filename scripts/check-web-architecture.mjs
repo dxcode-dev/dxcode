@@ -478,7 +478,8 @@ export const inspectWebArchitecture = ({
       displayPath.endsWith("/features/threads/new-thread-draft-store.ts") ||
       displayPath.endsWith(
         "/features/settings/model-routing/claude-code-notice-store.ts",
-      );
+      ) ||
+      displayPath.endsWith("/features/install-app/install-app-store.ts");
     if (!persistenceOwner)
       for (const { index, text } of indices(
         source,

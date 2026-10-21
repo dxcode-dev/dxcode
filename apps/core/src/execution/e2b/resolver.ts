@@ -361,7 +361,7 @@ export const makePauseExecutionWorkspace = (api: E2BResolverApi) =>
               api.pause(record.providerSandboxId as string, {
                 apiKey,
                 requestTimeoutMs: REQUEST_TIMEOUT_MS,
-                keepMemory: true,
+                keepMemory: false,
               }),
             catch: (cause) => cause,
           }).pipe(
@@ -622,15 +622,38 @@ export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
           }).pipe(Effect.catch(() => Effect.void));
         }
         observeOpening?.("waking");
-        const connected = yield* Effect.tryPromise({
+        const sandboxId = record.providerSandboxId;
+        const connect = Effect.tryPromise({
           try: () =>
-            api.connect(record.providerSandboxId as string, {
+            api.connect(sandboxId, {
               apiKey,
               requestTimeoutMs: REQUEST_TIMEOUT_MS,
               timeoutMs: requirements.timeoutMs,
             }),
           catch: (cause) => cause,
-        }).pipe(
+        });
+        // A running guest that cannot be reached (out of memory) is paused
+        // without its memory and connected once more, which cold-boots the
+        // same sandbox from its disk. A sandbox that is already paused stays
+        // as it is (E2B returns false), so a failure costs no second wait.
+        const connected = yield* connect.pipe(
+          Effect.catch((cause) =>
+            api.isNotFound(cause)
+              ? Effect.fail(cause)
+              : Effect.tryPromise({
+                  try: () =>
+                    api.pause(sandboxId, {
+                      apiKey,
+                      requestTimeoutMs: REQUEST_TIMEOUT_MS,
+                      keepMemory: false,
+                    }),
+                  catch: () => cause,
+                }).pipe(
+                  Effect.flatMap((paused) =>
+                    paused ? connect : Effect.fail(cause),
+                  ),
+                ),
+          ),
           Effect.catch((cause) =>
             api.isNotFound(cause)
               ? transitionState(stateStore, threadId, record, {
@@ -776,9 +799,13 @@ export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
                 // daemon's outbound session, and E2B would otherwise expose
                 // (and auto-resume for) every port, loopback ones included.
                 network: { allowPublicTraffic: false },
+                // A pause keeps the filesystem only, so every resume cold-boots:
+                // a guest that ran out of memory cannot come back out of
+                // memory. E2B refuses auto-resume for such a snapshot; Core
+                // always resumes explicitly with `connect`.
                 lifecycle: {
-                  onTimeout: { action: "pause", keepMemory: true },
-                  autoResume: true,
+                  onTimeout: { action: "pause", keepMemory: false },
+                  autoResume: false,
                 },
               }),
             catch: (cause) => cause,

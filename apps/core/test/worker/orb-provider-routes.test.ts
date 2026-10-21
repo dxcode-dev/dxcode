@@ -266,7 +266,7 @@ describe("Orb providers in workerd with real D1", () => {
           id: "e2b",
           displayName: "E2B",
           credentialLabel: "E2B API key",
-          pauseResume: "processes",
+          pauseResume: "filesystem",
           deployment: true,
           key: null,
           workspaceKey: null,

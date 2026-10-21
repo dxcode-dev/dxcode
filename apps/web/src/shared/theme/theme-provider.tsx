@@ -2,6 +2,8 @@ import * as React from "react";
 import {
   type Appearance,
   type Palette,
+  type ResolvedAppearance,
+  rememberBootTheme,
   resolveAppearance,
   type TerminalTheme,
   type ThemePreferences,
@@ -40,6 +42,28 @@ const useSystemPrefersDark = () => {
   );
 };
 
+/**
+ * The app surface in `scheme` as `rgb()`, which browser chrome, the
+ * installed app's status bar, and the launch script accept. A custom
+ * property computes to its unresolved text (`light-dark(…)`), and the light
+ * palette resolves to `oklch()`, so the colour goes through a real property
+ * and one canvas pixel.
+ */
+const resolvedSurfaceColor = (scheme: ResolvedAppearance) => {
+  const probe = document.createElement("span");
+  probe.style.colorScheme = `only ${scheme}`;
+  probe.style.color = "var(--surface)";
+  document.body.append(probe);
+  const color = getComputedStyle(probe).color;
+  probe.remove();
+  const context = document.createElement("canvas").getContext("2d");
+  if (!context) return undefined;
+  context.fillStyle = color;
+  context.fillRect(0, 0, 1, 1);
+  const [red, green, blue] = context.getImageData(0, 0, 1, 1).data;
+  return `rgb(${red}, ${green}, ${blue})`;
+};
+
 const useApplyTheme = (preferences: ThemePreferences) => {
   React.useLayoutEffect(() => {
     const root = document.documentElement;
@@ -47,12 +71,21 @@ const useApplyTheme = (preferences: ThemePreferences) => {
     root.dataset.resolvedAppearance = preferences.resolvedAppearance;
     root.dataset.palette = preferences.palette;
     root.dataset.windowLayout = "full-window";
-    const themeColor = getComputedStyle(root)
-      .getPropertyValue("--background")
-      .trim();
+    const light = resolvedSurfaceColor("light");
+    const dark = resolvedSurfaceColor("dark");
+    if (light === undefined || dark === undefined) return;
+    const surface = preferences.resolvedAppearance === "light" ? light : dark;
     document
       .querySelector<HTMLMetaElement>('meta[name="theme-color"]')
-      ?.setAttribute("content", themeColor);
+      ?.setAttribute("content", surface);
+    // The launch script painted the saved colour here; keep it current.
+    root.style.background = surface;
+    root.dataset.themed = "";
+    rememberBootTheme({
+      appearance: preferences.appearance,
+      palette: preferences.palette,
+      surface: { light, dark },
+    });
   }, [preferences]);
 };
 

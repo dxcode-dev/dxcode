@@ -69,14 +69,14 @@ describe("runner profile catalog", () => {
       kind: "cloudflare",
       state: "available",
     });
-    // Containers keeps only the filesystem across a pause.
+    // Both providers keep only the filesystem across a pause.
     // The picker shows the short name; settings pages keep the long one.
     expect(loaded.publicCatalog.providers).toEqual([
       {
         adapter: "e2b",
         displayName: "E2B",
         shortName: "E2B",
-        pauseResume: "processes",
+        pauseResume: "filesystem",
       },
       {
         adapter: "cloudflare",

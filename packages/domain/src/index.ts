@@ -348,6 +348,7 @@ export {
 } from "./settings/model-subscriptions.js";
 export {
   ComposerProjectChoice,
+  isDefaultPersonalAccountUsername,
   normalizePersonalAccountDisplayName,
   normalizePersonalAccountUsername,
   PersonalAccount,

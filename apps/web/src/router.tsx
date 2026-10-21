@@ -16,6 +16,7 @@ import {
   safeNextPath,
   validateSignInSearch,
 } from "./features/authentication/sign-in-paths.js";
+import { InstallAppBanner } from "./features/install-app/install-app-banner.js";
 import { ProductShell } from "./features/navigation/product-shell.js";
 import {
   projectQueryOptions,
@@ -76,6 +77,8 @@ const settingsPage = (
     name,
   );
 
+const productNotices = <InstallAppBanner />;
+
 const rootRoute = createRootRouteWithContext<RouterContext>()({
   component: () => (
     <NewThreadProvider>
@@ -90,7 +93,7 @@ const productRoute = createRoute({
   component: () => (
     <ThreadArchiveProvider>
       <ThreadEditingProvider>
-        <ProductShell />
+        <ProductShell notices={productNotices} />
       </ThreadEditingProvider>
     </ThreadArchiveProvider>
   ),
