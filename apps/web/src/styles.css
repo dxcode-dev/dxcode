@@ -516,6 +516,7 @@ a {
    only then does the title elide. The actions box lays its controls out in
    the bar itself so one flex pass can order the two. */
 .thread-title-bar {
+  container: thread-title-bar / inline-size;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -528,7 +529,8 @@ a {
 }
 .thread-title {
   min-width: 40px;
-  flex: 0 1 auto;
+  /* Elides ahead of the snoozed badge beside it. */
+  flex: 0 100000 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -552,9 +554,13 @@ a {
   width: 14px;
   height: 14px;
 }
+/* Once the title is at its minimum, the label elides down to the icon and
+   Wake, which stay. A narrow bar shows only the wake time, and the
+   narrowest drops Wake, which the Thread menu also offers. */
 .thread-snoozed-badge {
-  display: inline-flex;
-  flex: none;
+  display: inline-grid;
+  grid-template-columns: auto minmax(0, max-content) auto;
+  flex: 0 1 auto;
   align-items: center;
   gap: 5px;
   padding: 2px 3px 2px 7px;
@@ -580,6 +586,35 @@ a {
 }
 .thread-snoozed-badge > button:hover {
   background: var(--accent);
+}
+.thread-snoozed-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@container thread-title-bar (max-width: 420px) {
+  .thread-snoozed-badge {
+    gap: 4px;
+  }
+  .thread-snoozed-badge > button {
+    padding: 0 5px;
+  }
+  .thread-snoozed-prefix {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+}
+@container thread-title-bar (max-width: 290px) {
+  .thread-snoozed-badge {
+    grid-template-columns: auto minmax(0, max-content);
+    padding-right: 7px;
+  }
+  .thread-snoozed-badge > button {
+    display: none;
+  }
 }
 /* A Snooze menu's wake time sits at the item's end. */
 .thread-snooze-when {
@@ -10629,11 +10664,13 @@ body:has(.dx-app-shell) {
 .thread-context-trigger + .thread-context-trigger {
   margin-top: 1px;
 }
-/* What sits at a row's end sets two distances from its right edge: where
-   the title stops at rest (--thread-row-end) and where the hover actions
-   sit (--thread-actions-end, --thread-actions-width). */
+/* What sits at a row's end sets distances from its right edge: where the
+   owner avatar and child count leave off (--thread-row-marks), where the
+   title stops at rest (--thread-row-end), and where the hover actions sit
+   (--thread-actions-end, --thread-actions-width). */
 .thread-row-shell {
-  --thread-row-end: 8px;
+  --thread-row-marks: 8px;
+  --thread-row-end: var(--thread-row-marks);
   --thread-actions-end: 7px;
   --thread-actions-width: 38px;
   position: relative;
@@ -10645,18 +10682,20 @@ body:has(.dx-app-shell) {
 .thread-row-shell[data-actions="3"] {
   --thread-actions-width: 58px;
 }
-/* A snoozed row shows the time left at its end, a woken one a Woke mark;
-   each gives way to the hover actions. */
+/* Before those marks a snoozed row shows the time left, a woken one a
+   Woke mark; each gives way to the hover actions. The title leaves room
+   for the longest, 366d, at the status's own size. */
 .thread-row-shell[data-snooze] {
-  --thread-row-end: 36px;
+  --thread-snooze-room: calc(var(--sidebar-text-md) * 2.4 + 10px);
+  --thread-row-end: calc(var(--thread-row-marks) + var(--thread-snooze-room));
 }
 .thread-row-shell[data-snooze="woke"] {
-  --thread-row-end: 56px;
+  --thread-snooze-room: calc(var(--sidebar-text-md) * 3 + 24px);
 }
 .thread-snooze-status {
   position: absolute;
   top: 50%;
-  right: 8px;
+  right: var(--thread-row-marks);
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -10687,15 +10726,15 @@ body:has(.dx-app-shell) {
   }
 }
 .thread-row-shell[data-avatars] {
-  --thread-row-end: 29px;
+  --thread-row-marks: 29px;
   --thread-actions-end: 34px;
 }
 .thread-row-shell[data-children] {
-  --thread-row-end: 42px;
+  --thread-row-marks: 42px;
   --thread-actions-end: 44px;
 }
 .thread-row-shell[data-children][data-avatars] {
-  --thread-row-end: 65px;
+  --thread-row-marks: 65px;
   --thread-actions-end: 72px;
 }
 .product-sidebar .thread-row {
@@ -10830,7 +10869,9 @@ body:has(.dx-app-shell) {
    touch opens the same actions with a long press. */
 @media (hover: hover) {
   .product-sidebar .thread-row-shell[data-actions]:hover .thread-row strong {
-    --thread-actions-start: calc(
+    /* A snoozed row's title already stops short of the actions. */
+    --thread-actions-start: max(
+      0px,
       var(--thread-actions-end) +
       var(--thread-actions-width) -
       var(--thread-row-end)

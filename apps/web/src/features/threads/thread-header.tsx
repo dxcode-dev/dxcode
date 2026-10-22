@@ -44,7 +44,10 @@ function ThreadSnoozeBadge({
   return (
     <span className="thread-snoozed-badge">
       <AlarmClock aria-hidden="true" />
-      <span>Snoozed until {until}</span>
+      <span className="thread-snoozed-label" title={`Snoozed until ${until}`}>
+        <span className="thread-snoozed-prefix">Snoozed until </span>
+        {until}
+      </span>
       <button
         type="button"
         disabled={snooze.pendingThreadId === threadId}
