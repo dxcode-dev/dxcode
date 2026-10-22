@@ -116,6 +116,18 @@ const protectedUnauthenticatedEnvironment = Object.freeze({
   GIT_TRACE_REDACT: "1",
 });
 
+/**
+ * Prefix for dx's own protected and leased commands. Providers start every
+ * command under `bash -l`, whose profile sources the user's `~/.env` after
+ * the process environment is set, so a user's NODE_OPTIONS or LD_* variable
+ * would load code into dx's Git, gh, and Node processes that hold the lease.
+ */
+export const LOADER_VARIABLE_RESET =
+  'unset NODE_OPTIONS; for __dx_name in $(compgen -e); do case $__dx_name in LD_*) unset "$__dx_name" ;; esac; done; unset __dx_name; ';
+
+const withoutLoaderVariables = (command: string) =>
+  `${LOADER_VARIABLE_RESET}${command}`;
+
 const redact = (value: string, secrets: ReadonlyArray<string>) =>
   secrets.reduce(
     (current, secret) => current.replaceAll(secret, "[REDACTED]"),
@@ -132,7 +144,9 @@ const sanitizeFailure = (cause: unknown, secrets: ReadonlyArray<string>) => {
 
 const assertNoAuthenticationResidue = async (sandbox: Sandbox) => {
   const result = await sandbox.exec(
-    String.raw`node -e 'const fs=require("node:fs"),path=require("node:path");const files=["/home/user/.git-credentials","/home/user/.netrc",path.join(${JSON.stringify(GITHUB_CONFIG_DIRECTORY)},"hosts.yml"),path.join(${JSON.stringify(GITHUB_CONFIG_DIRECTORY)},"config.yml"),path.join(process.cwd(),".git/config")];for(const f of files){if(!fs.existsSync(f))continue;if(f.endsWith(".git-credentials")||f.endsWith(".netrc"))process.exit(41);const s=fs.readFileSync(f,"utf8");if(/oauth_token|authorization\s*=|https:\/\/[^/@\s]+@github\.com/i.test(s))process.exit(41)}'`,
+    withoutLoaderVariables(
+      String.raw`node -e 'const fs=require("node:fs"),path=require("node:path");const files=["/home/user/.git-credentials","/home/user/.netrc",path.join(${JSON.stringify(GITHUB_CONFIG_DIRECTORY)},"hosts.yml"),path.join(${JSON.stringify(GITHUB_CONFIG_DIRECTORY)},"config.yml"),path.join(process.cwd(),".git/config")];for(const f of files){if(!fs.existsSync(f))continue;if(f.endsWith(".git-credentials")||f.endsWith(".netrc"))process.exit(41);const s=fs.readFileSync(f,"utf8");if(/oauth_token|authorization\s*=|https:\/\/[^/@\s]+@github\.com/i.test(s))process.exit(41)}'`,
+    ),
     {
       cwd: sandbox.cwd,
       env: protectedUnauthenticatedEnvironment,
@@ -165,7 +179,7 @@ const decorate = (
           env: { ...options?.env, ...nativeCommandEnvironment },
         });
       if (trusted.kind === "local")
-        return sandbox.exec(command, {
+        return sandbox.exec(withoutLoaderVariables(command), {
           ...options,
           env: { ...options?.env, ...protectedUnauthenticatedEnvironment },
         });
@@ -181,15 +195,18 @@ const decorate = (
         let result: Awaited<ReturnType<Sandbox["exec"]>> | undefined;
         let commandFailure: Error | undefined;
         try {
-          const unsafeResult = await sandbox.exec(command, {
-            ...options,
-            cwd: options?.cwd ?? sandbox.cwd,
-            env: {
-              ...options?.env,
-              ...protectedUnauthenticatedEnvironment,
-              ...lease,
+          const unsafeResult = await sandbox.exec(
+            withoutLoaderVariables(command),
+            {
+              ...options,
+              cwd: options?.cwd ?? sandbox.cwd,
+              env: {
+                ...options?.env,
+                ...protectedUnauthenticatedEnvironment,
+                ...lease,
+              },
             },
-          });
+          );
           result = {
             ...unsafeResult,
             stdout: redact(unsafeResult.stdout, secrets),

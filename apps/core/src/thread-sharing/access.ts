@@ -36,6 +36,8 @@ export const sharedThreadAccessSql = (thread: string, now: string) => `
 export interface SharedThreadGrant {
   readonly ownerUserId: UserId;
   readonly lifecycleState: "active" | "archived";
+  /** The owner snoozed the Thread; a member's message wakes it too. */
+  readonly snoozed: boolean;
   readonly access: SharedThreadAccess;
 }
 
@@ -49,6 +51,7 @@ export const findSharedThreadGrant = async (
   const row = await db
     .prepare(
       `SELECT thread.owner_user_id, thread.lifecycle_state,
+              thread.snoozed_until IS NOT NULL AS snoozed,
               ${sharedThreadAccessSql("thread", "?3")} AS access
          FROM threads AS thread
          JOIN projects AS project ON project.id = thread.project_id
@@ -60,6 +63,7 @@ export const findSharedThreadGrant = async (
     .first<{
       owner_user_id: string;
       lifecycle_state: "active" | "archived";
+      snoozed: number;
       access: SharedThreadAccess;
     }>();
   return row === null
@@ -67,6 +71,7 @@ export const findSharedThreadGrant = async (
     : {
         ownerUserId: row.owner_user_id as UserId,
         lifecycleState: row.lifecycle_state,
+        snoozed: row.snoozed === 1,
         access: row.access,
       };
 };

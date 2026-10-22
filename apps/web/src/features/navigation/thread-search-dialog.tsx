@@ -21,6 +21,7 @@ const FILTERS = [
   { key: "visibility:", hint: "private or workspace" },
   { key: "repo:", hint: "Threads on a repository" },
   { key: "pinned:", hint: "true or false" },
+  { key: "snoozed:", hint: "true or false" },
   { key: "archived:", hint: "true or false" },
   { key: "color:", hint: "A Thread color, or auto" },
   { key: "id:", hint: "One exact Thread" },
@@ -77,12 +78,12 @@ function SearchSyntax({
         <code>project:</code> narrows to one project by name or ID, and{" "}
         <code>id:thr_…</code> finds one Thread. <code>visibility:private</code>{" "}
         or <code>visibility:workspace</code> only narrows Threads you can
-        already open. <code>archived:</code> and <code>pinned:</code> take{" "}
-        <code>true</code> or <code>false</code>, and <code>color:auto</code>{" "}
-        finds Threads without a color. <code>after:</code> and{" "}
-        <code>before:</code> take <code>7d</code>, <code>2w</code>, or{" "}
-        <code>2026-03-01</code> and use the last activity, as do{" "}
-        <code>updated_after:</code> and <code>updated_before:</code>.
+        already open. <code>archived:</code>, <code>pinned:</code>, and{" "}
+        <code>snoozed:</code> take <code>true</code> or <code>false</code>, and{" "}
+        <code>color:auto</code> finds Threads without a color.{" "}
+        <code>after:</code> and <code>before:</code> take <code>7d</code>,{" "}
+        <code>2w</code>, or <code>2026-03-01</code> and use the last activity,
+        as do <code>updated_after:</code> and <code>updated_before:</code>.
       </p>
       <div className="thread-search-examples">
         {EXAMPLES.map((example) => (

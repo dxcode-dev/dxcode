@@ -10,6 +10,10 @@ export {
   MagicLinkRequestResponseSchema,
 } from "./auth/magic-link-request.js";
 export {
+  SESSION_ENDED_CLOSE_CODE,
+  SESSION_ENDED_CLOSE_REASON,
+} from "./auth/session-ended.js";
+export {
   type SignInOptionsResponse,
   SignInOptionsResponseSchema,
   SignInRejectionCodeSchema,
@@ -86,6 +90,7 @@ export * from "./threads/orb-memory.js";
 export * from "./threads/pin-thread.js";
 export * from "./threads/portals.js";
 export * from "./threads/search-threads.js";
+export * from "./threads/snooze-thread.js";
 export * from "./threads/terminal.js";
 export * from "./threads/thread-chat.js";
 export * from "./threads/thread-data.js";

@@ -22,7 +22,12 @@ import {
 } from "@dx/domain";
 import { Context, DateTime, Effect, Layer, Schema } from "effect";
 import { SettingsAudit } from "../audit.js";
-import { previewSkillImport, type SkillPreview } from "./import.js";
+import {
+  previewSkillImport,
+  SkillImportRejected,
+  type SkillPreview,
+} from "./import.js";
+import { threadSkills } from "./precedence.js";
 
 interface AuditContext {
   readonly userId: UserId;
@@ -42,11 +47,13 @@ interface SkillServiceShape {
   readonly list: (
     target: SkillTarget,
   ) => ReturnType<typeof SkillRepository.Service.list>;
+  /** `enabled` saves the skill switched on, in the same write. */
   readonly create: (
     target: SkillTarget,
     bundle: SkillImportBundle,
     reviewedIntegrity: SkillIntegrity,
     audit: AuditContext,
+    enabled?: boolean,
   ) => Effect.Effect<SkillWithVersion, unknown>;
   readonly update: (
     target: SkillTarget,
@@ -180,47 +187,63 @@ export class SkillService extends Context.Service<
       return SkillService.of({
         preview: previewSkillImport,
         list: repository.list,
-        create: Effect.fn("SkillService.create")(
-          function* (target, bundle, reviewedIntegrity, auditContext) {
-            const existing = yield* repository.list(target);
-            if (existing.length >= MAX_SKILLS_PER_SCOPE) {
-              return yield* new SkillLimitExceeded();
-            }
-            const preview = yield* checkedPreview(bundle, reviewedIntegrity);
-            const id = yield* Schema.decodeEffect(SkillId)(
-              `skl_${crypto.randomUUID()}`,
-            );
-            const versionNumber = yield* Schema.decodeEffect(SkillVersion)(1);
-            const version = yield* makeVersion(
-              id,
-              versionNumber,
-              preview,
-              auditContext.userId,
-            );
-            const now = version.createdAt;
-            const skill = yield* Schema.decodeUnknownEffect(
-              Schema.toType(StoredSkill),
-            )({
-              id,
-              target,
-              name: preview.manifest.name,
-              enabled: false,
-              activeVersion: versionNumber,
-              pinned: false,
-              createdAt: now,
-              updatedAt: now,
+        create: Effect.fn("SkillService.create")(function* (
+          target,
+          bundle,
+          reviewedIntegrity,
+          auditContext,
+          enabled = false,
+        ) {
+          const existing = yield* repository.list(target);
+          if (existing.length >= MAX_SKILLS_PER_SCOPE) {
+            return yield* new SkillLimitExceeded();
+          }
+          const preview = yield* checkedPreview(bundle, reviewedIntegrity);
+          if (
+            existing.some(({ skill }) => skill.name === preview.manifest.name)
+          ) {
+            return yield* new SkillImportRejected({
+              field: "name",
+              reason: `A skill named ${preview.manifest.name} already exists here. Publish a new version of it instead.`,
             });
-            yield* repository.insert(skill, version);
+          }
+          if (enabled) yield* requireReviewedMcp(target, preview);
+          const id = yield* Schema.decodeEffect(SkillId)(
+            `skl_${crypto.randomUUID()}`,
+          );
+          const versionNumber = yield* Schema.decodeEffect(SkillVersion)(1);
+          const version = yield* makeVersion(
+            id,
+            versionNumber,
+            preview,
+            auditContext.userId,
+          );
+          const now = version.createdAt;
+          const skill = yield* Schema.decodeUnknownEffect(
+            Schema.toType(StoredSkill),
+          )({
+            id,
+            target,
+            name: preview.manifest.name,
+            enabled,
+            activeVersion: versionNumber,
+            pinned: false,
+            createdAt: now,
+            updatedAt: now,
+          });
+          yield* repository.insert(skill, version);
+          yield* audit("skill.import", target, auditContext, id, versionNumber);
+          if (enabled) {
             yield* audit(
-              "skill.import",
+              "skill.enable",
               target,
               auditContext,
               id,
               versionNumber,
             );
-            return yield* repository.find(target, id);
-          },
-        ),
+          }
+          return yield* repository.find(target, id);
+        }),
         update: Effect.fn("SkillService.update")(
           function* (
             target,
@@ -318,9 +341,8 @@ export class SkillService extends Context.Service<
         ),
         resolveForThread: Effect.fn("SkillService.resolveForThread")(
           function* (principal, projectId) {
-            const candidates = yield* repository.listEffectiveForThread(
+            const candidates = yield* repository.listThreadCandidates(
               principal.userId,
-              projectId,
             );
             const connections = yield* mcpServers.listForExecution(
               principal.userId,
@@ -331,27 +353,11 @@ export class SkillService extends Context.Service<
                 .filter(({ tools }) => tools.length > 0)
                 .map(({ server }) => server.id),
             );
-            const applicable = candidates.filter(({ active }) =>
+            return threadSkills(candidates, ({ active }) =>
               active.manifest.mcpServerIds.every((id) =>
                 approvedServerIds.has(id),
               ),
-            );
-            const bounded: typeof applicable = [];
-            let instructionBytes = 0;
-            for (const candidate of applicable) {
-              const nextBytes = new TextEncoder().encode(
-                candidate.active.instructions,
-              ).byteLength;
-              if (
-                bounded.length >= 20 ||
-                instructionBytes + nextBytes > 65_536
-              ) {
-                continue;
-              }
-              instructionBytes += nextBytes;
-              bounded.push(candidate);
-            }
-            return bounded.map(({ skill, active }) => ({
+            ).map(({ skill, active }) => ({
               id: skill.id,
               version: active.version,
               name: skill.name,

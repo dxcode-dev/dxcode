@@ -1,27 +1,37 @@
-import type { SkillImportBundle, SkillVersion } from "@dx/domain";
+import type { SkillImportBundle, WorkspaceSlug } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, FileText, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { Plus, Settings } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { settingsNavigationState } from "../../../shared/navigation/settings-return.js";
 import { settle } from "../../../shared/settle.js";
-import { Badge } from "../../../shared/ui/badge.js";
 import { Button } from "../../../shared/ui/button.js";
-import {
-  DialogContent,
-  DialogDescription,
-  DialogRoot,
-  DialogTitle,
-} from "../../../shared/ui/dialog.js";
+import { buttonVariants } from "../../../shared/ui/button-variants.js";
 import {
   SettingsCard,
   SettingsHeading,
-  SettingsSelect,
+  SettingsRow,
   SettingsToggle,
 } from "../settings-primitives.js";
-import type { SettingsSectionProps } from "../settings-registration.js";
 import {
+  type SettingsSectionProps,
+  settingsPath,
+} from "../settings-registration.js";
+import {
+  SkillDetailsDialog,
+  SkillFormDialog,
+  SkillImportDialog,
+  SkillReviewDialog,
+} from "./skill-dialogs.js";
+import {
+  skillErrorMessage as errorMessage,
+  type SkillDraft,
   type SkillPreview,
+  type SkillSaveFailure,
   type SkillsMutationAction,
+  skillAuthorMutationOptions,
+  skillErrorField,
   skillExportMutationOptions,
   skillPreviewMutationOptions,
   skillsMutationOptions,
@@ -32,16 +42,13 @@ import {
   skillsQueryOptions,
 } from "./skills-queries.js";
 
-const errorMessage = (error: unknown) =>
-  error instanceof Error ? error.message : "Request failed.";
-
-const stateLabel = (state: SkillData["effectiveState"]) =>
-  ({
-    disabled: "Disabled",
-    effective: "Effective",
-    "blocked-by-workspace": "Overridden by workspace",
-    "blocked-by-policy": "Blocked by workspace policy",
-  })[state];
+/** Shown after the name only when the skill is on but cannot load. */
+const stateHint = (state: SkillData["effectiveState"]) =>
+  state === "replaced-by-personal"
+    ? "Replaced by your personal skill"
+    : state === "blocked-by-policy"
+      ? "Blocked by workspace policy"
+      : undefined;
 
 const filesBundle = async (selected: FileList): Promise<SkillImportBundle> => {
   if (selected.length === 1) {
@@ -79,230 +86,254 @@ const filesBundle = async (selected: FileList): Promise<SkillImportBundle> => {
   } as SkillImportBundle;
 };
 
-type Preview = SkillPreview;
-
-function SkillReview({
-  preview,
-  busy,
-  updateName,
-  onCancel,
-  onConfirm,
-}: {
-  readonly preview: Preview;
-  readonly busy: boolean;
-  readonly updateName?: string;
-  readonly onCancel: () => void;
-  readonly onConfirm: () => void;
-}) {
-  return (
-    <DialogRoot
-      open
-      onOpenChange={(open) => {
-        if (!open) onCancel();
-      }}
-    >
-      <DialogContent className="skill-review-dialog">
-        <DialogTitle>
-          Review{" "}
-          {updateName === undefined ? "skill import" : `${updateName} update`}
-        </DialogTitle>
-        <DialogDescription>
-          Inspect the exact manifest, instructions, dependencies, resources, and
-          integrity before publishing this immutable version.
-        </DialogDescription>
-        <div className="skill-review">
-          <div className="skill-badges">
-            <Badge>v{preview.manifest.schemaVersion} manifest</Badge>
-            <Badge>{preview.source.type}</Badge>
-            <Badge>{preview.totalBytes.toLocaleString()} bytes</Badge>
-          </div>
-          <h3>{preview.manifest.name}</h3>
-          <p>{preview.manifest.description}</p>
-          <details open>
-            <summary>Instructions</summary>
-            <pre>{preview.instructions}</pre>
-          </details>
-          <details>
-            <summary>Manifest and dependencies</summary>
-            <pre>{JSON.stringify(preview.manifest, null, 2)}</pre>
-          </details>
-          <details>
-            <summary>Resources ({preview.resources.length})</summary>
-            <ul>
-              {preview.resources.map((resource) => (
-                <li key={resource.path}>
-                  <code>{resource.path}</code> — {resource.mediaType},{" "}
-                  {resource.sizeBytes.toLocaleString()} bytes
-                </li>
-              ))}
-            </ul>
-          </details>
-          <div className="skill-review-integrity">
-            <strong>Integrity</strong> <code>{preview.integrity}</code>
-          </div>
-          <div className="skill-actions">
-            <Button variant="ghost" disabled={busy} onClick={onCancel}>
-              Cancel
-            </Button>
-            <Button disabled={busy} onClick={onConfirm}>
-              {busy
-                ? "Saving…"
-                : updateName === undefined
-                  ? "Import reviewed skill"
-                  : "Publish and activate"}
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </DialogRoot>
+const download = (exported: unknown, filename: string) => {
+  const url = URL.createObjectURL(
+    new Blob([`${JSON.stringify(exported, null, 2)}\n`], {
+      type: "application/json",
+    }),
   );
-}
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+};
 
-function SkillCard({
+/** Pending keys, so only the control that is saving shows it. */
+const enabledKey = (skill: SkillData) => `enabled:${skill.id}`;
+const POLICY_KEY = "policy";
+
+type OpenDialog =
+  | { readonly kind: "new" }
+  | { readonly kind: "import" }
+  | { readonly kind: "details"; readonly skillId: SkillData["id"] }
+  | { readonly kind: "edit"; readonly skillId: SkillData["id"] }
+  | {
+      readonly kind: "review";
+      readonly preview: SkillPreview;
+      readonly bundle: SkillImportBundle;
+      readonly updating?: SkillData;
+    };
+
+function SkillRow({
   skill,
   canMutate,
-  busy,
-  onAction,
-  onChooseUpdate,
-  onExport,
+  pending,
+  onToggle,
+  onOpenSettings,
 }: {
   readonly skill: SkillData;
   readonly canMutate: boolean;
-  readonly busy: boolean;
-  readonly onAction: (action: SkillsMutationAction, message: string) => void;
-  readonly onChooseUpdate: (skill: SkillData) => void;
-  readonly onExport: (skill: SkillData) => Promise<unknown>;
+  /** This row's switch is saving. */
+  readonly pending: boolean;
+  readonly onToggle: (enabled: boolean) => void;
+  readonly onOpenSettings: (trigger: HTMLButtonElement) => void;
 }) {
-  const download = async () => {
-    const exported = await onExport(skill);
-    const blob = new Blob([JSON.stringify(exported, null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `${skill.name}-${skill.activeVersion}.skill.json`;
-    anchor.click();
-    URL.revokeObjectURL(url);
-  };
+  const hint = skill.enabled ? stateHint(skill.effectiveState) : undefined;
   return (
-    <article className="skill-card">
-      <header>
-        <div>
-          <h2>{skill.name}</h2>
-          <p>{skill.active.manifest.description}</p>
+    <div className="skill-row">
+      <div className="skill-row-copy">
+        <div className="skill-row-title">
+          <strong>{skill.name}</strong>
+          <span>v{skill.activeVersion}</span>
+          {hint === undefined ? null : <span>{hint}</span>}
         </div>
-        <SettingsToggle
-          checked={skill.enabled}
-          disabled={!canMutate || busy}
-          label={`${skill.enabled ? "Disable" : "Enable"} ${skill.name}`}
-          onCheckedChange={(enabled) =>
-            onAction(
-              {
-                type: "updateState",
-                skillId: skill.id,
-                input: { enabled },
-              },
-              "Skill state updated.",
-            )
-          }
-        />
-      </header>
-      <div className="skill-badges">
-        <Badge>{skill.scope}</Badge>
-        <Badge>v{skill.activeVersion}</Badge>
-        <Badge>{skill.active.source.type}</Badge>
-        <Badge>{stateLabel(skill.effectiveState)}</Badge>
-        {skill.pinned ? <Badge>Pinned</Badge> : null}
-        {skill.overridesPersonal ? <Badge>Overrides personal</Badge> : null}
+        <p>{skill.active.manifest.description}</p>
       </div>
-      <p className="skill-source">
-        <strong>Source:</strong> {skill.active.source.label}
-      </p>
-      <details>
-        <summary>Inspect manifest, resources, and integrity</summary>
-        <pre>{JSON.stringify(skill.active.manifest, null, 2)}</pre>
-        <ul>
-          {skill.active.resources.map((resource) => (
-            <li key={resource.path}>
-              <code>{resource.path}</code> · {resource.mediaType} ·{" "}
-              {resource.sizeBytes.toLocaleString()} bytes
-            </li>
-          ))}
-        </ul>
-        <p className="skill-integrity">
-          <strong>Integrity:</strong> <code>{skill.active.integrity}</code>
-        </p>
-      </details>
-      <div className="skill-version-controls">
-        <SettingsSelect
-          label={`Active version for ${skill.name}`}
-          value={String(skill.activeVersion)}
-          disabled={!canMutate || busy || skill.pinned}
-          options={skill.versions.map((version) => [
-            String(version),
-            `Version ${version}`,
-          ])}
-          onValueChange={(activeVersion) =>
-            onAction(
-              {
-                type: "updateState",
-                skillId: skill.id,
-                input: {
-                  activeVersion: Number(activeVersion) as SkillVersion,
-                },
-              },
-              "Active version changed.",
-            )
-          }
-        />
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={!canMutate || busy}
-          onClick={() =>
-            onAction(
-              {
-                type: "updateState",
-                skillId: skill.id,
-                input: { pinned: !skill.pinned },
-              },
-              skill.pinned ? "Skill unpinned." : "Skill pinned.",
-            )
-          }
-        >
-          {skill.pinned ? "Unpin" : "Pin version"}
-        </Button>
-      </div>
-      <div className="skill-actions">
-        <Button size="xs" variant="ghost" onClick={() => void download()}>
-          <Download /> Export
-        </Button>
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={!canMutate || busy}
-          onClick={() => onChooseUpdate(skill)}
-        >
-          <RefreshCw /> Update
-        </Button>
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={!canMutate || busy}
-          onClick={() => {
-            if (window.confirm(`Remove ${skill.name}?`))
-              onAction({ type: "remove", skillId: skill.id }, "Skill removed.");
-          }}
-        >
-          <Trash2 /> Remove
-        </Button>
-      </div>
-    </article>
+      <SettingsToggle
+        checked={skill.enabled}
+        disabled={!canMutate}
+        pending={pending}
+        label={`${skill.name} ${skill.enabled ? "on" : "off"}`}
+        onCheckedChange={onToggle}
+      />
+      <Button
+        size="icon-xs"
+        variant="ghost"
+        aria-label={`${skill.name} settings`}
+        onClick={(event) => onOpenSettings(event.currentTarget)}
+      >
+        <Settings />
+      </Button>
+    </div>
   );
 }
 
-export function SkillsSettings({ workspaceSlug }: SettingsSectionProps) {
+const otherScopeLink = (
+  scope: SkillsTarget["scope"],
+  workspace: SettingsSectionProps["workspace"],
+) =>
+  scope === "workspace"
+    ? {
+        label: "Personal Skills",
+        to: settingsPath({ scope: "personal", section: "skills" }),
+      }
+    : workspace === undefined
+      ? undefined
+      : {
+          label: "Workspace Skills",
+          to: settingsPath({
+            scope: "workspace",
+            workspaceSlug: workspace.shortName as WorkspaceSlug,
+            section: "skills",
+          }),
+        };
+
+function SkillsHeading({
+  scope,
+  canMutate,
+  busy,
+  status,
+  otherScope,
+  settingsReturnTo,
+  onNew,
+  onImport,
+}: {
+  readonly scope: SkillsTarget["scope"];
+  readonly canMutate: boolean;
+  readonly busy: boolean;
+  readonly status?: string;
+  readonly otherScope?: { readonly label: string; readonly to: string };
+  readonly settingsReturnTo?: string;
+  readonly onNew: () => void;
+  readonly onImport: () => void;
+}) {
+  return (
+    <SettingsHeading
+      title={scope === "workspace" ? "Workspace Skills" : "Personal Skills"}
+      actions={
+        <div className="skills-heading-actions">
+          <span aria-live="polite">{status}</span>
+          {canMutate ? (
+            <>
+              <Button size="xs" variant="ghost" disabled={busy} onClick={onNew}>
+                <Plus aria-hidden="true" />
+                New Skill
+              </Button>
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={busy}
+                onClick={onImport}
+              >
+                Import
+              </Button>
+            </>
+          ) : null}
+          {otherScope === undefined ? null : (
+            <Link
+              to={otherScope.to}
+              replace
+              state={settingsNavigationState(settingsReturnTo)}
+              className={buttonVariants({ size: "xs", variant: "ghost" })}
+            >
+              {otherScope.label}
+            </Link>
+          )}
+        </div>
+      }
+      description={
+        scope === "workspace" ? (
+          <>
+            Skills teach dx reusable workflows and knowledge in every Thread
+            that members of this workspace start. A member's personal skill with
+            the same name replaces a workspace skill.{" "}
+            {canMutate
+              ? "New Threads load the active version of each enabled skill; running Threads keep theirs."
+              : "Only workspace admins can change them."}
+          </>
+        ) : (
+          <>
+            Skills teach dx reusable workflows and knowledge in every Thread you
+            start. New Threads load the active version of each enabled skill;
+            running Threads keep theirs. Your skill replaces a workspace skill
+            with the same name.
+          </>
+        )
+      }
+    />
+  );
+}
+
+function SkillList({
+  skills,
+  canMutate,
+  pending,
+  scopeLabel,
+  onToggle,
+  onOpenSettings,
+}: {
+  readonly skills: ReadonlyArray<SkillData>;
+  readonly canMutate: boolean;
+  /** The key of the action that is saving, if any. */
+  readonly pending?: string;
+  readonly scopeLabel: SkillsTarget["scope"];
+  readonly onToggle: (skill: SkillData, enabled: boolean) => void;
+  readonly onOpenSettings: (
+    skill: SkillData,
+    trigger: HTMLButtonElement,
+  ) => void;
+}) {
+  return (
+    <SettingsCard>
+      {skills.length === 0 ? (
+        <p className="settings-card-empty">
+          {canMutate
+            ? `No ${scopeLabel} skills yet. Create one with New Skill, or import a skill folder.`
+            : `No ${scopeLabel} skills yet.`}
+        </p>
+      ) : (
+        skills.map((skill) => (
+          <SkillRow
+            key={skill.id}
+            skill={skill}
+            canMutate={canMutate}
+            pending={pending === enabledKey(skill)}
+            onToggle={(enabled) => onToggle(skill, enabled)}
+            onOpenSettings={(trigger) => onOpenSettings(skill, trigger)}
+          />
+        ))
+      )}
+    </SettingsCard>
+  );
+}
+
+function PersonalSkillsPolicy({
+  allowed,
+  disabled,
+  pending,
+  onChange,
+}: {
+  readonly allowed: boolean;
+  readonly disabled: boolean;
+  readonly pending: boolean;
+  readonly onChange: (allowed: boolean) => void;
+}) {
+  return (
+    <SettingsCard>
+      <SettingsRow
+        title="Members can use personal skills"
+        description="When off, only workspace skills load in members' Threads."
+        control={
+          <SettingsToggle
+            checked={allowed}
+            disabled={disabled}
+            pending={pending}
+            label="Members can use personal skills"
+            onCheckedChange={onChange}
+          />
+        }
+      />
+    </SettingsCard>
+  );
+}
+
+export function SkillsSettings({
+  workspace,
+  workspaceSlug,
+  settingsReturnTo,
+  onDirtyChange,
+}: SettingsSectionProps) {
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
   const target: SkillsTarget =
@@ -313,198 +344,280 @@ export function SkillsSettings({ workspaceSlug }: SettingsSectionProps) {
   const mutation = useMutation(
     skillsMutationOptions(queryClient, identity.id, target),
   );
+  const authorMutation = useMutation(
+    skillAuthorMutationOptions(queryClient, identity.id, target),
+  );
   const previewMutation = useMutation(
     skillPreviewMutationOptions(identity.id, target),
   );
   const exportMutation = useMutation(
     skillExportMutationOptions(identity.id, target),
   );
-  const [preview, setPreview] = React.useState<Preview>();
-  const bundle = React.useRef<SkillImportBundle | undefined>(undefined);
-  const [updating, setUpdating] = React.useState<SkillData>();
-  const [busy, setBusy] = React.useState(false);
+  const [dialog, setDialog] = React.useState<OpenDialog>();
+  /** The skill a folder selection becomes a new version of. */
+  const uploadFor = React.useRef<SkillData | undefined>(undefined);
+  /** The key of the action that is saving; one action runs at a time. */
+  const [pending, setPending] = React.useState<string>();
+  const busy = pending !== undefined;
   const [message, setMessage] = React.useState<string>();
   const folderInput = React.useRef<HTMLInputElement>(null);
   const exportInput = React.useRef<HTMLInputElement>(null);
+  const finalFocus = React.useRef<HTMLElement | null>(null);
 
-  const run = async (action: SkillsMutationAction, success: string) => {
-    setBusy(true);
+  const run = async (
+    action: SkillsMutationAction,
+    success: string,
+    key?: string,
+  ) => {
+    if (busy) return false;
+    setPending(key ?? action.type);
     setMessage(undefined);
-    const outcome = await settle(async () => {
-      await mutation.mutateAsync(action);
-      setMessage(success);
-    });
-    if (!outcome.ok) {
-      setMessage(errorMessage(outcome.error));
-    }
-    setBusy(false);
+    const outcome = await settle(() => mutation.mutateAsync(action));
+    setMessage(outcome.ok ? success : errorMessage(outcome.error));
+    setPending(undefined);
     mutation.reset();
+    return outcome.ok;
+  };
+  const closeDialog = () => {
+    setDialog(undefined);
+    onDirtyChange(false);
+  };
+  const save = async (
+    draft: SkillDraft,
+    skill?: SkillData,
+  ): Promise<SkillSaveFailure | undefined> => {
+    setPending("save");
+    setMessage(undefined);
+    const outcome = await settle(() =>
+      authorMutation.mutateAsync({ draft, skill }),
+    );
+    setPending(undefined);
+    authorMutation.reset();
+    if (!outcome.ok) {
+      return {
+        message: errorMessage(outcome.error),
+        field: skillErrorField(outcome.error),
+      };
+    }
+    setMessage(
+      skill === undefined
+        ? `${draft.name} published.`
+        : `${skill.name} version ${Math.max(...outcome.value.versions)} published.`,
+    );
+    closeDialog();
+    return undefined;
   };
   const selectFiles = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files?.length) return;
+    setMessage(undefined);
     const outcome = await settle(async () => {
-      const nextBundle = await filesBundle(files);
-      bundle.current = nextBundle;
-      setPreview(await previewMutation.mutateAsync(nextBundle));
+      const bundle = await filesBundle(files);
+      const preview = await previewMutation.mutateAsync(bundle);
+      setDialog({
+        kind: "review",
+        preview,
+        bundle,
+        updating: uploadFor.current,
+      });
     });
-    if (!outcome.ok) {
-      setMessage(errorMessage(outcome.error));
-    }
+    if (!outcome.ok) setMessage(errorMessage(outcome.error));
     previewMutation.reset();
     event.target.value = "";
   };
-  const confirm = async () => {
-    if (!preview || !bundle.current) return;
-    await run(
-      updating
+  const confirmReview = async (
+    review: Extract<OpenDialog, { kind: "review" }>,
+  ) => {
+    const done = await run(
+      review.updating === undefined
         ? {
-            type: "publishVersion",
-            skillId: updating.id,
-            bundle: bundle.current,
-            reviewedIntegrity: preview.integrity,
-            activate: true,
+            type: "import",
+            bundle: review.bundle,
+            reviewedIntegrity: review.preview.integrity,
           }
         : {
-            type: "import",
-            bundle: bundle.current,
-            reviewedIntegrity: preview.integrity,
+            type: "publishVersion",
+            skillId: review.updating.id,
+            bundle: review.bundle,
+            reviewedIntegrity: review.preview.integrity,
+            activate: !review.updating.pinned,
           },
-      updating ? "Version published." : "Skill imported.",
+      review.updating === undefined
+        ? `${review.preview.manifest.name} imported. Switch it on to use it.`
+        : `${review.updating.name} version published.`,
     );
-    setPreview(undefined);
-    bundle.current = undefined;
-    setUpdating(undefined);
+    if (done) {
+      setDialog(undefined);
+      uploadFor.current = undefined;
+    }
   };
-  const choose = (skill?: SkillData) => {
-    setUpdating(skill);
-    folderInput.current?.click();
+  const exportSkill = async (skill: SkillData) => {
+    const outcome = await settle(() => exportMutation.mutateAsync(skill.id));
+    exportMutation.reset();
+    if (outcome.ok) {
+      download(
+        outcome.value,
+        `${skill.name}-v${skill.activeVersion}.skill.json`,
+      );
+      setMessage(`${skill.name} exported.`);
+    } else {
+      setMessage(errorMessage(outcome.error));
+    }
   };
-  const canMutate = state.data?.canMutate ?? false;
+
+  const data = state.data;
+  const skills = data?.items ?? [];
+  const canMutate = data?.canMutate ?? false;
+  const selected =
+    dialog?.kind === "details" || dialog?.kind === "edit"
+      ? skills.find(({ id }) => id === dialog.skillId)
+      : undefined;
+
   return (
-    <div className="skills-settings">
-      <SettingsHeading
-        title="Skills"
-        description="Import browser-reviewed instruction bundles, control effective versions, and inspect precedence."
+    <div className="skills-page">
+      <SkillsHeading
+        scope={target.scope}
+        canMutate={canMutate}
+        busy={busy}
+        status={
+          state.isPending
+            ? "Loading skills…"
+            : state.error !== null
+              ? errorMessage(state.error)
+              : message
+        }
+        otherScope={otherScopeLink(target.scope, workspace)}
+        settingsReturnTo={settingsReturnTo}
+        onNew={() => setDialog({ kind: "new" })}
+        onImport={() => setDialog({ kind: "import" })}
       />
-      {target.scope === "workspace" &&
-      state.data?.allowPersonalSkills !== undefined ? (
-        <SettingsCard title="Personal skill policy">
-          <div className="skill-settings-card-content">
-            <div className="skill-policy">
-              <div>
-                <strong>Allow personal skills</strong>
-                <p>
-                  Workspace skills take precedence when names conflict.
-                  Disabling this policy blocks every personal skill in this
-                  workspace.
-                </p>
-              </div>
-              <SettingsToggle
-                checked={state.data.allowPersonalSkills}
-                disabled={!canMutate || busy}
-                label="Allow personal skills in this workspace"
-                onCheckedChange={(value) =>
-                  run(
-                    { type: "updatePolicy", allowPersonalSkills: value },
-                    "Workspace policy updated.",
-                  )
-                }
-              />
-            </div>
-          </div>
-        </SettingsCard>
-      ) : null}
-      <SettingsCard title="Installed skills">
-        <div className="skill-settings-card-content">
-          <div className="skill-toolbar">
-            <p>
-              Precedence: <strong>workspace over personal</strong>
-            </p>
-            <div className="skill-actions">
-              <Button
-                variant="ghost"
-                disabled={!canMutate || busy}
-                onClick={() => {
-                  setUpdating(undefined);
-                  exportInput.current?.click();
-                }}
-              >
-                <Download /> Import export
-              </Button>
-              <Button disabled={!canMutate || busy} onClick={() => choose()}>
-                <Plus /> Import folder
-              </Button>
-            </div>
-          </div>
-          <input
-            ref={folderInput}
-            className="skill-file-input"
-            type="file"
-            aria-label="Select skill folder"
-            multiple
-            {...({ webkitdirectory: "" } as Record<string, string>)}
-            accept=".json,.md,.txt,.csv,.yaml,.yml,.toml,text/*,application/json"
-            onChange={(event) => void selectFiles(event)}
-          />
-          <input
-            ref={exportInput}
-            className="skill-file-input"
-            type="file"
-            aria-label="Select exported skill"
-            accept=".skill.json,application/json"
-            onChange={(event) => void selectFiles(event)}
-          />
-          <p className="skill-file-help">
-            <FileText /> Select a skill folder containing{" "}
-            <code>manifest.json</code> (or <code>skill.json</code>),{" "}
-            <code>instructions.md</code>, and bounded text resources, or
-            re-import a <code>.skill.json</code> export. Every file is previewed
-            before upload.
-          </p>
-          <div aria-live="polite" className="skill-message">
-            {state.isPending
-              ? "Loading skills…"
-              : ((state.error === null
-                  ? undefined
-                  : errorMessage(state.error)) ?? message)}
-          </div>
-          {!state.isPending && state.data?.items.length === 0 ? (
-            <p className="skill-empty">No skills installed in this scope.</p>
-          ) : null}
-          <div className="skill-grid">
-            {state.data?.items.map((skill) => (
-              <SkillCard
-                key={skill.id}
-                skill={skill}
-                canMutate={canMutate}
-                busy={busy}
-                onAction={(action, success) => void run(action, success)}
-                onChooseUpdate={choose}
-                onExport={async (skill) => {
-                  const outcome = await settle(() =>
-                    exportMutation.mutateAsync(skill.id),
-                  );
-                  exportMutation.reset();
-                  if (!outcome.ok) throw outcome.error;
-                  return outcome.value;
-                }}
-              />
-            ))}
-          </div>
-        </div>
-      </SettingsCard>
-      {preview ? (
-        <SkillReview
-          preview={preview}
-          busy={busy}
-          updateName={updating?.name}
-          onCancel={() => {
-            setPreview(undefined);
-            bundle.current = undefined;
-            setUpdating(undefined);
+      {data === undefined ? null : (
+        <SkillList
+          skills={skills}
+          canMutate={canMutate}
+          pending={pending}
+          scopeLabel={target.scope}
+          onToggle={(skill, enabled) =>
+            void run(
+              { type: "updateState", skillId: skill.id, input: { enabled } },
+              `${skill.name} turned ${enabled ? "on" : "off"}.`,
+              enabledKey(skill),
+            )
+          }
+          onOpenSettings={(skill, trigger) => {
+            finalFocus.current = trigger;
+            setDialog({ kind: "details", skillId: skill.id });
           }}
-          onConfirm={() => void confirm()}
+        />
+      )}
+      {target.scope === "workspace" &&
+      data?.allowPersonalSkills !== undefined ? (
+        <PersonalSkillsPolicy
+          allowed={data.allowPersonalSkills}
+          disabled={!canMutate}
+          pending={pending === POLICY_KEY}
+          onChange={(value) =>
+            void run(
+              { type: "updatePolicy", allowPersonalSkills: value },
+              value
+                ? "Members' personal skills load again."
+                : "Members' personal skills are blocked.",
+              POLICY_KEY,
+            )
+          }
+        />
+      ) : null}
+      <input
+        ref={(node) => {
+          folderInput.current = node;
+          if (node === null) return;
+          // A cancelled version upload returns focus to the skill's gear.
+          const cancelled = () => {
+            if (uploadFor.current === undefined) return;
+            uploadFor.current = undefined;
+            finalFocus.current?.focus();
+          };
+          node.addEventListener("cancel", cancelled);
+          return () => node.removeEventListener("cancel", cancelled);
+        }}
+        className="skill-file-input"
+        type="file"
+        aria-label="Select skill folder"
+        multiple
+        {...({ webkitdirectory: "" } as Record<string, string>)}
+        accept=".json,.md,.txt,.csv,.yaml,.yml,.toml,text/*,application/json"
+        onChange={(event) => void selectFiles(event)}
+      />
+      <input
+        ref={exportInput}
+        className="skill-file-input"
+        type="file"
+        aria-label="Select exported skill"
+        accept=".skill.json,application/json"
+        onChange={(event) => void selectFiles(event)}
+      />
+      {dialog?.kind === "new" ? (
+        <SkillFormDialog
+          busy={busy}
+          onDirtyChange={onDirtyChange}
+          onSave={(draft) => save(draft)}
+          onClose={closeDialog}
+        />
+      ) : null}
+      {dialog?.kind === "edit" && selected !== undefined ? (
+        <SkillFormDialog
+          skill={selected}
+          busy={busy}
+          finalFocus={finalFocus}
+          onDirtyChange={onDirtyChange}
+          onSave={(draft) => save(draft, selected)}
+          onClose={closeDialog}
+        />
+      ) : null}
+      {dialog?.kind === "details" && selected !== undefined ? (
+        <SkillDetailsDialog
+          skill={selected}
+          canMutate={canMutate}
+          busy={busy}
+          pending={pending}
+          finalFocus={finalFocus}
+          onAction={run}
+          onEdit={() => setDialog({ kind: "edit", skillId: selected.id })}
+          onUploadVersion={() => {
+            uploadFor.current = selected;
+            setDialog(undefined);
+            folderInput.current?.click();
+          }}
+          onExport={() => void exportSkill(selected)}
+          onClose={closeDialog}
+        />
+      ) : null}
+      {dialog?.kind === "import" ? (
+        <SkillImportDialog
+          onChooseFolder={() => {
+            uploadFor.current = undefined;
+            setDialog(undefined);
+            folderInput.current?.click();
+          }}
+          onChooseExport={() => {
+            uploadFor.current = undefined;
+            setDialog(undefined);
+            exportInput.current?.click();
+          }}
+          onClose={closeDialog}
+        />
+      ) : null}
+      {dialog?.kind === "review" ? (
+        <SkillReviewDialog
+          preview={dialog.preview}
+          busy={busy}
+          updating={dialog.updating}
+          finalFocus={dialog.updating === undefined ? undefined : finalFocus}
+          onCancel={() => {
+            setDialog(undefined);
+            uploadFor.current = undefined;
+          }}
+          onConfirm={() => void confirmReview(dialog)}
         />
       ) : null}
     </div>

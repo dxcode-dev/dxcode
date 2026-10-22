@@ -647,6 +647,30 @@ export class ClaudeCodeRun {
     return this.sandbox.exists(`${this.dir}/stopped`);
   }
 
+  /**
+   * Whether the run's process is gone without writing its exit marker, as
+   * when its workspace cold-boots and only files survive. A lost run is
+   * recorded as killed (137), so its Claude session is resumed. A failed
+   * check says nothing and counts as live.
+   */
+  async lost() {
+    if (this.#exited || this.stream.finished) return false;
+    const result = await this.sandbox
+      .exec(
+        `bash -c ${quote(`D=${quote(this.dir)}
+pid=$(cat "$D/pid" 2>/dev/null || true)
+if [ -f "$D/exit" ] || [ -z "$pid" ] || tr '\\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -qF "$D/runner.sh"; then echo live; exit 0; fi
+echo 137 > "$D/exit"
+echo lost`)}`,
+        { timeoutMs: 15_000 },
+      )
+      .catch(() => undefined);
+    if (result?.stdout.trim() !== "lost") return false;
+    this.#dead = true;
+    this.#exited = true;
+    return true;
+  }
+
   /** It wrote an exit code other than a stop's SIGTERM or SIGKILL. */
   async exitedOnItsOwn() {
     if (await this.stopped()) return false;

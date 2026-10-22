@@ -6,9 +6,10 @@ export const personalSecuritySettingsSection = {
   id: "personal-security",
   scope: "personal",
   slug: "security",
+  group: "privacy-security",
   label: "Security",
   title: "Security",
-  description: "Manage API access and browser sessions.",
+  description: "Manage access tokens and browser sessions.",
   icon: ShieldCheck,
   component: PersonalSecuritySettings,
 } as const satisfies SettingsSectionRegistration;

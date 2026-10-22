@@ -29,6 +29,11 @@ export const searchThreadsItem = (hit: ThreadSearchHit): SearchThreadsItem => ({
   color: hit.color ?? "auto",
   archived: hit.lifecycle_state !== "active",
   pinned: hit.pinned_at !== null,
+  ...(hit.snoozed_until !== null &&
+  hit.lifecycle_state === "active" &&
+  Date.parse(hit.snoozed_until) > Date.now()
+    ? { snoozedUntil: hit.snoozed_until }
+    : {}),
   visibility:
     hit.workspace_access === "view" || hit.workspace_access === "contribute"
       ? "workspace"

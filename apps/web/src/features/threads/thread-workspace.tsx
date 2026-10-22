@@ -26,7 +26,10 @@ import { wakingExecutionEnvironmentMessage } from "../../shared/execution-enviro
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
 import { settingsNavigationState } from "../../shared/navigation/settings-return.js";
 import { Button } from "../../shared/ui/button.js";
-import { MarkdownFileLinkContext } from "../../shared/ui/markdown-file-link-context.js";
+import {
+  MarkdownFileLinkContext,
+  MarkdownImageSourceContext,
+} from "../../shared/ui/markdown-file-link-context.js";
 import { useMobile } from "../../shared/use-mobile.js";
 import { projectQueryOptions } from "../projects/project-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
@@ -90,6 +93,7 @@ import {
   resolveTranscriptFileLink,
   sandboxFileUrl,
   type ThreadFileTarget,
+  transcriptMediaSource,
 } from "./transcript-file-link.js";
 import { useFrameCoalescedAgentSource } from "./use-frame-coalesced-agent-session.js";
 import {
@@ -707,6 +711,8 @@ function useCenterFileTabs(threadId: ThreadId) {
       ...(downloadUrl === undefined ? {} : { downloadUrl }),
     };
   };
+  const resolveMediaSource = (src: string) =>
+    transcriptMediaSource(threadId, src);
   return {
     files,
     setFiles,
@@ -716,6 +722,7 @@ function useCenterFileTabs(threadId: ThreadId) {
     closeFile,
     fileNavigation,
     resolveFileLink,
+    resolveMediaSource,
   };
 }
 
@@ -858,6 +865,7 @@ function ThreadSessionContent({
     closeFile,
     fileNavigation,
     resolveFileLink,
+    resolveMediaSource,
   } = centerFiles;
   // A notification opens the transcript at a message, so it comes forward
   // from an open file tab.
@@ -995,7 +1003,9 @@ function ThreadSessionContent({
           {toolsAvailable ? (
             <ThreadFileNavigationContext value={fileNavigation}>
               <MarkdownFileLinkContext value={resolveFileLink}>
-                {panel}
+                <MarkdownImageSourceContext value={resolveMediaSource}>
+                  {panel}
+                </MarkdownImageSourceContext>
               </MarkdownFileLinkContext>
             </ThreadFileNavigationContext>
           ) : (
@@ -1066,38 +1076,40 @@ function ThreadSessionContent({
         main={
           <ThreadFileNavigationContext value={fileNavigation}>
             <MarkdownFileLinkContext value={resolveFileLink}>
-              <ThreadAgentPanel
-                {...retainedImageProps}
-                source={agentSource}
-                agentInitialization={thread.agentInitialization}
-                onOpenModelRouting={openModelRouting}
-                dictationAvailable={dictationAvailable}
-                active={activeFile === undefined}
-                additionalPanels={openFilePanes}
-                draft={draft}
-                workspaceReady={thread.executionWorkspace.ready}
-                workspaceStatus={workspaceStatus}
-                composerNotice={composerNotice}
-                optimisticCreation={optimisticCreation}
-                onInitialSubmissionObserved={onInitialSubmissionObserved}
-                {...sharedPanelProps}
-                renderHeader={(transcript) => (
-                  <>
-                    <ThreadHeader
-                      {...headerProps}
-                      transcript={transcript}
-                      rightPaneCollapsed={rightPaneCollapsed}
-                      onToggleRightPane={toggleRightPane}
-                    />
-                    <ThreadCenterTabs
-                      activeFile={activeFile}
-                      files={files}
-                      onClose={closeFile}
-                      onSelect={setActiveFile}
-                    />
-                  </>
-                )}
-              />
+              <MarkdownImageSourceContext value={resolveMediaSource}>
+                <ThreadAgentPanel
+                  {...retainedImageProps}
+                  source={agentSource}
+                  agentInitialization={thread.agentInitialization}
+                  onOpenModelRouting={openModelRouting}
+                  dictationAvailable={dictationAvailable}
+                  active={activeFile === undefined}
+                  additionalPanels={openFilePanes}
+                  draft={draft}
+                  workspaceReady={thread.executionWorkspace.ready}
+                  workspaceStatus={workspaceStatus}
+                  composerNotice={composerNotice}
+                  optimisticCreation={optimisticCreation}
+                  onInitialSubmissionObserved={onInitialSubmissionObserved}
+                  {...sharedPanelProps}
+                  renderHeader={(transcript) => (
+                    <>
+                      <ThreadHeader
+                        {...headerProps}
+                        transcript={transcript}
+                        rightPaneCollapsed={rightPaneCollapsed}
+                        onToggleRightPane={toggleRightPane}
+                      />
+                      <ThreadCenterTabs
+                        activeFile={activeFile}
+                        files={files}
+                        onClose={closeFile}
+                        onSelect={setActiveFile}
+                      />
+                    </>
+                  )}
+                />
+              </MarkdownImageSourceContext>
             </MarkdownFileLinkContext>
           </ThreadFileNavigationContext>
         }

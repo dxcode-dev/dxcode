@@ -2,6 +2,8 @@ import { ContextMenu } from "@base-ui/react/context-menu";
 import type { ThreadData } from "@dx/api";
 import { Link } from "@tanstack/react-router";
 import {
+  AlarmClock,
+  AlarmClockOff,
   Archive,
   ArchiveRestore,
   ChevronRight,
@@ -15,7 +17,10 @@ import {
   PinOff,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import { useNowMinute } from "../../shared/hooks/use-clock.js";
 import { useOptionalThreadEditing } from "../../shared/thread-editing.js";
+import type { ThreadSnoozeController } from "../../shared/thread-snooze.js";
+import { snoozePresets } from "../../shared/thread-snooze-presets.js";
 import { absoluteThreadUrl } from "../../shared/thread-url.js";
 import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
 import { ThreadColorSubmenu } from "../../shared/ui/thread-color-submenu.js";
@@ -23,6 +28,38 @@ import { ThreadColorSubmenu } from "../../shared/ui/thread-color-submenu.js";
 const copy = (text: string) => {
   void navigator.clipboard.writeText(text);
 };
+
+/** The Snooze submenu's wake times, read as it opens. */
+function SnoozeContextItems({
+  threadId,
+  snooze,
+}: {
+  readonly threadId: ThreadData["id"];
+  readonly snooze: ThreadSnoozeController;
+}) {
+  const now = useNowMinute();
+  return (
+    <>
+      {snoozePresets(now).map((preset) => (
+        <ContextMenu.Item
+          key={preset.id}
+          className="thread-context-item"
+          onClick={() => snooze.snooze(threadId, preset.wakeAt(Date.now()))}
+        >
+          <span>{preset.label}</span>
+          <small className="thread-snooze-when">{preset.when}</small>
+        </ContextMenu.Item>
+      ))}
+      <ContextMenu.Separator className="thread-context-separator" />
+      <ContextMenu.Item
+        className="thread-context-item"
+        onClick={() => snooze.snoozeCustom(threadId)}
+      >
+        <span>Custom…</span>
+      </ContextMenu.Item>
+    </>
+  );
+}
 
 export function ThreadContextMenu({
   thread,
@@ -33,6 +70,7 @@ export function ThreadContextMenu({
   creating = false,
   subthreads,
   sourceThread,
+  snooze,
   onOpenChange,
   children,
 }: {
@@ -67,6 +105,11 @@ export function ThreadContextMenu({
   readonly sourceThread?: {
     readonly id: ThreadData["id"];
     readonly onOpen: () => void;
+  };
+  /** A Thread that can snooze; `snoozed` offers Wake instead. */
+  readonly snooze?: {
+    readonly controller: ThreadSnoozeController;
+    readonly snoozed: boolean;
   };
   readonly onOpenChange?: (open: boolean) => void;
   readonly children: ReactNode;
@@ -140,6 +183,41 @@ export function ThreadContextMenu({
                     </span>
                   </ContextMenu.Item>
                 ) : null}
+                {snooze === undefined ? null : snooze.snoozed ? (
+                  <ContextMenu.Item
+                    className="thread-context-item"
+                    disabled={snooze.controller.pendingThreadId === thread.id}
+                    onClick={() => snooze.controller.wake(thread.id)}
+                  >
+                    <AlarmClockOff />
+                    <span>Wake</span>
+                  </ContextMenu.Item>
+                ) : (
+                  <ContextMenu.SubmenuRoot>
+                    <ContextMenu.SubmenuTrigger
+                      className="thread-context-item"
+                      disabled={snooze.controller.pendingThreadId === thread.id}
+                    >
+                      <AlarmClock />
+                      <span>Snooze</span>
+                      <ChevronRight />
+                    </ContextMenu.SubmenuTrigger>
+                    <ContextMenu.Portal>
+                      <ContextMenu.Positioner
+                        className="thread-context-positioner"
+                        sideOffset={4}
+                        alignOffset={-4}
+                      >
+                        <ContextMenu.Popup className="thread-context-menu">
+                          <SnoozeContextItems
+                            threadId={thread.id}
+                            snooze={snooze.controller}
+                          />
+                        </ContextMenu.Popup>
+                      </ContextMenu.Positioner>
+                    </ContextMenu.Portal>
+                  </ContextMenu.SubmenuRoot>
+                )}
                 {editing === undefined ||
                 title === undefined ||
                 creating ? null : (

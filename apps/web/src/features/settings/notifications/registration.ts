@@ -6,6 +6,7 @@ export const personalNotificationsSettingsSection = {
   id: "personal-notifications",
   scope: "personal",
   slug: "notifications",
+  group: "interface",
   label: "Notifications",
   title: "Notifications",
   description: "Choose where mentions reach you besides the app.",

@@ -1,3 +1,4 @@
+import "./security.css";
 import type {
   BrowserSessionData,
   PersonalApiTokenData,
@@ -12,18 +13,17 @@ import {
 } from "@tanstack/react-query";
 import { DateTime } from "effect";
 import {
-  Check,
   ClipboardCopy,
   KeyRound,
-  Laptop,
-  RefreshCw,
-  ShieldAlert,
-  Trash2,
+  Monitor,
+  Plus,
+  Smartphone,
 } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { DxLoading } from "../../../shared/brand/dx-loading.js";
+import { useTimeText } from "../../../shared/hooks/use-clock.js";
 import { settle } from "../../../shared/settle.js";
-import { Badge } from "../../../shared/ui/badge.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
   DialogContent,
@@ -32,17 +32,17 @@ import {
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
 import { Input } from "../../../shared/ui/input.js";
+import { TimeText } from "../../../shared/ui/time-text.js";
+import { formatRelativeTime } from "../../../shared/utils.js";
 import {
   SettingsBackgroundError,
   SettingsCard,
   SettingsHeading,
-  SettingsRow,
 } from "../settings-primitives.js";
 import {
   browserSessionsQueryOptions,
   createPersonalApiTokenMutationOptions,
   personalApiTokensQueryOptions,
-  personalSecurityQueryOptions,
   revokeBrowserSessionMutationOptions,
   revokeOtherBrowserSessionsMutationOptions,
   revokePersonalApiTokenMutationOptions,
@@ -50,12 +50,6 @@ import {
   securityErrorMessage,
 } from "./security-queries.js";
 
-const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
-const formatDateTime = (value: DateTime.Utc): string =>
-  dateTimeFormatter.format(new Date(DateTime.formatIso(value)));
 const scopeLabels: Record<PersonalApiTokenScope, string> = {
   "projects:read": "Read projects",
   "projects:write": "Create and update projects",
@@ -66,39 +60,48 @@ const scopeLabels: Record<PersonalApiTokenScope, string> = {
   "settings:write": "Update personal settings",
 };
 
-function SecurityState({
+const ago = (value: DateTime.Utc, now: number) =>
+  formatRelativeTime({ epochMilliseconds: DateTime.toEpochMillis(value) }, now);
+
+const tokenUse = (token: PersonalApiTokenData, now: number) =>
+  token.lastUsedAt === undefined
+    ? "Never used"
+    : `Last used ${ago(token.lastUsedAt, now)}`;
+
+const signedInFormatter = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "medium",
+});
+
+const isPhone = (device: string) => / on (?:iOS|Android)$/.test(device);
+
+function CardState({
   loading,
+  label,
   error,
-  empty,
   retry,
 }: {
-  readonly loading?: boolean;
-  readonly error?: string;
-  readonly empty?: string;
-  readonly retry?: () => void;
+  readonly loading: boolean;
+  readonly label: string;
+  readonly error: unknown;
+  readonly retry: () => void;
 }) {
   if (loading) {
     return (
-      <div className="security-state" aria-busy="true">
-        <span className="tool-spinner" /> Loading…
+      <div className="security-state">
+        <DxLoading label={label} />
       </div>
     );
   }
-  if (error !== undefined) {
-    return (
-      <div className="security-state" role="alert">
-        <ShieldAlert aria-hidden="true" />
-        <span>{error}</span>
-        {retry === undefined ? null : (
-          <Button size="xs" variant="outline" onClick={retry}>
-            Try again
-          </Button>
-        )}
-      </div>
-    );
-  }
-  return empty === undefined ? null : (
-    <div className="security-state">{empty}</div>
+  return (
+    <div className="security-state security-error" role="alert">
+      <span>
+        {error instanceof Error ? error.message : "Something went wrong."}
+      </span>
+      <Button size="xs" variant="outline" onClick={retry}>
+        Try again
+      </Button>
+    </div>
   );
 }
 
@@ -116,12 +119,12 @@ function SecretDialog({
   };
   const copy = async () => {
     if (secret === undefined) return;
-    try {
-      await navigator.clipboard.writeText(secret.plaintext);
-      setCopyStatus("Token copied.");
-    } catch {
-      setCopyStatus("Select and copy the token manually.");
-    }
+    const outcome = await settle(() =>
+      navigator.clipboard.writeText(secret.plaintext),
+    );
+    setCopyStatus(
+      outcome.ok ? "Token copied." : "Select and copy the token manually.",
+    );
   };
   return (
     <DialogRoot
@@ -132,8 +135,7 @@ function SecretDialog({
         <DialogContent className="security-dialog">
           <DialogTitle>Copy {secret.token.name} now</DialogTitle>
           <DialogDescription>
-            This plaintext is shown once. dx stores only its hash and cannot
-            display it again.
+            dx shows this token once and stores only its hash.
           </DialogDescription>
           <div className="security-secret">
             <Input
@@ -143,15 +145,17 @@ function SecretDialog({
               autoFocus
               onFocus={(event) => event.currentTarget.select()}
             />
-            <Button onClick={() => void copy()}>
-              <ClipboardCopy aria-hidden="true" /> Copy token
+            <Button size="sm" onClick={() => void copy()}>
+              <ClipboardCopy aria-hidden="true" /> Copy
             </Button>
           </div>
-          <p className="security-live-status" aria-live="polite">
-            {copyStatus}
-          </p>
           <div className="security-dialog-actions">
-            <Button onClick={closeDialog}>I’ve saved it</Button>
+            <span className="security-live-status" aria-live="polite">
+              {copyStatus}
+            </span>
+            <Button size="sm" variant="outline" onClick={closeDialog}>
+              Done
+            </Button>
           </div>
         </DialogContent>
       )}
@@ -211,11 +215,8 @@ function CreateTokenDialog({
       onOpenChange={(nextOpen) => (nextOpen ? setOpen(true) : close())}
     >
       {open ? (
-        <DialogContent className="security-dialog security-token-dialog">
-          <DialogTitle>Create a personal API token</DialogTitle>
-          <DialogDescription>
-            Choose only the dx capabilities this account-owned token needs.
-          </DialogDescription>
+        <DialogContent className="security-dialog">
+          <DialogTitle>New access token</DialogTitle>
           <form
             className="security-dialog-form"
             onSubmit={(event) => {
@@ -224,7 +225,7 @@ function CreateTokenDialog({
             }}
           >
             <label htmlFor="security-token-name">
-              Token name
+              Name
               <Input
                 id="security-token-name"
                 autoFocus
@@ -236,27 +237,32 @@ function CreateTokenDialog({
               />
             </label>
             <fieldset className="security-scopes">
-              <legend>dx scopes</legend>
-              {personalApiTokenScopes.map((scope) => (
-                <label key={scope}>
-                  <input
-                    type="checkbox"
-                    checked={selectedScopes.has(scope)}
-                    onChange={() => toggle(scope)}
-                  />
-                  <span>
-                    <strong>{scopeLabels[scope]}</strong>
+              <legend>Scopes</legend>
+              <div>
+                {personalApiTokenScopes.map((scope) => (
+                  <label key={scope}>
+                    <input
+                      type="checkbox"
+                      checked={selectedScopes.has(scope)}
+                      onChange={() => toggle(scope)}
+                    />
+                    <span>{scopeLabels[scope]}</span>
                     <code>{scope}</code>
-                  </span>
-                </label>
-              ))}
+                  </label>
+                ))}
+              </div>
             </fieldset>
-            {error === undefined ? null : <p role="alert">{error}</p>}
-            <footer>
-              <Button variant="ghost" onClick={close}>
+            {error === undefined ? null : (
+              <p className="security-error" role="alert">
+                {error}
+              </p>
+            )}
+            <footer className="security-dialog-actions">
+              <Button size="sm" variant="ghost" onClick={close}>
                 Cancel
               </Button>
               <Button
+                size="sm"
                 type="submit"
                 disabled={createToken.isPending || scopes.length === 0}
               >
@@ -267,6 +273,48 @@ function CreateTokenDialog({
         </DialogContent>
       ) : null}
     </DialogRoot>
+  );
+}
+
+function TokenRow({
+  token,
+  act,
+}: {
+  readonly token: PersonalApiTokenData;
+  readonly act: (kind: "rotate" | "revoke") => void;
+}) {
+  return (
+    <div className="security-row security-token-row">
+      <KeyRound className="security-row-icon" aria-hidden="true" />
+      <div className="security-row-copy">
+        <div>
+          <strong>{token.name}</strong>
+          <code>{token.identifier}…</code>
+        </div>
+        <span>
+          {token.scopes.map((scope) => scopeLabels[scope]).join(", ")} ·{" "}
+          <TimeText text={(now) => tokenUse(token, now)} />
+        </span>
+      </div>
+      <div className="security-row-actions">
+        <Button
+          size="xs"
+          variant="outline"
+          aria-label={`Rotate ${token.name} (${token.identifier}…)`}
+          onClick={() => act("rotate")}
+        >
+          Rotate
+        </Button>
+        <Button
+          size="xs"
+          variant="outline"
+          aria-label={`Revoke ${token.name} (${token.identifier}…)`}
+          onClick={() => act("revoke")}
+        >
+          Revoke
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -288,6 +336,10 @@ function TokenList() {
   }>();
   const [error, setError] = React.useState<string>();
   const busy = rotateToken.isPending || revokeToken.isPending;
+  const closeAction = () => {
+    setError(undefined);
+    setAction(undefined);
+  };
   const mutate = async () => {
     if (action === undefined || busy) return;
     setError(undefined);
@@ -307,72 +359,38 @@ function TokenList() {
     if (action.kind === "rotate") rotateToken.reset();
   };
   return (
-    <SettingsCard title="Personal API tokens">
-      <div className="security-card-toolbar">
-        <div>
-          <strong>Named, scoped access</strong>
-          <p>Plaintext is shown once. Rotation revokes the previous token.</p>
-        </div>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
-          <KeyRound aria-hidden="true" /> Create token
+    <SettingsCard
+      className="security-card"
+      title="Access tokens"
+      description="Scoped tokens for scripts and tools that call the dx API."
+      actions={
+        <Button size="xs" variant="outline" onClick={() => setCreateOpen(true)}>
+          <Plus aria-hidden="true" /> New token
         </Button>
-      </div>
-      {error === undefined ? null : (
-        <p className="security-error" role="alert">
-          {error}
-        </p>
-      )}
-      {tokens.isPending || tokens.error !== null ? (
-        <SecurityState
+      }
+    >
+      {tokens.data !== undefined && tokens.isRefetchError ? (
+        <SettingsBackgroundError onRetry={() => void tokens.refetch()}>
+          Tokens could not be refreshed. Showing the last loaded list.
+        </SettingsBackgroundError>
+      ) : null}
+      {tokens.data === undefined ? (
+        <CardState
           loading={tokens.isPending}
-          error={
-            tokens.error instanceof Error ? tokens.error.message : undefined
-          }
+          label="Loading tokens…"
+          error={tokens.error}
           retry={() => void tokens.refetch()}
         />
-      ) : tokens.data?.length === 0 ? (
-        <SecurityState empty="No personal API tokens have been created." />
+      ) : tokens.data.length === 0 ? (
+        <p className="security-empty">No access tokens.</p>
       ) : (
-        <div className="security-token-list">
-          {tokens.data?.map((token) => (
-            <article key={token.id}>
-              <span className="security-item-icon" aria-hidden="true">
-                <KeyRound />
-              </span>
-              <div className="security-item-copy">
-                <strong>{token.name}</strong>
-                <code>{token.identifier}…</code>
-                <small>
-                  Created {formatDateTime(token.createdAt)} ·{" "}
-                  {token.lastUsedAt === undefined
-                    ? "Never used"
-                    : `Last used ${formatDateTime(token.lastUsedAt)}`}
-                </small>
-                <div className="security-scope-badges">
-                  {token.scopes.map((scope) => (
-                    <Badge key={scope}>{scope}</Badge>
-                  ))}
-                </div>
-              </div>
-              <div className="security-item-actions">
-                <Button
-                  size="xs"
-                  variant="outline"
-                  onClick={() => setAction({ kind: "rotate", token })}
-                >
-                  <RefreshCw aria-hidden="true" /> Rotate
-                </Button>
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  onClick={() => setAction({ kind: "revoke", token })}
-                >
-                  <Trash2 aria-hidden="true" /> Revoke
-                </Button>
-              </div>
-            </article>
-          ))}
-        </div>
+        tokens.data.map((token) => (
+          <TokenRow
+            key={token.id}
+            token={token}
+            act={(kind) => setAction({ kind, token })}
+          />
+        ))
       )}
       <CreateTokenDialog
         open={createOpen}
@@ -382,7 +400,7 @@ function TokenList() {
       <SecretDialog secret={secret} close={() => setSecret(undefined)} />
       <DialogRoot
         open={action !== undefined}
-        onOpenChange={(open) => !open && setAction(undefined)}
+        onOpenChange={(open) => !open && closeAction()}
       >
         {action === undefined ? null : (
           <DialogContent className="security-dialog">
@@ -392,14 +410,20 @@ function TokenList() {
             </DialogTitle>
             <DialogDescription>
               {action.kind === "rotate"
-                ? "The current token stops working immediately. Its replacement plaintext is shown once."
-                : "This token stops working immediately and cannot be restored."}
+                ? "The current token stops working now. dx shows its replacement once."
+                : "This token stops working now and cannot be restored."}
             </DialogDescription>
+            {error === undefined ? null : (
+              <p className="security-error" role="alert">
+                {error}
+              </p>
+            )}
             <div className="security-dialog-actions">
-              <Button variant="ghost" onClick={() => setAction(undefined)}>
+              <Button size="sm" variant="ghost" onClick={closeAction}>
                 Cancel
               </Button>
               <Button
+                size="sm"
                 variant={action.kind === "revoke" ? "destructive" : "default"}
                 disabled={busy}
                 onClick={() => void mutate()}
@@ -418,6 +442,47 @@ function TokenList() {
   );
 }
 
+function SessionRow({
+  session,
+  signOut,
+}: {
+  readonly session: BrowserSessionData;
+  readonly signOut: () => void;
+}) {
+  const DeviceIcon = isPhone(session.device) ? Smartphone : Monitor;
+  const active = useTimeText((now) => ago(session.lastActiveAt, now));
+  // Rows can share a browser name, so the button names the session fully.
+  const signOutLabel = `Sign out ${session.device}, ${session.network}, active ${active}, signed in ${signedInFormatter.format(DateTime.toEpochMillis(session.createdAt))}`;
+  return (
+    <div className="security-row" data-session-id={session.id}>
+      <DeviceIcon className="security-row-icon" aria-hidden="true" />
+      <div className="security-row-copy">
+        <div>
+          <strong>{session.device}</strong>
+          {session.isCurrent ? (
+            <span className="security-tag">This device</span>
+          ) : null}
+        </div>
+        <span>
+          {session.network} · Active {active}
+        </span>
+      </div>
+      {session.isCurrent ? null : (
+        <div className="security-row-actions">
+          <Button
+            size="xs"
+            variant="outline"
+            aria-label={signOutLabel}
+            onClick={signOut}
+          >
+            Sign out
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SessionList() {
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
@@ -429,105 +494,82 @@ function SessionList() {
     revokeOtherBrowserSessionsMutationOptions(queryClient, identity.id),
   );
   const items = sessions.data?.pages.flatMap((page) => page.items) ?? [];
+  const hasOthers =
+    items.some((session) => !session.isCurrent) || sessions.hasNextPage;
   const [target, setTarget] = React.useState<BrowserSessionData | "others">();
   const [error, setError] = React.useState<string>();
   const busy = revokeSession.isPending || revokeOthers.isPending;
+  const closeTarget = () => {
+    setError(undefined);
+    setTarget(undefined);
+  };
   const mutate = async () => {
     if (target === undefined || busy) return;
     setError(undefined);
-    try {
+    const outcome = await settle(async () => {
       if (target === "others") await revokeOthers.mutateAsync();
       else await revokeSession.mutateAsync(target.id);
       setTarget(undefined);
-    } catch (cause) {
+    });
+    if (!outcome.ok) {
       setError(
-        securityErrorMessage(
-          cause,
-          "The browser session could not be revoked.",
-        ),
+        securityErrorMessage(outcome.error, "The session could not be ended."),
       );
     }
   };
   return (
-    <SettingsCard title="Browser sessions">
-      <div className="security-card-toolbar">
-        <div>
-          <strong>Signed-in browsers</strong>
-          <p>Network and device details are intentionally coarse.</p>
-        </div>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={
-            sessions.isPending ||
-            sessions.data === undefined ||
-            items.every((session) => session.isCurrent)
-          }
-          onClick={() => setTarget("others")}
-        >
-          Sign out other sessions
-        </Button>
-      </div>
-      {error === undefined ? null : (
-        <p className="security-error" role="alert">
-          {error}
-        </p>
-      )}
-      {sessions.isPending ||
-      (sessions.error !== null && !sessions.isFetchNextPageError) ? (
-        <SecurityState
+    <SettingsCard
+      className="security-card"
+      title="Active sessions"
+      description="Browsers signed in to your dx account."
+      actions={
+        hasOthers ? (
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => setTarget("others")}
+          >
+            Sign out other sessions
+          </Button>
+        ) : undefined
+      }
+    >
+      {sessions.data !== undefined && sessions.isRefetchError ? (
+        <SettingsBackgroundError onRetry={() => void sessions.refetch()}>
+          Sessions could not be refreshed. Showing the last loaded list.
+        </SettingsBackgroundError>
+      ) : null}
+      {sessions.data === undefined ? (
+        <CardState
           loading={sessions.isPending}
-          error={
-            sessions.error instanceof Error ? sessions.error.message : undefined
-          }
+          label="Loading sessions…"
+          error={sessions.error}
           retry={() => void sessions.refetch()}
         />
       ) : items.length === 0 ? (
-        <SecurityState empty="No active browser sessions were found." />
+        <p className="security-empty">No active sessions.</p>
       ) : (
-        <div className="security-session-list">
+        <>
           {items.map((session) => (
-            <article key={session.id}>
-              <span className="security-item-icon" aria-hidden="true">
-                <Laptop />
-              </span>
-              <div className="security-item-copy">
-                <div>
-                  <strong>{session.device}</strong>
-                  {session.isCurrent ? <Badge>Current session</Badge> : null}
-                </div>
-                <span>{session.network}</span>
-                <small>
-                  Last active {formatDateTime(session.lastActiveAt)} · expires{" "}
-                  {formatDateTime(session.expiresAt)}
-                </small>
-              </div>
-              <div className="security-item-actions">
-                {session.isCurrent ? (
-                  <span className="security-current-protected">
-                    <Check aria-hidden="true" /> Protected
-                  </span>
-                ) : (
-                  <Button size="xs" onClick={() => setTarget(session)}>
-                    Sign out
-                  </Button>
-                )}
-              </div>
-            </article>
+            <SessionRow
+              key={session.id}
+              session={session}
+              signOut={() => setTarget(session)}
+            />
           ))}
           {sessions.isFetchNextPageError ? (
             <p className="security-error" role="alert">
               {securityErrorMessage(
                 sessions.error,
-                "More browser sessions could not be loaded.",
+                "More sessions could not be loaded.",
               )}
             </p>
           ) : null}
-          {!sessions.hasNextPage ? null : (
+          {sessions.hasNextPage ? (
             <div className="security-load-more">
               <Button
-                size="sm"
-                variant="outline"
+                size="xs"
+                variant="ghost"
                 disabled={sessions.isFetchingNextPage}
                 onClick={() => void sessions.fetchNextPage()}
               >
@@ -535,33 +577,39 @@ function SessionList() {
                   ? "Loading…"
                   : sessions.isFetchNextPageError
                     ? "Retry"
-                    : "Load more"}
+                    : "Show more"}
               </Button>
             </div>
-          )}
-        </div>
+          ) : null}
+        </>
       )}
       <DialogRoot
         open={target !== undefined}
-        onOpenChange={(open) => !open && setTarget(undefined)}
+        onOpenChange={(open) => !open && closeTarget()}
       >
         {target === undefined ? null : (
           <DialogContent className="security-dialog">
             <DialogTitle>
               {target === "others"
-                ? "Sign out every other browser?"
+                ? "Sign out other sessions?"
                 : `Sign out ${target.device}?`}
             </DialogTitle>
             <DialogDescription>
               {target === "others"
-                ? "Every other session is revoked immediately. This current session is always protected."
-                : "That session is revoked immediately. This current session is not affected."}
+                ? "Ends every other browser session. This device stays signed in."
+                : "Ends that browser session. This device stays signed in."}
             </DialogDescription>
+            {error === undefined ? null : (
+              <p className="security-error" role="alert">
+                {error}
+              </p>
+            )}
             <div className="security-dialog-actions">
-              <Button variant="ghost" onClick={() => setTarget(undefined)}>
+              <Button size="sm" variant="ghost" onClick={closeTarget}>
                 Cancel
               </Button>
               <Button
+                size="sm"
                 variant="destructive"
                 disabled={busy}
                 onClick={() => void mutate()}
@@ -577,46 +625,14 @@ function SessionList() {
 }
 
 export function PersonalSecuritySettings() {
-  const { identity } = useAuthenticatedIdentity();
-  const security = useQuery(personalSecurityQueryOptions(identity.id));
-  const data = security.data;
   return (
-    <div className="personal-security-settings">
+    <div className="security-settings">
       <SettingsHeading
         title="Security"
-        description="Control personal API access and the browser sessions signed in to your account."
+        description="Manage access tokens and browser sessions."
       />
-      {data === undefined ? (
-        <SettingsCard>
-          <SecurityState
-            loading={security.isPending}
-            error={
-              security.error instanceof Error
-                ? security.error.message
-                : undefined
-            }
-            retry={() => void security.refetch()}
-          />
-        </SettingsCard>
-      ) : (
-        <>
-          {security.error === null ? null : (
-            <SettingsBackgroundError onRetry={() => void security.refetch()}>
-              Security settings could not be refreshed. Showing the last loaded
-              settings.
-            </SettingsBackgroundError>
-          )}
-          <TokenList />
-          <SessionList />
-          <SettingsCard title="Passkeys">
-            <SettingsRow
-              title="WebAuthn passkeys"
-              description={data.passkeys.reason}
-              badge={<Badge>Unavailable</Badge>}
-            />
-          </SettingsCard>
-        </>
-      )}
+      <TokenList />
+      <SessionList />
     </div>
   );
 }

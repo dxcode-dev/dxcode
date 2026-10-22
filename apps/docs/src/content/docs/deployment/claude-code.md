@@ -53,15 +53,15 @@ cannot ask Anthropic for them directly, so they appear after your first
 Claude Code thread runs, and the card shows only the windows Anthropic
 reports for your plan.
 
-The card's **Claude usage** choice decides what happens at a limit:
+The card's **Claude Usage** choice decides what happens at a limit:
 
-- **Subscription only** (the default): dx stops Claude Code when Anthropic
+- **Subscription Only** (the default): dx stops Claude Code when Anthropic
   reports that extra usage is paying, and does not start it again until the
   limit resets. A weekly limit for one model, such as the Fable limit, holds
   only threads on that model. The response in flight when Anthropic reports it may already
   be billed as extra usage. To make sure nothing is billed, turn off extra
   usage in your Claude account settings.
-- **Allow extra usage**: Claude Code keeps working on extra usage.
+- **Allow Extra Usage**: Claude Code keeps working on extra usage.
 
 A thread that reaches a limit shows a **Claude subscription limit reached**
 card above the composer with the reset time. Choose **Retry** after the limit

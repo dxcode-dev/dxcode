@@ -89,6 +89,7 @@ export const DeleteEnvironmentVariableResponseSchema = successResponse(
 
 export const BulkEnvironmentVariablesRequestSchema = Schema.Struct({
   ...EnvironmentVariableScopeRequestSchema.fields,
+  /** `secret`, `variable`, or `auto` to pick each line's kind from its name. */
   kind: Schema.String,
   contents: Schema.String,
 });
@@ -121,6 +122,8 @@ export const ListEnvironmentVariableHistoryResponseSchema = successResponse(
 export const BulkEnvironmentVariablePreviewItemSchema = Schema.Struct({
   line: Schema.Int,
   name: Schema.String,
+  /** The kind the line is saved as; absent for an invalid line. */
+  kind: Schema.optional(EnvironmentVariableKind),
   status: Schema.Literals(["ready", "conflict", "invalid"]),
   message: Schema.optional(Schema.String),
 });

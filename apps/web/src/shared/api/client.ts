@@ -51,6 +51,9 @@ import {
   DeleteConnectionResponseSchema,
   DeleteEnvironmentVariableResponseSchema,
   DeleteMcpServerResponseSchema,
+  type DictationVocabularyData,
+  DictationVocabularyErrorResponseSchema,
+  DictationVocabularyResponseSchema,
   DisconnectPersonalModelSubscriptionResponseSchema,
   DiscoverMcpServerResponseSchema,
   type EnvironmentVariableAuditEventData,
@@ -71,7 +74,6 @@ import {
   GetPersonalAgentInstructionsResponseSchema,
   GetPersonalComposerDefaultsResponseSchema,
   GetPersonalExperimentalFeaturesResponseSchema,
-  GetPersonalSecurityResponseSchema,
   GetPersonalUsageResponseSchema,
   GetProjectDefaultsResponseSchema,
   GetProjectResponseSchema,
@@ -133,7 +135,6 @@ import {
   PersonalModelSubscriptionInUseResponseSchema,
   PersonalModelSubscriptionNotFoundResponseSchema,
   PersonalModelSubscriptionUnavailableResponseSchema,
-  type PersonalSecurityData,
   PersonalSecurityErrorResponseSchema,
   type PersonalUsageData,
   PersonalUsageErrorResponseSchema,
@@ -191,6 +192,7 @@ import {
   SigningKeysErrorResponseSchema,
   type SkillData,
   SkillsErrorResponseSchema,
+  SnoozeThreadResponseSchema,
   SourceControlDeniedResponseSchema,
   SourceControlProviderFailureResponseSchema,
   type ThreadData,
@@ -279,6 +281,7 @@ import type {
   WorkspaceSlug,
 } from "@dx/domain";
 import { Schema } from "effect";
+import { noticeUnauthenticated } from "../auth/session-ended.js";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -323,6 +326,7 @@ export const request = async <
       ...init?.headers,
     },
   });
+  noticeUnauthenticated(response);
   if (!response.ok) {
     const body: unknown = await response.json().catch(() => undefined);
     const settingsError = await Schema.decodeUnknownPromise(
@@ -347,6 +351,7 @@ export const request = async <
         SkillsErrorResponseSchema,
         PluginsErrorResponseSchema,
         FirstPartyPluginErrorResponseSchema,
+        DictationVocabularyErrorResponseSchema,
         OrbProviderErrorResponseSchema,
         ExperimentalFeaturesErrorResponseSchema,
         ProjectDefaultsErrorResponseSchema,
@@ -601,11 +606,12 @@ export const importSkill = async (
   target: SkillsTarget,
   bundle: SkillImportBundle,
   reviewedIntegrity: SkillIntegrity,
+  enabled = false,
 ): Promise<SkillData> =>
   (
     await request(skillsBase(target), ImportSkillResponseSchema, {
       method: "POST",
-      body: JSON.stringify({ bundle, reviewedIntegrity }),
+      body: JSON.stringify({ bundle, reviewedIntegrity, enabled }),
     })
   ).data;
 
@@ -760,6 +766,36 @@ export const setFirstPartyPluginWorkspacePolicy = async (
       `${firstPartyPluginsBase({ scope: "workspace", workspaceSlug })}/policy`,
       FirstPartyPluginListResponseSchema,
       { method: "PUT", body: JSON.stringify({ allowPersonalOverrides }) },
+    )
+  ).data;
+
+/** Dictation vocabulary per scope; dictation merges personal, then workspace. */
+const dictationVocabularyPath = (target: PluginsTarget) =>
+  target.scope === "personal"
+    ? "/v1/settings/personal/dictation-vocabulary"
+    : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/dictation-vocabulary`;
+
+export const getDictationVocabulary = async (
+  target: PluginsTarget,
+  signal?: AbortSignal,
+): Promise<DictationVocabularyData> =>
+  (
+    await request(
+      dictationVocabularyPath(target),
+      DictationVocabularyResponseSchema,
+      { signal },
+    )
+  ).data;
+
+export const updateDictationVocabulary = async (
+  target: PluginsTarget,
+  terms: ReadonlyArray<string>,
+): Promise<DictationVocabularyData> =>
+  (
+    await request(
+      dictationVocabularyPath(target),
+      DictationVocabularyResponseSchema,
+      { method: "PUT", body: JSON.stringify({ terms }) },
     )
   ).data;
 
@@ -1086,7 +1122,7 @@ export const updateMcpWorkspacePolicy = async (
 export const previewBulkEnvironmentVariables = async (
   target: EnvironmentVariablesTarget,
   input: {
-    readonly kind: "secret" | "variable";
+    readonly kind: "secret" | "variable" | "auto";
     readonly contents: string;
   },
 ): Promise<{
@@ -1110,7 +1146,7 @@ export const previewBulkEnvironmentVariables = async (
 export const applyBulkEnvironmentVariables = async (
   target: EnvironmentVariablesTarget,
   input: {
-    readonly kind: "secret" | "variable";
+    readonly kind: "secret" | "variable" | "auto";
     readonly contents: string;
     readonly conflictBehavior: "reject" | "replace";
   },
@@ -1334,6 +1370,24 @@ export const setThreadPinned = async (
       `/v1/threads/${encodeURIComponent(threadId)}/pin`,
       PinThreadResponseSchema,
       { method: "PATCH", body: JSON.stringify({ pinned }) },
+    )
+  ).data;
+
+/** Snoozes the Thread until `snoozedUntil`, or wakes it when null. */
+export const setThreadSnoozed = async (
+  threadId: ThreadId,
+  snoozedUntil: Date | null,
+): Promise<ThreadData> =>
+  (
+    await request(
+      `/v1/threads/${encodeURIComponent(threadId)}/snooze`,
+      SnoozeThreadResponseSchema,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          snoozedUntil: snoozedUntil?.toISOString() ?? null,
+        }),
+      },
     )
   ).data;
 
@@ -2282,22 +2336,6 @@ export const updatePersonalAgentInstructions = async (input: {
       "/v1/settings/personal/agent-instructions",
       UpdatePersonalAgentInstructionsResponseSchema,
       { method: "PATCH", body: JSON.stringify(input) },
-    )
-  ).data;
-
-export const resetPersonalAgentInstructions = async (
-  expectedRevision: number,
-): Promise<PersonalAgentInstructionsData> =>
-  updatePersonalAgentInstructions({ instructions: "", expectedRevision });
-
-export const getPersonalSecurity = async (
-  signal?: AbortSignal,
-): Promise<PersonalSecurityData> =>
-  (
-    await request(
-      "/v1/settings/personal/security",
-      GetPersonalSecurityResponseSchema,
-      { signal },
     )
   ).data;
 

@@ -114,10 +114,11 @@ export const PersonalSecurityRepositoryD1 = (db: D1Database) =>
                 .prepare(
                   `${sessionSelect}
                    WHERE userId = ? AND ${epochMilliseconds("expiresAt")} > ?
-                   ORDER BY ${epochMilliseconds("updatedAt")} DESC, id DESC
+                   ORDER BY id = ? DESC,
+                     ${epochMilliseconds("updatedAt")} DESC, id DESC
                    LIMIT ? OFFSET ?`,
                 )
-                .bind(userId, now, limit + 1, offset)
+                .bind(userId, now, currentSessionId, limit + 1, offset)
                 .all(),
             catch: (cause) =>
               PersistenceUnavailable.new(

@@ -23,7 +23,7 @@ export interface NotificationTopicDefinition {
   readonly id: NotificationTopic;
   /** Names the topic in copy: "Unsubscribe from mention emails". */
   readonly noun: string;
-  /** Completes "Receive … when ": "someone mentions you in a shared thread". */
+  /** Completes "Receive … when ": "someone @-mentions you in a shared Thread". */
   readonly trigger: string;
   /** Whether a channel delivers this topic for someone who never chose. */
   readonly defaults: Readonly<Record<NotificationChannel, boolean>>;
@@ -37,7 +37,7 @@ export interface NotificationTopicDefinition {
 const mention: NotificationTopicDefinition = {
   id: "mention",
   noun: "mention",
-  trigger: "someone mentions you in a shared thread",
+  trigger: "someone @-mentions you in a shared Thread",
   defaults: { email: true },
   content: ({ actorName, threadTitle, excerpt }) => ({
     subject: `${actorName} mentioned you in ${threadTitle}`,

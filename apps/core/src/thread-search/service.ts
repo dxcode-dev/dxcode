@@ -43,6 +43,7 @@ export interface ThreadSearchRow {
   readonly lifecycle_state: "active" | "archived";
   readonly activity_status: "idle" | "working";
   readonly pinned_at: string | null;
+  readonly snoozed_until: string | null;
   readonly workspace_access: string | null;
   readonly created_at: string;
   readonly activity_at: string;
@@ -166,6 +167,15 @@ const filterClauses = (
         ? "thread.pinned_at IS NOT NULL"
         : "thread.pinned_at IS NULL",
     );
+  if (filters.snoozed !== undefined) {
+    // Only the owner sees a snooze; another member's Thread is never snoozed.
+    // IS NOT NULL keeps the clause false, not NULL, so NOT matches the rest.
+    const snoozed = `(thread.owner_user_id = ${parameters.add(scope.userId)}
+      AND thread.lifecycle_state = 'active'
+      AND thread.snoozed_until IS NOT NULL
+      AND thread.snoozed_until > ${parameters.add(new Date().toISOString())})`;
+    clauses.push(filters.snoozed ? snoozed : `NOT ${snoozed}`);
+  }
   if (filters.archived !== undefined)
     clauses.push(
       `thread.lifecycle_state = '${filters.archived ? "archived" : "active"}'`,
@@ -188,6 +198,7 @@ const SELECTED = `thread.id, thread.title, thread.project_id, project.name AS pr
   COALESCE(account.display_name, owner.name, 'Member') AS owner_name,
   thread.parent_thread_id, thread.color, thread.lifecycle_state,
   thread.activity_status, thread.pinned_at, thread.workspace_access, thread.created_at,
+  thread.snoozed_until,
   ${ACTIVITY} AS activity_at`;
 
 export interface SearchThreadsInput {
@@ -328,7 +339,14 @@ export const searchThreads = async (
       LIMIT ${limit + 1}`,
     parameters,
   );
-  const page = rows.slice(0, limit);
+  // A snooze is the owner's; members never see it.
+  const page = rows
+    .slice(0, limit)
+    .map((row) =>
+      row.owner_user_id === scope.userId
+        ? row
+        : { ...row, snoozed_until: null },
+    );
   const last = page.at(-1);
   const nextCursor =
     rows.length > limit && last !== undefined

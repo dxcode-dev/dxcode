@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Settings } from "lucide-react";
+import { Blocks, Plus, Settings } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { settle } from "../../../shared/settle.js";
@@ -29,33 +29,56 @@ import {
 } from "./mcp-queries.js";
 import {
   type McpAuthMode,
+  type McpFieldErrors,
   type McpServerFields,
   mcpCreateInput,
+  mcpFieldErrors,
+  mcpFieldErrorsAfterEdit,
+  mcpFieldErrorsShown,
   mcpFieldsComplete,
   mcpFieldsFor,
   mcpServerHint,
+  mcpServerHost,
   mcpUpdateInput,
 } from "./mcp-server-fields.js";
 
 type Run = (
   action: McpServersMutationAction,
   message: string,
+  /** Receives server field errors instead of the page status. */
+  onFieldErrors?: (errors: McpFieldErrors) => void,
 ) => Promise<boolean>;
 type FinalFocus = React.RefObject<HTMLElement | null>;
 
 const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : "Request failed.";
 
+function FieldError({
+  id,
+  children,
+}: {
+  readonly id: string;
+  readonly children?: string;
+}) {
+  return children === undefined ? null : (
+    <p id={id} className="mcp-field-error">
+      {children}
+    </p>
+  );
+}
+
 function ServerFields({
   id,
   value,
   server,
+  errors,
   disabled,
   onChange,
 }: {
   readonly id: string;
   readonly value: McpServerFields;
   readonly server?: McpServerData;
+  readonly errors: McpFieldErrors;
   readonly disabled: boolean;
   readonly onChange: (value: McpServerFields) => void;
 }) {
@@ -65,36 +88,50 @@ function ServerFields({
       <SettingsRow
         title="Name"
         control={
-          <Input
-            id={`${id}-name`}
-            aria-label="Name"
-            value={value.name}
-            maxLength={80}
-            required
-            disabled={disabled}
-            placeholder="Docs"
-            onChange={(event) =>
-              onChange({ ...value, name: event.target.value })
-            }
-          />
+          <div className="mcp-server-field">
+            <Input
+              id={`${id}-name`}
+              aria-label="Name"
+              aria-invalid={errors.name !== undefined}
+              aria-describedby={
+                errors.name === undefined ? undefined : `${id}-name-error`
+              }
+              value={value.name}
+              maxLength={80}
+              required
+              disabled={disabled}
+              placeholder="Docs"
+              onChange={(event) =>
+                onChange({ ...value, name: event.target.value })
+              }
+            />
+            <FieldError id={`${id}-name-error`}>{errors.name}</FieldError>
+          </div>
         }
       />
       <SettingsRow
         title="URL"
         control={
-          <Input
-            id={`${id}-url`}
-            aria-label="URL"
-            type="url"
-            value={value.endpoint}
-            maxLength={2048}
-            required
-            disabled={disabled}
-            placeholder="https://mcp.example.com/mcp"
-            onChange={(event) =>
-              onChange({ ...value, endpoint: event.target.value })
-            }
-          />
+          <div className="mcp-server-field">
+            <Input
+              id={`${id}-url`}
+              aria-label="URL"
+              aria-invalid={errors.endpoint !== undefined}
+              aria-describedby={
+                errors.endpoint === undefined ? undefined : `${id}-url-error`
+              }
+              type="url"
+              value={value.endpoint}
+              maxLength={2048}
+              required
+              disabled={disabled}
+              placeholder="https://mcp.example.com/mcp"
+              onChange={(event) =>
+                onChange({ ...value, endpoint: event.target.value })
+              }
+            />
+            <FieldError id={`${id}-url-error`}>{errors.endpoint}</FieldError>
+          </div>
         }
       />
       <SettingsRow
@@ -147,6 +184,7 @@ function ServerFields({
           }
         />
       ) : null}
+      <FieldError id={`${id}-form-error`}>{errors.form}</FieldError>
     </>
   );
 }
@@ -173,6 +211,7 @@ function AddServerDialog({
     auth: "none",
     token: "",
   });
+  const [errors, setErrors] = React.useState<McpFieldErrors>({});
   return (
     <DialogRoot
       open={open}
@@ -189,6 +228,7 @@ function AddServerDialog({
               const saved = await run(
                 { type: "create", input: mcpCreateInput(fields) },
                 "Server added. Discover and review its tools to use them.",
+                setErrors,
               );
               if (saved) onClose();
             }}
@@ -196,8 +236,10 @@ function AddServerDialog({
             <ServerFields
               id={id}
               value={fields}
+              errors={errors}
               disabled={busy}
               onChange={(next) => {
+                setErrors(mcpFieldErrorsAfterEdit(errors, fields, next));
                 setFields(next);
                 onDirtyChange(true);
               }}
@@ -209,7 +251,11 @@ function AddServerDialog({
               <Button
                 size="xs"
                 type="submit"
-                disabled={busy || !mcpFieldsComplete(fields)}
+                disabled={
+                  busy ||
+                  !mcpFieldsComplete(fields) ||
+                  mcpFieldErrorsShown(errors)
+                }
               >
                 Add server
               </Button>
@@ -366,6 +412,7 @@ function ServerSettingsForm({
   const [fields, setFields] = React.useState<McpServerFields>(() =>
     mcpFieldsFor(server),
   );
+  const [errors, setErrors] = React.useState<McpFieldErrors>({});
   const [reviewing, setReviewing] = React.useState<McpToolData>();
   const [removing, setRemoving] = React.useState(false);
   const disabled = !canMutate || busy;
@@ -381,6 +428,7 @@ function ServerSettingsForm({
               input: mcpUpdateInput(fields, server),
             },
             "Server saved.",
+            setErrors,
           );
           if (saved) onClose();
         }}
@@ -389,8 +437,10 @@ function ServerSettingsForm({
           id={id}
           value={fields}
           server={server}
+          errors={errors}
           disabled={disabled}
           onChange={(next) => {
+            setErrors(mcpFieldErrorsAfterEdit(errors, fields, next));
             setFields(next);
             onDirtyChange(true);
           }}
@@ -448,7 +498,11 @@ function ServerSettingsForm({
           <Button
             size="xs"
             type="submit"
-            disabled={disabled || !mcpFieldsComplete(fields, server)}
+            disabled={
+              disabled ||
+              !mcpFieldsComplete(fields, server) ||
+              mcpFieldErrorsShown(errors)
+            }
           >
             Save
           </Button>
@@ -485,17 +539,20 @@ function PolicyRow({
   const [confirming, setConfirming] = React.useState<boolean>();
   return (
     <>
-      <SettingsRow
-        title="Allow personal MCP servers"
-        control={
-          <SettingsToggle
-            checked={allowed}
-            disabled={disabled}
-            label="Allow personal MCP servers"
-            onCheckedChange={setConfirming}
-          />
-        }
-      />
+      <SettingsCard>
+        <SettingsRow
+          title="Allow personal MCP servers"
+          description="Members' Threads also use the MCP servers they add in personal settings."
+          control={
+            <SettingsToggle
+              checked={allowed}
+              disabled={disabled}
+              label="Allow personal MCP servers"
+              onCheckedChange={setConfirming}
+            />
+          }
+        />
+      </SettingsCard>
       <DialogRoot
         open={confirming !== undefined}
         onOpenChange={(open) => {
@@ -538,6 +595,17 @@ function PolicyRow({
   );
 }
 
+/**
+ * Server IDs are generated, so no server overrides another: a Thread gets its
+ * owner's personal servers and their workspaces' servers side by side.
+ */
+const mcpPrecedence = {
+  personal:
+    "Threads you start use these alongside your workspace's MCP servers. Neither overrides the other.",
+  workspace:
+    "Members' Threads use these alongside their personal MCP servers. Neither overrides the other.",
+} as const;
+
 export function McpSection({
   target,
   onStatus,
@@ -557,14 +625,19 @@ export function McpSection({
   const [adding, setAdding] = React.useState(false);
   const [editing, setEditing] = React.useState<string>();
   const finalFocus = React.useRef<HTMLElement | null>(null);
-  const run: Run = async (action, message) => {
+  const run: Run = async (action, message, onFieldErrors) => {
     setBusy(true);
     onStatus(undefined);
     const outcome = await settle(async () => {
       await mutation.mutateAsync(action);
       onStatus(message);
     });
-    if (!outcome.ok) onStatus(errorMessage(outcome.error));
+    if (!outcome.ok) {
+      const fieldErrors =
+        onFieldErrors === undefined ? undefined : mcpFieldErrors(outcome.error);
+      if (fieldErrors === undefined) onStatus(errorMessage(outcome.error));
+      else onFieldErrors?.(fieldErrors);
+    }
     setBusy(false);
     return outcome.ok;
   };
@@ -580,11 +653,13 @@ export function McpSection({
   return (
     <section className="mcp-section" aria-labelledby="mcp-section-title">
       <header className="integrations-section-heading">
-        <h2 id="mcp-section-title">MCP</h2>
+        <div>
+          <h2 id="mcp-section-title">MCP</h2>
+          <p>{mcpPrecedence[target.scope]}</p>
+        </div>
         {canMutate ? (
           <Button
             size="xs"
-            variant="outline"
             onClick={(event) => {
               finalFocus.current = event.currentTarget;
               setAdding(true);
@@ -615,8 +690,16 @@ export function McpSection({
             const hint = mcpServerHint(server);
             return (
               <div className="mcp-server-row" key={server.id}>
-                <strong>{server.name}</strong>
-                {hint === undefined ? null : <span>{hint}</span>}
+                <span className="integration-row-icon" aria-hidden="true">
+                  <Blocks />
+                </span>
+                <div className="mcp-server-row-copy">
+                  <div>
+                    <strong>{server.name}</strong>
+                    {hint === undefined ? null : <span>{hint}</span>}
+                  </div>
+                  <p>{mcpServerHost(server)}</p>
+                </div>
                 <SettingsToggle
                   checked={server.enabled}
                   disabled={!canMutate || busy}
@@ -647,15 +730,15 @@ export function McpSection({
             );
           })
         )}
-        {target.scope === "workspace" &&
-        resource.data?.allowPersonalServers !== undefined ? (
-          <PolicyRow
-            allowed={resource.data.allowPersonalServers}
-            disabled={!canMutate || busy}
-            run={run}
-          />
-        ) : null}
       </SettingsCard>
+      {target.scope === "workspace" &&
+      resource.data?.allowPersonalServers !== undefined ? (
+        <PolicyRow
+          allowed={resource.data.allowPersonalServers}
+          disabled={!canMutate || busy}
+          run={run}
+        />
+      ) : null}
       <AddServerDialog
         key={adding ? "adding" : "idle"}
         open={adding}

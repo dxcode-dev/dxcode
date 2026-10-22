@@ -15,6 +15,7 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { setProvider } from "@flue/runtime";
 import { Schema } from "effect";
+import { RICH_REPLY_TEXT } from "./model-fixture-rich-reply.js";
 import {
   LOCAL_MODEL_FIXTURE_MODEL,
   LOCAL_MODEL_FIXTURE_PROVIDER,
@@ -33,6 +34,8 @@ export const LOCAL_MODEL_FIXTURE_PROMPTS = {
     "Use the create_thread tool to start a child thread titled Synthetic child thread that runs the synthetic model-stream check. After the tool result, reply with one short confirmation sentence.",
   threadColor:
     "Use the update_thread tool to color this thread green. After the tool result, reply with one short confirmation sentence.",
+  richReply:
+    "Reply with the synthetic rich reply: two views, an image, a video, and audio from the workspace. Do not use tools.",
 } as const;
 
 /** The tool call each tool fixture makes before its confirmation. */
@@ -175,6 +178,9 @@ export const createLocalModelFixtureProvider = () => {
       provider: LOCAL_MODEL_FIXTURE_PROVIDER,
       models: [{ id: LOCAL_MODEL_FIXTURE_MODEL, reasoning: true }],
       tokenSize: { min: 2, max: 2 },
+      // The rich reply streams over a few seconds, so a reader sees its
+      // views render while the rest of the reply still arrives.
+      ...(fixture.kind === "richReply" ? { tokensPerSecond: 600 } : {}),
     });
     switch (fixture.kind) {
       case "textCompletion":
@@ -188,6 +194,11 @@ export const createLocalModelFixtureProvider = () => {
               timestamp: 0,
             },
           ),
+        ]);
+        break;
+      case "richReply":
+        core.setResponses([
+          fauxAssistantMessage(RICH_REPLY_TEXT, { timestamp: 0 }),
         ]);
         break;
       case "toolContinuation":

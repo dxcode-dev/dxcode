@@ -5,6 +5,7 @@ import {
   ThreadSandboxFilePath,
 } from "@dx/api";
 import { Option, Schema } from "effect";
+import type { MarkdownMediaSource } from "../../shared/ui/markdown-file-link-context.js";
 
 const PRIMARY_WORKTREE = "primary" as ThreadFilesWorktreeId;
 
@@ -231,4 +232,21 @@ export const fileMediaKind = (path: string): FileMediaKind | undefined => {
   if (AUDIO_EXTENSIONS.has(extension)) return "audio";
   if (extension === "pdf") return "pdf";
   return undefined;
+};
+
+/**
+ * A Markdown image in a transcript, `![alt](/path/in/the/orb.mp4)`: an
+ * image, video, or audio file in the Thread's sandbox, streamed from it.
+ */
+export const transcriptMediaSource = (
+  threadId: string,
+  src: string,
+): MarkdownMediaSource | undefined => {
+  const resolved = resolveTranscriptFileLink(src);
+  if (resolved === undefined || resolved.lines !== undefined) return undefined;
+  const path = absolutePathFor(resolved.target);
+  const kind = path === undefined ? undefined : fileMediaKind(path);
+  return path === undefined || kind === undefined || kind === "pdf"
+    ? undefined
+    : { url: sandboxFileUrl(threadId, path), kind };
 };

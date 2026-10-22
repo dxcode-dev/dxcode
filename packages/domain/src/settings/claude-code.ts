@@ -294,9 +294,9 @@ export interface ClaudePlanLimit {
 
 const LIMIT_REASONS: Record<ClaudePlanLimitCause, string> = {
   "not-started":
-    "dx did not start Claude Code so it does not run on paid extra usage. To keep working now, choose Allow extra usage for Claude Pro/Max in Settings → Model Routing.",
+    "dx did not start Claude Code so it does not run on paid extra usage. To keep working now, choose Allow Extra Usage for Claude Pro/Max in Settings → Model Routing.",
   stopped:
-    "dx stopped Claude Code so it does not run on paid extra usage. To keep working now, choose Allow extra usage for Claude Pro/Max in Settings → Model Routing.",
+    "dx stopped Claude Code so it does not run on paid extra usage. To keep working now, choose Allow Extra Usage for Claude Pro/Max in Settings → Model Routing.",
   exhausted: "Claude Code cannot run on this plan until then.",
 };
 

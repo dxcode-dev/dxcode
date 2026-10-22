@@ -261,3 +261,148 @@
     padding-inline: 16px;
   }
 }
+
+/* ```dx-view blocks: the view sits on the reply's own background. */
+.markdown-view-drawing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.markdown-view-drawing svg {
+  width: 14px;
+  height: 14px;
+  animation: spin 1s linear infinite;
+}
+.markdown.transcript-markdown .markdown-view-link code {
+  overflow-wrap: anywhere;
+}
+.markdown.transcript-markdown .markdown-view,
+.markdown.transcript-markdown .markdown-view-source,
+.markdown.transcript-markdown .markdown-view-drawing {
+  margin: 1.1em 0 0.5em;
+}
+.markdown.transcript-markdown .markdown-view-source .transcript-code-block {
+  margin: 0;
+}
+.markdown-view-frame {
+  display: block;
+  width: 100%;
+  height: var(--view-height, 120px);
+  border: 0;
+  background: transparent;
+}
+.markdown-view-pending {
+  min-height: 120px;
+}
+.markdown-view:fullscreen {
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+  background: var(--background);
+}
+.markdown-view:fullscreen .markdown-view-slot {
+  display: flex;
+  flex: 1;
+}
+.markdown-view:fullscreen .markdown-view-frame {
+  flex: 1;
+  height: auto;
+}
+/* Frames waiting for their view to mount again, out of sight and reach. */
+.markdown-view-shelf {
+  position: fixed;
+  top: 0;
+  left: -100000px;
+  visibility: hidden;
+  pointer-events: none;
+}
+.markdown-view-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+  margin-top: 4px;
+  opacity: 0;
+}
+.markdown-view:hover > .markdown-view-actions,
+.markdown-view:focus-within > .markdown-view-actions,
+.markdown-view-source > .markdown-view-actions {
+  opacity: 1;
+}
+.markdown.transcript-markdown .markdown-view-actions .transcript-copy,
+.markdown-view-action {
+  position: static;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted-foreground);
+  background: transparent;
+  cursor: pointer;
+  opacity: 1;
+}
+.markdown.transcript-markdown .markdown-view-actions .transcript-copy:hover,
+.markdown-view-action:hover {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.markdown.transcript-markdown .markdown-view-actions .transcript-copy svg,
+.markdown-view-action svg {
+  width: 14px;
+  height: 14px;
+}
+.markdown-view-note {
+  margin: 4px 0 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.markdown-view-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.markdown-view-button {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--foreground);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.markdown-view-button:hover {
+  background: var(--accent);
+}
+@media (pointer: coarse) {
+  .markdown-view-actions {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .markdown-view-drawing svg {
+    animation: none;
+  }
+}
+
+/* Workspace media named by Markdown images. */
+.markdown.transcript-markdown video.markdown-media {
+  display: block;
+  max-width: 100%;
+  max-height: 480px;
+  margin: 0.75em 0;
+  border-radius: 4px;
+  background: #000;
+}
+.markdown.transcript-markdown audio.markdown-media {
+  display: block;
+  width: min(100%, 420px);
+  margin: 0.75em 0;
+}

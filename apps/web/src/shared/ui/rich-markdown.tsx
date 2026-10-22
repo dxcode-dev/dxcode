@@ -1,7 +1,8 @@
 import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-700.css";
 import { splitMentions } from "@dx/api";
-import { Check, Code, Copy, Image, WrapText } from "lucide-react";
+import type { VIEW_LANGUAGE as ViewLanguage } from "@dx/api/views/view-frame.mjs";
+import { Check, Code, Copy, Image, LoaderCircle, WrapText } from "lucide-react";
 import * as React from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";
@@ -33,6 +34,13 @@ import {
   requestMermaid,
   subscribeMermaid,
 } from "./markdown-mermaid.js";
+import { MarkdownView } from "./markdown-view.js";
+
+/**
+ * The view fence's language. Typed by the view contract, so the two cannot
+ * drift, and not imported: views and their contract load with the first view.
+ */
+const VIEW_LANGUAGE: typeof ViewLanguage = "dx-view";
 
 const accessibleName = (value: string | undefined, fallback: string) =>
   value?.trim() || fallback;
@@ -254,6 +262,59 @@ function MermaidBlock({
   );
 }
 
+/**
+ * A ```dx-view fence as the view it describes, once its fence closes. Its
+ * source stays one toggle away, and shows when the view kit cannot load.
+ */
+function ViewBlock({
+  content,
+  text = nodeText(content),
+}: {
+  readonly content: React.ReactNode;
+  readonly text?: string;
+}) {
+  const unsettled = React.useContext(UnsettledMarkdown);
+  const [showSource, setShowSource] = React.useState(false);
+  const source = text.replace(/\n$/, "");
+  if (unsettled)
+    return (
+      <div className="markdown-view-drawing" role="status">
+        <LoaderCircle aria-hidden="true" />
+        Drawing view, {Math.max(1, Math.round(source.length / 1024))} KB
+      </div>
+    );
+  const sourceBlock = <CodeBlock content={content} source={text} />;
+  const toggle = (
+    <button
+      type="button"
+      className="markdown-view-action"
+      aria-label={showSource ? "Show view" : "Show view source"}
+      onClick={() => setShowSource(!showSource)}
+    >
+      {showSource ? <Image aria-hidden="true" /> : <Code aria-hidden="true" />}
+    </button>
+  );
+  if (showSource || source.trim() === "")
+    return (
+      <div className="markdown-view-source">
+        {sourceBlock}
+        <div className="markdown-view-actions">{toggle}</div>
+      </div>
+    );
+  return (
+    <MarkdownView
+      source={source}
+      fallback={sourceBlock}
+      actions={
+        <>
+          <CopyButton text={source} label="Copy view source" subject="View" />
+          {toggle}
+        </>
+      }
+    />
+  );
+}
+
 function KatexFormula({
   source,
   display,
@@ -465,6 +526,8 @@ function MarkdownPre({
     );
   if (languages.includes("language-mermaid"))
     return <MermaidBlock content={content} text={text} />;
+  if (languages.includes(`language-${VIEW_LANGUAGE}`))
+    return <ViewBlock content={content} text={text} />;
   return <CodeBlock content={content} source={text} />;
 }
 
@@ -602,10 +665,36 @@ function MarkdownImage({
   const resolveImage = React.useContext(MarkdownImageSourceContext);
   const name = accessibleName(alt, "Markdown image");
   const url = typeof src === "string" && src !== "" ? src : undefined;
-  const documentImage = url === undefined ? undefined : resolveImage?.(url);
-  if (documentImage !== undefined)
-    return <img src={documentImage} alt={name} title={title} loading="lazy" />;
-  if (url !== undefined && sameOriginImage(url))
+  const media = url === undefined ? undefined : resolveImage?.(url);
+  // Players are interactive, so a linked one stays an image or a label.
+  if (media?.kind === "video" && !insideLink)
+    return (
+      // biome-ignore lint/a11y/useMediaCaption: agent-made media has no caption track; the alt text names it.
+      <video
+        className="markdown-media"
+        src={media.url}
+        title={title ?? name}
+        aria-label={name}
+        controls
+        playsInline
+        preload="metadata"
+      />
+    );
+  if (media?.kind === "audio" && !insideLink)
+    return (
+      // biome-ignore lint/a11y/useMediaCaption: agent-made media has no caption track; the alt text names it.
+      <audio
+        className="markdown-media"
+        src={media.url}
+        title={title ?? name}
+        aria-label={name}
+        controls
+        preload="metadata"
+      />
+    );
+  if (media?.kind === "image")
+    return <img src={media.url} alt={name} title={title} loading="lazy" />;
+  if (media === undefined && url !== undefined && sameOriginImage(url))
     return <img src={url} alt={name} title={title} loading="lazy" />;
   const label = (
     <>

@@ -29,7 +29,7 @@ export interface ChannelDelivery {
  */
 export interface NotificationChannel {
   readonly id: NotificationChannelId;
-  /** Settings row title for a topic: "Mention notification emails". */
+  /** Settings row title for a topic: "Mention emails". */
   readonly subscriptionTitle: (topicNoun: string) => string;
   /** Settings row description: "Receive an email when …". */
   readonly subscriptionDescription: (trigger: string) => string;

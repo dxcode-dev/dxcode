@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   DXD_MAX_ENVIRONMENT_REQUEST_FRAME_BYTES,
   DxdEnvironmentActivateOperation,
+  dxdAcceptsCurrentEnvironment,
 } from "../../execution/dxd/protocol.js";
 import { environmentActivationOperation } from "./activation.js";
 import type { ExecutionEnvironmentSnapshot } from "./execution.js";
@@ -71,6 +72,33 @@ describe("resident environment activation", () => {
     ).toEqual([{ name: "SAFE_VALUE", valueBase64Url: "a2VwdA" }]);
   });
 
+  it("sends names and empty values an earlier daemon rejects only to a daemon that accepts them", () => {
+    const values = snapshot([
+      ["CLOUDFLARE_API_TOKEN", "kept"],
+      ["GIT_CONFIG_VALUE_0", ""],
+      ["SAFE_VALUE", "kept"],
+    ]);
+    // The daemon's reported release decides; no `register` key is needed.
+    const entries = (release: string | undefined) =>
+      environmentActivationOperation(values, 9, undefined, {
+        current: dxdAcceptsCurrentEnvironment(release),
+      }).entries;
+    for (const release of ["0.10.1", "0.11.0-rc.1", "dev", undefined])
+      expect(entries(release), String(release)).toEqual([
+        { name: "SAFE_VALUE", valueBase64Url: "a2VwdA" },
+      ]);
+    for (const release of ["0.11.0", "0.11.4", "0.12.0", "1.0.0"])
+      expect(entries(release)[1], release).toEqual({
+        name: "GIT_CONFIG_VALUE_0",
+        valueBase64Url: "",
+      });
+    expect(entries("0.11.0")).toEqual([
+      { name: "CLOUDFLARE_API_TOKEN", valueBase64Url: "a2VwdA" },
+      { name: "GIT_CONFIG_VALUE_0", valueBase64Url: "" },
+      { name: "SAFE_VALUE", valueBase64Url: "a2VwdA" },
+    ]);
+  });
+
   it("supports 0 and 300 entries and rejects 301 or invalid generations", () => {
     expect(environmentActivationOperation(snapshot([]), 1).entries).toEqual([]);
     const maximum = Array.from(
@@ -125,10 +153,15 @@ describe("resident environment activation", () => {
         1,
       ),
     ).toThrow();
-    for (const valueBase64Url of ["", "eA==", "e", "eA+", "AA", "_w"])
+    for (const valueBase64Url of ["eA==", "e", "eA+", "AA", "_w"])
       expect(() =>
         decode({ ...valid, entries: [{ name: "A", valueBase64Url }] }),
       ).toThrow();
+    // An empty env var value is canonical.
+    expect(
+      decode({ ...valid, entries: [{ name: "A", valueBase64Url: "" }] })
+        .entries,
+    ).toEqual([{ name: "A", valueBase64Url: "" }]);
     expect(() =>
       decode({ ...valid, entries: [{ name: "PATH", valueBase64Url: "eA" }] }),
     ).toThrow();

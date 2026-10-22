@@ -2,7 +2,7 @@ import type { SettingsWorkspaceData } from "@dx/api";
 import type { SettingsScope, WorkspaceRole, WorkspaceSlug } from "@dx/domain";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
-import { AlertTriangle, ChevronDown, UserRound, X } from "lucide-react";
+import { AlertTriangle, UserRound, X } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { DxLoading } from "../../shared/brand/dx-loading.js";
@@ -20,7 +20,7 @@ import {
 } from "./settings-context-queries.js";
 import {
   isWorkspaceAdmin,
-  settingsNavigationRegistrations,
+  settingsNavigationSections,
 } from "./settings-navigation.js";
 import { SettingsBackgroundError } from "./settings-primitives.js";
 import {
@@ -52,8 +52,12 @@ function ScopeBar({
           className="settings-scope-link"
           data-active={scope === "personal" || undefined}
           aria-current={scope === "personal" ? "page" : undefined}
+          aria-label="Personal Settings"
         >
-          <UserRound /> Personal Settings
+          <UserRound />
+          <span>
+            Personal<span className="settings-scope-suffix"> Settings</span>
+          </span>
         </Link>
         {workspace === undefined ? (
           <Link
@@ -63,11 +67,14 @@ function ScopeBar({
             className="settings-scope-link"
             data-active={scope === "workspace" || undefined}
             aria-current={scope === "workspace" ? "page" : undefined}
+            aria-label="Workspace Settings"
           >
             <span className="settings-workspace-mark" aria-hidden="true">
               W
             </span>
-            Workspace Settings
+            <span>
+              Workspace<span className="settings-scope-suffix"> Settings</span>
+            </span>
           </Link>
         ) : (
           <Link
@@ -78,11 +85,14 @@ function ScopeBar({
             className="settings-scope-link"
             data-active={scope === "workspace" || undefined}
             aria-current={scope === "workspace" ? "page" : undefined}
+            aria-label="Workspace Settings"
           >
             <span className="settings-workspace-mark" aria-hidden="true">
               W
             </span>
-            Workspace Settings
+            <span>
+              Workspace<span className="settings-scope-suffix"> Settings</span>
+            </span>
           </Link>
         )}
       </nav>
@@ -115,13 +125,6 @@ type SettingsNavigationProps =
       readonly settingsReturnTo?: string;
     };
 
-const personalAdvancedChildIds = new Set([
-  "personal-appearance",
-  "personal-experimental-features",
-  "personal-keyboard-shortcuts",
-  "personal-signing-keys",
-  "personal-project-defaults",
-]);
 function SettingsNavigation(props: SettingsNavigationProps) {
   const allRegistrations =
     props.scope === "personal"
@@ -131,29 +134,14 @@ function SettingsNavigation(props: SettingsNavigationProps) {
             (registration) => registration.slug === undefined,
           )
         : settingsManifest.workspace;
-  const visibleRegistrations = settingsNavigationRegistrations(
+  const sections = settingsNavigationSections(
     props.scope,
     allRegistrations,
     props.scope === "workspace" ? props.workspaceRole : undefined,
   );
-  const advancedChildren =
-    props.scope === "personal"
-      ? visibleRegistrations.filter((registration) =>
-          personalAdvancedChildIds.has(registration.id),
-        )
-      : [];
-  const registrations = visibleRegistrations.filter(
-    (registration) => !personalAdvancedChildIds.has(registration.id),
-  );
-  const activeIsAdvancedChild = personalAdvancedChildIds.has(props.active.id);
-  const [advancedExpanded, setAdvancedExpanded] = React.useState(
-    props.active.id === "personal-advanced" || activeIsAdvancedChild,
-  );
+  const headingId = React.useId();
 
-  const navigationLink = (
-    registration: SettingsSectionRegistration,
-    kind: "standard" | "advanced" | "advanced-child",
-  ) => {
+  const navigationLink = (registration: SettingsSectionRegistration) => {
     const Icon = registration.icon;
     const path =
       props.scope === "personal"
@@ -176,26 +164,13 @@ function SettingsNavigation(props: SettingsNavigationProps) {
         replace
         state={settingsNavigationState(props.settingsReturnTo)}
         activeOptions={{ exact: true }}
-        className={`settings-navigation-link${kind === "advanced-child" ? " settings-navigation-child" : ""}`}
+        className="settings-navigation-link"
         data-active={active || undefined}
         aria-label={registration.label}
         aria-current={active ? "page" : undefined}
-        aria-expanded={kind === "advanced" ? advancedExpanded : undefined}
-        onClick={() => {
-          if (kind === "advanced") {
-            setAdvancedExpanded((expanded) => !expanded);
-          } else if (kind === "advanced-child") {
-            setAdvancedExpanded(true);
-          } else {
-            setAdvancedExpanded(false);
-          }
-        }}
       >
         <Icon />
         <span>{registration.label}</span>
-        {kind === "advanced" ? (
-          <ChevronDown className="settings-navigation-chevron" />
-        ) : null}
       </Link>
     );
   };
@@ -206,27 +181,30 @@ function SettingsNavigation(props: SettingsNavigationProps) {
         className="settings-navigation"
         aria-label={`${props.scope} settings`}
       >
-        {registrations.map((registration) => {
-          if (registration.id !== "personal-advanced") {
-            return navigationLink(registration, "standard");
-          }
-          return (
-            <div
-              className="settings-navigation-group"
-              data-expanded={advancedExpanded || undefined}
-              key={registration.id}
-            >
-              {navigationLink(registration, "advanced")}
-              {advancedExpanded ? (
-                <div className="settings-navigation-submenu">
-                  {advancedChildren.map((child) =>
-                    navigationLink(child, "advanced-child"),
-                  )}
-                </div>
-              ) : null}
+        {sections.map((section) =>
+          section.heading === undefined ? (
+            section.registrations.map(navigationLink)
+          ) : (
+            <div key={section.group} className="settings-navigation-group">
+              <span
+                id={`${headingId}-${section.group}`}
+                className="settings-navigation-heading"
+              >
+                <span className="settings-navigation-heading-text">
+                  {section.heading}
+                </span>
+              </span>
+              <ul
+                className="settings-navigation-list"
+                aria-labelledby={`${headingId}-${section.group}`}
+              >
+                {section.registrations.map((registration) => (
+                  <li key={registration.id}>{navigationLink(registration)}</li>
+                ))}
+              </ul>
             </div>
-          );
-        })}
+          ),
+        )}
       </nav>
     </aside>
   );
@@ -388,14 +366,12 @@ export function SettingsPage(props: SettingsPageProps) {
         <div className="settings-shell-body">
           {props.scope === "personal" ? (
             <SettingsNavigation
-              key={registration.id}
               scope={props.scope}
               active={registration}
               settingsReturnTo={settingsReturnTo}
             />
           ) : (
             <SettingsNavigation
-              key={registration.id}
               scope={props.scope}
               workspaceSlug={effectiveWorkspaceSlug}
               workspaceRole={workspace?.role}

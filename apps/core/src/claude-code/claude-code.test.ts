@@ -163,6 +163,8 @@ exec /usr/bin/awk "$@"
       existsSync(map(guestPath))
         ? readFileSync(map(guestPath), "utf8")
         : undefined,
+    write: (guestPath: string, content: string) =>
+      writeFileSync(map(guestPath), content),
     home: (name: string) => readFileSync(join(home, name), "utf8"),
   };
 };
@@ -448,6 +450,53 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
     expect(done).toMatchObject({
       type: "done",
       message: { content: [{ type: "text", text: "Still here." }] },
+    });
+  });
+
+  it("relaunches on retry when the run it rejoins was lost with a cold-booted workspace", {
+    timeout: 45_000,
+  }, async () => {
+    const guest = await createGuest();
+    await guest.script([init(), "#wait never"]);
+    const first = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    guest.before = ({ op, path }) => {
+      if (op === "read" && path.endsWith("/exit"))
+        vi.setSystemTime(Date.now() + 5_100);
+      return undefined;
+    };
+    const context: Context = { messages: [user("Keep working", 6)] };
+    const lost = first.answer(context);
+    let dir = "";
+    await waitFor(() => {
+      const [attempt] = runDirectories(guest.ops);
+      dir = attempt === undefined ? "" : `${STATE}/runs/${attempt}`;
+      // The runner's first heartbeat: it is running in its own group.
+      return dir !== "" && guest.file(`${dir}/alive`) !== undefined;
+    });
+    // A cold boot keeps the run's files but not its processes: no exit
+    // marker is ever written, and the heartbeat stops at its last value.
+    process.kill(-Number(guest.file(`${dir}/pid`)), "SIGKILL");
+    guest.write(`${dir}/alive`, "1");
+    expect(await lost).toMatchObject({
+      type: "error",
+      error: { errorMessage: "Claude Code stopped responding." },
+    });
+
+    // Flue's retry, from a restarted Durable Object, rejoins that attempt.
+    await guest.script([
+      init(),
+      ...response("m1", [{ text: "Recovered." }]),
+      result("Recovered."),
+    ]);
+    const retry = claudeCode(
+      await restartedProvider(),
+      guest.sandbox,
+      first.threadId,
+    );
+    expect(await retry.answer(context)).toMatchObject({
+      type: "done",
+      message: { content: [{ type: "text", text: "Recovered." }] },
     });
   });
 

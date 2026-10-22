@@ -4,6 +4,7 @@ import { EnvironmentVariablesSettings } from "./environment-variables-settings.j
 
 const common = {
   slug: "environment-variables",
+  group: "library",
   label: "Secrets & Env Vars",
   title: "Secrets & Environment Variables",
   description: "Manage values available to your dx Orbs and Terminal shells.",

@@ -23,6 +23,14 @@ import {
   threadDaemonBearer,
   verifyThreadDaemonApiKey,
 } from "../auth/daemon-api-key.js";
+import {
+  type BrowserSessionBinding,
+  closeForEndedSession,
+  enforceBrowserSessions,
+  readBrowserSessionHeaders,
+  SESSION_ENDED_CLOSE_CODE,
+  sessionSocketCheckMs,
+} from "../auth/session-sockets.js";
 import { decodeBase64Url, encodeBase64Url } from "../encoding/base64.js";
 import { utf8ByteLength, utf8ExceedsBytes } from "../encoding/utf8.js";
 import {
@@ -67,6 +75,7 @@ import {
   type DxdWorkloadIdentityRequest,
   DxdWorkloadIdentityRequestMessage,
   decodeDxdSandboxChunkFrame,
+  dxdAcceptsCurrentEnvironment,
   environmentActivationDigest,
   isDxdProxyFrame,
   isDxdSandboxChunkFrame,
@@ -344,11 +353,14 @@ interface ResidentBrowserAttachment {
   readonly daemonGeneration?: DaemonGeneration;
   readonly nonce?: string;
   readonly terminal: ResidentTerminalMetadata;
+  /** The browser session that opened the socket; it closes when that ends. */
+  readonly session?: BrowserSessionBinding;
 }
 
 interface ChangesBrowserAttachment {
   readonly kind: "changes-browser";
   readonly threadId: ThreadId;
+  readonly session?: BrowserSessionBinding;
 }
 
 type SocketAttachment =
@@ -486,6 +498,12 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   readonly #daemonConfirmations = new WeakMap<WebSocket, Promise<boolean>>();
   /** When the scheduled alarm next checks the daemon heartbeat lease. */
   #leaseCheckAt?: number;
+  /**
+   * When the alarm next checks the browser sessions behind this object's
+   * sockets (auth/session-sockets.ts). Memory only: every alarm runs the
+   * check, so a wake that lost it loses nothing.
+   */
+  #sessionCheckAt?: number;
   #terminalResetRequired = false;
   /**
    * Until when the daemon's own release swap (`update-status: applying`)
@@ -614,6 +632,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           attachment.threadId,
           () => {},
           socket,
+          attachment.session,
         );
         if (attachment.terminal.requested && !daemonLive) {
           // Paused or gone: an immediate reconnect would make a retained,
@@ -765,15 +784,17 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       this.ctx.waitUntil(delivery);
     };
 
+    const session = readBrowserSessionHeaders(request.headers);
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
     this.ctx.acceptWebSocket(server);
     this.#residentRelay.attach(
       server,
-      this.#residentTransport(threadId.value, record, server),
+      this.#residentTransport(threadId.value, record, server, session),
       false,
     );
+    if (session !== undefined) await this.#watchSessions();
     return new Response(null, {
       status: 101,
       webSocket: client,
@@ -793,6 +814,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   async #alarm() {
     const now = Date.now();
     this.#leaseCheckAt = undefined;
+    await this.#enforceSessions();
     const expired = await this.#expiredDaemonSocket(now);
     if (expired !== undefined) await this.#loseDaemonConnection(expired, true);
     const attempt = await this.#readDaemonActivationAttempt();
@@ -814,16 +836,80 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         await this.ctx.storage.delete(ACTIVATION_ATTEMPT_STORAGE_KEY);
       }
     }
-    if (attemptCheckAt === undefined && this.#leaseCheckAt === undefined)
+    if (
+      attemptCheckAt === undefined &&
+      this.#leaseCheckAt === undefined &&
+      this.#sessionCheckAt === undefined
+    )
       await this.ctx.storage.deleteAlarm();
     else
       await this.ctx.storage.setAlarm(
         Math.min(
-          ...[attemptCheckAt, this.#leaseCheckAt].filter(
+          ...[attemptCheckAt, this.#leaseCheckAt, this.#sessionCheckAt].filter(
             (value): value is number => value !== undefined,
           ),
         ),
       );
+  }
+
+  /**
+   * Closes the browser sockets whose session ended, and keeps checking while
+   * any socket still has a session. A failed read keeps the sockets and
+   * checks again.
+   */
+  async #enforceSessions() {
+    this.#sessionCheckAt = undefined;
+    const db = this.env.DB;
+    if (db === undefined) return;
+    let watching = true;
+    try {
+      watching = await enforceBrowserSessions(db, this.ctx.getWebSockets(), {
+        binding: (socket) => this.#browserSessionOf(socket),
+        renew: (socket, expiresAt) => {
+          const attachment = socket.deserializeAttachment() as
+            | SocketAttachment
+            | undefined;
+          if (attachment === undefined || attachment.kind === "daemon") return;
+          if (attachment.session === undefined) return;
+          socket.serializeAttachment({
+            ...attachment,
+            session: { ...attachment.session, expiresAt },
+          });
+        },
+        end: (socket) => {
+          const attachment = socket.deserializeAttachment() as
+            | SocketAttachment
+            | undefined;
+          if (attachment?.kind === "resident-browser")
+            this.#residentRelay.endSession(socket, SESSION_ENDED_CLOSE_CODE);
+          else if (attachment?.kind === "proxy-browser")
+            this.#proxyRelay.endSession(socket, attachment);
+          else closeForEndedSession(socket);
+        },
+      });
+    } catch {
+      threadDaemonLogger.warn("Browser session check failed.", {
+        event: "browser_session_check_failed",
+      });
+    }
+    if (watching)
+      this.#sessionCheckAt = Date.now() + sessionSocketCheckMs(this.env);
+  }
+
+  #browserSessionOf(socket: WebSocket) {
+    const attachment = socket.deserializeAttachment() as
+      | SocketAttachment
+      | undefined;
+    return attachment === undefined || attachment.kind === "daemon"
+      ? undefined
+      : attachment.session;
+  }
+
+  /** Starts checking sessions after accepting a socket that has one. */
+  async #watchSessions() {
+    if (this.#sessionCheckAt !== undefined) return;
+    this.#sessionCheckAt = Date.now() + sessionSocketCheckMs(this.env);
+    await this.#scheduleAlarm().catch(() => undefined);
   }
 
   /**
@@ -937,8 +1023,9 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         continue;
       headers.push([name, value]);
     }
-    if (websocket)
-      return this.#proxyRelay.websocket({
+    if (websocket) {
+      const session = readBrowserSessionHeaders(request.headers);
+      const response = await this.#proxyRelay.websocket({
         port,
         target,
         headers,
@@ -947,7 +1034,12 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           .map((protocol) => protocol.trim())
           .filter((protocol) => protocol.length > 0),
         wake,
+        ...(session === undefined ? {} : { session }),
       });
+      if (session !== undefined && response.status === 101)
+        await this.#watchSessions();
+      return response;
+    }
     const idempotent = request.method === "GET" || request.method === "HEAD";
     const exchange = () =>
       this.#proxyRelay.http({
@@ -1089,7 +1181,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     );
   }
 
-  #acceptChangesObserver(request: Request): Response {
+  async #acceptChangesObserver(request: Request): Promise<Response> {
     const threadId = Schema.decodeUnknownOption(ThreadId)(
       request.headers.get("x-dx-thread-id"),
     );
@@ -1110,12 +1202,15 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         ).length >= 16
     )
       return new Response(null, { status: 429 });
+    const session = readBrowserSessionHeaders(request.headers);
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1]);
     pair[1].serializeAttachment({
       kind: "changes-browser",
       threadId: threadId.value,
+      ...(session === undefined ? {} : { session }),
     } satisfies ChangesBrowserAttachment);
+    if (session !== undefined) await this.#watchSessions();
     // Initial notification closes the race between the HTTP read and subscription.
     pair[1].send(JSON.stringify({ type: "changes-updated" }));
     return new Response(null, {
@@ -2046,6 +2141,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     threadId: ThreadId,
     record: (phase: ThreadTerminalServerPhase) => void,
     socket: WebSocket,
+    session: BrowserSessionBinding | undefined,
   ): ResidentTerminalTransport {
     return {
       activate: async () => {
@@ -2091,11 +2187,20 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
                 nonce: authority.attachmentNonce,
               }
             : {};
+        // A renewed expiry lives only on the attachment.
+        const previous = socket.deserializeAttachment() as
+          | SocketAttachment
+          | undefined;
+        const bound =
+          (previous?.kind === "resident-browser"
+            ? previous.session
+            : undefined) ?? session;
         socket.serializeAttachment({
           kind: "resident-browser",
           threadId,
           ...daemonIdentity,
           terminal,
+          ...(bound === undefined ? {} : { session: bound }),
         } satisfies ResidentBrowserAttachment);
       },
       record,
@@ -2432,17 +2537,23 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       signing.author.name === "dx" &&
       signing.author.email === "noreply@dx.local";
     const origin = new URL(this.env.DX_AUTH_URL as string).origin;
-    const operation = environmentActivationOperation(snapshot, generation, {
-      authorName: legacyDefaultAuthor ? "dxcodeagent" : signing.author.name,
-      authorEmail: legacyDefaultAuthor
-        ? "agent@dxcode.dev"
-        : signing.author.email,
-      threadUrl: `${origin}/threads/${threadId}`,
-      // Preferred policy falls back to unsigned Git when no managed key is
-      // available. Required signing stays fail-closed through Git's signer.
-      signingEnabled: signing.policy === "required" || "credential" in signing,
-      ...(bitbucketGateway === undefined ? {} : { bitbucketGateway }),
-    });
+    const operation = environmentActivationOperation(
+      snapshot,
+      generation,
+      {
+        authorName: legacyDefaultAuthor ? "dxcodeagent" : signing.author.name,
+        authorEmail: legacyDefaultAuthor
+          ? "agent@dxcode.dev"
+          : signing.author.email,
+        threadUrl: `${origin}/threads/${threadId}`,
+        // Preferred policy falls back to unsigned Git when no managed key is
+        // available. Required signing stays fail-closed through Git's signer.
+        signingEnabled:
+          signing.policy === "required" || "credential" in signing,
+        ...(bitbucketGateway === undefined ? {} : { bitbucketGateway }),
+      },
+      { current: dxdAcceptsCurrentEnvironment(authority.daemonRelease) },
+    );
     // Digest first: a daemon that already holds this exact environment
     // answers a 4 KiB control frame instead of receiving up to 14 MiB again.
     const digest = await environmentActivationDigest(operation);
@@ -2657,10 +2768,20 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       attemptCheckAt === undefined
         ? await this.#readDaemonActivationAttempt()
         : undefined;
+    // A wake forgets the session check; sockets that still have a session
+    // bring it back, so a lease or activation alarm never pushes it out.
+    if (
+      this.#sessionCheckAt === undefined &&
+      this.ctx
+        .getWebSockets()
+        .some((socket) => this.#browserSessionOf(socket) !== undefined)
+    )
+      this.#sessionCheckAt = Date.now() + sessionSocketCheckMs(this.env);
     const next = [
       attemptCheckAt ??
         (attempt === undefined ? undefined : attempt.deadlineAt + 1_000),
       this.#leaseCheckAt,
+      this.#sessionCheckAt,
     ].filter((value): value is number => value !== undefined);
     if (next.length === 0) await this.ctx.storage.deleteAlarm();
     else await this.ctx.storage.setAlarm(Math.min(...next));

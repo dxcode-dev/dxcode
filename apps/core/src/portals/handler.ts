@@ -483,11 +483,19 @@ const servePortalRequest = async (
   const authenticated = await authenticate(request, key, db, match, nowMs);
   if ("session" in authenticated) {
     const { session, refresh } = authenticated;
-    return relay(request, bindings, configuration, match, refresh, {
-      userId: session.userId,
-      ...(session.email === undefined ? {} : { email: session.email }),
-      ...(session.name === undefined ? {} : { name: session.name }),
-    });
+    return relay(
+      request,
+      bindings,
+      configuration,
+      match,
+      refresh,
+      {
+        userId: session.userId,
+        ...(session.email === undefined ? {} : { email: session.email }),
+        ...(session.name === undefined ? {} : { name: session.name }),
+      },
+      session,
+    );
   }
   const link =
     framedByApp(request) && startsHandshake(request)
@@ -676,6 +684,7 @@ const relay = async (
   match: PortalMatch,
   refresh: ReadonlyArray<string>,
   identity: PortalIdentity | undefined,
+  session?: PortalSession,
 ) => {
   const namespace = bindings.THREAD_EXECUTION;
   if (namespace === undefined) return unavailable(request, configuration);
@@ -694,7 +703,20 @@ const relay = async (
     if (websocket && request.method !== "GET")
       return new Response("WebSocket upgrades use GET", { status: 400 });
     response = websocket
-      ? await relayWebSocket(request, target, identity)
+      ? await relayWebSocket(
+          request,
+          target,
+          identity,
+          // The dx session's expiry is not on the Portal cookie, so the
+          // first check reads it.
+          session === undefined
+            ? undefined
+            : {
+                sessionId: session.sessionId,
+                userId: session.userId,
+                expiresAt: 0,
+              },
+        )
       : await relayHttp(request, target, identity);
   } catch {
     portalLogger.error("Portal relay failed.", {

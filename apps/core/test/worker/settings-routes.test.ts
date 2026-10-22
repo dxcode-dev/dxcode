@@ -1056,6 +1056,55 @@ describe("settings routes in workerd with real D1", () => {
       },
     });
 
+    // A second skill with a live skill's name is refused with a field error,
+    // and a removed skill gives its name up: its export imports again.
+    const duplicate = await call(ownerApp, personal, "POST", {
+      bundle: secondBundle,
+      reviewedIntegrity: secondPreview.data.integrity,
+    });
+    expect(duplicate.status).toBe(400);
+    await expect(duplicate.json()).resolves.toMatchObject({
+      data: {
+        code: "INVALID_SKILL_REQUEST",
+        fieldErrors: [
+          {
+            field: "name",
+            message: expect.stringContaining("review-guidelines"),
+          },
+        ],
+      },
+    });
+    const exportedBundle = (
+      await (
+        await call(ownerApp, `${personal}/${created.data.id}/export`)
+      ).json<{
+        data: { source: unknown; files: unknown[] };
+      }>()
+    ).data;
+    expect(
+      (await call(ownerApp, `${personal}/${created.data.id}`, "DELETE")).status,
+    ).toBe(200);
+    const reimported = await call(ownerApp, personal, "POST", {
+      bundle: { source: exportedBundle.source, files: exportedBundle.files },
+      reviewedIntegrity: secondPreview.data.integrity,
+    });
+    expect(reimported.status).toBe(201);
+    const reimportedSkill = await reimported.json<{
+      data: { id: string; name: string; activeVersion: number };
+    }>();
+    expect(reimportedSkill.data).toMatchObject({
+      name: "review-guidelines",
+      activeVersion: 1,
+    });
+    expect(reimportedSkill.data.id).not.toBe(created.data.id);
+    await expect(
+      env.DB.prepare(
+        "SELECT COUNT(*) AS versions FROM skill_version WHERE skill_id = ?",
+      )
+        .bind(created.data.id)
+        .first(),
+    ).resolves.toEqual({ versions: 2 });
+
     const workspace = "/settings/workspaces/dx-team/skills";
     const workspacePreview = await (
       await call(ownerApp, `${workspace}/preview`, "POST", firstBundle)
@@ -1068,11 +1117,66 @@ describe("settings routes in workerd with real D1", () => {
         })
       ).status,
     ).toBe(201);
+    // The owner's personal review-guidelines replaces the workspace one of
+    // the same name once both are on.
+    expect(
+      (
+        await call(
+          ownerApp,
+          `${personal}/${reimportedSkill.data.id}`,
+          "PATCH",
+          {
+            enabled: true,
+          },
+        )
+      ).status,
+    ).toBe(200);
+    const workspaceSkill = (
+      await (
+        await call(ownerApp, workspace)
+      ).json<{
+        data: { items: Array<{ id: string }> };
+      }>()
+    ).data.items[0];
+    expect(
+      (
+        await call(ownerApp, `${workspace}/${workspaceSkill?.id}`, "PATCH", {
+          enabled: true,
+        })
+      ).status,
+    ).toBe(200);
+    await expect(
+      (await call(ownerApp, workspace)).json(),
+    ).resolves.toMatchObject({
+      data: {
+        precedence: "personal-over-workspace",
+        items: [
+          {
+            name: "review-guidelines",
+            effectiveState: "replaced-by-personal",
+          },
+        ],
+      },
+    });
+    await expect(
+      (await call(ownerApp, personal)).json(),
+    ).resolves.toMatchObject({
+      data: {
+        precedence: "personal-over-workspace",
+        items: [
+          {
+            name: "review-guidelines",
+            effectiveState: "effective",
+            overridesWorkspace: true,
+          },
+        ],
+      },
+    });
     const memberApp = createSettingsApp(member);
     const memberList = await call(memberApp, workspace);
     expect(memberList.status).toBe(200);
     await expect(memberList.json()).resolves.toMatchObject({
-      data: { canMutate: false, precedence: "workspace-over-personal" },
+      data: { canMutate: false, precedence: "personal-over-workspace" },
     });
     expect(
       (

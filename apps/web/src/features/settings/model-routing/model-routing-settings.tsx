@@ -5,7 +5,8 @@ import {
   workspaceRoleHasPermission,
 } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { ChevronRight, UsersRound } from "lucide-react";
 import {
   type Dispatch,
   type PointerEvent,
@@ -15,8 +16,15 @@ import {
 } from "react";
 import type { ModelRoutingTarget } from "../../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { DxLoading } from "../../../shared/brand/dx-loading.js";
+import { settingsNavigationState } from "../../../shared/navigation/settings-return.js";
 import { settingsContextQueryOptions } from "../settings-context-queries.js";
-import type { SettingsSectionProps } from "../settings-registration.js";
+import { isWorkspaceAdmin } from "../settings-navigation.js";
+import { SettingsHeading } from "../settings-primitives.js";
+import {
+  type SettingsSectionProps,
+  settingsPath,
+} from "../settings-registration.js";
 import {
   ClaudeCodeNotice,
   ClaudeConnectDialog,
@@ -88,8 +96,55 @@ const formDialogProvider = (
         )
       : undefined;
 
+/**
+ * Another scope's routing in its place in the order: members' own
+ * connections come before the workspace's, and the workspace's after yours.
+ */
+function ScopeRow({
+  label,
+  icon,
+  to,
+  settingsReturnTo,
+}: {
+  readonly label: string;
+  readonly icon: ReactNode;
+  /** The scope's Model Routing page, when this user can open it. */
+  readonly to?: string;
+  readonly settingsReturnTo?: string;
+}) {
+  const content = (
+    <>
+      {icon}
+      <span className="model-routing-connection-name">{label}</span>
+    </>
+  );
+  return (
+    <li className="model-routing-scope-row">
+      {to === undefined ? (
+        <div className="model-routing-scope-content">{content}</div>
+      ) : (
+        <Link
+          to={to}
+          replace
+          state={settingsNavigationState(settingsReturnTo)}
+          className="model-routing-scope-content"
+        >
+          {content}
+          <ChevronRight
+            className="model-routing-connection-chevron"
+            aria-hidden="true"
+          />
+        </Link>
+      )}
+    </li>
+  );
+}
+
 function ConnectionList({
   rows,
+  empty,
+  leading,
+  trailing,
   canMutate,
   checkingConnectionId,
   onReorder,
@@ -103,6 +158,11 @@ function ConnectionList({
   renderPanel,
 }: {
   readonly renderPanel?: (connection: ConnectionData) => ReactNode;
+  /** Shown in place of the rows when the scope has no connections. */
+  readonly empty?: string;
+  /** Rows of other scopes' routing before and after these connections. */
+  readonly leading?: ReactNode;
+  readonly trailing?: ReactNode;
   readonly expanded: ReadonlyArray<string>;
   readonly onExpand: (id: string) => void;
   readonly rows: ReadonlyArray<ConnectionData>;
@@ -156,6 +216,7 @@ function ConnectionList({
 
   return (
     <ol className="model-routing-connection-list">
+      {leading}
       {rows.map((connection, index) => (
         <li
           key={connection.id}
@@ -172,7 +233,6 @@ function ConnectionList({
         >
           <ConnectionRow
             connection={connection}
-            priority={index + 1}
             canMutate={canMutate}
             canReorderUp={index > 0 && canMutate}
             canReorderDown={index < rows.length - 1 && canMutate}
@@ -202,6 +262,8 @@ function ConnectionList({
           </ConnectionRow>
         </li>
       ))}
+      {empty === undefined ? null : <li className="routing-empty">{empty}</li>}
+      {trailing}
     </ol>
   );
 }
@@ -212,6 +274,8 @@ function ConnectionList({
  */
 function RoutingConnections({
   target,
+  leading,
+  trailing,
   routingRows,
   claudeRows,
   canMutate,
@@ -220,6 +284,8 @@ function RoutingConnections({
   onEdit,
 }: {
   readonly target: ModelRoutingTarget;
+  readonly leading?: ReactNode;
+  readonly trailing?: ReactNode;
   readonly routingRows: ReadonlyArray<ConnectionData>;
   readonly claudeRows: ReadonlyArray<ConnectionData>;
   readonly canMutate: boolean;
@@ -264,9 +330,19 @@ function RoutingConnections({
   };
   return (
     <>
-      {routingRows.length > 0 || claudeRows.length === 0 ? (
+      {routingRows.length > 0 ||
+      claudeRows.length === 0 ||
+      leading !== undefined ||
+      trailing !== undefined ? (
         <ConnectionList
           {...listProps}
+          leading={leading}
+          trailing={trailing}
+          empty={
+            routingRows.length === 0 && claudeRows.length === 0
+              ? `No ${target.scope} connections yet.`
+              : undefined
+          }
           rows={routingRows}
           // Reorder lists every connection; Claude Pro/Max keeps its place.
           onReorder={(ids) =>
@@ -326,6 +402,7 @@ function RoutingConnections({
 export const ModelRoutingSettings = ({
   workspace,
   workspaceSlug,
+  settingsReturnTo,
 }: SettingsSectionProps) => {
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
@@ -421,6 +498,11 @@ export const ModelRoutingSettings = ({
     );
   };
 
+  // Personal Threads use the user's one workspace's connections after theirs.
+  const personalWorkspace =
+    settingsContext.data?.activeScope === "personal"
+      ? settingsContext.data.workspace
+      : undefined;
   const copilotRow = rows.find(
     (connection) => connection.kind === "subscription",
   );
@@ -432,23 +514,25 @@ export const ModelRoutingSettings = ({
 
   return (
     <div className="model-routing-settings routing-parity">
-      <header className="model-routing-page-heading">
-        <h1>Model Routing</h1>
-        {canMutate ? (
-          <AddConnectionMenu
-            showCopilot={personal && copilotRow === undefined}
-            showClaude={personal}
-            onPick={(pick) =>
-              setDialog(
-                // One plan per owner: picking it again replaces the token.
-                pick === "claude" && claudeRow !== undefined
-                  ? editDialog(claudeRow)
-                  : { kind: pick === "custom" ? "add-custom" : pick },
-              )
-            }
-          />
-        ) : null}
-      </header>
+      <SettingsHeading
+        title="Model Routing"
+        actions={
+          canMutate ? (
+            <AddConnectionMenu
+              showCopilot={personal && copilotRow === undefined}
+              showClaude={personal}
+              onPick={(pick) =>
+                setDialog(
+                  // One plan per owner: picking it again replaces the token.
+                  pick === "claude" && claudeRow !== undefined
+                    ? editDialog(claudeRow)
+                    : { kind: pick === "custom" ? "add-custom" : pick },
+                )
+              }
+            />
+          ) : undefined
+        }
+      />
       {personal && claudeRow === undefined && connections.isSuccess ? (
         <ClaudeCodeNotice onConnect={() => setDialog({ kind: "claude" })} />
       ) : null}
@@ -458,24 +542,53 @@ export const ModelRoutingSettings = ({
         </p>
       ) : null}
       {connections.isPending ? (
-        <p className="routing-empty" role="status">
-          Loading connections…
-        </p>
-      ) : rows.length === 0 && !connections.isError ? (
-        <p className="routing-empty">
-          No connections yet. Add Claude Pro/Max, GitHub Copilot, or a Custom
-          URL to serve your models.
-        </p>
-      ) : null}
-      <RoutingConnections
-        target={target}
-        routingRows={routingRows}
-        claudeRows={claudeRows}
-        canMutate={canMutate}
-        expanded={expanded}
-        setExpanded={setExpanded}
-        onEdit={(connection) => setDialog(editDialog(connection))}
-      />
+        <DxLoading label="Loading connections…" />
+      ) : connections.isError ? null : (
+        <RoutingConnections
+          target={target}
+          leading={
+            personal ? undefined : (
+              <ScopeRow
+                label="Members' personal model routing"
+                icon={
+                  <UsersRound
+                    className="routing-connection-icon"
+                    aria-hidden="true"
+                  />
+                }
+              />
+            )
+          }
+          trailing={
+            personalWorkspace === undefined ? undefined : (
+              <ScopeRow
+                label={`${personalWorkspace.displayName} workspace model routing`}
+                icon={
+                  <span className="settings-workspace-mark" aria-hidden="true">
+                    W
+                  </span>
+                }
+                settingsReturnTo={settingsReturnTo}
+                to={
+                  isWorkspaceAdmin(personalWorkspace.role)
+                    ? settingsPath({
+                        scope: "workspace",
+                        workspaceSlug: personalWorkspace.shortName,
+                        section: "model-routing",
+                      })
+                    : undefined
+                }
+              />
+            )
+          }
+          routingRows={routingRows}
+          claudeRows={claudeRows}
+          canMutate={canMutate}
+          expanded={expanded}
+          setExpanded={setExpanded}
+          onEdit={(connection) => setDialog(editDialog(connection))}
+        />
+      )}
       {graph.isError ? (
         <p className="model-routing-field-error" role="alert">
           {message(graph.error)}
@@ -513,9 +626,7 @@ export const ModelRoutingSettings = ({
           }}
         />
       ) : (
-        <p role="status" className="routing-empty">
-          Loading routes…
-        </p>
+        <DxLoading label="Loading routes…" />
       )}
       {catalog.isError || (personal && choices.isError) ? (
         <p className="model-routing-field-error" role="alert">

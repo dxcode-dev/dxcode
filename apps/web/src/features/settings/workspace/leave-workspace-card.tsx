@@ -10,7 +10,7 @@ import {
   DialogRoot,
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
-import { SettingsCard } from "../settings-primitives.js";
+import { SettingsCard, SettingsRow } from "../settings-primitives.js";
 import { leaveWorkspaceMutationOptions } from "./workspace-mutations.js";
 
 export function LeaveWorkspaceCard({
@@ -32,15 +32,16 @@ export function LeaveWorkspaceCard({
     },
   });
   return (
-    <SettingsCard
-      title="Leave workspace"
-      description="Remove yourself from this workspace. Your workspace threads stay with it and come back if you rejoin."
-      actions={
-        <Button size="xs" variant="outline" onClick={() => setOpen(true)}>
-          Leave workspace
-        </Button>
-      }
-    >
+    <SettingsCard>
+      <SettingsRow
+        title="Leave workspace"
+        description="Remove yourself from this workspace. Your workspace threads stay with it and come back if you rejoin."
+        control={
+          <Button size="xs" variant="outline" onClick={() => setOpen(true)}>
+            Leave workspace
+          </Button>
+        }
+      />
       <DialogRoot
         open={open}
         onOpenChange={(next) => {

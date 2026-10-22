@@ -491,6 +491,18 @@ export class ResidentTerminalRelay {
     }
   }
 
+  /**
+   * The browser session that opened this socket ended: the browser is told
+   * not to retry, the socket closes with `closeCode`, and the resident
+   * terminal drops the attachment.
+   */
+  endSession(socket: ResidentTerminalSocket, closeCode: number) {
+    const session = this.#sessions.get(socket);
+    if (session === undefined)
+      this.#sendError(socket, "session-ended", "never", closeCode);
+    else this.#fail(session, "session-ended", "never", closeCode, true);
+  }
+
   disconnect(socket: ResidentTerminalSocket) {
     const session = this.#sessions.get(socket);
     if (session !== undefined) this.#dispose(session, true);

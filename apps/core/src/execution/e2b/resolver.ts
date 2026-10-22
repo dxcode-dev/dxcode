@@ -799,13 +799,12 @@ export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
                 // daemon's outbound session, and E2B would otherwise expose
                 // (and auto-resume for) every port, loopback ones included.
                 network: { allowPublicTraffic: false },
-                // A pause keeps the filesystem only, so every resume cold-boots:
-                // a guest that ran out of memory cannot come back out of
-                // memory. E2B refuses auto-resume for such a snapshot; Core
-                // always resumes explicitly with `connect`.
+                // E2B pauses a sandbox when its timeout or session limit runs
+                // out, even under a running agent; keeping memory lets the
+                // next request resume it with its processes intact.
                 lifecycle: {
-                  onTimeout: { action: "pause", keepMemory: false },
-                  autoResume: false,
+                  onTimeout: { action: "pause", keepMemory: true },
+                  autoResume: true,
                 },
               }),
             catch: (cause) => cause,

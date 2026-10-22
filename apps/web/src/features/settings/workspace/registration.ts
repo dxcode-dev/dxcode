@@ -5,6 +5,7 @@ import { WorkspaceProfileSettings } from "./workspace-profile-settings.js";
 export const workspaceProfileSettingsSection: SettingsSectionRegistration = {
   id: "workspace-root",
   scope: "workspace",
+  group: "top-level",
   label: "Workspace",
   title: "Workspace",
   description: "Manage this workspace's profile and stable identity.",

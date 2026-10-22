@@ -27,15 +27,17 @@ import {
 } from "@dx/api";
 import {
   configReferenceFor,
+  EMPTY_SECRET_PROBLEM,
   EnvironmentVariableConflict,
   EnvironmentVariableKind,
   EnvironmentVariableName,
   EnvironmentVariableNotFound,
-  EnvironmentVariablePlaintext,
   EnvironmentVariableRepository,
   type EnvironmentVariableTarget,
+  EnvironmentVariableValue,
+  environmentVariableNameProblem,
   InvalidPageCursor,
-  isReservedEnvironmentVariableName,
+  looksLikeSecretEnvironmentVariable,
   MAX_ENVIRONMENT_VARIABLE_BULK_ITEMS,
   MAX_ENVIRONMENT_VARIABLE_VALUE_BYTES,
   normalizeEnvironmentVariableName,
@@ -44,6 +46,7 @@ import {
   ProjectId,
   ProjectNotFound,
   ProjectRepository,
+  parseEnvironmentVariableAssignments,
   SettingsMembershipInvariantViolation,
   SettingsScopeForbidden,
   type StoredEnvironmentVariable,
@@ -81,11 +84,10 @@ import { EnvironmentVariableRepositoryD1 } from "./repository-d1.js";
 import {
   type BulkEnvironmentVariableInput,
   ENVIRONMENT_VARIABLE_PRECEDENCE,
+  EnvironmentVariableEmptySecret,
   EnvironmentVariableLimitExceeded,
   EnvironmentVariableService,
 } from "./service.js";
-
-const MAX_BULK_CONTENT_BYTES = 262_144;
 
 class InvalidEnvironmentVariablesRequest extends Schema.TaggedError<InvalidEnvironmentVariablesRequest>()(
   "InvalidEnvironmentVariablesRequest",
@@ -95,14 +97,6 @@ class InvalidEnvironmentVariablesRequest extends Schema.TaggedError<InvalidEnvir
     ),
   },
 ) {}
-
-interface ParsedBulkItem {
-  readonly line: number;
-  readonly rawName: string;
-  readonly name?: EnvironmentVariableName;
-  readonly value?: EnvironmentVariablePlaintext;
-  readonly error?: string;
-}
 
 type RouteScope =
   | { readonly mode: "personal" }
@@ -116,37 +110,31 @@ const fieldError = (field: string, message: string): SettingsFieldError => ({
 const invalid = (...fieldErrors: ReadonlyArray<SettingsFieldError>) =>
   new InvalidEnvironmentVariablesRequest({ fieldErrors: [...fieldErrors] });
 
-const decodePlaintext = (value: string) => {
-  const bytes = new TextEncoder().encode(value).byteLength;
-  const decoded = Schema.decodeOption(EnvironmentVariablePlaintext)(value);
-  return bytes < 1 ||
-    bytes > MAX_ENVIRONMENT_VARIABLE_VALUE_BYTES ||
-    Option.isNone(decoded)
-    ? undefined
-    : decoded.value;
-};
-
 const validateName = (value: string) => {
+  const problem = environmentVariableNameProblem(value);
   const name = Schema.decodeOption(EnvironmentVariableName)(
     normalizeEnvironmentVariableName(value),
   );
-  return Option.isSome(name) && !isReservedEnvironmentVariableName(name.value)
-    ? name.value
-    : undefined;
+  return problem === undefined && Option.isSome(name)
+    ? Effect.succeed(name.value)
+    : Effect.fail(invalid(fieldError("name", problem ?? "Invalid name.")));
 };
 
-const validateValue = (value: string) => {
-  const decoded = decodePlaintext(value);
-  return decoded === undefined
-    ? Effect.fail(
-        invalid(
-          fieldError(
-            "value",
-            `Enter a value between 1 and ${MAX_ENVIRONMENT_VARIABLE_VALUE_BYTES.toLocaleString()} UTF-8 bytes.`,
-          ),
+const validateValue = (value: string, kind: EnvironmentVariableKind) => {
+  const decoded = Schema.decodeOption(EnvironmentVariableValue)(value);
+  if (Option.isNone(decoded)) {
+    return Effect.fail(
+      invalid(
+        fieldError(
+          "value",
+          `Enter at most ${MAX_ENVIRONMENT_VARIABLE_VALUE_BYTES.toLocaleString("en-US")} UTF-8 bytes.`,
         ),
-      )
-    : Effect.succeed(decoded);
+      ),
+    );
+  }
+  return kind === "secret" && decoded.value.length === 0
+    ? Effect.fail(invalid(fieldError("value", EMPTY_SECRET_PROBLEM)))
+    : Effect.succeed(decoded.value);
 };
 
 const validateKind = (value: string) => {
@@ -158,71 +146,22 @@ const validateKind = (value: string) => {
     : Effect.succeed(kind.value);
 };
 
-const parseBulk = (contents: string): ReadonlyArray<ParsedBulkItem> => {
-  if (new TextEncoder().encode(contents).byteLength > MAX_BULK_CONTENT_BYTES) {
-    return [
-      {
-        line: 1,
-        rawName: "",
-        error: "Bulk input is too large.",
-      },
-    ];
-  }
-  const parsed: Array<ParsedBulkItem> = contents
-    .split(/\r?\n/)
-    .flatMap<ParsedBulkItem>((source, index) => {
-      const line = index + 1;
-      const trimmed = source.trim();
-      if (trimmed.length === 0 || trimmed.startsWith("#")) return [];
-      const assignment = trimmed.startsWith("export ")
-        ? trimmed.slice("export ".length)
-        : trimmed;
-      const separator = assignment.indexOf("=");
-      const rawName =
-        separator < 0
-          ? assignment.trim()
-          : assignment.slice(0, separator).trim();
-      const rawValue = separator < 0 ? "" : assignment.slice(separator + 1);
-      const name = validateName(rawName);
-      if (separator < 1 || name === undefined) {
-        return [
-          { line, rawName, error: "Use a non-reserved NAME=value assignment." },
-        ];
-      }
-      const quoted =
-        rawValue.length >= 2 &&
-        ((rawValue.startsWith('"') && rawValue.endsWith('"')) ||
-          (rawValue.startsWith("'") && rawValue.endsWith("'")))
-          ? rawValue.slice(1, -1)
-          : rawValue;
-      const value = decodePlaintext(quoted);
-      return value === undefined
-        ? [
-            {
-              line,
-              rawName,
-              error: `Value must be 1–${MAX_ENVIRONMENT_VARIABLE_VALUE_BYTES.toLocaleString()} UTF-8 bytes.`,
-            },
-          ]
-        : [{ line, rawName, name, value }];
-    });
-  const counts = new Map<string, number>();
-  for (const item of parsed) {
-    if (item.name !== undefined) {
-      counts.set(item.name, (counts.get(item.name) ?? 0) + 1);
-    }
-  }
-  return parsed.map((item) =>
-    item.name !== undefined && (counts.get(item.name) ?? 0) > 1
-      ? {
-          ...item,
-          name: undefined,
-          value: undefined,
-          error: "Duplicate name in bulk input.",
-        }
-      : item,
-  );
-};
+/** Bulk Add also takes `auto`, which picks each line's kind from its name. */
+const validateBulkKind = (value: string) =>
+  value === "auto" ? Effect.succeed("auto" as const) : validateKind(value);
+
+const bulkItemKind = (
+  kind: EnvironmentVariableKind | "auto",
+  name: string,
+  value: string,
+): EnvironmentVariableKind =>
+  kind !== "auto"
+    ? kind
+    : looksLikeSecretEnvironmentVariable(name, value)
+      ? "secret"
+      : "variable";
+
+const parseBulk = parseEnvironmentVariableAssignments;
 
 const environmentLayers = (db: D1Database) => {
   const d1 = D1Client.layer({ db });
@@ -376,6 +315,12 @@ const errorResponse = (
   );
 
 const failureResponse = (context: Context<AppEnv>, failure: unknown) => {
+  if (failure instanceof EnvironmentVariableEmptySecret) {
+    return failureResponse(
+      context,
+      invalid(fieldError("value", EMPTY_SECRET_PROBLEM)),
+    );
+  }
   if (
     failure instanceof InvalidEnvironmentVariablesRequest ||
     failure instanceof InvalidPageCursor
@@ -607,17 +552,9 @@ const registerRoutes = (
         CreateEnvironmentVariableRequestSchema,
         () => invalid(fieldError("request", "Use only the supported fields.")),
       );
-      const name = validateName(body.name);
-      if (name === undefined) {
-        return yield* invalid(
-          fieldError(
-            "name",
-            "Use 1–64 uppercase letters, numbers, or underscores; system names are reserved.",
-          ),
-        );
-      }
+      const name = yield* validateName(body.name);
       const kind = yield* validateKind(body.kind);
-      const value = yield* validateValue(body.value);
+      const value = yield* validateValue(body.value, kind);
       const { db, keyring } = yield* dependencies(context);
       const route = routeFor(context);
       const access = yield* withEnvironment(
@@ -668,7 +605,7 @@ const registerRoutes = (
         BulkEnvironmentVariablesRequestSchema,
         () => invalid(fieldError("request", "Use only the supported fields.")),
       );
-      yield* validateKind(body.kind);
+      const kind = yield* validateBulkKind(body.kind);
       const { db } = yield* dependencies(context);
       const route = routeFor(context);
       const access = yield* withEnvironment(
@@ -683,7 +620,9 @@ const registerRoutes = (
           return yield* repository.list(access.target);
         }),
       );
-      const names = new Set(existing.map(({ name }) => name));
+      const existingKinds = new Map(
+        existing.map(({ name, kind }) => [name, kind]),
+      );
       const overLimit = parsed.length > MAX_ENVIRONMENT_VARIABLE_BULK_ITEMS;
       const items = parsed.map((item) => {
         if (overLimit) {
@@ -694,7 +633,11 @@ const registerRoutes = (
             message: `Import at most ${MAX_ENVIRONMENT_VARIABLE_BULK_ITEMS} values at once.`,
           };
         }
-        if (item.error !== undefined || item.name === undefined) {
+        if (
+          item.error !== undefined ||
+          item.name === undefined ||
+          item.value === undefined
+        ) {
           return {
             line: item.line,
             name: item.rawName,
@@ -702,14 +645,33 @@ const registerRoutes = (
             message: item.error ?? "Invalid assignment.",
           };
         }
-        return names.has(item.name)
+        // Replacing a stored secret keeps it secret.
+        const itemKind =
+          existingKinds.get(item.name) === "secret"
+            ? "secret"
+            : bulkItemKind(kind, item.name, item.value);
+        if (itemKind === "secret" && item.value.length === 0) {
+          return {
+            line: item.line,
+            name: item.name,
+            status: "invalid" as const,
+            message: EMPTY_SECRET_PROBLEM,
+          };
+        }
+        return existingKinds.has(item.name)
           ? {
               line: item.line,
               name: item.name,
+              kind: itemKind,
               status: "conflict" as const,
               message: "This name already exists in the selected scope.",
             }
-          : { line: item.line, name: item.name, status: "ready" as const };
+          : {
+              line: item.line,
+              name: item.name,
+              kind: itemKind,
+              status: "ready" as const,
+            };
       });
       return yield* Schema.encodeUnknownEffect(
         PreviewBulkEnvironmentVariablesResponseSchema,
@@ -733,26 +695,48 @@ const registerRoutes = (
         ApplyBulkEnvironmentVariablesRequestSchema,
         () => invalid(fieldError("request", "Use only the supported fields.")),
       );
-      const kind = yield* validateKind(body.kind);
+      const kind = yield* validateBulkKind(body.kind);
       const parsed = parseBulk(body.contents);
-      if (
-        parsed.length === 0 ||
-        parsed.length > MAX_ENVIRONMENT_VARIABLE_BULK_ITEMS ||
-        parsed.some(
-          (item) => item.name === undefined || item.value === undefined,
-        )
-      ) {
+      if (parsed.length === 0) {
+        return yield* invalid(
+          fieldError("contents", "Paste at least one NAME=value line."),
+        );
+      }
+      if (parsed.length > MAX_ENVIRONMENT_VARIABLE_BULK_ITEMS) {
         return yield* invalid(
           fieldError(
             "contents",
-            "Resolve every bulk preview error before applying.",
+            `Add at most ${MAX_ENVIRONMENT_VARIABLE_BULK_ITEMS} values at once.`,
           ),
         );
       }
-      const values = parsed.map(({ name, value }) => ({
-        name: name as EnvironmentVariableName,
-        value: value as EnvironmentVariablePlaintext,
-      })) satisfies ReadonlyArray<BulkEnvironmentVariableInput>;
+      const values: Array<BulkEnvironmentVariableInput> = [];
+      const lineErrors: Array<SettingsFieldError> = [];
+      for (const item of parsed) {
+        const lineError =
+          item.name === undefined || item.value === undefined
+            ? (item.error ?? "Invalid assignment.")
+            : bulkItemKind(kind, item.name, item.value) === "secret" &&
+                item.value.length === 0
+              ? EMPTY_SECRET_PROBLEM
+              : undefined;
+        if (
+          lineError !== undefined ||
+          item.name === undefined ||
+          item.value === undefined
+        ) {
+          lineErrors.push(
+            fieldError("contents", `Line ${item.line}: ${lineError}`),
+          );
+        } else {
+          values.push({
+            name: item.name,
+            value: item.value,
+            kind: bulkItemKind(kind, item.name, item.value),
+          });
+        }
+      }
+      if (lineErrors.length > 0) return yield* invalid(...lineErrors);
       const { db, keyring } = yield* dependencies(context);
       const route = routeFor(context);
       const access = yield* withEnvironment(
@@ -774,7 +758,6 @@ const registerRoutes = (
           return yield* service.applyBulk(
             keyring,
             access.target,
-            kind,
             values,
             body.conflictBehavior,
             {
@@ -854,7 +837,8 @@ const registerRoutes = (
         RotateEnvironmentVariableRequestSchema,
         () => invalid(fieldError("request", "Use only value.")),
       );
-      const value = yield* validateValue(body.value);
+      // The stored kind decides whether empty is allowed; the service checks it.
+      const value = yield* validateValue(body.value, "variable");
       const { db, keyring } = yield* dependencies(context);
       const access = yield* withEnvironment(
         db,

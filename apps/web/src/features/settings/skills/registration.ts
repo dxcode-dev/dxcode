@@ -4,9 +4,10 @@ import { SkillsSettings } from "./skills-settings.js";
 
 const common = {
   slug: "skills",
+  group: "library",
   label: "Skills",
   title: "Skills",
-  description: "Review and manage versioned instruction bundles and resources.",
+  description: "Reusable workflows and knowledge that dx loads in new Threads.",
   icon: Library,
   component: SkillsSettings,
 } as const;

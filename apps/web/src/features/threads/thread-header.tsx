@@ -1,6 +1,8 @@
 import type { ProjectData, ThreadDetailData } from "@dx/api";
 import { isClaudeCodeModel } from "@dx/domain";
+import { DateTime } from "effect";
 import {
+  AlarmClock,
   Bookmark,
   Eye,
   FolderGit2,
@@ -11,8 +13,11 @@ import {
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
+import { useTimeText } from "../../shared/hooks/use-clock.js";
 import { modelDisplayName } from "../../shared/model-display-name.js";
 import { threadColorAttributes } from "../../shared/thread-color.js";
+import { useOptionalThreadSnooze } from "../../shared/thread-snooze.js";
+import { snoozeWakeText } from "../../shared/thread-snooze-presets.js";
 import { Avatar } from "../../shared/ui/avatar.js";
 import { Button } from "../../shared/ui/button.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
@@ -22,6 +27,34 @@ import { useSetThreadFollowing } from "./sharing/sharing-mutations.js";
 import { ThreadParticipants } from "./sharing/thread-participants.js";
 import { ThreadMenu } from "./thread-menu.js";
 import type { TranscriptViewModel } from "./transcript-view-model.js";
+
+/** While the Thread sleeps: when it wakes, and Wake to bring it back now. */
+function ThreadSnoozeBadge({
+  threadId,
+  wakeAt,
+}: {
+  readonly threadId: ThreadDetailData["id"];
+  readonly wakeAt: number;
+}) {
+  const snooze = useOptionalThreadSnooze();
+  const until = useTimeText((now) =>
+    wakeAt > now ? snoozeWakeText(wakeAt, now) : "",
+  );
+  if (until === "" || snooze === undefined) return null;
+  return (
+    <span className="thread-snoozed-badge">
+      <AlarmClock aria-hidden="true" />
+      <span>Snoozed until {until}</span>
+      <button
+        type="button"
+        disabled={snooze.pendingThreadId === threadId}
+        onClick={() => snooze.wake(threadId)}
+      >
+        Wake
+      </button>
+    </span>
+  );
+}
 
 function PrivacyChip({
   thread,
@@ -149,6 +182,11 @@ export function ThreadHeader({
         ) : null}
         {archived ? (
           <span className="thread-archived-badge">Archived thread</span>
+        ) : own && thread.snoozedUntil !== undefined ? (
+          <ThreadSnoozeBadge
+            threadId={thread.id}
+            wakeAt={DateTime.toEpochMillis(thread.snoozedUntil)}
+          />
         ) : null}
       </div>
       <div className="thread-header-actions">

@@ -73,14 +73,16 @@ export const startingModel = (
 
 /**
  * Orb size precedence: this composer's pick, then the selected Project's own
- * size, then the remembered size (only when no Project is selected and it is
- * still available and allowed), then the personal or workspace default.
+ * size, then (only when no Project is selected) the remembered size and the
+ * person's own default size while still available and allowed, then the
+ * personal or workspace default.
  */
 export const effectiveRunnerProfileId = ({
   override,
   projectSelected,
   projectRunnerProfileId,
   remembered,
+  personalDefault = null,
   catalog,
   allowed,
   fallback,
@@ -89,18 +91,20 @@ export const effectiveRunnerProfileId = ({
   readonly projectSelected: boolean;
   readonly projectRunnerProfileId: RunnerProfileId | undefined;
   readonly remembered: RunnerProfileId | null;
+  /** The person's saved Orb size, which No Project Threads use first. */
+  readonly personalDefault?: RunnerProfileId | null;
   readonly catalog: ReadonlyArray<RunnerProfile> | undefined;
   readonly allowed: ReadonlyArray<RunnerProfileId> | null | undefined;
   readonly fallback: RunnerProfileId | undefined;
 }): RunnerProfileId | undefined => {
   if (override !== undefined) return override;
   if (projectSelected) return projectRunnerProfileId ?? fallback;
-  const rememberedUsable =
-    remembered !== null &&
+  const usable = (id: RunnerProfileId | null): id is RunnerProfileId =>
+    id !== null &&
     catalog?.some(
-      ({ id, availability }) =>
-        id === remembered && availability === "available",
+      (profile) => profile.id === id && profile.availability === "available",
     ) === true &&
-    (allowed === null || allowed === undefined || allowed.includes(remembered));
-  return rememberedUsable ? remembered : fallback;
+    (allowed === null || allowed === undefined || allowed.includes(id));
+  if (usable(remembered)) return remembered;
+  return usable(personalDefault) ? personalDefault : fallback;
 };

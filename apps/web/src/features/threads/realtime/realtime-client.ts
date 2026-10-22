@@ -2,6 +2,10 @@ import { RealtimeServerEvent } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import type { QueryClient } from "@tanstack/react-query";
 import { Option, Schema } from "effect";
+import {
+  isSessionEndedClose,
+  reportSessionEnded,
+} from "../../../shared/auth/session-ended.js";
 import { invalidateSidebarLayout } from "../../navigation/sidebar-layout-queries.js";
 import { invalidateNotifications } from "../../notifications/notifications-queries.js";
 import {
@@ -154,13 +158,18 @@ export class RealtimeClient {
       if (this.#socket === socket) this.#attempt = 0;
     };
     socket.onerror = () => socket.close();
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       if (this.#socket !== socket) return;
       this.#socket = undefined;
       this.#clearWorkspaceStatuses();
       if (this.#heartbeat !== undefined) clearInterval(this.#heartbeat);
       this.#heartbeat = undefined;
       if (this.#stopped) return;
+      if (isSessionEndedClose(event.code)) {
+        this.stop();
+        reportSessionEnded();
+        return;
+      }
       const delay = Math.min(1_000 * 2 ** this.#attempt, 15_000);
       this.#attempt += 1;
       this.#reconnect = setTimeout(() => this.#connect(), delay);

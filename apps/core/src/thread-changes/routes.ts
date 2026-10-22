@@ -18,6 +18,7 @@ import { ThreadId } from "@dx/domain";
 import { Effect, Schema } from "effect";
 import type { Context } from "hono";
 import { Hono } from "hono";
+import { setBrowserSessionHeaders } from "../auth/session-sockets.js";
 import { ExecutionWorkspaces } from "../execution/execution-workspaces.js";
 import type { AppEnv } from "../http/types.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
@@ -218,6 +219,7 @@ threadChangesRoutes.get("/:threadId/changes/events", async (context) => {
     "x-dx-thread-id": threadId,
     "sec-websocket-protocol": THREAD_CHANGES_SUBPROTOCOL,
   });
+  setBrowserSessionHeaders(headers, context.get("browserSession"));
   return namespace
     .get(namespace.idFromName(threadId))
     .fetch(new Request("https://thread.internal/changes/events", { headers }));

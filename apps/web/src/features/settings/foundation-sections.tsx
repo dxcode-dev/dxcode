@@ -3,6 +3,10 @@ import { personalAdvancedSettingsSection } from "./advanced/registration.js";
 import { appearanceSettingsSection } from "./appearance/registration.js";
 import { workspaceApplicationsSettingsSection } from "./applications/registration.js";
 import {
+  personalComposerSettingsSection,
+  workspaceComposerSettingsSection,
+} from "./composer/registration.js";
+import {
   personalCustomPluginsSettingsSection,
   workspaceCustomPluginsSettingsSection,
 } from "./custom-plugins/registration.js";
@@ -17,7 +21,6 @@ import {
 } from "./integrations/registration.js";
 import { keyboardShortcutsSettingsSection } from "./keyboard-shortcuts/registration.js";
 import { personalSigningKeysSettingsSection } from "./keys/registration.js";
-import { personalNotificationsSettingsSection } from "./notifications/registration.js";
 import { workspaceMembersSettingsSection } from "./members/registration.js";
 import {
   personalModeDialSettingsSection,
@@ -27,6 +30,7 @@ import {
   personalModelRoutingSettingsSection,
   workspaceModelRoutingSettingsSection,
 } from "./model-routing/registration.js";
+import { personalNotificationsSettingsSection } from "./notifications/registration.js";
 import {
   personalOrbProvidersSettingsSection,
   workspaceOrbProvidersSettingsSection,
@@ -60,39 +64,41 @@ import { workspaceProfileSettingsSection } from "./workspace/registration.js";
 export const foundationSettingsSections: ReadonlyArray<SettingsSectionRegistration> =
   [
     personalAccountSettingsSection,
+    personalIntegrationsSettingsSection,
+    personalExperimentalFeaturesSettingsSection,
     personalUsageSettingsSection,
     personalPluginUsageSettingsSection,
-    personalEnvironmentVariablesSettingsSection,
-    personalModelRoutingSettingsSection,
-    personalModeDialSettingsSection,
-    personalIntegrationsSettingsSection,
-    personalSecuritySettingsSection,
-    personalPluginsSettingsSection,
-    personalOrbProvidersSettingsSection,
-    personalCustomPluginsSettingsSection,
-    personalPluginTriggersSettingsSection,
-    personalSkillsSettingsSection,
-    personalNotificationsSettingsSection,
     personalAdvancedSettingsSection,
-    appearanceSettingsSection,
-    personalExperimentalFeaturesSettingsSection,
-    keyboardShortcutsSettingsSection,
-    personalSigningKeysSettingsSection,
+    personalModeDialSettingsSection,
+    personalModelRoutingSettingsSection,
+    personalEnvironmentVariablesSettingsSection,
+    personalSkillsSettingsSection,
+    personalPluginsSettingsSection,
+    personalCustomPluginsSettingsSection,
     personalProjectDefaultsSettingsSection,
+    personalOrbProvidersSettingsSection,
+    personalPluginTriggersSettingsSection,
+    appearanceSettingsSection,
+    personalComposerSettingsSection,
+    keyboardShortcutsSettingsSection,
+    personalNotificationsSettingsSection,
+    personalSecuritySettingsSection,
+    personalSigningKeysSettingsSection,
     workspaceProfileSettingsSection,
     workspaceMembersSettingsSection,
+    workspaceIntegrationsSettingsSection,
     workspaceUsageSettingsSection,
     workspacePluginUsageSettingsSection,
-    workspaceProjectDefaultsSettingsSection,
-    workspaceEnvironmentVariablesSettingsSection,
-    workspaceModelRoutingSettingsSection,
     workspaceModeDialSettingsSection,
-    workspaceApplicationsSettingsSection,
-    workspaceIntegrationsSettingsSection,
+    workspaceModelRoutingSettingsSection,
+    workspaceEnvironmentVariablesSettingsSection,
     workspaceSkillsSettingsSection,
     workspacePluginsSettingsSection,
-    workspaceOrbProvidersSettingsSection,
+    workspaceApplicationsSettingsSection,
     workspaceCustomPluginsSettingsSection,
+    workspaceProjectDefaultsSettingsSection,
+    workspaceOrbProvidersSettingsSection,
+    workspaceComposerSettingsSection,
   ];
 
 export const settingsManifest = createSettingsManifest(

@@ -4,6 +4,10 @@ import {
   DictationStreamResultSchema,
 } from "@dx/api";
 import { Option, Schema } from "effect";
+import {
+  isSessionEndedClose,
+  reportSessionEnded,
+} from "../../../shared/auth/session-ended.js";
 
 /** 100 ms of 16 kHz audio per frame. */
 const FRAME_SAMPLES = 1_600;
@@ -41,7 +45,10 @@ export class LiveDictation {
     this.socket.addEventListener("message", ({ data }) => {
       this.settle(Option.getOrUndefined(decodeResult(data)));
     });
-    this.socket.addEventListener("close", () => this.settle(undefined));
+    this.socket.addEventListener("close", ({ code }) => {
+      this.settle(undefined);
+      if (isSessionEndedClose(code)) reportSessionEnded();
+    });
   }
 
   /** Queues captured PCM; it reaches the server in 100 ms frames. */

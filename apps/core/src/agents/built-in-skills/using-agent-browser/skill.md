@@ -46,9 +46,9 @@ browser-use skill instead.
   `--executable-path` wrapper instead (see Hover-gated UI).
 - Save every screenshot and recording the user should see under `~/artifacts/<topic>/` by
   absolute path, outside the repository so it never shows up in `git status`. Pass an absolute
-  path: a path starting with `.` is read as a CSS selector. The transcript does not render
-  workspace images inline; link each file as `[label](file:///home/user/artifacts/<topic>/name.png)`,
-  which opens it in the Thread's file viewer.
+  path: a path starting with `.` is read as a CSS selector. Show each one in your reply
+  with a Markdown image of its absolute path, `![label](/home/user/artifacts/<topic>/name.png)`:
+  the transcript shows images inline and plays `.webm`/`.mp4` recordings and audio in place.
 
 ## Sessions
 

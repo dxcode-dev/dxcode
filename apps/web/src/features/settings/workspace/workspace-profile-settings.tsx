@@ -199,6 +199,161 @@ function CreateWorkspaceCard({
   );
 }
 
+function WorkspaceProfileRow({
+  workspace,
+}: {
+  readonly workspace: WorkspaceProfileData;
+}) {
+  const [workspaceIdCopyState, setWorkspaceIdCopyState] = React.useState<
+    "idle" | "copied" | "manual"
+  >("idle");
+  const copyWorkspaceId = () => {
+    if (navigator.clipboard === undefined) {
+      setWorkspaceIdCopyState("manual");
+      return;
+    }
+    void navigator.clipboard
+      .writeText(workspace.id)
+      .then(() => setWorkspaceIdCopyState("copied"))
+      .catch(() => setWorkspaceIdCopyState("manual"));
+  };
+  return (
+    <div className="workspace-profile-body">
+      <span className="settings-workspace-mark" aria-hidden="true">
+        {initials(workspace.displayName)}
+      </span>
+      <dl className="account-profile-details">
+        <div>
+          <dt>Display name</dt>
+          <dd className="workspace-profile-name">
+            <span>{workspace.displayName}</span>
+            <Button
+              className="workspace-id-copy"
+              size="icon-xs"
+              variant="ghost"
+              aria-label={
+                workspaceIdCopyState === "copied"
+                  ? "Workspace ID copied"
+                  : "Copy workspace ID"
+              }
+              title={
+                workspaceIdCopyState === "copied"
+                  ? "Workspace ID copied"
+                  : "Copy workspace ID"
+              }
+              onClick={copyWorkspaceId}
+            >
+              {workspaceIdCopyState === "copied" ? (
+                <Check aria-hidden="true" />
+              ) : (
+                <Copy aria-hidden="true" />
+              )}
+            </Button>
+          </dd>
+        </div>
+        <div>
+          <dt>Short name</dt>
+          <dd>{workspace.shortName}</dd>
+        </div>
+        {workspaceIdCopyState === "manual" ? (
+          <div>
+            <dt>Workspace ID</dt>
+            <dd>
+              <code className="workspace-id-fallback">{workspace.id}</code>
+            </dd>
+          </div>
+        ) : null}
+      </dl>
+    </div>
+  );
+}
+
+function WorkspaceProfileFields({
+  formId,
+  displayName,
+  shortName,
+  saving,
+  fieldErrors,
+  displayNameInput,
+  shortNameInput,
+  onChange,
+}: {
+  readonly formId: string;
+  readonly displayName: string;
+  readonly shortName: string;
+  readonly saving: boolean;
+  readonly fieldErrors: ReadonlyArray<SettingsFieldError>;
+  readonly displayNameInput: React.RefObject<HTMLInputElement | null>;
+  readonly shortNameInput: React.RefObject<HTMLInputElement | null>;
+  readonly onChange: (displayName: string, shortName: string) => void;
+}) {
+  const displayNameError = fieldError(fieldErrors, "displayName");
+  const shortNameError = fieldError(fieldErrors, "shortName");
+  return (
+    <div className="workspace-profile-fields">
+      <div className="account-field">
+        <label htmlFor={`${formId}-display-name`}>Display name</label>
+        <Input
+          ref={displayNameInput}
+          id={`${formId}-display-name`}
+          name="displayName"
+          autoComplete="organization"
+          value={displayName}
+          readOnly={saving}
+          aria-readonly={saving}
+          aria-invalid={displayNameError === undefined ? undefined : true}
+          aria-describedby={
+            displayNameError === undefined
+              ? undefined
+              : `${formId}-display-name-error`
+          }
+          onChange={(event) => onChange(event.target.value, shortName)}
+        />
+        {displayNameError === undefined ? null : (
+          <small
+            id={`${formId}-display-name-error`}
+            className="account-field-error"
+          >
+            {displayNameError}
+          </small>
+        )}
+      </div>
+      <div className="account-field">
+        <label htmlFor={`${formId}-short-name`}>Short name</label>
+        <div className="workspace-short-name-input">
+          <span aria-hidden="true">/workspaces/</span>
+          <Input
+            ref={shortNameInput}
+            id={`${formId}-short-name`}
+            name="shortName"
+            autoCapitalize="none"
+            spellCheck={false}
+            value={shortName}
+            readOnly={saving}
+            aria-readonly={saving}
+            aria-invalid={shortNameError === undefined ? undefined : true}
+            aria-describedby={`${formId}-short-name-help${
+              shortNameError === undefined ? "" : ` ${formId}-short-name-error`
+            }`}
+            onChange={(event) => onChange(displayName, event.target.value)}
+          />
+        </div>
+        <small id={`${formId}-short-name-help`}>
+          Changing this changes the workspace's settings URL.
+        </small>
+        {shortNameError === undefined ? null : (
+          <small
+            id={`${formId}-short-name-error`}
+            className="account-field-error"
+          >
+            {shortNameError}
+          </small>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function WorkspaceProfileForm({
   initialWorkspace,
   onDirtyChange,
@@ -227,6 +382,7 @@ export function WorkspaceProfileForm({
     reduceSettingsFormState,
     initialSettingsFormState,
   );
+  const [editing, setEditing] = React.useState(false);
   const displayNameInput = React.useRef<HTMLInputElement>(null);
   const shortNameInput = React.useRef<HTMLInputElement>(null);
   const formId = React.useId();
@@ -250,23 +406,6 @@ export function WorkspaceProfileForm({
     authoritativeBaseline.lifecycleState === "active" &&
     (authoritativeBaseline.role === "owner" ||
       authoritativeBaseline.role === "admin");
-  const displayNameError = fieldError(state.fieldErrors, "displayName");
-  const shortNameError = fieldError(state.fieldErrors, "shortName");
-  const [workspaceIdCopyState, setWorkspaceIdCopyState] = React.useState<
-    "idle" | "copied" | "manual"
-  >("idle");
-
-  const copyWorkspaceId = () => {
-    if (navigator.clipboard === undefined) {
-      setWorkspaceIdCopyState("manual");
-      return;
-    }
-    void navigator.clipboard
-      .writeText(authoritativeBaseline.id)
-      .then(() => setWorkspaceIdCopyState("copied"))
-      .catch(() => setWorkspaceIdCopyState("manual"));
-  };
-
   const change = (nextDisplayName: string, nextShortName: string) => {
     setDisplayName(nextDisplayName);
     setShortName(nextShortName);
@@ -277,11 +416,12 @@ export function WorkspaceProfileForm({
     onDirtyChange(dirty);
   };
 
-  const reset = () => {
+  const cancel = () => {
     setDisplayName(authoritativeBaseline.displayName);
     setShortName(authoritativeBaseline.shortName);
     dispatch({ type: "reset" });
     onDirtyChange(false);
+    setEditing(false);
   };
 
   const save = async () => {
@@ -305,6 +445,7 @@ export function WorkspaceProfileForm({
         message: "Workspace profile saved.",
       });
       onDirtyChange(false);
+      setEditing(false);
       onSaved(workspace);
     } catch (cause) {
       const error = settingsMutationError(
@@ -328,140 +469,70 @@ export function WorkspaceProfileForm({
         title="Workspace"
         description="Manage this workspace's name and URL."
       />
-      <SettingsCard title="Profile">
-        <div className="workspace-profile-summary">
-          <span className="settings-workspace-mark" aria-hidden="true">
-            {initials(baseline.displayName)}
-          </span>
-          <div>
-            <div className="workspace-profile-name">
-              <strong>{baseline.displayName}</strong>
-              <Button
-                className="workspace-id-copy"
-                size="icon-xs"
-                variant="ghost"
-                aria-label={
-                  workspaceIdCopyState === "copied"
-                    ? "Workspace ID copied"
-                    : "Copy workspace ID"
-                }
-                title={
-                  workspaceIdCopyState === "copied"
-                    ? "Workspace ID copied"
-                    : "Copy workspace ID"
-                }
-                onClick={copyWorkspaceId}
-              >
-                {workspaceIdCopyState === "copied" ? (
-                  <Check aria-hidden="true" />
-                ) : (
-                  <Copy aria-hidden="true" />
-                )}
-              </Button>
-            </div>
-            <span>/workspaces/{baseline.shortName}</span>
-            {workspaceIdCopyState === "manual" ? (
-              <div className="workspace-id-fallback" role="status">
-                <span>Copy unavailable.</span>
-                <code>{authoritativeBaseline.id}</code>
-              </div>
-            ) : null}
-          </div>
-          <span className="account-local-badge">
-            {baseline.role === "owner"
-              ? "Owner"
-              : baseline.role === "admin"
-                ? "Admin"
-                : "Member"}
-          </span>
-        </div>
-        <form
-          id={formId}
-          className="account-profile-form"
-          noValidate
-          onSubmit={(event) => {
-            event.preventDefault();
-            void save();
-          }}
-        >
-          <div className="account-field">
-            <label htmlFor={`${formId}-display-name`}>Display name</label>
-            <Input
-              ref={displayNameInput}
-              id={`${formId}-display-name`}
-              name="displayName"
-              autoComplete="organization"
-              value={displayName}
-              readOnly={!canEdit || saving}
-              aria-readonly={!canEdit || saving}
-              aria-invalid={displayNameError === undefined ? undefined : true}
-              aria-describedby={
-                displayNameError === undefined
-                  ? undefined
-                  : `${formId}-display-name-error`
-              }
-              onChange={(event) => change(event.target.value, shortName)}
-            />
-            {displayNameError === undefined ? null : (
-              <small
-                id={`${formId}-display-name-error`}
-                className="account-field-error"
-              >
-                {displayNameError}
-              </small>
-            )}
-          </div>
-          <div className="account-field">
-            <label htmlFor={`${formId}-short-name`}>Short name</label>
-            <div className="workspace-short-name-input">
-              <span aria-hidden="true">/workspaces/</span>
-              <Input
-                ref={shortNameInput}
-                id={`${formId}-short-name`}
-                name="shortName"
-                autoCapitalize="none"
-                spellCheck={false}
-                value={shortName}
-                readOnly={!canEdit || saving}
-                aria-readonly={!canEdit || saving}
-                aria-invalid={shortNameError === undefined ? undefined : true}
-                aria-describedby={`${formId}-short-name-help${
-                  shortNameError === undefined
-                    ? ""
-                    : ` ${formId}-short-name-error`
-                }`}
-                onChange={(event) => change(displayName, event.target.value)}
+      <SettingsCard
+        title="Workspace profile"
+        actions={
+          canEdit && !editing ? (
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => setEditing(true)}
+            >
+              Edit
+            </Button>
+          ) : undefined
+        }
+      >
+        {editing ? (
+          <div className="workspace-profile-body">
+            <span className="settings-workspace-mark" aria-hidden="true">
+              {initials(baseline.displayName)}
+            </span>
+            <form
+              id={formId}
+              className="workspace-profile-form"
+              noValidate
+              onSubmit={(event) => {
+                event.preventDefault();
+                void save();
+              }}
+            >
+              <WorkspaceProfileFields
+                formId={formId}
+                displayName={displayName}
+                shortName={shortName}
+                saving={saving}
+                fieldErrors={state.fieldErrors}
+                displayNameInput={displayNameInput}
+                shortNameInput={shortNameInput}
+                onChange={change}
               />
-            </div>
-            <small id={`${formId}-short-name-help`}>
-              Changing this updates the canonical URL.
-            </small>
-            {shortNameError === undefined ? null : (
-              <small
-                id={`${formId}-short-name-error`}
-                className="account-field-error"
-              >
-                {shortNameError}
-              </small>
-            )}
+              <footer className="workspace-profile-actions">
+                <span aria-live="polite">
+                  {state.status === "error" ? state.message : null}
+                </span>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={saving}
+                  onClick={cancel}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="xs"
+                  type="submit"
+                  disabled={!state.dirty || saving}
+                >
+                  {saving ? "Saving…" : "Save"}
+                </Button>
+              </footer>
+            </form>
           </div>
-        </form>
+        ) : (
+          <WorkspaceProfileRow workspace={authoritativeBaseline} />
+        )}
       </SettingsCard>
-      {canEdit ? (
-        <SettingsFormActions
-          dirty={state.dirty}
-          saving={saving}
-          message={
-            state.status === "saved"
-              ? state.message
-              : "Workspace profile is up to date."
-          }
-          error={state.status === "error" ? state.message : undefined}
-          form={formId}
-          onSave={() => void save()}
-          onReset={reset}
-        />
-      ) : null}
       {footer}
     </div>
   );

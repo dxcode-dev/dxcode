@@ -1,13 +1,16 @@
-import { ProjectId, SkillRepository, UserId, WorkspaceId } from "@dx/domain";
 import { env } from "cloudflare:test";
-import { Effect, Schema } from "effect";
+import { Principal, ProjectId, UserId, WorkspaceId } from "@dx/domain";
+import { Effect, Layer, Schema } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Bindings } from "../../src/http/types.js";
+import { SettingsAudit } from "../../src/settings/audit.js";
+import { McpServerRepositoryD1 } from "../../src/settings/mcp-servers/repository-d1.js";
 import {
   readSkillResource,
   SkillResourceForbidden,
 } from "../../src/settings/skills/execution.js";
 import { SkillRepositoryD1 } from "../../src/settings/skills/repository-d1.js";
+import { SkillService } from "../../src/settings/skills/service.js";
 
 const owner = Schema.decodeUnknownSync(UserId)("skill-policy-owner");
 const workspaceId = Schema.decodeUnknownSync(WorkspaceId)(
@@ -39,6 +42,7 @@ const insertSkill = (
   scope: "personal" | "workspace",
   targetId: string,
   name: string,
+  mcpServerIds: ReadonlyArray<string> = [],
 ) => [
   env.DB.prepare(
     `INSERT INTO skill (
@@ -51,7 +55,7 @@ const insertSkill = (
        skill_id, version, description, instructions, manifest_json,
        mcp_server_ids_json, source_type, source_label, integrity,
        created_at, created_by_user_id
-     ) VALUES (?, 1, ?, ?, ?, '[]', 'browser-files', ?, ?, ?, ?)`,
+     ) VALUES (?, 1, ?, ?, ?, ?, 'browser-files', ?, ?, ?, ?)`,
   ).bind(
     id,
     `${name} description`,
@@ -61,6 +65,7 @@ const insertSkill = (
       name,
       description: `${name} description`,
     }),
+    JSON.stringify(mcpServerIds),
     "Reviewed browser folder",
     versionIntegrity,
     timestamp,
@@ -68,12 +73,31 @@ const insertSkill = (
   ),
 ];
 
+const principal = Schema.decodeUnknownSync(Principal)({
+  userId: owner,
+  credentialScopes: ["personal", "workspace"],
+});
+
+/** The skill IDs a new Thread of the owner loads. */
 const listEffective = () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const repository = yield* SkillRepository;
-      return yield* repository.listEffectiveForThread(owner, projectId);
-    }).pipe(Effect.provide(SkillRepositoryD1(env.DB))),
+      const service = yield* SkillService;
+      const resolved = yield* service.resolveForThread(principal, projectId);
+      return resolved.map(({ id }) => ({ skill: { id } }));
+    }).pipe(
+      Effect.provide(
+        SkillService.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              SkillRepositoryD1(env.DB),
+              McpServerRepositoryD1(env.DB),
+              SettingsAudit.layer,
+            ),
+          ),
+        ),
+      ),
+    ),
   );
 
 beforeEach(async () => {
@@ -107,35 +131,64 @@ beforeEach(async () => {
 });
 
 describe("skill precedence and immutable resource policy in D1", () => {
-  it("applies workspace-over-personal precedence and the workspace policy seam", async () => {
-    expect((await listEffective()).map(({ skill }) => skill.id)).toEqual([
-      workspaceIdConflict,
-      workspaceOnlyId,
-    ]);
-
-    await env.DB.prepare("UPDATE skill SET enabled = 0 WHERE id = ?")
-      .bind(workspaceIdConflict)
-      .run();
+  it("applies personal-over-workspace precedence and the workspace policy seam", async () => {
+    // A personal skill replaces the workspace skill with the same name.
     expect((await listEffective()).map(({ skill }) => skill.id)).toEqual([
       personalId,
       workspaceOnlyId,
     ]);
 
-    await env.DB.prepare(
-      "INSERT INTO skill_workspace_policy (workspace_id, allow_personal_skills) VALUES (?, 0)",
-    )
-      .bind(workspaceId)
+    await env.DB.prepare("UPDATE skill SET enabled = 0 WHERE id = ?")
+      .bind(personalId)
       .run();
     expect((await listEffective()).map(({ skill }) => skill.id)).toEqual([
+      workspaceIdConflict,
+      workspaceOnlyId,
+    ]);
+
+    // A workspace that blocks personal skills keeps its own in place.
+    await env.DB.batch([
+      env.DB.prepare("UPDATE skill SET enabled = 1 WHERE id = ?").bind(
+        personalId,
+      ),
+      env.DB.prepare(
+        "INSERT INTO skill_workspace_policy (workspace_id, allow_personal_skills) VALUES (?, 0)",
+      ).bind(workspaceId),
+    ]);
+    expect((await listEffective()).map(({ skill }) => skill.id)).toEqual([
+      workspaceIdConflict,
       workspaceOnlyId,
     ]);
 
     await env.DB.prepare(
-      "UPDATE skill SET removed_at = ?, enabled = 0 WHERE id = ?",
+      "UPDATE skill SET removed_at = ?, enabled = 0 WHERE id IN (?, ?)",
     )
-      .bind(timestamp, workspaceOnlyId)
+      .bind(timestamp, workspaceIdConflict, workspaceOnlyId)
       .run();
     expect(await listEffective()).toEqual([]);
+  });
+
+  it("falls back to the workspace skill when the personal one of that name cannot load", async () => {
+    // The personal skill needs an MCP server with no reviewed tools, so a
+    // Thread drops it; the workspace skill of the same name loads instead.
+    const unreviewedServer = "mcp_00000000-0000-4000-8000-000000000044";
+    const personalWithMcp = "skl_00000000-0000-4000-8000-000000000047";
+    await env.DB.batch([
+      env.DB.prepare("UPDATE skill SET enabled = 0 WHERE id = ?").bind(
+        personalId,
+      ),
+      ...insertSkill(
+        personalWithMcp,
+        "personal",
+        owner,
+        "workspace-standards",
+        [unreviewedServer],
+      ),
+    ]);
+    expect((await listEffective()).map(({ skill }) => skill.id)).toEqual([
+      workspaceIdConflict,
+      workspaceOnlyId,
+    ]);
   });
 
   it("authorizes lazy resources only through a Thread's immutable snapshot, even after removal", async () => {

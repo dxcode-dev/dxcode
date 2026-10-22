@@ -4,8 +4,9 @@ import { IntegrationsSettings } from "./integrations-settings.js";
 
 const common = {
   slug: "integrations",
-  label: "MCP & Integrations",
-  title: "MCP & Integrations",
+  group: "top-level",
+  label: "Integrations & MCP",
+  title: "Integrations & MCP",
   description: "Connect source control and MCP servers.",
   icon: PlugZap,
   component: IntegrationsSettings,

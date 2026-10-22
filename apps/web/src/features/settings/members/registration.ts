@@ -5,6 +5,7 @@ import { MembersSettings } from "./members-settings.js";
 export const workspaceMembersSettingsSection = {
   id: "workspace-members",
   scope: "workspace",
+  group: "top-level",
   slug: "members",
   label: "Members",
   title: "Members",

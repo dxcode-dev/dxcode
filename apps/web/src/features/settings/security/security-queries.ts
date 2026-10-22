@@ -13,7 +13,6 @@ import {
 import {
   ApiError,
   createPersonalApiToken,
-  getPersonalSecurity,
   listBrowserSessions,
   listPersonalApiTokens,
   revokeBrowserSession,
@@ -24,8 +23,6 @@ import {
 
 export const securityKeys = {
   all: (userId: UserId) => ["personal-security", userId] as const,
-  overview: (userId: UserId) =>
-    [...securityKeys.all(userId), "overview"] as const,
   tokens: (userId: UserId) => [...securityKeys.all(userId), "tokens"] as const,
   sessions: (userId: UserId) =>
     [...securityKeys.all(userId), "sessions"] as const,
@@ -37,13 +34,6 @@ const securityFreshness = {
   refetchOnMount: "always" as const,
   refetchOnWindowFocus: "always" as const,
 };
-
-export const personalSecurityQueryOptions = (userId: UserId) =>
-  queryOptions({
-    queryKey: securityKeys.overview(userId),
-    queryFn: ({ signal }) => getPersonalSecurity(signal),
-    ...securityFreshness,
-  });
 
 export const personalApiTokensQueryOptions = (userId: UserId) =>
   queryOptions({

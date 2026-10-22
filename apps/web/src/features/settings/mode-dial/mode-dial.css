@@ -2,28 +2,17 @@
   font-family: var(--sidebar-font-family);
   color: var(--foreground);
 }
-.mode-tuning-heading h1 {
+.tuning-notice {
   margin: 0 0 10px;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 20px;
-  letter-spacing: -0.325px;
-}
-.mode-tuning-heading p {
-  margin: 0 0 16px;
-  max-width: 700px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  line-height: 19px;
-}
-.tuning-section-label {
-  display: inline-flex;
-  padding: 6px 10px;
-  margin-bottom: 8px;
-  background: var(--muted);
-  border-radius: 5px;
   font-size: 11px;
-  font-weight: 500;
+  line-height: 16px;
+  color: var(--muted-foreground);
+}
+.tuning-notice a,
+.tuning-hint a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .mode-tuning-workbench {
   --mode-accent: #ffd700;
@@ -121,7 +110,7 @@
   color: #9295a1;
   line-height: 17px;
 }
-.tuning-agent-card .tuning-serving {
+.tuning-agent-card .tuning-hint {
   margin: 7px 0 0;
   overflow-wrap: anywhere;
 }
@@ -131,6 +120,9 @@
   gap: 12px;
   margin-top: 12px;
   min-height: 32px;
+}
+.tuning-agent-card[data-auto="true"] .tuning-effort {
+  opacity: 0.55;
 }
 .tuning-effort-track {
   flex: 1;
@@ -198,20 +190,13 @@
 .tuning-footer {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
   margin-top: 24px;
   border-top: 1px solid #ffffff08;
   padding-top: 16px;
   font: 10px monospace;
   text-transform: uppercase;
-}
-.tuning-save-state {
-  margin-right: auto;
-  color: #777c88;
-  letter-spacing: 1px;
-}
-.tuning-save-state[data-dirty="true"] {
-  color: var(--mode-accent);
 }
 .tuning-footer button {
   padding: 7px 12px;
@@ -260,10 +245,6 @@
   }
   .tuning-workbench-body {
     min-height: 0;
-  }
-  .tuning-save-state {
-    font-size: 8px;
-    letter-spacing: 0.3px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -6,6 +6,7 @@ import { OrbProvidersSettings } from "./orb-providers-settings.js";
 // key-based providers such as E2B.
 const common = {
   slug: "orb-providers",
+  group: "projects-orbs",
   label: "Orb Providers",
   title: "Orb Providers",
   description: "Choose which accounts run your Orbs.",

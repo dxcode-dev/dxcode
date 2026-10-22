@@ -3,17 +3,31 @@ import type { ReactNode } from "react";
 import { cn } from "../utils.js";
 import { Button } from "./button.js";
 
+/**
+ * The one settings page heading: a compact title row, an optional muted
+ * detail inside the title, actions or status on the right, and an intro.
+ */
 export function SettingsHeading({
   title,
+  detail,
   description,
+  actions,
 }: {
   readonly title: string;
-  readonly description: string;
+  readonly detail?: ReactNode;
+  readonly description?: ReactNode;
+  readonly actions?: ReactNode;
 }) {
   return (
     <header className="settings-heading">
-      <h1>{title}</h1>
-      <p>{description}</p>
+      <div className="settings-heading-row">
+        <h1>
+          {title}
+          {detail === undefined ? null : <span>{detail}</span>}
+        </h1>
+        {actions}
+      </div>
+      {description === undefined ? null : <p>{description}</p>}
     </header>
   );
 }
@@ -33,21 +47,6 @@ export function SettingsBackgroundError({
         Retry
       </Button>
     </div>
-  );
-}
-
-export function SettingsSectionIntro({
-  title,
-  description,
-}: {
-  readonly title: string;
-  readonly description: ReactNode;
-}) {
-  return (
-    <header className="settings-section-intro">
-      <h1>{title}</h1>
-      <p>{description}</p>
-    </header>
   );
 }
 
@@ -118,21 +117,36 @@ export function SettingsToggle({
   onCheckedChange,
   label,
   disabled = false,
+  pending = false,
+  describedBy,
 }: {
   readonly checked: boolean;
   readonly onCheckedChange: (checked: boolean) => void;
   readonly label: string;
   readonly disabled?: boolean;
+  /**
+   * Shows `checked` while it saves and ignores presses until it settles. It
+   * stays focusable, so keyboard focus does not jump away mid-save.
+   */
+  readonly pending?: boolean;
+  /** Id of the hint that explains the toggle's state. */
+  readonly describedBy?: string;
 }) {
   return (
     <button
       type="button"
       className="settings-toggle"
       data-checked={checked || undefined}
+      data-pending={pending || undefined}
       aria-label={label}
       aria-pressed={checked}
+      aria-busy={pending || undefined}
+      aria-disabled={pending || undefined}
+      aria-describedby={describedBy}
       disabled={disabled}
-      onClick={() => onCheckedChange(!checked)}
+      onClick={() => {
+        if (!pending) onCheckedChange(!checked);
+      }}
     >
       <span />
     </button>
@@ -181,6 +195,7 @@ export function SettingsFormActions({
   error,
   form,
   resetLabel = "Reset",
+  saveLabel = "Save",
   showStatus = true,
   showReset = true,
   onSave,
@@ -192,6 +207,7 @@ export function SettingsFormActions({
   readonly error?: string;
   readonly form?: string;
   readonly resetLabel?: string;
+  readonly saveLabel?: string;
   readonly showStatus?: boolean;
   readonly showReset?: boolean;
   readonly onSave: () => void;
@@ -223,7 +239,7 @@ export function SettingsFormActions({
         form={form}
         onClick={form === undefined ? onSave : undefined}
       >
-        {saving ? "Saving…" : "Save"}
+        {saving ? "Saving…" : saveLabel}
       </Button>
     </footer>
   );

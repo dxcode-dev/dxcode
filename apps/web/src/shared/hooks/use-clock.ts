@@ -57,3 +57,36 @@ export const useTimeText = (text: (now: number) => string) => {
   const read = () => text(Date.now());
   return React.useSyncExternalStore(subscribe, read, read);
 };
+
+// The longest delay setTimeout keeps; a later wake re-arms on the next tick.
+const MAX_TIMER_MS = 2_147_483_647;
+
+const subscribeUntil = (wakeAt: number | undefined) => {
+  return (listener: () => void) => {
+    const unsubscribe = subscribe(listener);
+    if (wakeAt === undefined) return unsubscribe;
+    const wake = setTimeout(
+      () => {
+        now = Date.now();
+        for (const reader of listeners) reader();
+      },
+      Math.min(Math.max(0, wakeAt - Date.now()) + 50, MAX_TIMER_MS),
+    );
+    return () => {
+      clearTimeout(wake);
+      unsubscribe();
+    };
+  };
+};
+
+/**
+ * `useNowMinute`, also read again just after `wakeAt`, such as when the
+ * next snoozed Thread wakes, so what depends on it changes on time. Every
+ * reader then shares the new time.
+ */
+export const useNowAt = (wakeAt: number | undefined) =>
+  React.useSyncExternalStore(
+    subscribeUntil(wakeAt),
+    minuteSnapshot,
+    minuteSnapshot,
+  );

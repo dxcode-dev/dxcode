@@ -4,7 +4,6 @@ export {
   SettingsFormActions,
   SettingsHeading,
   SettingsRow,
-  SettingsSectionIntro,
   SettingsSelect,
   type SettingsSelectOption,
   SettingsToggle,

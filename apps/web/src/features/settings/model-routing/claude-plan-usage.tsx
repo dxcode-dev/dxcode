@@ -41,13 +41,13 @@ const when = (seconds: number, now: Date) => {
 const EXTRA_USAGE_OPTIONS = [
   {
     value: false,
-    title: "Subscription only",
+    title: "Subscription Only",
     description:
       "Stop Claude Code at a plan limit instead of using paid extra usage.",
   },
   {
     value: true,
-    title: "Allow extra usage",
+    title: "Allow Extra Usage",
     description:
       "Keep Claude Code working on paid extra usage from your Claude account.",
   },
@@ -154,7 +154,7 @@ export const ClaudePlanPanel = ({
         aria-labelledby={`${name}-usage`}
       >
         <div className="claude-plan-heading">
-          <h3 id={`${name}-usage`}>Plan usage</h3>
+          <h3 id={`${name}-usage`}>Plan Usage</h3>
           {usage === undefined ? null : (
             <span>As of {when(usage.observedAt, now)}</span>
           )}
@@ -215,7 +215,7 @@ export const ClaudePlanPanel = ({
         className="claude-plan-section claude-plan-choice"
         disabled={extraUsageOff}
       >
-        <legend>Claude usage</legend>
+        <legend>Claude Usage</legend>
         {EXTRA_USAGE_OPTIONS.map((option) => (
           <label key={option.title} className="claude-plan-option">
             <input

@@ -27,6 +27,14 @@ import { Option, Schema } from "effect";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { CommandProvider } from "../../shared/commands/command-provider.js";
+import {
+  canStartThreadsIn,
+  rememberedProjectToResolve,
+  effectiveRunnerProfileId as resolveRunnerProfileId,
+  startingMode,
+  startingModel,
+  startingProjectId,
+} from "../../shared/composer-start.js";
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
 import {
   NewThreadSurfaceContext,
@@ -45,7 +53,7 @@ import {
 import {
   composerDefaultsQueryOptions,
   updateComposerDefaultsMutationOptions,
-} from "../settings/account/composer-defaults-queries.js";
+} from "../settings/composer/composer-defaults-queries.js";
 import {
   modelRoutingChoicesQueryOptions,
   modelRoutingGraphQueryOptions,
@@ -53,14 +61,6 @@ import {
 import { orbProvidersQueryOptions } from "../settings/orb-providers/orb-providers-queries.js";
 import { projectDefaultsQueryOptions } from "../settings/project-defaults/project-defaults-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
-import {
-  canStartThreadsIn,
-  rememberedProjectToResolve,
-  effectiveRunnerProfileId as resolveRunnerProfileId,
-  startingMode,
-  startingModel,
-  startingProjectId,
-} from "./composer-start.js";
 import { useDictation } from "./dictation/use-dictation.js";
 import {
   addScreenshot,
@@ -490,6 +490,11 @@ function useComposerOrb({
     ),
     enabled: defaultsTarget !== undefined,
   });
+  // A No Project Thread in a workspace starts on the person's own size first.
+  const personalDefaultsQuery = useQuery({
+    ...projectDefaultsQueryOptions(userId, { scope: "personal" }),
+    enabled: projectId === "" && defaultsTarget?.scope === "workspace",
+  });
   const orbProvidersQuery = useQuery(
     orbProvidersQueryOptions(
       userId,
@@ -502,6 +507,10 @@ function useComposerOrb({
     projectSelected: projectId !== "",
     projectRunnerProfileId: project?.configuration.runnerProfileId,
     remembered,
+    personalDefault:
+      defaultsTarget?.scope === "workspace"
+        ? (personalDefaultsQuery.data?.overrides.runnerProfileId ?? null)
+        : null,
     catalog: defaultsQuery.data?.catalog.profiles,
     allowed: defaultsQuery.data?.restrictions.allowedRunnerProfileIds,
     fallback: defaultsQuery.data?.resolved.runnerProfileId.value,

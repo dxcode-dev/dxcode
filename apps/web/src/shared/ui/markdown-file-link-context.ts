@@ -20,11 +20,20 @@ export const MarkdownFileLinkContext = createContext<
   MarkdownFileLinkResolver | undefined
 >(undefined);
 
+/** A media file a Markdown image names, as a same-origin URL and a player. */
+export interface MarkdownMediaSource {
+  readonly url: string;
+  readonly kind: "image" | "video" | "audio";
+}
+
 /**
- * Resolves an image a Markdown document references by a relative path to a
- * same-origin URL. Transcripts have no document location, so they omit it.
+ * Resolves the file a Markdown image names (`![alt](path)`) to a same-origin
+ * URL: in a document, relative to the document; in a transcript, a path in
+ * the Thread's workspace. Video and audio files render as players.
  */
-export type MarkdownImageSourceResolver = (src: string) => string | undefined;
+export type MarkdownImageSourceResolver = (
+  src: string,
+) => MarkdownMediaSource | undefined;
 
 export const MarkdownImageSourceContext = createContext<
   MarkdownImageSourceResolver | undefined

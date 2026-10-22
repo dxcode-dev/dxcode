@@ -286,6 +286,7 @@ async fn register(socket: &mut Socket) -> String {
     assert_eq!(register["release"], env!("CARGO_PKG_VERSION"));
     assert_eq!(register["capabilities"]["terminal"]["version"], 1);
     assert_eq!(register["capabilities"]["files"]["version"], 1);
+    assert!(register["capabilities"].get("environment").is_none());
     let generation = format!("gen-{}", rand::random::<u32>());
     socket
         .send(Message::Text(
@@ -336,7 +337,10 @@ fn environment_operation(generation: u64) -> Value {
         "operation": "environment.activate",
         "generation": generation,
         "entries": [
+            {"name": "CLOUDFLARE_API_TOKEN", "valueBase64Url": b64("for-wrangler")},
             {"name": "DX_TEST_VALUE", "valueBase64Url": b64("from-core")},
+            {"name": "GIT_CONFIG_VALUE_0", "valueBase64Url": ""},
+            {"name": "PORT", "valueBase64Url": b64("from-an-earlier-core")},
         ],
         "git": {
             "authorName": "Ada",
@@ -639,6 +643,9 @@ async fn real_daemon_serves_every_feature_over_protocol_v2() {
     assert_eq!(applied["shell"], "no-shell");
     let env_file = std::fs::read_to_string(fixture.home.join(".env")).unwrap();
     assert!(env_file.contains("DX_TEST_VALUE='from-core'"));
+    assert!(env_file.contains("CLOUDFLARE_API_TOKEN='for-wrangler'"));
+    assert!(env_file.contains("GIT_CONFIG_VALUE_0=''\n"));
+    assert!(!env_file.contains("PORT="));
     assert!(fixture.state.join("dx-terminal/gitconfig").is_file());
     let check_started = Instant::now();
     let check = request(
@@ -1619,7 +1626,7 @@ async fn real_daemon_is_quiet_while_idle_and_publishes_writes_promptly() {
 
 fn environment_operation_with(generation: u64, value: &str) -> Value {
     let mut operation = environment_operation(generation);
-    operation["entries"][0]["valueBase64Url"] = json!(b64(value));
+    operation["entries"][1]["valueBase64Url"] = json!(b64(value));
     operation
 }
 

@@ -5,6 +5,7 @@ export const DX_WORKSPACE_SKILL = "dx-workspace";
 export const BUILT_IN_SKILL_NAMES = [
   "browser-use",
   "building-skills",
+  "creating-views",
   "explaining-code",
   "orb-setup",
   "proving-changes",

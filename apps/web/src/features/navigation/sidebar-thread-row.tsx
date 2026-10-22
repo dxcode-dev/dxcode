@@ -1,6 +1,10 @@
+import { Menu } from "@base-ui/react/menu";
 import type { ThreadData } from "@dx/api";
 import { Link } from "@tanstack/react-router";
+import { DateTime } from "effect";
 import {
+  AlarmClock,
+  AlarmClockOff,
   Archive,
   ArchiveRestore,
   Bookmark,
@@ -10,10 +14,20 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
+import { useTimeText } from "../../shared/hooks/use-clock.js";
 import { threadColorAttributes } from "../../shared/thread-color.js";
+import {
+  type ThreadSnoozeController,
+  useOptionalThreadSnooze,
+} from "../../shared/thread-snooze.js";
+import {
+  snoozeRemainingText,
+  snoozeWakeText,
+} from "../../shared/thread-snooze-presets.js";
 import { Avatar } from "../../shared/ui/avatar.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
+import { SnoozeMenuItems } from "../../shared/ui/thread-snooze-menu.js";
 import {
   PendingThreadTitle,
   ThreadTitleText,
@@ -33,6 +47,53 @@ const LONG_PRESS_CLICK_MS = 1_000;
 function SidebarThreadTitle({ thread }: { readonly thread: ThreadData }) {
   if (isOptimisticThread(thread)) return <PendingThreadTitle />;
   return <ThreadTitleText thread={thread} />;
+}
+
+/** How long a snoozed row has left, at its end while not hovered. */
+function SnoozeCountdown({ wakeAt }: { readonly wakeAt: number }) {
+  const remaining = useTimeText((now) => snoozeRemainingText(wakeAt, now));
+  const until = useTimeText((now) => snoozeWakeText(wakeAt, now));
+  return (
+    <span className="thread-snooze-status" title={`Snoozed until ${until}`}>
+      {remaining}
+    </span>
+  );
+}
+
+/** The row's Snooze action: a menu of wake times. */
+function SnoozeRowButton({
+  threadId,
+  snooze,
+}: {
+  readonly threadId: ThreadData["id"];
+  readonly snooze: ThreadSnoozeController;
+}) {
+  return (
+    <Menu.Root>
+      <Menu.Trigger
+        aria-label="Snooze thread"
+        title="Snooze thread"
+        disabled={snooze.pendingThreadId === threadId}
+      >
+        <AlarmClock />
+      </Menu.Trigger>
+      <Menu.Portal>
+        <Menu.Positioner
+          className="thread-menu-positioner"
+          align="end"
+          sideOffset={4}
+        >
+          <Menu.Popup className="thread-menu-popup thread-actions-menu">
+            <SnoozeMenuItems
+              threadId={threadId}
+              snooze={snooze}
+              itemClassName="thread-menu-item"
+            />
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
+  );
 }
 
 /** What every Thread row in a sidebar list shares. */
@@ -83,6 +144,8 @@ export interface SidebarThreadRowProps
   readonly onToggleChildren?: (threadId: ThreadData["id"]) => void;
   /** This row is a child Thread listed under its parent. */
   readonly child?: boolean;
+  /** Listed in the Snoozed section: asleep until `snoozedUntil`. */
+  readonly snoozed?: boolean;
 }
 
 /**
@@ -101,6 +164,7 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
   expanded = false,
   onToggleChildren,
   child = false,
+  snoozed = false,
   onThreadNavigate,
   onThreadPointerEnter,
   onThreadPointerLeave,
@@ -132,14 +196,33 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
         <Avatar name={owner.name} image={owner.image} seed={owner.userId} />
       </span>
     ) : null;
-  // Hover actions: Unfollow for a shared Thread; Pin and Archive, or only
-  // Unarchive, for the person's own.
+  const snooze = useOptionalThreadSnooze();
+  // Only an owned active root Thread snoozes; a child follows its parent.
+  const snoozable =
+    snooze !== undefined &&
+    !sharedWithMe &&
+    !child &&
+    thread.lifecycleState === "active" &&
+    parentThreadId === undefined &&
+    !isOptimisticThread(thread);
+  // Outside the Snoozed section a snooze still on the row has passed its
+  // wake time: the Thread woke and the owner has not opened it since.
+  const woke =
+    snooze !== undefined &&
+    !snoozed &&
+    !sharedWithMe &&
+    thread.lifecycleState === "active" &&
+    thread.snoozedUntil !== undefined;
+  // Hover actions: Unfollow for a shared Thread; Pin, Snooze, and Archive,
+  // Wake and Archive while snoozed, or only Unarchive, for the person's own.
   const actionCount = sharedWithMe
     ? onUnfollow === undefined
       ? 0
       : 1
     : thread.lifecycleState === "active"
-      ? 2
+      ? snoozed || !snoozable
+        ? 2
+        : 3
       : 1;
   return (
     <ThreadContextMenu
@@ -174,6 +257,11 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
         onSetArchived(thread.id, archived, includeChildren)
       }
       onSetPinned={(pinned) => onSetPinned(thread.id, pinned)}
+      snooze={
+        snoozable && snooze !== undefined
+          ? { controller: snooze, snoozed }
+          : undefined
+      }
     >
       <div
         className="thread-row-shell"
@@ -181,6 +269,7 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
         data-actions={actionCount === 0 ? undefined : actionCount}
         data-children={hasChildren ? "" : undefined}
         data-child={child ? "" : undefined}
+        data-snooze={snoozed ? "snoozed" : woke ? "woke" : undefined}
         onPointerEnter={(event) => {
           // A tap is not a hover: touch opens the Thread, not its preview.
           if (event.pointerType === "touch") return;
@@ -207,6 +296,8 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
               event.preventDefault();
               return;
             }
+            // Opening a woken Thread is seeing it.
+            if (woke) snooze?.wake(thread.id);
             onThreadNavigate(thread.id);
           }}
         >
@@ -241,6 +332,22 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
             </span>
           </strong>
         </Link>
+        {snoozed && thread.snoozedUntil !== undefined ? (
+          <SnoozeCountdown
+            wakeAt={DateTime.toEpochMillis(thread.snoozedUntil)}
+          />
+        ) : woke ? (
+          <button
+            type="button"
+            className="thread-snooze-status thread-woke"
+            aria-label="Dismiss Woke"
+            title="Woke from snooze. Dismiss"
+            onClick={() => snooze?.wake(thread.id)}
+          >
+            <AlarmClock aria-hidden="true" />
+            <span role="status">Woke</span>
+          </button>
+        ) : null}
         {avatars}
         {hasChildren ? (
           <button
@@ -274,7 +381,17 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
           )
         ) : (
           <span className="thread-hover-actions">
-            {thread.lifecycleState === "active" ? (
+            {snoozed && snooze !== undefined ? (
+              <button
+                type="button"
+                aria-label="Wake thread"
+                title="Wake thread"
+                disabled={snooze.pendingThreadId === thread.id}
+                onClick={() => snooze.wake(thread.id)}
+              >
+                <AlarmClockOff />
+              </button>
+            ) : thread.lifecycleState === "active" ? (
               <button
                 type="button"
                 aria-label={
@@ -290,6 +407,9 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
               >
                 <Pin />
               </button>
+            ) : null}
+            {snoozable && !snoozed && snooze !== undefined ? (
+              <SnoozeRowButton threadId={thread.id} snooze={snooze} />
             ) : null}
             <button
               type="button"

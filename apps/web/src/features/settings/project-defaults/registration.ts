@@ -4,9 +4,10 @@ import { ProjectDefaultsSettings } from "./project-defaults-settings.js";
 
 const common = {
   slug: "projects",
+  group: "projects-orbs",
   label: "Project Defaults",
   title: "Project Defaults",
-  description: "Set Git and runner defaults snapshotted by new projects.",
+  description: "Commit author and Orb size for new projects.",
   icon: GitBranch,
   component: ProjectDefaultsSettings,
 } as const;

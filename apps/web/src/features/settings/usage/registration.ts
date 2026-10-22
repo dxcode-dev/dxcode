@@ -11,6 +11,7 @@ export const personalUsageSettingsSection = {
   id: "personal-usage",
   scope: "personal",
   slug: "usage",
+  group: "usage",
   label: "Usage",
   title: "Usage",
   description:
@@ -22,6 +23,7 @@ export const personalUsageSettingsSection = {
 export const workspaceUsageSettingsSection = {
   id: "workspace-usage",
   scope: "workspace",
+  group: "top-level",
   adminOnly: true,
   slug: "usage",
   label: "Usage",
@@ -47,6 +49,7 @@ export const personalPluginUsageSettingsSection = {
   ...pluginUsage,
   id: "personal-plugin-usage",
   scope: "personal",
+  group: "usage",
   component: PersonalPluginUsageSettings,
 } satisfies SettingsSectionRegistration;
 
@@ -54,6 +57,7 @@ export const workspacePluginUsageSettingsSection = {
   ...pluginUsage,
   id: "workspace-plugin-usage",
   scope: "workspace",
+  group: "top-level",
   adminOnly: true,
   component: WorkspacePluginUsageSettings,
 } satisfies SettingsSectionRegistration;

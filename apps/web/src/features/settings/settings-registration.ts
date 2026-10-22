@@ -15,10 +15,27 @@ export interface SettingsSectionProps {
   readonly onWorkspaceChanged?: (workspace: WorkspaceProfileData) => void;
 }
 
+/** Menu headings, in the order the settings rail shows them. */
+export const settingsNavigationGroups = [
+  { id: "usage", label: "Usage" },
+  { id: "agent", label: "Agent" },
+  { id: "library", label: "Library" },
+  { id: "projects-orbs", label: "Projects & Orbs" },
+  { id: "interface", label: "Interface" },
+  { id: "privacy-security", label: "Privacy & Security" },
+] as const;
+
+/** `top-level` sections lead the menu, above the first heading. */
+export type SettingsNavigationGroup =
+  | "top-level"
+  | (typeof settingsNavigationGroups)[number]["id"];
+
 export interface SettingsSectionRegistration {
   readonly id: string;
   readonly scope: SettingsScope;
   readonly slug?: SettingsSectionSlug;
+  /** Menu heading the section sits under. */
+  readonly group: SettingsNavigationGroup;
   readonly label: string;
   readonly title: string;
   readonly description: string;

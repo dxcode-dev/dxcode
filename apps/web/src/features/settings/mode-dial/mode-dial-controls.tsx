@@ -2,12 +2,12 @@ import type { ModeId, ThinkingLevel } from "@dx/domain";
 import type { CSSProperties, KeyboardEvent, PointerEvent } from "react";
 
 import {
-  DIAL_POSITION_BY_MODE,
   angularDistance,
+  DIAL_POSITION_BY_MODE,
 } from "../../../shared/ui/mode-dial-geometry.js";
 import { ModeDialPlate } from "../../../shared/ui/mode-dial-plate.js";
 
-import { MODES, MODE_LABELS, THINKING_LEVELS } from "./mode-dial-values.js";
+import { MODE_LABELS, MODES, THINKING_LEVELS } from "./mode-dial-values.js";
 export function ModeDialControl({
   selected,
   onSelect,
@@ -129,10 +129,13 @@ export function ModeDialControl({
 
 export function ReasoningEffort({
   value,
+  label,
   disabled,
   onChange,
 }: {
   readonly value: ThinkingLevel;
+  /** Shown instead of the level, such as Auto before it resolves. */
+  readonly label?: string | undefined;
   readonly disabled: boolean;
   readonly onChange: (value: ThinkingLevel) => void;
 }) {
@@ -162,7 +165,7 @@ export function ReasoningEffort({
           }
         />
       </div>
-      <output>{value === "xhigh" ? "X-High" : value}</output>
+      <output>{label ?? (value === "xhigh" ? "X-High" : value)}</output>
     </div>
   );
 }

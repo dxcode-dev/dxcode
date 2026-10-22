@@ -1,6 +1,5 @@
 import { Context, type Effect, Schema } from "effect";
 import type { PersistenceUnavailable } from "../persistence/errors.js";
-import type { ProjectId } from "../projects/project-id.js";
 import type { UserId } from "../users/user-id.js";
 import type {
   SkillId,
@@ -73,10 +72,18 @@ export interface SkillRepositoryShape {
     },
     updatedAt: StoredSkill["updatedAt"],
   ) => Effect.Effect<void, SkillRepositoryFailure | SkillNotFound>;
-  readonly listEffectiveForThread: (
+  /**
+   * Every enabled skill a new Thread of the owner could load, ordered by name
+   * with the personal skill first. Personal skills are left out while a
+   * workspace the owner belongs to blocks them. Precedence is the caller's.
+   */
+  readonly listThreadCandidates: (
     ownerUserId: UserId,
-    projectId: ProjectId,
   ) => Effect.Effect<ReadonlyArray<SkillWithVersion>, SkillRepositoryFailure>;
+  /** Whether a workspace the owner belongs to blocks personal skills. */
+  readonly personalSkillsBlocked: (
+    ownerUserId: UserId,
+  ) => Effect.Effect<boolean, SkillRepositoryFailure>;
   readonly getWorkspacePolicy: (
     workspaceId: WorkspaceId,
   ) => Effect.Effect<boolean, SkillRepositoryFailure>;

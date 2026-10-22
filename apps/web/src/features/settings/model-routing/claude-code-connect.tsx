@@ -59,6 +59,7 @@ export const ClaudeCodeNotice = ({
       <p>{CLAUDE_PLAN_COPY}</p>
       <Button
         type="button"
+        size="xs"
         variant="secondary"
         className="claude-code-connect-button"
         onClick={onConnect}

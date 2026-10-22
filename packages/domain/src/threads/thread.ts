@@ -56,6 +56,11 @@ export const Thread = Schema.Struct({
   activityStatus: ThreadActivityStatus,
   lifecycleState: ThreadLifecycleState,
   pinnedAt: Schema.optional(Timestamp),
+  /** The owner snoozed the Thread until this time; see `threadSnoozeState`. */
+  snoozedUntil: Schema.optional(Timestamp),
+  snoozedAt: Schema.optional(Timestamp),
+  /** When a snooze last ended, by its timer or the owner. */
+  snoozeWokeAt: Schema.optional(Timestamp),
   color: Schema.optional(ThreadColor),
   /** Until this time clients show a loading title while one is generated. */
   titlePendingUntil: Schema.optional(Timestamp),

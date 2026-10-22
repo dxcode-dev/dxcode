@@ -14,7 +14,7 @@ export const appearanceOptions: ReadonlyArray<{
   readonly value: Appearance;
   readonly label: string;
 }> = [
-  { value: "system", label: "System default" },
+  { value: "system", label: "System" },
   { value: "light", label: "Light" },
   { value: "dark", label: "Dark" },
 ];

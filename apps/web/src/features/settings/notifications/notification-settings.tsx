@@ -1,5 +1,6 @@
 import type { NotificationSubscriptionData } from "@dx/api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useId } from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import {
   notificationPreferencesQueryOptions,
@@ -8,21 +9,27 @@ import {
 import {
   SettingsBackgroundError,
   SettingsCard,
+  SettingsHeading,
   SettingsRow,
   SettingsToggle,
 } from "../settings-primitives.js";
 
-const unavailableReason = (subscription: NotificationSubscriptionData) =>
-  subscription.channel === "email"
-    ? "This deployment has no email sender. Ask your administrator to set one up with pnpm dx:deploy."
-    : "This deployment cannot deliver on this channel.";
+const unavailableHint = (subscription: NotificationSubscriptionData) =>
+  subscription.channel === "email" ? "Email not set up" : "Unavailable";
+
+const sameRow = (
+  a: Pick<NotificationSubscriptionData, "topic" | "channel">,
+  b: Pick<NotificationSubscriptionData, "topic" | "channel">,
+) => a.topic === b.topic && a.channel === b.channel;
 
 /**
- * Which notifications reach the person outside the app. Mentions always
- * appear in the in-app inbox; each row turns one channel on or off.
+ * Which notifications reach the person outside the app; every mention also
+ * lands in the in-app Mentions inbox. A toggle saves at once: the switch
+ * shows the pending choice and falls back to the saved one if the save fails.
  */
 export function NotificationSettings() {
   const { identity } = useAuthenticatedIdentity();
+  const hintIdPrefix = useId();
   const queryClient = useQueryClient();
   const preferences = useQuery(
     notificationPreferencesQueryOptions(identity.id),
@@ -30,11 +37,15 @@ export function NotificationSettings() {
   const update = useMutation(
     updateNotificationPreferenceMutationOptions(queryClient, identity.id),
   );
+  const failed =
+    update.isError && preferences.data !== undefined
+      ? preferences.data.subscriptions.find((subscription) =>
+          sameRow(subscription, update.variables),
+        )
+      : undefined;
   return (
     <div className="notification-settings">
-      <header className="notification-settings-heading">
-        <h1>Notifications</h1>
-      </header>
+      <SettingsHeading title="Notifications" />
       {preferences.isError ? (
         <SettingsBackgroundError onRetry={() => void preferences.refetch()}>
           Notification settings could not be loaded.
@@ -44,36 +55,55 @@ export function NotificationSettings() {
         <SettingsBackgroundError
           onRetry={() => update.mutate(update.variables)}
         >
-          The change was not saved.
+          {failed === undefined
+            ? "The change was not saved."
+            : `${failed.title} were not turned ${update.variables.enabled ? "on" : "off"}.`}
         </SettingsBackgroundError>
       ) : null}
       {preferences.data === undefined ? null : (
         <SettingsCard>
-          {preferences.data.subscriptions.map((subscription) => (
-            <SettingsRow
-              key={`${subscription.topic}:${subscription.channel}`}
-              title={subscription.title}
-              description={
-                subscription.available
-                  ? subscription.description
-                  : `${subscription.description} ${unavailableReason(subscription)}`
-              }
-              control={
-                <SettingsToggle
-                  checked={subscription.available && subscription.enabled}
-                  disabled={!subscription.available || update.isPending}
-                  label={`${subscription.enabled ? "Turn off" : "Turn on"} ${subscription.title.toLowerCase()}`}
-                  onCheckedChange={(enabled) =>
-                    update.mutate({
-                      topic: subscription.topic,
-                      channel: subscription.channel,
-                      enabled,
-                    })
-                  }
-                />
-              }
-            />
-          ))}
+          {preferences.data.subscriptions.map((subscription) => {
+            const pending =
+              update.isPending && sameRow(subscription, update.variables);
+            const enabled = pending
+              ? update.variables.enabled
+              : subscription.enabled;
+            const hintId = subscription.available
+              ? undefined
+              : `${hintIdPrefix}-${subscription.topic}-${subscription.channel}`;
+            return (
+              <SettingsRow
+                key={`${subscription.topic}:${subscription.channel}`}
+                title={subscription.title}
+                badge={
+                  hintId === undefined ? undefined : (
+                    <span id={hintId}>{unavailableHint(subscription)}</span>
+                  )
+                }
+                description={subscription.description}
+                control={
+                  <SettingsToggle
+                    checked={subscription.available && enabled}
+                    pending={pending}
+                    // One save at a time: the saving row ignores presses but
+                    // keeps focus; the others wait, disabled.
+                    disabled={
+                      !subscription.available || (update.isPending && !pending)
+                    }
+                    describedBy={hintId}
+                    label={subscription.title}
+                    onCheckedChange={(checked) =>
+                      update.mutate({
+                        topic: subscription.topic,
+                        channel: subscription.channel,
+                        enabled: checked,
+                      })
+                    }
+                  />
+                }
+              />
+            );
+          })}
         </SettingsCard>
       )}
     </div>

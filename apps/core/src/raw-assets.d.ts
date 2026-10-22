@@ -73,3 +73,19 @@ declare module "*.mjs?raw" {
   const source: string;
   export default source;
 }
+
+// The dx-view kit from @dx/api, shipped with the creating-views skill.
+declare module "*.css?raw" {
+  const source: string;
+  export default source;
+}
+
+declare module "*.js?raw" {
+  const source: string;
+  export default source;
+}
+
+declare module "*.svg?raw" {
+  const source: string;
+  export default source;
+}

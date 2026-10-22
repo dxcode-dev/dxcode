@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   createSettingsManifest,
   resolveSettingsSection,
-  settingsPath,
   type SettingsSectionRegistration,
+  settingsPath,
 } from "./settings-registration.js";
 
 const Empty = () => null;
@@ -18,6 +18,7 @@ const registration = (
   scope,
   id,
   slug,
+  group: "top-level",
   label: id,
   title: id,
   description: id,

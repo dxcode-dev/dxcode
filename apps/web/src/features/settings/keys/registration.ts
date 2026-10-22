@@ -6,6 +6,7 @@ export const personalSigningKeysSettingsSection = {
   id: "personal-signing-keys",
   scope: "personal",
   slug: "keys",
+  group: "privacy-security",
   label: "Signing Keys",
   title: "Signing Keys",
   description:

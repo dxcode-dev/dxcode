@@ -31,7 +31,7 @@ export interface SidebarLayout {
 }
 
 /** Sections closed until the person opens them. */
-const DEFAULT_COLLAPSED_SECTIONS = ["inactive", "archived"];
+const DEFAULT_COLLAPSED_SECTIONS = ["snoozed", "inactive", "archived"];
 
 const isSyncedSection = Schema.is(SidebarSectionIdSchema);
 

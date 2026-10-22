@@ -10,7 +10,8 @@
       "!**/.dx",
       "!**/.wrangler",
       "!**/.astro",
-      "!wiki/raw"
+      "!wiki/raw",
+      "!packages/api/src/views/kit"
     ]
   },
   "formatter": {

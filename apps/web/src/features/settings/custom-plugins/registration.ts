@@ -6,6 +6,7 @@ import { CustomPluginsSettings } from "./custom-plugins-settings.js";
 // first-party plugin page (see ../plugins/registration.ts).
 const common = {
   slug: "custom-plugins",
+  group: "library",
   label: "Custom plugins",
   title: "Custom plugins",
   description: "Review, trust, and manage bounded imported plugin bundles.",

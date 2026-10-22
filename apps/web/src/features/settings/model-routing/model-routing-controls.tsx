@@ -7,9 +7,8 @@ import type {
 } from "@dx/api";
 import { CLAUDE_CODE_PROVIDER_ID, customModelEndpoint } from "@dx/domain";
 import {
-  ArrowDown,
-  ArrowUp,
   ChevronRight,
+  Ellipsis,
   GitBranch,
   GripVertical,
   Plus,
@@ -63,8 +62,9 @@ export const AddConnectionMenu = ({
   readonly onPick: (pick: "copilot" | "claude" | "custom") => void;
 }) => (
   <Menu.Root>
-    <Menu.Trigger className="routing-add-button">
-      <Plus aria-hidden="true" /> Add
+    <Menu.Trigger render={<Button size="xs" />}>
+      <Plus aria-hidden="true" />
+      Add
     </Menu.Trigger>
     <Menu.Portal>
       <Menu.Positioner
@@ -98,7 +98,6 @@ export const AddConnectionMenu = ({
 
 export const ConnectionRow = ({
   connection,
-  priority,
   canMutate,
   canReorderUp,
   canReorderDown,
@@ -118,7 +117,6 @@ export const ConnectionRow = ({
   children,
 }: {
   readonly connection: ConnectionData;
-  readonly priority: number;
   readonly canMutate: boolean;
   readonly canReorderUp: boolean;
   readonly canReorderDown: boolean;
@@ -230,14 +228,6 @@ export const ConnectionRow = ({
                   : managed
                     ? label
                     : "Not configured"}
-                <button
-                  type="button"
-                  className="model-routing-connection-check"
-                  disabled={checkingAccess || !canMutate}
-                  onClick={onCheckAccess}
-                >
-                  {checkingAccess ? "Checking…" : "Check access"}
-                </button>
               </dd>
             </div>
             {connection.baseUrl ? (
@@ -280,79 +270,109 @@ export const ConnectionRow = ({
               <dd>{healthLabel(connection.health)}</dd>
             </div>
           </dl>
-          <div className="model-routing-connection-footer">
-            {/* Claude Pro/Max has no routing priority. */}
-            {claude ? (
-              <span className="model-routing-connection-meta" />
-            ) : (
-              <span className="model-routing-connection-meta">
-                Priority {priority}
-              </span>
-            )}
-            <div className="model-routing-connection-actions">
-              {claude ? null : (
-                <>
-                  <button
+          <div className="model-routing-connection-actions">
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              disabled={checkingAccess || !canMutate}
+              onClick={onCheckAccess}
+            >
+              {checkingAccess ? "Checking…" : "Check Access"}
+            </Button>
+            {canMutate ? (
+              <>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  onClick={() => onToggle(!connection.enabled)}
+                >
+                  {connection.enabled ? "Deactivate" : "Activate"}
+                </Button>
+                {!managed ? (
+                  <Button
                     type="button"
-                    className="model-routing-connection-action"
-                    disabled={!canReorderUp}
-                    aria-label="Move connection up"
-                    onClick={() => onMove(-1)}
+                    size="xs"
+                    variant="outline"
+                    onClick={onEdit}
                   >
-                    <ArrowUp />
-                  </button>
-                  <button
-                    type="button"
-                    className="model-routing-connection-action"
-                    disabled={!canReorderDown}
-                    aria-label="Move connection down"
-                    onClick={() => onMove(1)}
-                  >
-                    <ArrowDown />
-                  </button>
-                </>
-              )}
-              {canMutate ? (
-                <>
-                  <button
-                    type="button"
-                    className="model-routing-connection-action"
-                    onClick={() => onToggle(!connection.enabled)}
-                  >
-                    {connection.enabled ? "Deactivate" : "Activate"}
-                  </button>
-                  {!managed ? (
-                    <button
-                      type="button"
-                      className="model-routing-connection-action"
-                      onClick={onEdit}
-                    >
-                      {claude ? "Replace token" : "Edit"}
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="model-routing-connection-action"
-                    data-variant="danger"
-                    onClick={
-                      connection.kind === "subscription"
-                        ? onDisconnect
-                        : onDelete
-                    }
-                  >
-                    {connection.kind === "subscription"
-                      ? "Disconnect"
-                      : "Delete"}
-                  </button>
-                </>
-              ) : null}
-            </div>
+                    {claude ? "Replace Token" : "Edit"}
+                  </Button>
+                ) : null}
+                <ConnectionMenu
+                  connection={connection}
+                  // Claude Pro/Max has no routing order to move in.
+                  canReorderUp={!claude && canReorderUp}
+                  canReorderDown={!claude && canReorderDown}
+                  onMove={onMove}
+                  onRemove={
+                    connection.kind === "subscription" ? onDisconnect : onDelete
+                  }
+                />
+              </>
+            ) : null}
           </div>
         </div>
       ) : null}
     </div>
   );
 };
+
+/** Reordering without dragging, and removal, behind the row's overflow. */
+const ConnectionMenu = ({
+  connection,
+  canReorderUp,
+  canReorderDown,
+  onMove,
+  onRemove,
+}: {
+  readonly connection: ConnectionData;
+  readonly canReorderUp: boolean;
+  readonly canReorderDown: boolean;
+  readonly onMove: (direction: -1 | 1) => void;
+  readonly onRemove: () => void;
+}) => (
+  <Menu.Root>
+    <Menu.Trigger
+      render={
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          aria-label={`More actions for ${connection.name}`}
+        />
+      }
+    >
+      <Ellipsis />
+    </Menu.Trigger>
+    <Menu.Portal>
+      <Menu.Positioner
+        className="routing-menu-positioner"
+        align="end"
+        sideOffset={4}
+      >
+        <Menu.Popup className="thread-menu-popup">
+          {canReorderUp ? (
+            <Menu.Item className="thread-menu-item" onClick={() => onMove(-1)}>
+              Move Up
+            </Menu.Item>
+          ) : null}
+          {canReorderDown ? (
+            <Menu.Item className="thread-menu-item" onClick={() => onMove(1)}>
+              Move Down
+            </Menu.Item>
+          ) : null}
+          <Menu.Item
+            className="thread-menu-item routing-menu-danger"
+            onClick={onRemove}
+          >
+            {connection.kind === "subscription" ? "Disconnect" : "Delete"}
+          </Menu.Item>
+        </Menu.Popup>
+      </Menu.Positioner>
+    </Menu.Portal>
+  </Menu.Root>
+);
 
 const parseHeaders = (
   input: string,

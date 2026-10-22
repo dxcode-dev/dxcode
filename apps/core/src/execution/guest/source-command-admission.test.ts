@@ -8,9 +8,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
   executeTrustedLocalCommand,
   executeTrustedSourceCommand,
+  LOADER_VARIABLE_RESET,
   nativeCommandEnvironment,
   withSourceCommandAdmission,
 } from "./source-command-admission.js";
+
+/** dx's own protected and leased commands first drop NODE_OPTIONS and LD_*. */
+const reset = (command: string) => `${LOADER_VARIABLE_RESET}${command}`;
 
 const source = {
   actorUserId: "user-117",
@@ -48,10 +52,10 @@ describe("source command admission", () => {
   ])("executes the generated residue check against %s", async (contents) => {
     let checked = false;
     const exec = vi.fn(async (command: string) => {
-      if (command.startsWith("node -e '")) {
+      if (command.startsWith(reset("node -e '"))) {
         checked = true;
         const exit = vi.fn();
-        runInNewContext(command.slice(9, -1), {
+        runInNewContext(command.slice(reset("node -e '").length, -1), {
           require: (name: string) =>
             name === "node:fs"
               ? {
@@ -152,7 +156,7 @@ describe("source command admission", () => {
     });
     expect(exec).toHaveBeenNthCalledWith(
       2,
-      "test -d .git",
+      reset("test -d .git"),
       expect.objectContaining({
         env: expect.objectContaining({
           GH_TOKEN: "",
@@ -208,7 +212,7 @@ describe("source command admission", () => {
 
     expect(exec).toHaveBeenNthCalledWith(
       1,
-      "gh repo view",
+      reset("gh repo view"),
       expect.objectContaining({
         env: expect.objectContaining({
           PATH: "/usr/local/bin:/usr/bin:/bin",
@@ -262,7 +266,7 @@ describe("source command admission", () => {
       ).createSandbox({ id: "thread-117" });
 
     const successExec = vi.fn(async (command: string) =>
-      command.startsWith("node -e")
+      command.startsWith(reset("node -e"))
         ? { stdout: "", stderr: "", exitCode: 0 }
         : { stdout: `out:${token}`, stderr: `err:${token}`, exitCode: 0 },
     );
@@ -280,7 +284,7 @@ describe("source command admission", () => {
     expect(successExec).toHaveBeenCalledTimes(2);
 
     const nonzeroExec = vi.fn(async (command: string) =>
-      command.startsWith("node -e")
+      command.startsWith(reset("node -e"))
         ? { stdout: "", stderr: "", exitCode: 0 }
         : { stdout: "", stderr: `failed:${token}`, exitCode: 1 },
     );
@@ -298,7 +302,7 @@ describe("source command admission", () => {
     expect(nonzeroExec).toHaveBeenCalledTimes(2);
 
     const failureExec = vi.fn(async (command: string) => {
-      if (command.startsWith("node -e"))
+      if (command.startsWith(reset("node -e")))
         return { stdout: "", stderr: "", exitCode: 0 };
       throw new Error(`transport failed with ${token}`);
     });

@@ -128,6 +128,11 @@ interface ProjectDefaultsServiceShape {
       readonly workspaceSlug?: WorkspaceSlug;
       readonly publicCodeEnabled: boolean;
       readonly deploymentSigningAvailable: boolean;
+      /**
+       * A No Project Thread's backing project: the person's own Orb size
+       * comes before the workspace's, as it does in their personal scope.
+       */
+      readonly projectless?: boolean;
     },
   ) => Effect.Effect<ProjectCreationSnapshot, ProjectSnapshotError>;
 }
@@ -163,6 +168,26 @@ const resolveOverrides = (
       ? current.runnerProfileId
       : { value: overrides.runnerProfileId, source },
 });
+
+/**
+ * A workspace project's defaults: workspace, then the creator's personal
+ * defaults, then the deployment. The Orb size skips the personal layer, so an
+ * unset workspace size means the deployment default for every member.
+ */
+const resolveWorkspace = (
+  defaultProfileId: RunnerProfileId,
+  personal: ProjectDefaultOverrides,
+  workspace: ProjectDefaultOverrides,
+): ResolvedProjectDefaults =>
+  resolveOverrides(
+    resolveOverrides(
+      deploymentResolved(defaultProfileId),
+      { ...personal, runnerProfileId: null },
+      "personal",
+    ),
+    workspace,
+    "workspace",
+  );
 
 const restrictionsFor = (
   workspace:
@@ -297,14 +322,10 @@ export class ProjectDefaultsService extends Context.Service<
             access.workspace.role,
             access.workspace.workspace.lifecycleState,
           );
-          const resolved = resolveOverrides(
-            resolveOverrides(
-              deploymentResolved(catalog.configuration.defaultProfileId),
-              personal.overrides,
-              "personal",
-            ),
+          const resolved = resolveWorkspace(
+            catalog.configuration.defaultProfileId,
+            personal.overrides,
             workspace.settings.overrides,
-            "workspace",
           );
           return {
             scope: "workspace" as const,
@@ -456,14 +477,10 @@ export class ProjectDefaultsService extends Context.Service<
                 lifecycleState: "active",
                 policy: saved.policy,
               }),
-              resolved: resolveOverrides(
-                resolveOverrides(
-                  deploymentResolved(catalog.configuration.defaultProfileId),
-                  personal.overrides,
-                  "personal",
-                ),
+              resolved: resolveWorkspace(
+                catalog.configuration.defaultProfileId,
+                personal.overrides,
                 saved.overrides,
-                "workspace",
               ),
             };
           },
@@ -500,6 +517,24 @@ export class ProjectDefaultsService extends Context.Service<
             resolved = workspace.resolved;
             restrictions = workspace.restrictions;
             workspaceId = workspace.settings.workspaceId;
+            const personalSize = input.projectless
+              ? (yield* defaults.getPersonal(principal.userId)).overrides
+                  .runnerProfileId
+              : null;
+            const allowed = restrictions.allowedRunnerProfileIds;
+            if (
+              personalSize !== null &&
+              (allowed === null || allowed.includes(personalSize)) &&
+              catalog.configuration.profiles.some(
+                ({ id, availability }) =>
+                  id === personalSize && availability === "available",
+              )
+            ) {
+              resolved = {
+                ...resolved,
+                runnerProfileId: { value: personalSize, source: "personal" },
+              };
+            }
           }
           const profile = yield* enforceRestrictions(
             catalog,

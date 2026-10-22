@@ -211,8 +211,8 @@ describe("resolveExecutionWorkspace", () => {
       allowInternetAccess: true,
       network: { allowPublicTraffic: false },
       lifecycle: {
-        onTimeout: { action: "pause", keepMemory: false },
-        autoResume: false,
+        onTimeout: { action: "pause", keepMemory: true },
+        autoResume: true,
       },
     });
     expect(observeOpening).toHaveBeenCalledWith("starting");

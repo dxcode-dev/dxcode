@@ -9,6 +9,7 @@ import {
 import { RichMarkdown } from "../../../shared/ui/rich-markdown.js";
 import {
   absolutePathFor,
+  fileMediaKind,
   sandboxFileUrl,
   type ThreadFileTarget,
 } from "../transcript-file-link.js";
@@ -66,7 +67,12 @@ const DocumentReferences = ({
   const resolveWorkspaceLink = React.useContext(MarkdownFileLinkContext);
   const resolveImage = (src: string) => {
     const file = referencedFile(location, src);
-    return file === undefined ? undefined : sandboxFileUrl(threadId, file.path);
+    if (file === undefined) return undefined;
+    const kind = fileMediaKind(file.path);
+    return {
+      url: sandboxFileUrl(threadId, file.path),
+      kind: kind === "video" || kind === "audio" ? kind : "image",
+    } as const;
   };
   const resolveLink =
     resolveWorkspaceLink === undefined

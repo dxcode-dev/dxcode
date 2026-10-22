@@ -5,6 +5,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "DX_RUNTIME_MODE": "deployed",
+    "DX_SESSION_SOCKET_CHECK_MS": "5000",
     "DX_CONFIG_ENCRYPTION_KEYS": "{\"activeVersion\":1,\"keys\":{\"1\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}}"
   },
   "d1_databases": [

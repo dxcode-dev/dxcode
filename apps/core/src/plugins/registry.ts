@@ -144,8 +144,8 @@ export const FIRST_PARTY_PLUGINS: ReadonlyArray<PluginDefinition> = [
         // into that team.
         credentialLabel: "E2B API key",
         deploymentSecret: "E2B_API_KEY",
-        // A pause keeps the filesystem only; processes start again on wake.
-        pauseResumePreserves: "filesystem",
+        // A timeout pause keeps the sandbox's processes and memory.
+        pauseResumePreserves: "processes",
         // Sandbox seconds are not metered yet; see
         // wiki/plugin-platform-direction.md "What phase 4 shipped".
         unit: null,

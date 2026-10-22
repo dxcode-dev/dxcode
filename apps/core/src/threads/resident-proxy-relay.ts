@@ -1,4 +1,8 @@
 import {
+  type BrowserSessionBinding,
+  closeForEndedSession,
+} from "../auth/session-sockets.js";
+import {
   DXD_PROXY_KIND_BYTES,
   DXD_PROXY_KIND_TEXT,
   DXD_PROXY_MAX_BODY_CHUNK_BYTES,
@@ -87,6 +91,8 @@ export interface ProxyBrowserAttachment {
   readonly streamId: number;
   /** The daemon session the guest end of this stream lives in. */
   readonly daemonNonce: string;
+  /** The browser session that opened the socket; it closes when that ends. */
+  readonly session?: BrowserSessionBinding;
 }
 
 export const proxyBrowserTag = (streamId: number) => `proxy:${streamId}`;
@@ -405,6 +411,7 @@ export class ResidentProxyRelay {
     readonly headers: ReadonlyArray<readonly [string, string]>;
     readonly protocols: readonly string[];
     readonly wake: boolean;
+    readonly session?: BrowserSessionBinding;
   }): Promise<Response> {
     const daemon = this.#host.daemon();
     if (daemon === undefined) return proxyFailure("workspace-unavailable");
@@ -456,6 +463,7 @@ export class ResidentProxyRelay {
       kind: "proxy-browser",
       streamId,
       daemonNonce: daemon.nonce,
+      ...(input.session === undefined ? {} : { session: input.session }),
     });
     this.#windows.set(streamId, {
       daemon: daemon.socket,
@@ -812,6 +820,12 @@ export class ResidentProxyRelay {
       // Already closed.
     }
     this.#closeStream(daemon, streamId, 1001);
+  }
+
+  /** The browser session behind this socket ended; the guest end closes too. */
+  endSession(socket: WebSocket, attachment: ProxyBrowserAttachment) {
+    closeForEndedSession(socket);
+    this.browserClosed(attachment, 1001, "");
   }
 
   browserClosed(

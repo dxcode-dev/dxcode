@@ -1,8 +1,9 @@
+import "./orb-providers.css";
 import type { OrbProviderData, OrbProviderListData } from "@dx/api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Settings } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { DxLoading } from "../../../shared/brand/dx-loading.js";
 import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
@@ -14,6 +15,7 @@ import { Input } from "../../../shared/ui/input.js";
 import { OrbIcon } from "../../../shared/ui/orb-icon.js";
 import {
   SettingsCard,
+  SettingsHeading,
   SettingsRow,
   SettingsToggle,
 } from "../settings-primitives.js";
@@ -31,7 +33,6 @@ import {
   orbProviderSource,
 } from "./orb-providers-status.js";
 
-type Scope = "personal" | "workspace";
 /** Resolves to the error message, or undefined when the action succeeded. */
 type Run = (
   action: OrbProviderAction,
@@ -41,31 +42,45 @@ type Run = (
 const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : "Request failed.";
 
+/** The row's status: whose account runs the Orbs, and where a key stops. */
+const rowStatus = (data: OrbProviderListData, provider: OrbProviderData) => {
+  const source = orbProviderSource(provider, data.scope);
+  return data.scope === "personal" &&
+    provider.key !== null &&
+    !data.localRuntime &&
+    data.personalKeysOnWorkspaceProjects !== null &&
+    !data.personalKeysOnWorkspaceProjects.allowed
+    ? `${source} · Personal projects only`
+    : source;
+};
+
 function OrbProviderRow({
+  data,
   provider,
-  scope,
-  onOpenSettings,
+  onOpenKey,
 }: {
+  readonly data: OrbProviderListData;
   readonly provider: OrbProviderData;
-  readonly scope: Scope;
-  readonly onOpenSettings: (trigger: HTMLButtonElement) => void;
+  readonly onOpenKey: (trigger: HTMLButtonElement) => void;
 }) {
   return (
-    <div className="first-party-plugin-row orb-provider-row">
-      <span className="first-party-plugin-creator">
+    <div className="orb-provider-row" data-provider={provider.id}>
+      <span className="orb-provider-mark">
         <OrbIcon aria-hidden="true" />
       </span>
-      <strong>{provider.displayName}</strong>
-      <span>{orbProviderSource(provider, scope)}</span>
+      <div className="orb-provider-copy">
+        <strong>{provider.displayName}</strong>
+        <p>{rowStatus(data, provider)}</p>
+      </div>
       {provider.credentialLabel === null ? null : (
         <Button
-          size="icon-xs"
-          variant="ghost"
-          className="orb-provider-action"
-          aria-label={`${provider.displayName} settings`}
-          onClick={(event) => onOpenSettings(event.currentTarget)}
+          size="xs"
+          variant="outline"
+          disabled={!data.canUpdate}
+          aria-label={`${provider.key === null ? "Add" : "Manage"} ${provider.displayName} key`}
+          onClick={(event) => onOpenKey(event.currentTarget)}
         >
-          <Settings />
+          {provider.key === null ? "Add Key" : "Manage Key"}
         </Button>
       )}
     </div>
@@ -85,7 +100,7 @@ const keyNote = (
     data.personalKeysOnWorkspaceProjects !== null &&
     !data.personalKeysOnWorkspaceProjects.allowed
   )
-    return "Applies to your personal projects. Your workspace decides for its projects.";
+    return "Your workspace keeps members' own keys off its projects, so this key runs your personal projects only.";
   return undefined;
 };
 
@@ -109,6 +124,7 @@ function OrbKeyForm({
   const [failure, setFailure] = React.useState<string>();
   const disabled = !data.canUpdate || busy;
   const label = provider.credentialLabel ?? "API key";
+  const fieldId = React.useId();
   const note = keyNote(data, provider);
   const edit = (value: string) => {
     setCredential(value);
@@ -116,7 +132,7 @@ function OrbKeyForm({
   };
   return (
     <form
-      className="first-party-plugin-form"
+      className="orb-key-form"
       onSubmit={async (event) => {
         event.preventDefault();
         const error = await run(
@@ -136,21 +152,19 @@ function OrbKeyForm({
     >
       {note === undefined ? null : <p>{note}</p>}
       {failure === undefined ? null : <p role="alert">{failure}</p>}
-      <SettingsRow
-        title={label}
-        control={
-          <Input
-            aria-label={label}
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            placeholder={orbKeyPlaceholder(provider)}
-            value={credential}
-            disabled={disabled}
-            onChange={(event) => edit(event.target.value)}
-          />
-        }
-      />
+      <div className="orb-key-field">
+        <label htmlFor={fieldId}>{label}</label>
+        <Input
+          id={fieldId}
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder={orbKeyPlaceholder(provider)}
+          value={credential}
+          disabled={disabled}
+          onChange={(event) => edit(event.target.value)}
+        />
+      </div>
       <footer>
         {provider.key === null ? null : (
           <Button
@@ -167,7 +181,7 @@ function OrbKeyForm({
               if (error === undefined) onDone();
             }}
           >
-            Remove key
+            Remove Key
           </Button>
         )}
         <Button
@@ -219,65 +233,87 @@ export function OrbProvidersSettings({
   const data = resource.data;
   const editingProvider = data?.providers.find(({ id }) => id === editing);
   const policy = data?.personalKeysOnWorkspaceProjects;
+  // Keys and the policy on them matter only where a provider takes a key.
+  const keyed =
+    data?.providers.some(({ credentialLabel }) => credentialLabel !== null) ??
+    false;
   return (
-    <div className="first-party-plugins-settings">
-      <header className="first-party-plugins-heading">
-        <h1>
-          {target.scope === "workspace"
+    <div className="orb-providers-settings">
+      <SettingsHeading
+        title={
+          target.scope === "workspace"
             ? "Workspace Orb Providers"
-            : "Orb Providers"}
-        </h1>
-        <span aria-live="polite">
-          {resource.isPending
-            ? "Loading Orb providers…"
-            : resource.error !== null
-              ? errorMessage(resource.error)
-              : message}
-        </span>
-      </header>
+            : "Orb Providers"
+        }
+        description={
+          data === undefined
+            ? undefined
+            : target.scope === "workspace"
+              ? keyed
+                ? "Orbs run the dx Threads of everyone in this workspace. A workspace key runs them in the workspace's provider account instead of this deployment's."
+                : "Orbs run the dx Threads of everyone in this workspace on the providers this deployment offers."
+              : keyed
+                ? "Orbs run your dx Threads. Your own key runs them in your provider account, ahead of your workspace's key and this deployment's. On workspace projects it applies only when the workspace allows members' own keys."
+                : "Orbs run your dx Threads on the providers this deployment offers."
+        }
+        actions={
+          resource.isPending ? null : (
+            <span aria-live="polite">
+              {resource.error !== null ? errorMessage(resource.error) : message}
+            </span>
+          )
+        }
+      />
+      {resource.isPending ? <DxLoading label="Loading Orb providers…" /> : null}
       {data === undefined ? null : (
         <SettingsCard>
           {data.providers.map((provider) => (
             <OrbProviderRow
               key={provider.id}
+              data={data}
               provider={provider}
-              scope={target.scope}
-              onOpenSettings={(trigger) => {
+              onOpenKey={(trigger) => {
                 finalFocus.current = trigger;
                 setEditing(provider.id);
               }}
             />
           ))}
-          {target.scope === "workspace" &&
-          policy !== null &&
-          policy !== undefined ? (
-            <SettingsRow
-              title="Members' own keys on workspace projects"
-              badge={
-                policy.pluginOverridesAllowed
-                  ? undefined
-                  : "Off for all plugins"
-              }
-              control={
-                <SettingsToggle
-                  checked={policy.allowed}
-                  disabled={
-                    !data.canUpdate || busy || !policy.pluginOverridesAllowed
-                  }
-                  label="Members' own keys on workspace projects"
-                  onCheckedChange={(value) =>
-                    void run(
-                      {
-                        type: "policy",
-                        allowPersonalKeysOnWorkspaceProjects: value,
-                      },
-                      "Workspace Orb policy updated.",
-                    )
-                  }
-                />
-              }
-            />
-          ) : null}
+        </SettingsCard>
+      )}
+      {data === undefined ||
+      !keyed ||
+      target.scope !== "workspace" ||
+      policy === null ||
+      policy === undefined ? null : (
+        <SettingsCard>
+          <SettingsRow
+            title="Members' Own Keys"
+            description={
+              policy.pluginOverridesAllowed
+                ? "Members' own keys run their Orbs on this workspace's projects, ahead of the workspace key."
+                : "Off while the workspace policy turns off members' own plugin settings."
+            }
+            control={
+              <SettingsToggle
+                checked={policy.allowed}
+                disabled={
+                  !data.canUpdate || busy || !policy.pluginOverridesAllowed
+                }
+                label="Members' own keys on workspace projects"
+                onCheckedChange={(value) =>
+                  void run(
+                    {
+                      type: "policy",
+                      allowPersonalKeysOnWorkspaceProjects: value,
+                    },
+                    value
+                      ? "Members' own keys allowed."
+                      : "Members' own keys turned off.",
+                  )
+                }
+              />
+            }
+          />
         </SettingsCard>
       )}
       <DialogRoot
@@ -287,10 +323,7 @@ export function OrbProvidersSettings({
         }}
       >
         {editingProvider === undefined || data === undefined ? null : (
-          <DialogContent
-            finalFocus={finalFocus}
-            className="first-party-plugin-dialog"
-          >
+          <DialogContent finalFocus={finalFocus} className="orb-key-dialog">
             <DialogTitle>{editingProvider.displayName}</DialogTitle>
             <OrbKeyForm
               key={editingProvider.id}

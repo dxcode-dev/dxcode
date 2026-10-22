@@ -8,6 +8,11 @@ import { WorkspaceProfileForm } from "./workspace-profile-settings.js";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
+const clickButton = (container: HTMLElement, label: string) =>
+  [...container.querySelectorAll("button")]
+    .find((button) => button.textContent === label)
+    ?.click();
+
 const workspace = Schema.decodeUnknownSync(WorkspaceProfileDataSchema)({
   id: "stable-workspace-id",
   displayName: "DX Team",
@@ -18,7 +23,7 @@ const workspace = Schema.decodeUnknownSync(WorkspaceProfileDataSchema)({
 });
 
 describe("workspace profile settings", () => {
-  it("keeps member profile visible and read only", () => {
+  it("shows a member the profile without an Edit button", () => {
     const markup = renderToStaticMarkup(
       <WorkspaceProfileForm
         initialWorkspace={{ ...workspace, role: "member" }}
@@ -27,23 +32,27 @@ describe("workspace profile settings", () => {
       />,
     );
 
-    expect(markup).toContain("readOnly");
-    expect(markup).not.toContain(">Save<");
+    expect(markup).toContain("DX Team");
+    expect(markup).toContain("dx-team");
+    expect(markup).not.toContain(">Edit<");
+    expect(markup).not.toContain("<input");
   });
 
   it("locks workspace profile fields while a save is pending", () => {
     const container = document.createElement("div");
     const root = createRoot(container);
-    act(() =>
+    const render = (saving: boolean) =>
       root.render(
         <WorkspaceProfileForm
           initialWorkspace={workspace}
           onDirtyChange={() => undefined}
           onSaved={() => undefined}
-          saving
+          saving={saving}
         />,
-      ),
-    );
+      );
+    act(() => render(false));
+    act(() => clickButton(container, "Edit"));
+    act(() => render(true));
 
     expect(
       container.querySelector<HTMLInputElement>('input[name="displayName"]')
@@ -55,7 +64,7 @@ describe("workspace profile settings", () => {
     ).toBe(true);
     expect(
       [...container.querySelectorAll("button")].find(
-        (button) => button.textContent === "Reset",
+        (button) => button.textContent === "Cancel",
       )?.disabled,
     ).toBe(true);
     act(() => root.unmount());
@@ -81,10 +90,7 @@ describe("workspace profile settings", () => {
         revision: 1,
       }),
     );
-    expect(
-      container.querySelector<HTMLInputElement>('input[name="displayName"]')
-        ?.value,
-    ).toBe("Remote Team");
+    expect(container.querySelector("dd")?.textContent).toBe("Remote Team");
     act(() => root.unmount());
   });
 
@@ -104,6 +110,7 @@ describe("workspace profile settings", () => {
       );
 
     act(() => render(workspace));
+    act(() => clickButton(container, "Edit"));
     const displayName = container.querySelector<HTMLInputElement>(
       'input[name="displayName"]',
     );
@@ -123,11 +130,7 @@ describe("workspace profile settings", () => {
         revision: 1,
       }),
     );
-    await act(async () => {
-      [...container.querySelectorAll("button")]
-        .find((button) => button.textContent === "Save")
-        ?.click();
-    });
+    await act(async () => clickButton(container, "Save"));
 
     expect(mutateWorkspace).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -167,37 +170,25 @@ describe("workspace profile settings", () => {
         />,
       ),
     );
-    const input = container.querySelector<HTMLInputElement>(
-      'input[name="displayName"]',
-    );
-    const save = () =>
-      [...container.querySelectorAll("button")].find(
-        (button) => button.textContent === "Save",
+    const saveAs = async (value: string) => {
+      act(() => clickButton(container, "Edit"));
+      const input = container.querySelector<HTMLInputElement>(
+        'input[name="displayName"]',
       );
-    await act(() => {
-      if (input !== null) {
-        Object.getOwnPropertyDescriptor(
-          HTMLInputElement.prototype,
-          "value",
-        )?.set?.call(input, "First Save");
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-      }
-    });
-    await act(async () => {
-      save()?.click();
-    });
-    await act(() => {
-      if (input !== null) {
-        Object.getOwnPropertyDescriptor(
-          HTMLInputElement.prototype,
-          "value",
-        )?.set?.call(input, "Second Save");
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-      }
-    });
-    await act(async () => {
-      save()?.click();
-    });
+      await act(() => {
+        if (input !== null) {
+          Object.getOwnPropertyDescriptor(
+            HTMLInputElement.prototype,
+            "value",
+          )?.set?.call(input, value);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      });
+      await act(async () => clickButton(container, "Save"));
+    };
+    await saveAs("First Save");
+    expect(container.querySelector("dd")?.textContent).toBe("First Save");
+    await saveAs("Second Save");
     expect(mutateWorkspace.mock.calls[1]?.[0]).toMatchObject({
       input: { expectedRevision: 1 },
     });

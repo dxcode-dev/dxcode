@@ -510,6 +510,9 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
             interruptedAt !== undefined &&
             (await existing.base()) < interruptedAt;
           if (interrupted && !existing.exited) await existing.stop();
+          // A run lost with its workspace's processes (a cold boot keeps only
+          // files) never writes its exit marker; it counts as exited.
+          if (!interrupted && !settled) await existing.lost();
           // The turn already ended, so there is no further segment to run.
           // A stopped attempt's result does not end it.
           if (

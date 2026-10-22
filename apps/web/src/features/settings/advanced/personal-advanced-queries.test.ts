@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   personalAdvancedKeys,
   personalAgentInstructionsQueryOptions,
-  resetPersonalAgentInstructionsMutationOptions,
   updatePersonalAgentInstructionsMutationOptions,
 } from "./personal-advanced-queries.js";
 
@@ -67,16 +66,5 @@ describe("personal instructions mutations", () => {
           updatePersonalAgentInstructionsMutationOptions(queryClient, userId),
         )
         .execute({ instructions: saved.instructions, expectedRevision: 1 }),
-    ));
-
-  it("protects a reset from an in-flight stale GET", () =>
-    verifyStaleGetCannotWin((queryClient) =>
-      queryClient
-        .getMutationCache()
-        .build(
-          queryClient,
-          resetPersonalAgentInstructionsMutationOptions(queryClient, userId),
-        )
-        .execute(1),
     ));
 });

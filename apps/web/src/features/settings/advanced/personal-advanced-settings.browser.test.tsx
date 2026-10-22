@@ -16,7 +16,7 @@ const instructions = (revision: number, value: string) =>
     updatedAt: `2026-08-2${revision}T12:00:00.000Z`,
   });
 
-describe("personal Advanced settings", () => {
+describe("personal Instructions settings", () => {
   it("keeps a dirty draft on its original revision when a newer revision arrives", async () => {
     const container = document.createElement("div");
     const root = createRoot(container);
@@ -27,7 +27,6 @@ describe("personal Advanced settings", () => {
         onDirtyChange={() => undefined}
         onReload={() => Promise.resolve(undefined)}
         updateInstructions={updateInstructions}
-        resetInstructions={() => Promise.reject(new Error("not submitted"))}
         saving={saving}
       />
     );
@@ -86,7 +85,6 @@ describe("personal Advanced settings", () => {
               ),
             )
           }
-          resetInstructions={() => Promise.reject(new Error("not submitted"))}
         />,
       ),
     );
@@ -112,7 +110,7 @@ describe("personal Advanced settings", () => {
     expect(onReload).toHaveBeenCalledOnce();
     expect(textarea?.value).toBe("Local draft");
     expect(container.textContent).toContain(
-      "Latest agent instructions could not be loaded.",
+      "Latest instructions could not be loaded.",
     );
     expect(container.textContent).toContain("revision 4");
     expect(onDirtyChange).not.toHaveBeenLastCalledWith(false);
@@ -151,7 +149,6 @@ describe("personal Advanced settings", () => {
               ),
             )
           }
-          resetInstructions={() => Promise.reject(new Error("not submitted"))}
         />,
       ),
     );
@@ -178,7 +175,7 @@ describe("personal Advanced settings", () => {
     expect(
       [
         ...(container
-          .querySelector(".settings-form-actions")
+          .querySelector(".agent-instructions-actions")
           ?.querySelectorAll("button") ?? []),
       ].every(({ disabled }) => disabled),
     ).toBe(true);
@@ -192,10 +189,10 @@ describe("personal Advanced settings", () => {
     act(() => root.unmount());
   });
 
-  it("disables Reset to empty while an unsaved draft exists and preserves the draft", async () => {
+  it("Reset restores the saved instructions and is disabled while unchanged", () => {
     const container = document.createElement("div");
     const root = createRoot(container);
-    const resetInstructions = vi.fn().mockResolvedValue(instructions(4, ""));
+    const updateInstructions = vi.fn();
     const onDirtyChange = vi.fn();
 
     act(() =>
@@ -204,70 +201,36 @@ describe("personal Advanced settings", () => {
           initialSettings={instructions(3, "Be helpful")}
           onDirtyChange={onDirtyChange}
           onReload={() => Promise.resolve(undefined)}
-          updateInstructions={() => Promise.reject(new Error("not submitted"))}
-          resetInstructions={resetInstructions}
+          updateInstructions={updateInstructions}
         />,
       ),
     );
 
-    const reset = [...container.querySelectorAll("button")].find((b) =>
-      b.textContent?.includes("Reset to empty"),
+    const reset = [...container.querySelectorAll("button")].find(
+      ({ textContent }) => textContent === "Reset",
     );
-    // A clean form with a non-empty saved revision keeps reset available.
-    expect(reset?.disabled).toBe(false);
-
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(reset?.disabled).toBe(true);
+    expect(container.textContent).toContain("10 / 10,000 characters");
+
     act(() => {
       const setter = Object.getOwnPropertyDescriptor(
         HTMLTextAreaElement.prototype,
         "value",
       )?.set;
-      setter?.call(textarea, "Unsaved draft I have not saved yet");
+      setter?.call(textarea, "Unsaved draft");
       textarea?.dispatchEvent(new Event("input", { bubbles: true }));
     });
-
-    // The guard fires the moment the draft becomes dirty, so the destructive
-    // reset cannot wipe the draft or falsely report the form as clean.
-    expect(reset?.disabled).toBe(true);
-    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
-    expect(textarea?.value).toBe("Unsaved draft I have not saved yet");
-    expect(resetInstructions).not.toHaveBeenCalled();
-
-    act(() => root.unmount());
-  });
-
-  it("resets the saved revision to empty from a clean state without dropping a draft", async () => {
-    const container = document.createElement("div");
-    const root = createRoot(container);
-    const resetInstructions = vi.fn().mockResolvedValue(instructions(4, ""));
-    const onDirtyChange = vi.fn();
-
-    act(() =>
-      root.render(
-        <PersonalAgentInstructionsForm
-          initialSettings={instructions(3, "Be helpful")}
-          onDirtyChange={onDirtyChange}
-          onReload={() => Promise.resolve(undefined)}
-          updateInstructions={() => Promise.reject(new Error("not submitted"))}
-          resetInstructions={resetInstructions}
-        />,
-      ),
-    );
-
-    const reset = [...container.querySelectorAll("button")].find((b) =>
-      b.textContent?.includes("Reset to empty"),
-    );
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     expect(reset?.disabled).toBe(false);
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+    expect(container.textContent).toContain("13 / 10,000 characters");
 
-    await act(async () => reset?.click());
+    act(() => reset?.click());
 
-    expect(resetInstructions).toHaveBeenCalledWith(3);
-    expect(textarea?.value).toBe("");
-    expect(container.textContent).toContain("Revision 4");
-    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
-    // The saved revision is now empty, so reset stays disabled.
+    expect(textarea?.value).toBe("Be helpful");
     expect(reset?.disabled).toBe(true);
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+    expect(updateInstructions).not.toHaveBeenCalled();
 
     act(() => root.unmount());
   });

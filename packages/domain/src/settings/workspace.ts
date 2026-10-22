@@ -73,7 +73,7 @@ const permissionsByRole = {
     "private-threads:inspect",
     "applications:read",
   ],
-  member: ["applications:read"],
+  member: [],
 } as const satisfies Record<WorkspaceRole, ReadonlyArray<WorkspacePermission>>;
 
 export const workspacePermissionsForRole = (

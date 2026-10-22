@@ -5,6 +5,7 @@ import { PluginTriggersSettings } from "./triggers-settings.js";
 export const personalPluginTriggersSettingsSection = {
   id: "personal-triggers",
   slug: "triggers",
+  group: "projects-orbs",
   scope: "personal",
   label: "Triggers",
   title: "Plugin Triggers",

@@ -2,6 +2,7 @@ import { THREAD_TERMINAL_SUBPROTOCOL } from "@dx/api";
 import { ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { Hono } from "hono";
+import { setBrowserSessionHeaders } from "../auth/session-sockets.js";
 import type { AppEnv } from "../http/types.js";
 import { selectWorkspaceRuntime } from "../runtime/workspace-composition.js";
 
@@ -68,6 +69,7 @@ export const threadTerminalRoutes = new Hono<AppEnv>().get(
       const value = request.headers.get(name);
       if (value !== null) headers.set(name, value);
     }
+    setBrowserSessionHeaders(headers, context.get("browserSession"));
     return stub.fetch(new Request(request, { headers }));
   },
 );

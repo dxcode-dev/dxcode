@@ -65,6 +65,13 @@ export const ThreadDataSchema = Schema.Struct({
   activityStatus: ThreadActivityStatus,
   lifecycleState: ThreadLifecycleState,
   pinnedAt: Schema.optional(Timestamp),
+  /**
+   * Owner only: the Thread is snoozed until this time. Once it passes the
+   * Thread has woken and stays marked until the owner wakes it.
+   */
+  snoozedUntil: Schema.optional(Timestamp),
+  /** Owner only: when a snooze last ended. */
+  snoozeWokeAt: Schema.optional(Timestamp),
   /** The owner's chosen color; absent means auto. */
   color: Schema.optional(ThreadColor),
   /** True while DxTitleAgent may still replace `title`; show a loading state. */
@@ -207,6 +214,9 @@ export const ThreadDetailDataSchema = Schema.Struct({
   lastActivityAt: Timestamp,
   activityStatus: ThreadActivityStatus,
   lifecycleState: ThreadLifecycleState,
+  /** Owner only: see ThreadDataSchema. */
+  snoozedUntil: Schema.optional(Timestamp),
+  snoozeWokeAt: Schema.optional(Timestamp),
   /** The owner's chosen color; absent means auto. */
   color: Schema.optional(ThreadColor),
   titlePending: Schema.optional(Schema.Boolean),

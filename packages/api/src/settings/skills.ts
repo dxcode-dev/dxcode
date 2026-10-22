@@ -36,8 +36,9 @@ export type SkillVersionData = typeof SkillVersionDataSchema.Type;
 export const SkillEffectiveStateSchema = Schema.Literals([
   "disabled",
   "effective",
-  "blocked-by-workspace",
   "blocked-by-policy",
+  /** A workspace skill the viewer's own skill of the same name replaces. */
+  "replaced-by-personal",
 ]);
 
 export const SkillDataSchema = Schema.Struct({
@@ -50,7 +51,8 @@ export const SkillDataSchema = Schema.Struct({
   versions: Schema.Array(SkillVersion),
   active: SkillVersionDataSchema,
   effectiveState: SkillEffectiveStateSchema,
-  overridesPersonal: Schema.Boolean,
+  /** A personal skill that replaces a workspace skill of the same name. */
+  overridesWorkspace: Schema.Boolean,
   createdAt: Timestamp,
   updatedAt: Timestamp,
 });
@@ -61,7 +63,7 @@ export const ListSkillsResponseSchema = successResponse(
   Schema.Struct({
     items: Schema.Array(SkillDataSchema),
     canMutate: Schema.Boolean,
-    precedence: Schema.Literal("workspace-over-personal"),
+    precedence: Schema.Literal("personal-over-workspace"),
     allowPersonalSkills: Schema.optional(Schema.Boolean),
   }),
 );
@@ -82,6 +84,8 @@ export const PreviewSkillResponseSchema = successResponse(
 export const ImportSkillRequestSchema = Schema.Struct({
   bundle: SkillImportBundle,
   reviewedIntegrity: SkillIntegrity,
+  /** Save the skill switched on; imports start off unless this is true. */
+  enabled: Schema.optional(Schema.Boolean),
 });
 
 export const ImportSkillResponseSchema = successResponse(SkillDataSchema);

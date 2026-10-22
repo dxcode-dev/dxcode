@@ -39,6 +39,9 @@ const ThreadRow = Schema.Struct({
   color: Schema.optional(Schema.NullOr(Schema.String)),
   title_pending_until: Schema.optional(Schema.NullOr(Schema.String)),
   parent_thread_id: Schema.optional(Schema.NullOr(Schema.String)),
+  snoozed_until: Schema.optional(Schema.NullOr(Schema.String)),
+  snoozed_at: Schema.optional(Schema.NullOr(Schema.String)),
+  snooze_woke_at: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 type ThreadRow = typeof ThreadRow.Type;
@@ -115,6 +118,16 @@ export const decodeThreadRows = (rows: ReadonlyArray<unknown>) =>
               row.parent_thread_id === undefined
                 ? {}
                 : { parentThreadId: row.parent_thread_id }),
+              ...(row.snoozed_until === null || row.snoozed_until === undefined
+                ? {}
+                : { snoozedUntil: row.snoozed_until }),
+              ...(row.snoozed_at === null || row.snoozed_at === undefined
+                ? {}
+                : { snoozedAt: row.snoozed_at }),
+              ...(row.snooze_woke_at === null ||
+              row.snooze_woke_at === undefined
+                ? {}
+                : { snoozeWokeAt: row.snooze_woke_at }),
             });
           }),
         ),
@@ -495,7 +508,10 @@ export const ThreadRepositoryD1 = Layer.effect(
               pinned_at,
               title_pending_until,
               color,
-              parent_thread_id
+              parent_thread_id,
+              snoozed_until,
+              snoozed_at,
+              snooze_woke_at
             FROM threads
             WHERE id = ${threadId}
               AND owner_user_id = ${ownerUserId}
@@ -525,7 +541,16 @@ export const ThreadRepositoryD1 = Layer.effect(
                 : Schema.encodeSync(Schema.DateTimeUtcFromString)(pinnedAt);
             yield* sql`
               UPDATE threads
-              SET pinned_at = ${encodedPinnedAt}, updated_at = ${encodedPinnedAt ?? new Date().toISOString()}
+              SET pinned_at = ${encodedPinnedAt},
+                  -- Pinning wakes a snoozed Thread; unpinning leaves it.
+                  snooze_woke_at = CASE
+                    WHEN ${encodedPinnedAt} IS NOT NULL AND snoozed_until IS NOT NULL
+                      THEN MIN(snoozed_until, ${encodedPinnedAt})
+                    ELSE snooze_woke_at
+                  END,
+                  snoozed_until = CASE WHEN ${encodedPinnedAt} IS NULL THEN snoozed_until END,
+                  snoozed_at = CASE WHEN ${encodedPinnedAt} IS NULL THEN snoozed_at END,
+                  updated_at = ${encodedPinnedAt ?? new Date().toISOString()}
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
                 AND ${inReachableScope("project_id", ownerUserId)}
@@ -542,7 +567,8 @@ export const ThreadRepositoryD1 = Layer.effect(
                 model_selection, runner_profile_id, plugin_snapshot_json, skill_snapshot_json,
                 visibility, created_at, updated_at,
                 last_activity_at, activity_status, lifecycle_state, pinned_at,
-                title_pending_until, color, parent_thread_id
+                title_pending_until, color, parent_thread_id,
+                snoozed_until, snoozed_at, snooze_woke_at
               FROM threads
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
@@ -552,6 +578,55 @@ export const ThreadRepositoryD1 = Layer.effect(
             `.pipe(
               Effect.catchTag("SqlError", (cause) =>
                 Effect.fail(unavailable("thread.setPinnedAtOwned")(cause)),
+              ),
+              Effect.flatMap(decodeThreadRows),
+              Effect.flatMap((threads) =>
+                threads[0] === undefined
+                  ? Effect.fail(new ThreadNotFound({ threadId }))
+                  : Effect.succeed(threads[0]),
+              ),
+            );
+          }),
+        ),
+
+      setSnoozedUntilOwned: (threadId, ownerUserId, snoozedUntil) =>
+        observe(
+          "thread.setSnoozedUntilOwned",
+          { threadId },
+          Effect.gen(function* () {
+            const now = new Date().toISOString();
+            const encodedUntil =
+              snoozedUntil === undefined
+                ? null
+                : Schema.encodeSync(Schema.DateTimeUtcFromString)(snoozedUntil);
+            // Only an active root Thread snoozes. Waking records when the
+            // snooze ended: its wake time if that passed, otherwise now.
+            return yield* sql<ThreadRow>`
+              UPDATE threads
+              SET snooze_woke_at = CASE
+                    WHEN snoozed_until IS NOT NULL
+                      THEN MIN(snoozed_until, ${now})
+                    ELSE snooze_woke_at
+                  END,
+                  snoozed_until = ${encodedUntil},
+                  snoozed_at = CASE WHEN ${encodedUntil} IS NULL THEN NULL ELSE ${now} END,
+                  updated_at = ${now}
+              WHERE id = ${threadId}
+                AND owner_user_id = ${ownerUserId}
+                AND ${inReachableScope("project_id", ownerUserId)}
+                AND lifecycle_state != 'deleted'
+                AND (${encodedUntil} IS NULL
+                  OR (lifecycle_state = 'active' AND parent_thread_id IS NULL))
+              RETURNING id, title, project_id, owner_user_id, agent_instructions,
+                agent_instructions_revision, agent_instructions_version,
+                model_selection, runner_profile_id, plugin_snapshot_json, skill_snapshot_json,
+                visibility, created_at, updated_at,
+                last_activity_at, activity_status, lifecycle_state, pinned_at,
+                title_pending_until, color, parent_thread_id,
+                snoozed_until, snoozed_at, snooze_woke_at
+            `.pipe(
+              Effect.catchTag("SqlError", (cause) =>
+                Effect.fail(unavailable("thread.setSnoozedUntilOwned")(cause)),
               ),
               Effect.flatMap(decodeThreadRows),
               Effect.flatMap((threads) =>
@@ -590,7 +665,8 @@ export const ThreadRepositoryD1 = Layer.effect(
                 model_selection, runner_profile_id, plugin_snapshot_json, skill_snapshot_json,
                 visibility, created_at, updated_at,
                 last_activity_at, activity_status, lifecycle_state, pinned_at,
-                title_pending_until, color, parent_thread_id
+                title_pending_until, color, parent_thread_id,
+                snoozed_until, snoozed_at, snooze_woke_at
             `.pipe(
               Effect.catchTag("SqlError", (cause) =>
                 Effect.fail(unavailable("thread.updateOwned")(cause)),
@@ -618,6 +694,14 @@ export const ThreadRepositoryD1 = Layer.effect(
                     WHEN ${lifecycleState} = 'archived' THEN NULL
                     ELSE pinned_at
                   END,
+                  snoozed_until = CASE
+                    WHEN ${lifecycleState} = 'archived' THEN NULL
+                    ELSE snoozed_until
+                  END,
+                  snoozed_at = CASE
+                    WHEN ${lifecycleState} = 'archived' THEN NULL
+                    ELSE snoozed_at
+                  END,
                   updated_at = ${updatedAt}
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
@@ -628,7 +712,8 @@ export const ThreadRepositoryD1 = Layer.effect(
                 model_selection, runner_profile_id, plugin_snapshot_json, skill_snapshot_json,
                 visibility, created_at, updated_at,
                 last_activity_at, activity_status, lifecycle_state, pinned_at,
-                title_pending_until, color, parent_thread_id
+                title_pending_until, color, parent_thread_id,
+                snoozed_until, snoozed_at, snooze_woke_at
             `.pipe(
               Effect.catchTag("SqlError", (cause) =>
                 Effect.fail(
@@ -737,6 +822,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.agent_instructions, thread.agent_instructions_revision,
                       thread.agent_instructions_version, thread.model_selection,
                       thread.runner_profile_id, thread.title_pending_until, thread.color,
+                      thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
                       thread.parent_thread_id,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
@@ -783,6 +869,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.agent_instructions, thread.agent_instructions_revision,
                       thread.agent_instructions_version, thread.model_selection,
                       thread.runner_profile_id, thread.title_pending_until, thread.color,
+                      thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
                       thread.parent_thread_id,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
@@ -836,6 +923,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.agent_instructions, thread.agent_instructions_revision,
                       thread.agent_instructions_version, thread.model_selection,
                       thread.runner_profile_id, thread.title_pending_until, thread.color,
+                      thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
                       thread.parent_thread_id,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
@@ -873,6 +961,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.agent_instructions, thread.agent_instructions_revision,
                       thread.agent_instructions_version, thread.model_selection,
                       thread.runner_profile_id, thread.title_pending_until, thread.color,
+                      thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
                       thread.parent_thread_id,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
@@ -917,6 +1006,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.agent_instructions, thread.agent_instructions_revision,
                       thread.agent_instructions_version, thread.model_selection,
                       thread.runner_profile_id, thread.title_pending_until, thread.color,
+                      thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
                       thread.parent_thread_id,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
@@ -968,6 +1058,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.agent_instructions, thread.agent_instructions_revision,
                       thread.agent_instructions_version, thread.model_selection,
                       thread.runner_profile_id, thread.title_pending_until, thread.color,
+                      thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
                       thread.parent_thread_id,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
@@ -1040,7 +1131,8 @@ export const ThreadRepositoryD1 = Layer.effect(
                   model_selection, runner_profile_id, title_pending_until, color,
                   parent_thread_id, plugin_snapshot_json, skill_snapshot_json,
                   visibility, created_at, updated_at, last_activity_at,
-                  activity_status, lifecycle_state, pinned_at
+                  activity_status, lifecycle_state, pinned_at,
+                  snoozed_until, snoozed_at, snooze_woke_at
                 FROM (
                   SELECT thread.*, ROW_NUMBER() OVER (
                     PARTITION BY thread.parent_thread_id

@@ -1,4 +1,5 @@
 import type { Principal, ThreadLifecycleState } from "@dx/domain";
+import type { BrowserSessionBinding } from "../auth/session-sockets.js";
 import type { OrbContainerObject } from "../execution/cloudflare/orb-container-object.js";
 
 export interface Bindings {
@@ -21,6 +22,8 @@ export interface Bindings {
   readonly DX_E2B_TEMPLATE?: string;
   readonly DX_E2B_TIMEOUT_MS?: string;
   readonly DX_WORKSPACE_INACTIVITY_MS?: string;
+  /** Shortens the 60 s check of sockets' browser sessions in tests. */
+  readonly DX_SESSION_SOCKET_CHECK_MS?: string;
   readonly DX_DXD_PUBLIC_URL?: string;
   /**
    * The Portal domain: guest port N of a Thread is served at
@@ -102,9 +105,17 @@ export interface Variables {
   readonly principal: Principal;
   /** The signed-in user; differs from `principal` in a shared Thread. */
   readonly actor: Principal;
+  /**
+   * The browser session that authenticated this request; absent for API
+   * tokens and external applications. WebSocket routes pass it to the socket
+   * holder so the socket closes when the session ends (auth/session-sockets.ts).
+   */
+  readonly browserSession?: BrowserSessionBinding;
   readonly threadAccess: "owner" | "contribute" | "view";
   readonly threadOwnerUserId: string;
   readonly threadLifecycleState: ThreadLifecycleState;
+  /** The Thread has a snooze (asleep or woken), so a message wakes it. */
+  readonly threadSnoozed?: boolean;
   /** The Thread POST is a chat message: Flue records it without a model call. */
   readonly chatDelivery: boolean;
   /**

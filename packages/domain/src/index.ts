@@ -47,6 +47,14 @@ export {
   ResolvedPluginProvider,
 } from "./plugins/plugin.js";
 export {
+  DICTATION_VOCABULARY_MAX_TERM_LENGTH,
+  DICTATION_VOCABULARY_MAX_TERMS,
+  DictationVocabulary,
+  DictationVocabularyTerm,
+  dictationVocabularyProblem,
+  mergeDictationVocabularies,
+  parseDictationVocabulary,
+  type SpeechOptions,
   type SpeechProvider,
   SpeechProviderError,
   type SpeechSession,
@@ -118,6 +126,8 @@ export {
   ConfigReference,
   configReferenceFor,
   decodeEnvironmentVariableAuditCursor,
+  EMPTY_SECRET_PROBLEM,
+  type EnvironmentVariableAssignment,
   EnvironmentVariableAuditAction,
   type EnvironmentVariableAuditCursorPosition,
   EnvironmentVariableAuditEvent,
@@ -131,11 +141,17 @@ export {
   EnvironmentVariablePlaintext,
   EnvironmentVariableScope,
   EnvironmentVariableTarget,
+  EnvironmentVariableValue,
   encodeEnvironmentVariableAuditCursor,
+  environmentVariableNameProblem,
   IntegrationCredentialConfigReference,
   integrationCredentialReferenceFor,
   isReservedEnvironmentVariableName,
+  isWeakSecretValue,
+  looksLikeSecretEnvironmentVariable,
+  looksLikeSecretName,
   MASKED_SECRET_VALUE,
+  MAX_ENVIRONMENT_VARIABLE_BULK_BYTES,
   MAX_ENVIRONMENT_VARIABLE_BULK_ITEMS,
   MAX_ENVIRONMENT_VARIABLE_NAME_LENGTH,
   MAX_ENVIRONMENT_VARIABLE_VALUE_BYTES,
@@ -144,6 +160,7 @@ export {
   normalizeEnvironmentVariableName,
   PersonalEnvironmentVariableTarget,
   ProjectEnvironmentVariableTarget,
+  parseEnvironmentVariableAssignments,
   StoredEnvironmentVariable,
   WorkspaceEnvironmentVariableTarget,
 } from "./settings/environment-variable.js";
@@ -729,6 +746,12 @@ export {
   type ThreadSearchQuery,
   ThreadSearchQueryError,
 } from "./threads/thread-search-query.js";
+export {
+  THREAD_SNOOZE_MAX_MS,
+  type ThreadSnoozeState,
+  threadReturnedAt,
+  threadSnoozeState,
+} from "./threads/thread-snooze.js";
 export {
   generateThreadTitle,
   THREAD_TITLE_MAX_LENGTH,

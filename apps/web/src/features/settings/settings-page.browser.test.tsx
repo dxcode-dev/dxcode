@@ -102,6 +102,7 @@ function DeferredWorkspaceSection({
 const registration: SettingsSectionRegistration = {
   id: "workspace-sensitive-test",
   scope: "workspace",
+  group: "top-level",
   label: "Sensitive",
   title: "Sensitive",
   description: "Sensitive workspace test section.",

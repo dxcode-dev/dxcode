@@ -6,6 +6,7 @@ import {
 import { ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { Hono } from "hono";
+import { setBrowserSessionHeaders } from "../auth/session-sockets.js";
 import type { AppEnv } from "../http/types.js";
 import { selectWorkspaceRuntime } from "../runtime/workspace-composition.js";
 
@@ -130,6 +131,7 @@ export const threadDesktopRoutes = new Hono<AppEnv>()
       const value = request.headers.get(name);
       if (value !== null) headers.set(name, value);
     }
+    setBrowserSessionHeaders(headers, context.get("browserSession"));
     return stub.fetch(
       new Request("https://thread-execution/proxy/websocket", { headers }),
     );

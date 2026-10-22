@@ -82,8 +82,7 @@ export const emailChannel = (
   sender: EmailSender | undefined,
 ): NotificationChannel => ({
   id: "email",
-  subscriptionTitle: (topicNoun) =>
-    `${capitalized(topicNoun)} notification emails`,
+  subscriptionTitle: (topicNoun) => `${capitalized(topicNoun)} emails`,
   subscriptionDescription: (trigger) => `Receive an email when ${trigger}.`,
   available: sender !== undefined,
   deliver: async (delivery) => {

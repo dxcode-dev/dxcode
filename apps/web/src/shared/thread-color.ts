@@ -1,5 +1,6 @@
 import type { ThreadData } from "@dx/api";
 import { THREAD_COLORS, type ThreadColor } from "@dx/domain";
+import type { CSSProperties } from "react";
 
 export { THREAD_COLORS, type ThreadColor };
 
@@ -15,16 +16,14 @@ export const THREAD_COLOR_LABELS: Readonly<Record<ThreadColor, string>> = {
   cyan: "Cyan",
 };
 
-const AUTO_COLORS = THREAD_COLORS.filter((color) => color !== "gray");
-
-/** The color a Thread gets until its owner picks one, stable per Thread. */
-export const autoThreadColor = (threadId: string): ThreadColor => {
+/** The hue a Thread's orb gets until its owner picks a color, stable per Thread. */
+export const autoThreadHue = (threadId: string): number => {
   let hash = 2166136261;
   for (let index = 0; index < threadId.length; index += 1) {
     hash ^= threadId.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
   }
-  return AUTO_COLORS[(hash >>> 0) % AUTO_COLORS.length] ?? "blue";
+  return (hash >>> 0) % 360;
 };
 
 /**
@@ -34,10 +33,16 @@ export const autoThreadColor = (threadId: string): ThreadColor => {
  */
 export const threadColorAttributes = (
   thread: Pick<ThreadData, "id" | "color" | "parentThreadId" | "parentColor">,
-) => ({
-  "data-thread-color":
-    thread.color ??
-    thread.parentColor ??
-    autoThreadColor(thread.parentThreadId ?? thread.id),
-  "data-thread-color-chosen": thread.color === undefined ? undefined : "",
-});
+) => {
+  const named = thread.color ?? thread.parentColor;
+  return {
+    "data-thread-color": named ?? "auto",
+    "data-thread-color-chosen": thread.color === undefined ? undefined : "",
+    style:
+      named === undefined
+        ? ({
+            "--thread-hue": autoThreadHue(thread.parentThreadId ?? thread.id),
+          } as CSSProperties)
+        : undefined,
+  };
+};

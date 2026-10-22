@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { PageCursor } from "../pagination/cursor.js";
 import { InvalidPageCursor } from "../persistence/errors.js";
 import { Timestamp } from "../persistence/timestamp.js";
@@ -240,73 +240,252 @@ export const EnvironmentVariablePlaintext = Schema.String.check(
 export type EnvironmentVariablePlaintext =
   typeof EnvironmentVariablePlaintext.Type;
 
-const reservedNames = new Set([
-  "BASHPID",
-  "BASHOPTS",
-  "BASH_ENV",
-  "BASH_VERSION",
-  "BASH_VERSINFO",
-  "BETTER_AUTH_SECRET",
-  "CI",
-  "COLUMNS",
-  "DX_ACCESS_AUDIENCE",
-  "DX_ACCESS_ISSUER",
-  "DX_AUTH_TRUSTED_ORIGINS",
-  "DX_AUTH_URL",
-  "DX_CONFIG_ENCRYPTION_KEYS",
-  "DX_E2B_TEMPLATE",
-  "DX_E2B_TIMEOUT_MS",
-  "DX_ENV",
-  "DX_EXPERIMENTAL_FEATURE_FIXTURE",
-  "DX_INTEGRATION_BITBUCKET_OAUTH",
-  "DX_INTEGRATION_FORGEJO_OAUTH",
-  "DX_INTEGRATION_GITHUB_APP",
-  "DX_INTEGRATION_GITLAB_OAUTH",
-  "DX_BITBUCKET_GIT_TOKEN",
-  "DX_BITBUCKET_GIT_ORIGIN",
-  "DX_BITBUCKET_GIT_PATH",
-  "DX_MANAGED_SSH_SIGNING_ENABLED",
-  "DX_MODEL_DEPLOYMENT_PROVIDERS",
-  "DX_MODEL_ENDPOINT_ALLOWLIST",
-  "DX_RUNNER_PROFILE_CATALOG",
-  "DX_SOURCE_COMMAND_SOCKET",
-  "DX_STORAGE",
-  "ENV",
-  "E2B_API_KEY",
-  "EUID",
-  "HOME",
-  "HOSTNAME",
-  "HISTFILE",
-  "HISTFILESIZE",
-  "HISTSIZE",
-  "IFS",
-  "LD_LIBRARY_PATH",
-  "LD_PRELOAD",
-  "LINES",
-  "LOGNAME",
-  "NODE_OPTIONS",
-  "PATH",
-  "PPID",
-  "PWD",
-  "SHELL",
-  "SHELLOPTS",
-  "SHLVL",
-  "TERM",
-  "TMUX",
-  "TMUX_PANE",
-  "UID",
-  "USER",
-  "_",
-]);
+/**
+ * A stored value: up to 32 KiB of UTF-8 without NUL. An env var may be
+ * empty (`GIT_CONFIG_VALUE_0=` resets a Git setting); a secret may not.
+ */
+export const EnvironmentVariableValue = Schema.String.check(
+  Schema.makeFilter((value) => {
+    const encoded = new TextEncoder().encode(value);
+    return (
+      encoded.byteLength <= MAX_ENVIRONMENT_VARIABLE_VALUE_BYTES &&
+      !value.includes("\0") &&
+      new TextDecoder().decode(encoded) === value
+    );
+  }),
+).pipe(Schema.brand("@dx/EnvironmentVariableValue"));
+
+export type EnvironmentVariableValue = typeof EnvironmentVariableValue.Type;
+
+export const EMPTY_SECRET_PROBLEM = "A secret must have a value.";
+
+/**
+ * Names dx sets or reads inside an Orb, where a user value would be ignored,
+ * would override dx's own value, or would break dx's shells and helpers.
+ * Providers start every command under `bash -l`, so the Orb profile sources
+ * `~/.env` after dx's own exports and per-command variables and a user value
+ * usually wins. Names that only exist in the Worker never reach an Orb and
+ * are not listed. dxd keeps the same list (`RESERVED_NAMES` and
+ * `RESERVED_PREFIXES` in `apps/dxd/src/environment.rs`); both must equal
+ * `environment-variable-names.json`.
+ */
+export const RESERVED_ENVIRONMENT_VARIABLE_NAMES: ReadonlySet<string> = new Set(
+  [
+    // Set by the Orb shell profile, dxd's base environment, or the Terminal.
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "PATH",
+    "TERM",
+    "TMUX",
+    "TMUX_PANE",
+    "HISTFILE",
+    "HISTSIZE",
+    "HISTFILESIZE",
+    "GIT_CONFIG_GLOBAL",
+    // Set by dxd for Thread services and its guest helpers.
+    "PORT",
+    "DX_SERVICE",
+    "DX_WORKLOAD_IDENTITY_SOCKET",
+    // Passed by Core to source preparation and agent commands.
+    "DX_CLONE_URL",
+    "DX_DEFAULT_BRANCH",
+    "DX_BINDING_REVISION",
+    "DX_GH_WRAPPER",
+    "DX_GIT_ALLOWED_PATH",
+    "DX_GIT_HELPER",
+    "DX_INVOCATION_ID",
+    "DX_REPOSITORIES_ROOT",
+    "DX_RUN_RESUME",
+    "DX_THREAD_ID",
+    "FLUE_WORKSPACE_CONTEXT_ROOT",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    // Read by the Desktop's Chromium launcher from the calling shell.
+    "WAYLAND_DISPLAY",
+    // Read-only in Bash: every login shell would print an error.
+    "BASHOPTS",
+    "BASH_VERSINFO",
+    "EUID",
+    "PPID",
+    "SHELLOPTS",
+    "UID",
+    // Change how every dx shell and process starts, or load code into it.
+    "BASH_ENV",
+    "ENV",
+    "IFS",
+    "LD_AUDIT",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+  ],
+);
+
+export const RESERVED_ENVIRONMENT_VARIABLE_PREFIXES: ReadonlyArray<string> = [
+  "DXD_",
+  "DX_ASSET_",
+  "DX_BITBUCKET_GIT_",
+  "DX_CHANGES_",
+  "DX_DESKTOP_",
+  "DX_REPOSITORY_",
+  "DX_SOURCE_",
+  "DX_SUBMODULE_",
+];
 
 export const normalizeEnvironmentVariableName = (value: string): string =>
   value.trim();
 
 export const isReservedEnvironmentVariableName = (name: string): boolean =>
-  reservedNames.has(name) ||
-  name.startsWith("CLOUDFLARE_") ||
-  name.startsWith("CF_") ||
-  name.startsWith("DYLD_");
+  RESERVED_ENVIRONMENT_VARIABLE_NAMES.has(name) ||
+  RESERVED_ENVIRONMENT_VARIABLE_PREFIXES.some((prefix) =>
+    name.startsWith(prefix),
+  );
+
+/**
+ * Why a name cannot be saved, in the words settings show under the Name
+ * field; `undefined` when it can.
+ */
+export const environmentVariableNameProblem = (
+  value: string,
+): string | undefined => {
+  const name = normalizeEnvironmentVariableName(value);
+  if (name.length === 0) return "Enter a name.";
+  if (name.length > MAX_ENVIRONMENT_VARIABLE_NAME_LENGTH)
+    return `Name must be ${MAX_ENVIRONMENT_VARIABLE_NAME_LENGTH} characters or fewer.`;
+  if (!/^[A-Z_][A-Z0-9_]*$/.test(name))
+    return "Use uppercase letters, digits, and underscores, not starting with a digit (e.g. MY_VAR).";
+  if (isReservedEnvironmentVariableName(name))
+    return `${name} is set by dx in Orbs. Choose a different name.`;
+  return undefined;
+};
+
+const secretNameSuffix =
+  /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_KEY|PRIVATE_KEY|SECRET_KEY|CLIENT_SECRET|CREDENTIALS?|PAT)$/;
+
+/** Whether a name ends like a credential: `_TOKEN`, `_API_KEY`, `_PASSWORD`. */
+export const looksLikeSecretName = (name: string): boolean =>
+  secretNameSuffix.test(name);
+
+const commonValues = new Set([
+  "changeme",
+  "default",
+  "development",
+  "disabled",
+  "enabled",
+  "localhost",
+  "password",
+  "production",
+  "staging",
+  "undefined",
+]);
+
+/**
+ * Whether a secret value is too short or too common to hide. dx replaces
+ * every occurrence of a secret value in agent command output, so a secret
+ * such as `true` would hide every `true` there.
+ */
+export const isWeakSecretValue = (value: string): boolean => {
+  const trimmed = value.trim();
+  return trimmed.length < 8 || commonValues.has(trimmed.toLowerCase());
+};
+
+/**
+ * Whether Bulk Add's "Auto-detect secrets" saves an assignment as a secret:
+ * a credential-style name or a URL with a password, and never a value too
+ * short or common to hide.
+ */
+export const looksLikeSecretEnvironmentVariable = (
+  name: string,
+  value: string,
+): boolean =>
+  !isWeakSecretValue(value) &&
+  (looksLikeSecretName(name) ||
+    /^[a-z][a-z0-9+.-]*:\/\/[^/@\s:]*:[^/@\s]+@/i.test(value));
+
+export const MAX_ENVIRONMENT_VARIABLE_BULK_BYTES = 262_144;
+
+export interface EnvironmentVariableAssignment {
+  readonly line: number;
+  /** The name as written, for messages about a line that did not parse. */
+  readonly rawName: string;
+  readonly name?: EnvironmentVariableName;
+  readonly value?: EnvironmentVariableValue;
+  /** Why the line cannot be added; absent when `name` and `value` are set. */
+  readonly error?: string;
+}
+
+/**
+ * Parses Bulk Add input: one `NAME=value` per line, an optional `export `,
+ * and one pair of matching quotes around the value. Blank lines and `#`
+ * comments are skipped. Settings and the server share it, so the dialog
+ * shows the same per-line errors the server would return.
+ */
+export const parseEnvironmentVariableAssignments = (
+  contents: string,
+): ReadonlyArray<EnvironmentVariableAssignment> => {
+  if (
+    new TextEncoder().encode(contents).byteLength >
+    MAX_ENVIRONMENT_VARIABLE_BULK_BYTES
+  ) {
+    return [{ line: 1, rawName: "", error: "Bulk input is too large." }];
+  }
+  const parsed = contents
+    .split(/\r?\n/)
+    .flatMap<EnvironmentVariableAssignment>((source, index) => {
+      const line = index + 1;
+      const trimmed = source.trim();
+      if (trimmed.length === 0 || trimmed.startsWith("#")) return [];
+      const assignment = trimmed.startsWith("export ")
+        ? trimmed.slice("export ".length)
+        : trimmed;
+      const separator = assignment.indexOf("=");
+      const rawName = (
+        separator < 0 ? assignment : assignment.slice(0, separator)
+      ).trim();
+      if (separator < 1 || rawName.length === 0) {
+        return [{ line, rawName, error: "Use NAME=value." }];
+      }
+      const nameProblem = environmentVariableNameProblem(rawName);
+      const name = Schema.decodeUnknownOption(EnvironmentVariableName)(
+        normalizeEnvironmentVariableName(rawName),
+      );
+      if (nameProblem !== undefined || Option.isNone(name)) {
+        return [{ line, rawName, error: nameProblem ?? "Invalid name." }];
+      }
+      const rawValue = assignment.slice(separator + 1);
+      const unquoted =
+        rawValue.length >= 2 &&
+        ((rawValue.startsWith('"') && rawValue.endsWith('"')) ||
+          (rawValue.startsWith("'") && rawValue.endsWith("'")))
+          ? rawValue.slice(1, -1)
+          : rawValue;
+      const value = Schema.decodeUnknownOption(EnvironmentVariableValue)(
+        unquoted,
+      );
+      return Option.isNone(value)
+        ? [
+            {
+              line,
+              rawName,
+              error: `Value must be at most ${MAX_ENVIRONMENT_VARIABLE_VALUE_BYTES.toLocaleString("en-US")} UTF-8 bytes.`,
+            },
+          ]
+        : [{ line, rawName, name: name.value, value: value.value }];
+    });
+  const counts = new Map<string, number>();
+  for (const item of parsed) {
+    if (item.name !== undefined)
+      counts.set(item.name, (counts.get(item.name) ?? 0) + 1);
+  }
+  return parsed.map((item) =>
+    item.name !== undefined && (counts.get(item.name) ?? 0) > 1
+      ? {
+          line: item.line,
+          rawName: item.rawName,
+          error: `${item.name} appears more than once.`,
+        }
+      : item,
+  );
+};
 
 export const configReferenceFor = (
   id: EnvironmentVariableId,

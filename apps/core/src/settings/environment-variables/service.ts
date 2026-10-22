@@ -1,21 +1,22 @@
 import {
   configReferenceFor,
+  type EnvironmentVariableAuditAction,
+  type EnvironmentVariableAuditEvent,
   EnvironmentVariableAuditId,
   EnvironmentVariableAuditRecord,
   EnvironmentVariableConflict,
   EnvironmentVariableId,
-  type EnvironmentVariableAuditAction,
-  type EnvironmentVariableAuditEvent,
   type EnvironmentVariableKind,
   type EnvironmentVariableName,
   type EnvironmentVariablePlaintext,
   EnvironmentVariableRepository,
   type EnvironmentVariableTarget,
+  type EnvironmentVariableValue,
   MAX_ENVIRONMENT_VARIABLE_BULK_ITEMS,
   MAX_ENVIRONMENT_VARIABLES_PER_SCOPE,
-  type ProjectId,
   type Page,
   type PageRequest,
+  type ProjectId,
   StoredEnvironmentVariable,
   type UserId,
   WorkspaceRepository,
@@ -42,6 +43,12 @@ export const ENVIRONMENT_VARIABLE_PRECEDENCE = [
   "workspace",
 ] as const;
 
+/** A secret was given an empty value; only an env var may be empty. */
+export class EnvironmentVariableEmptySecret extends Schema.TaggedError<EnvironmentVariableEmptySecret>()(
+  "EnvironmentVariableEmptySecret",
+  {},
+) {}
+
 export class EnvironmentVariableLimitExceeded extends Schema.TaggedError<EnvironmentVariableLimitExceeded>()(
   "EnvironmentVariableLimitExceeded",
   {},
@@ -62,7 +69,8 @@ export interface ResolvedEnvironmentVariable {
 
 export interface BulkEnvironmentVariableInput {
   readonly name: EnvironmentVariableName;
-  readonly value: EnvironmentVariablePlaintext;
+  readonly value: EnvironmentVariableValue | EnvironmentVariablePlaintext;
+  readonly kind: EnvironmentVariableKind;
 }
 
 interface EnvironmentVariableServiceShape {
@@ -76,7 +84,7 @@ interface EnvironmentVariableServiceShape {
     input: {
       readonly name: EnvironmentVariableName;
       readonly kind: EnvironmentVariableKind;
-      readonly value: EnvironmentVariablePlaintext;
+      readonly value: EnvironmentVariableValue | EnvironmentVariablePlaintext;
     },
     audit: { readonly userId: UserId; readonly requestId: string },
   ) => Effect.Effect<StoredEnvironmentVariable, unknown>;
@@ -90,7 +98,7 @@ interface EnvironmentVariableServiceShape {
     keyring: ConfigEncryptionKeyring,
     target: EnvironmentVariableTarget,
     id: EnvironmentVariableId,
-    value: EnvironmentVariablePlaintext,
+    value: EnvironmentVariableValue | EnvironmentVariablePlaintext,
     audit: { readonly userId: UserId; readonly requestId: string },
   ) => Effect.Effect<StoredEnvironmentVariable, unknown>;
   readonly remove: (
@@ -101,7 +109,6 @@ interface EnvironmentVariableServiceShape {
   readonly applyBulk: (
     keyring: ConfigEncryptionKeyring,
     target: EnvironmentVariableTarget,
-    kind: EnvironmentVariableKind,
     values: ReadonlyArray<BulkEnvironmentVariableInput>,
     conflictBehavior: "reject" | "replace",
     audit: { readonly userId: UserId; readonly requestId: string },
@@ -171,7 +178,9 @@ export class EnvironmentVariableService extends Context.Service<
           input: {
             readonly name: EnvironmentVariableName;
             readonly kind: EnvironmentVariableKind;
-            readonly value: EnvironmentVariablePlaintext;
+            readonly value:
+              | EnvironmentVariableValue
+              | EnvironmentVariablePlaintext;
           },
         ) {
           const id = yield* Schema.decodeUnknownEffect(EnvironmentVariableId)(
@@ -306,6 +315,9 @@ export class EnvironmentVariableService extends Context.Service<
         rotate: Effect.fn("EnvironmentVariableService.rotate")(
           function* (keyring, target, id, value, audit) {
             const current = yield* repository.find(target, id);
+            if (current.kind === "secret" && value.length === 0) {
+              return yield* new EnvironmentVariableEmptySecret();
+            }
             const now = yield* DateTime.now;
             const envelope = yield* encryptEnvironmentVariable(
               keyring,
@@ -351,7 +363,7 @@ export class EnvironmentVariableService extends Context.Service<
           },
         ),
         applyBulk: Effect.fn("EnvironmentVariableService.applyBulk")(
-          function* (keyring, target, kind, values, conflictBehavior, audit) {
+          function* (keyring, target, values, conflictBehavior, audit) {
             if (
               values.length === 0 ||
               values.length > MAX_ENVIRONMENT_VARIABLE_BULK_ITEMS
@@ -383,16 +395,18 @@ export class EnvironmentVariableService extends Context.Service<
             for (const value of values) {
               const current = existingByName.get(value.name);
               if (current === undefined) {
-                const stored = yield* createStored(keyring, target, {
-                  ...value,
-                  kind,
-                });
+                const stored = yield* createStored(keyring, target, value);
                 writes.push({
                   operation: "insert",
                   value: stored,
                   audit: yield* mutationAudit(stored, "create", audit),
                 });
                 continue;
+              }
+              // Bulk Add never turns a stored secret into a visible env var.
+              const kind = current.kind === "secret" ? "secret" : value.kind;
+              if (kind === "secret" && value.value.length === 0) {
+                return yield* new EnvironmentVariableEmptySecret();
               }
               const now = yield* DateTime.now;
               const nextContext = { ...current, kind };
@@ -422,7 +436,13 @@ export class EnvironmentVariableService extends Context.Service<
               "environment_variable.bulk_apply",
               target,
               audit,
-              { kind, itemCount: writes.length },
+              {
+                ...(values.every(({ kind }) => kind === values[0]?.kind) &&
+                values[0] !== undefined
+                  ? { kind: values[0].kind }
+                  : {}),
+                itemCount: writes.length,
+              },
             );
             return writes.map(({ value }) => value);
           },

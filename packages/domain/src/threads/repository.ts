@@ -65,6 +65,18 @@ export interface ThreadRepositoryShape {
     Thread,
     Schema.SchemaError | PersistenceUnavailable | ThreadNotFound
   >;
+  /**
+   * Snoozes an active root Thread until `snoozedUntil`, or wakes it when
+   * undefined. Fails with ThreadNotFound for a Thread it may not snooze.
+   */
+  readonly setSnoozedUntilOwned: (
+    threadId: ThreadId,
+    ownerUserId: UserId,
+    snoozedUntil: Thread["snoozedUntil"],
+  ) => Effect.Effect<
+    Thread,
+    Schema.SchemaError | PersistenceUnavailable | ThreadNotFound
+  >;
   /** Renames or recolors; a rename also ends a pending generated title. */
   readonly updateOwned: (
     threadId: ThreadId,

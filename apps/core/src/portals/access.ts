@@ -12,6 +12,7 @@
 import { Principal, type ThreadId } from "@dx/domain";
 import { Effect, Option, Schema } from "effect";
 import { authorizeThreadRequest } from "../auth/authorize-thread.js";
+import { readSessionExpiry } from "../auth/session-sockets.js";
 import type { PortalSession } from "./session.js";
 
 export type PortalAccess = "allowed" | "not-found" | "read-only" | "archived";
@@ -35,15 +36,6 @@ export const evaluatePortalAccess = async (
   return "allowed";
 };
 
-const sessionExpiry = (value: unknown) => {
-  if (typeof value === "number") return value < 1e12 ? value * 1_000 : value;
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    return Number.isNaN(parsed) ? undefined : parsed;
-  }
-  return undefined;
-};
-
 /** Whether the dx session a Portal handshake ran under is still signed in. */
 export const dxSessionActive = async (
   db: D1Database,
@@ -51,13 +43,7 @@ export const dxSessionActive = async (
   userId: string,
   nowMs: number,
 ) => {
-  const row = await db
-    .prepare(
-      'SELECT "expiresAt" AS expires_at FROM "session" WHERE id = ? AND "userId" = ?',
-    )
-    .bind(sessionId, userId)
-    .first<{ expires_at: unknown }>();
-  const expiresAt = row === null ? undefined : sessionExpiry(row.expires_at);
+  const expiresAt = await readSessionExpiry(db, sessionId, userId);
   return expiresAt !== undefined && expiresAt > nowMs;
 };
 

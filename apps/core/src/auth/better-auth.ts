@@ -24,6 +24,11 @@ import { emailPassword } from "./email-password.js";
 import { fillMissingName } from "./profile-name.js";
 import type { AuthenticationRequirements } from "./requirements.js";
 import {
+  noteSessionEnded,
+  sessionCacheVersion,
+  sessionCookieCacheMaxAgeSeconds,
+} from "./session-revocation.js";
+import {
   loadSignInConfiguration,
   type SignInConfiguration,
 } from "./sign-in-configuration.js";
@@ -393,12 +398,20 @@ export const createAuth = (
           }),
         },
       },
+      session: {
+        delete: {
+          after: async (session) => noteSessionEnded(session.id),
+        },
+      },
     },
     session: {
       cookieCache: {
         enabled: true,
-        maxAge: 60 * 60,
+        maxAge: sessionCookieCacheMaxAgeSeconds,
         strategy: "compact",
+        // Asked on every cache hit. An ended session's cache stops matching,
+        // so Better Auth reads D1, finds no session, and clears the cookies.
+        version: (session) => sessionCacheVersion(db, session.id),
       },
     },
     rateLimit: {

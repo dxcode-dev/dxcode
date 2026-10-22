@@ -7,7 +7,7 @@ import { DX_WORKSPACE_SKILL } from "./built-in-skill-names.js";
  * own loop, `mcp__dx__create_thread` through Claude Code's dx MCP server.
  */
 const threadToolsPrompt = (tool: (name: string) => string) =>
-  `You can start child Threads with ${tool("create_thread")}, message the owner's other Threads with ${tool("send_thread_message")}, check on them with ${tool("get_thread_status")}, wait for them with ${tool("wait_for_threads")}, and rename, recolor, pin, or archive them with ${tool("update_thread")}. Each child Thread has its own Orb, which ${tool("create_thread")} can pick by provider and size, and starts from the project's repository; files do not move between Threads, so give a child everything it needs in its prompt. A child Thread belongs to this Thread's owner and is private to them. A message another Thread's agent sent carries source_thread on its <dx_message_author> tag: answer it as a request from that Thread, and use ${tool("send_thread_message")} to reply there when it asks for a reply.`;
+  `You can start child Threads with ${tool("create_thread")}, message the owner's other Threads with ${tool("send_thread_message")}, check on them with ${tool("get_thread_status")}, wait for them with ${tool("wait_for_threads")}, and rename, recolor, pin, snooze, or archive them with ${tool("update_thread")}. Each child Thread has its own Orb, which ${tool("create_thread")} can pick by provider and size, and starts from the project's repository; files do not move between Threads, so give a child everything it needs in its prompt. A child Thread belongs to this Thread's owner and is private to them. A message another Thread's agent sent carries source_thread on its <dx_message_author> tag: answer it as a request from that Thread, and use ${tool("send_thread_message")} to reply there when it asks for a reply.`;
 
 /**
  * Attachments: the message names each file and its
@@ -23,6 +23,13 @@ const attachmentsPrompt = (shell: string) =>
  */
 const terminalPrompt = (shell: string) =>
   `When /opt/dx/bin/tmux exists, the user's Terminal tab is tmux session main on socket dx, and you share it. Read it with \`/opt/dx/bin/tmux -L dx capture-pane -p -J -S -200 -t main\`; type into it with \`/opt/dx/bin/tmux -L dx send-keys -t main -l '<text>'\`, then \`/opt/dx/bin/tmux -L dx send-keys -t main Enter\`. The user sees everything typed there, so use it when they ask you to run something in their terminal or to look at what they ran, and keep your own work in ${shell}. No session means they have not opened the Terminal yet.`;
+
+/**
+ * What a reply can show besides text: workspace media through Markdown
+ * images, and views through the creating-views skill. The web transcript
+ * renders both (`rich-markdown.tsx`, `markdown-view.tsx`).
+ */
+const richRepliesPrompt = `Your replies render as Markdown in the dx web app. To show an image, video, or audio file from the workspace, write a Markdown image of its absolute path, such as \`![Login page](/home/user/artifacts/login.png)\` or \`![Sign-in recording](/home/user/artifacts/sign-in.webm)\`: images show inline, and video and audio play in place. For a chart, dashboard, explorable diagram, UI mockup, or interactive prototype, use the creating-views skill, which renders a \`\`\`dx-view block of HTML as an interactive view in the reply.`;
 
 /**
  * dx's own workspace skill: how the Orb sleeps, how to run servers so they
@@ -74,6 +81,8 @@ The Project's repository is checked out in the working directory. A Project's ad
 ${attachmentsPrompt("shell_command")}
 
 ${terminalPrompt("shell_command")}
+
+${richRepliesPrompt}
 
 Before starting a long-running process (a dev server, watcher, or database), showing the user something running in the workspace, or using the Desktop's browser, activate the ${DX_WORKSPACE_SKILL} skill. Never give the user a \`localhost\` URL: it points at their own machine.
 
@@ -141,6 +150,8 @@ The Project's repository is checked out in the working directory. A Project's ad
 ${attachmentsPrompt("Bash")}
 
 ${terminalPrompt("Bash")}
+
+${richRepliesPrompt}
 
 ## Your workspace
 

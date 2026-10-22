@@ -6,6 +6,7 @@ import type {
   GraphData,
 } from "@dx/api";
 import { isClaudeCodeModel } from "@dx/domain";
+import { modelDisplayName } from "../../../shared/model-display-name.js";
 
 export interface RoutingSource {
   readonly id: string;
@@ -24,6 +25,8 @@ export interface RoutingDestination {
   readonly name: string;
   readonly detail?: string;
   readonly kind: string;
+  /** A workspace connection, which serves after the user's own. */
+  readonly workspace?: boolean;
 }
 export const NOT_SERVED = "not-served";
 export const TRANSCRIPTION_SOURCE = "speech:transcription";
@@ -44,6 +47,13 @@ const MODE_NAMES: Record<string, string> = {
   ultra: "Ultra",
 };
 
+/** A model's readable name when neither the catalog nor choices name it. */
+const readableModel = (id: string) =>
+  modelDisplayName(id).replace(
+    /(^|\s)([a-z])/g,
+    (_, space: string, letter: string) => space + letter.toUpperCase(),
+  );
+
 export function routingPresentation({
   graph,
   catalog,
@@ -62,8 +72,7 @@ export function routingPresentation({
   const names = new Map(catalogModels.map((m) => [m.id, m.name]));
   const displayName = (id: string) =>
     names.get(id) ??
-    choices?.models.find((m) => m.canonical === id)?.name ??
-    id;
+    readableModel(choices?.models.find((m) => m.canonical === id)?.name ?? id);
   const edgeByMode = new Map(graph.edges.map((e) => [e.mode, e]));
   const groups: RoutingGroup[] = graph.modes.map((mode) => ({
     id: mode.mode,
@@ -124,11 +133,15 @@ export function routingPresentation({
       detail:
         connection.kind === "subscription"
           ? "GitHub Copilot"
-          : connection.scope === "workspace"
-            ? "Workspace"
-            : row?.kind === "custom"
-              ? "Custom URL"
+          : connection.kind === "custom"
+            ? "Custom URL"
+            : connection.kind === "deployment"
+              ? "Deployment"
               : row?.providerId,
+      // The deployment's own connection is stored under a workspace target.
+      ...(connection.scope === "workspace" && connection.kind !== "deployment"
+        ? { workspace: true }
+        : {}),
     });
   }
   for (const model of served.values()) {

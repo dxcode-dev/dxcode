@@ -17,6 +17,8 @@ export interface SidebarThreadRowsProps extends SidebarThreadListProps {
     ThreadListClientItem["id"],
     ReadonlyArray<ThreadListClientItem>
   >;
+  /** The Snoozed section's rows. */
+  readonly snoozed?: boolean;
 }
 
 const noChildren: ReadonlyArray<ThreadListClientItem> = [];
@@ -24,6 +26,7 @@ const noChildren: ReadonlyArray<ThreadListClientItem> = [];
 export function SidebarThreadRows({
   threads,
   childThreads,
+  snoozed = false,
   activeThreadId,
   projectNames,
   onThreadNavigate,
@@ -69,6 +72,7 @@ export function SidebarThreadRows({
               pinning={pinningThreadId === thread.id}
               childCount={childCount}
               expanded={expanded}
+              snoozed={snoozed}
               onToggleChildren={expansion?.toggle}
               onThreadNavigate={onThreadNavigate}
               onThreadPointerEnter={onThreadPointerEnter}

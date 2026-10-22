@@ -31,6 +31,7 @@ import {
 } from "./features/threads/new-thread-page.js";
 import { ThreadArchiveProvider } from "./features/threads/thread-archive.js";
 import { ThreadEditingProvider } from "./features/threads/thread-editing.js";
+import { ThreadSnoozeProvider } from "./features/threads/thread-snooze.js";
 import { isStaleChunkError } from "./shared/stale-chunk.js";
 
 export interface RouterContext {
@@ -92,9 +93,11 @@ const productRoute = createRoute({
   id: "_product",
   component: () => (
     <ThreadArchiveProvider>
-      <ThreadEditingProvider>
-        <ProductShell notices={productNotices} />
-      </ThreadEditingProvider>
+      <ThreadSnoozeProvider>
+        <ThreadEditingProvider>
+          <ProductShell notices={productNotices} />
+        </ThreadEditingProvider>
+      </ThreadSnoozeProvider>
     </ThreadArchiveProvider>
   ),
 });
@@ -242,6 +245,20 @@ const personalSettingsRoute = createRoute({
   notFoundComponent: SettingsRouteNotFound,
 });
 
+// Instructions lived at /settings/advanced; keep old links working.
+const personalAdvancedSettingsRedirectRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings/advanced",
+  beforeLoad: ({ location }) => {
+    throw redirect({
+      to: "/settings/$section",
+      params: { section: "instructions" },
+      state: location.state,
+      replace: true,
+    });
+  },
+});
+
 const personalSettingsSectionRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings/$section",
@@ -330,6 +347,7 @@ const routeTree = rootRoute.addChildren([
     threadRoute,
   ]),
   personalSettingsRoute,
+  personalAdvancedSettingsRedirectRoute,
   personalSettingsSectionRoute,
   workspaceSettingsEmptyRoute,
   workspaceSettingsRoute,

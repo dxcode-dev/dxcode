@@ -25,6 +25,7 @@ import { threadRoutes } from "../../src/threads/routes.js";
 
 const owner = Schema.decodeUnknownSync(UserId)("applications-owner");
 const admin = Schema.decodeUnknownSync(UserId)("applications-admin");
+const auditor = Schema.decodeUnknownSync(UserId)("applications-auditor");
 const member = Schema.decodeUnknownSync(UserId)("applications-member");
 const outsider = Schema.decodeUnknownSync(UserId)("applications-outsider");
 const otherOwner = Schema.decodeUnknownSync(UserId)("applications-other-owner");
@@ -143,6 +144,7 @@ beforeEach(async () => {
     insertUser(member, 3),
     insertUser(outsider, 4),
     insertUser(otherOwner, 5),
+    insertUser(auditor, 6),
     env.DB.prepare(
       "INSERT INTO organization (id, name, slug, createdAt) VALUES (?, ?, ?, ?)",
     ).bind("applications-workspace", "DX Team", workspaceSlug, 1),
@@ -165,6 +167,15 @@ beforeEach(async () => {
       "applications-workspace",
       admin,
       "admin",
+      1,
+    ),
+    env.DB.prepare(
+      "INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES (?, ?, ?, ?, ?)",
+    ).bind(
+      "applications-auditor-member",
+      "applications-workspace",
+      auditor,
+      "auditor",
       1,
     ),
     env.DB.prepare(
@@ -232,13 +243,13 @@ describe("workspace external API applications in workerd with real D1", () => {
     await createApplication(admin, { name: "Admin app" });
     await createApplication(owner, { name: "Third app" });
 
-    const memberList = await settingsApp(member).request(
+    const adminList = await settingsApp(admin).request(
       `/settings/workspaces/${workspaceSlug}/applications?limit=2`,
       {},
       { DB: env.DB },
     );
-    expect(memberList.status).toBe(200);
-    const firstPage = (await memberList.json()) as {
+    expect(adminList.status).toBe(200);
+    const firstPage = (await adminList.json()) as {
       data: {
         items: ReadonlyArray<ExternalApiApplicationData>;
         nextCursor?: string;
@@ -247,8 +258,11 @@ describe("workspace external API applications in workerd with real D1", () => {
     };
     expect(firstPage.data.items).toHaveLength(2);
     expect(firstPage.data.nextCursor).toBeDefined();
-    expect(firstPage.data.permissions).toEqual(["applications:read"]);
-    const secondPage = await settingsApp(member).request(
+    expect(firstPage.data.permissions).toEqual([
+      "applications:read",
+      "applications:manage",
+    ]);
+    const secondPage = await settingsApp(admin).request(
       `/settings/workspaces/${workspaceSlug}/applications?limit=2&cursor=${encodeURIComponent(firstPage.data.nextCursor ?? "")}`,
       {},
       { DB: env.DB },
@@ -317,6 +331,60 @@ describe("workspace external API applications in workerd with real D1", () => {
       { DB: env.DB },
     );
     expect(oversized.status).toBe(400);
+  });
+
+  it("lets owners, admins, and auditors list apps and read their audit log, and denies members both", async () => {
+    const { application } = (
+      await createApplication(owner, { name: "Audited app" })
+    ).data;
+    const listPath = `/settings/workspaces/${workspaceSlug}/applications`;
+    const auditPath = `${listPath}/${application.id}/audit`;
+    const expected = [
+      { role: "owner", userId: owner, list: 200, audit: 200 },
+      { role: "admin", userId: admin, list: 200, audit: 200 },
+      { role: "auditor", userId: auditor, list: 200, audit: 200 },
+      { role: "member", userId: member, list: 403, audit: 403 },
+    ] as const;
+
+    for (const { role, userId, list, audit } of expected) {
+      const listed = await settingsApp(userId).request(
+        listPath,
+        {},
+        { DB: env.DB },
+      );
+      expect(listed.status, `${role} list`).toBe(list);
+      const listedText = await listed.text();
+      if (list === 200) {
+        expect(listedText, `${role} list`).toContain(application.clientId);
+      } else {
+        expect(JSON.parse(listedText), `${role} list`).toMatchObject({
+          data: { code: "WORKSPACE_PERMISSION_FORBIDDEN" },
+        });
+        expect(listedText, `${role} list`).not.toContain(application.clientId);
+        expect(listedText, `${role} list`).not.toContain("Audited app");
+      }
+
+      const audited = await settingsApp(userId).request(
+        auditPath,
+        {},
+        { DB: env.DB },
+      );
+      expect(audited.status, `${role} audit`).toBe(audit);
+      const auditBody = await audited.json();
+      expect(auditBody, `${role} audit`).toMatchObject(
+        audit === 200
+          ? {
+              data: {
+                items: [
+                  expect.objectContaining({
+                    action: "external_api_application.create",
+                  }),
+                ],
+              },
+            }
+          : { data: { code: "WORKSPACE_PERMISSION_FORBIDDEN" } },
+      );
+    }
   });
 
   it("authenticates client credentials and maps every grantable scope only to stable Project and Thread actions", async () => {

@@ -21,6 +21,7 @@ import {
   type SharingRow,
 } from "../thread-sharing/service.js";
 import { decodeThreadRows } from "./repository-d1.js";
+import { threadSnoozeData } from "./snooze.js";
 
 const SummaryRowSchema = Schema.Struct({
   thread_id: Schema.String,
@@ -58,6 +59,7 @@ export const threadListItem = (
   activityStatus: thread.activityStatus,
   lifecycleState: thread.lifecycleState,
   pinnedAt: thread.pinnedAt,
+  ...threadSnoozeData(thread),
   ...(thread.color === undefined ? {} : { color: thread.color }),
   ...(isThreadTitlePending(thread) ? { titlePending: true } : {}),
   agentUrl: threadAgentUrl(thread.id),
@@ -187,6 +189,8 @@ export const readThreadListItem = async (
               COALESCE(thread.last_activity_at, thread.updated_at) AS last_activity_at,
               thread.activity_status, thread.lifecycle_state,
               CASE WHEN thread.owner_user_id = ?2 THEN thread.pinned_at END AS pinned_at,
+              CASE WHEN thread.owner_user_id = ?2 THEN thread.snoozed_until END AS snoozed_until,
+              CASE WHEN thread.owner_user_id = ?2 THEN thread.snooze_woke_at END AS snooze_woke_at,
               thread.workspace_access, thread.contribute_until,
               thread.owner_user_id = ?2 AS owned,
               ${sharedThreadAccessSql("thread", "?3")} AS access,

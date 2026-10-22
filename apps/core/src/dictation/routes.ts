@@ -14,6 +14,11 @@ import {
   requireBrowserSession,
 } from "../auth/browser-session.js";
 import { loadAuthenticationRequirements } from "../auth/requirements.js";
+import {
+  checkBrowserSessions,
+  closeForEndedSession,
+  sessionSocketCheckMs,
+} from "../auth/session-sockets.js";
 import type { AppEnv, Bindings } from "../http/types.js";
 import { dictationLogger } from "../logging.js";
 import type { AdmittedConfiguration } from "../plugins/host.js";
@@ -24,6 +29,7 @@ import {
   recordTranscription,
   speechProviderFor,
 } from "../plugins/speech/transcription.js";
+import { loadDictationVocabulary } from "./vocabulary.js";
 import { InvalidDictationAudio, readCanonicalWav } from "./wav.js";
 
 const UUID =
@@ -231,6 +237,8 @@ dictationRoutes.get("/:id/stream", async (c) => {
     const { db, owner, workspace } = await authorize(c);
     const id = c.req.param("id");
     if (!UUID.test(id)) return c.json({ error: "Invalid request." }, 400);
+    // Read alongside admission so the session opens no later; never rejects.
+    const vocabularyRead = loadDictationVocabulary(db, owner);
     const admission = await admitSpeech({ db, bindings: c.env }, owner);
     if (!admission.admitted) return unavailable(c);
     const { configuration } = admission;
@@ -247,13 +255,14 @@ dictationRoutes.get("/:id/stream", async (c) => {
     )
       return c.json({ error: "Dictation is temporarily unavailable." }, 429);
 
+    const vocabulary = await vocabularyRead;
     let reached = false;
     const abort = new AbortController();
     let session: SpeechSession;
     try {
       session = speechProviderFor(configuration, c.env, () => {
         reached = true;
-      }).openSession(abort.signal);
+      }).openSession({ signal: abort.signal, vocabulary });
     } catch (error) {
       await settleJob(db, id, owner, "failed");
       logTranscriptionFailure(c.env, id, configuration, "stream", error);
@@ -268,6 +277,7 @@ dictationRoutes.get("/:id/stream", async (c) => {
     let bytes = 0;
     let heartbeatAt = startedAt;
     let settled = false;
+    let sessionWatch: ReturnType<typeof setInterval> | undefined;
     let done: () => void = () => undefined;
     const lifetime = new Promise<void>((resolve) => {
       done = resolve;
@@ -280,6 +290,7 @@ dictationRoutes.get("/:id/stream", async (c) => {
     ) => {
       if (settled) return;
       settled = true;
+      clearInterval(sessionWatch);
       abort.abort();
       if (outcome.state !== "completed") session.close();
       try {
@@ -351,6 +362,23 @@ dictationRoutes.get("/:id/stream", async (c) => {
           .catch(() => undefined);
       }
     });
+    // The socket lives in this request, so the request checks its session.
+    let browserSession = c.get("browserSession");
+    if (browserSession !== undefined)
+      sessionWatch = setInterval(() => {
+        if (browserSession === undefined) return;
+        const watched = browserSession;
+        void checkBrowserSessions(db, [watched], Date.now())
+          .then((states) => {
+            const state = states.get(watched.sessionId);
+            if (state?.state === "renewed")
+              browserSession = { ...watched, expiresAt: state.expiresAt };
+            if (state?.state !== "ended" || settled) return;
+            closeForEndedSession(server);
+            return settle({ state: "canceled" });
+          })
+          .catch(() => undefined);
+      }, sessionSocketCheckMs(c.env));
     server.addEventListener("close", () => void settle({ state: "canceled" }));
     server.addEventListener("error", () => void settle({ state: "canceled" }));
     try {
@@ -379,6 +407,8 @@ dictationRoutes.post("/:id", async (c) => {
     const id = c.req.param("id");
     if (!UUID.test(id)) return c.json({ error: "Invalid request." }, 400);
     const wav = await readCanonicalWav(c.req.raw);
+    // Read alongside admission; never rejects.
+    const vocabularyRead = loadDictationVocabulary(db, owner);
     const admission = await admitSpeech({ db, bindings: c.env }, owner);
     if (!admission.admitted) return unavailable(c);
     const { configuration } = admission;
@@ -394,6 +424,7 @@ dictationRoutes.post("/:id", async (c) => {
       ))
     )
       return existingJob(c, db, id, owner, workspace);
+    const vocabulary = await vocabularyRead;
     let reached = false;
     const startedAt = Date.now();
     const meter = (outcome: "success" | "error") =>
@@ -408,13 +439,13 @@ dictationRoutes.post("/:id", async (c) => {
     try {
       text = await speechProviderFor(configuration, c.env, () => {
         reached = true;
-      }).transcribe(
-        wav,
-        AbortSignal.any([
+      }).transcribe(wav, {
+        signal: AbortSignal.any([
           c.req.raw.signal,
           AbortSignal.timeout(TRANSCRIBE_TIMEOUT),
         ]),
-      );
+        vocabulary,
+      });
     } catch (error) {
       await settleJob(db, id, owner, "failed");
       await meter("error");

@@ -264,6 +264,7 @@ Report as a visual transcript, in order: one line per action describing what was
 clicked, with the non-sensitive values named (say that a password, card number, or code was
 entered without reproducing it; card numbers by last four digits only), the confirmation with its
 reference or order number quoted as text, the fields you could not fill and why, and links to the
-screenshots, recording, and contact sheet. The transcript does not render workspace images
-inline: link each file as `[Order confirmation](file:///home/user/artifacts/browser-use/acme-checkout/order-confirmation.png)`,
-which opens it in the Thread's file viewer.
+screenshots, recording, and contact sheet. Show each capture inline
+with a Markdown image of its absolute path, such as
+`![Order confirmation](/home/user/artifacts/browser-use/acme-checkout/order-confirmation.png)`;
+recordings (`.webm`, `.mp4`) play in place the same way.

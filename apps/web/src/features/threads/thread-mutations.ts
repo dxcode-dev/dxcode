@@ -26,6 +26,7 @@ import {
   request,
   setThreadArchived,
   setThreadPinned,
+  setThreadSnoozed,
   type ThreadPage,
   updateThread,
 } from "../../shared/api/client.js";
@@ -265,10 +266,128 @@ export const setThreadPinnedMutationOptions = (
       pinned: boolean;
     }) => setThreadPinned(threadId, pinned),
     onSuccess: (thread: ThreadData) => {
+      // Pinning wakes a snoozed Thread.
       queryClient.setQueryData<ThreadDetailData>(
         threadKeys.detail(userId, thread.id),
-        (detail) => (detail === undefined ? detail : { ...detail, ...thread }),
+        (detail) => withThreadRow(detail, thread),
       );
+      return queryClient.invalidateQueries({
+        queryKey: threadKeys.lists(userId),
+      });
+    },
+  });
+
+/**
+ * A Thread's detail with the server's row applied. The row has no snooze
+ * once woken, so a snooze the detail still holds goes with it.
+ */
+const withThreadRow = (
+  detail: ThreadDetailData | undefined,
+  thread: ThreadData,
+): ThreadDetailData | undefined => {
+  if (detail === undefined) return detail;
+  const { snoozedUntil: _until, snoozeWokeAt: _wokeAt, ...rest } = detail;
+  return { ...rest, ...thread };
+};
+
+/** A snooze or wake as the server will apply it to a listed Thread. */
+const withSnooze = <
+  Cached extends Pick<ThreadData, "snoozedUntil" | "snoozeWokeAt">,
+>(
+  thread: Cached,
+  snoozedUntil: Date | null,
+  now: number,
+): Cached => {
+  const { snoozedUntil: previous, ...rest } = thread;
+  if (snoozedUntil !== null)
+    return {
+      ...rest,
+      snoozedUntil: DateTime.makeUnsafe(snoozedUntil),
+    } as Cached;
+  return (
+    previous === undefined
+      ? thread
+      : {
+          ...rest,
+          snoozeWokeAt: DateTime.makeUnsafe(
+            Math.min(DateTime.toEpochMillis(previous), now),
+          ),
+        }
+  ) as Cached;
+};
+
+/**
+ * Snoozes a Thread until a time, or wakes it with `null`. The sidebar moves
+ * the row at once and puts it back if the server refuses.
+ */
+export const setThreadSnoozedMutationOptions = (
+  queryClient: QueryClient,
+  userId: UserId,
+) =>
+  mutationOptions({
+    mutationKey: [...threadKeys.all(userId), "snooze"] as const,
+    mutationFn: ({
+      threadId,
+      snoozedUntil,
+    }: {
+      threadId: ThreadId;
+      snoozedUntil: Date | null;
+    }) => setThreadSnoozed(threadId, snoozedUntil),
+    onMutate: async ({ threadId, snoozedUntil }) => {
+      await Promise.all([
+        queryClient.cancelQueries({
+          queryKey: threadKeys.detail(userId, threadId),
+          exact: true,
+        }),
+        queryClient.cancelQueries({ queryKey: threadKeys.lists(userId) }),
+      ]);
+      const previousDetail = queryClient.getQueryData<ThreadDetailData>(
+        threadKeys.detail(userId, threadId),
+      );
+      const previousLists = queryClient.getQueriesData<ThreadListData>({
+        queryKey: threadKeys.lists(userId),
+      });
+      const now = Date.now();
+      queryClient.setQueryData<ThreadDetailData>(
+        threadKeys.detail(userId, threadId),
+        (detail) =>
+          detail === undefined ? detail : withSnooze(detail, snoozedUntil, now),
+      );
+      queryClient.setQueriesData<ThreadListData>(
+        { queryKey: threadKeys.lists(userId) },
+        (current) =>
+          current === undefined
+            ? current
+            : {
+                ...current,
+                pages: current.pages.map((page) =>
+                  flatMapListedThreads(page, (thread) => [
+                    thread.id === threadId
+                      ? withSnooze(thread, snoozedUntil, now)
+                      : thread,
+                  ]),
+                ),
+              },
+      );
+      return { previousDetail, previousLists };
+    },
+    onSuccess: (thread: ThreadData) => {
+      queryClient.setQueryData<ThreadDetailData>(
+        threadKeys.detail(userId, thread.id),
+        (detail) => withThreadRow(detail, thread),
+      );
+      return queryClient.invalidateQueries({
+        queryKey: threadKeys.lists(userId),
+      });
+    },
+    onError: (_error, { threadId }, rollback) => {
+      if (rollback !== undefined)
+        queryClient.setQueryData(
+          threadKeys.detail(userId, threadId),
+          rollback.previousDetail,
+        );
+      for (const [queryKey, data] of rollback?.previousLists ?? [])
+        queryClient.setQueryData(queryKey, data);
       return queryClient.invalidateQueries({
         queryKey: threadKeys.lists(userId),
       });

@@ -161,8 +161,9 @@ const harness = async (
         };
       });
     },
-    listEffectiveForThread: () =>
+    listThreadCandidates: () =>
       Effect.succeed(skill.enabled ? [current()] : []),
+    personalSkillsBlocked: () => Effect.succeed(false),
     getWorkspacePolicy: () => Effect.succeed(policy),
     setWorkspacePolicy: (_workspaceId, allowPersonal) =>
       Effect.sync(() => {

@@ -30,7 +30,7 @@ Someone who already belongs to another workspace must leave it first.
   **Members**, an admin can promote a member to admin, revoke admin, or remove
   a member.
 - **Members** use everything the workspace provides. They see **Workspace**,
-  **Members**, **MCP & Integrations**, and **Plugins** read-only; other
+  **Members**, **Integrations & MCP**, and **Plugins** read-only; other
   workspace settings are hidden.
 
 ## Projects and source access

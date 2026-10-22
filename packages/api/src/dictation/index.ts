@@ -1,4 +1,7 @@
+import { DictationVocabulary } from "@dx/domain";
 import { Schema } from "effect";
+import { errorResponse, successResponse } from "../http/response.js";
+import { SettingsFieldErrorSchema } from "../settings/field-error.js";
 
 export const DICTATION_MAX_SECONDS = 900;
 export const DICTATION_SAMPLE_RATE = 16_000;
@@ -46,3 +49,51 @@ export const DictationUnavailableSchema = Schema.Struct({
 });
 export type DictationUnavailable = typeof DictationUnavailableSchema.Type;
 export type DictationError = typeof DictationErrorSchema.Type;
+
+/**
+ * Dictation vocabulary for one scope: `GET` and `PUT`
+ * `/v1/settings/personal/dictation-vocabulary` and
+ * `/v1/settings/workspaces/:workspaceSlug/dictation-vocabulary`. Dictation
+ * uses the person's terms, then their workspace's.
+ */
+export const DictationVocabularyDataSchema = Schema.Struct({
+  scope: Schema.Literals(["personal", "workspace"]),
+  terms: DictationVocabulary,
+  /** Workspace members who cannot update the workspace read it only. */
+  canUpdate: Schema.Boolean,
+  updatedAt: Schema.NullOr(Schema.String),
+});
+export type DictationVocabularyData = typeof DictationVocabularyDataSchema.Type;
+
+/** Terms as typed; the server splits, trims, and de-duplicates them. */
+export const UpdateDictationVocabularyRequestSchema = Schema.Struct({
+  terms: Schema.Array(Schema.String).check(Schema.isMaxLength(1_000)),
+});
+export type UpdateDictationVocabularyRequest =
+  typeof UpdateDictationVocabularyRequestSchema.Type;
+
+export const DictationVocabularyResponseSchema = successResponse(
+  DictationVocabularyDataSchema,
+);
+
+export const DictationVocabularyErrorResponseSchema = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("error"),
+    data: Schema.Struct({
+      code: Schema.Literal("INVALID_DICTATION_VOCABULARY"),
+      message: Schema.String,
+      requestId: Schema.String,
+      fieldErrors: Schema.Array(SettingsFieldErrorSchema),
+    }),
+  }),
+  errorResponse(
+    "DICTATION_VOCABULARY_FORBIDDEN",
+    "Only workspace admins can change the workspace vocabulary.",
+  ),
+  errorResponse(
+    "DICTATION_VOCABULARY_UNAVAILABLE",
+    "Dictation vocabulary is temporarily unavailable.",
+  ),
+]);
+export type DictationVocabularyErrorResponse =
+  typeof DictationVocabularyErrorResponseSchema.Type;

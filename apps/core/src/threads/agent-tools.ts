@@ -89,6 +89,7 @@ interface ThreadRow {
   readonly activity_status: "idle" | "working";
   readonly last_activity_at: string | null;
   readonly created_at: string;
+  readonly snoozed_until: string | null;
 }
 
 /** What the tools report for one Thread. */
@@ -106,6 +107,11 @@ const threadState = (row: ThreadRow) => ({
   color: row.color ?? "auto",
   state: row.activity_status,
   archived: row.lifecycle_state !== "active",
+  ...(row.snoozed_until !== null &&
+  row.lifecycle_state === "active" &&
+  Date.parse(row.snoozed_until) > Date.now()
+    ? { snoozedUntil: row.snoozed_until }
+    : {}),
   lastActivityAt: row.last_activity_at ?? row.created_at,
   createdAt: row.created_at,
 });
@@ -192,7 +198,8 @@ export const createThreadTools = (
     const rows = await context.db
       .prepare(
         `SELECT id, title, title_pending_until, project_id, parent_thread_id, color,
-           lifecycle_state, activity_status, last_activity_at, created_at
+           lifecycle_state, activity_status, last_activity_at, created_at,
+           snoozed_until
          FROM threads
          WHERE owner_user_id = ? AND lifecycle_state != 'deleted'
            AND id IN (${threadIds.map(() => "?").join(", ")})${
@@ -893,8 +900,9 @@ export const createThreadTools = (
     defineTool({
       name: "update_thread",
       description: description([
-        "Rename, recolor, pin or unpin, or archive or restore one of this Thread owner's Threads. Omit thread to update this Thread. Change only what the user asked for.",
+        "Rename, recolor, pin or unpin, snooze or wake, or archive or restore one of this Thread owner's Threads. Omit thread to update this Thread. Change only what the user asked for.",
         "Archiving stops the Thread's Orb, so this Thread cannot archive itself.",
+        "Snoozing hides a Thread from the owner's sidebar until its wake time; it keeps its Orb and keeps working. A message someone sends wakes it early. Threads started by another Thread follow their parent and cannot be snoozed.",
       ]),
       input: v.object({
         thread: v.optional(
@@ -925,6 +933,18 @@ export const createThreadTools = (
             v.description("True to archive, false to restore."),
           ),
         ),
+        snoozed_until: v.optional(
+          v.pipe(
+            v.string(),
+            v.check(
+              (value) => value === "none" || !Number.isNaN(Date.parse(value)),
+              "Use an ISO 8601 date and time, or none.",
+            ),
+            v.description(
+              "ISO 8601 date and time to snooze the Thread until, within a year, such as 2026-10-22T09:00:00+05:30; or none to wake it.",
+            ),
+          ),
+        ),
       }),
       run: async ({ data }) =>
         withContext(async (context, owner) => {
@@ -933,10 +953,11 @@ export const createThreadTools = (
             data.title === undefined &&
             data.color === undefined &&
             data.pinned === undefined &&
-            data.archived === undefined
+            data.archived === undefined &&
+            data.snoozed_until === undefined
           )
             throw new Error(
-              "Name at least one of title, color, pinned, or archived.",
+              "Name at least one of title, color, pinned, snoozed_until, or archived.",
             );
           if (data.archived === true && threadId === callingThreadId)
             throw new Error("This Thread cannot archive itself.");
@@ -965,6 +986,14 @@ export const createThreadTools = (
             });
           if (data.pinned !== undefined)
             await patch("/pin", { pinned: data.pinned });
+          // After pinning, which wakes a snoozed Thread.
+          if (data.snoozed_until !== undefined)
+            await patch("/snooze", {
+              snoozedUntil:
+                data.snoozed_until === "none"
+                  ? null
+                  : new Date(data.snoozed_until).toISOString(),
+            });
           if (data.archived === true)
             await patch("/archive", { archived: true });
           return {

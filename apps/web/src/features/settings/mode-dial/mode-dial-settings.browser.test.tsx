@@ -90,7 +90,8 @@ describe("mode dial settings", () => {
           ?.click(),
       );
       expect(onDirtyChange).toHaveBeenLastCalledWith(false);
-      expect(select.value).toBe("openai/a");
+      // An unpinned mode shows Auto, not the model Auto resolves to.
+      expect(select.value).toBe("auto");
     } finally {
       await React.act(() => root.unmount());
       container.remove();

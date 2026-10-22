@@ -173,8 +173,12 @@ const seedTwoProviderCatalog = (queryClient: QueryClient) =>
   });
 
 const sectionNames = (container: HTMLElement) =>
-  [...container.querySelectorAll(".orb-size-section-trigger")].map(
-    (trigger) => trigger.textContent,
+  [...container.querySelectorAll(".orb-size-picker-group h3")].map(
+    (heading) => heading.textContent,
+  );
+const sizeGroups = (container: HTMLElement) =>
+  [...container.querySelectorAll('[role="radiogroup"]')].map((group) =>
+    group.getAttribute("aria-label"),
   );
 
 const renderSettings = async (
@@ -383,10 +387,9 @@ describe("project settings workspace state", () => {
     await React.act(() => root.unmount());
   });
 
-  it("groups Orb sizes by provider in an accordion opened at the saved default", async () => {
+  it("groups Orb sizes under provider headings and saves a size from another provider", async () => {
     const fetch = vi.fn(() => new Promise<Response>(() => undefined));
     vi.stubGlobal("fetch", fetch);
-    const consoleError = vi.spyOn(console, "error");
     const { container, root } = await renderSettings(
       "orb",
       project(1, {
@@ -400,54 +403,27 @@ describe("project settings workspace state", () => {
         seedResolvedOrbs(queryClient, ["e2b", "cloudflare"]);
       },
     );
-    const section = (name: string) =>
-      [
-        ...container.querySelectorAll<HTMLButtonElement>(
-          ".orb-size-section-trigger",
-        ),
-      ].find((trigger) => trigger.textContent === name);
     const checked = () =>
       [
         ...container.querySelectorAll<HTMLInputElement>('input[type="radio"]'),
       ].map((radio) => radio.checked);
 
-    // Settings keep the provider's long name.
+    // Settings keep the provider's long name; every size shows at once.
     expect(sectionNames(container)).toEqual(["E2B", "Cloudflare Containers"]);
-    expect(section("E2B")?.getAttribute("aria-expanded")).toBe("false");
-    expect(
-      section("Cloudflare Containers")?.getAttribute("aria-expanded"),
-    ).toBe("true");
-    expect(
-      container
-        .querySelector('[role="radiogroup"]')
-        ?.getAttribute("aria-label"),
-    ).toBe("Cloudflare Containers sizes");
-    expect(checked()).toEqual([true, false]);
+    expect(sizeGroups(container)).toEqual([
+      "E2B sizes",
+      "Cloudflare Containers sizes",
+    ]);
+    expect(checked()).toEqual([false, false, true, false]);
 
-    // One section open at a time.
-    await React.act(() => section("E2B")?.click());
-    expect(section("E2B")?.getAttribute("aria-expanded")).toBe("true");
-    expect(
-      section("Cloudflare Containers")?.getAttribute("aria-expanded"),
-    ).toBe("false");
-    expect(
-      container
-        .querySelector('[role="radiogroup"]')
-        ?.getAttribute("aria-label"),
-    ).toBe("E2B sizes");
-    expect(checked()).toEqual([false, false]);
-
-    // Choosing a size in another section saves as the project default.
+    // Choosing a size under another provider saves as the project default.
     await React.act(() =>
       container
         .querySelectorAll<HTMLInputElement>('input[type="radio"]')
         .item(1)
         .click(),
     );
-    expect(checked()).toEqual([false, true]);
-    expect(section("E2B")?.getAttribute("aria-expanded")).toBe("true");
-    expect(String(consoleError.mock.calls)).not.toContain("Accordion");
-    consoleError.mockRestore();
+    expect(checked()).toEqual([false, true, false, false]);
     const save = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "Save",
     );
@@ -470,7 +446,9 @@ describe("project settings workspace state", () => {
       {},
       seedTwoProviderCatalog,
     );
-    expect(sectionNames(container)).toEqual(["E2B"]);
+    // One provider needs no heading.
+    expect(sectionNames(container)).toEqual([]);
+    expect(sizeGroups(container)).toEqual(["E2B sizes"]);
     await React.act(() => root.unmount());
   });
 
@@ -489,14 +467,12 @@ describe("project settings workspace state", () => {
       "E2B",
       "Cloudflare ContainersNot available",
     ]);
-    const unavailable = container.querySelectorAll<HTMLButtonElement>(
-      ".orb-size-section-trigger",
-    )[1];
-    expect(unavailable?.getAttribute("aria-expanded")).toBe("true");
-    // Only the saved size is shown, checked and not choosable.
     const radios = [
-      ...container.querySelectorAll<HTMLInputElement>('input[type="radio"]'),
+      ...container.querySelectorAll<HTMLInputElement>(
+        '[aria-label="Cloudflare Containers sizes"] input[type="radio"]',
+      ),
     ];
+    // Only the saved size is shown, checked and not choosable.
     expect(radios.map((radio) => radio.closest("label")?.textContent)).toEqual([
       "standard-21 CPU4GB memory8GB disk",
     ]);

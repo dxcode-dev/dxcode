@@ -5,6 +5,7 @@ import { PluginsSettings } from "./plugins-settings.js";
 // First-party plugins (Search, Speech, …) driven by the Core registry.
 const common = {
   slug: "plugins",
+  group: "library",
   label: "Plugins",
   title: "Plugins",
   description:

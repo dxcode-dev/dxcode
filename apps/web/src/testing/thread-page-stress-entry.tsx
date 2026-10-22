@@ -26,7 +26,7 @@ import { AuthGate } from "../features/authentication/auth-gate.js";
 import "../features/install-app/install-prompt-capture.js";
 import { sessionQueryOptions } from "../features/authentication/sign-in-queries.js";
 import { projectKeys } from "../features/projects/project-queries.js";
-import { composerDefaultsQueryOptions } from "../features/settings/account/composer-defaults-queries.js";
+import { composerDefaultsQueryOptions } from "../features/settings/composer/composer-defaults-queries.js";
 import { personalAccountQueryOptions } from "../features/settings/account/personal-account-queries.js";
 import { settingsContextQueryOptions } from "../features/settings/settings-context-queries.js";
 import { RealtimeProvider } from "../features/threads/realtime/realtime-provider.js";

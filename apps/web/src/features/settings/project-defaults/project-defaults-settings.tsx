@@ -1,19 +1,16 @@
 import type {
   CommitAuthorPreference,
-  CommitSigningPreference,
   ProjectDefaultOverrides,
-  ProjectShipAction,
   RunnerProfile,
+  RunnerProfileCatalog,
   RunnerProfileId,
-  WorkspaceProjectPolicy,
 } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
-import { AlertTriangle, ArrowRight } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Button } from "../../../shared/ui/button.js";
-import { RunnerProfileCard } from "../../../shared/ui/runner-profile-card.js";
+import { OrbSizePicker } from "../../../shared/ui/orb-size-grid.js";
 import {
   SettingsBackgroundError,
   SettingsCard,
@@ -21,7 +18,6 @@ import {
   SettingsHeading,
   SettingsRow,
   SettingsSelect,
-  SettingsToggle,
 } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
 import { projectDefaultsMutationOptions } from "./project-defaults-mutations.js";
@@ -33,248 +29,83 @@ import {
 
 const inheritValue = "inherit";
 
-const sourceLabel = (source: string) =>
-  source === "deployment"
-    ? "Deployment"
-    : source === "workspace"
-      ? "Workspace"
-      : "Personal";
+const headingDescription = {
+  personal:
+    "Settings for new projects you create. Existing projects keep their own, and workspace defaults come first in workspace projects.",
+  workspace:
+    "Settings for new workspace projects. Existing projects keep their own.",
+} as const;
 
-function WorkspaceProjectPolicyCard({
-  policy,
-  disabled,
-  onChange,
-}: {
-  readonly policy: WorkspaceProjectPolicy;
-  readonly disabled: boolean;
-  readonly onChange: (policy: WorkspaceProjectPolicy) => void;
-}) {
-  return (
-    <SettingsCard title="Workspace project policy">
-      <SettingsRow
-        title="Allow members to create projects"
-        description="Owners and admins remain authorized. Members are denied server-side for both personal and workspace project creation when this is off."
-        control={
-          <SettingsToggle
-            checked={policy.allowMemberProjectCreation}
-            disabled={disabled}
-            label="Allow members to create projects"
-            onCheckedChange={(allowMemberProjectCreation) =>
-              onChange({ ...policy, allowMemberProjectCreation })
-            }
-          />
-        }
-      />
-      <SettingsRow
-        title="Allow read-only public code access"
-        description="Public code remains off for every new project unless an authorized creator explicitly enables it."
-        control={
-          <SettingsToggle
-            checked={policy.allowPublicCodeAccess}
-            disabled={disabled}
-            label="Allow read-only public code access"
-            onCheckedChange={(allowPublicCodeAccess) =>
-              onChange({ ...policy, allowPublicCodeAccess })
-            }
-          />
-        }
-      />
-    </SettingsCard>
-  );
-}
+/** Catalog sizes grouped by provider; a single provider needs no label. */
+const orbSizeGroups = (catalog: RunnerProfileCatalog) => {
+  const adapters = [...new Set(catalog.profiles.map(({ adapter }) => adapter))];
+  return adapters.map((adapter) => {
+    const name =
+      adapters.length === 1
+        ? undefined
+        : (catalog.providers?.find((provider) => provider.adapter === adapter)
+            ?.displayName ?? adapter);
+    return {
+      key: adapter,
+      ...(name === undefined ? {} : { name }),
+      label:
+        name === undefined ? "Default Orb size" : `Default ${name} Orb size`,
+      profiles: catalog.profiles.filter(
+        (profile) => profile.adapter === adapter,
+      ),
+    };
+  });
+};
 
-function DefaultProjectSettingsCard({
-  overrides,
-  resolved,
-  scopeInheritance,
-  disabled,
-  onChange,
-}: {
-  readonly overrides: ProjectDefaultOverrides;
-  readonly resolved: ProjectDefaultsData["resolved"];
-  readonly scopeInheritance: string;
-  readonly disabled: boolean;
-  readonly onChange: (overrides: ProjectDefaultOverrides) => void;
-}) {
-  return (
-    <SettingsCard title="Default project settings">
-      <SettingsRow
-        title="Ship behavior"
-        description="Choose the main action shown for changes in new projects."
-        badge={sourceLabel(resolved.shipAction.source)}
-        control={
-          <SettingsSelect
-            value={overrides.shipAction ?? inheritValue}
-            disabled={disabled}
-            label="Default ship behavior"
-            onValueChange={(value) =>
-              onChange({
-                ...overrides,
-                shipAction:
-                  value === inheritValue ? null : (value as ProjectShipAction),
-              })
-            }
-            options={[
-              [inheritValue, `${scopeInheritance} default`],
-              ["ship", "Ship"],
-              ["commit", "Commit only"],
-            ]}
-          />
-        }
-      />
-      <SettingsRow
-        title="Commit author"
-        description="Snapshot either the dx identity or your current account name and email for new projects."
-        badge={sourceLabel(resolved.commitAuthor.source)}
-        control={
-          <SettingsSelect
-            value={overrides.commitAuthor ?? inheritValue}
-            disabled={disabled}
-            label="Default commit author"
-            onValueChange={(value) =>
-              onChange({
-                ...overrides,
-                commitAuthor:
-                  value === inheritValue
-                    ? null
-                    : (value as CommitAuthorPreference),
-              })
-            }
-            options={[
-              [inheritValue, `${scopeInheritance} default`],
-              ["dx", "dx"],
-              ["user", "Your account identity"],
-            ]}
-          />
-        }
-      />
-      <SettingsRow
-        title="Commit signing"
-        description="Store the require, prefer, or disable policy consumed by the signing backend boundary. Required signing fails closed when the selected runner cannot provide it."
-        badge={sourceLabel(resolved.signingPreference.source)}
-        control={
-          <SettingsSelect
-            value={overrides.signingPreference ?? inheritValue}
-            disabled={disabled}
-            label="Default commit signing policy"
-            onValueChange={(value) =>
-              onChange({
-                ...overrides,
-                signingPreference:
-                  value === inheritValue
-                    ? null
-                    : (value as CommitSigningPreference),
-              })
-            }
-            options={[
-              [inheritValue, `${scopeInheritance} default`],
-              ["disabled", "Disabled"],
-              ["preferred", "Preferred"],
-              ["required", "Required"],
-            ]}
-          />
-        }
-      />
-    </SettingsCard>
-  );
-}
-
-function RunnerProfileSettingsCard({
-  profiles,
-  resolved,
-  value,
+function OrbSizeDefault({
+  catalog,
+  selectedId,
   allowedRunnerProfileIds,
   disabled,
   onChange,
 }: {
-  readonly profiles: ReadonlyArray<RunnerProfile>;
-  readonly resolved: ProjectDefaultsData["resolved"]["runnerProfileId"];
-  readonly value: RunnerProfileId | null;
+  readonly catalog: RunnerProfileCatalog;
+  readonly selectedId: RunnerProfileId;
   readonly allowedRunnerProfileIds:
     | ReadonlyArray<RunnerProfileId>
     | null
     | undefined;
   readonly disabled: boolean;
-  readonly onChange: (runnerProfileId: RunnerProfileId | null) => void;
+  readonly onChange: (runnerProfileId: RunnerProfileId) => void;
 }) {
-  const allowedProfileIds =
-    allowedRunnerProfileIds === null || allowedRunnerProfileIds === undefined
+  const allowed =
+    allowedRunnerProfileIds == null
       ? undefined
       : new Set(allowedRunnerProfileIds);
-  const hasAvailableProfile = profiles.some(
-    ({ availability }) => availability === "available",
+  const isDisabled = (profile: RunnerProfile) =>
+    disabled ||
+    profile.availability !== "available" ||
+    (allowed !== undefined && !allowed.has(profile.id));
+  const anyAvailable = catalog.profiles.some(
+    (profile) =>
+      profile.availability === "available" &&
+      (allowed === undefined || allowed.has(profile.id)),
   );
   return (
-    <SettingsCard title="Runner profile">
-      <SettingsRow
-        title="Deployment-defined execution"
-        description="New projects snapshot one validated profile ID. Existing projects are not rewritten when defaults or the catalog change."
-        badge={sourceLabel(resolved.source)}
-        control={
-          value === null ? null : (
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={disabled}
-              onClick={() => onChange(null)}
-            >
-              Use inherited default
-            </Button>
-          )
-        }
-      />
-      <div
-        className="runner-profile-grid"
-        role="radiogroup"
-        aria-label="Default runner profile"
-      >
-        {profiles.map((profile) => (
-          <RunnerProfileCard
-            key={profile.id}
-            profile={profile}
-            selected={(value ?? resolved.value) === profile.id}
-            disabled={
-              disabled ||
-              profile.availability !== "available" ||
-              (allowedProfileIds !== undefined &&
-                !allowedProfileIds.has(profile.id))
-            }
-            onSelect={() => onChange(profile.id)}
-          />
-        ))}
-      </div>
-      {!hasAvailableProfile ? (
-        <div className="runner-profile-empty" role="alert">
-          No runner profile is currently available. New project creation is
-          disabled by the server.
+    <div className="project-defaults-orb-size">
+      <div className="settings-row-copy">
+        <div className="settings-row-title">
+          <strong>Orb Size</strong>
         </div>
-      ) : null}
-    </SettingsCard>
-  );
-}
-
-function EffectiveRestrictionsCard({
-  restrictions,
-}: {
-  readonly restrictions: ProjectDefaultsData["restrictions"];
-}) {
-  return (
-    <SettingsCard title="Effective restrictions">
-      <SettingsRow
-        title="Project creation"
-        description={
-          restrictions.allowProjectCreation
-            ? "Your current role may create projects."
-            : "Workspace policy denies project creation for your current role."
-        }
-        badge={sourceLabel(restrictions.source)}
+        <p>Choose the default Orb size for new projects.</p>
+      </div>
+      <OrbSizePicker
+        groups={orbSizeGroups(catalog)}
+        selectedId={selectedId}
+        isDisabled={isDisabled}
+        onSelect={onChange}
       />
-      <SettingsRow
-        title="Public code default"
-        description="Always off. Enabling public code is a separate explicit creation action and remains subject to workspace policy."
-        badge="Off"
-      />
-    </SettingsCard>
+      {anyAvailable ? null : (
+        <p className="project-defaults-hint" role="alert">
+          No Orb size is available, so new projects can't be created.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -294,52 +125,27 @@ function ProjectDefaultsForm({
   );
   const [baseline, setBaseline] = React.useState(initial);
   const [overrides, setOverrides] = React.useState(initial.overrides);
-  const [policy, setPolicy] = React.useState<
-    WorkspaceProjectPolicy | undefined
-  >(initial.policy);
   const [feedback, setFeedback] = React.useState<{
     readonly message?: string;
     readonly error?: string;
   }>({});
   const disabled = mutation.isPending || !initial.canUpdate;
-  const scopeInheritance =
-    target.scope === "workspace" ? "Personal or deployment" : "Deployment";
-  const allowedRunnerProfileIds = initial.restrictions.allowedRunnerProfileIds;
 
-  const isDirty = (
-    nextOverrides: ProjectDefaultOverrides,
-    nextPolicy: WorkspaceProjectPolicy | undefined,
-  ) =>
-    JSON.stringify({ overrides: nextOverrides, policy: nextPolicy }) !==
-    JSON.stringify({
-      overrides: baseline.overrides,
-      policy: baseline.policy,
-    });
+  const isDirty = (next: ProjectDefaultOverrides) =>
+    next.commitAuthor !== baseline.overrides.commitAuthor ||
+    next.runnerProfileId !== baseline.overrides.runnerProfileId;
 
-  const dirty = isDirty(overrides, policy);
+  const dirty = isDirty(overrides);
   if (baseline.revision < initial.revision && !dirty && !mutation.isPending) {
     setBaseline(initial);
     setOverrides(initial.overrides);
-    setPolicy(initial.policy);
     setFeedback({});
   }
 
-  const update = (
-    nextOverrides: ProjectDefaultOverrides,
-    nextPolicy = policy,
-  ) => {
-    setOverrides(nextOverrides);
-    setPolicy(nextPolicy);
+  const update = (next: ProjectDefaultOverrides) => {
+    setOverrides(next);
     setFeedback({});
-    onDirtyChange(isDirty(nextOverrides, nextPolicy));
-  };
-
-  const reset = () => {
-    setBaseline(initial);
-    setOverrides(initial.overrides);
-    setPolicy(initial.policy);
-    setFeedback({});
-    onDirtyChange(false);
+    onDirtyChange(isDirty(next));
   };
 
   const save = async () => {
@@ -349,13 +155,10 @@ function ProjectDefaultsForm({
       const saved = await mutation.mutateAsync({
         expectedRevision: baseline.revision,
         overrides,
-        ...(target.scope === "workspace" && policy !== undefined
-          ? { policy }
-          : {}),
+        ...(baseline.policy === undefined ? {} : { policy: baseline.policy }),
       });
       setBaseline(saved);
       setOverrides(saved.overrides);
-      setPolicy(saved.policy);
       setFeedback({ message: "Project defaults saved for new projects." });
       onDirtyChange(false);
     } catch (cause) {
@@ -372,61 +175,66 @@ function ProjectDefaultsForm({
     <div className="project-defaults-settings">
       <SettingsHeading
         title="Project Defaults"
-        description="A project combines a Git repository with immutable Git and runner configuration for dx execution."
+        description={headingDescription[target.scope]}
       />
-
-      <Link to="/projects" className="project-defaults-manage">
-        View & Manage {target.scope === "workspace" ? "Workspace" : "Personal"}{" "}
-        Projects <ArrowRight aria-hidden="true" />
-      </Link>
-
-      {target.scope === "workspace" && policy !== undefined ? (
-        <WorkspaceProjectPolicyCard
-          policy={policy}
+      {initial.canUpdate ? null : (
+        <p className="project-defaults-hint" role="status">
+          Read-only for your role.
+        </p>
+      )}
+      <SettingsCard className="project-defaults-card">
+        {target.scope === "personal" ? (
+          <SettingsRow
+            title="Commit Author"
+            description="Choose who authors commits in new projects: dx or you. Until you choose, dx authors them."
+            control={
+              <SettingsSelect
+                value={overrides.commitAuthor ?? inheritValue}
+                disabled={disabled}
+                label="Default commit author"
+                onValueChange={(value) =>
+                  update({
+                    ...overrides,
+                    commitAuthor:
+                      value === inheritValue
+                        ? null
+                        : (value as CommitAuthorPreference),
+                  })
+                }
+                options={[
+                  [inheritValue, "Default"],
+                  ["dx", "dx"],
+                  ["user", "You"],
+                ]}
+              />
+            }
+          />
+        ) : null}
+        <OrbSizeDefault
+          catalog={initial.catalog}
+          selectedId={
+            overrides.runnerProfileId ?? initial.resolved.runnerProfileId.value
+          }
+          allowedRunnerProfileIds={initial.restrictions.allowedRunnerProfileIds}
           disabled={disabled}
-          onChange={(nextPolicy) => update(overrides, nextPolicy)}
+          onChange={(runnerProfileId) =>
+            update({ ...overrides, runnerProfileId })
+          }
         />
-      ) : null}
-
-      <DefaultProjectSettingsCard
-        overrides={overrides}
-        resolved={initial.resolved}
-        scopeInheritance={scopeInheritance}
-        disabled={disabled}
-        onChange={update}
-      />
-
-      <RunnerProfileSettingsCard
-        profiles={initial.catalog.profiles}
-        resolved={initial.resolved.runnerProfileId}
-        value={overrides.runnerProfileId}
-        allowedRunnerProfileIds={allowedRunnerProfileIds}
-        disabled={disabled}
-        onChange={(runnerProfileId) =>
-          update({ ...overrides, runnerProfileId })
-        }
-      />
-
-      <EffectiveRestrictionsCard restrictions={initial.restrictions} />
-
-      {!initial.canUpdate ? (
-        <div className="project-defaults-notice" role="status">
-          Workspace defaults are read-only for your current role.
-        </div>
-      ) : null}
-
-      <SettingsFormActions
-        dirty={dirty}
-        saving={mutation.isPending}
-        message={
-          feedback.message ??
-          "Changes affect only projects created after saving."
-        }
-        error={feedback.error}
-        resetLabel="Discard edits"
-        onSave={() => void save()}
-        onReset={reset}
-      />
+        {initial.canUpdate ? (
+          <SettingsFormActions
+            dirty={dirty}
+            saving={mutation.isPending}
+            message={feedback.message}
+            error={feedback.error}
+            saveLabel="Save Defaults"
+            showStatus={feedback.message !== undefined}
+            showReset={false}
+            onSave={() => void save()}
+            onReset={() => undefined}
+          />
+        ) : null}
+      </SettingsCard>
     </div>
   );
 }

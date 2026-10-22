@@ -118,6 +118,15 @@ interface ThreadServiceShape {
     Thread,
     Schema.SchemaError | PersistenceUnavailable | ThreadNotFound
   >;
+  /** Snoozes the Thread until `snoozedUntil`, or wakes it when undefined. */
+  readonly setSnoozed: (
+    principal: Principal,
+    threadId: ThreadId,
+    snoozedUntil: Thread["snoozedUntil"],
+  ) => Effect.Effect<
+    Thread,
+    Schema.SchemaError | PersistenceUnavailable | ThreadNotFound
+  >;
   readonly update: (
     principal: Principal,
     threadId: ThreadId,
@@ -289,6 +298,14 @@ export class ThreadService extends Context.Service<
               pinnedAt,
             );
           },
+        ),
+        setSnoozed: Effect.fn("ThreadService.setSnoozed")(
+          (principal, threadId, snoozedUntil) =>
+            threads.setSnoozedUntilOwned(
+              threadId,
+              principal.userId,
+              snoozedUntil,
+            ),
         ),
         update: Effect.fn("ThreadService.update")(
           (principal, threadId, update) =>

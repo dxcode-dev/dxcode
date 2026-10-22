@@ -581,7 +581,7 @@ describe("Thread tools", () => {
     await expect(
       tools.update_thread?.run({ data: {}, toolCallId: "call_14" }),
     ).rejects.toThrow(
-      "Name at least one of title, color, pinned, or archived.",
+      "Name at least one of title, color, pinned, snoozed_until, or archived.",
     );
 
     await tools.update_thread?.run({
@@ -603,6 +603,40 @@ describe("Thread tools", () => {
       ["PATCH", `/v1/threads/${OTHER}`, { color: null }],
       ["PATCH", `/v1/threads/${OTHER}/pin`, { pinned: false }],
       ["PATCH", `/v1/threads/${OTHER}/archive`, { archived: true }],
+    ]);
+  });
+
+  it("snoozes after pinning, in UTC, and wakes with none", async () => {
+    const tools = toolsFor(
+      fakeDb(
+        new Map([
+          [CALLER, row(CALLER)],
+          [OTHER, row(OTHER)],
+        ]),
+      ),
+    );
+    await tools.update_thread?.run({
+      data: {
+        thread: OTHER,
+        pinned: true,
+        snoozed_until: "2026-10-22T09:00:00+05:30",
+      },
+      toolCallId: "call_snooze",
+    });
+    await tools.update_thread?.run({
+      data: { thread: OTHER, snoozed_until: "none" },
+      toolCallId: "call_wake",
+    });
+    expect(
+      routes.requests.map(({ method, path, body }) => [method, path, body]),
+    ).toEqual([
+      ["PATCH", `/v1/threads/${OTHER}/pin`, { pinned: true }],
+      [
+        "PATCH",
+        `/v1/threads/${OTHER}/snooze`,
+        { snoozedUntil: "2026-10-22T03:30:00.000Z" },
+      ],
+      ["PATCH", `/v1/threads/${OTHER}/snooze`, { snoozedUntil: null }],
     ]);
   });
 

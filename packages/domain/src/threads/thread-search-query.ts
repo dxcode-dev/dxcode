@@ -16,6 +16,7 @@ export const THREAD_SEARCH_FILTER_KEYS = [
   "visibility",
   "repo",
   "pinned",
+  "snoozed",
   "archived",
   "color",
   "after",
@@ -37,6 +38,8 @@ export interface ThreadSearchFilters {
   /** `owner/repo`, lowercased. */
   readonly repo?: string;
   readonly pinned?: boolean;
+  /** The requester's own Threads that are snoozed now, or that are not. */
+  readonly snoozed?: boolean;
   readonly archived?: boolean;
   /** A Thread color, or `auto` for no chosen color. */
   readonly color?: string;
@@ -166,6 +169,7 @@ export const parseThreadSearchQuery = (
         filters.repo = repoValue(value);
         break;
       case "pinned":
+      case "snoozed":
       case "archived":
         filters[key] = booleanValue(key, value);
         break;

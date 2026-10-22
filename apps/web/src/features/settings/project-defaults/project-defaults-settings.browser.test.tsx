@@ -26,19 +26,19 @@ const target = { scope: "personal" } as const satisfies ProjectDefaultsTarget;
 
 const defaults = (
   revision: number,
-  shipAction: ProjectDefaultsData["overrides"]["shipAction"] = null,
+  commitAuthor: ProjectDefaultsData["overrides"]["commitAuthor"] = null,
 ): ProjectDefaultsData => ({
   scope: "personal",
   revision,
   overrides: {
-    shipAction,
-    commitAuthor: null,
+    shipAction: null,
+    commitAuthor,
     signingPreference: null,
     runnerProfileId: null,
   },
   resolved: {
-    shipAction: { value: shipAction ?? "commit", source: "deployment" },
-    commitAuthor: { value: "dx", source: "deployment" },
+    shipAction: { value: "ship", source: "deployment" },
+    commitAuthor: { value: commitAuthor ?? "dx", source: "deployment" },
     signingPreference: { value: "disabled", source: "deployment" },
     runnerProfileId: {
       value: "e2b-standard" as never,
@@ -88,9 +88,9 @@ const renderSettings = async (
   return { container, root };
 };
 
-const selectShipAction = (container: HTMLElement, value: "ship" | "commit") => {
+const selectCommitAuthor = (container: HTMLElement, value: "dx" | "user") => {
   const select = container.querySelector<HTMLSelectElement>(
-    'select[aria-label="Default ship behavior"]',
+    'select[aria-label="Default commit author"]',
   );
   React.act(() => {
     const setter = Object.getOwnPropertyDescriptor(
@@ -111,16 +111,16 @@ describe("project defaults settings", () => {
         mutations: { retry: false },
       },
     });
-    const saved = defaults(4, "ship");
+    const saved = defaults(4, "user");
     const fetchMock = vi
       .fn()
       .mockResolvedValue(Response.json({ status: "success", data: saved }));
     vi.stubGlobal("fetch", fetchMock);
     const { container, root } = await renderSettings(queryClient, defaults(3));
 
-    selectShipAction(container, "ship");
+    selectCommitAuthor(container, "user");
     const save = [...container.querySelectorAll("button")].find(
-      ({ textContent }) => textContent === "Save",
+      ({ textContent }) => textContent === "Save Defaults",
     );
     await React.act(async () => save?.click());
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
@@ -147,29 +147,29 @@ describe("project defaults settings", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(
-        Response.json({ status: "success", data: defaults(5, "ship") }),
+        Response.json({ status: "success", data: defaults(5, "user") }),
       );
     vi.stubGlobal("fetch", fetchMock);
     const { container, root } = await renderSettings(queryClient, defaults(3));
 
-    const select = selectShipAction(container, "ship");
+    const select = selectCommitAuthor(container, "user");
     await React.act(() =>
       queryClient.setQueryData(
         projectDefaultsKeys.detail(userId, target),
-        defaults(4, "commit"),
+        defaults(4, "dx"),
       ),
     );
-    expect(select?.value).toBe("ship");
+    expect(select?.value).toBe("user");
 
     const save = [...container.querySelectorAll("button")].find(
-      ({ textContent }) => textContent === "Save",
+      ({ textContent }) => textContent === "Save Defaults",
     );
     await React.act(async () => save?.click());
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
     expect(JSON.parse(String(request?.body))).toMatchObject({
       expectedRevision: 3,
-      overrides: { shipAction: "ship" },
+      overrides: { commitAuthor: "user" },
     });
 
     await React.act(() => root.unmount());
@@ -184,7 +184,7 @@ describe("project defaults settings", () => {
       },
     });
     const { container, root } = await renderSettings(queryClient, defaults(3));
-    const select = selectShipAction(container, "ship");
+    const select = selectCommitAuthor(container, "user");
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Unavailable")));
 
     await React.act(async () => {
@@ -204,10 +204,10 @@ describe("project defaults settings", () => {
 
     expect(
       container.querySelector<HTMLSelectElement>(
-        'select[aria-label="Default ship behavior"]',
+        'select[aria-label="Default commit author"]',
       ),
     ).toBe(select);
-    expect(select?.value).toBe("ship");
+    expect(select?.value).toBe("user");
     await React.act(async () => {
       await vi.waitFor(() =>
         expect(container.textContent).toContain(

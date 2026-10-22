@@ -1,34 +1,35 @@
-import { Accordion } from "@base-ui/react/accordion";
 import type {
   OrbResolvedProvider,
   ProjectData,
   SettingsContextData,
 } from "@dx/api";
-import {
-  PROJECT_NAME_HELP,
-  type ProjectId,
-  type ProviderRepositoryId,
-  type RunnerProfileCatalog,
-  type RunnerProfileId,
-  type UserId,
+import type {
+  ProjectId,
+  ProviderRepositoryId,
+  RunnerProfileCatalog,
+  RunnerProfileId,
+  UserId,
 } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useParams } from "@tanstack/react-router";
-import { ChevronRight, FolderCog, KeyRound, X } from "lucide-react";
+import { FolderCog, KeyRound, Upload, X } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
 import { settingsNavigationState } from "../../shared/navigation/settings-return.js";
 import { settle } from "../../shared/settle.js";
 import { Button } from "../../shared/ui/button.js";
+import { buttonVariants } from "../../shared/ui/button-variants.js";
 import { Input } from "../../shared/ui/input.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
-import { RunnerProfileCard } from "../../shared/ui/runner-profile-card.js";
+import { OrbSizePicker } from "../../shared/ui/orb-size-grid.js";
 import {
   SettingsCard,
   SettingsFormActions,
+  SettingsHeading,
   SettingsRow,
-  SettingsSectionIntro,
+  SettingsSelect,
+  type SettingsSelectOption,
 } from "../../shared/ui/settings.js";
 import {
   bitbucketConnectionQueryOptions,
@@ -174,6 +175,97 @@ export function ProjectSettingsPage({
   );
 }
 
+/** The repository a Project can be bound to through the person's connections. */
+type AuthorizedRepository = {
+  readonly key: string;
+  readonly provider: "github" | "bitbucket";
+  readonly grantId: string;
+  readonly workspaceId?: string;
+  readonly repositoryId: string;
+  readonly fullName: string;
+};
+
+const sameUrls = (
+  left: ReadonlyArray<RepositoryOption>,
+  right: ReadonlyArray<RepositoryOption>,
+) =>
+  left.map(({ webUrl }) => webUrl.toLowerCase()).join("\n") ===
+  right.map(({ webUrl }) => webUrl.toLowerCase()).join("\n");
+
+/** The General form: edits drafted over the last saved project. */
+type GeneralDraft = {
+  readonly baseline: ProjectData;
+  readonly name: string;
+  readonly description: string;
+  /** "" keeps the bound repository. */
+  readonly repositoryKey: string;
+  /** Undefined keeps the saved list. */
+  readonly additional?: ReadonlyArray<RepositoryOption>;
+  readonly error?: string;
+};
+
+type GeneralAction =
+  | {
+      readonly type: "edit";
+      readonly edit: Partial<
+        Pick<
+          GeneralDraft,
+          "name" | "description" | "repositoryKey" | "additional"
+        >
+      >;
+    }
+  /** Start over from a saved project, dropping every edit. */
+  | { readonly type: "reset"; readonly project: ProjectData }
+  /** A request saved part of the project; keep the remaining edits. */
+  | {
+      readonly type: "rebased";
+      readonly project: ProjectData;
+      readonly rebound?: boolean;
+      readonly error?: string;
+    }
+  | { readonly type: "error"; readonly error?: string };
+
+const generalDraft = (project: ProjectData): GeneralDraft => ({
+  baseline: project,
+  name: project.name,
+  description: project.description ?? "",
+  repositoryKey: "",
+});
+
+const reduceGeneral = (
+  draft: GeneralDraft,
+  action: GeneralAction,
+): GeneralDraft => {
+  switch (action.type) {
+    case "edit":
+      return { ...draft, ...action.edit };
+    case "reset":
+      return generalDraft(action.project);
+    case "rebased": {
+      const { error: _cleared, ...rest } = draft;
+      return {
+        ...rest,
+        baseline: action.project,
+        ...(action.rebound ? { repositoryKey: "" } : {}),
+        ...(action.error === undefined ? {} : { error: action.error }),
+      };
+    }
+    case "error": {
+      const { error: _cleared, ...rest } = draft;
+      return action.error === undefined
+        ? rest
+        : { ...rest, error: action.error };
+    }
+  }
+};
+
+const failure = (cause: unknown, fallback: string) =>
+  cause instanceof Error ? cause.message : fallback;
+
+/**
+ * Name, icon, description, and repositories in one card with one Save. The
+ * icon uploads as soon as it is chosen and keeps unsaved edits.
+ */
 function GeneralProjectSettings({
   project,
   ownerName,
@@ -187,86 +279,137 @@ function GeneralProjectSettings({
   const updateMutation = useMutation(
     updateProjectMutationOptions(queryClient, userId, project.id),
   );
+  const rebindMutation = useMutation(
+    rebindProjectSourceMutationOptions(queryClient, userId, project.id),
+  );
   const iconMutation = useMutation(
     uploadProjectIconMutationOptions(queryClient, userId, project.id),
   );
-  const [baseline, setBaseline] = React.useState(project);
-  const [name, setName] = React.useState(project.name);
-  const [description, setDescription] = React.useState(
-    project.description ?? "",
+  const repositories = useAuthorizedRepositories(userId);
+  // The draft starts from the project it mounted with; a newer project
+  // replaces it below only while nothing is edited.
+  const [draft, dispatch] = React.useReducer(
+    reduceGeneral,
+    project,
+    generalDraft,
   );
-  const [error, setError] = React.useState<string>();
-  const saving = updateMutation.isPending || iconMutation.isPending;
+  const { baseline } = draft;
+  const additionalOptions = repositories.options.filter(
+    (option) =>
+      option.webUrl.toLowerCase() !== baseline.repository?.webUrl.toLowerCase(),
+  );
+  const savedAdditional = (baseline.additionalRepositories ?? []).map(
+    (repository): RepositoryOption =>
+      additionalOptions.find(
+        (option) =>
+          option.webUrl.toLowerCase() === repository.webUrl.toLowerCase(),
+      ) ?? {
+        value: `url:${repository.webUrl.toLowerCase()}`,
+        label: repository.webUrl,
+        fullName: repository.fullName,
+        webUrl: repository.webUrl,
+      },
+  );
+  const additional = draft.additional ?? savedAdditional;
+  const additionalChanged = !sameUrls(additional, savedAdditional);
+  const rebindChoices = repositories.authorized.filter(
+    (repository) =>
+      baseline.repository === undefined ||
+      repository.provider !== baseline.repository.provider ||
+      repository.fullName.toLowerCase() !==
+        baseline.repository.fullName.toLowerCase(),
+  );
+  const rebindTo = rebindChoices.find(({ key }) => key === draft.repositoryKey);
+  const saving =
+    updateMutation.isPending ||
+    rebindMutation.isPending ||
+    iconMutation.isPending;
   const dirty =
-    name !== baseline.name || description !== (baseline.description ?? "");
-  if (baseline.revision < project.revision && !dirty && !saving) {
-    setBaseline(project);
-    setName(project.name);
-    setDescription(project.description ?? "");
-    setError(undefined);
-  }
+    draft.name !== baseline.name ||
+    draft.description !== (baseline.description ?? "") ||
+    rebindTo !== undefined ||
+    additionalChanged;
+  if (baseline.revision < project.revision && !dirty && !saving)
+    dispatch({ type: "reset", project });
+  const edit = (next: Extract<GeneralAction, { type: "edit" }>["edit"]) =>
+    dispatch({ type: "edit", edit: next });
   const save = async () => {
-    const result = buildProjectMetadataChanges(
+    const metadata = buildProjectMetadataChanges(
       baseline.name,
-      name,
-      description,
+      draft.name,
+      draft.description,
     );
-    if (!result.ok) {
-      setError(result.error);
+    if (!metadata.ok) {
+      dispatch({ type: "error", error: metadata.error });
       return;
     }
-    setError(undefined);
-    try {
-      const saved = await updateMutation.mutateAsync({
-        revision: baseline.revision,
-        ...result.changes,
+    dispatch({ type: "error" });
+    // Rebind first: when it is refused, nothing else has changed.
+    const rebound =
+      rebindTo === undefined
+        ? { ok: true as const, value: baseline }
+        : await settle(() =>
+            rebindMutation.mutateAsync({
+              revision: baseline.revision,
+              grantId: rebindTo.grantId,
+              provider: rebindTo.provider,
+              ...(rebindTo.workspaceId === undefined
+                ? {}
+                : { workspaceId: rebindTo.workspaceId }),
+              providerRepositoryId:
+                rebindTo.repositoryId as ProviderRepositoryId,
+            }),
+          );
+    if (!rebound.ok) {
+      dispatch({
+        type: "error",
+        error: failure(rebound.error, "The repository could not be changed."),
       });
-      setBaseline(saved);
-      setName(saved.name);
-      setDescription(saved.description ?? "");
-    } catch {}
+      return;
+    }
+    const saved = await settle(() =>
+      updateMutation.mutateAsync({
+        revision: rebound.value.revision,
+        ...metadata.changes,
+        ...(additionalChanged
+          ? { additionalRepositories: additional.map(({ webUrl }) => webUrl) }
+          : {}),
+      }),
+    );
+    if (saved.ok) dispatch({ type: "reset", project: saved.value });
+    // The rebind stands; keep the other edits on top of it.
+    else
+      dispatch({
+        type: "rebased",
+        project: rebound.value,
+        rebound: true,
+        error: failure(saved.error, "Project settings could not be saved."),
+      });
   };
   const upload = async (file: File) => {
-    setError(undefined);
+    dispatch({ type: "error" });
     const saved = await settle(() =>
       iconMutation.mutateAsync({ revision: baseline.revision, file }),
     );
-    if (saved.ok) {
-      setBaseline(saved.value);
-      setName(saved.value.name);
-      setDescription(saved.value.description ?? "");
-    } else {
-      setError(
-        saved.error instanceof Error
-          ? saved.error.message
-          : "Icon could not be uploaded.",
-      );
-    }
+    // The icon has its own request; unsaved edits stay in the form.
+    if (saved.ok) dispatch({ type: "rebased", project: saved.value });
+    else
+      dispatch({
+        type: "error",
+        error: failure(saved.error, "Icon could not be uploaded."),
+      });
     iconMutation.reset();
   };
   return (
     <div className="project-settings-content project-settings-general">
-      <SettingsCard title="Project">
-        <SettingsRow
-          title="Name"
-          description={PROJECT_NAME_HELP}
-          control={
-            <div className="project-name-control">
-              <span className="project-owner-initial" aria-hidden="true">
-                {ownerName.slice(0, 1).toUpperCase()}
-              </span>
-              <span className="project-owner-name">{ownerName}</span>
-              <span aria-hidden="true">/</span>
-              <Input
-                className="project-name-input"
-                aria-label="Project name"
-                value={name}
-                disabled={saving}
-                maxLength={64}
-                onChange={(event) => setName(event.target.value)}
-              />
-            </div>
-          }
+      <SettingsCard className="project-general-card">
+        <ProjectIdentityRow
+          ownerName={ownerName}
+          name={draft.name}
+          project={baseline}
+          disabled={saving}
+          onNameChange={(name) => edit({ name })}
+          onIconChosen={(file) => void upload(file)}
         />
         <SettingsRow
           title="Description"
@@ -274,95 +417,259 @@ function GeneralProjectSettings({
             <Input
               className="project-description-input"
               aria-label="Project description"
-              value={description}
+              value={draft.description}
               disabled={saving}
               maxLength={500}
-              onChange={(event) => setDescription(event.target.value)}
+              onChange={(event) => edit({ description: event.target.value })}
             />
           }
         />
-        <SettingsRow
-          title="Project Icon"
-          description="Shown next to the project across dx."
-          control={
-            <label className="project-icon-control">
-              <span className="project-settings-icon">
-                {baseline.iconUrl ? (
-                  <img src={baseline.iconUrl} alt="" />
-                ) : (
-                  baseline.name.slice(0, 1).toUpperCase()
-                )}
-              </span>
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={saving || dirty}
-                onClick={() =>
-                  document.getElementById("project-icon-input")?.click()
-                }
-              >
-                Set Icon
-              </Button>
-              <input
-                id="project-icon-input"
-                className="visually-hidden"
-                type="file"
-                disabled={saving || dirty}
-                accept="image/png,image/jpeg,image/webp"
-                onChange={(event) => {
-                  const file = event.currentTarget.files?.[0];
-                  event.currentTarget.value = "";
-                  if (file) void upload(file);
-                }}
-              />
-            </label>
-          }
+        <GitRepositoryRow
+          bound={baseline.repository}
+          choices={rebindChoices}
+          value={rebindTo === undefined ? "" : draft.repositoryKey}
+          hint={repositories.hint}
+          disabled={saving}
+          retrying={repositories.fetching}
+          onRetry={repositories.retry}
+          onValueChange={(repositoryKey) => edit({ repositoryKey })}
+        />
+        <AdditionalRepositoriesSection
+          value={additional}
+          options={additionalOptions}
+          loading={repositories.loading}
+          disabled={saving}
+          onValueChange={(next) => edit({ additional: next })}
+        />
+        <SettingsFormActions
+          dirty={dirty}
+          saving={saving}
+          error={draft.error}
+          showStatus={false}
+          showReset={false}
+          onSave={() => void save()}
+          onReset={() => undefined}
         />
       </SettingsCard>
-      <ProjectSourceSettings
-        project={baseline}
-        userId={userId}
-        disabled={saving || dirty}
-        onRebound={setBaseline}
-      />
-      <SettingsFormActions
-        dirty={dirty}
-        saving={saving}
-        error={
-          error ??
-          (updateMutation.error instanceof Error
-            ? updateMutation.error.message
-            : undefined)
-        }
-        showStatus={false}
-        showReset={false}
-        onSave={() => void save()}
-        onReset={() => {
-          setBaseline(project);
-          setName(project.name);
-          setDescription(project.description ?? "");
-          setError(undefined);
-        }}
+    </div>
+  );
+}
+
+/** Name beside its owner, and the icon, which uploads as soon as it is chosen. */
+function ProjectIdentityRow({
+  ownerName,
+  name,
+  project,
+  disabled,
+  onNameChange,
+  onIconChosen,
+}: {
+  readonly ownerName: string;
+  readonly name: string;
+  readonly project: ProjectData;
+  readonly disabled: boolean;
+  readonly onNameChange: (name: string) => void;
+  readonly onIconChosen: (file: File) => void;
+}) {
+  return (
+    <div className="project-identity-row">
+      <div className="project-identity-field">
+        <strong>Name</strong>
+        <div className="project-name-control">
+          <span className="project-owner-initial" aria-hidden="true">
+            {ownerName.slice(0, 1).toUpperCase()}
+          </span>
+          <span className="project-owner-name">{ownerName}</span>
+          <span aria-hidden="true">/</span>
+          <Input
+            className="project-name-input"
+            aria-label="Project name"
+            value={name}
+            disabled={disabled}
+            maxLength={64}
+            onChange={(event) => onNameChange(event.target.value)}
+          />
+        </div>
+      </div>
+      <div className="project-identity-field project-identity-icon">
+        <strong>Project Icon</strong>
+        <div className="project-icon-control">
+          <span className="project-settings-icon">
+            {project.iconUrl ? (
+              <img src={project.iconUrl} alt="" />
+            ) : (
+              project.name.slice(0, 1).toUpperCase()
+            )}
+          </span>
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={disabled}
+            onClick={() =>
+              document.getElementById("project-icon-input")?.click()
+            }
+          >
+            <Upload aria-hidden="true" />
+            Set Icon
+          </Button>
+          <input
+            id="project-icon-input"
+            className="visually-hidden"
+            type="file"
+            aria-label="Project icon image"
+            tabIndex={-1}
+            disabled={disabled}
+            accept="image/png,image/jpeg,image/webp"
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = "";
+              if (file) onIconChosen(file);
+            }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** The bound repository, and the authorized ones it can be rebound to. */
+function GitRepositoryRow({
+  bound,
+  choices,
+  value,
+  hint,
+  disabled,
+  retrying,
+  onRetry,
+  onValueChange,
+}: {
+  readonly bound: ProjectData["repository"];
+  readonly choices: ReadonlyArray<AuthorizedRepository>;
+  readonly value: string;
+  readonly hint?: string;
+  readonly disabled: boolean;
+  readonly retrying: boolean;
+  readonly onRetry?: () => void;
+  readonly onValueChange: (repositoryKey: string) => void;
+}) {
+  return (
+    <SettingsRow
+      title="Git Repository"
+      description={hint}
+      control={
+        <div className="project-repository-control">
+          <SettingsSelect
+            label="Authorized repository"
+            value={value}
+            disabled={disabled || choices.length === 0}
+            onValueChange={onValueChange}
+            options={[
+              ["", bound?.fullName ?? "No repository"],
+              ...choices.map(
+                (repository): SettingsSelectOption => [
+                  repository.key,
+                  `${repository.provider === "github" ? "GitHub" : "Bitbucket"} · ${repository.fullName}`,
+                ],
+              ),
+            ]}
+          />
+          {bound === undefined ? null : (
+            <a
+              className={buttonVariants({ size: "icon-xs", variant: "ghost" })}
+              href={bound.webUrl}
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Open repository"
+              title="Open repository"
+            >
+              <ProjectRepositoryIcon provider={bound.provider} />
+            </a>
+          )}
+          {onRetry === undefined ? null : (
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={retrying}
+              onClick={onRetry}
+            >
+              Retry
+            </Button>
+          )}
+        </div>
+      }
+    />
+  );
+}
+
+/** Other repositories cloned beside the primary one, listed with Remove. */
+function AdditionalRepositoriesSection({
+  value,
+  options,
+  loading,
+  disabled,
+  onValueChange,
+}: {
+  readonly value: ReadonlyArray<RepositoryOption>;
+  readonly options: ReadonlyArray<RepositoryOption>;
+  readonly loading: boolean;
+  readonly disabled: boolean;
+  readonly onValueChange: (value: ReadonlyArray<RepositoryOption>) => void;
+}) {
+  return (
+    <div className="project-additional-repositories">
+      <div className="settings-row-copy">
+        <div className="settings-row-title">
+          <strong>Additional Repositories</strong>
+        </div>
+        <p>
+          Clone other repositories into ~/workspace/repos in this project's
+          Orbs.
+        </p>
+      </div>
+      {value.length === 0 ? null : (
+        <ul aria-label="Additional repositories">
+          {value.map((repository) => (
+            <li key={repository.value} title={repository.webUrl}>
+              <span>
+                {repository.connected === undefined
+                  ? repository.webUrl
+                  : repository.fullName}
+              </span>
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                aria-label={`Remove ${repository.fullName}`}
+                disabled={disabled}
+                onClick={() =>
+                  onValueChange(
+                    value.filter(({ value: key }) => key !== repository.value),
+                  )
+                }
+              >
+                <X />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <AdditionalRepositoriesPicker
+        addTrigger
+        options={options}
+        value={value}
+        loading={loading ? "Loading repositories…" : undefined}
+        disabled={disabled}
+        onValueChange={onValueChange}
       />
     </div>
   );
 }
 
-function ProjectSourceSettings({
-  project,
-  userId,
-  disabled,
-  onRebound,
-}: {
-  readonly project: ProjectData;
-  readonly userId: UserId;
-  readonly disabled: boolean;
-  readonly onRebound: (project: ProjectData) => void;
-}) {
-  const queryClient = useQueryClient();
-  const mutation = useMutation(
-    rebindProjectSourceMutationOptions(queryClient, userId, project.id),
-  );
+/**
+ * GitHub and Bitbucket repositories the person's own connections reach, as
+ * rebind choices and as additional-repository options, with a short hint when
+ * they are loading, unreachable, or absent.
+ */
+function useAuthorizedRepositories(userId: UserId) {
   const grantsQuery = useQuery(sourceGrantsQueryOptions(userId));
   const bitbucketConnectionQuery = useQuery(
     bitbucketConnectionQueryOptions(userId),
@@ -374,27 +681,30 @@ function ProjectSourceSettings({
   const bitbucketRepositoriesQuery = useQuery(
     bitbucketRepositoriesQueryOptions(userId, bitbucketConnection?.id),
   );
-  const [repositoryKey, setRepositoryKey] = React.useState("");
-  const [error, setError] = React.useState<string>();
-  // Private and workspace Projects bind repositories the current user reaches
-  // through their own connections.
-  const githubRepositories = (grantsQuery.data ?? []).flatMap((grant) =>
-    grant.ownerScope === "personal" &&
-    grant.status === "active" &&
-    grant.installationStatus === "active"
-      ? grant.repositories.map((repository) => ({
-          key: `github:${grant.id}:${repository.id}`,
-          provider: "github" as const,
-          grantId: grant.id,
-          repositoryId: repository.id,
-          fullName: repository.fullName,
-        }))
-      : [],
-  );
   const bitbucketRepositories =
     bitbucketConnection !== undefined &&
-    bitbucketRepositoriesQuery.data?.connectionId === bitbucketConnection?.id
-      ? bitbucketRepositoriesQuery.data.repositories.flatMap((repository) =>
+    bitbucketRepositoriesQuery.data?.connectionId === bitbucketConnection.id
+      ? bitbucketRepositoriesQuery.data.repositories
+      : [];
+  // Private and workspace Projects bind repositories the current user reaches
+  // through their own connections.
+  const authorized: ReadonlyArray<AuthorizedRepository> = [
+    ...(grantsQuery.data ?? []).flatMap((grant) =>
+      grant.ownerScope === "personal" &&
+      grant.status === "active" &&
+      grant.installationStatus === "active"
+        ? grant.repositories.map((repository) => ({
+            key: `github:${grant.id}:${repository.id}`,
+            provider: "github" as const,
+            grantId: grant.id,
+            repositoryId: repository.id,
+            fullName: repository.fullName,
+          }))
+        : [],
+    ),
+    ...(bitbucketConnection === undefined
+      ? []
+      : bitbucketRepositories.flatMap((repository) =>
           isBitbucketUuid(repository.id) &&
           isBitbucketUuid(repository.workspaceId)
             ? [
@@ -408,256 +718,94 @@ function ProjectSourceSettings({
                 },
               ]
             : [],
-        )
-      : [];
-  const repositories = [...githubRepositories, ...bitbucketRepositories];
-  const selected = repositories.find(({ key }) => key === repositoryKey);
-  const rebind = async () => {
-    if (selected === undefined) return;
-    setError(undefined);
-    try {
-      const saved = await mutation.mutateAsync({
-        revision: project.revision,
-        grantId: selected.grantId,
-        provider: selected.provider,
-        ...(selected.provider !== "bitbucket"
-          ? {}
-          : { workspaceId: selected.workspaceId }),
-        providerRepositoryId: selected.repositoryId as ProviderRepositoryId,
-      });
-      setRepositoryKey("");
-      onRebound(saved);
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "The repository could not be rebound.",
-      );
-    }
+        )),
+  ];
+  const loading =
+    grantsQuery.isPending ||
+    bitbucketConnectionQuery.isPending ||
+    (bitbucketConnection !== undefined && bitbucketRepositoriesQuery.isPending);
+  const failed =
+    grantsQuery.error !== null ||
+    bitbucketConnectionQuery.error !== null ||
+    bitbucketRepositoriesQuery.error !== null;
+  return {
+    authorized,
+    options: connectedRepositoryOptions(
+      grantsQuery.data ?? [],
+      bitbucketConnection?.id,
+      bitbucketRepositories,
+    ),
+    loading,
+    hint: loading
+      ? "Loading authorized repositories…"
+      : failed
+        ? "Your repositories could not be loaded."
+        : authorized.length === 0
+          ? "Connect GitHub or Bitbucket to choose a repository."
+          : undefined,
+    fetching:
+      grantsQuery.isFetching ||
+      bitbucketConnectionQuery.isFetching ||
+      bitbucketRepositoriesQuery.isFetching,
+    retry:
+      loading || (!failed && authorized.length > 0)
+        ? undefined
+        : () => {
+            void Promise.all([
+              grantsQuery.refetch(),
+              bitbucketConnectionQuery.refetch(),
+              ...(bitbucketConnection === undefined
+                ? []
+                : [bitbucketRepositoriesQuery.refetch()]),
+            ]);
+          },
   };
-  return (
-    <SettingsCard title="Repository">
-      <SettingsRow
-        title="Git Repository"
-        description={
-          project.repository?.fullName ??
-          "This project was started without a repository."
-        }
-        control={
-          project.repository ? (
-            <a
-              className="project-repository-link"
-              href={project.repository.webUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              <ProjectRepositoryIcon provider={project.repository.provider} />
-              Open repository
-            </a>
-          ) : undefined
-        }
-      />
-      <SettingsRow
-        title={
-          project.repository === undefined ? "Bind source" : "Rebind source"
-        }
-        description={
-          grantsQuery.isPending ||
-          bitbucketConnectionQuery.isPending ||
-          (bitbucketConnection !== undefined &&
-            bitbucketRepositoriesQuery.isPending)
-            ? "Loading authorized repositories…"
-            : grantsQuery.error !== null ||
-                bitbucketConnectionQuery.error !== null ||
-                bitbucketRepositoriesQuery.error !== null
-              ? "Source-control authorization is currently unreachable. Retry before rebinding."
-              : repositories.length === 0
-                ? "No personal GitHub or Bitbucket repositories are available. Connect a provider first."
-                : "Only repositories your connections can access are shown."
-        }
-        control={
-          repositories.length === 0 ? (
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={
-                grantsQuery.isFetching ||
-                bitbucketConnectionQuery.isFetching ||
-                bitbucketRepositoriesQuery.isFetching
-              }
-              onClick={() => {
-                void Promise.all([
-                  grantsQuery.refetch(),
-                  bitbucketConnectionQuery.refetch(),
-                  ...(bitbucketConnection === undefined
-                    ? []
-                    : [bitbucketRepositoriesQuery.refetch()]),
-                ]);
-              }}
-            >
-              Retry
-            </Button>
-          ) : (
-            <div>
-              <select
-                aria-label="Authorized repository"
-                value={repositoryKey}
-                disabled={disabled || mutation.isPending}
-                onChange={(event) => setRepositoryKey(event.target.value)}
-              >
-                <option value="">Select repository</option>
-                {repositories.map((repository) => (
-                  <option key={repository.key} value={repository.key}>
-                    {repository.provider === "github" ? "GitHub" : "Bitbucket"}{" "}
-                    · {repository.fullName}
-                  </option>
-                ))}
-              </select>
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={
-                  disabled || mutation.isPending || selected === undefined
-                }
-                onClick={() => void rebind()}
-              >
-                {mutation.isPending ? "Authorizing…" : "Rebind"}
-              </Button>
-            </div>
-          )
-        }
-      />
-      <AdditionalRepositoriesRow
-        key={`${project.id}:${project.revision}`}
-        project={project}
-        userId={userId}
-        disabled={disabled}
-        options={connectedRepositoryOptions(
-          grantsQuery.data ?? [],
-          bitbucketConnection?.id,
-          bitbucketConnection !== undefined &&
-            bitbucketRepositoriesQuery.data?.connectionId ===
-              bitbucketConnection.id
-            ? bitbucketRepositoriesQuery.data.repositories
-            : [],
-        ).filter(
-          (option) =>
-            option.webUrl.toLowerCase() !==
-            project.repository?.webUrl.toLowerCase(),
-        )}
-        onSaved={onRebound}
-      />
-      {error === undefined ? null : <p role="alert">{error}</p>}
-    </SettingsCard>
-  );
-}
-
-function AdditionalRepositoriesRow({
-  project,
-  userId,
-  disabled,
-  options,
-  onSaved,
-}: {
-  readonly project: ProjectData;
-  readonly userId: UserId;
-  readonly disabled: boolean;
-  readonly options: ReadonlyArray<RepositoryOption>;
-  readonly onSaved: (project: ProjectData) => void;
-}) {
-  const queryClient = useQueryClient();
-  const mutation = useMutation(
-    updateProjectMutationOptions(queryClient, userId, project.id),
-  );
-  const saved = (project.additionalRepositories ?? []).map(
-    (repository): RepositoryOption => {
-      const connected = options.find(
-        (option) =>
-          option.webUrl.toLowerCase() === repository.webUrl.toLowerCase(),
-      );
-      return (
-        connected ?? {
-          value: `url:${repository.webUrl.toLowerCase()}`,
-          label: repository.webUrl,
-          fullName: repository.fullName,
-          webUrl: repository.webUrl,
-        }
-      );
-    },
-  );
-  const [selected, setSelected] =
-    React.useState<ReadonlyArray<RepositoryOption>>(saved);
-  const changed =
-    selected.map(({ webUrl }) => webUrl.toLowerCase()).join("\n") !==
-    saved.map(({ webUrl }) => webUrl.toLowerCase()).join("\n");
-  return (
-    <SettingsRow
-      title="Additional repositories"
-      description={
-        saved.length === 0
-          ? "Clone other repositories into ~/workspace/repos in this project's Orbs."
-          : saved.map(({ fullName }) => fullName).join(", ")
-      }
-      control={
-        <div className="project-additional-repositories-control">
-          <AdditionalRepositoriesPicker
-            options={options}
-            value={selected}
-            disabled={disabled || mutation.isPending}
-            onValueChange={setSelected}
-          />
-          <Button
-            size="xs"
-            variant="outline"
-            disabled={disabled || mutation.isPending || !changed}
-            onClick={() =>
-              void mutation
-                .mutateAsync({
-                  revision: project.revision,
-                  additionalRepositories: selected.map(({ webUrl }) => webUrl),
-                })
-                .then(onSaved, () => undefined)
-            }
-          >
-            {mutation.isPending ? "Saving…" : "Save"}
-          </Button>
-          {mutation.error instanceof Error ? (
-            <small role="alert">{mutation.error.message}</small>
-          ) : null}
-        </div>
-      }
-    />
-  );
 }
 
 /**
  * The Orb sizes this person can choose for the project, grouped by provider in
  * catalog order: only providers in the resolved set (the same set the
  * new-Thread picker offers). A saved default on a provider outside that set
- * keeps a section holding just that size, marked unavailable, so it is not
- * silently lost.
+ * keeps a group holding just that size, marked not available, so it is not
+ * silently lost. One available provider needs no heading.
  */
-const orbSizeSections = (
+const orbSizeGroups = (
   catalog: RunnerProfileCatalog,
   resolved: ReadonlyArray<OrbResolvedProvider>,
   savedProfileId: RunnerProfileId,
-) =>
-  [...new Set(catalog.profiles.map(({ adapter }) => adapter))].flatMap(
-    (adapter) => {
-      const name =
-        catalog.providers?.find((provider) => provider.adapter === adapter)
-          ?.displayName ?? adapter;
-      const profiles = catalog.profiles.filter(
-        (profile) => profile.adapter === adapter,
-      );
-      if (resolved.some(({ providerId }) => providerId === adapter))
-        return [{ adapter, name, available: true, profiles }];
-      const saved = profiles.filter(({ id }) => id === savedProfileId);
-      return saved.length === 0
-        ? []
-        : [{ adapter, name, available: false, profiles: saved }];
-    },
-  );
+) => {
+  const groups = [
+    ...new Set(catalog.profiles.map(({ adapter }) => adapter)),
+  ].flatMap((adapter) => {
+    const name =
+      catalog.providers?.find((provider) => provider.adapter === adapter)
+        ?.displayName ?? adapter;
+    const profiles = catalog.profiles.filter(
+      (profile) => profile.adapter === adapter,
+    );
+    if (resolved.some(({ providerId }) => providerId === adapter))
+      return [{ key: adapter, name, available: true, profiles }];
+    const saved = profiles.filter(({ id }) => id === savedProfileId);
+    return saved.length === 0
+      ? []
+      : [
+          {
+            key: adapter,
+            name,
+            hint: "Not available",
+            available: false,
+            profiles: saved,
+          },
+        ];
+  });
+  const labelled =
+    groups.length > 1 || groups.some((group) => !group.available);
+  return groups.map(({ name, ...group }) => ({
+    ...group,
+    ...(labelled ? { name } : {}),
+    label: `${name} sizes`,
+  }));
+};
 
 function OrbProjectSettings({
   project,
@@ -719,16 +867,11 @@ function ResolvedOrbProjectSettings({
   const [runnerProfileId, setRunnerProfileId] = React.useState<RunnerProfileId>(
     project.configuration.runnerProfileId,
   );
-  // The provider sections the person opened; until then, the saved default's.
-  const [openSections, setOpenSections] = React.useState<Array<string>>();
   const allowedIds = defaults.data?.restrictions.allowedRunnerProfileIds;
   const allowedRunnerProfileIds =
     allowedIds == null ? undefined : new Set(allowedIds);
   const saving = updateMutation.isPending;
   const dirty = runnerProfileId !== baseline.configuration.runnerProfileId;
-  const savedSection = defaults.data?.catalog.profiles.find(
-    ({ id }) => id === baseline.configuration.runnerProfileId,
-  )?.adapter;
   if (baseline.revision < project.revision && !dirty && !saving) {
     setBaseline(project);
     setRunnerProfileId(project.configuration.runnerProfileId);
@@ -743,79 +886,62 @@ function ResolvedOrbProjectSettings({
       setRunnerProfileId(saved.configuration.runnerProfileId);
     } catch {}
   };
+  const groups =
+    defaults.data === undefined || orbProviders.data === undefined
+      ? undefined
+      : orbSizeGroups(
+          defaults.data.catalog,
+          orbProviders.data.resolved,
+          baseline.configuration.runnerProfileId,
+        );
+  const unavailable = new Set(
+    groups?.flatMap((group) =>
+      group.available ? [] : group.profiles.map(({ id }) => id),
+    ),
+  );
   return (
     <div className="project-settings-content project-settings-orb">
-      <SettingsSectionIntro
+      <SettingsHeading
         title={EXECUTION_ENVIRONMENT_DISPLAY_NAME}
-        description={`Choose the ${EXECUTION_ENVIRONMENT_DISPLAY_NAME} size that dx uses for this Project's threads.`}
+        description={
+          <>
+            Choose the {EXECUTION_ENVIRONMENT_DISPLAY_NAME} size that dx uses
+            for this Project's Threads. Choose additional repositories to clone
+            in{" "}
+            <Link
+              to="/projects/$projectId/settings/$section"
+              params={{ projectId: project.id, section: "general" }}
+            >
+              General
+            </Link>
+            .
+          </>
+        }
       />
       <SettingsCard
         className="project-orb-size-card"
         title={`${EXECUTION_ENVIRONMENT_DISPLAY_NAME} Size`}
+        description="Each Thread can still pick a different size when it starts."
         variant="outline"
       >
-        {defaults.data === undefined ||
-        orbProviders.data === undefined ? null : (
-          <Accordion.Root
-            className="orb-size-accordion"
-            value={
-              openSections ?? (savedSection === undefined ? [] : [savedSection])
-            }
-            onValueChange={setOpenSections}
-          >
-            {orbSizeSections(
-              defaults.data.catalog,
-              orbProviders.data.resolved,
-              baseline.configuration.runnerProfileId,
-            ).map((section) => (
-              <Accordion.Item
-                key={section.adapter}
-                value={section.adapter}
-                className="orb-size-section"
-              >
-                <Accordion.Header className="orb-size-section-header">
-                  <Accordion.Trigger className="orb-size-section-trigger">
-                    <span className="orb-size-section-name">
-                      {section.name}
-                      {section.available ? null : (
-                        <small className="orb-size-section-hint">
-                          Not available
-                        </small>
-                      )}
-                    </span>
-                    <ChevronRight aria-hidden="true" />
-                  </Accordion.Trigger>
-                </Accordion.Header>
-                <Accordion.Panel className="orb-size-section-panel">
-                  <div
-                    className="runner-profile-grid"
-                    role="radiogroup"
-                    aria-label={`${section.name} sizes`}
-                  >
-                    {section.profiles.map((profile) => (
-                      <RunnerProfileCard
-                        key={profile.id}
-                        profile={profile}
-                        presentation="orb-size"
-                        selected={runnerProfileId === profile.id}
-                        disabled={
-                          saving ||
-                          !section.available ||
-                          profile.availability !== "available" ||
-                          (allowedRunnerProfileIds !== undefined &&
-                            !allowedRunnerProfileIds.has(profile.id))
-                        }
-                        onSelect={() => setRunnerProfileId(profile.id)}
-                      />
-                    ))}
-                  </div>
-                </Accordion.Panel>
-              </Accordion.Item>
-            ))}
-          </Accordion.Root>
+        {groups === undefined ? null : (
+          <div className="project-orb-size-picker">
+            <OrbSizePicker
+              groups={groups}
+              selectedId={runnerProfileId}
+              isDisabled={(profile) =>
+                saving ||
+                unavailable.has(profile.id) ||
+                profile.availability !== "available" ||
+                (allowedRunnerProfileIds !== undefined &&
+                  !allowedRunnerProfileIds.has(profile.id))
+              }
+              onSelect={setRunnerProfileId}
+            />
+          </div>
         )}
         {defaults.error ? (
-          <p role="alert">Runner profiles could not be loaded.</p>
+          <p role="alert">Orb sizes could not be loaded.</p>
         ) : null}
         {orbProviders.error ? (
           <p role="alert">
@@ -833,28 +959,7 @@ function ResolvedOrbProjectSettings({
           showStatus={false}
           showReset={false}
           onSave={() => void save()}
-          onReset={() => {
-            setBaseline(project);
-            setRunnerProfileId(project.configuration.runnerProfileId);
-          }}
-        />
-      </SettingsCard>
-      <SettingsCard
-        className="project-setup-card"
-        title="Setup"
-        description={`These files help dx prepare ${EXECUTION_ENVIRONMENT_DISPLAY_NAME}s and expose app portals.`}
-        actions={<span>Detection deferred</span>}
-        variant="outline"
-      >
-        <SettingsRow
-          title={<code>.agents/setup</code>}
-          badge={baseline.repository ? "Not checked" : "Unavailable"}
-          description={`A shell script that runs before dx starts working in a fresh ${EXECUTION_ENVIRONMENT_DISPLAY_NAME}, so the repository can install tools, dependencies, and other local prerequisites.`}
-        />
-        <SettingsRow
-          title={<code>.agents/resume</code>}
-          badge={baseline.repository ? "Not checked" : "Unavailable"}
-          description={`A fast, idempotent shell script that runs after initial ${EXECUTION_ENVIRONMENT_DISPLAY_NAME} activation and whenever the ${EXECUTION_ENVIRONMENT_DISPLAY_NAME} wakes. Use it to authenticate, reconnect, or repair local services.`}
+          onReset={() => undefined}
         />
       </SettingsCard>
     </div>
@@ -872,36 +977,28 @@ function ProjectSecretsSettings({
   ) => React.ReactNode;
 }) {
   const returnTo = useLocation({ select: (location) => location.href });
-  const [dirty, setDirty] = React.useState(false);
   return (
     <div className="project-settings-content project-settings-secrets">
-      <SettingsSectionIntro
+      <SettingsHeading
         title="Secrets & Env Vars"
         description={
           <>
-            Secrets and environment variables are encrypted at rest and made
-            available to dx Threads running in Orbs. Each Orb receives the
-            resolved values in <code>~/.env</code> and new Terminal shells.
-            Project entries override workspace entries with the same name, and{" "}
+            Secrets and environment variables are set in the Orbs that run this
+            project's dx Threads, in <code>~/.env</code> and new Terminal
+            shells. All values are encrypted at rest. Project entries override
+            workspace entries with the same name, and{" "}
             <Link
               to="/settings/$section"
               params={{ section: "environment-variables" }}
               state={settingsNavigationState(returnTo)}
             >
-              personal environment variables
+              personal entries
             </Link>{" "}
-            override both. Active Orbs refresh automatically; use the Terminal
-            refresh control to reconcile on demand and restart the shared shell
-            only when values changed.
+            override both.
           </>
         }
       />
-      {renderEnvironmentSettings(projectId, setDirty)}
-      {dirty ? (
-        <p className="project-settings-dirty-note">
-          Environment variable changes are handled individually.
-        </p>
-      ) : null}
+      {renderEnvironmentSettings(projectId, () => undefined)}
     </div>
   );
 }

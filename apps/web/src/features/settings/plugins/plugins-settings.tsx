@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { Settings } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { DxWordmark } from "../../../shared/brand/dx-wordmark.js";
+import { settingsNavigationState } from "../../../shared/navigation/settings-return.js";
 import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
@@ -13,6 +15,7 @@ import {
 import { Input } from "../../../shared/ui/input.js";
 import {
   SettingsCard,
+  SettingsHeading,
   SettingsRow,
   SettingsSelect,
   SettingsToggle,
@@ -210,8 +213,43 @@ function PluginSettingsForm({
   );
 }
 
+/** The Personal / Workspace switch: a link to the other scope's page. */
+function OtherScopeLink({
+  scope,
+  workspace,
+  settingsReturnTo,
+}: Pick<SettingsSectionProps, "workspace" | "settingsReturnTo"> & {
+  readonly scope: Scope;
+}) {
+  const state = settingsNavigationState(settingsReturnTo);
+  if (scope === "workspace")
+    return (
+      <Link
+        to="/settings/$section"
+        params={{ section: "plugins" }}
+        replace
+        state={state}
+      >
+        Personal Plugins
+      </Link>
+    );
+  if (workspace === undefined) return null;
+  return (
+    <Link
+      to="/workspaces/$workspaceSlug/$section"
+      params={{ workspaceSlug: workspace.shortName, section: "plugins" }}
+      replace
+      state={state}
+    >
+      Workspace Plugins
+    </Link>
+  );
+}
+
 export function PluginsSettings({
+  workspace,
   workspaceSlug,
+  settingsReturnTo,
   onDirtyChange,
 }: SettingsSectionProps) {
   const { identity } = useAuthenticatedIdentity();
@@ -250,18 +288,34 @@ export function PluginsSettings({
   const editingPlugin = plugins.find(({ id }) => id === editing);
   return (
     <div className="first-party-plugins-settings">
-      <header className="first-party-plugins-heading">
-        <h1>
-          {target.scope === "workspace" ? "Workspace Plugins" : "Plugins"}
-        </h1>
-        <span aria-live="polite">
-          {resource.isPending
-            ? "Loading plugins…"
-            : resource.error !== null
-              ? errorMessage(resource.error)
-              : message}
-        </span>
-      </header>
+      <SettingsHeading
+        title={
+          target.scope === "workspace"
+            ? "Workspace Plugins"
+            : "Personal Plugins"
+        }
+        description={
+          target.scope === "workspace"
+            ? "Plugins add tools to dx Threads for everyone in this workspace. A plugin turned off here is off for every member."
+            : "Plugins add tools to your dx Threads. Your choices override your workspace's, unless it turns a plugin off or manages its keys."
+        }
+        actions={
+          <span className="first-party-plugins-heading-actions">
+            <span aria-live="polite">
+              {resource.isPending
+                ? "Loading plugins…"
+                : resource.error !== null
+                  ? errorMessage(resource.error)
+                  : message}
+            </span>
+            <OtherScopeLink
+              scope={target.scope}
+              workspace={workspace}
+              settingsReturnTo={settingsReturnTo}
+            />
+          </span>
+        }
+      />
       {data === undefined ? null : (
         <SettingsCard>
           {plugins.length === 0 ? (

@@ -6,6 +6,10 @@ import type {
 } from "@rockorager/waymote";
 import { Monitor, Play, RefreshCw } from "lucide-react";
 import * as React from "react";
+import {
+  isSessionEndedClose,
+  reportSessionEnded,
+} from "../../shared/auth/session-ended.js";
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
 import { useMobile } from "../../shared/use-mobile.js";
 import {
@@ -262,8 +266,13 @@ function DesktopSession({
           openedAt = Date.now();
           failures = 0;
         });
-        socket.addEventListener("close", () => {
+        socket.addEventListener("close", (event) => {
           if (disposed() || recovering) return;
+          if (isSessionEndedClose(event.code)) {
+            session?.disconnect();
+            reportSessionEnded();
+            return;
+          }
           if (openedAt !== undefined) {
             if (Date.now() - openedAt >= STABLE_SOCKET_MS) recoveries = 0;
             return;

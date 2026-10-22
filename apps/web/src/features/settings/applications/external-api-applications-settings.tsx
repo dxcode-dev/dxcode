@@ -1,3 +1,5 @@
+import "./applications.css";
+import { Menu } from "@base-ui/react/menu";
 import type {
   ExternalApiApplicationAuditEventData,
   ExternalApiApplicationData,
@@ -6,6 +8,7 @@ import type {
 import {
   type ExternalApiApplicationRotationOverlapSeconds,
   type ExternalApiApplicationScope,
+  type ExternalApiApplicationStatus,
   externalApiApplicationScopes,
   type WorkspaceSlug,
 } from "@dx/domain";
@@ -15,20 +18,10 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { DateTime } from "effect";
-import {
-  Activity,
-  ClipboardCopy,
-  KeyRound,
-  Pencil,
-  Power,
-  RefreshCw,
-  ShieldAlert,
-  Trash2,
-} from "lucide-react";
+import { Check, Copy, Ellipsis, Plus } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { settle } from "../../../shared/settle.js";
-import { Badge } from "../../../shared/ui/badge.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
   DialogContent,
@@ -37,11 +30,7 @@ import {
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
 import { Input } from "../../../shared/ui/input.js";
-import {
-  SettingsCard,
-  SettingsHeading,
-  SettingsRow,
-} from "../settings-primitives.js";
+import { SettingsCard, SettingsHeading } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
 import { applicationMutationOptions } from "./application-mutations.js";
 import {
@@ -49,13 +38,15 @@ import {
   applicationsQueryOptions,
 } from "./application-queries.js";
 
+const dateFormatter = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+});
 const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
   dateStyle: "medium",
   timeStyle: "short",
 });
 
-const formatDateTime = (value: DateTime.Utc): string =>
-  dateTimeFormatter.format(new Date(DateTime.formatIso(value)));
+const toDate = (value: DateTime.Utc) => new Date(DateTime.formatIso(value));
 
 const scopeLabels: Record<ExternalApiApplicationScope, string> = {
   "projects:read": "Read projects",
@@ -64,154 +55,113 @@ const scopeLabels: Record<ExternalApiApplicationScope, string> = {
   "threads:write": "Create threads",
 };
 
+const statusLabels: Record<ExternalApiApplicationStatus, string> = {
+  active: "Active",
+  disabled: "Disabled",
+  revoked: "Revoked",
+};
+
+const auditActionLabels: Record<string, string> = {
+  "external_api_application.create": "Created",
+  "external_api_application.update": "Edited",
+  "external_api_application.rotate": "Secret rotated",
+  "external_api_application.enable": "Enabled",
+  "external_api_application.disable": "Disabled",
+  "external_api_application.revoke": "Revoked",
+};
+
 const errorMessage = (cause: unknown, fallback: string): string =>
   cause instanceof Error ? cause.message : fallback;
 
-function ApplicationsState({
-  loading,
-  error,
-  empty,
-  retry,
+function CopyField({
+  id,
+  label,
+  value,
+  copied,
+  copy,
 }: {
-  readonly loading?: boolean;
-  readonly error?: string;
-  readonly empty?: string;
-  readonly retry?: () => void;
+  readonly id: string;
+  readonly label: string;
+  readonly value: string;
+  readonly copied: boolean;
+  readonly copy: () => void;
 }) {
-  if (loading) {
-    return (
-      <div className="applications-state" aria-busy="true">
-        <span className="tool-spinner" /> Loading applications…
+  return (
+    <div className="application-field">
+      <label htmlFor={id}>{label}</label>
+      <div className="application-copy-field">
+        <Input
+          id={id}
+          value={value}
+          readOnly
+          spellCheck={false}
+          onFocus={(event) => event.currentTarget.select()}
+        />
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          aria-label={`Copy ${label}`}
+          onClick={copy}
+        >
+          {copied ? <Check /> : <Copy />}
+        </Button>
       </div>
-    );
-  }
-  if (error !== undefined) {
-    return (
-      <div className="applications-state" role="alert">
-        <ShieldAlert aria-hidden="true" />
-        <span>{error}</span>
-        {retry === undefined ? null : (
-          <Button size="xs" variant="outline" onClick={retry}>
-            Try again
-          </Button>
-        )}
-      </div>
-    );
-  }
-  return empty === undefined ? null : (
-    <div className="applications-state">{empty}</div>
+    </div>
   );
 }
 
-function ScopeSelector({
-  scopes,
-  onChange,
-}: {
-  readonly scopes: ReadonlyArray<ExternalApiApplicationScope>;
-  readonly onChange: (
-    scopes: ReadonlyArray<ExternalApiApplicationScope>,
-  ) => void;
-}) {
-  const selected = new Set(scopes);
-  const toggle = (scope: ExternalApiApplicationScope) =>
-    onChange(
-      selected.has(scope)
-        ? scopes.filter((candidate) => candidate !== scope)
-        : [...scopes, scope],
-    );
-  return (
-    <fieldset className="application-scopes">
-      <legend>Product API scopes</legend>
-      {externalApiApplicationScopes.map((scope) => (
-        <label key={scope}>
-          <input
-            type="checkbox"
-            checked={selected.has(scope)}
-            onChange={() => toggle(scope)}
-          />
-          <span>
-            <strong>{scopeLabels[scope]}</strong>
-            <code>{scope}</code>
-          </span>
-        </label>
-      ))}
-    </fieldset>
-  );
-}
+type CopyStatus = {
+  readonly label: "Client ID" | "Client secret";
+  readonly ok: boolean;
+};
 
 function SecretDialog({
   secret,
   close,
 }: {
-  readonly secret?: ExternalApiApplicationSecretData;
+  readonly secret: ExternalApiApplicationSecretData;
   readonly close: () => void;
 }) {
-  const [copyStatus, setCopyStatus] = React.useState("");
-  const closeDialog = () => {
-    setCopyStatus("");
-    close();
+  const [copyStatus, setCopyStatus] = React.useState<CopyStatus>();
+  const copy = async (label: CopyStatus["label"], value: string) => {
+    const outcome = await settle(() => navigator.clipboard.writeText(value));
+    setCopyStatus({ label, ok: outcome.ok });
   };
-  const copy = async () => {
-    if (secret === undefined) return;
-    try {
-      await navigator.clipboard.writeText(
-        `${secret.application.clientId}:${secret.clientSecret}`,
-      );
-      setCopyStatus("Client credentials copied.");
-    } catch {
-      setCopyStatus("Select each value and copy it manually.");
-    }
-  };
+  const copiedLabel = copyStatus?.ok === true ? copyStatus.label : undefined;
   return (
-    <DialogRoot
-      open={secret !== undefined}
-      onOpenChange={(open) => !open && closeDialog()}
-    >
-      {secret === undefined ? null : (
-        <DialogContent className="application-dialog application-secret-dialog">
-          <DialogTitle>
-            Copy {secret.application.name} credentials now
-          </DialogTitle>
-          <DialogDescription>
-            The client secret is shown once. dx stores only its SHA-256 hash and
-            cannot display it again.
-          </DialogDescription>
-          <div className="application-secret-values">
-            <label htmlFor="application-client-id">
-              Client ID
-              <Input
-                id="application-client-id"
-                aria-label="Client ID"
-                value={secret.application.clientId}
-                readOnly
-                onFocus={(event) => event.currentTarget.select()}
-              />
-            </label>
-            <label htmlFor="application-client-secret">
-              Client secret
-              <Input
-                id="application-client-secret"
-                aria-label="Client secret"
-                value={secret.clientSecret}
-                readOnly
-                autoFocus
-                onFocus={(event) => event.currentTarget.select()}
-              />
-            </label>
-          </div>
-          <p className="application-credential-note">
-            Send these as HTTP Basic credentials to stable `/v1/projects` and
-            `/v1/threads` routes. No user authorization flow is available.
+    <DialogRoot open onOpenChange={(open) => !open && close()}>
+      <DialogContent className="application-dialog">
+        <DialogTitle>Save the client secret</DialogTitle>
+        <DialogDescription>
+          dx shows this secret once. Send the pair as HTTP Basic credentials.
+        </DialogDescription>
+        <CopyField
+          id="application-client-id"
+          label="Client ID"
+          value={secret.application.clientId}
+          copied={copiedLabel === "Client ID"}
+          copy={() => void copy("Client ID", secret.application.clientId)}
+        />
+        <CopyField
+          id="application-client-secret"
+          label="Client secret"
+          value={secret.clientSecret}
+          copied={copiedLabel === "Client secret"}
+          copy={() => void copy("Client secret", secret.clientSecret)}
+        />
+        <footer className="application-dialog-actions">
+          <p className="application-copy-status" aria-live="polite">
+            {copyStatus === undefined
+              ? null
+              : copyStatus.ok
+                ? `${copyStatus.label} copied.`
+                : "Copy failed. Select the value and copy it manually."}
           </p>
-          <p aria-live="polite">{copyStatus}</p>
-          <footer className="application-dialog-actions">
-            <Button variant="outline" onClick={() => void copy()}>
-              <ClipboardCopy aria-hidden="true" /> Copy both
-            </Button>
-            <Button onClick={closeDialog}>I’ve saved them</Button>
-          </footer>
-        </DialogContent>
-      )}
+          <Button size="sm" onClick={close}>
+            Done
+          </Button>
+        </footer>
+      </DialogContent>
     </DialogRoot>
   );
 }
@@ -232,7 +182,6 @@ function ApplicationEditorDialog({
   const mutation = useMutation(
     applicationMutationOptions(queryClient, identity.id, workspaceSlug),
   );
-  const editing = application !== undefined;
   const [name, setName] = React.useState(application?.name ?? "");
   const [scopes, setScopes] = React.useState<
     ReadonlyArray<ExternalApiApplicationScope>
@@ -241,43 +190,46 @@ function ApplicationEditorDialog({
     application?.rateLimitPerMinute ?? 60,
   );
   const [error, setError] = React.useState<string>();
+  const selected = new Set(scopes);
+  const toggle = (scope: ExternalApiApplicationScope) =>
+    setScopes(
+      selected.has(scope)
+        ? scopes.filter((candidate) => candidate !== scope)
+        : [...scopes, scope],
+    );
 
   const submit = async () => {
     if (mutation.isPending) return;
     setError(undefined);
-    const outcome = await settle(async () => {
-      const input = { name, scopes, rateLimitPerMinute: rateLimit };
-      if (application === undefined) {
-        const result = await mutation.mutateAsync({ kind: "create", input });
-        saved(result.secret);
-      } else {
-        await mutation.mutateAsync({
-          kind: "update",
-          applicationId: application.id,
-          input,
-        });
-        saved();
-      }
-      close();
-    });
+    const input = { name, scopes, rateLimitPerMinute: rateLimit };
+    const outcome = await settle(() =>
+      application === undefined
+        ? mutation.mutateAsync({ kind: "create", input })
+        : mutation.mutateAsync({
+            kind: "update",
+            applicationId: application.id,
+            input,
+          }),
+    );
+    mutation.reset();
     if (!outcome.ok) {
       setError(
         errorMessage(outcome.error, "The application could not be saved."),
       );
+      return;
     }
-    mutation.reset();
+    close();
+    saved(outcome.value.secret);
   };
 
   return (
     <DialogRoot open onOpenChange={(open) => !open && close()}>
       <DialogContent className="application-dialog">
         <DialogTitle>
-          {editing ? `Edit ${application.name}` : "Create an API application"}
+          {application === undefined
+            ? "Create Application"
+            : `Edit ${application.name}`}
         </DialogTitle>
-        <DialogDescription>
-          Machine credentials act as your dx identity and can access only the
-          stable product actions selected below.
-        </DialogDescription>
         <form
           className="application-form"
           onSubmit={(event) => {
@@ -285,21 +237,33 @@ function ApplicationEditorDialog({
             void submit();
           }}
         >
-          <label htmlFor="application-name">
-            Application name
+          <div className="application-field">
+            <label htmlFor="application-name">Name</label>
             <Input
               id="application-name"
               autoFocus
               required
               maxLength={64}
-              placeholder="Deployment automation"
+              placeholder="Deploy bot"
               value={name}
               onChange={(event) => setName(event.target.value)}
             />
-          </label>
-          <ScopeSelector scopes={scopes} onChange={setScopes} />
-          <label htmlFor="application-rate-limit">
-            Requests per minute
+          </div>
+          <fieldset className="application-field application-scopes">
+            <legend>Access</legend>
+            {externalApiApplicationScopes.map((scope) => (
+              <label key={scope}>
+                <input
+                  type="checkbox"
+                  checked={selected.has(scope)}
+                  onChange={() => toggle(scope)}
+                />
+                {scopeLabels[scope]}
+              </label>
+            ))}
+          </fieldset>
+          <div className="application-field">
+            <label htmlFor="application-rate-limit">Requests per minute</label>
             <Input
               id="application-rate-limit"
               type="number"
@@ -309,21 +273,26 @@ function ApplicationEditorDialog({
               value={rateLimit}
               onChange={(event) => setRateLimit(event.target.valueAsNumber)}
             />
-          </label>
-          {error === undefined ? null : <p role="alert">{error}</p>}
-          <footer>
-            <Button variant="ghost" onClick={close}>
+          </div>
+          {error === undefined ? null : (
+            <p className="application-error" role="alert">
+              {error}
+            </p>
+          )}
+          <footer className="application-dialog-actions">
+            <Button size="sm" variant="ghost" onClick={close}>
               Cancel
             </Button>
             <Button
+              size="sm"
               type="submit"
               disabled={mutation.isPending || scopes.length === 0}
             >
               {mutation.isPending
                 ? "Saving…"
-                : editing
-                  ? "Save application"
-                  : "Create application"}
+                : application === undefined
+                  ? "Create"
+                  : "Save"}
             </Button>
           </footer>
         </form>
@@ -336,6 +305,24 @@ type ApplicationAction = {
   readonly kind: "rotate" | "disable" | "revoke";
   readonly application: ExternalApiApplicationData;
 };
+
+const actionCopy = {
+  rotate: {
+    title: "Rotate secret?",
+    body: "dx shows the new secret once. The current secret stops working after the overlap you choose.",
+    confirm: "Rotate",
+  },
+  disable: {
+    title: "Disable application?",
+    body: "Requests with its credentials fail until you enable it again.",
+    confirm: "Disable",
+  },
+  revoke: {
+    title: "Revoke application?",
+    body: "Its credentials stop working for good. The audit log stays.",
+    confirm: "Revoke",
+  },
+} as const;
 
 function ApplicationActionDialog({
   workspaceSlug,
@@ -356,61 +343,47 @@ function ApplicationActionDialog({
   const [overlapSeconds, setOverlapSeconds] =
     React.useState<ExternalApiApplicationRotationOverlapSeconds>(0);
   const [error, setError] = React.useState<string>();
+  const applicationId = action.application.id;
   const mutate = async () => {
     if (mutation.isPending) return;
     setError(undefined);
-    const outcome = await settle(async () => {
-      if (action.kind === "rotate") {
-        const result = await mutation.mutateAsync({
-          kind: "rotate",
-          applicationId: action.application.id,
-          overlapSeconds,
-        });
-        completed(result.secret);
-      } else if (action.kind === "disable") {
-        await mutation.mutateAsync({
-          kind: "enabled",
-          applicationId: action.application.id,
-          enabled: false,
-        });
-        completed();
-      } else {
-        await mutation.mutateAsync({
-          kind: "revoke",
-          applicationId: action.application.id,
-        });
-        completed();
-      }
-      close();
-    });
+    const outcome = await settle(() =>
+      action.kind === "rotate"
+        ? mutation.mutateAsync({
+            kind: "rotate",
+            applicationId,
+            overlapSeconds,
+          })
+        : action.kind === "disable"
+          ? mutation.mutateAsync({
+              kind: "enabled",
+              applicationId,
+              enabled: false,
+            })
+          : mutation.mutateAsync({ kind: "revoke", applicationId }),
+    );
+    mutation.reset();
     if (!outcome.ok) {
       setError(
         errorMessage(outcome.error, "The application could not be updated."),
       );
+      return;
     }
-    mutation.reset();
+    close();
+    completed(outcome.value.secret);
   };
-  const title =
-    action.kind === "rotate"
-      ? `Rotate ${action.application.name} secret?`
-      : action.kind === "disable"
-        ? `Disable ${action.application.name}?`
-        : `Revoke ${action.application.name}?`;
+  const copy = actionCopy[action.kind];
   return (
     <DialogRoot open onOpenChange={(open) => !open && close()}>
       <DialogContent className="application-dialog">
-        <DialogTitle>{title}</DialogTitle>
-        <DialogDescription>
-          {action.kind === "rotate"
-            ? "A replacement secret will be shown once. Choose the shortest overlap your machine rollout needs."
-            : action.kind === "disable"
-              ? "All credentials stop authenticating immediately. You can enable the application later."
-              : "All credentials stop authenticating immediately. Revocation is permanent."}
-        </DialogDescription>
+        <DialogTitle>{copy.title}</DialogTitle>
+        <DialogDescription>{copy.body}</DialogDescription>
         {action.kind === "rotate" ? (
-          <label className="application-overlap">
-            Previous secret overlap
+          <div className="application-field">
+            <label htmlFor="application-overlap">Keep the current secret</label>
             <select
+              id="application-overlap"
+              className="settings-select"
               value={overlapSeconds}
               onChange={(event) =>
                 setOverlapSeconds(
@@ -423,33 +396,37 @@ function ApplicationActionDialog({
               <option value={0}>No overlap</option>
               <option value={300}>5 minutes</option>
               <option value={3600}>1 hour</option>
-              <option value={86400}>24 hours (maximum)</option>
+              <option value={86400}>24 hours</option>
             </select>
-          </label>
+          </div>
         ) : null}
-        {error === undefined ? null : <p role="alert">{error}</p>}
+        {error === undefined ? null : (
+          <p className="application-error" role="alert">
+            {error}
+          </p>
+        )}
         <footer className="application-dialog-actions">
-          <Button variant="ghost" onClick={close}>
+          <Button size="sm" variant="ghost" onClick={close}>
             Cancel
           </Button>
           <Button
-            variant={action.kind === "revoke" ? "destructive" : "default"}
+            size="sm"
+            variant={action.kind === "rotate" ? "default" : "destructive"}
             disabled={mutation.isPending}
             onClick={() => void mutate()}
           >
-            {mutation.isPending
-              ? "Working…"
-              : action.kind === "rotate"
-                ? "Rotate secret"
-                : action.kind === "disable"
-                  ? "Disable application"
-                  : "Revoke permanently"}
+            {mutation.isPending ? "Working…" : copy.confirm}
           </Button>
         </footer>
       </DialogContent>
     </DialogRoot>
   );
 }
+
+const auditEventLabel = (event: ExternalApiApplicationAuditEventData) =>
+  event.action === "external_api_application.request"
+    ? `${event.method ?? "Request"} ${event.path ?? ""}`.trim()
+    : (auditActionLabels[event.action] ?? event.action);
 
 function AuditDialog({
   workspaceSlug,
@@ -468,84 +445,78 @@ function AuditDialog({
   return (
     <DialogRoot open onOpenChange={(open) => !open && close()}>
       <DialogContent className="application-dialog application-audit-dialog">
-        <DialogTitle>{application.name} audit events</DialogTitle>
-        <DialogDescription>
-          Immutable events use stable application, credential, actor, and
-          request IDs instead of mutable display names.
-        </DialogDescription>
-        {auditQuery.isPending ||
-        (auditQuery.error !== null && !auditQuery.isFetchNextPageError) ? (
-          <ApplicationsState
-            loading={auditQuery.isPending}
-            error={
-              auditQuery.error instanceof Error
-                ? auditQuery.error.message
-                : undefined
-            }
-            retry={() => void auditQuery.refetch()}
-          />
-        ) : events.length === 0 ? (
-          <ApplicationsState empty="No audit events have been recorded." />
-        ) : (
-          <div className="application-audit-list">
-            {events.map((event) => (
-              <AuditEventRow event={event} key={event.id} />
-            ))}
+        <DialogTitle>{application.name} audit</DialogTitle>
+        {auditQuery.isPending ? (
+          <p className="application-empty" role="status">
+            Loading…
+          </p>
+        ) : auditQuery.isError && events.length === 0 ? (
+          <div className="application-error" role="alert">
+            {errorMessage(auditQuery.error, "The audit could not be loaded.")}{" "}
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={auditQuery.isFetching}
+              onClick={() => void auditQuery.refetch()}
+            >
+              Retry
+            </Button>
           </div>
+        ) : events.length === 0 ? (
+          <p className="application-empty">No events yet.</p>
+        ) : (
+          <ul className="application-audit-list">
+            {events.map((event) => (
+              <li key={event.id}>
+                <span className="application-audit-action">
+                  {auditEventLabel(event)}
+                </span>
+                {event.outcome === "rejected" ? (
+                  <span className="application-audit-rejected">Rejected</span>
+                ) : null}
+                <time dateTime={DateTime.formatIso(event.createdAt)}>
+                  {dateTimeFormatter.format(toDate(event.createdAt))}
+                </time>
+              </li>
+            ))}
+          </ul>
         )}
         {auditQuery.isFetchNextPageError ? (
-          <p role="alert">
+          <p className="application-error" role="alert">
             {errorMessage(
               auditQuery.error,
-              "Older audit events could not be loaded.",
+              "Older events could not be loaded.",
             )}
           </p>
         ) : null}
-        {!auditQuery.hasNextPage ? null : (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={auditQuery.isFetchingNextPage}
-            onClick={() => void auditQuery.fetchNextPage()}
-          >
-            {auditQuery.isFetchingNextPage ? "Loading…" : "Load older events"}
-          </Button>
-        )}
         <footer className="application-dialog-actions">
-          <Button onClick={close}>Done</Button>
+          {auditQuery.hasNextPage ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={auditQuery.isFetchingNextPage}
+              onClick={() => void auditQuery.fetchNextPage()}
+            >
+              {auditQuery.isFetchingNextPage ? "Loading…" : "Load older"}
+            </Button>
+          ) : null}
+          <Button size="sm" onClick={close}>
+            Done
+          </Button>
         </footer>
       </DialogContent>
     </DialogRoot>
   );
 }
 
-function AuditEventRow({
-  event,
-}: {
-  readonly event: ExternalApiApplicationAuditEventData;
-}) {
-  return (
-    <article>
-      <Activity aria-hidden="true" />
-      <div>
-        <strong>{event.action.replaceAll("_", " ")}</strong>
-        <small>
-          {event.outcome} · {formatDateTime(event.createdAt)}
-        </small>
-        <code>{event.requestId}</code>
-      </div>
-      {event.scope === undefined ? null : <Badge>{event.scope}</Badge>}
-    </article>
-  );
-}
-
-function ApplicationRow({
+function ApplicationMenu({
   application,
   canManage,
   edit,
   act,
   audit,
   enable,
+  enabling,
 }: {
   readonly application: ExternalApiApplicationData;
   readonly canManage: boolean;
@@ -553,69 +524,75 @@ function ApplicationRow({
   readonly act: (kind: ApplicationAction["kind"]) => void;
   readonly audit: () => void;
   readonly enable: () => void;
+  readonly enabling: boolean;
 }) {
+  const manageable = canManage && application.status !== "revoked";
   return (
-    <article className="application-row">
-      <span className="application-icon" aria-hidden="true">
-        <KeyRound />
-      </span>
-      <div className="application-identity">
-        <div>
-          <strong>{application.name}</strong>
-          <Badge data-status={application.status}>{application.status}</Badge>
-        </div>
-        <code>{application.clientId}</code>
-        <small>
-          Owner {application.owner.name} ·{" "}
-          {application.lastUsedAt === undefined
-            ? "Never used"
-            : `Last used ${formatDateTime(application.lastUsedAt)}`}
-        </small>
-        <div className="application-scope-badges">
-          {application.scopes.map((scope) => (
-            <Badge key={scope}>{scope}</Badge>
-          ))}
-          <Badge>{application.rateLimitPerMinute}/min</Badge>
-        </div>
-      </div>
-      <div className="application-actions">
-        <Button size="xs" variant="ghost" onClick={audit}>
-          <Activity aria-hidden="true" /> Audit
-        </Button>
-        {canManage && application.status !== "revoked" ? (
-          <>
-            <Button size="xs" variant="outline" onClick={edit}>
-              <Pencil aria-hidden="true" /> Edit
-            </Button>
-            {application.status === "active" ? (
+    <Menu.Root>
+      <Menu.Trigger
+        render={
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            aria-label={`Manage ${application.name}`}
+          />
+        }
+      >
+        <Ellipsis />
+      </Menu.Trigger>
+      <Menu.Portal>
+        <Menu.Positioner
+          className="thread-menu-positioner"
+          align="end"
+          sideOffset={4}
+        >
+          <Menu.Popup className="thread-menu-popup">
+            {manageable ? (
               <>
-                <Button
-                  size="xs"
-                  variant="outline"
-                  onClick={() => act("rotate")}
-                >
-                  <RefreshCw aria-hidden="true" /> Rotate
-                </Button>
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  onClick={() => act("disable")}
-                >
-                  <Power aria-hidden="true" /> Disable
-                </Button>
+                <Menu.Item className="thread-menu-item" onClick={edit}>
+                  Edit
+                </Menu.Item>
+                {application.status === "active" ? (
+                  <>
+                    <Menu.Item
+                      className="thread-menu-item"
+                      onClick={() => act("rotate")}
+                    >
+                      Rotate Secret
+                    </Menu.Item>
+                    <Menu.Item
+                      className="thread-menu-item"
+                      onClick={() => act("disable")}
+                    >
+                      Disable
+                    </Menu.Item>
+                  </>
+                ) : (
+                  <Menu.Item
+                    className="thread-menu-item"
+                    disabled={enabling}
+                    onClick={enable}
+                  >
+                    {enabling ? "Enabling…" : "Enable"}
+                  </Menu.Item>
+                )}
               </>
-            ) : (
-              <Button size="xs" variant="outline" onClick={enable}>
-                <Power aria-hidden="true" /> Enable
-              </Button>
-            )}
-            <Button size="xs" variant="ghost" onClick={() => act("revoke")}>
-              <Trash2 aria-hidden="true" /> Revoke
-            </Button>
-          </>
-        ) : null}
-      </div>
-    </article>
+            ) : null}
+            <Menu.Item className="thread-menu-item" onClick={audit}>
+              View Audit
+            </Menu.Item>
+            {manageable ? (
+              <Menu.Item
+                className="thread-menu-item application-danger"
+                onClick={() => act("revoke")}
+              >
+                Revoke
+              </Menu.Item>
+            ) : null}
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
   );
 }
 
@@ -623,7 +600,11 @@ export function ExternalApiApplicationsSettings({
   workspaceSlug,
 }: SettingsSectionProps) {
   if (workspaceSlug === undefined) {
-    return <ApplicationsState error="A workspace route is required." />;
+    return (
+      <p className="application-error" role="alert">
+        A workspace route is required.
+      </p>
+    );
   }
   return <WorkspaceApplications workspaceSlug={workspaceSlug} />;
 }
@@ -653,112 +634,131 @@ function WorkspaceApplications({
   const applications = pages?.flatMap((page) => page.items) ?? [];
   const canManage =
     pages?.[0]?.permissions.includes("applications:manage") ?? false;
-  const changed = (nextSecret?: ExternalApiApplicationSecretData) => {
-    setSecret(nextSecret);
-  };
+  const [enablingId, setEnablingId] =
+    React.useState<ExternalApiApplicationData["id"]>();
   const enable = async (application: ExternalApiApplicationData) => {
+    if (enablingId !== undefined) return;
+    setEnablingId(application.id);
     setError(undefined);
-    try {
-      await mutation.mutateAsync({
+    const outcome = await settle(() =>
+      mutation.mutateAsync({
         kind: "enabled",
         applicationId: application.id,
         enabled: true,
-      });
-    } catch (cause) {
-      setError(errorMessage(cause, "The application could not be enabled."));
+      }),
+    );
+    setEnablingId(undefined);
+    if (!outcome.ok) {
+      setError(
+        errorMessage(outcome.error, "The application could not be enabled."),
+      );
     }
   };
   return (
-    <div className="external-api-applications-settings">
-      <SettingsHeading
-        title="External API Applications"
-        description="Workspace-owned machine clients with narrow access to stable dx product APIs."
-      />
-      <SettingsCard title="Credential architecture">
-        <SettingsRow
-          title="Machine client credentials"
-          badge="No user delegation"
-          description="Client secrets are shown once and hashed at rest. Redirect URIs and authorization-code flows are intentionally omitted."
-        />
-        <SettingsRow
-          title="Stable product actions only"
-          description="Applications can read or create projects and threads. Settings, administration, experimental endpoints, and Flue-native agent routes cannot be granted."
-        />
-      </SettingsCard>
-      <SettingsCard title="Applications">
-        <div className="application-toolbar">
-          <div>
-            <strong>Workspace applications</strong>
-            <p>
-              Per-app rate limits and immutable attribution are enforced in
-              Core.
-            </p>
-          </div>
-          {canManage ? (
-            <Button size="sm" onClick={() => setEditor("create")}>
-              <KeyRound aria-hidden="true" /> Create application
+    <div className="applications-settings">
+      <SettingsHeading title="External API Apps" />
+      <SettingsCard
+        className="applications-card"
+        title="Applications"
+        description="Machine clients for dx's Project and Thread APIs. Each one signs in with a client ID and secret."
+        actions={
+          canManage ? (
+            <Button size="xs" onClick={() => setEditor("create")}>
+              <Plus aria-hidden="true" /> Create Application
             </Button>
-          ) : null}
-        </div>
-        {error === undefined ? null : <p role="alert">{error}</p>}
-        {applicationsQuery.isPending ||
-        (applicationsQuery.error !== null &&
-          !applicationsQuery.isFetchNextPageError) ? (
-          <ApplicationsState
-            loading={applicationsQuery.isPending}
-            error={
-              applicationsQuery.error instanceof Error
-                ? applicationsQuery.error.message
-                : undefined
-            }
-            retry={() => void applicationsQuery.refetch()}
-          />
-        ) : applications.length === 0 ? (
-          <ApplicationsState empty="No external API applications have been created." />
-        ) : (
-          <div className="application-list">
-            {applications.map((application) => (
-              <ApplicationRow
-                application={application}
-                canManage={canManage}
-                key={application.id}
-                edit={() => setEditor(application)}
-                audit={() => setAudit(application)}
-                act={(kind) => setAction({ kind, application })}
-                enable={() => void enable(application)}
-              />
-            ))}
+          ) : undefined
+        }
+      >
+        {error === undefined ? null : (
+          <p className="application-error" role="alert">
+            {error}
+          </p>
+        )}
+        {applicationsQuery.isPending ? (
+          <p className="application-empty" role="status">
+            Loading applications…
+          </p>
+        ) : applicationsQuery.isError && applications.length === 0 ? (
+          <div className="application-empty" role="alert">
+            {errorMessage(
+              applicationsQuery.error,
+              "Applications could not be loaded.",
+            )}{" "}
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => void applicationsQuery.refetch()}
+            >
+              Retry
+            </Button>
           </div>
+        ) : applications.length === 0 ? (
+          <p className="application-empty">No applications yet.</p>
+        ) : (
+          applications.map((application) => (
+            <div
+              className="application-row"
+              data-status={application.status}
+              key={application.id}
+            >
+              <div className="application-identity">
+                <strong>{application.name}</strong>
+                <code>{application.clientId}</code>
+              </div>
+              <div className="application-meta">
+                <span className="application-status" aria-live="polite">
+                  {enablingId === application.id
+                    ? "Enabling…"
+                    : statusLabels[application.status]}
+                </span>
+                <time
+                  className="application-created"
+                  dateTime={DateTime.formatIso(application.createdAt)}
+                >
+                  {dateFormatter.format(toDate(application.createdAt))}
+                </time>
+              </div>
+              <div className="application-row-actions">
+                <ApplicationMenu
+                  application={application}
+                  canManage={canManage}
+                  edit={() => setEditor(application)}
+                  audit={() => setAudit(application)}
+                  act={(kind) => setAction({ kind, application })}
+                  enable={() => void enable(application)}
+                  enabling={enablingId === application.id}
+                />
+              </div>
+            </div>
+          ))
         )}
         {applicationsQuery.isFetchNextPageError ? (
-          <p role="alert">
+          <p className="application-error" role="alert">
             {errorMessage(
               applicationsQuery.error,
               "More applications could not be loaded.",
             )}
           </p>
         ) : null}
-        {!applicationsQuery.hasNextPage ? null : (
-          <div className="applications-more">
+        {applicationsQuery.hasNextPage ? (
+          <div className="application-more">
             <Button
-              size="sm"
-              variant="outline"
+              size="xs"
+              variant="ghost"
               disabled={applicationsQuery.isFetchingNextPage}
               onClick={() => void applicationsQuery.fetchNextPage()}
             >
-              {applicationsQuery.isFetchingNextPage
-                ? "Loading…"
-                : "Load more applications"}
+              {applicationsQuery.isFetchingNextPage ? "Loading…" : "Load more"}
             </Button>
           </div>
-        )}
+        ) : null}
       </SettingsCard>
       {editor === undefined ? null : (
         <ApplicationEditorDialog
           workspaceSlug={workspaceSlug}
           application={editor === "create" ? undefined : editor}
           close={() => setEditor(undefined)}
-          saved={changed}
+          saved={setSecret}
         />
       )}
       {action === undefined ? null : (
@@ -766,7 +766,7 @@ function WorkspaceApplications({
           workspaceSlug={workspaceSlug}
           action={action}
           close={() => setAction(undefined)}
-          completed={changed}
+          completed={setSecret}
         />
       )}
       {audit === undefined ? null : (
@@ -776,7 +776,9 @@ function WorkspaceApplications({
           close={() => setAudit(undefined)}
         />
       )}
-      <SecretDialog secret={secret} close={() => setSecret(undefined)} />
+      {secret === undefined ? null : (
+        <SecretDialog secret={secret} close={() => setSecret(undefined)} />
+      )}
     </div>
   );
 }

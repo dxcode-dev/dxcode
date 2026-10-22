@@ -11,7 +11,7 @@ import { Search, SquarePen } from "lucide-react";
 import * as React from "react";
 import type { ThreadListClientItem } from "../../shared/api/client.js";
 import { AppUpdateRow } from "../../shared/app-update/app-update-row.js";
-import { useNowMinute } from "../../shared/hooks/use-clock.js";
+import { useNowAt, useNowMinute } from "../../shared/hooks/use-clock.js";
 import {
   type PendingThreadCreation,
   useNewThreadSurface,
@@ -31,6 +31,7 @@ import { SidebarPanelIcon } from "./sidebar-panel-icon.js";
 import { SidebarThreadNavigation } from "./sidebar-thread-navigation.js";
 import {
   buildThreadSections,
+  nextSnoozeWake,
   withPendingThreads,
 } from "./sidebar-thread-utils.js";
 import {
@@ -298,7 +299,9 @@ function AppSidebarContent({
     schedulePreviewClose,
     sidebarLifecycleRef,
   } = useThreadPreviewIntent();
-  const now = useNowMinute();
+  // Read again when the next snoozed Thread wakes, so it returns on time.
+  const minute = useNowMinute();
+  const now = useNowAt(nextSnoozeWake(threads, minute));
   const projectNames = useProjectNames(projects, sharedThreads);
   const onThreadNavigate = (threadId: ThreadData["id"]) => {
     dismissPreviewForNavigation(threadId);

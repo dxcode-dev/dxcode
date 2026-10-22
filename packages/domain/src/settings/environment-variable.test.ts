@@ -3,19 +3,22 @@ import { describe, expect, it } from "vitest";
 import {
   EnvironmentVariableName,
   EnvironmentVariablePlaintext,
+  environmentVariableNameProblem,
   isReservedEnvironmentVariableName,
   MAX_ENVIRONMENT_VARIABLE_NAME_LENGTH,
   normalizeEnvironmentVariableName,
+  RESERVED_ENVIRONMENT_VARIABLE_NAMES,
+  RESERVED_ENVIRONMENT_VARIABLE_PREFIXES,
 } from "./environment-variable.js";
+import names from "./environment-variable-names.json" with { type: "json" };
 
 describe("environment variable domain", () => {
-  it("validates normalized portable names and reserves runtime-owned names", () => {
+  it("validates normalized portable names and reserves only names dx owns in Orbs", () => {
     expect(normalizeEnvironmentVariableName("  BUILD_CHANNEL  ")).toBe(
       "BUILD_CHANNEL",
     );
     for (const name of [
-      "BUILD_CHANNEL",
-      "DX_PARITY_SCOPE",
+      ...names.allowed,
       "_SYNTHETIC_2",
       "X".repeat(MAX_ENVIRONMENT_VARIABLE_NAME_LENGTH),
     ]) {
@@ -23,8 +26,10 @@ describe("environment variable domain", () => {
         Option.isSome(
           Schema.decodeUnknownOption(EnvironmentVariableName)(name),
         ),
+        name,
       ).toBe(true);
-      expect(isReservedEnvironmentVariableName(name)).toBe(false);
+      expect(isReservedEnvironmentVariableName(name), name).toBe(false);
+      expect(environmentVariableNameProblem(name), name).toBeUndefined();
     }
     for (const name of ["lowercase", "2_START", "WITH-DASH", "X".repeat(65)]) {
       expect(
@@ -33,30 +38,26 @@ describe("environment variable domain", () => {
         ),
       ).toBe(true);
     }
+    // The fixture is the whole list; dxd's test compares its own to it too.
+    expect([...RESERVED_ENVIRONMENT_VARIABLE_NAMES].sort()).toEqual(
+      names.names,
+    );
+    expect(RESERVED_ENVIRONMENT_VARIABLE_PREFIXES).toEqual(names.prefixes);
     for (const name of [
-      "PATH",
-      "LOGNAME",
-      "TERM",
-      "HISTFILE",
-      "TMUX_PANE",
-      "BASHOPTS",
-      "IFS",
-      "_",
-      "BETTER_AUTH_SECRET",
-      "DX_ENV",
-      "DX_CONFIG_ENCRYPTION_KEYS",
-      "DX_SOURCE_COMMAND_SOCKET",
-      "DX_STORAGE",
-      "DX_INTEGRATION_BITBUCKET_OAUTH",
-      "DX_BITBUCKET_GIT_TOKEN",
-      "DX_BITBUCKET_GIT_ORIGIN",
-      "DX_BITBUCKET_GIT_PATH",
-      "CF_INTERNAL",
-      "CLOUDFLARE_ACCOUNT_ID",
-      "DYLD_INSERT_LIBRARIES",
+      ...names.names,
+      ...names.prefixes.map((prefix) => `${prefix}X`),
     ]) {
-      expect(isReservedEnvironmentVariableName(name)).toBe(true);
+      expect(isReservedEnvironmentVariableName(name), name).toBe(true);
+      expect(environmentVariableNameProblem(name)).toBe(
+        `${name} is set by dx in Orbs. Choose a different name.`,
+      );
     }
+    expect(environmentVariableNameProblem("1ABC")).toBe(
+      "Use uppercase letters, digits, and underscores, not starting with a digit (e.g. MY_VAR).",
+    );
+    expect(environmentVariableNameProblem("X".repeat(65))).toBe(
+      "Name must be 64 characters or fewer.",
+    );
   });
 
   it("bounds plaintext by UTF-8 bytes and rejects NUL and lone surrogates", () => {

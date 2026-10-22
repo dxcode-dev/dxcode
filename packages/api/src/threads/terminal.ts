@@ -98,6 +98,7 @@ export const ThreadTerminalErrorCodeSchema = Schema.Literals([
   "workspace-lost",
   "terminal-exited",
   "terminal-overflow",
+  "session-ended",
 ]);
 export type ThreadTerminalErrorCode = typeof ThreadTerminalErrorCodeSchema.Type;
 

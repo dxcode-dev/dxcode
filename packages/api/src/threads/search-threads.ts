@@ -25,6 +25,8 @@ export const SearchThreadsItemSchema = Schema.Struct({
   color: Schema.String,
   archived: Schema.Boolean,
   pinned: Schema.Boolean,
+  /** The requester's own Thread, snoozed until this time. */
+  snoozedUntil: Schema.optional(Schema.String),
   visibility: Schema.Literals(["private", "workspace"]),
   state: Schema.Literals(["idle", "working"]),
   lastActivityAt: Schema.String,

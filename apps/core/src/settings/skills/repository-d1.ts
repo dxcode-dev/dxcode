@@ -87,6 +87,15 @@ const decodeSkill = (row: SkillRow) =>
     ...(row.removed_at === null ? {} : { removedAt: row.removed_at }),
   });
 
+/** True while a workspace the bound user belongs to blocks personal skills. */
+const personalBlockedSql = `EXISTS (
+  SELECT 1 FROM member
+  JOIN skill_workspace_policy policy
+    ON policy.workspace_id = member.organizationId
+ WHERE member.userId = ?
+   AND policy.allow_personal_skills = 0
+)`;
+
 export const SkillRepositoryD1 = (db: D1Database) =>
   Layer.effect(
     SkillRepository,
@@ -313,6 +322,15 @@ export const SkillRepositoryD1 = (db: D1Database) =>
           yield* Effect.tryPromise({
             try: () =>
               db.batch([
+                // A removed skill keeps its row, so Threads that loaded it can
+                // still read its files, but gives its name up for a new one.
+                db
+                  .prepare(
+                    `UPDATE skill SET name = id
+                      WHERE scope = ? AND target_id = ? AND name = ?
+                        AND removed_at IS NOT NULL`,
+                  )
+                  .bind(skill.target.scope, skill.target.id, skill.name),
                 db
                   .prepare(
                     `INSERT INTO skill (
@@ -406,45 +424,42 @@ export const SkillRepositoryD1 = (db: D1Database) =>
             if (result.meta.changes !== 1) return yield* new SkillNotFound();
           },
         ),
-        listEffectiveForThread: Effect.fn(
-          "SkillRepository.listEffectiveForThread",
-        )(function* (ownerUserId, _projectId) {
-          const skills = yield* querySkills(
-            `WHERE enabled = 1 AND removed_at IS NULL
-               AND (
-                 (
-                   scope = 'workspace' AND EXISTS (
-                     SELECT 1 FROM member
-                      WHERE member.userId = ?
-                        AND member.organizationId = skill.target_id
+        listThreadCandidates: Effect.fn("SkillRepository.listThreadCandidates")(
+          function* (ownerUserId) {
+            const skills = yield* querySkills(
+              `WHERE enabled = 1 AND removed_at IS NULL
+                 AND (
+                   (
+                     scope = 'personal' AND target_id = ?
+                     AND NOT ${personalBlockedSql}
+                   )
+                   OR (
+                     scope = 'workspace' AND EXISTS (
+                       SELECT 1 FROM member
+                        WHERE member.userId = ?
+                          AND member.organizationId = skill.target_id
+                     )
                    )
                  )
-                 OR (
-                   scope = 'personal' AND target_id = ?
-                   AND NOT EXISTS (
-                     SELECT 1 FROM member
-                     JOIN skill_workspace_policy policy
-                       ON policy.workspace_id = member.organizationId
-                    WHERE member.userId = ?
-                      AND policy.allow_personal_skills = 0
-                   )
-                   AND NOT EXISTS (
-                     SELECT 1 FROM member
-                     JOIN skill workspace_skill
-                       ON workspace_skill.scope = 'workspace'
-                      AND workspace_skill.target_id = member.organizationId
-                      AND workspace_skill.name = skill.name
-                      AND workspace_skill.enabled = 1
-                      AND workspace_skill.removed_at IS NULL
-                    WHERE member.userId = ?
-                   )
-                 )
-               )
-             ORDER BY name, scope DESC, id`,
-            [ownerUserId, ownerUserId, ownerUserId, ownerUserId],
-            "settings.skills.listEffectiveForThread",
-          );
-          return yield* hydrate(skills);
+               ORDER BY name, scope, id`,
+              [ownerUserId, ownerUserId, ownerUserId],
+              "settings.skills.listThreadCandidates",
+            );
+            return yield* hydrate(skills);
+          },
+        ),
+        personalSkillsBlocked: Effect.fn(
+          "SkillRepository.personalSkillsBlocked",
+        )(function* (ownerUserId) {
+          const row = yield* Effect.tryPromise({
+            try: () =>
+              db
+                .prepare(`SELECT ${personalBlockedSql} AS blocked`)
+                .bind(ownerUserId)
+                .first<{ blocked: number }>(),
+            catch: unavailable("settings.skills.personalSkillsBlocked"),
+          });
+          return row?.blocked === 1;
         }),
         getWorkspacePolicy: Effect.fn("SkillRepository.getWorkspacePolicy")(
           function* (workspaceId) {

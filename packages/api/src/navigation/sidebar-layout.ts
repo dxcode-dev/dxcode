@@ -2,10 +2,13 @@ import { ProjectId, ThreadId } from "@dx/domain";
 import { Schema } from "effect";
 import { errorResponse, successResponse } from "../http/response.js";
 
-/** A sidebar section that opens and closes: a Project, Inactive, or Archived. */
+/**
+ * A sidebar section that opens and closes: a Project, Snoozed, Inactive, or
+ * Archived.
+ */
 export const SidebarSectionIdSchema = Schema.Union([
   ProjectId,
-  Schema.Literals(["inactive", "archived"]),
+  Schema.Literals(["snoozed", "inactive", "archived"]),
 ]);
 
 /**

@@ -1,0 +1,222 @@
+/* Same density as the Members and Plugins pages. */
+.applications-settings {
+  display: grid;
+  gap: 12px;
+}
+.applications-card {
+  width: 100%;
+  max-width: 823px;
+  margin: 0 auto;
+}
+.applications-card .settings-card-header > button {
+  flex: none;
+  color: var(--primary-foreground);
+}
+.application-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px 96px 24px;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 7px 16px;
+  border-bottom: 1px solid var(--divider);
+}
+.application-row:last-child {
+  border-bottom: 0;
+}
+.application-identity {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+.application-identity strong,
+.application-identity code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.application-identity strong {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+.application-identity code {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono-family);
+  font-size: 11px;
+  line-height: 15px;
+}
+.application-meta {
+  display: contents;
+}
+.application-status,
+.application-created {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.application-row:not([data-status="active"]) .application-identity strong {
+  color: var(--muted-foreground);
+}
+.application-row[data-status="revoked"] .application-status {
+  color: var(--destructive);
+}
+.application-row-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.application-empty,
+.application-error {
+  margin: 0;
+  padding: 24px 16px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  text-align: center;
+}
+.application-error {
+  color: var(--destructive);
+}
+.application-dialog .application-error,
+.applications-card > .application-error {
+  padding: 0;
+  text-align: left;
+}
+.applications-card > .application-error {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--divider);
+}
+.application-more {
+  display: flex;
+  justify-content: center;
+  padding: 6px;
+  border-top: 1px solid var(--divider);
+}
+.application-danger {
+  color: var(--destructive);
+}
+
+.application-dialog {
+  display: grid;
+  gap: 12px;
+  width: min(420px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+}
+.application-dialog h2 {
+  margin: 0;
+}
+.application-dialog > p {
+  margin: 0;
+}
+.application-form {
+  display: grid;
+  gap: 12px;
+}
+.application-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.application-field > label,
+.application-field > legend {
+  padding: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.application-scopes {
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 12px;
+}
+.application-scopes > legend {
+  margin-bottom: 4px;
+}
+.application-form .application-scopes > label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.application-copy-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.application-copy-field input {
+  font-family: var(--font-mono-family);
+  font-size: 11px;
+}
+.application-dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.application-copy-status {
+  flex: 1;
+  min-width: 0;
+}
+.application-audit-list {
+  display: grid;
+  max-height: 320px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.application-audit-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--divider);
+  font-size: 12px;
+}
+.application-audit-list li:last-child {
+  border-bottom: 0;
+}
+.application-audit-action {
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.application-audit-rejected {
+  color: var(--destructive);
+  font-size: 11px;
+}
+.application-audit-list time {
+  flex: none;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+@media (max-width: 767px) {
+  .applications-card .settings-card-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .application-row {
+    grid-template-columns: minmax(0, 1fr) 24px;
+    grid-template-areas:
+      "identity actions"
+      "meta actions";
+    row-gap: 2px;
+  }
+  .application-identity {
+    grid-area: identity;
+  }
+  .application-row-actions {
+    grid-area: actions;
+  }
+  .application-meta {
+    display: flex;
+    grid-area: meta;
+    gap: 8px;
+  }
+  .application-scopes {
+    grid-template-columns: 1fr;
+  }
+}

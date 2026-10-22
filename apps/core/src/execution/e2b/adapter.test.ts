@@ -15,6 +15,7 @@ import type {
   WorkspaceContextSnapshot,
 } from "@flue/runtime";
 import type { Sandbox as E2BSandbox } from "e2b";
+import { SandboxNotFoundError, TimeoutError } from "e2b";
 import { describe, expect, it, vi } from "vitest";
 import { e2b } from "./adapter.js";
 
@@ -441,6 +442,50 @@ describe("Flue E2B 2.0.7 blueprint adapter", () => {
       envs: { A: "b" },
       timeoutMs: 12_345,
     });
+  });
+
+  it("resumes a paused sandbox once and reruns only operations that never ran", async () => {
+    const fake = makeE2B();
+    // The errors the E2B SDK raises for a paused sandbox, as observed live.
+    const notStarted = new SandboxNotFoundError(
+      "Sandbox is probably not running anymore",
+    );
+    const paused502 = new TimeoutError(
+      "The sandbox was not found: This error is likely due to sandbox timeout.",
+    );
+    let running = false;
+    const resume = vi.fn(async () => {
+      await new Promise((settle) => setTimeout(settle, 5));
+      running = true;
+    });
+    fake.commands.run.mockImplementation(async () => {
+      if (!running) throw notStarted;
+      return { stdout: "resumed", stderr: "", exitCode: 0 };
+    });
+    fake.files.read.mockImplementation(async () => {
+      if (!running) throw paused502;
+      return "contents";
+    });
+    const sandbox = await e2b(fake.value, "/home/user", resume).createSandbox({
+      id: "test",
+    });
+
+    // Two operations refused at once share one resume, then each runs again.
+    await expect(
+      Promise.all([sandbox.exec("echo hi"), sandbox.readFile("/home/user/a")]),
+    ).resolves.toEqual([
+      { stdout: "resumed", stderr: "", exitCode: 0 },
+      "contents",
+    ]);
+    expect(resume).toHaveBeenCalledOnce();
+    expect(fake.commands.run).toHaveBeenCalledTimes(2);
+    expect(fake.files.read).toHaveBeenCalledTimes(2);
+
+    // A command whose stream broke mid-run may have run: it is not rerun.
+    fake.commands.run.mockRejectedValueOnce(paused502);
+    await expect(sandbox.exec("make build")).rejects.toBe(paused502);
+    expect(fake.commands.run).toHaveBeenCalledTimes(3);
+    expect(resume).toHaveBeenCalledOnce();
   });
 
   it("forwards interruption to the admitted remote command", async () => {

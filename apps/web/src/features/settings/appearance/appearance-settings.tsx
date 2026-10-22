@@ -27,17 +27,17 @@ export function AppearanceSettings(_props: SettingsSectionProps) {
     <div className="appearance-settings">
       <SettingsHeading
         title="Appearance"
-        description="Choose how dx looks across your signed-in sessions."
+        description="These are saved to your account and sync across your devices."
       />
 
-      <SettingsCard title="Display">
+      <SettingsCard title="Theme">
         <SettingsRow
-          title="Theme"
-          description="Follow your system appearance or keep dx light or dark."
+          title="Light or Dark"
+          description="Follow your system, or always use light or dark."
           control={
             <SettingsSelect
               value={theme.appearance}
-              label="Theme"
+              label="Light or Dark"
               options={appearanceSelectOptions}
               onValueChange={(value) => {
                 const option = appearanceOptions.find(
@@ -49,12 +49,12 @@ export function AppearanceSettings(_props: SettingsSectionProps) {
           }
         />
         <SettingsRow
-          title="Color palette"
-          description="Daydream adds a faint green cast; Deadpan uses greys."
+          title="Color Palette"
+          description="The colors dx uses. Daydream adds a faint green cast; Deadpan uses greys."
           control={
             <SettingsSelect
               value={theme.palette}
-              label="Color palette"
+              label="Color Palette"
               options={paletteSelectOptions}
               onValueChange={(value) => {
                 const option = paletteOptions.find(
@@ -69,12 +69,12 @@ export function AppearanceSettings(_props: SettingsSectionProps) {
 
       <SettingsCard title="Terminal">
         <SettingsRow
-          title="Terminal theme"
-          description="Use the matching light or dark Ghostty variant for your appearance."
+          title="Color Scheme"
+          description="The terminal's colors, in the light or dark version that matches your theme."
           control={
             <SettingsSelect
               value={theme.terminalTheme}
-              label="Terminal theme"
+              label="Terminal Color Scheme"
               options={terminalThemeSelectOptions}
               onValueChange={(value) => {
                 const option = terminalThemeOptions.find(

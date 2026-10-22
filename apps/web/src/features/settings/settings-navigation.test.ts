@@ -1,52 +1,47 @@
+import type { SettingsScope, WorkspaceRole } from "@dx/domain";
 import { describe, expect, it } from "vitest";
 import { settingsManifest } from "./foundation-sections.js";
-import { settingsNavigationRegistrations } from "./settings-navigation.js";
+import { settingsNavigationSections } from "./settings-navigation.js";
+
+const menu = (scope: SettingsScope, workspaceRole?: WorkspaceRole) =>
+  settingsNavigationSections(scope, settingsManifest[scope], workspaceRole).map(
+    ({ heading, registrations }) => [
+      heading ?? null,
+      registrations.map(({ label }) => label),
+    ],
+  );
 
 describe("settings navigation", () => {
   it("shows only the settings features currently exposed in each menu", () => {
-    expect(
-      settingsNavigationRegistrations(
-        "personal",
-        settingsManifest.personal,
-      ).map(({ label }) => label),
-    ).toEqual([
-      "Account",
-      "Secrets & Env Vars",
-      "Model Routing",
-      "Mode Dial",
-      "MCP & Integrations",
-      "Plugins",
-      "Orb Providers",
-      "Notifications",
-      "Advanced",
-      "Appearance",
-      "Keyboard Shortcuts",
+    expect(menu("personal")).toEqual([
+      [null, ["Account", "Integrations & MCP"]],
+      ["Agent", ["Instructions", "Mode Dial", "Model Routing"]],
+      ["Library", ["Secrets & Env Vars", "Skills", "Plugins"]],
+      ["Projects & Orbs", ["Project Defaults", "Orb Providers"]],
+      [
+        "Interface",
+        ["Appearance", "Composer", "Keyboard Shortcuts", "Notifications"],
+      ],
+      ["Privacy & Security", ["Security"]],
     ]);
 
-    expect(
-      settingsNavigationRegistrations(
-        "workspace",
-        settingsManifest.workspace,
-        "admin",
-      ).map(({ label }) => label),
-    ).toEqual([
-      "Workspace",
-      "Members",
-      "Secrets & Env Vars",
-      "Model Routing",
-      "Mode Dial",
-      "MCP & Integrations",
-      "Plugins",
-      "Orb Providers",
+    expect(menu("workspace", "admin")).toEqual([
+      [null, ["Workspace", "Members", "Integrations & MCP"]],
+      ["Agent", ["Mode Dial", "Model Routing"]],
+      [
+        "Library",
+        ["Secrets & Env Vars", "Skills", "Plugins", "External API Apps"],
+      ],
+      ["Projects & Orbs", ["Project Defaults", "Orb Providers"]],
+      ["Interface", ["Composer"]],
     ]);
 
-    // Members see shared configuration read-only; admin-only sections hide.
-    expect(
-      settingsNavigationRegistrations(
-        "workspace",
-        settingsManifest.workspace,
-        "member",
-      ).map(({ label }) => label),
-    ).toEqual(["Workspace", "Members", "MCP & Integrations", "Plugins"]);
+    // Members see shared configuration read-only; admin-only sections hide,
+    // and so do the headings they leave empty.
+    expect(menu("workspace", "member")).toEqual([
+      [null, ["Workspace", "Members", "Integrations & MCP"]],
+      ["Library", ["Skills", "Plugins"]],
+      ["Interface", ["Composer"]],
+    ]);
   });
 });

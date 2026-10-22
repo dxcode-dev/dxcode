@@ -14,6 +14,10 @@
 // threads/resident-proxy-relay.ts for the full list and statuses).
 
 import type { ThreadId } from "@dx/domain";
+import {
+  type BrowserSessionBinding,
+  setBrowserSessionHeaders,
+} from "../auth/session-sockets.js";
 import { guestCookieHeader, isDxCookieName, parseCookies } from "./session.js";
 
 export type PortalRelayError =
@@ -211,15 +215,19 @@ export const relayWebSocket = (
   request: Request,
   target: PortalRelayTarget,
   identity: PortalIdentity | undefined,
+  session: BrowserSessionBinding | undefined,
 ) =>
   stub(target).fetch(
     new Request("https://thread-execution/proxy/websocket", {
       method: "GET",
-      headers: relayHeaders(
-        guestRequestHeaders(request, target, identity, true),
-        target,
-        pathAndQuery(new URL(request.url)),
-        false,
+      headers: setBrowserSessionHeaders(
+        relayHeaders(
+          guestRequestHeaders(request, target, identity, true),
+          target,
+          pathAndQuery(new URL(request.url)),
+          false,
+        ),
+        session,
       ),
     }),
   );

@@ -53,6 +53,7 @@ import { McpServerRepositoryD1 } from "../mcp-servers/repository-d1.js";
 import { SettingsService } from "../service.js";
 import { WorkspaceRepositoryD1 } from "../workspace/repository-d1.js";
 import { exportSkillVersion, SkillImportRejected } from "./import.js";
+import { threadSkills } from "./precedence.js";
 import { SkillRepositoryD1 } from "./repository-d1.js";
 import { SkillService } from "./service.js";
 
@@ -142,7 +143,7 @@ const versionData = (version: SkillWithVersion["active"]) => ({
 const skillData = (
   value: SkillWithVersion,
   effectiveState: SkillData["effectiveState"],
-  overridesPersonal: boolean,
+  overridesWorkspace: boolean,
 ): SkillData => ({
   id: value.skill.id,
   scope: value.skill.target.scope,
@@ -153,7 +154,7 @@ const skillData = (
   versions: value.versions,
   active: versionData(value.active),
   effectiveState,
-  overridesPersonal,
+  overridesWorkspace,
   createdAt: value.skill.createdAt,
   updatedAt: value.skill.updatedAt,
 });
@@ -164,40 +165,44 @@ const listData = Effect.fn("skillsListData")(function* (
 ) {
   const repository = yield* SkillRepository;
   const items = yield* repository.list(access.target);
-  let allowPersonalSkills: boolean | undefined;
-  let counterparts: ReadonlyArray<SkillWithVersion> = [];
-  if (access.workspaceId !== undefined) {
-    allowPersonalSkills = yield* repository.getWorkspacePolicy(
-      access.workspaceId as never,
-    );
-    counterparts = yield* repository.list(
-      access.target.scope === "personal"
-        ? { scope: "workspace", id: access.workspaceId as never }
-        : { scope: "personal", id: principal.userId },
-    );
-  }
+  const allowPersonalSkills =
+    access.workspaceId === undefined
+      ? undefined
+      : yield* repository.getWorkspacePolicy(access.workspaceId as never);
+  // Label with the rule a new Thread of this viewer uses. MCP dependencies
+  // depend on the Thread's project, so the labels leave them out.
+  const personalBlocked = yield* repository.personalSkillsBlocked(
+    principal.userId,
+  );
+  const candidates = yield* repository.listThreadCandidates(principal.userId);
+  const loaded = threadSkills(candidates, () => true);
   return {
     items: items.map((item) => {
-      const conflict = counterparts.some(
-        (candidate) =>
-          candidate.skill.enabled && candidate.skill.name === item.skill.name,
-      );
+      const { scope } = item.skill.target;
+      const loads = loaded.some(({ skill }) => skill.id === item.skill.id);
+      const sameName = (
+        other: "personal" | "workspace",
+        among: ReadonlyArray<SkillWithVersion>,
+      ) =>
+        among.some(
+          ({ skill }) =>
+            skill.target.scope === other && skill.name === item.skill.name,
+        );
       const state: SkillData["effectiveState"] = !item.skill.enabled
         ? "disabled"
-        : item.skill.target.scope === "personal" &&
-            allowPersonalSkills === false
+        : scope === "personal" && personalBlocked
           ? "blocked-by-policy"
-          : item.skill.target.scope === "personal" && conflict
-            ? "blocked-by-workspace"
+          : scope === "workspace" && !loads && sameName("personal", loaded)
+            ? "replaced-by-personal"
             : "effective";
       return skillData(
         item,
         state,
-        item.skill.target.scope === "workspace" && conflict,
+        scope === "personal" && loads && sameName("workspace", candidates),
       );
     }),
     canMutate: access.canMutate,
-    precedence: "workspace-over-personal" as const,
+    precedence: "personal-over-workspace" as const,
     ...(allowPersonalSkills === undefined ? {} : { allowPersonalSkills }),
   };
 });
@@ -394,7 +399,8 @@ const registerRoutes = (
           const body = yield* decodeJsonBody(
             context.req,
             ImportSkillRequestSchema,
-            () => invalid("request", "Use bundle and reviewedIntegrity."),
+            () =>
+              invalid("request", "Use bundle, reviewedIntegrity, and enabled."),
           );
           yield* mutate(access);
           const service = yield* SkillService;
@@ -403,6 +409,7 @@ const registerRoutes = (
             body.bundle,
             body.reviewedIntegrity,
             audit(context),
+            body.enabled,
           );
           const listed = yield* listData(access, context.get("principal"));
           const created = listed.items.find(

@@ -20,9 +20,13 @@ import {
 import type { AppEnv } from "../http/types.js";
 import { threadSharingLogger } from "../logging.js";
 import { scheduleNotification } from "../notifications/publish.js";
-import { scheduleRealtimeInvalidation } from "../realtime/publication.js";
+import {
+  publishRealtimeInvalidation,
+  scheduleRealtimeInvalidation,
+} from "../realtime/publication.js";
 import { ThreadRepositoryD1 } from "../threads/repository-d1.js";
 import { threadDetailData } from "../threads/routes.js";
+import { wakeSnoozedThread } from "../threads/snooze.js";
 import {
   canUseSharedThreads,
   findSharedThreadGrant,
@@ -385,6 +389,31 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
       actorUserId: actor.userId as UserId,
       excerpt: mention.excerpt,
     });
+  // Only a snoozed Thread pays for the write; authorization read its row.
+  if (
+    userMessage !== undefined &&
+    sourceThreadId === undefined &&
+    context.get("threadSnoozed") === true
+  )
+    await afterResponse(
+      context,
+      wakeSnoozedThread(db, threadId.value)
+        .then((woke) =>
+          woke
+            ? publishRealtimeInvalidation(
+                context.env,
+                threadId.value,
+                "thread.invalidated",
+              )
+            : undefined,
+        )
+        .catch((cause) =>
+          threadSharingLogger.warn("Snoozed Thread was not woken.", {
+            event: "thread_snooze_wake_failed",
+            cause,
+          }),
+        ),
+    );
   if (!modeChanged && mentioned.length === 0 && access !== "contribute") return;
   await afterResponse(
     context,

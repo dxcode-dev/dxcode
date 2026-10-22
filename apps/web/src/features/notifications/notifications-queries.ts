@@ -118,6 +118,10 @@ export const notificationPreferencesQueryOptions = (userId: UserId) =>
     gcTime: 5 * 60_000,
   });
 
+/**
+ * Saves one row. Callers show `variables.enabled` while it is pending, so a
+ * failed save falls back to the cached choice with nothing to undo.
+ */
 export const updateNotificationPreferenceMutationOptions = (
   client: QueryClient,
   userId: UserId,
@@ -126,7 +130,16 @@ export const updateNotificationPreferenceMutationOptions = (
     mutationKey: [...notificationKeys.preferences(userId), "update"] as const,
     mutationFn: (input: UpdateNotificationPreferenceRequest) =>
       updateNotificationPreference(input),
+    // A read that started before the save must not land after it.
+    onMutate: () =>
+      client.cancelQueries({ queryKey: notificationKeys.preferences(userId) }),
     onSuccess: (preferences: NotificationPreferencesData) => {
       client.setQueryData(notificationKeys.preferences(userId), preferences);
     },
+    // Reread after every save, so neither a rollback nor a late read can
+    // leave the switch showing a choice the server does not hold.
+    onSettled: () =>
+      client.invalidateQueries({
+        queryKey: notificationKeys.preferences(userId),
+      }),
   });

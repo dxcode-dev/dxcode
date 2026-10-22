@@ -70,12 +70,13 @@ export function ThreadHoverPreview({
   const left = Math.min(anchor.right + 8, viewportWidth - width - 10);
   const top = Math.max(10, Math.min(anchor.top, viewportHeight - 180));
 
+  const colorAttributes = threadColorAttributes(currentThread);
   return createPortal(
     <aside
       className="thread-hover-preview"
-      style={{ left, top, width }}
       aria-label={`Preview ${projectName} thread`}
-      {...threadColorAttributes(currentThread)}
+      {...colorAttributes}
+      style={{ ...colorAttributes.style, left, top, width }}
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
     >

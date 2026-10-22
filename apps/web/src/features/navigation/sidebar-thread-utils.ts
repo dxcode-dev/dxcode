@@ -1,5 +1,11 @@
 import type { ProjectData, ThreadData } from "@dx/api";
-import { PROJECTLESS_PROJECT_NAME, type ProjectId } from "@dx/domain";
+import {
+  PROJECTLESS_PROJECT_NAME,
+  type ProjectId,
+  threadReturnedAt,
+  threadSnoozeState,
+} from "@dx/domain";
+import { DateTime } from "effect";
 import type {
   ThreadListClientItem,
   ThreadPage,
@@ -89,6 +95,36 @@ const byPin = (left: ThreadData, right: ThreadData) =>
   (right.pinnedAt?.epochMilliseconds ?? 0) -
     (left.pinnedAt?.epochMilliseconds ?? 0) || byActivity(left, right);
 
+/** The soonest wake first. */
+const byWake = (left: ThreadData, right: ThreadData) =>
+  (left.snoozedUntil === undefined
+    ? 0
+    : DateTime.toEpochMillis(left.snoozedUntil)) -
+    (right.snoozedUntil === undefined
+      ? 0
+      : DateTime.toEpochMillis(right.snoozedUntil)) || byActivity(left, right);
+
+/**
+ * The next time a listed Thread wakes after `now`, when the sidebar must
+ * move it back; undefined when none is snoozed.
+ */
+export const nextSnoozeWake = (
+  threads: ReadonlyArray<ThreadData>,
+  now: number,
+): number | undefined => {
+  let next: number | undefined;
+  for (const thread of threads) {
+    if (
+      thread.snoozedUntil === undefined ||
+      threadSnoozeState(thread, now) !== "snoozed"
+    )
+      continue;
+    const wakeAt = DateTime.toEpochMillis(thread.snoozedUntil);
+    if (next === undefined || wakeAt < next) next = wakeAt;
+  }
+  return next;
+};
+
 /**
  * Sidebar sections. Shared Threads the user follows sit with their own
  * Threads under the Thread's Project, named by the Project even when it is
@@ -110,6 +146,7 @@ export function buildThreadSections(
   );
   for (const project of projects) projectNames.set(project.id, project.name);
   const pinned: Array<ThreadData> = [];
+  const snoozed: Array<ThreadData> = [];
   const inactive: Array<ThreadData> = [];
   const archived: Array<ThreadData> = [];
   const groups = new Map<ThreadData["projectId"], Array<ThreadData>>();
@@ -122,11 +159,15 @@ export function buildThreadSections(
     if (thread.lifecycleState === "archived") {
       archived.push(thread);
     } else if (thread.lifecycleState === "active") {
-      if (thread.pinnedAt !== undefined) {
+      // A snoozed Thread leaves every other section, even Pinned, and
+      // keeps its pin for when it wakes.
+      if (threadSnoozeState(thread, now) === "snoozed") {
+        snoozed.push(thread);
+      } else if (thread.pinnedAt !== undefined) {
         pinned.push(thread);
       } else if (
         thread.activityStatus !== "working" &&
-        now - thread.lastActivityAt.epochMilliseconds >= INACTIVE_AFTER_MS
+        now - threadReturnedAt(thread, now) >= INACTIVE_AFTER_MS
       ) {
         inactive.push(thread);
       } else {
@@ -137,6 +178,7 @@ export function buildThreadSections(
     }
   }
   pinned.sort(byPin);
+  snoozed.sort(byWake);
 
   return [
     ...(pinned.length === 0 ? [] : [{ id: "pinned", threads: pinned }]),
@@ -147,6 +189,9 @@ export function buildThreadSections(
       project: true,
       threads: groupedThreads,
     })),
+    ...(snoozed.length === 0
+      ? []
+      : [{ id: "snoozed", label: "Snoozed", threads: snoozed }]),
     ...(inactive.length === 0
       ? []
       : [{ id: "inactive", label: "Inactive Last 72h", threads: inactive }]),

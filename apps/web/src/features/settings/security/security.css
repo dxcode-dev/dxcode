@@ -1,0 +1,196 @@
+/* Same density as the Members and Secrets & Env Vars pages. */
+.security-settings {
+  display: grid;
+  gap: 16px;
+}
+.security-card .settings-card-header {
+  padding: 10px 16px;
+}
+.security-card .settings-card-header > button,
+.security-card .security-row-actions > button {
+  height: 24px;
+  color: var(--foreground);
+  font-size: 11px;
+}
+.security-card .settings-background-error {
+  margin: 0;
+  border-width: 0 0 1px;
+  border-radius: 0;
+}
+.security-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--divider);
+}
+.security-row:last-child {
+  border-bottom: 0;
+}
+.security-row-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--muted-foreground);
+  stroke-width: 1.5;
+}
+.security-row-copy {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+}
+.security-row-copy > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.security-row-copy strong {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+.security-row-copy code {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono-family);
+  font-size: 11px;
+}
+.security-row-copy > span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 15px;
+}
+.security-tag {
+  padding: 1px 5px;
+  color: var(--background);
+  border-radius: 3px;
+  background: var(--foreground);
+  font-size: 10px;
+  line-height: 14px;
+}
+.security-row-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+.security-state,
+.security-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 16px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.security-error {
+  margin: 0;
+  color: var(--destructive);
+  font-size: 11px;
+}
+.security-state.security-error {
+  justify-content: space-between;
+}
+.security-load-more {
+  display: flex;
+  justify-content: center;
+  padding: 6px;
+  border-top: 1px solid var(--divider);
+}
+.security-dialog {
+  display: grid;
+  gap: 12px;
+  width: min(480px, calc(100vw - 32px));
+  max-height: min(720px, calc(100dvh - 32px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.security-dialog-form {
+  display: grid;
+  gap: 12px;
+}
+.security-dialog-form > label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.security-dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.security-scopes {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.security-scopes legend {
+  margin-bottom: 4px;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 500;
+}
+.security-scopes > div {
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+}
+.security-dialog .security-scopes label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+.security-dialog .security-scopes label + label {
+  border-top: 1px solid var(--divider);
+}
+.security-scopes input {
+  accent-color: var(--primary);
+}
+.security-scopes code {
+  margin-left: auto;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono-family);
+  font-size: 11px;
+}
+.security-secret {
+  display: flex;
+  gap: 8px;
+}
+.security-secret input {
+  font-family: var(--font-mono-family);
+  font-size: 12px;
+}
+.security-live-status {
+  margin-right: auto;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+@media (max-width: 639px) {
+  .security-card .settings-card-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .security-row {
+    flex-wrap: wrap;
+  }
+  .security-token-row .security-row-copy {
+    flex-basis: calc(100% - 30px);
+  }
+  .security-token-row .security-row-actions {
+    margin-left: 30px;
+  }
+  .security-scopes code {
+    display: none;
+  }
+}

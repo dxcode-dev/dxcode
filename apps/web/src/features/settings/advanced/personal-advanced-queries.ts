@@ -8,7 +8,6 @@ import {
 import {
   ApiError,
   getPersonalAgentInstructions,
-  resetPersonalAgentInstructions,
   updatePersonalAgentInstructions,
 } from "../../../shared/api/client.js";
 
@@ -59,20 +58,6 @@ export const updatePersonalAgentInstructionsMutationOptions = (
       "update",
     ] as const,
     mutationFn: updatePersonalAgentInstructions,
-    onSuccess: (instructions) =>
-      cacheInstructions(queryClient, userId, instructions),
-  });
-
-export const resetPersonalAgentInstructionsMutationOptions = (
-  queryClient: QueryClient,
-  userId: UserId,
-) =>
-  mutationOptions({
-    mutationKey: [
-      ...personalAdvancedKeys.instructions(userId),
-      "reset",
-    ] as const,
-    mutationFn: resetPersonalAgentInstructions,
     onSuccess: (instructions) =>
       cacheInstructions(queryClient, userId, instructions),
   });

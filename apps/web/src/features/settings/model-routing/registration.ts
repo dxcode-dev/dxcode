@@ -4,6 +4,7 @@ import { ModelRoutingSettings } from "./model-routing-settings.js";
 
 const common = {
   slug: "model-routing",
+  group: "agent",
   label: "Model Routing",
   title: "Model Routing",
   description:

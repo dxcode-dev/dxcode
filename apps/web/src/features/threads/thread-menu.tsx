@@ -1,7 +1,10 @@
 import { Menu } from "@base-ui/react/menu";
 import type { ProjectData, ThreadDetailData } from "@dx/api";
 import { Link } from "@tanstack/react-router";
+import { DateTime } from "effect";
 import {
+  AlarmClock,
+  AlarmClockOff,
   Archive,
   ArchiveRestore,
   Braces,
@@ -20,15 +23,21 @@ import {
   X,
 } from "lucide-react";
 import * as React from "react";
+import { useNowMinute } from "../../shared/hooks/use-clock.js";
 import { useOptionalThreadArchive } from "../../shared/thread-archive.js";
 import {
   type ThreadEditingController,
   useOptionalThreadEditing,
 } from "../../shared/thread-editing.js";
+import {
+  type ThreadSnoozeController,
+  useOptionalThreadSnooze,
+} from "../../shared/thread-snooze.js";
 import { absoluteThreadUrl } from "../../shared/thread-url.js";
 import { Button } from "../../shared/ui/button.js";
 import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
 import { ThreadColorSubmenu } from "../../shared/ui/thread-color-submenu.js";
+import { SnoozeMenuItems } from "../../shared/ui/thread-snooze-menu.js";
 import {
   serializeThreadJson,
   serializeThreadMarkdown,
@@ -81,6 +90,7 @@ export function ThreadMenu({
 }) {
   const archive = useOptionalThreadArchive();
   const editing = useOptionalThreadEditing();
+  const snooze = useOptionalThreadSnooze();
   // Archiving and editing are the owner's; members of a shared Thread only
   // read or export.
   const own = thread.access === undefined || thread.access === "owner";
@@ -206,6 +216,11 @@ export function ThreadMenu({
                   {thread.lifecycleState === "active" ? (
                     <PinMenuItem threadId={thread.id} editing={editing} />
                   ) : null}
+                  {thread.lifecycleState === "active" &&
+                  thread.parentThreadId === undefined &&
+                  snooze !== undefined ? (
+                    <SnoozeMenuItem thread={thread} snooze={snooze} />
+                  ) : null}
                   <Menu.Item
                     className="thread-menu-item"
                     onClick={() => editing.openRename(thread)}
@@ -262,6 +277,40 @@ export function ThreadMenu({
         ) : null}
       </span>
     </>
+  );
+}
+
+/** Snooze, with its wake times, or Wake while the Thread is snoozed. */
+function SnoozeMenuItem({
+  thread,
+  snooze,
+}: {
+  readonly thread: ThreadDetailData;
+  readonly snooze: ThreadSnoozeController;
+}) {
+  const now = useNowMinute();
+  const snoozed =
+    thread.snoozedUntil !== undefined &&
+    DateTime.toEpochMillis(thread.snoozedUntil) > now;
+  if (snoozed)
+    return (
+      <Menu.Item
+        className="thread-menu-item"
+        disabled={snooze.pendingThreadId === thread.id}
+        onClick={() => snooze.wake(thread.id)}
+      >
+        <AlarmClockOff />
+        <span>Wake</span>
+      </Menu.Item>
+    );
+  return (
+    <Submenu icon={<AlarmClock />} label="Snooze">
+      <SnoozeMenuItems
+        threadId={thread.id}
+        snooze={snooze}
+        itemClassName="thread-menu-item"
+      />
+    </Submenu>
   );
 }
 

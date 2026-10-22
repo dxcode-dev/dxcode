@@ -245,7 +245,11 @@ export function ModelRoutingGraph({
               data-routing-destination={destination.id}
               data-active={lit || undefined}
               data-unavailable={destination.kind === "unavailable" || undefined}
-              title={[destination.name, destination.detail]
+              title={[
+                destination.name,
+                destination.detail,
+                destination.workspace ? "Workspace" : undefined,
+              ]
                 .filter(Boolean)
                 .join(" · ")}
               onMouseEnter={() =>
@@ -263,6 +267,14 @@ export function ModelRoutingGraph({
               <Icon aria-hidden="true" />
               <span>{destination.name}</span>
               {destination.detail ? <small>{destination.detail}</small> : null}
+              {destination.workspace ? (
+                <>
+                  <span className="settings-workspace-mark" aria-hidden="true">
+                    W
+                  </span>
+                  <span className="sr-only">Workspace</span>
+                </>
+              ) : null}
             </Destination>
           );
         })}

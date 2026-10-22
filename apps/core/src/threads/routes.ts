@@ -46,6 +46,14 @@ import {
   PinThreadPersistenceUnavailableResponseSchema,
   PinThreadRequestSchema,
   PinThreadResponseSchema,
+  SnoozeThreadInvalidRequestResponseSchema,
+  SnoozeThreadInvalidTimeResponseSchema,
+  SnoozeThreadNotFoundResponseSchema,
+  SnoozeThreadParamsSchema,
+  SnoozeThreadPersistenceUnavailableResponseSchema,
+  SnoozeThreadRequestSchema,
+  SnoozeThreadResponseSchema,
+  SnoozeThreadUnavailableResponseSchema,
   SourceControlDeniedResponseSchema,
   SourceControlProviderFailureResponseSchema,
   type ThreadData,
@@ -70,6 +78,7 @@ import {
   SourceControlAccessDenied,
   SourceControlGrantId,
   SourceControlProviderFailure,
+  THREAD_SNOOZE_MAX_MS,
   type Thread,
   type ThreadColor,
   type ThreadExecutionPin,
@@ -82,7 +91,7 @@ import {
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
 import { dispatch, FlueError, getAgentInstance } from "@flue/runtime";
-import { Effect, Layer, Match, Option, Result, Schema } from "effect";
+import { DateTime, Effect, Layer, Match, Option, Result, Schema } from "effect";
 import { Hono } from "hono";
 import * as v from "valibot";
 import { DxAgent } from "../agents/dx-agent.js";
@@ -167,6 +176,17 @@ import {
 } from "./list-projection-d1.js";
 import { ThreadRepositoryD1 } from "./repository-d1.js";
 import { ThreadService } from "./service.js";
+import { threadSnoozeData } from "./snooze.js";
+
+class InvalidSnoozeTime extends Schema.TaggedError<InvalidSnoozeTime>()(
+  "InvalidSnoozeTime",
+  {},
+) {}
+
+class ThreadSnoozeUnavailable extends Schema.TaggedError<ThreadSnoozeUnavailable>()(
+  "ThreadSnoozeUnavailable",
+  {},
+) {}
 
 class InvalidThreadRequest extends Schema.TaggedError<InvalidThreadRequest>()(
   "InvalidThreadRequest",
@@ -246,6 +266,7 @@ const threadData = (thread: Thread): ThreadData => ({
   activityStatus: thread.activityStatus,
   lifecycleState: thread.lifecycleState,
   pinnedAt: thread.pinnedAt,
+  ...threadSnoozeData(thread),
   ...(thread.color === undefined ? {} : { color: thread.color }),
   ...(isThreadTitlePending(thread) ? { titlePending: true } : {}),
   agentUrl: threadAgentUrl(thread.id),
@@ -256,16 +277,22 @@ const threadData = (thread: Thread): ThreadData => ({
 
 /**
  * Thread detail for a member of a shared Thread: the owner's personal agent
- * instructions, skill instructions, MCP endpoints, and plugins stay private.
+ * instructions, skill instructions, MCP endpoints, plugins, and snooze stay
+ * private.
  * The agent still runs with them; the server supplies them (see
  * attributeSubmission).
  */
 const withoutOwnerConfiguration = <
-  Detail extends Pick<ThreadDetailData, "agentInitialization">,
->(
-  detail: Detail,
-): Detail => ({
-  ...detail,
+  Detail extends Pick<
+    ThreadDetailData,
+    "agentInitialization" | "snoozedUntil" | "snoozeWokeAt"
+  >,
+>({
+  snoozedUntil: _snoozedUntil,
+  snoozeWokeAt: _snoozeWokeAt,
+  ...detail
+}: Detail): Detail => ({
+  ...(detail as Detail),
   agentInitialization: {
     ...detail.agentInitialization,
     personalInstructions: "",
@@ -786,6 +813,7 @@ export const createThreadRoutes = (
                                   membership.value.workspace.shortName,
                               }),
                           publicCodeEnabled: false,
+                          projectless: true,
                           deploymentSigningAvailable: signingCapabilities.some(
                             ({ source, state }) =>
                               source === "deployment" && state === "available",
@@ -1647,6 +1675,141 @@ export const createThreadRoutes = (
           context.json(
             Schema.encodeUnknownSync(
               PinThreadPersistenceUnavailableResponseSchema,
+            )({
+              status: "error",
+              data: {
+                code: "PERSISTENCE_UNAVAILABLE",
+                message: "Persistence is temporarily unavailable.",
+                requestId,
+              },
+            }),
+            503,
+          ),
+        D1BindingUnavailable: (error) => {
+          throw error;
+        },
+        ConfigError: (error) => {
+          throw error;
+        },
+        SchemaError: (error) => {
+          throw error;
+        },
+      }),
+      Match.exhaustive,
+    );
+  });
+
+  threadRoutes.patch("/:threadId/snooze", async (context) => {
+    const requestId = context.get("requestId");
+    const operation = Effect.gen(function* () {
+      const params = yield* decodeRequestInput(
+        SnoozeThreadParamsSchema,
+        { threadId: context.req.param("threadId") },
+        () => new InvalidThreadRequest(),
+      );
+      const body = yield* decodeJsonBody(
+        context.req,
+        SnoozeThreadRequestSchema,
+        () => new InvalidThreadRequest(),
+      );
+      const now = DateTime.toEpochMillis(yield* DateTime.now);
+      const until =
+        body.snoozedUntil === null
+          ? undefined
+          : DateTime.toEpochMillis(body.snoozedUntil);
+      if (
+        until !== undefined &&
+        (until <= now || until > now + THREAD_SNOOZE_MAX_MS)
+      )
+        return yield* new InvalidSnoozeTime();
+      const db = yield* decodeD1Binding(context.env.DB);
+      const thread = yield* Effect.gen(function* () {
+        const service = yield* ThreadService;
+        const principal = context.get("principal");
+        if (body.snoozedUntil !== null) {
+          const current = yield* service.get(principal, params.threadId);
+          if (
+            current.lifecycleState !== "active" ||
+            current.parentThreadId !== undefined
+          )
+            return yield* new ThreadSnoozeUnavailable();
+        }
+        return yield* service.setSnoozed(
+          principal,
+          params.threadId,
+          body.snoozedUntil ?? undefined,
+        );
+      }).pipe(Effect.provide(threadServiceLayer(db)));
+      yield* Effect.promise(() =>
+        scheduleRealtimeInvalidation(
+          () => context.executionCtx,
+          context.env,
+          thread.id,
+          "thread.invalidated",
+        ),
+      );
+      return yield* Schema.encodeUnknownEffect(SnoozeThreadResponseSchema)({
+        status: "success",
+        data: threadData(thread),
+      });
+    });
+    const result = await Effect.runPromise(Effect.result(operation));
+    if (Result.isSuccess(result)) return context.json(result.success, 200);
+    return Match.value(result.failure).pipe(
+      Match.tags({
+        InvalidThreadRequest: () =>
+          context.json(
+            Schema.encodeUnknownSync(SnoozeThreadInvalidRequestResponseSchema)({
+              status: "error",
+              data: {
+                code: "INVALID_REQUEST",
+                message: "Request validation failed.",
+                requestId,
+              },
+            }),
+            400,
+          ),
+        InvalidSnoozeTime: () =>
+          context.json(
+            Schema.encodeUnknownSync(SnoozeThreadInvalidTimeResponseSchema)({
+              status: "error",
+              data: {
+                code: "INVALID_SNOOZE_TIME",
+                message: "Choose a wake time in the future, within a year.",
+                requestId,
+              },
+            }),
+            400,
+          ),
+        ThreadSnoozeUnavailable: () =>
+          context.json(
+            Schema.encodeUnknownSync(SnoozeThreadUnavailableResponseSchema)({
+              status: "error",
+              data: {
+                code: "THREAD_SNOOZE_UNAVAILABLE",
+                message:
+                  "Only active Threads that were not started by another Thread can be snoozed.",
+                requestId,
+              },
+            }),
+            409,
+          ),
+        ThreadNotFound: () =>
+          context.json(
+            Schema.encodeUnknownSync(SnoozeThreadNotFoundResponseSchema)({
+              status: "error",
+              data: {
+                code: "THREAD_NOT_FOUND",
+                message: "Thread was not found.",
+                requestId,
+              },
+            }),
+            404,
+          ),
+        PersistenceUnavailable: () =>
+          context.json(
+            Schema.encodeUnknownSync(
+              SnoozeThreadPersistenceUnavailableResponseSchema,
             )({
               status: "error",
               data: {

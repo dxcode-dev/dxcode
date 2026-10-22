@@ -2,7 +2,16 @@ import { DurableObject } from "cloudflare:workers";
 import { ThreadId, UserId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { Hono } from "hono";
+import {
+  type BrowserSessionBinding,
+  closeForEndedSession,
+  enforceBrowserSessions,
+  readBrowserSessionHeaders,
+  sessionSocketCheckMs,
+  setBrowserSessionHeaders,
+} from "../auth/session-sockets.js";
 import type { AppEnv, Bindings } from "../http/types.js";
+import { realtimeLogger } from "../logging.js";
 import { sharedThreadVisibleSql } from "../thread-sharing/access.js";
 import {
   AUDIENCE_HEADER,
@@ -26,6 +35,8 @@ interface SocketAttachment {
   readonly clientId: string;
   /** The joined Thread; kept on the socket so presence survives hibernation. */
   readonly topic?: PresenceTopic;
+  /** The browser session that opened the socket; it closes when that ends. */
+  readonly session?: BrowserSessionBinding;
 }
 
 interface PresenceEntry {
@@ -68,6 +79,11 @@ const copyWebSocketHeaders = (request: Request, headers: Headers) => {
     const value = request.headers.get(name);
     if (value !== null) headers.set(name, value);
   }
+};
+
+const sessionOf = (request: Request) => {
+  const session = readBrowserSessionHeaders(request.headers);
+  return session === undefined ? {} : { session };
 };
 
 const decodeThreadEvent = (input: unknown): ThreadEvent | undefined => {
@@ -165,19 +181,61 @@ export class RealtimeHub extends DurableObject<Bindings> {
     }
   }
 
-  webSocketClose(socket: WebSocket): void {
+  #leave(socket: WebSocket) {
     this.#restorePresence();
     const topic = this.#presence.get(socket)?.topic;
     this.#presence.delete(socket);
     if (topic !== undefined) this.#broadcastPresence(topic);
   }
 
+  webSocketClose(socket: WebSocket): void {
+    this.#leave(socket);
+  }
+
   webSocketError(socket: WebSocket): void {
-    this.#restorePresence();
-    const topic = this.#presence.get(socket)?.topic;
-    this.#presence.delete(socket);
-    if (topic !== undefined) this.#broadcastPresence(topic);
+    this.#leave(socket);
     socket.close(1011, "websocket-error");
+  }
+
+  /** Closes the sockets whose browser session ended, then checks again. */
+  async alarm(): Promise<void> {
+    const db = this.env.DB;
+    if (db === undefined) return;
+    let watching = true;
+    try {
+      watching = await enforceBrowserSessions(db, this.ctx.getWebSockets(), {
+        binding: (socket) =>
+          (socket.deserializeAttachment() as SocketAttachment | undefined)
+            ?.session,
+        renew: (socket, expiresAt) => {
+          const attachment = socket.deserializeAttachment() as SocketAttachment;
+          if (attachment.session === undefined) return;
+          socket.serializeAttachment({
+            ...attachment,
+            session: { ...attachment.session, expiresAt },
+          });
+        },
+        end: (socket) => {
+          closeForEndedSession(socket);
+          this.#leave(socket);
+        },
+      });
+    } catch {
+      realtimeLogger.warn("Realtime session check failed.", {
+        event: "realtime_session_check_failed",
+      });
+    }
+    if (watching)
+      await this.ctx.storage.setAlarm(
+        Date.now() + sessionSocketCheckMs(this.env),
+      );
+  }
+
+  async #watchSessions() {
+    if ((await this.ctx.storage.getAlarm()) === null)
+      await this.ctx.storage.setAlarm(
+        Date.now() + sessionSocketCheckMs(this.env),
+      );
   }
 
   async webSocketMessage(
@@ -281,6 +339,7 @@ export class RealtimeHub extends DurableObject<Bindings> {
         audience,
         participant: participant.value,
         clientId,
+        ...sessionOf(request),
       });
     if (request.method === "POST" && url.pathname === "/invalidate")
       return this.#publishInvalidation(request, audience);
@@ -309,6 +368,7 @@ export class RealtimeHub extends DurableObject<Bindings> {
     const server = pair[1];
     server.serializeAttachment(attachment);
     this.ctx.acceptWebSocket(server);
+    if (attachment.session !== undefined) await this.#watchSessions();
     if (cursor !== undefined && cursor !== revision) {
       server.send(
         JSON.stringify({
@@ -525,6 +585,7 @@ export const realtimeRoutes = new Hono<AppEnv>().get("/", async (context) => {
     [CLIENT_HEADER]: clientId,
   });
   copyWebSocketHeaders(request, headers);
+  setBrowserSessionHeaders(headers, context.get("browserSession"));
   const cursor = context.req.query("cursor");
   const search =
     cursor === undefined ? "" : `?cursor=${encodeURIComponent(cursor)}`;

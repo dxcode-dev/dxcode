@@ -14,6 +14,7 @@ import {
   runnerResourceAttribution,
 } from "../../settings/usage/recorder.js";
 import {
+  assertThreadActive,
   assertThreadLifecycleState,
   atDaemonInstallationStage,
 } from "../activation.js";
@@ -135,28 +136,42 @@ const openE2BWorkspace = async (
   const resolve = options.existingOnly
     ? resolvers.connectExisting
     : resolvers.resolve;
+  const resolution = {
+    id: threadId,
+    requirements,
+    stateStore: makeD1ExecutionWorkspaceStateStore(db),
+    coordination: makeD1ExecutionWorkspaceCoordinator(db),
+    observeResolution: observeE2BResolution(
+      bindings,
+      threadId,
+      profile,
+      requirements,
+      context.account.scope,
+    ),
+  };
   const sandbox = await Effect.runPromise(
     resolve({
-      id: threadId,
-      requirements,
-      stateStore: makeD1ExecutionWorkspaceStateStore(db),
-      coordination: makeD1ExecutionWorkspaceCoordinator(db),
+      ...resolution,
       authorizeResolution: options.authorize,
-      observeResolution: observeE2BResolution(
-        bindings,
-        threadId,
-        profile,
-        requirements,
-        context.account.scope,
-      ),
       ...(options.observeResidency === undefined
         ? {}
         : { observeResidency: options.observeResidency }),
     }),
   );
+  // A sandbox paused under a running Thread (E2B's session limit, or a
+  // filesystem-only snapshot that cannot auto-resume) is woken again by
+  // reconnecting to it; an archived Thread is never woken this way.
+  const resume = async () => {
+    await Effect.runPromise(
+      resolvers.connectExisting({
+        ...resolution,
+        authorizeResolution: () => assertThreadActive(db, threadId),
+      }),
+    );
+  };
   return {
     guest: sandbox,
-    sandbox: (cwd) => e2b(sandbox, cwd).createSandbox({ id: threadId }),
+    sandbox: (cwd) => e2b(sandbox, cwd, resume).createSandbox({ id: threadId }),
     setIdleDeadline: (durationMs) => sandbox.setTimeout(durationMs),
     inactivityMs: requirements.inactivityMs,
     commandTimeoutMs: requirements.timeoutMs,
@@ -188,9 +203,8 @@ const resolversFor = (api: E2BResolverApi | undefined): E2BResolvers =>
 
 /**
  * The first Execution provider: E2B sandboxes. It claims
- * `execution.pause-resume` (the filesystem survives; a resume cold-boots):
- * archiving pauses
- * the sandbox, and destroying kills it. Tests pass a fake control-plane API.
+ * `execution.pause-resume` (a timeout pause keeps processes and memory):
+ * archiving pauses the sandbox without its memory, and destroying kills it. Tests pass a fake control-plane API.
  */
 export const makeE2BExecutionProvider = (
   api?: E2BResolverApi,

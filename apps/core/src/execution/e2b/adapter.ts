@@ -21,6 +21,7 @@ import {
   sandboxFromDriver,
 } from "@flue/runtime";
 import type { Sandbox as E2BSandbox } from "e2b";
+import { SandboxNotFoundError, TimeoutError } from "e2b";
 import { executionWorkspaceTools } from "../../plugins/execution/tools.js";
 import {
   decodeWorkspaceContextSnapshot,
@@ -28,44 +29,90 @@ import {
   workspaceContextCommand,
 } from "../workspace-context.js";
 
+/**
+ * A paused sandbox refuses envd traffic before the operation runs: a command
+ * fails with `SandboxNotFoundError` before it starts, and a file operation
+ * with E2B's "sandbox timeout" `TimeoutError` (HTTP 502). A command whose
+ * stream breaks mid-run fails with that `TimeoutError` too, but it may have
+ * run, so only file operations treat it as paused.
+ */
+const refusedWhilePaused = (error: unknown, kind: "command" | "file") =>
+  // By name, not class: the SDK ships ESM and CommonJS builds, and an error
+  // from the other build fails \`instanceof\`.
+  error instanceof Error &&
+  (error.name === SandboxNotFoundError.name ||
+    (kind === "file" &&
+      error.name === TimeoutError.name &&
+      error.message.includes("sandbox timeout")));
+
 /** Implements SandboxDriver by wrapping the E2B v2 TypeScript SDK. */
 class E2BSandboxDriver implements SandboxDriver {
-  constructor(private sandbox: E2BSandbox) {}
+  #resuming: Promise<void> | undefined;
+
+  constructor(
+    private sandbox: E2BSandbox,
+    private resume?: () => Promise<void>,
+  ) {}
+
+  /**
+   * Runs one operation; when the sandbox refused it because it is paused,
+   * resumes that same sandbox and runs the operation once more. The handle
+   * stays valid across a resume. Concurrent refusals share one resume.
+   */
+  async #run<A>(kind: "command" | "file", operation: () => Promise<A>) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (this.resume === undefined || !refusedWhilePaused(error, kind))
+        throw error;
+      this.#resuming ??= this.resume().finally(() => {
+        this.#resuming = undefined;
+      });
+      await this.#resuming;
+      return operation();
+    }
+  }
 
   async snapshotWorkspaceContext(
     root: string,
   ): Promise<WorkspaceContextSnapshotResult> {
-    const result = await this.sandbox.commands.run(workspaceContextCommand, {
-      envs: { FLUE_WORKSPACE_CONTEXT_ROOT: root },
-      timeoutMs: WORKSPACE_CONTEXT_TIMEOUT_MS,
-    });
+    const result = await this.#run("command", () =>
+      this.sandbox.commands.run(workspaceContextCommand, {
+        envs: { FLUE_WORKSPACE_CONTEXT_ROOT: root },
+        timeoutMs: WORKSPACE_CONTEXT_TIMEOUT_MS,
+      }),
+    );
     if (result.exitCode !== 0)
       throw new Error("E2B workspace-context operation failed.");
     return decodeWorkspaceContextSnapshot(result.stdout ?? "");
   }
 
   async readFile(path: string): Promise<string> {
-    return this.sandbox.files.read(path);
+    return this.#run("file", () => this.sandbox.files.read(path));
   }
 
   async readFileBuffer(path: string): Promise<Uint8Array> {
-    return this.sandbox.files.read(path, { format: "bytes" });
+    return this.#run("file", () =>
+      this.sandbox.files.read(path, { format: "bytes" }),
+    );
   }
 
   async writeFile(path: string, content: string | Uint8Array): Promise<void> {
     if (typeof content === "string") {
-      await this.sandbox.files.write(path, content);
+      await this.#run("file", () => this.sandbox.files.write(path, content));
     } else {
       const ab = content.buffer.slice(
         content.byteOffset,
         content.byteOffset + content.byteLength,
       ) as ArrayBuffer;
-      await this.sandbox.files.write(path, ab);
+      await this.#run("file", () => this.sandbox.files.write(path, ab));
     }
   }
 
   async stat(path: string): Promise<FileStat> {
-    const info = await this.sandbox.files.getInfo(path);
+    const info = await this.#run("file", () =>
+      this.sandbox.files.getInfo(path),
+    );
     const isDirectory = info.type === "dir";
     return {
       isFile: info.type === "file",
@@ -76,16 +123,18 @@ class E2BSandboxDriver implements SandboxDriver {
   }
 
   async readdir(path: string): Promise<string[]> {
-    const entries = await this.sandbox.files.list(path);
+    const entries = await this.#run("file", () =>
+      this.sandbox.files.list(path),
+    );
     return entries.map((entry) => entry.name);
   }
 
   async exists(path: string): Promise<boolean> {
-    return this.sandbox.files.exists(path);
+    return this.#run("file", () => this.sandbox.files.exists(path));
   }
 
   async mkdir(path: string, _options?: { recursive?: boolean }): Promise<void> {
-    await this.sandbox.files.makeDir(path);
+    await this.#run("file", () => this.sandbox.files.makeDir(path));
   }
 
   async rm(
@@ -103,7 +152,7 @@ class E2BSandboxDriver implements SandboxDriver {
         options: unsupported,
       });
     }
-    await this.sandbox.files.remove(path);
+    await this.#run("file", () => this.sandbox.files.remove(path));
   }
 
   async exec(
@@ -115,12 +164,14 @@ class E2BSandboxDriver implements SandboxDriver {
       signal?: AbortSignal;
     },
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    const result = await this.sandbox.commands.run(command, {
-      cwd: options?.cwd,
-      envs: options?.env,
-      timeoutMs: options?.timeoutMs,
-      signal: options?.signal,
-    });
+    const result = await this.#run("command", () =>
+      this.sandbox.commands.run(command, {
+        cwd: options?.cwd,
+        envs: options?.env,
+        timeoutMs: options?.timeoutMs,
+        signal: options?.signal,
+      }),
+    );
     return {
       stdout: result.stdout ?? "",
       stderr: result.stderr ?? "",
@@ -129,14 +180,18 @@ class E2BSandboxDriver implements SandboxDriver {
   }
 }
 
-/** Create a Flue sandbox factory from an initialized E2B sandbox. */
+/**
+ * Create a Flue sandbox factory from an initialized E2B sandbox. `resume`
+ * wakes that same sandbox when it refuses an operation because it is paused.
+ */
 export function e2b(
   sandbox: E2BSandbox,
   sandboxCwd = "/home/user",
+  resume?: () => Promise<void>,
 ): SandboxFactory {
   return {
     async createSandbox(): Promise<Sandbox> {
-      const driver = new E2BSandboxDriver(sandbox);
+      const driver = new E2BSandboxDriver(sandbox, resume);
       return sandboxFromDriver(driver, sandboxCwd);
     },
     tools: executionWorkspaceTools,

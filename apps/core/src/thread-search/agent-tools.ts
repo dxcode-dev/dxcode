@@ -49,6 +49,7 @@ Scope broad searches by repository, project, or date when that context is known.
 - **Project filter**: \`project:name\` to scope to a project by name or ID
 - **Repo filter**: \`repo:url\` to scope to a repository: \`repo:github.com/owner/repo\` or \`repo:owner/repo\`
 - **Pinned filter**: \`pinned:true\` for pinned threads or \`pinned:false\` for unpinned threads
+- **Snoozed filter**: \`snoozed:true\` for the thread owner's threads snoozed right now, hidden from their sidebar until a wake time, or \`snoozed:false\` for the rest
 - **Author filter**: \`author:name\` to find threads by a user: \`author:alice\` or \`author:me\` for the thread owner's own threads
 - **Visibility filter**: \`visibility:private\` or \`visibility:workspace\` to narrow by sharing scope. This does not grant access
 - **Color filter**: \`color:blue\`, or \`color:auto\` for threads without a chosen color
@@ -61,7 +62,7 @@ All matching is case-insensitive. Keywords match by word stem; there is no prefi
 
 ## Results
 
-Each thread has threadId, title, projectName, ownerName, ownedByYou, parentThreadId when it has one, color, archived, pinned, visibility, state, lastActivityAt, and createdAt. Keyword results add matchedSearchText, an excerpt of the newest message holding the first keyword.
+Each thread has threadId, title, projectName, ownerName, ownedByYou, parentThreadId when it has one, color, archived, pinned, snoozedUntil while snoozed, visibility, state, lastActivityAt, and createdAt. Keyword results add matchedSearchText, an excerpt of the newest message holding the first keyword.
 
 ## Pagination
 

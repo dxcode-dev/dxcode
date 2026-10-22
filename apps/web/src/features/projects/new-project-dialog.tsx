@@ -133,12 +133,15 @@ export function AdditionalRepositoriesPicker({
   value,
   loading,
   disabled,
+  addTrigger = false,
   onValueChange,
 }: {
   readonly options: ReadonlyArray<RepositoryOption>;
   readonly value: ReadonlyArray<RepositoryOption>;
   readonly loading?: string;
   readonly disabled?: boolean;
+  /** Opens from an "Add Repository" button where the choices are listed. */
+  readonly addTrigger?: boolean;
   readonly onValueChange: (value: ReadonlyArray<RepositoryOption>) => void;
 }) {
   const [query, setQuery] = React.useState("");
@@ -165,19 +168,29 @@ export function AdditionalRepositoriesPicker({
       autoHighlight
       disabled={disabled}
     >
-      <Combobox.Trigger
-        id="project-additional-repositories"
-        className="additional-repositories-trigger"
-      >
-        <span>
-          {value.length === 0
-            ? "None selected"
-            : value.length === 1
-              ? "1 repository"
-              : `${value.length} repositories`}
-        </span>
-        <ChevronsUpDown aria-hidden="true" />
-      </Combobox.Trigger>
+      {addTrigger ? (
+        <Combobox.Trigger
+          id="project-additional-repositories"
+          className={buttonVariants({ size: "xs", variant: "ghost" })}
+        >
+          <Plus aria-hidden="true" />
+          Add Repository
+        </Combobox.Trigger>
+      ) : (
+        <Combobox.Trigger
+          id="project-additional-repositories"
+          className="additional-repositories-trigger"
+        >
+          <span>
+            {value.length === 0
+              ? "None selected"
+              : value.length === 1
+                ? "1 repository"
+                : `${value.length} repositories`}
+          </span>
+          <ChevronsUpDown aria-hidden="true" />
+        </Combobox.Trigger>
+      )}
       <Combobox.Portal>
         <Combobox.Positioner
           className="repository-combobox-positioner"

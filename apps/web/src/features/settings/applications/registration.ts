@@ -1,4 +1,4 @@
-import { AppWindow } from "lucide-react";
+import { Braces } from "lucide-react";
 import type { SettingsSectionRegistration } from "../settings-registration.js";
 import { ExternalApiApplicationsSettings } from "./external-api-applications-settings.js";
 
@@ -8,10 +8,11 @@ export const workspaceApplicationsSettingsSection: SettingsSectionRegistration =
     scope: "workspace",
     adminOnly: true,
     slug: "applications",
-    label: "Applications",
-    title: "External API Applications",
+    group: "library",
+    label: "External API Apps",
+    title: "External API Apps",
     description:
-      "Manage workspace-owned machine clients for stable dx product APIs.",
-    icon: AppWindow,
+      "Machine clients that call dx's Project and Thread APIs with a client ID and secret.",
+    icon: Braces,
     component: ExternalApiApplicationsSettings,
   };

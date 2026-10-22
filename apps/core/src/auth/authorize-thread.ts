@@ -24,6 +24,7 @@ interface ThreadAuthorizationResult {
   readonly authorized: boolean;
   readonly threadId?: ThreadId;
   readonly lifecycleState?: ThreadLifecycleState;
+  readonly snoozed?: boolean;
   readonly access?: "owner" | "contribute" | "view";
   readonly ownerUserId?: string;
 }
@@ -40,19 +41,19 @@ export const authorizeThreadRequest = Effect.fn("authorizeThreadRequest")(
     const repositoryLayer = ThreadRepositoryD1.pipe(
       Layer.provide(D1Client.layer({ db })),
     );
-    const lifecycleState = yield* Effect.gen(function* () {
+    const owned = yield* Effect.gen(function* () {
       const repository = yield* ThreadRepository;
-      return (yield* repository.findOwnedById(threadId, principal.userId))
-        .lifecycleState;
+      return yield* repository.findOwnedById(threadId, principal.userId);
     }).pipe(
       Effect.catchTag("ThreadNotFound", () => Effect.succeed(undefined)),
       Effect.provide(repositoryLayer),
     );
-    if (lifecycleState !== undefined)
+    if (owned !== undefined)
       return {
         authorized: true,
         threadId,
-        lifecycleState,
+        lifecycleState: owned.lifecycleState,
+        snoozed: owned.snoozedUntil !== undefined,
         access: "owner",
         ownerUserId: principal.userId,
       } satisfies ThreadAuthorizationResult;
@@ -68,6 +69,7 @@ export const authorizeThreadRequest = Effect.fn("authorizeThreadRequest")(
             authorized: true,
             threadId,
             lifecycleState: grant.lifecycleState,
+            snoozed: grant.snoozed,
             access: grant.access,
             ownerUserId: grant.ownerUserId,
           }
@@ -174,5 +176,6 @@ export const authorizeThread: MiddlewareHandler<AppEnv> = async (
     "threadLifecycleState",
     result.lifecycleState as ThreadLifecycleState,
   );
+  context.set("threadSnoozed", result.snoozed === true);
   await next();
 };

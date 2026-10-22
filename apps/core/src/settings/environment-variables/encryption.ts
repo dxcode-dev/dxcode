@@ -5,6 +5,7 @@ import type {
   EnvironmentVariableName,
   EnvironmentVariablePlaintext,
   EnvironmentVariableTarget,
+  EnvironmentVariableValue,
 } from "@dx/domain";
 import { Effect } from "effect";
 import {
@@ -41,7 +42,7 @@ export const encryptEnvironmentVariable = Effect.fn(
 )(function* (
   keyring: ConfigEncryptionKeyring,
   context: EnvironmentVariableEncryptionContext,
-  plaintext: EnvironmentVariablePlaintext,
+  plaintext: EnvironmentVariableValue | EnvironmentVariablePlaintext,
 ) {
   return (yield* encryptConfigValue(
     keyring,

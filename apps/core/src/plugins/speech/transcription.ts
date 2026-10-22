@@ -51,13 +51,13 @@ export const speechProviderFor = (
     case "fixture": {
       const fixture = createFixtureSpeechProvider();
       return {
-        transcribe: (wav, signal) => {
+        transcribe: (wav, options) => {
           onRequest();
-          return fixture.transcribe(wav, signal);
+          return fixture.transcribe(wav, options);
         },
-        openSession: (signal) => {
+        openSession: (options) => {
           onRequest();
-          return fixture.openSession(signal);
+          return fixture.openSession(options);
         },
       };
     }

@@ -1,16 +1,18 @@
 import type { GitHubGrantData } from "@dx/api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
-import { CircleHelp } from "lucide-react";
+import { Link, useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Button } from "../../../shared/ui/button.js";
+import { buttonVariants } from "../../../shared/ui/button-variants.js";
 import {
   DialogContent,
   DialogDescription,
   DialogRoot,
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
+import { GitHubIcon } from "../../../shared/ui/github-icon.js";
+import { SettingsHeading } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
 import {
   bitbucketAuthorizeMutationOptions,
@@ -29,17 +31,39 @@ import { McpSection } from "./mcp-section.js";
 
 const errorMessage = (cause: unknown) =>
   cause instanceof Error ? cause.message : "Request failed.";
-function GitHubIcon() {
+
+/** One integration account: its mark, name, a muted line, and its actions. */
+function IntegrationRow({
+  icon,
+  title,
+  badge,
+  description,
+  actions,
+}: {
+  readonly icon: React.ReactNode;
+  readonly title: React.ReactNode;
+  readonly badge?: string;
+  readonly description?: React.ReactNode;
+  readonly actions?: React.ReactNode;
+}) {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        fill="currentColor"
-        d="M12 .7a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.23c-3.22.7-3.9-1.37-3.9-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.78 2.72 1.27 3.38.97.1-.75.4-1.27.74-1.56-2.57-.29-5.27-1.28-5.27-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.47.11-3.05 0 0 .97-.31 3.16 1.18a10.9 10.9 0 0 1 5.76 0c2.2-1.49 3.16-1.18 3.16-1.18.63 1.58.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.71 5.39-5.29 5.68.42.36.79 1.06.79 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z"
-      />
-    </svg>
+    <div className="integration-row">
+      <span className="integration-row-icon" aria-hidden="true">
+        {icon}
+      </span>
+      <div className="integration-row-copy">
+        <div className="integration-row-title">
+          <h3>{title}</h3>
+          {badge === undefined ? null : <span>{badge}</span>}
+        </div>
+        {description === undefined ? null : <p>{description}</p>}
+      </div>
+      {actions === undefined ? null : (
+        <div className="integration-row-actions">{actions}</div>
+      )}
+    </div>
   );
 }
-
 function BitbucketIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -87,73 +111,70 @@ function BitbucketIntegration() {
       // The mutation error is rendered below; keep the confirmation open.
     }
   };
+  const reconnectRequired = connection?.status === "reauthorization-required";
   return (
-    <section className="github-integration" aria-label="Bitbucket integration">
-      <div className="github-integration-identity">
-        <span className="github-integration-icon bitbucket" aria-hidden="true">
-          <BitbucketIcon />
-        </span>
-        <div>
-          <h2>
-            {active ? `${connection.accountName} on Bitbucket` : "Bitbucket"}
-          </h2>
-          <span className="github-integration-summary">
-            {connectionQuery.isPending
-              ? "Checking connection…"
-              : unavailable
-                ? "Connection status is unavailable."
-                : configured === false
-                  ? "Bitbucket is unavailable because it is not configured."
+    <section className="integration-card" aria-label="Bitbucket integration">
+      <IntegrationRow
+        icon={<BitbucketIcon />}
+        title={active ? `${connection.accountName} on Bitbucket` : "Bitbucket"}
+        description={
+          connectionQuery.isPending
+            ? "Checking connection…"
+            : unavailable
+              ? "Connection status is unavailable."
+              : configured === false
+                ? "Bitbucket is not configured on this deployment."
+                : reconnectRequired
+                  ? "Authorization expired or was revoked. Reconnect to continue."
                   : active
-                    ? "Connected for personal projects."
-                    : connection?.status === "reauthorization-required"
-                      ? "Authorization expired or was revoked. Reconnect to continue."
-                      : "Connect Bitbucket for personal projects."}
-          </span>
-        </div>
-      </div>
-      <div className="github-integration-actions">
-        {unavailable ? (
-          <Button
-            size="xs"
-            variant="outline"
-            onClick={() => void connectionQuery.refetch()}
-          >
-            Retry
-          </Button>
-        ) : active ? (
-          <Button
-            size="xs"
-            variant="outline"
-            disabled={refresh.isPending}
-            onClick={() => refresh.mutate()}
-          >
-            {refresh.isPending ? "Refreshing…" : "Refresh status"}
-          </Button>
-        ) : configured === false ? null : (
-          <Button
-            size="xs"
-            disabled={connectionQuery.isPending || authorize.isPending}
-            onClick={() => void connect()}
-          >
-            {connection === null || connection === undefined
-              ? "Connect"
-              : "Reconnect"}
-          </Button>
-        )}
-        {connection === null || connection === undefined ? null : (
-          <Button
-            size="xs"
-            variant="outline"
-            onClick={(event) => {
-              finalFocus.current = event.currentTarget;
-              setConfirming(true);
-            }}
-          >
-            Disconnect
-          </Button>
-        )}
-      </div>
+                    ? undefined
+                    : "Use your Bitbucket repositories in personal projects."
+        }
+        actions={
+          <>
+            {unavailable ? (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => void connectionQuery.refetch()}
+              >
+                Retry
+              </Button>
+            ) : active ? (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={refresh.isPending}
+                onClick={() => refresh.mutate()}
+              >
+                {refresh.isPending ? "Refreshing…" : "Refresh status"}
+              </Button>
+            ) : configured === false ? null : (
+              <Button
+                size="xs"
+                disabled={connectionQuery.isPending || authorize.isPending}
+                onClick={() => void connect()}
+              >
+                {connection === null || connection === undefined
+                  ? "Connect"
+                  : "Reconnect"}
+              </Button>
+            )}
+            {connection === null || connection === undefined ? null : (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={(event) => {
+                  finalFocus.current = event.currentTarget;
+                  setConfirming(true);
+                }}
+              >
+                Disconnect
+              </Button>
+            )}
+          </>
+        }
+      />
       {error instanceof Error ? <p role="alert">{error.message}</p> : null}
       {!confirming || connection === null || connection === undefined ? null : (
         <DialogRoot open onOpenChange={(open) => !open && setConfirming(false)}>
@@ -241,22 +262,50 @@ export function IntegrationsSettings({
       : { scope: "workspace", workspaceSlug };
   return (
     <div className="integrations-settings">
-      <header className="integrations-page-heading">
-        <h1>MCP &amp; Integrations</h1>
-        <span aria-live="polite">{status}</span>
-      </header>
-      {workspaceSlug === undefined ? (
-        <section aria-labelledby="integrations-section-title">
-          <header className="integrations-section-heading">
-            <h2 id="integrations-section-title">Integrations</h2>
-          </header>
-          <GitHubIntegration
-            onDirtyChange={onDirtyChange}
-            settingsReturnTo={settingsReturnTo}
-          />
-          <BitbucketIntegration />
-        </section>
-      ) : null}
+      <SettingsHeading
+        title="Integrations & MCP"
+        description={
+          workspaceSlug === undefined
+            ? "Connect dx to the tools and services you use through integrations and MCP servers."
+            : "Connect this workspace to the tools and services it uses through MCP servers."
+        }
+        actions={<span aria-live="polite">{status}</span>}
+      />
+      <section aria-labelledby="integrations-section-title">
+        <header className="integrations-section-heading">
+          <h2 id="integrations-section-title">Integrations</h2>
+        </header>
+        {workspaceSlug === undefined ? (
+          <>
+            <GitHubIntegration
+              onDirtyChange={onDirtyChange}
+              settingsReturnTo={settingsReturnTo}
+            />
+            <BitbucketIntegration />
+          </>
+        ) : (
+          <section
+            className="integration-card"
+            aria-label="Source control integration"
+          >
+            <IntegrationRow
+              icon={<GitHubIcon />}
+              title="GitHub and Bitbucket"
+              description="Each member connects their own account in personal settings to work in the workspace's repositories."
+              actions={
+                <Link
+                  to="/settings/$section"
+                  params={{ section: "integrations" }}
+                  state={(previous) => previous}
+                  className={buttonVariants({ variant: "outline", size: "xs" })}
+                >
+                  Personal integrations
+                </Link>
+              }
+            />
+          </section>
+        )}
+      </section>
       <McpSection
         target={target}
         onStatus={setStatus}
@@ -295,81 +344,52 @@ function GitHubIntegration({
       setError(errorMessage(cause));
     }
   };
-  const activeGrants = grants.filter(
-    (grant) =>
-      grant.status === "active" && grant.installationStatus === "active",
-  );
-  const summary = grantsQuery.isPending
-    ? "Checking connection…"
-    : grantsQuery.error !== null
-      ? "Connection status is unavailable."
-      : configured === false
-        ? "GitHub is unavailable because it is not configured."
-        : grants.length === 0
-          ? "Connect GitHub for personal projects."
-          : activeGrants.length === grants.length
-            ? `${grants.length} connected installation${grants.length === 1 ? "" : "s"}.`
-            : `${activeGrants.length} of ${grants.length} installations connected.`;
   return (
     <>
-      <section
-        className="github-integration github-installations"
-        aria-label="GitHub integration"
-      >
-        <div className="github-integration-identity">
-          <span className="github-integration-icon" aria-hidden="true">
-            <GitHubIcon />
-          </span>
-          <div>
-            <h2>GitHub</h2>
-            <span className="github-integration-summary">{summary}</span>
-          </div>
-        </div>
-        <div className="github-integration-actions">
-          {grantsQuery.error !== null ? (
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() => void grantsQuery.refetch()}
-            >
-              Retry
-            </Button>
-          ) : configured === false ? (
-            <Button size="xs" disabled>
-              Connect
-            </Button>
-          ) : grants.length === 0 ? (
-            <Button
-              size="xs"
-              disabled={grantsQuery.isPending}
-              onClick={() => void redirect("connect")}
-            >
-              Connect
-            </Button>
-          ) : (
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() => void redirect("install")}
-            >
-              Connect another
-            </Button>
-          )}
-        </div>
-        {grants.length === 0 ? null : (
-          <ul
-            className="github-installation-list"
-            aria-label="GitHub installations"
-          >
-            {grants.map((grant) => (
-              <GitHubInstallation
-                key={grant.id}
-                grant={grant}
-                onDirtyChange={onDirtyChange}
-                onRedirect={redirect}
-              />
-            ))}
-          </ul>
+      <section className="integration-card" aria-label="GitHub integration">
+        {grants.length === 0 ? (
+          <IntegrationRow
+            icon={<GitHubIcon />}
+            title="GitHub"
+            description={
+              grantsQuery.isPending
+                ? "Checking connection…"
+                : grantsQuery.error !== null
+                  ? "Connection status is unavailable."
+                  : configured === false
+                    ? "GitHub is not configured on this deployment."
+                    : "Use your GitHub repositories in dx projects."
+            }
+            actions={
+              grantsQuery.error !== null ? (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() => void grantsQuery.refetch()}
+                >
+                  Retry
+                </Button>
+              ) : configured === false ? undefined : (
+                <Button
+                  size="xs"
+                  disabled={grantsQuery.isPending}
+                  onClick={() => void redirect("connect")}
+                >
+                  Connect GitHub
+                </Button>
+              )
+            }
+          />
+        ) : (
+          grants.map((grant, index) => (
+            <GitHubInstallation
+              key={grant.id}
+              grant={grant}
+              connectAnother={index === 0}
+              onDirtyChange={onDirtyChange}
+              onRedirect={redirect}
+            />
+          ))
         )}
       </section>
       {error === undefined ? null : <p role="alert">{error}</p>}
@@ -379,10 +399,13 @@ function GitHubIntegration({
 
 function GitHubInstallation({
   grant,
+  connectAnother,
   onDirtyChange,
   onRedirect,
 }: {
   readonly grant: GitHubGrantData;
+  /** The first account's row also offers connecting another account. */
+  readonly connectAnother: boolean;
   readonly onDirtyChange: SettingsSectionProps["onDirtyChange"];
   readonly onRedirect: (operation: "connect" | "install") => Promise<void>;
 }) {
@@ -413,65 +436,65 @@ function GitHubInstallation({
     }
   };
   return (
-    <li className="github-installation">
-      <div>
-        <div className="github-installation-title">
-          <strong>@{grant.account.login}</strong>
-          <span>
-            {grant.account.type === "organization"
-              ? "Organization"
-              : "Personal"}
-          </span>
-          <span
-            className="github-integration-help"
-            title="GitHub repository access"
-            role="img"
-            aria-label="GitHub repository access"
-          >
-            <CircleHelp />
-          </span>
-        </div>
-        <span className="github-integration-summary">
-          {connected
-            ? "Connected"
+    <>
+      <IntegrationRow
+        icon={<GitHubIcon />}
+        title={`@${grant.account.login} on GitHub`}
+        badge={
+          grant.account.type === "organization" ? "Organization" : undefined
+        }
+        description={
+          connected
+            ? undefined
             : grant.status === "reauthorization-required"
               ? "Authorization expired or was revoked."
-              : "Installation needs attention."}
-        </span>
-      </div>
-      <div className="github-integration-actions">
-        {connected ? (
-          <Button
-            size="xs"
-            variant="outline"
-            aria-label={`Configure @${grant.account.login}`}
-            onClick={() => void onRedirect("install")}
-          >
-            Configure
-          </Button>
-        ) : (
-          <Button
-            size="xs"
-            aria-label={`Reconnect @${grant.account.login}`}
-            onClick={() => void reconnect()}
-          >
-            Reconnect
-          </Button>
-        )}
-        {grant.status === "reauthorization-required" ? null : (
-          <Button
-            size="xs"
-            variant="outline"
-            aria-label={`Disconnect @${grant.account.login}`}
-            onClick={(event) => {
-              finalFocus.current = event.currentTarget;
-              setDisconnectOpen(true);
-            }}
-          >
-            Disconnect
-          </Button>
-        )}
-      </div>
+              : "Installation needs attention."
+        }
+        actions={
+          <>
+            {connectAnother ? (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => void onRedirect("install")}
+              >
+                Connect another account
+              </Button>
+            ) : null}
+            {connected ? (
+              <Button
+                size="xs"
+                variant="outline"
+                aria-label={`Configure @${grant.account.login}`}
+                onClick={() => void onRedirect("install")}
+              >
+                Configure
+              </Button>
+            ) : (
+              <Button
+                size="xs"
+                aria-label={`Reconnect @${grant.account.login}`}
+                onClick={() => void reconnect()}
+              >
+                Reconnect
+              </Button>
+            )}
+            {grant.status === "reauthorization-required" ? null : (
+              <Button
+                size="xs"
+                variant="outline"
+                aria-label={`Disconnect @${grant.account.login}`}
+                onClick={(event) => {
+                  finalFocus.current = event.currentTarget;
+                  setDisconnectOpen(true);
+                }}
+              >
+                Disconnect
+              </Button>
+            )}
+          </>
+        }
+      />
       {error === undefined ? null : <p role="alert">{error}</p>}
       {!disconnectOpen ? null : (
         <DisconnectConfirmation
@@ -483,6 +506,6 @@ function GitHubInstallation({
           onConfirm={() => void confirmDisconnect()}
         />
       )}
-    </li>
+    </>
   );
 }

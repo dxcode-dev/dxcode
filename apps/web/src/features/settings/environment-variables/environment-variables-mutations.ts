@@ -1,6 +1,7 @@
 import type { UserId } from "@dx/domain";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 import {
+  ApiError,
   applyBulkEnvironmentVariables,
   createEnvironmentVariable,
   deleteEnvironmentVariable,
@@ -32,6 +33,22 @@ export type EnvironmentVariablesMutationAction =
       readonly type: "applyBulk";
       readonly input: Parameters<typeof applyBulkEnvironmentVariables>[1];
     };
+
+/** The server's field errors, or its message when it names no field. */
+export const failureMessages = (
+  error: unknown,
+): ReadonlyArray<{ readonly field: string; readonly message: string }> => {
+  const fieldErrors =
+    error instanceof ApiError ? (error.fieldErrors ?? []) : [];
+  return fieldErrors.length > 0
+    ? fieldErrors
+    : [
+        {
+          field: "request",
+          message: error instanceof Error ? error.message : "Request failed.",
+        },
+      ];
+};
 
 const mutateEnvironmentVariables = async (
   target: EnvironmentVariablesTarget,

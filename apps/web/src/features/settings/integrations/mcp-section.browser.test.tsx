@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthContext } from "../../../shared/auth/auth-context.js";
@@ -26,6 +26,9 @@ vi.mock("./mcp-mutations.js", async (importOriginal) => ({
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useNavigate: () => vi.fn(),
+  Link: ({ children }: { readonly children: ReactNode }) => (
+    <a href="/settings/integrations">{children}</a>
+  ),
 }));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -178,9 +181,9 @@ describe("MCP section", () => {
     });
   });
 
-  it("shows integrations and MCP personally, and only MCP plus policy in a workspace", () => {
+  it("connects source control personally, and points a workspace to personal settings", () => {
     const personal = mount([server({ tools: [] })]);
-    expect(personal.textContent).toContain("MCP & Integrations");
+    expect(personal.textContent).toContain("Integrations & MCP");
     expect(personal.textContent).toContain("GitHub");
     expect(personal.textContent).toContain("Docs");
     expect(personal.textContent).toContain("Tools not discovered");
@@ -189,7 +192,10 @@ describe("MCP section", () => {
     container?.remove();
 
     const workspace = mount([], "team", true);
-    expect(workspace.textContent).not.toContain("GitHub");
+    expect(workspace.textContent).toContain(
+      "Each member connects their own account in personal settings",
+    );
+    expect(workspace.textContent).not.toContain("Connect GitHub");
     expect(workspace.textContent).toContain("No MCP servers yet.");
     expect(workspace.textContent).toContain("Allow personal MCP servers");
   });

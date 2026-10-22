@@ -156,6 +156,7 @@ export function SidebarThreadNavigation({
               ) : (
                 <SidebarThreadRows
                   threads={section.threads}
+                  snoozed={section.id === "snoozed"}
                   childThreads={childThreads}
                   activeThreadId={activeThreadId}
                   projectNames={projectNames}

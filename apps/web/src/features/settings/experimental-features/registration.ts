@@ -5,6 +5,7 @@ import { ExperimentalFeaturesSettings } from "./experimental-features-settings.j
 export const personalExperimentalFeaturesSettingsSection = {
   id: "personal-experimental-features",
   scope: "personal",
+  group: "top-level",
   slug: "experimental-features",
   label: "Experimental Features",
   title: "Experimental Features",

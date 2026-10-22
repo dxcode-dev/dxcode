@@ -1,11 +1,19 @@
 import { EnvironmentVariableDataSchema } from "@dx/api";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  RouterProvider,
+} from "@tanstack/react-router";
 import { Schema } from "effect";
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AuthContext } from "../../../shared/auth/auth-context.js";
+import { modelConnectionsQueryOptions } from "../model-routing/model-routing-queries.js";
 import {
   environmentVariableHistoryQueryOptions,
   environmentVariablesQueryOptions,
@@ -176,32 +184,115 @@ describe("environment variables settings", () => {
         </AuthContext.Provider>,
       ),
     );
-    const rotate = [...container.querySelectorAll("button")].find(
-      (button) => button.textContent === "Rotate",
-    );
-    await act(() => rotate?.click());
-    const replacement = document.querySelector<HTMLInputElement>(
-      'input[id$="-rotate"]',
-    );
+    // Rotate sits in the row's menu.
+    const openRotate = async () => {
+      await act(() =>
+        container
+          .querySelector<HTMLButtonElement>('[aria-label="Manage API_SECRET"]')
+          ?.click(),
+      );
+      const rotate = await vi.waitUntil(() =>
+        [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+          (item) => item.textContent === "Rotate",
+        ),
+      );
+      await act(() => rotate.click());
+      return vi.waitUntil(() =>
+        document.querySelector<HTMLTextAreaElement>('textarea[id$="-rotate"]'),
+      );
+    };
+    const replacement = await openRotate();
     await act(() => {
       const setter = Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
+        HTMLTextAreaElement.prototype,
         "value",
       )?.set;
       setter?.call(replacement, "must-not-survive-close");
-      replacement?.dispatchEvent(new Event("input", { bubbles: true }));
+      replacement.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    expect(replacement?.value).toBe("must-not-survive-close");
+    expect(replacement.value).toBe("must-not-survive-close");
 
     await act(() =>
       document
         .querySelector<HTMLButtonElement>('[aria-label="Close dialog"]')
         ?.click(),
     );
-    await act(() => rotate?.click());
-    expect(
-      document.querySelector<HTMLInputElement>('input[id$="-rotate"]')?.value,
-    ).toBe("");
+    await vi.waitUntil(
+      () => document.querySelector('textarea[id$="-rotate"]') === null,
+    );
+    expect((await openRotate()).value).toBe("");
+
+    await act(() => root.unmount());
+    container.remove();
+  });
+  it("lists a connected Claude plan read-only and links to Model Routing", async () => {
+    const queryClient = new QueryClient();
+    const userId = "usr_test" as never;
+    const target = { scope: "personal" } as const;
+    queryClient.setQueryData(
+      environmentVariablesQueryOptions(userId, target).queryKey,
+      { items: [], precedence: ["personal", "project", "workspace"] },
+    );
+    queryClient.setQueryData(
+      environmentVariableHistoryQueryOptions(userId, target).queryKey,
+      { pages: [{ items: [] }], pageParams: [undefined] },
+    );
+    queryClient.setQueryData(
+      modelConnectionsQueryOptions({ scope: "personal" }, userId).queryKey,
+      [
+        {
+          id: "mcn_claude",
+          name: "Claude",
+          kind: "provider",
+          providerId: "claude-code",
+        },
+      ] as never,
+    );
+    const rootRoute = createRootRoute();
+    const section = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/settings/$section",
+      component: () => (
+        <AuthContext.Provider
+          value={{
+            identity: {
+              id: userId,
+              name: "Test User",
+              email: "test@example.com",
+            },
+            logout: () => undefined,
+          }}
+        >
+          <QueryClientProvider client={queryClient}>
+            <EnvironmentVariablesSettings onDirtyChange={() => undefined} />
+          </QueryClientProvider>
+        </AuthContext.Provider>
+      ),
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([section]),
+      history: createMemoryHistory({
+        initialEntries: ["/settings/environment-variables"],
+      }),
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(() => root.render(<RouterProvider router={router} />));
+    const link = await vi.waitUntil(() =>
+      [...container.querySelectorAll<HTMLAnchorElement>("a")].find(
+        (anchor) => anchor.textContent === "Configured in Model Routing",
+      ),
+    );
+    const row = link.closest("tr");
+    expect(row?.textContent).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(row?.textContent).toContain("Subscription");
+    expect(row?.querySelector("button")).toBeNull();
+
+    await act(() => link.click());
+    await vi.waitUntil(
+      () => router.state.location.pathname === "/settings/model-routing",
+    );
 
     await act(() => root.unmount());
     container.remove();

@@ -41,7 +41,7 @@ const skillData = (id: string, name: string, description: string) => ({
   versions: [1],
   active: versionData(name, description),
   effectiveState: "effective" as const,
-  overridesPersonal: false,
+  overridesWorkspace: false,
   createdAt: timestamp,
   updatedAt: timestamp,
 });
@@ -62,7 +62,7 @@ const skillsListResponse = {
   data: {
     items: [codeReviewer, writingHelper],
     canMutate: true,
-    precedence: "workspace-over-personal" as const,
+    precedence: "personal-over-workspace" as const,
   },
 };
 
@@ -196,7 +196,7 @@ const exportInputOf = (container: HTMLElement) => {
 
 const waitForDialog = () =>
   vi.waitFor(() => {
-    const dialog = document.querySelector(".skill-review-dialog");
+    const dialog = document.querySelector(".skill-import-review");
     expect(dialog).not.toBeNull();
     return dialog as HTMLElement;
   });
@@ -206,8 +206,16 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
+const openSettingsFor = async (container: HTMLElement, name: string) => {
+  const gear = container.querySelector<HTMLButtonElement>(
+    `button[aria-label="${name} settings"]`,
+  );
+  if (!gear) throw new Error(`Settings button for ${name} not found.`);
+  await act(() => gear.click());
+};
+
 describe("SkillsSettings import routing", () => {
-  it("imports an export as a fresh skill after a dismissed Update instead of switching to an unrelated skill", async () => {
+  it("imports an export as a fresh skill after a dismissed version upload instead of switching to an unrelated skill", async () => {
     const network = new FrontendNetworkHarness(
       respondSkills({
         name: "writing-helper",
@@ -217,12 +225,14 @@ describe("SkillsSettings import routing", () => {
     vi.stubGlobal("fetch", network.fetch);
     const { container, root } = await mountSkills();
 
-    await act(() => findButtonByText(container, "Update").click());
-    expect(document.querySelector(".skill-review-dialog")).toBeNull();
+    await openSettingsFor(container, "code-reviewer");
+    await act(() => findButtonByText(document, "Upload version").click());
+    expect(document.querySelector(".skill-import-review")).toBeNull();
     await act(() => setInputFiles(folderInputOf(container), []));
-    expect(document.querySelector(".skill-review-dialog")).toBeNull();
+    expect(document.querySelector(".skill-import-review")).toBeNull();
 
-    await act(() => findButtonByText(container, "Import export").click());
+    await act(() => findButtonByText(container, "Import").click());
+    await act(() => findButtonByText(document, "Choose .skill.json").click());
     await act(() =>
       setInputFiles(exportInputOf(container), [
         exportedPayload("writing-helper", "Helps with writing."),
@@ -254,14 +264,15 @@ describe("SkillsSettings import routing", () => {
     await act(() => root.unmount());
   });
 
-  it("publishes an activated new version when a real Update selection is made (regression guard for the legitimate publish path)", async () => {
+  it("publishes an activated new version when a version upload is made from a skill's settings (regression guard for the legitimate publish path)", async () => {
     const network = new FrontendNetworkHarness(
       respondSkills({ name: "code-reviewer", description: "Reviews code." }),
     );
     vi.stubGlobal("fetch", network.fetch);
     const { container, root } = await mountSkills();
 
-    await act(() => findButtonByText(container, "Update").click());
+    await openSettingsFor(container, "code-reviewer");
+    await act(() => findButtonByText(document, "Upload version").click());
     await act(() =>
       setInputFiles(folderInputOf(container), [
         exportedPayload("code-reviewer", "Reviews code."),

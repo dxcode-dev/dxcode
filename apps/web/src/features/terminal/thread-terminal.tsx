@@ -8,6 +8,10 @@ import type { ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { RefreshCw, SquareTerminal } from "lucide-react";
 import * as React from "react";
+import {
+  isSessionEndedClose,
+  reportSessionEnded,
+} from "../../shared/auth/session-ended.js";
 import { wakingExecutionEnvironmentMessage } from "../../shared/execution-environment-copy.js";
 import { useTheme } from "../../shared/theme/theme-provider.js";
 import { useMobile } from "../../shared/use-mobile.js";
@@ -73,6 +77,8 @@ const errorMessage = (code: ThreadTerminalErrorCode) => {
       return "Terminal exited.";
     case "terminal-overflow":
       return "Terminal output exceeded capacity.";
+    case "session-ended":
+      return "Your session ended. Sign in again.";
   }
 };
 
@@ -526,9 +532,18 @@ const useTerminalConnection = ({
           setStatus(disconnected);
           if (recovering) reconnect();
         };
-        socket.addEventListener("close", unavailable, {
-          signal: listeners.signal,
-        });
+        socket.addEventListener(
+          "close",
+          (event) => {
+            // The session that opened this socket ended: sign-in, not a retry.
+            if (isSessionEndedClose(event.code)) {
+              if (!abort.signal.aborted) reportSessionEnded();
+              return;
+            }
+            unavailable();
+          },
+          { signal: listeners.signal },
+        );
         socket.addEventListener("error", unavailable, {
           signal: listeners.signal,
         });

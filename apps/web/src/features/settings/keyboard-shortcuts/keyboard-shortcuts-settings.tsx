@@ -1,17 +1,23 @@
 import type { Hotkey } from "@tanstack/react-hotkeys";
-import { Eraser, RotateCcw } from "lucide-react";
+import { Keyboard, Pencil, RotateCcw, Trash2 } from "lucide-react";
 import * as React from "react";
+import { useCommandPaletteSurface } from "../../../shared/commands/command-provider.js";
 import {
   type BindingValidation,
   type CommandId,
   type CommandRegistry,
   type CommandView,
   getBrowserCommandRegistry,
+  keymapCategories,
+  keymapCategoryFor,
   type RecordedProposal,
   type RecordingSession,
   type SequenceValidation,
 } from "../../../shared/commands/command-registry.js";
-import { ShortcutBindings } from "../../../shared/commands/shortcut-keycaps.js";
+import {
+  ShortcutBindings,
+  ShortcutKeycaps,
+} from "../../../shared/commands/shortcut-keycaps.js";
 import { Button } from "../../../shared/ui/button.js";
 import { Input } from "../../../shared/ui/input.js";
 import {
@@ -19,12 +25,6 @@ import {
   SettingsHeading,
   SettingsRow,
 } from "../../../shared/ui/settings.js";
-
-const commandCategories = [
-  "Navigation",
-  "Threads",
-  "Keyboard shortcuts",
-] as const;
 
 type PendingValidation = BindingValidation | SequenceValidation;
 
@@ -137,17 +137,32 @@ function ShortcutControl({
 }) {
   return (
     <div className="shortcut-control">
-      <button
-        type="button"
-        className="shortcut-binding-button"
-        aria-label={`Edit ${command.label}`}
-        onClick={onEdit}
-      >
+      {command.customized ? (
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          aria-label={`Reset ${command.label}`}
+          title="Reset to default"
+          onClick={onReset}
+        >
+          <RotateCcw aria-hidden="true" />
+        </Button>
+      ) : null}
+      <span className="shortcut-binding">
         <ShortcutBindings
           bindings={command.displayedBindings}
           sequence={command.sequence !== undefined}
         />
-      </button>
+      </span>
+      <Button
+        size="icon-xs"
+        variant="ghost"
+        aria-label={`Edit ${command.label}`}
+        title="Change shortcut"
+        onClick={onEdit}
+      >
+        <Pencil aria-hidden="true" />
+      </Button>
       <Button
         size="icon-xs"
         variant="ghost"
@@ -156,17 +171,7 @@ function ShortcutControl({
         disabled={command.displayedBindings.length === 0}
         onClick={onClear}
       >
-        <Eraser aria-hidden="true" />
-      </Button>
-      <Button
-        size="icon-xs"
-        variant="ghost"
-        aria-label={`Reset ${command.label}`}
-        title="Reset shortcut"
-        disabled={!command.customized}
-        onClick={onReset}
-      >
-        <RotateCcw aria-hidden="true" />
+        <Trash2 aria-hidden="true" />
       </Button>
     </div>
   );
@@ -187,13 +192,11 @@ type EditingAction =
       readonly pendingBinding: Hotkey | null | undefined;
       readonly pendingSteps: ReadonlyArray<Hotkey> | undefined;
       readonly validation?: PendingValidation;
-      readonly status: string;
     }
   | { readonly type: "reset"; readonly status: string }
   | {
       readonly type: "validation";
       readonly validation: PendingValidation;
-      readonly status: string;
     }
   | { readonly type: "status"; readonly status: string };
 
@@ -202,7 +205,7 @@ const initialEditingState: EditingState = {
   pendingBinding: undefined,
   pendingSteps: undefined,
   validation: undefined,
-  status: "Shortcut changes are saved on this device.",
+  status: "",
 };
 
 const editingReducer = (
@@ -216,7 +219,7 @@ const editingReducer = (
         pendingBinding: undefined,
         pendingSteps: undefined,
         validation: undefined,
-        status: "Recording a shortcut. Press a key combination.",
+        status: "",
       };
     case "proposal":
       return {
@@ -224,7 +227,7 @@ const editingReducer = (
         pendingBinding: action.pendingBinding,
         pendingSteps: action.pendingSteps,
         validation: action.validation,
-        status: action.status,
+        status: "",
       };
     case "reset":
       return { ...initialEditingState, status: action.status };
@@ -232,18 +235,32 @@ const editingReducer = (
       return {
         ...state,
         validation: action.validation,
-        status: action.status,
+        status: "",
       };
     case "status":
       return { ...state, status: action.status };
   }
 };
 
+/** The settings section: opens the app's keymap dialog for Show All. */
+export function KeyboardShortcutsSection() {
+  const { openKeymap, keymapKeycaps } = useCommandPaletteSurface();
+  return (
+    <KeyboardShortcutsSettings
+      onShowAll={openKeymap}
+      showAllKeycaps={keymapKeycaps}
+    />
+  );
+}
+
 export function KeyboardShortcutsSettings({
   registry = getBrowserCommandRegistry(),
+  onShowAll,
+  showAllKeycaps,
 }: {
   readonly registry?: CommandRegistry;
-  readonly onDirtyChange?: (dirty: boolean) => void;
+  readonly onShowAll: () => void;
+  readonly showAllKeycaps: ReadonlyArray<string>;
 }) {
   const [query, setQuery] = React.useState("");
   const [editingState, dispatchEditing] = React.useReducer(
@@ -264,7 +281,12 @@ export function KeyboardShortcutsSettings({
     registry.getSnapshot,
     registry.getServerSnapshot,
   );
-  const commands = registry.getCommands("keyboard-shortcuts");
+  const commands = keymapCategories.flatMap((category) =>
+    registry
+      .getCommands("keyboard-shortcuts")
+      .filter((command) => keymapCategoryFor(command) === category),
+  );
+  const customized = Object.keys(snapshot.overrides).length > 0;
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const visibleCommands = commands.filter(
     (command) =>
@@ -281,7 +303,6 @@ export function KeyboardShortcutsSettings({
         pendingBinding: null,
         pendingSteps: undefined,
         validation: undefined,
-        status: "The shortcut will be cleared after you save.",
       });
       return;
     }
@@ -292,9 +313,6 @@ export function KeyboardShortcutsSettings({
         pendingBinding: undefined,
         pendingSteps: result.ok ? result.steps : [...proposal.steps],
         validation: result,
-        status: result.ok
-          ? "Shortcut recorded. Review it before saving."
-          : "Choose a different shortcut before saving.",
       });
       return;
     }
@@ -304,9 +322,6 @@ export function KeyboardShortcutsSettings({
       pendingBinding: result.ok ? result.binding : proposal.hotkey,
       pendingSteps: undefined,
       validation: result,
-      status: result.ok
-        ? "Shortcut recorded. Review it before saving."
-        : "Choose a different shortcut before saving.",
     });
   };
 
@@ -341,7 +356,6 @@ export function KeyboardShortcutsSettings({
         dispatchEditing({
           type: "validation",
           validation: result,
-          status: "Choose a different shortcut before saving.",
         });
         return;
       }
@@ -357,7 +371,6 @@ export function KeyboardShortcutsSettings({
       dispatchEditing({
         type: "validation",
         validation: result,
-        status: "Choose a different shortcut before saving.",
       });
       return;
     }
@@ -389,80 +402,74 @@ export function KeyboardShortcutsSettings({
     <div className="keyboard-shortcuts-settings">
       <SettingsHeading
         title="Keyboard Shortcuts"
-        description="Move through dx without leaving the keyboard. Changes are saved only on this device."
+        description="Customize keyboard shortcuts in dx. They are stored on this device."
+        actions={<span aria-live="polite">{editingState.status}</span>}
       />
       <div className="shortcut-toolbar">
+        <Button size="xs" variant="outline" onClick={onShowAll}>
+          <Keyboard aria-hidden="true" /> Show All Keyboard Shortcuts
+          {showAllKeycaps.length > 0 ? (
+            <ShortcutKeycaps keycaps={showAllKeycaps} />
+          ) : null}
+        </Button>
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={!customized}
+          onClick={resetAll}
+        >
+          <RotateCcw aria-hidden="true" /> Reset All Shortcuts
+        </Button>
         <Input
           type="search"
           value={query}
           data-command-target="keyboard-shortcut-search"
           aria-label="Search keyboard shortcuts"
-          placeholder="Search commands"
+          placeholder="Search shortcuts"
           onChange={(event) => setQuery(event.target.value)}
         />
-        <span>
-          {visibleCommands.length} of {commands.length} commands
-        </span>
       </div>
 
       {visibleCommands.length === 0 ? (
         <div className="shortcut-empty" role="status">
-          <strong>No matching commands</strong>
-          <span>Try a command name, description, or context.</span>
+          No shortcuts match “{query.trim()}”.
         </div>
       ) : (
-        commandCategories.map((category) => {
-          const categoryCommands = visibleCommands.filter(
-            (command) => command.category === category,
-          );
-          if (categoryCommands.length === 0) return null;
-          return (
-            <SettingsCard title={category} key={category}>
-              {categoryCommands.map((command) => (
-                <React.Fragment key={command.id}>
-                  <SettingsRow
-                    title={command.label}
-                    description={command.description}
-                    badge={command.contextLabel}
-                    control={
-                      <ShortcutControl
-                        command={command}
-                        onEdit={() => startRecording(command.id)}
-                        onClear={() => clearBinding(command)}
-                        onReset={() => resetBinding(command)}
-                      />
-                    }
+        <SettingsCard className="shortcut-list">
+          {visibleCommands.map((command) => (
+            <React.Fragment key={command.id}>
+              <SettingsRow
+                title={command.label}
+                control={
+                  <ShortcutControl
+                    command={command}
+                    onEdit={() => startRecording(command.id)}
+                    onClear={() => clearBinding(command)}
+                    onReset={() => resetBinding(command)}
                   />
-                  {editingState.editingId === command.id ? (
-                    <ShortcutEditor
-                      command={command}
-                      pendingBinding={editingState.pendingBinding}
-                      pendingSteps={editingState.pendingSteps}
-                      validation={editingState.validation}
-                      recording={
-                        snapshot.recording?.commandId === command.id
-                          ? snapshot.recording
-                          : null
-                      }
-                      registry={registry}
-                      onRecord={() => startRecording(command.id)}
-                      onSave={saveEditing}
-                      onCancel={cancelEditing}
-                    />
-                  ) : null}
-                </React.Fragment>
-              ))}
-            </SettingsCard>
-          );
-        })
+                }
+              />
+              {editingState.editingId === command.id ? (
+                <ShortcutEditor
+                  command={command}
+                  pendingBinding={editingState.pendingBinding}
+                  pendingSteps={editingState.pendingSteps}
+                  validation={editingState.validation}
+                  recording={
+                    snapshot.recording?.commandId === command.id
+                      ? snapshot.recording
+                      : null
+                  }
+                  registry={registry}
+                  onRecord={() => startRecording(command.id)}
+                  onSave={saveEditing}
+                  onCancel={cancelEditing}
+                />
+              ) : null}
+            </React.Fragment>
+          ))}
+        </SettingsCard>
       )}
-
-      <footer className="shortcut-actions" aria-live="polite">
-        <span>{editingState.status}</span>
-        <Button size="xs" variant="outline" onClick={resetAll}>
-          <RotateCcw aria-hidden="true" /> Restore all defaults
-        </Button>
-      </footer>
     </div>
   );
 }

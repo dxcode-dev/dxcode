@@ -3,7 +3,6 @@
   display: grid;
   gap: 12px;
 }
-.members-heading,
 .members-toolbar {
   display: flex;
   align-items: center;
@@ -12,23 +11,26 @@
   max-width: 823px;
   margin: 0 auto;
 }
-.members-heading {
-  min-height: 32px;
-}
-.members-heading h1 {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 20px;
-  letter-spacing: -0.325px;
-}
-.members-heading > span {
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
 .members-search {
   position: relative;
   width: 200px;
+}
+.members-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+}
+.members-chip {
+  border-color: var(--divider);
+  font-weight: 400;
+}
+.members-chip[aria-pressed="true"] {
+  border-color: var(--foreground);
+  background: var(--secondary);
+  color: var(--foreground);
 }
 .members-search svg {
   position: absolute;
@@ -151,30 +153,34 @@
   color: var(--destructive);
 }
 .members-link-form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--divider);
+  display: grid;
+  gap: 10px;
 }
 .members-link-field {
   display: grid;
-  flex: 1 1 160px;
   gap: 4px;
 }
 .members-link-field > label {
   color: var(--muted-foreground);
   font-size: 11px;
 }
-.members-link-form-actions {
-  display: flex;
-  gap: 4px;
-  margin-left: auto;
+.members-link-field > span {
+  color: var(--muted-foreground);
+  font-size: 11px;
 }
-.members-link-form > .members-error {
-  flex-basis: 100%;
+.members-link-form > .members-error,
+.members-dialog > .members-error {
   padding: 0;
+}
+.members-link-ready {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.members-link-ready > .members-input {
+  flex: 1;
+  min-width: 0;
+  padding-right: 9px;
 }
 .members-dialog {
   display: grid;
@@ -185,4 +191,29 @@
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+@media (max-width: 639px) {
+  .members-toolbar {
+    flex-wrap: wrap;
+  }
+  .members-search {
+    width: 100%;
+  }
+  .members-filters {
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+  /* Last active moves under the name instead of squeezing it. */
+  .members-person {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  .members-person > .members-identity {
+    flex-basis: calc(100% - 64px);
+  }
+  .members-activity {
+    flex: 1 0 100%;
+    order: 1;
+    padding-left: 30px;
+  }
 }

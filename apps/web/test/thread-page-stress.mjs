@@ -63,6 +63,9 @@ const WATCH = [
   "TerminalKeys",
   "ThreadFilesPanel",
   "MobilePullActions",
+  "ViewBlock",
+  "ViewFrame",
+  "ViewDocument",
 ];
 /** Phone runs: an iPhone-sized touch screen on a CPU four times slower. */
 const PHONE = {
@@ -106,6 +109,55 @@ const codeFence = (lines) =>
       `export const step${i} = (cart: Cart) => applyDiscount(cart, ${i}) ?? cart;`,
   ).join("\n") +
   "\n```\n\nRun `pnpm test` to check it.\n";
+
+/**
+ * A reply with a `dx-view` chart of `points` weekly values, as an agent
+ * writes one with the creating-views skill.
+ */
+const viewReply = (points) => {
+  const values = Array.from({ length: points }, (_, i) =>
+    Math.round(300 + i * 2.5 + 40 * Math.sin(i / 6)),
+  );
+  return (
+    "Weekly threads since launch:\n\n```dx-view\n" +
+    '<div class="ui-header"><p class="ui-title">Weekly threads tripled after the launch</p>' +
+    '<p class="ui-sub">Threads per week</p></div>\n' +
+    '<div class="ui-seg" id="measure"><button data-value="all" aria-selected="true">All</button>' +
+    '<button data-value="recent">Last 52</button></div>\n<div id="chart"></div>\n<script>\n{\n' +
+    `  const values = ${JSON.stringify(values)};\n` +
+    "  const x = values.map((_, i) => 'W' + (i + 1));\n" +
+    "  const chart = ui.line(document.getElementById('chart'), { x, series: [{ name: 'Threads', values, highlight: true }] });\n" +
+    "  document.getElementById('measure').addEventListener('change', (e) => chart.update({ series: [{ name: 'Threads', values: e.detail.value === 'all' ? values : values.map((v, i) => (i < values.length - 52 ? values[values.length - 52] : v)), highlight: true }] }));\n" +
+    "}\n</script>\n```\n\n" +
+    // The reply goes on after the view, so the view renders mid-stream.
+    "Most of the growth came from existing users who switched modes. ".repeat(
+      80,
+    ) +
+    "\n"
+  );
+};
+
+/** Counts view frames the transcript creates and loads from now on. */
+const countViewFrames = (page) =>
+  page.evaluate(() => {
+    window.__viewFrames = { created: 0, loaded: 0 };
+    new MutationObserver((records) => {
+      for (const record of records)
+        for (const node of record.addedNodes)
+          if (node.nodeType === 1)
+            window.__viewFrames.created += node.matches(".markdown-view-frame")
+              ? 1
+              : node.querySelectorAll(".markdown-view-frame").length;
+    }).observe(document.body, { childList: true, subtree: true });
+    document.addEventListener(
+      "load",
+      (event) => {
+        if (event.target.matches?.(".markdown-view-frame"))
+          window.__viewFrames.loaded++;
+      },
+      true,
+    );
+  });
 
 // --- Interactions shared by scenarios.
 const drag = async (page, selector, dx) => {
@@ -563,6 +615,67 @@ const SCENARIOS = [
           }),
         codeFence(1_000),
       ),
+  },
+  {
+    name: "view-stream",
+    label: "stream a reply with a 300-point dx-view chart",
+    stream: true,
+    setup: async (page) => {
+      await toLiveEdge(page);
+      await countViewFrames(page);
+    },
+    run: async (page) => {
+      const streaming = page.evaluate(
+        (text) =>
+          // 2,500 characters a second, faster than a model writes, and slow
+          // enough that the view loads before the reply finishes.
+          window.dxPerf.stream({
+            text,
+            deltaChars: 40,
+            batchSize: 1,
+            intervalMs: 16,
+            settle: true,
+          }),
+        viewReply(300),
+      );
+      // Mid-stream, the reader switches the view; the choice must survive
+      // the turn finishing, when the transcript moves the reply.
+      const inner = page
+        .frameLocator(".markdown-view-frame >> nth=-1")
+        .frameLocator("iframe");
+      // Dispatched in the view: at the live edge the composer covers it.
+      await inner.locator('button[data-value="recent"]').dispatchEvent("click");
+      const chosenMidStream = await inner
+        .locator('button[data-value="recent"]')
+        .getAttribute("aria-selected");
+      const clickedAt = Date.now();
+      const streamed = await streaming;
+      const clickBeforeSettleMs = Date.now() - clickedAt;
+      await page.waitForFunction(() => {
+        const frame = [...document.querySelectorAll(".markdown-view-frame")].at(
+          -1,
+        );
+        return (
+          frame && getComputedStyle(frame).getPropertyValue("--view-height")
+        );
+      });
+      await page.waitForTimeout(1000);
+      const drawn = await inner.locator("#chart svg path").count();
+      const keptChoice = await inner
+        .locator('button[data-value="recent"]')
+        .getAttribute("aria-selected");
+      return {
+        ...streamed,
+        viewFramesCreated: (await page.evaluate(() => window.__viewFrames))
+          .created,
+        viewFramesLoaded: (await page.evaluate(() => window.__viewFrames))
+          .loaded,
+        viewPaths: drawn,
+        viewChoseMidStream: chosenMidStream === "true",
+        viewKeptChoice: keptChoice === "true",
+        clickBeforeSettleMs,
+      };
+    },
   },
   {
     name: "changes-expand",

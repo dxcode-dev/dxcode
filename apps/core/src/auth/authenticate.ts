@@ -19,6 +19,7 @@ import {
 } from "./authenticate-application.js";
 import { createAuth, sessionPrincipal } from "./better-auth.js";
 import { loadAuthenticationRequirements } from "./requirements.js";
+import type { BrowserSessionBinding } from "./session-sockets.js";
 
 const unauthorized = (
   context: Parameters<MiddlewareHandler<AppEnv>>[0],
@@ -69,6 +70,7 @@ export const authenticate: MiddlewareHandler<AppEnv> = async (
     return unauthorized(context);
   }
   let principal: Principal | undefined;
+  let browserSession: BrowserSessionBinding | undefined;
   let outcome: "session" | "api_key" | "application";
 
   if (authorization?.startsWith("Basic ")) {
@@ -163,11 +165,18 @@ export const authenticate: MiddlewareHandler<AppEnv> = async (
         return unauthorized(context);
       }
       principal = sessionPrincipal(session);
+      browserSession = {
+        sessionId: session.session.id,
+        userId: session.user.id,
+        expiresAt: new Date(session.session.expiresAt).getTime() || 0,
+      };
       outcome = "session";
     }
   }
 
   context.set("principal", principal);
+  if (browserSession !== undefined)
+    context.set("browserSession", browserSession);
   context.set("authenticatedAt", Date.now());
   authenticationLogger.info("Request authentication succeeded.", {
     event: "authentication_completed",

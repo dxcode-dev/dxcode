@@ -379,6 +379,30 @@ describe("Thread search with real D1 and per-owner FTS5 indexes", () => {
     expect(seen).toEqual([pinned.id, archived.id, child.id, parent.id]);
   });
 
+  it("filters by snooze as of now, counting a never-snoozed Thread as awake", async () => {
+    const asleep = await seed(owner, ids.ownerPersonal, "Asleep", ["egret"], {
+      snoozed_until: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+    const woke = await seed(owner, ids.ownerPersonal, "Woke", ["egret"], {
+      snoozed_until: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const never = await seed(owner, ids.ownerPersonal, "Never", ["egret"]);
+    const archived = await seed(owner, ids.ownerPersonal, "Gone", ["egret"], {
+      lifecycle_state: "archived",
+      snoozed_until: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+
+    expect(await found("egret snoozed:true")).toEqual([asleep.id]);
+    expect(await found("egret snoozed:false")).toEqual([
+      archived.id,
+      never.id,
+      woke.id,
+    ]);
+    const [hit] = (await search("egret snoozed:true")).items;
+    expect(hit?.snoozed_until).not.toBeNull();
+    await expect(search("snoozed:soon")).rejects.toThrow(/true or false/);
+  });
+
   it("is idempotent, follows renames, forgets dropped Threads, and snippets text", async () => {
     const renamed = await seed(owner, ids.ownerPersonal, "Gannet plan", [
       "Investigated apps/web/src/sidebar.tsx for the pelican bug",

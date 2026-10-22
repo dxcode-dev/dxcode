@@ -1,4 +1,7 @@
 import {
+  DICTATION_VOCABULARY_MAX_TERM_LENGTH,
+  DICTATION_VOCABULARY_MAX_TERMS,
+  type SpeechOptions,
   type SpeechProvider,
   SpeechProviderError,
   type SpeechSession,
@@ -6,7 +9,8 @@ import {
 import { Option, Redacted, Schema } from "effect";
 
 const API = "https://api.sarvam.ai";
-const MODEL = "saaras:v3";
+// `saaras:v4` is the model that accepts `keyterms`.
+const MODEL = "saaras:v4";
 // Translate mode turns any spoken language into English text.
 const MODE = "translate";
 const BYTES_PER_SECOND = 32_000;
@@ -27,6 +31,22 @@ const SETTLE_QUIET_MILLIS = 350;
 const FINISH_TIMEOUT_MILLIS = 8_000;
 
 const fail = (reason: string) => new SpeechProviderError({ reason });
+
+/**
+ * The vocabulary as Sarvam's `keyterms`: a JSON array of at most 50 terms of
+ * at most 64 characters, which both APIs reject otherwise. Undefined when
+ * there is nothing to bias toward.
+ */
+const keytermsOf = (vocabulary: SpeechOptions["vocabulary"]) => {
+  const terms = (vocabulary ?? [])
+    .map((term) => term.trim())
+    .filter(
+      (term) =>
+        term.length > 0 && term.length <= DICTATION_VOCABULARY_MAX_TERM_LENGTH,
+    )
+    .slice(0, DICTATION_VOCABULARY_MAX_TERMS);
+  return terms.length === 0 ? undefined : JSON.stringify(terms);
+};
 
 const runtimeFetch: typeof fetch = (input, init) =>
   globalThis.fetch(input, init);
@@ -116,6 +136,7 @@ const transcribeChunk = async (
   key: string,
   transport: typeof fetch,
   pcm: Uint8Array,
+  keyterms: string | undefined,
   signal: AbortSignal,
 ) => {
   const form = new FormData();
@@ -126,6 +147,7 @@ const transcribeChunk = async (
   );
   form.append("model", MODEL);
   form.append("mode", MODE);
+  if (keyterms !== undefined) form.append("keyterms", keyterms);
   const response = await transport(`${API}/speech-to-text`, {
     method: "POST",
     headers: { "api-subscription-key": key },
@@ -149,8 +171,9 @@ const transcribeRecording = async (
   key: string,
   transport: typeof fetch,
   wav: Uint8Array,
-  signal: AbortSignal = new AbortController().signal,
+  { signal = new AbortController().signal, vocabulary }: SpeechOptions = {},
 ) => {
+  const keyterms = keytermsOf(vocabulary);
   const chunks = splitAtQuietPoints(wav.subarray(44));
   const transcripts: string[] = Array(chunks.length).fill("");
   const failed = new AbortController();
@@ -163,6 +186,7 @@ const transcribeRecording = async (
         key,
         transport,
         chunks[index] as Uint8Array,
+        keyterms,
         combined,
       );
     }
@@ -189,15 +213,20 @@ const base64 = (bytes: Uint8Array) => {
   return btoa(binary);
 };
 
-const streamQuery = new URLSearchParams({
-  "language-code": "unknown",
-  model: MODEL,
-  mode: MODE,
-  sample_rate: "16000",
-  input_audio_codec: "pcm_s16le",
-  vad_signals: "true",
-  flush_signal: "true",
-}).toString();
+const streamQuery = (vocabulary: SpeechOptions["vocabulary"]) => {
+  const query = new URLSearchParams({
+    "language-code": "unknown",
+    model: MODEL,
+    mode: MODE,
+    sample_rate: "16000",
+    input_audio_codec: "pcm_s16le",
+    vad_signals: "true",
+    flush_signal: "true",
+  });
+  const keyterms = keytermsOf(vocabulary);
+  if (keyterms !== undefined) query.set("keyterms", keyterms);
+  return query.toString();
+};
 
 /**
  * One Sarvam streaming session. Sarvam's voice detection reports each
@@ -209,7 +238,7 @@ const streamQuery = new URLSearchParams({
 const openSarvamSession = (
   key: string,
   transport: typeof fetch,
-  signal?: AbortSignal,
+  { signal, vocabulary }: SpeechOptions = {},
 ): SpeechSession => {
   const queued: string[] = [];
   const transcripts: string[] = [];
@@ -308,7 +337,7 @@ const openSarvamSession = (
   );
   void (async () => {
     const response = await transport(
-      `${API}/speech-to-text/ws?${streamQuery}`,
+      `${API}/speech-to-text/ws?${streamQuery(vocabulary)}`,
       {
         headers: { upgrade: "websocket", "api-subscription-key": key },
         signal: closer.signal,
@@ -367,7 +396,8 @@ const openSarvamSession = (
 
 /**
  * Sarvam implements the Speech plugin's API (`speech.transcribe`) with
- * `saaras:v3` in translate mode, so any spoken language becomes English text:
+ * `saaras:v4` in translate mode, so any spoken language becomes English text,
+ * biased toward the dictation vocabulary through `keyterms`:
  * its streaming API for live dictation and its synchronous API, in parallel
  * chunks of at most 29 s, for a saved recording. One API key; no retries.
  */
@@ -381,8 +411,8 @@ export const createSarvamSpeechProvider = (
     return value;
   };
   return {
-    transcribe: async (wav, signal) =>
-      transcribeRecording(secret(), transport, wav, signal),
-    openSession: (signal) => openSarvamSession(secret(), transport, signal),
+    transcribe: async (wav, options) =>
+      transcribeRecording(secret(), transport, wav, options),
+    openSession: (options) => openSarvamSession(secret(), transport, options),
   };
 };

@@ -1,3 +1,7 @@
+import viewIcons from "@dx/api/views/kit/icons.svg?raw";
+import viewKitCss from "@dx/api/views/kit/kit.css?raw";
+import viewKitJs from "@dx/api/views/kit/kit.js?raw";
+import viewFrame from "@dx/api/views/view-frame.mjs?raw";
 import { defineSkill, type Sandbox, type SkillDefinition } from "@flue/runtime";
 import { parse } from "yaml";
 import { encodeBase64 } from "../encoding/base64.js";
@@ -8,6 +12,8 @@ import {
 } from "./built-in-skill-names.js";
 import browserUse from "./built-in-skills/browser-use/skill.md?raw";
 import buildingSkills from "./built-in-skills/building-skills/skill.md?raw";
+import creatingViewsPreview from "./built-in-skills/creating-views/scripts/preview.mjs?raw";
+import creatingViews from "./built-in-skills/creating-views/skill.md?raw";
 import explainingCode from "./built-in-skills/explaining-code/skill.md?raw";
 import orbSetup from "./built-in-skills/orb-setup/skill.md?raw";
 import provingChangesAgentInstructions from "./built-in-skills/proving-changes/reference/agent-instructions.md?raw";
@@ -39,6 +45,19 @@ const sources: ReadonlyArray<{
 }> = [
   { name: "browser-use", files: { "SKILL.md": browserUse } },
   { name: "building-skills", files: { "SKILL.md": buildingSkills } },
+  {
+    name: "creating-views",
+    // The frame and kit are the web app's own (@dx/api/views), so a preview
+    // frames a view exactly as the transcript does.
+    files: {
+      "SKILL.md": creatingViews,
+      "scripts/preview.mjs": creatingViewsPreview,
+      "scripts/view-frame.mjs": viewFrame,
+      "scripts/kit/kit.css": viewKitCss,
+      "scripts/kit/kit.js": viewKitJs,
+      "scripts/kit/icons.svg": viewIcons,
+    },
+  },
   { name: "explaining-code", files: { "SKILL.md": explainingCode } },
   { name: "orb-setup", files: { "SKILL.md": orbSetup } },
   {

@@ -178,6 +178,31 @@ export const DxdChangesDirtyMessage = Schema.Struct({
   type: Schema.Literal("changes-dirty"),
 });
 
+/**
+ * The first release whose `environment.activate` accepts every name Core's
+ * `isReservedEnvironmentVariableName` allows, and empty values. Core sends an
+ * earlier daemon only what it accepts. Gated on the reported release rather
+ * than a new `register` key, so a Core rollback still admits newer daemons.
+ */
+export const DXD_CURRENT_ENVIRONMENT_RELEASE = "0.11.0";
+
+const releaseParts = (release: string) => {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(release);
+  return match === null ? undefined : match.slice(1).map(Number);
+};
+
+/** Whether a daemon on `release` accepts Core's current environment rule. */
+export const dxdAcceptsCurrentEnvironment = (release: string | undefined) => {
+  const parts = release === undefined ? undefined : releaseParts(release);
+  const minimum = releaseParts(DXD_CURRENT_ENVIRONMENT_RELEASE) ?? [];
+  if (parts === undefined) return false;
+  for (const [index, part] of parts.entries()) {
+    const floor = minimum[index] ?? 0;
+    if (part !== floor) return part > floor;
+  }
+  return true;
+};
+
 /** A release the daemon reports; Core compares it with `DXD_RELEASE`. */
 export const DxdReleaseVersion = Schema.String.check(
   Schema.isMinLength(1),
@@ -590,8 +615,7 @@ const canonicalEnvironmentValue = (value: string) => {
     // Native decode; the re-encode comparison below rejects non-canonical input.
     const bytes = decodeBase64Url(value);
     const plaintext = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    return bytes.byteLength >= 1 &&
-      bytes.byteLength <= DXD_ENVIRONMENT_MAX_VALUE_BYTES &&
+    return bytes.byteLength <= DXD_ENVIRONMENT_MAX_VALUE_BYTES &&
       !plaintext.includes("\0") &&
       encodeBase64Url(bytes) === value
       ? bytes.byteLength
@@ -601,10 +625,10 @@ const canonicalEnvironmentValue = (value: string) => {
   }
 };
 
+/** An empty string is an empty env var value (`DXD_CURRENT_ENVIRONMENT_RELEASE`). */
 const CanonicalBase64Url = Schema.String.check(
-  Schema.isMinLength(2),
   Schema.isMaxLength(43_691),
-  Schema.isPattern(/^[A-Za-z0-9_-]+$/),
+  Schema.isPattern(/^[A-Za-z0-9_-]*$/),
   Schema.makeFilter((value) => canonicalEnvironmentValue(value) !== undefined),
 );
 

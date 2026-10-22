@@ -2,32 +2,42 @@ import type {
   EnvironmentVariableAuditEventData,
   EnvironmentVariableData,
 } from "@dx/api";
-import { type ProjectId, workspaceRoleHasPermission } from "@dx/domain";
+import {
+  CLAUDE_CODE_PROVIDER_ID,
+  environmentVariableNameProblem,
+  looksLikeSecretName,
+  normalizeEnvironmentVariableName,
+  type ProjectId,
+  workspaceRoleHasPermission,
+} from "@dx/domain";
 import {
   useInfiniteQuery,
   useMutation,
+  useMutationState,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { DateTime } from "effect";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { settle } from "../../../shared/settle.js";
-import { Button } from "../../../shared/ui/button.js";
-import { SettingsCard } from "../settings-primitives.js";
+import { modelConnectionsQueryOptions } from "../model-routing/model-routing-queries.js";
+import { SettingsCard, SettingsHeading } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
 import {
-  type BulkPreview,
-  CompactEnvironmentVariableDialogs,
-  ConfiguredEnvironmentVariables,
-  EnvironmentVariableDialogs,
+  AddEnvironmentVariableActions,
+  AddEnvironmentVariableDialog,
+  BulkAddEnvironmentVariablesDialog,
+  DeleteEnvironmentVariableDialog,
+  EditEnvironmentVariableDialog,
   EnvironmentVariableHistory,
+  EnvironmentVariableValues,
 } from "./environment-variable-controls.js";
 import {
   createEnvironmentVariableMutationOptions,
   type EnvironmentVariablesMutationAction,
   environmentVariablesMutationOptions,
-  environmentVariablesPreviewMutationOptions,
+  failureMessages,
 } from "./environment-variables-mutations.js";
 import {
   type EnvironmentVariablesTarget,
@@ -38,25 +48,44 @@ import {
 const message = (error: unknown) =>
   error instanceof Error ? error.message : "Request failed.";
 
-interface EnvironmentVariableEditorState {
-  readonly name: string;
-  readonly value: string;
-  readonly kind: "secret" | "variable";
-  readonly error?: string;
-  readonly bulk: string;
-  readonly preview?: BulkPreview;
-  readonly conflictBehavior: "reject" | "replace";
-  readonly rotate?: EnvironmentVariableData;
-  readonly remove?: EnvironmentVariableData;
-  readonly editorMode?: "add" | "bulk";
+interface AddErrors {
+  readonly name?: string;
+  readonly value?: string;
+  readonly form: ReadonlyArray<string>;
 }
 
-const initialEditorState: EnvironmentVariableEditorState = {
+interface EditorState {
+  readonly mode?: "add" | "bulk";
+  readonly name: string;
+  readonly value: string;
+  /** The Secret checkbox once touched; until then the name decides. */
+  readonly secret?: boolean;
+  readonly addErrors: AddErrors;
+  readonly contents: string;
+  readonly autoDetect: boolean;
+  readonly replace: boolean;
+  readonly bulkErrors: ReadonlyArray<string>;
+  readonly edit?: EnvironmentVariableData;
+  readonly editValue: string;
+  readonly editError?: string;
+  readonly remove?: EnvironmentVariableData;
+  readonly removeError?: string;
+  readonly rowError?: string;
+  readonly filter: string;
+}
+
+const noAddErrors: AddErrors = { form: [] };
+
+const initialEditorState: EditorState = {
   name: "",
   value: "",
-  kind: "secret",
-  bulk: "",
-  conflictBehavior: "reject",
+  addErrors: noAddErrors,
+  contents: "",
+  autoDetect: true,
+  replace: false,
+  bulkErrors: [],
+  editValue: "",
+  filter: "",
 };
 
 function useEnvironmentVariableController({
@@ -74,155 +103,171 @@ function useEnvironmentVariableController({
   const history = useInfiniteQuery(
     environmentVariableHistoryQueryOptions(identity.id, target),
   );
-  const mutation = useMutation(
-    environmentVariablesMutationOptions(queryClient, identity.id, target),
+  // A Claude plan in Model Routing sets CLAUDE_CODE_OAUTH_TOKEN for Claude
+  // Code runs, so the personal list shows it read-only.
+  const modelConnections = useQuery({
+    ...modelConnectionsQueryOptions({ scope: "personal" }, identity.id),
+    enabled: target.scope === "personal",
+  });
+  const managed =
+    target.scope === "personal" &&
+    modelConnections.data?.some(
+      ({ providerId }) => providerId === CLAUDE_CODE_PROVIDER_ID,
+    )
+      ? [{ name: "CLAUDE_CODE_OAUTH_TOKEN", detail: "Subscription" }]
+      : [];
+  const mutationOptions = environmentVariablesMutationOptions(
+    queryClient,
+    identity.id,
+    target,
   );
+  const mutation = useMutation(mutationOptions);
   const createMutation = useMutation(
     createEnvironmentVariableMutationOptions(queryClient, identity.id, target),
   );
-  const previewMutation = useMutation(
-    environmentVariablesPreviewMutationOptions(identity.id, target),
-  );
+  // Every action in flight, so concurrent row changes each show as pending.
+  const pendingActions = useMutationState({
+    filters: { mutationKey: mutationOptions.mutationKey, status: "pending" },
+    select: (pending) =>
+      pending.state.variables as EnvironmentVariablesMutationAction,
+  });
   const [editor, setEditor] = React.useState(initialEditorState);
-  const updateEditor = (patch: Partial<EnvironmentVariableEditorState>) =>
+  const updateEditor = (patch: Partial<EditorState>) =>
     setEditor((current) => ({ ...current, ...patch }));
-  const nameRef = React.useRef<HTMLInputElement>(null);
   const dialogTriggerRef = React.useRef<HTMLElement>(null);
   const fieldId = React.useId();
   const canMutate =
     target.scope !== "workspace" ||
     (workspace !== undefined &&
       workspaceRoleHasPermission(workspace.role, "workspace:update"));
-  const handleError = (cause: unknown) => {
-    updateEditor({ error: message(cause) });
-  };
   const execute = async (action: EnvironmentVariablesMutationAction) => {
-    updateEditor({ error: undefined });
     const outcome = await settle(() => mutation.mutateAsync(action));
-    if (!outcome.ok) handleError(outcome.error);
     mutation.reset();
-    return outcome.ok
-      ? { success: true as const, result: outcome.value }
-      : { success: false as const };
+    return outcome;
   };
+  const addAsSecret =
+    editor.secret ??
+    looksLikeSecretName(normalizeEnvironmentVariableName(editor.name));
   const create = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!/^[A-Z_][A-Z0-9_]*$/.test(editor.name)) {
-      updateEditor({
-        error:
-          "Use uppercase letters, numbers, and underscores; the name cannot start with a number.",
-      });
-      nameRef.current?.focus();
+    if (
+      environmentVariableNameProblem(editor.name) !== undefined ||
+      (addAsSecret && editor.value.length === 0)
+    )
       return;
-    }
-    if (!editor.value) {
-      updateEditor({ error: "Value is required." });
-      return;
-    }
-    updateEditor({ error: undefined });
-    const outcome = await settle(async () => {
-      await createMutation.mutateAsync({
-        name: editor.name,
+    updateEditor({ addErrors: noAddErrors });
+    const outcome = await settle(() =>
+      createMutation.mutateAsync({
+        name: normalizeEnvironmentVariableName(editor.name),
         value: editor.value,
-        kind: editor.kind,
-      });
-      updateEditor({ name: "", value: "", editorMode: undefined });
-      onDirtyChange(false);
-    });
-    if (!outcome.ok) {
-      handleError(outcome.error);
-    }
+        kind: addAsSecret ? "secret" : "variable",
+      }),
+    );
     createMutation.reset();
-  };
-  const previewBulk = async () => {
-    updateEditor({ error: undefined });
-    const outcome = await settle(async () => {
-      const preview = await previewMutation.mutateAsync({
-        kind: editor.kind,
-        contents: editor.bulk,
-      });
-      updateEditor({ preview });
-    });
-    if (!outcome.ok) {
-      handleError(outcome.error);
+    if (outcome.ok) {
+      updateEditor({ mode: undefined, name: "", value: "" });
+      onDirtyChange(false);
+      return;
     }
-    previewMutation.reset();
-  };
-  const applyBulk = async () => {
-    let nextPreview = editor.preview;
-    if (nextPreview === undefined) {
-      updateEditor({ error: undefined });
-      const outcome = await settle(() =>
-        previewMutation.mutateAsync({
-          kind: editor.kind,
-          contents: editor.bulk,
-        }),
-      );
-      previewMutation.reset();
-      if (!outcome.ok) {
-        handleError(outcome.error);
-        return;
-      }
-      nextPreview = outcome.value;
-      updateEditor({ preview: nextPreview });
-    }
-    if (!nextPreview.canApply) return;
-    const result = await execute({
-      type: "applyBulk",
-      input: {
-        kind: editor.kind,
-        contents: editor.bulk,
-        conflictBehavior: editor.conflictBehavior,
+    const errors = failureMessages(outcome.error);
+    updateEditor({
+      addErrors: {
+        name: errors.find(({ field }) => field === "name")?.message,
+        value: errors.find(({ field }) => field === "value")?.message,
+        form: errors.flatMap(({ field, message }) =>
+          field === "name" || field === "value" ? [] : [message],
+        ),
       },
     });
-    if (!result.success) return;
+  };
+  const applyBulk = async () => {
+    updateEditor({ bulkErrors: [] });
+    const outcome = await execute({
+      type: "applyBulk",
+      input: {
+        kind: editor.autoDetect ? "auto" : "variable",
+        contents: editor.contents,
+        conflictBehavior: editor.replace ? "replace" : "reject",
+      },
+    });
+    if (outcome.ok) {
+      updateEditor({ mode: undefined, contents: "", replace: false });
+      onDirtyChange(false);
+      return;
+    }
     updateEditor({
-      bulk: "",
-      preview: undefined,
-      editorMode: undefined,
+      bulkErrors: failureMessages(outcome.error).map(({ message }) => message),
     });
-    onDirtyChange(false);
   };
-  const rotateValue = async () => {
-    if (editor.rotate === undefined) return;
-    const result = await execute({
+  const saveEdit = async () => {
+    if (editor.edit === undefined) return;
+    updateEditor({ editError: undefined });
+    const outcome = await execute({
       type: "rotate",
-      item: editor.rotate,
-      value: editor.value,
+      item: editor.edit,
+      value: editor.editValue,
     });
-    if (result.success) updateEditor({ value: "", rotate: undefined });
+    updateEditor(
+      outcome.ok
+        ? { edit: undefined, editValue: "" }
+        : {
+            editError: failureMessages(outcome.error)
+              .map(({ message }) => message)
+              .join(" "),
+          },
+    );
   };
-  const removeValue = async () => {
+  const confirmRemove = async () => {
     if (editor.remove === undefined) return;
-    const result = await execute({ type: "delete", item: editor.remove });
-    if (result.success) updateEditor({ remove: undefined });
+    updateEditor({ removeError: undefined });
+    const outcome = await execute({ type: "delete", item: editor.remove });
+    updateEditor(
+      outcome.ok
+        ? { remove: undefined }
+        : { removeError: message(outcome.error) },
+    );
+  };
+  const toggle = async (item: EnvironmentVariableData) => {
+    updateEditor({ rowError: undefined });
+    const outcome = await execute({
+      type: "update",
+      item,
+      input: { enabled: !item.enabled },
+    });
+    if (!outcome.ok)
+      updateEditor({
+        rowError: `Could not ${item.enabled ? "disable" : "enable"} ${item.name}: ${message(outcome.error)}`,
+      });
   };
   const closeEditor = () => {
     updateEditor({
-      editorMode: undefined,
+      mode: undefined,
       name: "",
       value: "",
-      bulk: "",
-      preview: undefined,
-      error: undefined,
+      contents: "",
+      replace: false,
+      addErrors: noAddErrors,
+      bulkErrors: [],
     });
     onDirtyChange(false);
   };
   return {
     list,
     history,
+    managed,
     editor,
     updateEditor,
-    nameRef,
     dialogTriggerRef,
     fieldId,
     canMutate,
-    execute,
+    pendingActions,
+    createPending: createMutation.isPending,
+    addAsSecret,
     create,
-    previewBulk,
     applyBulk,
-    rotateValue,
-    removeValue,
+    saveEdit,
+    confirmRemove,
+    toggle,
     closeEditor,
   };
 }
@@ -241,6 +286,29 @@ export function EnvironmentVariablesSettings(props: SettingsSectionProps) {
       }
       {...props}
       target={target}
+      intro={
+        <SettingsHeading
+          title="Secrets & Env Vars"
+          description={
+            target.scope === "personal" ? (
+              <>
+                Secrets and environment variables are set in the Orbs that run
+                your dx Threads, in <code>~/.env</code> and new Terminal shells.
+                All values are encrypted at rest. Personal entries override
+                project and workspace entries with the same name.
+              </>
+            ) : (
+              <>
+                Secrets and environment variables are set in the Orbs that run
+                this workspace's dx Threads, in <code>~/.env</code> and new
+                Terminal shells. All values are encrypted at rest. Project
+                entries override workspace entries, and personal entries
+                override both.
+              </>
+            )
+          }
+        />
+      }
     />
   );
 }
@@ -262,19 +330,40 @@ export function ProjectEnvironmentVariablesSettings({
   );
 }
 
+/** Who made the latest loaded change to each value. */
+const latestActors = (
+  history: ReadonlyArray<EnvironmentVariableAuditEventData>,
+) => {
+  const latest = new Map<string, EnvironmentVariableAuditEventData>();
+  for (const event of history) {
+    const current = latest.get(event.variableId);
+    if (
+      current === undefined ||
+      DateTime.toEpochMillis(event.occurredAt) >
+        DateTime.toEpochMillis(current.occurredAt)
+    )
+      latest.set(event.variableId, event);
+  }
+  return new Map(
+    [...latest].map(([variableId, event]) => [variableId, event.actorName]),
+  );
+};
+
 function EnvironmentVariablesContent({
   target,
   onDirtyChange,
   workspace,
+  intro,
 }: SettingsSectionProps & {
   readonly target: EnvironmentVariablesTarget;
+  readonly intro?: React.ReactNode;
 }) {
   const controller = useEnvironmentVariableController({
     target,
     workspace,
     onDirtyChange,
   });
-  const { editor, dialogTriggerRef } = controller;
+  const { editor, dialogTriggerRef, updateEditor } = controller;
   const historyItemsById = new Map<
     EnvironmentVariableAuditEventData["id"],
     EnvironmentVariableAuditEventData
@@ -283,8 +372,21 @@ function EnvironmentVariablesContent({
     for (const item of page.items) historyItemsById.set(item.id, item);
   }
   const historyItems = [...historyItemsById.values()];
+  const items = controller.list.data?.items ?? [];
+  const pendingIds = new Set(
+    controller.pendingActions.flatMap((action) =>
+      action.type === "applyBulk" ? [] : [action.item.reference.id],
+    ),
+  );
+  const pendingFor = (type: EnvironmentVariablesMutationAction["type"]) =>
+    controller.pendingActions.some((action) => action.type === type);
+  const nameError =
+    editor.name.length === 0
+      ? undefined
+      : (environmentVariableNameProblem(editor.name) ?? editor.addErrors.name);
   return (
     <div className="environment-variables-settings">
+      {intro}
       {!controller.canMutate ? (
         <SettingsCard title="Read-only workspace values">
           <p>
@@ -294,41 +396,31 @@ function EnvironmentVariablesContent({
           </p>
         </SettingsCard>
       ) : null}
-      <ConfiguredEnvironmentVariables
-        title="Values"
-        emptyMessage="No secrets or environment variables configured."
+      <EnvironmentVariableValues
+        filter={editor.filter}
+        onFilterChange={(filter) => updateEditor({ filter })}
         actions={
           controller.canMutate ? (
-            <div className="environment-card-actions">
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => {
-                  controller.updateEditor({
-                    bulk: "",
-                    preview: undefined,
-                    kind: "secret",
-                    editorMode: "bulk",
-                  });
-                }}
-              >
-                Bulk Add
-              </Button>
-              <Button
-                size="xs"
-                onClick={() => {
-                  controller.updateEditor({
-                    name: "",
-                    value: "",
-                    kind: "variable",
-                    editorMode: "add",
-                  });
-                }}
-              >
-                <Plus aria-hidden="true" />
-                Add
-              </Button>
-            </div>
+            <AddEnvironmentVariableActions
+              onBulkAdd={() =>
+                updateEditor({
+                  mode: "bulk",
+                  contents: "",
+                  autoDetect: true,
+                  replace: false,
+                  bulkErrors: [],
+                })
+              }
+              onAdd={() =>
+                updateEditor({
+                  mode: "add",
+                  name: "",
+                  value: "",
+                  secret: undefined,
+                  addErrors: noAddErrors,
+                })
+              }
+            />
           ) : undefined
         }
         loading={controller.list.isPending}
@@ -337,25 +429,32 @@ function EnvironmentVariablesContent({
             ? undefined
             : message(controller.list.error)
         }
-        items={controller.list.data?.items ?? []}
+        items={items}
+        managed={controller.managed}
+        updatedBy={latestActors(historyItems)}
+        pendingIds={pendingIds}
         canMutate={controller.canMutate}
         onReload={() => void controller.list.refetch()}
-        onRotate={(item, trigger) => {
+        onEdit={(item, trigger) => {
           dialogTriggerRef.current = trigger;
-          controller.updateEditor({ rotate: item });
+          // An env var opens with its value, since saving empty is allowed.
+          updateEditor({
+            edit: item,
+            editValue: item.kind === "variable" ? item.value : "",
+            editError: undefined,
+          });
         }}
-        onToggle={(item) =>
-          void controller.execute({
-            type: "update",
-            item,
-            input: { enabled: !item.enabled },
-          })
-        }
+        onToggle={(item) => void controller.toggle(item)}
         onDelete={(item, trigger) => {
           dialogTriggerRef.current = trigger;
-          controller.updateEditor({ remove: item });
+          updateEditor({ remove: item, removeError: undefined });
         }}
       />
+      {editor.rowError === undefined ? null : (
+        <p className="environment-field-error" role="alert">
+          {editor.rowError}
+        </p>
+      )}
       <EnvironmentVariableHistory
         loading={controller.history.isPending}
         loadError={
@@ -375,66 +474,83 @@ function EnvironmentVariablesContent({
         onLoadMore={() => void controller.history.fetchNextPage()}
       />
       {controller.canMutate ? (
-        <CompactEnvironmentVariableDialogs
-          fieldId={controller.fieldId}
-          mode={editor.editorMode}
-          name={editor.name}
-          value={editor.value}
-          kind={editor.kind}
-          bulk={editor.bulk}
-          preview={editor.preview}
-          conflictBehavior={editor.conflictBehavior}
-          error={editor.error}
-          nameRef={controller.nameRef}
-          onNameChange={(next) => {
-            controller.updateEditor({ name: next });
-            onDirtyChange(true);
-          }}
-          onValueChange={(next) => {
-            controller.updateEditor({ value: next });
-            onDirtyChange(true);
-          }}
-          onKindChange={(next) => {
-            controller.updateEditor({ kind: next });
-            onDirtyChange(true);
-          }}
-          onBulkChange={(next) => {
-            controller.updateEditor({ bulk: next, preview: undefined });
-            onDirtyChange(true);
-          }}
-          onConflictBehavior={(conflictBehavior) =>
-            controller.updateEditor({ conflictBehavior })
-          }
-          onCreate={(event) => void controller.create(event)}
-          onApplyBulk={() => void controller.applyBulk()}
-          onClose={controller.closeEditor}
-        />
-      ) : null}
-      {editor.error ? (
-        <div className="environment-error" role="alert">
-          {editor.error}
-          <Button size="xs" onClick={() => void controller.list.refetch()}>
-            Refresh
-          </Button>
-        </div>
-      ) : null}
-      {controller.canMutate ? (
-        <EnvironmentVariableDialogs
-          fieldId={controller.fieldId}
-          rotate={editor.rotate}
-          remove={editor.remove}
-          value={editor.value}
-          finalFocus={controller.dialogTriggerRef}
-          onValueChange={(value) => controller.updateEditor({ value })}
-          onRotateOpenChange={(open) =>
-            !open && controller.updateEditor({ rotate: undefined, value: "" })
-          }
-          onRotate={() => void controller.rotateValue()}
-          onRemoveOpenChange={(open) =>
-            !open && controller.updateEditor({ remove: undefined })
-          }
-          onRemove={() => void controller.removeValue()}
-        />
+        <>
+          <AddEnvironmentVariableDialog
+            open={editor.mode === "add"}
+            fieldId={controller.fieldId}
+            name={editor.name}
+            value={editor.value}
+            secret={controller.addAsSecret}
+            nameError={nameError}
+            valueError={editor.addErrors.value}
+            formErrors={editor.addErrors.form}
+            pending={controller.createPending}
+            onNameChange={(name) => {
+              updateEditor({
+                name,
+                addErrors: { ...editor.addErrors, name: undefined },
+              });
+              onDirtyChange(true);
+            }}
+            onValueChange={(value) => {
+              updateEditor({
+                value,
+                addErrors: { ...editor.addErrors, value: undefined },
+              });
+              onDirtyChange(true);
+            }}
+            onSecretChange={(secret) => updateEditor({ secret })}
+            onSubmit={(event) => void controller.create(event)}
+            onClose={controller.closeEditor}
+          />
+          <BulkAddEnvironmentVariablesDialog
+            open={editor.mode === "bulk"}
+            fieldId={controller.fieldId}
+            contents={editor.contents}
+            autoDetect={editor.autoDetect}
+            replace={editor.replace}
+            existingKinds={new Map(items.map(({ name, kind }) => [name, kind]))}
+            serverErrors={editor.bulkErrors}
+            pending={pendingFor("applyBulk")}
+            onContentsChange={(contents) => {
+              updateEditor({ contents, bulkErrors: [] });
+              onDirtyChange(true);
+            }}
+            onAutoDetectChange={(autoDetect) => updateEditor({ autoDetect })}
+            onReplaceChange={(replace) => updateEditor({ replace })}
+            onSubmit={() => void controller.applyBulk()}
+            onClose={controller.closeEditor}
+          />
+          <EditEnvironmentVariableDialog
+            fieldId={controller.fieldId}
+            item={editor.edit}
+            value={editor.editValue}
+            error={editor.editError}
+            pending={pendingFor("rotate")}
+            finalFocus={dialogTriggerRef}
+            onValueChange={(editValue) =>
+              updateEditor({ editValue, editError: undefined })
+            }
+            onClose={() =>
+              updateEditor({
+                edit: undefined,
+                editValue: "",
+                editError: undefined,
+              })
+            }
+            onSubmit={() => void controller.saveEdit()}
+          />
+          <DeleteEnvironmentVariableDialog
+            item={editor.remove}
+            error={editor.removeError}
+            pending={pendingFor("delete")}
+            finalFocus={dialogTriggerRef}
+            onClose={() =>
+              updateEditor({ remove: undefined, removeError: undefined })
+            }
+            onConfirm={() => void controller.confirmRemove()}
+          />
+        </>
       ) : null}
     </div>
   );

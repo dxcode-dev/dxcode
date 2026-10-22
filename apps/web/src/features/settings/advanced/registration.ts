@@ -1,15 +1,15 @@
-import { SlidersHorizontal } from "lucide-react";
+import { SquarePen } from "lucide-react";
 import type { SettingsSectionRegistration } from "../settings-registration.js";
 import { PersonalAdvancedSettings } from "./personal-advanced-settings.js";
 
 export const personalAdvancedSettingsSection: SettingsSectionRegistration = {
   id: "personal-advanced",
   scope: "personal",
-  slug: "advanced",
-  label: "Advanced",
-  title: "Advanced",
-  description:
-    "Set guidance for new top-level dx agents and review its data flow.",
-  icon: SlidersHorizontal,
+  slug: "instructions",
+  group: "agent",
+  label: "Instructions",
+  title: "Instructions",
+  description: "Personal guidance for the top-level agent in every new Thread.",
+  icon: SquarePen,
   component: PersonalAdvancedSettings,
 };

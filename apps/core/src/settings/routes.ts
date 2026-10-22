@@ -7,11 +7,14 @@ import {
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Match, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
-import { notificationPreferenceRoutes } from "../notifications/routes.js";
+import {
+  personalDictationVocabularyRoutes,
+  workspaceDictationVocabularyRoutes,
+} from "../dictation/vocabulary.js";
 import type { AppEnv } from "../http/types.js";
 import { authorizationLogger, dictationLogger } from "../logging.js";
+import { notificationPreferenceRoutes } from "../notifications/routes.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
-import { portalConfiguration } from "../portals/host.js";
 import {
   personalOrbProviderRoutes,
   workspaceOrbProviderRoutes,
@@ -21,6 +24,7 @@ import {
   workspaceFirstPartyPluginRoutes,
 } from "../plugins/routes.js";
 import { resolveDictation } from "../plugins/speech/transcription.js";
+import { portalConfiguration } from "../portals/host.js";
 import { personalAccountRoutes } from "./account/routes.js";
 import { personalAgentInstructionsRoutes } from "./agent-instructions/routes.js";
 import { workspaceApplicationRoutes } from "./applications/routes.js";
@@ -186,6 +190,10 @@ settingsRoutes.route(
   "/personal/environment-variables",
   personalEnvironmentVariableRoutes,
 );
+settingsRoutes.route(
+  "/personal/dictation-vocabulary",
+  personalDictationVocabularyRoutes,
+);
 settingsRoutes.route("/personal/integrations", personalIntegrationRoutes);
 settingsRoutes.route(
   "/personal/model-routing/subscriptions",
@@ -219,6 +227,10 @@ settingsRoutes.route(
 );
 
 settingsRoutes.route("/workspaces/:workspaceSlug/usage", workspaceUsageRoutes);
+settingsRoutes.route(
+  "/workspaces/:workspaceSlug/dictation-vocabulary",
+  workspaceDictationVocabularyRoutes,
+);
 settingsRoutes.route(
   "/workspaces/:workspaceSlug/mcp-servers",
   workspaceMcpServerRoutes,

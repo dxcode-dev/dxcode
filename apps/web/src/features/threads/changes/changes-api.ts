@@ -12,6 +12,10 @@ import {
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { Effect, Schema } from "effect";
+import {
+  isSessionEndedClose,
+  reportSessionEnded,
+} from "../../../shared/auth/session-ended.js";
 import { sameOriginFetch } from "../../../shared/same-origin-fetch.js";
 
 export class ChangesApiError extends Error {
@@ -118,8 +122,12 @@ export const subscribeToChanges = (
         // Invalid hints are safe to ignore. The polling fallback remains active.
       }
     });
-    socket.addEventListener("close", () => {
+    socket.addEventListener("close", (event) => {
       if (disposed) return;
+      if (isSessionEndedClose((event as Partial<CloseEvent>).code)) {
+        reportSessionEnded();
+        return;
+      }
       const delay = Math.min(1_000 * 2 ** attempt, 30_000);
       attempt = Math.min(attempt + 1, 5);
       timer = setTimer(connect, delay * (0.75 + random() * 0.5));
