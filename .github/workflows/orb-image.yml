@@ -1,0 +1,56 @@
+name: Orb image
+
+# Publishes the standard Orb image (deploy/orb) as a public package, so
+# Orb providers that start containers from a registry image (Cloudflare
+# Containers in a person's own account, Docker Sandboxes) can use it.
+# After a publish, set the digest from the job summary in
+# deploy/orb/public-image.json.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/orb/**
+      - apps/dxd/assets/**
+      - .github/workflows/orb-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: orb-image
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/orb/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=dx standard Orb image
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/dx-orb:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/dx-orb:latest
+      - name: Record the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          echo "ghcr.io/${OWNER}/dx-orb@${DIGEST}" >> "$GITHUB_STEP_SUMMARY"
