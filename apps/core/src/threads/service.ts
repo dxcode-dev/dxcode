@@ -231,6 +231,10 @@ export class ThreadService extends Context.Service<
                 : {
                     parentThreadId:
                       parentThread.parentThreadId ?? parentThread.id,
+                    // The insert copies the family's sharing too.
+                    ...(parentThread.visibility === undefined
+                      ? {}
+                      : { visibility: parentThread.visibility }),
                   }),
               plugins,
               skills,

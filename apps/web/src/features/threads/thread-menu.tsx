@@ -148,7 +148,8 @@ export function ThreadMenu({
             sideOffset={4}
           >
             <Menu.Popup className="thread-menu-popup thread-actions-menu">
-              {!own || thread.parentThreadId === undefined ? null : (
+              {/* A family shares as one unit, so members reach the parent too. */}
+              {thread.parentThreadId === undefined ? null : (
                 <>
                   <Menu.Item
                     className="thread-menu-item"

@@ -245,8 +245,8 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
           : undefined
       }
       sourceThread={
-        // A shared Thread's parent may not be shared with this viewer.
-        parentThreadId === undefined || sharedWithMe
+        // A family shares as one unit, so a shared child's parent is too.
+        parentThreadId === undefined
           ? undefined
           : {
               id: parentThreadId,

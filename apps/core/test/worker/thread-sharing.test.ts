@@ -471,3 +471,211 @@ describe("Thread sharing in workerd with real D1", () => {
     ).toBe(400);
   });
 });
+
+describe("Thread families share as one unit", () => {
+  const childA = thread(
+    "thr_00000000-0000-4000-8000-000000000ca1",
+    personalProject.id as ProjectId,
+    owner,
+  );
+  const childB = thread(
+    "thr_00000000-0000-4000-8000-000000000ca2",
+    personalProject.id as ProjectId,
+    owner,
+  );
+  const unrelated = thread(
+    "thr_00000000-0000-4000-8000-000000000ca3",
+    personalProject.id as ProjectId,
+    owner,
+  );
+  const family = [sharedThread.id, childA.id, childB.id] as const;
+
+  beforeEach(async () => {
+    await runRepositories(
+      Effect.gen(function* () {
+        const threads = yield* ThreadRepository;
+        yield* threads.insert({ ...childA, parentThreadId: sharedThread.id });
+        yield* threads.insert({ ...childB, parentThreadId: sharedThread.id });
+        yield* threads.insert(unrelated);
+      }),
+    );
+  });
+
+  const detailOf = async (userId: UserId, threadId: string) => {
+    const response = await send(userId, `/threads/${threadId}`);
+    return {
+      status: response.status,
+      body: response.status === 200 ? await response.json<Detail>() : undefined,
+    };
+  };
+  const shareOne = (threadId: string, body: unknown, userId = owner) =>
+    send(userId, `/threads/${threadId}/sharing`, "PUT", body);
+  const accessOf = async (userId: UserId, threadId: string) => {
+    const seen = await detailOf(userId, threadId);
+    return seen.status === 200 ? seen.body?.data.access : seen.status;
+  };
+
+  it("shares every child when the owner shares the parent", async () => {
+    expect(
+      (await shareOne(sharedThread.id, { workspaceAccess: "view" })).status,
+    ).toBe(200);
+
+    for (const id of family) expect(await accessOf(member, id)).toBe("view");
+    for (const id of family) {
+      const own = await detailOf(owner, id);
+      expect(own.body?.data).toMatchObject({
+        visibility: "workspace",
+        sharing: { workspaceAccess: "view" },
+      });
+    }
+    // A View member still reads a child without prompting it.
+    expect((await send(member, `/agents/${childA.id}`)).status).toBe(200);
+    expect(
+      (await send(member, `/agents/${childA.id}`, "POST", { message: "hi" }))
+        .status,
+    ).toBe(403);
+    // The owner's other Threads stay private; other workspaces see nothing.
+    expect(await accessOf(member, unrelated.id)).toBe(404);
+    for (const id of family) expect(await accessOf(outsider, id)).toBe(404);
+    // A followed child lists in the member's sidebar.
+    await send(member, `/threads/${childA.id}/follow`, "PUT");
+    expect(await sharedList(member)).toMatchObject([
+      { id: childA.id, access: "view" },
+    ]);
+  });
+
+  it("shares the parent and siblings when the owner shares a child", async () => {
+    expect(
+      (
+        await shareOne(childB.id, {
+          workspaceAccess: "contribute",
+          contributeFor: "1h",
+        })
+      ).status,
+    ).toBe(200);
+    for (const id of family)
+      expect(await accessOf(member, id)).toBe("contribute");
+    const prompt = await send(member, `/agents/${childA.id}`, "POST", {
+      kind: "user",
+      body: "From a sibling",
+    });
+    expect(prompt.status).toBe(202);
+    expect(await accessOf(member, unrelated.id)).toBe(404);
+  });
+
+  it("starts a child created after sharing as shared", async () => {
+    await shareOne(sharedThread.id, {
+      workspaceAccess: "contribute",
+      contributeFor: "1h",
+    });
+    const created = await send(owner, "/threads", "POST", {
+      projectId: personalProject.id,
+      title: "Child after sharing",
+      parentThreadId: sharedThread.id,
+    });
+    expect(created.status).toBe(201);
+    const child = (await created.json<{ data: { id: string } }>()).data.id;
+    // A child's child becomes a sibling and is shared too.
+    const nested = await send(owner, "/threads", "POST", {
+      projectId: personalProject.id,
+      title: "Grandchild",
+      parentThreadId: child,
+    });
+    expect(nested.status).toBe(201);
+    const sibling = (await nested.json<{ data: { id: string } }>()).data.id;
+    for (const id of [child, sibling]) {
+      expect(await accessOf(member, id)).toBe("contribute");
+      expect((await detailOf(owner, id)).body?.data).toMatchObject({
+        visibility: "workspace",
+        sharing: { workspaceAccess: "contribute" },
+      });
+    }
+    // A new root Thread stays private.
+    const root = await send(owner, "/threads", "POST", {
+      projectId: personalProject.id,
+      title: "Separate root",
+    });
+    const rootId = (await root.json<{ data: { id: string } }>()).data.id;
+    expect(await accessOf(member, rootId)).toBe(404);
+  });
+
+  it("unshares the whole family when the owner unshares any Thread in it", async () => {
+    await shareOne(sharedThread.id, { workspaceAccess: "view" });
+    for (const id of family) expect(await accessOf(member, id)).toBe("view");
+    expect(
+      (await shareOne(childA.id, { workspaceAccess: "none" })).status,
+    ).toBe(200);
+    for (const id of family) {
+      expect(await accessOf(member, id)).toBe(404);
+      const own = await detailOf(owner, id);
+      expect(own.body?.data.visibility).toBe("private");
+      expect(own.body?.data.sharing).toBeUndefined();
+    }
+    // Only the owner changes a family's sharing.
+    await shareOne(sharedThread.id, { workspaceAccess: "view" });
+    const memberShare = await shareOne(
+      childB.id,
+      { workspaceAccess: "none" },
+      member,
+    );
+    expect(memberShare.status).toBe(403);
+    for (const id of family) expect(await accessOf(member, id)).toBe("view");
+  });
+
+  it("migrates families shared before sharing reached children", async () => {
+    // A parent shared before this change, with children left private, and a
+    // second family where only a child was shared for Contribute.
+    await env.DB.prepare(
+      `UPDATE threads SET workspace_access = 'view', shared_workspace_id = ?1,
+              visibility = 'workspace'
+        WHERE id = ?2`,
+    )
+      .bind(workspaceId, sharedThread.id)
+      .run();
+    await env.DB.prepare(
+      `UPDATE threads SET workspace_access = 'none', shared_workspace_id = NULL,
+              contribute_until = NULL, visibility = 'private'
+        WHERE id IN (?1, ?2)`,
+    )
+      .bind(childA.id, childB.id)
+      .run();
+    const lateChild = thread(
+      "thr_00000000-0000-4000-8000-000000000ca4",
+      personalProject.id as ProjectId,
+      owner,
+    );
+    await runRepositories(
+      Effect.gen(function* () {
+        const threads = yield* ThreadRepository;
+        yield* threads.insert({ ...lateChild, parentThreadId: unrelated.id });
+      }),
+    );
+    await env.DB.prepare(
+      `UPDATE threads SET workspace_access = 'none', shared_workspace_id = NULL,
+              contribute_until = NULL, visibility = 'private'
+        WHERE id = ?1`,
+    )
+      .bind(unrelated.id)
+      .run();
+    await env.DB.prepare(
+      `UPDATE threads SET workspace_access = 'contribute', shared_workspace_id = ?1,
+              contribute_until = '2999-01-01T00:00:00.000Z', visibility = 'workspace'
+        WHERE id = ?2`,
+    )
+      .bind(workspaceId, lateChild.id)
+      .run();
+    expect(await accessOf(member, childA.id)).toBe(404);
+    expect(await accessOf(member, unrelated.id)).toBe(404);
+
+    const migration = env.TEST_MIGRATIONS.find(({ name }) =>
+      name.endsWith("_thread_family_sharing.sql"),
+    );
+    if (migration === undefined) throw new Error("migration not found");
+    await env.DB.batch(migration.queries.map((query) => env.DB.prepare(query)));
+
+    for (const id of family) expect(await accessOf(member, id)).toBe("view");
+    expect(await accessOf(member, unrelated.id)).toBe("contribute");
+    expect(await accessOf(member, lateChild.id)).toBe("contribute");
+    expect(await accessOf(member, lonerThread.id)).toBe(404);
+  });
+});

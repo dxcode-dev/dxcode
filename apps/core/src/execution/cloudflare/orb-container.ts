@@ -154,6 +154,8 @@ const MAX_CONTAINER_INACTIVITY_MS = 6 * 60 * 60 * 1000;
 const CONTAINER_INACTIVITY_MARGIN_MS = 15 * 60 * 1000;
 const READY_TIMEOUT_MS = 90_000;
 const READY_RETRY_MS = 100;
+/** While a start waits for readiness, log its progress this often. */
+const READY_PROGRESS_LOG_MS = 30_000;
 /** A command's output kept in this object's memory, per stream. */
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 /** The largest file read in one call (one RPC result). */
@@ -322,18 +324,77 @@ export class OrbContainerController {
     );
   }
 
-  /** The container accepts `exec` once it has started. */
+  /**
+   * The container accepts `exec` once it has started. Logs progress while it
+   * waits, so a stalled start shows whether one probe hung
+   * (`currentAttemptMs`) or probes kept failing (`attempts`, `lastFailure`).
+   */
   async #waitReady(operation: string) {
-    const deadline = this.#now() + READY_TIMEOUT_MS;
+    const startedAt = this.#now();
+    const deadline = startedAt + READY_TIMEOUT_MS;
     let lastFailure: unknown;
-    while (this.#now() < deadline) {
-      try {
-        const process = await this.#container.exec(["true"]);
-        if ((await process.exitCode) === 0) return;
-      } catch (cause) {
-        lastFailure = cause;
+    let attempts = 0;
+    let attemptStartedAt = startedAt;
+    let slowestAttemptMs = 0;
+    const progress = (outcome: "waiting" | "ready" | "timed_out") => ({
+      event: "orb_container_ready_wait",
+      outcome,
+      sandboxId: this.#sandboxId,
+      operation,
+      elapsedMs: this.#now() - startedAt,
+      attempts,
+      slowestAttemptMs,
+      currentAttemptMs: this.#now() - attemptStartedAt,
+      running: this.#container.running,
+      ...(lastFailure === undefined
+        ? {}
+        : {
+            lastFailure:
+              lastFailure instanceof Error
+                ? lastFailure.message
+                : String(lastFailure),
+          }),
+    });
+    const watchdog = setInterval(
+      () =>
+        orbContainerLogger.warn(
+          "Orb container is not ready yet.",
+          progress("waiting"),
+        ),
+      READY_PROGRESS_LOG_MS,
+    );
+    try {
+      while (this.#now() < deadline) {
+        attempts += 1;
+        attemptStartedAt = this.#now();
+        try {
+          const process = await this.#container.exec(["true"]);
+          if ((await process.exitCode) === 0) {
+            slowestAttemptMs = Math.max(
+              slowestAttemptMs,
+              this.#now() - attemptStartedAt,
+            );
+            orbContainerLogger.info(
+              "Orb container is ready.",
+              progress("ready"),
+            );
+            return;
+          }
+        } catch (cause) {
+          lastFailure = cause;
+        }
+        slowestAttemptMs = Math.max(
+          slowestAttemptMs,
+          this.#now() - attemptStartedAt,
+        );
+        await sleep(READY_RETRY_MS);
       }
-      await sleep(READY_RETRY_MS);
+      orbContainerLogger.error(
+        "Orb container did not become ready.",
+        progress("timed_out"),
+      );
+    } finally {
+      clearInterval(watchdog);
     }
     throw failure(
       operation,
@@ -349,8 +410,51 @@ export class OrbContainerController {
     state: OrbWorkspaceState,
     idleMs: number,
     fresh = false,
+    lockWaitMs = 0,
   ): Promise<"paused" | "created"> {
     const now = this.#now();
+    const snapshot = state.snapshot;
+    const details = {
+      event: "orb_container_start",
+      sandboxId: this.#sandboxId,
+      source: snapshot === undefined ? "image" : "snapshot",
+      ...(snapshot === undefined
+        ? {}
+        : {
+            snapshotId: snapshot.id,
+            snapshotSize: snapshot.size,
+            snapshotAgeMs: now - snapshot.refreshedAt,
+          }),
+      instance: state.instance,
+      fresh,
+      lockWaitMs,
+    };
+    orbContainerLogger.info("Orb container start requested.", details);
+    try {
+      const residency = await this.#startContainer(state, idleMs, fresh, now);
+      orbContainerLogger.info("Orb container started.", {
+        ...details,
+        outcome: "started",
+        durationMs: this.#now() - now,
+      });
+      return residency;
+    } catch (cause) {
+      orbContainerLogger.error("Orb container start failed.", {
+        ...details,
+        outcome: "error",
+        durationMs: this.#now() - now,
+        error: cause instanceof Error ? cause.message : String(cause),
+      });
+      throw cause;
+    }
+  }
+
+  async #startContainer(
+    state: OrbWorkspaceState,
+    idleMs: number,
+    fresh: boolean,
+    now: number,
+  ): Promise<"paused" | "created"> {
     const snapshot = state.snapshot;
     if (snapshot === undefined) {
       const image = this.#image();
@@ -401,7 +505,9 @@ export class OrbContainerController {
     readonly instance: CloudflareContainerInstance;
     readonly idleMs: number;
   }): Promise<OrbOpenResult> {
+    const requestedAt = this.#now();
     return this.#exclusive(async () => {
+      const lockWaitMs = this.#now() - requestedAt;
       let state = await this.#load();
       let fresh = false;
       if (state === undefined) {
@@ -438,7 +544,12 @@ export class OrbContainerController {
             : { processesStartedAt: state.startedAt }),
         };
       }
-      const residency = await this.#start(state, input.idleMs, fresh);
+      const residency = await this.#start(
+        state,
+        input.idleMs,
+        fresh,
+        lockWaitMs,
+      );
       const started = await this.#load();
       return {
         kind: "ready",

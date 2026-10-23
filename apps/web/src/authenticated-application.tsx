@@ -1,10 +1,12 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
 import { lazy, Suspense } from "react";
+import { attachInAppNavigation } from "./features/install-app/in-app-navigation.js";
 import { RealtimeProvider } from "./features/threads/realtime/realtime-provider.js";
 import { ThreadSessionProvider } from "./features/threads/thread-session-provider.js";
-import { createAppRouter } from "./router.js";
+import { type AppRouter, createAppRouter } from "./router.js";
 import { useIdentity } from "./shared/auth/auth-context.js";
+import { useMountEffect } from "./shared/hooks/use-mount-effect.js";
 
 const ReactQueryDevtools = import.meta.env.DEV
   ? lazy(() =>
@@ -13,6 +15,22 @@ const ReactQueryDevtools = import.meta.env.DEV
       })),
     )
   : undefined;
+
+/**
+ * Lends the router to notification clicks, app launches, and dx links in the
+ * installed app, so each changes route in place instead of reloading dx.
+ */
+function InAppNavigation({ router }: { readonly router: AppRouter }) {
+  useMountEffect(() =>
+    attachInAppNavigation((url) => {
+      // Paths the router has no page for, such as `/v1/…`, load as documents.
+      if (router.getMatchedRoutes(url.pathname)[2] === undefined) return false;
+      void router.navigate({ href: url.pathname + url.search + url.hash });
+      return true;
+    }),
+  );
+  return null;
+}
 
 /** Builds the signed-in product router with the application-owned query client. */
 export function AuthenticatedApplication({
@@ -37,6 +55,7 @@ export function AuthenticatedApplication({
     >
       <RealtimeProvider queryClient={queryClient} userId={auth.identity.id}>
         <RouterProvider router={router} />
+        <InAppNavigation key={auth.identity.id} router={router} />
         {ReactQueryDevtools === undefined ? null : (
           <Suspense fallback={null}>
             <ReactQueryDevtools />

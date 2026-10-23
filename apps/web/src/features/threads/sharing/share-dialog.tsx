@@ -271,7 +271,8 @@ export function ShareDialog({
         <DialogContent className="thread-share-dialog">
           <DialogTitle>Share</DialogTitle>
           <DialogDescription className="sr-only">
-            Choose who in your workspace can see or use this thread.
+            Choose who in your workspace can see or use this thread, its parent,
+            and their child threads.
           </DialogDescription>
           <section className="thread-share-section">
             <h3>URL</h3>
@@ -341,7 +342,11 @@ export function ShareDialog({
                   </span>
                   <div>
                     <strong>{workspace.displayName}</strong>
-                    <span>Your workspace</span>
+                    <span>
+                      {thread.parentThreadId === undefined
+                        ? "Includes its child threads"
+                        : "Includes the parent and its child threads"}
+                    </span>
                   </div>
                   <PermissionMenu
                     value={current}

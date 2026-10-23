@@ -284,18 +284,21 @@ export const updateThreadSharing = async (
 ): Promise<{
   readonly sharing?: ThreadSharingData;
   readonly skipMultiplayerConfirmation: boolean;
+  /** Every Thread in the family whose sharing changed with this one. */
+  readonly family: ReadonlyArray<ThreadId>;
 }> => {
   const now = input.now ?? new Date();
   const owned = await db
     .prepare(
-      `SELECT thread.id FROM threads AS thread
+      `SELECT COALESCE(thread.parent_thread_id, thread.id) AS root_id
+         FROM threads AS thread
          JOIN projects AS project ON project.id = thread.project_id
         WHERE thread.id = ?1 AND thread.owner_user_id = ?2
           AND thread.lifecycle_state != 'deleted'
           AND ${threadProjectReachableSql("project", "?2")}`,
     )
     .bind(input.threadId, input.ownerUserId)
-    .first();
+    .first<{ root_id: string }>();
   if (owned === null) {
     const shared = await db
       .prepare(
@@ -332,6 +335,18 @@ export const updateThreadSharing = async (
           now.getTime() + THREAD_CONTRIBUTE_DURATION_MS[contributeFor],
         ).toISOString()
       : null;
+  // A family (a root Thread and its children) shares as one unit: the
+  // same access reaches the root and every child.
+  const family = (
+    await db
+      .prepare(
+        `SELECT id FROM threads
+          WHERE (id = ?1 OR parent_thread_id = ?1) AND owner_user_id = ?2
+            AND lifecycle_state != 'deleted'`,
+      )
+      .bind(owned.root_id, input.ownerUserId)
+      .all<{ id: ThreadId }>()
+  ).results.map(({ id }) => id);
   const statements = [
     db
       .prepare(
@@ -345,14 +360,16 @@ export const updateThreadSharing = async (
                 conversation_mode = CASE WHEN ?2 = 'none' THEN 'agent'
                                          ELSE conversation_mode END,
                 updated_at = ?5
-          WHERE id = ?1`,
+          WHERE (id = ?1 OR parent_thread_id = ?1) AND owner_user_id = ?6
+            AND lifecycle_state != 'deleted'`,
       )
       .bind(
-        input.threadId,
+        owned.root_id,
         workspaceAccess,
         workspaceId ?? null,
         contributeUntil,
         now.toISOString(),
+        input.ownerUserId,
       ),
   ];
   if (input.request.skipMultiplayerConfirmation !== undefined)
@@ -387,6 +404,7 @@ export const updateThreadSharing = async (
       db,
       input.ownerUserId,
     ),
+    family,
   };
 };
 

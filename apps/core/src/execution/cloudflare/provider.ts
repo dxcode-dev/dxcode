@@ -5,6 +5,7 @@ import {
 } from "@dx/domain";
 import { Config, ConfigProvider, Effect, Redacted, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
+import { orbContainerLogger } from "../../logging.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
 import type {
   ExecutionContext,
@@ -258,6 +259,40 @@ const openCloudflareWorkspace = async (
       return handleFor(stub, idleMs, result.processesStartedAt);
     throw unavailable(`container ${result.kind}`);
   };
+  // Core's view of one open: with the object's own logs (same `sandboxId`)
+  // and Cloudflare's instance list (named by Thread), it places a slow start.
+  const open = async (create: boolean) => {
+    const startedAt = Date.now();
+    const details = {
+      event: "orb_container_open",
+      threadId: id,
+      sandboxId,
+      create,
+      instance: profile.instance,
+    };
+    try {
+      const result = await stub.open({
+        create,
+        instance: profile.instance,
+        idleMs,
+      });
+      orbContainerLogger.info("Orb container open returned.", {
+        ...details,
+        outcome: result.kind,
+        ...(result.kind === "ready" ? { residency: result.residency } : {}),
+        durationMs: Date.now() - startedAt,
+      });
+      return result;
+    } catch (cause) {
+      orbContainerLogger.error("Orb container open failed.", {
+        ...details,
+        outcome: "error",
+        durationMs: Date.now() - startedAt,
+        error: cause instanceof Error ? cause.message : String(cause),
+      });
+      throw cause;
+    }
+  };
   for (let attempt = 0; attempt < STATE_RETRIES; attempt += 1) {
     const record = await readRecord(db, id);
     if (record.state === "uninitialized") {
@@ -271,11 +306,7 @@ const openCloudflareWorkspace = async (
     if (record.state === "provisioning") {
       if (options.existingOnly) throw unavailable("not created");
       await options.authorize();
-      const result = await stub.open({
-        create: true,
-        instance: profile.instance,
-        idleMs,
-      });
+      const result = await open(true);
       const handle = ready(result);
       if (!(await initialize(db, id, record, sandboxId))) continue;
       return handle;
@@ -290,11 +321,7 @@ const openCloudflareWorkspace = async (
       await options.observeResidency(status.running ? "running" : "paused");
     }
     await options.authorize();
-    const result = await stub.open({
-      create: false,
-      instance: profile.instance,
-      idleMs,
-    });
+    const result = await open(false);
     if (result.kind !== "ready") {
       await markLost(db, id);
       throw unavailable(`container ${result.kind}`);

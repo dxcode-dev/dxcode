@@ -214,6 +214,12 @@ export const ThreadRepositoryD1 = Layer.effect(
           { threadId: thread.id },
           Schema.encodeEffect(Thread)(thread).pipe(
             Effect.flatMap((encoded) => {
+              // A child starts with its family's sharing: a family shares
+              // as one unit.
+              const parentSharing = (column: string) =>
+                sql`SELECT ${sql.literal(column)} FROM threads
+                     WHERE id = ${encoded.parentThreadId ?? null}
+                       AND owner_user_id = ${encoded.ownerUserId}`;
               const insertThread = sql`
                 INSERT INTO threads (
                   id,
@@ -228,6 +234,9 @@ export const ThreadRepositoryD1 = Layer.effect(
                   plugin_snapshot_json,
                   skill_snapshot_json,
                   visibility,
+                  workspace_access,
+                  shared_workspace_id,
+                  contribute_until,
                   lifecycle_state,
                   title_pending_until,
                   parent_thread_id,
@@ -243,7 +252,11 @@ export const ThreadRepositoryD1 = Layer.effect(
                   ${encoded.runnerProfileId ?? null},
                   ${JSON.stringify(encoded.plugins)},
                   ${JSON.stringify(encoded.skills)},
-                  ${encoded.visibility ?? "private"},
+                  COALESCE((${parentSharing("visibility")}),
+                           ${encoded.visibility ?? "private"}),
+                  COALESCE((${parentSharing("workspace_access")}), 'none'),
+                  (${parentSharing("shared_workspace_id")}),
+                  (${parentSharing("contribute_until")}),
                   ${encoded.lifecycleState},
                   ${encoded.titlePendingUntil ?? null},
                   ${encoded.parentThreadId ?? null},

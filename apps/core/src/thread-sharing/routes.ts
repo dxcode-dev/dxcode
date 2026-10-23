@@ -90,7 +90,7 @@ export const threadSharingRoutes = new Hono<AppEnv>().put(
       const principal = context.get("principal");
       if (!canUseSharedThreads(principal))
         return failure(context, "THREAD_NOT_FOUND", 404, "Thread not found.");
-      const result = await updateThreadSharing(db, {
+      const { family, ...result } = await updateThreadSharing(db, {
         threadId: threadId.value,
         ownerUserId: principal.userId as UserId,
         request: body.value,
@@ -100,14 +100,16 @@ export const threadSharingRoutes = new Hono<AppEnv>().put(
         requestId: context.get("requestId"),
         threadId: threadId.value,
         workspaceAccess: body.value.workspaceAccess,
+        familySize: family.length,
       });
-      await scheduleRealtimeInvalidation(
-        () => context.executionCtx,
-        context.env,
-        threadId.value,
-        "thread.invalidated",
-        "audience",
-      );
+      for (const id of family)
+        await scheduleRealtimeInvalidation(
+          () => context.executionCtx,
+          context.env,
+          id,
+          "thread.invalidated",
+          "audience",
+        );
       return context.json(
         Schema.encodeUnknownSync(UpdateThreadSharingResponseSchema)({
           status: "success",

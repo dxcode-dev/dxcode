@@ -2320,6 +2320,8 @@ var MAX_CONTAINER_INACTIVITY_MS = 216e5;
 var CONTAINER_INACTIVITY_MARGIN_MS = 9e5;
 var READY_TIMEOUT_MS = 9e4;
 var READY_RETRY_MS = 100;
+/** While a start waits for readiness, log its progress this often. */
+var READY_PROGRESS_LOG_MS = 3e4;
 /** A command's output kept in this object's memory, per stream. */
 var MAX_OUTPUT_BYTES = 8388608;
 /** The largest file read in one call (one RPC result). */
@@ -2442,17 +2444,50 @@ var OrbContainerController = class {
 	async #armInactivity(idleMs) {
 		await this.#container.setInactivityTimeout(Math.min(MAX_CONTAINER_INACTIVITY_MS, idleMs + CONTAINER_INACTIVITY_MARGIN_MS));
 	}
-	/** The container accepts `exec` once it has started. */
+	/**
+	* The container accepts `exec` once it has started. Logs progress while it
+	* waits, so a stalled start shows whether one probe hung
+	* (`currentAttemptMs`) or probes kept failing (`attempts`, `lastFailure`).
+	*/
 	async #waitReady(operation) {
-		const deadline = this.#now() + READY_TIMEOUT_MS;
+		const startedAt = this.#now();
+		const deadline = startedAt + READY_TIMEOUT_MS;
 		let lastFailure;
-		while (this.#now() < deadline) {
-			try {
-				if (await (await this.#container.exec(["true"])).exitCode === 0) return;
-			} catch (cause) {
-				lastFailure = cause;
+		let attempts = 0;
+		let attemptStartedAt = startedAt;
+		let slowestAttemptMs = 0;
+		const progress = (outcome) => ({
+			event: "orb_container_ready_wait",
+			outcome,
+			sandboxId: this.#sandboxId,
+			operation,
+			elapsedMs: this.#now() - startedAt,
+			attempts,
+			slowestAttemptMs,
+			currentAttemptMs: this.#now() - attemptStartedAt,
+			running: this.#container.running,
+			...lastFailure === void 0 ? {} : { lastFailure: lastFailure instanceof Error ? lastFailure.message : String(lastFailure) }
+		});
+		const watchdog = setInterval(() => orbContainerLogger.warn("Orb container is not ready yet.", progress("waiting")), READY_PROGRESS_LOG_MS);
+		try {
+			while (this.#now() < deadline) {
+				attempts += 1;
+				attemptStartedAt = this.#now();
+				try {
+					if (await (await this.#container.exec(["true"])).exitCode === 0) {
+						slowestAttemptMs = Math.max(slowestAttemptMs, this.#now() - attemptStartedAt);
+						orbContainerLogger.info("Orb container is ready.", progress("ready"));
+						return;
+					}
+				} catch (cause) {
+					lastFailure = cause;
+				}
+				slowestAttemptMs = Math.max(slowestAttemptMs, this.#now() - attemptStartedAt);
+				await sleep(READY_RETRY_MS);
 			}
-			await sleep(READY_RETRY_MS);
+			orbContainerLogger.error("Orb container did not become ready.", progress("timed_out"));
+		} finally {
+			clearInterval(watchdog);
 		}
 		throw failure(operation, lastFailure instanceof Error ? lastFailure.message : "not ready");
 	}
@@ -2460,8 +2495,42 @@ var OrbContainerController = class {
 	* Starts the stopped container from its latest snapshot, or from the
 	* image when it never paused. Runs under the lifecycle lock.
 	*/
-	async #start(state, idleMs, fresh = false) {
+	async #start(state, idleMs, fresh = false, lockWaitMs = 0) {
 		const now = this.#now();
+		const snapshot = state.snapshot;
+		const details = {
+			event: "orb_container_start",
+			sandboxId: this.#sandboxId,
+			source: snapshot === void 0 ? "image" : "snapshot",
+			...snapshot === void 0 ? {} : {
+				snapshotId: snapshot.id,
+				snapshotSize: snapshot.size,
+				snapshotAgeMs: now - snapshot.refreshedAt
+			},
+			instance: state.instance,
+			fresh,
+			lockWaitMs
+		};
+		orbContainerLogger.info("Orb container start requested.", details);
+		try {
+			const residency = await this.#startContainer(state, idleMs, fresh, now);
+			orbContainerLogger.info("Orb container started.", {
+				...details,
+				outcome: "started",
+				durationMs: this.#now() - now
+			});
+			return residency;
+		} catch (cause) {
+			orbContainerLogger.error("Orb container start failed.", {
+				...details,
+				outcome: "error",
+				durationMs: this.#now() - now,
+				error: cause instanceof Error ? cause.message : String(cause)
+			});
+			throw cause;
+		}
+	}
+	async #startContainer(state, idleMs, fresh, now) {
 		const snapshot = state.snapshot;
 		if (snapshot === void 0) {
 			const image = this.#image();
@@ -2503,7 +2572,9 @@ var OrbContainerController = class {
 	* fixed afterwards.
 	*/
 	async open(input) {
+		const requestedAt = this.#now();
 		return this.#exclusive(async () => {
+			const lockWaitMs = this.#now() - requestedAt;
 			let state = await this.#load();
 			let fresh = false;
 			if (state === void 0) {
@@ -2534,7 +2605,7 @@ var OrbContainerController = class {
 					...state.startedAt === void 0 ? {} : { processesStartedAt: state.startedAt }
 				};
 			}
-			const residency = await this.#start(state, input.idleMs, fresh);
+			const residency = await this.#start(state, input.idleMs, fresh, lockWaitMs);
 			const started = await this.#load();
 			return {
 				kind: "ready",

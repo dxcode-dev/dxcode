@@ -59,6 +59,28 @@ self.addEventListener("push", (event) => {
   );
 });
 
+/**
+ * How long a dx window has to answer before the worker navigates it instead.
+ * A current window answers at once; a window still loading, or one running
+ * a dx from before this worker, may never answer.
+ */
+const ROUTE_ANSWER_MS = 3000;
+
+/**
+ * Asks a running dx window to change route itself, which keeps the app, its
+ * session, and its place. `in-app-navigation.ts` answers.
+ */
+const routeInWindow = (client, url) =>
+  new Promise((resolve) => {
+    const channel = new MessageChannel();
+    const timer = setTimeout(() => resolve(false), ROUTE_ANSWER_MS);
+    channel.port1.onmessage = (event) => {
+      clearTimeout(timer);
+      resolve(event.data?.handled === true);
+    };
+    client.postMessage({ type: "dx:navigate", url }, [channel.port2]);
+  });
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const target = new URL(
@@ -79,7 +101,9 @@ self.addEventListener("notificationclick", (event) => {
         // browsers withhold; the window still goes where the notification
         // pointed.
         await client.focus().catch(() => {});
+        if (await routeInWindow(client, target.href)) return;
         if (client.url === target.href) return;
+        // Loading the page again is the fallback: slower, but it arrives.
         const navigated = await client
           .navigate(target.href)
           .then(() => true)
