@@ -60,9 +60,9 @@ function Checkbox({
   );
 }
 
-/** dx hides every occurrence of a secret value in agent command output. */
+/** dx hides a secret in what the agent reads only when it is not weak. */
 const SHORT_VALUE_WARNING =
-  "This value is short or common. dx hides every occurrence of a secret in command output, so this would hide unrelated text too.";
+  "Too short to hide. dx won't mask this value in chat.";
 
 /** What a secret's value field says before it can be saved. */
 const secretValueNotice = (secret: boolean, value: string) =>
@@ -373,12 +373,9 @@ export function BulkAddEnvironmentVariablesDialog({
             </div>
             {weakSecrets.length > 0 ? (
               <p className="environment-field-warning">
-                {summaryNames(weakSecrets)}:{" "}
-                {weakSecrets.length === 1
-                  ? "this value is"
-                  : "these values are"}{" "}
-                short or common. dx hides every occurrence of a secret in
-                command output, so unrelated text would be hidden too.
+                {summaryNames(weakSecrets)}: too short to hide. dx won't mask{" "}
+                {weakSecrets.length === 1 ? "this value" : "these values"} in
+                chat.
               </p>
             ) : null}
             <Checkbox checked={autoDetect} onChange={onAutoDetectChange}>
@@ -548,6 +545,14 @@ export function EnvironmentVariableValues({
                         {item.kind === "secret" ? "••••••••" : item.value}
                       </code>
                     )}
+                    {item.kind === "secret" && !item.hidden ? (
+                      <span
+                        className="environment-values-hint"
+                        title={SHORT_VALUE_WARNING}
+                      >
+                        Not hidden
+                      </span>
+                    ) : null}
                   </td>
                   <td className="environment-values-cell environment-values-updated">
                     <TimeText text={relativeTime(item.updatedAt)} />

@@ -68,6 +68,48 @@ const threadAudience = async (
   };
 };
 
+/**
+ * Who has the Thread open right now, from its hub's memory-only presence.
+ * An empty set when the hub, the binding, or the Thread is unavailable: a
+ * notification that cannot tell holds nobody back.
+ */
+export const threadPresentUsers = async (
+  bindings: Pick<Bindings, "DB" | "REALTIME_HUB">,
+  threadId: ThreadId,
+): Promise<ReadonlySet<UserId>> => {
+  if (bindings.DB === undefined || bindings.REALTIME_HUB === undefined)
+    return new Set();
+  try {
+    const target = await threadAudience(bindings.DB, threadId);
+    if (target === undefined) return new Set();
+    const response = await bindings.REALTIME_HUB.getByName(
+      target.audience,
+    ).fetch(
+      `https://realtime.internal/presence?topic=${encodeURIComponent(`thread:${threadId}`)}`,
+      {
+        headers: {
+          [AUDIENCE_HEADER]: target.audience,
+          [PARTICIPANT_HEADER]: target.ownerUserId,
+          [CLIENT_HEADER]: crypto.randomUUID(),
+        },
+      },
+    );
+    if (!response.ok)
+      throw new Error(`Realtime hub returned ${response.status}.`);
+    const body = (await response.json()) as {
+      readonly participants?: ReadonlyArray<string>;
+    };
+    return new Set((body.participants ?? []) as ReadonlyArray<UserId>);
+  } catch (cause) {
+    realtimeLogger.warn("Realtime presence could not be read.", {
+      event: "realtime_presence_read_failed",
+      threadId,
+      cause,
+    });
+    return new Set();
+  }
+};
+
 export const publishRealtimeInvalidation = async (
   bindings: Pick<Bindings, "DB" | "REALTIME_HUB">,
   threadId: ThreadId,

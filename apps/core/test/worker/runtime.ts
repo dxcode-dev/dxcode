@@ -1,3 +1,4 @@
+import { env } from "cloudflare:test";
 import type {
   PersonalAgentInstructionsRepository,
   ProjectRepository,
@@ -6,7 +7,6 @@ import type {
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer } from "effect";
-import { env } from "cloudflare:test";
 import { ProjectRepositoryD1 } from "../../src/projects/repository-d1.js";
 import { PersonalAgentInstructionsRepositoryD1 } from "../../src/settings/agent-instructions/repository-d1.js";
 import { WorkspaceRepositoryD1 } from "../../src/settings/workspace/repository-d1.js";

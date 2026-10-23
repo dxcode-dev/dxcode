@@ -380,13 +380,19 @@ const commonValues = new Set([
 
 /**
  * Whether a secret value is too short or too common to hide. dx replaces
- * every occurrence of a secret value in agent command output, so a secret
- * such as `true` would hide every `true` there.
+ * every occurrence of a hidden secret in what the agent reads, so hiding a
+ * secret such as `true` would garble every `true` there; dx leaves it shown.
  */
 export const isWeakSecretValue = (value: string): boolean => {
   const trimmed = value.trim();
   return trimmed.length < 8 || commonValues.has(trimmed.toLowerCase());
 };
+
+/** Whether dx hides a value in what the agent reads: a secret, not weak. */
+export const isHiddenEnvironmentValue = (
+  kind: EnvironmentVariableKind,
+  value: string,
+): boolean => kind === "secret" && !isWeakSecretValue(value);
 
 /**
  * Whether Bulk Add's "Auto-detect secrets" saves an assignment as a secret:

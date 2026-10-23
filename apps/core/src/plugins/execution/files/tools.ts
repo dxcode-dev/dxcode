@@ -2,6 +2,7 @@ import { posix } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import type { Sandbox, SandboxToolFactory } from "@flue/runtime";
 import { createTwoFilesPatch } from "diff";
+import { refuseSecretMarkerWrite } from "../../../settings/environment-variables/sandbox.js";
 import {
   createFileDescription,
   createFileParameters,
@@ -49,6 +50,12 @@ export const createFileTools = (sandbox: Sandbox): AgentTool[] => [
       const params = input as { path: string; content: string };
       signal?.throwIfAborted();
       absolute(params.path);
+      await refuseSecretMarkerWrite(
+        sandbox,
+        params.path,
+        params.content,
+        false,
+      );
       await sandbox.mkdir(posix.dirname(params.path), { recursive: true });
       signal?.throwIfAborted();
       await sandbox.writeFile(params.path, params.content);
@@ -104,6 +111,15 @@ export const createFileTools = (sandbox: Sandbox): AgentTool[] => [
           `Found ${matches} matches in ${params.path}; old_str must be unique or replace_all must be true.`,
         );
       const after = pieces.join(params.new_str);
+      // A marker in new_str is the agent's; one elsewhere came from the
+      // file, which holds the secret there.
+      await refuseSecretMarkerWrite(
+        sandbox,
+        params.path,
+        params.new_str,
+        false,
+      );
+      await refuseSecretMarkerWrite(sandbox, params.path, after, true);
       let offset = (pieces[0] ?? "").length;
       const start = after.slice(0, offset).split("\n").length;
       for (let index = 1; index < matches; index++)

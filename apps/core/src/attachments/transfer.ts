@@ -2,18 +2,13 @@ import { AwsClient } from "aws4fetch";
 import type { Bindings } from "../http/types.js";
 
 /**
- * How attachment bytes move. Deployed stages sign short-lived R2 URLs, so
- * browsers upload straight to storage and the browser and dxd download
- * straight from it; Core only authorizes and signs. Local development has no
- * real R2, so there Core carries the bytes through its own routes. The mode
- * comes from composition: local development, and self-hosts deployed with
- * Alchemy OAuth (which cannot mint a signing token), carry bytes through
- * Core; any other deployed stage without signing credentials has no
- * attachments rather than a slower path.
+ * How attachment bytes move, the same in every composition: Core signs
+ * short-lived R2 URLs, browsers upload straight to storage, and the browser
+ * and dxd download straight from it; Core only authorizes and signs. Local
+ * development signs for its own emulation of R2's S3 API (`local-r2.ts`). A
+ * stage without signing credentials has no attachments.
  */
-export type AttachmentTransfer = DirectTransfer | CoreTransfer;
-
-interface Common {
+export interface AttachmentTransfer {
   /** Start a multipart upload; returns its upload id. */
   readonly create: (key: string) => Promise<string>;
   /**
@@ -32,10 +27,6 @@ interface Common {
     parts: ReadonlyArray<{ partNumber: number; etag: string }>,
   ) => Promise<void>;
   readonly abort: (key: string, uploadId: string) => Promise<void>;
-}
-
-export interface DirectTransfer extends Common {
-  readonly kind: "direct";
   /** A presigned GET that sets the response's type and disposition. */
   readonly readUrl: (
     key: string,
@@ -43,21 +34,27 @@ export interface DirectTransfer extends Common {
   ) => Promise<string>;
 }
 
-export interface CoreTransfer extends Common {
-  readonly kind: "core";
-}
-
 /** Presigned upload and read URLs live this long. */
 export const PRESIGNED_URL_SECONDS = 3600;
 
-/** R2's S3 endpoint for the bucket, e.g. `https://<account>.r2.cloudflarestorage.com/<bucket>`. */
-const parseEndpoint = (value: string) => {
+/**
+ * R2's S3 endpoint for the bucket, e.g.
+ * `https://<account>.r2.cloudflarestorage.com/<bucket>`. Local development
+ * names its loopback emulation of that API instead.
+ */
+const parseEndpoint = (value: string, local: boolean) => {
   try {
     const url = new URL(value);
     const bucket = url.pathname.replace(/^\/+|\/+$/g, "");
+    const r2 =
+      url.protocol === "https:" &&
+      url.hostname.endsWith(".r2.cloudflarestorage.com");
+    const loopback =
+      local &&
+      url.protocol === "http:" &&
+      (url.hostname === "127.0.0.1" || url.hostname === "localhost");
     if (
-      url.protocol !== "https:" ||
-      !url.hostname.endsWith(".r2.cloudflarestorage.com") ||
+      !(r2 || loopback) ||
       bucket === "" ||
       bucket.includes("/") ||
       url.search !== "" ||
@@ -101,7 +98,7 @@ const xmlEscape = (value: string) =>
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
 
-const direct = (endpoint: string, client: AwsClient): DirectTransfer => {
+const direct = (endpoint: string, client: AwsClient): AttachmentTransfer => {
   const objectUrl = (key: string) =>
     `${endpoint}/${key.split("/").map(encodeURIComponent).join("/")}`;
   const call = async (url: string, init: RequestInit, operation: string) => {
@@ -127,7 +124,6 @@ const direct = (endpoint: string, client: AwsClient): DirectTransfer => {
       })
     ).url;
   return {
-    kind: "direct",
     create: async (key) => {
       const text = await call(
         `${objectUrl(key)}?uploads`,
@@ -180,26 +176,9 @@ const direct = (endpoint: string, client: AwsClient): DirectTransfer => {
   };
 };
 
-/** Core carries the bytes itself: local development only. */
-const throughCore = (bucket: R2Bucket): CoreTransfer => ({
-  kind: "core",
-  create: async (key) => (await bucket.createMultipartUpload(key)).uploadId,
-  partUrls: async (id, _key, _uploadId, partLengths) =>
-    partLengths.map((_, index) => `/v1/attachments/${id}/parts/${index + 1}`),
-  complete: async (key, uploadId, parts) => {
-    await bucket.resumeMultipartUpload(key, uploadId).complete(
-      parts.map(({ partNumber, etag }) => ({
-        partNumber,
-        etag: bareEtag(etag),
-      })),
-    );
-  },
-  abort: (key, uploadId) => bucket.resumeMultipartUpload(key, uploadId).abort(),
-});
-
 /**
  * The stage's attachment transfer, or undefined when attachments are not
- * available: a deployed stage needs R2 signing credentials.
+ * available: every stage needs R2 signing credentials.
  */
 export const attachmentTransfer = (
   bindings: Bindings,
@@ -208,21 +187,18 @@ export const attachmentTransfer = (
   const endpoint =
     bindings.DX_ATTACHMENT_R2_ENDPOINT === undefined
       ? undefined
-      : parseEndpoint(bindings.DX_ATTACHMENT_R2_ENDPOINT);
+      : parseEndpoint(
+          bindings.DX_ATTACHMENT_R2_ENDPOINT,
+          bindings.DX_RUNTIME_MODE === "local",
+        );
   const credentials =
     bindings.DX_ATTACHMENT_R2_CREDENTIALS === undefined
       ? undefined
       : parseCredentials(bindings.DX_ATTACHMENT_R2_CREDENTIALS);
-  if (endpoint !== undefined && credentials !== undefined)
-    return direct(
-      endpoint,
-      new AwsClient({ ...credentials, service: "s3", region: "auto" }),
-    );
-  // Local development has no real R2; a deployment that cannot mint a
-  // signing token (Alchemy OAuth self-host) records that it carries bytes
-  // through Core. Anything else without credentials has no attachments.
-  return bindings.DX_RUNTIME_MODE === "local" ||
-    bindings.DX_ATTACHMENT_TRANSFER === "core"
-    ? throughCore(bindings.DX_STORAGE)
-    : undefined;
+  return endpoint === undefined || credentials === undefined
+    ? undefined
+    : direct(
+        endpoint,
+        new AwsClient({ ...credentials, service: "s3", region: "auto" }),
+      );
 };

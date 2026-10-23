@@ -25,8 +25,18 @@ export interface NotificationTopicDefinition {
   readonly noun: string;
   /** Completes "Receive … when ": "someone @-mentions you in a shared Thread". */
   readonly trigger: string;
-  /** Whether a channel delivers this topic for someone who never chose. */
-  readonly defaults: Readonly<Record<NotificationChannel, boolean>>;
+  /**
+   * Whether the topic also appears in the in-app Mentions inbox. A topic
+   * that does not still records a row, which deduplicates the event and
+   * carries its delivery outcomes.
+   */
+  readonly inbox: boolean;
+  /**
+   * The channels this topic is offered on, and whether each delivers for
+   * someone who never chose. A channel the topic omits is not offered at
+   * all: only a mention is worth an email, so the others are push only.
+   */
+  readonly defaults: Readonly<Partial<Record<NotificationChannel, boolean>>>;
   readonly content: (input: {
     readonly actorName: string;
     readonly threadTitle: string;
@@ -38,7 +48,8 @@ const mention: NotificationTopicDefinition = {
   id: "mention",
   noun: "mention",
   trigger: "someone @-mentions you in a shared Thread",
-  defaults: { email: true },
+  inbox: true,
+  defaults: { email: true, push: true },
   content: ({ actorName, threadTitle, excerpt }) => ({
     subject: `${actorName} mentioned you in ${threadTitle}`,
     headline: `${actorName} mentioned you`,
@@ -49,7 +60,62 @@ const mention: NotificationTopicDefinition = {
   }),
 };
 
+/**
+ * The agent settled a turn in a Thread its owner started. It is addressed to
+ * one person about their own Thread, so it stays out of the Mentions inbox,
+ * where the sidebar already shows the Thread going idle, and off email: a
+ * turn finishes far more often than someone tags you.
+ */
+const turnCompleted: NotificationTopicDefinition = {
+  id: "turn_completed",
+  noun: "agent update",
+  trigger: "the agent finishes a turn in one of your Threads",
+  inbox: false,
+  defaults: { push: true },
+  content: ({ threadTitle, excerpt }) => ({
+    subject: `The agent finished in ${threadTitle}`,
+    headline: "The agent finished its turn",
+    title: threadTitle,
+    body: excerpt,
+    actorName: "dx",
+    reason: "your Thread's agent finished a turn",
+  }),
+};
+
+/**
+ * A Thread the person snoozed reached its wake time. Like the agent update
+ * it is a nudge about their own Thread, so it is push only and stays out of
+ * the Mentions inbox; the sidebar already moves the Thread back.
+ */
+const snoozeWoke: NotificationTopicDefinition = {
+  id: "snooze_woke",
+  noun: "snoozed Thread",
+  trigger: "a Thread you snoozed wakes up",
+  inbox: false,
+  defaults: { push: true },
+  content: ({ threadTitle, excerpt }) => ({
+    subject: `${threadTitle} is back`,
+    headline: "A Thread you snoozed woke up",
+    title: threadTitle,
+    body: excerpt,
+    actorName: "dx",
+    reason: "a Thread you snoozed woke up",
+  }),
+};
+
 /** Every topic, in the order settings list them. */
 export const NOTIFICATION_TOPICS: Readonly<
   Record<NotificationTopic, NotificationTopicDefinition>
-> = { mention };
+> = { mention, turn_completed: turnCompleted, snooze_woke: snoozeWoke };
+
+/** The channels a topic is offered on, in channel order. */
+export const topicOffersChannel = (
+  topic: NotificationTopicDefinition,
+  channel: NotificationChannel,
+) => topic.defaults[channel] !== undefined;
+
+/** Topics whose rows the in-app inbox lists, as a SQL literal list. */
+export const INBOX_TOPICS_SQL = Object.values(NOTIFICATION_TOPICS)
+  .filter(({ inbox }) => inbox)
+  .map(({ id }) => `'${id}'`)
+  .join(", ");

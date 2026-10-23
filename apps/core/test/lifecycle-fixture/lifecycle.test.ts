@@ -1,11 +1,15 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { parseMessageAuthor } from "@dx/api";
 import { newThreadId, ProjectNameInput } from "@dx/domain";
 import { createFlueClient } from "@flue/sdk";
-import { mkdirSync, writeFileSync } from "node:fs";
-import path from "node:path";
 import { Redacted, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import { runReferenceLifecycle } from "../../src/dev/reference-lifecycle/workflow.js";
+import {
+  POISON_FAILURE,
+  POISONED_IMAGE_BASE64,
+} from "./src/attachment-poison.js";
 import { HEAVY_TURNS } from "./src/heavy-history.js";
 import { ORPHAN_RESULT } from "./src/sandbox.js";
 
@@ -24,6 +28,81 @@ const UNBOUNDED_FIRST_PAGE_BYTES = 2_768_553;
 
 const fixtureRequest = (path: string, init?: RequestInit) =>
   fetch(new Request(new URL(path, BASE_URL), init));
+
+const threadClient = (threadId: string) =>
+  createFlueClient({
+    url: new URL(`/v1/agents/dx/${threadId}`, BASE_URL).toString(),
+    fetch: fetchFixture,
+    headers: authorization,
+  });
+
+/** Creates a Thread whose first message starts the given fixture scenario. */
+const startScenarioThread = async (scenario: string, firstMessage: string) => {
+  expect(
+    (
+      await fixtureRequest(`/__fixture/scenario/${scenario}`, {
+        method: "POST",
+      })
+    ).status,
+  ).toBe(204);
+  const projectResponse = await fixtureRequest("/v1/projects", {
+    method: "POST",
+    headers: { ...authorization, "content-type": "application/json" },
+    body: JSON.stringify({ name: `${scenario}-lifecycle` }),
+  });
+  expect(projectResponse.status).toBe(201);
+  const project = await projectResponse.json<{ data: { id: string } }>();
+  const threadId = newThreadId();
+  const created = await fixtureRequest("/v1/threads", {
+    method: "POST",
+    headers: { ...authorization, "content-type": "application/json" },
+    body: JSON.stringify({
+      projectId: project.data.id,
+      title: scenario,
+      threadId,
+      initialMessage: { body: firstMessage, attachments: [] },
+    }),
+  });
+  expect(created.status).toBe(201);
+  return threadId;
+};
+
+const waitUntil = async (
+  condition: () => Promise<boolean>,
+  what: string,
+  timeoutMs = 10_000,
+) => {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await condition())) {
+    if (Date.now() > deadline)
+      throw new Error(`Timed out waiting for ${what}.`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+};
+
+type FlueHistory = Awaited<
+  ReturnType<ReturnType<typeof createFlueClient>["history"]>
+>;
+const textsOf = (history: FlueHistory, role: "user" | "assistant") =>
+  history.messages.flatMap((message) =>
+    message.role === role
+      ? message.parts.flatMap((part) =>
+          part.type === "text"
+            ? [role === "user" ? parseMessageAuthor(part.text).text : part.text]
+            : [],
+        )
+      : [],
+  );
+
+const writeProof = (name: string, proof: unknown) => {
+  const directory = process.env.DX_FLUE_STOP_QUEUE_ARTIFACTS;
+  if (directory === undefined) return;
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(
+    path.join(directory, `${name}.json`),
+    `${JSON.stringify(proof, null, 2)}\n`,
+  );
+};
 
 describe("generated Flue Worker lifecycle", () => {
   it("proves the native lifecycle, authorization boundary, and product-state separation", async () => {
@@ -599,4 +678,182 @@ describe("generated Flue Worker lifecycle", () => {
     // Ratio against the unbounded page (0.38 today).
     expect(firstBounded / first).toBeLessThanOrEqual(0.4);
   }, 600_000);
+
+  it("keeps the messages queued behind a running turn when Stop ends it", async () => {
+    const first = "Hold this turn open.";
+    const threadId = await startScenarioThread("stop-queue", first);
+    await waitUntil(
+      async () =>
+        (
+          await (
+            await fixtureRequest(`/__fixture/holding/${threadId}`)
+          ).json<{ holding: boolean }>()
+        ).holding,
+      "the first turn to hold",
+    );
+    const client = threadClient(threadId);
+    const queued = ["First queued message.", "Second queued message."];
+    const receipts = [];
+    for (const [index, body] of queued.entries())
+      receipts.push(
+        await client.send({
+          message: { kind: "user", body },
+          idempotencyKey: `stop-queue-${index}`,
+        }),
+      );
+
+    await client.abort();
+    for (const receipt of receipts)
+      await expect(client.wait(receipt)).rejects.toThrow(/abort/i);
+    await waitUntil(
+      async () =>
+        !(
+          await (
+            await fixtureRequest(`/__fixture/holding/${threadId}`)
+          ).json<{ holding: boolean }>()
+        ).holding,
+      "Stop to release the held turn",
+    );
+
+    // Reload: a fresh client reads history from the Durable Object.
+    const reloaded = await threadClient(threadId).history();
+    // Before the fix only the first message was left.
+    expect(textsOf(reloaded, "user")).toEqual([first, ...queued]);
+    const outcomes = new Map(
+      reloaded.settlements.map(({ submissionId, outcome }) => [
+        submissionId,
+        outcome,
+      ]),
+    );
+    for (const receipt of receipts)
+      expect(outcomes.get(receipt.submissionId)).toBe("aborted");
+    expect(textsOf(reloaded, "assistant")).toEqual([]);
+
+    // Stop does not stick: the next message runs.
+    const after = await client.send({
+      message: { kind: "user", body: "Continue after Stop." },
+      idempotencyKey: "stop-queue-after",
+    });
+    await client.wait(after);
+    const continued = await threadClient(threadId).history();
+    expect(textsOf(continued, "user")).toEqual([
+      first,
+      ...queued,
+      "Continue after Stop.",
+    ]);
+    expect(textsOf(continued, "assistant")).toEqual(["after-stop-complete"]);
+    writeProof("stop-queue", {
+      threadId,
+      queuedSubmissionIds: receipts.map(({ submissionId }) => submissionId),
+      reloadedAfterStop: {
+        userMessages: textsOf(reloaded, "user"),
+        settlements: reloaded.settlements,
+      },
+      afterNextMessage: {
+        userMessages: textsOf(continued, "user"),
+        assistantMessages: textsOf(continued, "assistant"),
+      },
+    });
+  });
+
+  // Waits out the real two-minute unready deadline; nothing is faked but
+  // the storage failure.
+  it("fails a message that never becomes ready within minutes, so the next message runs", async () => {
+    const first = "Start the unready journey.";
+    const threadId = await startScenarioThread("unready", first);
+    const client = threadClient(threadId);
+    await waitUntil(
+      async () => (await client.history()).settlements.length > 0,
+      "the first turn to settle",
+    );
+    expect(
+      (
+        await fixtureRequest("/__fixture/poison-attachments", {
+          method: "POST",
+        })
+      ).status,
+    ).toBe(204);
+
+    const poisonedAt = Date.now();
+    await expect(
+      client.send({
+        message: {
+          kind: "user",
+          body: "This message can never be prepared.",
+          attachments: [
+            {
+              type: "image",
+              mimeType: "image/png",
+              data: POISONED_IMAGE_BASE64,
+              filename: "poisoned.png",
+            },
+          ],
+        },
+        idempotencyKey: "unready-poisoned",
+      }),
+    ).rejects.toThrow();
+    const followUpText = "Run once the poisoned message fails.";
+    const followUp = await client.send({
+      message: { kind: "user", body: followUpText },
+      idempotencyKey: "unready-follow-up",
+    });
+
+    // Control: the follow-up waits behind the unready message at first.
+    await new Promise((resolve) => setTimeout(resolve, 15_000));
+    expect(
+      (await client.history()).settlements.map(
+        ({ submissionId }) => submissionId,
+      ),
+    ).not.toContain(followUp.submissionId);
+
+    // Before the fix the deadline was the seven-day run limit.
+    await Promise.race([
+      client.wait(followUp),
+      new Promise((_resolve, reject) =>
+        setTimeout(
+          () => reject(new Error("The follow-up did not run within 200 s.")),
+          200_000,
+        ),
+      ),
+    ]);
+    const ranAfterMs = Date.now() - poisonedAt;
+    // Two minutes, plus up to one 30 s heartbeat.
+    expect(ranAfterMs).toBeGreaterThanOrEqual(120_000);
+    expect(ranAfterMs).toBeLessThan(165_000);
+
+    const settled = await (
+      await fixtureRequest(`/__fixture/settlements/${threadId}`)
+    ).json<
+      Array<{
+        submissionId: string;
+        outcome: string;
+        error?: string;
+        at: number;
+      }>
+    >();
+    const poisoned = settled.find(
+      ({ outcome, submissionId }) =>
+        outcome === "failed" && submissionId !== followUp.submissionId,
+    );
+    expect(poisoned?.error).toBe(
+      `Submission could not be prepared to run within 2 minutes: ${POISON_FAILURE}`,
+    );
+    const history = await threadClient(threadId).history();
+    expect(textsOf(history, "user")).toEqual([first, followUpText]);
+    expect(textsOf(history, "assistant")).toEqual([
+      "unready-first-complete",
+      "unready-follow-up-complete",
+    ]);
+    writeProof("unready-deadline", {
+      threadId,
+      followUpSubmissionId: followUp.submissionId,
+      followUpRanAfterMs: ranAfterMs,
+      settlements: settled.map(({ at, ...rest }) => ({
+        ...rest,
+        msAfterPoisonedSend: at - poisonedAt,
+      })),
+      userMessages: textsOf(history, "user"),
+      assistantMessages: textsOf(history, "assistant"),
+    });
+  }, 240_000);
 });

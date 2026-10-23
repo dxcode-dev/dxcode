@@ -3,7 +3,7 @@ import {
   type CloudflareRunnerProfileConfiguration,
   ThreadId,
 } from "@dx/domain";
-import { Config, ConfigProvider, Effect, Schema } from "effect";
+import { Config, ConfigProvider, Effect, Redacted, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
 import type {
@@ -25,6 +25,10 @@ import {
   loadDaemonRelease,
   loadDaemonReleaseMetadata,
 } from "../guest/daemon-release.js";
+import {
+  accountOrbContainer,
+  type OrbContainerRpc,
+} from "./account-orb-client.js";
 import {
   cloudflareGuest,
   cloudflareSandbox,
@@ -165,14 +169,44 @@ const markLost = (db: D1Database, threadId: string) =>
     .bind(new Date().toISOString(), threadId)
     .run();
 
-/** Each Thread's workspace is the Orb container object named by its ID. */
-const orbContainer = (bindings: Bindings, threadId: string) => {
-  const namespace = bindings.ORB_CONTAINER;
-  if (namespace === undefined) throw unavailable("no ORB_CONTAINER binding");
-  return namespace.get(namespace.idFromName(threadId));
+/**
+ * Each Thread's workspace is the Orb container object named by its ID: in
+ * the deployer's account through the `ORB_CONTAINER` binding, or in a
+ * connected account through that account's Orb Worker. The sandbox ID the
+ * D1 record pins names the object in its account.
+ */
+const orbContainer = (
+  context: ExecutionContext,
+  bindings: Bindings,
+  threadId: string,
+): { readonly stub: OrbContainerRpc; readonly sandboxId: string } => {
+  if (context.account.scope === "deployment") {
+    const namespace = bindings.ORB_CONTAINER;
+    if (namespace === undefined) throw unavailable("no ORB_CONTAINER binding");
+    const stub = namespace.get(namespace.idFromName(threadId));
+    return {
+      stub: stub as unknown as OrbContainerRpc,
+      sandboxId: stub.id.toString(),
+    };
+  }
+  const profile = cloudflareProfile(context.profile);
+  const secret =
+    context.credentials === undefined
+      ? undefined
+      : Redacted.value(context.credentials).workerSecret;
+  if (profile.endpoint === undefined || secret === undefined)
+    throw unavailable("no account Orb Worker");
+  return {
+    stub: accountOrbContainer({
+      endpoint: profile.endpoint,
+      secret,
+      threadId,
+    }),
+    sandboxId: `${context.account.providerAccount}:${threadId}`,
+  };
 };
 
-type OrbContainerStub = ReturnType<typeof orbContainer>;
+type OrbContainerStub = OrbContainerRpc;
 
 /** The raw workspace Core's pipeline prepares, over the container object. */
 interface CloudflareWorkspaceHandle extends ExecutionWorkspaceHandle {
@@ -218,8 +252,7 @@ const openCloudflareWorkspace = async (
   const idleMs = await inactivityMs(bindings);
   const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
   const id = Schema.decodeUnknownSync(ThreadId)(threadId);
-  const stub = orbContainer(bindings, id);
-  const sandboxId = stub.id.toString();
+  const { stub, sandboxId } = orbContainer(context, bindings, id);
   const ready = (result: OrbOpenResult) => {
     if (result.kind === "ready")
       return handleFor(stub, idleMs, result.processesStartedAt);
@@ -273,7 +306,8 @@ const openCloudflareWorkspace = async (
 
 /**
  * The second Execution provider: Cloudflare Containers, one container per
- * Thread owned by a Durable Object in the deployer's account. It claims
+ * Thread owned by a Durable Object in the deployer's account or in a
+ * person's or workspace's connected account. It claims
  * `execution.pause-resume` with `preserves: "filesystem"`: archiving and the
  * idle deadline snapshot the filesystem and stop the container, and the
  * next activation restores it (dxd restarts from the image entrypoint).
@@ -306,7 +340,7 @@ export const cloudflareExecutionProvider: ExecutionProvider<CloudflareWorkspaceH
         if (mode === "destroy" && record.state === "lost") return;
         // Provisioning or conflict fails closed, as on E2B.
         if (record.state !== "initialized") throw unavailable(record.state);
-        const stub = orbContainer(bindings, threadId);
+        const { stub } = orbContainer(context, bindings, threadId);
         if (mode === "archive") {
           await assertThreadLifecycleState(db, threadId, "archived");
           await stub.pause();

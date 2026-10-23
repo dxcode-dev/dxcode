@@ -6,6 +6,11 @@ DX_CONFIG_ENCRYPTION_KEYS='{"activeVersion":1,"keys":{"1":"replace-with-base64-3
 DX_MODEL_ENDPOINT_ALLOWLIST=""
 # Comma-separated bundled Pi provider IDs whose deployment credentials are configured.
 DX_MODEL_DEPLOYMENT_PROVIDERS=""
+# Web Push (VAPID). The setup script generates a local pair; keep it stable so
+# a browser that subscribed keeps receiving. Both values are base64url: the
+# uncompressed P-256 public key and its private scalar.
+DX_PUSH_VAPID_PUBLIC_KEY="replace-with-vapid-public-key"
+DX_PUSH_VAPID_PRIVATE_KEY="replace-with-vapid-private-key"
 DX_AUTH_URL="http://localhost:3000"
 DX_AUTH_TRUSTED_ORIGINS="http://localhost:3000"
 DX_WORKLOAD_IDENTITY_ISSUER="http://localhost:5173/api/workload-identity"

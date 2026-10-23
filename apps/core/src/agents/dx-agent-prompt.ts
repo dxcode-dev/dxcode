@@ -7,7 +7,20 @@ import { DX_WORKSPACE_SKILL } from "./built-in-skill-names.js";
  * own loop, `mcp__dx__create_thread` through Claude Code's dx MCP server.
  */
 const threadToolsPrompt = (tool: (name: string) => string) =>
-  `You can start child Threads with ${tool("create_thread")}, message the owner's other Threads with ${tool("send_thread_message")}, check on them with ${tool("get_thread_status")}, wait for them with ${tool("wait_for_threads")}, and rename, recolor, pin, snooze, or archive them with ${tool("update_thread")}. Each child Thread has its own Orb, which ${tool("create_thread")} can pick by provider and size, and starts from the project's repository; files do not move between Threads, so give a child everything it needs in its prompt. A child Thread belongs to this Thread's owner and is private to them. A message another Thread's agent sent carries source_thread on its <dx_message_author> tag: answer it as a request from that Thread, and use ${tool("send_thread_message")} to reply there when it asks for a reply.`;
+  `You can start child Threads with ${tool("create_thread")}, message the owner's other Threads with ${tool("send_thread_message")}, check on them with ${tool("get_thread_status")}, wait for them with ${tool("wait_for_threads")}, and rename, recolor, pin, snooze, or archive them with ${tool("update_thread")}. Each child Thread has its own Orb, which ${tool("create_thread")} can pick by provider and size, and starts from the project's repository; files do not move between Threads, so give a child everything it needs in its prompt. A child Thread belongs to this Thread's owner and is private to them. A child sends its result to this Thread as a message when it finishes, and that message starts a new turn here, so after starting children, continue with work that does not need their results or end your turn. A message another Thread's agent sent carries source_thread on its <dx_message_author> tag: answer it as a request from that Thread, and use ${tool("send_thread_message")} to reply there when it asks for a reply.`;
+
+/**
+ * A Thread another Thread's agent started (`startedByThreadId` in its
+ * initial data) reports back there; the parent ends its turn instead of
+ * waiting, and the report starts its next one.
+ */
+const startedByPrompt = (
+  tool: (name: string) => string,
+  startedByThreadId: string | undefined,
+) =>
+  startedByThreadId === undefined
+    ? ""
+    : `The agent of Thread ${startedByThreadId} started this Thread. When you finish a turn that worked on a request from that Thread, send your result there with ${tool("send_thread_message")}: what you did, the outcome, links such as a pull request, and anything left unfinished. When a question blocks you, send it there and end your turn; the answer arrives as a message.`;
 
 /**
  * Attachments: the message names each file and its
@@ -167,10 +180,12 @@ export const composeClaudeCodePrompt = (
   personalInstructions: string,
   skills: ReadonlyArray<PromptSkill> = [],
   workspaceNotes = "",
+  startedByThreadId?: string,
 ): string =>
   [
     claudeCodeModePrompt,
     workspaceNotes,
+    startedByPrompt((name) => `mcp__dx__${name}`, startedByThreadId),
     personalInstructionsPrompt(personalInstructions),
     skills.length === 0
       ? ""
@@ -186,14 +201,17 @@ ${skills.map(skillPrompt).join("\n\n")}`,
 /**
  * `workspaceNotes` describes this deployment's workspace (such as where the
  * user reaches servers the agent starts); empty leaves the baseline prompt.
+ * `startedByThreadId` names the Thread whose agent started this one.
  */
 export const composeDxAgentPrompt = (
   personalInstructions: string,
   skills: ReadonlyArray<PromptSkill> = [],
   workspaceNotes = "",
+  startedByThreadId?: string,
 ): string => {
   const additions = [
     workspaceNotes,
+    startedByPrompt((name) => name, startedByThreadId),
     personalInstructionsPrompt(personalInstructions),
     skills.length === 0
       ? ""

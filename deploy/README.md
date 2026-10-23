@@ -36,7 +36,12 @@ have separate OAuth clients and token stores. dx does not read Wrangler tokens.
 `pnpm dx:deploy` signs in or refreshes the `dx-selfhost` Alchemy profile with
 `alchemy profile edit` or `alchemy profile refresh` (run through
 `node_modules/alchemy/bin/alchemy.js`, since Alchemy's `alchemy` launcher needs
-Node 24); preflight and apply use that same profile and access token. For unattended deployment, set
+Node 24); preflight and apply use that same profile and access token.
+Browser login cannot create the token Core signs attachment URLs with, so
+the installer asks once for an R2 API token you create under R2 → Manage API
+tokens (Object Read & Write) and prints the steps; set `DX_R2_ACCESS_KEY_ID`
+and `DX_R2_SECRET_ACCESS_KEY` to answer without the prompt. Attachments then
+upload straight to R2, as on every dx deployment. For unattended deployment, set
 `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, the first-run secrets, and
 `DX_DEPLOY_APPROVE=1`, then run:
 
@@ -153,7 +158,7 @@ Basic Scopes, and the same account.
 
 ```bash
 pnpm dx:deploy                    # repeatable upgrade
-pnpm dx:deploy -- --rotate        # rotate supplied integration, E2B, and Google secrets
+pnpm dx:deploy -- --rotate        # rotate supplied integration, E2B, Google, and R2 attachment secrets
 pnpm dx:deploy -- --reset-admin   # replace the first admin password (password sign-in only)
 pnpm dx:deploy -- --portals       # turn Portals on or off, or choose another Portal zone
 ```

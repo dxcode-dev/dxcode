@@ -1,4 +1,8 @@
 import type { ClaudePlanReading } from "@dx/domain";
+import {
+  type EnvironmentSecret,
+  redactFragment,
+} from "../settings/environment-variables/sandbox.js";
 import { claudePlanReadingFromEvent } from "./plan.js";
 
 /**
@@ -14,25 +18,39 @@ import { claudePlanReadingFromEvent } from "./plan.js";
 /** Written by the runner after the last line of each full chunk file. */
 export const CHUNK_END_LINE = '{"type":"dx_chunk_end"}';
 
+const MARKER = /\[REDACTED:[A-Z_][A-Z0-9_]*\]/y;
+
 /**
- * Workspace reads replace each secret value with one NUL byte, which JSON
- * forbids. Inside a string it becomes an escaped NUL, the redaction marker
- * dx shows everywhere; anywhere else it becomes `null`.
+ * Workspace reads replace each secret value with its marker
+ * (`environmentSecretMarker`), which a JSON string holds as it is. A secret
+ * can also match across JSON syntax: a marker outside a string becomes
+ * `null`, and one that cut an escape off drops the escape's start. The text
+ * is invalid JSON there either way, so no valid line changes.
  */
 const withJsonSafeRedactions = (line: string) => {
-  if (!line.includes("\0")) return line;
+  if (!line.includes("[REDACTED:")) return line;
   let output = "";
   let inString = false;
-  let escaped = false;
-  for (const character of line) {
-    if (character === "\0") {
-      output += inString ? "\\u0000" : "null";
-      escaped = false;
+  /** The escape sequence read so far, such as `\u00`. */
+  let pending = "";
+  for (let index = 0; index < line.length; ) {
+    MARKER.lastIndex = index;
+    const marker = MARKER.exec(line)?.[0];
+    if (marker !== undefined && (!inString || pending !== "")) {
+      output =
+        output.slice(0, output.length - pending.length) +
+        (inString ? marker : "null");
+      pending = "";
+      index += marker.length;
       continue;
     }
+    const character = line.charAt(index);
     output += character;
-    if (escaped) escaped = false;
-    else if (character === "\\") escaped = inString;
+    index += 1;
+    if (pending !== "") {
+      pending += character;
+      if (!pending.startsWith("\\u") || pending.length === 6) pending = "";
+    } else if (inString && character === "\\") pending = character;
     else if (character === '"') inString = !inString;
   }
   return output;
@@ -161,13 +179,20 @@ const subagentResult = (
   };
 };
 
+/**
+ * The only argument of a tool call whose input dx could not read, such as
+ * one cut off mid-stream; a dx tool answers it with an error.
+ */
+export const UNREADABLE_TOOL_INPUT = "dx_unreadable_input";
+
+/** A streamed input is JSON text, so its markers need the same care. */
 const parseToolInput = (json: string): Record<string, unknown> => {
   if (json.trim() === "") return {};
   try {
-    return record(JSON.parse(json)) ?? {};
-  } catch {
-    return {};
-  }
+    const input = record(JSON.parse(withJsonSafeRedactions(json)));
+    if (input !== undefined) return input;
+  } catch {}
+  return { [UNREADABLE_TOOL_INPUT]: true };
 };
 
 export class ClaudeCodeStream {
@@ -181,6 +206,14 @@ export class ClaudeCodeStream {
   planReading: ClaudePlanReading | undefined;
   /** When dx read `planReading` (epoch seconds). */
   planReadingAt = 0;
+  /**
+   * The values workspace reads redact. Each line is redacted on its own, so
+   * a secret Claude streamed across two fragments is redacted here, once
+   * the fragments are joined and before a block shows the text.
+   */
+  secrets: ReadonlyArray<EnvironmentSecret> = [];
+  /** Each streamed block's text that could still begin a secret. */
+  #held = new Map<ClaudeCodeBlock, string>();
   /** Blocks of the response being streamed, by Anthropic block index. */
   #response = new Map<number, ClaudeCodeBlock>();
   #responseCallsTools = false;
@@ -328,6 +361,7 @@ export class ClaudeCodeStream {
           }
         }
         this.#responseOpen = true;
+        this.#held.clear();
         const id = text(record(event.message)?.id);
         if (id !== "") this.#streamedIds.add(id);
         this.#response = new Map();
@@ -367,18 +401,20 @@ export class ClaudeCodeStream {
         const delta = record(event.delta);
         if (block === undefined || delta === undefined) return;
         if (block.type === "text" && delta.type === "text_delta")
-          block.text += text(delta.text);
+          this.#append(block, text(delta.text));
         else if (block.type === "thinking" && delta.type === "thinking_delta")
-          block.thinking += text(delta.thinking);
+          this.#append(block, text(delta.thinking));
         else if (block.type === "thinking" && delta.type === "signature_delta")
           block.signature = (block.signature ?? "") + text(delta.signature);
         else if (block.type === "toolCall" && delta.type === "input_json_delta")
-          block.json += text(delta.partial_json);
+          this.#append(block, text(delta.partial_json));
         return;
       }
       case "content_block_stop": {
         const block = this.#response.get(index);
-        if (block?.type === "toolCall") {
+        if (block === undefined) return;
+        this.#append(block, "", true);
+        if (block.type === "toolCall") {
           block.input = parseToolInput(block.json);
           block.complete = true;
         }
@@ -397,11 +433,13 @@ export class ClaudeCodeStream {
         segment.usage.cacheRead += this.#responseUsage.cacheRead;
         segment.usage.cacheWrite += this.#responseUsage.cacheWrite;
         this.#responseUsage = emptyUsage();
-        for (const block of this.#response.values())
+        for (const block of this.#response.values()) {
+          this.#append(block, "", true);
           if (block.type === "toolCall" && !block.complete) {
             block.input = parseToolInput(block.json);
             block.complete = true;
           }
+        }
         this.#responseOpen = false;
         if (this.#responseCallsTools) {
           segment.stopReason = "toolUse";
@@ -413,6 +451,24 @@ export class ClaudeCodeStream {
       default:
         return;
     }
+  }
+
+  /**
+   * Adds a streamed fragment to a block's text, redacted together with the
+   * text held back before it; `final` releases what is still held.
+   */
+  #append(block: ClaudeCodeBlock, fragment: string, final = false) {
+    const { released, held } = redactFragment(
+      this.#held.get(block) ?? "",
+      fragment,
+      this.secrets,
+      final,
+    );
+    if (held === "") this.#held.delete(block);
+    else this.#held.set(block, held);
+    if (block.type === "text") block.text += released;
+    else if (block.type === "thinking") block.thinking += released;
+    else block.json += released;
   }
 
   #toolResults(content: unknown, subagent?: ClaudeCodeSubagentResult) {
@@ -489,6 +545,7 @@ export class ClaudeCodeStream {
     this.result = { isError, text: message };
     // The result settles whichever segment Flue is waiting on, including
     // one a crashed or interrupted response left open.
+    for (const block of this.#held.keys()) this.#append(block, "", true);
     const segment = this.#current;
     segment.stopReason = isError ? "error" : "stop";
     if (isError) segment.errorMessage = message || "Claude Code failed.";

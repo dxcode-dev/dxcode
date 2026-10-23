@@ -50,9 +50,6 @@ export const forwardDaemonAttachment = async (
   });
   const range = request.headers.get("range");
   if (range !== null) headers.set("range", range);
-  // Only local development streams the bytes through Core.
-  if (new URL(request.url).searchParams.get("content") === "1")
-    headers.set("x-dx-attachment-content", "1");
   return namespace.get(namespace.idFromName(threadId)).fetch(
     new Request("https://thread.internal/daemon/attachment", {
       method: request.method,

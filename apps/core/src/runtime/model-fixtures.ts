@@ -2,6 +2,7 @@ import { parseMessageAuthor } from "@dx/api";
 import {
   type Context,
   createProvider,
+  getCurrentSystemPrompt,
   type Model,
   type SimpleStreamOptions,
   type StreamOptions,
@@ -25,6 +26,10 @@ const LOCAL_MODEL_FIXTURE_AUDIT_MARKER = "dx-local-model-fixture-v1" as const;
 
 const LOCAL_MODEL_FIXTURE_PROMPTS_TEXT_COMPLETION =
   "Reply with two short sentences confirming this synthetic model-stream check. Do not use tools.";
+const LOCAL_MODEL_FIXTURE_PROMPTS_REPORT_TO_PARENT =
+  "Run the synthetic check, then send its result to the thread that started you.";
+const LOCAL_MODEL_FIXTURE_PROMPTS_CHILD_REPORT =
+  "Synthetic child report: the synthetic check completed.";
 
 export const LOCAL_MODEL_FIXTURE_PROMPTS = {
   textCompletion: LOCAL_MODEL_FIXTURE_PROMPTS_TEXT_COMPLETION,
@@ -36,6 +41,10 @@ export const LOCAL_MODEL_FIXTURE_PROMPTS = {
     "Use the update_thread tool to color this thread green. After the tool result, reply with one short confirmation sentence.",
   richReply:
     "Reply with the synthetic rich reply: two views, an image, a video, and audio from the workspace. Do not use tools.",
+  reportingChild:
+    "Use the create_thread tool to start a child thread titled Synthetic reporting child that runs the synthetic check and reports back. After the tool result, reply with one short sentence and end your turn.",
+  reportToParent: LOCAL_MODEL_FIXTURE_PROMPTS_REPORT_TO_PARENT,
+  childReport: LOCAL_MODEL_FIXTURE_PROMPTS_CHILD_REPORT,
 } as const;
 
 /** The tool call each tool fixture makes before its confirmation. */
@@ -64,7 +73,35 @@ const LOCAL_MODEL_FIXTURE_TOOL_CALLS = {
     arguments: { color: "green" },
     confirmation: "This thread is green now.",
   },
+  reportingChild: {
+    id: "dx-local-fixture-reporting-child",
+    name: "create_thread",
+    arguments: {
+      prompt: LOCAL_MODEL_FIXTURE_PROMPTS_REPORT_TO_PARENT,
+      title: "Synthetic reporting child",
+    },
+    confirmation:
+      "The synthetic reporting child started; its report will arrive here.",
+  },
 } as const;
+
+/**
+ * The report a child sends the Thread that started it, which only its
+ * system prompt names: a Thread that was not started by an agent has none.
+ */
+const reportToParentCall = (context: Context) => {
+  const thread =
+    /The agent of Thread (thr_[0-9a-f-]{36}) started this Thread\./.exec(
+      getCurrentSystemPrompt(context.messages) ?? "",
+    )?.[1];
+  if (thread === undefined) throw fixtureMismatch();
+  return {
+    id: "dx-local-fixture-report-to-parent",
+    name: "send_thread_message",
+    arguments: { thread, message: LOCAL_MODEL_FIXTURE_PROMPTS_CHILD_REPORT },
+    confirmation: "The synthetic report was sent.",
+  };
+};
 
 export type LocalModelFixtureKind = keyof typeof LOCAL_MODEL_FIXTURE_PROMPTS;
 
@@ -122,9 +159,16 @@ export const localModelFixtureForPrompt = (prompt: string | undefined) => {
   return fixture;
 };
 
+interface FixtureToolCall {
+  readonly id: string;
+  readonly name: string;
+  readonly arguments: Readonly<Record<string, unknown>>;
+  readonly confirmation: string;
+}
+
 const hasSuccessfulFixtureToolResult = (
   context: Context,
-  expected: (typeof LOCAL_MODEL_FIXTURE_TOOL_CALLS)[keyof typeof LOCAL_MODEL_FIXTURE_TOOL_CALLS],
+  expected: FixtureToolCall,
 ) => {
   const promptIndex = context.messages.findLastIndex(
     ({ role }) => role === "user",
@@ -181,6 +225,7 @@ export const createLocalModelFixtureProvider = () => {
       // The rich reply streams over a few seconds, so a reader sees its
       // views render while the rest of the reply still arrives.
       ...(fixture.kind === "richReply" ? { tokensPerSecond: 600 } : {}),
+      ...(fixture.kind === "reportToParent" ? { tokensPerSecond: 5 } : {}),
     });
     switch (fixture.kind) {
       case "textCompletion":
@@ -201,17 +246,40 @@ export const createLocalModelFixtureProvider = () => {
           fauxAssistantMessage(RICH_REPLY_TEXT, { timestamp: 0 }),
         ]);
         break;
+      case "childReport":
+        core.setResponses([
+          fauxAssistantMessage("The synthetic child report arrived.", {
+            timestamp: 0,
+          }),
+        ]);
+        break;
       case "toolContinuation":
       case "childThread":
-      case "threadColor": {
-        const expected = LOCAL_MODEL_FIXTURE_TOOL_CALLS[fixture.kind];
+      case "threadColor":
+      case "reportingChild":
+      case "reportToParent": {
+        const expected =
+          fixture.kind === "reportToParent"
+            ? reportToParentCall(context)
+            : LOCAL_MODEL_FIXTURE_TOOL_CALLS[fixture.kind];
         core.setResponses([
           hasSuccessfulFixtureToolResult(context, expected)
             ? fauxAssistantMessage(expected.confirmation, { timestamp: 0 })
             : fauxAssistantMessage(
-                fauxToolCall(expected.name, expected.arguments, {
-                  id: expected.id,
-                }),
+                [
+                  // The child works a few seconds first, so its report
+                  // reaches a parent that has ended its turn.
+                  ...(fixture.kind === "reportToParent"
+                    ? [
+                        fauxText(
+                          "Running the synthetic check before reporting.",
+                        ),
+                      ]
+                    : []),
+                  fauxToolCall(expected.name, expected.arguments, {
+                    id: expected.id,
+                  }),
+                ],
                 {
                   stopReason: "toolUse",
                   timestamp: 0,

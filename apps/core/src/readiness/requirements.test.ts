@@ -221,16 +221,74 @@ describe("readiness requirements", () => {
     ).resolves.toMatchObject({ _tag: "ReadinessError", category });
   });
 
-  it("fails closed when no Execution provider resolves", async () => {
+  it("is ready with no deployment Orb provider, but not with sizes no one can run", async () => {
+    // People and workspaces connect their own E2B team.
+    for (const E2B_API_KEY of [undefined, "  "])
+      await expect(
+        Effect.runPromise(
+          loadReadinessRequirements(createTestBindings({ E2B_API_KEY })),
+        ),
+      ).resolves.toBeDefined();
+    // Containers sizes without the Containers binding run on people's own
+    // Cloudflare accounts.
+    const cloudflareSizes = CLOUDFLARE_ORB_PROFILES.map((size) => ({
+      ...size,
+      adapter: "cloudflare",
+      isolation: "container",
+      availability: "available",
+      capabilities: [
+        "git",
+        "environment-variables",
+        "internet-access",
+        "persistent-workspace",
+        "pause-resume",
+      ],
+    }));
     await expect(
-      failure(createTestBindings({ E2B_API_KEY: undefined })),
+      Effect.runPromise(
+        loadReadinessRequirements(
+          createTestBindings({
+            E2B_API_KEY: undefined,
+            DX_RUNNER_PROFILE_CATALOG: JSON.stringify({
+              version: 1,
+              defaultProfileId: CLOUDFLARE_ORB_PROFILES[1].id,
+              profiles: cloudflareSizes,
+            }),
+          }),
+        ),
+      ),
+    ).resolves.toBeDefined();
+    // A local-runtime size on a deployment: no one can run it.
+    await expect(
+      failure(
+        createTestBindings({
+          E2B_API_KEY: undefined,
+          DX_RUNNER_PROFILE_CATALOG: JSON.stringify({
+            version: 1,
+            defaultProfileId: CLOUDFLARE_ORB_PROFILES[1].id,
+            profiles: [
+              ...cloudflareSizes,
+              {
+                id: "local-default",
+                label: "Local",
+                adapter: "local",
+                resources: { cpuCores: 1, memoryMb: 1024, diskGb: 1 },
+                isolation: "process",
+                availability: "available",
+                capabilities: [
+                  "git",
+                  "environment-variables",
+                  "persistent-workspace",
+                ],
+              },
+            ],
+          }),
+        }),
+      ),
     ).resolves.toMatchObject({
       _tag: "ReadinessError",
-      category: "execution_provider_unavailable",
+      category: "runner_profile_configuration",
     });
-    await expect(
-      failure(createTestBindings({ E2B_API_KEY: "  " })),
-    ).resolves.toMatchObject({ category: "execution_provider_unavailable" });
   });
 
   it("is ready with Cloudflare Containers as the only Orb provider", async () => {
@@ -263,11 +321,14 @@ describe("readiness requirements", () => {
     await expect(
       Effect.runPromise(loadReadinessRequirements(containers())),
     ).resolves.toMatchObject({ e2bTemplateBuildId: "" });
-    // Neither provider configured: not ready.
+    // Containers sizes without Containers installed run on people's own
+    // Cloudflare accounts.
     await expect(
-      failure(containers({ ORB_CONTAINER: undefined })),
-    ).resolves.toMatchObject({ category: "execution_provider_unavailable" });
-    // An E2B size in the catalog without E2B installed is a broken catalog.
+      Effect.runPromise(
+        loadReadinessRequirements(containers({ ORB_CONTAINER: undefined })),
+      ),
+    ).resolves.toBeDefined();
+    // E2B sizes without E2B installed run on people's own E2B teams.
     const e2bCatalog = JSON.parse(
       createTestBindings().DX_RUNNER_PROFILE_CATALOG ?? "{}",
     );
@@ -275,15 +336,17 @@ describe("readiness requirements", () => {
       containers().DX_RUNNER_PROFILE_CATALOG ?? "{}",
     );
     await expect(
-      failure(
-        containers({
-          DX_RUNNER_PROFILE_CATALOG: JSON.stringify({
-            ...cloudflareCatalog,
-            profiles: [...cloudflareCatalog.profiles, ...e2bCatalog.profiles],
+      Effect.runPromise(
+        loadReadinessRequirements(
+          containers({
+            DX_RUNNER_PROFILE_CATALOG: JSON.stringify({
+              ...cloudflareCatalog,
+              profiles: [...cloudflareCatalog.profiles, ...e2bCatalog.profiles],
+            }),
           }),
-        }),
+        ),
       ),
-    ).resolves.toMatchObject({ category: "runner_profile_configuration" });
+    ).resolves.toBeDefined();
     // Both installed: the catalog may offer both, and either may be default.
     await expect(
       Effect.runPromise(

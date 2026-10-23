@@ -47,6 +47,7 @@ export function NewThreadComposer({
   allowedRunnerProfileIds,
   onRunnerProfileChange,
   onRunnerProfileRetry,
+  onConnectOrbProvider,
   profile,
   onProfileChange,
   model,
@@ -83,6 +84,7 @@ export function NewThreadComposer({
   readonly allowedRunnerProfileIds?: ReadonlyArray<RunnerProfileId> | null;
   readonly onRunnerProfileChange: (runnerProfileId: RunnerProfileId) => void;
   readonly onRunnerProfileRetry?: () => void;
+  readonly onConnectOrbProvider?: () => void;
   readonly profile: ModeId;
   readonly onProfileChange: (profile: ModeId) => void;
   readonly model?: string;
@@ -170,6 +172,7 @@ export function NewThreadComposer({
         allowedRunnerProfileIds={allowedRunnerProfileIds}
         onRunnerProfileChange={onRunnerProfileChange}
         onRunnerProfileRetry={onRunnerProfileRetry}
+        onConnectOrbProvider={onConnectOrbProvider}
         onProfileChange={onProfileChange}
         onModelChange={onModelChange}
         onEffortChange={onEffortChange}

@@ -219,7 +219,7 @@ describe("new thread configuration strip accessibility", () => {
           },
         ],
       }),
-    ).toContain('aria-label="Orb: E2B a1.tiny, your key"');
+    ).toContain('aria-label="Orb: E2B a1.tiny, your account"');
     expect(
       renderStrip({
         runnerProfiles: e2bProfiles,
@@ -786,7 +786,7 @@ describe("new thread Orb picker", () => {
         '[role="menuitem"][aria-haspopup="menu"]',
       );
       expect(Array.from(rows, (row) => row.textContent)).toEqual([
-        "E2BYour key",
+        "E2BYour account",
         "Cloudflare",
       ]);
       expect(picker.providerRow("E2B")?.getAttribute("title")).toBe(
@@ -843,13 +843,13 @@ describe("new thread Orb picker", () => {
     }
   });
 
-  it("disables a provider's sizes while its key's template builds", async () => {
+  it("disables a provider's sizes while its connection prepares", async () => {
     const picker = await mountPicker([
       {
         providerId: "e2b",
         scope: "personal",
         account: "team-a",
-        status: "building",
+        status: "preparing",
       },
       {
         providerId: "cloudflare",
@@ -861,7 +861,7 @@ describe("new thread Orb picker", () => {
     try {
       await React.act(() => picker.trigger?.click());
       const row = picker.providerRow("E2B");
-      expect(row?.textContent).toBe("E2BBuilding template…");
+      expect(row?.textContent).toBe("E2BPreparing…");
       await React.act(() => row?.click());
       const sizes = document.querySelectorAll('[role="menuitemradio"]');
       expect(sizes).toHaveLength(3);

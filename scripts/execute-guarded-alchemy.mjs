@@ -77,10 +77,10 @@ const selection = {
   orbProviders: parseOrbProviders(process.env.DX_DEPLOYMENT_ORB_PROVIDERS),
   attachmentSigning: (() => {
     const value = process.env.DX_DEPLOYMENT_ATTACHMENT_SIGNING ?? "token";
-    if (value === "token" || (value === "core" && target === "selfhost"))
+    if (value === "token" || (value === "operator" && target === "selfhost"))
       return value;
     throw new Error(
-      "DX_DEPLOYMENT_ATTACHMENT_SIGNING must be token, or core for self-host.",
+      "DX_DEPLOYMENT_ATTACHMENT_SIGNING must be token, or operator for self-host.",
     );
   })(),
   turnstileTestKeys: (() => {

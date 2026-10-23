@@ -157,7 +157,11 @@ describe("exportable self-host configuration", () => {
       validateSelfhostConfig({ ...base, orbProviders: ["cloudflare"] })
         .orbProviders,
     ).toEqual(["cloudflare"]);
-    for (const orbProviders of [[], ["other"], ["e2b", "e2b"], "e2b"])
+    // None: people and workspaces connect their own accounts.
+    expect(
+      validateSelfhostConfig({ ...base, orbProviders: [] }).orbProviders,
+    ).toEqual([]);
+    for (const orbProviders of [["other"], ["e2b", "e2b"], "e2b"])
       expect(() => validateSelfhostConfig({ ...base, orbProviders })).toThrow(
         "orbProviders",
       );

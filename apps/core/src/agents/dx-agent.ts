@@ -254,6 +254,7 @@ export function DxAgent(props: AgentProps) {
         initialData?.personalInstructions ?? "",
         skills,
         threadPortalPrompt(props.id),
+        initialData?.startedByThreadId,
       );
     }
     for (const tool of dxTools(props.id, initialData, promptData))
@@ -271,6 +272,7 @@ export function DxAgent(props: AgentProps) {
     agentRuntimeComposition.capabilities === "workspace"
       ? threadPortalPrompt(props.id)
       : "",
+    initialData?.startedByThreadId,
   );
 }
 

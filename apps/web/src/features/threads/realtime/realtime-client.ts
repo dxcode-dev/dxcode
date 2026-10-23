@@ -47,6 +47,9 @@ const invalidateAllRealtimeState = (
   void invalidateSidebarLayout(queryClient, userId);
 };
 
+const visible = () =>
+  typeof document === "undefined" || document.visibilityState !== "hidden";
+
 export class RealtimeClient {
   readonly #clientId = crypto.randomUUID();
   readonly #queryClient: QueryClient;
@@ -81,11 +84,35 @@ export class RealtimeClient {
   start() {
     if (!this.#stopped) return;
     this.#stopped = false;
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", this.#onVisibility);
+      window.addEventListener("pagehide", this.#onPageHide);
+      window.addEventListener("pageshow", this.#onVisibility);
+    }
     this.#connect();
   }
 
+  /**
+   * Presence means the Thread is in front of someone: notifications hold back
+   * for them. A hidden tab or a page being left is not watching, so it leaves
+   * at once instead of lingering until its heartbeat times out.
+   */
+  readonly #onVisibility = () => {
+    if (this.#topic === undefined || this.#topic === this.#deniedTopic) return;
+    this.#send(visible() ? "presence.join" : "presence.leave", this.#topic);
+  };
+
+  readonly #onPageHide = () => {
+    if (this.#topic !== undefined) this.#send("presence.leave", this.#topic);
+  };
+
   stop() {
     this.#stopped = true;
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", this.#onVisibility);
+      window.removeEventListener("pagehide", this.#onPageHide);
+      window.removeEventListener("pageshow", this.#onVisibility);
+    }
     if (this.#reconnect !== undefined) clearTimeout(this.#reconnect);
     if (this.#heartbeat !== undefined) clearInterval(this.#heartbeat);
     this.#reconnect = undefined;
@@ -102,7 +129,7 @@ export class RealtimeClient {
     if (this.#topic !== undefined) this.#send("presence.leave", this.#topic);
     this.#topic = next;
     this.#deniedTopic = undefined;
-    this.#send("presence.join", next);
+    if (visible()) this.#send("presence.join", next);
     return () => {
       if (this.#topic !== next) return;
       this.#send("presence.leave", next);
@@ -192,9 +219,14 @@ export class RealtimeClient {
     if (event.type === "ready") {
       this.#cursor = event.revision;
       this.#deniedTopic = undefined;
-      if (this.#topic !== undefined) this.#send("presence.join", this.#topic);
+      if (this.#topic !== undefined && visible())
+        this.#send("presence.join", this.#topic);
       this.#heartbeat = setInterval(() => {
-        if (this.#topic !== undefined && this.#topic !== this.#deniedTopic)
+        if (
+          this.#topic !== undefined &&
+          this.#topic !== this.#deniedTopic &&
+          visible()
+        )
           this.#send("presence.heartbeat", this.#topic);
       }, 10_000);
       return;

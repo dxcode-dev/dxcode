@@ -1,5 +1,10 @@
 import { Buffer } from "node:buffer";
-import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
+import {
+  createECDH,
+  createHash,
+  generateKeyPairSync,
+  randomBytes,
+} from "node:crypto";
 import { readFileSync } from "node:fs";
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
@@ -14,6 +19,7 @@ import migrationManifest from "./apps/core/migration-manifest.json" with {
 import productionBindingContract from "./apps/core/production-bindings.json" with {
   type: "json",
 };
+import { SNOOZE_SWEEP_CRON } from "./apps/core/src/notifications/snooze-cron.ts";
 import { portalDomainSharesSite } from "./apps/core/src/portals/portal-site.ts";
 import {
   E2BProfiles,
@@ -301,15 +307,19 @@ export default Alchemy.Stack(
       e2bApiKey: Config.option(Config.Redacted("E2B_API_KEY")),
       githubApp: Config.option(Config.Redacted("DX_INTEGRATION_GITHUB_APP")),
       sarvamApiKey: Config.option(Config.Redacted("SARVAM_API_KEY")),
-      // How attachment bytes move: "token" deployments mint a bucket-scoped
-      // R2 token Core signs direct URLs with; "core" deployments (Alchemy
-      // OAuth, which cannot create tokens) carry the bytes through Core.
+      // Where the R2 S3 credentials Core signs attachment URLs with come
+      // from: "token" deployments mint a bucket-scoped token; "operator"
+      // self-hosts (Alchemy OAuth, which cannot create tokens) hold the R2
+      // API token the operator created. Attachments move the same way.
       attachmentSigning: Config.withDefault(
         Config.Literals(
-          ["token", "core"] as const,
+          ["token", "operator"] as const,
           "DX_DEPLOYMENT_ATTACHMENT_SIGNING",
         ),
         "token",
+      ),
+      attachmentR2Credentials: Config.option(
+        Config.Redacted("DX_ATTACHMENT_R2_CREDENTIALS"),
       ),
       cloudflareAccountId: Config.option(
         Config.NonEmptyString("CLOUDFLARE_ACCOUNT_ID"),
@@ -321,7 +331,8 @@ export default Alchemy.Stack(
         Config.Redacted("DX_GOOGLE_CLIENT_SECRET"),
       ),
       plugins: Config.withDefault(Config.String("DX_DEPLOYMENT_PLUGINS"), ""),
-      // Orb providers the deployment installs: e2b, cloudflare, or both.
+      // Orb providers the deployment offers on its own account: e2b,
+      // cloudflare, both, or none (people and workspaces connect their own).
       orbProviders: Config.withDefault(
         Config.String("DX_DEPLOYMENT_ORB_PROVIDERS"),
         "e2b",
@@ -416,16 +427,19 @@ export default Alchemy.Stack(
       configuration.integrations.split(",").filter(Boolean),
     );
     const orbProviders = new Set(
-      configuration.orbProviders.split(",").filter(Boolean),
+      configuration.orbProviders.trim() === "none"
+        ? []
+        : configuration.orbProviders.split(",").filter(Boolean),
     );
     if (
-      orbProviders.size === 0 ||
+      (orbProviders.size === 0 &&
+        configuration.orbProviders.trim() !== "none") ||
       [...orbProviders].some(
         (provider) => provider !== "e2b" && provider !== "cloudflare",
       )
     )
       return yield* Effect.die(
-        "DX_DEPLOYMENT_ORB_PROVIDERS must name e2b, cloudflare, or both.",
+        "DX_DEPLOYMENT_ORB_PROVIDERS must name e2b, cloudflare, both, or none.",
       );
     const e2bInstalled = orbProviders.has("e2b");
     const cloudflareInstalled = orbProviders.has("cloudflare");
@@ -510,11 +524,13 @@ export default Alchemy.Stack(
             "DX_DEPLOYMENT_ORB_WORKER_NAME is required for Cloudflare Containers.",
           );
     // Hosted stages run on Containers whenever they install it; a self-host
-    // keeps E2B first (scripts/alchemy-deployment.mjs checks the same rule).
+    // keeps E2B first, and a deployment with no provider defaults to an E2B
+    // size people connect (scripts/alchemy-deployment.mjs checks the same
+    // rule).
     const defaultOrbProfileId =
-      e2bInstalled && (selfhost || !cloudflareInstalled)
-        ? defaultE2BOrbProfile.id
-        : defaultCloudflareOrbProfile.id;
+      cloudflareInstalled && !(e2bInstalled && selfhost)
+        ? defaultCloudflareOrbProfile.id
+        : defaultE2BOrbProfile.id;
     const runnerProfileCatalog = (e2bProfiles: ReadonlyArray<unknown>) =>
       JSON.stringify({
         version: 1,
@@ -615,38 +631,46 @@ export default Alchemy.Stack(
       forceDestroy: false,
       cors: [attachmentBucketCors(configuration.origin)],
     });
-    // A token that can only read and write this stage's bucket. R2's S3
-    // credentials derive from it: the token id is the access key id and the
-    // SHA-256 of its value is the secret. Destroying the stage deletes it.
-    const attachmentSigning =
-      configuration.attachmentSigning === "token"
-        ? yield* Effect.gen(function* () {
-            const accountId = Option.isSome(configuration.cloudflareAccountId)
-              ? configuration.cloudflareAccountId.value
-              : yield* Effect.die(
-                  "CLOUDFLARE_ACCOUNT_ID is required to sign attachment URLs.",
-                );
-            const token = yield* Cloudflare.ApiToken.AccountApiToken(
-              "AttachmentSigningToken",
-              attachmentSigningTokenProps(accountId, configuration.bucketName),
-            );
-            return {
-              endpoint: `https://${accountId}.r2.cloudflarestorage.com/${configuration.bucketName}`,
-              credentials: Output.map(
-                Output.all(token.tokenId, token.value),
-                ([tokenId, value]) =>
-                  Redacted.make(
-                    JSON.stringify({
-                      accessKeyId: tokenId,
-                      secretAccessKey: createHash("sha256")
-                        .update(Redacted.value(value))
-                        .digest("hex"),
-                    }),
-                  ),
-              ),
-            };
-          })
-        : undefined;
+    // The R2 S3 credentials Core signs attachment URLs with. A deployment
+    // that can create tokens mints one that can only read and write this
+    // stage's bucket: the token id is the access key id and the SHA-256 of
+    // its value is the secret, and destroying the stage deletes it. Alchemy
+    // OAuth cannot create tokens, so those self-hosts hold the R2 API token
+    // the operator created instead. Either way attachments move directly.
+    const attachmentSigning = yield* Effect.gen(function* () {
+      const accountId = Option.isSome(configuration.cloudflareAccountId)
+        ? configuration.cloudflareAccountId.value
+        : yield* Effect.die(
+            "CLOUDFLARE_ACCOUNT_ID is required to sign attachment URLs.",
+          );
+      const endpoint = `https://${accountId}.r2.cloudflarestorage.com/${configuration.bucketName}`;
+      if (configuration.attachmentSigning === "operator")
+        return {
+          endpoint,
+          credentials: (yield* HeldSecret("AttachmentR2Credentials", {
+            value: Option.getOrUndefined(configuration.attachmentR2Credentials),
+          })).value,
+        };
+      const token = yield* Cloudflare.ApiToken.AccountApiToken(
+        "AttachmentSigningToken",
+        attachmentSigningTokenProps(accountId, configuration.bucketName),
+      );
+      return {
+        endpoint,
+        credentials: Output.map(
+          Output.all(token.tokenId, token.value),
+          ([tokenId, value]) =>
+            Redacted.make(
+              JSON.stringify({
+                accessKeyId: tokenId,
+                secretAccessKey: createHash("sha256")
+                  .update(Redacted.value(value))
+                  .digest("hex"),
+              }),
+            ),
+        ),
+      };
+    });
     // Turnstile protects magic-link requests. A self-host sender may serve
     // notification email alone, which needs no widget; hosted targets always
     // offer magic link with their sender.
@@ -688,6 +712,20 @@ export default Alchemy.Stack(
           )
         : (yield* WorkloadIdentitySigningKey("WorkloadIdentitySigningKey", {}))
             .keyring;
+    // Web Push needs one stable P-256 key pair per deployment: browsers
+    // subscribe with its public key, so rotating it silently orphans every
+    // device. The random seed is the private scalar; the public point is
+    // derived from it, exactly as a push key generator would.
+    const pushVapidSeed = yield* Alchemy.Random("PushVapidKey", {});
+    const pushVapidKeys = Output.map(pushVapidSeed.text, (secret) => {
+      const scalar = Buffer.from(Redacted.value(secret), "hex");
+      const curve = createECDH("prime256v1");
+      curve.setPrivateKey(scalar);
+      return {
+        publicKey: Redacted.make(curve.getPublicKey().toString("base64url")),
+        privateKey: Redacted.make(scalar.toString("base64url")),
+      };
+    });
     const encryptionKeyring = Output.map(encryptionSecret.text, (secret) =>
       Redacted.make(
         JSON.stringify({
@@ -725,9 +763,7 @@ export default Alchemy.Stack(
         DX_AUTH_URL: configuration.origin,
         DX_AUTH_TRUSTED_ORIGINS: configuration.origin,
         ...(portals === undefined ? {} : { DX_PORTAL_DOMAIN: portals.domain }),
-        ...(attachmentSigning === undefined
-          ? { DX_ATTACHMENT_TRANSFER: "core" }
-          : { DX_ATTACHMENT_R2_ENDPOINT: attachmentSigning.endpoint }),
+        DX_ATTACHMENT_R2_ENDPOINT: attachmentSigning.endpoint,
         ...(e2bInstalled
           ? {
               DX_E2B_TEMPLATE:
@@ -766,7 +802,17 @@ export default Alchemy.Stack(
                       availability: "available",
                       capabilities: deployedOrbCapabilities,
                     }))
-                  : [],
+                  : cloudflareInstalled
+                    ? []
+                    : // No provider: the sizes people's own E2B teams run.
+                      E2B_ORB_PROFILES.map((profile) => ({
+                        ...profile,
+                        adapter: "e2b",
+                        template: `dx-orb-${profile.templateSuffix}`,
+                        isolation: "sandbox",
+                        availability: "available",
+                        capabilities: deployedOrbCapabilities,
+                      })),
               )
             : Output.map(selfhostProfiles.profilesJson, (profilesJson) =>
                 runnerProfileCatalog(
@@ -842,13 +888,19 @@ export default Alchemy.Stack(
       },
       secret: {
         BETTER_AUTH_SECRET: authSecret.text,
+        DX_PUSH_VAPID_PUBLIC_KEY: Output.map(
+          pushVapidKeys,
+          ({ publicKey }) => publicKey,
+        ),
+        DX_PUSH_VAPID_PRIVATE_KEY: Output.map(
+          pushVapidKeys,
+          ({ privateKey }) => privateKey,
+        ),
         ...(turnstile === undefined
           ? {}
           : { DX_TURNSTILE_SECRET_KEY: turnstile.secret }),
         DX_CONFIG_ENCRYPTION_KEYS: encryptionKeyring,
-        ...(attachmentSigning === undefined
-          ? {}
-          : { DX_ATTACHMENT_R2_CREDENTIALS: attachmentSigning.credentials }),
+        DX_ATTACHMENT_R2_CREDENTIALS: attachmentSigning.credentials,
         DX_INTEGRATION_GITHUB_APP: githubApp,
         DX_WORKLOAD_IDENTITY_SIGNING_KEYS: workloadIdentitySigningKeys,
         ...(e2bApiKey === undefined ? {} : { E2B_API_KEY: e2bApiKey }),
@@ -958,7 +1010,12 @@ export default Alchemy.Stack(
           persist: true,
         },
       },
-      crons: configuration.environment === "staging" ? ["17 3 * * *"] : [],
+      // Every stage sweeps snoozed Threads, which is how their owners hear
+      // about a wake; only staging also runs the daily retention pass.
+      crons:
+        configuration.environment === "staging"
+          ? ["17 3 * * *", SNOOZE_SWEEP_CRON]
+          : [SNOOZE_SWEEP_CRON],
       workersDev: !Option.isSome(configuration.deploymentZone),
       ...(Option.isSome(configuration.deploymentZone)
         ? {

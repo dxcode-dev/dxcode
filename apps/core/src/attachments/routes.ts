@@ -1,7 +1,6 @@
 import {
   type AttachmentData,
   type AttachmentError,
-  type AttachmentPartResponse,
   CompleteAttachmentRequestSchema,
   CreateAttachmentRequestSchema,
   type CreateAttachmentResponse,
@@ -28,7 +27,6 @@ import {
   purgeUnsentAttachments,
   readAttachmentHead,
   resolveAttachmentType,
-  serveAttachment,
 } from "./store.js";
 import { attachmentTransfer, bareEtag } from "./transfer.js";
 
@@ -171,36 +169,6 @@ export const attachmentRoutes = new Hono<AppEnv>()
       );
     }),
   )
-  .put(
-    "/:id/parts/:partNumber",
-    handle("part", async (context) => {
-      // Deployed stages upload parts straight to R2.
-      if (attachmentContext(context).transfer.kind !== "core")
-        return notFound(context);
-      const row = await ownUpload(context, context.req.param("id"));
-      if (row === undefined) return notFound(context);
-      const partNumber = Number(context.req.param("partNumber"));
-      const expected = Number.isInteger(partNumber)
-        ? attachmentPartLength(row.size, partNumber)
-        : undefined;
-      if (expected === undefined)
-        return error(context, "The part number is invalid.", 400);
-      const bytes = await context.req.arrayBuffer();
-      if (bytes.byteLength !== expected)
-        return error(context, "The part has the wrong size.", 400);
-      const { bucket } = attachmentBindings(context.env);
-      const part = await bucket
-        .resumeMultipartUpload(row.object_key, row.upload_id as string)
-        .uploadPart(partNumber, bytes);
-      context.header("Cache-Control", "no-store");
-      // The same contract as R2: the part is named by its ETag header.
-      context.header("ETag", `"${part.etag}"`);
-      return context.json<AttachmentPartResponse>({
-        partNumber: part.partNumber,
-        etag: part.etag,
-      });
-    }),
-  )
   .post(
     "/:id/complete",
     handle("complete", async (context) => {
@@ -285,7 +253,7 @@ export const attachmentRoutes = new Hono<AppEnv>()
     handle("read", async (context) => {
       const id = context.req.param("id");
       if (!isAttachmentId(id)) return notFound(context);
-      const { db, bucket, transfer } = attachmentContext(context);
+      const { db, transfer } = attachmentContext(context);
       const row = await findAttachment(db, id);
       if (
         row === null ||
@@ -293,8 +261,6 @@ export const attachmentRoutes = new Hono<AppEnv>()
       )
         return notFound(context);
       const download = context.req.query("download") === "1";
-      if (transfer.kind === "core")
-        return serveAttachment(bucket, row, context.req.raw, { download });
       // The bytes come straight from R2; Core only authorizes and signs.
       const location = await transfer.readUrl(
         row.object_key,

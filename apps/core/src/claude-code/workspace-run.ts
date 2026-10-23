@@ -1,6 +1,7 @@
 import type { Sandbox } from "@flue/runtime";
 import { BUILT_IN_SKILL_NAMES } from "../agents/built-in-skill-names.js";
 import { encodeBase64 } from "../encoding/base64.js";
+import { environmentSecretsOf } from "../settings/environment-variables/sandbox.js";
 import { CLAUDE_CODE_MCP_SERVER } from "./mcp-server.js";
 import { CHUNK_END_LINE, ClaudeCodeStream } from "./stream.js";
 
@@ -70,10 +71,13 @@ export const CLAUDE_CODE_DISALLOWED_TOOLS = [
 /**
  * Command-line settings outrank a repository's `.claude` settings, whose
  * `env` could otherwise send the plan token to another endpoint, through an
- * intercepting proxy, or to another provider.
+ * intercepting proxy, or to another provider, or run the turn on a token of
+ * its own. The plan token is read from descriptor 3 (see the runner).
  */
 const CLI_SETTINGS = JSON.stringify({
   env: {
+    CLAUDE_CODE_OAUTH_TOKEN: "",
+    CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3",
     ANTHROPIC_BASE_URL: "https://api.anthropic.com",
     ANTHROPIC_API_KEY: "",
     ANTHROPIC_AUTH_TOKEN: "",
@@ -109,6 +113,13 @@ const CLI_ENVIRONMENT = {
   MCP_TOOL_TIMEOUT: String(31 * 60_000),
   MCP_TIMEOUT: "30000",
 };
+
+/**
+ * The oldest Claude Code dx runs: the first release that accepts every flag
+ * dx passes (`--effort` arrived in 2.1.38). It also reads the plan token from
+ * a descriptor, which Claude Code has done since 1.0.109.
+ */
+const CLAUDE_CODE_MIN_VERSION = "2.1.38";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
@@ -219,7 +230,16 @@ const launchScript = (
   ]
     .map(quote)
     .join(" ");
-  return `set -eu
+  return `# The plan token arrives in this command's environment, which every process
+# of the workspace user can read through /proc while the process lives, and
+# which children inherit. It moves into a pipe on descriptor 3 and this
+# script restarts without it; the CLI alone reads the pipe, once.
+if [ -n "\${CLAUDE_CODE_OAUTH_TOKEN-}" ]; then
+  exec 3< <(printf '%s\\n' "$CLAUDE_CODE_OAUTH_TOKEN")
+  unset CLAUDE_CODE_OAUTH_TOKEN
+  exec bash -c "$BASH_EXECUTION_STRING"
+fi
+set -eu
 D=${quote(dir)}
 S=${quote(STATE_ROOT)}
 mkdir -p "$D"
@@ -254,12 +274,26 @@ done
 ls -1t "$S/runs" 2>/dev/null | tail -n +${KEPT_RUNS + 1} | while read -r n; do
   [ -f "$S/runs/$n/exit" ] && rm -rf "$S/runs/$n"
 done
+# A workspace image or a repository's setup can carry an older Claude Code;
+# one older than ${CLAUDE_CODE_MIN_VERSION} is replaced as a missing one is installed.
+version() { "$1" --version 2>/dev/null < /dev/null 3<&- | sed -n '1s/^\\([0-9][0-9.]*\\).*/\\1/p'; }
+current() {
+  v="$(version "$1")"
+  [ -n "$v" ] && [ "$(printf '%s\\n%s\\n' ${CLAUDE_CODE_MIN_VERSION} "$v" | sort -V | head -n 1)" = ${CLAUDE_CODE_MIN_VERSION} ]
+}
 CLAUDE="$(command -v claude || true)"
 if [ -z "$CLAUDE" ] && [ -x "$HOME/.local/bin/claude" ]; then CLAUDE="$HOME/.local/bin/claude"; fi
+OUTDATED=""
+if [ -n "$CLAUDE" ] && ! current "$CLAUDE"; then
+  OUTDATED="$(version "$CLAUDE")"
+  OUTDATED="Claude Code \${OUTDATED:-of an unknown version} is older than ${CLAUDE_CODE_MIN_VERSION}, the oldest dx can run, and could not be updated. Run \\\`claude update\\\` in the workspace's terminal, then retry."
+  CLAUDE=""
+  if current "$HOME/.local/bin/claude"; then CLAUDE="$HOME/.local/bin/claude"; fi
+fi
 if [ -z "$CLAUDE" ]; then
   CLAUDE="$HOME/.local/bin/claude"
-  if ! (set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash) > "$D/install.log" 2>&1 || [ ! -x "$CLAUDE" ]; then
-    { echo "Claude Code could not be installed."; tail -n 20 "$D/install.log"; } | tee "$D/stderr.log" >&2
+  if ! (set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash) > "$D/install.log" 2>&1 3<&- || ! current "$CLAUDE"; then
+    { echo "\${OUTDATED:-Claude Code could not be installed.}"; tail -n 20 "$D/install.log"; } | tee "$D/stderr.log" >&2
     exit 3
   fi
 fi
@@ -310,7 +344,8 @@ set -o pipefail
 D="$(cd "$(dirname "$0")" && pwd)"
 CLAUDE="$1"
 shift
-( while :; do date +%s > "$D/alive.tmp" && mv "$D/alive.tmp" "$D/alive"; sleep 5; done ) &
+# Descriptor 3 holds the plan token for the CLI; nothing else keeps it.
+( while :; do date +%s > "$D/alive.tmp" && mv "$D/alive.tmp" "$D/alive"; sleep 5; done ) 3<&- &
 HEARTBEAT=$!
 trap 'kill "$HEARTBEAT" 2>/dev/null' EXIT
 GUEST=/home/user
@@ -343,7 +378,7 @@ fi
 if [ "$SEEN" != "$D" ]; then
   PROMPT="$SEEN/prompt.txt"
   run() {
-    unshare --user --map-root-user --mount bash -c '
+    CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3 unshare --user --map-root-user --mount bash -c '
       bin="$HOME/.local/state/dx-claude-code/bin" &&
         mkdir -p "$bin" &&
         { [ -f "$bin/claude" ] || : > "$bin/claude"; } &&
@@ -355,7 +390,7 @@ if [ "$SEEN" != "$D" ]; then
     ' "$(readlink -f "$CLAUDE")" "$@" --append-system-prompt-file "$PROMPT"
   }
 else
-  run() { "$CLAUDE" "$@" --append-system-prompt-file "$D/prompt.txt"; }
+  run() { CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3 "$CLAUDE" "$@" --append-system-prompt-file "$D/prompt.txt"; }
 fi
 # mawk, the sandbox image's awk, reads a pipe in large blocks unless
 # interactive; Claude's output would then arrive only when the run exits.
@@ -366,7 +401,7 @@ case "$(awk -W version 2>&1)" in *mawk*) AWK=(awk -W interactive) ;; esac
 run "$@" "\${MCP[@]}" < "$D/input.jsonl" 2> "$D/stderr.log" |
   "\${AWK[@]}" -v dir="$D" -v end='${CHUNK_END_LINE}' 'BEGIN { n = 0; size = 0; f = sprintf("%s/c%06d", dir, n) }
     { print > f; fflush(f); size += length($0) + 1
-      if (size >= ${CHUNK_BYTES}) { print end > f; close(f); n++; size = 0; f = sprintf("%s/c%06d", dir, n) } }'
+      if (size >= ${CHUNK_BYTES}) { print end > f; close(f); n++; size = 0; f = sprintf("%s/c%06d", dir, n) } }' 3<&-
 echo $? > "$D/exit.tmp"
 mv "$D/exit.tmp" "$D/exit"
 `;
@@ -499,6 +534,7 @@ export class ClaudeCodeRun {
     for (;;) {
       const bytes = await this.#read(`${this.dir}/${chunkName(this.#chunk)}`);
       if (bytes === undefined) break;
+      this.stream.secrets = await environmentSecretsOf(this.sandbox);
       // Reads are redacted: a secret becomes one byte, so positions are
       // counted in lines, which redaction never adds or removes.
       const lines = new TextDecoder().decode(bytes).split("\n");

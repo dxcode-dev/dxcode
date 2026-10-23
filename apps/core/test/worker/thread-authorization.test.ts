@@ -1,3 +1,4 @@
+import { env } from "cloudflare:test";
 import {
   Principal,
   ProjectRepository,
@@ -6,7 +7,6 @@ import {
 } from "@dx/domain";
 import { Effect, Schema } from "effect";
 import { Hono } from "hono";
-import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { authorizeThread } from "../../src/auth/authorize-thread.js";
 import { requestId } from "../../src/http/request-id.js";

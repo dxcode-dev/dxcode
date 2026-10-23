@@ -1,32 +1,32 @@
 import { describe, expect, it } from "vitest";
+import { makeE2BConnector } from "../../execution/e2b/connector.js";
+import type { OrbConnection } from "./connections-d1.js";
 import {
-  type OrbKeyConfiguration,
   type OrbProviderSetInput,
   orbProviderSet,
-  orbTemplateStatus,
   personalOrbKeysAllowed,
 } from "./orb-providers.js";
+import { connectionStatus } from "./preparation.js";
 
 const recipe = "0123456789abcdef";
 const configuredAt = "2026-10-04T00:00:00.000Z";
 
 const key = (
-  scope: OrbKeyConfiguration["scope"],
+  scope: OrbConnection["scope"],
   targetId: string,
-  state: "building" | "ready" | "failed" = "ready",
+  status: OrbConnection["status"] = "ready",
   account = `${scope}-team`,
-): OrbKeyConfiguration => ({
+): OrbConnection => ({
   scope,
   targetId,
   providerId: "e2b",
   configuredAt,
-  template: {
-    configuredAt,
-    recipe,
-    account,
-    state,
+  recipe,
+  account,
+  status,
+  state: {
     builds:
-      state === "ready"
+      status === "ready"
         ? [
             {
               profileId: null,
@@ -44,10 +44,12 @@ const key = (
             },
           ]
         : [],
-    error: state === "failed" ? "E2B could not build it." : null,
-    revision: 0,
-    updatedAt: configuredAt,
   },
+  progress: null,
+  error: status === "failed" ? "E2B could not build it." : null,
+  served: null,
+  revision: 0,
+  updatedAt: configuredAt,
 });
 
 const input = (
@@ -69,7 +71,8 @@ const input = (
   projectWorkspaceId: null,
   policy: null,
   localRuntime: false,
-  recipe,
+  connectors: { e2b: makeE2BConnector() },
+  recipes: new Map([["e2b", recipe]]),
   ...overrides,
 });
 
@@ -104,7 +107,7 @@ describe("Orb provider set", () => {
         status: "ready",
       },
     ]);
-    expect(set[0]?.templates?.get("a1.medium")).toBe(
+    expect(set[0]?.targets?.get("a1.medium")).toBe(
       `dx-orb-${recipe}-a1-medium`,
     );
     expect(set[0]?.account).toBe("personal-team");
@@ -165,23 +168,20 @@ describe("Orb provider set", () => {
   it("does not fall back to the deployment while a key's template is not ready", () => {
     expect(
       summary(
-        orbProviderSet(input({ personal: [key("personal", "u", "building")] })),
+        orbProviderSet(
+          input({ personal: [key("personal", "u", "preparing")] }),
+        ),
       )[0],
-    ).toMatchObject({ scope: "personal", status: "building" });
+    ).toMatchObject({ scope: "personal", status: "preparing" });
     expect(
       summary(
         orbProviderSet(input({ personal: [key("personal", "u", "failed")] })),
       )[0],
     ).toMatchObject({ scope: "personal", status: "failed" });
-    // A template from another recipe or an earlier key must be rebuilt.
-    const stale = key("personal", "u");
-    expect(orbTemplateStatus(stale, "fedcba9876543210")).toBe("building");
-    expect(
-      orbTemplateStatus(
-        { ...stale, configuredAt: "2026-10-05T00:00:00.000Z" },
-        recipe,
-      ),
-    ).toBe("building");
+    // A connection prepared for another recipe must be prepared again.
+    expect(connectionStatus(key("personal", "u"), "fedcba9876543210")).toBe(
+      "preparing",
+    );
   });
 
   it("leaves out a provider without sizes in the catalog", () => {

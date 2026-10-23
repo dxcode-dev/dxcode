@@ -8,14 +8,23 @@ import type { Bindings } from "./http/types.js";
 import { settingsPersistenceLogger } from "./logging.js";
 import { installContentFreeFlueTracing } from "./observability/flue-tracing.js";
 import { createDxCloudflareModelProvider } from "./runtime/cloudflare-model-provider.js";
+import { scheduled } from "./scheduled.js";
 import { createDxModelRoutingProvider } from "./settings/model-byok/flue-provider.js";
 
+export { OrbProviderPreparationObject } from "./plugins/execution/preparation-object.js";
 export { RealtimeHub } from "./realtime/realtime-hub.js";
 export { ByokCredentialCoordinatorObject } from "./settings/model-byok/invocation.js";
 export { SubscriptionCredentialCoordinatorObject } from "./settings/model-subscriptions/invocation.js";
 export { PluginTriggerDeliveryObject } from "./settings/triggers/durable-object.js";
 export { ThreadSearchIndexObject } from "./thread-search/index-object.js";
 export { ThreadExecutionObject } from "./threads/terminal-object.js";
+
+/**
+ * The Worker's non-HTTP handlers. Flue's generated entry serves `fetch` from
+ * app.ts and spreads this default export beside it; a handler attached
+ * anywhere else never runs.
+ */
+export default { scheduled } satisfies ExportedHandler<Bindings>;
 
 declare const __DX_CORE_DEV_FIXTURES__: boolean;
 

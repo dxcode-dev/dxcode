@@ -41,6 +41,29 @@ const isAllowedLocalAuthEmail = (value) => {
   );
 };
 
+/**
+ * A Web Push (VAPID) key pair, base64url, in the shape every push library
+ * and browser expects: the uncompressed P-256 public key a browser
+ * subscribes with, and its private scalar.
+ */
+const generatedVapidKeys = () => {
+  const { privateKey } = generateKeyPairSync("ec", {
+    namedCurve: "prime256v1",
+  });
+  const jwk = privateKey.export({ format: "jwk" });
+  const point = Buffer.concat([
+    Buffer.of(4),
+    Buffer.from(jwk.x, "base64url"),
+    Buffer.from(jwk.y, "base64url"),
+  ]);
+  return {
+    DX_PUSH_VAPID_PUBLIC_KEY: point.toString("base64url"),
+    DX_PUSH_VAPID_PRIVATE_KEY: Buffer.from(jwk.d, "base64url").toString(
+      "base64url",
+    ),
+  };
+};
+
 const generatedDefaults = () => {
   const { privateKey: githubPrivateKey } = generateKeyPairSync("rsa", {
     modulusLength: 2048,
@@ -101,6 +124,7 @@ const generatedDefaults = () => {
         },
       ],
     }),
+    ...generatedVapidKeys(),
     DX_LOCAL_AUTH_NAME: "Codex Developer",
     DX_LOCAL_AUTH_EMAIL: "codex-local@dx.local",
     DX_LOCAL_AUTH_PASSWORD: randomBytes(24).toString("base64url"),
@@ -172,6 +196,18 @@ const prepareFile = (
       defaults.DX_INTEGRATION_GITHUB_APP,
       true,
     );
+  }
+
+  // Local push keys: generated once, then kept, so a browser that already
+  // subscribed keeps receiving across restarts.
+  for (const name of [
+    "DX_PUSH_VAPID_PUBLIC_KEY",
+    "DX_PUSH_VAPID_PRIVATE_KEY",
+  ]) {
+    const value = readValue(contents, name);
+    if (value === undefined || value === "" || value.startsWith("replace-")) {
+      contents = setValue(contents, name, defaults[name]);
+    }
   }
 
   if (!isAllowedLocalAuthEmail(readValue(contents, "DX_LOCAL_AUTH_EMAIL"))) {

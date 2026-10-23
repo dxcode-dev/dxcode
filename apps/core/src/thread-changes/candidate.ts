@@ -72,3 +72,43 @@ export const ThreadChangesCandidateContentSchema = Schema.Struct({
 });
 export type ThreadChangesCandidateContent =
   typeof ThreadChangesCandidateContentSchema.Type;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * A daemon's candidate with every file whose patch Changes cannot show
+ * (NUL bytes: git diffs a Git bundle as text, because it opens with a text
+ * header) turned into a binary file without a patch, as git reports it once
+ * the file is marked binary. Applied to the raw message before decoding, so
+ * one such file never makes the whole candidate, or the daemon's
+ * connection, invalid. Anything else passes through unchanged.
+ */
+export const repairCandidatePatches = (message: unknown): unknown => {
+  if (!isRecord(message) || !isRecord(message.outcome)) return message;
+  const capture = message.outcome.capture;
+  if (!isRecord(capture) || !Array.isArray(capture.ranges)) return message;
+  let repaired = false;
+  const ranges = capture.ranges.map((range: unknown) => {
+    if (!isRecord(range) || !Array.isArray(range.files)) return range;
+    return {
+      ...range,
+      files: range.files.map((file: unknown) => {
+        if (
+          !isRecord(file) ||
+          typeof file.patch !== "string" ||
+          !file.patch.includes("\0")
+        )
+          return file;
+        repaired = true;
+        return { ...file, binary: true, truncated: false, patch: "" };
+      }),
+    };
+  });
+  return repaired
+    ? {
+        ...message,
+        outcome: { ...message.outcome, capture: { ...capture, ranges } },
+      }
+    : message;
+};

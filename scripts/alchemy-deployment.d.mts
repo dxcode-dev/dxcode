@@ -57,6 +57,16 @@ export function assertDeploymentCredentials(
   | StagingDeploymentCredentials
   | SharedDeploymentCredentials;
 
+export function deploymentCredentialsFromEnvironment(
+  environment: Readonly<Record<string, string | undefined>>,
+  stage: string,
+  target: "branch" | "staging",
+): SharedDeploymentCredentials;
+
+export function e2bApiKeyFromEnvironment(
+  environment: Readonly<Record<string, string | undefined>>,
+): string;
+
 export function deploymentSelection(input: {
   readonly branch: string;
   readonly stage: string;

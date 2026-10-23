@@ -756,23 +756,23 @@ const runnerProfileGroups = (
     ];
   });
 
-/** A person's or workspace's own key; the deployment's needs no words. */
+/** A person's or workspace's own account; the deployment's needs no words. */
 const orbKeyOwner = (scope: OrbResolvedProvider["scope"]) =>
   scope === "personal"
-    ? "Your key"
+    ? "Your account"
     : scope === "workspace"
-      ? "Workspace key"
+      ? "Workspace account"
       : undefined;
 
 /**
  * The quiet hint after a provider's name: why it cannot start yet, else whose
- * key it runs on. Absent for a ready deployment provider.
+ * account it runs on. Absent for a ready deployment provider.
  */
 const orbProviderHint = (orb: OrbResolvedProvider | undefined) =>
-  orb?.status === "building"
-    ? "Building template…"
+  orb?.status === "preparing"
+    ? "Preparing…"
     : orb?.status === "failed"
-      ? "Template failed"
+      ? "Setup failed"
       : orb === undefined
         ? undefined
         : orbKeyOwner(orb.scope);
@@ -922,6 +922,7 @@ export function NewThreadConfigurationStrip({
   allowedRunnerProfileIds,
   onRunnerProfileChange,
   onRunnerProfileRetry,
+  onConnectOrbProvider,
   onProfileChange,
   onModelChange,
   dictationControls,
@@ -953,6 +954,8 @@ export function NewThreadConfigurationStrip({
   readonly allowedRunnerProfileIds?: ReadonlyArray<RunnerProfileId> | null;
   readonly onRunnerProfileChange?: (runnerProfileId: RunnerProfileId) => void;
   readonly onRunnerProfileRetry?: () => void;
+  /** Opens Orb Providers settings, for a person with no provider. */
+  readonly onConnectOrbProvider?: () => void;
   readonly onProfileChange: (profile: ModeId) => void;
   readonly onModelChange: (model: string | undefined) => void;
   readonly dictationControls?: ReactNode;
@@ -1020,7 +1023,19 @@ export function NewThreadConfigurationStrip({
 
   return (
     <footer className="new-thread-config-strip">
-      {selectedRunnerProfile === undefined ? (
+      {runnerOrbs !== undefined && runnerOrbs.length === 0 ? (
+        // No provider runs this person's Threads yet: connecting one is the
+        // only thing to choose.
+        <button
+          type="button"
+          className="new-thread-config-pill new-thread-orb-size"
+          disabled={locked || onConnectOrbProvider === undefined}
+          onClick={onConnectOrbProvider}
+        >
+          <OrbIcon aria-hidden="true" />
+          <span>Connect an Orb provider</span>
+        </button>
+      ) : selectedRunnerProfile === undefined ? (
         <button
           type="button"
           className="new-thread-config-pill new-thread-orb-size"

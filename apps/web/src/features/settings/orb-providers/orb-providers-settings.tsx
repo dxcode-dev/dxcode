@@ -29,7 +29,7 @@ import {
   type PluginsTarget,
 } from "./orb-providers-queries.js";
 import {
-  orbKeyPlaceholder,
+  orbFieldPlaceholder,
   orbProviderSource,
 } from "./orb-providers-status.js";
 
@@ -42,11 +42,11 @@ type Run = (
 const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : "Request failed.";
 
-/** The row's status: whose account runs the Orbs, and where a key stops. */
+/** The row's status: whose account runs the Orbs, and where it stops. */
 const rowStatus = (data: OrbProviderListData, provider: OrbProviderData) => {
   const source = orbProviderSource(provider, data.scope);
   return data.scope === "personal" &&
-    provider.key !== null &&
+    provider.connection !== null &&
     !data.localRuntime &&
     data.personalKeysOnWorkspaceProjects !== null &&
     !data.personalKeysOnWorkspaceProjects.allowed
@@ -57,11 +57,11 @@ const rowStatus = (data: OrbProviderListData, provider: OrbProviderData) => {
 function OrbProviderRow({
   data,
   provider,
-  onOpenKey,
+  onOpen,
 }: {
   readonly data: OrbProviderListData;
   readonly provider: OrbProviderData;
-  readonly onOpenKey: (trigger: HTMLButtonElement) => void;
+  readonly onOpen: (trigger: HTMLButtonElement) => void;
 }) {
   return (
     <div className="orb-provider-row" data-provider={provider.id}>
@@ -72,39 +72,52 @@ function OrbProviderRow({
         <strong>{provider.displayName}</strong>
         <p>{rowStatus(data, provider)}</p>
       </div>
-      {provider.credentialLabel === null ? null : (
+      {provider.fields.length === 0 ? null : (
         <Button
           size="xs"
           variant="outline"
           disabled={!data.canUpdate}
-          aria-label={`${provider.key === null ? "Add" : "Manage"} ${provider.displayName} key`}
-          onClick={(event) => onOpenKey(event.currentTarget)}
+          aria-label={`${provider.connection === null ? "Connect" : "Manage"} ${provider.displayName}`}
+          onClick={(event) => onOpen(event.currentTarget)}
         >
-          {provider.key === null ? "Add Key" : "Manage Key"}
+          {provider.connection === null ? "Connect" : "Manage"}
         </Button>
       )}
     </div>
   );
 }
 
-/** One sentence, only when the key would not apply where the person expects. */
-const keyNote = (
+/** One sentence, only when the connection needs attention or stops short. */
+const connectionNote = (
   data: OrbProviderListData,
   provider: OrbProviderData,
 ): string | undefined => {
-  if (data.localRuntime) return "The local runtime ignores Orb keys.";
-  if (provider.key?.template?.status === "failed")
-    return `${provider.key.template.error ?? "The template build failed."} Save the key again to retry.`;
+  if (data.localRuntime) return "The local runtime ignores Orb connections.";
+  const connection = provider.connection;
+  const keepsServing = connection?.updating === true;
+  if (connection?.status === "preparing") {
+    const step =
+      connection.progress === null
+        ? "Preparing your account…"
+        : `${connection.progress.step} (${connection.progress.done} of ${connection.progress.total})`;
+    return keepsServing
+      ? `Updating: ${step} New Threads keep using the current version until it is ready.`
+      : step;
+  }
+  if (connection?.status === "failed")
+    return keepsServing
+      ? `The update failed: ${connection.error ?? "unknown error"} New Threads keep using the current version.`
+      : (connection.error ?? "Setting up your account failed.");
   if (
     data.scope === "personal" &&
     data.personalKeysOnWorkspaceProjects !== null &&
     !data.personalKeysOnWorkspaceProjects.allowed
   )
-    return "Your workspace keeps members' own keys off its projects, so this key runs your personal projects only.";
-  return undefined;
+    return "Your workspace keeps members' own accounts off its projects, so this runs your personal projects only.";
+  return connection === null ? provider.description : undefined;
 };
 
-function OrbKeyForm({
+function OrbConnectionForm({
   data,
   provider,
   busy,
@@ -119,16 +132,20 @@ function OrbKeyForm({
   readonly onDirtyChange: (dirty: boolean) => void;
   readonly onDone: () => void;
 }) {
-  const [credential, setCredential] = React.useState("");
-  // A rejected key is the likely failure here; say so beside the field.
+  const [values, setValues] = React.useState<Record<string, string>>({});
+  // A rejected credential is the likely failure here; say so beside it.
   const [failure, setFailure] = React.useState<string>();
   const disabled = !data.canUpdate || busy;
-  const label = provider.credentialLabel ?? "API key";
-  const fieldId = React.useId();
-  const note = keyNote(data, provider);
-  const edit = (value: string) => {
-    setCredential(value);
-    onDirtyChange(value.length > 0);
+  const formId = React.useId();
+  const note = connectionNote(data, provider);
+  const failed = provider.connection?.status === "failed";
+  const complete = provider.fields.every(
+    ({ id }) => (values[id] ?? "").trim().length > 0,
+  );
+  const edit = (id: string, value: string) => {
+    const next = { ...values, [id]: value };
+    setValues(next);
+    onDirtyChange(Object.values(next).some((entry) => entry.length > 0));
   };
   return (
     <form
@@ -137,36 +154,44 @@ function OrbKeyForm({
         event.preventDefault();
         const error = await run(
           {
-            type: "saveKey",
+            type: "connect",
             providerId: provider.id,
-            credential: credential.trim(),
+            credentials: Object.fromEntries(
+              provider.fields.map(({ id }) => [id, (values[id] ?? "").trim()]),
+            ),
           },
-          `${provider.displayName} key saved.`,
+          `${provider.displayName} connected.`,
         );
         setFailure(error);
         if (error === undefined) {
-          edit("");
+          setValues({});
+          onDirtyChange(false);
           onDone();
         }
       }}
     >
-      {note === undefined ? null : <p>{note}</p>}
+      {note === undefined ? null : (
+        <p {...(failed ? { role: "alert" } : {})}>{note}</p>
+      )}
       {failure === undefined ? null : <p role="alert">{failure}</p>}
-      <div className="orb-key-field">
-        <label htmlFor={fieldId}>{label}</label>
-        <Input
-          id={fieldId}
-          type="password"
-          autoComplete="off"
-          spellCheck={false}
-          placeholder={orbKeyPlaceholder(provider)}
-          value={credential}
-          disabled={disabled}
-          onChange={(event) => edit(event.target.value)}
-        />
-      </div>
+      {provider.fields.map((field) => (
+        <div className="orb-key-field" key={field.id}>
+          <label htmlFor={`${formId}-${field.id}`}>{field.label}</label>
+          <Input
+            id={`${formId}-${field.id}`}
+            type={field.secret ? "password" : "text"}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={orbFieldPlaceholder(provider, field)}
+            value={values[field.id] ?? ""}
+            disabled={disabled}
+            onChange={(event) => edit(field.id, event.target.value)}
+          />
+          {field.help === undefined ? null : <small>{field.help}</small>}
+        </div>
+      ))}
       <footer>
-        {provider.key === null ? null : (
+        {provider.connection === null ? null : (
           <Button
             size="xs"
             variant="ghost"
@@ -174,22 +199,36 @@ function OrbKeyForm({
             disabled={disabled}
             onClick={async () => {
               const error = await run(
-                { type: "removeKey", providerId: provider.id },
-                `${provider.displayName} key removed.`,
+                { type: "disconnect", providerId: provider.id },
+                `${provider.displayName} disconnected.`,
               );
               setFailure(error);
               if (error === undefined) onDone();
             }}
           >
-            Remove Key
+            Disconnect
           </Button>
         )}
-        <Button
-          size="xs"
-          type="submit"
-          disabled={disabled || credential.trim().length === 0}
-        >
-          Save
+        {failed ? (
+          <Button
+            size="xs"
+            variant="outline"
+            type="button"
+            disabled={disabled}
+            onClick={async () => {
+              setFailure(
+                await run(
+                  { type: "retry", providerId: provider.id },
+                  `Preparing ${provider.displayName} again.`,
+                ),
+              );
+            }}
+          >
+            Retry
+          </Button>
+        ) : null}
+        <Button size="xs" type="submit" disabled={disabled || !complete}>
+          {provider.connection === null ? "Connect" : "Save"}
         </Button>
       </footer>
     </form>
@@ -233,10 +272,9 @@ export function OrbProvidersSettings({
   const data = resource.data;
   const editingProvider = data?.providers.find(({ id }) => id === editing);
   const policy = data?.personalKeysOnWorkspaceProjects;
-  // Keys and the policy on them matter only where a provider takes a key.
-  const keyed =
-    data?.providers.some(({ credentialLabel }) => credentialLabel !== null) ??
-    false;
+  // The policy on members' own accounts matters only where one can connect.
+  const connectable =
+    data?.providers.some(({ fields }) => fields.length > 0) ?? false;
   return (
     <div className="orb-providers-settings">
       <SettingsHeading
@@ -249,12 +287,8 @@ export function OrbProvidersSettings({
           data === undefined
             ? undefined
             : target.scope === "workspace"
-              ? keyed
-                ? "Orbs run the dx Threads of everyone in this workspace. A workspace key runs them in the workspace's provider account instead of this deployment's."
-                : "Orbs run the dx Threads of everyone in this workspace on the providers this deployment offers."
-              : keyed
-                ? "Orbs run your dx Threads. Your own key runs them in your provider account, ahead of your workspace's key and this deployment's. On workspace projects it applies only when the workspace allows members' own keys."
-                : "Orbs run your dx Threads on the providers this deployment offers."
+              ? "Orbs run the dx Threads of everyone in this workspace. Connect the workspace's own provider accounts to run them there."
+              : "Orbs run your dx Threads. Connect your own provider account to run them there, ahead of your workspace's. On workspace projects it applies only when the workspace allows members' own accounts."
         }
         actions={
           resource.isPending ? null : (
@@ -272,7 +306,7 @@ export function OrbProvidersSettings({
               key={provider.id}
               data={data}
               provider={provider}
-              onOpenKey={(trigger) => {
+              onOpen={(trigger) => {
                 finalFocus.current = trigger;
                 setEditing(provider.id);
               }}
@@ -281,16 +315,16 @@ export function OrbProvidersSettings({
         </SettingsCard>
       )}
       {data === undefined ||
-      !keyed ||
+      !connectable ||
       target.scope !== "workspace" ||
       policy === null ||
       policy === undefined ? null : (
         <SettingsCard>
           <SettingsRow
-            title="Members' Own Keys"
+            title="Members' Own Accounts"
             description={
               policy.pluginOverridesAllowed
-                ? "Members' own keys run their Orbs on this workspace's projects, ahead of the workspace key."
+                ? "Members' own provider accounts run their Orbs on this workspace's projects, ahead of the workspace's."
                 : "Off while the workspace policy turns off members' own plugin settings."
             }
             control={
@@ -299,7 +333,7 @@ export function OrbProvidersSettings({
                 disabled={
                   !data.canUpdate || busy || !policy.pluginOverridesAllowed
                 }
-                label="Members' own keys on workspace projects"
+                label="Members' own accounts on workspace projects"
                 onCheckedChange={(value) =>
                   void run(
                     {
@@ -307,8 +341,8 @@ export function OrbProvidersSettings({
                       allowPersonalKeysOnWorkspaceProjects: value,
                     },
                     value
-                      ? "Members' own keys allowed."
-                      : "Members' own keys turned off.",
+                      ? "Members' own accounts allowed."
+                      : "Members' own accounts turned off.",
                   )
                 }
               />
@@ -325,7 +359,7 @@ export function OrbProvidersSettings({
         {editingProvider === undefined || data === undefined ? null : (
           <DialogContent finalFocus={finalFocus} className="orb-key-dialog">
             <DialogTitle>{editingProvider.displayName}</DialogTitle>
-            <OrbKeyForm
+            <OrbConnectionForm
               key={editingProvider.id}
               data={data}
               provider={editingProvider}

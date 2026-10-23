@@ -5,12 +5,14 @@ import {
   type ExecutionPauseResumePreserves,
   executionCapabilitiesForRunnerProfile,
   type LocalRunnerProfileConfiguration,
+  type OrbProviderCredentials,
   type PluginProviderId,
   type RunnerProfile,
   type ThreadId,
 } from "@dx/domain";
 import type { Sandbox, SandboxFactory } from "@flue/runtime";
 import { Effect, Redacted, Schema } from "effect";
+import { orbProviderConnectors } from "../../execution/connectors.js";
 import {
   type ExecutionCredentialUnavailableReason,
   type ExecutionTargetCredential,
@@ -46,8 +48,9 @@ export type ExecutionProviderId = Extract<
 
 /**
  * Whose provider account holds the workspace, and therefore who pays.
- * `providerAccount` names the account a person's or workspace's key belongs
- * to (the E2B team), which the Thread pinned at creation.
+ * `providerAccount` names the account a person's or workspace's connection
+ * belongs to (the E2B team, the Cloudflare account), which the Thread
+ * pinned at creation.
  */
 export type ExecutionAccount =
   | { readonly scope: "deployment" }
@@ -71,12 +74,16 @@ export type ExecutionProfile =
  * Resolved by Core for each provider operation; providers never pick an
  * account or read a key from bindings themselves. The account is the one
  * the Thread pinned at creation: the deployment's, or a person's or
- * workspace's own key for a key-based provider (E2B).
+ * workspace's own connection.
  */
 export interface ExecutionContext {
   readonly account: ExecutionAccount;
-  /** Undefined only for credential-less providers (the local runtime). */
-  readonly credential: Redacted.Redacted<string> | undefined;
+  /**
+   * The account's credentials, by the provider's connection field IDs (the
+   * deployment's E2B key is `apiKey`). Undefined for a deployment provider
+   * that needs none (Containers on its binding, the local runtime).
+   */
+  readonly credentials: Redacted.Redacted<OrbProviderCredentials> | undefined;
   /** The Thread's runner profile; its adapter is this provider. */
   readonly profile: ExecutionProfile;
 }
@@ -490,14 +497,55 @@ const implementedCapabilities = (
 ];
 
 /**
- * Composes the resolved providers into what Core uses: Core's activation
- * pipeline over each provider's raw handles. Core resolves the context
- * (deployment account, key, the Thread's runner profile) once per operation
- * and dispatches to the provider the profile names, so the provider never
- * chooses an account and a Thread never changes provider. A profile on a
- * provider that does not resolve, or no provider at all, fails closed. A
- * capability the provider does not both claim and implement is unavailable.
- * There is no fallback to another provider.
+ * The registry's view of an implemented provider that the deployment does
+ * not offer: a Thread reaches it only on a person's or workspace's own
+ * connection.
+ */
+const registeredProvider = (
+  providerId: ExecutionProviderId,
+): ResolvedExecutionProvider | undefined => {
+  const plugin = findPlugin("execution");
+  if (plugin === undefined || findProvider(plugin, providerId) === undefined)
+    return undefined;
+  const capabilities = providerCapabilities(plugin, providerId).filter(
+    (capability): capability is ExecutionCapabilityId =>
+      capability.startsWith("execution."),
+  );
+  const preserves = findProvider(plugin, providerId)?.pauseResumePreserves;
+  return {
+    providerId,
+    capabilities,
+    ...(preserves === undefined ||
+    !capabilities.includes("execution.pause-resume")
+      ? {}
+      : { pauseResumePreserves: preserves }),
+  };
+};
+
+/**
+ * A provider a person or workspace can connect their own account for,
+ * whether or not the deployment installed it.
+ */
+export const connectableExecutionProvider = (
+  adapter: string,
+): ResolvedExecutionProvider | undefined =>
+  adapter === "e2b" || adapter === "cloudflare"
+    ? orbProviderConnectors[adapter] === undefined
+      ? undefined
+      : registeredProvider(adapter)
+    : undefined;
+
+/**
+ * Composes the providers into what Core uses: Core's activation pipeline
+ * over each provider's raw handles. Core resolves the context (the pinned
+ * account, its credentials, the Thread's runner profile) once per
+ * operation and dispatches to the provider the profile names, so the
+ * provider never chooses an account and a Thread never changes provider.
+ * Every implemented provider can run on a person's or workspace's
+ * connection; only the `resolved` deployment providers run on the
+ * deployment's account. A pin the composition cannot serve fails closed,
+ * and a capability the provider does not both claim and implement is
+ * unavailable. There is no fallback to another provider.
  */
 export const composeExecutionWorkspaces = (
   bindings: Bindings,
@@ -509,8 +557,19 @@ export const composeExecutionWorkspaces = (
   resolveTarget: ExecutionTargetResolver = executionTarget,
 ): ExecutionWorkspaces => {
   const plugin = findPlugin("execution");
+  const deploymentIds = new Set(resolved.map(({ providerId }) => providerId));
+  const candidates = [
+    ...resolved,
+    ...(Object.keys(providers) as Array<ExecutionProviderId>).flatMap(
+      (providerId) => {
+        if (deploymentIds.has(providerId) || providerId === "local") return [];
+        const provider = registeredProvider(providerId);
+        return provider === undefined ? [] : [provider];
+      },
+    ),
+  ];
   const entries = new Map(
-    resolved.flatMap((provider) => {
+    candidates.flatMap((provider) => {
       const implementation = providers[provider.providerId];
       if (implementation === undefined) return [];
       const implemented = implementedCapabilities(implementation);
@@ -529,6 +588,7 @@ export const composeExecutionWorkspaces = (
             provider: { ...provider, capabilities },
             implementation,
             residentDaemon,
+            deployment: deploymentIds.has(provider.providerId),
             secret,
             pipeline: activation(
               residentDaemon
@@ -579,18 +639,22 @@ export const composeExecutionWorkspaces = (
     if (credential.scope === "unavailable")
       throw new ExecutionCredentialUnavailable({ reason: credential.reason });
     if (credential.scope === "deployment") {
+      // The deployment's account runs only a provider it installed.
+      if (!entry.deployment) throw new ExecutionProviderUnavailable();
       const key =
         entry.secret === undefined ? "" : (bindings[entry.secret] ?? "").trim();
       if (entry.secret !== undefined && key === "")
         throw new ExecutionProviderUnavailable();
       return {
         account: { scope: "deployment" },
-        credential: key === "" ? undefined : Redacted.make(key),
+        credentials: key === "" ? undefined : Redacted.make({ apiKey: key }),
         profile,
       };
     }
-    // Only a key-based provider runs in a person's or workspace's account.
-    if (entry.secret === undefined) throw new ExecutionProviderUnavailable();
+    // A person's or workspace's account runs only a provider they can
+    // connect.
+    if (orbProviderConnectors[entry.provider.providerId] === undefined)
+      throw new ExecutionProviderUnavailable();
     return {
       account:
         credential.scope === "personal"
@@ -604,7 +668,7 @@ export const composeExecutionWorkspaces = (
               workspaceId: credential.ownerId,
               providerAccount: credential.account,
             },
-      credential: credential.key,
+      credentials: credential.credentials,
       profile,
     };
   };

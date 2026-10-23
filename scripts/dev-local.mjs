@@ -164,6 +164,13 @@ const generatedBindings = {
   // Every first-party plugin is installed locally; local runtime substitutes
   // fixtures for external providers; built-in providers need no credit.
   DX_INSTALLED_PLUGINS: "search,speech",
+  // Attachments sign URLs for Core's loopback emulation of R2's S3 API, so
+  // they take the same direct path as every deployment.
+  DX_ATTACHMENT_R2_ENDPOINT: `${coreOrigin}/dx-local-r2`,
+  DX_ATTACHMENT_R2_CREDENTIALS: JSON.stringify({
+    accessKeyId: "dx-local",
+    secretAccessKey: "dx-local-secret",
+  }),
 };
 for (const [name, value] of Object.entries(generatedBindings)) {
   const line = `${name}=${localDevVarValue(value)}`;

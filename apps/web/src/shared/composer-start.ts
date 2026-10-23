@@ -108,3 +108,34 @@ export const effectiveRunnerProfileId = ({
   if (usable(remembered)) return remembered;
   return usable(personalDefault) ? personalDefault : fallback;
 };
+
+/**
+ * The size a new Thread starts on, among the providers the person can use
+ * (their resolved Orb set). A size on a provider they cannot use gives way
+ * to the first available size of the first provider they can; with no
+ * provider at all, or before the set loads, the size stands and creation
+ * says why it cannot start.
+ */
+export const runnableRunnerProfileId = (
+  runnerProfileId: RunnerProfileId | undefined,
+  catalog: ReadonlyArray<RunnerProfile> | undefined,
+  resolved:
+    | ReadonlyArray<{ readonly providerId: string; readonly status: string }>
+    | undefined,
+): RunnerProfileId | undefined => {
+  if (catalog === undefined || resolved === undefined) return runnerProfileId;
+  const adapter = catalog.find(({ id }) => id === runnerProfileId)?.adapter;
+  if (resolved.some(({ providerId }) => providerId === adapter))
+    return runnerProfileId;
+  const usable = new Set(
+    resolved.flatMap(({ providerId, status }) =>
+      status === "ready" ? [providerId] : [],
+    ),
+  );
+  return (
+    catalog.find(
+      (profile) =>
+        usable.has(profile.adapter) && profile.availability === "available",
+    )?.id ?? runnerProfileId
+  );
+};

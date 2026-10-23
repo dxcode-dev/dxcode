@@ -1,0 +1,65 @@
+import type { ThreadId, UserId } from "@dx/domain";
+import type { Bindings } from "../http/types.js";
+import { notificationLogger } from "../logging.js";
+import { threadPresentUsers } from "../realtime/publication.js";
+import { publishNotification } from "./publish.js";
+
+/**
+ * The agent settled a turn. Flue reports it once per submission, so the
+ * submission names the event and a replayed observation notifies once.
+ */
+export interface TurnCompletion {
+  readonly threadId: ThreadId;
+  readonly submissionId: string;
+  readonly outcome: "completed" | "failed" | "aborted";
+}
+
+const excerptFor = (outcome: TurnCompletion["outcome"]) =>
+  outcome === "completed"
+    ? "The agent finished its turn and is waiting for you."
+    : "The agent stopped before finishing its turn.";
+
+/**
+ * Notifies a Thread's owner that its agent finished. Only root Threads
+ * notify: a child Thread is the agent's own errand, and its parent is
+ * already waiting on it. A cancelled turn notifies nobody — the person who
+ * stopped it is looking at it. Neither does a turn whose owner has that
+ * Thread open: they are watching the reply arrive, and a notification about
+ * what is already on their screen is noise.
+ *
+ * Never throws: a notification must not disturb the runtime observation it
+ * rides on.
+ */
+export const notifyTurnCompleted = async (
+  bindings: Bindings,
+  completion: TurnCompletion,
+): Promise<void> => {
+  const db = bindings.DB;
+  if (db === undefined || completion.outcome === "aborted") return;
+  try {
+    const thread = await db
+      .prepare(
+        `SELECT owner_user_id, parent_thread_id
+           FROM threads
+          WHERE id = ?1 AND lifecycle_state != 'deleted'`,
+      )
+      .bind(completion.threadId)
+      .first<{ owner_user_id: string; parent_thread_id: string | null }>();
+    if (thread === null || thread.parent_thread_id !== null) return;
+    const watching = await threadPresentUsers(bindings, completion.threadId);
+    if (watching.has(thread.owner_user_id as UserId)) return;
+    await publishNotification(bindings, {
+      topic: "turn_completed",
+      sourceKey: `turn:${completion.submissionId}`,
+      recipients: [thread.owner_user_id as UserId],
+      threadId: completion.threadId,
+      excerpt: excerptFor(completion.outcome),
+    });
+  } catch (cause) {
+    notificationLogger.warn("Turn completion was not notified.", {
+      event: "turn_completion_notify_failed",
+      threadId: completion.threadId,
+      cause,
+    });
+  }
+};

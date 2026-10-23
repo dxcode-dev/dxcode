@@ -43,8 +43,7 @@ export interface E2BRequirements {
   readonly inactivityMs: number;
 }
 
-const e2bConfiguration = Config.all({
-  apiKey: Config.Redacted("E2B_API_KEY"),
+const e2bWorkspaceConfiguration = Config.all({
   dxEnv: Config.String("DX_ENV"),
   template: Config.String("DX_E2B_TEMPLATE").pipe(
     Config.withDefault(DEFAULT_E2B_TEMPLATE),
@@ -57,9 +56,14 @@ const e2bConfiguration = Config.all({
   ),
 });
 
-export const loadE2BRequirements = Effect.fn("loadE2BRequirements")(
+/**
+ * Everything an E2B workspace needs except the key, which comes from the
+ * Thread's account: the deployment's `E2B_API_KEY`, or a person's or
+ * workspace's connection on a deployment that installed no E2B.
+ */
+export const loadE2BWorkspaceSettings = Effect.fn("loadE2BWorkspaceSettings")(
   function* (bindings: Bindings, templateOverride?: string) {
-    const configuration = yield* e2bConfiguration.parse(
+    const configuration = yield* e2bWorkspaceConfiguration.parse(
       ConfigProvider.fromUnknown(bindings),
     );
     const dxEnv = yield* Schema.decodeEffect(EnvironmentName)(
@@ -74,14 +78,27 @@ export const loadE2BRequirements = Effect.fn("loadE2BRequirements")(
     const inactivityMs = yield* Schema.decodeEffect(ActiveTimeout)(
       configuration.inactivityMs,
     );
-
     return {
-      apiKey: configuration.apiKey,
       dxEnv,
       template: templateOverride ?? template,
       timeoutMs,
       inactivityMs,
-    } satisfies E2BRequirements;
+    } satisfies Omit<E2BRequirements, "apiKey">;
+  },
+  Effect.mapError(() => new ExecutionWorkspaceConfigurationError()),
+);
+
+/** The deployment's own E2B: its settings and `E2B_API_KEY`. */
+export const loadE2BRequirements = Effect.fn("loadE2BRequirements")(
+  function* (bindings: Bindings, templateOverride?: string) {
+    const apiKey = yield* Config.Redacted("E2B_API_KEY").parse(
+      ConfigProvider.fromUnknown(bindings),
+    );
+    const settings = yield* loadE2BWorkspaceSettings(
+      bindings,
+      templateOverride,
+    );
+    return { apiKey, ...settings } satisfies E2BRequirements;
   },
   Effect.mapError(() => new ExecutionWorkspaceConfigurationError()),
 );

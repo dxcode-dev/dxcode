@@ -9,8 +9,8 @@ import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
 import { projectRoutes } from "../../src/projects/routes.js";
-import { threadRoutes } from "../../src/threads/routes.js";
 import { TEST_RUNNER_PROFILE_CATALOG } from "../../src/testing/bindings.js";
+import { threadRoutes } from "../../src/threads/routes.js";
 
 export const owner = Schema.decodeUnknownSync(UserId)("product-route-owner");
 const otherOwner = Schema.decodeUnknownSync(UserId)("product-route-other");

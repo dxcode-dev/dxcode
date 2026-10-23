@@ -1,9 +1,10 @@
 import type { OrbProviderId } from "@dx/api";
-import type { UserId } from "@dx/domain";
+import type { OrbProviderCredentials, UserId } from "@dx/domain";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 import {
-  deleteOrbProviderKey,
-  setOrbProviderKey,
+  deleteOrbProviderConnection,
+  retryOrbProviderConnection,
+  setOrbProviderConnection,
   setOrbProviderWorkspacePolicy,
 } from "../../../shared/api/client.js";
 import {
@@ -13,11 +14,12 @@ import {
 
 export type OrbProviderAction =
   | {
-      readonly type: "saveKey";
+      readonly type: "connect";
       readonly providerId: OrbProviderId;
-      readonly credential: string;
+      readonly credentials: OrbProviderCredentials;
     }
-  | { readonly type: "removeKey"; readonly providerId: OrbProviderId }
+  | { readonly type: "retry"; readonly providerId: OrbProviderId }
+  | { readonly type: "disconnect"; readonly providerId: OrbProviderId }
   | {
       readonly type: "policy";
       readonly allowPersonalKeysOnWorkspaceProjects: boolean;
@@ -25,10 +27,16 @@ export type OrbProviderAction =
 
 const mutate = (target: PluginsTarget, action: OrbProviderAction) => {
   switch (action.type) {
-    case "saveKey":
-      return setOrbProviderKey(target, action.providerId, action.credential);
-    case "removeKey":
-      return deleteOrbProviderKey(target, action.providerId);
+    case "connect":
+      return setOrbProviderConnection(
+        target,
+        action.providerId,
+        action.credentials,
+      );
+    case "retry":
+      return retryOrbProviderConnection(target, action.providerId);
+    case "disconnect":
+      return deleteOrbProviderConnection(target, action.providerId);
     case "policy":
       if (target.scope !== "workspace")
         throw new Error("Orb provider policy requires a workspace target.");

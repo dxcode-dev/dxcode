@@ -86,7 +86,6 @@ export const smokeProductionPackage = async (packageRoot) => {
     BETTER_AUTH_SECRET: "package-smoke-not-a-secret-package-smoke",
     DX_ATTACHMENT_R2_CREDENTIALS: "",
     DX_ATTACHMENT_R2_ENDPOINT: "",
-    DX_ATTACHMENT_TRANSFER: "",
     DX_AUTH_EMAIL_FROM: "sign-in@package-smoke.invalid",
     DX_AUTH_TRUSTED_ORIGINS: "http://127.0.0.1",
     DX_AUTH_URL: "http://127.0.0.1",
@@ -127,6 +126,8 @@ export const smokeProductionPackage = async (packageRoot) => {
     DX_TERMS_URL: "",
     DX_PRIVACY_URL: "",
     DX_PORTAL_DOMAIN: "",
+    DX_PUSH_VAPID_PUBLIC_KEY: "",
+    DX_PUSH_VAPID_PRIVATE_KEY: "",
     DX_SOURCE_CONTROL_SCHEMA_VERSION: sourceControlSchemaVersion(migrations),
     DX_SOURCE_SHALLOW_CLONE: "false",
     DX_WORKLOAD_IDENTITY_AUDIENCE_POLICIES: JSON.stringify({
@@ -264,6 +265,7 @@ export const smokeProductionPackage = async (packageRoot) => {
       "--port",
       String(port),
       "--show-interactive-dev-session=false",
+      "--test-scheduled",
     ],
     {
       cwd: smokeRoot,
@@ -357,6 +359,14 @@ export const smokeProductionPackage = async (packageRoot) => {
       throw new Error(
         "Packaged Worker workload identity metadata was unavailable.",
       );
+    // A cron trigger reaches only the handlers the generated entry exports.
+    const sweep = await fetch(
+      `${origin}/cdn-cgi/handler/scheduled?cron=${encodeURIComponent("*/5 * * * *")}`,
+    );
+    if (sweep.status !== 200)
+      throw new Error(
+        `Packaged Worker did not run its cron handler (${sweep.status}: ${(await sweep.text()).slice(0, 200)}).`,
+      );
   } catch (error) {
     if (errors) console.error(errors);
     throw error;
@@ -365,7 +375,7 @@ export const smokeProductionPackage = async (packageRoot) => {
     rmSync(smokeRoot, { recursive: true, force: true });
   }
   console.log(
-    "Package evidence passed: exact packaged Worker loaded and routed health, static application, and protected API under workerd with synthetic bindings. This does not prove Cloudflare, E2B, resident dxd, or a model provider.",
+    "Package evidence passed: exact packaged Worker loaded and routed health, static application, protected API, and cron handler under workerd with synthetic bindings. This does not prove Cloudflare, E2B, resident dxd, or a model provider.",
   );
 };
 

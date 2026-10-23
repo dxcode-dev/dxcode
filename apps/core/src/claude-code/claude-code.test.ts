@@ -8,7 +8,12 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import {
+  configReferenceFor,
+  EnvironmentVariableId,
+  EnvironmentVariableName,
+} from "@dx/domain";
 import {
   type AssistantMessage,
   type AssistantMessageEvent,
@@ -17,7 +22,10 @@ import {
 } from "@earendil-works/pi-ai";
 import type { Sandbox } from "@flue/runtime";
 import { local } from "@flue/runtime/node";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { Redacted, Schema } from "effect";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import type { ExecutionEnvironmentSnapshot } from "../settings/environment-variables/execution.js";
+import { withExecutionEnvironment } from "../settings/environment-variables/sandbox.js";
 import { createClaudeCodeProvider } from "./provider.js";
 import { ClaudeCodeStream } from "./stream.js";
 
@@ -59,7 +67,29 @@ afterEach(async () => {
 });
 
 const FAKE_CLAUDE = `#!/bin/bash
+if [ "$1" = --version ]; then echo "2.1.296 (Claude Code)"; exit 0; fi
 printf '%s\\n' "$@" > "$HOME/claude-args"
+# The plan token as Claude Code reads it: from CLAUDE_CODE_OAUTH_TOKEN, or
+# once from the descriptor CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR names.
+if [ -n "\${CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR-}" ]; then
+  token=$(cat "/proc/self/fd/$CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR")
+else
+  token="\${CLAUDE_CODE_OAUTH_TOKEN-}"
+fi
+printf '%s' "$token" > "$HOME/claude-token"
+# Every process this user can read, the runner, its heartbeat, the chunk
+# writer, and this CLI among them, whose environment or command line holds
+# the token: what any command Claude runs could read.
+: > "$HOME/claude-token-readers"
+if [ -n "$token" ]; then
+  for p in /proc/[0-9]*; do
+    for f in environ cmdline; do
+      if grep -qaF -- "$token" "$p/$f" 2>/dev/null; then
+        printf '%s %s: %s\\n' "\${p#/proc/}" "$f" "$(tr '\\0' ' ' < "$p/cmdline" 2>/dev/null | cut -c1-100)" >> "$HOME/claude-token-readers"
+      fi
+    done
+  done
+fi
 prompt=""
 while [ $# -gt 0 ]; do
   [ "$1" = --append-system-prompt-file ] && prompt="$2"
@@ -78,7 +108,26 @@ for line in "\${script[@]}"; do
 done
 `;
 
-const createGuest = async (options: { readonly claude?: boolean } = {}) => {
+/**
+ * A Claude Code release older than dx can run: it fails on a flag dx passes,
+ * as a real one does, before it reads any token.
+ */
+const OLD_CLAUDE = (version: string) => `#!/bin/bash
+if [ "$1" = --version ]; then echo "${version} (Claude Code)"; exit 0; fi
+: > "$HOME/old-claude-ran"
+echo "error: unknown option '--effort'" >&2
+exit 1
+`;
+
+const createGuest = async (
+  options: {
+    readonly claude?: boolean;
+    /** A Claude Code of this version on PATH instead of the current one. */
+    readonly oldClaude?: string;
+    /** The downloaded installer installs the current Claude Code. */
+    readonly installerWorks?: boolean;
+  } = {},
+) => {
   const root = await mkdtemp(join(tmpdir(), "dx-claude-code-"));
   const home = join(root, "home");
   const bin = join(root, "bin");
@@ -104,13 +153,19 @@ fi
 exec /usr/bin/awk "$@"
 `,
   );
-  // The installer it downloads fails.
+  // The installer it downloads fails, or installs the current Claude Code
+  // at ~/.local/bin/claude.
+  await writeFile(join(root, "claude-latest"), FAKE_CLAUDE, { mode: 0o755 });
   await tool(
     "curl",
-    "#!/bin/sh\necho 'echo \"Installation failed: no space left on device\" >&2; exit 1'\n",
+    options.installerWorks === true
+      ? `#!/bin/sh\necho 'mkdir -p "$HOME/.local/bin" && cp ${join(root, "claude-latest")} "$HOME/.local/bin/claude"'\n`
+      : "#!/bin/sh\necho 'echo \"Installation failed: no space left on device\" >&2; exit 1'\n",
   );
   const installClaude = () => tool("claude", FAKE_CLAUDE);
-  if (options.claude !== false) await installClaude();
+  if (options.oldClaude !== undefined)
+    await tool("claude", OLD_CLAUDE(options.oldClaude));
+  else if (options.claude !== false) await installClaude();
   const base = await local({
     cwd: join(home, "workspace/repo"),
     env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` },
@@ -243,6 +298,8 @@ const claudeCode = (
   threadId = `thr_claude_code_${crypto.randomUUID()}`,
 ) => {
   const credentials: string[] = [];
+  // Unique, so a scan for it finds only this run's processes.
+  const token = `plan-token-${crypto.randomUUID()}`;
   const provider = create({
     invocation: (() => ({
       instanceId: threadId,
@@ -251,26 +308,32 @@ const claudeCode = (
     sandbox: async () => sandbox,
     credential: async (_thread, submissionId) => {
       credentials.push(submissionId);
-      return { token: "plan-token", plan: { allowExtraUsage: false } };
+      return { token, plan: { allowExtraUsage: false } };
     },
     recordUsage: async () => ({ allowExtraUsage: false }),
   });
   const model = provider.getModels()[0];
   if (model === undefined) throw new Error("Expected a Claude Code model.");
+  /** One Flue model call; resolves with every event it streamed. */
+  const events = async (context: Context, signal?: AbortSignal) => {
+    const streamed: AssistantMessageEvent[] = [];
+    for await (const next of provider.streamSimple(
+      model,
+      normalizeContext(context),
+      { ...(signal === undefined ? {} : { signal }) },
+    ))
+      streamed.push(next);
+    return streamed;
+  };
   return {
     threadId,
     credentials,
+    token,
     model,
+    events,
     /** One Flue model call; resolves with its final event. */
     answer: async (context: Context, signal?: AbortSignal) => {
-      const events: AssistantMessageEvent[] = [];
-      for await (const next of provider.streamSimple(
-        model,
-        normalizeContext(context),
-        { ...(signal === undefined ? {} : { signal }) },
-      ))
-        events.push(next);
-      const last = events.at(-1);
+      const last = (await events(context, signal)).at(-1);
       if (last === undefined) throw new Error("Expected an event.");
       return last;
     },
@@ -367,6 +430,23 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
     ]);
   });
 
+  it("hands the plan token to the CLI alone, never to a process environment", async () => {
+    const guest = await createGuest();
+    await guest.script([
+      init(),
+      ...response("m1", [{ text: "Hello from Claude." }]),
+      result("Hello from Claude."),
+    ]);
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    const done = await claude.answer({
+      systemPrompt: "Answer briefly.",
+      messages: [user("Say hello", 1)],
+    });
+    expect(done).toMatchObject({ type: "done", reason: "stop" });
+    expect(guest.home("claude-token")).toBe(claude.token);
+    expect(guest.home("claude-token-readers")).toBe("");
+  });
+
   it("launches with a prompt too large for one command line", async () => {
     const guest = await createGuest();
     await guest.script([
@@ -417,6 +497,41 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
       message: { content: [{ type: "text", text: "Installed." }] },
     });
     expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("updates a Claude Code too old for dx before the turn, and the turn runs on the new one", async () => {
+    const guest = await createGuest({
+      oldClaude: "2.1.37",
+      installerWorks: true,
+    });
+    await guest.script([
+      init(),
+      ...response("m1", [{ text: "Hello from Claude." }]),
+      result("Hello from Claude."),
+    ]);
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    const done = await claude.answer({ messages: [user("Say hello", 1)] });
+    expect(done).toMatchObject({
+      type: "done",
+      message: { content: [{ type: "text", text: "Hello from Claude." }] },
+    });
+    expect(guest.home("claude-token")).toBe(claude.token);
+    expect(guest.file(`${GUEST_HOME}/old-claude-ran`)).toBeUndefined();
+  });
+
+  it("stops with an error naming the version when a too-old Claude Code cannot be updated", async () => {
+    const guest = await createGuest({ oldClaude: "1.0.108" });
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    const failed = await claude.answer({ messages: [user("Say hello", 1)] });
+    expect(failed).toMatchObject({
+      type: "error",
+      error: {
+        errorMessage: expect.stringMatching(
+          /Claude Code 1\.0\.108 is older than 2\.1\.38[\s\S]*claude update[\s\S]*no space left on device/,
+        ),
+      },
+    });
+    expect(guest.file(`${GUEST_HOME}/old-claude-ran`)).toBeUndefined();
   });
 
   it("keeps a live run through failed heartbeat reads", {
@@ -726,5 +841,237 @@ describe("Claude Code stream", () => {
       blocks: [{ type: "text", text: "Done." }],
     });
     expect(stream.toolResults.get("toolu_dx")?.text).toBe("thread text");
+  });
+});
+
+/**
+ * Q9 and Q1 in tasks/platform-quirks-tracker.md, through the real launch
+ * script, runner, and environment decorator: Claude Code streams text and
+ * tool input as fragments, one stream-json line each, and a workspace read
+ * redacts each line on its own. What Flue records and forwards is the
+ * provider's messages and deltas, so neither may hold a secret however the
+ * fragments split it.
+ */
+describe("Claude Code stream through secret redaction", {
+  timeout: 30_000,
+}, () => {
+  const SECRET = "sk-live-4f9a2c7e";
+  /** A secret too short to hide, as a workspace may hold one; it occurs in "exactly". */
+  const SHORT = "act";
+  /** What dx shows in place of SECRET, the first variable. */
+  const MARK = "[REDACTED:Q9_0]";
+  const recorded: Record<string, unknown> = {};
+
+  // DX_STREAM_REDACTION_ARTIFACT=<file> keeps what each case recorded.
+  afterAll(async () => {
+    const path = process.env.DX_STREAM_REDACTION_ARTIFACT;
+    if (path === undefined || path === "") return;
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, `${JSON.stringify(recorded, null, 2)}\n`);
+  });
+
+  const environment = (
+    secrets: ReadonlyArray<string>,
+  ): ExecutionEnvironmentSnapshot => ({
+    revision: {
+      personal: { targetId: "user", revision: 0 },
+      project: { targetId: "project", revision: 0 },
+      workspace: { targetId: null, revision: 0 },
+    },
+    values: secrets.map((plaintext, index) => ({
+      reference: configReferenceFor(
+        Schema.decodeUnknownSync(EnvironmentVariableId)(`env_q9_${index}`),
+      ),
+      name: Schema.decodeUnknownSync(EnvironmentVariableName)(`Q9_${index}`),
+      kind: "secret" as const,
+      value: Redacted.make(plaintext),
+      source: "workspace" as const,
+    })),
+  });
+
+  const delta = (index: number, value: Record<string, unknown>) =>
+    event({ type: "content_block_delta", index, delta: value });
+
+  /** One response whose blocks arrive in the given fragments. */
+  const fragmented = (
+    blocks: ReadonlyArray<
+      | { readonly text: ReadonlyArray<string> }
+      | { readonly thinking: ReadonlyArray<string> }
+      | {
+          readonly id: string;
+          readonly name: string;
+          readonly json: ReadonlyArray<string>;
+        }
+    >,
+  ) => [
+    init(),
+    event({
+      type: "message_start",
+      message: { id: "m1", usage: { input_tokens: 3, output_tokens: 1 } },
+    }),
+    ...blocks.flatMap((block, index) => [
+      event({
+        type: "content_block_start",
+        index,
+        content_block:
+          "text" in block
+            ? { type: "text", text: "" }
+            : "thinking" in block
+              ? { type: "thinking", thinking: "" }
+              : { type: "tool_use", id: block.id, name: block.name, input: {} },
+      }),
+      ...("text" in block
+        ? block.text.map((text) => delta(index, { type: "text_delta", text }))
+        : "thinking" in block
+          ? block.thinking.map((thinking) =>
+              delta(index, { type: "thinking_delta", thinking }),
+            )
+          : block.json.map((partial_json) =>
+              delta(index, { type: "input_json_delta", partial_json }),
+            )),
+      event({ type: "content_block_stop", index }),
+    ]),
+    event({ type: "message_delta", usage: { output_tokens: 9 } }),
+    event({ type: "message_stop" }),
+    result("Done."),
+  ];
+
+  /**
+   * Runs the response through a workspace holding these secrets and
+   * returns what Flue records (the final message) and what it forwards
+   * (every delta, joined per block).
+   */
+  const record = async (
+    name: string,
+    lines: ReadonlyArray<string>,
+    secrets: ReadonlyArray<string>,
+  ) => {
+    const guest = await createGuest();
+    await guest.script(lines);
+    const sandbox = await withExecutionEnvironment(
+      { createSandbox: async () => guest.sandbox },
+      async () => environment(secrets),
+    ).createSandbox({ id: "guest" });
+    const claude = claudeCode(createClaudeCodeProvider, sandbox);
+    const events = await claude.events({
+      systemPrompt: "Answer briefly.",
+      messages: [user("Go", 1)],
+    });
+    const last = events.at(-1);
+    if (last?.type !== "done")
+      throw new Error(`Expected done: ${JSON.stringify(last)}`);
+    const forwarded: string[] = [];
+    for (const next of events)
+      if (
+        next.type === "text_delta" ||
+        next.type === "thinking_delta" ||
+        next.type === "toolcall_delta"
+      )
+        forwarded[next.contentIndex] =
+          (forwarded[next.contentIndex] ?? "") + next.delta;
+    const content = last.message.content;
+    recorded[name] = { secrets, content, forwarded };
+    return { content, forwarded, events: JSON.stringify(events) };
+  };
+
+  it("never records or forwards a secret split across two text deltas, or two thinking deltas", async () => {
+    const { content, forwarded, events } = await record(
+      "text split across deltas",
+      fragmented([
+        { thinking: ["The key sk-live-", "4f9a2c7e is set."] },
+        { text: ["Your token is sk-live-4f9", "a2c7e, keep it safe."] },
+      ]),
+      [SECRET],
+    );
+    expect(content).toEqual([
+      { type: "thinking", thinking: `The key ${MARK} is set.` },
+      { type: "text", text: `Your token is ${MARK}, keep it safe.` },
+    ]);
+    expect(forwarded).toEqual([
+      `The key ${MARK} is set.`,
+      `Your token is ${MARK}, keep it safe.`,
+    ]);
+    expect(events).not.toContain(SECRET);
+  });
+
+  it("never records or forwards a secret split across two partial_json deltas", async () => {
+    const { content, forwarded, events } = await record(
+      "tool input split across deltas",
+      fragmented([
+        {
+          id: "toolu_bash",
+          name: "Bash",
+          json: [
+            '{"command": "curl -H \'Authorization: sk-live-4f',
+            "9a2c7e' https://api.example.com\"}",
+          ],
+        },
+      ]),
+      [SECRET],
+    );
+    expect(content).toEqual([
+      {
+        type: "toolCall",
+        id: "toolu_bash",
+        name: "Bash",
+        arguments: {
+          command: `curl -H 'Authorization: ${MARK}' https://api.example.com`,
+        },
+      },
+    ]);
+    expect(forwarded.join("")).not.toContain(SECRET);
+    expect(events).not.toContain(SECRET);
+  });
+
+  it("leaves a dx tool input unchanged when a secret too short to hide occurs inside its words", async () => {
+    const { content, events } = await record(
+      "short secret inside words",
+      fragmented([
+        {
+          id: "toolu_dx",
+          name: "mcp__dx__create_thread",
+          json: [
+            '{"pro',
+            'mpt": "Find exactly',
+            ' where the input loses its keys."}',
+          ],
+        },
+      ]),
+      [SHORT],
+    );
+    expect(content).toEqual([
+      {
+        type: "toolCall",
+        id: "toolu_dx",
+        name: "mcp__dx__create_thread",
+        arguments: { prompt: "Find exactly where the input loses its keys." },
+      },
+    ]);
+    expect(events).toContain("exactly");
+  });
+
+  it("control: without secrets, and near a secret's prefix, the stream arrives as Claude sent it", async () => {
+    const response = fragmented([
+      { text: ["Nearly sk-live-4f9", "b, and ends with sk-live"] },
+      {
+        id: "toolu_dx",
+        name: "mcp__dx__create_thread",
+        json: ['{"pro', 'mpt": "Find exactly', ' where."}'],
+      },
+    ]);
+    const expected = [
+      { type: "text", text: "Nearly sk-live-4f9b, and ends with sk-live" },
+      {
+        type: "toolCall",
+        id: "toolu_dx",
+        name: "mcp__dx__create_thread",
+        arguments: { prompt: "Find exactly where." },
+      },
+    ];
+    const without = await record("control without secrets", response, []);
+    expect(without.content).toEqual(expected);
+    const near = await record("control near a secret", response, [SECRET]);
+    expect(near.content).toEqual(expected);
+    expect(near.forwarded).toEqual(without.forwarded);
   });
 });

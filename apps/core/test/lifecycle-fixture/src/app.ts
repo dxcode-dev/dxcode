@@ -4,7 +4,7 @@ import {
   fauxText,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
-import { dispatch, setProvider } from "@flue/runtime";
+import { dispatch, observe, setProvider } from "@flue/runtime";
 import { createAgentRouter } from "@flue/runtime/routing";
 import { Hono } from "hono";
 import { authenticate } from "../../../src/auth/authenticate.js";
@@ -21,8 +21,13 @@ import { projectRoutes } from "../../../src/projects/routes.js";
 import { settingsRoutes } from "../../../src/settings/routes.js";
 import { createThreadRoutes } from "../../../src/threads/routes.js";
 import { FixtureLifecycleAgent } from "./agents/fixture-lifecycle-agent.js";
+import { armAttachmentPoison } from "./attachment-poison.js";
 import { heavyTurnResponses } from "./heavy-history.js";
-import { failNextActivation, settleDelayedCommand } from "./sandbox.js";
+import {
+  failNextActivation,
+  isHoldingTurn,
+  settleDelayedCommand,
+} from "./sandbox.js";
 
 // A context window large enough that the heavy-history Thread never compacts.
 const faux = fauxProvider({
@@ -66,6 +71,40 @@ faux.setResponses([
 ]);
 setProvider(faux.provider);
 installFlueObservation();
+
+// Model steps for scenarios that run after the scripted lifecycle above.
+const scenarioResponses = {
+  "stop-queue": () => [
+    fauxAssistantMessage([fauxToolCall("bash", { command: "hold-turn" })], {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage("after-stop-complete"),
+  ],
+  unready: () => [
+    fauxAssistantMessage("unready-first-complete"),
+    fauxAssistantMessage("unready-follow-up-complete"),
+  ],
+};
+
+/** Every settlement Flue reports, as live observers see it. */
+const settlements: Array<{
+  threadId: string;
+  submissionId: string;
+  outcome: string;
+  error?: string;
+  at: number;
+}> = [];
+observe((event) => {
+  if (event.type !== "submission_settled" || event.instanceId === undefined)
+    return;
+  settlements.push({
+    threadId: event.instanceId,
+    submissionId: event.submissionId,
+    outcome: event.outcome,
+    ...(event.error === undefined ? {} : { error: event.error.message }),
+    at: Date.now(),
+  });
+});
 
 const observedReferenceHeaders: string[] = [];
 const observedUpdateOffsets: string[] = [];
@@ -204,6 +243,35 @@ app.post("/__fixture/heavy-turn/:turn", (context) => {
   if (faux.getPendingResponseCount() !== 0)
     return context.json({ pending: faux.getPendingResponseCount() }, 409);
   faux.appendResponses(heavyTurnResponses(Number(context.req.param("turn"))));
+  return context.body(null, 204);
+});
+// Queues one scenario's model steps once the scripted queue is empty. A
+// scenario replaces steps an earlier scenario left unused, so one failing
+// case does not fail the next.
+let scenarioStarted = false;
+app.post("/__fixture/scenario/:name", (context) => {
+  const name = context.req.param("name");
+  if (!(name in scenarioResponses)) return context.notFound();
+  if (!scenarioStarted && faux.getPendingResponseCount() !== 0)
+    return context.json({ pending: faux.getPendingResponseCount() }, 409);
+  scenarioStarted = true;
+  faux.setResponses(
+    scenarioResponses[name as keyof typeof scenarioResponses](),
+  );
+  return context.body(null, 204);
+});
+app.get("/__fixture/holding/:threadId", (context) =>
+  context.json({ holding: isHoldingTurn(context.req.param("threadId")) }),
+);
+app.get("/__fixture/settlements/:threadId", (context) =>
+  context.json(
+    settlements.filter(
+      ({ threadId }) => threadId === context.req.param("threadId"),
+    ),
+  ),
+);
+app.post("/__fixture/poison-attachments", (context) => {
+  armAttachmentPoison();
   return context.body(null, 204);
 });
 app.post("/__fixture/reject-next-initial-admission", (context) => {

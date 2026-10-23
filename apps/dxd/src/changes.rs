@@ -866,8 +866,15 @@ fn capture_range(
                 } else {
                     patches.get(path).map(String::as_str).unwrap_or("")
                 };
-                let (patch, truncated) = limited_patch(raw);
-                (additions, deletions, binary, patch, truncated)
+                // git checks only a file's first 8000 bytes for NUL, so a file
+                // with a longer text header (a Git bundle) diffs as text with
+                // NUL bytes, which no patch view can show: it is binary.
+                if raw.contains('\0') {
+                    (additions, deletions, true, String::new(), false)
+                } else {
+                    let (patch, truncated) = limited_patch(raw);
+                    (additions, deletions, binary, patch, truncated)
+                }
             }
         };
         files.push(CapturedFile {
@@ -1355,6 +1362,44 @@ mod tests {
         assert!(fingerprint_only(&root, "main").is_some());
         assert_eq!(fs::metadata(&index).unwrap().modified().unwrap(), stale);
         assert_eq!(fs::read(&index).unwrap(), before);
+    }
+
+    #[test]
+    fn shows_a_file_whose_diff_would_carry_nul_bytes_as_binary() {
+        // A Git bundle opens with more text than git inspects for NUL bytes,
+        // so git diffs it as text; Core cannot show a patch with NUL bytes.
+        let bundle = |refs: &str| {
+            let mut bytes = format!("# v2 git bundle\n{}\n\n", refs.repeat(600)).into_bytes();
+            bytes.extend_from_slice(b"PACK\0\0\0\x02\0\0\0\x03tail\n");
+            bytes
+        };
+        let (_directory, root, baseline) = repository();
+        fs::write(root.join("source.bundle"), bundle("1111 refs/heads/a\n")).unwrap();
+        git_ok(&root, &["add", "source.bundle"]);
+        git_ok(&root, &["commit", "-q", "-m", "add bundle"]);
+        fs::write(root.join("source.bundle"), bundle("2222 refs/heads/b\n")).unwrap();
+        git_ok(&root, &["commit", "-q", "-am", "update bundle"]);
+        let CandidateOutcome::Complete { capture } =
+            capture(&root, &request(&baseline, None), &CaptureCache::default())
+        else {
+            panic!("expected a complete capture")
+        };
+        for range in &capture.ranges {
+            for file in &range.files {
+                assert!(
+                    !file.patch.contains('\0'),
+                    "{} carries NUL bytes",
+                    file.path
+                );
+            }
+        }
+        let bundle = capture.ranges[0]
+            .files
+            .iter()
+            .find(|file| file.path == "source.bundle")
+            .unwrap();
+        assert!(bundle.binary);
+        assert_eq!(bundle.patch, "");
     }
 
     #[test]

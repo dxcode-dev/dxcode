@@ -187,56 +187,6 @@ export const parseAttachmentRange = (
   return end < start ? "unsatisfiable" : { start, end };
 };
 
-/**
- * Stream a ready attachment through Core: local development only, where
- * there is no R2 to sign for. Only passive media is labelled with its real
- * type and shown inline; everything else downloads as opaque bytes.
- */
-export const serveAttachment = async (
-  bucket: R2Bucket,
-  row: AttachmentRow,
-  request: Request,
-  options: { readonly download: boolean },
-) => {
-  const { contentType, disposition } = attachmentResponseType(
-    row,
-    options.download,
-  );
-  const headers = new Headers({
-    "accept-ranges": "bytes",
-    "cache-control": "private, no-store",
-    "content-disposition": disposition,
-    "content-security-policy": "default-src 'none'; sandbox",
-    "content-type": contentType,
-    "x-content-type-options": "nosniff",
-  });
-  const requested = parseAttachmentRange(
-    request.headers.get("range"),
-    row.size,
-  );
-  if (requested === "unsatisfiable") {
-    headers.set("content-range", `bytes */${row.size}`);
-    return new Response(null, { status: 416, headers });
-  }
-  const head = request.method === "HEAD";
-  const range = requested ?? { start: 0, end: row.size - 1 };
-  const length = range.end - range.start + 1;
-  headers.set("content-length", String(length));
-  if (requested !== undefined)
-    headers.set(
-      "content-range",
-      `bytes ${range.start}-${range.end}/${row.size}`,
-    );
-  const status = requested === undefined ? 200 : 206;
-  if (head) return new Response(null, { status, headers });
-  const object = await bucket.get(
-    row.object_key,
-    requested === undefined ? {} : { range: { offset: range.start, length } },
-  );
-  if (object === null) return new Response(null, { status: 404 });
-  return new Response(object.body, { status, headers });
-};
-
 /** The first bytes of an object, for type sniffing. */
 export const readAttachmentHead = async (
   bucket: R2Bucket,

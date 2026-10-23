@@ -40,6 +40,15 @@ import {
   PORTAL_OAUTH_SCOPES,
   preflightPortalZone,
 } from "../deploy/selfhost/portals.mjs";
+import {
+  resourceName,
+  selfhostDeploymentShape,
+  selfhostStage,
+} from "./alchemy-deployment.mjs";
+import {
+  operatorR2Credentials,
+  operatorR2CredentialsGuidance,
+} from "./attachment-deployment.mjs";
 import { createHiddenPrompt } from "./hidden-prompt.mjs";
 
 export const WORKER_TRACES_PROMPT =
@@ -95,14 +104,17 @@ export const collectPluginChoices = async ({
 };
 
 export const E2B_ORB_PROMPT =
-  "Install E2B as an Orb provider (sandboxes on E2B; needs an E2B API key)";
+  "Offer E2B on this deployment's own account (Threads without their own E2B connection run on, and bill, your E2B API key)";
 export const CLOUDFLARE_ORB_PROMPT =
-  "Install Cloudflare Containers as an Orb provider (containers run and are billed in this Cloudflare account; requires the Workers Paid plan and Docker on this machine)";
+  "Offer Cloudflare Containers on this deployment's own account (containers run and are billed in this Cloudflare account; requires the Workers Paid plan and Docker on this machine)";
+export const NO_DEPLOYMENT_ORB_NOTICE =
+  "No deployment Orb provider: people and workspaces connect their own in Settings → Orb Providers.\n";
 
 /**
- * Every deployment installs at least one Orb provider (where each Thread's
- * workspace runs). Containers needs no key, but must be an explicit choice
- * because it requires the Workers Paid plan.
+ * Orb providers the deployment offers on its own account, where each
+ * Thread's workspace runs unless its owner connected their own. None is
+ * required: people and workspaces connect E2B (and later providers) from
+ * Settings. Each is an explicit choice, because the deployment pays for it.
  */
 export const collectOrbProviders = async ({
   yes,
@@ -110,19 +122,14 @@ export const collectOrbProviders = async ({
   environment,
   log,
 }) => {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const providers = [];
-    if (await yes(E2B_ORB_PROMPT, true)) {
-      providers.push("e2b");
-      environment.E2B_API_KEY = await secret("E2B API key");
-    }
-    if (await yes(CLOUDFLARE_ORB_PROMPT, false)) providers.push("cloudflare");
-    if (providers.length > 0) return providers;
-    log(
-      "Install at least one Orb provider: E2B, Cloudflare Containers, or both.\n",
-    );
+  const providers = [];
+  if (await yes(E2B_ORB_PROMPT, false)) {
+    providers.push("e2b");
+    environment.E2B_API_KEY = await secret("E2B API key");
   }
-  throw new Error("A deployment must install at least one Orb provider.");
+  if (await yes(CLOUDFLARE_ORB_PROMPT, false)) providers.push("cloudflare");
+  if (providers.length === 0) log(NO_DEPLOYMENT_ORB_NOTICE);
+  return providers;
 };
 
 export const EMAIL_SENDING_PROMPT =
@@ -204,6 +211,61 @@ export const chooseCloudflareAuth = async ({
     return { credentials: "api-token", record: "alchemy-oauth" };
   }
   return hasToken ? token : browser;
+};
+
+/**
+ * Attachments upload straight to R2 in every deployment. Alchemy's browser
+ * login cannot mint the signing token, so such a deployment asks once for an
+ * R2 API token the operator creates, with directions, and holds it; `--rotate`
+ * asks again. `DX_R2_ACCESS_KEY_ID` and `DX_R2_SECRET_ACCESS_KEY` in the
+ * environment answer without a prompt. Returns the config to save.
+ */
+export const collectOperatorR2Credentials = async ({
+  config,
+  credentials,
+  rotate = false,
+  environment,
+  answer,
+  secret,
+  log = () => {},
+}) => {
+  const { attachmentSigning } = selfhostDeploymentShape({
+    signIn: config.signIn,
+    credentials,
+    cloudflareAuth: config.cloudflareAuth,
+  });
+  if (attachmentSigning !== "operator") return config;
+  const supplied =
+    environment.DX_R2_ACCESS_KEY_ID?.trim() &&
+    environment.DX_R2_SECRET_ACCESS_KEY?.trim();
+  if (supplied)
+    operatorR2Credentials({
+      accessKeyId: environment.DX_R2_ACCESS_KEY_ID,
+      secretAccessKey: environment.DX_R2_SECRET_ACCESS_KEY,
+    });
+  else if (config.attachmentR2Credentials !== true || rotate) {
+    log(
+      operatorR2CredentialsGuidance(
+        resourceName("storage", selfhostStage(config.name)),
+      ),
+    );
+    for (let attempt = 0; ; attempt += 1) {
+      const accessKeyId = await answer("R2 Access Key ID");
+      const secretAccessKey = await secret("R2 Secret Access Key");
+      try {
+        operatorR2Credentials({ accessKeyId, secretAccessKey });
+        environment.DX_R2_ACCESS_KEY_ID = accessKeyId.trim();
+        environment.DX_R2_SECRET_ACCESS_KEY = secretAccessKey.trim();
+        break;
+      } catch (error) {
+        if (attempt === 2) throw error;
+        log(`${error.message}\n`);
+      }
+    }
+  } else return config;
+  return config.attachmentR2Credentials === true
+    ? config
+    : validateSelfhostConfig({ ...config, attachmentR2Credentials: true });
 };
 
 export const NO_SENDER_NOTICE =
@@ -838,6 +900,15 @@ export const runDxDeploy = async ({
       ...config,
       workerTraces: await yes(WORKER_TRACES_PROMPT, false),
     });
+  config = await collectOperatorR2Credentials({
+    config,
+    credentials: cloudflareAuthChoice.credentials,
+    rotate: flags.has("--rotate"),
+    environment,
+    answer,
+    secret,
+    log: (message) => stdout.write(message),
+  });
   if (config.orbProviders.includes("cloudflare")) {
     await preflightCloudflareContainers({ auth: cloudflareAuth });
     await assertDockerReady(
@@ -893,6 +964,8 @@ export const runDxDeploy = async ({
           "SARVAM_API_KEY",
           "EXA_API_KEY",
           "DX_GOOGLE_CLIENT_SECRET",
+          "DX_R2_ACCESS_KEY_ID",
+          "DX_R2_SECRET_ACCESS_KEY",
         ]).has(name),
       )
       .sort()

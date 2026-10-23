@@ -387,7 +387,7 @@ export const createThreadTools = (
         "Start a child Thread: a new dx Thread with its own agent and its own Orb that works on a task while you continue. It belongs to this Thread's owner, stays private to them, and lists under this Thread in their sidebar.",
         "Use a child Thread for a self-contained task that can run on its own or in parallel with yours, or that needs a separate Orb. Do the work yourself when it is small, when you need its result immediately, or when it depends on files you changed here.",
         "Files do not transfer. The child starts from its project's repository, not from this Orb, so uncommitted changes here are invisible to it. Put everything it needs in the prompt, and push any commits it must build on first.",
-        "Returns the child's thread ID. Use send_thread_message for follow-ups, get_thread_status to check on it, and wait_for_threads to block until it finishes its turn.",
+        "Returns the child's thread ID. The child sends its result to this Thread as a message when it finishes, and that message starts a new turn here. Use send_thread_message for follow-ups.",
         "Before choosing an Orb or a mode, call list_orbs for the providers and sizes the owner can start, and list_agent_modes for the modes and the models they run. Omit them to use the project's Orb and this Thread's mode.",
       ]),
       input: v.object({
@@ -507,7 +507,7 @@ export const createThreadTools = (
     defineTool({
       name: "send_thread_message",
       description: description([
-        "Send a message to another of this Thread owner's Threads, such as a child you started. It shows there as a message from this Thread. Returns as soon as the Thread accepts it; use wait_for_threads to wait for the reply.",
+        "Send a message to another of this Thread owner's Threads, such as a child you started. It shows there as a message from this Thread. Returns as soon as the Thread accepts it. A child you started replies with a message to this Thread; ask any other Thread for a reply in the message if you want one.",
         "Only the owner's own Threads can receive it, not Threads other people shared with them. If the Thread is working, the message steers its current turn. A message carries text only: files and commits do not transfer.",
       ]),
       input: v.object({
@@ -578,7 +578,7 @@ export const createThreadTools = (
       name: "get_thread_status",
       description: description([
         "Check one of this Thread owner's Threads: whether its agent is working or idle, its title, its last activity, and the text of its latest agent message.",
-        "Idle means the Thread finished its turn and is waiting for a message, not that it failed. Use wait_for_threads instead of calling this repeatedly.",
+        "Idle means the Thread finished its turn and is waiting for a message, not that it failed. A child you started messages this Thread when it finishes, so do not call this repeatedly.",
       ]),
       input: v.object({ thread: threadIdInput("The thread ID.") }),
       run: async ({ data }) =>
@@ -596,7 +596,7 @@ export const createThreadTools = (
       name: "wait_for_threads",
       description: description([
         "Wait until each listed Thread is idle, meaning its agent finished its turn, or until the timeout. Returns each Thread's state and the text of its latest agent message, and settled: true when every Thread is idle or archived.",
-        "Use it after create_thread or send_thread_message when you need the result before you continue. On a timeout, call it again to keep waiting.",
+        "Use it only when you cannot continue your turn without a Thread's result; otherwise a child's result arrives as a message that starts a new turn here. On a timeout, call it again to keep waiting.",
       ]),
       input: v.object({
         threads: v.pipe(

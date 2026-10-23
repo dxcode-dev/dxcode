@@ -1,0 +1,5 @@
+{
+  "registry": "ghcr.io",
+  "repository": "dxcode-dev/dx-orb",
+  "digest": "sha256:ff94d069d2806d6f98361a03939b6ae51f615b0ca2fdbb1172f88b8ede82d7b3"
+}

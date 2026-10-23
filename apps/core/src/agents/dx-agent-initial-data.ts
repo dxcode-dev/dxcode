@@ -139,6 +139,15 @@ export const DxAgentInitialDataSchema = v.object({
     ),
     [],
   ),
+  /** The Thread whose agent started this one, which it reports to. */
+  startedByThreadId: v.optional(
+    v.pipe(
+      v.string(),
+      v.regex(
+        /^thr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    ),
+  ),
 });
 
 export type DxAgentInitialData = v.InferOutput<typeof DxAgentInitialDataSchema>;

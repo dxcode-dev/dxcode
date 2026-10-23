@@ -46,9 +46,11 @@ import {
   deploymentGitStatusArguments,
   deploymentPortals,
   deploymentSelection,
+  e2bApiKeyFromEnvironment,
   isolatedAlchemyEnvironment,
   isolatedDeploymentBuildEnvironment,
   loadSelfhostConfig,
+  orbProvidersValue,
   orbWorkerName,
   parseDeploymentRevisionArgument,
   parseOrbProviders,
@@ -60,11 +62,12 @@ import {
   resolveE2BTemplateEvidence,
   resourceName,
   securePrivateDeploymentState,
+  selfhostDeploymentShape,
   selfhostStage,
   writeDeploymentAlchemyProfile,
-  selfhostDeploymentShape,
 } from "./alchemy-deployment.mjs";
 import { alchemyStage } from "./alchemy-stage.mjs";
+import { operatorR2Credentials } from "./attachment-deployment.mjs";
 import { buildTarget, GUEST_TARGET } from "./build-dxd.mjs";
 import { loadMigrationManifest } from "./migration-manifest.mjs";
 
@@ -218,6 +221,17 @@ const selfhostShape =
       })
     : undefined;
 const attachmentSigning = selfhostShape?.attachmentSigning ?? "token";
+// The operator's R2 API token, for deployments that cannot mint one. The
+// deployment holds it, so it is needed only the first time or to rotate it.
+const attachmentR2Credentials =
+  attachmentSigning === "operator" &&
+  (operatorEnvironment.DX_R2_ACCESS_KEY_ID?.trim() ||
+    operatorEnvironment.DX_R2_SECRET_ACCESS_KEY?.trim())
+    ? operatorR2Credentials({
+        accessKeyId: operatorEnvironment.DX_R2_ACCESS_KEY_ID,
+        secretAccessKey: operatorEnvironment.DX_R2_SECRET_ACCESS_KEY,
+      })
+    : undefined;
 // Google sign-in's client secret. HeldSecret keeps it across deploys, so it
 // is required only the first time google is configured.
 const googleClientSecret =
@@ -247,10 +261,10 @@ const deploymentSignIn =
           googleClientId: hostedGoogleClient.clientId,
         };
 // Orb providers: self-host records them; previews and staging read
-// DX_ORB_PROVIDERS (e2b, cloudflare, or both; E2B by default).
+// DX_ORB_PROVIDERS (e2b, cloudflare, both, or none; E2B by default).
 const orbProviders =
   target === "selfhost"
-    ? parseOrbProviders(selfhostConfig.orbProviders.join(","))
+    ? parseOrbProviders(orbProvidersValue(selfhostConfig.orbProviders))
     : parseOrbProviders(process.env.DX_ORB_PROVIDERS?.trim() || "e2b");
 const e2bInstalled = orbProviders.includes("e2b");
 const cloudflareInstalled = orbProviders.includes("cloudflare");
@@ -602,7 +616,9 @@ if (operation === "deploy" && !e2bInstalled) {
   e2bApiKey =
     target === "selfhost"
       ? process.env.E2B_API_KEY?.trim() || ""
-      : required("E2B_API_KEY");
+      : e2bApiKeyFromEnvironment(process.env);
+  if (target !== "selfhost" && !e2bApiKey)
+    throw new Error("E2B_API_KEY (or DX_E2B_API_KEY) is required.");
   if (target === "staging")
     workloadIdentitySigningKeys = required("DX_WORKLOAD_IDENTITY_SIGNING_KEYS");
   assertDxdChecksum(dxdChecksum);
@@ -646,7 +662,7 @@ console.log(
   `Portals: ${portals === undefined ? "off" : `https://t-<thread>-p<port>.${portals.domain} (${portalWorkerName(stage)})`}`,
 );
 console.log(
-  `Attachments: ${attachmentSigning === "token" ? "direct to R2 (bucket-scoped signing token)" : "through Core (Alchemy OAuth cannot mint a signing token)"}`,
+  `Attachments: direct to R2 (${attachmentSigning === "token" ? "bucket-scoped signing token" : "operator's R2 API token"})`,
 );
 if (operation === "deploy" && e2bInstalled)
   console.log(
@@ -685,6 +701,9 @@ const environment = {
     : { DX_INTEGRATION_BITBUCKET_OAUTH: bitbucketOAuth }),
   ...(sarvamApiKey ? { SARVAM_API_KEY: sarvamApiKey } : {}),
   ...(exaApiKey ? { EXA_API_KEY: exaApiKey } : {}),
+  ...(attachmentR2Credentials === undefined
+    ? {}
+    : { DX_ATTACHMENT_R2_CREDENTIALS: attachmentR2Credentials }),
   ...((googleClientSecret ?? hostedGoogleClient?.clientSecret)
     ? {
         DX_GOOGLE_CLIENT_SECRET:
@@ -777,7 +796,7 @@ const environment = {
     target === "selfhost"
       ? ""
       : JSON.stringify(hostedPolicy.bootstrapRepository),
-  DX_DEPLOYMENT_ORB_PROVIDERS: orbProviders.join(","),
+  DX_DEPLOYMENT_ORB_PROVIDERS: orbProvidersValue(orbProviders),
   DX_DEPLOYMENT_ATTACHMENT_SIGNING: attachmentSigning,
   ...(selfhostShape === undefined
     ? {}

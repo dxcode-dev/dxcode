@@ -68,9 +68,15 @@ account, allowed email domains, and the sign-in email sender are covered in
 
 ## Orb providers
 
-A deployment installs at least one Orb provider, where each Thread's workspace
-runs. `orbProviders` in `deploy.selfhost.json` records the choice. A file
-without it means `["e2b"]`.
+Each Thread's workspace (its Orb) runs on an Orb provider. A deployment needs
+none of its own: people and workspaces connect their own provider accounts in
+Settings → Orb Providers, and dx prepares each account before its sizes show
+in the Orb picker. For E2B that means an API key, and dx builds its Orb
+templates in that E2B team.
+
+A deployment may also offer providers on its own account, which it then pays
+for. `orbProviders` in `deploy.selfhost.json` records them, and `[]` offers
+none. A file without it means `["e2b"]`.
 
 - `e2b` needs an E2B API key. The deploy builds immutable templates for every
   profile. See [E2B profiles](/docs/deployment/e2b-profiles/).
@@ -83,7 +89,8 @@ without it means `["e2b"]`.
   authentication, the token must also manage Durable Objects and Containers.
   Sizes are `cf.standard-1` through `cf.standard-4`.
 
-The wizard asks which providers to install on first deploy. To add Containers
+The wizard asks which providers to offer on first deploy; each defaults to
+no. To add Containers
 to an existing deployment, set `"orbProviders": ["e2b", "cloudflare"]` and rerun
 `pnpm dx:deploy`.
 

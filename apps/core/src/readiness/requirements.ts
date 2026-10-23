@@ -6,10 +6,14 @@ import { loadAuthenticationRequirements } from "../auth/requirements.js";
 import { loadSignInConfiguration } from "../auth/sign-in-configuration.js";
 import { loadE2BRequirements } from "../execution/e2b/requirements.js";
 import { validateLocalRuntimeConfiguration } from "../execution/local/adapter.js";
-import { loadRunnerProfileCatalog } from "../execution/runner-profiles/catalog.js";
+import {
+  decodeRunnerProfileCatalog,
+  loadRunnerProfileCatalog,
+} from "../execution/runner-profiles/catalog.js";
 import type { Bindings } from "../http/types.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
 import {
+  connectableExecutionProvider,
   providerServesProfile,
   resolveExecutionProviders,
 } from "../plugins/execution/provider.js";
@@ -117,7 +121,6 @@ export class ReadinessError extends Schema.TaggedError<ReadinessError>()(
       "github_app_event_drift",
       "github_app_expiring_token_drift",
       "bitbucket_oauth_configuration_malformed",
-      "execution_provider_unavailable",
       "execution_workspace_configuration",
       "local_workspace_configuration",
       "runner_profile_configuration",
@@ -417,18 +420,19 @@ export const loadReadinessRequirements = Effect.fn("loadReadinessRequirements")(
         });
       config = deploymentConfig;
     }
-    // Execution is a required slot: a deployment without at least one
-    // resolvable provider is not ready (any provider counts; owner decision
-    // 2026-10-03). Each runner profile is an Execution configuration: it must
-    // name a resolved provider and rely only on capabilities that provider
-    // claims, and the default profile is one of them.
+    // No deployment provider is required: people and workspaces connect
+    // their own accounts (tasks/orb-provider-connections.md). Each runner
+    // profile is an Execution configuration: it must name a provider the
+    // deployment installed or one a person can connect, and rely only on
+    // capabilities that provider claims; the default profile is one of them.
     const executionProviders = resolveExecutionProviders(bindings);
-    if (executionProviders.length === 0)
-      return yield* new ReadinessError({
-        category: "execution_provider_unavailable",
-      });
     const resolvedProvider = (adapter: string) =>
       executionProviders.find(({ providerId }) => providerId === adapter);
+    const servingProvider = (adapter: string) =>
+      resolvedProvider(adapter) ??
+      (runtime.mode === "deployed"
+        ? connectableExecutionProvider(adapter)
+        : undefined);
     const runnerCatalog = yield* loadRunnerProfileCatalog(bindings).pipe(
       Effect.mapError(
         () => new ReadinessError({ category: "runner_profile_configuration" }),
@@ -437,10 +441,26 @@ export const loadReadinessRequirements = Effect.fn("loadReadinessRequirements")(
     const defaultRunner = runnerCatalog.configuration.profiles.find(
       ({ id }) => id === runnerCatalog.configuration.defaultProfileId,
     );
+    // Only the sizes the deployment configured; every provider's own sizes
+    // are offered to whoever connects that provider.
+    const configuredProfiles =
+      bindings.DX_RUNNER_PROFILE_CATALOG === undefined ||
+      bindings.DX_RUNNER_PROFILE_CATALOG === ""
+        ? []
+        : (yield* decodeRunnerProfileCatalog(
+            bindings.DX_RUNNER_PROFILE_CATALOG,
+          ).pipe(
+            Effect.mapError(
+              () =>
+                new ReadinessError({
+                  category: "runner_profile_configuration",
+                }),
+            ),
+          )).configuration.profiles;
     if (
       defaultRunner === undefined ||
-      runnerCatalog.configuration.profiles.some((profile) => {
-        const provider = resolvedProvider(profile.adapter);
+      configuredProfiles.some((profile) => {
+        const provider = servingProvider(profile.adapter);
         return (
           provider === undefined || !providerServesProfile(provider, profile)
         );
@@ -537,6 +557,7 @@ export const loadReadinessRequirements = Effect.fn("loadReadinessRequirements")(
     if (runtime.mode === "deployed") {
       for (const binding of [
         bindings.PLUGIN_TRIGGER_DELIVERY,
+        bindings.ORB_PROVIDER_PREPARATION,
         bindings.THREAD_EXECUTION,
         bindings.SUBSCRIPTION_CREDENTIAL_COORDINATOR,
         bindings.REALTIME_HUB,

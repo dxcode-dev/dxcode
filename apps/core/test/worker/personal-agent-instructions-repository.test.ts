@@ -1,9 +1,9 @@
+import { env } from "cloudflare:test";
 import {
   PersonalAgentInstructionsRepository,
   UpdatePersonalAgentInstructionsInput,
   UserId,
 } from "@dx/domain";
-import { env } from "cloudflare:test";
 import { Effect, Schema } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { settingsPersistenceLogger } from "../../src/logging.js";

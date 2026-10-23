@@ -567,6 +567,9 @@ export const createProductionPackage = async ({
     "manifest.webmanifest",
     "robots.txt",
     "social-card.png",
+    // The push service worker: served from the origin root, so the browser
+    // can scope it to the whole app.
+    "sw.js",
   ];
   const web = readGraph(webBuildRoot, {
     source: "index.html",
@@ -885,6 +888,7 @@ export const validateProductionPackage = async (root) => {
     "assets/manifest.webmanifest",
     "assets/robots.txt",
     "assets/social-card.png",
+    "assets/sw.js",
     "assets/dxd",
   ]);
   const docsFiles = (manifest.graph?.docs ?? []).map((path) => {

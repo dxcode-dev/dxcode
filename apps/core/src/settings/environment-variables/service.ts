@@ -12,6 +12,8 @@ import {
   EnvironmentVariableRepository,
   type EnvironmentVariableTarget,
   type EnvironmentVariableValue,
+  isHiddenEnvironmentValue,
+  MASKED_SECRET_VALUE,
   MAX_ENVIRONMENT_VARIABLE_BULK_ITEMS,
   MAX_ENVIRONMENT_VARIABLES_PER_SCOPE,
   type Page,
@@ -56,7 +58,9 @@ export class EnvironmentVariableLimitExceeded extends Schema.TaggedError<Environ
 
 export interface EnvironmentVariableView {
   readonly stored: StoredEnvironmentVariable;
+  /** The plaintext of a variable; a secret's stays masked. */
   readonly value: string;
+  readonly hidden: boolean;
 }
 
 export interface ResolvedEnvironmentVariable {
@@ -249,13 +253,19 @@ export class EnvironmentVariableService extends Context.Service<
         list: Effect.fn("EnvironmentVariableService.list")(
           function* (keyring, target) {
             const values = yield* repository.list(target);
+            // A secret is read only to say whether dx hides it.
             return yield* Effect.all(
               values.map((stored) =>
-                stored.kind === "secret"
-                  ? Effect.succeed({ stored, value: "••••••••" })
-                  : decrypt(keyring)(stored).pipe(
-                      Effect.map((value) => ({ stored, value })),
-                    ),
+                decrypt(keyring)(stored).pipe(
+                  Effect.map((plaintext) => ({
+                    stored,
+                    value:
+                      stored.kind === "secret"
+                        ? MASKED_SECRET_VALUE
+                        : plaintext,
+                    hidden: isHiddenEnvironmentValue(stored.kind, plaintext),
+                  })),
+                ),
               ),
               { concurrency: 4 },
             );

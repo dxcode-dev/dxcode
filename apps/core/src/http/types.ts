@@ -34,12 +34,11 @@ export interface Bindings {
   /**
    * R2's S3 endpoint for the storage bucket and the JSON
    * `{ accessKeyId, secretAccessKey }` Core signs attachment URLs with.
-   * Deployed stages have attachments only with both.
+   * Every stage has attachments only with both; local development names its
+   * loopback emulation of R2 (`attachments/local-r2.ts`).
    */
   readonly DX_ATTACHMENT_R2_ENDPOINT?: string;
   readonly DX_ATTACHMENT_R2_CREDENTIALS?: string;
-  /** "core" where the deployment carries attachment bytes through Core. */
-  readonly DX_ATTACHMENT_TRANSFER?: string;
   readonly DX_DXD_RELEASE_URL?: string;
   readonly DX_DXD_RELEASE_SHA256?: string;
   readonly DX_E2B_TEMPLATE_BUILD_ID?: string;
@@ -73,6 +72,13 @@ export interface Bindings {
   readonly DX_INSTALLED_PLUGINS?: string;
   readonly EXA_API_KEY?: string;
   readonly BETTER_AUTH_SECRET?: string;
+  /**
+   * The deployment's VAPID key pair for Web Push, both base64url: the
+   * uncompressed P-256 public key browsers subscribe with, and its private
+   * scalar. Without them the push channel reports itself unavailable.
+   */
+  readonly DX_PUSH_VAPID_PUBLIC_KEY?: string;
+  readonly DX_PUSH_VAPID_PRIVATE_KEY?: string;
   readonly E2B_API_KEY?: string;
   readonly FLUE_DX_AGENT_AGENT?: DurableObjectNamespace;
   readonly PLUGIN_TRIGGER_DELIVERY?: DurableObjectNamespace;
@@ -81,6 +87,8 @@ export interface Bindings {
   readonly REALTIME_HUB?: DurableObjectNamespace;
   readonly BYOK_CREDENTIAL_COORDINATOR?: DurableObjectNamespace;
   readonly THREAD_SEARCH_INDEX?: DurableObjectNamespace;
+  /** One object per Orb provider connection, which prepares its account. */
+  readonly ORB_PROVIDER_PREPARATION?: DurableObjectNamespace;
   /**
    * The Cloudflare Containers Orb provider: the Orb Worker's container
    * object namespace, bound across scripts. Present only when the deployment

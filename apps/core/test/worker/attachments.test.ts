@@ -1,3 +1,4 @@
+import { env, runInDurableObject } from "cloudflare:test";
 import { createHash } from "node:crypto";
 import {
   ATTACHMENT_PART_BYTES,
@@ -14,8 +15,11 @@ import {
 } from "@dx/domain";
 import { Effect, Schema } from "effect";
 import { Hono } from "hono";
-import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  LOCAL_R2_BUCKET,
+  localR2Routes,
+} from "../../src/attachments/local-r2.js";
 import {
   admitMessageAttachments,
   MessageAttachmentsRejected,
@@ -409,7 +413,7 @@ describe("message attachments", () => {
     });
     expect(wrongSize.status).toBe(403);
     await wrongSize.arrayBuffer();
-    // Deployed stages have no Core part route.
+    // Core has no part route: bytes never pass through it.
     const proxied = await asOwner(
       `/v1/attachments/${sizedResponse.id}/parts/1`,
       { method: "PUT", body: new Uint8Array(10) },
@@ -598,32 +602,114 @@ describe("message attachments", () => {
     ).toBeNull();
   });
 
-  it("carries bytes through Core only where composition says so", async () => {
-    const asLocal = app(owner, { DX_RUNTIME_MODE: "local" });
-    const bytes = new TextEncoder().encode("local bytes");
+  it("takes the same direct path in local development, through its R2 emulation", async () => {
+    const LOCAL_ORIGIN = "http://127.0.0.1:8787";
+    const local: Partial<Bindings> = {
+      DX_RUNTIME_MODE: "local",
+      DX_AUTH_TRUSTED_ORIGINS: "http://127.0.0.1:5173",
+      DX_ATTACHMENT_R2_ENDPOINT: `${LOCAL_ORIGIN}/${LOCAL_R2_BUCKET}`,
+      DX_ATTACHMENT_R2_CREDENTIALS: JSON.stringify({
+        accessKeyId: "dx-local",
+        secretAccessKey: "dx-local-secret",
+      }),
+    };
+    const emulator = new Hono<AppEnv>().route(
+      `/${LOCAL_R2_BUCKET}`,
+      localR2Routes,
+    );
+    const emulated: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const request = new Request(input, init);
+      if (new URL(request.url).origin !== LOCAL_ORIGIN)
+        return realFetch(input, init);
+      emulated.push(`${request.method} ${new URL(request.url).pathname}`);
+      return Promise.resolve(
+        emulator.fetch(request, {
+          DX_STORAGE: env.DX_STORAGE,
+          ...local,
+        }),
+      );
+    });
+    coreRequests.length = 0;
+    const asLocal = app(owner, local);
+    const bytes = pngBytes(ATTACHMENT_PART_BYTES + 5);
     const { created, data } = await upload(
       asLocal,
       bytes,
-      "local.txt",
-      "text/plain",
+      "local.png",
+      "image/png",
     );
-    expect(created.parts[0]?.url).toBe(`/v1/attachments/${data.id}/parts/1`);
-    const read = await asLocal(`/v1/attachments/${data.id}`);
-    expect(read.status).toBe(200);
-    expect(await read.text()).toBe("local bytes");
-    // An Alchemy OAuth self-host records at deploy time that Core carries
-    // the bytes.
-    const asOauthSelfhost = app(owner, { DX_ATTACHMENT_TRANSFER: "core" });
-    const oauthUpload = await upload(
-      asOauthSelfhost,
-      new TextEncoder().encode("oauth"),
-      "oauth.txt",
-      "text/plain",
+    // Parts go to the emulated R2, never to a Core route.
+    expect(created.parts.map(({ url }) => new URL(url).origin)).toEqual([
+      LOCAL_ORIGIN,
+      LOCAL_ORIGIN,
+    ]);
+    expect(coreRequests.some((line) => line.includes("/parts/"))).toBe(false);
+    expect(data.mimeType).toBe("image/png");
+
+    // Like R2, a presigned part URL refuses any other length, and an
+    // unsigned request is refused.
+    const sized = await asLocal("/v1/attachments", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ filename: "a.bin", mimeType: "", size: 10 }),
+    });
+    const sizedResponse = (await sized.json()) as CreateAttachmentResponse;
+    const wrongSize = await fetch(sizedResponse.parts[0]?.url ?? "", {
+      method: "PUT",
+      body: new Uint8Array(9),
+    });
+    expect(wrongSize.status).toBe(403);
+    await wrongSize.arrayBuffer();
+    const unsigned = await fetch(
+      `${LOCAL_ORIGIN}/${LOCAL_R2_BUCKET}/attachments/${owner}/${data.id}`,
     );
-    expect(oauthUpload.created.parts[0]?.url).toBe(
-      `/v1/attachments/${oauthUpload.data.id}/parts/1`,
+    expect(unsigned.status).toBe(403);
+    await unsigned.arrayBuffer();
+
+    // Reads redirect to a presigned GET on the emulation, with ranges and
+    // the deployment's CORS rule for the web origin.
+    const read = await asLocal(`/v1/attachments/${data.id}/local.png`);
+    expect(read.status).toBe(302);
+    const location = read.headers.get("location") ?? "";
+    expect(new URL(location).origin).toBe(LOCAL_ORIGIN);
+    const whole = await fetch(location, {
+      headers: { origin: "http://127.0.0.1:5173" },
+    });
+    expect(whole.status).toBe(200);
+    expect(whole.headers.get("content-type")).toBe("image/png");
+    expect(whole.headers.get("access-control-allow-origin")).toBe(
+      "http://127.0.0.1:5173",
     );
-    // A deployed stage without signing credentials has no attachments.
+    expect(digest(await whole.arrayBuffer())).toBe(digest(bytes));
+    const ranged = await fetch(location, { headers: { range: "bytes=1-3" } });
+    expect(ranged.status).toBe(206);
+    expect([...new Uint8Array(await ranged.arrayBuffer())]).toEqual([
+      0x50, 0x4e, 0x47,
+    ]);
+
+    // The emulation exists only in local development, and a deployed stage
+    // never signs for a loopback endpoint.
+    const deployed = await emulator.request(location, undefined, {
+      DX_STORAGE: env.DX_STORAGE,
+      ...local,
+      DX_RUNTIME_MODE: "deployed",
+    });
+    expect(deployed.status).toBe(404);
+    await deployed.arrayBuffer();
+    const loopbackDeployed = await app(owner, {
+      ...local,
+      DX_RUNTIME_MODE: "deployed",
+    })("/v1/attachments", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ filename: "a", mimeType: "", size: 1 }),
+    });
+    expect(loopbackDeployed.status).toBe(503);
+    await loopbackDeployed.arrayBuffer();
+    expect(emulated.length).toBeGreaterThan(0);
+
+    // A stage without signing credentials has no attachments.
     const unavailable = await app(owner, {})("/v1/attachments", {
       method: "POST",
       headers: { "content-type": "application/json" },

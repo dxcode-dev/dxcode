@@ -1,3 +1,4 @@
+import type { ThreadId } from "@dx/domain";
 import {
   type FlueEventContext,
   type FlueObservation,
@@ -10,6 +11,7 @@ import {
   agentToolLogger,
   settingsPersistenceLogger,
 } from "../logging.js";
+import { notifyTurnCompleted } from "../notifications/turn-completed.js";
 import { recordFlueUsage } from "../settings/usage/recorder.js";
 import { enqueueThreadSearchIndex } from "../thread-search/enqueue.js";
 import { recordFlueThreadActivity } from "../threads/activity.js";
@@ -66,7 +68,13 @@ const unknownFailure = (error: unknown) =>
         ? {}
         : failure({ message: JSON.stringify(error) });
 
-const observeFlueEvent = (
+/**
+ * What one runtime observation does: logging, usage, Thread activity,
+ * startup phases, search indexing, and the finished-turn notification.
+ * Exported so a test can drive it with a real observation and real
+ * bindings; Flue is the only caller in production.
+ */
+export const observeFlueEvent = (
   event: FlueObservation,
   context: FlueEventContext,
 ) => {
@@ -149,10 +157,21 @@ const observeFlueEvent = (
     event.type === "submission_settled" && event.instanceId !== undefined
       ? enqueueThreadSearchIndex(bindings, event.instanceId)
       : Promise.resolve();
+  // The settled turn is what people wait for, so it notifies its Thread's
+  // owner here, beside the activity and index work the same event drives.
+  const turnNotification =
+    event.type === "submission_settled" && event.instanceId !== undefined
+      ? notifyTurnCompleted(bindings, {
+          threadId: event.instanceId as ThreadId,
+          submissionId: event.submissionId,
+          outcome: event.outcome,
+        })
+      : Promise.resolve();
   const persistence = Promise.all([
     usageDelivery,
     activityDelivery,
     searchIndexDelivery,
+    turnNotification,
     startupDelivery.catch(() => {
       settingsPersistenceLogger.warn(
         "Startup phase observation could not be delivered.",

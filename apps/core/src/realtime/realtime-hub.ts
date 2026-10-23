@@ -35,6 +35,8 @@ interface SocketAttachment {
   readonly clientId: string;
   /** The joined Thread; kept on the socket so presence survives hibernation. */
   readonly topic?: PresenceTopic;
+  /** When that presence was last confirmed, so a wake does not renew it. */
+  readonly heartbeatAt?: number;
   /** The browser session that opened the socket; it closes when that ends. */
   readonly session?: BrowserSessionBinding;
 }
@@ -145,25 +147,31 @@ export class RealtimeHub extends DurableObject<Bindings> {
 
   /**
    * Hibernation drops in-memory presence while sockets stay open. Rebuild it
-   * once per wake from the topic each socket carries.
+   * once per wake from the topic and last heartbeat each socket carries; a
+   * wake is not a heartbeat, so a socket that went quiet stays expired.
    */
   #restorePresence() {
     if (this.#presenceRestored) return;
     this.#presenceRestored = true;
-    const now = Date.now();
     for (const socket of this.ctx.getWebSockets()) {
-      const topic = (
-        socket.deserializeAttachment() as SocketAttachment | undefined
-      )?.topic;
-      if (topic !== undefined && !this.#presence.has(socket))
-        this.#presence.set(socket, { topic, heartbeatAt: now });
+      const attachment = socket.deserializeAttachment() as
+        | SocketAttachment
+        | undefined;
+      if (attachment?.topic !== undefined && !this.#presence.has(socket))
+        this.#presence.set(socket, {
+          topic: attachment.topic,
+          heartbeatAt: attachment.heartbeatAt ?? 0,
+        });
     }
   }
 
   #setPresence(socket: WebSocket, entry: PresenceEntry) {
     const attachment = socket.deserializeAttachment() as SocketAttachment;
-    if (attachment.topic !== entry.topic)
-      socket.serializeAttachment({ ...attachment, topic: entry.topic });
+    socket.serializeAttachment({
+      ...attachment,
+      topic: entry.topic,
+      heartbeatAt: entry.heartbeatAt,
+    });
     this.#presence.set(socket, entry);
   }
 
@@ -173,7 +181,7 @@ export class RealtimeHub extends DurableObject<Bindings> {
       | SocketAttachment
       | undefined;
     if (attachment?.topic === undefined) return;
-    const { topic: _topic, ...rest } = attachment;
+    const { topic: _topic, heartbeatAt: _heartbeatAt, ...rest } = attachment;
     try {
       socket.serializeAttachment(rest);
     } catch {
@@ -184,7 +192,9 @@ export class RealtimeHub extends DurableObject<Bindings> {
   #leave(socket: WebSocket) {
     this.#restorePresence();
     const topic = this.#presence.get(socket)?.topic;
-    this.#presence.delete(socket);
+    // Clears the socket's attachment too: a closing socket can still be
+    // listed after a wake, and must not come back as present.
+    this.#clearPresence(socket);
     if (topic !== undefined) this.#broadcastPresence(topic);
   }
 
@@ -345,7 +355,33 @@ export class RealtimeHub extends DurableObject<Bindings> {
       return this.#publishInvalidation(request, audience);
     if (request.method === "POST" && url.pathname === "/notify")
       return this.#publishUserEvent(request, audience);
+    if (request.method === "GET" && url.pathname === "/presence")
+      return this.#readPresence(url);
     return new Response(null, { status: 404 });
+  }
+
+  /**
+   * Who has a Thread open right now, so a notification can leave them alone.
+   * Presence is memory-only and expires with its heartbeat, so an answer is
+   * a snapshot, never a promise about the next moment.
+   */
+  #readPresence(url: URL): Response {
+    const topic = url.searchParams.get("topic") ?? "";
+    this.#restorePresence();
+    const now = Date.now();
+    const participants = new Set<UserId>();
+    for (const [socket, entry] of this.#presence) {
+      if (
+        entry.topic !== topic ||
+        now - entry.heartbeatAt > PRESENCE_HEARTBEAT_TIMEOUT_MS
+      )
+        continue;
+      const attachment = socket.deserializeAttachment() as
+        | SocketAttachment
+        | undefined;
+      if (attachment !== undefined) participants.add(attachment.participant);
+    }
+    return Response.json({ participants: [...participants] });
   }
 
   async #subscribe(

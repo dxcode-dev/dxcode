@@ -171,6 +171,7 @@ export const createTestBindings = (
   SUBSCRIPTION_CREDENTIAL_COORDINATOR: validAgentBinding,
   REALTIME_HUB: validAgentBinding,
   THREAD_SEARCH_INDEX: validAgentBinding,
+  ORB_PROVIDER_PREPARATION: validAgentBinding,
   AI: validAiBinding,
   DB: validD1Binding,
   EMAIL: validEmailBinding,

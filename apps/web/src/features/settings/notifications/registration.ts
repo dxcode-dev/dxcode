@@ -9,7 +9,7 @@ export const personalNotificationsSettingsSection = {
   group: "interface",
   label: "Notifications",
   title: "Notifications",
-  description: "Choose where mentions reach you besides the app.",
+  description: "Choose which updates reach you by email and push.",
   icon: Bell,
   component: NotificationSettings,
 } satisfies SettingsSectionRegistration;

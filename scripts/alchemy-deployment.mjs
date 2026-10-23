@@ -86,11 +86,20 @@ const preDeploymentTargetBindingOmission = "DX_DEPLOYMENT_TARGET";
 const preSourceShallowCloneBindingOmission = "DX_SOURCE_SHALLOW_CLONE";
 const preRealtimeHubBindingOmission = "REALTIME_HUB";
 const preThreadSearchIndexBindingOmission = "THREAD_SEARCH_INDEX";
+const preOrbProviderPreparationBindingOmission = "ORB_PROVIDER_PREPARATION";
 const preAuthenticationEmailBindingOmissions = ["DX_AUTH_EMAIL_FROM", "EMAIL"];
 const preTurnstileBindingOmissions = [
   "DX_TURNSTILE_SECRET_KEY",
   "DX_TURNSTILE_SITE_KEY",
 ];
+// SNOOZE_SWEEP_CRON in apps/core/src/notifications/snooze-cron.ts. Every
+// stage sweeps snoozed Threads; staging also keeps its daily retention pass.
+const workerCrons = (selection) =>
+  selection.environment === "staging"
+    ? ["17 3 * * *", "*/5 * * * *"]
+    : ["*/5 * * * *"];
+const prePushWorkerCrons = (selection) =>
+  selection.environment === "staging" ? ["17 3 * * *"] : [];
 const destroyWorkerBindingOmissions = new Set([
   "BYOK_CREDENTIAL_COORDINATOR",
   "DX_AUTH_EMAIL_FROM",
@@ -104,6 +113,7 @@ const destroyWorkerBindingOmissions = new Set([
   "DX_TURNSTILE_SITE_KEY",
   "DX_WORKSPACE_INACTIVITY_MS",
   "EMAIL",
+  "ORB_PROVIDER_PREPARATION",
   "REALTIME_HUB",
   "THREAD_SEARCH_INDEX",
 ]);
@@ -129,6 +139,7 @@ const deploymentBuildEnvironmentNames = new Set([
 const workerDurableObjectBindings = [
   ["BYOK_CREDENTIAL_COORDINATOR", "ByokCredentialCoordinatorObject"],
   ["FLUE_DX_AGENT_AGENT", "FlueDxAgentAgent"],
+  ["ORB_PROVIDER_PREPARATION", "OrbProviderPreparationObject"],
   ["PLUGIN_TRIGGER_DELIVERY", "PluginTriggerDeliveryObject"],
   ["REALTIME_HUB", "RealtimeHub"],
   [
@@ -144,6 +155,7 @@ const commonDeploymentResourceTypes = new Map([
   ["Bootstrap", "Command.Exec"],
   ["ConfigEncryptionKey", "Alchemy.Random"],
   ["Database", "Cloudflare.D1Database"],
+  ["PushVapidKey", "Alchemy.Random"],
   ["Storage", "Cloudflare.R2.Bucket"],
   ["Verify", "Command.Exec"],
   ["Worker", "Cloudflare.Worker"],
@@ -154,16 +166,22 @@ const ORB_PROVIDER_IDS = new Set(["e2b", "cloudflare"]);
 /**
  * Default Orb size a new deployment's first project uses. Hosted stages run
  * on Cloudflare Containers whenever they install it (E2B stays available for
- * provider testing); a self-host keeps E2B first.
+ * provider testing); a self-host keeps E2B first. With no deployment
+ * provider it is an E2B size, which people run on their own E2B team.
  */
 const defaultOrbProfileId = (orbProviders = ["e2b"], target = "selfhost") =>
-  orbProviders.includes("e2b") &&
-  !(target !== "selfhost" && orbProviders.includes("cloudflare"))
-    ? "a1.medium"
-    : "cf.standard-2";
+  orbProviders.includes("cloudflare") &&
+  !(target === "selfhost" && orbProviders.includes("e2b"))
+    ? "cf.standard-2"
+    : "a1.medium";
 const bootstrapRunnerProfileIds = new Set(["a1.medium", "cf.standard-2"]);
 
+/**
+ * The Orb providers a deployment offers on its own account. `none` installs
+ * none: people and workspaces connect their own accounts.
+ */
 export const parseOrbProviders = (value = "e2b") => {
+  if (value.trim() === "none") return [];
   const providers = value.split(",").filter(Boolean);
   if (
     providers.length === 0 ||
@@ -171,10 +189,14 @@ export const parseOrbProviders = (value = "e2b") => {
     new Set(providers).size !== providers.length
   )
     throw new Error(
-      "Orb providers must name e2b, cloudflare, or both, once each.",
+      "Orb providers must name e2b, cloudflare, both, or none, once each.",
     );
   return [...providers].sort();
 };
+
+/** The DX_DEPLOYMENT_ORB_PROVIDERS value for parsed providers. */
+export const orbProvidersValue = (orbProviders) =>
+  orbProviders.length === 0 ? "none" : orbProviders.join(",");
 
 const deploymentResourceTypes = ({
   target,
@@ -193,11 +215,12 @@ const deploymentResourceTypes = ({
           ["PortalWorker", "Cloudflare.Worker"],
           ["PortalDns", "Cloudflare.DNS.Record"],
         ]),
-    // The bucket-scoped token Core signs attachment URLs with; Alchemy OAuth
-    // self-hosts cannot mint it and carry attachment bytes through Core.
+    // The R2 credentials Core signs attachment URLs with: a minted
+    // bucket-scoped token, or, for Alchemy OAuth self-hosts, which cannot
+    // mint one, the R2 API token the operator created.
     ...(attachmentSigning === "token"
       ? [["AttachmentSigningToken", "Cloudflare.ApiToken.AccountApiToken"]]
-      : []),
+      : [["AttachmentR2Credentials", "Dx.HeldSecret"]]),
     ...(orbProviders.includes("cloudflare")
       ? [["OrbContainers", "Dx.OrbContainers"]]
       : []),
@@ -243,6 +266,9 @@ const retiredRandomResourceIds = new Set([
 ]);
 const retiredWorkerBindings = new Map([
   ["ACCOUNT_SHELL", "durable_object_namespace"],
+  // Self-hosts that carried attachment bytes through Core; every stage now
+  // signs direct R2 URLs.
+  ["DX_ATTACHMENT_TRANSFER", "plain_text"],
   ["DX_MODEL_INVOCATION_HMAC_KEYS", "secret_text"],
   ["DX_MODEL_REPLAY_SEAL_KEYS", "secret_text"],
   ["DX_WEB_PROVIDER", "plain_text"],
@@ -652,20 +678,35 @@ export const prepareDeploymentCredentials = ({
       `The ${target} stage already has a D1 database, but its private credentials file is missing. Recover the exact credentials before deploying.`,
     );
 
-  const ids = bootstrapIdentity(stage);
-  const shared = sharedDeploymentCredentials(environment, target);
   return writePrivateCredentials(credentialsFile, {
-    version: 2,
-    source: sharedDeploymentCredentialSource,
-    target,
-    stage,
-    ...shared,
-    ...ids,
+    ...deploymentCredentialsFromEnvironment(environment, stage, target),
     ...(target === "selfhost"
       ? { bootstrapProject: false, displayName: "dx admin" }
       : {}),
   });
 };
+
+/**
+ * The credentials a new stage's deploy writes, rebuilt from the stage and
+ * the reviewer, staging test, or admin login in the environment. Journeys on
+ * an Orb that did not deploy the stage sign in with these.
+ */
+export const deploymentCredentialsFromEnvironment = (
+  environment,
+  stage,
+  target,
+) => ({
+  version: 2,
+  source: sharedDeploymentCredentialSource,
+  target,
+  stage,
+  ...sharedDeploymentCredentials(environment, target),
+  ...bootstrapIdentity(stage),
+});
+
+/** dx Orbs carry the E2B key as DX_E2B_API_KEY; E2B's own name wins. */
+export const e2bApiKeyFromEnvironment = (environment) =>
+  environment.E2B_API_KEY?.trim() || environment.DX_E2B_API_KEY?.trim() || "";
 
 const assertStoredCredentials = (value, expected, label) => {
   const selfhost = expected.target === "selfhost";
@@ -1167,6 +1208,13 @@ const validateWorkerProps = (
     preTurnstileBindingOmissions.every((name) =>
       missingEnvironmentNames.includes(name),
     );
+  // A stage deployed before push notifications has no snooze sweep schedule;
+  // admit it only as history. Its missing VAPID pair is optional anyway.
+  const prePushSchedule =
+    !current &&
+    (representation === "persisted" || representation === "prior") &&
+    JSON.stringify(props.crons) ===
+      JSON.stringify(prePushWorkerCrons(selection));
   const preBranchPreviewIdentity =
     !current &&
     selection.target === "branch" &&
@@ -1204,6 +1252,11 @@ const validateWorkerProps = (
         !current &&
         (representation === "persisted" || representation === "prior") &&
         name === preThreadSearchIndexBindingOmission
+      ) &&
+      !(
+        !current &&
+        (representation === "persisted" || representation === "prior") &&
+        name === preOrbProviderPreparationBindingOmission
       ) &&
       !(
         !current &&
@@ -1362,10 +1415,9 @@ const validateWorkerProps = (
     ],
     [
       "crons",
-      JSON.stringify(props.crons) !==
-        JSON.stringify(
-          selection.environment === "staging" ? ["17 3 * * *"] : [],
-        ) && !legacyRouterWorker,
+      JSON.stringify(props.crons) !== JSON.stringify(workerCrons(selection)) &&
+        !prePushSchedule &&
+        !legacyRouterWorker,
     ],
     ["workers-dev", props.workersDev !== (selection.zone === undefined)],
     [
@@ -1789,8 +1841,9 @@ const isRecoveredWorkerAttr = (attr, selection) => {
     ) &&
     isExactInterruptedWorkerIdentity(attr, selection, true) &&
     (JSON.stringify(attr.crons) === "[]" ||
-      (selection.environment === "staging" &&
-        JSON.stringify(attr.crons) === JSON.stringify(["17 3 * * *"]))) &&
+      JSON.stringify(attr.crons) === JSON.stringify(workerCrons(selection)) ||
+      JSON.stringify(attr.crons) ===
+        JSON.stringify(prePushWorkerCrons(selection))) &&
     (JSON.stringify(attr.urls) === "[]" ||
       JSON.stringify(attr.urls) === JSON.stringify([url])) &&
     (attr.url === undefined || attr.url === url) &&
@@ -2540,6 +2593,7 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
   if (
     id === "BetterAuthSecret" ||
     id === "ConfigEncryptionKey" ||
+    id === "PushVapidKey" ||
     id === "WorkloadIdentitySigningKey"
   )
     assertExactRandomIdentity(node, operation, id);
@@ -2672,9 +2726,9 @@ export const assertPostApplyVerification = ({ error, status }) => {
  * protects magic-link requests, so only magic link creates it; notification
  * email needs only the sender. Attachments are signed directly to R2 with a
  * bucket-scoped token that only an API token can mint, so a deployment that
- * records Alchemy's browser login carries them through Core, even on the one
- * deploy that switches with a token and removes what browser login cannot
- * manage.
+ * records Alchemy's browser login signs with the R2 API token its operator
+ * supplies instead, even on the one deploy that switches with a token and
+ * removes what browser login cannot manage.
  */
 export const selfhostDeploymentShape = ({
   signIn,
@@ -2684,7 +2738,7 @@ export const selfhostDeploymentShape = ({
   attachmentSigning:
     credentials === "api-token" && cloudflareAuth !== "alchemy-oauth"
       ? "token"
-      : "core",
+      : "operator",
   turnstile: signIn.providers.includes("magic-link"),
 });
 
@@ -2701,6 +2755,7 @@ export const isolatedAlchemyEnvironment = (inherited, deployment) => ({
           "CLOUDFLARE_EMAIL",
           "DX_ADMIN_PASSWORD",
           "DX_ADMIN_PASSWORD_RESET",
+          "DX_ATTACHMENT_R2_CREDENTIALS",
           "DX_INTEGRATION_GITHUB_APP",
           "DX_INTEGRATION_BITBUCKET_OAUTH",
           // The runner forwards validated Portal settings itself.
@@ -2711,6 +2766,7 @@ export const isolatedAlchemyEnvironment = (inherited, deployment) => ({
           "DX_DEPLOYMENT_REVIEWER_PASSWORD",
           "DX_STAGING_TEST_PASSWORD",
           "DX_STAGING_TEST_USERNAME",
+          "DX_E2B_API_KEY",
           "E2B_API_KEY",
           "HOME",
           "SARVAM_API_KEY",

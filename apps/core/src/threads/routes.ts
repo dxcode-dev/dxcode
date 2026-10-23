@@ -102,7 +102,6 @@ import {
   messageAttachmentBody,
   resolveMessageAttachments,
 } from "../attachments/message.js";
-import { currentOrbTemplateRecipe } from "../execution/e2b/team-templates.js";
 import { ExecutionWorkspaces } from "../execution/execution-workspaces.js";
 import {
   loadRunnerProfileCatalog,
@@ -845,7 +844,6 @@ export const createThreadRoutes = (
                               project.snapshot.configuration.runnerProfileId,
                           }
                         : {}),
-                      recipe: currentOrbTemplateRecipe,
                     }),
                   catch: (cause) =>
                     cause instanceof OrbUnavailable
@@ -1010,7 +1008,14 @@ export const createThreadRoutes = (
           dispatchInitialMessage({
             id: thread.id,
             uid: null,
-            initialData: dispatchDetail.agentInitialization,
+            // A Thread an agent started reports to that agent's Thread.
+            initialData:
+              messageSourceThreadId === undefined
+                ? dispatchDetail.agentInitialization
+                : {
+                    ...dispatchDetail.agentInitialization,
+                    startedByThreadId: messageSourceThreadId,
+                  },
             message: {
               kind: "user",
               body: withMessageAuthor(

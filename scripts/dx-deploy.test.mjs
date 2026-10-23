@@ -6,12 +6,14 @@ import {
   CLOUDFLARE_ORB_PROMPT,
   chooseCloudflareAuth,
   collectDeploymentConfig,
+  collectOperatorR2Credentials,
   collectOrbProviders,
   collectPluginChoices,
   collectPortalDomain,
   collectSenderUpgrade,
   E2B_ORB_PROMPT,
   EMAIL_SENDING_PROMPT,
+  NO_DEPLOYMENT_ORB_NOTICE,
   PASSWORD_PROMPT,
   PORTAL_SKIP_PROMPT,
   SENDER_EMAIL_PROMPT,
@@ -82,7 +84,8 @@ describe("common deployment installer", () => {
       },
     });
     expect(yes).toHaveBeenCalledWith(WORKER_TRACES_PROMPT, false);
-    expect(environment).toEqual({ E2B_API_KEY: "fixture-e2b-key" });
+    // No Orb provider by default: people connect their own accounts.
+    expect(environment).toEqual({});
     expect(answer).not.toHaveBeenCalledWith(
       "Deployment name",
       expect.anything(),
@@ -220,7 +223,7 @@ describe("common deployment installer", () => {
 });
 
 describe("Orb provider choice", () => {
-  it("asks for E2B and Cloudflare Containers, keys only E2B, and requires one", async () => {
+  it("offers E2B and Cloudflare Containers on the deployment's account, keys only E2B, and requires neither", async () => {
     const run = async (answers) => {
       const environment = {};
       const log = vi.fn();
@@ -240,9 +243,9 @@ describe("Orb provider choice", () => {
     const e2bOnly = await run([true, false]);
     expect(e2bOnly.providers).toEqual(["e2b"]);
     expect(e2bOnly.environment).toEqual({ E2B_API_KEY: "fixture-e2b-key" });
-    // E2B is the default; Containers must be an explicit choice.
+    // The deployment pays for either, so both are explicit choices.
     expect(e2bOnly.asked).toEqual([
-      [E2B_ORB_PROMPT, true],
+      [E2B_ORB_PROMPT, false],
       [CLOUDFLARE_ORB_PROMPT, false],
     ]);
     expect(CLOUDFLARE_ORB_PROMPT).toContain("Workers Paid");
@@ -251,10 +254,11 @@ describe("Orb provider choice", () => {
     expect(containersOnly.environment).toEqual({});
     const both = await run([true, true]);
     expect(both.providers).toEqual(["e2b", "cloudflare"]);
-    const retried = await run([false, false, false, true]);
-    expect(retried.providers).toEqual(["cloudflare"]);
-    expect(retried.log).toHaveBeenCalledOnce();
-    await expect(run([])).rejects.toThrow("at least one Orb provider");
+    // None: people connect their own, and the installer says where.
+    const none = await run([]);
+    expect(none.providers).toEqual([]);
+    expect(none.environment).toEqual({});
+    expect(none.log).toHaveBeenCalledWith(NO_DEPLOYMENT_ORB_NOTICE);
   });
 
   it("offers a sender once to a deployment without one, for notification email", async () => {
@@ -608,5 +612,79 @@ describe("Portal domain choice", () => {
     });
     expect(portals).toHaveBeenCalledWith("dx.example.com");
     expect(config.portalDomain).toBe("example-portals.dev");
+  });
+});
+
+describe("attachment R2 credentials", () => {
+  const ACCESS = "0123456789abcdef0123456789abcdef";
+  const SECRET = "f".repeat(64);
+  const oauthConfig = (extra = {}) =>
+    validateSelfhostConfig({
+      name: "acme",
+      adminEmail: "owner@example.com",
+      cloudflareAuth: "alchemy-oauth",
+      signIn: { providers: ["email-password"], admission: "invite" },
+      ...extra,
+    });
+  const prompts = (accessKeyIds, secrets) => ({
+    answer: vi.fn(async () => accessKeyIds.shift()),
+    secret: vi.fn(async () => secrets.shift()),
+  });
+
+  it("asks a browser-login deployment once, with directions, and keeps the answer out of the config", async () => {
+    const environment = {};
+    const log = vi.fn();
+    // A pasted token value instead of the S3 keys is refused and asked again.
+    const { answer, secret } = prompts(["not-a-key", ACCESS], ["x", SECRET]);
+    const config = await collectOperatorR2Credentials({
+      config: oauthConfig(),
+      credentials: "alchemy-oauth",
+      environment,
+      answer,
+      secret,
+      log,
+    });
+    expect(answer).toHaveBeenCalledTimes(2);
+    expect(log.mock.calls.join("\n")).toContain("dx-storage-selfhost-acme");
+    expect(environment).toEqual({
+      DX_R2_ACCESS_KEY_ID: ACCESS,
+      DX_R2_SECRET_ACCESS_KEY: SECRET,
+    });
+    expect(config.attachmentR2Credentials).toBe(true);
+    expect(JSON.stringify(config)).not.toContain(SECRET);
+
+    // The deployment holds it: later deploys do not ask, --rotate does.
+    const later = prompts([], []);
+    await collectOperatorR2Credentials({
+      config,
+      credentials: "alchemy-oauth",
+      environment: {},
+      ...later,
+    });
+    expect(later.answer).not.toHaveBeenCalled();
+    const rotated = prompts([ACCESS], [SECRET]);
+    await collectOperatorR2Credentials({
+      config,
+      credentials: "alchemy-oauth",
+      rotate: true,
+      environment: {},
+      ...rotated,
+    });
+    expect(rotated.secret).toHaveBeenCalledTimes(1);
+  });
+
+  it("never asks a deployment that mints its own signing token", async () => {
+    const { answer, secret } = prompts([], []);
+    const config = oauthConfig({ cloudflareAuth: "api-token" });
+    await expect(
+      collectOperatorR2Credentials({
+        config,
+        credentials: "api-token",
+        environment: {},
+        answer,
+        secret,
+      }),
+    ).resolves.toEqual(config);
+    expect(answer).not.toHaveBeenCalled();
   });
 });

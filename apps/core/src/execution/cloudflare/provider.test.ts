@@ -91,7 +91,7 @@ const fakeNamespace = () => {
 
 const context: ExecutionContext = {
   account: { scope: "deployment" },
-  credential: undefined,
+  credentials: undefined,
   profile: {
     id: "cf.standard-2",
     label: "standard-2",

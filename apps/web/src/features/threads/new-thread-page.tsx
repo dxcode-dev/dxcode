@@ -31,6 +31,7 @@ import {
   canStartThreadsIn,
   rememberedProjectToResolve,
   effectiveRunnerProfileId as resolveRunnerProfileId,
+  runnableRunnerProfileId,
   startingMode,
   startingModel,
   startingProjectId,
@@ -502,7 +503,7 @@ function useComposerOrb({
       projectId === "" ? undefined : projectId,
     ),
   );
-  const effectiveRunnerProfileId = resolveRunnerProfileId({
+  const preferredRunnerProfileId = resolveRunnerProfileId({
     override,
     projectSelected: projectId !== "",
     projectRunnerProfileId: project?.configuration.runnerProfileId,
@@ -515,6 +516,16 @@ function useComposerOrb({
     allowed: defaultsQuery.data?.restrictions.allowedRunnerProfileIds,
     fallback: defaultsQuery.data?.resolved.runnerProfileId.value,
   });
+  // The composer's own pick stands; a default moves to a provider the
+  // person can use.
+  const effectiveRunnerProfileId =
+    override !== undefined
+      ? preferredRunnerProfileId
+      : runnableRunnerProfileId(
+          preferredRunnerProfileId,
+          defaultsQuery.data?.catalog.profiles,
+          orbProvidersQuery.data?.resolved,
+        );
   return {
     defaultsTarget,
     defaultsQuery,
@@ -765,6 +776,12 @@ function ScopedNewThreadModal({
             defaultsTarget === undefined
               ? undefined
               : () => void defaultsQuery.refetch()
+          }
+          onConnectOrbProvider={() =>
+            void navigate({
+              to: "/settings/$section",
+              params: { section: "orb-providers" },
+            })
           }
           onProfileChange={chooseProfile}
           onModelChange={chooseModel}

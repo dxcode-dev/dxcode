@@ -1,13 +1,19 @@
 import {
+  CLOUDFLARE_ORB_PROFILES,
+  E2B_ORB_PROFILES,
   type RunnerAdapterCapabilityState,
   type RunnerProfile,
   type RunnerProfileCatalog,
   RunnerProfileCatalogConfiguration,
-  type RunnerProfileId,
+  RunnerProfileId,
 } from "@dx/domain";
 import { Effect, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
-import { findPlugin, findProvider } from "../../plugins/registry.js";
+import {
+  findPlugin,
+  findProvider,
+  isLocalRuntime,
+} from "../../plugins/registry.js";
 
 const unavailableAdapterStates = [
   { kind: "container", state: "unavailable" },
@@ -43,14 +49,85 @@ const publicProfile = (
   capabilities: profile.capabilities,
 });
 
-export const decodeRunnerProfileCatalog = Effect.fn(
-  "decodeRunnerProfileCatalog",
-)(function* (input: string) {
-  const configuration = yield* Schema.decodeUnknownEffect(
+type CatalogConfiguration = typeof RunnerProfileCatalogConfiguration.Type;
+
+const orbCapabilities = [
+  "git",
+  "environment-variables",
+  "internet-access",
+  "persistent-workspace",
+  "pause-resume",
+] as const;
+
+/**
+ * Every provider's own sizes. A deployment's catalog lists the sizes it
+ * offers on its own account with its templates. A connection's Threads
+ * pin the target their account prepared, so these profiles stand in for
+ * any size the deployment does not list; the E2B template here is never
+ * created from.
+ */
+export const PROVIDER_RUNNER_PROFILES: CatalogConfiguration["profiles"] = [
+  ...E2B_ORB_PROFILES.map((profile) => ({
+    id: profile.id,
+    label: profile.label,
+    adapter: "e2b" as const,
+    template: `dx-orb-${profile.templateSuffix}`,
+    resources: profile.resources,
+    isolation: "sandbox" as const,
+    availability: "available" as const,
+    capabilities: orbCapabilities,
+  })),
+  ...CLOUDFLARE_ORB_PROFILES.map((profile) => ({
+    id: profile.id,
+    label: profile.label,
+    adapter: "cloudflare" as const,
+    instance: profile.instance,
+    resources: profile.resources,
+    isolation: "container" as const,
+    availability: "available" as const,
+    capabilities: orbCapabilities,
+  })),
+];
+
+/** The size a new project starts on when the deployment names none. */
+export const DEFAULT_ORB_PROFILE_ID =
+  Schema.decodeUnknownSync(RunnerProfileId)("a1.medium");
+
+/**
+ * The deployment's catalog with every provider's sizes it does not list,
+ * so a size is known whichever account runs it. Who may start a Thread on
+ * a size is the provider set's decision (plugins/execution/orb-providers).
+ */
+const withProviderProfiles = (
+  configuration: CatalogConfiguration | undefined,
+): CatalogConfiguration => {
+  const listed = new Set(configuration?.profiles.map(({ id }) => id) ?? []);
+  return {
+    version: 1,
+    defaultProfileId: configuration?.defaultProfileId ?? DEFAULT_ORB_PROFILE_ID,
+    profiles: [
+      ...(configuration?.profiles ?? []),
+      ...PROVIDER_RUNNER_PROFILES.filter(({ id }) => !listed.has(id)),
+    ],
+  };
+};
+
+const decodeCatalogConfiguration = (input: string) =>
+  Schema.decodeUnknownEffect(
     Schema.fromJsonString(RunnerProfileCatalogConfiguration),
   )(input).pipe(
     Effect.mapError(() => new RunnerProfileConfigurationUnavailable()),
   );
+
+export const decodeRunnerProfileCatalog = Effect.fn(
+  "decodeRunnerProfileCatalog",
+)(function* (input: string) {
+  return catalogFrom(yield* decodeCatalogConfiguration(input));
+});
+
+const catalogFrom = (
+  configuration: CatalogConfiguration,
+): LoadedRunnerProfileCatalog => {
   const configuredAdapters = new Set(
     configuration.profiles.map(({ adapter }) => adapter),
   );
@@ -94,16 +171,28 @@ export const decodeRunnerProfileCatalog = Effect.fn(
         };
       }),
     },
-  } satisfies LoadedRunnerProfileCatalog;
-});
+  };
+};
 
+/**
+ * The size catalog. Deployed, it is the deployment's catalog plus every
+ * provider's own sizes, so it exists with no deployment provider and no
+ * `DX_RUNNER_PROFILE_CATALOG`. The local runtime keeps exactly its
+ * configured catalog.
+ */
 export const loadRunnerProfileCatalog = Effect.fn("loadRunnerProfileCatalog")(
   function* (bindings: Bindings) {
     const input = bindings.DX_RUNNER_PROFILE_CATALOG;
-    if (input === undefined || input.length === 0) {
-      return yield* new RunnerProfileConfigurationUnavailable();
+    const configured =
+      input === undefined || input.length === 0
+        ? undefined
+        : yield* decodeCatalogConfiguration(input);
+    if (isLocalRuntime(bindings)) {
+      if (configured === undefined)
+        return yield* new RunnerProfileConfigurationUnavailable();
+      return catalogFrom(configured);
     }
-    return yield* decodeRunnerProfileCatalog(input);
+    return catalogFrom(withProviderProfiles(configured));
   },
 );
 

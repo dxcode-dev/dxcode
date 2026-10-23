@@ -33,6 +33,14 @@ export {
   executionCapabilitiesForRunnerProfile,
 } from "./plugins/execution.js";
 export {
+  MAX_ORB_PROVIDER_CREDENTIAL_LENGTH,
+  OrbProviderConnectionStatus,
+  OrbProviderCredentials,
+  OrbProviderField,
+  OrbProviderFieldId,
+  OrbProviderPreparationProgress,
+} from "./plugins/orb-provider.js";
+export {
   FirstPartyPluginId,
   MAX_PLUGIN_CREDENTIAL_LENGTH,
   MeteredPluginCall,
@@ -146,6 +154,7 @@ export {
   environmentVariableNameProblem,
   IntegrationCredentialConfigReference,
   integrationCredentialReferenceFor,
+  isHiddenEnvironmentValue,
   isReservedEnvironmentVariableName,
   isWeakSecretValue,
   looksLikeSecretEnvironmentVariable,

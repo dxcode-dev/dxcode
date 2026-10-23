@@ -151,6 +151,7 @@ describe("environment variables settings", () => {
             scope: "personal",
             source: "personal",
             value: "••••••••",
+            hidden: true,
             createdAt: "2026-08-25T10:00:00.000Z",
             updatedAt: "2026-08-25T10:00:00.000Z",
             rotatedAt: "2026-08-25T10:00:00.000Z",

@@ -49,9 +49,9 @@ const decode = async <A>(
 };
 
 /**
- * PUT one part with upload progress, which fetch cannot report. In deployed
- * stages the URL is a presigned R2 URL, so the bytes go straight to storage;
- * the part is named by the response's `ETag` header either way.
+ * PUT one part with upload progress, which fetch cannot report. The URL is a
+ * presigned R2 URL in every stage, so the bytes go straight to storage; the
+ * part is named by the response's `ETag` header.
  */
 const putPart = (
   url: string,

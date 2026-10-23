@@ -37,7 +37,9 @@ import {
   EnvironmentVariableValue,
   environmentVariableNameProblem,
   InvalidPageCursor,
+  isHiddenEnvironmentValue,
   looksLikeSecretEnvironmentVariable,
+  MASKED_SECRET_VALUE,
   MAX_ENVIRONMENT_VARIABLE_BULK_ITEMS,
   MAX_ENVIRONMENT_VARIABLE_VALUE_BYTES,
   normalizeEnvironmentVariableName,
@@ -265,9 +267,15 @@ const queryTarget = (context: Context<AppEnv>, route: RouteScope) =>
     return yield* authorizeTarget(route, raw, context.get("principal"));
   });
 
+/** What a response shows of a value: a secret masked, and whether dx hides it. */
+const viewOf = (stored: StoredEnvironmentVariable, plaintext: string) => ({
+  value: stored.kind === "secret" ? MASKED_SECRET_VALUE : plaintext,
+  hidden: isHiddenEnvironmentValue(stored.kind, plaintext),
+});
+
 const responseData = (
   stored: StoredEnvironmentVariable,
-  value: string,
+  { value, hidden }: { readonly value: string; readonly hidden: boolean },
 ): EnvironmentVariableData => ({
   reference: configReferenceFor(stored.id),
   name: stored.name,
@@ -277,6 +285,7 @@ const responseData = (
   enabled: stored.enabled,
   source: stored.target.scope,
   value,
+  hidden,
   createdAt: stored.createdAt,
   updatedAt: stored.updatedAt,
   rotatedAt: stored.rotatedAt,
@@ -286,18 +295,18 @@ const viewStored = (
   keyring: ConfigEncryptionKeyring,
   stored: StoredEnvironmentVariable,
 ) =>
-  stored.kind === "secret"
-    ? Effect.succeed(responseData(stored, "••••••••"))
-    : decryptEnvironmentVariable(
-        keyring,
-        {
-          id: stored.id,
-          target: stored.target,
-          name: stored.name,
-          kind: stored.kind,
-        },
-        stored.envelope,
-      ).pipe(Effect.map((value) => responseData(stored, value)));
+  decryptEnvironmentVariable(
+    keyring,
+    {
+      id: stored.id,
+      target: stored.target,
+      name: stored.name,
+      kind: stored.kind,
+    },
+    stored.envelope,
+  ).pipe(
+    Effect.map((plaintext) => responseData(stored, viewOf(stored, plaintext))),
+  );
 
 const errorResponse = (
   context: Context<AppEnv>,
@@ -491,7 +500,7 @@ const registerRoutes = (
       )({
         status: "success",
         data: {
-          items: items.map(({ stored, value }) => responseData(stored, value)),
+          items: items.map(({ stored, ...view }) => responseData(stored, view)),
           precedence: ENVIRONMENT_VARIABLE_PRECEDENCE,
         },
       });
@@ -589,10 +598,7 @@ const registerRoutes = (
         CreateEnvironmentVariableResponseSchema,
       )({
         status: "success",
-        data: responseData(
-          stored,
-          stored.kind === "secret" ? "••••••••" : body.value,
-        ),
+        data: responseData(stored, viewOf(stored, body.value)),
       });
     });
     return run(context, operation, 201);
@@ -779,9 +785,7 @@ const registerRoutes = (
           items: stored.map((item) =>
             responseData(
               item,
-              item.kind === "secret"
-                ? "••••••••"
-                : (plaintextByName.get(item.name) ?? ""),
+              viewOf(item, plaintextByName.get(item.name) ?? ""),
             ),
           ),
           conflictBehavior: body.conflictBehavior,
@@ -862,10 +866,7 @@ const registerRoutes = (
         RotateEnvironmentVariableResponseSchema,
       )({
         status: "success",
-        data: responseData(
-          stored,
-          stored.kind === "secret" ? "••••••••" : body.value,
-        ),
+        data: responseData(stored, viewOf(stored, body.value)),
       });
     });
     return run(context, operation);

@@ -131,8 +131,8 @@ export const preflightCloudflareDeployment = async ({
   }
 
   // API-token deployments mint the bucket-scoped token Core signs
-  // attachment URLs with; Alchemy OAuth deployments carry attachment bytes
-  // through Core instead and need no token permission.
+  // attachment URLs with; Alchemy OAuth deployments sign with the R2 API
+  // token the operator supplies and need no token permission.
   if (auth.method !== "alchemy-oauth")
     await get(`/accounts/${auth.accountId}/tokens?per_page=1`, {
       label: "Account API Tokens permission",

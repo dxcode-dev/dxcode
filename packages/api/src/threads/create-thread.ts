@@ -139,8 +139,9 @@ export const CreateThreadRunnerUnavailableResponseSchema = errorResponse(
 );
 
 /**
- * The Orb runs on the person's or workspace's own key, whose template is
- * still building (or failed) in its account. Never retried on another key.
+ * The selected Orb cannot start: its account's connection is still
+ * preparing or failed, or no provider the person can use offers the size.
+ * Never retried on another account.
  */
 export const CreateThreadOrbUnavailableResponseSchema = Schema.Struct({
   status: Schema.Literal("error"),
@@ -148,7 +149,11 @@ export const CreateThreadOrbUnavailableResponseSchema = Schema.Struct({
     code: Schema.Literal("ORB_UNAVAILABLE"),
     message: Schema.Literal("The selected Orb is not available."),
     requestId: Schema.String,
-    reason: Schema.Literals(["template-building", "template-failed"]),
+    /**
+     * `preparing`/`failed`: the account's connection is not ready.
+     * `no-provider`: no provider the person can use offers the size.
+     */
+    reason: Schema.Literals(["preparing", "failed", "no-provider"]),
   }),
 });
 

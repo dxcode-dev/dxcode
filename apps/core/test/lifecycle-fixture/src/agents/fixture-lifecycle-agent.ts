@@ -13,6 +13,7 @@ import {
   type DxAgentInitialData,
   DxAgentInitialDataSchema,
 } from "../../../../src/agents/dx-agent-initial-data.js";
+import { AGENT_RUN_LIMIT_MS } from "../../../../src/runtime/agent-run-limit.js";
 import { fixtureText } from "../heavy-history.js";
 import { fixtureSandboxFactory } from "../sandbox.js";
 
@@ -33,4 +34,6 @@ export function FixtureLifecycleAgent(_props: AgentProps) {
 }
 
 FixtureLifecycleAgent.agentName = "fixture-lifecycle-agent";
+// dx's run limit, which the unready deadline must not inherit.
+FixtureLifecycleAgent.durability = { timeoutMs: AGENT_RUN_LIMIT_MS };
 FixtureLifecycleAgent.initialData = DxAgentInitialDataSchema;

@@ -152,10 +152,13 @@ import {
   ProjectDefaultsErrorResponseSchema,
   PublishPluginVersionResponseSchema,
   PublishSkillVersionResponseSchema,
+  PushStateResponseSchema,
   type PutModeRequestSchema,
   RebindProjectSourceResponseSchema,
   RefreshPersonalModelSubscriptionResponseSchema,
+  type RegisterPushDeviceRequest,
   RemovePluginResponseSchema,
+  type RemovePushDeviceRequest,
   RemoveSkillResponseSchema,
   RemoveWorkspaceMemberResponseSchema,
   type ReorderConnectionsRequestSchema,
@@ -179,6 +182,7 @@ import {
   type SearchThreadsItem,
   SearchThreadsResponseSchema,
   SearchThreadsUnavailableResponseSchema,
+  SendTestPushResponseSchema,
   type SetClaudePlanRequestSchema,
   type SetConnectionEnabledRequestSchema,
   SetExternalApiApplicationStatusResponseSchema,
@@ -257,6 +261,7 @@ import type {
   McpServerId,
   McpToolName,
   McpToolSchemaHash,
+  OrbProviderCredentials,
   PageCursor,
   PersonalApiTokenId,
   PluginGrantedPermissions,
@@ -394,7 +399,11 @@ export const request = async <
     if (settingsError !== undefined) {
       throw new ApiError(
         response.status,
-        settingsError.data.message,
+        // A provider's own reason (Orb credentials) says what to fix.
+        "detail" in settingsError.data &&
+          typeof settingsError.data.detail === "string"
+          ? settingsError.data.detail
+          : settingsError.data.message,
         settingsError.data.code,
         "fieldErrors" in settingsError.data
           ? settingsError.data.fieldErrors
@@ -799,7 +808,7 @@ export const updateDictationVocabulary = async (
     )
   ).data;
 
-/** Orb providers: bring-your-own keys for key-based providers per scope. */
+/** Orb providers: each scope's own provider connections. */
 const orbProvidersBase = (target: PluginsTarget) =>
   target.scope === "personal"
     ? "/v1/settings/personal/orb-providers"
@@ -820,26 +829,41 @@ export const listOrbProviders = async (
     )
   ).data;
 
-export const setOrbProviderKey = async (
+const orbConnectionPath = (target: PluginsTarget, providerId: OrbProviderId) =>
+  `${orbProvidersBase(target)}/${encodeURIComponent(providerId)}/connection`;
+
+export const setOrbProviderConnection = async (
   target: PluginsTarget,
   providerId: OrbProviderId,
-  credential: string,
+  credentials: OrbProviderCredentials,
 ) =>
   (
     await request(
-      `${orbProvidersBase(target)}/${encodeURIComponent(providerId)}/key`,
+      orbConnectionPath(target, providerId),
       OrbProviderListResponseSchema,
-      { method: "PUT", body: JSON.stringify({ credential }) },
+      { method: "PUT", body: JSON.stringify({ credentials }) },
     )
   ).data;
 
-export const deleteOrbProviderKey = async (
+export const retryOrbProviderConnection = async (
   target: PluginsTarget,
   providerId: OrbProviderId,
 ) =>
   (
     await request(
-      `${orbProvidersBase(target)}/${encodeURIComponent(providerId)}/key`,
+      `${orbConnectionPath(target, providerId)}/retry`,
+      OrbProviderListResponseSchema,
+      { method: "POST" },
+    )
+  ).data;
+
+export const deleteOrbProviderConnection = async (
+  target: PluginsTarget,
+  providerId: OrbProviderId,
+) =>
+  (
+    await request(
+      orbConnectionPath(target, providerId),
       OrbProviderListResponseSchema,
       { method: "DELETE" },
     )
@@ -2661,4 +2685,32 @@ export const updateNotificationPreference = async (
       NotificationPreferencesResponseSchema,
       { method: "PUT", body: JSON.stringify(input) },
     )
+  ).data;
+
+/** Whether this deployment can push, and which browsers are registered. */
+export const getPushState = async (signal?: AbortSignal) =>
+  (await request("/v1/notifications/push", PushStateResponseSchema, { signal }))
+    .data;
+
+export const registerPushDevice = async (input: RegisterPushDeviceRequest) =>
+  (
+    await request("/v1/notifications/push/devices", PushStateResponseSchema, {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  ).data;
+
+export const removePushDevice = async (input: RemovePushDeviceRequest) =>
+  (
+    await request("/v1/notifications/push/devices", PushStateResponseSchema, {
+      method: "DELETE",
+      body: JSON.stringify(input),
+    })
+  ).data;
+
+export const sendTestPush = async () =>
+  (
+    await request("/v1/notifications/push/test", SendTestPushResponseSchema, {
+      method: "POST",
+    })
   ).data;

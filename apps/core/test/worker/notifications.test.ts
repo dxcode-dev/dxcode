@@ -193,6 +193,12 @@ const preferences = async (userId: UserId) =>
     ).json<{ data: Subscriptions }>()
   ).data.subscriptions;
 
+/** One row of the settings grid: this test is about mention email. */
+const mentionEmail = async (userId: UserId) =>
+  (await preferences(userId)).find(
+    ({ topic, channel }) => topic === "mention" && channel === "email",
+  );
+
 const user = (id: string, name: string, handle: string) => [
   env.DB.prepare(
     'INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, 1, 1)',
@@ -300,22 +306,22 @@ describe("Mention notifications, in workerd with real D1", () => {
   });
 
   it("keeps the in-app notification and skips email when the member turns mention emails off", async () => {
-    expect(await preferences(member)).toEqual([
+    expect(await mentionEmail(member)).toEqual(
       expect.objectContaining({
         topic: "mention",
         channel: "email",
         enabled: true,
         available: true,
       }),
-    ]);
+    );
     const updated = await send(member, "/v1/settings/personal/notifications", {
       method: "PUT",
       body: { topic: "mention", channel: "email", enabled: false },
     });
     expect(updated.status).toBe(200);
-    expect(await preferences(member)).toEqual([
+    expect(await mentionEmail(member)).toEqual(
       expect.objectContaining({ enabled: false }),
-    ]);
+    );
 
     await message(owner, "@ben quiet please", "key-3");
     expect((await inbox(member)).unreadCount).toBe(1);
@@ -330,9 +336,9 @@ describe("Mention notifications, in workerd with real D1", () => {
     const page = await send(member, `${link.pathname}${link.search}`);
     expect(page.status).toBe(200);
     expect(await page.text()).toContain("Unsubscribe");
-    expect(await preferences(member)).toEqual([
+    expect(await mentionEmail(member)).toEqual(
       expect.objectContaining({ enabled: true }),
-    ]);
+    );
 
     const forged = new URL(link);
     forged.searchParams.set(
@@ -344,18 +350,18 @@ describe("Mention notifications, in workerd with real D1", () => {
       form: "List-Unsubscribe=One-Click",
     });
     expect(refused.status).toBe(400);
-    expect(await preferences(member)).toEqual([
+    expect(await mentionEmail(member)).toEqual(
       expect.objectContaining({ enabled: true }),
-    ]);
+    );
 
     const done = await send(member, `${link.pathname}${link.search}`, {
       method: "POST",
       form: "List-Unsubscribe=One-Click",
     });
     expect(done.status).toBe(200);
-    expect(await preferences(member)).toEqual([
+    expect(await mentionEmail(member)).toEqual(
       expect.objectContaining({ enabled: false }),
-    ]);
+    );
     await message(owner, "@ben second", "key-5");
     expect(sent).toHaveLength(1);
     expect((await inbox(member)).unreadCount).toBe(2);
@@ -363,9 +369,9 @@ describe("Mention notifications, in workerd with real D1", () => {
 
   it("still notifies in the app when the deployment has no email sender", async () => {
     bindings = withoutSender;
-    expect(await preferences(member)).toEqual([
+    expect(await mentionEmail(member)).toEqual(
       expect.objectContaining({ channel: "email", available: false }),
-    ]);
+    );
     await message(owner, "@ben no mail here", "key-6");
     expect((await inbox(member)).unreadCount).toBe(1);
     expect(sent).toHaveLength(0);
@@ -426,9 +432,9 @@ describe("Mention notifications, in workerd with real D1", () => {
 
   it("reports email unavailable, and sends none, when links cannot be built", async () => {
     bindings = { ...withSender, DX_AUTH_URL: undefined };
-    expect(await preferences(member)).toEqual([
+    expect(await mentionEmail(member)).toEqual(
       expect.objectContaining({ channel: "email", available: false }),
-    ]);
+    );
     await message(owner, "@ben no links here", "key-12");
     expect((await inbox(member)).unreadCount).toBe(1);
     expect(sent).toHaveLength(0);

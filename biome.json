@@ -11,6 +11,7 @@
       "!**/.wrangler",
       "!**/.astro",
       "!wiki/raw",
+      "!**/*.generated.js",
       "!packages/api/src/views/kit"
     ]
   },

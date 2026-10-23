@@ -7,6 +7,7 @@ import type { ThreadId, UserId } from "@dx/domain";
 import { threadProjectReachableSql } from "../settings/members/membership-sql.js";
 import { sharedThreadVisibleSql } from "../thread-sharing/access.js";
 import { displayNameSql } from "../thread-sharing/service.js";
+import { INBOX_TOPICS_SQL } from "./topics.js";
 
 const INBOX_LIMIT = 50;
 
@@ -96,7 +97,11 @@ interface InboxRow {
   readonly actor_image: string | null;
 }
 
-/** The newest notifications for Threads the recipient can still open. */
+/**
+ * The newest inbox-listed notifications for Threads the recipient can still
+ * open. Topics the inbox does not list (agent updates) are stored but never
+ * returned here.
+ */
 export const listNotifications = async (
   db: D1Database,
   recipient: UserId,
@@ -117,6 +122,7 @@ export const listNotifications = async (
            LEFT JOIN personal_account AS account
                   ON account.user_id = notification.actor_user_id
           WHERE notification.recipient_user_id = ?1
+            AND notification.topic IN (${INBOX_TOPICS_SQL})
             AND ${reachableSql("?1")}
           ORDER BY notification.created_at DESC, notification.rowid DESC
           LIMIT ${INBOX_LIMIT}`,
@@ -167,6 +173,7 @@ export const unreadNotificationCount = async (
                JOIN threads AS thread ON thread.id = notification.thread_id
                JOIN projects AS project ON project.id = thread.project_id
               WHERE notification.recipient_user_id = ?1
+                AND notification.topic IN (${INBOX_TOPICS_SQL})
                 AND ${reachableSql("?1")}
               ORDER BY notification.created_at DESC, notification.rowid DESC
               LIMIT ${INBOX_LIMIT}
@@ -177,7 +184,11 @@ export const unreadNotificationCount = async (
       .first<{ count: number }>()
   )?.count ?? 0;
 
-/** Marks the recipient's own notifications read; others' ids are ignored. */
+/**
+ * Marks the recipient's own notifications read; others' ids are ignored.
+ * "All" covers every topic, including the ones the inbox does not list, so
+ * nothing invisible stays unread.
+ */
 export const markNotificationsRead = async (
   db: D1Database,
   recipient: UserId,

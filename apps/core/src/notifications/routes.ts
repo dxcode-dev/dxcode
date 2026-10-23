@@ -6,6 +6,10 @@ import {
   NotificationErrorResponseSchema,
   NotificationPreferencesResponseSchema,
   type NotificationSubscriptionData,
+  PushStateResponseSchema,
+  RegisterPushDeviceRequestSchema,
+  RemovePushDeviceRequestSchema,
+  SendTestPushResponseSchema,
   UpdateNotificationPreferenceRequestSchema,
 } from "@dx/api";
 import type { UserId } from "@dx/domain";
@@ -14,8 +18,15 @@ import { type Context, Hono } from "hono";
 import type { AppEnv, Bindings } from "../http/types.js";
 import { notificationLogger } from "../logging.js";
 import { publishNotificationsInvalidation } from "../realtime/publication.js";
-import { notificationChannels } from "./channels/index.js";
+import { ChannelNotReachable } from "./channels/channel.js";
+import { deploymentVapidKeys, notificationChannels } from "./channels/index.js";
+import { deliverPush, type PushChannelContext } from "./channels/push.js";
 import { subscribed } from "./publish.js";
+import {
+  listPushDevices,
+  registerPushSubscription,
+  removePushSubscription,
+} from "./push-devices.js";
 import {
   listNotifications,
   markNotificationsRead,
@@ -23,7 +34,7 @@ import {
   setNotificationPreference,
   unreadNotificationCount,
 } from "./repository.js";
-import { NOTIFICATION_TOPICS } from "./topics.js";
+import { NOTIFICATION_TOPICS, topicOffersChannel } from "./topics.js";
 import { verifyUnsubscribeToken } from "./unsubscribe-token.js";
 
 const failure = (
@@ -84,6 +95,34 @@ const readResponse = async (
   );
 };
 
+/** The push channel's dependencies, or undefined when it cannot deliver. */
+const pushContext = (bindings: Bindings): PushChannelContext | undefined => {
+  const keys = deploymentVapidKeys(bindings);
+  const origin = bindings.DX_AUTH_URL?.trim().replace(/\/+$/, "");
+  return keys === undefined || bindings.DB === undefined || !origin
+    ? undefined
+    : { db: bindings.DB, keys, subject: origin };
+};
+
+const pushStateResponse = async (
+  context: Context<AppEnv>,
+  db: D1Database,
+  userId: UserId,
+) => {
+  const keys = deploymentVapidKeys(context.env);
+  return context.json(
+    Schema.encodeUnknownSync(PushStateResponseSchema)({
+      status: "success",
+      data: {
+        available: pushContext(context.env) !== undefined,
+        ...(keys === undefined ? {} : { publicKey: keys.publicKey }),
+        devices: await listPushDevices(db, userId),
+      },
+    }),
+    200,
+  );
+};
+
 /** Mounted at `/v1/notifications`: the signed-in person's inbox. */
 export const notificationRoutes = new Hono<AppEnv>()
   .get("/", (context) =>
@@ -122,6 +161,114 @@ export const notificationRoutes = new Hono<AppEnv>()
       await markNotificationsRead(db, userId, "all");
       return readResponse(context, db, userId);
     }),
+  )
+  .get("/push", (context) =>
+    handle(context, (db, userId) => pushStateResponse(context, db, userId)),
+  )
+  /**
+   * Registers this browser's `PushSubscription`. Repeating it is how a
+   * browser refreshes keys its push service rotated.
+   */
+  .post("/push/devices", (context) =>
+    handle(context, async (db, userId) => {
+      const body = Schema.decodeUnknownOption(RegisterPushDeviceRequestSchema)(
+        await context.req.json().catch(() => undefined),
+      );
+      if (Option.isNone(body))
+        return failure(
+          context,
+          "INVALID_REQUEST",
+          400,
+          "Request validation failed.",
+        );
+      if (pushContext(context.env) === undefined)
+        return failure(
+          context,
+          "PUSH_UNAVAILABLE",
+          503,
+          "This deployment cannot send push notifications.",
+        );
+      // A browser issues an https endpoint; a loopback one belongs to a
+      // local push service, which only local development ever has.
+      if (
+        !body.value.endpoint.startsWith("https://") &&
+        context.env.DX_RUNTIME_MODE !== "local"
+      )
+        return failure(
+          context,
+          "INVALID_REQUEST",
+          400,
+          "Request validation failed.",
+        );
+      await registerPushSubscription(db, {
+        userId,
+        endpoint: body.value.endpoint,
+        p256dh: body.value.keys.p256dh,
+        auth: body.value.keys.auth,
+        label: body.value.label ?? "",
+      });
+      notificationLogger.info("Push device registered.", {
+        event: "push_device_registered",
+      });
+      return pushStateResponse(context, db, userId);
+    }),
+  )
+  .delete("/push/devices", (context) =>
+    handle(context, async (db, userId) => {
+      const body = Schema.decodeUnknownOption(RemovePushDeviceRequestSchema)(
+        await context.req.json().catch(() => undefined),
+      );
+      if (Option.isNone(body))
+        return failure(
+          context,
+          "INVALID_REQUEST",
+          400,
+          "Request validation failed.",
+        );
+      if (
+        body.value.endpoint === undefined &&
+        body.value.deviceId === undefined
+      )
+        return failure(
+          context,
+          "INVALID_REQUEST",
+          400,
+          "Request validation failed.",
+        );
+      await removePushSubscription(db, userId, body.value);
+      return pushStateResponse(context, db, userId);
+    }),
+  )
+  /** Sends one push through the same path a notification takes. */
+  .post("/push/test", (context) =>
+    handle(context, async (_db, userId) => {
+      const push = pushContext(context.env);
+      if (push === undefined)
+        return failure(
+          context,
+          "PUSH_UNAVAILABLE",
+          503,
+          "This deployment cannot send push notifications.",
+        );
+      const outcome = await deliverPush(push, userId, {
+        title: "dx push notifications are on",
+        body: "This is how a mention or a finished turn will reach you.",
+        url: `${push.subject}/settings/notifications`,
+        topic: "test",
+        tag: "test",
+      }).catch((cause) =>
+        cause instanceof ChannelNotReachable
+          ? { delivered: 0, failed: 0 }
+          : { delivered: 0, failed: 1 },
+      );
+      return context.json(
+        Schema.encodeUnknownSync(SendTestPushResponseSchema)({
+          status: "success",
+          data: outcome,
+        }),
+        200,
+      );
+    }),
   );
 
 const subscriptions = async (
@@ -131,15 +278,19 @@ const subscriptions = async (
 ): Promise<ReadonlyArray<NotificationSubscriptionData>> => {
   const preferences = await notificationPreferences(db, [userId]);
   const channels = Object.values(notificationChannels(bindings));
+  // Only the pairs a topic offers: an agent update or a woken Thread is a
+  // nudge, not mail.
   return Object.values(NOTIFICATION_TOPICS).flatMap((topic) =>
-    channels.map((channel) => ({
-      topic: topic.id,
-      channel: channel.id,
-      title: channel.subscriptionTitle(topic.noun),
-      description: channel.subscriptionDescription(topic.trigger),
-      enabled: subscribed(preferences, userId, topic.id, channel.id),
-      available: channel.available,
-    })),
+    channels
+      .filter((channel) => topicOffersChannel(topic, channel.id))
+      .map((channel) => ({
+        topic: topic.id,
+        channel: channel.id,
+        title: channel.subscriptionTitle(topic.noun),
+        description: channel.subscriptionDescription(topic.trigger),
+        enabled: subscribed(preferences, userId, topic.id, channel.id),
+        available: channel.available,
+      })),
   );
 };
 
@@ -170,6 +321,19 @@ export const notificationPreferenceRoutes = new Hono<AppEnv>()
         UpdateNotificationPreferenceRequestSchema,
       )(await context.req.json().catch(() => undefined));
       if (Option.isNone(body))
+        return failure(
+          context,
+          "INVALID_REQUEST",
+          400,
+          "Request validation failed.",
+        );
+      // A topic that does not offer the channel has no such choice to make.
+      if (
+        !topicOffersChannel(
+          NOTIFICATION_TOPICS[body.value.topic],
+          body.value.channel,
+        )
+      )
         return failure(
           context,
           "INVALID_REQUEST",

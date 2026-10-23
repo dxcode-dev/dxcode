@@ -158,6 +158,14 @@ export const CloudflareRunnerProfileConfiguration = Schema.Struct({
   ...RunnerProfile.fields,
   adapter: Schema.Literal("cloudflare"),
   instance: CloudflareContainerInstance,
+  /**
+   * The account Orb Worker a connected Cloudflare account runs the Thread
+   * through, from the Thread's pin; absent on the deployment's own account,
+   * which binds the Orb container namespace.
+   */
+  endpoint: Schema.optional(
+    Schema.String.check(Schema.isPattern(/^https:\/\/[^/\s]+\/$/)),
+  ),
 });
 
 export type CloudflareRunnerProfileConfiguration =

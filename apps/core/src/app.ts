@@ -1,8 +1,7 @@
 import { Hono } from "hono";
 import { dxAgentRoutes } from "./agents/routes.js";
+import { LOCAL_R2_BUCKET, localR2Routes } from "./attachments/local-r2.js";
 import { attachmentRoutes } from "./attachments/routes.js";
-import { purgeUnsentAttachments } from "./attachments/store.js";
-import { attachmentTransfer } from "./attachments/transfer.js";
 import { authenticate } from "./auth/authenticate.js";
 import { authorizeApiTokenScope } from "./auth/authorize-api-token-scope.js";
 import { authorizeThread } from "./auth/authorize-thread.js";
@@ -14,7 +13,6 @@ import { errorHandler, notFoundHandler } from "./http/http-errors.js";
 import { requestId } from "./http/request-id.js";
 import { requestLogging } from "./http/request-logging.js";
 import type { AppEnv } from "./http/types.js";
-import { attachmentLogger } from "./logging.js";
 import {
   notificationRoutes,
   notificationUnsubscribeRoutes,
@@ -34,7 +32,6 @@ import {
 } from "./settings/members/routes.js";
 import { settingsRoutes } from "./settings/routes.js";
 import { pluginTriggerIngressRoutes } from "./settings/triggers/routes.js";
-import { scheduleUsageRetention } from "./settings/usage/retention.js";
 import { sidebarLayoutRoutes } from "./sidebar-layout/routes.js";
 import { bitbucketGitGatewayRoutes } from "./source-control/bitbucket/git-gateway.js";
 import { bitbucketControlPlaneRoutes } from "./source-control/bitbucket/routes.js";
@@ -69,6 +66,8 @@ app.use("*", requestLogging);
 
 app.get("/healthz", healthHandler);
 app.get("/readyz", readinessHandler);
+// Local development only: its emulation of R2's S3 API for attachments.
+app.route(`/${LOCAL_R2_BUCKET}`, localR2Routes);
 
 app.route("/api/auth", authRoutes);
 app.route("/api/workload-identity", workloadIdentityRoutes);
@@ -130,30 +129,4 @@ app.route("/v1/agents/dx", dxAgentRoutes);
 app.notFound(notFoundHandler);
 app.onError(errorHandler);
 
-export default Object.assign(app, {
-  scheduled: (
-    controller: ScheduledController,
-    bindings: AppEnv["Bindings"],
-    context: ExecutionContext,
-  ) => {
-    scheduleUsageRetention(controller, bindings, context);
-    const transfer = attachmentTransfer(bindings);
-    if (transfer === undefined) return;
-    context.waitUntil(
-      purgeUnsentAttachments(bindings, transfer, controller.scheduledTime, {
-        limit: 500,
-      })
-        .then((deleted) =>
-          attachmentLogger.info("Unsent attachments purged.", {
-            event: "attachment_retention_completed",
-            deleted,
-          }),
-        )
-        .catch(() =>
-          attachmentLogger.error("Unsent attachment retention failed.", {
-            event: "attachment_retention_failed",
-          }),
-        ),
-    );
-  },
-});
+export default app;

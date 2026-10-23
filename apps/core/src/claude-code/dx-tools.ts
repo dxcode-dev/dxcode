@@ -8,6 +8,7 @@ import type {
 import { toJsonSchema } from "@valibot/to-json-schema";
 import * as v from "valibot";
 import { claudeCodeRuns } from "./runs.js";
+import { UNREADABLE_TOOL_INPUT } from "./stream.js";
 import {
   type ClaudeCodeDxTool,
   claudeCodeToolResultPath,
@@ -69,6 +70,14 @@ const execute = async (
   const sandbox = context.harness.sandbox as Sandbox;
   let result: unknown;
   try {
+    if (
+      typeof args === "object" &&
+      args !== null &&
+      UNREADABLE_TOOL_INPUT in args
+    )
+      throw new Error(
+        `dx could not read the input of this ${tool.name} call, so the tool did not run: it was not a complete JSON object. Call ${tool.name} again.`,
+      );
     let data = args;
     if (tool.input !== undefined) {
       const parsed = v.safeParse(tool.input, args);

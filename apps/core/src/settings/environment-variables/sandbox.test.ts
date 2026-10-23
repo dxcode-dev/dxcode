@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -24,11 +24,12 @@ import { local, start } from "@flue/runtime/node";
 import { Redacted, Schema } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ClaudeCodeStream } from "../../claude-code/stream.js";
+import { executionWorkspaceTools } from "../../plugins/execution/tools.js";
 import type { ExecutionEnvironmentSnapshot } from "./execution.js";
-import {
-  ENVIRONMENT_SECRET_REDACTION,
-  withExecutionEnvironment,
-} from "./sandbox.js";
+import { withExecutionEnvironment } from "./sandbox.js";
+
+/** What dx shows in place of the secret this variable holds. */
+const marker = (name: string) => `[REDACTED:${name}]`;
 
 const temporaryDirectories: Array<string> = [];
 
@@ -89,7 +90,7 @@ describe("Flue execution environment", () => {
     let current = snapshot([
       value("BUILD_CHANNEL", "variable", "before"),
       value("API_SECRET", "secret", "synthetic-secret"),
-      value("OVERLAP", "secret", "secret"),
+      value("OVERLAP", "secret", "synthetic"),
       value("SHORT_SECRET", "secret", "R"),
     ]);
     const resolve = vi.fn(async () => current);
@@ -98,13 +99,13 @@ describe("Flue execution environment", () => {
     const first = await sandbox.exec(
       `printf '%s|%s|%s|%s' "$BUILD_CHANNEL" "$API_SECRET" "$OVERLAP" "$SHORT_SECRET"; printf '%s' "$API_SECRET" >&2`,
     );
+    // A secret under 8 characters is too short to hide, and still applied.
     expect(first).toEqual({
-      stdout: `before|${ENVIRONMENT_SECRET_REDACTION}|${ENVIRONMENT_SECRET_REDACTION}|${ENVIRONMENT_SECRET_REDACTION}`,
-      stderr: ENVIRONMENT_SECRET_REDACTION,
+      stdout: `before|${marker("API_SECRET")}|${marker("OVERLAP")}|R`,
+      stderr: marker("API_SECRET"),
       exitCode: 0,
     });
     expect(first.stdout).not.toContain("synthetic-secret");
-    expect(ENVIRONMENT_SECRET_REDACTION).not.toContain("R");
     expect(first.stdout).not.toContain("undefined");
 
     const overridden = await sandbox.exec(`printf '%s' "$BUILD_CHANNEL"`, {
@@ -120,13 +121,13 @@ describe("Flue execution environment", () => {
     await sandbox.mkdir("directory");
     await sandbox.writeFile("directory/synthetic-secret.txt", "safe");
     expect(await sandbox.readFile("text.txt")).toBe(
-      `prefix ${ENVIRONMENT_SECRET_REDACTION} suffix`,
+      `prefix ${marker("API_SECRET")} suffix`,
     );
     expect(
       new TextDecoder().decode(await sandbox.readFileBuffer("bytes.bin")),
-    ).toBe(`bytes ${ENVIRONMENT_SECRET_REDACTION} suffix`);
+    ).toBe(`bytes ${marker("API_SECRET")} suffix`);
     expect(await sandbox.readdir("directory")).toEqual([
-      `${ENVIRONMENT_SECRET_REDACTION}.txt`,
+      `${marker("API_SECRET")}.txt`,
     ]);
 
     const inFlight = sandbox.exec(`sleep 0.05; printf '%s' "$BUILD_CHANNEL"`);
@@ -138,7 +139,7 @@ describe("Flue execution environment", () => {
     expect(
       (await sandbox.exec(`printf '%s|%s' "$BUILD_CHANNEL" "$API_SECRET"`))
         .stdout,
-    ).toBe(`after|${ENVIRONMENT_SECRET_REDACTION}`);
+    ).toBe(`after|${marker("API_SECRET")}`);
     expect(resolve.mock.calls.length).toBeGreaterThanOrEqual(7);
   });
 
@@ -162,7 +163,7 @@ describe("Flue execution environment", () => {
     await sandbox.writeFile("out.txt", "first-secret second-secret");
     for (let read = 0; read < 100; read += 1)
       expect(await sandbox.readFile("out.txt")).toBe(
-        `${ENVIRONMENT_SECRET_REDACTION} second-secret`,
+        `${marker("API_SECRET")} second-secret`,
       );
     expect(resolve).toHaveBeenCalledTimes(1);
     expect(revision).toHaveBeenCalledTimes(0);
@@ -184,18 +185,18 @@ describe("Flue execution environment", () => {
     expect((await sandbox.exec(channel)).stdout).toBe("after");
     expect(resolve).toHaveBeenCalledTimes(2);
     expect(await sandbox.readFile("out.txt")).toBe(
-      `first-secret ${ENVIRONMENT_SECRET_REDACTION}`,
+      `first-secret ${marker("API_SECRET")}`,
     );
 
     // Other operations see an edit within 5 s.
     current = snapshot([value("API_SECRET", "secret", "first-secret")], 2);
     vi.setSystemTime(Date.now() + 4_000);
     expect(await sandbox.readFile("out.txt")).toBe(
-      `first-secret ${ENVIRONMENT_SECRET_REDACTION}`,
+      `first-secret ${marker("API_SECRET")}`,
     );
     vi.setSystemTime(Date.now() + 1_000);
     expect(await sandbox.readFile("out.txt")).toBe(
-      `${ENVIRONMENT_SECRET_REDACTION} second-secret`,
+      `${marker("API_SECRET")} second-secret`,
     );
     expect(resolve).toHaveBeenCalledTimes(3);
 
@@ -260,7 +261,7 @@ describe("Flue execution environment", () => {
     const stream = new ClaudeCodeStream();
     for (const line of first?.split("\n") ?? []) stream.push(line);
     expect(stream.toolResults.get("toolu_1")?.text).toBe(
-      `token=${ENVIRONMENT_SECRET_REDACTION}`,
+      `token=${marker("API_SECRET")}`,
     );
   });
 
@@ -310,11 +311,11 @@ describe("Flue execution environment", () => {
     await expect(sandbox.exec("abort")).rejects.toBe(abort);
     exec.mockRejectedValueOnce(new Error("provider exposed sensitive"));
     await expect(sandbox.exec("fail")).rejects.toThrow(
-      `provider exposed ${ENVIRONMENT_SECRET_REDACTION}`,
+      `provider exposed ${marker("API_SECRET")}`,
     );
     writeFile.mockRejectedValueOnce(new Error("provider exposed sensitive"));
     await expect(sandbox.writeFile("file", "contents")).rejects.toThrow(
-      `provider exposed ${ENVIRONMENT_SECRET_REDACTION}`,
+      `provider exposed ${marker("API_SECRET")}`,
     );
   });
 
@@ -349,21 +350,21 @@ describe("Flue execution environment", () => {
       sandbox.snapshotWorkspaceContext?.(sandbox.cwd),
     ).resolves.toEqual({
       instructionFiles: {
-        "AGENTS.md": `${ENVIRONMENT_SECRET_REDACTION} instructions`,
+        "AGENTS.md": `${marker("API_SECRET")} instructions`,
       },
       skillFiles: [
         {
           kind: "file",
-          directoryName: `${ENVIRONMENT_SECRET_REDACTION}-skill`,
-          content: `${ENVIRONMENT_SECRET_REDACTION} body`,
+          directoryName: `${marker("API_SECRET")}-skill`,
+          content: `${marker("API_SECRET")} body`,
         },
         {
           kind: "read-error",
           directoryName: "broken",
-          errorMessage: `${ENVIRONMENT_SECRET_REDACTION} failure`,
+          errorMessage: `${marker("API_SECRET")} failure`,
         },
       ],
-      directoryListing: [`${ENVIRONMENT_SECRET_REDACTION}.txt`],
+      directoryListing: [`${marker("API_SECRET")}.txt`],
     });
     expect(snapshotWorkspaceContext).toHaveBeenCalledWith(sandbox.cwd);
   });
@@ -389,11 +390,9 @@ describe("Flue execution environment", () => {
           (message) => message.role === "toolResult",
         );
         const serializedResult = JSON.stringify(toolResult?.content);
-        expect(serializedResult).toContain(
-          JSON.stringify(ENVIRONMENT_SECRET_REDACTION).slice(1, -1),
-        );
+        // X is too short to hide.
+        expect(serializedResult).toContain(`${marker("API_SECRET")}|R`);
         expect(serializedResult).not.toContain(secret);
-        expect(serializedResult).not.toContain("R");
         return fauxAssistantMessage("done");
       },
     ]);
@@ -412,5 +411,133 @@ describe("Flue execution environment", () => {
     const handle = init(LocalAgent, { id: "environment-history" });
     const receipt = await handle.dispatch("Print the configured API secret.");
     await expect(handle.read(receipt)).resolves.toMatchObject({ text: "done" });
+  });
+
+  it("keeps a hidden secret out of Flue history and out of the files the agent writes", async () => {
+    const secret = "dxs_live_7Hq2Vm9KpX4rT8w";
+    const directory = await mkdtemp(join(tmpdir(), "dx-environment-test-"));
+    temporaryDirectories.push(directory);
+    const environment = local({ cwd: directory });
+    const factory = withExecutionEnvironment(
+      {
+        createSandbox: (request) => environment.createSandbox(request),
+        tools: executionWorkspaceTools,
+      },
+      async () =>
+        snapshot([
+          value("DEPLOY_TOKEN", "secret", secret),
+          value("SHORT_KEY", "secret", "ent"),
+        ]),
+    );
+    await writeFile(
+      join(directory, "deploy.env"),
+      `TOKEN=${secret}\nREGION=eu\n`,
+    );
+    const results: Array<{ text: string; isError: boolean }> = [];
+    const lastResult = (context: { messages: ReadonlyArray<unknown> }) => {
+      const message = context.messages.at(-1) as {
+        role: string;
+        content: ReadonlyArray<{ text?: string }>;
+        isError?: boolean;
+      };
+      results.push({
+        text: message.content.map((part) => part.text ?? "").join(""),
+        isError: message.isError === true,
+      });
+    };
+    let history = "";
+    const provider = fauxProvider();
+    provider.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("shell_command", {
+          command: "cat deploy.env; echo the client environment",
+        }),
+        { stopReason: "toolUse" },
+      ),
+      (context) => {
+        lastResult(context);
+        return fauxAssistantMessage(
+          fauxToolCall("create_file", {
+            path: join(directory, "copy.env"),
+            content: "TOKEN=[REDACTED:DEPLOY_TOKEN]\n",
+          }),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        lastResult(context);
+        return fauxAssistantMessage(
+          fauxToolCall("edit_file", {
+            path: join(directory, "deploy.env"),
+            old_str: "REGION=eu",
+            new_str: "REGION=us",
+          }),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        lastResult(context);
+        return fauxAssistantMessage(
+          fauxToolCall("create_file", {
+            path: join(directory, "notes.md"),
+            content: "The client environment entry.",
+          }),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        lastResult(context);
+        history = JSON.stringify(context.messages);
+        return fauxAssistantMessage("done");
+      },
+    ]);
+
+    function LocalAgent(_props: AgentProps) {
+      useModel("faux/faux-1");
+      useSandbox(factory);
+      return "Use the workspace tools.";
+    }
+    LocalAgent.agentName = "environment-writes-test";
+
+    await using _runtime = await start({
+      agents: [LocalAgent],
+      providers: [provider.provider],
+    });
+    const handle = init(LocalAgent, { id: "environment-writes" });
+    const receipt = await handle.dispatch("Copy the deploy settings.");
+    await expect(handle.read(receipt)).resolves.toMatchObject({ text: "done" });
+
+    expect(results).toEqual([
+      {
+        text: expect.stringContaining(
+          "TOKEN=[REDACTED:DEPLOY_TOKEN]\nREGION=eu\nthe client environment",
+        ),
+        isError: false,
+      },
+      {
+        text: expect.stringContaining(
+          "[REDACTED:DEPLOY_TOKEN] stands for the hidden secret DEPLOY_TOKEN. Do not write it into a file.",
+        ),
+        isError: true,
+      },
+      {
+        text: expect.stringContaining(
+          "holds the hidden secret DEPLOY_TOKEN, which dx shows as [REDACTED:DEPLOY_TOKEN]. Do not write it into a file.",
+        ),
+        isError: true,
+      },
+      { text: expect.stringContaining("Successfully created"), isError: false },
+    ]);
+    expect(history).not.toContain(secret);
+    // The secret stays in its file, and no marker reaches the disk.
+    await expect(readFile(join(directory, "deploy.env"), "utf8")).resolves.toBe(
+      `TOKEN=${secret}\nREGION=eu\n`,
+    );
+    await expect(readFile(join(directory, "copy.env"), "utf8")).rejects.toThrow(
+      "ENOENT",
+    );
+    await expect(readFile(join(directory, "notes.md"), "utf8")).resolves.toBe(
+      "The client environment entry.",
+    );
   });
 });

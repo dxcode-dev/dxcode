@@ -14,20 +14,20 @@ export const orbProviderKeys = {
     [...orbProviderKeys.all(userId), target, projectId ?? null] as const,
 };
 
-/** True while a key's Orb template is still building in its account. */
-export const orbTemplateBuilding = (data: OrbProviderListData | undefined) =>
+/** True while dx prepares a connection's account (or one is listed so). */
+export const orbConnectionPreparing = (data: OrbProviderListData | undefined) =>
   data !== undefined &&
   (data.providers.some(
-    ({ key, workspaceKey }) =>
-      key?.template?.status === "building" ||
-      workspaceKey?.template?.status === "building",
+    ({ connection, workspaceConnection }) =>
+      connection?.status === "preparing" ||
+      workspaceConnection?.status === "preparing",
   ) ||
-    data.resolved.some(({ status }) => status === "building"));
+    data.resolved.some(({ status }) => status === "preparing"));
 
 /**
  * The Orb providers for a scope. A projectId resolves the set a new Thread
- * in that project could start on (the new-Thread picker). Polling drives a
- * template build forward while one is in progress.
+ * in that project could start on (the new-Thread picker). It polls while a
+ * connection is preparing, so its progress and readiness show up.
  */
 export const orbProvidersQueryOptions = (
   userId: UserId,
@@ -41,5 +41,5 @@ export const orbProvidersQueryOptions = (
     gcTime: 5 * 60_000,
     refetchOnWindowFocus: true,
     refetchInterval: (query) =>
-      orbTemplateBuilding(query.state.data) ? 10_000 : false,
+      orbConnectionPreparing(query.state.data) ? 5_000 : false,
   });

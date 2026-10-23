@@ -12,7 +12,6 @@ import {
   attachmentResponseType,
   findAttachment,
   isAttachmentId,
-  serveAttachment,
 } from "../attachments/store.js";
 import { attachmentTransfer } from "../attachments/transfer.js";
 import {
@@ -118,6 +117,7 @@ import {
   bitbucketRuntimeBroker,
 } from "../source-control/bitbucket/runtime.js";
 import { readGitHubUserAccessToken } from "../source-control/github/control-plane.js";
+import { repairCandidatePatches } from "../thread-changes/candidate.js";
 import {
   markResidentThreadChangesDirty,
   usableResidentCapture,
@@ -3191,20 +3191,10 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       !(await canReadAttachment(db, row, userPrincipal(owner.owner_user_id)))
     )
       return new Response(null, { status: 404 });
-    if (request.headers.get("x-dx-attachment-content") === "1")
-      return transfer.kind === "core"
-        ? serveAttachment(this.env.DX_STORAGE, row, request, {
-            download: true,
-          })
-        : new Response(null, { status: 404 });
-    const url =
-      transfer.kind === "direct"
-        ? await transfer.readUrl(
-            row.object_key,
-            attachmentResponseType(row, true),
-          )
-        : // Local development: the same daemon route, streamed by Core.
-          `/v1/dxd/${encodeURIComponent(threadId.value)}/attachments/${row.id}?content=1`;
+    const url = await transfer.readUrl(
+      row.object_key,
+      attachmentResponseType(row, true),
+    );
     return Response.json(
       { url, name: row.filename, size: row.size },
       { headers: { "cache-control": "no-store" } },
@@ -3509,12 +3499,26 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       onExcessProperty: "error",
     });
     const candidate = Schema.decodeUnknownOption(DxdChangesCandidateMessage)(
-      decoded,
+      messageType === "changes-candidate"
+        ? repairCandidatePatches(decoded)
+        : decoded,
       { onExcessProperty: "error" },
     );
     const workloadIdentityRequest = Schema.decodeUnknownOption(
       DxdWorkloadIdentityRequestMessage,
     )(decoded, { onExcessProperty: "error" });
+    if (messageType === "changes-candidate" && Option.isNone(candidate)) {
+      // A candidate Core cannot read stays unpublished, and Changes keeps its
+      // last capture; dropping the connection would only bring the same
+      // candidate back on every reconnect, and take Terminal, Files, and Git
+      // credentials down with it.
+      threadDaemonLogger.warn("Thread Changes candidate rejected.", {
+        event: "thread_changes_candidate_rejected",
+        threadId: authority?.threadId,
+        frameBytes,
+      });
+      return;
+    }
     if (
       Option.isNone(control) &&
       Option.isNone(response) &&

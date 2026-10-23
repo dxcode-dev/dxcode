@@ -1,12 +1,12 @@
+import { env } from "cloudflare:test";
 import { IntegrationCredentialConfigReference, UserId } from "@dx/domain";
 import { Effect, Schema } from "effect";
-import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { loadConfigEncryptionKeyring } from "../../src/settings/environment-variables/encryption.js";
 import {
   IntegrationCredentialVault,
   IntegrationCredentialVaultD1,
 } from "../../src/settings/integrations/credential-vault.js";
-import { loadConfigEncryptionKeyring } from "../../src/settings/environment-variables/encryption.js";
 import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
 
 describe("IntegrationCredentialVaultD1", () => {

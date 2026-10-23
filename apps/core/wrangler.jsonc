@@ -19,7 +19,7 @@
     "DX_WORKLOAD_IDENTITY_AUDIENCE_POLICIES": "{\"version\":1,\"policies\":[]}"
   },
   "triggers": {
-    "crons": ["17 3 * * *"]
+    "crons": ["17 3 * * *", "*/5 * * * *"]
   },
   "ai": {
     "binding": "AI",
@@ -64,6 +64,10 @@
       {
         "name": "THREAD_SEARCH_INDEX",
         "class_name": "ThreadSearchIndexObject"
+      },
+      {
+        "name": "ORB_PROVIDER_PREPARATION",
+        "class_name": "OrbProviderPreparationObject"
       }
     ]
   },
@@ -95,6 +99,10 @@
     {
       "tag": "v6-thread-search-index",
       "new_sqlite_classes": ["ThreadSearchIndexObject"]
+    },
+    {
+      "tag": "v7-orb-provider-preparation",
+      "new_sqlite_classes": ["OrbProviderPreparationObject"]
     }
   ]
 }

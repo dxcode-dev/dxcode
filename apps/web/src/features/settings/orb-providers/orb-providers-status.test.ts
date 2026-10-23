@@ -5,18 +5,23 @@ import { orbProviderSource } from "./orb-providers-status.js";
 const e2b: OrbProviderData = {
   id: "e2b",
   displayName: "E2B",
-  credentialLabel: "E2B API key",
+  description: "Runs Orbs in your E2B team.",
+  fields: [{ id: "apiKey", label: "E2B API key", secret: true }],
+  sizes: [],
   pauseResume: "processes",
   deployment: true,
-  key: null,
-  workspaceKey: null,
+  connection: null,
+  workspaceConnection: null,
 };
-const key = (
-  status: "building" | "ready" | "failed" | null,
-): OrbProviderData["key"] => ({
+const connection = (
+  status: "preparing" | "ready" | "failed" | null,
+): OrbProviderData["connection"] => ({
   configuredAt: "2026-10-04T00:00:00.000Z",
   account: "team-a",
-  template: status === null ? null : { status, error: null },
+  status,
+  progress: null,
+  error: null,
+  updating: false,
 });
 
 describe("Orb provider rows", () => {
@@ -24,17 +29,38 @@ describe("Orb provider rows", () => {
     expect(orbProviderSource(e2b, "personal")).toBe(
       "Provided by this deployment",
     );
-    expect(orbProviderSource({ ...e2b, key: key("ready") }, "personal")).toBe(
-      "Your key · team-a",
-    );
-    expect(orbProviderSource({ ...e2b, key: key("ready") }, "workspace")).toBe(
-      "Workspace key · team-a",
-    );
     expect(
-      orbProviderSource({ ...e2b, workspaceKey: key("ready") }, "personal"),
-    ).toBe("Workspace key · team-a");
+      orbProviderSource(
+        { ...e2b, connection: connection("ready") },
+        "personal",
+      ),
+    ).toBe("Your account · team-a");
+    expect(
+      orbProviderSource(
+        { ...e2b, connection: connection("ready") },
+        "workspace",
+      ),
+    ).toBe("Workspace account · team-a");
+    expect(
+      orbProviderSource(
+        { ...e2b, workspaceConnection: connection("ready") },
+        "personal",
+      ),
+    ).toBe("Workspace account · team-a");
+    expect(
+      orbProviderSource(
+        { ...e2b, connection: connection("preparing") },
+        "personal",
+      ),
+    ).toBe("Preparing…");
+    expect(
+      orbProviderSource(
+        { ...e2b, connection: connection("failed") },
+        "personal",
+      ),
+    ).toBe("Setup failed");
     expect(orbProviderSource({ ...e2b, deployment: false }, "personal")).toBe(
-      "Needs an API key",
+      "Not connected",
     );
     expect(
       orbProviderSource(
@@ -42,7 +68,7 @@ describe("Orb provider rows", () => {
           ...e2b,
           id: "cloudflare",
           displayName: "Cloudflare Containers",
-          credentialLabel: null,
+          fields: [],
         },
         "personal",
       ),

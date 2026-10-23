@@ -41,10 +41,12 @@ The wizard will ask you to:
    Policy pages.
 7. When the deployment offers email and password, enter the administrator
    password twice. Leave the first password prompt empty to generate one.
-8. Choose the Orb providers: E2B (default yes), Cloudflare Containers
-   (default no), or both. E2B asks for an API key, and the deploy builds the
-   `a1.tiny`, `a1.small`, and `a1.medium` profiles. Containers requires the
-   Workers Paid plan and Docker on this machine.
+8. Choose the Orb providers the deployment offers on its own account: E2B,
+   Cloudflare Containers, both, or neither (each defaults to no). Without one,
+   people connect their own E2B account in Settings → Orb Providers. E2B asks
+   for an API key, and the deploy builds the `a1.tiny`, `a1.small`, and
+   `a1.medium` profiles. Containers requires the Workers Paid plan and Docker
+   on this machine.
 9. Choose optional source and model integrations. Public Git repositories work
    without GitHub or Bitbucket configuration.
 10. Review the redacted configuration before approving the apply.

@@ -4,7 +4,10 @@ import type { Bindings } from "../http/types.js";
 import { notificationLogger } from "../logging.js";
 import { publishNotificationsInvalidation } from "../realtime/publication.js";
 import { userIdentity } from "../thread-sharing/service.js";
-import { ChannelDeliveryError } from "./channels/channel.js";
+import {
+  ChannelDeliveryError,
+  ChannelNotReachable,
+} from "./channels/channel.js";
 import { notificationChannels } from "./channels/index.js";
 import {
   insertNotifications,
@@ -40,15 +43,21 @@ const excerptOf = (text: string) => {
     : `${trimmed.slice(0, EXCERPT_LENGTH - 1).trimEnd()}…`;
 };
 
-/** Whether a person receives a topic on a channel: their choice, else the default. */
+/**
+ * Whether a person receives a topic on a channel: their choice, else the
+ * topic's default. A topic that does not offer the channel is never
+ * delivered on it, whatever is stored.
+ */
 export const subscribed = (
   preferences: ReadonlyMap<string, boolean>,
   userId: UserId,
   topic: NotificationTopic,
   channel: NotificationChannel,
-) =>
-  preferences.get(preferenceKey(userId, topic, channel)) ??
-  NOTIFICATION_TOPICS[topic].defaults[channel];
+) => {
+  const fallback = NOTIFICATION_TOPICS[topic].defaults[channel];
+  if (fallback === undefined) return false;
+  return preferences.get(preferenceKey(userId, topic, channel)) ?? fallback;
+};
 
 /**
  * Notifies people: records each recipient's inbox row, tells their open apps
@@ -125,6 +134,8 @@ export const publishNotification = async (
           await channel.deliver({
             recipient: { userId: recipientUserId, ...recipient },
             content,
+            topic: topic.id,
+            threadId: event.threadId,
             topicNoun: topic.noun,
             links: {
               open,
@@ -133,6 +144,8 @@ export const publishNotification = async (
           });
           outcome = { status: "sent" };
         } catch (cause) {
+          // Nothing was tried: the person has no address on this channel.
+          if (cause instanceof ChannelNotReachable) return;
           const error =
             cause instanceof ChannelDeliveryError ? cause.code : "unexpected";
           notificationLogger.warn("Notification delivery failed.", {

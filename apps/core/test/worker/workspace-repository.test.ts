@@ -1,3 +1,4 @@
+import { env } from "cloudflare:test";
 import {
   CreateWorkspaceInput,
   UpdateWorkspaceProfileInput,
@@ -7,7 +8,6 @@ import {
   WorkspaceRepository,
   WorkspaceShortNameUnavailable,
 } from "@dx/domain";
-import { env } from "cloudflare:test";
 import { Effect, Option, Schema } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 import { runRepositories } from "./runtime.js";

@@ -34,12 +34,6 @@
       "optional": true
     },
     {
-      "name": "DX_ATTACHMENT_TRANSFER",
-      "type": "text",
-      "provenance": "alchemy",
-      "optional": true
-    },
-    {
       "name": "DX_AUTH_EMAIL_FROM",
       "type": "text",
       "provenance": "alchemy",
@@ -184,6 +178,18 @@
       "optional": true
     },
     {
+      "name": "DX_PUSH_VAPID_PRIVATE_KEY",
+      "type": "secret",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_PUSH_VAPID_PUBLIC_KEY",
+      "type": "secret",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
       "name": "DX_RUNNER_PROFILE_CATALOG",
       "type": "text",
       "provenance": "authored-wrangler"
@@ -300,6 +306,11 @@
       "provenance": "alchemy",
       "optional": true,
       "crossScript": true
+    },
+    {
+      "name": "ORB_PROVIDER_PREPARATION",
+      "type": "durable-object",
+      "provenance": "authored-wrangler"
     },
     {
       "name": "PLUGIN_TRIGGER_DELIVERY",

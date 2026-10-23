@@ -25,11 +25,11 @@ for (const [path, version] of [
     version,
   );
 }
-const revision = "33a2cf7e3796a7f3960a24455f3c5bb57537ee13";
+const revision = "1a87a0b331f25810794dbee6cff0d125760a8485";
 const artifact = readFileSync(resolve(here, `runtime-${revision}.tgz`));
 assert.equal(
   createHash("sha256").update(artifact).digest("hex"),
-  "5cffb446243361c2dc55fcb1fd5edab3fa0d64cca8ea785e5852f607b5079b57",
+  "72a208a43366811237589cca7eb86027ed7aa1fe666f9d377d115e9ef5f392cb",
 );
 assert.ok(
   readFileSync(resolve(runtime, "DX_SOURCE_REVISION"), "utf8").includes(
@@ -44,17 +44,17 @@ for (const [name, directory, hash] of [
   [
     "sdk",
     sdk,
-    "1dc0bb17f30fab87948c2d1de4ab2044c113c57c558628411aa883731c5002e2",
+    "360b79cae8735adb96a3abe97ee29b419e1a0d2991b4d3e7a8a7389b575d750c",
   ],
   [
     "react",
     react,
-    "63bcfe43edf87119b47e2845ea325655909974a699a541a9c5a6c06703674e06",
+    "659bb2ebd2f8c146db3a55ebbe997c846d05bc1398504184e45f26cdae8c01d3",
   ],
   [
     "vite",
     vite,
-    "b4be437d5a7fe0121bec7a803440c0d4dff5abc980dfcf63a942efeae676d7e3",
+    "1501b4b0260b88b94489b2c5b98f3e57e5808dd37e45877bec0764c8cf30744e",
   ],
 ]) {
   assert.ok(

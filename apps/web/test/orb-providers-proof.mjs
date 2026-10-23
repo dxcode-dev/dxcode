@@ -1,47 +1,42 @@
-// Orb Providers journey against a running `pnpm dev` (local) or a branch
-// preview. Through the page it saves, replaces, and removes a personal key
-// and a workspace key for the first key-based provider (E2B), turns the
-// workspace's "Members' Own Keys" policy off and on, and checks after each
-// step what the server reports and what the personal row says. On a
-// deployment (not the local runtime) it also checks that the provider set a
-// workspace project's new Thread resolves to follows the policy: the
-// personal key only when the workspace allows it. Writes desktop (1440) and
-// mobile (390) screenshots, a HAR without bodies or credentials,
-// console.json, and summary.json to <output>, then restores the policy and
-// removes the keys it saved.
+// Orb provider connections, end to end, against a deployment (a branch
+// preview; the local runtime never reaches a provider). Through the Settings
+// page it connects the signed-in person's own provider account, watches dx
+// prepare it until ready, starts a Thread on that account, waits for its Orb
+// to be ready and lists its files, then disconnects and checks that it
+// stops new Threads and the picker asks to connect a provider again (on a
+// deployment that offers none of its own). Writes desktop and mobile
+// screenshots, a HAR without bodies or credentials, console.json, and
+// summary.json to <output>, and with DX_PROOF_VIDEO=1 a WebM of the
+// desktop pages under <output>/video.
 //
-//   node apps/web/test/orb-providers-proof.mjs http://127.0.0.1:3000 out/
+//   DX_PROOF_PROVIDER=e2b DX_PROOF_CREDENTIALS='{"apiKey":"e2b_…"}' \
+//     node apps/web/test/orb-providers-proof.mjs https://<preview> out/
 //
-// The local runtime stores keys without reaching the provider, so a
-// placeholder works there. A deployment checks the key with the provider:
-// set DX_PROOF_ORB_KEY to a real key. Without one the run only checks that
-// a placeholder is rejected inline. A deployment whose catalog has no
-// key-based provider shows rows only: the run checks there is no key action
-// and no policy card. The workspace half creates an
-// `orb-proof` workspace when the account belongs to none.
-//
-// Credentials come from DX_PROOF_EMAIL / DX_PROOF_PASSWORD, or from the local
-// account in apps/core/.dev.vars. DX_PROOF_CHROMIUM picks the browser binary.
+// DX_PROOF_PROVIDER picks the provider (e2b by default). DX_PROOF_CREDENTIALS
+// is a JSON object of its connection fields. Sign-in comes from
+// DX_PROOF_EMAIL / DX_PROOF_PASSWORD. DX_PROOF_CHROMIUM picks the browser.
+// The run refuses an account that already has a connection for the
+// provider, and removes the connection it made.
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { parseEnv } from "node:util";
 import { chromium } from "playwright-core";
 
 const [base, outputArgument] = process.argv.slice(2);
 assert(base && outputArgument, "Usage: <base url> <output dir>");
 const output = resolve(outputArgument);
 mkdirSync(output, { recursive: true });
-const devVars = resolve(import.meta.dirname, "../../core/.dev.vars");
-const local = existsSync(devVars)
-  ? parseEnv(readFileSync(devVars, "utf8"))
-  : {};
-const email = process.env.DX_PROOF_EMAIL ?? local.DX_LOCAL_AUTH_EMAIL;
-const password = process.env.DX_PROOF_PASSWORD ?? local.DX_LOCAL_AUTH_PASSWORD;
-assert(email && password, "No proof account credentials.");
-const stamp = Date.now().toString(36);
-const realKey = process.env.DX_PROOF_ORB_KEY;
-const placeholder = `orb-proof-placeholder-${stamp}`;
+const email = process.env.DX_PROOF_EMAIL;
+const password = process.env.DX_PROOF_PASSWORD;
+assert(email && password, "Set DX_PROOF_EMAIL and DX_PROOF_PASSWORD.");
+const providerId = process.env.DX_PROOF_PROVIDER ?? "e2b";
+const credentials = JSON.parse(process.env.DX_PROOF_CREDENTIALS ?? "{}");
+assert(
+  Object.keys(credentials).length > 0,
+  "Set DX_PROOF_CREDENTIALS to the provider's connection fields.",
+);
+const PREPARE_TIMEOUT_MS = 30 * 60_000;
+const ORB_TIMEOUT_MS = 10 * 60_000;
 
 const browser = await chromium.launch(
   process.env.DX_PROOF_CHROMIUM === undefined
@@ -52,6 +47,15 @@ const context = await browser.newContext({
   viewport: { width: 1440, height: 900 },
   locale: "en-US",
   recordHar: { path: join(output, "network.har"), content: "omit" },
+  // DX_PROOF_VIDEO=1 also records the desktop pages as WebM.
+  ...(process.env.DX_PROOF_VIDEO === "1"
+    ? {
+        recordVideo: {
+          dir: join(output, "video"),
+          size: { width: 1440, height: 900 },
+        },
+      }
+    : {}),
 });
 const signIn = await context.request.post(`${base}/api/auth/sign-in/email`, {
   headers: { origin: base },
@@ -59,16 +63,19 @@ const signIn = await context.request.post(`${base}/api/auth/sign-in/email`, {
 });
 assert.equal(signIn.status(), 200, "Password sign-in failed.");
 
-const api = async (method, path, data) => {
+const request = async (method, path, data) => {
   const response = await context.request.fetch(`${base}${path}`, {
     method,
     headers: { origin: base },
     ...(data === undefined ? {} : { data }),
   });
-  const body = await response.json();
+  return { status: response.status(), body: await response.json() };
+};
+const api = async (method, path, data) => {
+  const { status, body } = await request(method, path, data);
   assert(
-    response.ok(),
-    `${method} ${path} answered ${response.status()}: ${JSON.stringify(body)}`,
+    status >= 200 && status < 300,
+    `${method} ${path} answered ${status}: ${JSON.stringify(body)}`,
   );
   return body.data;
 };
@@ -76,8 +83,9 @@ const api = async (method, path, data) => {
 const consoleMessages = [];
 const pageErrors = [];
 const steps = [];
+const started = Date.now();
 const step = (name, detail = {}) => {
-  steps.push({ name, ...detail });
+  steps.push({ name, atMs: Date.now() - started, ...detail });
   console.log(`✓ ${name}`);
 };
 const watch = (page) => {
@@ -94,115 +102,255 @@ const watch = (page) => {
 };
 const shot = (page, name) =>
   page.screenshot({ path: join(output, `${name}.png`), fullPage: true });
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
-let { workspace } = await api("GET", "/v1/settings/personal");
-const createdWorkspace = workspace === undefined;
-if (createdWorkspace)
-  workspace = await api("POST", "/v1/settings/workspaces", {
-    displayName: "Orb Proof",
-    shortName: `orb-proof-${stamp}`,
-  });
-const workspaceSlug = ["owner", "admin"].includes(workspace.role ?? "owner")
-  ? workspace.shortName
-  : undefined;
+const providersBase = "/v1/settings/personal/orb-providers";
+const list = () => api("GET", providersBase);
+const providerOf = (data) => data.providers.find(({ id }) => id === providerId);
 
-const scopes = {
-  personal: {
-    name: "personal",
-    apiBase: "/v1/settings/personal/orb-providers",
-    page: "/settings/orb-providers",
-    heading: "Orb Providers",
-  },
-  workspace: {
-    name: "workspace",
-    apiBase: `/v1/settings/workspaces/${workspaceSlug}/orb-providers`,
-    page: `/workspaces/${workspaceSlug}/orb-providers`,
-    heading: "Workspace Orb Providers",
-  },
-};
-const listOf = (scope) => api("GET", scope.apiBase);
-const personalStart = await listOf(scopes.personal);
-// A deployment lists a key-based provider only when its catalog has sizes
-// for it. Without one, the run checks the rows and the policy alone.
-const keyed = personalStart.providers.find(
-  ({ credentialLabel }) => credentialLabel !== null,
-);
-const provider = keyed ?? personalStart.providers[0];
-const { localRuntime } = personalStart;
-const keyOf = async (scope) =>
-  (await listOf(scope)).providers.find(({ id }) => id === provider.id).key;
-const workspaceStart =
-  workspaceSlug === undefined ? undefined : await listOf(scopes.workspace);
-const workspaceKeyAtStart = workspaceStart?.providers.find(
-  ({ id }) => id === provider.id,
-)?.key;
-const policyAtStart = workspaceStart?.personalKeysOnWorkspaceProjects;
-const key = (n) => (realKey === undefined ? `${placeholder}-${n}` : realKey);
-
-const openPage = async (page, scope) => {
-  await page.goto(`${base}${scope.page}`);
-  await page
-    .getByRole("heading", { name: scope.heading, exact: true })
-    .waitFor({ timeout: 60_000 });
-  await row(page).waitFor({ timeout: 60_000 });
-};
-const row = (page) => page.locator(`[data-provider="${provider.id}"]`);
-const rowStatus = async (page) =>
-  (await row(page).locator(".orb-provider-copy p").innerText()).trim();
-/** Polls the row's status until `predicate` holds. */
-const waitForStatus = async (page, predicate, label) => {
-  for (let attempt = 0; ; attempt += 1) {
-    const text = await rowStatus(page);
-    if (predicate(text)) return text;
-    if (attempt >= 60) throw new Error(`${label}: the row reads "${text}".`);
-    await page.waitForTimeout(500);
-  }
-};
-const waitForMutation = (page, method, path) =>
-  page.waitForResponse(
-    (response) =>
-      response.request().method() === method &&
-      new URL(response.url()).pathname.endsWith(path),
-  );
-
-/** Opens the row's key dialog. */
-const openKey = async (page, action) => {
-  await page
-    .getByRole("button", { name: `${action} ${provider.displayName} key` })
-    .click();
-  const dialog = page.getByRole("dialog");
-  await dialog.getByLabel(provider.credentialLabel, { exact: true }).waitFor();
-  return dialog;
-};
-/** Types a key into the open dialog and saves it; returns the response. */
-const saveKey = async (page, dialog, credential) => {
-  await dialog
-    .getByLabel(provider.credentialLabel, { exact: true })
-    .fill(credential);
-  const saved = waitForMutation(page, "PUT", `/${provider.id}/key`);
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
-  return saved;
-};
-const placeholderOf = (dialog) =>
-  dialog
-    .getByLabel(provider.credentialLabel, { exact: true })
-    .getAttribute("placeholder");
-
-const saved = { personal: false, workspace: false };
 const summary = {
   base,
-  localRuntime,
-  provider: provider.id,
-  keyBased: keyed !== undefined,
-  providers: personalStart.providers.map(({ id }) => id),
-  workspace: workspaceSlug ?? null,
-  createdWorkspace,
-  realKey: realKey !== undefined,
+  provider: providerId,
   steps,
 };
+let connected = false;
+// Until the provider lists its fields, treat every value as secret.
+let secretFieldIds = Object.keys(credentials);
 try {
+  const before = await list();
+  const provider = providerOf(before);
+  assert(provider !== undefined, `${providerId} is not listed.`);
+  assert(provider.fields.length > 0, `${providerId} takes no connection.`);
+  secretFieldIds = provider.fields
+    .filter(({ secret }) => secret)
+    .map(({ id }) => id);
+  assert.equal(
+    provider.connection,
+    null,
+    "The account already has a connection; the run would replace it.",
+  );
+  assert.deepEqual(
+    provider.fields.map(({ id }) => id).sort(),
+    Object.keys(credentials).sort(),
+    "DX_PROOF_CREDENTIALS does not match the provider's fields.",
+  );
+  summary.deploymentProviders = before.providers
+    .filter(({ deployment }) => deployment)
+    .map(({ id }) => id);
+  summary.resolvedBefore = before.resolved;
+  step("the provider lists its connection form and sizes", {
+    fields: provider.fields.map(({ id, secret }) => ({ id, secret })),
+    sizes: provider.sizes.map(({ id }) => id),
+  });
+
   const page = await context.newPage();
   watch(page);
+  const row = page.locator(`[data-provider="${providerId}"]`);
+  const rowStatus = async () =>
+    (await row.locator(".orb-provider-copy p").innerText()).trim();
+  const openSettings = async () => {
+    await page.goto(`${base}/settings/orb-providers`);
+    await page
+      .getByRole("heading", { name: "Orb Providers", exact: true })
+      .waitFor({ timeout: 60_000 });
+    await row.waitFor({ timeout: 60_000 });
+  };
+
+  // With no usable provider the composer asks to connect one.
+  if (before.resolved.length === 0) {
+    await page.goto(`${base}/new`);
+    const connect = page.getByRole("button", {
+      name: "Connect an Orb provider",
+    });
+    await connect.waitFor({ timeout: 60_000 });
+    await shot(page, "01-new-thread-no-provider.desktop");
+    await connect.click();
+    await page
+      .getByRole("heading", { name: "Orb Providers", exact: true })
+      .waitFor({ timeout: 60_000 });
+    step("with no provider, New Thread offers Connect an Orb provider");
+  }
+
+  await openSettings();
+  await shot(page, "02-settings-before.desktop");
+  await page
+    .getByRole("button", { name: `Connect ${provider.displayName}` })
+    .click();
+  const dialog = page.getByRole("dialog");
+  for (const field of provider.fields)
+    await dialog
+      .getByLabel(field.label, { exact: true })
+      .fill(credentials[field.id]);
+  await shot(page, "03-connect-dialog.desktop");
+  const saved = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PUT" &&
+      new URL(response.url()).pathname.endsWith(`/${providerId}/connection`),
+  );
+  await dialog.getByRole("button", { name: "Connect", exact: true }).click();
+  const savedResponse = await saved;
+  assert(
+    savedResponse.ok(),
+    `Connecting answered ${savedResponse.status()}: ${await savedResponse.text()}`,
+  );
+  connected = true;
+  await dialog.waitFor({ state: "detached" });
+  step("the connection form verifies and saves the credentials", {
+    status: await rowStatus(),
+  });
+
+  // Preparation runs on its own; the page polls while it does.
+  const progress = [];
+  const preparingSince = Date.now();
+  for (;;) {
+    const connection = providerOf(await list()).connection;
+    const last = progress.at(-1);
+    if (
+      connection.progress !== null &&
+      (last === undefined || last.step !== connection.progress.step)
+    ) {
+      progress.push({
+        ...connection.progress,
+        atMs: Date.now() - preparingSince,
+      });
+      await openSettings();
+      await shot(page, `04-preparing-${progress.length}.desktop`);
+    }
+    if (connection.status === "ready") break;
+    assert.notEqual(
+      connection.status,
+      "failed",
+      `Preparation failed: ${connection.error}`,
+    );
+    assert(
+      Date.now() - preparingSince < PREPARE_TIMEOUT_MS,
+      "Preparation took longer than 30 minutes.",
+    );
+    await sleep(5_000);
+  }
+  const ready = await list();
+  summary.preparation = {
+    ms: Date.now() - preparingSince,
+    progress,
+    account: providerOf(ready).connection.account,
+  };
+  await openSettings();
+  await shot(page, "05-ready.desktop");
+  const readyStatus = await rowStatus();
+  assert(
+    readyStatus.startsWith("Your account"),
+    `The ready row reads "${readyStatus}".`,
+  );
+  const member = ready.resolved.find(
+    (candidate) => candidate.providerId === providerId,
+  );
+  assert.equal(member?.scope, "personal", "New Threads do not use it.");
+  assert.equal(member?.status, "ready");
+  step("preparation reaches ready and new Threads resolve to the account", {
+    status: readyStatus,
+    preparationMs: summary.preparation.ms,
+  });
+
+  // The picker offers the connected provider's sizes.
+  await page.goto(`${base}/new`);
+  const picker = page.locator(".new-thread-orb-size");
+  await picker.waitFor({ timeout: 60_000 });
+  await picker.click();
+  await page
+    .locator(".orb-picker-provider")
+    .filter({ hasText: provider.displayName.split(" ")[0] })
+    .first()
+    .waitFor();
+  await shot(page, "06-picker.desktop");
+  await page.keyboard.press("Escape");
+  step("the Orb picker offers the connected provider");
+
+  // A Thread on the connection gets a ready Orb whose files list.
+  const size = provider.sizes[0].id;
+  const thread = await api("POST", "/v1/threads", {
+    runnerProfileId: size,
+    title: "Orb connection proof",
+    generateTitle: false,
+    threadId: `thr_${crypto.randomUUID()}`,
+    initialMessage: {
+      body: "Run `uname -a` in the terminal and reply with its output.",
+      attachments: [],
+    },
+  });
+  summary.threadId = thread.id;
+  const orbSince = Date.now();
+  let readiness;
+  for (;;) {
+    readiness = await api("GET", `/v1/threads/${thread.id}/readiness`);
+    if (readiness.ready) break;
+    assert(Date.now() - orbSince < ORB_TIMEOUT_MS, "The Orb never got ready.");
+    await sleep(3_000);
+  }
+  const files = await api("GET", `/v1/threads/${thread.id}/files`);
+  summary.orb = {
+    readyMs: Date.now() - orbSince,
+    files: files.entries?.length,
+  };
+  await page.goto(`${base}/threads/${thread.id}`);
+  await page.waitForTimeout(5_000);
+  await shot(page, "07-thread.desktop");
+  step("a Thread on the connection gets a ready Orb and lists its files", {
+    size,
+    orbReadyMs: summary.orb.readyMs,
+  });
+
+  // Disconnecting fails pinned Threads closed and stops new ones.
+  await openSettings();
+  await page
+    .getByRole("button", { name: `Manage ${provider.displayName}` })
+    .click();
+  const removed = page.waitForResponse(
+    (response) =>
+      response.request().method() === "DELETE" &&
+      new URL(response.url()).pathname.endsWith(`/${providerId}/connection`),
+  );
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Disconnect", exact: true })
+    .click();
+  assert((await removed).ok(), "Disconnecting failed.");
+  connected = false;
+  const after = await list();
+  assert.equal(providerOf(after).connection, null);
+  // A running Orb keeps serving through its resident daemon until it
+  // pauses; the pinned account fails closed at the next provider operation.
+  const filesAfter = await request("GET", `/v1/threads/${thread.id}/files`);
+  // New Threads cannot start on the removed account.
+  const refused = await request("POST", "/v1/threads", {
+    runnerProfileId: size,
+    title: "Orb connection proof (after disconnect)",
+    generateTitle: false,
+  });
+  summary.afterDisconnect = {
+    resolved: after.resolved,
+    runningOrbFilesStatus: filesAfter.status,
+    newThread: { status: refused.status, body: refused.body.data },
+  };
+  if (summary.deploymentProviders.length === 0) {
+    assert.equal(
+      refused.status,
+      409,
+      "A new Thread started without a provider.",
+    );
+    assert.equal(refused.body.data.code, "ORB_UNAVAILABLE");
+    assert.equal(refused.body.data.reason, "no-provider");
+    await page.goto(`${base}/new`);
+    await page
+      .getByRole("button", { name: "Connect an Orb provider" })
+      .waitFor({ timeout: 60_000 });
+  }
+  await shot(page, "08-disconnected.desktop");
+  step("disconnecting stops new Threads on the account", {
+    newThreadStatus: refused.status,
+    runningOrbFilesStatus: filesAfter.status,
+  });
+
+  // The settings page on a phone has no horizontal overflow.
   const mobile = await browser.newContext({
     viewport: { width: 390, height: 844 },
     deviceScaleFactor: 2,
@@ -213,301 +361,27 @@ try {
   });
   const phone = await mobile.newPage();
   watch(phone);
-  const phoneShot = async (scope, name) => {
-    await openPage(phone, scope);
-    const overflow = await phone.evaluate(
-      () => document.documentElement.scrollWidth - window.innerWidth,
-    );
-    assert(overflow <= 0, `The mobile page overflows by ${overflow}px.`);
-    await shot(phone, name);
-  };
-
-  const personal = scopes.personal;
-  await openPage(page, personal);
-  const startStatus = await rowStatus(page);
-  await shot(page, "personal-01.desktop");
-  await phoneShot(personal, "personal-02.mobile");
-  assert.equal(
-    await page.locator(".orb-provider-row").count(),
-    personalStart.providers.length,
-    "The page does not show one row per provider.",
+  await phone.goto(`${base}/settings/orb-providers`);
+  await phone
+    .getByRole("heading", { name: "Orb Providers", exact: true })
+    .waitFor({ timeout: 60_000 });
+  const overflow = await phone.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
   );
-  if (keyed === undefined) {
-    assert.equal(
-      await row(page).getByRole("button").count(),
-      0,
-      "A provider without keys offers a key action.",
-    );
-  } else {
-    const phoneDialog = await openKey(phone, "Add");
-    await shot(phone, "personal-02-add-dialog.mobile");
-    await phone.keyboard.press("Escape");
-    await phoneDialog.waitFor({ state: "detached" });
-    assert.equal(
-      personalStart.providers.find(({ id }) => id === provider.id).key,
-      null,
-      "The account already has a personal key; the run would replace it.",
-    );
-  }
-  step("personal: one row per provider; mobile has no horizontal overflow", {
-    status: startStatus,
-  });
-
-  if (keyed === undefined) {
-    step("personal: no key-based provider here, so no key to save");
-  } else if (!localRuntime && realKey === undefined) {
-    // Without a real key a deployment can only show the rejection.
-    const dialog = await openKey(page, "Add");
-    const response = await saveKey(page, dialog, placeholder);
-    assert.equal(response.status(), 400, "The placeholder key was accepted.");
-    await dialog
-      .getByRole("alert")
-      .filter({ hasText: "The provider rejected this key." })
-      .waitFor();
-    await shot(page, "personal-03-rejected.desktop");
-    assert.equal(await keyOf(personal), null, "A rejected key was saved.");
-    step("personal: a rejected key shows inline and is not saved");
-    await page.keyboard.press("Escape");
-  } else {
-    // Save.
-    let dialog = await openKey(page, "Add");
-    await shot(page, "personal-03-add-dialog.desktop");
-    const response = await saveKey(page, dialog, key(1));
-    assert(response.ok(), `Saving answered ${response.status()}.`);
-    saved.personal = true;
-    await dialog.waitFor({ state: "detached" });
-    const first = await keyOf(personal);
-    assert(first !== null, "The saved key is not on the server.");
-    await waitForStatus(
-      page,
-      (text) => /^(Your key|Building template…|Ignored locally)/.test(text),
-      "After saving",
-    );
-    await page
-      .getByRole("button", { name: `Manage ${provider.displayName} key` })
-      .waitFor();
-    await shot(page, "personal-04-saved.desktop");
-    step("personal: Add Key saves a key and the row names it", {
-      status: await rowStatus(page),
-    });
-
-    // Replace.
-    dialog = await openKey(page, "Manage");
-    assert.equal(
-      await placeholderOf(dialog),
-      "Key saved. Enter a new key to replace it.",
-    );
-    await shot(page, "personal-05-manage-dialog.desktop");
-    const replaced = await saveKey(page, dialog, key(2));
-    assert(replaced.ok(), `Replacing answered ${replaced.status()}.`);
-    await dialog.waitFor({ state: "detached" });
-    const second = await keyOf(personal);
-    assert(
-      second !== null && second.configuredAt !== first.configuredAt,
-      "Replacing did not store a new key.",
-    );
-    step("personal: Manage Key replaces the key", {
-      configuredAt: [first.configuredAt, second.configuredAt],
-    });
-  }
-
-  if (workspaceSlug !== undefined) {
-    const workspaceScope = scopes.workspace;
-    assert.equal(workspaceKeyAtStart, null, "The workspace already has a key.");
-    await openPage(page, workspaceScope);
-    await shot(page, "workspace-01.desktop");
-    await phoneShot(workspaceScope, "workspace-02.mobile");
-    step("workspace: one row per provider; mobile has no horizontal overflow", {
-      status: await rowStatus(page),
-    });
-
-    if (keyed !== undefined && (localRuntime || realKey !== undefined)) {
-      let dialog = await openKey(page, "Add");
-      const response = await saveKey(page, dialog, key(3));
-      assert(response.ok(), `Saving answered ${response.status()}.`);
-      saved.workspace = true;
-      await dialog.waitFor({ state: "detached" });
-      const first = await keyOf(workspaceScope);
-      assert(first !== null, "The workspace key is not on the server.");
-      await waitForStatus(
-        page,
-        (text) =>
-          /^(Workspace key|Building template…|Ignored locally)/.test(text),
-        "After saving the workspace key",
-      );
-      step("workspace: Add Key saves a workspace key", {
-        status: await rowStatus(page),
-      });
-      dialog = await openKey(page, "Manage");
-      const replaced = await saveKey(page, dialog, key(4));
-      assert(replaced.ok(), `Replacing answered ${replaced.status()}.`);
-      await dialog.waitFor({ state: "detached" });
-      const second = await keyOf(workspaceScope);
-      assert.notEqual(second.configuredAt, first.configuredAt);
-      await shot(page, "workspace-03-saved.desktop");
-      step("workspace: Manage Key replaces the workspace key");
-    }
-
-    // The workspace policy on members' own keys.
-    const toggle = page.getByRole("button", {
-      name: "Members' own keys on workspace projects",
-    });
-    const policy = (await listOf(workspaceScope))
-      .personalKeysOnWorkspaceProjects;
-    if (keyed === undefined) {
-      // No provider takes a key, so the policy on keys has nothing to do.
-      assert.equal(await toggle.count(), 0, "The policy card is shown.");
-      step("workspace: without a key-based provider there is no policy card");
-    } else if (!policy.pluginOverridesAllowed) {
-      assert(await toggle.isDisabled(), "A locked policy switch is enabled.");
-      step("workspace: the switch is locked by the plugin policy");
-    } else {
-      /** Sets the switch through the page and checks the server agrees. */
-      const setPolicy = async (allowed) => {
-        await openPage(page, workspaceScope);
-        if ((await toggle.getAttribute("aria-pressed")) !== String(allowed)) {
-          const written = waitForMutation(page, "PUT", "/orb-providers/policy");
-          await toggle.click();
-          assert((await written).ok(), "The policy write failed.");
-        }
-        await page.waitForFunction(
-          (expected) =>
-            [...document.querySelectorAll("button[aria-pressed]")].some(
-              (button) =>
-                button.getAttribute("aria-label") ===
-                  "Members' own keys on workspace projects" &&
-                button.getAttribute("aria-pressed") === expected,
-            ),
-          String(allowed),
-        );
-        assert.equal(
-          (await listOf(workspaceScope)).personalKeysOnWorkspaceProjects
-            .allowed,
-          allowed,
-        );
-      };
-      /** The provider a new Thread in a workspace project would run on. */
-      const resolvedScope = async () =>
-        (await listOf(personal)).resolved.find(
-          ({ providerId }) => providerId === provider.id,
-        )?.scope ?? null;
-
-      for (const allowed of [false, true]) {
-        await setPolicy(allowed);
-        await shot(
-          page,
-          `workspace-0${allowed ? 5 : 4}-policy-${allowed ? "on" : "off"}.desktop`,
-        );
-        await openPage(page, personal);
-        const detail = { status: await rowStatus(page) };
-        if (saved.personal && !localRuntime) {
-          await waitForStatus(
-            page,
-            allowed
-              ? (text) => !text.includes("Personal projects only")
-              : (text) => text.endsWith("· Personal projects only"),
-            `Policy ${allowed ? "on" : "off"}`,
-          );
-          detail.status = await rowStatus(page);
-          // Without a projectId the set resolves for the member's workspace.
-          detail.resolved = await resolvedScope();
-          assert.equal(
-            detail.resolved === "personal",
-            allowed,
-            `With the policy ${allowed ? "on" : "off"} a workspace project resolves to the ${detail.resolved} key.`,
-          );
-        }
-        if (saved.personal) {
-          const dialog = await openKey(page, "Manage");
-          const note = dialog.getByText(
-            "Your workspace keeps members' own keys off its projects",
-          );
-          assert.equal(
-            await note.count(),
-            !allowed && !localRuntime ? 1 : 0,
-            "The dialog's policy note does not match the policy.",
-          );
-          await shot(
-            page,
-            `personal-0${allowed ? 7 : 6}-policy-${allowed ? "on" : "off"}.desktop`,
-          );
-          await page.keyboard.press("Escape");
-          await dialog.waitFor({ state: "detached" });
-        }
-        step(
-          `policy ${allowed ? "on" : "off"}: the server, the personal row, and the resolved provider agree`,
-          detail,
-        );
-      }
-    }
-  }
-
-  if (saved.personal) {
-    await openPage(page, personal);
-    const dialog = await openKey(page, "Manage");
-    const removed = waitForMutation(page, "DELETE", `/${provider.id}/key`);
-    await dialog
-      .getByRole("button", { name: "Remove Key", exact: true })
-      .click();
-    assert((await removed).ok(), "Removing the personal key failed.");
-    await dialog.waitFor({ state: "detached" });
-    saved.personal = false;
-    assert.equal(await keyOf(personal), null, "The key is still saved.");
-    await page
-      .getByRole("button", { name: `Add ${provider.displayName} key` })
-      .waitFor();
-    if (saved.workspace)
-      await waitForStatus(
-        page,
-        (text) =>
-          /^(Workspace key|Building template…|Ignored locally)/.test(text),
-        "After removing with a workspace key",
-      );
-    await shot(page, "personal-08-removed.desktop");
-    step("personal: Remove Key deletes it and the row falls back", {
-      status: await rowStatus(page),
-    });
-  }
-  if (saved.workspace) {
-    await openPage(page, scopes.workspace);
-    const dialog = await openKey(page, "Manage");
-    const removed = waitForMutation(page, "DELETE", `/${provider.id}/key`);
-    await dialog
-      .getByRole("button", { name: "Remove Key", exact: true })
-      .click();
-    assert((await removed).ok(), "Removing the workspace key failed.");
-    await dialog.waitFor({ state: "detached" });
-    saved.workspace = false;
-    assert.equal(await keyOf(scopes.workspace), null);
-    await openPage(page, personal);
-    assert.equal(
-      await rowStatus(page),
-      startStatus,
-      "The personal row did not return to its first state.",
-    );
-    step("workspace: Remove Key deletes it; the personal row is as it began");
-  }
+  assert(overflow <= 0, `The mobile page overflows by ${overflow}px.`);
+  await shot(phone, "09-settings.mobile");
   await mobile.close();
+  step("the settings page fits a phone");
   summary.passed = true;
 } catch (error) {
   summary.passed = false;
   summary.error = error instanceof Error ? error.stack : String(error);
   throw error;
 } finally {
-  if (saved.personal)
-    await api("DELETE", `${scopes.personal.apiBase}/${provider.id}/key`).catch(
+  if (connected)
+    await request("DELETE", `${providersBase}/${providerId}/connection`).catch(
       () => undefined,
     );
-  if (saved.workspace)
-    await api("DELETE", `${scopes.workspace.apiBase}/${provider.id}/key`).catch(
-      () => undefined,
-    );
-  if (policyAtStart?.pluginOverridesAllowed)
-    await api("PUT", `${scopes.workspace.apiBase}/policy`, {
-      allowPersonalKeysOnWorkspaceProjects:
-        policyAtStart.executionOverridesAllowed,
-    }).catch(() => undefined);
-  summary.restored = true;
   summary.pageErrors = pageErrors;
   summary.consoleErrors = consoleMessages.filter(
     ({ type }) => type === "error",
@@ -536,9 +410,12 @@ try {
     "x-forwarded-for",
     "x-real-ip",
   ]);
-  const secrets = [password, email, placeholder, realKey].filter(
-    (value) => value !== undefined,
-  );
+  // The provider's secret fields; others (an account ID) are not secret.
+  const secrets = [
+    password,
+    email,
+    ...secretFieldIds.map((id) => credentials[id]),
+  ].filter((value) => typeof value === "string" && value.length > 0);
   const harPath = join(output, "network.har");
   const har = JSON.parse(readFileSync(harPath, "utf8"));
   for (const entry of har.log.entries) {

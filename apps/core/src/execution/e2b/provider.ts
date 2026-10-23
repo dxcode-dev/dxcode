@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import type { E2BRunnerProfileConfiguration } from "@dx/domain";
 import type { Sandbox as E2BSandbox } from "e2b";
-import { Effect } from "effect";
+import { Effect, Redacted } from "effect";
 import type { Bindings } from "../../http/types.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
 import type {
@@ -27,7 +27,7 @@ import {
   loadDaemonReleaseMetadata,
 } from "../guest/daemon-release.js";
 import { e2b } from "./adapter.js";
-import { loadE2BRequirements } from "./requirements.js";
+import { loadE2BWorkspaceSettings } from "./requirements.js";
 import {
   connectExistingExecutionWorkspace,
   destroyExecutionWorkspace,
@@ -62,14 +62,18 @@ const e2bRequirements = async (
   context: ExecutionContext,
 ) => {
   const profile = e2bProfile(context.profile);
-  if (context.credential === undefined)
+  const apiKey =
+    context.credentials === undefined
+      ? undefined
+      : Redacted.value(context.credentials).apiKey;
+  if (apiKey === undefined)
     throw new Error("E2B execution requires an account key.");
   const requirements = await Effect.runPromise(
-    loadE2BRequirements(bindings, profile.template),
+    loadE2BWorkspaceSettings(bindings, profile.template),
   );
   return {
     profile,
-    requirements: { ...requirements, apiKey: context.credential },
+    requirements: { ...requirements, apiKey: Redacted.make(apiKey) },
   };
 };
 

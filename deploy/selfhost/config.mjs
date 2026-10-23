@@ -22,6 +22,7 @@ const CONFIG_KEYS = new Set([
   "plugins",
   "offeredPlugins",
   "offeredEmailSending",
+  "attachmentR2Credentials",
   "cloudflareAuth",
   "orbProviders",
   "signIn",
@@ -62,6 +63,8 @@ export const DEPLOYMENT_SECRET_NAMES = Object.freeze([
   "SARVAM_API_KEY",
   "EXA_API_KEY",
   "DX_GOOGLE_CLIENT_SECRET",
+  "DX_R2_ACCESS_KEY_ID",
+  "DX_R2_SECRET_ACCESS_KEY",
 ]);
 
 /**
@@ -263,6 +266,7 @@ export const validateSelfhostConfig = (input) => {
     "workersAi",
     "workerTraces",
     "offeredEmailSending",
+    "attachmentR2Credentials",
   ])
     if (input[key] !== undefined && typeof input[key] !== "boolean")
       throw new Error(`${key} must be true or false.`);
@@ -277,17 +281,16 @@ export const validateSelfhostConfig = (input) => {
     throw new Error(
       "integrations may contain github, bitbucket, sarvam, and exa once each.",
     );
-  // Configs written before Containers existed installed E2B.
+  // Configs written before Containers existed installed E2B. An empty list
+  // offers no provider on the deployment's account: people and workspaces
+  // connect their own.
   const orbProviders = input.orbProviders ?? ["e2b"];
   if (
     !Array.isArray(orbProviders) ||
-    orbProviders.length === 0 ||
     orbProviders.some((value) => !ORB_PROVIDER_IDS.includes(value)) ||
     new Set(orbProviders).size !== orbProviders.length
   )
-    throw new Error(
-      "orbProviders must contain e2b, cloudflare, or both, once each.",
-    );
+    throw new Error("orbProviders may contain e2b and cloudflare, once each.");
   let plugins = [...pluginList(input.plugins ?? [], "plugins")];
   // Plugins the installer has asked about; an installed plugin was asked
   // about. Configs written before this key existed were asked about Search
@@ -347,6 +350,11 @@ export const validateSelfhostConfig = (input) => {
     // The installer offered a sender to this deployment; it asks once.
     ...(input.offeredEmailSending === true
       ? { offeredEmailSending: true }
+      : {}),
+    // The deployment holds the operator's R2 API token (Alchemy OAuth, which
+    // cannot mint the attachment signing token); the installer asks once.
+    ...(input.attachmentR2Credentials === true
+      ? { attachmentR2Credentials: true }
       : {}),
     ...(cloudflareAuth === undefined ? {} : { cloudflareAuth }),
     // Kept for deployments that read it; signIn.admission decides.

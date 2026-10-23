@@ -182,6 +182,7 @@ vi.mock("./runner-profiles/execution.js", () => ({
 }));
 vi.mock("./e2b/requirements.js", () => ({
   loadE2BRequirements: mocks.loadRequirements,
+  loadE2BWorkspaceSettings: mocks.loadRequirements,
 }));
 vi.mock("../persistence/d1-binding.js", () => ({
   decodeD1Binding: mocks.decodeDb,

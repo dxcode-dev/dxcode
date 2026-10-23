@@ -2,8 +2,16 @@ import type { NotificationSubscriptionData } from "@dx/api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId } from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { Button } from "../../../shared/ui/button.js";
 import {
+  browserPushStateQueryOptions,
+  disablePushMutationOptions,
+  enablePushMutationOptions,
   notificationPreferencesQueryOptions,
+  PushPermissionDenied,
+  pushStateQueryOptions,
+  removePushDeviceMutationOptions,
+  testPushMutationOptions,
   updateNotificationPreferenceMutationOptions,
 } from "../../notifications/notifications-queries.js";
 import {
@@ -15,12 +23,151 @@ import {
 } from "../settings-primitives.js";
 
 const unavailableHint = (subscription: NotificationSubscriptionData) =>
-  subscription.channel === "email" ? "Email not set up" : "Unavailable";
+  subscription.channel === "email"
+    ? "Email not set up"
+    : subscription.channel === "push"
+      ? "Push not set up"
+      : "Unavailable";
 
 const sameRow = (
   a: Pick<NotificationSubscriptionData, "topic" | "channel">,
   b: Pick<NotificationSubscriptionData, "topic" | "channel">,
 ) => a.topic === b.topic && a.channel === b.channel;
+
+/**
+ * Push on this browser: permission, a service worker, and a subscription
+ * registered with dx. The per-topic push rows above are the account's
+ * choice; this row is the device's, so a person can keep push on their
+ * phone and off on a shared desktop.
+ */
+function PushDeviceCard() {
+  const { identity } = useAuthenticatedIdentity();
+  const queryClient = useQueryClient();
+  const push = useQuery(pushStateQueryOptions(identity.id));
+  const browser = useQuery(browserPushStateQueryOptions(identity.id));
+  const enable = useMutation(
+    enablePushMutationOptions(queryClient, identity.id),
+  );
+  const disable = useMutation(
+    disablePushMutationOptions(queryClient, identity.id),
+  );
+  const remove = useMutation(
+    removePushDeviceMutationOptions(queryClient, identity.id),
+  );
+  const test = useMutation(testPushMutationOptions(identity.id));
+  const publicKey = push.data?.publicKey;
+  const thisDeviceHash = browser.data?.endpointHash;
+  // On only when this browser holds a subscription dx also knows about:
+  // either side alone would promise notifications that never arrive.
+  const registered =
+    thisDeviceHash !== undefined &&
+    (push.data?.devices ?? []).some(
+      (device) => device.endpointHash === thisDeviceHash,
+    );
+  const pending = enable.isPending || disable.isPending;
+  const supported = browser.data?.supported !== false;
+  const blocked = browser.data?.permission === "denied";
+  const deployed = push.data?.available === true;
+  const otherDevices = (push.data?.devices ?? []).filter(
+    (device) => device.endpointHash !== thisDeviceHash,
+  );
+  // Why the switch cannot turn on here, and what would let it.
+  const hint = !deployed
+    ? "This deployment has no push keys."
+    : browser.data?.needsHomeScreen === true
+      ? "On iPhone and iPad, push works in dx added to your Home Screen: tap Share, then Add to Home Screen, and turn this on there."
+      : !supported
+        ? "This browser cannot receive push notifications."
+        : blocked
+          ? "Notifications are blocked for dx in this browser's settings."
+          : undefined;
+  return (
+    <SettingsCard
+      title="This device"
+      description="Notifications reach a device only after that device accepts them."
+    >
+      {enable.isError ? (
+        <SettingsBackgroundError
+          onRetry={() => {
+            if (publicKey !== undefined) enable.mutate(publicKey);
+          }}
+        >
+          {enable.error instanceof PushPermissionDenied
+            ? "The browser refused notification permission. Allow notifications for dx and try again."
+            : "Push could not be turned on for this browser."}
+        </SettingsBackgroundError>
+      ) : null}
+      <SettingsRow
+        title="Push notifications on this browser"
+        description={
+          registered
+            ? "This browser receives dx notifications, even with no dx tab open."
+            : (hint ?? "Turn on to receive dx notifications on this browser.")
+        }
+        control={
+          <SettingsToggle
+            checked={registered}
+            pending={pending}
+            disabled={
+              hint !== undefined || (publicKey === undefined && !registered)
+            }
+            label="Push notifications on this browser"
+            onCheckedChange={(checked) => {
+              if (!checked) {
+                disable.mutate();
+                return;
+              }
+              if (publicKey !== undefined) enable.mutate(publicKey);
+            }}
+          />
+        }
+      />
+      {registered ? (
+        <SettingsRow
+          title="Send a test notification"
+          description={
+            test.data === undefined
+              ? "Sends one push through the same path a mention takes."
+              : test.data.delivered > 0
+                ? `Sent to ${test.data.delivered} device${test.data.delivered === 1 ? "" : "s"}.`
+                : "No device took it; turn push off and on again."
+          }
+          control={
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={test.isPending}
+              onClick={() => test.mutate()}
+            >
+              {test.isPending ? "Sending…" : "Send"}
+            </Button>
+          }
+        />
+      ) : null}
+      {otherDevices.map((device) => (
+        <SettingsRow
+          key={device.id}
+          title={device.label}
+          description={
+            device.lastDeliveredAt === undefined
+              ? "Registered; nothing delivered yet."
+              : `Last notification ${new Date(device.lastDeliveredAt).toLocaleString()}.`
+          }
+          control={
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={remove.isPending}
+              onClick={() => remove.mutate(device.id)}
+            >
+              Remove
+            </Button>
+          }
+        />
+      ))}
+    </SettingsCard>
+  );
+}
 
 /**
  * Which notifications reach the person outside the app; every mention also
@@ -106,6 +253,7 @@ export function NotificationSettings() {
           })}
         </SettingsCard>
       )}
+      <PushDeviceCard />
     </div>
   );
 }

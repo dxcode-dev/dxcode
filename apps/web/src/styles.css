@@ -4614,13 +4614,11 @@ a {
 .environment-values-row[aria-busy="true"] {
   opacity: 0.6;
 }
-.environment-values-name > code {
+.environment-values-name > code,
+.environment-values-value > code {
   display: inline-block;
   max-width: 100%;
   vertical-align: bottom;
-}
-.environment-values-value > code {
-  display: block;
 }
 .environment-values code {
   overflow: hidden;
@@ -4637,7 +4635,8 @@ a {
   color: var(--muted-foreground);
   font-size: 11px;
 }
-.environment-values-name > .environment-values-hint {
+.environment-values-name > .environment-values-hint,
+.environment-values-value > code + .environment-values-hint {
   margin-left: 8px;
 }
 .environment-values-updated {

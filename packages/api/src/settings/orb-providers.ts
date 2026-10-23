@@ -1,8 +1,13 @@
 import {
   ExecutionPauseResumePreserves,
-  PluginCredential,
+  OrbProviderConnectionStatus,
+  OrbProviderCredentials,
+  OrbProviderField,
+  OrbProviderPreparationProgress,
   PluginScope,
   ProjectId,
+  RunnerProfileId,
+  RunnerResources,
   WorkspaceSlug,
 } from "@dx/domain";
 import { Schema } from "effect";
@@ -14,55 +19,63 @@ export const OrbProviderId = Schema.Literals(["e2b", "cloudflare", "local"]);
 export type OrbProviderId = typeof OrbProviderId.Type;
 
 /**
- * The Orb template in a key's own provider account: `building` until
- * every size is ready, `ready`, or `failed` (save the key again to retry).
+ * A person's or workspace's own provider account. The credentials are
+ * never returned.
  */
-export const OrbTemplateStatus = Schema.Literals([
-  "building",
-  "ready",
-  "failed",
-]);
-
-export type OrbTemplateStatus = typeof OrbTemplateStatus.Type;
-
-/** A person's or workspace's own key; the key itself is never returned. */
-export const OrbProviderKeyDataSchema = Schema.Struct({
+export const OrbProviderConnectionDataSchema = Schema.Struct({
   configuredAt: Schema.String,
-  /** The provider account (E2B team) the key belongs to, once known. */
+  /** The provider account (E2B team, Cloudflare account), once known. */
   account: Schema.NullOr(Schema.String),
-  /** Null in the local runtime, which ignores the key. */
-  template: Schema.NullOr(
-    Schema.Struct({
-      status: OrbTemplateStatus,
-      error: Schema.NullOr(Schema.String),
-    }),
-  ),
+  /** Null in the local runtime, which never reaches the provider. */
+  status: Schema.NullOr(OrbProviderConnectionStatus),
+  /** What preparation is doing; null unless preparing. */
+  progress: Schema.NullOr(OrbProviderPreparationProgress),
+  /** Why preparation failed; null unless failed. */
+  error: Schema.NullOr(Schema.String),
+  /**
+   * Preparing (or failed to prepare) a new version while new Threads keep
+   * using the last ready one.
+   */
+  updating: Schema.Boolean,
 });
 
-export type OrbProviderKeyData = typeof OrbProviderKeyDataSchema.Type;
+export type OrbProviderConnectionData =
+  typeof OrbProviderConnectionDataSchema.Type;
+
+/** One Orb size a provider offers. */
+export const OrbProviderSizeSchema = Schema.Struct({
+  id: RunnerProfileId,
+  label: Schema.String,
+  resources: RunnerResources,
+});
+
+export type OrbProviderSize = typeof OrbProviderSizeSchema.Type;
 
 export const OrbProviderDataSchema = Schema.Struct({
   id: OrbProviderId,
   displayName: Schema.String,
-  /** Null for providers a person cannot key (deployment scope only). */
-  credentialLabel: Schema.NullOr(Schema.String),
+  /** One sentence: what connecting this provider takes. */
+  description: Schema.String,
+  /** The connection form; empty when no one can connect the provider. */
+  fields: Schema.Array(OrbProviderField),
+  sizes: Schema.Array(OrbProviderSizeSchema),
   pauseResume: Schema.NullOr(ExecutionPauseResumePreserves),
   /** The deployment provides this provider with its own account. */
   deployment: Schema.Boolean,
-  /** This scope's own key. */
-  key: Schema.NullOr(OrbProviderKeyDataSchema),
-  /** The workspace's key, shown to a member on the personal page. */
-  workspaceKey: Schema.NullOr(OrbProviderKeyDataSchema),
+  /** This scope's own connection. */
+  connection: Schema.NullOr(OrbProviderConnectionDataSchema),
+  /** The workspace's connection, shown to a member on the personal page. */
+  workspaceConnection: Schema.NullOr(OrbProviderConnectionDataSchema),
 });
 
 export type OrbProviderData = typeof OrbProviderDataSchema.Type;
 
-/** One provider a Thread can start on, with whose key pays for it. */
+/** One provider a Thread can start on, with whose account pays for it. */
 export const OrbResolvedProviderSchema = Schema.Struct({
   providerId: OrbProviderId,
   scope: PluginScope,
   account: Schema.NullOr(Schema.String),
-  status: OrbTemplateStatus,
+  status: OrbProviderConnectionStatus,
 });
 
 export type OrbResolvedProvider = typeof OrbResolvedProviderSchema.Type;
@@ -70,11 +83,11 @@ export type OrbResolvedProvider = typeof OrbResolvedProviderSchema.Type;
 export const OrbProviderListDataSchema = Schema.Struct({
   scope: Schema.Literals(["personal", "workspace"]),
   canUpdate: Schema.Boolean,
-  /** The local runtime ignores personal and workspace keys. */
+  /** The local runtime ignores personal and workspace connections. */
   localRuntime: Schema.Boolean,
   providers: Schema.Array(OrbProviderDataSchema),
   /**
-   * Whether members' own keys apply on workspace projects: both the
+   * Whether members' own connections apply on workspace projects: both the
    * workspace's general plugin flag and its Orb opt-in. Null without a
    * workspace.
    */
@@ -89,7 +102,8 @@ export const OrbProviderListDataSchema = Schema.Struct({
   ),
   /**
    * Providers a new Thread can start on, for the requested project (or a
-   * projectless Thread). One per provider; precedence picks its key.
+   * projectless Thread). One per provider; precedence picks its account.
+   * Empty when the person has no provider: they connect one first.
    */
   resolved: Schema.Array(OrbResolvedProviderSchema),
 });
@@ -112,12 +126,12 @@ export const OrbProviderParamsSchema = Schema.Struct({
   providerId: OrbProviderId,
 });
 
-export const SetOrbProviderKeyRequestSchema = Schema.Struct({
-  credential: PluginCredential,
+export const SetOrbProviderConnectionRequestSchema = Schema.Struct({
+  credentials: OrbProviderCredentials,
 });
 
-export type SetOrbProviderKeyRequest =
-  typeof SetOrbProviderKeyRequestSchema.Type;
+export type SetOrbProviderConnectionRequest =
+  typeof SetOrbProviderConnectionRequestSchema.Type;
 
 export const SetOrbProviderPolicyRequestSchema = Schema.Struct({
   allowPersonalKeysOnWorkspaceProjects: Schema.Boolean,
@@ -128,10 +142,16 @@ export const OrbProviderInvalidRequestResponseSchema = errorResponse(
   "Orb provider request is invalid.",
 );
 
-export const OrbProviderKeyRejectedResponseSchema = errorResponse(
-  "ORB_PROVIDER_KEY_REJECTED",
-  "The provider rejected this key.",
-);
+/** The provider refused the credentials; `detail` says what to fix. */
+export const OrbProviderCredentialsRejectedResponseSchema = Schema.Struct({
+  status: Schema.Literal("error"),
+  data: Schema.Struct({
+    code: Schema.Literal("ORB_PROVIDER_CREDENTIALS_REJECTED"),
+    message: Schema.Literal("The provider rejected these credentials."),
+    requestId: Schema.String,
+    detail: Schema.optional(Schema.String),
+  }),
+});
 
 export const OrbProviderForbiddenResponseSchema = errorResponse(
   "ORB_PROVIDER_SETTINGS_FORBIDDEN",
@@ -145,7 +165,7 @@ export const OrbProviderUnavailableResponseSchema = errorResponse(
 
 export const OrbProviderErrorResponseSchema = Schema.Union([
   OrbProviderInvalidRequestResponseSchema,
-  OrbProviderKeyRejectedResponseSchema,
+  OrbProviderCredentialsRejectedResponseSchema,
   OrbProviderForbiddenResponseSchema,
   OrbProviderUnavailableResponseSchema,
 ]);

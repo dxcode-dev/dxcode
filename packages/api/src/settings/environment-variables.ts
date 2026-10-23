@@ -31,6 +31,8 @@ export const EnvironmentVariableDataSchema = Schema.Struct({
   enabled: Schema.Boolean,
   source: EnvironmentVariableScope,
   value: Schema.String,
+  /** Whether dx hides the value in what the agent reads (`isHiddenEnvironmentValue`). */
+  hidden: Schema.Boolean,
   createdAt: Schema.DateTimeUtcFromString,
   updatedAt: Schema.DateTimeUtcFromString,
   rotatedAt: Schema.DateTimeUtcFromString,

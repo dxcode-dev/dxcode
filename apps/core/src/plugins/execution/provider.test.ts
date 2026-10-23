@@ -117,15 +117,15 @@ describe("Execution provider contract", () => {
     expect(pipeline.activate).toHaveBeenCalledWith(
       {
         account: { scope: "deployment" },
-        credential: expect.anything(),
+        credentials: expect.anything(),
         profile: e2bProfile,
       },
       { id: threadId },
     );
     const context = pipeline.activate.mock.calls[0]?.[0];
-    expect(Redacted.value(context?.credential as Redacted.Redacted)).toBe(
-      "deployment-key",
-    );
+    expect(
+      Redacted.value(context?.credentials as Redacted.Redacted<object>),
+    ).toEqual({ apiKey: "deployment-key" });
     expect(pipeline.reconnect).toHaveBeenCalledOnce();
     expect(resolveProfile).toHaveBeenCalledTimes(2);
     expect(resolveProfile).toHaveBeenCalledWith(deployed, threadId, {
@@ -373,7 +373,7 @@ describe("Execution provider contract", () => {
     expect(cloudflarePipeline?.activate.mock.calls[0]?.[0]).toMatchObject({
       profile: cloudflareProfile,
       // Containers is keyless; the deployment key belongs to E2B.
-      credential: undefined,
+      credentials: undefined,
     });
     expect(e2bPipeline?.activate).toHaveBeenCalledOnce();
     // Each Thread names its pinned provider, before any installation.
@@ -409,7 +409,7 @@ describe("Execution provider contract", () => {
         scope: "personal",
         ownerId: "user-1",
         account: "team-a",
-        key: Redacted.make("personal-key"),
+        credentials: Redacted.make({ apiKey: "personal-key" }),
       };
     const resolveTarget = vi.fn<ExecutionTargetResolver>(async () => ({
       profile: e2bProfile,
@@ -441,9 +441,9 @@ describe("Execution provider contract", () => {
       providerAccount: "team-a",
     });
     // The owner's key, never the deployment's.
-    expect(Redacted.value(context?.credential as Redacted.Redacted)).toBe(
-      "personal-key",
-    );
+    expect(
+      Redacted.value(context?.credentials as Redacted.Redacted<object>),
+    ).toEqual({ apiKey: "personal-key" });
 
     // The key was removed: every operation fails closed, with no fallback
     // to the deployment key…
@@ -477,25 +477,26 @@ describe("Execution provider contract", () => {
     expect(release).not.toHaveBeenCalled();
   });
 
-  it("never runs a person's key on a keyless provider", async () => {
+  it("never runs a person's account on a provider no one can connect", async () => {
     const { provider, resolved } = workspaceOnly();
     const { activation } = stubActivation();
-    const cloudflareProfile = {
+    // The local runtime's provider has no connector.
+    const localProfile = {
       ...e2bProfile,
-      adapter: "cloudflare",
+      adapter: "local",
     } as unknown as ExecutionProfile;
     const workspaces = composeExecutionWorkspaces(
-      { ...deployed, ORB_CONTAINER: {} as Bindings["ORB_CONTAINER"] },
-      { cloudflare: provider },
+      deployed,
+      { local: provider },
       activation,
-      [{ ...resolved, providerId: "cloudflare" }],
+      [{ ...resolved, providerId: "local" }],
       vi.fn<ExecutionTargetResolver>(async () => ({
-        profile: cloudflareProfile,
+        profile: localProfile,
         credential: {
           scope: "workspace",
           ownerId: "workspace-1",
           account: "team-a",
-          key: Redacted.make("workspace-key"),
+          credentials: Redacted.make({ apiKey: "workspace-key" }),
         },
       })),
     );

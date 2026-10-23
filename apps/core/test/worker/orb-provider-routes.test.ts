@@ -3,6 +3,7 @@ import { E2B_ORB_PROFILES, Principal, type UserId } from "@dx/domain";
 import { Effect, Redacted, Schema } from "effect";
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it } from "vitest";
+import { makeE2BConnector } from "../../src/execution/e2b/connector.js";
 import {
   currentOrbTemplateRecipe,
   E2BKeyRejected,
@@ -14,14 +15,16 @@ import { resolveExecutionTarget } from "../../src/execution/runner-profiles/exec
 import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
+import type { OrbConnectionKey } from "../../src/plugins/execution/connections-d1.js";
+import type { OrbProviderConnectors } from "../../src/plugins/execution/connector.js";
 import {
   makePersonalOrbProviderRoutes,
   makeWorkspaceOrbProviderRoutes,
 } from "../../src/plugins/execution/orb-provider-routes.js";
-import {
-  OrbUnavailable,
-  resolveThreadExecutionPin,
-} from "../../src/plugins/execution/orb-providers.js";
+import { resolveThreadExecutionPin } from "../../src/plugins/execution/orb-providers.js";
+import { advanceConnection } from "../../src/plugins/execution/preparation.js";
+import { encryptPluginCredential } from "../../src/plugins/settings-store-d1.js";
+import { loadConfigEncryptionKeyring } from "../../src/settings/config-encryption.js";
 import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
 
 const owner = "orb-owner" as UserId;
@@ -40,6 +43,7 @@ const capabilities = [
   "pause-resume",
 ] as const;
 
+/** A deployment that offers E2B on its own account. */
 const deployed: Bindings = {
   DB: env.DB,
   DX_RUNTIME_MODE: "deployed",
@@ -61,19 +65,32 @@ const deployed: Bindings = {
   }),
 };
 
+/** A deployment installed with no Orb provider at all. */
+const providerless: Bindings = {
+  DB: env.DB,
+  DX_RUNTIME_MODE: "deployed",
+  DX_CONFIG_ENCRYPTION_KEYS: TEST_CONFIG_ENCRYPTION_KEYS,
+};
+
 /** One fake E2B team per key: "key-a*" keys are team-a, "key-b*" team-b. */
 const teams = new Map<string, Array<ListedTeamTemplate>>();
 const teamOfKey = (apiKey: string) => (apiKey.startsWith("key-b") ? "b" : "a");
 let builds = 0;
+/** Keys E2B stops accepting after they were saved. */
+const revoked = new Set<string>();
 const teamApi: E2BTeamApi = {
   listTemplates: async (apiKey) => {
-    if (apiKey === "rejected") throw new E2BKeyRejected();
+    if (apiKey === "rejected" || revoked.has(apiKey))
+      throw new E2BKeyRejected();
     return teams.get(teamOfKey(apiKey)) ?? [];
   },
   buildBase: async (apiKey, name) => start(apiKey, name),
   buildProfile: async (apiKey, name) => start(apiKey, name),
-  // Every build finishes by the next poll.
-  buildStatus: async () => "ready",
+  // Every build finishes by the next step.
+  buildStatus: async (apiKey) => {
+    if (revoked.has(apiKey)) throw new E2BKeyRejected();
+    return "ready";
+  },
 };
 const start = (apiKey: string, name: string) => {
   builds += 1;
@@ -88,6 +105,15 @@ const start = (apiKey: string, name: string) => {
   });
   teams.set(team, listed);
   return { templateId: `t${builds}`, buildId: `b${builds}` };
+};
+/** The recipe this "build" prepares for; a test moves it like a deploy. */
+let recipeOverride: string | undefined;
+const e2bConnector = makeE2BConnector(teamApi);
+const connectors: OrbProviderConnectors = {
+  e2b: {
+    ...e2bConnector,
+    recipe: async () => recipeOverride ?? (await e2bConnector.recipe()),
+  },
 };
 
 const principal = (userId: UserId) =>
@@ -105,11 +131,11 @@ const app = (userId: UserId) => {
   });
   router.route(
     "/personal/orb-providers",
-    makePersonalOrbProviderRoutes({ teamApi }),
+    makePersonalOrbProviderRoutes({ connectors }),
   );
   router.route(
     "/workspaces/:workspaceSlug/orb-providers",
-    makeWorkspaceOrbProviderRoutes({ teamApi }),
+    makeWorkspaceOrbProviderRoutes({ connectors }),
   );
   router.onError(errorHandler);
   return router;
@@ -118,7 +144,7 @@ const app = (userId: UserId) => {
 const call = async (
   userId: UserId,
   path: string,
-  method: "GET" | "PUT" | "DELETE" = "GET",
+  method: "GET" | "PUT" | "POST" | "DELETE" = "GET",
   body?: unknown,
   bindings: Bindings = deployed,
 ) => {
@@ -145,23 +171,36 @@ const call = async (
 const personal = "/personal/orb-providers";
 const workspace = `/workspaces/${workspaceSlug}/orb-providers`;
 
-/** Lets the next poll advance a build (the claim interval is 10 s). */
-const age = () =>
-  env.DB.prepare(
-    "UPDATE execution_account_template SET updated_at = '2026-01-01T00:00:00.000Z'",
-  ).run();
+const connect = (
+  userId: UserId,
+  base: string,
+  apiKey: string,
+  bindings: Bindings = deployed,
+) =>
+  call(
+    userId,
+    `${base}/e2b/connection`,
+    "PUT",
+    { credentials: { apiKey } },
+    bindings,
+  );
 
-/** Polls the page until the key's templates are ready. */
-const pollReady = async (userId: UserId, path: string) => {
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    await age();
-    const listed = await call(userId, path);
-    const e2b = listed.body.data.providers.find(
-      ({ id }: { id: string }) => id === "e2b",
-    );
-    if (e2b.key?.template?.status === "ready") return listed;
+const e2bOf = (data: {
+  readonly providers: ReadonlyArray<{ readonly id: string }>;
+}) =>
+  // biome-ignore lint/suspicious/noExplicitAny: response shapes are asserted below.
+  data.providers.find(({ id }) => id === "e2b") as any;
+
+/**
+ * Runs the connection's preparation object's steps until it stops, as its
+ * alarms do, with the fake E2B team.
+ */
+const prepare = async (key: OrbConnectionKey, bindings = deployed) => {
+  for (let step = 0; step < 12; step += 1) {
+    const outcome = await advanceConnection(bindings, env.DB, key, connectors);
+    if (outcome.nextStepInMs === undefined) return;
   }
-  throw new Error("Orb templates never became ready.");
+  throw new Error("Preparation never finished.");
 };
 
 const thread = async (id: string, projectId: string, userId: UserId) => {
@@ -173,24 +212,20 @@ const thread = async (id: string, projectId: string, userId: UserId) => {
   return id;
 };
 
-let recipeReads = 0;
-
 /** What the Thread repository writes beside a new Thread. */
 const pin = async (
   threadId: string,
   userId: UserId,
   projectId: string | null,
+  bindings: Bindings = deployed,
 ) => {
   const resolved = await resolveThreadExecutionPin({
     db: env.DB,
-    bindings: deployed,
+    bindings,
     userId,
     projectId,
     runnerProfileId: undefined,
-    recipe: () => {
-      recipeReads += 1;
-      return currentOrbTemplateRecipe();
-    },
+    connectors,
   });
   if (resolved === undefined) throw new Error("no pin");
   await env.DB.prepare(
@@ -219,10 +254,19 @@ const target = (threadId: string, bindings: Bindings = deployed) =>
     resolveExecutionTarget(bindings, threadId, { admission: false }),
   );
 
+const apiKeyOf = (
+  credential: Awaited<ReturnType<typeof target>>["credential"],
+) => {
+  if (credential.scope !== "personal" && credential.scope !== "workspace")
+    throw new Error(`no connection: ${credential.scope}`);
+  return Redacted.value(credential.credentials).apiKey;
+};
+
 beforeEach(async () => {
+  recipeOverride = undefined;
   teams.clear();
+  revoked.clear();
   builds = 0;
-  recipeReads = 0;
   await env.DB.batch([
     ...[owner, member, solo].map((id) =>
       env.DB.prepare(
@@ -252,50 +296,100 @@ beforeEach(async () => {
   ]);
 });
 
-describe("Orb providers in workerd with real D1", () => {
-  it("lists the deployment's E2B and an empty key slot", async () => {
-    const listed = await call(solo, personal);
+describe("Orb provider connections in workerd with real D1", () => {
+  it("runs with no deployment provider: E2B is connectable and nothing can start yet", async () => {
+    const listed = await call(solo, personal, "GET", undefined, providerless);
     expect(listed.status).toBe(200);
     expect(listed.body.data).toMatchObject({
       scope: "personal",
       canUpdate: true,
       localRuntime: false,
-      personalKeysOnWorkspaceProjects: null,
-      providers: [
-        {
-          id: "e2b",
-          displayName: "E2B",
-          credentialLabel: "E2B API key",
-          pauseResume: "processes",
-          deployment: true,
-          key: null,
-          workspaceKey: null,
-        },
-      ],
-      resolved: [{ providerId: "e2b", scope: "deployment", status: "ready" }],
+      resolved: [],
     });
+    expect(e2bOf(listed.body.data)).toMatchObject({
+      id: "e2b",
+      displayName: "E2B",
+      fields: [{ id: "apiKey", label: "E2B API key", secret: true }],
+      deployment: false,
+      connection: null,
+      workspaceConnection: null,
+    });
+    expect(
+      e2bOf(listed.body.data).sizes.map(({ id }: { id: string }) => id),
+    ).toEqual(E2B_ORB_PROFILES.map(({ id }) => id));
+    // Thread creation says why instead of creating a Thread that cannot run.
+    await expect(
+      pin(
+        await thread(
+          "thr_00000000-0000-4000-8000-0000000004a0",
+          personalProject,
+          solo,
+        ),
+        solo,
+        personalProject,
+        providerless,
+      ),
+    ).rejects.toMatchObject({ _tag: "OrbUnavailable", reason: "no-provider" });
+
+    // Connecting their own team is all a person needs.
+    await connect(solo, personal, "key-a-1", providerless);
+    await prepare(
+      { scope: "personal", targetId: solo, providerId: "e2b" },
+      providerless,
+    );
+    const ready = await call(solo, personal, "GET", undefined, providerless);
+    expect(ready.body.data.resolved).toEqual([
+      {
+        providerId: "e2b",
+        scope: "personal",
+        account: "team-a",
+        status: "ready",
+      },
+    ]);
+    const threadId = await thread(
+      "thr_00000000-0000-4000-8000-0000000004a1",
+      personalProject,
+      solo,
+    );
+    expect(
+      await pin(threadId, solo, personalProject, providerless),
+    ).toMatchObject({
+      credentialScope: "personal",
+      credentialAccount: "team-a",
+    });
+    expect(apiKeyOf((await target(threadId, providerless)).credential)).toBe(
+      "key-a-1",
+    );
   });
 
-  it("builds a personal key's templates, pins a Thread to its account, and fails closed when the key goes", async () => {
+  it("prepares a personal connection, pins a Thread to its account, and fails closed when it goes", async () => {
+    const rejected = await connect(solo, personal, "rejected");
+    expect(rejected.status).toBe(400);
+    expect(rejected.body.data).toMatchObject({
+      code: "ORB_PROVIDER_CREDENTIALS_REJECTED",
+      detail: "E2B rejected this API key.",
+    });
+    // Only the provider's own fields are accepted.
     expect(
       (
-        await call(solo, `${personal}/e2b/key`, "PUT", {
-          credential: "rejected",
+        await call(solo, `${personal}/e2b/connection`, "PUT", {
+          credentials: { apiKey: "key-a-1", extra: "x" },
         })
       ).status,
     ).toBe(400);
-    const saved = await call(solo, `${personal}/e2b/key`, "PUT", {
-      credential: "key-a-1",
-    });
+    const saved = await connect(solo, personal, "key-a-1");
     expect(saved.status).toBe(200);
-    expect(saved.body.data.providers[0].key).toMatchObject({
+    expect(e2bOf(saved.body.data).connection).toMatchObject({
       account: "team-a",
-      template: { status: "building", error: null },
+      status: "preparing",
+      progress: { done: 0, total: E2B_ORB_PROFILES.length + 1 },
+      error: null,
     });
-    // A Thread cannot start on the key until its templates are ready.
+    // A Thread cannot start on the connection until it is ready, and never
+    // falls back to the deployment's account meanwhile.
     expect(saved.body.data.resolved[0]).toMatchObject({
       scope: "personal",
-      status: "building",
+      status: "preparing",
     });
     await expect(
       pin(
@@ -307,14 +401,13 @@ describe("Orb providers in workerd with real D1", () => {
         solo,
         personalProject,
       ),
-    ).rejects.toBeInstanceOf(OrbUnavailable);
+    ).rejects.toMatchObject({ _tag: "OrbUnavailable", reason: "preparing" });
 
-    const ready = await pollReady(solo, personal);
-    expect(ready.body.data.resolved[0]).toMatchObject({
-      providerId: "e2b",
-      scope: "personal",
-      account: "team-a",
+    await prepare({ scope: "personal", targetId: solo, providerId: "e2b" });
+    const ready = await call(solo, personal);
+    expect(e2bOf(ready.body.data).connection).toMatchObject({
       status: "ready",
+      progress: null,
     });
     const recipe = await currentOrbTemplateRecipe();
     expect(teams.get("a")?.map(({ aliases }) => aliases[0])).toEqual([
@@ -345,8 +438,7 @@ describe("Orb providers in workerd with real D1", () => {
       ownerId: solo,
       account: "team-a",
     });
-    if (resolved.credential.scope !== "personal") throw new Error();
-    expect(Redacted.value(resolved.credential.key)).toBe("key-a-1");
+    expect(apiKeyOf(resolved.credential)).toBe("key-a-1");
     // The pin is immutable once written.
     await expect(
       env.DB.prepare(
@@ -356,27 +448,27 @@ describe("Orb providers in workerd with real D1", () => {
         .run(),
     ).rejects.toThrow();
 
-    // A key rotated within team-a is used for the next operation.
-    await call(solo, `${personal}/e2b/key`, "PUT", { credential: "key-a-2" });
-    const rotated = await target(byok);
-    if (rotated.credential.scope !== "personal") throw new Error();
-    expect(Redacted.value(rotated.credential.key)).toBe("key-a-2");
+    // A key rotated within team-a is used for the next operation, and the
+    // team's templates are reused at once.
+    const rotated = await connect(solo, personal, "key-a-2");
+    expect(e2bOf(rotated.body.data).connection.status).toBe("ready");
+    expect(apiKeyOf((await target(byok)).credential)).toBe("key-a-2");
 
     // A key for another team does not reach the pinned sandbox.
-    await call(solo, `${personal}/e2b/key`, "PUT", { credential: "key-b-1" });
+    await connect(solo, personal, "key-b-1");
     expect((await target(byok)).credential).toEqual({
       scope: "unavailable",
       reason: "account-changed",
     });
 
     // Removed: fails closed, and releasing knows to skip the provider.
-    await call(solo, `${personal}/e2b/key`, "DELETE");
+    await call(solo, `${personal}/e2b/connection`, "DELETE");
     expect((await target(byok)).credential).toEqual({
       scope: "unavailable",
       reason: "removed",
     });
 
-    // A Thread pinned to the deployment key is unaffected throughout.
+    // A Thread pinned to the deployment's account is unaffected throughout.
     const deploymentThread = await thread(
       "thr_00000000-0000-4000-8000-0000000004c2",
       personalProject,
@@ -388,40 +480,176 @@ describe("Orb providers in workerd with real D1", () => {
     expect((await target(deploymentThread)).credential).toEqual({
       scope: "deployment",
     });
-    // The local runtime never uses a person's key.
+    // The local runtime never uses a person's connection.
     expect(
       (await target(byok, { ...deployed, DX_RUNTIME_MODE: "local" }))
         .credential,
     ).toEqual({ scope: "unavailable", reason: "local-runtime" });
   });
 
-  it("reads the template recipe only for a Thread pinned to a key", async () => {
-    const deploymentThread = await thread(
-      "thr_00000000-0000-4000-8000-0000000004d0",
-      personalProject,
-      solo,
-    );
-    expect(
-      (await pin(deploymentThread, solo, personalProject)).credentialScope,
-    ).toBe("deployment");
-    expect(recipeReads).toBe(0);
+  it("keeps new Threads on the ready version while a new recipe prepares", async () => {
+    await connect(solo, personal, "key-a-1");
+    const key = {
+      scope: "personal",
+      targetId: solo,
+      providerId: "e2b",
+    } as const;
+    await prepare(key);
+    const before = await currentOrbTemplateRecipe();
+    const oldTemplate = teamTemplateName(before, E2B_ORB_PROFILES[2]);
 
-    await call(solo, `${personal}/e2b/key`, "PUT", { credential: "key-a-1" });
-    await pollReady(solo, personal);
-    const byok = await thread(
-      "thr_00000000-0000-4000-8000-0000000004d1",
-      personalProject,
-      solo,
-    );
-    expect((await pin(byok, solo, personalProject)).credentialScope).toBe(
-      "personal",
-    );
-    expect(recipeReads).toBe(1);
+    // A deploy ships a new Orb recipe: the connection prepares again, and
+    // new Threads keep starting on the templates already in the team.
+    recipeOverride = "fedcba9876543210";
+    const updating = (await call(solo, personal)).body.data;
+    expect(e2bOf(updating).connection).toMatchObject({
+      status: "preparing",
+      updating: true,
+    });
+    expect(updating.resolved).toEqual([
+      expect.objectContaining({ scope: "personal", status: "ready" }),
+    ]);
+    const pinNew = async (id: string) =>
+      pin(await thread(id, personalProject, solo), solo, personalProject);
+    expect(
+      (await pinNew("thr_00000000-0000-4000-8000-0000000004f0"))
+        .providerTemplate,
+    ).toBe(oldTemplate);
+    // The first step starts the new build; the old version still serves.
+    await advanceConnection(deployed, env.DB, key, connectors);
+    expect(
+      (await pinNew("thr_00000000-0000-4000-8000-0000000004f1"))
+        .providerTemplate,
+    ).toBe(oldTemplate);
+    expect(
+      e2bOf((await call(solo, personal)).body.data).connection,
+    ).toMatchObject({
+      status: "preparing",
+      updating: true,
+      progress: { done: 0 },
+    });
+
+    // Ready: new Threads move to the new recipe's templates.
+    await prepare(key);
+    expect(
+      e2bOf((await call(solo, personal)).body.data).connection,
+    ).toMatchObject({ status: "ready", updating: false });
+    expect(
+      (await pinNew("thr_00000000-0000-4000-8000-0000000004f2"))
+        .providerTemplate,
+    ).toBe(teamTemplateName("fedcba9876543210", E2B_ORB_PROFILES[2]));
   });
 
-  it("ignores a member's personal key on workspace projects until the admin opts in", async () => {
-    await call(member, `${personal}/e2b/key`, "PUT", { credential: "key-a-1" });
-    await pollReady(member, personal);
+  it("fails a connection the provider stops accepting, and retries it", async () => {
+    await connect(solo, personal, "key-a-1");
+    revoked.add("key-a-1");
+    const key = {
+      scope: "personal",
+      targetId: solo,
+      providerId: "e2b",
+    } as const;
+    await prepare(key);
+    const failed = await call(solo, personal);
+    expect(e2bOf(failed.body.data).connection).toMatchObject({
+      status: "failed",
+      error: "E2B rejected this API key.",
+    });
+    expect(failed.body.data.resolved[0]).toMatchObject({ status: "failed" });
+
+    revoked.clear();
+    const retried = await call(
+      solo,
+      `${personal}/e2b/connection/retry`,
+      "POST",
+    );
+    expect(retried.status).toBe(200);
+    expect(e2bOf(retried.body.data).connection).toMatchObject({
+      status: "preparing",
+      error: null,
+    });
+    await prepare(key);
+    expect(
+      e2bOf((await call(solo, personal)).body.data).connection.status,
+    ).toBe("ready");
+  });
+
+  it("moves an Orb key saved before connections into a ready connection", async () => {
+    // An E2B key and its finished template builds, as 0.2 stored them.
+    const recipe = await currentOrbTemplateRecipe();
+    const keyring = await Effect.runPromise(
+      loadConfigEncryptionKeyring(deployed),
+    );
+    const envelope = await encryptPluginCredential(
+      keyring,
+      { scope: "personal", targetId: solo, pluginId: "execution" },
+      "e2b",
+      "key-a-legacy",
+    );
+    const builds = [null, ...E2B_ORB_PROFILES].map((profile, index) => ({
+      profileId: profile?.id ?? null,
+      name: teamTemplateName(recipe, profile ?? undefined),
+      templateId: `legacy-t${index}`,
+      buildId: `legacy-b${index}`,
+      status: "ready",
+    }));
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO plugin_setting (
+           scope, target_id, plugin_id, provider_id, envelope_version,
+           key_version, value_nonce, ciphertext, wrapped_key_nonce,
+           wrapped_key, configured_at, updated_at
+         ) VALUES ('personal', ?, 'execution', 'e2b', 1, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(
+        solo,
+        envelope.keyVersion,
+        envelope.valueNonce,
+        envelope.ciphertext,
+        envelope.wrappedKeyNonce,
+        envelope.wrappedKey,
+        timestamp,
+        timestamp,
+      ),
+      env.DB.prepare(
+        `INSERT INTO execution_account_template (
+           scope, target_id, provider_id, configured_at, recipe, account,
+           state, builds_json, error, revision, updated_at
+         ) VALUES ('personal', ?, 'e2b', ?, ?, 'team-a', 'ready', ?, NULL, 0, ?)`,
+      ).bind(solo, timestamp, recipe, JSON.stringify(builds), timestamp),
+    ]);
+    // Migration 0084's copy, as it runs on a deployment's D1.
+    const migration = env.TEST_MIGRATIONS.find(
+      ({ name }) => name === "0084_orb_provider_connections.sql",
+    );
+    const copy = migration?.queries.find((query) =>
+      query.trimStart().startsWith("INSERT INTO orb_connection"),
+    );
+    if (copy === undefined) throw new Error("migration copy not found");
+    await env.DB.prepare(copy).run();
+
+    expect(e2bOf((await call(solo, personal)).body.data).connection).toEqual({
+      configuredAt: timestamp,
+      account: "team-a",
+      status: "ready",
+      progress: null,
+      error: null,
+      updating: false,
+    });
+    const threadId = await thread(
+      "thr_00000000-0000-4000-8000-0000000004e0",
+      personalProject,
+      solo,
+    );
+    expect(await pin(threadId, solo, personalProject)).toMatchObject({
+      credentialScope: "personal",
+      providerTemplate: teamTemplateName(recipe, E2B_ORB_PROFILES[2]),
+    });
+    // The bare key it always held still decrypts.
+    expect(apiKeyOf((await target(threadId)).credential)).toBe("key-a-legacy");
+  });
+
+  it("ignores a member's personal connection on workspace projects until the admin opts in", async () => {
+    await connect(member, personal, "key-a-1");
+    await prepare({ scope: "personal", targetId: member, providerId: "e2b" });
     const onWorkspaceProject = async () =>
       (await call(member, `${personal}?projectId=${workspaceProject}`)).body
         .data;
@@ -482,26 +710,18 @@ describe("Orb providers in workerd with real D1", () => {
     });
   });
 
-  it("lets only workspace admins set the workspace key, which members then use", async () => {
-    expect(
-      (
-        await call(member, `${workspace}/e2b/key`, "PUT", {
-          credential: "key-a-1",
-        })
-      ).status,
-    ).toBe(403);
-    expect(
-      (
-        await call(owner, `${workspace}/e2b/key`, "PUT", {
-          credential: "key-a-1",
-        })
-      ).status,
-    ).toBe(200);
-    await pollReady(owner, workspace);
+  it("lets only workspace admins connect the workspace's account, which members then use", async () => {
+    expect((await connect(member, workspace, "key-a-1")).status).toBe(403);
+    expect((await connect(owner, workspace, "key-a-1")).status).toBe(200);
+    await prepare({
+      scope: "workspace",
+      targetId: workspaceId,
+      providerId: "e2b",
+    });
     const memberView = (await call(member, personal)).body.data;
-    expect(memberView.providers[0]).toMatchObject({
-      key: null,
-      workspaceKey: { account: "team-a", template: { status: "ready" } },
+    expect(e2bOf(memberView)).toMatchObject({
+      connection: null,
+      workspaceConnection: { account: "team-a", status: "ready" },
     });
     expect(memberView.resolved).toMatchObject([
       { scope: "workspace", account: "team-a" },
@@ -519,7 +739,7 @@ describe("Orb providers in workerd with real D1", () => {
       scope: "workspace",
       ownerId: workspaceId,
     });
-    // A member who leaves the workspace no longer runs on its key.
+    // A member who leaves the workspace no longer runs on its account.
     await env.DB.prepare(
       "DELETE FROM member WHERE id = 'orb-member-member'",
     ).run();
@@ -529,21 +749,15 @@ describe("Orb providers in workerd with real D1", () => {
     });
   });
 
-  it("keeps the key but never reaches E2B in the local runtime", async () => {
+  it("keeps the connection but never reaches E2B in the local runtime", async () => {
     const local = { ...deployed, DX_RUNTIME_MODE: "local" };
-    const saved = await call(
-      solo,
-      `${personal}/e2b/key`,
-      "PUT",
-      { credential: "rejected" },
-      local,
-    );
+    const saved = await connect(solo, personal, "rejected", local);
     expect(saved.status).toBe(200);
     expect(saved.body.data.localRuntime).toBe(true);
-    expect(
-      saved.body.data.providers.find(({ id }: { id: string }) => id === "e2b")
-        .key,
-    ).toMatchObject({ account: null, template: null });
+    expect(e2bOf(saved.body.data).connection).toMatchObject({
+      account: null,
+      status: null,
+    });
     expect(builds).toBe(0);
   });
 });

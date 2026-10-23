@@ -18,3 +18,8 @@ export function attachmentSigningTokenProps(
     resources: Record<`com.cloudflare.edge.r2.bucket.${string}`, string>;
   }[];
 };
+export function operatorR2CredentialsGuidance(bucketName: string): string;
+export function operatorR2Credentials(keys: {
+  accessKeyId?: string;
+  secretAccessKey?: string;
+}): string;

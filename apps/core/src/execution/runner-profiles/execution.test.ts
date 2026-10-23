@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { type ExecutionRunnerRow, pinnedCredential } from "./execution.js";
 
-const configuredAt = "2026-10-04T00:00:00.000Z";
-
 const row = (overrides: Partial<ExecutionRunnerRow> = {}): ExecutionRunnerRow =>
   ({
     thread_runner_profile_id: null,
@@ -15,15 +13,13 @@ const row = (overrides: Partial<ExecutionRunnerRow> = {}): ExecutionRunnerRow =>
     account_owner_id: "user-1",
     provider_account: "team-a",
     provider_template: "dx-orb-x-a1-medium",
-    key_provider_id: "e2b",
+    connection_provider_id: "e2b",
     key_version: 1,
     value_nonce: "nonce",
     ciphertext: "ciphertext",
     wrapped_key_nonce: "wrapped-nonce",
     wrapped_key: "wrapped",
-    key_configured_at: configuredAt,
-    key_account: "team-a",
-    key_template_configured_at: configuredAt,
+    connection_account: "team-a",
     allow_personal_plugin_overrides: null,
     allow_personal_execution_overrides: null,
     owner_is_member: null,
@@ -36,13 +32,18 @@ describe("pinned Orb credential", () => {
   it.each([
     [
       "the new key's account is not verified yet",
-      { key_account: null },
+      { connection_account: null },
       "account-changed",
     ],
     [
-      "the template record is from an earlier key",
-      { key_template_configured_at: "2026-10-01T00:00:00.000Z" },
+      "the connection now belongs to another account",
+      { connection_account: "team-b" },
       "account-changed",
+    ],
+    [
+      "the connection is for another provider",
+      { connection_provider_id: "cloudflare" },
+      "removed",
     ],
     [
       "a personal key on a workspace project with only the Orb opt-in",

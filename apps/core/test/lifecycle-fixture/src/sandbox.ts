@@ -15,6 +15,7 @@ interface InstanceState {
   readonly files: Map<string, Uint8Array>;
   initializationCount: number;
   orphanSettled: boolean;
+  holding: boolean;
   readonly orphanWaiters: Set<() => void>;
   settleDelayedExec?: () => void;
   sandbox?: Sandbox;
@@ -32,6 +33,7 @@ const stateFor = (id: string): InstanceState => {
     files: new Map(),
     initializationCount: 0,
     orphanSettled: false,
+    holding: false,
     orphanWaiters: new Set(),
   };
   instances.set(id, created);
@@ -92,7 +94,11 @@ class FixtureSandboxDriver implements SandboxDriver {
     this.state.files.delete(path);
   }
 
-  async exec(command: string): Promise<ShellResult> {
+  async exec(
+    command: string,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<ShellResult> {
+    if (command === "hold-turn") return this.holdUntilStopped(options?.signal);
     const output = /^fixture-output (\d+) (\d+)$/.exec(command);
     if (output !== null)
       return {
@@ -108,6 +114,19 @@ class FixtureSandboxDriver implements SandboxDriver {
         this.state.settleDelayedExec = undefined;
         resolve({ stdout: ORPHAN_RESULT, stderr: "", exitCode: 0 });
       };
+    });
+  }
+
+  /** Keeps the turn running until Stop aborts it. */
+  private holdUntilStopped(signal?: AbortSignal): Promise<ShellResult> {
+    this.state.holding = true;
+    return new Promise((resolve) => {
+      const release = () => {
+        this.state.holding = false;
+        resolve({ stdout: "", stderr: "stopped", exitCode: 130 });
+      };
+      if (signal?.aborted) release();
+      else signal?.addEventListener("abort", release, { once: true });
     });
   }
 }
@@ -146,6 +165,8 @@ export const fixtureSandboxFactory: SandboxFactory = {
 export const settleDelayedCommand = (id: string) => {
   stateFor(id).settleDelayedExec?.();
 };
+
+export const isHoldingTurn = (id: string) => stateFor(id).holding;
 
 /** Fails the instance's next workspace activation, before any model call. */
 export const failNextActivation = (id: string) => {
