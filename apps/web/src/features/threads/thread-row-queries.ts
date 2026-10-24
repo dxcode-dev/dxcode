@@ -75,7 +75,17 @@ const placeRow = <Rows extends ReadonlyArray<Row> | undefined>(
   ] as unknown as Rows;
 };
 
-const withoutChildCount = ({ childCount: _count, ...row }: Row): Row => row;
+const withoutChildCount = ({
+  childCount: _count,
+  childActivity: _activity,
+  ...row
+}: Row): Row => row;
+
+/** A change in what a parent's child count shows for this child. */
+const movesParentCount = (cached: Row, row: Row) =>
+  cached.activityStatus !== row.activityStatus ||
+  cached.turnFailed !== row.turnFailed ||
+  cached.unread !== row.unread;
 
 const listRows = (data: ListData | undefined, threadId: ThreadId) =>
   data?.pages.flatMap((page) =>
@@ -296,6 +306,22 @@ export class ThreadListRows {
     if (generation !== this.#generation) return;
     if (cached.some((cachedRow) => isStructural(cachedRow, row)))
       return refetchLists();
+    // A parent's row counts its working, unread, and failed children; the
+    // hint names only the child, so the parent's row is read too.
+    const parentId = row.parentThreadId;
+    if (
+      parentId !== undefined &&
+      cached.some((cachedRow) => movesParentCount(cachedRow, row)) &&
+      client
+        .getQueryCache()
+        .findAll({ queryKey: threadKeys.lists(userId) })
+        .some(
+          (query) =>
+            listRows(query.state.data as ListData | undefined, parentId)
+              .length > 0,
+        )
+    )
+      this.threadChanged(parentId);
 
     const childRow = withoutChildCount(row);
     for (const { queryKey } of lists) {

@@ -2719,6 +2719,11 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       this.ctx.storage.delete(APPLIED_ENVIRONMENT_STORAGE_KEY),
     ]);
     await revokeThreadDaemonApiKey(this.env, authority?.apiKeyId);
+    // A deleted Thread never comes back, so nothing it stored is kept.
+    if (reason === "thread-deleted") {
+      await this.ctx.storage.deleteAlarm();
+      await this.ctx.storage.deleteAll();
+    }
     return new Response(null, { status: 204 });
   }
 

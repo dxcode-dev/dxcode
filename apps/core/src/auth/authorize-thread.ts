@@ -1,4 +1,4 @@
-import type { ThreadNotFoundResponse } from "@dx/api";
+import type { ThreadDeletedResponse, ThreadNotFoundResponse } from "@dx/api";
 import {
   type Principal,
   ThreadId,
@@ -12,6 +12,7 @@ import type { MiddlewareHandler } from "hono";
 import type { AppEnv } from "../http/types.js";
 import { authorizationLogger } from "../logging.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
+import { isDeletedThread } from "../thread-deletion/tombstone.js";
 import {
   canUseSharedThreads,
   findSharedThreadGrant,
@@ -126,6 +127,28 @@ export const authorizeThread: MiddlewareHandler<AppEnv> = async (
   });
   if (!result.authorized) {
     logAuthorization("not_found", requestId, startedAt, result.threadId);
+    // The owner learns their Thread was deleted; anyone else, that it does
+    // not exist.
+    if (
+      result.threadId !== undefined &&
+      context.env.DB !== undefined &&
+      (await isDeletedThread(
+        context.env.DB,
+        result.threadId,
+        context.get("principal").userId,
+      ))
+    )
+      return context.json<ThreadDeletedResponse>(
+        {
+          status: "error",
+          data: {
+            code: "THREAD_DELETED",
+            message: "This Thread was deleted.",
+            requestId,
+          },
+        },
+        410,
+      );
     return context.json<ThreadNotFoundResponse>(
       {
         status: "error",

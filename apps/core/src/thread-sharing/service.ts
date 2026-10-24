@@ -8,6 +8,7 @@ import {
 import type { ThreadId, UserId } from "@dx/domain";
 import { DateTime } from "effect";
 import { threadProjectReachableSql } from "../settings/members/membership-sql.js";
+import { threadUnreadSql } from "../threads/attention-d1.js";
 import { sharedThreadAccessSql, sharedThreadVisibleSql } from "./access.js";
 
 export class ThreadSharingError extends Error {
@@ -418,7 +419,12 @@ export const listSharedThreadRows = async (
   now = new Date(),
 ): Promise<
   ReadonlyArray<
-    Record<string, unknown> & { access: string; project_name: string }
+    Record<string, unknown> & {
+      access: string;
+      project_name: string;
+      turn_failed: number;
+      unread: number;
+    }
   >
 > =>
   (
@@ -435,7 +441,8 @@ export const listSharedThreadRows = async (
                 thread.activity_status, thread.lifecycle_state,
                 NULL AS pinned_at,
                 ${sharedThreadAccessSql("thread", "?2")} AS access,
-                project.name AS project_name
+                project.name AS project_name,
+                thread.turn_failed, ${threadUnreadSql("thread", "?1")} AS unread
            FROM thread_follower AS follower
            JOIN threads AS thread ON thread.id = follower.thread_id
            JOIN projects AS project ON project.id = thread.project_id
@@ -446,7 +453,14 @@ export const listSharedThreadRows = async (
           LIMIT 100`,
       )
       .bind(userId, now.toISOString())
-      .all<Record<string, unknown> & { access: string; project_name: string }>()
+      .all<
+        Record<string, unknown> & {
+          access: string;
+          project_name: string;
+          turn_failed: number;
+          unread: number;
+        }
+      >()
   ).results;
 
 /** Sharing fields of Thread detail for the requester. */

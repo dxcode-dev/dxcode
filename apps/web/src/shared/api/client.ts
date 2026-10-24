@@ -51,6 +51,10 @@ import {
   DeleteConnectionResponseSchema,
   DeleteEnvironmentVariableResponseSchema,
   DeleteMcpServerResponseSchema,
+  DeleteThreadInvalidRequestResponseSchema,
+  DeleteThreadNotFoundResponseSchema,
+  DeleteThreadPersistenceUnavailableResponseSchema,
+  DeleteThreadResponseSchema,
   type DictationVocabularyData,
   DictationVocabularyErrorResponseSchema,
   DictationVocabularyResponseSchema,
@@ -116,6 +120,7 @@ import {
   ListWorkspaceMembersResponseSchema,
   ListWorkspaceUsageAuditResponseSchema,
   MarkNotificationsReadResponseSchema,
+  MarkThreadSeenResponseSchema,
   type McpServerData,
   McpServersErrorResponseSchema,
   ModelRoutingErrorResponseSchema,
@@ -200,8 +205,10 @@ import {
   SourceControlDeniedResponseSchema,
   SourceControlProviderFailureResponseSchema,
   type ThreadData,
+  ThreadDeletedResponseSchema,
   type ThreadDetailData,
   ThreadFollowResponseSchema,
+  ThreadIdUnavailableResponseSchema,
   type ThreadListItem,
   ThreadOrbProcessErrorResponseSchema,
   ThreadPortalPublicErrorResponseSchema,
@@ -387,6 +394,11 @@ export const request = async <
         ArchiveThreadNotFoundResponseSchema,
         ArchiveThreadPersistenceUnavailableResponseSchema,
         ArchiveThreadExecutionUnavailableResponseSchema,
+        DeleteThreadInvalidRequestResponseSchema,
+        DeleteThreadNotFoundResponseSchema,
+        DeleteThreadPersistenceUnavailableResponseSchema,
+        ThreadDeletedResponseSchema,
+        ThreadIdUnavailableResponseSchema,
         SourceControlDeniedResponseSchema,
         SourceControlProviderFailureResponseSchema,
         ThreadSharingErrorResponseSchema,
@@ -426,7 +438,17 @@ export interface ProjectPage {
 }
 
 export type ThreadListClientItem = ThreadData &
-  Partial<Pick<ThreadListItem, "mode" | "changes" | "childCount">>;
+  Partial<
+    Pick<
+      ThreadListItem,
+      | "mode"
+      | "changes"
+      | "childCount"
+      | "unread"
+      | "turnFailed"
+      | "childActivity"
+    >
+  >;
 
 /**
  * `roots`: Threads not listed under a parent, with their child counts. A
@@ -1397,6 +1419,15 @@ export const setThreadPinned = async (
     )
   ).data;
 
+/** The requester opened the Thread: what it finished is seen. */
+export const markThreadSeen = async (threadId: ThreadId): Promise<void> => {
+  await request(
+    `/v1/threads/${encodeURIComponent(threadId)}/seen`,
+    MarkThreadSeenResponseSchema,
+    { method: "POST" },
+  );
+};
+
 /** Snoozes the Thread until `snoozedUntil`, or wakes it when null. */
 export const setThreadSnoozed = async (
   threadId: ThreadId,
@@ -1510,6 +1541,19 @@ export const setThreadArchived = async (
       : { changedChildThreadIds: response.changedChildThreadIds }),
   };
 };
+
+/**
+ * Deletes a Thread for good: its conversation, sandbox, and files. `pending`
+ * cleanup finishes on the server.
+ */
+export const deleteThread = async (threadId: ThreadId) =>
+  (
+    await request(
+      `/v1/threads/${encodeURIComponent(threadId)}`,
+      DeleteThreadResponseSchema,
+      { method: "DELETE" },
+    )
+  ).data;
 
 /** One Thread's sidebar row, exactly as the requester's lists hold it. */
 export const getThreadListItem = async (

@@ -2,6 +2,7 @@ import type { ThreadId, UserId } from "@dx/domain";
 import type { Bindings } from "../http/types.js";
 import { notificationLogger } from "../logging.js";
 import { threadPresentUsers } from "../realtime/publication.js";
+import { latestAgentReply } from "./latest-reply.js";
 import { publishNotification } from "./publish.js";
 
 /**
@@ -14,18 +15,17 @@ export interface TurnCompletion {
   readonly outcome: "completed" | "failed" | "aborted";
 }
 
-const excerptFor = (outcome: TurnCompletion["outcome"]) =>
-  outcome === "completed"
-    ? "The agent finished its turn and is waiting for you."
-    : "The agent stopped before finishing its turn.";
+const FINISHED_WITHOUT_REPLY =
+  "The agent finished its turn and is waiting for you.";
+const STOPPED = "The agent stopped before finishing its turn.";
 
 /**
- * Notifies a Thread's owner that its agent finished. Only root Threads
- * notify: a child Thread is the agent's own errand, and its parent is
- * already waiting on it. A cancelled turn notifies nobody — the person who
- * stopped it is looking at it. Neither does a turn whose owner has that
- * Thread open: they are watching the reply arrive, and a notification about
- * what is already on their screen is noise.
+ * Notifies a Thread's owner that its agent finished, with what the agent
+ * said. Only root Threads notify: a child Thread is the agent's own errand,
+ * and its parent is already waiting on it. A cancelled turn notifies nobody
+ * — the person who stopped it is looking at it. Neither does a turn whose
+ * owner has that Thread open: they are watching the reply arrive, and a
+ * notification about what is already on their screen is noise.
  *
  * Never throws: a notification must not disturb the runtime observation it
  * rides on.
@@ -46,14 +46,33 @@ export const notifyTurnCompleted = async (
       .bind(completion.threadId)
       .first<{ owner_user_id: string; parent_thread_id: string | null }>();
     if (thread === null || thread.parent_thread_id !== null) return;
+    const ownerUserId = thread.owner_user_id as UserId;
     const watching = await threadPresentUsers(bindings, completion.threadId);
-    if (watching.has(thread.owner_user_id as UserId)) return;
+    if (watching.has(ownerUserId)) return;
+    const reply =
+      completion.outcome === "completed"
+        ? await latestAgentReply(
+            bindings,
+            ownerUserId,
+            completion.threadId,
+            completion.submissionId,
+          ).catch((cause) => {
+            notificationLogger.warn("The finished turn's reply was not read.", {
+              event: "turn_completion_reply_read_failed",
+              threadId: completion.threadId,
+              cause,
+            });
+            return undefined;
+          })
+        : undefined;
     await publishNotification(bindings, {
       topic: "turn_completed",
       sourceKey: `turn:${completion.submissionId}`,
-      recipients: [thread.owner_user_id as UserId],
+      recipients: [ownerUserId],
       threadId: completion.threadId,
-      excerpt: excerptFor(completion.outcome),
+      excerpt:
+        reply ??
+        (completion.outcome === "completed" ? FINISHED_WITHOUT_REPLY : STOPPED),
     });
   } catch (cause) {
     notificationLogger.warn("Turn completion was not notified.", {

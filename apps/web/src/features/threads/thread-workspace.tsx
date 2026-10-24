@@ -80,6 +80,7 @@ import {
   createThreadAgentClient,
   initializeRetainedThread,
   isAuthorizationError,
+  isDeletedThreadError,
   type OptimisticThreadCreation,
   type PendingSubmissionControl,
   type RetainedThread,
@@ -277,6 +278,16 @@ export function ThreadWorkspace({
     isAuthorizationError(error) ||
     !historyReady
   ) {
+    if (isDeletedThreadError(error))
+      return (
+        <div className="fatal-state">
+          <strong>Thread deleted</strong>
+          <span>
+            This Thread, its conversation, and its sandbox were permanently
+            deleted.
+          </span>
+        </div>
+      );
     if (error && !metadataReady)
       return (
         <div className="fatal-state">

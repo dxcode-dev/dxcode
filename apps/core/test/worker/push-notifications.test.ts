@@ -45,7 +45,70 @@ import { runRepositories } from "./runtime.js";
  * to the push endpoint, and decrypts it back with nothing but RFC 8291 and
  * the device's private key. A payload that reads back correctly could only
  * have been encrypted for that device.
+ *
+ * It also plays Flue behind DxAgent's routes: a finished turn's push quotes
+ * the reply the history read returns, so these routes answer that read with
+ * the page Flue would. Ways the finished-turn push could go wrong:
+ *  1. It says something generic instead of what the agent replied.
+ *  2. It quotes narration the agent wrote before its last tool call.
+ *  3. Markdown syntax or line breaks reach the lock screen.
+ *  4. It quotes an older turn's reply.
+ *  5. A long reply is not cut to a preview.
+ *  6. A history Flue cannot serve loses the notification.
+ *  7. A failed turn's partial reply reads like a finished one.
  */
+const flue = vi.hoisted(() => ({
+  /** The history page DxAgent's routes serve, or the status they fail with. */
+  history: undefined as
+    | undefined
+    | number
+    | { messages: ReadonlyArray<unknown>; settlements: ReadonlyArray<unknown> },
+  reads: [] as Array<string>,
+}));
+
+vi.mock("../../src/agents/routes.js", async () => {
+  const { Hono } = await import("hono");
+  return {
+    dxAgentRoutes: new Hono().get("/:threadId", (context) => {
+      flue.reads.push(new URL(context.req.url).search);
+      const { history } = flue;
+      if (history === undefined || typeof history === "number")
+        return new Response(null, { status: history ?? 404 });
+      return Response.json(history);
+    }),
+  };
+});
+
+/** A one-prompt history page whose response is `parts`, after an older turn. */
+const historyWithReply = (
+  submissionId: string,
+  parts: ReadonlyArray<{ type: string; text?: string; toolName?: string }>,
+) => ({
+  messages: [
+    {
+      id: "msg-older",
+      role: "assistant",
+      purpose: "assistant",
+      submissionId: "sub-older",
+      parts: [{ type: "text", text: "An earlier turn's answer." }],
+    },
+    {
+      id: "msg-prompt",
+      role: "user",
+      purpose: "chat",
+      submissionId,
+      parts: [{ type: "text", text: "Open the PR please." }],
+    },
+    {
+      id: "msg-reply",
+      role: "assistant",
+      purpose: "assistant",
+      submissionId,
+      parts,
+    },
+  ],
+  settlements: [{ submissionId, outcome: "completed" }],
+});
 
 const utf8 = new TextEncoder();
 
@@ -458,6 +521,8 @@ const sha256Hex = async (value: string) =>
     .join("");
 
 beforeEach(async () => {
+  flue.history = undefined;
+  flue.reads = [];
   pushes = [];
   pushStatus = 201;
   watching = [];
@@ -551,8 +616,8 @@ describe("Push notifications, in workerd with real D1 and WebCrypto", () => {
     expect(vapidToken.claims.exp * 1_000).toBeGreaterThan(Date.now());
 
     expect(await decryptPush(device, push.body)).toEqual({
-      title: "Ada Owner mentioned you in Test thread",
-      body: "@ben can you review this?",
+      title: "Test thread",
+      body: "Ada Owner: @ben can you review this?",
       url: expect.stringContaining(
         `https://dx.test/threads/${sharedThread.id}`,
       ),
@@ -574,9 +639,34 @@ describe("Push notifications, in workerd with real D1 and WebCrypto", () => {
     });
   });
 
-  it("pushes a finished turn to the Thread's owner, and keeps it out of the Mentions inbox", async () => {
+  it("pushes a finished turn as the Thread's title and the agent's reply, and keeps it out of the Mentions inbox", async () => {
     const device = await newDevice("https://push.test/owner-device");
     await registerDevice(owner, device);
+    flue.history = historyWithReply("sub-finished", [
+      { type: "text", text: "Let me push the branch first." },
+      { type: "dynamic-tool", toolName: "Bash" },
+      {
+        type: "text",
+        text: [
+          "## Done",
+          "",
+          "I pushed the branch and opened the PR: **[example-org/app#1040](https://github.com/example-org/app/pull/1040)**.",
+          "",
+          "- It has 13 commits on current `main`",
+          "- It ends at *e5e6416*.",
+          "",
+          "```bash",
+          "git log --oneline",
+          "```",
+          "",
+          "![PR checks](/home/user/artifacts/pr-checks.png)",
+          "",
+          "```dx-view",
+          '<div class="ui-header"><p class="ui-title">Checks</p></div>',
+          "```",
+        ].join("\n"),
+      },
+    ]);
 
     await notifyTurnCompleted(bindings, {
       threadId: sharedThread.id as ThreadId,
@@ -584,11 +674,13 @@ describe("Push notifications, in workerd with real D1 and WebCrypto", () => {
       outcome: "completed",
     });
 
+    // The reply is read as the owner, from the latest prompt only.
+    expect(flue.reads).toEqual(["?view=history&promptLimit=1"]);
     expect(pushes).toHaveLength(1);
     expect(await decryptPush(device, (pushes[0] as CapturedPush).body)).toEqual(
       {
-        title: "The agent finished in Test thread",
-        body: "The agent finished its turn and is waiting for you.",
+        title: "Test thread",
+        body: "Done. I pushed the branch and opened the PR: example-org/app#1040. It has 13 commits on current main. It ends at e5e6416.",
         url: `https://dx.test/threads/${sharedThread.id}`,
         topic: "turn_completed",
         tag: `turn_completed:${sharedThread.id}`,
@@ -606,9 +698,87 @@ describe("Push notifications, in workerd with real D1 and WebCrypto", () => {
     expect(pushes).toHaveLength(1);
   });
 
+  it("cuts a long reply to a lock-screen preview", async () => {
+    const device = await newDevice("https://push.test/owner-device");
+    await registerDevice(owner, device);
+    const sentence = "The migration ran against every shard and verified.";
+    flue.history = historyWithReply("sub-long", [
+      { type: "text", text: `${sentence}\n\n`.repeat(40) },
+    ]);
+
+    await notifyTurnCompleted(bindings, {
+      threadId: sharedThread.id as ThreadId,
+      submissionId: "sub-long",
+      outcome: "completed",
+    });
+
+    const { body = "" } = await decryptPush(
+      device,
+      (pushes[0] as CapturedPush).body,
+    );
+    expect(body).toHaveLength(280);
+    expect(body.startsWith(`${sentence} ${sentence}`)).toBe(true);
+    expect(body.endsWith("…")).toBe(true);
+  });
+
+  it("still pushes a finished turn when Flue cannot serve the reply", async () => {
+    const device = await newDevice("https://push.test/owner-device");
+    await registerDevice(owner, device);
+    // Flue is still indexing the history.
+    flue.history = 503;
+    await notifyTurnCompleted(bindings, {
+      threadId: sharedThread.id as ThreadId,
+      submissionId: "sub-busy",
+      outcome: "completed",
+    });
+    // The turn ended on a tool call: no reply text to quote.
+    flue.history = historyWithReply("sub-tool-last", [
+      { type: "text", text: "Running the suite now." },
+      { type: "dynamic-tool", toolName: "Bash" },
+    ]);
+    await notifyTurnCompleted(bindings, {
+      threadId: sharedThread.id as ThreadId,
+      submissionId: "sub-tool-last",
+      outcome: "completed",
+    });
+
+    expect(pushes).toHaveLength(2);
+    for (const push of pushes)
+      expect(await decryptPush(device, push.body)).toEqual(
+        expect.objectContaining({
+          title: "Test thread",
+          body: "The agent finished its turn and is waiting for you.",
+        }),
+      );
+  });
+
+  it("says a failed turn stopped instead of quoting its partial reply", async () => {
+    const device = await newDevice("https://push.test/owner-device");
+    await registerDevice(owner, device);
+    flue.history = historyWithReply("sub-failed", [
+      { type: "text", text: "Half an answ" },
+    ]);
+
+    await notifyTurnCompleted(bindings, {
+      threadId: sharedThread.id as ThreadId,
+      submissionId: "sub-failed",
+      outcome: "failed",
+    });
+
+    expect(await decryptPush(device, (pushes[0] as CapturedPush).body)).toEqual(
+      expect.objectContaining({
+        title: "Test thread",
+        body: "The agent stopped before finishing its turn.",
+      }),
+    );
+  });
+
   it("pushes the turn Flue reports settled, straight from the observation", async () => {
     const device = await newDevice("https://push.test/owner-device");
     await registerDevice(owner, device);
+    flue.history = historyWithReply("sub-observed", [
+      { type: "text", text: "All 42 tests pass." },
+    ]);
 
     // The observation the Flue runtime delivers when a turn settles.
     await observeFlueEvent(
@@ -627,7 +797,8 @@ describe("Push notifications, in workerd with real D1 and WebCrypto", () => {
     expect(pushes).toHaveLength(1);
     expect(await decryptPush(device, (pushes[0] as CapturedPush).body)).toEqual(
       expect.objectContaining({
-        title: "The agent finished in Test thread",
+        title: "Test thread",
+        body: "All 42 tests pass.",
         topic: "turn_completed",
       }),
     );
@@ -655,9 +826,16 @@ describe("Push notifications, in workerd with real D1 and WebCrypto", () => {
     expect(pushes).toHaveLength(1);
   });
 
-  it("pushes a snoozed Thread back to its owner when its wake time passes", async () => {
+  it("pushes a snoozed Thread back as its title and where it left off", async () => {
     const device = await newDevice("https://push.test/owner-device");
     await registerDevice(owner, device);
+    flue.history = historyWithReply("sub-before-snooze", [
+      { type: "dynamic-tool", toolName: "Bash" },
+      {
+        type: "text",
+        text: "**Staging is green.** Merge the PR after the\n`v0.2.37` release goes out.",
+      },
+    ]);
     const wakeAt = new Date(Date.now() - 60_000).toISOString();
     await env.DB.prepare(
       "UPDATE threads SET snoozed_until = ?2, snoozed_at = ?2 WHERE id = ?1",
@@ -669,19 +847,54 @@ describe("Push notifications, in workerd with real D1 and WebCrypto", () => {
     expect(pushes).toHaveLength(1);
     expect(await decryptPush(device, (pushes[0] as CapturedPush).body)).toEqual(
       {
-        title: "Test thread is back",
-        body: "The Thread you snoozed is back in your sidebar.",
+        title: "Test thread",
+        body: "Back from snooze: Staging is green. Merge the PR after the v0.2.37 release goes out.",
         url: `https://dx.test/threads/${sharedThread.id}`,
         topic: "snooze_woke",
         tag: `snooze_woke:${sharedThread.id}`,
       },
     );
+    expect(flue.reads).toEqual(["?view=history&promptLimit=1"]);
 
-    // The sweep runs every five minutes; the person hears about it once.
-    await sweepSnoozeWakes(bindings);
+    // The sweep runs every five minutes; the person hears about it once,
+    // and a told snooze is not even read again.
+    expect(await sweepSnoozeWakes(bindings)).toBe(0);
     expect(pushes).toHaveLength(1);
+    expect(flue.reads).toHaveLength(1);
     // Nothing about it belongs in the Mentions inbox.
     expect(await inbox(owner)).toEqual({ unreadCount: 0, items: [] });
+  });
+
+  it("still pushes a snoozed Thread back when there is no reply to quote", async () => {
+    const device = await newDevice("https://push.test/owner-device");
+    await registerDevice(owner, device);
+    const snooze = (minutesAgo: number) =>
+      env.DB.prepare(
+        "UPDATE threads SET snoozed_until = ?2, snoozed_at = ?2 WHERE id = ?1",
+      )
+        .bind(
+          sharedThread.id,
+          new Date(Date.now() - minutesAgo * 60_000).toISOString(),
+        )
+        .run();
+
+    // No conversation yet: Flue has no history for the Thread.
+    flue.history = 404;
+    await snooze(2);
+    await sweepSnoozeWakes(bindings);
+    // Snoozed again, and this time the history read fails outright.
+    flue.history = 500;
+    await snooze(1);
+    await sweepSnoozeWakes(bindings);
+
+    expect(pushes).toHaveLength(2);
+    for (const push of pushes)
+      expect(await decryptPush(device, push.body)).toEqual(
+        expect.objectContaining({
+          title: "Test thread",
+          body: "Back from snooze.",
+        }),
+      );
   });
 
   it("sweeps snoozed Threads when the Worker's cron trigger fires", async () => {
@@ -710,7 +923,11 @@ describe("Push notifications, in workerd with real D1 and WebCrypto", () => {
     expect(pushes).toHaveLength(1);
     expect(
       await decryptPush(device, (pushes[0] as CapturedPush).body),
-    ).toMatchObject({ title: "Test thread is back", topic: "snooze_woke" });
+    ).toMatchObject({
+      title: "Test thread",
+      body: "Back from snooze.",
+      topic: "snooze_woke",
+    });
   });
 
   it("leaves a Thread still sleeping, and an ancient one, alone", async () => {
@@ -746,6 +963,25 @@ describe("Push notifications, in workerd with real D1 and WebCrypto", () => {
     });
 
     expect(pushes).toEqual([]);
+  });
+
+  it("pushes a multi-line mention as one line under who said it", async () => {
+    const device = await newDevice("https://push.test/device-a");
+    await registerDevice(member, device);
+
+    await message(
+      owner,
+      sharedThread.id,
+      "@ben two things before the release:\n\n- the **retry** loop in `deploy.sh`\n- [the flaky test](https://github.com/example-org/app/pull/1)",
+      "m-multi",
+    );
+
+    expect(await decryptPush(device, (pushes[0] as CapturedPush).body)).toEqual(
+      expect.objectContaining({
+        title: "Test thread",
+        body: "Ada Owner: @ben two things before the release: the retry loop in deploy.sh. the flaky test.",
+      }),
+    );
   });
 
   it("sends nothing to a person who turned that topic's push off", async () => {

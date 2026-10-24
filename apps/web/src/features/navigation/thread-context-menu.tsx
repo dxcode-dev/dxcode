@@ -15,6 +15,7 @@ import {
   Pencil,
   Pin,
   PinOff,
+  Trash2,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useNowMinute } from "../../shared/hooks/use-clock.js";
@@ -291,6 +292,17 @@ export function ThreadContextMenu({
                         ? "Archive"
                         : "Unarchive"}
                     </span>
+                  </ContextMenu.Item>
+                )}
+                {editing === undefined ||
+                title === undefined ||
+                creating ? null : (
+                  <ContextMenu.Item
+                    className="thread-context-item thread-menu-item-danger"
+                    onClick={() => editing.openDelete({ id: thread.id, title })}
+                  >
+                    <Trash2 />
+                    <span>Delete</span>
                   </ContextMenu.Item>
                 )}
                 <ContextMenu.Separator className="thread-context-separator" />

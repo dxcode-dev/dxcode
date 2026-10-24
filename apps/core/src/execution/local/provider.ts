@@ -94,10 +94,13 @@ export const localExecutionProvider: ExecutionProvider = {
   workspace: {
     create: (_context, { threadId }) => openLocalWorkspace(threadId, false),
     connect: (_context, { threadId }) => openLocalWorkspace(threadId, true),
-    async release(_context, { threadId }) {
-      await requestLocalRuntime(env as Bindings, threadId, "pause", {
-        existingOnly: true,
-      });
+    async release(_context, { threadId }, mode) {
+      await requestLocalRuntime(
+        env as Bindings,
+        threadId,
+        mode === "destroy" ? "destroy" : "pause",
+        { existingOnly: true },
+      );
     },
   },
   residentDaemon: {

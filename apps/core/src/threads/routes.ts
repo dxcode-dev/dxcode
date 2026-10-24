@@ -40,6 +40,11 @@ import {
   ListThreadsPersistenceUnavailableResponseSchema,
   ListThreadsQuerySchema,
   ListThreadsResponseSchema,
+  MarkThreadSeenInvalidRequestResponseSchema,
+  MarkThreadSeenNotFoundResponseSchema,
+  MarkThreadSeenParamsSchema,
+  MarkThreadSeenPersistenceUnavailableResponseSchema,
+  MarkThreadSeenResponseSchema,
   PinThreadInvalidRequestResponseSchema,
   PinThreadNotFoundResponseSchema,
   PinThreadParamsSchema,
@@ -57,7 +62,9 @@ import {
   SourceControlDeniedResponseSchema,
   SourceControlProviderFailureResponseSchema,
   type ThreadData,
+  ThreadDeletedResponseSchema,
   type ThreadDetailData,
+  ThreadIdUnavailableResponseSchema,
   threadAgentUrl,
   UpdateThreadInvalidRequestResponseSchema,
   UpdateThreadNotFoundResponseSchema,
@@ -153,13 +160,18 @@ import { WorkspaceRepositoryD1 } from "../settings/workspace/repository-d1.js";
 import { WorkspacePolicyRepositoryD1 } from "../settings/workspace-policy/repository-d1.js";
 import { WorkspacePolicyService } from "../settings/workspace-policy/service.js";
 import { authorizeProjectSource } from "../source-control/admission.js";
+import { isDeletedThread } from "../thread-deletion/tombstone.js";
 import { scheduleThreadSearchIndex } from "../thread-search/enqueue.js";
-import { canUseSharedThreads } from "../thread-sharing/access.js";
+import {
+  canUseSharedThreads,
+  findSharedThreadGrant,
+} from "../thread-sharing/access.js";
 import {
   threadSharingDecorations,
   threadSharingDetail,
   userIdentity,
 } from "../thread-sharing/service.js";
+import { childActivityField, markThreadOpened } from "./attention-d1.js";
 import {
   type DxTitleAgentRunner,
   dxTitleAgentApplies,
@@ -202,6 +214,18 @@ class ThreadInitialAdmissionUnavailable extends Schema.TaggedError<ThreadInitial
   {},
 ) {}
 
+/** The requester's own Thread, which they deleted. */
+class ThreadDeleted extends Schema.TaggedError<ThreadDeleted>()(
+  "ThreadDeleted",
+  {},
+) {}
+
+/** A create named the ID of a deleted Thread, whose tombstone keeps it. */
+class ThreadIdUnavailable extends Schema.TaggedError<ThreadIdUnavailable>()(
+  "ThreadIdUnavailable",
+  {},
+) {}
+
 // Flue's permanent refusals of a first message: retrying it unchanged fails
 // the same way, so none of them answers "Please retry".
 class InitialMessageRejected extends Schema.TaggedError<InitialMessageRejected>()(
@@ -241,6 +265,19 @@ const initialDispatchFailure = (cause: unknown) => {
 
 /** A child's parent's chosen color, which it shows until it has its own. */
 /** How many of a root's children its list item carries. */
+/** A root's child count and, when any child calls for it, their activity. */
+const childCountFields = (
+  counts:
+    | {
+        readonly count: number;
+        readonly activity: Parameters<typeof childActivityField>[0];
+      }
+    | undefined,
+) =>
+  counts === undefined
+    ? {}
+    : { childCount: counts.count, ...childActivityField(counts.activity) };
+
 const CHILDREN_PER_ROOT = 100;
 
 const parentColorField = (
@@ -964,13 +1001,23 @@ export const createThreadRoutes = (
                       ? Effect.fail(failure)
                       : // A concurrent request created this row; its own
                         // title job owns the title.
-                        service
-                          .get(principal, requestedThreadId)
-                          .pipe(
-                            Effect.catchTag("ThreadNotFound", () =>
-                              Effect.fail(failure),
+                        service.get(principal, requestedThreadId).pipe(
+                          // Or the ID is a deleted Thread's tombstone,
+                          // which keeps it forever.
+                          Effect.catchTag("ThreadNotFound", () =>
+                            Effect.promise(() =>
+                              isDeletedThread(db, requestedThreadId),
+                            ).pipe(
+                              Effect.flatMap((deleted) =>
+                                Effect.fail<
+                                  ThreadIdUnavailable | PersistenceUnavailable
+                                >(
+                                  deleted ? new ThreadIdUnavailable() : failure,
+                                ),
+                              ),
                             ),
                           ),
+                        ),
                   ),
                   createPhase("persist"),
                 );
@@ -1210,6 +1257,19 @@ export const createThreadRoutes = (
               },
             }),
             422,
+          ),
+        ThreadIdUnavailable: () =>
+          context.json(
+            Schema.encodeUnknownSync(ThreadIdUnavailableResponseSchema)({
+              status: "error",
+              data: {
+                code: "THREAD_ID_UNAVAILABLE",
+                message:
+                  "This Thread ID belonged to a deleted Thread and cannot be reused.",
+                requestId,
+              },
+            }),
+            409,
           ),
         ThreadInitialAdmissionUnavailable: () =>
           context.json(
@@ -1500,9 +1560,10 @@ export const createThreadRoutes = (
             Effect.tryPromise({
               try: () =>
                 Promise.all([
-                  query.roots === undefined
-                    ? new Map<ThreadId, number>()
-                    : readThreadChildCounts(db, ids),
+                  readThreadChildCounts(
+                    db,
+                    query.roots === undefined ? [] : ids,
+                  ),
                   readParentColors(
                     db,
                     page.items.flatMap(({ parentThreadId }) =>
@@ -1521,7 +1582,7 @@ export const createThreadRoutes = (
         );
       const [childProjection, childSharing] =
         children.length === 0
-          ? [new Map(), new Map()]
+          ? [{ changes: new Map(), attention: new Map() }, new Map()]
           : yield* decorate(children.map(({ id }) => id));
       // A child's parent is a root on this page.
       const rootColors = new Map(
@@ -1535,19 +1596,22 @@ export const createThreadRoutes = (
         status: "success",
         data: {
           items: page.items.map((thread) => ({
-            ...threadListItem(thread, projection.get(thread.id)),
+            ...threadListItem(thread, projection.changes.get(thread.id)),
             ...sharing.get(thread.id),
-            ...(childCounts.has(thread.id)
-              ? { childCount: childCounts.get(thread.id) }
-              : {}),
+            ...projection.attention.get(thread.id),
+            ...childCountFields(childCounts.get(thread.id)),
             ...parentColorField(parentColors, thread),
           })),
           ...(query.roots === undefined
             ? {}
             : {
                 children: children.map((thread) => ({
-                  ...threadListItem(thread, childProjection.get(thread.id)),
+                  ...threadListItem(
+                    thread,
+                    childProjection.changes.get(thread.id),
+                  ),
                   ...childSharing.get(thread.id),
+                  ...childProjection.attention.get(thread.id),
                   ...parentColorField(rootColors, thread),
                 })),
               }),
@@ -2235,6 +2299,121 @@ export const createThreadRoutes = (
     );
   });
 
+  // The requester opened the Thread: what it finished is seen, and its row
+  // stops showing it unread on every open client.
+  threadRoutes.post("/:threadId/seen", async (context) => {
+    const requestId = context.get("requestId");
+    const operation = Effect.gen(function* () {
+      const params = yield* decodeRequestInput(
+        MarkThreadSeenParamsSchema,
+        { threadId: context.req.param("threadId") },
+        () => new InvalidThreadRequest(),
+      );
+      const db = yield* decodeD1Binding(context.env.DB);
+      const principal = context.get("principal");
+      const seen = yield* Effect.tryPromise({
+        try: async () => {
+          const thread = await db
+            .prepare(
+              `SELECT owner_user_id FROM threads
+                WHERE id = ? AND lifecycle_state != 'deleted'`,
+            )
+            .bind(params.threadId)
+            .first<{ owner_user_id: string }>();
+          const readable =
+            thread !== null &&
+            (thread.owner_user_id === principal.userId ||
+              (canUseSharedThreads(principal) &&
+                (await findSharedThreadGrant(
+                  db,
+                  params.threadId,
+                  principal.userId,
+                )) !== undefined));
+          if (!readable) return undefined;
+          return markThreadOpened(
+            db,
+            params.threadId,
+            principal.userId,
+            new Date().toISOString(),
+          );
+        },
+        catch: (cause) =>
+          PersistenceUnavailable.new({ operation: "thread.markSeen" }, cause),
+      });
+      if (seen === undefined)
+        return yield* Effect.fail(
+          new ThreadNotFound({ threadId: params.threadId }),
+        );
+      // Other open clients drop the dot; a parent's row follows its child.
+      if (seen)
+        yield* Effect.promise(() =>
+          scheduleRealtimeInvalidation(
+            () => context.executionCtx,
+            context.env,
+            params.threadId,
+            "thread.invalidated",
+          ),
+        );
+      return yield* Schema.encodeUnknownEffect(MarkThreadSeenResponseSchema)({
+        status: "success",
+        data: { threadId: params.threadId },
+      });
+    });
+    const result = await Effect.runPromise(Effect.result(operation));
+    if (Result.isSuccess(result)) return context.json(result.success, 200);
+    return Match.value(result.failure).pipe(
+      Match.tags({
+        InvalidThreadRequest: () =>
+          context.json(
+            Schema.encodeUnknownSync(
+              MarkThreadSeenInvalidRequestResponseSchema,
+            )({
+              status: "error",
+              data: {
+                code: "INVALID_REQUEST",
+                message: "Request validation failed.",
+                requestId,
+              },
+            }),
+            400,
+          ),
+        ThreadNotFound: () =>
+          context.json(
+            Schema.encodeUnknownSync(MarkThreadSeenNotFoundResponseSchema)({
+              status: "error",
+              data: {
+                code: "THREAD_NOT_FOUND",
+                message: "Thread not found.",
+                requestId,
+              },
+            }),
+            404,
+          ),
+        PersistenceUnavailable: () =>
+          context.json(
+            Schema.encodeUnknownSync(
+              MarkThreadSeenPersistenceUnavailableResponseSchema,
+            )({
+              status: "error",
+              data: {
+                code: "PERSISTENCE_UNAVAILABLE",
+                message: "Persistence is temporarily unavailable.",
+                requestId,
+              },
+            }),
+            503,
+          ),
+        D1BindingUnavailable: (error) => {
+          throw error;
+        },
+        SchemaError: (error) => {
+          throw error;
+        },
+      }),
+      Match.exhaustive,
+    );
+  });
+
   threadRoutes.get("/:threadId/readiness", async (context) => {
     const requestId = context.get("requestId");
     const operation = Effect.gen(function* () {
@@ -2327,7 +2506,25 @@ export const createThreadRoutes = (
       const thread = yield* Effect.gen(function* () {
         const service = yield* ThreadService;
         return yield* service.get(context.get("principal"), params.threadId);
-      }).pipe(Effect.provide(threadServiceLayer(db)));
+      }).pipe(
+        Effect.provide(threadServiceLayer(db)),
+        // The owner learns their Thread was deleted.
+        Effect.catchTag("ThreadNotFound", (notFound) =>
+          Effect.promise(() =>
+            isDeletedThread(
+              db,
+              params.threadId,
+              context.get("principal").userId,
+            ),
+          ).pipe(
+            Effect.flatMap((deleted) =>
+              Effect.fail<ThreadDeleted | ThreadNotFound>(
+                deleted ? new ThreadDeleted() : notFound,
+              ),
+            ),
+          ),
+        ),
+      );
       const detail = yield* threadDetailData(context.env.DB, db, thread);
       const sharing = yield* Effect.tryPromise({
         try: () =>
@@ -2368,6 +2565,18 @@ export const createThreadRoutes = (
               },
             }),
             400,
+          ),
+        ThreadDeleted: () =>
+          context.json(
+            Schema.encodeUnknownSync(ThreadDeletedResponseSchema)({
+              status: "error",
+              data: {
+                code: "THREAD_DELETED",
+                message: "This Thread was deleted.",
+                requestId,
+              },
+            }),
+            410,
           ),
         ThreadNotFound: () =>
           context.json(

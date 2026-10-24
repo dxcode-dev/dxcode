@@ -55,6 +55,7 @@
   --brand: #f34e3f;
   --success: #54b879;
   --warning: #d6a038;
+  --unread: #5b9cf6;
   --panel-header: rgba(11, 13, 11, 0.48);
   --radius: 6px;
   --sidebar-font-family:
@@ -119,6 +120,7 @@
   --destructive: light-dark(#a92f2a, #d67670);
   --success: light-dark(#247443, #54b879);
   --warning: light-dark(#805c0b, #d6a038);
+  --unread: light-dark(#2f6fdb, #5b9cf6);
   --panel-header: light-dark(rgba(228, 234, 224, 0.55), rgba(11, 13, 11, 0.48));
 }
 
@@ -148,6 +150,7 @@
   --destructive: light-dark(#a12f2f, #d67670);
   --success: light-dark(#286c3f, #54b879);
   --warning: light-dark(#795a13, #d6a038);
+  --unread: light-dark(#2f6fdb, #5b9cf6);
   --panel-header: light-dark(rgba(237, 237, 237, 0.55), rgba(12, 12, 12, 0.5));
 }
 
@@ -884,6 +887,16 @@ a {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* Delete: red text and icon, highlighted or not. */
+.thread-menu-item.thread-menu-item-danger,
+.thread-menu-item.thread-menu-item-danger svg,
+.thread-context-item.thread-menu-item-danger,
+.thread-context-item.thread-menu-item-danger svg {
+  color: var(--destructive);
+}
+.thread-menu-item-danger[data-highlighted] {
+  background: color-mix(in srgb, var(--destructive) 14%, transparent);
 }
 .thread-actions-menu .thread-menu-item svg:last-child:not(:first-child),
 .thread-context-item svg:last-child:not(:first-child) {
@@ -6995,6 +7008,35 @@ a {
 .new-thread-dialog {
   min-height: 209px;
 }
+.delete-thread-dialog {
+  width: min(400px, 100%);
+}
+.delete-thread-dialog .modal-surface-header {
+  height: auto;
+  padding: 18px 14px 0 22px;
+}
+.delete-thread-dialog-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 22px;
+}
+.delete-thread-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 6px 22px 22px;
+}
+.delete-thread-dialog-body p {
+  margin: 0 0 8px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 19px;
+  overflow-wrap: anywhere;
+}
+.delete-thread-dialog-name {
+  color: var(--foreground);
+}
 .rename-thread-dialog {
   width: min(560px, 100%);
 }
@@ -10715,6 +10757,41 @@ body:has(.dx-app-shell) {
   color: var(--warning);
   font-weight: 500;
 }
+/* The latest turn failed: an Error mark in the snooze status's place,
+   which a snooze status outranks and which gives way to hover actions. */
+.thread-row-shell[data-error] {
+  --thread-row-end: calc(
+    var(--thread-row-marks) +
+    var(--sidebar-text-md) *
+    2.4 +
+    20px
+  );
+}
+.thread-error-status {
+  position: absolute;
+  top: 50%;
+  right: var(--thread-row-marks);
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  color: var(--destructive);
+  border-radius: var(--sidebar-radius-sm);
+  background: color-mix(in srgb, var(--destructive) 10%, transparent);
+  font-size: var(--sidebar-text-md);
+  line-height: 1;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+@media (hover: hover) {
+  .thread-row-shell:hover .thread-error-status {
+    display: none;
+  }
+}
+.thread-row-shell:has(.thread-hover-actions [data-popup-open])
+  .thread-error-status {
+  display: none;
+}
 .thread-snooze-status > svg {
   width: 11px;
   height: 11px;
@@ -10728,13 +10805,21 @@ body:has(.dx-app-shell) {
   --thread-row-marks: 29px;
   --thread-actions-end: 34px;
 }
+/* The child-count control grows with its text, 3 or 12/14, and what sits
+   to its left moves with it. */
 .thread-row-shell[data-children] {
-  --thread-row-marks: 42px;
-  --thread-actions-end: 44px;
+  --thread-children-width: calc(
+    21px +
+    var(--sidebar-text-md) *
+    0.6 *
+    var(--thread-children-glyphs, 1)
+  );
+  --thread-row-marks: calc(var(--thread-children-width) + 14px);
+  --thread-actions-end: calc(var(--thread-children-width) + 16px);
 }
 .thread-row-shell[data-children][data-avatars] {
-  --thread-row-marks: 65px;
-  --thread-actions-end: 72px;
+  --thread-row-marks: calc(var(--thread-children-width) + 37px);
+  --thread-actions-end: calc(var(--thread-children-width) + 44px);
 }
 .product-sidebar .thread-row {
   align-items: center;
@@ -10990,7 +11075,26 @@ body:has(.dx-app-shell) {
   }
 }
 .thread-row-shell[data-children] .thread-row-avatars {
-  right: 44px;
+  right: calc(var(--thread-children-width) + 16px);
+}
+/* Any child's latest turn failed. */
+.thread-children-toggle[data-failed],
+.thread-children-toggle[data-failed]:hover,
+.thread-children-toggle[data-failed]:focus-visible {
+  color: var(--destructive);
+}
+/* Any child finished a turn its viewer has not seen: the Orb's unread dot,
+   over the count's upper right. */
+.thread-children-unread {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  width: 6.5px;
+  height: 6.5px;
+  border-radius: 50%;
+  background: var(--unread);
+  box-shadow: 0 0 0 1.25px var(--shell);
+  pointer-events: none;
 }
 .product-sidebar .thread-row > .thread-child-marker {
   width: 12px;

@@ -1,4 +1,5 @@
 import type { NotificationChannel, NotificationTopic } from "@dx/api";
+import { plainPreview } from "./plain-preview.js";
 
 /**
  * What a notification says, independent of how it is delivered. Each channel
@@ -6,7 +7,7 @@ import type { NotificationChannel, NotificationTopic } from "@dx/api";
  * service as a short message.
  */
 export interface NotificationContent {
-  /** One line: an email subject, a push title, a chat preview. */
+  /** One line that stands alone: an email subject. */
   readonly subject: string;
   /** "Ada mentioned you". */
   readonly headline: string;
@@ -14,6 +15,11 @@ export interface NotificationContent {
   readonly title: string;
   /** What was said, as plain text. */
   readonly body: string;
+  /**
+   * What a push or chat preview shows under the Thread's title: who said
+   * what, or why the Thread came back, so the title can stay the Thread's.
+   */
+  readonly preview: string;
   readonly actorName?: string;
   /** Why the recipient got it: "someone mentioned you in dx". */
   readonly reason: string;
@@ -55,6 +61,7 @@ const mention: NotificationTopicDefinition = {
     headline: `${actorName} mentioned you`,
     title: threadTitle,
     body: excerpt,
+    preview: `${actorName}: ${plainPreview(excerpt) || excerpt}`,
     actorName,
     reason: "someone mentioned you in dx",
   }),
@@ -77,6 +84,7 @@ const turnCompleted: NotificationTopicDefinition = {
     headline: "The agent finished its turn",
     title: threadTitle,
     body: excerpt,
+    preview: excerpt,
     actorName: "dx",
     reason: "your Thread's agent finished a turn",
   }),
@@ -85,7 +93,9 @@ const turnCompleted: NotificationTopicDefinition = {
 /**
  * A Thread the person snoozed reached its wake time. Like the agent update
  * it is a nudge about their own Thread, so it is push only and stays out of
- * the Mentions inbox; the sidebar already moves the Thread back.
+ * the Mentions inbox; the sidebar already moves the Thread back. The excerpt
+ * is what the agent last said there, empty when it said nothing, so the
+ * push reminds the person where the Thread left off.
  */
 const snoozeWoke: NotificationTopicDefinition = {
   id: "snooze_woke",
@@ -98,6 +108,8 @@ const snoozeWoke: NotificationTopicDefinition = {
     headline: "A Thread you snoozed woke up",
     title: threadTitle,
     body: excerpt,
+    preview:
+      excerpt === "" ? "Back from snooze." : `Back from snooze: ${excerpt}`,
     actorName: "dx",
     reason: "a Thread you snoozed woke up",
   }),

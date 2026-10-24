@@ -40,6 +40,7 @@ import {
   githubWebhookRoutes,
 } from "./source-control/github/routes.js";
 import { threadChangesRoutes } from "./thread-changes/routes.js";
+import { threadDeletionRoutes } from "./thread-deletion/routes.js";
 import { threadDesktopRoutes } from "./thread-desktop/routes.js";
 import { threadFilesRoutes } from "./thread-files/routes.js";
 import { threadSandboxFileRoutes } from "./thread-files/sandbox.js";
@@ -96,6 +97,7 @@ app.route("/v1/thread-search", threadSearchRoutes);
 app.use("/v1/threads/:threadId", shareThreadReads);
 app.use("/v1/threads/:threadId/readiness", shareThreadReads);
 app.route("/v1/threads", threadRoutes);
+app.route("/v1/threads", threadDeletionRoutes);
 app.route("/v1/threads", threadSharingRoutes);
 app.use("/v1/threads/:threadId/members", authorizeThread);
 app.use("/v1/threads/:threadId/follow", authorizeThread);

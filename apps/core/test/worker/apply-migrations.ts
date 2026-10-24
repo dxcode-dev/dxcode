@@ -104,7 +104,17 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM notification"),
     env.DB.prepare("DELETE FROM notification_preference"),
     env.DB.prepare("DELETE FROM push_subscription"),
+    env.DB.prepare("DELETE FROM thread_deletion"),
+    env.DB.prepare("DROP TRIGGER IF EXISTS threads_tombstone_no_delete"),
     env.DB.prepare("DELETE FROM threads"),
+    env.DB.prepare(`
+      CREATE TRIGGER threads_tombstone_no_delete
+      BEFORE DELETE ON threads
+      WHEN OLD.lifecycle_state = 'deleted'
+      BEGIN
+        SELECT RAISE(ABORT, 'thread tombstone is permanent');
+      END
+    `),
     env.DB.prepare("DELETE FROM projects"),
     env.DB.prepare("DELETE FROM personal_account"),
     env.DB.prepare("DELETE FROM apikey"),

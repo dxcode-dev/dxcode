@@ -1,4 +1,4 @@
-import { ProjectId, type UserId, WorkspaceSlug } from "@dx/domain";
+import { ProjectId, ThreadId, type UserId, WorkspaceSlug } from "@dx/domain";
 import type { QueryClient } from "@tanstack/react-query";
 import {
   createRootRouteWithContext,
@@ -31,6 +31,7 @@ import {
 } from "./features/threads/new-thread-page.js";
 import { ThreadArchiveProvider } from "./features/threads/thread-archive.js";
 import { ThreadEditingProvider } from "./features/threads/thread-editing.js";
+import { openThreadSeen } from "./features/threads/thread-seen-mutations.js";
 import { ThreadSnoozeProvider } from "./features/threads/thread-snooze.js";
 import { isStaleChunkError } from "./shared/stale-chunk.js";
 
@@ -187,6 +188,18 @@ const newThreadRoute = createRoute({
   component: NewThreadPage,
 });
 
+const seeOpenedThread = ({
+  context,
+  params,
+}: {
+  readonly context: RouterContext;
+  readonly params: { readonly threadId: string };
+}) => {
+  const threadId = Schema.decodeUnknownOption(ThreadId)(params.threadId);
+  if (Option.isSome(threadId))
+    openThreadSeen(context.queryClient, context.userId, threadId.value);
+};
+
 const threadRoute = createRoute({
   getParentRoute: () => productRoute,
   path: "/threads/$threadId",
@@ -198,6 +211,11 @@ const threadRoute = createRoute({
     /^msg_[0-9a-f]{24}$/.test(search.message)
       ? { message: search.message }
       : {},
+  // Opening a Thread is seeing it: entering the route, or moving within it
+  // from one Thread to the next. Not loading it: hovering a link preloads
+  // the route, and the click that follows reuses that match unloaded.
+  onEnter: seeOpenedThread,
+  onStay: seeOpenedThread,
   component: page.thread,
 });
 

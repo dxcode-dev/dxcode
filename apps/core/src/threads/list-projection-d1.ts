@@ -1,5 +1,6 @@
 import {
   type ThreadChangesSummary,
+  type ThreadChildActivity,
   type ThreadListItem,
   threadAgentUrl,
 } from "@dx/api";
@@ -20,6 +21,14 @@ import {
   decorateSharingRows,
   type SharingRow,
 } from "../thread-sharing/service.js";
+import {
+  type ChildActivityRow,
+  childActivityColumnsSql,
+  childActivityField,
+  childActivityFrom,
+  threadAttentionFields,
+  threadUnreadSql,
+} from "./attention-d1.js";
 import { decodeThreadRows } from "./repository-d1.js";
 import { threadSnoozeData } from "./snooze.js";
 
@@ -73,37 +82,58 @@ export const threadListItem = (
   changes,
 });
 
+/**
+ * Each owned Thread's Changes totals and what its row draws attention to,
+ * for its owner: these lists hold only the requester's own Threads.
+ */
 export const readThreadListProjection = async (
   db: D1Database,
   threadIds: readonly ThreadId[],
 ) => {
-  if (threadIds.length === 0) return new Map<ThreadId, ThreadChangesSummary>();
+  const changes = new Map<ThreadId, ThreadChangesSummary>();
+  const attention = new Map<
+    ThreadId,
+    ReturnType<typeof threadAttentionFields>
+  >();
   // D1 binds at most 100 parameters per statement.
   const results = await Promise.all(
     Array.from({ length: Math.ceil(threadIds.length / 100) }, (_, index) => {
       const ids = threadIds.slice(index * 100, index * 100 + 100);
       return db
         .prepare(
-          `SELECT thread_id, latest_capture_id, dirty_since,
-                  summary_additions, summary_deletions, summary_files
-             FROM thread_changes_state
-            WHERE thread_id IN (${ids.map(() => "?").join(", ")})`,
+          `SELECT thread.id AS thread_id, summary.latest_capture_id,
+                  summary.dirty_since, summary.summary_additions,
+                  summary.summary_deletions, summary.summary_files,
+                  thread.turn_failed,
+                  ${threadUnreadSql("thread", "thread.owner_user_id")} AS unread
+             FROM threads AS thread
+             LEFT JOIN thread_changes_state AS summary
+               ON summary.thread_id = thread.id
+            WHERE thread.id IN (${ids.map(() => "?").join(", ")})
+              AND (summary.thread_id IS NOT NULL OR thread.turn_failed = 1
+                OR thread.turn_settled_at IS NOT NULL)`,
         )
         .bind(...ids)
         .all();
     }),
   );
-  const rows = Schema.decodeUnknownSync(Schema.Array(SummaryRowSchema))(
-    results.flatMap((result) => result.results),
-  );
-  return new Map(
-    rows.flatMap((row) => {
-      const summary = summaryFrom(row);
-      return summary === undefined
-        ? []
-        : [[row.thread_id as ThreadId, summary] as const];
-    }),
-  );
+  const rows = Schema.decodeUnknownSync(
+    Schema.Array(
+      Schema.Struct({
+        ...SummaryRowSchema.fields,
+        turn_failed: Schema.Number,
+        unread: Schema.Number,
+      }),
+    ),
+  )(results.flatMap((result) => result.results));
+  for (const row of rows) {
+    const id = row.thread_id as ThreadId;
+    const summary = summaryFrom(row);
+    if (summary !== undefined) changes.set(id, summary);
+    const marks = threadAttentionFields(row);
+    if (Object.keys(marks).length > 0) attention.set(id, marks);
+  }
+  return { changes, attention };
 };
 
 /**
@@ -120,19 +150,24 @@ const listedUnderParentSql = `child.owner_user_id = parent.owner_user_id
  * How many child Threads list under each root: unpinned children that
  * share their parent's lifecycle state, in projects their owner still
  * reaches (as the Thread repository's reachable scope decides), as the
- * children list returns them. Roots without children are
- * absent.
+ * children list returns them; and how many of those work, are unread for
+ * their owner, and ended their latest turn in an error. Roots without
+ * children are absent.
  */
 export const readThreadChildCounts = async (
   db: D1Database,
   threadIds: readonly ThreadId[],
 ) => {
-  if (threadIds.length === 0) return new Map<ThreadId, number>();
+  if (threadIds.length === 0)
+    return new Map<
+      ThreadId,
+      { count: number; activity: ThreadChildActivity }
+    >();
   const placeholders = threadIds.map(() => "?").join(", ");
   const result = await db
     .prepare(
       `SELECT child.parent_thread_id AS parent_thread_id,
-              COUNT(*) AS child_count
+              ${childActivityColumnsSql("child.owner_user_id")}
          FROM threads AS child
          JOIN threads AS parent ON parent.id = child.parent_thread_id
          JOIN projects AS child_project ON child_project.id = child.project_id
@@ -141,9 +176,12 @@ export const readThreadChildCounts = async (
         GROUP BY child.parent_thread_id`,
     )
     .bind(...threadIds)
-    .all<{ parent_thread_id: ThreadId; child_count: number }>();
+    .all<ChildActivityRow & { parent_thread_id: ThreadId }>();
   return new Map(
-    result.results.map((row) => [row.parent_thread_id, row.child_count]),
+    result.results.map((row) => [
+      row.parent_thread_id,
+      { count: row.child_count, activity: childActivityFrom(row) },
+    ]),
   );
 };
 
@@ -200,14 +238,21 @@ export const readThreadListItem = async (
               summary.summary_files,
               (SELECT parent.color FROM threads AS parent
                 WHERE parent.id = thread.parent_thread_id) AS parent_color,
-              (SELECT COUNT(*) FROM threads AS child
-                 JOIN threads AS parent ON parent.id = child.parent_thread_id
-                 JOIN projects AS child_project ON child_project.id = child.project_id
-                WHERE child.parent_thread_id = thread.id
-                  AND ${listedUnderParentSql}) AS child_count
+              thread.turn_failed, ${threadUnreadSql("thread", "?2")} AS unread,
+              COALESCE(family.child_count, 0) AS child_count,
+              family.child_working, family.child_unread, family.child_failed
          FROM threads AS thread
          JOIN projects AS project ON project.id = thread.project_id
          LEFT JOIN thread_changes_state AS summary ON summary.thread_id = thread.id
+         LEFT JOIN (
+           SELECT child.parent_thread_id, ${childActivityColumnsSql("?2")}
+             FROM threads AS child
+             JOIN threads AS parent ON parent.id = child.parent_thread_id
+             JOIN projects AS child_project ON child_project.id = child.project_id
+            WHERE child.parent_thread_id = ?1
+              AND ${listedUnderParentSql}
+            GROUP BY child.parent_thread_id
+         ) AS family ON family.parent_thread_id = thread.id
         WHERE thread.id = ?1
           AND thread.lifecycle_state != 'deleted'
           AND ((thread.owner_user_id = ?2
@@ -234,8 +279,9 @@ export const readThreadListItem = async (
           readonly access: "contribute" | "view";
           readonly project_name: string;
           readonly parent_color: ThreadColor | null;
-          readonly child_count: number;
-        }
+          readonly turn_failed: number;
+          readonly unread: number;
+        } & ChildActivityRow
     >();
   if (row === null) return undefined;
   const [thread] = await Effect.runPromise(decodeThreadRows([row]));
@@ -250,6 +296,7 @@ export const readThreadListItem = async (
       access: row.access,
       projectName: row.project_name.slice(0, 256),
       ...decoration,
+      ...threadAttentionFields(row),
     };
   return {
     ...threadListItem(
@@ -262,7 +309,13 @@ export const readThreadListItem = async (
       ),
     ),
     ...decoration,
-    ...(row.child_count > 0 ? { childCount: row.child_count } : {}),
+    ...threadAttentionFields(row),
+    ...(row.child_count > 0
+      ? {
+          childCount: row.child_count,
+          ...childActivityField(childActivityFrom(row)),
+        }
+      : {}),
     ...(row.parent_color === null ? {} : { parentColor: row.parent_color }),
   };
 };

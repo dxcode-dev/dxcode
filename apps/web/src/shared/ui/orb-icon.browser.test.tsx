@@ -65,10 +65,11 @@ const mount = () => {
   container.innerHTML = renderToStaticMarkup(<OrbIcon />);
   const svg = container.querySelector("svg") as SVGSVGElement;
   document.body.append(svg);
-  const motion = mountOrbMotion(svg.querySelector("g") as SVGGElement);
+  const group = svg.querySelector("[data-activity-artwork]") as SVGGElement;
+  const motion = mountOrbMotion(group);
   if (!motion) throw new Error("Expected a browser renderer");
   cleanup = motion.dispose;
-  return { svg, motion, group: svg.querySelector("g") as SVGGElement };
+  return { svg, motion, group };
 };
 
 describe("rimmed gyroscope motion", () => {

@@ -2,6 +2,8 @@ import { Dialog } from "@base-ui/react/dialog";
 import type { ThreadData } from "@dx/api";
 import { THREAD_TITLE_MAX_LENGTH } from "@dx/domain";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "@tanstack/react-router";
+import { LoaderCircle, Trash2 } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import {
@@ -15,6 +17,7 @@ import {
   ModalSurfaceHeader,
 } from "../../shared/ui/modal-surface.js";
 import {
+  deleteThreadMutationOptions,
   setThreadPinnedMutationOptions,
   updateThreadMutationOptions,
 } from "./thread-mutations.js";
@@ -36,9 +39,11 @@ export function ThreadEditingProvider({
     setThreadPinnedMutationOptions(queryClient, identity.id),
   );
   const [renaming, setRenaming] = React.useState<RenameTarget>();
+  const [deleting, setDeleting] = React.useState<RenameTarget>();
 
   const controller: ThreadEditingController = {
     openRename: (thread) => setRenaming({ id: thread.id, title: thread.title }),
+    openDelete: (thread) => setDeleting({ id: thread.id, title: thread.title }),
     setColor: (threadId, color) => mutate({ threadId, update: { color } }),
     // A Thread's detail has no pin; the sidebar's list does.
     pinned: (threadId) =>
@@ -63,6 +68,13 @@ export function ThreadEditingProvider({
           key={renaming.id}
           thread={renaming}
           onClose={() => setRenaming(undefined)}
+        />
+      )}
+      {deleting === undefined ? null : (
+        <DeleteThreadDialog
+          key={deleting.id}
+          thread={deleting}
+          onClose={() => setDeleting(undefined)}
         />
       )}
     </ThreadEditingContext.Provider>
@@ -134,6 +146,101 @@ function RenameThreadDialog({
             </Button>
           </footer>
         </form>
+      </ModalSurface>
+    </Dialog.Root>
+  );
+}
+
+function DeleteThreadDialog({
+  thread,
+  onClose,
+}: {
+  readonly thread: RenameTarget;
+  readonly onClose: () => void;
+}) {
+  const { identity } = useAuthenticatedIdentity();
+  const queryClient = useQueryClient();
+  const router = useRouter();
+  // Owned by this dialog, as Rename's is.
+  const remove = useMutation(
+    deleteThreadMutationOptions(queryClient, identity.id),
+  );
+  const cancel = React.useRef<HTMLButtonElement>(null);
+  const confirm = () =>
+    remove.mutate(
+      { threadId: thread.id },
+      {
+        onSuccess: () => {
+          onClose();
+          // The open Thread is gone; leave its page.
+          if (
+            router.state.location.pathname ===
+            `/threads/${encodeURIComponent(thread.id)}`
+          )
+            void router.navigate({ to: "/" });
+        },
+      },
+    );
+  const error =
+    remove.error === null
+      ? undefined
+      : remove.error instanceof Error && remove.error.message !== ""
+        ? remove.error.message
+        : "The thread could not be deleted.";
+  return (
+    <Dialog.Root
+      open
+      onOpenChange={(open) =>
+        open || remove.isPending ? undefined : onClose()
+      }
+    >
+      <ModalSurface
+        className="delete-thread-dialog"
+        ariaLabel="Delete thread"
+        initialFocus={cancel}
+      >
+        <ModalSurfaceHeader>
+          <Dialog.Title className="delete-thread-dialog-title">
+            Delete Thread?
+          </Dialog.Title>
+          <ModalSurfaceClose />
+        </ModalSurfaceHeader>
+        <div className="delete-thread-dialog-body">
+          <Dialog.Description>
+            <span className="delete-thread-dialog-name">
+              &ldquo;{thread.title}&rdquo;
+            </span>{" "}
+            will be permanently deleted, with its conversation history and
+            sandbox.
+          </Dialog.Description>
+          {error === undefined ? null : (
+            <div className="notice error-notice" role="alert">
+              {error}
+            </div>
+          )}
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={remove.isPending}
+            onClick={confirm}
+          >
+            {remove.isPending ? (
+              <LoaderCircle className="spin" aria-hidden="true" />
+            ) : (
+              <Trash2 aria-hidden="true" />
+            )}
+            {remove.isPending ? "Deleting…" : "Delete"}
+          </Button>
+          <Button
+            ref={cancel}
+            type="button"
+            variant="outline"
+            disabled={remove.isPending}
+            onClick={onClose}
+          >
+            Cancel
+          </Button>
+        </div>
       </ModalSurface>
     </Dialog.Root>
   );

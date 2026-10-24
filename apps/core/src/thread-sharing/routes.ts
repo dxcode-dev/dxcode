@@ -13,6 +13,7 @@ import { type Context, Hono } from "hono";
 import type { AppEnv } from "../http/types.js";
 import { threadSharingLogger } from "../logging.js";
 import { scheduleRealtimeInvalidation } from "../realtime/publication.js";
+import { threadAttentionFields } from "../threads/attention-d1.js";
 import { threadListItem } from "../threads/list-projection-d1.js";
 import { decodeThreadRows } from "../threads/repository-d1.js";
 import { canUseSharedThreads } from "./access.js";
@@ -185,6 +186,9 @@ export const sharedThreadRoutes = new Hono<AppEnv>().get("/", (context) =>
     const projectNames = new Map(
       rows.map((row) => [row.id, row.project_name.slice(0, 256)]),
     );
+    const attention = new Map(
+      rows.map((row) => [row.id, threadAttentionFields(row)]),
+    );
     const decorations = await threadSharingDecorations(
       db,
       threads.map(({ id }) => id),
@@ -199,6 +203,7 @@ export const sharedThreadRoutes = new Hono<AppEnv>().get("/", (context) =>
               access.get(thread.id) === "contribute" ? "contribute" : "view",
             projectName: projectNames.get(thread.id),
             ...decorations.get(thread.id),
+            ...attention.get(thread.id),
           })),
         },
       }),

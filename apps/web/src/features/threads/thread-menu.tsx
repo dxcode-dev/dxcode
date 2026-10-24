@@ -20,6 +20,7 @@ import {
   Pin,
   PinOff,
   Share2,
+  Trash2,
   X,
 } from "lucide-react";
 import * as React from "react";
@@ -263,6 +264,15 @@ export function ThreadMenu({
                         : "Archive"}
                     </span>
                   </Menu.Item>
+                  {editable ? (
+                    <Menu.Item
+                      className="thread-menu-item thread-menu-item-danger"
+                      onClick={() => editing.openDelete(thread)}
+                    >
+                      <Trash2 />
+                      <span>Delete</span>
+                    </Menu.Item>
+                  ) : null}
                 </>
               ) : null}
             </Menu.Popup>

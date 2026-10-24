@@ -1,6 +1,7 @@
 import type { ThreadId, UserId } from "@dx/domain";
 import type { Bindings } from "../http/types.js";
 import { notificationLogger } from "../logging.js";
+import { latestAgentReply } from "./latest-reply.js";
 import { publishNotification } from "./publish.js";
 
 /**
@@ -24,7 +25,12 @@ interface DueThread {
   readonly snoozed_until: string;
 }
 
-/** Threads whose snooze came due and whose owner has not been told yet. */
+/**
+ * Threads whose snooze came due and whose owner has not been told yet. A
+ * told owner has the snooze's notification row, found through its unique
+ * (recipient, source key) index, so later sweeps skip the Thread instead of
+ * reading its history again.
+ */
 export const dueSnoozedThreads = async (
   db: D1Database,
   now: Date,
@@ -38,6 +44,11 @@ export const dueSnoozedThreads = async (
             AND snoozed_until <= ?1
             AND snoozed_until > ?2
             AND lifecycle_state = 'active'
+            AND NOT EXISTS (
+              SELECT 1 FROM notification
+               WHERE notification.recipient_user_id = threads.owner_user_id
+                 AND notification.source_key =
+                       'snooze:' || threads.id || ':' || threads.snoozed_until)
           ORDER BY snoozed_until
           LIMIT ${WAKE_BATCH}`,
       )
@@ -61,15 +72,29 @@ export const sweepSnoozeWakes = async (
   try {
     const due = await dueSnoozedThreads(db, now);
     await Promise.all(
-      due.map((thread) =>
-        publishNotification(bindings, {
+      due.map(async (thread) => {
+        const ownerUserId = thread.owner_user_id as UserId;
+        // Where the Thread left off; a wake without it still notifies.
+        const reply = await latestAgentReply(
+          bindings,
+          ownerUserId,
+          thread.id,
+        ).catch((cause) => {
+          notificationLogger.warn("The snoozed Thread's reply was not read.", {
+            event: "snooze_wake_reply_read_failed",
+            threadId: thread.id,
+            cause,
+          });
+          return undefined;
+        });
+        await publishNotification(bindings, {
           topic: "snooze_woke",
           sourceKey: `snooze:${thread.id}:${thread.snoozed_until}`,
-          recipients: [thread.owner_user_id as UserId],
+          recipients: [ownerUserId],
           threadId: thread.id as ThreadId,
-          excerpt: "The Thread you snoozed is back in your sidebar.",
-        }),
-      ),
+          excerpt: reply ?? "",
+        });
+      }),
     );
     return due.length;
   } catch (cause) {

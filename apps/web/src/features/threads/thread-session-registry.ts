@@ -235,7 +235,14 @@ export const createThreadAgentClient = (
 export const isAuthorizationError = (error: unknown): boolean =>
   error instanceof Error &&
   "status" in error &&
-  (error.status === 401 || error.status === 403 || error.status === 404);
+  (error.status === 401 ||
+    error.status === 403 ||
+    error.status === 404 ||
+    error.status === 410);
+
+/** The owner deleted this Thread; it never comes back. */
+export const isDeletedThreadError = (error: unknown): boolean =>
+  error instanceof Error && "status" in error && error.status === 410;
 
 export interface RetainedThread {
   readonly id: ThreadId;

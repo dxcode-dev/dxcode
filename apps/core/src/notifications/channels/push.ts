@@ -28,17 +28,18 @@ const bounded = (value: string, limit: number) =>
   value.length <= limit ? value : `${value.slice(0, limit - 1).trimEnd()}…`;
 
 /**
- * What one notification looks like on a device. The tag is per Thread and
- * topic, so a Thread's newest update replaces its previous one instead of
- * stacking.
+ * What one notification looks like on a device: the Thread's title, like a
+ * conversation in a messaging app, and under it the topic's preview. The
+ * tag is per Thread and topic, so a Thread's newest update replaces its
+ * previous one instead of stacking.
  */
 export const pushPayload = (
   delivery: ChannelDelivery,
   topic: string,
   threadId: string,
 ): PushPayload => ({
-  title: bounded(delivery.content.subject, 120),
-  body: bounded(delivery.content.body, BODY_LIMIT),
+  title: bounded(delivery.content.title, 120),
+  body: bounded(delivery.content.preview, BODY_LIMIT),
   url: delivery.links.open,
   topic,
   tag: `${topic}:${threadId}`,

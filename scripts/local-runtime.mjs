@@ -545,7 +545,7 @@ export const createLocalRuntimeServer = ({
       if (request.headers.authorization !== `Bearer ${token}`)
         return json(response, 401, { error: "unauthorized" });
       const match =
-        /^\/v1\/workspaces\/(thr_[^/]+)\/(ensure|source|exec|read|write|stat|readdir|mkdir|rm|snapshot|daemon|pause)$/.exec(
+        /^\/v1\/workspaces\/(thr_[^/]+)\/(ensure|source|exec|read|write|stat|readdir|mkdir|rm|snapshot|daemon|pause|destroy)$/.exec(
           request.url ?? "",
         );
       if (request.method !== "POST" || match === null)
@@ -554,10 +554,13 @@ export const createLocalRuntimeServer = ({
       const paths = workspacePaths(exactStateRoot, match[1]);
       const operation = match[2];
       const existingOnly = input.existingOnly === true;
-      if (operation === "pause") {
+      if (operation === "pause" || operation === "destroy") {
         daemons.get(match[1])?.process.kill("SIGTERM");
         daemons.delete(match[1]);
         removeDaemonConfig(paths);
+        // A deleted Thread's workspace goes with it: files, home, and state.
+        if (operation === "destroy")
+          rmSync(paths.root, { recursive: true, force: true });
         return json(response, 200, {});
       }
       const usesWorkspace = (value) =>

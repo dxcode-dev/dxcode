@@ -23,6 +23,7 @@ import {
 import { DateTime } from "effect";
 import {
   type ArchivedThread,
+  deleteThread,
   request,
   setThreadArchived,
   setThreadPinned,
@@ -497,6 +498,44 @@ export const setThreadArchivedMutationOptions = (
           queryKey: threadKeys.lists(userId),
         }),
       ]);
+    },
+  });
+
+/**
+ * Deletes a Thread once the server confirms: it leaves every list and its
+ * detail is dropped. Lists refetch, since its children become top-level.
+ */
+export const deleteThreadMutationOptions = (
+  queryClient: QueryClient,
+  userId: UserId,
+) =>
+  mutationOptions({
+    mutationKey: [...threadKeys.all(userId), "delete"] as const,
+    mutationFn: ({ threadId }: { threadId: ThreadId }) =>
+      deleteThread(threadId),
+    onSuccess: (_deleted, { threadId }) => {
+      for (const query of queryClient.getQueryCache().findAll({
+        queryKey: threadKeys.lists(userId),
+      }))
+        queryClient.setQueryData<ThreadListData>(query.queryKey, (current) =>
+          current === undefined
+            ? current
+            : {
+                ...current,
+                pages: current.pages.map((page) =>
+                  flatMapListedThreads(page, (thread) =>
+                    thread.id === threadId ? [] : [thread],
+                  ),
+                ),
+              },
+        );
+      queryClient.removeQueries({
+        queryKey: threadKeys.detail(userId, threadId),
+        exact: true,
+      });
+      return queryClient.invalidateQueries({
+        queryKey: threadKeys.lists(userId),
+      });
     },
   });
 

@@ -2276,6 +2276,11 @@ getLogger([
 	"threads",
 	"sharing"
 ]);
+getLogger([
+	"dx",
+	"threads",
+	"deletion"
+]);
 getLogger(["dx", "notifications"]);
 getLogger(["dx", "sidebar-layout"]);
 getLogger([

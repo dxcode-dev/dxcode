@@ -5,12 +5,32 @@ import { errorResponse, successResponse } from "../http/response.js";
 import { ThreadChangesSummarySchema } from "./changes.js";
 import { ThreadDataSchema } from "./thread-data.js";
 
+export const ThreadChildActivitySchema = Schema.Struct({
+  working: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  unread: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  failed: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+});
+
+export type ThreadChildActivity = typeof ThreadChildActivitySchema.Type;
+
 export const ThreadListItemSchema = Schema.Struct({
   ...ThreadDataSchema.fields,
   mode: Schema.Union([ModeId, ModelId]),
   changes: Schema.optional(ThreadChangesSummarySchema),
   /** Roots only: child Threads listed under this one; absent when none. */
   childCount: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
+  /**
+   * The agent finished a turn the requester has not seen: it settled after
+   * they last opened the Thread. Absent when seen.
+   */
+  unread: Schema.optional(Schema.Literal(true)),
+  /** The latest turn ended in an error. Absent when it did not. */
+  turnFailed: Schema.optional(Schema.Literal(true)),
+  /**
+   * Roots with `childCount` only: how many of those children are working,
+   * unread for the requester, and ended their latest turn in an error.
+   */
+  childActivity: Schema.optional(ThreadChildActivitySchema),
 });
 
 export type ThreadListItem = typeof ThreadListItemSchema.Type;

@@ -13,6 +13,7 @@ import {
   Pin,
 } from "lucide-react";
 import * as React from "react";
+import type { ThreadListClientItem } from "../../shared/api/client.js";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
 import { useTimeText } from "../../shared/hooks/use-clock.js";
 import { threadColorAttributes } from "../../shared/thread-color.js";
@@ -96,6 +97,65 @@ function SnoozeRowButton({
   );
 }
 
+/**
+ * What a parent's child-count control shows: `2/3` while two of its three
+ * children work and `3` while none do, tinted when any child's latest turn
+ * failed and dotted when any finished a turn its viewer has not seen.
+ */
+function childActivity(thread: ThreadListClientItem, childCount: number) {
+  const working = thread.childActivity?.working ?? 0;
+  const unread = (thread.childActivity?.unread ?? 0) > 0;
+  const failed = (thread.childActivity?.failed ?? 0) > 0;
+  const summary = [
+    working > 0 ? `${working} working` : undefined,
+    failed ? `${thread.childActivity?.failed} with errors` : undefined,
+    unread ? `${thread.childActivity?.unread} unread` : undefined,
+  ]
+    .filter((part) => part !== undefined)
+    .join(", ");
+  return {
+    text: working > 0 ? `${working}/${childCount}` : `${childCount}`,
+    unread,
+    failed,
+    summary: summary === "" ? undefined : `: ${summary}`,
+  };
+}
+
+/** A parent's child count, which expands and collapses its children. */
+function SubthreadsToggle({
+  status,
+  label,
+  expanded,
+  onToggle,
+}: {
+  readonly status: ReturnType<typeof childActivity>;
+  readonly label: string;
+  readonly expanded: boolean;
+  readonly onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="thread-children-toggle"
+      data-expanded={expanded ? "" : undefined}
+      data-failed={status.failed ? "" : undefined}
+      aria-expanded={expanded}
+      aria-label={`${expanded ? "Collapse" : "Expand"} ${label} started from this thread${status.summary ?? ""}`}
+      title={`${label}${status.summary ?? ""}`}
+      onClick={onToggle}
+    >
+      <span className="thread-children-icon" aria-hidden>
+        <CornerDownRight className="thread-children-corner" />
+        <ChevronDown className="thread-children-chevron" />
+      </span>
+      <span className="thread-children-count">{status.text}</span>
+      {status.unread ? (
+        <span className="thread-children-unread" aria-hidden />
+      ) : null}
+    </button>
+  );
+}
+
 /** What every Thread row in a sidebar list shares. */
 export interface SidebarThreadListProps {
   readonly activeThreadId?: string;
@@ -133,7 +193,7 @@ export interface SidebarThreadRowProps
     | "onSetPinned"
     | "onUnfollow"
   > {
-  readonly thread: ThreadData;
+  readonly thread: ThreadListClientItem;
   readonly projectName: string;
   readonly selected: boolean;
   readonly archiving: boolean;
@@ -178,6 +238,12 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
     thread.lifecycleState === "archived" ? "idle" : thread.activityStatus;
   const hasChildren = childCount > 0 && onToggleChildren !== undefined;
   const childLabel = `${childCount} ${childCount === 1 ? "thread" : "threads"}`;
+  // Opening a Thread is seeing it, so the open one is never unread.
+  const unread = thread.unread === true && !selected;
+  const failed = thread.turnFailed === true;
+  const childStatus = hasChildren
+    ? childActivity(thread, childCount)
+    : undefined;
   const parentThreadId = thread.parentThreadId;
   const sharedWithMe = thread.access !== undefined && thread.access !== "owner";
   const owner = thread.participants?.find((person) => person.owner);
@@ -270,6 +336,14 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
         data-children={hasChildren ? "" : undefined}
         data-child={child ? "" : undefined}
         data-snooze={snoozed ? "snoozed" : woke ? "woke" : undefined}
+        data-error={failed && !snoozed && !woke ? "" : undefined}
+        style={
+          childStatus === undefined
+            ? undefined
+            : ({
+                "--thread-children-glyphs": childStatus.text.length,
+              } as React.CSSProperties)
+        }
         onPointerEnter={(event) => {
           // A tap is not a hover: touch opens the Thread, not its preview.
           if (event.pointerType === "touch") return;
@@ -307,14 +381,15 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
           <span className="thread-executor-icon">
             <OrbIcon
               activityStatus={activityStatus}
+              unread={unread}
               aria-hidden="false"
-              aria-label={
+              aria-label={`${
                 thread.lifecycleState === "archived"
                   ? `${EXECUTION_ENVIRONMENT_DISPLAY_NAME} paused`
                   : activityStatus === "working"
                     ? `${EXECUTION_ENVIRONMENT_DISPLAY_NAME} working`
                     : `${EXECUTION_ENVIRONMENT_DISPLAY_NAME} idle`
-              }
+              }${unread ? ", unread" : ""}`}
             />
             {parentThreadId === undefined ? null : (
               <SubthreadIcon
@@ -347,24 +422,22 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
             <AlarmClock aria-hidden="true" />
             <span role="status">Woke</span>
           </button>
+        ) : failed ? (
+          <span
+            className="thread-error-status"
+            title="The latest turn ended in an error"
+          >
+            Error
+          </span>
         ) : null}
         {avatars}
-        {hasChildren ? (
-          <button
-            type="button"
-            className="thread-children-toggle"
-            data-expanded={expanded ? "" : undefined}
-            aria-expanded={expanded}
-            aria-label={`${expanded ? "Collapse" : "Expand"} ${childLabel} started from this thread`}
-            title={childLabel}
-            onClick={() => onToggleChildren(thread.id)}
-          >
-            <span className="thread-children-icon" aria-hidden>
-              <CornerDownRight className="thread-children-corner" />
-              <ChevronDown className="thread-children-chevron" />
-            </span>
-            <span>{childCount}</span>
-          </button>
+        {hasChildren && childStatus !== undefined ? (
+          <SubthreadsToggle
+            status={childStatus}
+            label={childLabel}
+            expanded={expanded}
+            onToggle={() => onToggleChildren(thread.id)}
+          />
         ) : null}
         {sharedWithMe ? (
           onUnfollow === undefined ? null : (
