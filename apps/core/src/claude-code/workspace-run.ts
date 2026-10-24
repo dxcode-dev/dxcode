@@ -1,6 +1,7 @@
 import type { Sandbox } from "@flue/runtime";
 import { BUILT_IN_SKILL_NAMES } from "../agents/built-in-skill-names.js";
 import { encodeBase64 } from "../encoding/base64.js";
+import { markRunFailure } from "../runtime/run-failure.js";
 import { environmentSecretsOf } from "../settings/environment-variables/sandbox.js";
 import { CLAUDE_CODE_MCP_SERVER } from "./mcp-server.js";
 import { CHUNK_END_LINE, ClaudeCodeStream } from "./stream.js";
@@ -44,6 +45,8 @@ const KEPT_RUNS = 20;
  * without one that succeeds fails its reader.
  */
 const UNREADABLE_MS = 60_000;
+/** A read that has not answered by then counts as failed. */
+const READ_TIMEOUT_MS = 30_000;
 /**
  * A command line is one argument of at most 128 KiB, so a launch whose files
  * are larger writes them as one file first.
@@ -122,6 +125,20 @@ const CLI_ENVIRONMENT = {
 const CLAUDE_CODE_MIN_VERSION = "2.1.38";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+
+/** The read's answer, or a failure once it has waited READ_TIMEOUT_MS. */
+const bounded = <A>(read: Promise<A>) => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    read,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error("The workspace did not answer a read.")),
+        READ_TIMEOUT_MS,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
+};
 
 const sleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
@@ -423,14 +440,25 @@ export class ClaudeCodeRun {
   #keptAliveAt = 0;
   /** When the current run of failed status reads began. */
   #unreadableSince: number | undefined;
+  /** The current run of failed reads already reconnected the sandbox. */
+  #reconnected = false;
+  #sandbox: Sandbox;
 
   constructor(
     readonly key: string,
-    private readonly sandbox: Sandbox,
+    sandbox: Sandbox,
     base?: number,
+    /** Opens a new handle on the Thread's sandbox, when one can be opened. */
+    private readonly reconnect?: () => Promise<Sandbox | undefined>,
   ) {
     this.dir = `${claudeCodeRunsRoot}/${key}`;
+    this.#sandbox = sandbox;
     this.#base = base;
+  }
+
+  #forgetReadFailures() {
+    this.#unreadableSince = undefined;
+    this.#reconnected = false;
   }
 
   /** Nothing of this run has been read yet. */
@@ -443,7 +471,12 @@ export class ClaudeCodeRun {
    * lookup that needs only what Claude wrote from there on.
    */
   readerFrom(index: number) {
-    const reader = new ClaudeCodeRun(this.key, this.sandbox, this.#base);
+    const reader = new ClaudeCodeRun(
+      this.key,
+      this.#sandbox,
+      this.#base,
+      this.reconnect,
+    );
     reader.#chunk = index;
     return reader;
   }
@@ -452,7 +485,7 @@ export class ClaudeCodeRun {
   async base() {
     if (this.#base === undefined) {
       const recorded = Number(
-        await this.sandbox.readFile(`${this.dir}/base`).catch(() => "0"),
+        await this.#sandbox.readFile(`${this.dir}/base`).catch(() => "0"),
       );
       this.#base = Number.isInteger(recorded) && recorded >= 0 ? recorded : 0;
     }
@@ -491,10 +524,10 @@ export class ClaudeCodeRun {
       })}\n`,
     });
     if (files.length > INLINE_LAUNCH_BYTES) {
-      await this.sandbox.writeFile(`${this.dir}/${LAUNCH_FILES}`, files);
+      await this.#sandbox.writeFile(`${this.dir}/${LAUNCH_FILES}`, files);
       files = undefined;
     }
-    const result = await this.sandbox.exec(
+    const result = await this.#sandbox.exec(
       `bash -c ${quote(launchScript(this.dir, launch, files))}`,
       {
         env: { ...CLI_ENVIRONMENT, CLAUDE_CODE_OAUTH_TOKEN: launch.token },
@@ -512,7 +545,7 @@ export class ClaudeCodeRun {
 
   async #read(path: string) {
     try {
-      return await this.sandbox.readFileBuffer(path);
+      return await bounded(this.#sandbox.readFileBuffer(path));
     } catch {
       return undefined;
     }
@@ -534,7 +567,7 @@ export class ClaudeCodeRun {
     for (;;) {
       const bytes = await this.#read(`${this.dir}/${chunkName(this.#chunk)}`);
       if (bytes === undefined) break;
-      this.stream.secrets = await environmentSecretsOf(this.sandbox);
+      this.stream.secrets = await environmentSecretsOf(this.#sandbox);
       // Reads are redacted: a secret becomes one byte, so positions are
       // counted in lines, which redaction never adds or removes.
       const lines = new TextDecoder().decode(bytes).split("\n");
@@ -553,10 +586,10 @@ export class ClaudeCodeRun {
       this.#chunk += 1;
       this.#lines = 0;
     }
-    if (progressed) this.#unreadableSince = undefined;
+    if (progressed) this.#forgetReadFailures();
     if (!progressed && !this.#exited && !this.stream.finished) {
       const exited = await this.#status(() =>
-        this.sandbox.exists(`${this.dir}/exit`),
+        this.#sandbox.exists(`${this.dir}/exit`),
       );
       if (exited !== undefined) this.#exited = exited;
       if (exited === false) await this.#checkHeartbeat();
@@ -567,13 +600,13 @@ export class ClaudeCodeRun {
       Date.now() - this.#keptAliveAt >= KEEP_ALIVE_MS
     ) {
       this.#keptAliveAt = Date.now();
-      await this.sandbox
+      await this.#sandbox
         .writeFile(`${this.dir}/seen`, String(this.#keptAliveAt))
         .catch(() => {});
     }
     if (!this.#sessionRecorded && this.stream.sessionId !== undefined) {
       this.#sessionRecorded = true;
-      await this.sandbox
+      await this.#sandbox
         .writeFile(`${STATE_ROOT}/session`, this.stream.sessionId)
         .catch(() => {
           this.#sessionRecorded = false;
@@ -584,21 +617,45 @@ export class ClaudeCodeRun {
 
   /**
    * Reads part of the run's status. A failed read is no answer, never a
-   * stale or missing one; failures that last UNREADABLE_MS fail the reader.
+   * stale or missing one. The first failure of a run of them reconnects the
+   * sandbox and reads again, since a reset container leaves the old handle
+   * failing; failures that then last UNREADABLE_MS fail the reader with a
+   * platform failure, which Flue retries on fresh handles.
    */
   async #status<A>(read: () => Promise<A>): Promise<A | undefined> {
     try {
-      const value = await read();
-      this.#unreadableSince = undefined;
+      const value = await bounded(read());
+      this.#forgetReadFailures();
       return value;
     } catch (error) {
+      let failure = error;
+      if (!this.#reconnected && this.reconnect !== undefined) {
+        this.#reconnected = true;
+        const next = await this.reconnect().catch(() => undefined);
+        if (next !== undefined) {
+          this.#sandbox = next;
+          this.#unreadableSince = undefined;
+          try {
+            const value = await bounded(read());
+            this.#forgetReadFailures();
+            return value;
+          } catch (retryError) {
+            failure = retryError;
+          }
+        }
+      }
       const now = Date.now();
       this.#unreadableSince ??= now;
       if (now - this.#unreadableSince >= UNREADABLE_MS)
         throw new Error(
-          `Claude Code's run could not be read for a minute: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          markRunFailure({
+            class: "platform",
+            code: "CLAUDE_CODE_RUN_UNREADABLE",
+            message: `Claude Code's run could not be read for a minute: ${
+              failure instanceof Error ? failure.message : String(failure)
+            }`,
+            retryable: true,
+          }),
         );
       return undefined;
     }
@@ -615,10 +672,10 @@ export class ClaudeCodeRun {
     const path = `${this.dir}/alive`;
     const beat = await this.#status(async () => {
       try {
-        return (await this.sandbox.readFile(path)).trim();
+        return (await this.#sandbox.readFile(path)).trim();
       } catch (error) {
         // Only a heartbeat known to be missing reads as none.
-        if (await this.sandbox.exists(path)) throw error;
+        if (await this.#sandbox.exists(path)) throw error;
         return "";
       }
     });
@@ -646,7 +703,7 @@ export class ClaudeCodeRun {
     while (await this.poll()) {}
     if (!this.#exited && !this.stream.finished)
       this.#exited =
-        (await this.#status(() => this.sandbox.exists(`${this.dir}/exit`))) ??
+        (await this.#status(() => this.#sandbox.exists(`${this.dir}/exit`))) ??
         false;
     // The last lines can land just before the exit marker that ended the
     // loop above; one more read keeps a finished run from looking lost.
@@ -672,7 +729,7 @@ export class ClaudeCodeRun {
 
   /** Whether this attempt resumed a recorded Claude session. */
   resumed() {
-    return this.sandbox.exists(`${this.dir}/resumed`);
+    return this.#sandbox.exists(`${this.dir}/resumed`);
   }
 
   /**
@@ -680,7 +737,7 @@ export class ClaudeCodeRun {
    * successful result, so that result does not finish the turn.
    */
   stopped() {
-    return this.sandbox.exists(`${this.dir}/stopped`);
+    return this.#sandbox.exists(`${this.dir}/stopped`);
   }
 
   /**
@@ -691,7 +748,7 @@ export class ClaudeCodeRun {
    */
   async lost() {
     if (this.#exited || this.stream.finished) return false;
-    const result = await this.sandbox
+    const result = await this.#sandbox
       .exec(
         `bash -c ${quote(`D=${quote(this.dir)}
 pid=$(cat "$D/pid" 2>/dev/null || true)
@@ -711,20 +768,20 @@ echo lost`)}`,
   async exitedOnItsOwn() {
     if (await this.stopped()) return false;
     const code = (
-      await this.sandbox.readFile(`${this.dir}/exit`).catch(() => "")
+      await this.#sandbox.readFile(`${this.dir}/exit`).catch(() => "")
     ).trim();
     return code !== "" && code !== "143" && code !== "137";
   }
 
   /** Forget a session Claude could not resume, so the next attempt starts one. */
   async forgetSession() {
-    await this.sandbox.writeFile(`${STATE_ROOT}/session`, "").catch(() => {});
+    await this.#sandbox.writeFile(`${STATE_ROOT}/session`, "").catch(() => {});
   }
 
   /** The CLI's stderr tail, for a run that ended without a result. */
   async stderrTail() {
     try {
-      return (await this.sandbox.readFile(`${this.dir}/stderr.log`))
+      return (await this.#sandbox.readFile(`${this.dir}/stderr.log`))
         .trim()
         .split("\n")
         .slice(-20)
@@ -743,7 +800,7 @@ echo lost`)}`,
       locate !== undefined && /^[A-Za-z0-9_-]+$/.test(locate)
         ? `\ngrep -l -F -- ${quote(locate)} "$D"/c[0-9]* 2>/dev/null | head -n 1`
         : "";
-    const result = await this.sandbox
+    const result = await this.#sandbox
       .exec(
         `bash -c ${quote(`D=${quote(this.dir)}
 if [ ! -f "$D/exit" ]; then
@@ -769,6 +826,6 @@ fi${find}`)}`,
    * coordinator captures what Claude's own tools wrote.
    */
   async syncChanges() {
-    await this.sandbox.exec("true", { timeoutMs: 30_000 }).catch(() => {});
+    await this.#sandbox.exec("true", { timeoutMs: 30_000 }).catch(() => {});
   }
 }

@@ -13,6 +13,7 @@ import {
 } from "../execution/guest/source-tool-requirements.js";
 import type { WorkspacePreparation } from "../execution/workspace-preparation.js";
 import { sourceControlLogger } from "../logging.js";
+import { markRunFailure } from "../runtime/run-failure.js";
 import {
   SourceRuntimeBroker,
   type SourceRuntimeBrokerShape,
@@ -50,8 +51,73 @@ export class SourceWorkspaceConflict extends Schema.TaggedError<SourceWorkspaceC
 
 export class SourceWorkspaceInitializationFailed extends Schema.TaggedError<SourceWorkspaceInitializationFailed>()(
   "SourceWorkspaceInitializationFailed",
-  {},
+  {
+    /** The failed guest command's exit code, when it exited. */
+    exitCode: Schema.optional(Schema.Int),
+    /** The end of its stderr (or the transport error), redacted. */
+    stderrTail: Schema.optional(Schema.String),
+    /** Set, as a run-failure stamp, when the platform caused it. */
+    message: Schema.optional(Schema.String),
+  },
 ) {}
+
+const STDERR_TAIL_CHARS = 2_000;
+
+/**
+ * The end of a command's stderr, fit for a log: credentials in URLs, tokens,
+ * and secret-looking assignments are removed, control characters replaced.
+ */
+const stderrTail = (value: string) =>
+  value
+    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, "$1[redacted]@")
+    .replace(
+      /\b(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|glpat-[A-Za-z0-9_-]{16,})/g,
+      "[redacted]",
+    )
+    .replace(/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 [redacted]")
+    .replace(
+      /\b([A-Za-z_]*(?:token|secret|password|passwd|credential|api_?key)[A-Za-z_]*)(\s*[=:]\s*)\S+/gi,
+      "$1$2[redacted]",
+    )
+    .replace(/\p{Cc}/gu, (char) =>
+      char === "\n" || char === "\t" ? char : "?",
+    )
+    .trim()
+    .slice(-STDERR_TAIL_CHARS);
+
+const commandFailed = (result: {
+  readonly exitCode?: number;
+  readonly stderr?: string;
+}) =>
+  new SourceWorkspaceInitializationFailed({
+    ...(result.exitCode === undefined ? {} : { exitCode: result.exitCode }),
+    ...(result.stderr === undefined || result.stderr === ""
+      ? {}
+      : { stderrTail: stderrTail(result.stderr) }),
+  });
+
+/**
+ * A hooks run that failed in dx's own machinery (the source lock, a guest
+ * exec that failed or timed out, the program's state) rather than in the
+ * user's hooks, whose failures are only warnings: Flue retries the run.
+ * An invalid input is dx's bug, and a retry repeats it.
+ */
+const asInfrastructureFailure = (error: SourceWorkspaceInitializationFailed) =>
+  /^invalid-input\b/.test(error.stderrTail ?? "")
+    ? error
+    : new SourceWorkspaceInitializationFailed({
+        ...(error.exitCode === undefined ? {} : { exitCode: error.exitCode }),
+        ...(error.stderrTail === undefined
+          ? {}
+          : { stderrTail: error.stderrTail }),
+        message: markRunFailure({
+          class: "platform",
+          code: "WORKSPACE_SETUP_INTERRUPTED",
+          message:
+            "The workspace's setup was interrupted before your hooks could finish.",
+          retryable: true,
+        }),
+      });
 
 export class SourceWorkspaceHistoryUnavailable extends Schema.TaggedError<SourceWorkspaceHistoryUnavailable>()(
   "SourceWorkspaceHistoryUnavailable",
@@ -310,7 +376,11 @@ const runCommand = (
         throw cause;
       }
     },
-    catch: () => new SourceWorkspaceInitializationFailed(),
+    // The guest exec itself failed: its error stands in for stderr.
+    catch: (cause) =>
+      commandFailed({
+        stderr: cause instanceof Error ? cause.message : String(cause),
+      }),
   });
 
 const run = (
@@ -363,7 +433,7 @@ const requireSuccess = (
   if (result.exitCode === 20) return Effect.fail(new SourceWorkspaceConflict());
   if (result.exitCode === 50)
     return Effect.fail(new SourceWorkspaceHistoryUnavailable());
-  return Effect.fail(new SourceWorkspaceInitializationFailed());
+  return Effect.fail(commandFailed(result));
 };
 
 const installPrograms = (
@@ -445,7 +515,7 @@ const decodeCheckoutState = Effect.fn("decodeCheckoutState")(function* (
       Schema.decodeUnknownSync(CheckoutState)(
         JSON.parse(result.stdout || "{}") as unknown,
       ),
-    catch: () => new SourceWorkspaceInitializationFailed(),
+    catch: () => commandFailed(result),
   });
 });
 
@@ -466,11 +536,11 @@ const requireHooksSuccess = Effect.fn("requireHooksSuccess")(function* (
       Schema.decodeUnknownSync(HooksState)(
         JSON.parse(result.stdout || "{}") as unknown,
       ),
-    catch: () => new SourceWorkspaceInitializationFailed(),
+    catch: () => commandFailed(result),
   });
   if (hooks.status === "conflict") return yield* new SourceWorkspaceConflict();
-  if (hooks.status === "failed")
-    return yield* new SourceWorkspaceInitializationFailed();
+  // The program wrote its failure kind to stderr.
+  if (hooks.status === "failed") return yield* commandFailed(result);
   const failed = hooks.failed ?? (hooks.hook === undefined ? [] : [hooks.hook]);
   if (failed.length > 0)
     sourceControlLogger.warn("Source workspace hooks failed; continuing.", {
@@ -753,6 +823,7 @@ const makeSourceWorkspaceService = (
       );
       stage = "read-checkout-state";
       let prefetchedHooks: typeof HooksState.Type | undefined;
+      let prefetchedHooksStderr = "";
       let checkout: typeof CheckoutState.Type;
       const verifiedOperation = assetVerification.operation;
       if (verifiedOperation === undefined) {
@@ -770,6 +841,7 @@ const makeSourceWorkspaceService = (
         });
         checkout = activation.checkout;
         prefetchedHooks = activation.hooks;
+        prefetchedHooksStderr = verifiedOperation.stderr;
       } else {
         yield* requireSuccess(verifiedOperation);
         checkout = yield* decodeCheckoutState(verifiedOperation);
@@ -851,25 +923,33 @@ const makeSourceWorkspaceService = (
         stage = "run-hooks";
         if (!setupPhasePublished && onPreparationPhase !== undefined)
           yield* onPreparationPhase("running-setup");
-        if (prefetchedHooks === undefined) {
-          const hooks = yield* run(
-            preparation,
-            "hooks",
-            {
-              ...base,
-              DX_RUN_RESUME: options?.runResume === false ? "false" : "true",
-            },
-            HOOKS_TIMEOUT_MS,
-          );
-          yield* requireSuccess(hooks);
-          yield* requireHooksSuccess(threadId, hooks);
-        } else {
-          yield* requireHooksSuccess(threadId, {
-            stdout: JSON.stringify(prefetchedHooks),
-            stderr: "",
-            exitCode: 0,
-          });
-        }
+        const hooksSettled =
+          prefetchedHooks === undefined
+            ? run(
+                preparation,
+                "hooks",
+                {
+                  ...base,
+                  DX_RUN_RESUME:
+                    options?.runResume === false ? "false" : "true",
+                },
+                HOOKS_TIMEOUT_MS,
+              ).pipe(
+                Effect.tap(requireSuccess),
+                Effect.flatMap((hooks) => requireHooksSuccess(threadId, hooks)),
+              )
+            : requireHooksSuccess(threadId, {
+                stdout: JSON.stringify(prefetchedHooks),
+                stderr: prefetchedHooksStderr,
+                exitCode: 0,
+              });
+        yield* hooksSettled.pipe(
+          Effect.mapError((error) =>
+            error instanceof SourceWorkspaceInitializationFailed
+              ? asInfrastructureFailure(error)
+              : error,
+          ),
+        );
         sourceControlLogger.info("Source workspace activated.", {
           event: "source_workspace_activation",
           threadId,
@@ -888,13 +968,25 @@ const makeSourceWorkspaceService = (
       }
       return SOURCE_WORKSPACE_CWD;
     }).pipe(
-      Effect.tapError(() =>
+      Effect.tapError((error) =>
         Effect.sync(() =>
           sourceControlLogger.error("Source workspace activation failed.", {
             event: "source_workspace_activation",
             threadId: unsafeThreadId,
             stage,
             outcome: "error",
+            ...(error instanceof SourceWorkspaceInitializationFailed
+              ? {
+                  error: error._tag,
+                  ...(error.exitCode === undefined
+                    ? {}
+                    : { exitCode: error.exitCode }),
+                  ...(error.stderrTail === undefined
+                    ? {}
+                    : { stderrTail: error.stderrTail }),
+                  retryable: error.message.includes("(dx_failure:platform:"),
+                }
+              : {}),
           }),
         ),
       ),

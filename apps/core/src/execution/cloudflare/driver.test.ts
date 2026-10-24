@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { classifyRunFailure } from "../../runtime/run-failure.js";
 import { cloudflareSandbox, type OrbContainerClient } from "./driver.js";
 
 const client = () =>
@@ -43,5 +44,44 @@ describe("Cloudflare Orb sandbox driver", () => {
     await expect(sandbox.exec("sleep 9", { timeoutMs: 1_000 })).rejects.toThrow(
       "Command timed out after 1000 ms.",
     );
+  });
+
+  it("fails a workspace context read as a retryable platform failure with its reason", async () => {
+    const orb = client();
+    orb.exec.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "node: cannot open /workspace: Input/output error",
+      exitCode: 1,
+      timedOut: false,
+    });
+    const sandbox = cloudflareSandbox(orb, "/workspace");
+    const failed = await sandbox.snapshotWorkspaceContext!("/workspace").then(
+      () => undefined,
+      (error: Error) => classifyRunFailure({ message: error.message }),
+    );
+    expect(failed).toMatchObject({
+      class: "platform",
+      code: "WORKSPACE_CONTEXT_UNAVAILABLE",
+      retryable: true,
+    });
+    expect(failed?.message).toContain("exit 1");
+    expect(failed?.message).toContain("Input/output error");
+
+    orb.exec.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "",
+      exitCode: 124,
+      timedOut: true,
+    });
+    await expect(
+      sandbox.snapshotWorkspaceContext!("/workspace").then(
+        () => undefined,
+        (error: Error) => classifyRunFailure({ message: error.message }),
+      ),
+    ).resolves.toMatchObject({
+      class: "platform",
+      code: "WORKSPACE_CONTEXT_UNAVAILABLE",
+      retryable: true,
+    });
   });
 });

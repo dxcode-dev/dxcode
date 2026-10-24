@@ -24,9 +24,12 @@ import type { Sandbox } from "@flue/runtime";
 import { local } from "@flue/runtime/node";
 import { Redacted, Schema } from "effect";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { classifyRunFailure } from "../runtime/run-failure.js";
 import type { ExecutionEnvironmentSnapshot } from "../settings/environment-variables/execution.js";
 import { withExecutionEnvironment } from "../settings/environment-variables/sandbox.js";
+import * as claudeCodeProvider from "./provider.js";
 import { createClaudeCodeProvider } from "./provider.js";
+import { claudeCodeSandbox } from "./runs.js";
 import { ClaudeCodeStream } from "./stream.js";
 
 /**
@@ -296,6 +299,8 @@ const claudeCode = (
   create: typeof createClaudeCodeProvider,
   sandbox: Sandbox,
   threadId = `thr_claude_code_${crypto.randomUUID()}`,
+  /** The workspace for each model call; `sandbox` when omitted. */
+  workspace?: (threadId: string) => Promise<Sandbox>,
 ) => {
   const credentials: string[] = [];
   // Unique, so a scan for it finds only this run's processes.
@@ -305,7 +310,7 @@ const claudeCode = (
       instanceId: threadId,
       scope: { kind: "prompt", submissionId: `sub-${threadId}` },
     })) as never,
-    sandbox: async () => sandbox,
+    sandbox: workspace ?? (async () => sandbox),
     credential: async (_thread, submissionId) => {
       credentials.push(submissionId);
       return { token, plan: { allowExtraUsage: false } };
@@ -593,10 +598,20 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
     // marker is ever written, and the heartbeat stops at its last value.
     process.kill(-Number(guest.file(`${dir}/pid`)), "SIGKILL");
     guest.write(`${dir}/alive`, "1");
-    expect(await lost).toMatchObject({
+    const failed = await lost;
+    expect(failed).toMatchObject({
       type: "error",
-      error: { errorMessage: "Claude Code stopped responding." },
+      error: {
+        errorMessage: expect.stringContaining(
+          "Claude Code stopped responding.",
+        ),
+      },
     });
+    // A process lost with its workspace is a platform failure Flue retries.
+    expect(
+      failed.type === "error" &&
+        classifyRunFailure({ message: failed.error.errorMessage ?? "" }).class,
+    ).toBe("platform");
 
     // Flue's retry, from a restarted Durable Object, rejoins that attempt.
     await guest.script([
@@ -790,6 +805,260 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
       },
     });
     expect(guest.ops.some(({ path }) => path === chunk(0))).toBe(false);
+  });
+
+  it("starts the next submission fresh after a minute of unreadable status and a replaced sandbox", {
+    timeout: 30_000,
+  }, async () => {
+    const guest = await createGuest();
+    await guest.script([init(), "#wait never"]);
+    // The handle from before the Orb's container was reset: once storage
+    // fails, every operation through it fails, and it never recovers.
+    let outage = false;
+    const STORAGE =
+      "Durable Object storage operation exceeded timeout which caused object to be reset.";
+    const stale = Object.fromEntries(
+      Object.entries(guest.sandbox).map(([name, value]) => [
+        name,
+        typeof value === "function"
+          ? (...args: unknown[]) => {
+              if (!outage) return value(...args);
+              vi.setSystemTime(Date.now() + 5_100);
+              return Promise.reject(new Error(STORAGE));
+            }
+          : value,
+      ]),
+    ) as unknown as Sandbox;
+    let current = stale;
+    const threadId = `thr_claude_code_${crypto.randomUUID()}`;
+    const claude = claudeCode(
+      createClaudeCodeProvider,
+      guest.sandbox,
+      threadId,
+      (thread) => claudeCodeSandbox(thread, async () => current),
+    );
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const first = claude.answer({ messages: [user("Wait for me", 40)] });
+    await waitFor(() => {
+      const [attempt] = runDirectories(guest.ops);
+      return (
+        attempt !== undefined &&
+        guest.file(`${STATE}/runs/${attempt}/alive`) !== undefined
+      );
+    });
+    outage = true;
+    const failed = await first;
+    expect(failed).toMatchObject({
+      type: "error",
+      error: { errorMessage: expect.stringContaining(STORAGE) },
+    });
+    if (failed.type !== "error") throw new Error("Expected an error.");
+    expect(
+      classifyRunFailure({ message: failed.error.errorMessage ?? "" }).class,
+    ).toBe("platform");
+
+    // The container came back on a new handle; the next message is a new
+    // submission, whose start resets the Thread's runtime state.
+    current = guest.sandbox;
+    (
+      claudeCodeProvider as {
+        resetClaudeCodeThreadState?: (threadId: string) => void;
+      }
+    ).resetClaudeCodeThreadState?.(threadId);
+    await guest.script([
+      init("session-2"),
+      ...response("m1", [{ text: "Back." }]),
+      result("Back."),
+    ]);
+    const started = performance.now();
+    const next = await claude.answer({
+      messages: [user("Wait for me", 40), user("Are you there?", 41)],
+    });
+    expect({
+      next,
+      failedWithinASecond:
+        next.type === "error" && performance.now() - started < 1_000,
+    }).toMatchObject({
+      next: {
+        type: "done",
+        message: { content: [{ type: "text", text: "Back." }] },
+      },
+      failedWithinASecond: false,
+    });
+  });
+
+  it("replays a retried turn's own user input, with no retry note, in the resumed session and in a new one", {
+    timeout: 30_000,
+  }, async () => {
+    const guest = await createGuest();
+    await guest.script([
+      init("session-1"),
+      ...response("m1", [
+        { id: "toolu_a", name: "Bash", input: { command: "echo a" } },
+      ]),
+      toolResult("toolu_a", "a"),
+      "#wait fail",
+      line({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        result: "API Error: 500 Internal server error",
+      }),
+    ]);
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    const turn = [user("Fix the parser", 50), user("and add a test", 51)];
+    expect(await claude.answer({ messages: turn })).toMatchObject({
+      type: "done",
+      reason: "toolUse",
+    });
+    const context: Context = {
+      messages: [
+        ...turn,
+        assistant(
+          [
+            {
+              type: "toolCall",
+              id: "toolu_a",
+              name: "bash",
+              arguments: { command: "echo a" },
+            },
+          ],
+          "toolUse",
+        ),
+        bashResult("toolu_a"),
+      ],
+    };
+    // Claude fails only once this call has found its run live.
+    const mark = guest.ops.length;
+    const failing = claude.answer(context);
+    await waitFor(() =>
+      guest.ops
+        .slice(mark)
+        .some(({ op, path }) => op === "exec" && path.includes("echo lost")),
+    );
+    guest.release("fail");
+    expect(await failing).toMatchObject({ type: "error" });
+
+    // Flue retries the turn. Claude's recorded session is gone, so the
+    // resumed CLI exits without naming one, and the adapter starts a new
+    // session.
+    guest.write(`${STATE}/session`, "session-gone");
+    await guest.script([]);
+    await claude.answer(context);
+    const inputs = [...runDirectories(guest.ops)]
+      .sort()
+      .slice(1)
+      .map((name) => guest.file(`${STATE}/runs/${name}/input.jsonl`) ?? "");
+    const content = (input: string) =>
+      (JSON.parse(input) as { message: { content: unknown } }).message.content;
+    expect(inputs).toHaveLength(2);
+    // Resuming the session: the turn's own input, exactly.
+    expect(content(inputs[0] ?? "{}")).toEqual([
+      { type: "text", text: "Fix the parser" },
+      { type: "text", text: "and add a test" },
+    ]);
+    // A new session: the turn's anchoring message.
+    expect(content(inputs[1] ?? "{}")).toEqual([
+      { type: "text", text: "and add a test" },
+    ]);
+    for (const input of inputs) expect(input).not.toMatch(/retry/i);
+  });
+
+  it("settles a run that wrote a successful result after tool use as done when Flue resumes past a failed message", {
+    timeout: 30_000,
+  }, async () => {
+    const guest = await createGuest();
+    await guest.script([
+      init(),
+      ...response("m1", [
+        { id: "toolu_a", name: "Bash", input: { command: "echo a" } },
+      ]),
+      toolResult("toolu_a", "a"),
+      "#wait go",
+      ...response("m2", [{ text: "All done." }]),
+      result("All done."),
+    ]);
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    const turn = [user("Do the work", 60)];
+    expect(await claude.answer({ messages: turn })).toMatchObject({
+      type: "done",
+      reason: "toolUse",
+    });
+    // The next model call failed while Claude kept working. An explicit
+    // resume keeps that failed message in context, rewritten as a stop
+    // (Flue's `resumeFailedAssistant`); it is not one of Claude's segments.
+    const resumed = claude.answer({
+      messages: [
+        ...turn,
+        assistant(
+          [
+            {
+              type: "toolCall",
+              id: "toolu_a",
+              name: "bash",
+              arguments: { command: "echo a" },
+            },
+          ],
+          "toolUse",
+        ),
+        bashResult("toolu_a"),
+        assistant([], "stop"),
+      ],
+    });
+    guest.release("go");
+    expect(await resumed).toMatchObject({
+      type: "done",
+      reason: "stop",
+      message: { content: [{ type: "text", text: "All done." }] },
+    });
+  });
+
+  it("stamps each failure with the class Flue's retry policy reads", {
+    timeout: 60_000,
+  }, async () => {
+    const cases = [
+      {
+        result:
+          'API Error: 403 {"error":{"type":"forbidden","message":"Request not allowed"}}',
+        class: "account",
+      },
+      {
+        result:
+          'Failed to authenticate. API Error: 401 {"type":"error","error":{"type":"authentication_error"}}',
+        class: "account",
+      },
+      {
+        result:
+          'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+        class: "transient",
+      },
+      { result: "API Error: Connection lost mid-response", class: "transient" },
+    ];
+    const seen: Array<{ class: string; stamped: boolean }> = [];
+    for (const [index, { result: text }] of cases.entries()) {
+      const guest = await createGuest();
+      await guest.script([
+        init(),
+        line({
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: true,
+          result: text,
+        }),
+      ]);
+      const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+      const failed = await claude.answer({
+        messages: [user("Go", 70 + index)],
+      });
+      const message = failed.type === "error" ? failed.error.errorMessage : "";
+      seen.push({
+        class: classifyRunFailure({ message: message ?? "" }).class,
+        stamped: /\(dx_failure:/.test(message ?? ""),
+      });
+    }
+    expect(seen).toEqual(
+      cases.map((entry) => ({ class: entry.class, stamped: true })),
+    );
   });
 });
 

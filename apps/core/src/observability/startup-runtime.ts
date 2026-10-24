@@ -11,6 +11,7 @@ import {
   StartupPhaseObservation as StartupPhaseObservationSchema,
   type StartupPhaseOutcome,
   type StartupTraceCorrelation,
+  startupPhaseOrdinal,
 } from "./startup-phase.js";
 import { StartupPhaseRepository } from "./startup-phase-repository.js";
 import { StartupPhaseRepositoryD1 } from "./startup-phase-repository-d1.js";
@@ -52,6 +53,42 @@ const repositoryEffect = <A, E>(
     return yield* effect.pipe(Effect.provide(StartupPhaseRepositoryD1(db)));
   });
 
+/**
+ * What a failed record reports: the persistence operation and the innermost
+ * cause's name and message (D1 names the rejected constraint or trigger).
+ */
+const recordFailure = (error: unknown) => {
+  let operation: string | undefined;
+  let cause = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (
+      operation === undefined &&
+      typeof cause === "object" &&
+      cause !== null &&
+      "operation" in cause &&
+      typeof cause.operation === "string"
+    )
+      operation = cause.operation;
+    const inner =
+      typeof cause === "object" && cause !== null && "cause" in cause
+        ? cause.cause
+        : undefined;
+    if (inner === undefined || inner === null) break;
+    cause = inner;
+  }
+  return {
+    ...(operation === undefined ? {} : { operation }),
+    errorName: (cause instanceof Error ? cause.name : typeof cause).slice(
+      0,
+      100,
+    ),
+    errorMessage: (cause instanceof Error
+      ? cause.message
+      : String(cause)
+    ).slice(0, 500),
+  };
+};
+
 export const recordStartupPhases = async (
   binding: unknown,
   observations: ReadonlyArray<StartupPhaseObservation>,
@@ -65,12 +102,14 @@ export const recordStartupPhases = async (
         ),
       ),
     );
-  } catch {
+  } catch (error) {
     const correlation = observations[0]?.correlation;
     startupObservabilityLogger.warn(
       "Startup phase observation could not be recorded.",
       {
         event: "startup_phase_record_failed",
+        phases: observations.map(({ phase }) => phase),
+        ...recordFailure(error),
         ...(correlation === undefined
           ? {}
           : {
@@ -148,6 +187,8 @@ interface ActiveSubmission {
   readonly submissionId: string;
   readonly correlation: ReturnType<typeof resolveSubmissionCorrelation>;
   delivery: Promise<void>;
+  /** The latest phase ordinal this submission has sent. */
+  latestOrdinal: number;
 }
 
 const activeSubmissions = new Map<string, ActiveSubmission>();
@@ -167,15 +208,20 @@ const enqueueActivePhase = (
   active.delivery = active.delivery.then(async () => {
     const resolved = await active.correlation;
     if (resolved === null) return;
-    await recordStartupPhases(binding, [
-      startupObservation(
-        resolved.correlation,
-        phase,
-        DateTime.toEpochMillis(resolved.startedAt),
-        occurredAt,
-        options,
-      ),
-    ]);
+    const observation = startupObservation(
+      resolved.correlation,
+      phase,
+      DateTime.toEpochMillis(resolved.startedAt),
+      occurredAt,
+      options,
+    );
+    // Startup evidence only moves forward (D1 rejects anything else): a
+    // phase reported after a later one, such as the initial Changes sync
+    // settling after the model request, or a repeat, is not recorded.
+    const ordinal = startupPhaseOrdinal(observation);
+    if (ordinal <= active.latestOrdinal) return;
+    active.latestOrdinal = ordinal;
+    await recordStartupPhases(binding, [observation]);
   });
   return active.delivery;
 };
@@ -202,6 +248,7 @@ export const startSubmissionStartup = (
       submissionId,
     ),
     delivery: Promise.resolve(),
+    latestOrdinal: -1,
   };
   activeSubmissions.set(threadId, active);
   return enqueueActivePhase(bindings.DB, threadId, "flue_running", occurredAt);

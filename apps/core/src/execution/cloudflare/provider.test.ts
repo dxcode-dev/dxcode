@@ -2,6 +2,7 @@ import { ThreadId } from "@dx/domain";
 import { Schema } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecutionContext } from "../../plugins/execution/provider.js";
+import { classifyRunFailure } from "../../runtime/run-failure.js";
 
 const mocks = vi.hoisted(() => ({
   workerEnv: {} as Record<string, unknown>,
@@ -9,7 +10,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("cloudflare:workers", () => ({ env: mocks.workerEnv }));
 
-const { cloudflareExecutionProvider } = await import("./provider.js");
+const { cloudflareExecutionProvider, CLOUDFLARE_OPEN_TIMEOUT_MS } =
+  await import("./provider.js");
 
 const threadId = Schema.decodeUnknownSync(ThreadId)(
   "thr_00000000-0000-4000-8000-0000000000cf",
@@ -271,5 +273,99 @@ describe("Cloudflare Containers Orb provider", () => {
       ),
     ).rejects.toThrow("Thread is not archived.");
     expect(active.stub.pause).not.toHaveBeenCalled();
+  });
+
+  it("replaces a stub whose Durable Object reset and retries an idempotent read", async () => {
+    const row: Row = {
+      provider: "cloudflare",
+      state: "initialized",
+      provider_sandbox_id: "orb-object-id",
+      initialization_attempt_id: null,
+    };
+    const { namespace, stub } = bind(row);
+    const reset = {
+      ...stub,
+      readFile: vi.fn(async () => {
+        throw new Error(
+          "Connection closed: this Durable Object instance is no longer active. Reconnect or retry the request.",
+        );
+      }),
+    };
+    const fresh = {
+      ...stub,
+      readFile: vi.fn(async () => new TextEncoder().encode("contents")),
+    };
+    namespace.get.mockReturnValueOnce(reset).mockReturnValue(fresh);
+    const handle = await cloudflareExecutionProvider.workspace.connect(
+      context,
+      { threadId },
+      { authorize: async () => undefined },
+    );
+    const sandbox = await handle.sandbox("/workspace");
+    await expect(sandbox.readFile("/workspace/a.txt")).resolves.toBe(
+      "contents",
+    );
+    expect(reset.readFile).toHaveBeenCalledOnce();
+    expect(fresh.readFile).toHaveBeenCalledOnce();
+  });
+
+  it("never replays a command whose object reset, and stamps it a platform failure", async () => {
+    const row: Row = {
+      provider: "cloudflare",
+      state: "initialized",
+      provider_sandbox_id: "orb-object-id",
+      initialization_attempt_id: null,
+    };
+    const { stub } = bind(row);
+    stub.exec.mockRejectedValueOnce(
+      new Error("Durable Object storage is no longer accessible."),
+    );
+    const handle = await cloudflareExecutionProvider.workspace.connect(
+      context,
+      { threadId },
+      { authorize: async () => undefined },
+    );
+    const cause = await handle.guest.commands
+      .run("make", { timeoutMs: 1_000 })
+      .catch((error: unknown) => error);
+    expect(stub.exec).toHaveBeenCalledOnce();
+    expect(
+      classifyRunFailure({ message: (cause as Error).message }),
+    ).toMatchObject({ class: "platform", retryable: true });
+  });
+
+  it("bounds an open that never returns with a platform failure, reporting its phases", async () => {
+    vi.useFakeTimers();
+    try {
+      const { stub } = bind(uninitialized());
+      stub.open.mockImplementation(() => new Promise(() => {}));
+      const phases: string[] = [];
+      const options = {
+        authorize: async () => undefined,
+        onPreparationPhase: (phase: string) => {
+          phases.push(phase);
+        },
+      };
+      const opened = cloudflareExecutionProvider.workspace
+        .create(context, { threadId }, options)
+        .then(
+          () => undefined,
+          (cause: unknown) => cause,
+        );
+      await vi.advanceTimersByTimeAsync(CLOUDFLARE_OPEN_TIMEOUT_MS);
+      const cause = await opened;
+      expect(cause).toBeInstanceOf(Error);
+      expect(
+        classifyRunFailure({ message: (cause as Error).message }),
+      ).toMatchObject({
+        class: "platform",
+        code: "WORKSPACE_OPEN_TIMED_OUT",
+        retryable: true,
+      });
+      expect(phases[0]).toBe("starting-machine");
+      expect(phases).toContain("waiting-for-machine");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

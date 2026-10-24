@@ -1,6 +1,10 @@
 import { env } from "cloudflare:workers";
 import { getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
-import { getModelInvocationContext, setProvider } from "@flue/runtime";
+import {
+  configureRetryPolicy,
+  getModelInvocationContext,
+  setProvider,
+} from "@flue/runtime";
 import { getDurableObjectIdentity } from "@flue/runtime/cloudflare";
 import { registerClaudeCodeProvider } from "./claude-code/registration.js";
 import { ExecutionWorkspaces } from "./execution/execution-workspaces.js";
@@ -8,6 +12,7 @@ import type { Bindings } from "./http/types.js";
 import { settingsPersistenceLogger } from "./logging.js";
 import { installContentFreeFlueTracing } from "./observability/flue-tracing.js";
 import { createDxCloudflareModelProvider } from "./runtime/cloudflare-model-provider.js";
+import { classifyRunFailure, runRetryDelayMs } from "./runtime/run-failure.js";
 import { scheduled } from "./scheduled.js";
 import { createDxModelRoutingProvider } from "./settings/model-byok/flue-provider.js";
 
@@ -30,6 +35,20 @@ declare const __DX_CORE_DEV_FIXTURES__: boolean;
 
 // Before the generated entry's body installs Flue's content-bearing default.
 installContentFreeFlueTracing();
+
+// One classifier decides what retries: transient and platform failures retry
+// on dx's schedule without the person noticing; account and internal
+// failures settle at once.
+const retryDelay = (errorMessage: string, attempt: number) =>
+  classifyRunFailure({ message: errorMessage }).retryable
+    ? runRetryDelayMs(attempt)
+    : undefined;
+configureRetryPolicy({
+  modelRetryPolicy: ({ errorMessage, attempt }) =>
+    retryDelay(errorMessage, attempt),
+  submissionRetryPolicy: ({ errorMessage, attempt }) =>
+    retryDelay(errorMessage, attempt),
+});
 
 const bindings = env as Bindings;
 if (

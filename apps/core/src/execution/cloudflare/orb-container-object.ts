@@ -34,10 +34,9 @@ export class OrbContainerObject extends DurableObject {
       image: () => container.images?.[ORB_IMAGE_NAME],
       sandboxId: ctx.id.toString(),
     });
-    if (container.running)
-      void ctx.blockConcurrencyWhile(() =>
-        this.#controller.resumeAfterRestart(),
-      );
+    // Not under `blockConcurrencyWhile`: storage that stalls for minutes
+    // would hold every call, and an over-long block resets the object.
+    void this.#controller.resumeAfterRestart();
   }
 
   open(input: {

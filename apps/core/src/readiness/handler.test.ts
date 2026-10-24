@@ -59,4 +59,16 @@ describe("readiness endpoint", () => {
     );
     expect(JSON.stringify(warn.mock.calls)).not.toContain(TEST_AUTH_SECRET);
   });
+
+  it("logs which deployment identity check failed without its value", async () => {
+    const warn = await expectNotReady(
+      createTestBindings({ DX_DEPLOYMENT_REVISION: "not-a-revision" }),
+      "deployment_identity_configuration",
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "Runtime readiness check failed.",
+      expect.objectContaining({ readinessCheck: "deployment_revision" }),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("not-a-revision");
+  });
 });

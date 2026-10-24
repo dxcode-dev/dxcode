@@ -102,6 +102,47 @@ const normalizeOrigin = (value: string): string => {
   return parsed.origin;
 };
 
+const ERROR_BODY_LIMIT = 2_000;
+const ERROR_BODY_READ_MS = 5_000;
+
+/**
+ * A bounded prefix of an error body, read for at most a few seconds, with the
+ * access token redacted in both plain and JSON-escaped spellings.
+ */
+const errorBody = async (response: Response, token: string | undefined) => {
+  const secrets = token
+    ? [token, JSON.stringify(token).slice(1, -1)].sort(
+        (left, right) => right.length - left.length,
+      )
+    : [];
+  const limit = ERROR_BODY_LIMIT + (secrets[0]?.length ?? 0);
+  const reader = response.body?.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), ERROR_BODY_READ_MS);
+  });
+  try {
+    while (reader !== undefined && text.length < limit) {
+      const chunk = await Promise.race([reader.read(), deadline]);
+      if (chunk === undefined || chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+  } catch {
+    // Keep whatever arrived before the body failed.
+  } finally {
+    clearTimeout(timer);
+    void reader?.cancel().catch(() => undefined);
+  }
+  return secrets
+    .reduce(
+      (redacted, secret) => redacted.replaceAll(secret, "[REDACTED]"),
+      text,
+    )
+    .slice(0, ERROR_BODY_LIMIT);
+};
+
 export const parseActiveModels = (
   raw: unknown,
   catalog = GITHUB_COPILOT_CATALOG,
@@ -198,18 +239,28 @@ export const createGitHubCopilotProvider = (options: ProviderOptions) => {
         signal: controller.signal,
         redirect: "manual",
       });
+      if (response.status >= 300 && response.status < 400)
+        throw new CopilotError({
+          code: "REDIRECT_BLOCKED",
+          status: response.status,
+        });
       if (!response.ok)
         throw new CopilotError({
           code:
-            response.status >= 300 && response.status < 400
-              ? "REDIRECT_BLOCKED"
-              : response.status === 401
-                ? "UNAUTHORIZED"
-                : response.status === 403
-                  ? "FORBIDDEN"
-                  : "UPSTREAM_REJECTED",
+            response.status === 401
+              ? "UNAUTHORIZED"
+              : response.status === 403
+                ? "FORBIDDEN"
+                : "UPSTREAM_REJECTED",
           status: response.status,
-        });
+        }).withUpstreamBody(
+          await errorBody(
+            response,
+            new Headers(init.headers)
+              .get("authorization")
+              ?.replace(/^Bearer /, ""),
+          ),
+        );
       return {
         response,
         signal: controller.signal,

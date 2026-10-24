@@ -1,12 +1,14 @@
 import { env, evictDurableObject, runInDurableObject } from "cloudflare:test";
-import { createModels } from "@earendil-works/pi-ai";
+import { createModels, isContextOverflow } from "@earendil-works/pi-ai";
 import { Effect } from "effect";
+import { HttpResponse, http } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { settingsPersistenceLogger } from "../../src/logging.js";
 import { loadConfigEncryptionKeyring } from "../../src/settings/config-encryption.js";
 import { createDxModelRoutingProvider } from "../../src/settings/model-byok/flue-provider.js";
 import {
   ByokCredentialCoordinatorObject,
+  modelRoutingDeadline,
   upstreamDns,
   upstreamFetch,
 } from "../../src/settings/model-byok/invocation.js";
@@ -19,6 +21,7 @@ import { loadRoutableConnections } from "../../src/settings/model-routing/connec
 import { connectionApiKey } from "../../src/settings/model-routing/credential-access.js";
 import { encryptModelCredential } from "../../src/settings/model-routing/model-credential-encryption.js";
 import type { SubmissionRoute } from "../../src/settings/model-routing/submission.js";
+import { GITHUB_COPILOT_CATALOG } from "../../src/settings/model-subscriptions/github-copilot/provider.js";
 import { PersonalModelSubscriptionRepositoryD1 } from "../../src/settings/model-subscriptions/repository-d1.js";
 import { PersonalModelSubscriptionService } from "../../src/settings/model-subscriptions/service.js";
 import {
@@ -26,6 +29,7 @@ import {
   storeSubmissionUsageAttribution,
 } from "../../src/settings/usage/submission-attribution.js";
 import { runDxTitleAgent } from "../../src/threads/dx-title-agent.js";
+import { network } from "./network-boundary.js";
 
 /**
  * Coordinator DO transport tests. DOs run in the same isolate as the test
@@ -185,6 +189,16 @@ const stubFetch = (
     responder(new Request(input as never, init as never))) as never;
 };
 
+const markHealthy = () =>
+  env.DB.prepare(
+    "UPDATE model_connection SET health_state = 'healthy', health_code = 'CONNECTED' WHERE id = ?",
+  )
+    .bind(CONNECTION)
+    .run();
+
+/** Lets any background health write land before asserting it did not. */
+const settled = () => new Promise((resolve) => setTimeout(resolve, 300));
+
 const connectionHealth = async () =>
   env.DB.prepare(
     "SELECT health_state, health_code FROM model_connection WHERE id = ?",
@@ -245,6 +259,74 @@ describe("ByokCredentialCoordinatorObject", () => {
       nearExpiry + 23 * 60 * 60 * 1_000,
     );
     expect(renewed?.credential).toBeDefined();
+  });
+
+  it("answers another submission while D1 stalls one /resolve, then fails the stalled one as retryable", async () => {
+    await seed();
+    const instanceEnv = await runInDurableObject(
+      stub(),
+      (instance) => (instance as unknown as { env: { DB: D1Database } }).env,
+    );
+    const db = instanceEnv.DB;
+    let release: () => void = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const bound = <T extends object>(target: T, key: PropertyKey) => {
+      const value = Reflect.get(target, key);
+      return typeof value === "function" ? value.bind(target) : value;
+    };
+    // Every query of the next statement prepared waits until released.
+    const stalled = (statement: D1PreparedStatement): D1PreparedStatement =>
+      new Proxy(statement, {
+        get: (target, key) =>
+          key === "bind"
+            ? (...values: unknown[]) => stalled(target.bind(...values))
+            : ["first", "all", "run", "raw"].includes(String(key))
+              ? async (...args: unknown[]) => {
+                  await released;
+                  return bound(target, key)(...args);
+                }
+              : bound(target, key),
+      });
+    let stallNext = true;
+    instanceEnv.DB = new Proxy(db, {
+      get: (target, key) =>
+        key === "prepare"
+          ? (query: string) => {
+              const statement = target.prepare(query);
+              if (!stallNext) return statement;
+              stallNext = false;
+              return stalled(statement);
+            }
+          : bound(target, key),
+    });
+    modelRoutingDeadline.ms = 1_000;
+    try {
+      const stalledResolve = prepare("sub-stalled");
+      await vi.waitFor(() => expect(stallNext).toBe(false));
+      const other = await Promise.race([
+        prepare("sub-other"),
+        new Promise<string>((resolve) =>
+          setTimeout(() => resolve("no answer within 3 s"), 3_000),
+        ),
+      ]);
+      expect(other).toBeInstanceOf(Response);
+      expect((other as Response).status).toBe(200);
+      const failed = await stalledResolve;
+      expect(failed.status).toBe(502);
+      expect(await failed.json()).toEqual({
+        code: "MODEL_ROUTING_TIMEOUT",
+        class: "platform",
+        message: expect.any(String),
+      });
+    } finally {
+      release();
+      instanceEnv.DB = db;
+      modelRoutingDeadline.ms = 20_000;
+    }
+    // The object was not reset: its pins survive and it keeps answering.
+    expect((await prepare("sub-1", true)).status).toBe(200);
   });
 
   it("retains safe immutable attribution after the next submission and prunes expired entries in batches", async () => {
@@ -384,24 +466,33 @@ describe("ByokCredentialCoordinatorObject", () => {
     );
   });
 
-  it("rejects a model removed by a Copilot entitlement refresh before resolving access", async () => {
-    await seed();
-    const row = {
-      status: "connected",
-      modelIds: ["astra-litellm"],
-      refreshAfter: now,
-    };
-    const find = vi
-      .spyOn(PersonalModelSubscriptionRepositoryD1.prototype, "find")
-      .mockResolvedValueOnce(row as never)
-      .mockResolvedValueOnce({ ...row, modelIds: [] } as never);
+  const COPILOT_MODEL = GITHUB_COPILOT_CATALOG.find(
+    ({ protocol }) => protocol === "anthropic-messages",
+  );
+  const COPILOT_ORIGIN = "https://api.githubcopilot.com";
+
+  /** Runs one `/proxy` call on the seeded route turned into a Copilot pin. */
+  const callCopilotProxy = async (rows: ReadonlyArray<unknown>) => {
+    if (COPILOT_MODEL === undefined) throw new Error("No Copilot model");
+    const find = vi.spyOn(
+      PersonalModelSubscriptionRepositoryD1.prototype,
+      "find",
+    );
+    for (const row of rows) find.mockResolvedValueOnce(row as never);
     const refresh = vi
       .spyOn(PersonalModelSubscriptionService.prototype, "refresh")
       .mockResolvedValue(undefined as never);
-    const access = vi.spyOn(
+    vi.spyOn(
       PersonalModelSubscriptionService.prototype,
       "resolveAccess",
-    );
+    ).mockResolvedValue({
+      access: {
+        accessToken: "copilot-access-secret",
+        expiresAt: Date.now() + 60 * 60_000,
+        apiOrigin: COPILOT_ORIGIN,
+      },
+      credentialRevision: 1,
+    });
     const response = await runInDurableObject(
       stub(),
       async (_instance, state) => {
@@ -411,6 +502,7 @@ describe("ByokCredentialCoordinatorObject", () => {
         if (pin === undefined) throw new Error("Expected seeded route");
         await state.storage.put("submission-route:sub-1", {
           ...pin,
+          upstreamModel: COPILOT_MODEL.id,
           connection: { ...pin.connection, kind: "subscription" },
         });
         const coordinator = new ByokCredentialCoordinatorObject(state, {
@@ -427,13 +519,91 @@ describe("ByokCredentialCoordinatorObject", () => {
         );
       },
     );
-    expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({
-      code: "SUBSCRIPTION_NOT_CONNECTED",
-    });
-    expect(find).toHaveBeenCalledTimes(2);
+    return { response, find, refresh };
+  };
+
+  const copilotRow = (
+    modelIds: ReadonlyArray<string>,
+    refreshAfter: string,
+  ) => ({
+    status: "connected",
+    modelIds,
+    catalogRevision: "test:catalog",
+    observedAt: now,
+    refreshAfter,
+  });
+
+  it("keeps serving a pinned Copilot submission when an entitlement refresh drops its model", async () => {
+    await seed();
+    if (COPILOT_MODEL === undefined) throw new Error("No Copilot model");
+    const upstream: string[] = [];
+    network.use(
+      http.post(
+        `${COPILOT_ORIGIN}${COPILOT_MODEL.endpoint}`,
+        async ({ request }) => {
+          upstream.push(((await request.json()) as { model: string }).model);
+          return new HttpResponse("event: message_stop\ndata: {}\n\n", {
+            headers: { "content-type": "text/event-stream" },
+          });
+        },
+      ),
+    );
+    const warn = vi.spyOn(settingsPersistenceLogger, "warn");
+    const { response, refresh } = await callCopilotProxy([
+      copilotRow([COPILOT_MODEL.id], now),
+      // The hourly refresh came back without any Claude model.
+      copilotRow([], new Date(Date.now() + 60 * 60_000).toISOString()),
+    ]);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("message_stop");
     expect(refresh).toHaveBeenCalledOnce();
-    expect(access).not.toHaveBeenCalled();
+    expect(upstream).toEqual([COPILOT_MODEL.id]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        event: "copilot_entitlement_refresh_dropped_model",
+        threadId: THREAD,
+        submissionId: "sub-1",
+        model: COPILOT_MODEL.id,
+      }),
+    );
+  });
+
+  it("classifies a Copilot rejection from its status and logs its redacted body", async () => {
+    await seed();
+    if (COPILOT_MODEL === undefined) throw new Error("No Copilot model");
+    const rejection = JSON.stringify({
+      error: { message: "token copilot-access-secret may not use this model" },
+    });
+    network.use(
+      http.post(
+        `${COPILOT_ORIGIN}${COPILOT_MODEL.endpoint}`,
+        () => new HttpResponse(rejection, { status: 403 }),
+      ),
+    );
+    const warn = vi.spyOn(settingsPersistenceLogger, "warn");
+    const { response } = await callCopilotProxy([
+      copilotRow(
+        [COPILOT_MODEL.id],
+        new Date(Date.now() + 60 * 60_000).toISOString(),
+      ),
+    ]);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      code: "PROVIDER_AUTHENTICATION_FAILED",
+      class: "account",
+      upstreamStatus: 403,
+      message:
+        "The model provider rejected this connection's credentials. Reconnect it in Settings, then retry.",
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "Model provider rejected the request.",
+      expect.objectContaining({
+        event: "model_upstream_rejected",
+        status: 403,
+        body: rejection.replace("copilot-access-secret", "[REDACTED]"),
+      }),
+    );
   });
 
   it("ignores reserved persisted headers before transport", async () => {
@@ -492,8 +662,8 @@ describe("ByokCredentialCoordinatorObject", () => {
       "https://dx-byok.invalid/proxy",
       proxyInit(proxyEnvelope()),
     );
-    expect(response.status).toBe(403);
-    await response.text();
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ code: "ENDPOINT_NOT_ALLOWED" });
     expect(transport).not.toHaveBeenCalled();
   });
 
@@ -625,20 +795,172 @@ describe("ByokCredentialCoordinatorObject", () => {
     });
   });
 
-  it("marks a genuine upstream network failure unhealthy", async () => {
+  it("reports one upstream network failure as retryable without changing health", async () => {
     await seed();
+    await markHealthy();
     stubFetch(async () => {
       throw new TypeError("network failed");
     });
     const response = await callProxy(proxyEnvelope());
     expect(response.status).toBe(502);
-    expect(await response.json()).toEqual({ code: "UPSTREAM_UNREACHABLE" });
-    await vi.waitFor(async () => {
+    expect(await response.json()).toEqual({
+      code: "UPSTREAM_UNREACHABLE",
+      class: "transient",
+      message: "The model provider could not be reached.",
+    });
+    await settled();
+    expect(await connectionHealth()).toMatchObject({
+      health_state: "healthy",
+      health_code: "CONNECTED",
+    });
+  });
+
+  it("stops a LiteLLM budget 429 as an account failure, marks the connection unhealthy, and heals on success", async () => {
+    await seed();
+    await markHealthy();
+    const budget = JSON.stringify({
+      message:
+        "Budget has been exceeded! Key=sk-litellm-real Current cost: 1000.0, Max budget: 1000.0",
+      type: "budget_exceeded",
+      param: null,
+      code: "429",
+    });
+    const calls = vi.fn(
+      async () =>
+        new Response(budget, {
+          status: 429,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    stubFetch(calls);
+    const warn = vi.spyOn(settingsPersistenceLogger, "warn");
+    const response = await callProxy(proxyEnvelope());
+    // 400 is the transport's "do not retry".
+    expect(response.status).toBe(400);
+    const text = await response.text();
+    expect(JSON.parse(text)).toEqual({
+      code: "PROVIDER_BUDGET_EXCEEDED",
+      class: "account",
+      upstreamStatus: 429,
+      message:
+        "The budget on this model connection is used up. Raise its budget or choose another model, then retry.",
+    });
+    expect(text).not.toContain("budget_exceeded");
+    expect(text).not.toContain("sk-litellm-real");
+    expect(calls).toHaveBeenCalledOnce();
+    await vi.waitFor(async () =>
       expect(await connectionHealth()).toMatchObject({
         health_state: "unhealthy",
-        health_code: "NETWORK_ERROR",
-      });
+        health_code: "PROVIDER_BUDGET_EXCEEDED",
+      }),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "Model provider rejected the request.",
+      expect.objectContaining({
+        event: "model_upstream_rejected",
+        status: 429,
+        body: budget.replace("sk-litellm-real", "[REDACTED]"),
+      }),
+    );
+
+    stubFetch(async () => Response.json({ ok: true }));
+    expect((await callProxy(proxyEnvelope())).status).toBe(200);
+    await vi.waitFor(async () =>
+      expect(await connectionHealth()).toMatchObject({
+        health_state: "healthy",
+        health_code: "CONNECTED",
+      }),
+    );
+  });
+
+  it("reports one Cloudflare 520 as retryable without changing health", async () => {
+    await seed();
+    await markHealthy();
+    stubFetch(async () => new Response("error code: 520", { status: 520 }));
+    const response = await callProxy(proxyEnvelope());
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      code: "PROVIDER_UNAVAILABLE",
+      class: "transient",
+      upstreamStatus: 520,
+      message: "The model provider is temporarily unavailable.",
     });
+    await settled();
+    expect(await connectionHealth()).toMatchObject({
+      health_state: "healthy",
+      health_code: "CONNECTED",
+    });
+  });
+
+  it("hands Flue a stamped account failure for a budget 429 after one upstream call", async () => {
+    await seed();
+    const { provider, options } = createDxModelRoutingProvider("openai", {
+      namespace: env.BYOK_CREDENTIAL_COORDINATOR,
+      identity: () => ({ name: THREAD }) as never,
+      invocation: () =>
+        ({ scope: { kind: "prompt", submissionId: "sub-1" } }) as never,
+    });
+    const model = await options.resolveModel!(
+      { providerId: "openai", modelId: "gpt-6-astra" },
+      {
+        instanceId: THREAD,
+        agentName: "dx-agent",
+        recovery: false,
+        scope: { kind: "prompt", submissionId: "sub-1" },
+        signal: new AbortController().signal,
+      },
+    );
+    if (!model) throw new Error("Missing model");
+    const calls = vi.fn(async () =>
+      Response.json(
+        {
+          message: "Budget has been exceeded! Max budget: 1000.0",
+          type: "budget_exceeded",
+        },
+        { status: 429 },
+      ),
+    );
+    stubFetch(calls);
+    const result = await provider
+      .streamSimple(
+        model,
+        { messages: [{ role: "user", content: "test", timestamp: 0 }] },
+        {},
+      )
+      .result();
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe(
+      "The budget on this model connection is used up. Raise its budget or choose another model, then retry. (dx_failure:account:PROVIDER_BUDGET_EXCEEDED)",
+    );
+    expect(calls).toHaveBeenCalledOnce();
+    // The first test to load the OpenAI adapter pays its cold import.
+  }, 15_000);
+
+  it("keeps a context overflow recognizable after classifying it", async () => {
+    await seed();
+    stubFetch(async () =>
+      Response.json(
+        {
+          error: {
+            message:
+              "This model's maximum context length is 131072 tokens. However, you requested about 140000 tokens.",
+            type: "invalid_request_error",
+          },
+        },
+        { status: 400 },
+      ),
+    );
+    const response = await callProxy(proxyEnvelope());
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { class: string; message: string };
+    expect(body.class).toBe("internal");
+    expect(body.message).not.toContain("{");
+    expect(
+      isContextOverflow({
+        stopReason: "error",
+        errorMessage: body.message,
+      } as never),
+    ).toBe(true);
   });
 
   it("streams the upstream response back", async () => {
@@ -655,7 +977,7 @@ describe("ByokCredentialCoordinatorObject", () => {
     expect(await response.text()).toContain("[DONE]");
   });
 
-  it("logs a provider rejection body without the credential and forwards it unchanged", async () => {
+  it("logs a provider rejection body without the credential and answers in plain text", async () => {
     await seed();
     const rejection = JSON.stringify({
       type: "error",
@@ -675,7 +997,13 @@ describe("ByokCredentialCoordinatorObject", () => {
     const warn = vi.spyOn(settingsPersistenceLogger, "warn");
     const response = await callProxy(proxyEnvelope());
     expect(response.status).toBe(400);
-    expect(await response.text()).toBe(rejection);
+    expect(await response.json()).toEqual({
+      code: "PROVIDER_REJECTED_REQUEST",
+      class: "internal",
+      upstreamStatus: 400,
+      message:
+        "The model provider rejected the request (HTTP 400): messages.4.content.0.tool_result: content cannot be empty if `is_error` is true (key [REDACTED])",
+    });
     await vi.waitFor(() =>
       expect(warn).toHaveBeenCalledWith(
         "Model provider rejected the request.",
@@ -702,7 +1030,11 @@ describe("ByokCredentialCoordinatorObject", () => {
     stubFetch(async () => new Response(rejection, { status: 401 }));
     const warn = vi.spyOn(settingsPersistenceLogger, "warn");
     const response = await callProxy(proxyEnvelope());
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      class: "account",
+      upstreamStatus: 401,
+    });
     await vi.waitFor(() =>
       expect(warn).toHaveBeenCalledWith(
         "Model provider rejected the request.",
@@ -719,7 +1051,11 @@ describe("ByokCredentialCoordinatorObject", () => {
     stubFetch(async () => new Response(rejection, { status: 401 }));
     const warn = vi.spyOn(settingsPersistenceLogger, "warn");
     const response = await callProxy(proxyEnvelope());
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      class: "account",
+      upstreamStatus: 401,
+    });
     await vi.waitFor(() =>
       expect(warn).toHaveBeenCalledWith(
         "Model provider rejected the request.",
@@ -738,8 +1074,14 @@ describe("ByokCredentialCoordinatorObject", () => {
     stubFetch(async () => new Response(rejection, { status: 403 }));
     const warn = vi.spyOn(settingsPersistenceLogger, "warn");
     const response = await callProxy(proxyEnvelope());
-    expect(response.status).toBe(403);
-    expect(await response.text()).toBe(rejection);
+    expect(response.status).toBe(400);
+    const text = await response.text();
+    expect(text).not.toMatch(/tenant-1|sk-litellm-real/);
+    expect(JSON.parse(text)).toMatchObject({
+      code: "PROVIDER_AUTHENTICATION_FAILED",
+      class: "account",
+      upstreamStatus: 403,
+    });
     await vi.waitFor(() =>
       expect(warn).toHaveBeenCalledWith(
         "Model provider rejected the request.",
@@ -750,7 +1092,7 @@ describe("ByokCredentialCoordinatorObject", () => {
     );
   });
 
-  it("forwards an endless provider rejection while logging a bounded prefix", async () => {
+  it("answers an endless provider rejection while logging a bounded prefix", async () => {
     await seed();
     const chunk = new TextEncoder().encode("x".repeat(1_024));
     stubFetch(
@@ -767,10 +1109,11 @@ describe("ByokCredentialCoordinatorObject", () => {
       "https://coordinator/proxy",
       proxyInit(proxyEnvelope()),
     );
-    expect(response.status).toBe(413);
-    const reader = response.body?.getReader();
-    expect((await reader?.read())?.done).toBe(false);
-    await reader?.cancel();
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      class: "internal",
+      upstreamStatus: 413,
+    });
     await vi.waitFor(() =>
       expect(warn).toHaveBeenCalledWith(
         "Model provider rejected the request.",
@@ -1258,7 +1601,9 @@ describe("ByokCredentialCoordinatorObject", () => {
       )
       .result();
     expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("503");
+    expect(result.errorMessage).toBe(
+      "The model provider is temporarily unavailable. (dx_failure:transient:PROVIDER_UNAVAILABLE)",
+    );
     expect(calls).toHaveBeenCalledOnce();
   });
 });
@@ -1446,7 +1791,7 @@ describe("ByokCredentialCoordinatorObject /complete", () => {
     }
   });
 
-  it("reports an upstream failure without retrying", async () => {
+  it("reports a classified upstream failure without retrying", async () => {
     await seed();
     const calls = vi.fn(async () =>
       Response.json({ error: { message: "Unavailable" } }, { status: 503 }),
@@ -1457,7 +1802,10 @@ describe("ByokCredentialCoordinatorObject /complete", () => {
 
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toEqual({
-      code: "COMPLETION_FAILED",
+      code: "PROVIDER_UNAVAILABLE",
+      class: "transient",
+      upstreamStatus: 503,
+      message: "The model provider is temporarily unavailable.",
     });
     expect(calls).toHaveBeenCalledOnce();
   });

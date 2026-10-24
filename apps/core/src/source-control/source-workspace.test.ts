@@ -10,6 +10,8 @@ import {
   type WorkspacePreparation,
   workspacePreparationFor,
 } from "../execution/workspace-preparation.js";
+import { sourceControlLogger } from "../logging.js";
+import { classifyRunFailure } from "../runtime/run-failure.js";
 import { SourceRuntimeBroker } from "./runtime.js";
 import {
   SCRATCH_WORKSPACE_CWD,
@@ -80,6 +82,11 @@ const makeSandbox = (
     readonly rejectedAssetVerification?: boolean;
     readonly shallow?: boolean;
     readonly fullHistoryNeeded?: boolean;
+    readonly hooksResult?: {
+      readonly stdout: string;
+      readonly stderr: string;
+      readonly exitCode: number;
+    };
   },
 ) => {
   const calls: Array<{
@@ -224,6 +231,8 @@ const makeSandbox = (
             stderr: "",
             exitCode: input?.actionExitCodes?.[action] ?? 0,
           };
+        if (action === "hooks" && input?.hooksResult !== undefined)
+          return input.hooksResult;
         if (action === "hooks") {
           const exitCode = input?.actionExitCodes?.[action] ?? 0;
           return {
@@ -625,6 +634,47 @@ describe("SourceWorkspaceService", () => {
         activate(fake.preparation, serviceLayer({ source: snapshot })),
       ).resolves.toBe(SOURCE_WORKSPACE_CWD);
       expect(fake.calls).toHaveLength(1);
+    }
+  });
+
+  it("logs the exit code and a redacted stderr tail when the hooks program fails, as a retryable platform failure", async () => {
+    const logged = vi
+      .spyOn(sourceControlLogger, "error")
+      .mockImplementation(() => {});
+    try {
+      const fake = makeSandbox([10], {
+        hooksResult: {
+          stdout: "",
+          stderr: `${"x".repeat(5_000)}\nfatal: https://x-access-token:ghs_abcdefghijklmnopqrstuvwxyz0123456789@github.com/owner/repository.git\nflock: failed to get lock`,
+          exitCode: 1,
+        },
+      });
+      const cause = await activate(
+        fake.preparation,
+        serviceLayer({ source: snapshot }),
+      ).catch((error: unknown) => error);
+      expect(cause).toMatchObject({
+        _tag: "SourceWorkspaceInitializationFailed",
+      });
+      expect(
+        classifyRunFailure({ message: (cause as Error).message }),
+      ).toMatchObject({ class: "platform", retryable: true });
+      const calls = logged.mock.calls as unknown as ReadonlyArray<
+        readonly [string, Record<string, unknown>]
+      >;
+      const activation = calls.find(
+        ([message]) => message === "Source workspace activation failed.",
+      )?.[1];
+      expect(activation).toMatchObject({
+        stage: "run-hooks",
+        exitCode: 1,
+      });
+      const tail = String(activation?.stderrTail);
+      expect(tail).toContain("flock: failed to get lock");
+      expect(tail).not.toContain("ghs_abcdefghijklmnopqrstuvwxyz0123456789");
+      expect(tail.length).toBeLessThanOrEqual(2_000);
+    } finally {
+      logged.mockRestore();
     }
   });
 

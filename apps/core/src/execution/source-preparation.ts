@@ -236,10 +236,11 @@ export const ensureGithubCliWrapper = async (
           readonly envs: Record<string, string>;
           readonly timeoutMs: number;
         },
-      ) => Promise<{ readonly exitCode?: number }>;
+      ) => Promise<{ readonly exitCode?: number; readonly stderr?: string }>;
     };
   },
 ) => {
+  let failure: { readonly exitCode: number; readonly stderrTail: string };
   try {
     const connected = await db
       .prepare(
@@ -260,8 +261,12 @@ export const ensureGithubCliWrapper = async (
         timeoutMs: 10_000,
       },
     );
-    if ((result.exitCode ?? 0) !== 0)
-      throw new Error("GitHub CLI wrapper installation failed.");
+    if ((result.exitCode ?? 0) === 0) return;
+    // A provider that reports a failed exit instead of rejecting.
+    failure = {
+      exitCode: result.exitCode ?? 0,
+      stderrTail: (result.stderr ?? "").trimEnd().slice(-500),
+    };
   } catch (error) {
     executionWorkspaceLogger.warn("GitHub CLI wrapper installation failed.", {
       event: "github_cli_wrapper",
@@ -271,7 +276,13 @@ export const ensureGithubCliWrapper = async (
         1_000,
       ),
     });
+    return;
   }
+  executionWorkspaceLogger.warn("GitHub CLI wrapper installation failed.", {
+    event: "github_cli_wrapper",
+    threadId,
+    ...failure,
+  });
 };
 
 export const ADDITIONAL_REPOSITORIES_DIRECTORY = "/home/user/workspace/repos";

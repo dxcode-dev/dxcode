@@ -18,6 +18,7 @@ import type {
   ExecutionActivation,
   ExecutionContext,
   ExecutionProvider,
+  ExecutionWorkspaceCreateOptions,
   ExecutionWorkspaceHandle,
   ExecutionWorkspaceResidency,
 } from "../plugins/execution/provider.js";
@@ -43,6 +44,10 @@ import {
   startThreadDaemonActivation,
 } from "../threads/daemon-client.js";
 import { createWorkspaceActivity, type WorkspaceActivity } from "./activity.js";
+import type {
+  CloudflareOpenPhase,
+  CloudflareOpenPhaseReporter,
+} from "./cloudflare/provider.js";
 import {
   activateSourceWorkspace,
   cloneAdditionalRepositories,
@@ -88,6 +93,11 @@ const sourcePreparationStatus = {
   "cloning-repository": "Cloning repository…",
   "running-setup": "Setting up machine…",
 } satisfies Record<SourceWorkspacePreparationPhase, string>;
+
+const openPreparationStatus = {
+  "starting-machine": "Starting machine…",
+  "waiting-for-machine": "Still starting machine…",
+} satisfies Record<CloudflareOpenPhase, string>;
 
 const reportWorkspacePreparation = async (
   bindings: Bindings,
@@ -406,27 +416,38 @@ export const makeExecutionActivation =
               "execution.activation.workspace",
               "phase",
               { "dx.operation": "create" },
-              () =>
-                provider.workspace.create(
+              () => {
+                const options: ExecutionWorkspaceCreateOptions &
+                  CloudflareOpenPhaseReporter = {
+                  authorize,
+                  // A provider that waits on a container start says so;
+                  // only a first preparation has a status line to show it.
+                  ...(needsFirstReadiness
+                    ? {
+                        onPreparationPhase: (phase: CloudflareOpenPhase) =>
+                          reportPreparation(openPreparationStatus[phase]),
+                      }
+                    : {}),
+                  observeResidency: (observed) => {
+                    residency.value = observed;
+                    if (observed === "paused" && !needsFirstReadiness) {
+                      wakeStatusPublished = true;
+                      publish(() =>
+                        publishRealtimeWorkspaceStatus(
+                          bindings,
+                          threadId,
+                          "waking",
+                        ),
+                      );
+                    }
+                  },
+                };
+                return provider.workspace.create(
                   context,
                   { threadId },
-                  {
-                    authorize,
-                    observeResidency: (observed) => {
-                      residency.value = observed;
-                      if (observed === "paused" && !needsFirstReadiness) {
-                        wakeStatusPublished = true;
-                        publish(() =>
-                          publishRealtimeWorkspaceStatus(
-                            bindings,
-                            threadId,
-                            "waking",
-                          ),
-                        );
-                      }
-                    },
-                  },
-                ),
+                  options,
+                );
+              },
             );
         void recordActiveSubmissionPhase(bindings, id, "workspace_resolved");
         if (needsFirstReadiness) reportPreparation("Preparing source…");

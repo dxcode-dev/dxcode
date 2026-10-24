@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { classifyRunFailure } from "../../runtime/run-failure.js";
 import {
   ORB_HEARTBEAT_MS,
   ORB_SNAPSHOT_REFRESH_MS,
@@ -7,6 +8,17 @@ import {
   type OrbContainerStartOptions,
   type OrbContainerStorage,
 } from "./orb-container.js";
+
+vi.mock("cloudflare:workers", () => ({
+  DurableObject: class {
+    constructor(
+      readonly ctx: unknown,
+      readonly env: unknown,
+    ) {}
+  },
+}));
+
+const { OrbContainerObject } = await import("./orb-container-object.js");
 
 const encoder = new TextEncoder();
 
@@ -414,5 +426,92 @@ describe("Orb container object", () => {
       status: "paused",
     });
     expect(orb.storage.alarm()).toBe(orb.now() + ORB_SNAPSHOT_REFRESH_MS);
+  });
+
+  it("answers status at once while a restarted object's first storage read stalls 35 s", async () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = fakeContainer();
+      container.running = true;
+      const storage = fakeStorage();
+      await storage.put("workspace", {
+        version: 1,
+        instance: "standard-2",
+        createdAt: 0,
+        status: "active",
+        idleDeadline: Date.now() + 300_000,
+      });
+      let reads = 0;
+      const stalling: OrbContainerStorage = {
+        ...storage,
+        get: <T>(key: string) => {
+          reads += 1;
+          if (reads > 1) return storage.get<T>(key);
+          return new Promise<T | undefined>((resolve) =>
+            setTimeout(() => resolve(storage.get<T>(key)), 35_000),
+          );
+        },
+      };
+      // The runtime's input gate: no call reaches the object while a
+      // `blockConcurrencyWhile` callback runs.
+      let gate: Promise<unknown> = Promise.resolve();
+      const ctx = {
+        id: { toString: () => "b".repeat(64) },
+        storage: stalling,
+        container,
+        blockConcurrencyWhile: <A>(callback: () => Promise<A>) => {
+          const run = callback();
+          gate = run.catch(() => undefined);
+          return run;
+        },
+      };
+      const object = new OrbContainerObject(ctx as never, {});
+      const deliver = <A>(call: () => Promise<A>) => gate.then(call);
+      let answered: unknown;
+      void deliver(() => object.status()).then((value) => {
+        answered = value;
+      });
+      let deadlineSet = false;
+      void deliver(() => object.setIdleDeadline(60_000)).then(() => {
+        deadlineSet = true;
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(answered).toEqual({ running: true, status: "active" });
+      // Operations ordered after the restart wait for it, but only so long.
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(deadlineSet).toBe(true);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(container.setInactivityTimeout).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails a start whose readiness probe hangs at the bound, as a platform failure", async () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = fakeContainer();
+      container.exec.mockImplementation(() => new Promise(() => {}));
+      const controller = new OrbContainerController({
+        container,
+        storage: fakeStorage(),
+        image: () => "registry.cloudflare.com/account/dx-orb@sha256:abc",
+        sandboxId: "c".repeat(64),
+      });
+      const opened = controller.open(create).then(
+        () => undefined,
+        (cause: unknown) => cause,
+      );
+      await vi.advanceTimersByTimeAsync(90_000);
+      const cause = await opened;
+      expect(cause).toBeInstanceOf(Error);
+      expect(
+        classifyRunFailure({ message: (cause as Error).message }),
+      ).toMatchObject({ class: "platform", retryable: true });
+      // The half-started container is stopped, so a retry starts it again.
+      expect(container.destroy).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -34,11 +34,23 @@ export interface ThreadChangesCoordinator {
 
 type ThreadChangesRepository = ReturnType<typeof makeThreadChangesRepository>;
 
-const logFailure = (threadId: ThreadId, stage: string, _cause: unknown) => {
+const logFailure = (threadId: ThreadId, stage: string, cause: unknown) => {
   threadChangesLogger.warn("Thread Changes capture failed.", {
     event: "thread_changes_capture_failed",
     stage,
     threadId,
+    // Capture errors name Git refs and storage keys, never file contents.
+    errorName: cause instanceof Error ? cause.name.slice(0, 100) : typeof cause,
+    ...(cause instanceof Error &&
+    cause.name === "ThreadChangesCaptureUnavailable"
+      ? {
+          captureStage: (cause as { stage?: string }).stage,
+          detail: (cause as { detail?: string }).detail,
+        }
+      : {}),
+    errorMessage: (cause instanceof Error ? cause.message : String(cause))
+      .replace(/\s+/g, " ")
+      .slice(0, 300),
   });
 };
 
@@ -302,6 +314,13 @@ export const makeThreadChangesCoordinator = (input: {
         if ((await flush(options)) !== "raced") return;
       }
     } catch (cause) {
+      // A fresh workspace syncs before dxd is installed; the daemon's
+      // registration captures Changes as soon as it is.
+      if (
+        (cause as { stage?: string } | undefined)?.stage ===
+        "daemon-not-installed"
+      )
+        return;
       logFailure(input.threadId, "flush", cause);
     }
   };

@@ -137,6 +137,8 @@ export class ReadinessError extends Schema.TaggedError<ReadinessError>()(
       "r2_binding",
       "thread_execution_binding",
     ]),
+    /** Which rule within the category failed; names a rule, never a value. */
+    check: Schema.optional(Schema.String),
   },
 ) {}
 
@@ -374,16 +376,24 @@ export const loadReadinessRequirements = Effect.fn("loadReadinessRequirements")(
       config = { dxEnv };
     } else {
       const deploymentConfig = yield* decodeDeploymentRequirements(bindings);
-      if (
-        !new Set(["preview", "staging", "test", "selfhost"]).has(
-          deploymentConfig.dxEnv,
-        ) ||
-        deploymentConfig.runtimeMode !== "deployed" ||
-        !/^[a-f0-9]{40}$/.test(deploymentConfig.revision) ||
-        deploymentConfig.e2bTemplateBuildId.length > 256
-      )
+      const identityCheck = !new Set([
+        "preview",
+        "staging",
+        "test",
+        "selfhost",
+      ]).has(deploymentConfig.dxEnv)
+        ? "deployment_environment"
+        : deploymentConfig.runtimeMode !== "deployed"
+          ? "deployment_runtime_mode"
+          : !/^[a-f0-9]{40}$/.test(deploymentConfig.revision)
+            ? "deployment_revision"
+            : deploymentConfig.e2bTemplateBuildId.length > 256
+              ? "e2b_template_build_id_length"
+              : undefined;
+      if (identityCheck !== undefined)
         return yield* new ReadinessError({
           category: "deployment_identity_configuration",
+          check: identityCheck,
         });
       try {
         const authOrigin = new URL(authentication.authUrl).origin;
@@ -487,9 +497,17 @@ export const loadReadinessRequirements = Effect.fn("loadReadinessRequirements")(
             }),
         ),
       );
-      if ("e2bTemplateBuildId" in config && config.e2bTemplateBuildId === "")
+      // Only a deployment that runs E2B sizes itself needs its template
+      // build; a bound key alone (every size on another provider) does not.
+      if (
+        "e2bTemplateBuildId" in config &&
+        config.e2bTemplateBuildId === "" &&
+        (defaultRunner.adapter === "e2b" ||
+          configuredProfiles.some(({ adapter }) => adapter === "e2b"))
+      )
         return yield* new ReadinessError({
           category: "deployment_identity_configuration",
+          check: "e2b_template_build_id",
         });
       if (
         defaultRunner.adapter === "e2b" &&

@@ -20,6 +20,7 @@ import {
   useTool,
 } from "@flue/runtime";
 import { claudeCodeDxTools } from "../claude-code/dx-tools.js";
+import { resetClaudeCodeThreadState } from "../claude-code/provider.js";
 import { rememberClaudeCodeSandbox } from "../claude-code/runs.js";
 import { claudeCodeMirrorTools } from "../claude-code/tools.js";
 import { traceSpan } from "../observability/tracing.js";
@@ -247,7 +248,10 @@ export function DxAgent(props: AgentProps) {
         dxTools(props.id, initialData, promptData, ["search"]),
       ))
         useTool(tool);
+      // Each delivered message starts on fresh Claude Code state: nothing a
+      // failed submission cached may fail it.
       useAgentStart(({ harness }) => {
+        resetClaudeCodeThreadState(props.id);
         rememberClaudeCodeSandbox(props.id, harness.sandbox);
       });
       return composeClaudeCodePrompt(

@@ -43,10 +43,20 @@ class ClaudeCodeRuns {
     const runs = this.#runs(threadId);
     let run = runs.get(key);
     if (run === undefined) {
-      run = new ClaudeCodeRun(key, sandbox, base);
+      run = new ClaudeCodeRun(key, sandbox, base, () =>
+        reconnectClaudeCodeSandbox(threadId),
+      );
       runs.set(key, run);
     }
     return run;
+  }
+
+  /**
+   * Forgets the Thread's readers, with their handles and read failures; a
+   * later call re-reads each attempt from its files.
+   */
+  forget(threadId: string) {
+    this.#threads.delete(threadId);
   }
 
   /**
@@ -123,6 +133,8 @@ export const claudeCodeRuns = new ClaudeCodeRuns();
  * any delivery runs again, reconnects through the execution factory.
  */
 const sandboxes = new Map<string, Promise<Sandbox>>();
+/** How each Thread's sandbox was last opened, to open it again. */
+const reconnects = new Map<string, () => Promise<Sandbox>>();
 
 export const rememberClaudeCodeSandbox = (
   threadId: string,
@@ -135,6 +147,7 @@ export const claudeCodeSandbox = (
   threadId: string,
   reconnect: () => Promise<Sandbox>,
 ) => {
+  reconnects.set(threadId, reconnect);
   let sandbox = sandboxes.get(threadId);
   if (sandbox === undefined) {
     sandbox = reconnect().catch((error: unknown) => {
@@ -144,4 +157,26 @@ export const claudeCodeSandbox = (
     sandboxes.set(threadId, sandbox);
   }
   return sandbox;
+};
+
+/**
+ * A new handle on the Thread's sandbox through the execution factory, for a
+ * reader whose handle stopped answering; undefined when this isolate never
+ * opened one.
+ */
+const reconnectClaudeCodeSandbox = async (threadId: string) => {
+  const reconnect = reconnects.get(threadId);
+  if (reconnect === undefined) return undefined;
+  sandboxes.delete(threadId);
+  return claudeCodeSandbox(threadId, reconnect);
+};
+
+/**
+ * Drops the Thread's cached sandbox handle and run readers. A submission
+ * starts on a fresh connection: a handle or a read failure from before a
+ * container reset must not fail it.
+ */
+export const forgetClaudeCodeThread = (threadId: string) => {
+  sandboxes.delete(threadId);
+  claudeCodeRuns.forget(threadId);
 };

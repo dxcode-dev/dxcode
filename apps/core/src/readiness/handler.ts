@@ -18,6 +18,9 @@ export const readinessHandler: Handler<AppEnv> = async (context) => {
   readinessLogger.warn("Runtime readiness check failed.", {
     event: "readiness_failed",
     readinessCategory: readiness.category,
+    ...(readiness.check === undefined
+      ? {}
+      : { readinessCheck: readiness.check }),
     requestId,
   });
 

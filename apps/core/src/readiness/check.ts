@@ -10,6 +10,7 @@ export type ReadinessCheck =
   | {
       readonly ready: false;
       readonly category: ReadinessError["category"];
+      readonly check?: string;
     };
 
 export async function checkReadiness(
@@ -21,7 +22,10 @@ export async function checkReadiness(
 
   const error = Cause.findErrorOption(exit.cause);
   if (Option.isSome(error)) {
-    return { ready: false, category: error.value.category };
+    const { category, check } = error.value;
+    return check === undefined
+      ? { ready: false, category }
+      : { ready: false, category, check };
   }
 
   throw Cause.squash(exit.cause);

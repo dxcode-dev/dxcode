@@ -7,7 +7,9 @@ import {
   ThreadModelSelection,
 } from "@dx/domain";
 import {
+  type AssistantMessage,
   type AssistantMessageEvent,
+  isContextOverflow,
   normalizeContext,
 } from "@earendil-works/pi-ai";
 import { Effect, Option, Schema } from "effect";
@@ -32,6 +34,11 @@ import {
 } from "../../observability/boundaries.js";
 import { createDxCloudflareModelProvider } from "../../runtime/cloudflare-model-provider.js";
 import { workersAiDeploymentEnabled } from "../../runtime/model-routing-dev-defaults.js";
+import {
+  classifyRunFailure,
+  type RunFailure,
+  type RunFailureClass,
+} from "../../runtime/run-failure.js";
 import type { ConfigEncryptionKeyring } from "../config-encryption.js";
 import { loadConfigEncryptionKeyring } from "../config-encryption.js";
 import {
@@ -101,6 +108,12 @@ import {
  */
 export const upstreamFetch: { current: typeof fetch } = { current: fetch };
 export const upstreamDns = { current: resolvePublicDns };
+/**
+ * Bound on the D1 work that prepares a submission route. Cloudflare resets
+ * an object whose `blockConcurrencyWhile` runs past 30 s, so the slow part
+ * runs outside the lock and fails as a retryable platform failure instead.
+ */
+export const modelRoutingDeadline = { ms: 20_000 };
 const upstreamFetchCall = async (
   ...args: Parameters<typeof fetch>
 ): ReturnType<typeof fetch> => {
@@ -111,8 +124,9 @@ const upstreamFetchCall = async (
     parseIpv4(hostname) !== undefined || hostname.includes(":")
       ? [hostname.replace(/^\[|\]$/g, "")]
       : await upstreamDns.current(hostname);
+  // A local refusal, not a provider answer: it must not read as one.
   if (addresses.length === 0 || !addresses.every(isPublicIpAddress))
-    return Response.json({ code: "ENDPOINT_NOT_ALLOWED" }, { status: 403 });
+    throw new Error("ENDPOINT_NOT_ALLOWED");
   const impl = upstreamFetch.current;
   return observeExternal("model", "upstream", input, () => impl(...args));
 };
@@ -132,6 +146,221 @@ const STRIPPED_HEADER_NAMES = new Set([
 
 const jsonResponse = (body: unknown, status: number) =>
   Response.json(body, { status, headers: { "cache-control": "no-store" } });
+
+const runFailure = (
+  failureClass: RunFailureClass,
+  code: string,
+  message: string,
+): RunFailure => ({
+  class: failureClass,
+  code,
+  message,
+  retryable: failureClass === "transient" || failureClass === "platform",
+});
+
+/** A classified failure that `#fetch` answers as `failureResponse`. */
+class CoordinatorFailure extends Error {
+  constructor(readonly failure: RunFailure) {
+    super(failure.code);
+  }
+}
+
+/**
+ * The coordinator's failure body. Retryable classes answer 502 and permanent
+ * ones 400, so the transport retries only what can succeed on retry.
+ */
+const failureResponse = (failure: RunFailure, upstreamStatus?: number) =>
+  jsonResponse(
+    {
+      code: failure.code,
+      class: failure.class,
+      ...(upstreamStatus === undefined ? {} : { upstreamStatus }),
+      message: failure.message,
+    },
+    failure.retryable ? 502 : 400,
+  );
+
+const UPSTREAM_BODY_LIMIT = 2_000;
+const UPSTREAM_BODY_READ_MS = 5_000;
+const PROVIDER_DETAIL_LIMIT = 500;
+
+/** The provider's own error sentence, never its JSON envelope. */
+const providerDetail = (body: string) => {
+  const text = body.trim();
+  if (text === "" || text.startsWith("<")) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return text.slice(0, PROVIDER_DETAIL_LIMIT);
+  }
+  const record = (value: unknown) =>
+    typeof value === "object" && value !== null
+      ? (value as Record<string, unknown>)
+      : {};
+  const error = record(parsed).error;
+  return [
+    record(error).message,
+    record(parsed).message,
+    error,
+    record(parsed).detail,
+  ]
+    .find(
+      (value): value is string =>
+        typeof value === "string" && value.trim() !== "",
+    )
+    ?.trim()
+    .slice(0, PROVIDER_DETAIL_LIMIT);
+};
+
+/**
+ * Classifies a non-2xx provider answer from its status and redacted body.
+ * The message is plain text; a request the provider rejects keeps the
+ * provider's sentence so Flue still recognizes a context overflow.
+ */
+export const classifyUpstreamRejection = (
+  status: number,
+  body: string,
+): RunFailure => {
+  const failure = classifyRunFailure({ status, message: body });
+  const detail = providerDetail(body);
+  if (failure.class === "internal") {
+    const message = `The model provider rejected the request (HTTP ${status})${detail === undefined ? "." : `: ${detail}`}`;
+    const overflow = (errorMessage: string) =>
+      isContextOverflow({
+        stopReason: "error",
+        errorMessage,
+      } as AssistantMessage);
+    return {
+      ...failure,
+      message:
+        overflow(`${status} ${body}`) && !overflow(message)
+          ? `${message} Context length exceeded.`
+          : message,
+    };
+  }
+  // A rule without its own text echoes the input.
+  return failure.message === body
+    ? {
+        ...failure,
+        message:
+          detail ?? `The model provider refused the request (HTTP ${status}).`,
+      }
+    : failure;
+};
+
+/**
+ * A bounded prefix of an upstream error body, read for at most a few seconds,
+ * with every secret redacted in plain and JSON-escaped spellings, longest
+ * first so a secret containing another is never partly revealed.
+ */
+const readRejectionBody = async (
+  response: Response,
+  secrets: ReadonlyArray<string>,
+) => {
+  const spellings = [
+    ...new Set(
+      // Over-redacting a log line is harmless; skipping a short key leaks it.
+      secrets
+        .filter((value) => value.length > 0)
+        .flatMap((value) => [value, JSON.stringify(value).slice(1, -1)]),
+    ),
+  ].sort((left, right) => right.length - left.length);
+  const limit = UPSTREAM_BODY_LIMIT + (spellings[0]?.length ?? 0);
+  const reader = response.body?.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), UPSTREAM_BODY_READ_MS);
+  });
+  try {
+    while (reader !== undefined && text.length < limit) {
+      const chunk = await Promise.race([reader.read(), deadline]);
+      if (chunk === undefined || chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+  } catch {
+    // Keep whatever arrived before the body failed.
+  } finally {
+    clearTimeout(timer);
+    void reader?.cancel().catch(() => undefined);
+  }
+  return spellings
+    .reduce(
+      (redacted, secret) => redacted.replaceAll(secret, "[REDACTED]"),
+      text,
+    )
+    .slice(0, UPSTREAM_BODY_LIMIT);
+};
+
+/** Copilot's typed failure, from the upstream status and body when it has one. */
+const copilotFailure = (error: CopilotError) => {
+  if (error.status !== undefined && error.code !== "REDIRECT_BLOCKED")
+    return {
+      failure: classifyUpstreamRejection(
+        error.status,
+        error.upstreamBody ?? "",
+      ),
+      upstreamStatus: error.status,
+    };
+  switch (error.code) {
+    case "MODEL_DISABLED":
+    case "MODEL_UNSUPPORTED":
+      return { failure: classifyRunFailure({ message: "MODEL_DISABLED" }) };
+    case "UNAUTHORIZED":
+    case "REAUTHORIZATION_REQUIRED":
+    case "ACCESS_INVALID":
+      return {
+        failure: classifyRunFailure({ message: "COPILOT_UNAUTHORIZED" }),
+      };
+    case "NETWORK_ERROR":
+    case "TIMEOUT":
+    case "EMPTY_STREAM":
+      return {
+        failure: runFailure(
+          "transient",
+          "PROVIDER_UNAVAILABLE",
+          "The model provider is temporarily unavailable.",
+        ),
+      };
+    default:
+      return {
+        failure: runFailure(
+          "internal",
+          `COPILOT_${error.code}`,
+          `GitHub Copilot failed the request (${error.code}).`,
+        ),
+      };
+  }
+};
+
+/** Consecutive transient failures, within one coordinator, before a connection reads unhealthy. */
+const TRANSIENT_FAILURES_BEFORE_UNHEALTHY = 3;
+
+const withinRoutingDeadline = async <T>(work: Promise<T>): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new CoordinatorFailure(
+            runFailure(
+              "platform",
+              "MODEL_ROUTING_TIMEOUT",
+              "Preparing the model route timed out.",
+            ),
+          ),
+        ),
+      modelRoutingDeadline.ms,
+    );
+  });
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
 
 type ModelEnvelope = Pick<
   ProxyEnvelope,
@@ -244,6 +473,7 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
   #runtime: Promise<CopilotRuntime> | undefined;
   #keyring: Promise<ConfigEncryptionKeyring> | undefined;
   #refresh: Promise<void> | undefined;
+  readonly #transientFailures = new Map<string, number>();
   /**
    * One title completion per Thread; concurrent creations share this DO. Only
    * an identical request (a double-submitted creation) joins the call.
@@ -324,57 +554,41 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
   async #prepare(envelope: ResolveEnvelope) {
     if (!envelope.threadId || !envelope.submissionId)
       throw new Error("SUBMISSION_REQUIRED");
+    const pinned = (pin: StoredPinnedSubmission | undefined) =>
+      pin?.threadId === envelope.threadId &&
+      pin.submissionId === envelope.submissionId;
+    const previous = await this.#readPin(envelope.submissionId);
+    if (previous !== undefined && pinned(previous)) {
+      await this.#storeUsageAttribution(previous);
+      return previous;
+    }
+    if (envelope.recovery) throw new Error("SUBMISSION_ROUTE_UNAVAILABLE");
+    const started = performance.now();
+    // D1 runs outside the lock: a stalled query must neither hold every other
+    // submission of this Thread nor outlive blockConcurrencyWhile's 30 s,
+    // after which Cloudflare resets the object.
+    const resolved = await withinRoutingDeadline(this.#resolveRoute(envelope));
     const result = await this.ctx.blockConcurrencyWhile(async () => {
       try {
-        const previous = await this.#readPin(envelope.submissionId);
-        if (
-          previous?.threadId === envelope.threadId &&
-          previous.submissionId === envelope.submissionId
-        ) {
-          await this.#storeUsageAttribution(previous);
-          return { route: previous };
-        }
-        if (envelope.recovery) throw new Error("SUBMISSION_ROUTE_UNAVAILABLE");
+        // A concurrent /resolve of the same submission may have pinned first.
+        const current = await this.#readPin(envelope.submissionId);
+        if (current !== undefined && pinned(current))
+          return { route: current, stored: false };
         const activePins = await this.#prunePins();
         // A live pin may still serve model calls. Preserve existing work and
         // refuse new preparation rather than evicting an in-flight route.
         if (activePins >= MAX_PINNED_SUBMISSION_ROUTES)
           throw new Error("SUBMISSION_ROUTE_CAPACITY");
-        const started = performance.now();
-        const route = await resolveThreadSubmission(
-          this.env,
-          envelope.threadId,
-          envelope.submissionId,
-        );
-        const credential = await loadConnectionCredential(
-          this.#db(),
-          route.connection,
-        );
-        if (
-          route.connection.credentialId !== undefined &&
-          credential === undefined
-        )
-          throw new Error("CREDENTIAL_UNAVAILABLE");
-        await this.#refuseBlockedClaudePlan(route);
         // Keep ciphertext and its route together. Rotation must never send a
         // new credential to an old submission's pinned endpoint.
         const pin: StoredPinnedSubmission = {
-          ...route,
-          credential,
+          ...resolved,
           expiresAt: Date.now() + SUBMISSION_ROUTE_RETENTION_MS,
         };
-        await this.ctx.storage.put(submissionRouteKey(route.submissionId), pin);
+        await this.ctx.storage.put(submissionRouteKey(pin.submissionId), pin);
         await this.#prunePins();
         await this.#storeUsageAttribution(pin);
-        settingsPersistenceLogger.info("Submission model resolved.", {
-          event: "model_route_resolved",
-          threadId: route.threadId,
-          submissionId: route.submissionId,
-          connectionId: route.connection.id,
-          model: `${route.model.provider}/${route.model.id}`,
-          durationMs: Math.round(performance.now() - started),
-        });
-        return { route };
+        return { route: pin, stored: true };
       } catch (error) {
         // Rejecting blockConcurrencyWhile resets the DO. Validation failures
         // must instead return a normal terminal response to the caller.
@@ -382,7 +596,33 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       }
     });
     if ("error" in result) throw result.error;
+    if (result.stored)
+      settingsPersistenceLogger.info("Submission model resolved.", {
+        event: "model_route_resolved",
+        threadId: result.route.threadId,
+        submissionId: result.route.submissionId,
+        connectionId: result.route.connection.id,
+        model: `${result.route.model.provider}/${result.route.model.id}`,
+        durationMs: Math.round(performance.now() - started),
+      });
     return result.route;
+  }
+
+  /** The D1 half of preparation: route, credential and Claude plan. */
+  async #resolveRoute(envelope: ResolveEnvelope): Promise<PinnedSubmission> {
+    const route = await resolveThreadSubmission(
+      this.env,
+      envelope.threadId,
+      envelope.submissionId,
+    );
+    const credential = await loadConnectionCredential(
+      this.#db(),
+      route.connection,
+    );
+    if (route.connection.credentialId !== undefined && credential === undefined)
+      throw new Error("CREDENTIAL_UNAVAILABLE");
+    await this.#refuseBlockedClaudePlan(route);
+    return { ...route, credential };
   }
 
   #db() {
@@ -523,6 +763,58 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     return this.#proxyWithPin(pin, envelope, request, signal, routingStarted);
   }
 
+  /**
+   * Connection health from real outcomes. An account failure needs the
+   * owner, so it shows at once; one transient failure says nothing about the
+   * connection, so only a run of them does; success heals. A rejected request
+   * (`internal`) leaves health as it was.
+   */
+  #recordOutcome(
+    connection: StoredModelConnection,
+    failure?: RunFailure,
+    upstreamStatus?: number,
+  ) {
+    if (failure === undefined || failure.class === "account") {
+      this.#transientFailures.delete(connection.id);
+      void updateConnectionHealth(
+        this.#db(),
+        connection,
+        failure === undefined
+          ? { state: "healthy", code: "CONNECTED" }
+          : { state: "unhealthy", code: failure.code },
+      );
+      return;
+    }
+    if (failure.class === "internal") return;
+    const count = (this.#transientFailures.get(connection.id) ?? 0) + 1;
+    this.#transientFailures.set(connection.id, count);
+    if (count >= TRANSIENT_FAILURES_BEFORE_UNHEALTHY)
+      void updateConnectionHealth(this.#db(), connection, {
+        state: "unhealthy",
+        code:
+          upstreamStatus === undefined
+            ? failure.code
+            : `HTTP_${upstreamStatus}`,
+      });
+  }
+
+  #logRejection(
+    pin: PinnedSubmission,
+    canonical: string,
+    status: number,
+    body: string,
+  ) {
+    settingsPersistenceLogger.warn("Model provider rejected the request.", {
+      event: "model_upstream_rejected",
+      threadId: pin.threadId,
+      submissionId: pin.submissionId,
+      connectionId: pin.connection.id,
+      model: canonical,
+      status,
+      body,
+    });
+  }
+
   async #proxyWithPin(
     pin: PinnedSubmission,
     envelope: ProxyEnvelope,
@@ -533,15 +825,17 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     const { connection } = pin;
 
     if (connection.kind === "subscription") {
+      const notConnected = () => {
+        const failure = classifyRunFailure({
+          message: "SUBSCRIPTION_NOT_CONNECTED",
+        });
+        this.#recordOutcome(connection, failure);
+        return failureResponse(failure);
+      };
       const runtime = await this.#loadCopilotRuntime();
       let row = await runtime.repository.find(pin.ownerUserId, connection.id);
-      if (
-        row === undefined ||
-        row.status !== "connected" ||
-        !row.modelIds.includes(pin.upstreamModel)
-      ) {
-        return jsonResponse({ code: "SUBSCRIPTION_NOT_CONNECTED" }, 403);
-      }
+      if (row === undefined || row.status !== "connected")
+        return notConnected();
       if (Date.parse(row.refreshAfter) <= Date.now()) {
         if (this.#refresh === undefined) {
           this.#refresh = runtime.service
@@ -553,23 +847,38 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
         }
         await this.#refresh;
         row = await runtime.repository.find(pin.ownerUserId, connection.id);
-        if (
-          row === undefined ||
-          row.status !== "connected" ||
-          !row.modelIds.includes(pin.upstreamModel)
-        )
-          return jsonResponse({ code: "SUBSCRIPTION_NOT_CONNECTED" }, 403);
+        if (row === undefined || row.status !== "connected")
+          return notConnected();
+        if (!row.modelIds.includes(pin.upstreamModel))
+          settingsPersistenceLogger.warn(
+            "Copilot entitlement refresh dropped a pinned model.",
+            {
+              event: "copilot_entitlement_refresh_dropped_model",
+              threadId: pin.threadId,
+              submissionId: pin.submissionId,
+              connectionId: connection.id,
+              model: pin.upstreamModel,
+              entitledModels: row.modelIds.length,
+            },
+          );
       }
+      // Routing admitted this model when it pinned the submission. A later
+      // entitlement list that drops it (Copilot has answered with an empty
+      // one) must not end the submission using it; new submissions get the
+      // current list at routing, and a real refusal comes back from Copilot.
+      const enabledModelIds = row.modelIds.includes(pin.upstreamModel)
+        ? row.modelIds
+        : [...row.modelIds, pin.upstreamModel];
       const resolved = await runtime.service.resolveAccess(
         pin.ownerUserId,
         connection.id,
       );
       try {
-        return await runtime.provider.invoke({
+        const response = await runtime.provider.invoke({
           modelId: pin.upstreamModel,
           access: resolved.access,
           entitlements: {
-            enabledModelIds: row.modelIds,
+            enabledModelIds,
             catalogRevision: row.catalogRevision,
             observedAt: Date.parse(row.observedAt),
           },
@@ -577,8 +886,13 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
           threadId: envelope.threadId,
           signal,
         });
+        this.#recordOutcome(connection);
+        return response;
       } catch (error) {
-        if (error instanceof CopilotError && error.code === "UNAUTHORIZED") {
+        if (!(error instanceof CopilotError)) throw error;
+        if (error.code === "REQUEST_CANCELLED")
+          return jsonResponse({ code: "REQUEST_CANCELLED" }, 499);
+        if (error.code === "UNAUTHORIZED") {
           if (this.#refresh === undefined) {
             this.#refresh = runtime.service
               .refresh(pin.ownerUserId, connection.id)
@@ -589,14 +903,16 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
           }
           await this.#refresh.catch(() => undefined);
         }
-        const code =
-          error instanceof CopilotError ? error.code : "UPSTREAM_ERROR";
-        return jsonResponse(
-          { code: `COPILOT_${code}` },
-          ["UNAUTHORIZED", "FORBIDDEN", "MODEL_NOT_ENTITLED"].includes(code)
-            ? 403
-            : 502,
-        );
+        const { failure, upstreamStatus } = copilotFailure(error);
+        if (upstreamStatus !== undefined)
+          this.#logRejection(
+            pin,
+            envelope.canonical,
+            upstreamStatus,
+            error.upstreamBody ?? "",
+          );
+        this.#recordOutcome(connection, failure, upstreamStatus);
+        return failureResponse(failure, upstreamStatus);
       }
     }
 
@@ -622,7 +938,13 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
         hasCredentialId: connection.credentialId !== undefined,
         scope: connection.target.scope,
       });
-      return jsonResponse({ code: "CREDENTIAL_UNAVAILABLE" }, 403);
+      return failureResponse(
+        runFailure(
+          "account",
+          "CREDENTIAL_UNAVAILABLE",
+          "The credential for this model connection could not be read. Reconnect it in Settings, then retry.",
+        ),
+      );
     }
 
     const base = new URL(pin.model.baseUrl);
@@ -685,87 +1007,43 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       ) {
         return jsonResponse({ code: "REQUEST_CANCELLED" }, 499);
       }
-      void updateConnectionHealth(this.#db(), connection, {
-        state: "unhealthy",
-        code: "NETWORK_ERROR",
+      if (error instanceof Error && error.message === "ENDPOINT_NOT_ALLOWED")
+        throw error;
+      const failure = runFailure(
+        "transient",
+        "UPSTREAM_UNREACHABLE",
+        "The model provider could not be reached.",
+      );
+      this.#recordOutcome(connection, failure);
+      return failureResponse(failure);
+    }
+    if (upstream.ok) {
+      this.#recordOutcome(connection);
+      return new Response(upstream.body, {
+        status: upstream.status,
+        headers: upstream.headers,
       });
-      return jsonResponse({ code: "UPSTREAM_UNREACHABLE" }, 502);
     }
     if (upstream.status >= 300 && upstream.status < 400) {
-      void updateConnectionHealth(this.#db(), connection, {
-        state: "unhealthy",
-        code: "ENDPOINT_REDIRECT",
-      });
-      return jsonResponse({ code: "ENDPOINT_REDIRECT" }, 400);
+      void upstream.body?.cancel().catch(() => undefined);
+      const failure = runFailure(
+        "account",
+        "ENDPOINT_REDIRECT",
+        "The model endpoint answered with a redirect, which dx does not follow. Check the connection's base URL in Settings.",
+      );
+      this.#recordOutcome(connection, failure, upstream.status);
+      return failureResponse(failure, upstream.status);
     }
-    if (upstream.status === 401 || upstream.status === 403) {
-      void updateConnectionHealth(this.#db(), connection, {
-        state: "unhealthy",
-        code: "AUTH_REJECTED",
-      });
-    } else if (upstream.status >= 500) {
-      void updateConnectionHealth(this.#db(), connection, {
-        state: "unhealthy",
-        code: `HTTP_${upstream.status}`,
-      });
-    } else {
-      void updateConnectionHealth(this.#db(), connection, {
-        state: "healthy",
-        code: "CONNECTED",
-      });
-    }
-    if (upstream.status >= 400 && upstream.status < 500) {
-      // Otherwise the provider's reason is visible only in the Thread. Read a
-      // bounded prefix beside the forwarded body, so a large or endless error
-      // body is neither buffered nor able to delay the response.
-      const reader = upstream.clone().body?.getReader();
-      // Custom headers can carry credentials too, and a JSON body may echo any
-      // of them escaped, so redact every secret in both spellings, longest
-      // first so a secret containing another is never partly revealed.
-      const secrets = [
-        ...new Set(
-          // Redact every non-empty secret regardless of length: over-redacting
-          // a log line is harmless, while skipping a short key would leak it.
-          [apiKey, ...connection.headers.map(({ value }) => value)]
-            .filter((value) => value.length > 0)
-            .flatMap((value) => [value, JSON.stringify(value).slice(1, -1)]),
-        ),
-      ].sort((left, right) => right.length - left.length);
-      const limit = 2_000 + (secrets[0]?.length ?? 0);
-      void (async () => {
-        const decoder = new TextDecoder();
-        let detail = "";
-        try {
-          while (reader !== undefined && detail.length < limit) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            detail += decoder.decode(value, { stream: true });
-          }
-        } catch {
-          // Log whatever arrived before the body failed.
-        } finally {
-          void reader?.cancel().catch(() => undefined);
-        }
-        settingsPersistenceLogger.warn("Model provider rejected the request.", {
-          event: "model_upstream_rejected",
-          threadId: pin.threadId,
-          submissionId: pin.submissionId,
-          connectionId: connection.id,
-          model: envelope.canonical,
-          status: upstream.status,
-          body: secrets
-            .reduce(
-              (redacted, secret) => redacted.replaceAll(secret, "[REDACTED]"),
-              detail,
-            )
-            .slice(0, 2_000),
-        });
-      })();
-    }
-    return new Response(upstream.body, {
-      status: upstream.status,
-      headers: upstream.headers,
-    });
+    // The provider's reason is otherwise visible nowhere. Custom headers can
+    // carry credentials too, and a JSON body may echo any of them escaped.
+    const detail = await readRejectionBody(upstream, [
+      apiKey,
+      ...connection.headers.map(({ value }) => value),
+    ]);
+    this.#logRejection(pin, envelope.canonical, upstream.status, detail);
+    const failure = classifyUpstreamRejection(upstream.status, detail);
+    this.#recordOutcome(connection, failure, upstream.status);
+    return failureResponse(failure, upstream.status);
   }
 
   async #handleStream(envelope: StreamEnvelope, signal: AbortSignal) {
@@ -842,19 +1120,25 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
               options as never,
             );
     const encoder = new TextEncoder();
-    const db = this.#db();
+    const record = (errorMessage?: string) =>
+      this.#recordOutcome(
+        connection,
+        errorMessage === undefined
+          ? undefined
+          : classifyRunFailure({ message: errorMessage }),
+      );
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
           for await (const event of events) {
+            if (event.type === "done") record();
+            else if (event.type === "error" && event.reason === "error")
+              record(event.error.errorMessage ?? "");
             controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
           }
           controller.close();
         } catch (error) {
-          void updateConnectionHealth(db, connection, {
-            state: "unhealthy",
-            code: "ADAPTER_ERROR",
-          });
+          record(error instanceof Error ? error.message : "Adapter failed.");
           controller.enqueue(
             encoder.encode(
               `${JSON.stringify({
@@ -986,6 +1270,9 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       ],
     });
     let final: AssistantMessageEvent | undefined;
+    // The adapter sees a failed proxy answer only as an SDK error; keep the
+    // coordinator's classification for this route's own answer.
+    let rejected: { failure: RunFailure; upstreamStatus?: number } | undefined;
     if (
       IN_DO_APIS.has(route.model.api) ||
       route.connection.kind === "deployment"
@@ -1010,7 +1297,7 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       const adapter = await loadAdapter();
       const proxyFetch: typeof fetch = async (input, init) => {
         const request = new Request(input, init);
-        return this.#proxyWithPin(
+        const response = await this.#proxyWithPin(
           pin,
           {
             threadId: pin.threadId,
@@ -1026,6 +1313,29 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
           signal,
           performance.now(),
         );
+        if (!response.ok) {
+          const body = await response
+            .clone()
+            .json<{
+              code?: string;
+              class?: RunFailureClass;
+              upstreamStatus?: number;
+              message?: string;
+            }>()
+            .catch(() => undefined);
+          if (
+            body?.code !== undefined &&
+            body.class !== undefined &&
+            body.message !== undefined
+          )
+            rejected = {
+              failure: runFailure(body.class, body.code, body.message),
+              ...(body.upstreamStatus === undefined
+                ? {}
+                : { upstreamStatus: body.upstreamStatus }),
+            };
+        }
+        return response;
       };
       for await (const event of adapter.streamSimple(route.model, context, {
         maxTokens: envelope.maxTokens,
@@ -1047,7 +1357,16 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
         model: canonical,
         error: final?.type === "error" ? final.error.errorMessage : undefined,
       });
-      return jsonResponse({ code: "COMPLETION_FAILED" }, 502);
+      // An in-DO adapter reports its provider's failure as an error event.
+      const adapterFailure =
+        final?.type === "error"
+          ? classifyRunFailure({ message: final.error.errorMessage ?? "" })
+          : undefined;
+      if (rejected !== undefined)
+        return failureResponse(rejected.failure, rejected.upstreamStatus);
+      return adapterFailure !== undefined && adapterFailure.class !== "internal"
+        ? failureResponse(adapterFailure, adapterFailure.status)
+        : jsonResponse({ code: "COMPLETION_FAILED" }, 502);
     }
     // Not recorded in the usage ledger; this log is its only accounting.
     settingsPersistenceLogger.info("One-shot completion finished.", {
@@ -1216,7 +1535,23 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
         model: `${pin.model.provider}/${pin.model.id}`,
         error: `HTTP_${response?.status ?? "NETWORK"}`,
       });
-      return jsonResponse({ code: "COMPLETION_FAILED" }, 502);
+      if (response === undefined)
+        return failureResponse(
+          runFailure(
+            "transient",
+            "UPSTREAM_UNREACHABLE",
+            "The model provider could not be reached.",
+          ),
+        );
+      return response.ok
+        ? jsonResponse({ code: "COMPLETION_FAILED" }, 502)
+        : failureResponse(
+            classifyUpstreamRejection(
+              response.status,
+              body === undefined ? "" : JSON.stringify(body),
+            ),
+            response.status,
+          );
     }
     settingsPersistenceLogger.info("One-shot completion finished.", {
       event: "model_one_shot_completed",
@@ -1361,9 +1696,15 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       headers,
       redirect: "manual",
       signal: AbortSignal.timeout(15_000),
-    }).catch(() => undefined);
+    }).catch((error: unknown) =>
+      error instanceof Error && error.message === "ENDPOINT_NOT_ALLOWED"
+        ? ("ENDPOINT_NOT_ALLOWED" as const)
+        : undefined,
+    );
     if (response === undefined)
       return { state: "unhealthy", code: "NETWORK_ERROR" };
+    if (response === "ENDPOINT_NOT_ALLOWED")
+      return { state: "unhealthy", code: response };
     if (response.status === 401 || response.status === 403)
       return { state: "unhealthy", code: "AUTH_REJECTED" };
     if (response.status >= 300 && response.status < 400)
@@ -1518,6 +1859,14 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
           { code: "CLAUDE_PLAN_LIMIT", message: error.message },
           400,
         );
+      if (error instanceof CoordinatorFailure) {
+        settingsPersistenceLogger.warn("BYOK invocation failed.", {
+          event: "byok_invocation_failed",
+          code: error.failure.code,
+          class: error.failure.class,
+        });
+        return failureResponse(error.failure);
+      }
       const detail = error instanceof Error ? error.message : "";
       const permanent =
         PERMANENT_FAILURE_CODES.has(detail) ||

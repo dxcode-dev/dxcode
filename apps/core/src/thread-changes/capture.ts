@@ -138,8 +138,28 @@ export type ThreadChangesIndex = typeof ThreadChangesIndexSchema.Type;
 
 export class ThreadChangesCaptureUnavailable extends Schema.TaggedError<ThreadChangesCaptureUnavailable>()(
   "ThreadChangesCaptureUnavailable",
-  { stage: Schema.String },
+  {
+    stage: Schema.String,
+    /** Exit code and the end of stderr from the guest, or the transport error. */
+    detail: Schema.optional(Schema.String),
+  },
 ) {}
+
+/** What a failed guest call said, bounded and without control characters. */
+const guestDetail = (
+  failure: unknown | { exitCode: number; stderr?: string },
+) =>
+  (typeof failure === "object" &&
+  failure !== null &&
+  "exitCode" in failure &&
+  typeof failure.exitCode === "number"
+    ? `exit ${failure.exitCode}: ${String((failure as { stderr?: string }).stderr ?? "").slice(-300)}`
+    : failure instanceof Error
+      ? failure.message.slice(0, 300)
+      : String(failure).slice(0, 300)
+  )
+    .replace(/\s+/g, " ")
+    .trim();
 
 // The request-scoped capture runs the resident daemon binary as a command so
 // activation and reconnect repair use exactly the capture and fingerprint the
@@ -168,11 +188,23 @@ export const probeThreadChanges = async (input: {
       },
       timeoutMs: CAPTURE_TIMEOUT_MS,
     })
-    .catch(() => {
-      throw new ThreadChangesCaptureUnavailable({ stage: "guest-probe" });
+    .catch((cause: unknown) => {
+      throw new ThreadChangesCaptureUnavailable({
+        stage: "guest-probe",
+        detail: guestDetail(cause),
+      });
+    });
+  // 127: the workspace's dxd is not installed yet; its registration
+  // captures Changes itself.
+  if (result.exitCode === 127)
+    throw new ThreadChangesCaptureUnavailable({
+      stage: "daemon-not-installed",
     });
   if (result.exitCode !== 0)
-    throw new ThreadChangesCaptureUnavailable({ stage: "guest-probe" });
+    throw new ThreadChangesCaptureUnavailable({
+      stage: "guest-probe",
+      detail: guestDetail(result),
+    });
   let decoded: unknown;
   try {
     decoded = JSON.parse(result.stdout) as unknown;
@@ -204,11 +236,23 @@ export const captureThreadChanges = async (input: {
       },
       timeoutMs: CAPTURE_TIMEOUT_MS,
     })
-    .catch(() => {
-      throw new ThreadChangesCaptureUnavailable({ stage: "guest-command" });
+    .catch((cause: unknown) => {
+      throw new ThreadChangesCaptureUnavailable({
+        stage: "guest-command",
+        detail: guestDetail(cause),
+      });
+    });
+  // 127: the workspace's dxd is not installed yet; its registration
+  // captures Changes itself.
+  if (result.exitCode === 127)
+    throw new ThreadChangesCaptureUnavailable({
+      stage: "daemon-not-installed",
     });
   if (result.exitCode !== 0)
-    throw new ThreadChangesCaptureUnavailable({ stage: "guest-command" });
+    throw new ThreadChangesCaptureUnavailable({
+      stage: "guest-command",
+      detail: guestDetail(result),
+    });
   let decoded: unknown;
   try {
     decoded = JSON.parse(result.stdout) as unknown;

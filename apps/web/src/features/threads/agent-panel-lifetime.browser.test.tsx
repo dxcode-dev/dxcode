@@ -1003,6 +1003,46 @@ describe("thread composer ownership", () => {
     await React.act(() => panel.root.unmount());
   });
 
+  it("shows an account failure's own message with Model Routing instead of a retry", async () => {
+    const panel = await mountPanel(
+      {
+        settlements: [
+          {
+            submissionId: "budget-exhausted",
+            outcome: "failed",
+            // The settlement error exactly as the preview delivered it.
+            error: {
+              name: "FlueError",
+              type: "operation_failed",
+              message:
+                "direct(sub_1) failed: The budget on this model connection is used up. Raise its budget or choose another model, then retry. (dx_failure:account:PROVIDER_BUDGET_EXCEEDED)",
+              details: "",
+              meta: {
+                operation: "direct(sub_1)",
+                reason:
+                  "The budget on this model connection is used up. Raise its budget or choose another model, then retry. (dx_failure:account:PROVIDER_BUDGET_EXCEEDED)",
+              },
+            },
+          },
+        ],
+      },
+      false,
+      {},
+      { onOpenModelRouting: vi.fn() },
+    );
+
+    const card = panel.container.querySelector(".thread-error-card");
+    expect(card?.textContent).toContain("Model connection needs attention");
+    expect(card?.textContent).toContain(
+      "The budget on this model connection is used up.",
+    );
+    expect(card?.textContent).not.toContain("dx_failure");
+    expect(card?.textContent).not.toContain("direct(sub_1)");
+    expect(card?.textContent).not.toContain("operation_failed");
+    expect(card?.textContent).toContain("Open Model Routing");
+    await React.act(() => panel.root.unmount());
+  });
+
   it("suppresses Model Routing actions on archived cards", async () => {
     const panel = await mountPanel(
       {

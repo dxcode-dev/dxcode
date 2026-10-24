@@ -367,6 +367,76 @@ describe("readiness requirements", () => {
     ).resolves.toMatchObject({ category: "deployment_identity_configuration" });
   });
 
+  it("does not require an E2B template build when no runner profile uses E2B", async () => {
+    // A self-host on Cloudflare Containers that still binds an E2B key.
+    const selfhost = (overrides: Partial<Bindings> = {}) =>
+      createTestBindings({
+        DX_ENV: "selfhost",
+        DX_AUTH_EMAIL_FROM: undefined,
+        EMAIL: undefined,
+        DX_E2B_TEMPLATE: undefined,
+        DX_E2B_TEMPLATE_BUILD_ID: undefined,
+        ORB_CONTAINER: validAgentBinding as never,
+        DX_RUNNER_PROFILE_CATALOG: JSON.stringify({
+          version: 1,
+          defaultProfileId: "cf.standard-2",
+          profiles: CLOUDFLARE_ORB_PROFILES.map((size) => ({
+            ...size,
+            adapter: "cloudflare",
+            isolation: "container",
+            availability: "available",
+            capabilities: [
+              "git",
+              "environment-variables",
+              "internet-access",
+              "persistent-workspace",
+              "pause-resume",
+            ],
+          })),
+        }),
+        ...overrides,
+      });
+    expect(selfhost().E2B_API_KEY).toBeTruthy();
+    await expect(
+      Effect.runPromise(loadReadinessRequirements(selfhost())),
+    ).resolves.toMatchObject({ dxEnv: "selfhost", e2bTemplateBuildId: "" });
+    // A configured E2B size still needs the template build identity.
+    const e2bCatalog = JSON.parse(
+      createTestBindings().DX_RUNNER_PROFILE_CATALOG ?? "{}",
+    );
+    const cloudflareCatalog = JSON.parse(
+      selfhost().DX_RUNNER_PROFILE_CATALOG ?? "{}",
+    );
+    await expect(
+      failure(
+        selfhost({
+          DX_RUNNER_PROFILE_CATALOG: JSON.stringify({
+            ...cloudflareCatalog,
+            profiles: [...cloudflareCatalog.profiles, ...e2bCatalog.profiles],
+          }),
+        }),
+      ),
+    ).resolves.toMatchObject({
+      category: "deployment_identity_configuration",
+      check: "e2b_template_build_id",
+    });
+  });
+
+  it("names the deployment identity check that failed", async () => {
+    await expect(
+      failure(createTestBindings({ DX_E2B_TEMPLATE_BUILD_ID: undefined })),
+    ).resolves.toMatchObject({
+      category: "deployment_identity_configuration",
+      check: "e2b_template_build_id",
+    });
+    await expect(
+      failure(createTestBindings({ DX_DEPLOYMENT_REVISION: "short" })),
+    ).resolves.toMatchObject({
+      category: "deployment_identity_configuration",
+      check: "deployment_revision",
+    });
+  });
+
   it("requires the default runner profile to use the Execution provider", async () => {
     const catalog = JSON.parse(
       createTestBindings().DX_RUNNER_PROFILE_CATALOG ?? "{}",

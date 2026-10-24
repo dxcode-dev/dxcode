@@ -22,6 +22,7 @@ import {
 } from "@earendil-works/pi-ai";
 import type { getModelInvocationContext, Sandbox } from "@flue/runtime";
 import { claudeCodeLogger } from "../logging.js";
+import { classifyRunFailure, markRunFailure } from "../runtime/run-failure.js";
 import {
   CLAUDE_CODE_API,
   catalogProviderModels,
@@ -31,7 +32,7 @@ import {
   deliverClaudeCodeDxToolResults,
 } from "./dx-tools.js";
 import { type ClaudePlanAccess, claudePlanBlockedCause } from "./plan.js";
-import { claudeCodeRuns } from "./runs.js";
+import { claudeCodeRuns, forgetClaudeCodeThread } from "./runs.js";
 import type { ClaudeCodeBlock, ClaudeCodeSegment } from "./stream.js";
 import { mirroredToolCall } from "./tools.js";
 import {
@@ -42,13 +43,25 @@ import {
 
 const ALREADY_FINISHED = "Claude Code already finished this request.";
 
-/** Attempts per turn before a failure is reported without another try. */
-const MAX_ATTEMPTS = 8;
-
-const CONTINUE_INPUT: ClaudeCodeInputBlock = {
-  type: "text",
-  text: "The previous Claude Code run for this request stopped before it finished, and this is a retry. A tool call that was running when it stopped did not complete and its output is lost, so run it again. Check the workspace only before repeating file changes that may already be made, then finish the request.",
+/**
+ * A failure's text stamped with its class, which Flue's retry policy reads
+ * (see `runtime/run-failure.ts`); text a layer below already stamped keeps
+ * its stamp. A failure Flue retries keeps Claude's own detail; one the
+ * person must act on says what to do.
+ */
+const stamped = (message: string) => {
+  if (/\(dx_failure:/.test(message)) return message;
+  const failure = classifyRunFailure({ message });
+  return markRunFailure(failure.retryable ? { ...failure, message } : failure);
 };
+
+/** Claude's process went with its sandbox: a platform reset, retried. */
+const PROCESS_LOST = markRunFailure({
+  class: "platform",
+  code: "CLAUDE_CODE_PROCESS_LOST",
+  message: "Claude Code stopped responding.",
+  retryable: true,
+});
 
 /**
  * The `claude-code` Flue provider. A model call does not reach a model API:
@@ -84,6 +97,16 @@ export interface ClaudeCodeProviderDeps {
  */
 const knownPlans = new Map<string, ClaudePlanAccess>();
 const KNOWN_PLANS = 500;
+
+/**
+ * Resets what this isolate keeps for a Thread at a submission's start: its
+ * sandbox handle, its run readers with their read failures, and its plan
+ * choice, so nothing a failed submission left behind fails the next one.
+ */
+export const resetClaudeCodeThreadState = (threadId: string) => {
+  forgetClaudeCodeThread(threadId);
+  knownPlans.delete(threadId);
+};
 
 const rememberPlan = (threadId: string, plan: ClaudePlanAccess) => {
   knownPlans.delete(threadId);
@@ -332,6 +355,18 @@ const isLifecycleSignal = (message: Context["messages"][number]) => {
 };
 
 /**
+ * Whether an assistant message is one of Claude's segments that Flue ran
+ * the tools of. A failed or stopped call's message is not, though an
+ * explicit resume returns it to the context as a stop (Flue's
+ * `resumeFailedAssistant`): the run is still on that segment. A final stop
+ * ends the turn, so no later call follows it.
+ */
+const isRecordedSegment = (message: Context["messages"][number]) =>
+  message.role === "assistant" &&
+  (message.stopReason === "toolUse" ||
+    message.content.some((block) => block.type === "toolCall"));
+
+/**
  * Where this call sits: new user input after the last assistant message
  * starts a turn; otherwise Flue continues the turn after tool results and
  * wants its next segment. `previous` is the turn new input interrupts, with
@@ -349,10 +384,13 @@ const position = (context: Context) => {
     lastUser > lastAssistant
       ? messages.slice(lastAssistant + 1).filter(isInput)
       : [];
-  const segment = messages
-    .slice(lastUser + 1)
-    .filter(({ role }) => role === "assistant").length;
+  const segment = messages.slice(lastUser + 1).filter(isRecordedSegment).length;
   const anchor = messages[lastUser];
+  // The input that started this turn: everything after the turn before it.
+  const turnStart = messages.findLastIndex(
+    ({ role }, index) => role === "assistant" && index < lastUser,
+  );
+  const turnInput = messages.slice(turnStart + 1, lastUser + 1).filter(isInput);
   // Segments Flue recorded before the latest interruption of this turn.
   const interruption = messages.findLastIndex(
     (message, index) => index > lastUser && isLifecycleSignal(message),
@@ -360,9 +398,8 @@ const position = (context: Context) => {
   const interruptedAt =
     interruption < 0
       ? undefined
-      : messages
-          .slice(lastUser + 1, interruption)
-          .filter(({ role }) => role === "assistant").length;
+      : messages.slice(lastUser + 1, interruption).filter(isRecordedSegment)
+          .length;
   const previousIndex =
     pending.length === 0
       ? -1
@@ -373,6 +410,7 @@ const position = (context: Context) => {
   const last = messages[lastAssistant];
   return {
     pending,
+    turnInput,
     segment,
     anchor: anchor?.role === "user" ? anchor : undefined,
     interruptedAt,
@@ -467,8 +505,22 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
         reason,
         error: {
           ...emitter.message(segment, reason),
-          errorMessage: message,
+          errorMessage: reason === "error" ? stamped(message) : message,
         },
+      });
+      events.end();
+    };
+    const alreadyFinished = () => {
+      const finished: ClaudeCodeSegment = {
+        blocks: [{ type: "text", text: ALREADY_FINISHED }],
+        usage: { input: 0, output: 1, cacheRead: 0, cacheWrite: 0 },
+        stopReason: "stop",
+      };
+      emitter.update(finished, true);
+      events.push({
+        type: "done",
+        reason: "stop",
+        message: emitter.message(finished, "stop"),
       });
       events.end();
     };
@@ -481,7 +533,7 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
         if (invocation === undefined || scope?.kind !== "prompt")
           throw new Error("Claude Code runs only for a Thread submission.");
         const threadId = invocation.instanceId;
-        const { pending, segment, anchor, previous, interruptedAt } =
+        const { pending, turnInput, segment, anchor, previous, interruptedAt } =
           position(context);
         if (anchor === undefined)
           throw new Error("Claude Code needs a user message to answer.");
@@ -523,18 +575,7 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
             found === undefined &&
             !(await existing.stopped())
           ) {
-            const finished: ClaudeCodeSegment = {
-              blocks: [{ type: "text", text: ALREADY_FINISHED }],
-              usage: { input: 0, output: 1, cacheRead: 0, cacheWrite: 0 },
-              stopReason: "stop",
-            };
-            emitter.update(finished, true);
-            events.push({
-              type: "done",
-              reason: "stop",
-              message: emitter.message(finished, "stop"),
-            });
-            events.end();
+            alreadyFinished();
             return;
           }
           // A failure already reported, a stopped attempt, or a lost process:
@@ -587,20 +628,14 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
           });
         };
         let nextAttempt = (attempts.at(-1)?.attempt ?? -1) + 1;
-        // A new session has none of the turn, so continuing it restates the
-        // request instead of only asking to finish it.
+        // A retry re-runs the turn from history, with nothing added: the
+        // resumed session gets the turn's own input again, a new session the
+        // message that anchors it. Flue owns how often a turn is retried.
         const input = () =>
           pending.length > 0
             ? inputBlocks(pending)
-            : freshSession
-              ? [...inputBlocks([anchor]), CONTINUE_INPUT]
-              : [CONTINUE_INPUT];
+            : inputBlocks(freshSession ? [anchor] : turnInput);
         const launchAttempt = async () => {
-          if (nextAttempt >= MAX_ATTEMPTS)
-            throw new Error(
-              latest?.run.stream.result?.text ||
-                "Claude Code failed repeatedly for this request.",
-            );
           const credential = await deps.credential(
             threadId,
             scope.submissionId,
@@ -759,6 +794,16 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
           if (await stopForPlan()) return;
           found = current.stream.segments[local];
         }
+        // The run finished at a segment before this one: the turn is over,
+        // and Claude's answer is no failure.
+        if (
+          found === undefined &&
+          current.stream.result?.isError === false &&
+          !(await current.stopped())
+        ) {
+          alreadyFinished();
+          return;
+        }
         if (found?.stopReason === undefined || found.stopReason === "error") {
           // Claude Code fails a request the plan has no usage left for, and
           // no extra usage covers: say which limit, and when it resets, in
@@ -789,13 +834,14 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
             );
             return;
           }
+          const result = current.stream.result;
           const detail =
             found?.errorMessage ??
-            current.stream.result?.text ??
-            ((await current.stderrTail()) ||
-              (current.dead
-                ? "Claude Code stopped responding."
-                : "Claude Code exited without a result."));
+            (result?.isError === true ? result.text : undefined) ??
+            (current.dead
+              ? PROCESS_LOST
+              : (await current.stderrTail()) ||
+                "Claude Code exited without a result.");
           fail(detail, "error", found);
           return;
         }

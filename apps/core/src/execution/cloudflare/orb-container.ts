@@ -156,6 +156,13 @@ const READY_TIMEOUT_MS = 90_000;
 const READY_RETRY_MS = 100;
 /** While a start waits for readiness, log its progress this often. */
 const READY_PROGRESS_LOG_MS = 30_000;
+/**
+ * How long an operation that must follow the restart work waits for it.
+ * Storage can stall for minutes; past this the operation goes ahead.
+ */
+const RESTART_WAIT_MS = 10_000;
+/** How long stopping a container that never became ready may take. */
+const ABANDON_START_MS = 5_000;
 /** A command's output kept in this object's memory, per stream. */
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 /** The largest file read in one call (one RPC result). */
@@ -189,6 +196,24 @@ const sleep = (durationMs: number) =>
 
 const failure = (operation: string, detail: string) =>
   new Error(`Orb container ${operation} failed: ${detail}`.trim());
+
+/** `promise`, or `undefined` once `durationMs` passes. */
+const within = async <A>(
+  promise: Promise<A>,
+  durationMs: number,
+): Promise<A | undefined> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), durationMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
 
 /** Reads a stream to the end, keeping at most `limit` bytes. */
 const collect = (
@@ -275,6 +300,8 @@ export class OrbContainerController {
   #lifecycle: Promise<unknown> = Promise.resolve();
   #busy = 0;
   #inflight = 0;
+  /** The restart work (`resumeAfterRestart`) while it runs. */
+  #restart: Promise<void> | undefined;
 
   constructor(input: OrbContainerControllerInput) {
     this.#container = input.container;
@@ -285,8 +312,11 @@ export class OrbContainerController {
   }
 
   async #load(): Promise<OrbWorkspaceState | undefined> {
-    if (this.#state === null)
-      this.#state = await this.#storage.get<OrbWorkspaceState>(STATE_KEY);
+    if (this.#state === null) {
+      const loaded = await this.#storage.get<OrbWorkspaceState>(STATE_KEY);
+      // A read that stalled must not overwrite a save made meanwhile.
+      if (this.#state === null) this.#state = loaded;
+    }
     return this.#state;
   }
 
@@ -297,7 +327,8 @@ export class OrbContainerController {
 
   #exclusive<A>(operation: () => Promise<A>): Promise<A> {
     this.#busy += 1;
-    const run = this.#lifecycle.then(operation, operation);
+    const after = () => this.#afterRestart().then(operation);
+    const run = this.#lifecycle.then(after, after);
     this.#lifecycle = run.then(
       () => undefined,
       () => undefined,
@@ -305,6 +336,28 @@ export class OrbContainerController {
     return run.finally(() => {
       this.#busy -= 1;
     });
+  }
+
+  /**
+   * Waits for the restart work, at most `RESTART_WAIT_MS`: the object
+   * answers while storage stalls, and an operation that must follow the
+   * restart does not hang behind it.
+   */
+  async #afterRestart() {
+    const restart = this.#restart;
+    if (restart === undefined) return;
+    const startedAt = this.#now();
+    const settled = await within(
+      restart.then(() => true),
+      RESTART_WAIT_MS,
+    );
+    if (settled === undefined)
+      orbContainerLogger.warn("Orb container restart work is still running.", {
+        event: "orb_container_restart_wait",
+        sandboxId: this.#sandboxId,
+        outcome: "timed_out",
+        waitedMs: this.#now() - startedAt,
+      });
   }
 
   async #idle() {
@@ -368,8 +421,16 @@ export class OrbContainerController {
         attempts += 1;
         attemptStartedAt = this.#now();
         try {
-          const process = await this.#container.exec(["true"]);
-          if ((await process.exitCode) === 0) {
+          // A probe can hang without failing; the deadline bounds it.
+          const exitCode = await within(
+            this.#container.exec(["true"]).then((process) => process.exitCode),
+            Math.max(0, deadline - this.#now()),
+          );
+          if (exitCode === undefined) {
+            lastFailure = new Error("the readiness probe did not return");
+            break;
+          }
+          if (exitCode === 0) {
             slowestAttemptMs = Math.max(
               slowestAttemptMs,
               this.#now() - attemptStartedAt,
@@ -396,9 +457,11 @@ export class OrbContainerController {
     } finally {
       clearInterval(watchdog);
     }
-    throw failure(
-      operation,
-      lastFailure instanceof Error ? lastFailure.message : "not ready",
+    // Text the run-failure classifier reads as a platform failure.
+    throw new Error(
+      `Orb container ${operation} timed out after ${READY_TIMEOUT_MS / 1000} s: ${
+        lastFailure instanceof Error ? lastFailure.message : "not ready"
+      }`,
     );
   }
 
@@ -480,7 +543,17 @@ export class OrbContainerController {
         enableInternet: true,
         env: ORB_START_ENVIRONMENT,
       });
-    await this.#waitReady("start");
+    try {
+      await this.#waitReady("start");
+    } catch (cause) {
+      // A container that never became ready would pass for running on the
+      // next open; stop it so a retry starts it again.
+      await within(
+        this.#container.destroy().catch(() => undefined),
+        ABANDON_START_MS,
+      );
+      throw cause;
+    }
     await this.#armInactivity(idleMs);
     await this.#save({
       ...state,
@@ -576,6 +649,7 @@ export class OrbContainerController {
 
   /** Core's idle deadline: pause `durationMs` from now unless renewed. */
   async setIdleDeadline(durationMs: number): Promise<void> {
+    await this.#afterRestart();
     const state = await this.#load();
     if (state === undefined || state.status === "destroyed") return;
     await this.#save({ ...state, idleDeadline: this.#now() + durationMs });
@@ -587,6 +661,7 @@ export class OrbContainerController {
    * meanwhile is restored first, as E2B resumes a paused sandbox on use.
    */
   async #use<A>(operation: () => Promise<A>): Promise<A> {
+    await this.#afterRestart();
     while (true) {
       await this.#idle();
       if (this.#container.running) break;
@@ -962,10 +1037,41 @@ export class OrbContainerController {
 
   /**
    * After this object restarts with its container still running, re-arm the
-   * inactivity timeout and the heartbeat.
+   * inactivity timeout and the heartbeat. It runs beside the object's calls,
+   * never blocking them: `status` answers at once, and lifecycle and
+   * container operations wait for it at most `RESTART_WAIT_MS`. A failure is
+   * logged; the next heartbeat or open re-arms both.
    */
-  async resumeAfterRestart() {
-    if (!this.#container.running) return;
+  resumeAfterRestart(): Promise<void> {
+    if (!this.#container.running) return Promise.resolve();
+    const startedAt = this.#now();
+    const restart = this.#resume().then(
+      () => {
+        orbContainerLogger.info("Orb container re-armed after a restart.", {
+          event: "orb_container_restart",
+          sandboxId: this.#sandboxId,
+          outcome: "resumed",
+          durationMs: this.#now() - startedAt,
+        });
+      },
+      (cause: unknown) => {
+        orbContainerLogger.error("Orb container restart work failed.", {
+          event: "orb_container_restart",
+          sandboxId: this.#sandboxId,
+          outcome: "error",
+          durationMs: this.#now() - startedAt,
+          error: cause instanceof Error ? cause.message : String(cause),
+        });
+      },
+    );
+    this.#restart = restart;
+    void restart.finally(() => {
+      if (this.#restart === restart) this.#restart = undefined;
+    });
+    return restart;
+  }
+
+  async #resume() {
     const state = await this.#load();
     await this.#armInactivity(
       Math.max(0, (state?.idleDeadline ?? this.#now()) - this.#now()),

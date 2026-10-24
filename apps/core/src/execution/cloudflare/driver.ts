@@ -6,6 +6,7 @@ import type {
 } from "@flue/runtime";
 import { sandboxFromDriver } from "@flue/runtime";
 import type { ExecutionGuest } from "../../plugins/execution/provider.js";
+import { markRunFailure } from "../../runtime/run-failure.js";
 import {
   decodeWorkspaceContextSnapshot,
   WORKSPACE_CONTEXT_TIMEOUT_MS,
@@ -64,12 +65,27 @@ class CloudflareSandboxDriver implements SandboxDriver {
   async snapshotWorkspaceContext(
     root: string,
   ): Promise<WorkspaceContextSnapshotResult> {
-    const result = await run(this.client, workspaceContextCommand, {
+    // dx's own read-only scan: when it fails, the container did, so the
+    // submission retries instead of settling as an internal error.
+    const unavailable = (reason: string) =>
+      new Error(
+        markRunFailure({
+          class: "platform",
+          code: "WORKSPACE_CONTEXT_UNAVAILABLE",
+          message: `Reading the workspace context failed: ${reason}`,
+          retryable: true,
+        }),
+      );
+    const result = await this.client.exec(workspaceContextCommand, {
       env: { FLUE_WORKSPACE_CONTEXT_ROOT: root },
       timeoutMs: WORKSPACE_CONTEXT_TIMEOUT_MS,
     });
+    if (result.timedOut)
+      throw unavailable(`timed out after ${WORKSPACE_CONTEXT_TIMEOUT_MS} ms.`);
     if (result.exitCode !== 0)
-      throw new Error("Cloudflare workspace-context operation failed.");
+      throw unavailable(
+        `exit ${result.exitCode}: ${result.stderr.slice(-500).trim()}`,
+      );
     return decodeWorkspaceContextSnapshot(result.stdout);
   }
 

@@ -524,6 +524,11 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   #changesMarked: Promise<void> = Promise.resolve();
   /** The capture lease the next candidate publishes under. */
   #heldCapture?: ThreadChangesCaptureLease;
+  /**
+   * The latest Changes refresh that arrived before the daemon was ready; it
+   * is sent once the daemon is. One is enough: a newer one supersedes it.
+   */
+  #pendingChangesRefresh?: string;
   /** Candidates publish one at a time, so they never contend for the lease. */
   #publishingChanges: Promise<void> = Promise.resolve();
   /** The resident Core last saw become ready, and when. */
@@ -2402,6 +2407,17 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   #resumePendingRequests() {
     const socket = this.#currentDaemonSocket();
     if (socket === undefined) return;
+    const refresh = this.#pendingChangesRefresh;
+    if (refresh !== undefined && this.#isReady()) {
+      this.#pendingChangesRefresh = undefined;
+      try {
+        socket.send(refresh);
+      } catch {
+        this.#pendingChangesRefresh ??= refresh;
+        void this.#loseDaemonConnection(socket, true);
+        return;
+      }
+    }
     for (const [requestId, pending] of this.#pendingRequests) {
       if (
         pending.socket !== undefined ||
@@ -2685,6 +2701,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       1000,
     );
     this.#authority = undefined;
+    this.#pendingChangesRefresh = undefined;
     this.#failAllPending();
     this.#proxyRelay.daemonUnavailable();
     this.#fenceDaemonSockets();
@@ -3311,8 +3328,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     if (
       request.method !== "POST" ||
       request.headers.get("x-dx-changes-refresh") !== "1" ||
-      request.headers.get("x-dx-thread-id") !== this.#authority?.threadId ||
-      !this.#isReady()
+      request.headers.get("x-dx-thread-id") !== this.#authority?.threadId
     )
       return new Response(null, { status: 503 });
     const body = await request.text();
@@ -3329,9 +3345,12 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       { onExcessProperty: "error" },
     );
     if (Option.isNone(refresh)) return new Response(null, { status: 400 });
+    const frame = JSON.stringify(refresh.value);
     const socket = this.#currentDaemonSocket();
-    if (socket === undefined) return new Response(null, { status: 503 });
-    socket.send(JSON.stringify(refresh.value));
+    if (socket === undefined || !this.#isReady())
+      // The daemon is connecting or repairing: send it once it is ready.
+      this.#pendingChangesRefresh = frame;
+    else socket.send(frame);
     return new Response(null, { status: 202 });
   }
 

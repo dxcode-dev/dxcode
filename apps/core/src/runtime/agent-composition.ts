@@ -10,6 +10,7 @@ import {
   selectRuntimeAdapters,
 } from "./composition.js";
 import { LOCAL_MODEL_FIXTURE_ROUTE } from "./model-fixture-route.js";
+import { markRunFailure, type RunFailureClass } from "./run-failure.js";
 
 export { LOCAL_MODEL_FIXTURE_ROUTE } from "./model-fixture-route.js";
 
@@ -56,17 +57,52 @@ const resolvePromptData =
         signal: context.signal,
       });
     if (!response.ok) {
-      const { code, message } = await response.json<{
-        code: string;
-        message?: string;
-      }>();
+      const text = await response.text();
+      let body: { code?: string; class?: RunFailureClass; message?: string };
+      try {
+        body = JSON.parse(text);
+      } catch {
+        // A reset coordinator answers with Cloudflare's plain-text error.
+        throw new Error(
+          markRunFailure({
+            class: "platform",
+            code: "MODEL_ROUTING_UNAVAILABLE",
+            message: `Model routing failed: ${text.slice(0, 300)}`,
+            retryable: true,
+          }),
+        );
+      }
+      const { code = "UNKNOWN", message } = body;
       // The Claude plan's limit text is what the Thread's limit card shows.
       if (code === "CLAUDE_PLAN_LIMIT" && message !== undefined)
         throw new Error(message);
+      if (body.class !== undefined && message !== undefined)
+        throw new Error(
+          markRunFailure({
+            class: body.class,
+            code,
+            message,
+            retryable: body.class === "transient" || body.class === "platform",
+          }),
+        );
+      if (code.startsWith("MODEL_NOT_SERVED:"))
+        throw new Error(
+          markRunFailure({
+            class: "account",
+            code: "MODEL_NOT_SERVED",
+            message: `Model ${code.slice("MODEL_NOT_SERVED:".length).trim()} is not served. Add or enable a connection, then retry.`,
+            retryable: false,
+          }),
+        );
+      // The coordinator answers 400 for what fails the same way every time.
+      const retryable = response.status !== 400;
       throw new Error(
-        code.startsWith("MODEL_NOT_SERVED:")
-          ? `Model ${code.slice("MODEL_NOT_SERVED:".length).trim()} is not served. Add or enable a connection, then retry.`
-          : `Model routing unavailable: ${code}`,
+        markRunFailure({
+          class: retryable ? "platform" : "internal",
+          code,
+          message: `Model routing unavailable: ${code}`,
+          retryable,
+        }),
       );
     }
     return response.json<DxPromptData>();

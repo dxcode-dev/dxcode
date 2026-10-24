@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Bindings } from "../http/types.js";
+import { executionWorkspaceLogger } from "../logging.js";
 import {
   additionalRepositoryDirectories,
   cloneAdditionalRepositories,
+  ensureGithubCliWrapper,
 } from "./source-preparation.js";
 
 const rows = [
@@ -129,6 +131,45 @@ describe("additional repositories", () => {
     for (const clone of sandbox.clones) {
       expect(clone).not.toHaveProperty("GH_TOKEN");
       expect(clone).not.toHaveProperty("GIT_CONFIG_COUNT");
+    }
+  });
+});
+
+describe("GitHub CLI wrapper installation", () => {
+  it("logs the exit code and a bounded stderr tail when the install command fails", async () => {
+    const warn = vi
+      .spyOn(executionWorkspaceLogger, "warn")
+      .mockImplementation(() => {});
+    const db = {
+      prepare: () => ({
+        bind: () => ({ first: async () => ({ connected: 1 }) }),
+      }),
+    } as unknown as D1Database;
+    const stderr = `${"x".repeat(4_000)}\nmktemp: failed to create file via template '/home/user/.local/bin/.gh.XXXXXX': Permission denied\n`;
+    try {
+      await ensureGithubCliWrapper(db, "thr_wrapper", {
+        commands: {
+          run: async () => ({ exitCode: 1, stdout: "", stderr }),
+        },
+      });
+      expect(warn).toHaveBeenCalledOnce();
+      const [message, properties] = warn.mock.calls[0] as unknown as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(message).toBe("GitHub CLI wrapper installation failed.");
+      expect(properties).toMatchObject({
+        event: "github_cli_wrapper",
+        threadId: "thr_wrapper",
+        exitCode: 1,
+      });
+      const tail = properties.stderrTail as string;
+      expect(tail).toContain(
+        "mktemp: failed to create file via template '/home/user/.local/bin/.gh.XXXXXX': Permission denied",
+      );
+      expect(tail.length).toBeLessThanOrEqual(1_000);
+    } finally {
+      warn.mockRestore();
     }
   });
 });

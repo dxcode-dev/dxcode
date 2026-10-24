@@ -227,6 +227,22 @@ const errorSearchText = (error: unknown): string => {
     .join(" ");
 };
 
+/**
+ * Core stamps a failure the person must fix (budget, credentials, plan) as
+ * `(dx_failure:account:CODE)`; its text is written for the person.
+ */
+const accountFailureMessage = (error: unknown) => {
+  const message =
+    typeof error === "object" && error !== null && "message" in error
+      ? String((error as { message: unknown }).message)
+      : errorSearchText(error);
+  if (!/\(dx_failure:account:[A-Z0-9_]+\)/.test(message)) return undefined;
+  return message
+    .replace(/\(dx_failure:[a-z]+:[A-Z0-9_]+\)/g, "")
+    .replace(/^\w+\(sub_[^)]*\) failed: /, "")
+    .trim();
+};
+
 const modelRoutingErrorMessage = (error: unknown) => {
   const text = errorSearchText(error);
   const model = text.match(/MODEL_NOT_SERVED:\s*([\w./:-]+)/i)?.[1];
@@ -308,6 +324,16 @@ const threadErrorPresentation = (
         id: `settlement:${latestSettlement.submissionId}`,
         ...sourceDenied,
         action: "resume",
+      };
+    const accountFailure = latestSettlementFailed
+      ? accountFailureMessage(latestSettlement.error)
+      : undefined;
+    if (accountFailure !== undefined)
+      return {
+        id: `settlement:${latestSettlement.submissionId}`,
+        title: "Model connection needs attention",
+        message: accountFailure,
+        action: "model-routing",
       };
     if (latestSettlementFailed && isModelRoutingError(latestSettlement.error)) {
       return {

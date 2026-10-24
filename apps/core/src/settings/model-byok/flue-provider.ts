@@ -13,6 +13,13 @@ import type {
 } from "@flue/runtime";
 import type { FlueDurableObjectIdentity } from "@flue/runtime/cloudflare";
 import { AGENT_RUN_LIMIT_MS } from "../../runtime/agent-run-limit.js";
+import {
+  classifyRunFailure,
+  markRunFailure,
+  type RunFailure,
+  type RunFailureClass,
+  runFailureText,
+} from "../../runtime/run-failure.js";
 import { catalogProviderModels, IN_DO_APIS } from "../model-routing/catalog.js";
 import {
   encodeProxyEnvelope,
@@ -125,12 +132,101 @@ export const withNonEmptyToolErrors = (context: Context): Context => {
   return changed ? { ...context, messages } : context;
 };
 
+const FAILURE_CLASSES: ReadonlySet<string> = new Set<RunFailureClass>([
+  "account",
+  "transient",
+  "platform",
+  "internal",
+]);
+
+/**
+ * A failed coordinator answer as a run failure: the coordinator's own
+ * classification when it gave one, otherwise its routing code.
+ */
+const coordinatorFailure = (status: number, text: string): RunFailure => {
+  let body: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed === "object" && parsed !== null)
+      body = parsed as Record<string, unknown>;
+  } catch {
+    // Not a coordinator body; classified from its status below.
+  }
+  const { code, message } = body;
+  const failureClass = body.class;
+  if (
+    typeof code === "string" &&
+    typeof message === "string" &&
+    typeof failureClass === "string" &&
+    FAILURE_CLASSES.has(failureClass)
+  )
+    return {
+      class: failureClass as RunFailureClass,
+      code,
+      message,
+      retryable: failureClass === "transient" || failureClass === "platform",
+      ...(typeof body.upstreamStatus === "number"
+        ? { status: body.upstreamStatus }
+        : {}),
+    };
+  const routingCode = typeof code === "string" ? code : `HTTP_${status}`;
+  const byCode = classifyRunFailure({ message: routingCode });
+  if (byCode.class !== "internal") return byCode;
+  const retryable = status >= 500;
+  return {
+    class: retryable ? "transient" : "internal",
+    // The stamp carries only `[A-Z0-9_]` (`MODEL_NOT_SERVED: openai/…`).
+    code: /^[A-Z0-9_]+/.exec(routingCode)?.[0] ?? "MODEL_ROUTING_FAILED",
+    message: retryable
+      ? "Model routing is temporarily unavailable."
+      : `Model routing refused the call (${routingCode}).`,
+    retryable,
+    status,
+  };
+};
+
+/**
+ * The text Flue reads to decide whether to retry: stamped with its class.
+ * Without a coordinator classification, a request the provider rejected
+ * keeps the provider's words, which is where Flue finds a context overflow.
+ */
+const failureText = (errorMessage: string, failure?: RunFailure) => {
+  if (failure !== undefined) return markRunFailure(failure);
+  const classified = classifyRunFailure({ message: errorMessage });
+  return markRunFailure(
+    classified.class === "internal"
+      ? {
+          ...classified,
+          message: runFailureText(errorMessage) || classified.message,
+        }
+      : classified,
+  );
+};
+
+const withFailureText = (
+  event: AssistantMessageEvent,
+  failure?: RunFailure,
+): AssistantMessageEvent =>
+  event.type === "error" && event.error.stopReason === "error"
+    ? {
+        ...event,
+        error: {
+          ...event.error,
+          errorMessage: failureText(event.error.errorMessage ?? "", failure),
+        },
+      }
+    : event;
+
 /**
  * Serialized upstream request → the coordinator `/proxy` endpoint. The body
  * streams through unchanged; only routing metadata travels in a header.
  */
 const coordinatorFetch =
-  (deps: DxModelRoutingTransportDeps, model: Model<Api>): typeof fetch =>
+  (
+    deps: DxModelRoutingTransportDeps,
+    model: Model<Api>,
+    onFailure: (failure: RunFailure) => void,
+  ): typeof fetch =>
   async (input, init) => {
     const threadId = invocationThreadId(deps);
     const request = new Request(input, init);
@@ -145,15 +241,29 @@ const coordinatorFetch =
         headers: Object.fromEntries(request.headers.entries()),
       },
     });
-    return coordinatorStub(deps, threadId).fetch(`${BYOK_DO_URL_BASE}/proxy`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/octet-stream",
-        [PROXY_ENVELOPE_HEADER]: envelope,
+    const response = await coordinatorStub(deps, threadId).fetch(
+      `${BYOK_DO_URL_BASE}/proxy`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/octet-stream",
+          [PROXY_ENVELOPE_HEADER]: envelope,
+        },
+        body: request.body,
+        signal: request.signal,
       },
-      body: request.body,
-      signal: request.signal,
-    });
+    );
+    if (!response.ok)
+      onFailure(
+        coordinatorFailure(
+          response.status,
+          await response
+            .clone()
+            .text()
+            .catch(() => ""),
+        ),
+      );
+    return response;
   };
 
 /** In-DO adapter run → the coordinator `/stream` endpoint, events relayed. */
@@ -236,7 +346,9 @@ const streamViaCoordinator = (
               },
             },
             stopReason: "error",
-            errorMessage: `Coordinator failed (${response.status}): ${detail}`,
+            errorMessage: markRunFailure(
+              coordinatorFailure(response.status, detail),
+            ),
             timestamp: Date.now(),
           },
         } satisfies AssistantMessageEvent);
@@ -256,14 +368,18 @@ const streamViaCoordinator = (
         buffer = lines.pop() ?? "";
         for (const line of lines) {
           if (line.trim() === "") continue;
-          const event = JSON.parse(line) as AssistantMessageEvent;
+          const event = withFailureText(
+            JSON.parse(line) as AssistantMessageEvent,
+          );
           if (event.type === "done" || event.type === "error") done = event;
           events.push(event);
         }
       }
       for (const line of buffer.split("\n")) {
         if (line.trim() === "") continue;
-        const event = JSON.parse(line) as AssistantMessageEvent;
+        const event = withFailureText(
+          JSON.parse(line) as AssistantMessageEvent,
+        );
         if (event.type === "done" || event.type === "error") done = event;
         events.push(event);
       }
@@ -295,8 +411,9 @@ const streamViaCoordinator = (
             },
           },
           stopReason: "error",
-          errorMessage:
+          errorMessage: failureText(
             cause instanceof Error ? cause.message : "Coordinator failed.",
+          ),
           timestamp: Date.now(),
         },
       } satisfies AssistantMessageEvent);
@@ -315,19 +432,25 @@ const streamViaAdapter = (
   options: Record<string, unknown>,
 ) => {
   const events = createAssistantMessageEventStream();
+  // The SDK turns a failed coordinator answer into its own error text; the
+  // coordinator's classification replaces it.
+  let failure: RunFailure | undefined;
   void (async () => {
     try {
       const adapter = await loadAdapter();
       let done: AssistantMessageEvent | undefined;
-      for await (const event of adapter[method](model, context, {
+      for await (const raw of adapter[method](model, context, {
         ...options,
         maxRetries: 0,
         // Flue's submission deadline bounds the call; SDK defaults must not
         // end it first (OpenAI/Anthropic 10 min to response, Mistral 60 s total).
         timeoutMs: AGENT_RUN_LIMIT_MS,
         apiKey: "dx-placeholder",
-        fetch: coordinatorFetch(deps, model),
+        fetch: coordinatorFetch(deps, model, (rejected) => {
+          failure = rejected;
+        }),
       })) {
+        const event = withFailureText(raw, failure);
         if (event.type === "done" || event.type === "error") done = event;
         events.push(event);
       }
@@ -359,8 +482,10 @@ const streamViaAdapter = (
             },
           },
           stopReason: "error",
-          errorMessage:
+          errorMessage: failureText(
             cause instanceof Error ? cause.message : "Adapter failed.",
+            failure,
+          ),
           timestamp: Date.now(),
         },
       } satisfies AssistantMessageEvent);

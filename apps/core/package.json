@@ -1,7 +1,7 @@
 {
   "name": "@dx/core",
   "private": true,
-  "version": "0.2.35",
+  "version": "0.2.36",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -20,7 +20,7 @@
     "@dx/api": "workspace:^",
     "@dx/domain": "workspace:^",
     "@effect/sql-d1": "4.0.5",
-    "@flue/runtime": "file:../../third-party/flue/runtime-1a87a0b331f25810794dbee6cff0d125760a8485.tgz",
+    "@flue/runtime": "file:../../third-party/flue/runtime-7047c601e7923609e65a9ae09d25eefd9081b2df.tgz",
     "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
     "@logtape/logtape": "2.3.1",
     "@modelcontextprotocol/client": "2.0.0",
@@ -43,8 +43,8 @@
     "@cloudflare/vitest-plugin": "1.0.0",
     "@cloudflare/workers-types": "5.20260820.1",
     "@earendil-works/pi-ai": "1.1.0",
-    "@flue/sdk": "file:../../third-party/flue/sdk-1a87a0b331f25810794dbee6cff0d125760a8485.tgz",
-    "@flue/vite": "file:../../third-party/flue/vite-1a87a0b331f25810794dbee6cff0d125760a8485.tgz",
+    "@flue/sdk": "file:../../third-party/flue/sdk-7047c601e7923609e65a9ae09d25eefd9081b2df.tgz",
+    "@flue/vite": "file:../../third-party/flue/vite-7047c601e7923609e65a9ae09d25eefd9081b2df.tgz",
     "@msw/cloudflare": "^0.0.1",
     "@types/ws": "8.18.1",
     "@valibot/to-json-schema": "1.7.1",
