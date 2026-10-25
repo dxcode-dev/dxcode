@@ -60,17 +60,20 @@ const wrapperDirectory = GITHUB_CLI_WRAPPER_PATH.slice(
  * Idempotently installs the wrapper passed in `DX_GH_WRAPPER`. It refreshes a
  * dx-generated file and never replaces a user's own `gh`. One guest command,
  * so it can run on every workspace activation, warm or cold. E2B runs it as
- * `bash -l -c`, which inherits the terminal profile's EXIT trap; under `set -e`
- * that trap failing turned the up-to-date early exit into status 1, so clear it.
+ * `bash -l -c`: under `set -e` a failure in the profile's inherited EXIT trap,
+ * or in the `~/.bash_logout` that the `exit` builtin runs, turns success into
+ * status 1. So it clears the trap and ends without calling `exit`.
  */
 export const GITHUB_CLI_WRAPPER_INSTALL_COMMAND = `set -eu
 trap - EXIT
 target=${GITHUB_CLI_WRAPPER_PATH}
-if test -f "$target" && ! test -L "$target" && test -x "$target" && printf '%s' "$DX_GH_WRAPPER" | cmp -s - "$target"; then exit 0; fi
-if { test -e "$target" || test -L "$target"; } && ! { test -f "$target" && ! test -L "$target" && sed -n 2p "$target" | grep -qxF '${GITHUB_CLI_WRAPPER_MARKER}'; }; then exit 0; fi
+if test -f "$target" && ! test -L "$target" && test -x "$target" && printf '%s' "$DX_GH_WRAPPER" | cmp -s - "$target"; then :
+elif { test -e "$target" || test -L "$target"; } && ! { test -f "$target" && ! test -L "$target" && sed -n 2p "$target" | grep -qxF '${GITHUB_CLI_WRAPPER_MARKER}'; }; then :
+else
 mkdir -p ${wrapperDirectory}
 temp=$(mktemp ${wrapperDirectory}/.gh.XXXXXX)
 trap 'rm -f "$temp"' EXIT
 printf '%s' "$DX_GH_WRAPPER" > "$temp"
 chmod 0755 "$temp"
-mv -f "$temp" "$target"`;
+mv -f "$temp" "$target"
+fi`;

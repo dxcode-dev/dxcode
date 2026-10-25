@@ -28,6 +28,7 @@ import {
   catalogProviderModels,
 } from "../settings/model-routing/catalog.js";
 import {
+  answerUnofferedClaudeCodeDxCalls,
   claudeCodeDxToolList,
   deliverClaudeCodeDxToolResults,
 } from "./dx-tools.js";
@@ -117,6 +118,23 @@ const rememberPlan = (threadId: string, plan: ClaudePlanAccess) => {
       knownPlans.size - KNOWN_PLANS,
     ))
       knownPlans.delete(key);
+};
+
+/**
+ * DxAgent's Claude Code prompt for each Thread, and the person's own
+ * instructions from dx Settings, from its latest render.
+ */
+const prompts = new Map<
+  string,
+  { readonly prompt: string; readonly personalInstructions: string }
+>();
+
+export const rememberClaudeCodePrompt = (
+  threadId: string,
+  prompt: string,
+  personalInstructions: string,
+) => {
+  prompts.set(threadId, { prompt, personalInstructions });
 };
 
 /** A failed recording is tried again after these delays, in milliseconds. */
@@ -662,14 +680,23 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
           nextAttempt += 1;
           // Set before launching, so Stop during the launch stops it.
           run = next;
+          const remembered = prompts.get(threadId);
           await next.launch(
             {
               model: model.id,
               effort: claudeCodeEffort(
                 options?.reasoning ?? CLAUDE_CODE_DEFAULT_EFFORT,
               ),
-              // pi carries the prompt as transcript system messages.
-              systemPrompt: getCurrentSystemPrompt(context.messages),
+              // Claude Code appends DxAgent's Claude Code prompt to its own and
+              // loads instruction files itself: AGENTS.md or CLAUDE.md from the
+              // repository, nested ones as it opens files, and the person's
+              // instructions from ~/.claude/CLAUDE.md. Flue's composed prompt
+              // is for dx's own loop: it repeats CLAUDE.md, lists skills and
+              // subagents for tools Claude does not have, and carries the
+              // date, which would miss the session's prompt cache.
+              systemPrompt:
+                remembered?.prompt ?? getCurrentSystemPrompt(context.messages),
+              personalInstructions: remembered?.personalInstructions,
               input: input(),
               token: credential.token,
               tools: claudeCodeDxToolList(threadId),
@@ -847,6 +874,14 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
         }
         emitter.update(found, true);
         if (found.stopReason === "stop") await current.syncChanges();
+        else
+          await answerUnofferedClaudeCodeDxCalls(
+            found.blocks.flatMap((block) =>
+              block.type === "toolCall" ? [block] : [],
+            ),
+            context,
+            sandbox,
+          );
         events.push({
           type: "done",
           reason: found.stopReason,

@@ -23,6 +23,15 @@
  *     the cron does not finish it; a finished cleanup runs again.
  * 12. The owner is told "not found" instead of "deleted", or anyone else is
  *     told it was deleted.
+ *
+ * Deleting a Thread with its children (`?includeChildren=true`):
+ * 13. It deletes a Thread the sidebar does not list under the parent: a
+ *     pinned child, a child archived while the parent is active, or an
+ *     unrelated Thread.
+ * 14. A listed child is only detached, or keeps its history, sandbox,
+ *     search text, Changes, or execution storage.
+ * 15. The response names a child it did not delete, or omits one it did.
+ * 16. Someone other than the owner deletes the family.
  */
 import { env, runInDurableObject } from "cloudflare:test";
 import {
@@ -73,6 +82,21 @@ const other = thread(
 );
 const child = thread(
   "thr_00000000-0000-4000-8000-000000000d03",
+  ownerProject.id as ProjectId,
+  owner,
+);
+const sibling = thread(
+  "thr_00000000-0000-4000-8000-000000000d04",
+  ownerProject.id as ProjectId,
+  owner,
+);
+const pinnedChild = thread(
+  "thr_00000000-0000-4000-8000-000000000d05",
+  ownerProject.id as ProjectId,
+  owner,
+);
+const archivedChild = thread(
+  "thr_00000000-0000-4000-8000-000000000d06",
   ownerProject.id as ProjectId,
   owner,
 );
@@ -548,5 +572,166 @@ describe("Thread deletion in workerd with real D1, R2, and Durable Objects", () 
     expect(done.status).toBe(200);
     expect((await json(done)).data.cleanup).toBe("complete");
     expect(recorder.calls.length).toBe(callsBefore);
+  });
+});
+
+describe("Deleting a Thread with its children", () => {
+  /** `child` and `sibling` list under `parent`; the other two do not. */
+  const seedFamily = async () => {
+    await runRepositories(
+      Effect.gen(function* () {
+        const threads = yield* ThreadRepository;
+        yield* threads.insert(sibling);
+        yield* threads.insert(pinnedChild);
+        yield* threads.insert(archivedChild);
+      }),
+    );
+    await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE threads SET parent_thread_id = ?1 WHERE id IN (?2, ?3, ?4, ?5)",
+      ).bind(parent.id, child.id, sibling.id, pinnedChild.id, archivedChild.id),
+      env.DB.prepare("UPDATE threads SET pinned_at = ? WHERE id = ?").bind(
+        new Date().toISOString(),
+        pinnedChild.id,
+      ),
+      env.DB.prepare(
+        "UPDATE threads SET lifecycle_state = 'archived' WHERE id = ?",
+      ).bind(archivedChild.id),
+    ]);
+    for (const { id } of [child, sibling]) {
+      await env.DX_STORAGE.put(`threads/${id}/changes/v1/capture-1.json`, "{}");
+      await ownerSearchIndex(bindings, owner)?.indexMessages(id, "Child work", [
+        { messageId: `m-${id}`, role: "user", text: "child secret" },
+      ]);
+      await runInDurableObject(
+        env.THREAD_EXECUTION.get(env.THREAD_EXECUTION.idFromName(id)),
+        (_instance, state) =>
+          state.storage.put("environment-next-generation", 3),
+      );
+    }
+  };
+
+  const lifecycle = async (threadId: string) =>
+    (await env.DB.prepare(
+      "SELECT lifecycle_state AS state, parent_thread_id AS parent FROM threads WHERE id = ?",
+    )
+      .bind(threadId)
+      .first<{ state: string; parent: string | null }>()) ?? undefined;
+
+  const removeFamily = (threadId: string, userId = owner) =>
+    send(userId, `/threads/${threadId}?includeChildren=true`, "DELETE");
+
+  it("deletes the parent and the children listed under it, and only those", async () => {
+    await seedFamily();
+    expect(await indexedThreads(child.id)).toBe(1);
+
+    const response = await removeFamily(parent.id);
+    expect(response.status).toBe(200);
+    const body = await json(response);
+    expect(body.data).toMatchObject({
+      threadId: parent.id,
+      cleanup: "complete",
+    });
+    expect([...(body.data.deletedChildThreadIds as string[])].sort()).toEqual(
+      [child.id, sibling.id].sort(),
+    );
+
+    // The parent and its listed children are scrubbed tombstones.
+    for (const id of [parent.id, child.id, sibling.id]) {
+      expect(await lifecycle(id)).toEqual({ state: "deleted", parent: null });
+      expect(
+        await env.DB.prepare(
+          "SELECT title, completed_at IS NOT NULL AS done FROM threads JOIN thread_deletion ON thread_id = id WHERE id = ?",
+        )
+          .bind(id)
+          .first(),
+      ).toEqual({ title: "Deleted thread", done: 1 });
+      expect((await send(owner, `/threads/${id}`)).status).toBe(410);
+    }
+
+    // Each one's history and sandbox, then its stored copies, are gone.
+    for (const id of [parent.id, child.id, sibling.id]) {
+      expect(recorder.calls).toContainEqual(["eraseAgentHistory", id]);
+      expect(recorder.calls).toContainEqual(["destroySandbox", id]);
+    }
+    for (const id of [child.id, sibling.id]) {
+      expect(await indexedThreads(id)).toBe(0);
+      expect(await executionKeys(id)).toEqual([]);
+      expect(
+        (await env.DX_STORAGE.list({ prefix: `threads/${id}/` })).objects,
+      ).toEqual([]);
+    }
+
+    // A pinned child and an archived child are not listed under the
+    // parent: they survive, detached, as top-level Threads.
+    expect(await lifecycle(pinnedChild.id)).toEqual({
+      state: "active",
+      parent: null,
+    });
+    expect(await lifecycle(archivedChild.id)).toEqual({
+      state: "archived",
+      parent: null,
+    });
+    expect(await lifecycle(other.id)).toEqual({
+      state: "active",
+      parent: null,
+    });
+    for (const id of [pinnedChild.id, archivedChild.id, other.id])
+      expect(recorder.calls.map(([, threadId]) => threadId)).not.toContain(id);
+
+    const listed = await listedIds();
+    expect(listed).toContain(pinnedChild.id);
+    expect(listed).toContain(other.id);
+    for (const id of [parent.id, child.id, sibling.id])
+      expect(listed).not.toContain(id);
+  });
+
+  it("deletes an archived parent with its archived children", async () => {
+    await seedFamily();
+    await env.DB.prepare(
+      "UPDATE threads SET lifecycle_state = 'archived' WHERE id IN (?, ?)",
+    )
+      .bind(parent.id, child.id)
+      .run();
+
+    const response = await removeFamily(parent.id);
+    expect(response.status).toBe(200);
+    expect((await json(response)).data.deletedChildThreadIds).toEqual(
+      expect.arrayContaining([child.id, archivedChild.id]),
+    );
+    expect(await lifecycle(child.id)).toEqual({
+      state: "deleted",
+      parent: null,
+    });
+    expect(await lifecycle(archivedChild.id)).toEqual({
+      state: "deleted",
+      parent: null,
+    });
+    // Still active, so listed on its own, not under the archived parent.
+    expect(await lifecycle(sibling.id)).toEqual({
+      state: "active",
+      parent: null,
+    });
+  });
+
+  it("reports no children when none are listed under the Thread", async () => {
+    const response = await removeFamily(other.id);
+    expect(response.status).toBe(200);
+    expect((await json(response)).data.deletedChildThreadIds).toEqual([]);
+    expect(await lifecycle(other.id)).toEqual({
+      state: "deleted",
+      parent: null,
+    });
+  });
+
+  it("refuses everyone but the owner and leaves the family intact", async () => {
+    await seedFamily();
+    for (const userId of [member, outsider]) {
+      const response = await removeFamily(parent.id, userId);
+      expect(response.status).toBe(404);
+    }
+    for (const id of [parent.id, child.id, sibling.id])
+      expect((await lifecycle(id))?.state).toBe("active");
+    expect(recorder.calls).toEqual([]);
   });
 });

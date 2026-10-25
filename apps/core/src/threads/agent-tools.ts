@@ -39,8 +39,6 @@ const WAIT_POLL_MS = 2_000;
 /** How long a hinted wait trusts the hub before reading D1 anyway. */
 const WAIT_HINT_RECHECK_MS = 10_000;
 const WAIT_MAX_THREADS = 20;
-/** How much of a Thread's latest agent message the tools return. */
-const MESSAGE_PREVIEW_CHARS = 4_000;
 const MESSAGE_MAX_CHARS = 32_000;
 const THREAD_ID_MAX_CHARS = 128;
 
@@ -174,6 +172,8 @@ export const createThreadTools = (
   getContext: () => ThreadToolsContext,
   /** The submission this turn runs, which a retried tool call shares. */
   submissionId?: string,
+  /** Claude Code mode: read_thread returns material instead of an answer. */
+  claudeCode = false,
 ): ToolDefinition[] => {
   /**
    * What a tool call's Thread IDs and message keys derive from, so a retry
@@ -301,8 +301,9 @@ export const createThreadTools = (
   }
 
   /**
-   * The text of the Thread's latest agent message, read from the history
-   * route the web client loads; null before the agent has answered.
+   * The whole text of the Thread's latest agent message, read from the
+   * history route the web client loads, so a parent gets a child's full
+   * report; null before the agent has answered.
    */
   const lastAgentMessage = async (
     context: ThreadToolsContext,
@@ -332,10 +333,7 @@ export const createThreadTools = (
       .flatMap(({ type, text }) => (type === "text" && text ? [text] : []))
       .join("\n")
       .trim();
-    if (text === "") return null;
-    return text.length > MESSAGE_PREVIEW_CHARS
-      ? `${text.slice(0, MESSAGE_PREVIEW_CHARS)}…`
-      : text;
+    return text === "" ? null : text;
   };
 
   /** The project a child joins when the call names none: the caller's. */
@@ -1002,6 +1000,6 @@ export const createThreadTools = (
         }),
     }),
     // find_thread and read_thread only read; see thread-search/agent-tools.ts.
-    ...createThreadSearchTools(callingThreadId, getContext),
+    ...createThreadSearchTools(callingThreadId, getContext, { claudeCode }),
   ];
 };

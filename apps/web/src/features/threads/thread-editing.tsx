@@ -21,9 +21,11 @@ import {
   setThreadPinnedMutationOptions,
   updateThreadMutationOptions,
 } from "./thread-mutations.js";
-import { threadsQueryOptions } from "./thread-queries.js";
+import { listedChildCount, threadsQueryOptions } from "./thread-queries.js";
 
 type RenameTarget = Pick<ThreadData, "id" | "title">;
+/** `children`: how many listed child Threads go with it. */
+type DeleteTarget = RenameTarget & { readonly children: number };
 
 export function ThreadEditingProvider({
   children,
@@ -39,12 +41,15 @@ export function ThreadEditingProvider({
     setThreadPinnedMutationOptions(queryClient, identity.id),
   );
   const [renaming, setRenaming] = React.useState<RenameTarget>();
-  const [deleting, setDeleting] = React.useState<RenameTarget>();
+  const [deleting, setDeleting] = React.useState<DeleteTarget>();
 
   const controller: ThreadEditingController = {
     openRename: (thread) => setRenaming({ id: thread.id, title: thread.title }),
-    openDelete: (thread) => setDeleting({ id: thread.id, title: thread.title }),
+    openDelete: (thread, children = 0) =>
+      setDeleting({ id: thread.id, title: thread.title, children }),
     setColor: (threadId, color) => mutate({ threadId, update: { color } }),
+    childCount: (threadId) =>
+      listedChildCount(queryClient, identity.id, threadId),
     // A Thread's detail has no pin; the sidebar's list does.
     pinned: (threadId) =>
       queryClient
@@ -155,7 +160,7 @@ function DeleteThreadDialog({
   thread,
   onClose,
 }: {
-  readonly thread: RenameTarget;
+  readonly thread: DeleteTarget;
   readonly onClose: () => void;
 }) {
   const { identity } = useAuthenticatedIdentity();
@@ -166,16 +171,22 @@ function DeleteThreadDialog({
     deleteThreadMutationOptions(queryClient, identity.id),
   );
   const cancel = React.useRef<HTMLButtonElement>(null);
+  const family = thread.children > 0;
   const confirm = () =>
     remove.mutate(
-      { threadId: thread.id },
+      family
+        ? { threadId: thread.id, includeChildren: true }
+        : { threadId: thread.id },
       {
-        onSuccess: () => {
+        onSuccess: ({ deletedChildThreadIds = [] }) => {
           onClose();
           // The open Thread is gone; leave its page.
           if (
-            router.state.location.pathname ===
-            `/threads/${encodeURIComponent(thread.id)}`
+            [thread.id, ...deletedChildThreadIds].some(
+              (id) =>
+                router.state.location.pathname ===
+                `/threads/${encodeURIComponent(id)}`,
+            )
           )
             void router.navigate({ to: "/" });
         },
@@ -186,7 +197,9 @@ function DeleteThreadDialog({
       ? undefined
       : remove.error instanceof Error && remove.error.message !== ""
         ? remove.error.message
-        : "The thread could not be deleted.";
+        : family
+          ? "The threads could not be deleted."
+          : "The thread could not be deleted.";
   return (
     <Dialog.Root
       open
@@ -196,12 +209,14 @@ function DeleteThreadDialog({
     >
       <ModalSurface
         className="delete-thread-dialog"
-        ariaLabel="Delete thread"
+        ariaLabel={family ? "Delete threads" : "Delete thread"}
         initialFocus={cancel}
       >
         <ModalSurfaceHeader>
           <Dialog.Title className="delete-thread-dialog-title">
-            Delete Thread?
+            {family
+              ? `Delete ${thread.children + 1} Threads?`
+              : "Delete Thread?"}
           </Dialog.Title>
           <ModalSurfaceClose />
         </ModalSurfaceHeader>
@@ -210,8 +225,9 @@ function DeleteThreadDialog({
             <span className="delete-thread-dialog-name">
               &ldquo;{thread.title}&rdquo;
             </span>{" "}
-            will be permanently deleted, with its conversation history and
-            sandbox.
+            {family
+              ? `and its ${thread.children} ${thread.children === 1 ? "subthread" : "subthreads"} will be permanently deleted, with their conversation histories and sandboxes.`
+              : "will be permanently deleted, with its conversation history and sandbox."}
           </Dialog.Description>
           {error === undefined ? null : (
             <div className="notice error-notice" role="alert">

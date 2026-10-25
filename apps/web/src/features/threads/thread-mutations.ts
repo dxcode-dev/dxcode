@@ -502,8 +502,9 @@ export const setThreadArchivedMutationOptions = (
   });
 
 /**
- * Deletes a Thread once the server confirms: it leaves every list and its
- * detail is dropped. Lists refetch, since its children become top-level.
+ * Deletes a Thread, and with `includeChildren` the children listed under
+ * it, once the server confirms: they leave every list and their details are
+ * dropped. Lists refetch, since children left behind become top-level.
  */
 export const deleteThreadMutationOptions = (
   queryClient: QueryClient,
@@ -511,9 +512,15 @@ export const deleteThreadMutationOptions = (
 ) =>
   mutationOptions({
     mutationKey: [...threadKeys.all(userId), "delete"] as const,
-    mutationFn: ({ threadId }: { threadId: ThreadId }) =>
-      deleteThread(threadId),
-    onSuccess: (_deleted, { threadId }) => {
+    mutationFn: ({
+      threadId,
+      includeChildren = false,
+    }: {
+      threadId: ThreadId;
+      includeChildren?: boolean;
+    }) => deleteThread(threadId, includeChildren),
+    onSuccess: ({ deletedChildThreadIds = [] }, { threadId }) => {
+      const deleted = new Set<ThreadId>([threadId, ...deletedChildThreadIds]);
       for (const query of queryClient.getQueryCache().findAll({
         queryKey: threadKeys.lists(userId),
       }))
@@ -524,15 +531,16 @@ export const deleteThreadMutationOptions = (
                 ...current,
                 pages: current.pages.map((page) =>
                   flatMapListedThreads(page, (thread) =>
-                    thread.id === threadId ? [] : [thread],
+                    deleted.has(thread.id) ? [] : [thread],
                   ),
                 ),
               },
         );
-      queryClient.removeQueries({
-        queryKey: threadKeys.detail(userId, threadId),
-        exact: true,
-      });
+      for (const id of deleted)
+        queryClient.removeQueries({
+          queryKey: threadKeys.detail(userId, id),
+          exact: true,
+        });
       return queryClient.invalidateQueries({
         queryKey: threadKeys.lists(userId),
       });

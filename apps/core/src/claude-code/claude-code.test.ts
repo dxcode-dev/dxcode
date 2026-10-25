@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import {
   mkdir,
@@ -31,6 +32,7 @@ import * as claudeCodeProvider from "./provider.js";
 import { createClaudeCodeProvider } from "./provider.js";
 import { claudeCodeSandbox } from "./runs.js";
 import { ClaudeCodeStream } from "./stream.js";
+import { claudeCodeMirrorTools } from "./tools.js";
 
 /**
  * Claude Code mode against a Thread workspace on this machine: guest paths
@@ -70,7 +72,7 @@ afterEach(async () => {
 });
 
 const FAKE_CLAUDE = `#!/bin/bash
-if [ "$1" = --version ]; then echo "2.1.296 (Claude Code)"; exit 0; fi
+if [ "$1" = --version ]; then echo "2.1.310 (Claude Code)"; exit 0; fi
 printf '%s\\n' "$@" > "$HOME/claude-args"
 # The plan token as Claude Code reads it: from CLAUDE_CODE_OAUTH_TOKEN, or
 # once from the descriptor CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR names.
@@ -435,6 +437,52 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
     ]);
   });
 
+  it("gives Claude Code dx's own prompt, not Flue's composition, and the person's instructions as its user-level CLAUDE.md", async () => {
+    const guest = await createGuest();
+    guest.write(
+      `${GUEST_HOME}/workspace/repo/AGENTS.md`,
+      "Run the tests before committing.\n",
+    );
+    // What Flue composes around the agent's prompt for its own loop.
+    const flue = [
+      "dx's Claude Code prompt.",
+      "Run the tests before committing.",
+      "## Available Agents\n\nNone. No subagents are currently declared, so the `task` tool has no valid `agent` value.",
+      "Date: Sat, Oct 24, 2026\nWorking directory: /home/user/workspace/repo",
+    ].join("\n\n");
+    const userInstructions = `${GUEST_HOME}/.claude/CLAUDE.md`;
+    const turn = async (
+      text: string,
+      timestamp: number,
+      personalInstructions: string,
+    ) => {
+      await guest.script([
+        init(),
+        ...response(`m${timestamp}`, [{ text: "Hi." }]),
+        result("Hi."),
+      ]);
+      const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+      claudeCodeProvider.rememberClaudeCodePrompt(
+        claude.threadId,
+        "dx's Claude Code prompt.",
+        personalInstructions,
+      );
+      await claude.answer({
+        systemPrompt: flue,
+        messages: [user(text, timestamp)],
+      });
+    };
+    await turn("Hi", 80, "Reply in French.");
+    // Claude Code reads the repository's AGENTS.md itself.
+    expect(guest.home("claude-prompt.txt")).toBe("dx's Claude Code prompt.");
+    expect(await guest.sandbox.readFile(userInstructions)).toBe(
+      "Reply in French.",
+    );
+    // Instructions cleared in Settings leave no stale file behind.
+    await turn("Hi again", 81, "");
+    expect(await guest.sandbox.exists(userInstructions)).toBe(false);
+  });
+
   it("hands the plan token to the CLI alone, never to a process environment", async () => {
     const guest = await createGuest();
     await guest.script([
@@ -506,7 +554,7 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
 
   it("updates a Claude Code too old for dx before the turn, and the turn runs on the new one", async () => {
     const guest = await createGuest({
-      oldClaude: "2.1.37",
+      oldClaude: "2.1.309",
       installerWorks: true,
     });
     await guest.script([
@@ -532,7 +580,7 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
       type: "error",
       error: {
         errorMessage: expect.stringMatching(
-          /Claude Code 1\.0\.108 is older than 2\.1\.38[\s\S]*claude update[\s\S]*no space left on device/,
+          /Claude Code 1\.0\.108 is older than 2\.1\.310[\s\S]*claude update[\s\S]*no space left on device/,
         ),
       },
     });
@@ -1011,6 +1059,131 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
       reason: "stop",
       message: { content: [{ type: "text", text: "All done." }] },
     });
+  });
+
+  it("answers a dx call Flue will not run as its segment closes, so Claude's next tool and the batch finish", {
+    timeout: 30_000,
+  }, async () => {
+    const guest = await createGuest();
+    // Claude runs its calls in order: the dx call's server answers first,
+    // only then does Bash run.
+    await guest.script([
+      init(),
+      ...response("m1", [
+        { id: "toolu_gone", name: "mcp__dx__gone", input: {} },
+        { id: "toolu_b", name: "Bash", input: { command: "echo b" } },
+      ]),
+      "#wait .local/state/dx-claude-code/mcp/results/toolu_gone.json",
+      toolResult("toolu_gone", "answered"),
+      toolResult("toolu_b", "b"),
+      ...response("m2", [{ text: "Done." }]),
+      result("Done."),
+    ]);
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    // The model call offers the mirrors but no dx tool named gone, so Flue
+    // answers that call itself without running anything.
+    const tools = claudeCodeMirrorTools(claude.threadId);
+    expect(
+      await claude.answer({
+        messages: [user("Use both tools", 70)],
+        tools: tools.map(({ name, description }) => ({
+          name,
+          description,
+          parameters: { type: "object" } as never,
+        })),
+      }),
+    ).toMatchObject({ type: "done", reason: "toolUse" });
+    const bash = tools.find(({ name }) => name === "Bash");
+    const output = await bash?.run({
+      toolCallId: "toolu_b",
+      signal: AbortSignal.timeout(10_000),
+      harness: { sandbox: guest.sandbox },
+      log: console,
+    } as never);
+    expect(output).toBe("b");
+    expect(
+      JSON.parse(guest.file(`${STATE}/mcp/results/toolu_gone.json`) ?? "null"),
+    ).toEqual({
+      content: [{ type: "text", text: "Tool mcp__dx__gone not found" }],
+      isError: true,
+    });
+  });
+
+  it("re-runs a read-only dx call a restart interrupted, so Flue records and Claude receives its real result", {
+    // Flue's Node runtime recovers a lost attempt after its 30-second lease.
+    timeout: 120_000,
+  }, async () => {
+    // A Durable Object restart ends the attempt while Claude waits on
+    // wait_for_threads: here the process running it is killed mid-call, and
+    // a new one over the same storage recovers the submission.
+    const root = await mkdtemp(join(tmpdir(), "dx-claude-code-restart-"));
+    guests.push({ root, home: join(root, "home") });
+    await mkdir(join(root, "home"));
+    const fixture = (mode: string, ...rest: string[]) =>
+      spawn(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          join(import.meta.dirname, "restart-fixture.ts"),
+          mode,
+          join(root, "db.sqlite"),
+          join(root, "home"),
+          ...rest,
+        ],
+        {
+          cwd: join(import.meta.dirname, "../.."),
+          stdio: ["ignore", "pipe", "inherit"],
+        },
+      );
+    const lines = (child: ReturnType<typeof spawn>) => {
+      const seen: Record<string, unknown>[] = [];
+      let buffered = "";
+      child.stdout?.on("data", (chunk: Buffer) => {
+        buffered += chunk.toString();
+        const parts = buffered.split("\n");
+        buffered = parts.pop() ?? "";
+        for (const line of parts)
+          if (line.startsWith("{")) seen.push(JSON.parse(line));
+      });
+      return seen;
+    };
+    const first = fixture("start");
+    const started = lines(first);
+    await vi.waitFor(
+      () => {
+        expect(started).toContainEqual({ calling: true });
+        expect(started.some((line) => "submissionId" in line)).toBe(true);
+      },
+      { timeout: 30_000, interval: 100 },
+    );
+    const exited = new Promise((resolve) => first.on("exit", resolve));
+    first.kill("SIGKILL");
+    await exited;
+    const submissionId = String(
+      started.find((line) => "submissionId" in line)?.submissionId,
+    );
+    const second = fixture("resume", submissionId);
+    const resumed = lines(second);
+    await new Promise((resolve) => second.on("exit", resolve));
+    const report = JSON.stringify({
+      settled: true,
+      lastMessage: "REPORT\nEND-OF-REPORT",
+    });
+    // The model's next call sees the tool's result, not "interrupted".
+    expect(resumed).toEqual([{ reply: report }]);
+    // And Claude, still waiting on the same call, receives it.
+    expect(
+      JSON.parse(
+        await readFile(
+          join(
+            root,
+            "home/.local/state/dx-claude-code/mcp/results/toolu_wait.json",
+          ),
+          "utf8",
+        ),
+      ),
+    ).toEqual({ content: [{ type: "text", text: report }], isError: false });
   });
 
   it("stamps each failure with the class Flue's retry policy reads", {

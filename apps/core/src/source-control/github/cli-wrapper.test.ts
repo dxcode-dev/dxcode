@@ -127,20 +127,27 @@ describe("GitHub CLI wrapper", () => {
         mkdirSync(join(root, "bin"));
         writeFileSync(target, existing);
       }
-      // E2B runs guest commands as `bash -l -c`, so the dx terminal profile's
-      // EXIT trap is inherited; it fails while its history directory is absent.
+      // E2B runs guest commands as `bash -l -c`: the profile can leave a
+      // failing EXIT trap (the dx terminal hook's history flush), and `exit`
+      // runs `~/.bash_logout`, whose `clear` fails without a terminal.
+      const home = join(root, "home");
+      mkdirSync(home);
+      writeFileSync(join(home, ".profile"), "trap false EXIT\n");
+      writeFileSync(join(home, ".bash_logout"), "false\n");
       const result = spawnSync(
         "bash",
         [
+          "-l",
           "-c",
-          `trap false EXIT\n${GITHUB_CLI_WRAPPER_INSTALL_COMMAND.replaceAll(
+          GITHUB_CLI_WRAPPER_INSTALL_COMMAND.replaceAll(
             GITHUB_CLI_WRAPPER_PATH.slice(0, -"/gh".length),
             join(root, "bin"),
-          )}`,
+          ),
         ],
         {
           encoding: "utf8",
           env: {
+            HOME: home,
             PATH: "/usr/bin:/bin",
             DX_GH_WRAPPER: githubCliWrapper(),
           },

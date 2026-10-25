@@ -1,4 +1,5 @@
-import { exec as executeCommand } from "node:child_process";
+import { exec as executeCommand, spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -63,6 +64,41 @@ const runGuestCommand = async (command: string, options?: CommandOptions) => {
   });
   return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
 };
+
+/**
+ * Runs the guest command as the E2B guest user does: without capabilities,
+ * so a process holding CAP_DAC_OVERRIDE (some CI and Orb hosts) still finds
+ * a mode-000 file unreadable. Hosts where setpriv is missing or may not drop
+ * capabilities (no CAP_SETPCAP, as on the release runner) run it unchanged.
+ */
+const dropCapabilities = [
+  "--inh-caps=-all",
+  "--ambient-caps=-all",
+  "--bounding-set=-all",
+];
+const setpriv = ["/usr/bin/setpriv", "/bin/setpriv"].find(
+  (path) =>
+    existsSync(path) &&
+    spawnSync(path, [...dropCapabilities, "true"]).status === 0,
+);
+const readable = (path: string) => {
+  try {
+    readFileSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+};
+const runUnprivilegedGuestCommand = (
+  command: string,
+  options?: CommandOptions,
+) =>
+  runGuestCommand(
+    setpriv === undefined
+      ? command
+      : `${setpriv} ${dropCapabilities.join(" ")} ${command}`,
+    options,
+  );
 
 describe("Flue E2B 2.0.7 blueprint adapter", () => {
   it("returns one provider-neutral workspace-context snapshot in one bounded operation", async () => {
@@ -190,21 +226,18 @@ describe("Flue E2B 2.0.7 blueprint adapter", () => {
       await mkdir(join(root, ".agents", "skills", "locked"), {
         recursive: true,
       });
-      await writeFile(
-        join(root, ".agents", "skills", "locked", "SKILL.md"),
-        "x",
-        {
-          mode: 0o000,
-        },
-      );
+      const lockedSkill = join(root, ".agents", "skills", "locked", "SKILL.md");
+      await writeFile(lockedSkill, "x", { mode: 0o000 });
       await mkdir(join(root, ".agents", "skills", "no-skill-file"));
       await writeFile(join(root, ".agents", "skills", "loose-file"), "");
       const fake = makeE2B();
-      fake.commands.run.mockImplementation(runGuestCommand);
+      fake.commands.run.mockImplementation(runUnprivilegedGuestCommand);
       const sandbox = await e2b(fake.value, root).createSandbox({ id: "test" });
 
       const snapshot = await sandbox.snapshotWorkspaceContext?.(root);
-      if (process.getuid?.() === 0) return;
+      // Without a working setpriv, a host that bypasses file permissions
+      // (root, or CAP_DAC_OVERRIDE) still reads a mode-000 file.
+      if (setpriv === undefined && readable(lockedSkill)) return;
       expect(snapshot).toEqual({
         instructionFiles: { "AGENTS.md": "ünïcødé ✓\n" },
         skillFiles: [

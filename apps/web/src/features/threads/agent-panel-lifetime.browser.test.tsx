@@ -696,9 +696,28 @@ describe("thread composer ownership", () => {
     expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
       "Failed steering prompt",
     );
+    // The kept message offers Send; Stop returns once the composer is empty.
+    expect(
+      mounted.container.querySelector<HTMLButtonElement>(
+        '[aria-label="Send steering message"]',
+      )?.disabled,
+    ).toBe(false);
+    expect(
+      mounted.container.querySelector('[aria-label="Stop agent"]'),
+    ).toBeNull();
+    await React.act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )?.set?.call(textarea, "");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
     expect(
       mounted.container.querySelector('[aria-label="Stop agent"]'),
     ).not.toBeNull();
+    expect(
+      mounted.container.querySelector('[aria-label="Send steering message"]'),
+    ).toBeNull();
     await React.act(() => mounted.root.unmount());
   });
 

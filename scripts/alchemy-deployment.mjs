@@ -2504,6 +2504,28 @@ const isRetiredWorkerBindingDeletion = (binding) => {
   );
 };
 
+const droppedBranchBindingTypes = new Set(["plain_text", "secret_text"]);
+
+/**
+ * A branch preview is deployed from the PR workflow and from Orbs, whose
+ * environments set different optional variables and secrets; a deploy may
+ * remove a text or secret binding that its own configuration no longer sets.
+ * Staging and self-hosted deploys never drop one.
+ */
+const isDroppedBranchBinding = (binding, node, selection) => {
+  const bindings = binding.data?.bindings;
+  return (
+    selection.target === "branch" &&
+    binding.action === "delete" &&
+    typeof binding.sid === "string" &&
+    !Object.hasOwn(node.resource?.Props?.env ?? {}, binding.sid) &&
+    Array.isArray(bindings) &&
+    bindings.length === 1 &&
+    bindings[0]?.name === binding.sid &&
+    droppedBranchBindingTypes.has(bindings[0]?.type)
+  );
+};
+
 const assertRetiredWorkerBindingCoverage = (node) => {
   const historicalNames = new Set(
     [node.state?.props, node.state?.old?.props]
@@ -2566,7 +2588,8 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
         !(
           operation === "deploy" &&
           id === "Worker" &&
-          isRetiredWorkerBindingDeletion(binding)
+          (isRetiredWorkerBindingDeletion(binding) ||
+            isDroppedBranchBinding(binding, node, selection))
         ),
     )
   )

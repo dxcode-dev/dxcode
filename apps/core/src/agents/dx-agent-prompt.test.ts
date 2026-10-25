@@ -48,7 +48,7 @@ describe("workspace guidance", () => {
   });
 
   it("is part of the Claude Code prompt", () => {
-    const prompt = composeClaudeCodePrompt("");
+    const prompt = composeClaudeCodePrompt();
     expect(prompt).toContain("## Your workspace");
     workspaceFacts(prompt, "Bash");
   });

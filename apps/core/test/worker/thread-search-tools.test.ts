@@ -17,7 +17,6 @@
  */
 import { env } from "cloudflare:test";
 import {
-  CLAUDE_CODE_DEFAULT_MODEL,
   type ProjectId,
   ProjectRepository,
   ThreadRepository,
@@ -561,33 +560,74 @@ describe("find_thread and read_thread", () => {
     });
   });
 
-  it("read_thread in a Claude Code Thread reports that no subagent is configured", async () => {
+  it("read_thread in a Claude Code Thread pages the Thread's messages, newest first, with no model call", async () => {
     const calling = await seed(owner, ownerProject, "Caller", "plover");
-    await env.DB.prepare("UPDATE threads SET model_selection = ? WHERE id = ?")
-      .bind(
-        JSON.stringify({
-          kind: "model",
-          model: CLAUDE_CODE_DEFAULT_MODEL,
-          thinking: "medium",
-        }),
-        calling,
-      )
-      .run();
-    const harness = {
+    const noModel = {
       task: async () => {
-        throw new Error("the reader must not run");
+        throw new Error("no model may run");
       },
       prompt: async () => {
-        throw new Error("the reader must not run");
+        throw new Error("no model may run");
       },
     };
-    await expect(
-      run(
-        tools(calling).readThread,
-        { threadID: calling, question: "Anything?", context: "full" },
-        harness,
+    const [, readThread] = createThreadSearchTools(
+      calling,
+      () => ({ db: env.DB, bindings }),
+      { loadHistory: history(longHistory()), claudeCode: true },
+    );
+    type Page = {
+      messageCount: number;
+      messages: Array<{ index: number; blocks?: unknown; jsonChunk?: string }>;
+      nextCursor?: string;
+    };
+    const pages: Page[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = (
+        (await run(
+          readThread,
+          {
+            threadID: calling,
+            question: "What did they settle on?",
+            context: "full",
+            ...(cursor === undefined ? {} : { cursor }),
+          },
+          noModel,
+        )) as { output: Page }
+      ).output;
+      pages.push(page);
+      cursor = page.nextCursor;
+    } while (cursor !== undefined && pages.length < 100);
+    const count = pages[0]?.messageCount ?? 0;
+    expect(count).toBeGreaterThan(10);
+    // The first page ends with the newest message, where a report is.
+    expect(pages[0]?.messages.at(-1)?.index).toBe(count);
+    expect(JSON.stringify(pages[0])).toContain("keep the ledger in D1");
+    expect(pages.length).toBeGreaterThan(1);
+    // Every message arrives once, across pages, and each page is bounded.
+    const seen = pages.flatMap(({ messages }) =>
+      messages.flatMap((message) =>
+        message.jsonChunk === undefined ||
+        (message as { chunk?: number }).chunk === 0
+          ? [message.index]
+          : [],
       ),
-    ).rejects.toThrow(/^Subagent not configured/);
+    );
+    expect([...seen].sort((a, b) => a - b)).toEqual(
+      Array.from({ length: count }, (_, at) => at + 1),
+    );
+    for (const page of pages)
+      expect(JSON.stringify(page).length).toBeLessThan(50_000);
+    // context "current" is the newest page alone.
+    const current = (
+      (await run(
+        readThread,
+        { threadID: calling, question: "Status?", context: "current" },
+        noModel,
+      )) as { output: Page & { note?: string } }
+    ).output;
+    expect(current.nextCursor).toBeUndefined();
+    expect(current.messages.at(-1)?.index).toBe(count);
     // find_thread needs no model, so it works in a Claude Code Thread.
     const found = (await run(tools(calling).findThread, {
       query: "plover",

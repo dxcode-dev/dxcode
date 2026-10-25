@@ -62,6 +62,55 @@ function SnoozeContextItems({
   );
 }
 
+/** A parent's action: on All N Threads, with its children, or This Thread. */
+function FamilyContextSubmenu({
+  icon,
+  label,
+  count,
+  danger = false,
+  disabled = false,
+  onAll,
+  onThis,
+}: {
+  readonly icon: ReactNode;
+  readonly label: string;
+  /** The child Threads listed under it. */
+  readonly count: number;
+  readonly danger?: boolean;
+  readonly disabled?: boolean;
+  readonly onAll: () => void;
+  readonly onThis: () => void;
+}) {
+  const itemClassName = danger
+    ? "thread-context-item thread-menu-item-danger"
+    : "thread-context-item";
+  return (
+    <ContextMenu.SubmenuRoot>
+      <ContextMenu.SubmenuTrigger className={itemClassName} disabled={disabled}>
+        {icon}
+        <span>{label}</span>
+        <ChevronRight />
+      </ContextMenu.SubmenuTrigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Positioner
+          className="thread-context-positioner"
+          sideOffset={4}
+          alignOffset={-4}
+        >
+          <ContextMenu.Popup className="thread-context-menu">
+            <ContextMenu.Item className={itemClassName} onClick={onAll}>
+              <span>All {count + 1} Threads</span>
+            </ContextMenu.Item>
+            <ContextMenu.Item className={itemClassName} onClick={onThis}>
+              <span>This Thread</span>
+            </ContextMenu.Item>
+          </ContextMenu.Popup>
+        </ContextMenu.Positioner>
+      </ContextMenu.Portal>
+    </ContextMenu.SubmenuRoot>
+  );
+}
+
 export function ThreadContextMenu({
   thread,
   onSetArchived,
@@ -242,38 +291,14 @@ export function ThreadContextMenu({
                 <ContextMenu.Separator className="thread-context-separator" />
                 {thread.lifecycleState === "active" &&
                 subthreads !== undefined ? (
-                  <ContextMenu.SubmenuRoot>
-                    <ContextMenu.SubmenuTrigger
-                      className="thread-context-item"
-                      disabled={archiving}
-                    >
-                      <Archive />
-                      <span>Archive</span>
-                      <ChevronRight />
-                    </ContextMenu.SubmenuTrigger>
-                    <ContextMenu.Portal>
-                      <ContextMenu.Positioner
-                        className="thread-context-positioner"
-                        sideOffset={4}
-                        alignOffset={-4}
-                      >
-                        <ContextMenu.Popup className="thread-context-menu">
-                          <ContextMenu.Item
-                            className="thread-context-item"
-                            onClick={() => onSetArchived(true, true)}
-                          >
-                            <span>All {subthreads.count + 1} Threads</span>
-                          </ContextMenu.Item>
-                          <ContextMenu.Item
-                            className="thread-context-item"
-                            onClick={() => onSetArchived(true)}
-                          >
-                            <span>This Thread</span>
-                          </ContextMenu.Item>
-                        </ContextMenu.Popup>
-                      </ContextMenu.Positioner>
-                    </ContextMenu.Portal>
-                  </ContextMenu.SubmenuRoot>
+                  <FamilyContextSubmenu
+                    icon={<Archive />}
+                    label="Archive"
+                    count={subthreads.count}
+                    disabled={archiving}
+                    onAll={() => onSetArchived(true, true)}
+                    onThis={() => onSetArchived(true)}
+                  />
                 ) : (
                   <ContextMenu.Item
                     className="thread-context-item"
@@ -296,7 +321,7 @@ export function ThreadContextMenu({
                 )}
                 {editing === undefined ||
                 title === undefined ||
-                creating ? null : (
+                creating ? null : subthreads === undefined ? (
                   <ContextMenu.Item
                     className="thread-context-item thread-menu-item-danger"
                     onClick={() => editing.openDelete({ id: thread.id, title })}
@@ -304,6 +329,20 @@ export function ThreadContextMenu({
                     <Trash2 />
                     <span>Delete</span>
                   </ContextMenu.Item>
+                ) : (
+                  <FamilyContextSubmenu
+                    icon={<Trash2 />}
+                    label="Delete"
+                    count={subthreads.count}
+                    danger
+                    onAll={() =>
+                      editing.openDelete(
+                        { id: thread.id, title },
+                        subthreads.count,
+                      )
+                    }
+                    onThis={() => editing.openDelete({ id: thread.id, title })}
+                  />
                 )}
                 <ContextMenu.Separator className="thread-context-separator" />
               </>

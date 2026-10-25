@@ -20,7 +20,10 @@ import {
   useTool,
 } from "@flue/runtime";
 import { claudeCodeDxTools } from "../claude-code/dx-tools.js";
-import { resetClaudeCodeThreadState } from "../claude-code/provider.js";
+import {
+  rememberClaudeCodePrompt,
+  resetClaudeCodeThreadState,
+} from "../claude-code/provider.js";
 import { rememberClaudeCodeSandbox } from "../claude-code/runs.js";
 import { claudeCodeMirrorTools } from "../claude-code/tools.js";
 import { traceSpan } from "../observability/tracing.js";
@@ -111,6 +114,8 @@ const dxTools = (
     threadId,
     agentThreadToolsContext,
     promptData?.plugins?.submissionId,
+    promptData?.route !== undefined &&
+      isClaudeCodeModel(promptData.route.model),
   ))
     tools.push(withToolFailureMessage(tool));
   const pluginTools = promptData?.plugins;
@@ -254,12 +259,19 @@ export function DxAgent(props: AgentProps) {
         resetClaudeCodeThreadState(props.id);
         rememberClaudeCodeSandbox(props.id, harness.sandbox);
       });
-      return composeClaudeCodePrompt(
-        initialData?.personalInstructions ?? "",
+      const prompt = composeClaudeCodePrompt(
         skills,
         threadPortalPrompt(props.id),
         initialData?.startedByThreadId,
       );
+      // Claude Code gets this prompt itself, not Flue's composition of it,
+      // and the person's instructions as its own user-level instructions.
+      rememberClaudeCodePrompt(
+        props.id,
+        prompt,
+        initialData?.personalInstructions ?? "",
+      );
+      return prompt;
     }
     for (const tool of dxTools(props.id, initialData, promptData))
       useTool(tool);

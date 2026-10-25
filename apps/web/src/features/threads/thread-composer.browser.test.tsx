@@ -112,11 +112,12 @@ describe("ThreadComposer", () => {
       idle.container.querySelector("textarea"),
     );
 
-    await React.act(() =>
-      idle.container
-        .querySelector<HTMLButtonElement>('[aria-label="Preview one.png"]')
-        ?.click(),
+    // A pointer click focuses the trigger before it opens the preview.
+    const preview = idle.container.querySelector<HTMLButtonElement>(
+      '[aria-label="Preview one.png"]',
     );
+    preview?.focus();
+    await React.act(() => preview?.click());
     expect(
       document.querySelector('[aria-label="Close image preview"]'),
     ).not.toBeNull();
@@ -125,16 +126,15 @@ describe("ThreadComposer", () => {
         .querySelector<HTMLButtonElement>('[aria-label="Close image preview"]')
         ?.click(),
     );
-    // The preview unmounts once its exit transition ends.
+    // The preview unmounts once its exit transition ends, then returns focus
+    // to its trigger.
     await React.act(() =>
-      vi.waitFor(() =>
+      vi.waitFor(() => {
         expect(
           document.querySelector('[aria-label="Close image preview"]'),
-        ).toBeNull(),
-      ),
-    );
-    expect(document.activeElement).toBe(
-      idle.container.querySelector('[aria-label="Preview one.png"]'),
+        ).toBeNull();
+        expect(document.activeElement).toBe(preview);
+      }),
     );
 
     const busy = await mountComposer({ busy: true });

@@ -653,6 +653,13 @@ function AgentComposer({
     event.preventDefault();
     if (!dictation.interceptSubmit()) onSubmit(draft);
   };
+  // One of Send or Stop: Stop only while the agent runs and the composer is
+  // empty; otherwise Send, disabled until there is something to send, so the
+  // mic keeps its place.
+  const composing =
+    dictation.active || draft.trim() !== "" || images.length > 0;
+  const showStop = stopAvailable && (draftLocked || !composing);
+  const showSend = !dictation.hideSubmit && (draftLocked || !showStop);
   return (
     <div className="agent-composer-dock" ref={dockRef}>
       {errorCard}
@@ -672,7 +679,6 @@ function AgentComposer({
           enterKeyHint={enterKey.enterKeyHint}
           disabled={draftLocked}
           readOnly={draftLocked}
-          placeholder="Message"
           value={draft}
           {...composerMentions.textareaProps}
           onChange={(event) => {
@@ -710,7 +716,7 @@ function AgentComposer({
           />
           <span className="composer-spacer" />
           {dictation.controls}
-          {dictation.hideSubmit ? null : (
+          {showSend ? (
             <Button
               type="submit"
               size="icon-sm"
@@ -720,11 +726,7 @@ function AgentComposer({
               }
               aria-busy={draftLocked || undefined}
               data-submitting={draftLocked ? "" : undefined}
-              disabled={
-                draftLocked ||
-                uploading ||
-                (!dictation.active && !draft.trim() && images.length === 0)
-              }
+              disabled={draftLocked || uploading || !composing}
             >
               {draftLocked ? (
                 // The New Thread composer's mark while it creates.
@@ -736,8 +738,8 @@ function AgentComposer({
                 <ArrowUp />
               )}
             </Button>
-          )}
-          {stopAvailable ? (
+          ) : null}
+          {showStop ? (
             <Button
               type="button"
               variant="secondary"

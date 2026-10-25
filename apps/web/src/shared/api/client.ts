@@ -1546,10 +1546,15 @@ export const setThreadArchived = async (
  * Deletes a Thread for good: its conversation, sandbox, and files. `pending`
  * cleanup finishes on the server.
  */
-export const deleteThread = async (threadId: ThreadId) =>
+export const deleteThread = async (
+  threadId: ThreadId,
+  includeChildren = false,
+) =>
   (
     await request(
-      `/v1/threads/${encodeURIComponent(threadId)}`,
+      `/v1/threads/${encodeURIComponent(threadId)}${
+        includeChildren ? "?includeChildren=true" : ""
+      }`,
       DeleteThreadResponseSchema,
       { method: "DELETE" },
     )

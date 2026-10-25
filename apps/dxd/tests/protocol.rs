@@ -179,6 +179,26 @@ impl TmuxFixture {
         );
         String::from_utf8(output.stdout).unwrap()
     }
+
+    /// Opens a detached session, as the agent does. Right after the last
+    /// session ends, the server may still be exiting and drop the client with
+    /// "server exited unexpectedly" (about 1 in 10 on a loaded host); the
+    /// agent would run it again, so the test does too.
+    fn new_session(&self, name: &str) {
+        for _ in 0..50 {
+            let output = self.run(&["new-session", "-d", "-s", name]);
+            if output.status.success() {
+                return;
+            }
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("server exited unexpectedly"),
+                "tmux new-session: {stderr}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("tmux new-session: the server kept exiting for a second");
+    }
 }
 
 impl Drop for TmuxFixture {
@@ -2054,7 +2074,7 @@ async fn real_daemon_never_passes_another_tmux_session_off_as_the_lost_resident(
     let applied = request(&mut socket, &generation, "env-1", environment_operation(1)).await;
     assert_eq!(applied["kind"], "applied");
     let bash_resident = open_terminal(&mut socket).await;
-    tmux.stdout(&["new-session", "-d", "-s", "main"]);
+    tmux.new_session("main");
     let status = Command::new("kill")
         .args(["-KILL", &daemon.0.id().to_string()])
         .status()
@@ -2094,7 +2114,7 @@ async fn real_daemon_never_passes_another_tmux_session_off_as_the_lost_resident(
     })
     .await;
     assert_eq!(exited["state"], "exited");
-    tmux.stdout(&["new-session", "-d", "-s", "main"]);
+    tmux.new_session("main");
     let status = Command::new("kill")
         .args(["-KILL", &daemon.0.id().to_string()])
         .status()

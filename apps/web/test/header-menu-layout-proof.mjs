@@ -346,11 +346,12 @@ try {
         },
       );
 
-      // Control: the Thread menu lives in the title group, not the actions.
+      // Control: the Thread menu, beside the title or, on a phone, at the
+      // bar's end.
       if (person === owen) {
         const threadMenu = await openAndClose(
           page,
-          '.thread-title-group [aria-label="Thread actions"]',
+          '.thread-title-bar [aria-label="Thread actions"]',
           '[role="menu"]',
           { open: join(output, `${key}-thread-menu-open.png`) },
         );

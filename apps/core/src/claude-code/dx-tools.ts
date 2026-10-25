@@ -1,4 +1,4 @@
-import type { Context } from "@earendil-works/pi-ai";
+import { type Context, getCurrentTools } from "@earendil-works/pi-ai";
 import type {
   FlueHarness,
   FlueLogger,
@@ -108,6 +108,22 @@ const execute = async (
 };
 
 /**
+ * Read-only dx tools. Flue runs a durable tool again when a restarted
+ * submission finds its call unfinished, and records the real result in place
+ * of "interrupted, outcome unknown"; the rerun answers the same call Claude
+ * still waits on. Running one of these again only reads the current state;
+ * a call that changes something is never repeated.
+ */
+const RERUNNABLE: ReadonlySet<string> = new Set([
+  "wait_for_threads",
+  "get_thread_status",
+  "read_thread",
+  "find_thread",
+  "list_orbs",
+  "list_agent_modes",
+]);
+
+/**
  * dx's own tools for a Claude Code Thread. Claude calls them through the
  * `dx` MCP server in the workspace; Flue runs the real tool when it reaches
  * the call, exactly as for any other model, so metering, Stop, and the
@@ -126,7 +142,21 @@ export const claudeCodeDxTools = (
         name: `${CLAUDE_CODE_DX_TOOL_PREFIX}${tool.name}`,
         input: v.looseObject({}),
         harness: true,
+        durable: RERUNNABLE.has(tool.name),
         run: async (context: CallContext & { readonly data: unknown }) => {
+          // Claude waits on this call, and in a batch of only dx tools no
+          // mirror reads the run meanwhile; reading it keeps writing the
+          // run's keep-alive, so the workspace does not sleep under Claude.
+          const watching = new AbortController();
+          const watched = claudeCodeRuns
+            .forToolCall(
+              threadId,
+              context.toolCallId,
+              context.harness.sandbox as Sandbox,
+              watching.signal,
+            )
+            .then((run) => run?.waitFor(() => false, watching.signal))
+            .catch(() => undefined);
           try {
             return await execute(tool, context.data, context);
           } catch (error) {
@@ -143,6 +173,9 @@ export const claudeCodeDxTools = (
               await run?.stop();
             }
             throw error;
+          } finally {
+            watching.abort();
+            await watched;
           }
         },
       }) as ToolDefinition,
@@ -192,9 +225,31 @@ export const claudeCodeDxToolList = (threadId: string): ClaudeCodeDxTool[] =>
   });
 
 /**
- * A dx tool call Flue settled without running the tool, such as one naming
- * a tool this submission no longer offers, wrote no result; the next model
- * call hands Flue's recorded result to the waiting server.
+ * Flue answers a call naming a tool the model call did not offer without
+ * running anything ("Tool <name> not found"). Claude waits on a dx call's
+ * server, and may hold the rest of its batch until it answers, while Flue
+ * finishes the batch, and so makes the next model call, only once the
+ * batch's mirrors have Claude's results. So such a dx call is answered as
+ * its segment closes, as Flue will answer it.
+ */
+export const answerUnofferedClaudeCodeDxCalls = async (
+  calls: ReadonlyArray<{ readonly id: string; readonly name: string }>,
+  context: Context,
+  sandbox: Sandbox,
+) => {
+  // pi carries the offered tools as transcript messages, like the prompt.
+  const offered = new Set(
+    getCurrentTools(context.messages).map(({ name }) => name),
+  );
+  for (const call of calls)
+    if (isClaudeCodeDxTool(call.name) && !offered.has(call.name))
+      await answer(sandbox, call.id, `Tool ${call.name} not found`, true);
+};
+
+/**
+ * A dx tool call Flue settled without running the tool, such as one a
+ * restart interrupted, wrote no result; the next model call hands Flue's
+ * recorded result to the waiting server.
  */
 export const deliverClaudeCodeDxToolResults = async (
   context: Context,

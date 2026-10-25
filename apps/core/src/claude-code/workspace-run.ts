@@ -35,9 +35,10 @@ const HEARTBEAT_STALE_SECONDS = 90;
 const HEARTBEAT_OBSERVED_MS = 15_000;
 /**
  * Reads skip the activity wrapper, so a live run writes this often to keep
- * the sandbox from pausing under Claude while it works.
+ * the sandbox from pausing under Claude while it works: within half the
+ * shortest idle deadline a deployment allows (one minute).
  */
-const KEEP_ALIVE_MS = 60_000;
+const KEEP_ALIVE_MS = 30_000;
 /** Settled run directories kept for tool-call lookups after a restart. */
 const KEPT_RUNS = 20;
 /**
@@ -118,11 +119,12 @@ const CLI_ENVIRONMENT = {
 };
 
 /**
- * The oldest Claude Code dx runs: the first release that accepts every flag
- * dx passes (`--effort` arrived in 2.1.38). It also reads the plan token from
- * a descriptor, which Claude Code has done since 1.0.109.
+ * The oldest Claude Code dx runs, the latest release when it was set. dx
+ * relies on Claude Code loading instruction files itself: a repository's
+ * root AGENTS.md when it has no CLAUDE.md, a subdirectory's as it opens a
+ * file there (2.1.277), and ~/.claude/CLAUDE.md for the person's own.
  */
-const CLAUDE_CODE_MIN_VERSION = "2.1.38";
+const CLAUDE_CODE_MIN_VERSION = "2.1.310";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
@@ -179,6 +181,12 @@ export interface ClaudeCodeLaunch {
   readonly model: string;
   readonly effort: string;
   readonly systemPrompt: string;
+  /**
+   * The person's instructions from dx Settings, which Claude Code reads from
+   * its user-level ~/.claude/CLAUDE.md; empty removes that file, and
+   * undefined, for a prompt not rendered in this isolate, leaves it.
+   */
+  readonly personalInstructions?: string;
   readonly input: ReadonlyArray<ClaudeCodeInputBlock>;
   readonly token: string;
   /** dx's own tools, served to Claude by the \`dx\` MCP server. */
@@ -292,7 +300,8 @@ ls -1t "$S/runs" 2>/dev/null | tail -n +${KEPT_RUNS + 1} | while read -r n; do
   [ -f "$S/runs/$n/exit" ] && rm -rf "$S/runs/$n"
 done
 # A workspace image or a repository's setup can carry an older Claude Code;
-# one older than ${CLAUDE_CODE_MIN_VERSION} is replaced as a missing one is installed.
+# one older than ${CLAUDE_CODE_MIN_VERSION} is replaced as a missing one is installed, from
+# the latest channel, since the stable one can lag behind that minimum.
 version() { "$1" --version 2>/dev/null < /dev/null 3<&- | sed -n '1s/^\\([0-9][0-9.]*\\).*/\\1/p'; }
 current() {
   v="$(version "$1")"
@@ -309,13 +318,20 @@ if [ -n "$CLAUDE" ] && ! current "$CLAUDE"; then
 fi
 if [ -z "$CLAUDE" ]; then
   CLAUDE="$HOME/.local/bin/claude"
-  if ! (set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash) > "$D/install.log" 2>&1 3<&- || ! current "$CLAUDE"; then
+  if ! (set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash -s latest) > "$D/install.log" 2>&1 3<&- || ! current "$CLAUDE"; then
     { echo "\${OUTDATED:-Claude Code could not be installed.}"; tail -n 20 "$D/install.log"; } | tee "$D/stderr.log" >&2
     exit 3
   fi
 fi
 RESUME=""
 if [ -s "$S/session" ]; then RESUME="--resume $(cat "$S/session")"; : > "$D/resumed"; fi
+# The person's instructions from dx Settings are Claude Code's user-level
+# instructions; it reads the repository's AGENTS.md or CLAUDE.md itself.
+if [ -f "$D/user-instructions.md" ]; then
+  mkdir -p "$HOME/.claude"
+  if [ -s "$D/user-instructions.md" ]; then cp "$D/user-instructions.md" "$HOME/.claude/CLAUDE.md"
+  else rm -f "$HOME/.claude/CLAUDE.md"; fi
+fi
 # Claude Code reads skills from ~/.claude/skills, not the repository's .agents.
 # dx's built-in skills come first; a repository skill with a built-in name is
 # skipped, as for the dx agent. Links are relative, so they resolve inside the
@@ -510,6 +526,9 @@ export class ClaudeCodeRun {
       base: String(this.#base ?? 0),
       "prompt.txt": launch.systemPrompt,
       "runner.sh": RUNNER,
+      ...(launch.personalInstructions === undefined
+        ? {}
+        : { "user-instructions.md": launch.personalInstructions }),
       ...(launch.tools.length > 0
         ? {
             "dx-tools.json": JSON.stringify(launch.tools),

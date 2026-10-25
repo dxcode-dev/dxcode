@@ -1,5 +1,6 @@
 import type { PageCursor, ProjectId, ThreadId, UserId } from "@dx/domain";
 import {
+  type InfiniteData,
   type InvalidateOptions,
   infiniteQueryOptions,
   type QueryClient,
@@ -12,6 +13,7 @@ import {
   listThreads,
   searchThreads,
   type ThreadListTree,
+  type ThreadPage,
 } from "../../shared/api/client.js";
 
 const staleTime = 30_000;
@@ -57,6 +59,25 @@ export const invalidateAllThreadQueries = (
   client: QueryClient,
   userId: UserId,
 ) => client.invalidateQueries({ queryKey: threadKeys.all(userId) });
+
+/**
+ * How many child Threads a loaded sidebar list counts under this Thread;
+ * zero when none does. Only a root's row carries the count.
+ */
+export const listedChildCount = (
+  client: QueryClient,
+  userId: UserId,
+  threadId: ThreadId,
+) => {
+  for (const [, data] of client.getQueriesData<
+    InfiniteData<ThreadPage, unknown>
+  >({ queryKey: threadKeys.lists(userId) }))
+    for (const page of data?.pages ?? [])
+      for (const item of page.items)
+        if (item.id === threadId && item.childCount !== undefined)
+          return item.childCount;
+  return 0;
+};
 
 export const invalidateThreadLists = (
   client: QueryClient,

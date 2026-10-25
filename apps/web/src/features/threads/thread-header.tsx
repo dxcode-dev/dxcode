@@ -1,5 +1,4 @@
 import type { ProjectData, ThreadDetailData } from "@dx/api";
-import { isClaudeCodeModel } from "@dx/domain";
 import { DateTime } from "effect";
 import {
   AlarmClock,
@@ -8,13 +7,13 @@ import {
   FolderGit2,
   LockKeyhole,
   PanelRight,
+  Share,
   UsersRound,
 } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
 import { useTimeText } from "../../shared/hooks/use-clock.js";
-import { modelDisplayName } from "../../shared/model-display-name.js";
 import { threadColorAttributes } from "../../shared/thread-color.js";
 import { useOptionalThreadSnooze } from "../../shared/thread-snooze.js";
 import { snoozeWakeText } from "../../shared/thread-snooze-presets.js";
@@ -22,10 +21,12 @@ import { Avatar } from "../../shared/ui/avatar.js";
 import { Button } from "../../shared/ui/button.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { ThreadTitleText } from "../../shared/ui/thread-title.js";
+import { useMobile } from "../../shared/use-mobile.js";
 import { ShareDialog } from "./sharing/share-dialog.js";
 import { useSetThreadFollowing } from "./sharing/sharing-mutations.js";
 import { ThreadParticipants } from "./sharing/thread-participants.js";
 import { ThreadMenu } from "./thread-menu.js";
+import { threadSelectionSummary } from "./thread-selection-summary.js";
 import type { TranscriptViewModel } from "./transcript-view-model.js";
 
 /** While the Thread sleeps: when it wakes, and Wake to bring it back now. */
@@ -135,21 +136,24 @@ export function ThreadHeader({
       ? "working"
       : "idle";
   const selection = thread.agentInitialization.selection;
-  const claudeCode =
-    selection.kind === "model" && isClaudeCodeModel(selection.model);
+  const summary = threadSelectionSummary(selection);
   const selectionLabel =
-    selection.kind === "mode"
-      ? selection.mode
-      : claudeCode
-        ? "claude code"
-        : selection.model;
-  const selectionTitle =
-    selection.kind === "mode"
-      ? `Mode: ${selection.mode}`
-      : claudeCode
-        ? `Claude Code: ${modelDisplayName(selection.model)}${selection.thinking === undefined ? "" : `, ${selection.thinking} effort`}`
-        : `Model: ${selection.model}`;
+    selection.kind === "model" && summary.kind === "model"
+      ? selection.model
+      : summary.label;
   const openShare = own && !archived ? () => setShareOpen(true) : undefined;
+  // A phone has no room for the chips: the Thread menu shows the model and
+  // Project instead, and sits at the bar's end after an icon-only Share.
+  const mobile = useMobile();
+  const menu = transcript ? (
+    <ThreadMenu
+      thread={thread}
+      project={project}
+      transcript={transcript}
+      onOpenShare={openShare}
+      showDetails={mobile}
+    />
+  ) : null;
   return (
     <header className="thread-title-bar">
       <div className="thread-title-group" {...threadColorAttributes(thread)}>
@@ -175,16 +179,11 @@ export function ThreadHeader({
           <ThreadTitleText thread={thread} maxCharacters={60} />
         </strong>
         {own ? null : <FollowButton thread={thread} />}
-        {transcript ? (
-          <ThreadMenu
-            thread={thread}
-            project={project}
-            transcript={transcript}
-            onOpenShare={openShare}
-          />
-        ) : null}
+        {mobile ? null : menu}
         {archived ? (
-          <span className="thread-archived-badge">Archived thread</span>
+          <span className="thread-archived-badge">
+            {mobile ? "Archived" : "Archived thread"}
+          </span>
         ) : own && thread.snoozedUntil !== undefined ? (
           <ThreadSnoozeBadge
             threadId={thread.id}
@@ -202,7 +201,18 @@ export function ThreadHeader({
           />
         ) : null}
         {own ? (
-          openShare === undefined ? null : (
+          openShare === undefined ? null : mobile ? (
+            <Button
+              className="thread-share-button thread-share-icon-button"
+              aria-label="Share"
+              title="Share"
+              variant="ghost"
+              size="icon-xs"
+              onClick={openShare}
+            >
+              <Share />
+            </Button>
+          ) : (
             <Button
               className="thread-share-button"
               variant="ghost"
@@ -235,7 +245,7 @@ export function ThreadHeader({
             {projectName ?? "No project"}
           </span>
         </span>
-        <span className="thread-header-chip" title={selectionTitle}>
+        <span className="thread-header-chip" title={summary.title}>
           <span className="thread-header-chip-label">{selectionLabel}</span>
         </span>
         <PrivacyChip thread={thread} onOpenShare={openShare} />
@@ -254,6 +264,7 @@ export function ThreadHeader({
             <PanelRight />
           </Button>
         ) : null}
+        {mobile ? menu : null}
       </div>
       {shareOpen && own && !archived ? (
         <ShareDialog

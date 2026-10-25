@@ -14,12 +14,15 @@ import {
   Ellipsis,
   FileDown,
   FileText,
+  FolderGit2,
+  Gauge,
   Hash,
   Link2,
   Pencil,
   Pin,
   PinOff,
   Share2,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -36,6 +39,7 @@ import {
 } from "../../shared/thread-snooze.js";
 import { absoluteThreadUrl } from "../../shared/thread-url.js";
 import { Button } from "../../shared/ui/button.js";
+import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
 import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
 import { ThreadColorSubmenu } from "../../shared/ui/thread-color-submenu.js";
 import { SnoozeMenuItems } from "../../shared/ui/thread-snooze-menu.js";
@@ -44,6 +48,7 @@ import {
   serializeThreadMarkdown,
   threadExportFilename,
 } from "./thread-export.js";
+import { threadSelectionSummary } from "./thread-selection-summary.js";
 import type { TranscriptViewModel } from "./transcript-view-model.js";
 
 function Submenu({
@@ -82,12 +87,18 @@ export function ThreadMenu({
   project,
   transcript,
   onOpenShare,
+  showDetails = false,
 }: {
   readonly thread: ThreadDetailData;
   readonly project?: Pick<ProjectData, "name">;
   /** Reads the shown transcript when an export runs. */
   readonly transcript: () => TranscriptViewModel;
   readonly onOpenShare?: () => void;
+  /**
+   * Adds what the Thread runs on and its Project, which a phone's header has
+   * no room for.
+   */
+  readonly showDetails?: boolean;
 }) {
   const archive = useOptionalThreadArchive();
   const editing = useOptionalThreadEditing();
@@ -148,7 +159,9 @@ export function ThreadMenu({
             align="end"
             sideOffset={4}
           >
-            <Menu.Popup className="thread-menu-popup thread-actions-menu">
+            <Menu.Popup
+              className={`thread-menu-popup thread-actions-menu${showDetails ? " thread-actions-menu-details" : ""}`}
+            >
               {/* A family shares as one unit, so members reach the parent too. */}
               {thread.parentThreadId === undefined ? null : (
                 <>
@@ -265,15 +278,12 @@ export function ThreadMenu({
                     </span>
                   </Menu.Item>
                   {editable ? (
-                    <Menu.Item
-                      className="thread-menu-item thread-menu-item-danger"
-                      onClick={() => editing.openDelete(thread)}
-                    >
-                      <Trash2 />
-                      <span>Delete</span>
-                    </Menu.Item>
+                    <DeleteMenuItem thread={thread} editing={editing} />
                   ) : null}
                 </>
+              ) : null}
+              {showDetails ? (
+                <ThreadDetailItems thread={thread} project={project} />
               ) : null}
             </Menu.Popup>
           </Menu.Positioner>
@@ -287,6 +297,60 @@ export function ThreadMenu({
           <Check />
         ) : null}
       </span>
+    </>
+  );
+}
+
+/**
+ * What the Thread runs on, and its Project. The owner opens the Project from
+ * here; members of a shared Thread cannot read the owner's Project.
+ */
+function ThreadDetailItems({
+  thread,
+  project,
+}: {
+  readonly thread: ThreadDetailData;
+  readonly project?: Pick<ProjectData, "name">;
+}) {
+  const selection = threadSelectionSummary(
+    thread.agentInitialization.selection,
+  );
+  const own = thread.access === undefined || thread.access === "owner";
+  const projectName = project?.name ?? thread.projectName ?? "No project";
+  return (
+    <>
+      <Menu.Separator className="thread-menu-separator" />
+      <Menu.Item
+        className="thread-menu-item thread-menu-detail-item"
+        title={selection.title}
+      >
+        {selection.kind === "claude-code" ? (
+          <ClaudeIcon />
+        ) : selection.kind === "mode" ? (
+          <Gauge />
+        ) : (
+          <Sparkles />
+        )}
+        <span className="thread-menu-detail-label">{selection.label}</span>
+        {selection.detail === undefined ? null : (
+          <span className="thread-menu-detail-value">{selection.detail}</span>
+        )}
+      </Menu.Item>
+      <Menu.Item
+        className="thread-menu-item"
+        title={projectName}
+        render={
+          own ? (
+            <Link
+              to="/projects/$projectId"
+              params={{ projectId: thread.projectId }}
+            />
+          ) : undefined
+        }
+      >
+        <FolderGit2 />
+        <span>{projectName}</span>
+      </Menu.Item>
     </>
   );
 }
@@ -343,5 +407,61 @@ function PinMenuItem({
       {pinned ? <PinOff /> : <Pin />}
       <span>{pinned ? "Unpin" : "Pin"}</span>
     </Menu.Item>
+  );
+}
+
+/**
+ * Delete, or a submenu offering the Thread with the children its sidebar
+ * row lists, as the row's own menu does.
+ */
+function DeleteMenuItem({
+  thread,
+  editing,
+}: {
+  readonly thread: ThreadDetailData;
+  readonly editing: ThreadEditingController;
+}) {
+  // Read as the menu opens, so it follows the sidebar's latest count.
+  const children = editing.childCount(thread.id);
+  if (children === 0)
+    return (
+      <Menu.Item
+        className="thread-menu-item thread-menu-item-danger"
+        onClick={() => editing.openDelete(thread)}
+      >
+        <Trash2 />
+        <span>Delete</span>
+      </Menu.Item>
+    );
+  return (
+    <Menu.SubmenuRoot>
+      <Menu.SubmenuTrigger className="thread-menu-item thread-menu-item-danger">
+        <Trash2 />
+        <span>Delete</span>
+        <ChevronRight />
+      </Menu.SubmenuTrigger>
+      <Menu.Portal>
+        <Menu.Positioner
+          className="thread-menu-positioner"
+          sideOffset={4}
+          alignOffset={-4}
+        >
+          <Menu.Popup className="thread-menu-popup thread-actions-menu thread-actions-submenu">
+            <Menu.Item
+              className="thread-menu-item thread-menu-item-danger"
+              onClick={() => editing.openDelete(thread, children)}
+            >
+              <span>All {children + 1} Threads</span>
+            </Menu.Item>
+            <Menu.Item
+              className="thread-menu-item thread-menu-item-danger"
+              onClick={() => editing.openDelete(thread)}
+            >
+              <span>This Thread</span>
+            </Menu.Item>
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.SubmenuRoot>
   );
 }

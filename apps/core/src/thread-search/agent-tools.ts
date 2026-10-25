@@ -1,5 +1,4 @@
 import {
-  isClaudeCodeModel,
   THREAD_SEARCH_QUERY_MAX_LENGTH,
   ThreadSearchQueryError,
 } from "@dx/domain";
@@ -19,10 +18,12 @@ import {
   readerUserMessage,
   sharedCurrentPrompt,
   sharedReaderPrompt,
+  threadMaterialPage,
 } from "./reader.js";
 import {
   CURRENT_CONTEXT_SYSTEM_PROMPT,
   READ_THREAD_DESCRIPTION,
+  READ_THREAD_MATERIAL_DESCRIPTION,
   THREAD_READER_SYSTEM_PROMPT,
 } from "./reader-prompt.js";
 import { searchThreadsItem } from "./routes.js";
@@ -127,6 +128,11 @@ export interface ThreadSearchToolOptions {
   /** Replaces the history read; tests run without Flue's agent objects. */
   readonly loadHistory?: typeof readHistory;
   readonly readerMode?: ReaderMode;
+  /**
+   * A Claude Code Thread's only model is its own CLI session, so read_thread
+   * returns the target's messages, paged, for Claude to read.
+   */
+  readonly claudeCode?: boolean;
 }
 
 export const createThreadSearchTools = (
@@ -135,6 +141,7 @@ export const createThreadSearchTools = (
   {
     loadHistory = readHistory,
     readerMode = "isolated",
+    claudeCode = false,
   }: ThreadSearchToolOptions = {},
 ): ToolDefinition[] => {
   const scopeOf = async (context: ThreadToolsContext) => {
@@ -213,47 +220,56 @@ export const createThreadSearchTools = (
     },
   });
 
+  const readThreadInput = {
+    threadID: v.pipe(
+      v.string(),
+      v.minLength(1),
+      v.maxLength(2_048),
+      v.description(
+        "A dx thread URL whose last path segment is thr_{uuid}, or a thread ID in format thr_{uuid}.",
+      ),
+    ),
+    question: v.pipe(
+      v.string(),
+      v.minLength(1),
+      v.maxLength(8_000),
+      v.description(
+        "The question you want to ask the thread. Be clear and specific.",
+      ),
+    ),
+    context: v.pipe(
+      v.picklist(["full", "current"]),
+      v.description(
+        'Which context windows of the target thread to consider: "full" or "current".',
+      ),
+    ),
+  };
+  const readThreadCursor = v.optional(
+    v.pipe(
+      v.string(),
+      v.maxLength(64),
+      v.description("nextCursor from the previous page."),
+    ),
+  );
+
   const readThread = defineTool({
     name: "read_thread",
-    description: READ_THREAD_DESCRIPTION,
+    description: claudeCode
+      ? READ_THREAD_MATERIAL_DESCRIPTION
+      : READ_THREAD_DESCRIPTION,
     harness: true,
-    input: v.object({
-      threadID: v.pipe(
-        v.string(),
-        v.minLength(1),
-        v.maxLength(2_048),
-        v.description(
-          "A dx thread URL whose last path segment is thr_{uuid}, or a thread ID in format thr_{uuid}.",
-        ),
-      ),
-      question: v.pipe(
-        v.string(),
-        v.minLength(1),
-        v.maxLength(8_000),
-        v.description(
-          "The question you want to ask the thread. Be clear and specific.",
-        ),
-      ),
-      context: v.pipe(
-        v.picklist(["full", "current"]),
-        v.description(
-          'Which context windows of the target thread to consider: "full" or "current".',
-        ),
-      ),
-    }),
+    // Only a Claude Code Thread pages; other Threads' reader reads it all.
+    input: (claudeCode
+      ? v.object({ ...readThreadInput, cursor: readThreadCursor })
+      : v.object(readThreadInput)) as v.ObjectSchema<
+      typeof readThreadInput & {
+        readonly cursor: typeof readThreadCursor;
+      },
+      undefined
+    >,
     run: async ({ data, harness, signal }) => {
       const context = getContext();
       const { calling, scope } = await scopeOf(context);
-      // A Claude Code model call runs the Thread's Claude Code session, so
-      // it cannot also run a reader. Until a subagent model is configured
-      // for such Threads, the tool says so instead.
-      if (
-        calling.selection?.kind === "model" &&
-        isClaudeCodeModel(calling.selection.model)
-      )
-        throw new Error(
-          "Subagent not configured: read_thread runs its reader on a subagent model, and this Claude Code Thread has none.",
-        );
       let target: LoadedThread;
       try {
         const found = await searchThreads({
@@ -284,12 +300,31 @@ export const createThreadSearchTools = (
             `That Thread's history is unavailable (${history.status}).`,
           );
         if (history.kind === "empty")
-          return { output: { answer: "That Thread has no messages yet." } };
+          return claudeCode
+            ? {
+                output: {
+                  threadId: row.id,
+                  title: row.title,
+                  messageCount: 0,
+                  messages: [],
+                },
+              }
+            : { output: { answer: "That Thread has no messages yet." } };
         target = { threadId: row.id, title: row.title, page: history.page };
       } catch (error) {
         if (error instanceof ThreadSearchQueryError)
           throw new Error(`read_thread: ${error.message}`);
         throw error;
+      }
+      if (claudeCode) {
+        const cursor = (data as { readonly cursor?: string }).cursor;
+        return {
+          output: threadMaterialPage(
+            target,
+            data.context === "current",
+            cursor,
+          ),
+        };
       }
       // Until subagent routes are pinned per submission, the reader runs on
       // the calling Thread's own model, at low thinking.

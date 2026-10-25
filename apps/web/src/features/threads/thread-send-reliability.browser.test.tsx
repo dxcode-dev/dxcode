@@ -522,6 +522,10 @@ const open = async (
     submitButton().querySelector(".processing-dot") === null &&
     !submitButton().hasAttribute("aria-busy") &&
     !submitButton().hasAttribute("data-submitting");
+  /** Nothing marks Send pending: Stop replaced it, or it shows its arrow. */
+  const sendSettled = () =>
+    container.querySelector('button[type="submit"].composer-submit') === null ||
+    arrowBack();
   const pressEnter = () =>
     React.act(async () => {
       textarea().dispatchEvent(
@@ -572,6 +576,7 @@ const open = async (
     submitButton,
     sending,
     arrowBack,
+    sendSettled,
     pressEnter,
     attach,
     preview,
@@ -659,7 +664,7 @@ describe("a message shows as sent only once the server has it", () => {
 
       await vi.waitFor(() => expect(panel.userRows("Held message")).toBe(1));
       expect(panel.textarea().value).toBe("");
-      expect(panel.arrowBack()).toBe(true);
+      expect(panel.sendSettled()).toBe(true);
       if (file) expect(panel.preview("held.png")).toBeNull();
       expect(server.submissions.size).toBe(steer ? 2 : 1);
       await panel.close();
@@ -779,7 +784,7 @@ describe("a message's own row on the stream confirms it, and it never shows twic
     );
     expect(server.submissions.size).toBe(1);
     await vi.waitFor(() => expect(panel.textarea().value).toBe(""));
-    expect(panel.arrowBack()).toBe(true);
+    expect(panel.sendSettled()).toBe(true);
     expect(panel.textarea().readOnly).toBe(false);
     expect(panel.card()).toBe("");
     await panel.type("Next thought");

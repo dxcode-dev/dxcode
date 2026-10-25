@@ -483,6 +483,83 @@ export const readerTools = (thread: LoadedThread): ReaderTools => {
   };
 };
 
+/**
+ * `read_thread` in a Claude Code Thread, which has no reader model: one
+ * page of the Thread's messages, newest first, each page about one
+ * `read_messages` response. A message larger than a page comes alone, in
+ * chunks. The cursor encodes `index * 1000 + chunk` of where to continue;
+ * context "current" is the first page only.
+ */
+export const threadMaterialPage = (
+  thread: LoadedThread,
+  current: boolean,
+  cursor?: string,
+) => {
+  const { messages } = normalizeHistory(thread.page);
+  const messageCount = messages.length;
+  const position =
+    cursor === undefined ? messageCount * 1000 : fromCursor(cursor);
+  let chunk = position % 1000;
+  const read: Array<
+    | NormalizedMessage
+    | {
+        readonly index: number;
+        readonly chunk: number;
+        readonly chunkCount: number;
+        readonly jsonChunk: string;
+      }
+  > = [];
+  let size = 0;
+  let next: number | undefined;
+  for (let index = Math.floor(position / 1000); index >= 1; index--) {
+    const message = messages[index - 1];
+    if (message === undefined) break;
+    const length = JSON.stringify(message).length;
+    if (chunk === 0 && length <= RESPONSE_MAX_CHARS) {
+      if (read.length > 0 && size + length > RESPONSE_MAX_CHARS) {
+        next = index * 1000;
+        break;
+      }
+      read.unshift(message);
+      size += length;
+      continue;
+    }
+    if (read.length > 0) {
+      next = index * 1000;
+      break;
+    }
+    const chunks = chunksOf(message);
+    read.push({
+      index,
+      chunk,
+      chunkCount: chunks.length,
+      jsonChunk: chunks[chunk] ?? "",
+    });
+    next =
+      chunk + 1 < chunks.length
+        ? index * 1000 + chunk + 1
+        : index > 1
+          ? (index - 1) * 1000
+          : undefined;
+    chunk = 0;
+    break;
+  }
+  const first = read[0]?.index ?? messageCount + 1;
+  return jsonOutput({
+    threadId: thread.threadId,
+    title: thread.title,
+    messageCount,
+    messages: read,
+    ...(current && cursor === undefined && first > 1
+      ? {
+          note: `Messages 1–${first - 1} are outside this page; ask again with context "full" if the answer is not here.`,
+        }
+      : next === undefined || current
+        ? {}
+        : { nextCursor: cursorOf(next) }),
+  });
+};
+
 /** What the reader is asked: the target thread and the question. */
 export const readerUserMessage = (
   thread: LoadedThread,

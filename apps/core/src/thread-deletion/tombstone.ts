@@ -1,28 +1,34 @@
 import type { ThreadId, UserId } from "@dx/domain";
+import { listedUnderParentSql } from "../threads/list-projection-d1.js";
 
 /** The title a tombstone keeps: the real one is part of what was deleted. */
 export const DELETED_THREAD_TITLE = "Deleted thread";
 
-/** Whether the owner's Thread is deleted. */
-const tombstoneOf = `EXISTS (
-  SELECT 1 FROM threads
-   WHERE id = ?1 AND owner_user_id = ?2 AND lifecycle_state = 'deleted'
+/** The JSON array of Thread IDs bound as `?1`. */
+const inThreads = "SELECT value FROM json_each(?1)";
+
+/** Whether the owner's Thread `column` names is deleted. */
+const tombstoneOf = (column: string) => `${column} IN (
+  SELECT id FROM threads
+   WHERE id IN (${inThreads}) AND owner_user_id = ?2
+     AND lifecycle_state = 'deleted'
 )`;
 
 /**
- * Turns the owner's live Thread into a tombstone in one D1 transaction. The
- * row stays, so its ID can never be issued again. Its title, instructions,
- * and snapshots are scrubbed. Its child Threads become top-level Threads.
- * Its notifications, sidebar placement, sharing records, and who saw it
- * are removed, and the deletion is recorded for cleanup. Returns false when the Thread was
- * not live (already deleted, or not the owner's).
+ * Turns the owner's live Threads into tombstones in one D1 transaction. Each
+ * row stays, so its ID can never be issued again. Titles, instructions, and
+ * snapshots are scrubbed. Their child Threads become top-level Threads.
+ * Their notifications, sidebar placement, sharing records, and who saw them
+ * are removed, and each deletion is recorded for cleanup. Returns the Threads
+ * it tombstoned: one already deleted, or not the owner's, is left out.
  */
-export const tombstoneThread = async (
+export const tombstoneThreads = async (
   db: D1Database,
-  threadId: ThreadId,
+  threadIds: ReadonlyArray<ThreadId>,
   ownerUserId: UserId,
   deletedAt: string,
-): Promise<boolean> => {
+): Promise<ReadonlyArray<ThreadId>> => {
+  const ids = JSON.stringify(threadIds);
   const [tombstoned] = await db.batch([
     db
       .prepare(
@@ -46,61 +52,87 @@ export const tombstoneThread = async (
                 turn_settled_at = NULL,
                 turn_failed = 0,
                 updated_at = ?4
-          WHERE id = ?1 AND owner_user_id = ?2
-            AND lifecycle_state != 'deleted'`,
+          WHERE id IN (${inThreads}) AND owner_user_id = ?2
+            AND lifecycle_state != 'deleted'
+         RETURNING id`,
       )
-      .bind(threadId, ownerUserId, DELETED_THREAD_TITLE, deletedAt),
+      .bind(ids, ownerUserId, DELETED_THREAD_TITLE, deletedAt),
     db
       .prepare(
         `INSERT INTO thread_deletion (thread_id, owner_user_id, requested_at)
-         SELECT ?1, ?2, ?3 WHERE ${tombstoneOf}
+         SELECT id, ?2, ?3 FROM threads WHERE ${tombstoneOf("id")}
          ON CONFLICT (thread_id) DO NOTHING`,
       )
-      .bind(threadId, ownerUserId, deletedAt),
+      .bind(ids, ownerUserId, deletedAt),
     db
       .prepare(
         `UPDATE threads SET parent_thread_id = NULL
-          WHERE parent_thread_id = ?1 AND ${tombstoneOf}`,
+          WHERE ${tombstoneOf("parent_thread_id")}`,
       )
-      .bind(threadId, ownerUserId),
+      .bind(ids, ownerUserId),
     db
-      .prepare(
-        `DELETE FROM notification WHERE thread_id = ?1 AND ${tombstoneOf}`,
-      )
-      .bind(threadId, ownerUserId),
+      .prepare(`DELETE FROM notification WHERE ${tombstoneOf("thread_id")}`)
+      .bind(ids, ownerUserId),
     db
       .prepare(
         `DELETE FROM sidebar_layout_entry
-          WHERE kind = 'thread' AND item_id = ?1 AND ${tombstoneOf}`,
+          WHERE kind = 'thread' AND ${tombstoneOf("item_id")}`,
       )
-      .bind(threadId, ownerUserId),
+      .bind(ids, ownerUserId),
     db
       .prepare(
-        `DELETE FROM thread_participant WHERE thread_id = ?1 AND ${tombstoneOf}`,
+        `DELETE FROM thread_participant WHERE ${tombstoneOf("thread_id")}`,
       )
-      .bind(threadId, ownerUserId),
+      .bind(ids, ownerUserId),
     db
-      .prepare(
-        `DELETE FROM thread_follower WHERE thread_id = ?1 AND ${tombstoneOf}`,
-      )
-      .bind(threadId, ownerUserId),
+      .prepare(`DELETE FROM thread_follower WHERE ${tombstoneOf("thread_id")}`)
+      .bind(ids, ownerUserId),
     db
-      .prepare(
-        `DELETE FROM thread_seen WHERE thread_id = ?1 AND ${tombstoneOf}`,
-      )
-      .bind(threadId, ownerUserId),
+      .prepare(`DELETE FROM thread_seen WHERE ${tombstoneOf("thread_id")}`)
+      .bind(ids, ownerUserId),
   ]);
-  return (tombstoned?.meta.changes ?? 0) > 0;
+  return (tombstoned?.results ?? []).map((row) => (row as { id: ThreadId }).id);
 };
 
-/** The child Threads a deletion turns into top-level Threads. */
-export const childThreadIds = async (db: D1Database, threadId: ThreadId) =>
+/** The child Threads a deletion of these Threads turns into top-level ones. */
+export const childThreadIds = async (
+  db: D1Database,
+  threadIds: ReadonlyArray<ThreadId>,
+) =>
   (
     await db
       .prepare(
-        "SELECT id FROM threads WHERE parent_thread_id = ? AND lifecycle_state != 'deleted'",
+        `SELECT id FROM threads
+          WHERE parent_thread_id IN (${inThreads})
+            AND lifecycle_state != 'deleted'`,
       )
-      .bind(threadId)
+      .bind(JSON.stringify(threadIds))
+      .all<{ id: ThreadId }>()
+  ).results.map(({ id }) => id);
+
+/**
+ * The owner's child Threads listed under this one, as the sidebar counts
+ * them, most recent activity first, up to `limit`.
+ */
+export const listedChildThreadIds = async (
+  db: D1Database,
+  threadId: ThreadId,
+  ownerUserId: UserId,
+  limit: number,
+) =>
+  (
+    await db
+      .prepare(
+        `SELECT child.id FROM threads AS child
+           JOIN threads AS parent ON parent.id = child.parent_thread_id
+           JOIN projects AS child_project ON child_project.id = child.project_id
+          WHERE child.parent_thread_id = ?1 AND parent.owner_user_id = ?2
+            AND ${listedUnderParentSql}
+          ORDER BY COALESCE(child.last_activity_at, child.updated_at) DESC,
+                   child.id DESC
+          LIMIT ?3`,
+      )
+      .bind(threadId, ownerUserId, limit)
       .all<{ id: ThreadId }>()
   ).results.map(({ id }) => id);
 

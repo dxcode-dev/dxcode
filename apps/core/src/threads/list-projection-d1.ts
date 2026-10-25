@@ -140,7 +140,7 @@ export const readThreadListProjection = async (
  * SQL predicate over `child`, its `parent`, and `child_project`: the child
  * lists under its parent, as the children list returns it.
  */
-const listedUnderParentSql = `child.owner_user_id = parent.owner_user_id
+export const listedUnderParentSql = `child.owner_user_id = parent.owner_user_id
           AND child.lifecycle_state = parent.lifecycle_state
           AND child.pinned_at IS NULL
           AND (child_project.workspace_id IS NULL

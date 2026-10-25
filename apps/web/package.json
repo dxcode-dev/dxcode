@@ -1,7 +1,7 @@
 {
   "name": "@dx/web",
   "private": true,
-  "version": "0.2.37",
+  "version": "0.2.38",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -42,6 +42,8 @@
     "test:keyboard-shortcuts": "node test/keyboard-shortcuts-proof.mjs",
     "test:mention-names": "node test/mention-names-proof.mjs",
     "test:header-menu-layout": "node test/header-menu-layout-proof.mjs",
+    "test:dictation-vocabulary": "node test/dictation-vocabulary-proof.mjs",
+    "test:orb-update": "node test/orb-update-proof.mjs",
     "preview": "vite preview",
     "test:network": "vitest run --root ../.. --project web-browser src/testing/frontend-network-regression.browser.test.tsx",
     "typecheck": "tsc -b --pretty false"

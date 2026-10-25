@@ -704,6 +704,13 @@ a {
   font-size: 11px;
   font-weight: 500;
 }
+.thread-title-bar .thread-share-icon-button {
+  padding: 0;
+}
+.thread-share-icon-button svg {
+  width: 15px;
+  height: 15px;
+}
 .thread-access-chip {
   display: inline-flex;
   align-items: center;
@@ -887,6 +894,20 @@ a {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* A phone's menu also lists the model and Project, so it runs wider. */
+.thread-menu-popup.thread-actions-menu-details {
+  width: min(264px, calc(100vw - 8px));
+}
+/* The model beside what the Thread runs on, as in "claude code  Opus 5.5";
+   the model elides first. */
+.thread-actions-menu .thread-menu-item > .thread-menu-detail-label {
+  flex: none;
+}
+.thread-actions-menu .thread-menu-item > .thread-menu-detail-value {
+  padding-left: 12px;
+  color: var(--muted-foreground);
+  text-align: right;
 }
 /* Delete: red text and icon, highlighted or not. */
 .thread-menu-item.thread-menu-item-danger,
@@ -2484,9 +2505,6 @@ a {
   outline: 0;
   font-size: 12px;
   line-height: 16px;
-}
-.agent-composer textarea::placeholder {
-  color: var(--muted-foreground);
 }
 .composer-actions {
   display: flex;
@@ -7163,6 +7181,11 @@ a {
 .attachment-trigger svg {
   width: 20px;
   height: 20px;
+}
+/* Beside the mic, Send, and Stop, the paperclip draws at their size. */
+.composer-actions .attachment-trigger svg {
+  width: 14px;
+  height: 14px;
 }
 .attachment-menu-positioner {
   z-index: 112;
