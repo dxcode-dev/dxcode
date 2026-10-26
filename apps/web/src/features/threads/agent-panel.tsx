@@ -267,6 +267,28 @@ const isModelRoutingError = (error: unknown) => {
   );
 };
 
+/**
+ * The Orb's disk filled up and even dx's reserve could not make room
+ * (`(dx_failure:…:WORKSPACE_DISK_FULL)`). Its first sentence names the
+ * limit; the disk notice above the card offers the ways to free space.
+ */
+const diskFullPresentation = (
+  id: string,
+  text: string,
+): ThreadErrorPresentation | undefined => {
+  if (!/\(dx_failure:[a-z]+:WORKSPACE_DISK_FULL\)/.test(text)) return undefined;
+  const title =
+    /Workspace disk is full(?: \([^)]*\))?/.exec(text)?.[0] ??
+    "Workspace disk is full";
+  return {
+    id,
+    title,
+    message:
+      "Free space, then retry: delete folders you can rebuild or files you don’t need, from the disk notice or the Terminal.",
+    action: "resume",
+  };
+};
+
 /** Core refused the run at Orb start because its source grant changed. */
 const sourceAccessDenial = (error: unknown) => {
   if (typeof error !== "object" || error === null) return undefined;
@@ -316,6 +338,13 @@ const threadErrorPresentation = (
         `settlement:${latestSettlement.submissionId}`,
         claudePlanLimit,
       );
+    const diskFull = latestSettlementFailed
+      ? diskFullPresentation(
+          `settlement:${latestSettlement.submissionId}`,
+          errorSearchText(latestSettlement.error),
+        )
+      : undefined;
+    if (diskFull !== undefined) return diskFull;
     const sourceDenied = latestSettlementFailed
       ? sourceAccessDenial(latestSettlement.error)
       : undefined;
@@ -361,13 +390,14 @@ const threadErrorPresentation = (
       : undefined;
   if (failedSettlementMessage !== undefined) {
     const id = `settlement-message:${failedSettlementMessage.submissionId ?? failedSettlementMessage.id}`;
-    const claudePlanLimit = parseClaudePlanLimit(
-      failedSettlementMessage.parts
-        .flatMap((part) => (part.type === "text" ? [part.text] : []))
-        .join("\n"),
-    );
+    const failureText = failedSettlementMessage.parts
+      .flatMap((part) => (part.type === "text" ? [part.text] : []))
+      .join("\n");
+    const claudePlanLimit = parseClaudePlanLimit(failureText);
     if (!dismissed.has(id) && claudePlanLimit !== undefined)
       return claudePlanLimitPresentation(id, claudePlanLimit);
+    const diskFull = diskFullPresentation(id, failureText);
+    if (!dismissed.has(id) && diskFull !== undefined) return diskFull;
     if (!dismissed.has(id)) {
       return {
         id,
@@ -995,8 +1025,14 @@ export interface AgentPanelOptions {
   readonly dictationAvailable?: boolean;
   readonly workspaceReady?: boolean;
   readonly workspaceStatus?: string;
-  /** Shown above the error card, such as the Orb memory notice. */
-  readonly composerNotice?: React.ReactNode;
+  /**
+   * Shown above the error card, such as the Orb memory and disk notices.
+   * As a function it gets `send`, which sends a message as the composer
+   * would.
+   */
+  readonly composerNotice?:
+    | React.ReactNode
+    | ((send: (message: string) => void) => React.ReactNode);
   readonly optimisticCreation?: OptimisticThreadCreation;
   readonly onInitialSubmissionObserved?: (submissionId: string) => void;
   readonly onOpenModelRouting?: () => void;
@@ -1523,7 +1559,9 @@ export function AgentPanel({
   };
   const errorCard = (
     <>
-      {composerNotice}
+      {typeof composerNotice === "function"
+        ? composerNotice((message) => void submit(message))
+        : composerNotice}
       <AgentThreadErrorCard
         source={source}
         discardedSends={discardedSends}

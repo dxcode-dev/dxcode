@@ -4,6 +4,7 @@ compile_error!("dxd runs on Linux only; cross-build it from any host with `pnpm 
 mod attachments;
 mod changes;
 mod child;
+mod disk;
 mod environment;
 mod files;
 mod files_sandbox;
@@ -32,7 +33,8 @@ use terminal::TerminalRuntime;
 
 pub const RELEASE: &str = env!("CARGO_PKG_VERSION");
 pub const PROTOCOL_MAJOR: u8 = 2;
-const STATE_DIR: &str = "/home/user/.local/state/dxd";
+pub(crate) const STATE_DIR: &str = "/home/user/.local/state/dxd";
+pub(crate) const GUEST_HOME: &str = "/home/user";
 const CONFIG_PATH: &str = "/home/user/.local/state/dxd/config.json";
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 
@@ -395,7 +397,7 @@ mod tests {
             })
             .unwrap(),
             format!(
-                r#"{{"type":"register","protocolMajor":2,"release":"{RELEASE}","capabilities":{{"terminal":{{"version":1}},"workloadIdentity":{{"version":1}},"files":{{"version":1}},"proxy":{{"version":1}},"memory":{{"version":1}}}}}}"#
+                r#"{{"type":"register","protocolMajor":2,"release":"{RELEASE}","capabilities":{{"terminal":{{"version":1}},"workloadIdentity":{{"version":1}},"files":{{"version":1}},"proxy":{{"version":1}},"memory":{{"version":1}},"disk":{{"version":1}}}}}}"#
             )
         );
         assert_eq!(
@@ -407,6 +409,7 @@ mod tests {
                 )
                 .heartbeat(),
                 memory: None,
+                disk: None,
             })
             .unwrap(),
             r#"{"type":"heartbeat","generation":"gen_1","terminal":{"state":"absent","terminalVersion":1,"terminal":"default"}}"#
@@ -423,9 +426,13 @@ mod tests {
                     used_bytes: 6_000,
                     total_bytes: 8_000,
                 }),
+                disk: Some(crate::disk::DiskUsage {
+                    used_bytes: 15_000,
+                    total_bytes: 20_000,
+                }),
             })
             .unwrap(),
-            r#"{"type":"heartbeat","generation":"gen_1","terminal":{"state":"absent","terminalVersion":1,"terminal":"default"},"memory":{"usedBytes":6000,"totalBytes":8000}}"#
+            r#"{"type":"heartbeat","generation":"gen_1","terminal":{"state":"absent","terminalVersion":1,"terminal":"default"},"memory":{"usedBytes":6000,"totalBytes":8000},"disk":{"usedBytes":15000,"totalBytes":20000}}"#
         );
         assert_eq!(
             serde_json::to_string(&ClientMessage::ChangesDirty).unwrap(),

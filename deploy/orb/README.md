@@ -187,6 +187,20 @@ The entrypoint runs unchanged: a container restored from a snapshot runs
 the snapshot kept. Core runs commands with `ctx.container.exec()` as the
 image user, so the container serves nothing for them.
 
+Cloudflare may stop a container at any time; before a planned stop it sends
+`SIGTERM` to tini, which forwards it to `dx-orb-init`, and kills the
+container up to 15 minutes later. The entrypoint then posts to
+`DX_ORB_STOP_NOTICE` (set only by the Orb container object), which the
+object intercepts with `interceptOutboundHttp` and routes to the Orb
+Worker's `OrbStopNotice` entrypoint. The object snapshots the filesystem
+while the container still runs, and the entrypoint exits only once it has
+answered, so the next use restores that snapshot. A container that stops
+without notice before its first snapshot has lost its files: the object
+never starts the bare image in its place for a command or a reconnect, and
+fails them as `WORKSPACE_RESET`, which Core retries as a whole submission so
+activation sets the workspace up again
+([`orb-container.ts`](../../apps/core/src/execution/cloudflare/orb-container.ts)).
+
 Snapshots are stored beside the image in the same registry repository
 (`rootfs-snapshot-*` tags) and are tied to the image version: keep an old
 image while any Thread's snapshot still refers to it.

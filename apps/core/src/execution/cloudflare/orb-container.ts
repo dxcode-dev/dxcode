@@ -20,6 +20,16 @@ import { orbContainerLogger } from "../../logging.js";
  *   restored. A paused workspace's alarm restores it (with a sleeping
  *   entrypoint, no Internet, no dxd) and re-snapshots it after 25 days, so
  *   archived and long-idle Threads stay resumable.
+ * - **Stop notice**: Cloudflare may stop a container at any time; before a
+ *   planned stop it sends SIGTERM and waits up to 15 minutes. The entrypoint
+ *   then posts to `ORB_STOP_NOTICE_ADDRESS`, which this object intercepts,
+ *   and the object snapshots the filesystem while the container still runs,
+ *   so the next use restores it.
+ * - **Reset**: a container that stopped before it ever had a snapshot lost
+ *   its files. Commands never run on the empty container that would replace
+ *   it: they fail (`stopped before its first pause`), and only Core's
+ *   activation, which sets the workspace up again, may start it over from
+ *   the image (`open` with `allowReset`).
  *
  * Commands and files go through `ctx.container.exec()`; nothing in the
  * container serves them. While the container runs, a short heartbeat alarm
@@ -50,6 +60,7 @@ export interface OrbContainerRuntime {
   }): Promise<OrbContainerSnapshot>;
   destroy(reason?: unknown): Promise<void>;
   setInactivityTimeout(durationMs: number): Promise<void>;
+  interceptOutboundHttp(address: string, binding: Fetcher): Promise<void>;
 }
 
 export interface OrbContainerProcess {
@@ -145,6 +156,12 @@ export interface OrbFileStat {
 }
 
 const STATE_KEY = "workspace";
+/**
+ * Where the entrypoint announces a stop (`DX_ORB_STOP_NOTICE`). A
+ * documentation address (TEST-NET-1) that nothing else uses; the object's
+ * intercept answers it, never the Internet.
+ */
+export const ORB_STOP_NOTICE_ADDRESS = "192.0.2.1:80";
 /** While the container runs, the alarm fires this often. */
 export const ORB_HEARTBEAT_MS = 10_000;
 /** Restore and re-snapshot a paused workspace this long after its TTL clock. */
@@ -187,7 +204,10 @@ const BASE_ENVIRONMENT = {
  * object ID; `dx-orb-init` sets this short, stable name instead, so the
  * Terminal prompt reads `user@cloudflare` (E2B's reads `user@e2b`).
  */
-const ORB_START_ENVIRONMENT = { DX_ORB_HOSTNAME: "cloudflare" } as const;
+const ORB_START_ENVIRONMENT = {
+  DX_ORB_HOSTNAME: "cloudflare",
+  DX_ORB_STOP_NOTICE: `http://${ORB_STOP_NOTICE_ADDRESS}/stopping`,
+} as const;
 
 const textDecoder = () => new TextDecoder("utf-8", { fatal: false });
 
@@ -196,6 +216,10 @@ const sleep = (durationMs: number) =>
 
 const failure = (operation: string, detail: string) =>
   new Error(`Orb container ${operation} failed: ${detail}`.trim());
+
+/** Core's provider reads this text as `WORKSPACE_RESET`. */
+export const ORB_WORKSPACE_RESET_DETAIL =
+  "the workspace stopped before its first pause, and its files are gone";
 
 /** `promise`, or `undefined` once `durationMs` passes. */
 const within = async <A>(
@@ -282,6 +306,8 @@ export interface OrbContainerControllerInput {
   /** The standard Orb image (`ctx.container.images.orb`). */
   readonly image: () => string | undefined;
   readonly sandboxId: string;
+  /** Answers the entrypoint's stop notice by calling `stopping`. */
+  readonly stopNotice?: () => Fetcher;
   readonly now?: () => number;
 }
 
@@ -294,7 +320,10 @@ export class OrbContainerController {
   readonly #storage: OrbContainerStorage;
   readonly #image: () => string | undefined;
   readonly #sandboxId: string;
+  readonly #stopNotice: (() => Fetcher) | undefined;
   readonly #now: () => number;
+  /** This object is stopping the container itself; a stop notice is moot. */
+  #stoppingItself = false;
   #state: OrbWorkspaceState | undefined | null = null;
   /** Serializes start, pause, refresh, and destroy. */
   #lifecycle: Promise<unknown> = Promise.resolve();
@@ -308,7 +337,60 @@ export class OrbContainerController {
     this.#storage = input.storage;
     this.#image = input.image;
     this.#sandboxId = input.sandboxId;
+    this.#stopNotice = input.stopNotice;
     this.#now = input.now ?? Date.now;
+  }
+
+  /** Stops the container on this object's own account (pause, destroy). */
+  async #destroyContainer() {
+    this.#stoppingItself = true;
+    try {
+      await this.#container.destroy();
+    } finally {
+      this.#stoppingItself = false;
+    }
+  }
+
+  /**
+   * Routes the entrypoint's stop notice to this object. An intercept lasts
+   * until the container stops, so every start registers it. Without it a
+   * planned stop loses what the last snapshot does not hold, so a failure
+   * is logged, never fatal.
+   */
+  async #watchForStop() {
+    if (this.#stopNotice === undefined) return;
+    try {
+      await this.#container.interceptOutboundHttp(
+        ORB_STOP_NOTICE_ADDRESS,
+        this.#stopNotice(),
+      );
+    } catch (cause) {
+      orbContainerLogger.warn("Orb container stop notice is not routed.", {
+        event: "orb_container_stop_notice",
+        sandboxId: this.#sandboxId,
+        outcome: "unrouted",
+        error: cause instanceof Error ? cause.message : String(cause),
+      });
+    }
+  }
+
+  /**
+   * A container that is not running and has no snapshot lost its files: it
+   * stopped before its first pause. Starting it from the image would hand
+   * callers an empty workspace, so only a caller that sets it up again may.
+   */
+  #refuseReset(state: OrbWorkspaceState, operation: string) {
+    if (state.snapshot !== undefined) return;
+    orbContainerLogger.warn("Orb container lost its files before a pause.", {
+      event: "orb_container_reset",
+      sandboxId: this.#sandboxId,
+      operation,
+      status: state.status,
+      ...(state.startedAt === undefined
+        ? {}
+        : { ranMs: this.#now() - state.startedAt }),
+    });
+    throw failure(operation, ORB_WORKSPACE_RESET_DETAIL);
   }
 
   async #load(): Promise<OrbWorkspaceState | undefined> {
@@ -549,12 +631,13 @@ export class OrbContainerController {
       // A container that never became ready would pass for running on the
       // next open; stop it so a retry starts it again.
       await within(
-        this.#container.destroy().catch(() => undefined),
+        this.#destroyContainer().catch(() => undefined),
         ABANDON_START_MS,
       );
       throw cause;
     }
     await this.#armInactivity(idleMs);
+    await this.#watchForStop();
     await this.#save({
       ...state,
       status: "active",
@@ -577,6 +660,12 @@ export class OrbContainerController {
     readonly create: boolean;
     readonly instance: CloudflareContainerInstance;
     readonly idleMs: number;
+    /**
+     * The caller sets the workspace up again (Core's activation), so one
+     * that lost its files may start over from the image. Unset means
+     * allowed, as for a Core from before this option.
+     */
+    readonly allowReset?: boolean;
   }): Promise<OrbOpenResult> {
     const requestedAt = this.#now();
     return this.#exclusive(async () => {
@@ -617,6 +706,8 @@ export class OrbContainerController {
             : { processesStartedAt: state.startedAt }),
         };
       }
+      if (!fresh && input.allowReset === false)
+        this.#refuseReset(state, "open");
       const residency = await this.#start(
         state,
         input.idleMs,
@@ -658,7 +749,8 @@ export class OrbContainerController {
 
   /**
    * Runs an operation in the running container. A container that paused
-   * meanwhile is restored first, as E2B resumes a paused sandbox on use.
+   * meanwhile is restored first, as E2B resumes a paused sandbox on use; one
+   * that lost its files is not started (see `#refuseReset`).
    */
   async #use<A>(operation: () => Promise<A>): Promise<A> {
     await this.#afterRestart();
@@ -671,6 +763,7 @@ export class OrbContainerController {
         if (state === undefined) throw failure("use", "no workspace");
         if (state.status === "destroyed")
           throw failure("use", "the workspace was destroyed");
+        this.#refuseReset(state, "use");
         await this.#start(
           state,
           Math.max(ORB_HEARTBEAT_MS, state.idleDeadline - this.#now()),
@@ -912,7 +1005,7 @@ export class OrbContainerController {
       await this.#save(next);
       return "kept" as const;
     }
-    await this.#container.destroy();
+    await this.#destroyContainer();
     await this.#save({ ...next, status: "paused" });
     orbContainerLogger.info("Orb container paused.", {
       event: "orb_container_paused",
@@ -943,7 +1036,7 @@ export class OrbContainerController {
   destroy(): Promise<void> {
     return this.#exclusive(async () => {
       const state = await this.#load();
-      if (this.#container.running) await this.#container.destroy();
+      if (this.#container.running) await this.#destroyContainer();
       await this.#storage.deleteAlarm();
       const now = this.#now();
       const { snapshot: _snapshot, ...rest } = state ?? {
@@ -988,8 +1081,66 @@ export class OrbContainerController {
         snapshotBytes: refreshed.size,
       });
     } finally {
-      if (this.#container.running) await this.#container.destroy();
+      if (this.#container.running) await this.#destroyContainer();
     }
+  }
+
+  /**
+   * The entrypoint's stop notice: Cloudflare sent SIGTERM and stops the
+   * container within 15 minutes. Snapshots the filesystem while it still
+   * runs and records it, so the next use restores it instead of losing it.
+   * The container stays active; it stops when the entrypoint exits.
+   */
+  stopping(): Promise<"snapshotted" | "ignored"> {
+    if (this.#stoppingItself) return Promise.resolve("ignored");
+    const noticedAt = this.#now();
+    return this.#exclusive(async () => {
+      const state = await this.#load();
+      if (
+        this.#stoppingItself ||
+        !this.#container.running ||
+        state === undefined ||
+        state.status !== "active"
+      )
+        return "ignored" as const;
+      const details = {
+        event: "orb_container_stop_snapshot",
+        sandboxId: this.#sandboxId,
+        hadSnapshot: state.snapshot !== undefined,
+        ...(state.startedAt === undefined
+          ? {}
+          : { ranMs: noticedAt - state.startedAt }),
+      };
+      try {
+        const snapshot = await this.#container.snapshotContainer({
+          name: `dx-orb-${this.#sandboxId.slice(0, 16)}`,
+        });
+        const current = (await this.#load()) ?? state;
+        await this.#save({
+          ...current,
+          snapshot: {
+            id: snapshot.id,
+            size: snapshot.size,
+            refreshedAt: this.#now(),
+          },
+        });
+        orbContainerLogger.info("Orb container snapshotted before a stop.", {
+          ...details,
+          outcome: "snapshotted",
+          snapshotBytes: snapshot.size,
+          durationMs: this.#now() - noticedAt,
+        });
+        return "snapshotted" as const;
+      } catch (cause) {
+        orbContainerLogger.error("Orb container stop snapshot failed.", {
+          ...details,
+          outcome: "error",
+          durationMs: this.#now() - noticedAt,
+          error: cause instanceof Error ? cause.message : String(cause),
+        });
+        throw cause;
+      }
+    });
   }
 
   /**
@@ -1076,6 +1227,9 @@ export class OrbContainerController {
     await this.#armInactivity(
       Math.max(0, (state?.idleDeadline ?? this.#now()) - this.#now()),
     );
+    // The intercept outlives the object; registering it again routes the
+    // notice through this deployment's code.
+    await this.#watchForStop();
     const alarm = await this.#storage.getAlarm();
     if (alarm === null || alarm > this.#now() + ORB_HEARTBEAT_MS)
       await this.#schedule(this.#now() + ORB_HEARTBEAT_MS);

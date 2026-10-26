@@ -141,6 +141,7 @@ describe("Cloudflare Containers Orb provider", () => {
       create: true,
       instance: "standard-2",
       idleMs: 120_000,
+      allowReset: true,
     });
     expect(row).toEqual({
       provider: "cloudflare",
@@ -182,9 +183,52 @@ describe("Cloudflare Containers Orb provider", () => {
       },
     );
     expect(observed).toEqual(["paused", "open"]);
+    // Activation sets the workspace up, so it may start one over.
     expect(stub.open).toHaveBeenCalledWith(
-      expect.objectContaining({ create: false }),
+      expect.objectContaining({ create: false, allowReset: true }),
     );
+  });
+
+  it("fails a workspace that lost its files as WORKSPACE_RESET, and lets only activation restart it", async () => {
+    const row: Row = {
+      provider: "cloudflare",
+      state: "initialized",
+      provider_sandbox_id: "orb-object-id",
+      initialization_attempt_id: null,
+    };
+    const { stub } = bind(row);
+    const lost = new Error(
+      "Orb container use failed: the workspace stopped before its first pause, and its files are gone",
+    );
+    const handle = await cloudflareExecutionProvider.workspace.connect(
+      context,
+      { threadId },
+      { authorize: async () => undefined },
+    );
+    stub.exec.mockRejectedValueOnce(lost);
+    const sandbox = await handle.sandbox("/home/user/workspace/repo");
+    const cause = await sandbox
+      .exec("claude --resume")
+      .catch((error: unknown) => error);
+    expect(stub.exec).toHaveBeenCalledOnce();
+    expect(
+      classifyRunFailure({ message: (cause as Error).message }),
+    ).toMatchObject({
+      class: "platform",
+      code: "WORKSPACE_RESET",
+      retryable: true,
+    });
+    // A reconnect never starts an empty container in its place.
+    expect(stub.open).toHaveBeenCalledWith(
+      expect.objectContaining({ create: false, allowReset: false }),
+    );
+    stub.open.mockRejectedValueOnce(lost);
+    const reconnect = await cloudflareExecutionProvider.workspace
+      .connect(context, { threadId }, { authorize: async () => undefined })
+      .catch((error: unknown) => error);
+    expect(
+      classifyRunFailure({ message: (reconnect as Error).message }).code,
+    ).toBe("WORKSPACE_RESET");
   });
 
   it("fails closed for a Thread pinned to another provider or never created", async () => {

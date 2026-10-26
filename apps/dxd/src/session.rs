@@ -11,14 +11,15 @@ use crate::changes::{
     CandidateOutcome, CaptureCache, ChangesScheduler, CompletedRefresh, RefreshRequest,
     UnavailableReason,
 };
+use crate::disk::Disk;
 use crate::environment::{EnvironmentOutcome, EnvironmentResult, EnvironmentRuntime, Materialized};
 use crate::files::{FilesContext, FilesDone, FilesOperation, FilesResult, FilesWorkers};
 use crate::files_sandbox::{self, SandboxReadResult};
 use crate::memory::{self, Memory};
 use crate::observer::Observer;
 use crate::protocol::{
-    Capabilities, ClientMessage, EnvironmentOperation, MemoryOperation, OperationResult,
-    PortalOperation, PortalResult, RequestOperation, ServerMessage, UpdateStatus,
+    Capabilities, ClientMessage, DiskOperation, EnvironmentOperation, MemoryOperation,
+    OperationResult, PortalOperation, PortalResult, RequestOperation, ServerMessage, UpdateStatus,
     WorkloadIdentityResult,
 };
 use crate::proxy::{self, DesktopStart, Outbound, Proxy};
@@ -154,6 +155,8 @@ pub struct Daemon {
     /// Processes a person asked to stop; snapshots and stops outlive a
     /// session.
     memory: Memory,
+    /// The workspace filesystem: heartbeats' usage, snapshots, deletions.
+    disk: Disk,
 }
 
 impl Daemon {
@@ -177,6 +180,17 @@ impl Daemon {
                 .local_runtime
                 .as_ref()
                 .map(|local| PathBuf::from(&local.home_directory)),
+        );
+        let disk = Disk::new(
+            config.local_runtime.as_ref().map_or_else(
+                || PathBuf::from(crate::GUEST_HOME),
+                |local| PathBuf::from(&local.home_directory),
+            ),
+            PathBuf::from(&config.workspace_root),
+            &config.local_runtime.as_ref().map_or_else(
+                || PathBuf::from(crate::STATE_DIR),
+                |local| PathBuf::from(&local.state_directory),
+            ),
         );
         Ok(Self {
             changes_workspace: PathBuf::from(&config.workspace_root),
@@ -203,6 +217,7 @@ impl Daemon {
             services,
             desktop_start: Arc::default(),
             memory,
+            disk,
         })
     }
 
@@ -448,6 +463,7 @@ impl Daemon {
                 generation: &generation,
                 terminal: self.terminal.heartbeat(),
                 memory: memory::usage(),
+                disk: self.disk.usage(),
             },
         )
         .await?;
@@ -582,6 +598,7 @@ impl Daemon {
                             generation: &generation,
                             terminal: self.terminal.heartbeat(),
                             memory: memory::usage(),
+                            disk: self.disk.usage(),
                         },
                     )
                     .await?;
@@ -966,6 +983,26 @@ impl Daemon {
                                 generation: &generation,
                                 request_id: &request_id,
                                 result: OperationResult::Memory(result),
+                            }) {
+                                let _ = sender.send(Outbound::Text(text));
+                            }
+                        });
+                    }
+                    RequestOperation::Disk(operation) => {
+                        // A snapshot walks the home's folders: its answer
+                        // returns through the proxy's lane.
+                        let sender = proxy.sender();
+                        let generation = generation.to_owned();
+                        let disk = self.disk.clone();
+                        tokio::task::spawn_blocking(move || {
+                            let result = match operation {
+                                DiskOperation::Snapshot {} => disk.snapshot(),
+                                DiskOperation::Delete { path } => disk.delete(&path),
+                            };
+                            if let Ok(text) = serde_json::to_string(&ClientMessage::Response {
+                                generation: &generation,
+                                request_id: &request_id,
+                                result: OperationResult::Disk(result),
                             }) {
                                 let _ = sender.send(Outbound::Text(text));
                             }

@@ -36,7 +36,10 @@ import {
   cloudflareSandbox,
   type OrbContainerClient,
 } from "./driver.js";
-import type { OrbOpenResult } from "./orb-container.js";
+import {
+  ORB_WORKSPACE_RESET_DETAIL,
+  type OrbOpenResult,
+} from "./orb-container.js";
 
 /** Default limit for one agent command, as E2B's sandbox timeout. */
 export const DEFAULT_CLOUDFLARE_COMMAND_TIMEOUT_MS = 300_000;
@@ -92,6 +95,18 @@ const isObjectReset = (cause: unknown) => RESET_PATTERN.test(messageOf(cause));
 const platformFailure = (code: string, message: string) =>
   new Error(
     markRunFailure({ class: "platform", code, message, retryable: true }),
+  );
+
+/**
+ * The container stopped before its first pause and lost its files; the
+ * object refuses to run anything on the empty container that would replace
+ * it. Flue re-attempts the whole submission for this code (`cloudflare.ts`),
+ * so activation sets the workspace up again before the turn retries.
+ */
+const workspaceReset = (method: string) =>
+  platformFailure(
+    "WORKSPACE_RESET",
+    `The workspace's container stopped before it was ever saved, so its files are gone (${method}); the run starts again in a new workspace.`,
   );
 
 const objectReset = (method: string, cause: unknown) =>
@@ -317,6 +332,8 @@ const resilientOrb = (
             ) => Promise<unknown>
           )(...args);
         } catch (cause) {
+          if (messageOf(cause).includes(ORB_WORKSPACE_RESET_DETAIL))
+            throw workspaceReset(method);
           if (!isObjectReset(cause)) throw cause;
           if (stub === used) stub = connect();
           const delay = IDEMPOTENT.has(method)
@@ -415,6 +432,8 @@ const openCloudflareWorkspace = async (
   };
   // Core's view of one open: with the object's own logs (same `sandboxId`)
   // and Cloudflare's instance list (named by Thread), it places a slow start.
+  // Only activation sets a workspace up, so only it may start one that lost
+  // its files over from the image.
   const open = async (create: boolean) => {
     const startedAt = Date.now();
     const details = {
@@ -447,6 +466,7 @@ const openCloudflareWorkspace = async (
           create,
           instance: profile.instance,
           idleMs,
+          allowReset: !options.existingOnly,
         }),
         CLOUDFLARE_OPEN_TIMEOUT_MS,
         () =>

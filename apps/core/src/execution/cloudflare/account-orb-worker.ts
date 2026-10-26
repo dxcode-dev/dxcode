@@ -26,7 +26,10 @@ import {
 } from "./account-orb-protocol.js";
 import type { OrbContainerObject } from "./orb-container-object.js";
 
-export { OrbContainerObject } from "./orb-container-object.js";
+export {
+  OrbContainerObject,
+  OrbStopNotice,
+} from "./orb-container-object.js";
 
 interface Env {
   readonly ORB_CONTAINER: DurableObjectNamespace<OrbContainerObject>;

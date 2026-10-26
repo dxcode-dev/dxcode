@@ -21,18 +21,27 @@ import {
 /** Viewers are told of new pressure at most this often. */
 export const ORB_MEMORY_HINT_INTERVAL_MS = 10_000;
 
+/** A heartbeat's reading of memory or disk. */
+type OrbUsage = Pick<DxdMemoryUsage, "usedBytes" | "totalBytes">;
+
 /**
- * Whether the current pressure episode was announced to the Thread's
- * viewers. Ephemeral: after hibernation or a lost daemon, the next heartbeat
- * (two seconds) announces an ongoing episode again.
+ * Whether the current pressure episode (memory, or with `isPressure` the
+ * disk) was announced to the Thread's viewers. Ephemeral: after hibernation
+ * or a lost daemon, the next heartbeat (two seconds) announces an ongoing
+ * episode again.
  */
-export class OrbMemoryMonitor {
+export class OrbPressureMonitor {
   #announced = false;
   #announcedAt = Number.NEGATIVE_INFINITY;
-  readonly #announce: (threadId: ThreadId, usage: DxdMemoryUsage) => void;
+  readonly #announce: (threadId: ThreadId, usage: OrbUsage) => void;
+  readonly #isPressure: (usedBytes: number, totalBytes: number) => boolean;
 
-  constructor(announce: (threadId: ThreadId, usage: DxdMemoryUsage) => void) {
+  constructor(
+    announce: (threadId: ThreadId, usage: OrbUsage) => void,
+    isPressure = isOrbMemoryPressure,
+  ) {
     this.#announce = announce;
+    this.#isPressure = isPressure;
   }
 
   /**
@@ -40,10 +49,10 @@ export class OrbMemoryMonitor {
    * no more often than `ORB_MEMORY_HINT_INTERVAL_MS`; viewers who see the
    * pressure poll until it ends, so falling out needs no announcement.
    */
-  observe(threadId: ThreadId, usage: DxdMemoryUsage | undefined, now: number) {
+  observe(threadId: ThreadId, usage: OrbUsage | undefined, now: number) {
     if (
       usage === undefined ||
-      !isOrbMemoryPressure(usage.usedBytes, usage.totalBytes)
+      !this.#isPressure(usage.usedBytes, usage.totalBytes)
     ) {
       this.#announced = false;
       return;

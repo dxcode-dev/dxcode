@@ -41,6 +41,7 @@ import {
   ThreadFilesPanel,
 } from "./files/files-panel.js";
 import type { PendingAttachment } from "./image-attachments.js";
+import { OrbDiskNotice } from "./orb-disk/orb-disk-notice.js";
 import { OrbMemoryNotice } from "./orb-memory/orb-memory-notice.js";
 import { ThreadPortalsPane } from "./portals/portals-pane.js";
 import {
@@ -837,6 +838,79 @@ function useWorkspaceTools({
   return { workspaceTools, openFilePanes };
 }
 
+interface TerminalOpener {
+  readonly mobile: boolean;
+  readonly mobileTool: ReturnType<typeof useMobileThreadTool>;
+  readonly setActiveFile: (file: undefined) => void;
+  readonly setRightPaneCollapsed: (collapsed: boolean) => void;
+}
+
+/** Brings the Terminal forward, as choosing its tab would. */
+function openTerminalTool({
+  mobile,
+  mobileTool,
+  setActiveFile,
+  setRightPaneCollapsed,
+}: TerminalOpener) {
+  if (mobile) {
+    setActiveFile(undefined);
+    mobileTool.select("terminal");
+    return;
+  }
+  setRightPaneCollapsed(false);
+  // The tab owns its selection; choose it as a click on it would.
+  requestAnimationFrame(() =>
+    document.getElementById("thread-workspace-tab-terminal")?.click(),
+  );
+}
+
+function OrbNotices({
+  threadId,
+  onAskAgent,
+  terminal,
+}: {
+  readonly threadId: ThreadId;
+  readonly onAskAgent: (message: string) => void;
+  readonly terminal: TerminalOpener | undefined;
+}) {
+  return (
+    <>
+      <OrbDiskNotice
+        threadId={threadId}
+        onAskAgent={onAskAgent}
+        onOpenTerminal={
+          terminal === undefined ? undefined : () => openTerminalTool(terminal)
+        }
+      />
+      <OrbMemoryNotice threadId={threadId} />
+    </>
+  );
+}
+
+/**
+ * Process names, commands, and folders are Terminal-level detail:
+ * contributors only.
+ */
+function orbComposerNotice(
+  thread: ThreadSessionProps["thread"],
+  terminal: TerminalOpener | undefined,
+) {
+  if (
+    thread.lifecycleState === "archived" ||
+    !thread.executionWorkspace.ready ||
+    thread.access === "view"
+  )
+    return undefined;
+  return (send: (message: string) => void) => (
+    <OrbNotices
+      key={thread.id}
+      threadId={thread.id}
+      onAskAgent={send}
+      terminal={terminal}
+    />
+  );
+}
+
 function ThreadSessionContent({
   thread,
   project,
@@ -925,12 +999,11 @@ function ThreadSessionContent({
     undefined;
   const toggleRightPane = () =>
     setRightPaneCollapsed((collapsed) => !collapsed);
-  // Process names and commands are Terminal-level detail: contributors only.
-  const composerNotice =
-    !archived && thread.executionWorkspace.ready && thread.access !== "view" ? (
-      <OrbMemoryNotice key={thread.id} threadId={thread.id} />
-    ) : undefined;
   const mobileTool = useMobileThreadTool();
+  const composerNotice = orbComposerNotice(
+    thread,
+    Terminal && { mobile, mobileTool, setActiveFile, setRightPaneCollapsed },
+  );
 
   const { workspaceTools, openFilePanes } = useWorkspaceTools({
     thread,

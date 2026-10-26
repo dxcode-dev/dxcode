@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+  isOrbDiskPressure,
   THREAD_CHANGES_SUBPROTOCOL,
   THREAD_TERMINAL_SUBPROTOCOL,
   ThreadFilesPath,
@@ -61,6 +62,7 @@ import {
   type DxdClientTerminalControl,
   type DxdCoreTerminalControl,
   DxdDesktopEnsureResult,
+  type DxdDiskUsage,
   DxdEnvironmentActivateResult,
   DxdFilesOperation,
   DxdFilesReadResult,
@@ -94,8 +96,9 @@ import {
   startupObservation,
   startupServerTiming,
 } from "../observability/startup-runtime.js";
+import { serveOrbDisk } from "../orb-disk/execution-object.js";
 import {
-  OrbMemoryMonitor,
+  OrbPressureMonitor,
   serveOrbMemory,
 } from "../orb-memory/execution-object.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
@@ -336,6 +339,8 @@ interface DaemonAuthority {
   readonly proxy?: boolean;
   /** The connected daemon reports memory and serves `memory.*` operations. */
   readonly memory?: boolean;
+  /** The connected daemon reports its disk and serves `disk.*` operations. */
+  readonly disk?: boolean;
 }
 
 interface DaemonAttachment {
@@ -444,7 +449,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   /** When proxied traffic last renewed the workspace's inactivity deadline. */
   #proxyActivityAt = 0;
   /** Tells the Thread's viewers when its Orb comes under memory pressure. */
-  readonly #orbMemory = new OrbMemoryMonitor((threadId, usage) => {
+  readonly #orbMemory = new OrbPressureMonitor((threadId, usage) => {
     threadDaemonLogger.info("Thread Orb memory pressure.", {
       event: "orb_memory_pressure",
       threadId,
@@ -459,6 +464,22 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       ).catch(() => undefined),
     );
   });
+  /** Tells the Thread's viewers when its Orb's disk starts filling up. */
+  readonly #orbDisk = new OrbPressureMonitor((threadId, usage) => {
+    threadDaemonLogger.info("Thread Orb disk pressure.", {
+      event: "orb_disk_pressure",
+      threadId,
+      usedBytes: usage.usedBytes,
+      totalBytes: usage.totalBytes,
+    });
+    this.ctx.waitUntil(
+      publishRealtimeInvalidation(this.env, threadId, "disk.invalidated").catch(
+        () => undefined,
+      ),
+    );
+  }, isOrbDiskPressure);
+  /** The connected daemon's last disk reading. Ephemeral, like the monitor. */
+  #orbDiskUsage: DxdDiskUsage | undefined;
   /** In-flight `services.ensure` attempts by guest port. */
   readonly #serviceEnsures = new Map<number, Promise<boolean>>();
   /** The in-flight `desktop.ensure`, shared by the Desktop's channels. */
@@ -709,6 +730,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       return this.#proxy(request, path);
     if (path === "/orb/memory" || path === "/orb/memory/stop")
       return this.#serveOrbMemory(request, path);
+    if (path === "/orb/disk" || path === "/orb/disk/delete")
+      return this.#serveOrbDisk(request, path);
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
       return new Response(null, { status: 404 });
     const threadId = Schema.decodeUnknownOption(ThreadId)(
@@ -932,6 +955,34 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       threadId: authority?.threadId,
       running: this.#isTransportReady() && this.#isHeartbeatFresh(),
       memory: authority?.memory === true,
+      dispatch: (operation) =>
+        authority === undefined
+          ? Promise.resolve(daemonFailureResponse("known"))
+          : this.#dispatchDaemonOperation(
+              authority,
+              operation,
+              DXD_MAX_REQUEST_FRAME_BYTES,
+              DAEMON_REQUEST_TIMEOUT_MS,
+            ),
+    });
+  }
+
+  /**
+   * Orb disk for an already authorized caller: usage from the last
+   * heartbeat, a folder snapshot, or a delete, relayed only to a live
+   * daemon. None wakes a paused workspace or renews its inactivity deadline.
+   */
+  #serveOrbDisk(request: Request, path: "/orb/disk" | "/orb/disk/delete") {
+    const threadId = Schema.decodeUnknownOption(ThreadId)(
+      request.headers.get("x-dx-thread-id"),
+    );
+    if (Option.isNone(threadId)) return new Response(null, { status: 404 });
+    const authority = this.#authority;
+    return serveOrbDisk(request, path, threadId.value, {
+      threadId: authority?.threadId,
+      running: this.#isTransportReady() && this.#isHeartbeatFresh(),
+      disk: authority?.disk === true,
+      usage: this.#orbDiskUsage,
       dispatch: (operation) =>
         authority === undefined
           ? Promise.resolve(daemonFailureResponse("known"))
@@ -2433,6 +2484,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           pending.operation.operation !== "services.ensure" &&
           pending.operation.operation !== "memory.snapshot" &&
           pending.operation.operation !== "memory.stop" &&
+          pending.operation.operation !== "disk.snapshot" &&
+          pending.operation.operation !== "disk.delete" &&
           !this.#isReady())
       )
         continue;
@@ -3576,8 +3629,11 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         chunkAcks: control.value.capabilities.files !== undefined,
         proxy: control.value.capabilities.proxy !== undefined,
         memory: control.value.capabilities.memory !== undefined,
+        disk: control.value.capabilities.disk !== undefined,
       };
       this.#orbMemory.reset();
+      this.#orbDisk.reset();
+      this.#orbDiskUsage = undefined;
       this.#authority = next;
       this.#lastPersistedHeartbeatAt = next.lastSeen;
       this.#lastHeartbeatAt = next.lastSeen;
@@ -3769,6 +3825,12 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       control.value.memory,
       now,
     );
+    this.#orbDiskUsage = control.value.disk;
+    this.#orbDisk.observe(
+      Schema.decodeUnknownSync(ThreadId)(authority.threadId),
+      control.value.disk,
+      now,
+    );
     socket.serializeAttachment({
       kind: "daemon",
       generation: authority.generation,
@@ -3868,6 +3930,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     };
     this.#authority = disconnected;
     this.#orbMemory.reset();
+    this.#orbDisk.reset();
+    this.#orbDiskUsage = undefined;
     this.#terminalHeartbeat = undefined;
     this.#environmentReady = false;
     this.#appliedEnvironment = undefined;

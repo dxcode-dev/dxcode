@@ -165,7 +165,7 @@ exec /usr/bin/awk "$@"
     "curl",
     options.installerWorks === true
       ? `#!/bin/sh\necho 'mkdir -p "$HOME/.local/bin" && cp ${join(root, "claude-latest")} "$HOME/.local/bin/claude"'\n`
-      : "#!/bin/sh\necho 'echo \"Installation failed: no space left on device\" >&2; exit 1'\n",
+      : "#!/bin/sh\necho 'echo \"Installation failed: checksum mismatch\" >&2; exit 1'\n",
   );
   const installClaude = () => tool("claude", FAKE_CLAUDE);
   if (options.oldClaude !== undefined)
@@ -397,7 +397,8 @@ const waitFor = async (ready: () => boolean, ms = 10_000) => {
 const runDirectories = (ops: ReadonlyArray<GuestOp>) =>
   new Set(
     ops.flatMap(({ path }) => {
-      const match = /dx-claude-code\/runs\/([^/'"\s]+)/.exec(path);
+      // A launch's disk guard names the runs directory with a glob.
+      const match = /dx-claude-code\/runs\/([^/'"\s*]+)/.exec(path);
       return match?.[1] === undefined ? [] : [match[1]];
     }),
   );
@@ -532,7 +533,7 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
       type: "error",
       error: {
         errorMessage: expect.stringMatching(
-          /Claude Code could not be installed\.[\s\S]*no space left on device/,
+          /Claude Code could not be installed\.[\s\S]*checksum mismatch/,
         ),
       },
     });
@@ -580,7 +581,7 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
       type: "error",
       error: {
         errorMessage: expect.stringMatching(
-          /Claude Code 1\.0\.108 is older than 2\.1\.310[\s\S]*claude update[\s\S]*no space left on device/,
+          /Claude Code 1\.0\.108 is older than 2\.1\.310[\s\S]*claude update[\s\S]*checksum mismatch/,
         ),
       },
     });

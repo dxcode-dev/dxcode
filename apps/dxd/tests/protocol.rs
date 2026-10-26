@@ -2406,3 +2406,122 @@ async fn real_daemon_reports_memory_and_stops_listed_processes() {
     assert!(hog.0.try_wait().unwrap().is_some());
     assert!(process_alive(runner_pid) && process_alive(cli_pid));
 }
+
+/// Orb disk: heartbeats carry the workspace filesystem's usage, a snapshot
+/// lists the largest folders in the checkout and the home, and a delete
+/// removes only a listed dependency, build, or cache folder that Git does
+/// not track, never source and never through a symlink.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_daemon_reports_disk_and_deletes_only_rebuildable_folders() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fixture = fixture(port);
+    let repo = &fixture.repo;
+    let write = |path: PathBuf, bytes: usize| {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, vec![7u8; bytes]).unwrap();
+    };
+    write(repo.join("node_modules/left-pad/index.js"), 3_000_000);
+    write(repo.join("src/big.bin"), 1_000_000);
+    // A committed build/ folder is source, whatever its name.
+    write(repo.join("build/release.sh"), 2_000_000);
+    git(repo, &["add", "build/release.sh"]);
+    write(fixture.home.join(".cache/pip/wheel.whl"), 500_000);
+    std::os::unix::fs::symlink(repo.join("src"), repo.join("dist")).unwrap();
+    let _daemon = DaemonGuard(spawn_daemon(&fixture));
+    let mut socket = accept(&listener).await;
+    let generation = register(&mut socket).await;
+
+    let heartbeat = wait_for(&mut socket, |value| value["type"] == "heartbeat").await;
+    let used = heartbeat["disk"]["usedBytes"].as_u64().expect("usedBytes");
+    let total = heartbeat["disk"]["totalBytes"]
+        .as_u64()
+        .expect("totalBytes");
+    assert!(total > 0 && used <= total, "{heartbeat}");
+
+    let snapshot = memory_request(
+        &mut socket,
+        &generation,
+        "disk-1",
+        json!({"operation": "disk.snapshot"}),
+    )
+    .await;
+    assert_eq!(snapshot["kind"], "snapshot", "{snapshot}");
+    assert_eq!(snapshot["partial"], false, "{snapshot}");
+    let folders = snapshot["folders"].as_array().unwrap();
+    let listed = folders
+        .iter()
+        .map(|folder| {
+            (
+                folder["path"].as_str().unwrap(),
+                folder["rebuildable"].as_bool().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        listed[..3],
+        [
+            ("workspace/repo/node_modules", true),
+            ("workspace/repo/build", false),
+            ("workspace/repo/src", false),
+        ],
+        "{snapshot}"
+    );
+    assert!(listed.contains(&(".cache", true)), "{snapshot}");
+    assert!(folders[0]["bytes"].as_u64().unwrap() >= 3_000_000);
+    // The home's folder holding the checkout and symlinks are not listed.
+    assert!(
+        !listed
+            .iter()
+            .any(|(path, _)| *path == "workspace" || path.ends_with("dist"))
+    );
+
+    for (id, path, reason) in [
+        ("disk-2", "workspace/repo/src", "protected"),
+        ("disk-3", "workspace/repo/build", "protected"),
+        ("disk-4", "workspace/repo/dist", "invalid"),
+        ("disk-5", "workspace/repo/../repo/node_modules", "invalid"),
+        ("disk-6", "workspace", "invalid"),
+        ("disk-7", "/etc", "invalid"),
+        ("disk-8", "workspace/repo/target", "missing"),
+    ] {
+        let result = memory_request(
+            &mut socket,
+            &generation,
+            id,
+            json!({"operation": "disk.delete", "path": path}),
+        )
+        .await;
+        assert_eq!(
+            result,
+            json!({"kind": "refused", "reason": reason}),
+            "{path}"
+        );
+    }
+    assert!(repo.join("src/big.bin").exists() && repo.join("build/release.sh").exists());
+
+    for (id, path) in [
+        ("disk-9", "workspace/repo/node_modules"),
+        ("disk-10", ".cache"),
+    ] {
+        let result = memory_request(
+            &mut socket,
+            &generation,
+            id,
+            json!({"operation": "disk.delete", "path": path}),
+        )
+        .await;
+        assert_eq!(result, json!({"kind": "deleted"}), "{path}");
+        assert!(!fixture.home.join(path).exists(), "{path}");
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while std::fs::read_dir(fixture.state.join("trash"))
+        .is_ok_and(|mut entries| entries.next().is_some())
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the deleted folders stayed in the trash"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}

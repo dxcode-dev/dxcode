@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "release": "v0.2.39",
+  "release": "v0.2.40",
   "dxd": "0.11.0",
   "platform": "linux-x64",
   "asset": "dxd-linux-x64",
-  "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.39/dxd-linux-x64",
-  "sha256": "d3a85385666b547620a62444b8267b84d484e551266e5b272b0ab3d7646b1455"
+  "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.40/dxd-linux-x64",
+  "sha256": "ec3cc56921fc136a3d36fc2dbaf19d22dd70d27b12912317a0cef5cd170914f7"
 }

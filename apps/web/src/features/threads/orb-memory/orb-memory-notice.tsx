@@ -38,7 +38,7 @@ type Phase = "hidden" | "open" | "recovered" | "dismissed";
  * Calls `onElapsed` once, `ms` after it mounts, unless it unmounts first.
  * Give each use its own `key`: React would otherwise reuse a spent timer.
  */
-function After({
+export function After({
   ms,
   onElapsed,
 }: {

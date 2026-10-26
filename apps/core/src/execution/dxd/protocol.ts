@@ -1,6 +1,8 @@
 import {
   IssueWorkloadIdentityRequestSchema,
   IssueWorkloadIdentityResultSchema,
+  OrbFolderPathSchema,
+  OrbFolderSchema,
   OrbProcessIdSchema,
   OrbProcessSchema,
   THREAD_FILES_MAX_EDITABLE_BYTES,
@@ -105,6 +107,11 @@ export const DxdTerminalCapability = Schema.Struct({
    * `memory.snapshot` and `memory.stop` operations.
    */
   memory: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
+  /**
+   * Version 1: heartbeats carry `disk`, and Core may send the
+   * `disk.snapshot` and `disk.delete` operations.
+   */
+  disk: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
 });
 
 export const DxdTerminalHeartbeat = Schema.Union([
@@ -258,11 +265,22 @@ export const DxdMemoryUsage = Schema.Struct({
 });
 export type DxdMemoryUsage = typeof DxdMemoryUsage.Type;
 
+/**
+ * The workspace filesystem, measured by dxd on every provider. In use is
+ * what the workspace user can no longer write.
+ */
+export const DxdDiskUsage = Schema.Struct({
+  usedBytes: DxdBytes,
+  totalBytes: DxdBytes,
+});
+export type DxdDiskUsage = typeof DxdDiskUsage.Type;
+
 export const DxdHeartbeatMessage = Schema.Struct({
   type: Schema.Literal("heartbeat"),
   generation: DaemonGeneration,
   terminal: DxdTerminalHeartbeat,
   memory: Schema.optional(DxdMemoryUsage),
+  disk: Schema.optional(DxdDiskUsage),
 });
 
 const TerminalControlBase = {
@@ -789,6 +807,17 @@ export const DxdMemoryStopOperation = Schema.Struct({
   process: OrbProcessIdSchema,
 });
 
+/** The largest folders in the checkout and home; see `orb-disk`. */
+export const DxdDiskSnapshotOperation = Schema.Struct({
+  operation: Schema.Literal("disk.snapshot"),
+});
+
+/** Delete one listed rebuildable folder, relative to the home. */
+export const DxdDiskDeleteOperation = Schema.Struct({
+  operation: Schema.Literal("disk.delete"),
+  path: OrbFolderPathSchema,
+});
+
 export const DxdOperation = Schema.Union([
   DxdFilesOperation,
   DxdEnvironmentActivateOperation,
@@ -798,6 +827,8 @@ export const DxdOperation = Schema.Union([
   DxdServicesEnsureOperation,
   DxdMemorySnapshotOperation,
   DxdMemoryStopOperation,
+  DxdDiskSnapshotOperation,
+  DxdDiskDeleteOperation,
 ]);
 export type DxdOperation = typeof DxdOperation.Type;
 
@@ -995,6 +1026,34 @@ export const DxdMemoryStopResult = Schema.Union([
   }),
 ]);
 export type DxdMemoryStopResult = typeof DxdMemoryStopResult.Type;
+
+export const DxdDiskSnapshotResult = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("snapshot"),
+    usedBytes: DxdBytes,
+    totalBytes: DxdBytes,
+    folders: Schema.Array(OrbFolderSchema).check(Schema.isMaxLength(16)),
+    partial: Schema.Boolean,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("unavailable"),
+    reason: Schema.Literal("unreadable"),
+  }),
+]);
+export type DxdDiskSnapshotResult = typeof DxdDiskSnapshotResult.Type;
+
+export const DxdDiskDeleteResult = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("deleted") }),
+  Schema.Struct({
+    kind: Schema.Literal("refused"),
+    reason: Schema.Literals(["invalid", "missing", "protected"]),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("unavailable"),
+    reason: Schema.Literal("failed"),
+  }),
+]);
+export type DxdDiskDeleteResult = typeof DxdDiskDeleteResult.Type;
 
 export const DxdDesktopEnsureResult = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("ready") }),

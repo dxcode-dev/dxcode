@@ -1,4 +1,4 @@
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import type { CloudflareContainerInstance } from "@dx/domain";
 import {
   OrbContainerController,
@@ -12,6 +12,30 @@ export const ORB_IMAGE_NAME = "orb";
 type ContainerWithImages = Container & {
   readonly images?: Readonly<Record<string, string>>;
 };
+
+interface OrbWorkerEnv {
+  readonly ORB_CONTAINER: DurableObjectNamespace<OrbContainerObject>;
+}
+
+/**
+ * Receives a container's stop notice: its entrypoint posts to
+ * `ORB_STOP_NOTICE_ADDRESS` on SIGTERM, and the object's intercept routes
+ * the request here with the object's ID. Answers once the object has taken
+ * its snapshot, so the entrypoint exits only after it.
+ */
+export class OrbStopNotice extends WorkerEntrypoint<
+  OrbWorkerEnv,
+  { readonly sandboxId: string }
+> {
+  override async fetch(request: Request) {
+    await request.body?.cancel();
+    const namespace = this.env.ORB_CONTAINER;
+    const outcome = await namespace
+      .get(namespace.idFromString(this.ctx.props.sandboxId))
+      .stopping();
+    return Response.json({ outcome });
+  }
+}
 
 /**
  * The Durable Object class that owns one Thread's Cloudflare container. It
@@ -33,6 +57,15 @@ export class OrbContainerObject extends DurableObject {
       storage: ctx.storage,
       image: () => container.images?.[ORB_IMAGE_NAME],
       sandboxId: ctx.id.toString(),
+      // The Worker exports `OrbStopNotice` beside this class.
+      stopNotice: () =>
+        (
+          ctx.exports as unknown as {
+            readonly OrbStopNotice: (options: {
+              readonly props: { readonly sandboxId: string };
+            }) => Fetcher;
+          }
+        ).OrbStopNotice({ props: { sandboxId: ctx.id.toString() } }),
     });
     // Not under `blockConcurrencyWhile`: storage that stalls for minutes
     // would hold every call, and an over-long block resets the object.
@@ -43,6 +76,7 @@ export class OrbContainerObject extends DurableObject {
     readonly create: boolean;
     readonly instance: CloudflareContainerInstance;
     readonly idleMs: number;
+    readonly allowReset?: boolean;
   }) {
     return this.#controller.open(input);
   }
@@ -92,6 +126,11 @@ export class OrbContainerObject extends DurableObject {
 
   pause() {
     return this.#controller.pause();
+  }
+
+  /** Only `OrbStopNotice` calls this; Core never does. */
+  stopping() {
+    return this.#controller.stopping();
   }
 
   destroy() {

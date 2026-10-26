@@ -53,6 +53,11 @@ configureRetryPolicy({
     retryDelay(errorMessage, attempt),
   submissionRetryPolicy: ({ errorMessage, attempt }) =>
     retryDelay(errorMessage, attempt),
+  // A workspace that lost its files fails every model or tool retry in
+  // place; re-attempting the submission runs activation, which sets it up
+  // again.
+  reattemptSubmission: ({ errorMessage }) =>
+    classifyRunFailure({ message: errorMessage }).code === "WORKSPACE_RESET",
 });
 
 const bindings = env as Bindings;

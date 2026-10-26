@@ -1,7 +1,14 @@
 import type { Sandbox } from "@flue/runtime";
 import { BUILT_IN_SKILL_NAMES } from "../agents/built-in-skill-names.js";
 import { encodeBase64 } from "../encoding/base64.js";
-import { markRunFailure } from "../runtime/run-failure.js";
+import {
+  isDiskFullText,
+  parseWorkspaceDiskReading,
+  withoutWorkspaceDiskReading,
+  workspaceDiskFullFailure,
+  workspaceDiskGuard,
+} from "../orb-disk/guard.js";
+import { classifyRunFailure, markRunFailure } from "../runtime/run-failure.js";
 import { environmentSecretsOf } from "../settings/environment-variables/sandbox.js";
 import { CLAUDE_CODE_MCP_SERVER } from "./mcp-server.js";
 import { CHUNK_END_LINE, ClaudeCodeStream } from "./stream.js";
@@ -126,6 +133,11 @@ const CLI_ENVIRONMENT = {
  */
 const CLAUDE_CODE_MIN_VERSION = "2.1.310";
 
+const isWorkspaceReset = (error: unknown) =>
+  classifyRunFailure({
+    message: error instanceof Error ? error.message : String(error),
+  }).code === "WORKSPACE_RESET";
+
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 /** The read's answer, or a failure once it has waited READ_TIMEOUT_MS. */
@@ -226,6 +238,13 @@ const launchFiles = (files: Readonly<Record<string, string>>) =>
 
 const LAUNCH_FILES = "launch-files.sh";
 
+/**
+ * Added to an attempt's system prompt when its launch found the disk full:
+ * a Claude Code run that died of it is restarted mid-turn, before the next
+ * turn's note can tell it.
+ */
+const CLAUDE_CODE_DISK_FULL_NOTE = `dx note: this Orb's disk filled up completely during this turn, which stopped Claude Code. dx freed its own emergency space so it could restart. Before anything else, free regenerable space (build outputs and caches such as node_modules, target, dist, build, .cache, and package manager caches; find them with \`du -xh -d 2 ~ 2>/dev/null | sort -h | tail -n 20\`), never source files or uncommitted work, then continue the task.`;
+
 /** Moves the plan token from the command's environment to descriptor 3. */
 const TOKEN_TO_DESCRIPTOR = `# The plan token arrives in this command's environment, which every process
 # of the workspace user can read through /proc while the process lives, and
@@ -276,7 +295,9 @@ const launchScript = (
     .join(" ");
   return `${TOKEN_TO_DESCRIPTOR}
 set -eu
-D=${quote(dir)}
+# A full disk must not keep Claude Code from starting: the guard frees dx's
+# reserve and leftovers first, and the agent is told to free space.
+${workspaceDiskGuard(false)}D=${quote(dir)}
 S=${quote(STATE_ROOT)}
 mkdir -p "$D"
 if [ -e "$D/pid" ]; then echo running; exit 0; fi
@@ -291,6 +312,7 @@ finish() {
 }
 trap finish EXIT
 ${files ?? `. "$D/${LAUNCH_FILES}"`}
+if [ "$dx_disk_full" = 1 ]; then printf '\n\n%s\n' ${quote(CLAUDE_CODE_DISK_FULL_NOTE)} >> "$D/prompt.txt"; fi
 # A recorded PID is killed only while it is still that run's runner: after a
 # container restart the number can belong to any process.
 ours() { tr '\\0' ' ' < "/proc/$2/cmdline" 2>/dev/null | grep -qF "$1/runner.sh"; }
@@ -625,12 +647,16 @@ export class ClaudeCodeRun {
         signal,
       },
     );
-    if (result.exitCode !== 0)
+    if (result.exitCode !== 0) {
+      const stderr = withoutWorkspaceDiskReading(result.stderr).trim();
+      const disk = parseWorkspaceDiskReading(result.stderr);
+      // Retrying frees nothing: the person or the agent must.
+      if (isDiskFullText(`${stderr}\n${result.stdout}`))
+        throw new Error(workspaceDiskFullFailure(disk?.totalBytes));
       throw new Error(
-        result.stderr.trim() ||
-          result.stdout.trim() ||
-          "Claude Code could not start.",
+        stderr || result.stdout.trim() || "Claude Code could not start.",
       );
+    }
   }
 
   async #read(path: string) {
@@ -718,6 +744,9 @@ export class ClaudeCodeRun {
       this.#forgetReadFailures();
       return value;
     } catch (error) {
+      // The workspace lost its files: no read will answer, and Flue
+      // re-attempts the submission for it at once.
+      if (isWorkspaceReset(error)) throw error;
       let failure = error;
       if (!this.#reconnected && this.reconnect !== undefined) {
         this.#reconnected = true;

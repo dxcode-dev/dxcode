@@ -16,6 +16,7 @@ import { SourceRuntimeBroker } from "./runtime.js";
 import {
   SCRATCH_WORKSPACE_CWD,
   SOURCE_WORKSPACE_CWD,
+  type SourceWorkspaceActivationOptions,
   SourceWorkspaceConflict,
   SourceWorkspaceService,
   SourceWorkspaceServiceLive,
@@ -351,7 +352,7 @@ const serviceLayer = (input: {
 const activate = (
   preparation: WorkspacePreparation,
   layer: ReturnType<typeof serviceLayer>,
-  options?: { readonly runResume?: boolean },
+  options?: SourceWorkspaceActivationOptions,
   onPreparationPhase?: (phase: string) => Effect.Effect<void>,
 ) =>
   Effect.runPromise(
@@ -838,6 +839,66 @@ describe("SourceWorkspaceService", () => {
     expect(
       fake.calls.some(({ command }) => command.endsWith(" submodule")),
     ).toBe(false);
+  });
+
+  it("fails a full workspace disk as WORKSPACE_DISK_FULL, never as a conflict", async () => {
+    const GIB_KIB = 1_048_576;
+    // The guard's reading and the setup program's verdict on a full disk.
+    const fullDisk = (availableKib: number) =>
+      workspacePreparationFor({
+        commands: {
+          run: async () => ({
+            stdout: JSON.stringify({
+              assets: "fresh",
+              tools: [{ tool: "git", status: "ok", version: "2.47.0" }],
+              operation: {
+                stdout: JSON.stringify({
+                  checkout: {
+                    status: "disk-full",
+                    modules: [],
+                    lfsNeeded: false,
+                    shallow: false,
+                    fullHistoryNeeded: false,
+                  },
+                }),
+                stderr: "disk-full",
+                exitCode: 0,
+              },
+            }),
+            stderr: `dx-disk ${20 * GIB_KIB} ${availableKib} 1\n`,
+            exitCode: 0,
+          }),
+        },
+        files: { write: async () => undefined },
+      });
+    for (const availableKib of [262_144, 4_096]) {
+      const readings: unknown[] = [];
+      const cause = await activate(
+        fullDisk(availableKib),
+        serviceLayer({ source: snapshot }),
+        {
+          disk: {
+            reserve: true,
+            onReading: (reading) => readings.push(reading),
+          },
+        },
+      ).catch((error: unknown) => error);
+      expect(cause).not.toBeInstanceOf(SourceWorkspaceConflict);
+      expect(
+        classifyRunFailure({ message: (cause as Error).message }),
+      ).toMatchObject({
+        code: "WORKSPACE_DISK_FULL",
+        retryable: false,
+        message: expect.stringMatching(/^Workspace disk is full/),
+      });
+      expect(readings).toEqual([
+        {
+          totalBytes: 20 * 1024 ** 3,
+          availableBytes: availableKib * 1024,
+          full: true,
+        },
+      ]);
+    }
   });
 
   it("leaves an identity conflict untouched and does not mint", async () => {

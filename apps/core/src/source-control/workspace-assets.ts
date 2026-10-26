@@ -225,6 +225,7 @@ process.stdin.on("end", () => {
 const sourceWorkspaceTemplate = String.raw`#!/usr/bin/env node
 import { createHash } from "node:crypto";
 import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import nodeFs from "node:fs";
 import { dirname, join, parse, posix, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import process from "node:process";
@@ -253,17 +254,25 @@ const releaseLock = () => {
     if (readFileSync(join(LOCK, "pid"), "utf8").trim() === String(process.pid)) rmSync(LOCK, { recursive: true });
   } catch {}
 };
+// A write that failed because the disk is full is not a conflict: Core
+// reports it as WORKSPACE_DISK_FULL, which the person can fix.
+const writeFailure = error => (error?.code === "ENOSPC" || error?.code === "EDQUOT" ? "disk-full" : "initialization");
 const acquireLock = () => {
   process.on("exit", releaseLock);
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => process.exit(124));
   while (true) {
+    let created = false;
     try {
       mkdirSync(LOCK, { mode: 0o700 });
-      try { writeFileSync(join(LOCK, "pid"), String(process.pid), { mode: 0o600, flag: "wx" }); }
-      catch { rmSync(LOCK, { recursive: true }); fail("conflict"); }
+      created = true;
+      writeFileSync(join(LOCK, "pid"), String(process.pid), { mode: 0o600, flag: "wx" });
       return;
     } catch (error) {
-      if (error?.code !== "EEXIST") fail("conflict");
+      if (created) {
+        try { rmSync(LOCK, { recursive: true }); } catch {}
+        fail(writeFailure(error));
+      }
+      if (error?.code !== "EEXIST") fail(writeFailure(error));
     }
     const entry = lstat(LOCK);
     if (entry === undefined) continue;
@@ -452,7 +461,7 @@ const writeLog = (name, output) => {
   try {
     descriptor = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
     writeFileSync(descriptor, output);
-  } catch { fail("conflict"); }
+  } catch (error) { fail(writeFailure(error) === "disk-full" ? "disk-full" : "conflict"); }
   finally { if (descriptor !== undefined) closeSync(descriptor); }
 };
 const atomicJson = (path, state) => {
@@ -465,7 +474,7 @@ const atomicJson = (path, state) => {
     created = true;
     renameSync(temporary, path);
     created = false;
-  } catch { fail("conflict"); }
+  } catch (error) { fail(writeFailure(error) === "disk-full" ? "disk-full" : "conflict"); }
   finally { if (created && lstat(temporary)?.isFile()) rmSync(temporary); }
 };
 const atomicState = state => atomicJson(STATE, state);
@@ -796,17 +805,30 @@ const inspectCheckout = expected => {
 };
 const checkoutPayload = expected => inspectCheckout(expected).payload;
 const checkoutFailure = kind => ({
-  status: kind === "absent" ? "absent" : kind === "conflict" ? "conflict" : "failed",
+  status: kind === "absent" ? "absent" : kind === "conflict" ? "conflict" : kind === "disk-full" ? "disk-full" : "failed",
   modules: [],
   lfsNeeded: false,
   shallow: false,
   fullHistoryNeeded: false
 });
 const hookFailure = failure => ({
-  status: failure.kind === "conflict" ? "conflict" : failure.kind === "hook" ? "hook-failed" : "failed",
+  status: failure.kind === "conflict" ? "conflict" : failure.kind === "disk-full" ? "disk-full" : failure.kind === "hook" ? "hook-failed" : "failed",
   hook: failure.kind === "hook" && (failure.detail === "setup" || failure.detail === "resume") ? failure.detail : undefined
 });
-const exitCode = failure => failure.kind === "absent" ? 10 : failure.kind === "conflict" ? 20 : failure.kind === "hook" ? (failure.detail === "resume" ? 31 : 30) : failure.kind === "history" ? 50 : 40;
+const exitCode = failure => failure.kind === "absent" ? 10 : failure.kind === "conflict" ? 20 : failure.kind === "hook" ? (failure.detail === "resume" ? 31 : 30) : failure.kind === "history" ? 50 : failure.kind === "disk-full" ? 60 : 40;
+// Most steps report a failed write as their own kind; any failure while the
+// disk has almost no room left is the full disk.
+const DISK_FULL_BYTES = 16 * 1024 * 1024;
+const diskFull = () => {
+  try {
+    const stats = nodeFs.statfsSync(HOME);
+    return stats.bavail * stats.bsize < DISK_FULL_BYTES;
+  } catch { return false; }
+};
+const settledFailure = cause => {
+  const failure = cause instanceof SourceWorkspaceFailure ? cause : new SourceWorkspaceFailure(cause?.code === "ENOSPC" || cause?.code === "EDQUOT" ? "disk-full" : "initialization");
+  return failure.kind !== "disk-full" && failure.kind !== "absent" && diskFull() ? new SourceWorkspaceFailure("disk-full") : failure;
+};
 try {
   const sourceIdentity = identity();
   ensureDirectoryChain(dirname(STATE));
@@ -827,7 +849,7 @@ try {
           if (process.env.DX_RUN_RESUME !== "false") hook(expected, "resume", afterSetup);
           process.stdout.write(JSON.stringify({ checkout: inspected.payload, hooks: hooksReady() }));
         } catch (cause) {
-          const failure = cause instanceof SourceWorkspaceFailure ? cause : new SourceWorkspaceFailure("initialization");
+          const failure = settledFailure(cause);
           process.stderr.write(failure.kind + (failure.detail ? ":" + failure.detail.slice(0, 160) : ""));
           process.stdout.write(JSON.stringify({ checkout: inspected.payload, hooks: hookFailure(failure) }));
         }
@@ -861,7 +883,7 @@ try {
     else fail("invalid-input", "action");
   }
 } catch (cause) {
-  const failure = cause instanceof SourceWorkspaceFailure ? cause : new SourceWorkspaceFailure("initialization");
+  const failure = settledFailure(cause);
   process.stderr.write(failure.kind + (failure.detail ? ":" + failure.detail.slice(0, 160) : ""));
   if (action === "snapshot") process.stdout.write(JSON.stringify(checkoutFailure(failure.kind)));
   else if (action === "activate") process.stdout.write(JSON.stringify({ checkout: checkoutFailure(failure.kind) }));

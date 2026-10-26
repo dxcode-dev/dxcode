@@ -19,6 +19,7 @@ import {
 } from "./notifications/routes.js";
 import { installFlueObservation } from "./observability/flue.js";
 import { installRuntimeTracing } from "./observability/platform-tracing.js";
+import { threadOrbDiskRoutes } from "./orb-disk/routes.js";
 import { threadOrbMemoryRoutes } from "./orb-memory/routes.js";
 import { portalAuthRoutes } from "./portals/auth-routes.js";
 import { portalHostRouting } from "./portals/host-routing.js";
@@ -123,6 +124,8 @@ app.route("/v1/threads", threadPortalRoutes);
 // `/memory/*` also matches `/memory`; see Portals above.
 app.use("/v1/threads/:threadId/memory/*", authorizeThread);
 app.route("/v1/threads", threadOrbMemoryRoutes);
+app.use("/v1/threads/:threadId/disk/*", authorizeThread);
+app.route("/v1/threads", threadOrbDiskRoutes);
 app.use("/v1/threads/:threadId/desktop/*", authorizeThread);
 app.use("/v1/threads/:threadId/desktop/*", enforceThreadActive);
 app.route("/v1/threads", threadDesktopRoutes);

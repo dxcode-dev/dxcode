@@ -28,6 +28,11 @@ import { rememberClaudeCodeSandbox } from "../claude-code/runs.js";
 import { claudeCodeMirrorTools } from "../claude-code/tools.js";
 import { traceSpan } from "../observability/tracing.js";
 import {
+  takeWorkspaceDisk,
+  WORKSPACE_DISK_SIGNAL,
+  workspaceDiskNote,
+} from "../orb-disk/note.js";
+import {
   agentPluginHostContext,
   agentThreadToolsContext,
   resolveAgentPluginTools,
@@ -184,8 +189,9 @@ const agentSandbox: SandboxFactory | undefined =
 /**
  * Installed plugins' agent-start and agent-finish hooks. The agent-start
  * hook first writes dx's built-in skills into the workspace, for the dx
- * agent and Claude Code alike; Flue runs separate start hooks concurrently,
- * so both stay in one.
+ * agent and Claude Code alike, then tells the agent when its disk is nearly
+ * or completely full; Flue runs separate start hooks concurrently, so all
+ * stay in one.
  */
 const usePluginLifecycle = (
   threadId: string,
@@ -218,7 +224,16 @@ const usePluginLifecycle = (
       }
     };
   useAgentStart(async (context) => {
+    // Opening the sandbox runs this turn's activation and its disk guard.
     await installBuiltInSkills(context.harness.sandbox);
+    const disk = takeWorkspaceDisk(threadId);
+    const note = disk === undefined ? undefined : workspaceDiskNote(disk);
+    if (note !== undefined)
+      context.append({
+        kind: "signal",
+        type: WORKSPACE_DISK_SIGNAL,
+        body: note,
+      });
     await hook("agent-start")(context);
   });
   if (plugins.some(({ lifecycle }) => lifecycle.includes("agent-finish")))

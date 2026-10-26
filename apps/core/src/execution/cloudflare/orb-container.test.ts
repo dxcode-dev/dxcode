@@ -3,6 +3,8 @@ import { classifyRunFailure } from "../../runtime/run-failure.js";
 import {
   ORB_HEARTBEAT_MS,
   ORB_SNAPSHOT_REFRESH_MS,
+  ORB_STOP_NOTICE_ADDRESS,
+  ORB_WORKSPACE_RESET_DETAIL,
   OrbContainerController,
   type OrbContainerRuntime,
   type OrbContainerStartOptions,
@@ -16,6 +18,7 @@ vi.mock("cloudflare:workers", () => ({
       readonly env: unknown,
     ) {}
   },
+  WorkerEntrypoint: class {},
 }));
 
 const { OrbContainerObject } = await import("./orb-container-object.js");
@@ -79,6 +82,7 @@ const fakeContainer = (handler: ExecHandler = () => ({})) => {
       container.running = false;
     }),
     setInactivityTimeout: vi.fn(async () => undefined),
+    interceptOutboundHttp: vi.fn(async () => undefined),
   } satisfies OrbContainerRuntime & { running: boolean };
   return { container, starts, execs };
 };
@@ -108,22 +112,32 @@ const setup = (handler?: ExecHandler) => {
   let now = 1_000_000;
   const fake = fakeContainer(handler);
   const storage = fakeStorage();
+  const stopNotice = { fetch: vi.fn() } as unknown as Fetcher;
   const controller = new OrbContainerController({
     container: fake.container,
     storage,
     image: () => "registry.cloudflare.com/account/dx-orb@sha256:abc",
     sandboxId: "a".repeat(64),
+    stopNotice: () => stopNotice,
     now: () => now,
   });
   return {
     ...fake,
     storage,
     controller,
+    stopNotice,
     advance: (durationMs: number) => {
       now += durationMs;
     },
     now: () => now,
   };
+};
+
+// dx-orb-init sets the short host name for the prompt, and posts the stop
+// notice to the address the object intercepts.
+const ORB_START_ENVIRONMENT = {
+  DX_ORB_HOSTNAME: "cloudflare",
+  DX_ORB_STOP_NOTICE: "http://192.0.2.1:80/stopping",
 };
 
 const create = {
@@ -148,7 +162,7 @@ describe("Orb container object", () => {
         instance: "standard-2",
         enableInternet: true,
         // dx-orb-init sets this short host name for the prompt.
-        env: { DX_ORB_HOSTNAME: "cloudflare" },
+        env: ORB_START_ENVIRONMENT,
       },
     ]);
     // Cloudflare must never stop it before this object snapshots it.
@@ -208,7 +222,7 @@ describe("Orb container object", () => {
       containerSnapshot: { id: "snapshot-1" },
       instance: "standard-2",
       enableInternet: true,
-      env: { DX_ORB_HOSTNAME: "cloudflare" },
+      env: ORB_START_ENVIRONMENT,
     });
   });
 
@@ -411,6 +425,69 @@ describe("Orb container object", () => {
     await restarted.resumeAfterRestart();
     expect(orb.container.setInactivityTimeout).toHaveBeenCalledOnce();
     expect(orb.storage.alarm()).toBe(orb.now() + ORB_HEARTBEAT_MS);
+  });
+
+  it("snapshots on a stop notice, so the next use restores the files instead of losing them", async () => {
+    const orb = setup(() => ({ stdout: "still here\n" }));
+    await orb.controller.open(create);
+    // Every start routes the entrypoint's notice to this object.
+    expect(orb.container.interceptOutboundHttp).toHaveBeenCalledWith(
+      ORB_STOP_NOTICE_ADDRESS,
+      orb.stopNotice,
+    );
+    // Cloudflare sent SIGTERM before the first pause.
+    await expect(orb.controller.stopping()).resolves.toBe("snapshotted");
+    expect(orb.container.running).toBe(true);
+    // The entrypoint exits once answered; the container stops.
+    orb.container.running = false;
+    await expect(orb.controller.exec("cat notes")).resolves.toMatchObject({
+      stdout: "still here\n",
+    });
+    expect(orb.starts[1]).toMatchObject({
+      containerSnapshot: { id: "snapshot-1" },
+    });
+    expect(orb.container.interceptOutboundHttp).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores the stop notice its own pause causes", async () => {
+    const orb = setup();
+    await orb.controller.open(create);
+    let notice: Promise<string> | undefined;
+    orb.container.destroy.mockImplementationOnce(async () => {
+      // The container's SIGTERM reaches the entrypoint while it stops.
+      notice = orb.controller.stopping();
+      orb.container.running = false;
+    });
+    await orb.controller.pause();
+    await expect(notice).resolves.toBe("ignored");
+    expect(orb.container.snapshotContainer).toHaveBeenCalledOnce();
+  });
+
+  it("never runs anything on the empty container that replaces one stopped before its first pause", async () => {
+    const orb = setup();
+    await orb.controller.open(create);
+    // Stopped without a stop notice (a crash, a lost host): no snapshot.
+    orb.container.running = false;
+    const used = await orb.controller
+      .exec("ls ~/workspace/repo")
+      .catch((error: unknown) => error);
+    expect((used as Error).message).toContain(ORB_WORKSPACE_RESET_DETAIL);
+    await expect(orb.controller.readFile("/home/user/a")).rejects.toThrow(
+      ORB_WORKSPACE_RESET_DETAIL,
+    );
+    // A reconnect (a Terminal, a run reading its output) cannot start it.
+    await expect(
+      orb.controller.open({ ...create, create: false, allowReset: false }),
+    ).rejects.toThrow(ORB_WORKSPACE_RESET_DETAIL);
+    expect(orb.starts).toHaveLength(1);
+    // Activation, which sets it up again, starts it over from the image.
+    await expect(
+      orb.controller.open({ ...create, create: false, allowReset: true }),
+    ).resolves.toMatchObject({ kind: "ready", residency: "created" });
+    expect(orb.starts[1]).toMatchObject({ image: expect.any(String) });
+    await expect(orb.controller.exec("true")).resolves.toMatchObject({
+      exitCode: 0,
+    });
   });
 
   it("marks a container Cloudflare stopped without a pause as paused", async () => {

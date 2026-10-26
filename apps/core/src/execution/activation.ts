@@ -10,6 +10,7 @@ import {
   recordActiveSubmissionPhase,
 } from "../observability/startup-runtime.js";
 import { observeCall, traceSpan } from "../observability/tracing.js";
+import { rememberWorkspaceDisk } from "../orb-disk/note.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
 import type {
   DaemonInstallation,
@@ -329,6 +330,23 @@ const admitRunStart = async (db: D1Database, threadId: string) => {
 };
 
 /**
+ * A source preparation that failed with WORKSPACE_DISK_FULL, as the run's
+ * error: Flue settles other activation failures as a generic internal error,
+ * so the Thread could not say the disk is full.
+ */
+const asDiskFullRunError = (cause: unknown): never => {
+  const message = cause instanceof Error ? cause.message : "";
+  if (!message.includes(":WORKSPACE_DISK_FULL)")) throw cause;
+  throw new FlueError({
+    type: "workspace_disk_full",
+    message,
+    details: "",
+    dev: "",
+    meta: { code: "WORKSPACE_DISK_FULL" },
+  });
+};
+
+/**
  * Between source preparation and the workspace's first use, for 4e's warm
  * snapshot capture. Nothing registers one yet.
  */
@@ -480,8 +498,14 @@ export const makeExecutionActivation =
                       )
                   : undefined,
                 residency.value !== "running" || needsFirstReadiness,
+                {
+                  reserve: context.profile.adapter !== "local",
+                  // The turn this activation starts tells its agent.
+                  onReading: (reading) =>
+                    rememberWorkspaceDisk(threadId, reading),
+                },
               ),
-          );
+          ).catch(asDiskFullRunError);
           if (source === undefined) {
             await ensureGithubCliWrapper(db, id, handle.guest);
             await cloneAdditionalRepositories(bindings, db, id, handle.guest);
@@ -679,6 +703,9 @@ export const makeExecutionActivation =
             handle.guest,
             false,
             source,
+            undefined,
+            true,
+            { reserve: context.profile.adapter !== "local" },
           );
           throwIfAborted(input.signal);
           mark("source");

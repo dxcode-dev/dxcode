@@ -627,7 +627,10 @@ describe("execution workspace admission", () => {
 
     expect(mocks.firstWorkspaceReadiness).toHaveBeenCalledOnce();
     expect(sourceRun).toHaveBeenCalledWith(
-      "mkdir -p -- /home/user/workspace/repo && git -C /home/user/workspace/repo init && git -C /home/user/workspace/repo hash-object -w -t tree --stdin </dev/null",
+      // After the disk guard every activation runs first.
+      expect.stringMatching(
+        /^dx_disk_kib\(\)[\s\S]*\nmkdir -p -- \/home\/user\/workspace\/repo && git -C \/home\/user\/workspace\/repo init && git -C \/home\/user\/workspace\/repo hash-object -w -t tree --stdin <\/dev\/null$/,
+      ),
       expect.objectContaining({ cwd: "/home/user" }),
     );
     // Warm (running) workspaces refresh the gh wrapper on every activation.
@@ -681,7 +684,10 @@ describe("execution workspace admission", () => {
     );
     expect(mocks.loadDaemonRelease).not.toHaveBeenCalled();
     expect(sourceRun).toHaveBeenCalledWith(
-      "mkdir -p -- /home/user/workspace/repo && git -C /home/user/workspace/repo init && git -C /home/user/workspace/repo hash-object -w -t tree --stdin </dev/null",
+      // After the disk guard every activation runs first.
+      expect.stringMatching(
+        /^dx_disk_kib\(\)[\s\S]*\nmkdir -p -- \/home\/user\/workspace\/repo && git -C \/home\/user\/workspace\/repo init && git -C \/home\/user\/workspace\/repo hash-object -w -t tree --stdin <\/dev\/null$/,
+      ),
       expect.objectContaining({ cwd: "/home/user" }),
     );
     expect(mocks.ensureDaemonInGuest).toHaveBeenCalledWith(

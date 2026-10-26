@@ -39,7 +39,22 @@ mkdir -p "$state/bin"
 echo $$ >"$state/supervisor.pid"
 
 child=
-trap 'if [ -n "$child" ]; then kill -TERM "$child" 2>/dev/null; fi; exit 0' TERM INT
+stop() {
+  if [ -n "$child" ]; then kill -TERM "$child" 2>/dev/null; fi
+  exit 0
+}
+# Cloudflare announces a planned stop with SIGTERM and kills the container
+# up to 15 minutes later. The Orb container object intercepts
+# DX_ORB_STOP_NOTICE (set only there) and answers once it has snapshotted
+# the filesystem, so the workspace survives the stop; only then stop.
+announce_stop() {
+  if [ -n "${DX_ORB_STOP_NOTICE:-}" ]; then
+    curl -fsS -m 600 -X POST -o /dev/null "$DX_ORB_STOP_NOTICE" 2>/dev/null || :
+  fi
+  stop
+}
+trap announce_stop TERM
+trap stop INT
 # SIGUSR1 only interrupts the current wait: the installer's "start now".
 trap ':' USR1
 

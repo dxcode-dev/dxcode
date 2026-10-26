@@ -13,6 +13,14 @@ import {
 } from "../execution/guest/source-tool-requirements.js";
 import type { WorkspacePreparation } from "../execution/workspace-preparation.js";
 import { sourceControlLogger } from "../logging.js";
+import {
+  isDiskFullText,
+  parseWorkspaceDiskReading,
+  type WorkspaceDiskReading,
+  workspaceDiskBlocksStart,
+  workspaceDiskFullFailure,
+  workspaceDiskGuard,
+} from "../orb-disk/guard.js";
 import { markRunFailure } from "../runtime/run-failure.js";
 import {
   SourceRuntimeBroker,
@@ -62,6 +70,15 @@ export class SourceWorkspaceInitializationFailed extends Schema.TaggedError<Sour
 ) {}
 
 const STDERR_TAIL_CHARS = 2_000;
+
+/**
+ * The workspace's disk is full: a retry frees nothing, so it is not retried,
+ * and the person (or the agent, once it can start) frees space.
+ */
+const diskFull = (totalBytes?: number) =>
+  new SourceWorkspaceInitializationFailed({
+    message: workspaceDiskFullFailure(totalBytes),
+  });
 
 /**
  * The end of a command's stderr, fit for a log: credentials in URLs, tokens,
@@ -139,15 +156,25 @@ interface SourceWorkspaceVerifiedOperation {
 interface SourceWorkspaceAssetVerificationResult {
   readonly assets: "fresh" | "stale";
   readonly operation?: CommandResult;
+  /** The disk guard's reading, when the verifier ran it first. */
+  readonly disk?: WorkspaceDiskReading;
 }
 
 export type SourceWorkspacePreparationPhase =
   | "cloning-repository"
   | "running-setup";
 
+/** The disk guard each activation runs before anything dx writes. */
+export interface SourceWorkspaceDiskOptions {
+  /** Keep a reserve file to free when the disk fills (not on a developer's disk). */
+  readonly reserve: boolean;
+  readonly onReading?: (reading: WorkspaceDiskReading) => void;
+}
+
 export interface SourceWorkspaceActivationOptions {
   /** Skip the per-activation resume hook after a confirmed running reconnect. */
   readonly runResume?: boolean;
+  readonly disk?: SourceWorkspaceDiskOptions;
 }
 
 export interface SourceWorkspaceServiceShape {
@@ -168,6 +195,7 @@ export interface SourceWorkspaceServiceShape {
   readonly prepare: (
     threadId: string,
     preparation: WorkspacePreparation,
+    disk?: SourceWorkspaceDiskOptions,
   ) => Effect.Effect<
     string,
     | SourceWorkspaceConflict
@@ -194,6 +222,7 @@ export type SourceWorkspaceAssetVerification = (
   program: string,
   tools: ReadonlyArray<"git" | "gh" | "git-lfs">,
   operation?: SourceWorkspaceVerifiedOperation,
+  disk?: SourceWorkspaceDiskOptions,
 ) => Effect.Effect<
   SourceWorkspaceAssetVerificationResult,
   SourceWorkspaceInitializationFailed | SourceRuntimeToolUnavailable | unknown,
@@ -239,6 +268,8 @@ const AssetVerdict = Schema.Struct({
  * verified program under the source lock; drift returns without invocation.
  * Exit protocol: 0 fresh, 42 stale assets (reinstall), 43 tool contract
  * failure (typed template error), anything else is an initialization failure.
+ * With `disk`, the same command first runs the disk guard; a disk that is
+ * still full after it fails as WORKSPACE_DISK_FULL.
  */
 export const verifySourceWorkspaceAssets = Effect.fn(
   "verifySourceWorkspaceAssets",
@@ -247,6 +278,7 @@ export const verifySourceWorkspaceAssets = Effect.fn(
   program: string,
   tools: ReadonlyArray<"git" | "gh" | "git-lfs">,
   operation?: SourceWorkspaceVerifiedOperation,
+  disk?: SourceWorkspaceDiskOptions,
 ): Effect.fn.Return<
   SourceWorkspaceAssetVerificationResult,
   SourceWorkspaceInitializationFailed | SourceRuntimeToolUnavailable | unknown
@@ -255,9 +287,12 @@ export const verifySourceWorkspaceAssets = Effect.fn(
     [sha256Hex(gitCredentialHelperProgram), sha256Hex(program)],
     { concurrency: 2 },
   );
+  const verifier = withSourceLock(`node -e '${assetVerifierProgram}'`);
   const verdictResult = yield* runCommand(
     preparation,
-    withSourceLock(`node -e '${assetVerifierProgram}'`),
+    disk === undefined
+      ? verifier
+      : `${workspaceDiskGuard(disk.reserve)}${verifier}`,
     {
       DX_ASSET_HELPER_PATH: GIT_CREDENTIAL_HELPER_PATH,
       DX_ASSET_PROGRAM_PATH: SOURCE_WORKSPACE_PROGRAM_PATH,
@@ -278,6 +313,12 @@ export const verifySourceWorkspaceAssets = Effect.fn(
     [0, ASSET_STALE_EXIT, 43],
     "verify-assets",
   );
+  const reading = parseWorkspaceDiskReading(verdictResult.stderr);
+  if (reading !== undefined) {
+    disk?.onReading?.(reading);
+    if (workspaceDiskBlocksStart(reading))
+      return yield* diskFull(reading.totalBytes);
+  }
   if (
     verdictResult.exitCode !== 0 &&
     verdictResult.exitCode !== ASSET_STALE_EXIT &&
@@ -308,12 +349,16 @@ export const verifySourceWorkspaceAssets = Effect.fn(
   if (verdictResult.exitCode === 43)
     return yield* new SourceWorkspaceInitializationFailed();
   if (verdict.assets === "stale" || verdictResult.exitCode === ASSET_STALE_EXIT)
-    return { assets: "stale" };
+    return {
+      assets: "stale",
+      ...(reading === undefined ? {} : { disk: reading }),
+    };
   return {
     assets: "fresh",
     ...(verdict.operation === undefined
       ? {}
       : { operation: verdict.operation }),
+    ...(reading === undefined ? {} : { disk: reading }),
   };
 });
 
@@ -452,6 +497,8 @@ const requireSuccess = (
   if (result.exitCode === 20) return Effect.fail(new SourceWorkspaceConflict());
   if (result.exitCode === 50)
     return Effect.fail(new SourceWorkspaceHistoryUnavailable());
+  if (result.exitCode === 60 || isDiskFullText(result.stderr))
+    return Effect.fail(diskFull());
   return Effect.fail(commandFailed(result));
 };
 
@@ -502,7 +549,13 @@ const Modules = Schema.Array(
 );
 
 const CheckoutState = Schema.Struct({
-  status: Schema.Literals(["ready", "absent", "conflict", "failed"]),
+  status: Schema.Literals([
+    "ready",
+    "absent",
+    "conflict",
+    "disk-full",
+    "failed",
+  ]),
   modules: Modules,
   lfsNeeded: Schema.Boolean,
   shallow: Schema.Boolean,
@@ -512,7 +565,13 @@ const CheckoutState = Schema.Struct({
 const HookName = Schema.Literals(["setup", "resume"]);
 
 const HooksState = Schema.Struct({
-  status: Schema.Literals(["ready", "conflict", "hook-failed", "failed"]),
+  status: Schema.Literals([
+    "ready",
+    "conflict",
+    "disk-full",
+    "hook-failed",
+    "failed",
+  ]),
   hook: Schema.optional(HookName),
   /** Hooks that failed. The workspace is still ready: the agent carries on. */
   failed: Schema.optional(Schema.Array(HookName)),
@@ -558,6 +617,7 @@ const requireHooksSuccess = Effect.fn("requireHooksSuccess")(function* (
     catch: () => commandFailed(result),
   });
   if (hooks.status === "conflict") return yield* new SourceWorkspaceConflict();
+  if (hooks.status === "disk-full") return yield* diskFull();
   // The program wrote its failure kind to stderr.
   if (hooks.status === "failed") return yield* commandFailed(result);
   const failed = hooks.failed ?? (hooks.hook === undefined ? [] : [hooks.hook]);
@@ -724,10 +784,11 @@ const makeSourceWorkspaceService = (
       const source = yield* repository.findByThreadId(threadId);
       if (source.snapshot === undefined && source.intent === undefined) {
         stage = "prepare-empty-workspace";
+        const disk = options?.disk;
         const prepared = yield* Effect.tryPromise({
           try: () =>
             preparation.run(
-              `mkdir -p -- ${SOURCE_WORKSPACE_CWD} && git -C ${SOURCE_WORKSPACE_CWD} init && git -C ${SOURCE_WORKSPACE_CWD} hash-object -w -t tree --stdin </dev/null`,
+              `${disk === undefined ? "" : workspaceDiskGuard(disk.reserve)}mkdir -p -- ${SOURCE_WORKSPACE_CWD} && git -C ${SOURCE_WORKSPACE_CWD} init && git -C ${SOURCE_WORKSPACE_CWD} hash-object -w -t tree --stdin </dev/null`,
               {
                 cwd: SCRATCH_WORKSPACE_CWD,
                 timeoutMs: 10_000,
@@ -735,6 +796,12 @@ const makeSourceWorkspaceService = (
             ),
           catch: guestExecLost,
         });
+        const reading = parseWorkspaceDiskReading(prepared.stderr ?? "");
+        if (reading !== undefined) {
+          disk?.onReading?.(reading);
+          if (workspaceDiskBlocksStart(reading))
+            return yield* diskFull(reading.totalBytes);
+        }
         yield* requireSuccess({
           stdout: bounded(prepared.stdout),
           stderr: bounded(prepared.stderr),
@@ -784,6 +851,7 @@ const makeSourceWorkspaceService = (
               },
               timeoutMs: runThreadHooks ? HOOKS_TIMEOUT_MS : COMMAND_TIMEOUT_MS,
             },
+        options?.disk,
       );
       if (assetVerification.assets === "stale") {
         stage = "install-programs";
@@ -884,6 +952,7 @@ const makeSourceWorkspaceService = (
       }
       if (checkout.status === "conflict")
         return yield* new SourceWorkspaceConflict();
+      if (checkout.status === "disk-full") return yield* diskFull();
       if (checkout.status !== "ready")
         return yield* new SourceWorkspaceInitializationFailed();
       // dx initializes only the private submodules the Project selected, and
@@ -1014,7 +1083,14 @@ const makeSourceWorkspaceService = (
   return SourceWorkspaceService.of({
     activate: (threadId, preparation, onPreparationPhase, options) =>
       activate(threadId, preparation, true, onPreparationPhase, options),
-    prepare: (threadId, preparation) => activate(threadId, preparation, false),
+    prepare: (threadId, preparation, disk) =>
+      activate(
+        threadId,
+        preparation,
+        false,
+        undefined,
+        disk === undefined ? undefined : { disk },
+      ),
     unshallow,
   });
 };

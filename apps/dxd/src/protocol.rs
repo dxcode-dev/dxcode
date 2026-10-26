@@ -141,6 +141,13 @@ pub struct MemoryCapability {
     pub version: u8,
 }
 
+/// Version 1: heartbeats carry `disk`, and Core may send the
+/// `disk.snapshot` and `disk.delete` operations; see [`crate::disk`].
+#[derive(Serialize)]
+pub struct DiskCapability {
+    pub version: u8,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capabilities {
@@ -149,6 +156,7 @@ pub struct Capabilities {
     pub files: FilesCapability,
     pub proxy: ProxyCapability,
     pub memory: MemoryCapability,
+    pub disk: DiskCapability,
 }
 
 impl Capabilities {
@@ -161,6 +169,7 @@ impl Capabilities {
             files: FilesCapability { version: 1 },
             proxy: ProxyCapability { version: 1 },
             memory: MemoryCapability { version: 1 },
+            disk: DiskCapability { version: 1 },
         }
     }
 }
@@ -369,6 +378,8 @@ pub enum ClientMessage<'a> {
         terminal: TerminalHeartbeat,
         #[serde(skip_serializing_if = "Option::is_none")]
         memory: Option<crate::memory::MemoryUsage>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        disk: Option<crate::disk::DiskUsage>,
     },
     ReadinessPong {
         generation: &'a str,
@@ -409,6 +420,7 @@ pub enum OperationResult {
     Environment(EnvironmentResult),
     Portal(PortalResult),
     Memory(crate::memory::MemoryResult),
+    Disk(crate::disk::DiskResult),
 }
 
 /// Requests that serve Portals and the Desktop rather than one stream.
@@ -451,6 +463,16 @@ pub enum MemoryOperation {
     Stop { process: String },
 }
 
+/// The Orb's disk: its largest folders, or deleting a rebuildable one.
+#[derive(Deserialize)]
+#[serde(tag = "operation", deny_unknown_fields)]
+pub enum DiskOperation {
+    #[serde(rename = "disk.snapshot")]
+    Snapshot {},
+    #[serde(rename = "disk.delete")]
+    Delete { path: String },
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 pub enum RequestOperation {
@@ -458,6 +480,7 @@ pub enum RequestOperation {
     Environment(EnvironmentOperation),
     Portal(PortalOperation),
     Memory(MemoryOperation),
+    Disk(DiskOperation),
 }
 
 #[derive(Deserialize)]
@@ -473,7 +496,7 @@ impl RequestOperation {
     pub fn refresh(&self) -> Option<crate::changes::RefreshRequest> {
         match self {
             Self::Files(operation) => operation.refresh(),
-            Self::Environment(_) | Self::Portal(_) | Self::Memory(_) => None,
+            Self::Environment(_) | Self::Portal(_) | Self::Memory(_) | Self::Disk(_) => None,
         }
     }
 }

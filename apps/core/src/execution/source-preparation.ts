@@ -32,6 +32,7 @@ import {
 import { SourceAuthorityRepositoryD1 } from "../source-control/runtime-authority.js";
 import {
   type SourceWorkspaceAssetVerification,
+  type SourceWorkspaceDiskOptions,
   type SourceWorkspacePreparationPhase,
   SourceWorkspaceService,
   SourceWorkspaceServiceWithBroker,
@@ -203,6 +204,7 @@ export const activateSourceWorkspace = (
     phase: SourceWorkspacePreparationPhase,
   ) => Effect.Effect<void>,
   runResume = true,
+  disk?: SourceWorkspaceDiskOptions,
 ) =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -211,8 +213,9 @@ export const activateSourceWorkspace = (
       return yield* runThreadHooks
         ? service.activate(threadId, preparation, onPreparationPhase, {
             runResume,
+            ...(disk === undefined ? {} : { disk }),
           })
-        : service.prepare(threadId, preparation);
+        : service.prepare(threadId, preparation, disk);
     }).pipe(
       Effect.provide(sourceWorkspaceLayer(bindings, db, options).activation),
     ),

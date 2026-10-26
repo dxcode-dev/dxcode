@@ -51,6 +51,12 @@ export const RealtimeInvalidationEvent = Schema.Union([
     threadId: ThreadId,
     revision: Revision,
   }),
+  /** The Thread's Orb disk is filling up; refetch its disk. */
+  Schema.Struct({
+    type: Schema.Literal("disk.invalidated"),
+    threadId: ThreadId,
+    revision: Revision,
+  }),
 ]);
 
 /** The user's notification inbox changed; refetch it. */
