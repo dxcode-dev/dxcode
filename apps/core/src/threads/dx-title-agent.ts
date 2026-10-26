@@ -79,12 +79,30 @@ export const dxTitleAgentApplies = (bindings: Bindings, message: string) =>
   bindings.DB !== undefined &&
   titleUserMessage(message) !== undefined;
 
+/**
+ * The coordinator's answer for a Thread on a Claude plan: the plan is used
+ * only through the Claude Code CLI, so its title waits for the first run.
+ */
+export const CLAUDE_CODE_TITLE_DEFERRED = "CLAUDE_CODE_TITLE_DEFERRED";
+const CLAUDE_CODE_TITLE = Symbol("claude-code-title");
+
+/**
+ * What `claude -p` answers for a Claude Code Thread's title: Claude Code
+ * keeps its own system prompt, so the instructions travel with the message.
+ */
+export const claudeCodeTitleInput = (body: string): string | undefined => {
+  const message = titleUserMessage(body);
+  return message === undefined
+    ? undefined
+    : `${DX_TITLE_AGENT_SYSTEM_PROMPT}\n\n${message}`;
+};
+
 /** Model call and sanitation; undefined keeps the stored fallback title. */
 const generateTitle = async (
   coordinator: DurableObjectNamespace,
   job: DxTitleAgentJob,
   message: string,
-): Promise<string | undefined> => {
+): Promise<string | typeof CLAUDE_CODE_TITLE | undefined> => {
   const response = await coordinator
     .get(coordinator.idFromName(`byok-${job.threadId}`))
     .fetch("https://dx-byok.invalid/complete", {
@@ -104,6 +122,7 @@ const generateTitle = async (
     const { code } = await response
       .json<{ code?: string }>()
       .catch(() => ({ code: undefined }));
+    if (code === CLAUDE_CODE_TITLE_DEFERRED) return CLAUDE_CODE_TITLE;
     threadPersistenceLogger.warn("Thread title generation failed.", {
       event: "thread_title_generation_failed",
       threadId: job.threadId,
@@ -122,19 +141,82 @@ const generateTitle = async (
   return title;
 };
 
+/** The owner of a Thread whose title is still pending, else undefined. */
+export const pendingTitleOwner = async (
+  bindings: Bindings,
+  threadId: string,
+): Promise<UserId | undefined> => {
+  const row = await bindings.DB?.prepare(
+    `SELECT owner_user_id FROM threads
+      WHERE id = ? AND title_pending_until IS NOT NULL`,
+  )
+    .bind(threadId)
+    .first<{ owner_user_id: string }>();
+  return row?.owner_user_id as UserId | undefined;
+};
+
 /**
- * Never rejects. Ends the pending state either way: a generated title
- * replaces the stored fallback, and any failure reveals the fallback. The
- * title is kept even when the first message is later not admitted.
+ * Ends a Thread's pending title: a generated title replaces the stored
+ * fallback, and undefined reveals the fallback. Nothing changes once the
+ * title is no longer pending (a rename, or an earlier result). Never rejects.
+ */
+export const storeGeneratedTitle = async (
+  bindings: Bindings,
+  threadId: ThreadId,
+  ownerUserId: UserId,
+  title: string | undefined,
+) => {
+  const db = bindings.DB;
+  if (db === undefined) return;
+  try {
+    const statement =
+      title === undefined
+        ? db
+            .prepare(
+              `UPDATE threads SET title_pending_until = NULL
+                WHERE id = ? AND title_pending_until IS NOT NULL`,
+            )
+            .bind(threadId)
+        : db
+            .prepare(
+              `UPDATE threads SET title = ?, title_pending_until = NULL
+                WHERE id = ? AND title_pending_until IS NOT NULL`,
+            )
+            .bind(title, threadId);
+    const result = await statement.run();
+    if (result.meta.changes > 0)
+      await Promise.all([
+        publishRealtimeInvalidation(bindings, threadId, "thread.invalidated"),
+        // The generated title replaces the fallback in search too.
+        title === undefined
+          ? undefined
+          : enqueueKnownThreadSearchIndex(bindings, {
+              threadId,
+              ownerUserId,
+              title,
+            }),
+      ]);
+  } catch (error) {
+    threadPersistenceLogger.warn("Thread title persistence failed.", {
+      event: "thread_title_persistence_failed",
+      threadId,
+      code: error instanceof Error ? error.name : "UNKNOWN",
+    });
+  }
+};
+
+/**
+ * Never rejects. Ends the pending state either way, unless the Thread runs on
+ * a Claude plan: its title comes from Claude Code once the first run starts
+ * (see `claudeCodeTitleInput`). The title is kept even when the first message
+ * is later not admitted.
  */
 export const runDxTitleAgent: DxTitleAgentRunner = async (bindings, job) => {
   const coordinator = bindings.BYOK_CREDENTIAL_COORDINATOR;
-  const db = bindings.DB;
   const message = titleUserMessage(job.message);
   if (
     !dxTitleAgentApplies(bindings, job.message) ||
     coordinator === undefined ||
-    db === undefined ||
     message === undefined
   )
     return;
@@ -151,44 +233,6 @@ export const runDxTitleAgent: DxTitleAgentRunner = async (bindings, job) => {
     }),
     job.persisted,
   ]);
-  if (!persisted) return;
-  try {
-    const statement =
-      title === undefined
-        ? db
-            .prepare(
-              `UPDATE threads SET title_pending_until = NULL
-                WHERE id = ? AND title_pending_until IS NOT NULL`,
-            )
-            .bind(job.threadId)
-        : db
-            .prepare(
-              `UPDATE threads SET title = ?, title_pending_until = NULL
-                WHERE id = ? AND title_pending_until IS NOT NULL`,
-            )
-            .bind(title, job.threadId);
-    const result = await statement.run();
-    if (result.meta.changes > 0)
-      await Promise.all([
-        publishRealtimeInvalidation(
-          bindings,
-          job.threadId,
-          "thread.invalidated",
-        ),
-        // The generated title replaces the fallback in search too.
-        title === undefined
-          ? undefined
-          : enqueueKnownThreadSearchIndex(bindings, {
-              threadId: job.threadId,
-              ownerUserId: job.ownerUserId,
-              title,
-            }),
-      ]);
-  } catch (error) {
-    threadPersistenceLogger.warn("Thread title persistence failed.", {
-      event: "thread_title_persistence_failed",
-      threadId: job.threadId,
-      code: error instanceof Error ? error.name : "UNKNOWN",
-    });
-  }
+  if (!persisted || title === CLAUDE_CODE_TITLE) return;
+  await storeGeneratedTitle(bindings, job.threadId, job.ownerUserId, title);
 };

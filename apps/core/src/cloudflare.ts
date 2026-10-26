@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import type { ThreadId, UserId } from "@dx/domain";
 import { getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
 import {
   configureRetryPolicy,
@@ -15,6 +16,10 @@ import { createDxCloudflareModelProvider } from "./runtime/cloudflare-model-prov
 import { classifyRunFailure, runRetryDelayMs } from "./runtime/run-failure.js";
 import { scheduled } from "./scheduled.js";
 import { createDxModelRoutingProvider } from "./settings/model-byok/flue-provider.js";
+import {
+  pendingTitleOwner,
+  storeGeneratedTitle,
+} from "./threads/dx-title-agent.js";
 
 export { OrbProviderPreparationObject } from "./plugins/execution/preparation-object.js";
 export { RealtimeHub } from "./realtime/realtime-hub.js";
@@ -115,5 +120,15 @@ if (
   registerClaudeCodeProvider({
     coordinator: bindings.BYOK_CREDENTIAL_COORDINATOR,
     execution: () => ExecutionWorkspaces.sandboxFactory,
+    title: {
+      pendingOwner: (threadId) => pendingTitleOwner(bindings, threadId),
+      store: (threadId, owner, title) =>
+        storeGeneratedTitle(
+          bindings,
+          threadId as ThreadId,
+          owner as UserId,
+          title,
+        ),
+    },
   });
 }

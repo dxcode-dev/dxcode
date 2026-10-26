@@ -226,6 +226,25 @@ const launchFiles = (files: Readonly<Record<string, string>>) =>
 
 const LAUNCH_FILES = "launch-files.sh";
 
+/** Moves the plan token from the command's environment to descriptor 3. */
+const TOKEN_TO_DESCRIPTOR = `# The plan token arrives in this command's environment, which every process
+# of the workspace user can read through /proc while the process lives, and
+# which children inherit. It moves into a pipe on descriptor 3 and this
+# script restarts without it; the CLI alone reads the pipe, once.
+if [ -n "\${CLAUDE_CODE_OAUTH_TOKEN-}" ]; then
+  exec 3< <(printf '%s\\n' "$CLAUDE_CODE_OAUTH_TOKEN")
+  unset CLAUDE_CODE_OAUTH_TOKEN
+  exec bash -c "$BASH_EXECUTION_STRING"
+fi`;
+
+const SCRUB_CREDENTIALS = `# The plan token is the only credential Claude Code may use. Workspace
+# variables could otherwise switch it to an API key or another provider, or
+# send the token to another endpoint.
+for name in $(env | sed -n 's/^\\(ANTHROPIC_[A-Za-z0-9_]*\\)=.*/\\1/p; s/^\\(CLAUDE_CODE_USE_[A-Za-z0-9_]*\\)=.*/\\1/p'); do
+  unset "$name"
+done
+unset NODE_TLS_REJECT_UNAUTHORIZED NODE_EXTRA_CA_CERTS CLAUDE_CONFIG_DIR`;
+
 const launchScript = (
   dir: string,
   launch: ClaudeCodeLaunch,
@@ -255,15 +274,7 @@ const launchScript = (
   ]
     .map(quote)
     .join(" ");
-  return `# The plan token arrives in this command's environment, which every process
-# of the workspace user can read through /proc while the process lives, and
-# which children inherit. It moves into a pipe on descriptor 3 and this
-# script restarts without it; the CLI alone reads the pipe, once.
-if [ -n "\${CLAUDE_CODE_OAUTH_TOKEN-}" ]; then
-  exec 3< <(printf '%s\\n' "$CLAUDE_CODE_OAUTH_TOKEN")
-  unset CLAUDE_CODE_OAUTH_TOKEN
-  exec bash -c "$BASH_EXECUTION_STRING"
-fi
+  return `${TOKEN_TO_DESCRIPTOR}
 set -eu
 D=${quote(dir)}
 S=${quote(STATE_ROOT)}
@@ -349,18 +360,78 @@ if [ -d ${quote(`${WORKSPACE}/.agents/skills`)} ]; then
     [ -f "$skill/SKILL.md" ] && ln -sfn "../../workspace/repo/.agents/skills/$name" "$HOME/.claude/skills/$name"
   done
 fi
-# The plan token is the only credential Claude Code may use. Workspace
-# variables could otherwise switch it to an API key or another provider, or
-# send the token to another endpoint.
-for name in $(env | sed -n 's/^\\(ANTHROPIC_[A-Za-z0-9_]*\\)=.*/\\1/p; s/^\\(CLAUDE_CODE_USE_[A-Za-z0-9_]*\\)=.*/\\1/p'); do
-  unset "$name"
-done
-unset NODE_TLS_REJECT_UNAUTHORIZED NODE_EXTRA_CA_CERTS CLAUDE_CONFIG_DIR
+${SCRUB_CREDENTIALS}
 cd ${quote(WORKSPACE)}
 setsid nohup bash "$D/runner.sh" "$CLAUDE" ${args} $RESUME > /dev/null 2>&1 < /dev/null &
 echo $! > "$D/pid"
 launched=1
 echo started`;
+};
+
+/**
+ * One print-mode answer from the Claude Code CLI with no tools, MCP servers,
+ * settings, skills, or session, beside the Thread's run: it runs from an
+ * empty directory outside `runs/`, so it never ends that run or touches its
+ * session. The CLI installed for the run answers it; it never installs one.
+ */
+export const claudeCodeAnswer = async (
+  sandbox: Sandbox,
+  request: {
+    readonly model: string;
+    readonly token: string;
+    readonly input: string;
+  },
+) => {
+  const args = [
+    "-p",
+    "--model",
+    request.model,
+    "--tools",
+    "",
+    "--no-session-persistence",
+    "--strict-mcp-config",
+    "--setting-sources",
+    "",
+    "--disable-slash-commands",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--settings",
+    CLI_SETTINGS,
+  ]
+    .map(quote)
+    .join(" ");
+  const input = (
+    encodeBase64(new TextEncoder().encode(request.input)).match(/.{1,76}/g) ??
+    []
+  ).join("\n");
+  const script = `${TOKEN_TO_DESCRIPTOR}
+set -eu
+CLAUDE="$(command -v claude || true)"
+if [ -z "$CLAUDE" ] && [ -x "$HOME/.local/bin/claude" ]; then CLAUDE="$HOME/.local/bin/claude"; fi
+if [ -z "$CLAUDE" ]; then echo "Claude Code is not installed." >&2; exit 3; fi
+${SCRUB_CREDENTIALS}
+T="$(mktemp -d)"
+trap 'rm -rf "$T"' EXIT
+cd "$T"
+base64 -d > "$T/input" <<'DX_FILE'
+${input}
+DX_FILE
+CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3 timeout 50 "$CLAUDE" ${args} < "$T/input" 2> /dev/null`;
+  const result = await sandbox.exec(`bash -c ${quote(script)}`, {
+    env: { ...CLI_ENVIRONMENT, CLAUDE_CODE_OAUTH_TOKEN: request.token },
+    timeoutMs: 60_000,
+  });
+  const stream = new ClaudeCodeStream();
+  for (const line of result.stdout.split("\n")) stream.push(line);
+  return {
+    text:
+      stream.result === undefined || stream.result.isError
+        ? undefined
+        : stream.result.text,
+    reading: stream.planReading,
+    readingAt: stream.planReadingAt,
+  };
 };
 
 /**

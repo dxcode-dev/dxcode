@@ -10,9 +10,9 @@ import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
 
 /**
  * A Claude Pro/Max plan's limits and extra usage choice, through the
- * settings API and the credential coordinator that Claude Code runs and
- * title calls use. Anthropic is replaced by a fake that answers the token
- * check and Messages calls with the plan's rate-limit headers.
+ * settings API and the credential coordinator that Claude Code runs use.
+ * Anthropic is replaced by a fake that answers the token check and Messages
+ * calls with the plan's rate-limit headers; titles never call it.
  */
 
 const origin = "http://dx.test";
@@ -218,40 +218,13 @@ describe("Claude Pro/Max plan usage", () => {
     const fresh = await claudeConnection(cookie);
     expect(fresh.claudePlan).toEqual({ allowExtraUsage: false });
 
-    // The title call reads the plan's limits from Anthropic's headers.
-    const fiveHourReset = now() + 2 * hour;
-    const weekReset = now() + 4 * 24 * hour;
-    planHeaders = {
-      "anthropic-ratelimit-unified-status": "allowed",
-      "anthropic-ratelimit-unified-representative-claim": "five_hour",
-      "anthropic-ratelimit-unified-reset": String(fiveHourReset),
-      "anthropic-ratelimit-unified-5h-utilization": "0.42",
-      "anthropic-ratelimit-unified-5h-reset": String(fiveHourReset),
-      "anthropic-ratelimit-unified-7d-utilization": "0.18",
-      "anthropic-ratelimit-unified-7d-reset": String(weekReset),
-      "anthropic-ratelimit-unified-overage-status": "allowed",
-      "anthropic-ratelimit-unified-overage-in-use": "false",
-    };
-    const titled = await title(threadId, userId);
-    expect(titled).toEqual({
-      status: 200,
-      body: { text: "Plan usage card" },
+    // A Claude Code Thread's title comes from Claude Code itself, never from
+    // the Messages API on the plan's token.
+    expect(await title(threadId, userId)).toEqual({
+      status: 409,
+      body: { code: "CLAUDE_CODE_TITLE_DEFERRED" },
     });
-    expect(messageCalls).toEqual([{ model: "claude-haiku-5-5" }]);
-    const observed = (await claudeConnection(cookie)).claudePlan;
-    expect(observed).toMatchObject({
-      allowExtraUsage: false,
-      usage: {
-        status: "allowed",
-        limit: { id: "five_hour", resetsAt: fiveHourReset },
-        windows: [
-          { id: "five_hour", utilization: 0.42, resetsAt: fiveHourReset },
-          { id: "seven_day", utilization: 0.18, resetsAt: weekReset },
-        ],
-        extraUsage: { status: "allowed", inUse: false },
-      },
-    });
-    expect(observed?.usage?.observedAt).toBeGreaterThanOrEqual(now() - 60);
+    expect(messageCalls).toEqual([]);
 
     // A Claude Code run gets the token with the plan's choice.
     const submissionId = "claude-plan-submission";
@@ -267,10 +240,48 @@ describe("Claude Pro/Max plan usage", () => {
     const route = { threadId, submissionId, canonical: MODEL };
     expect(await post(threadId, "/claude-code-credential", route)).toEqual({
       status: 200,
-      body: {
-        token: TOKEN,
-        plan: { allowExtraUsage: false, limitWindow: "five_hour" },
+      body: { token: TOKEN, plan: { allowExtraUsage: false } },
+    });
+
+    // The run (or its title answer) reports the plan's limits.
+    const fiveHourReset = now() + 2 * hour;
+    const weekReset = now() + 4 * 24 * hour;
+    expect(
+      (
+        await post(threadId, "/claude-code-usage", {
+          ...route,
+          reading: {
+            status: "allowed",
+            limit: { id: "five_hour", resetsAt: fiveHourReset },
+            windows: [
+              { id: "five_hour", utilization: 0.42, resetsAt: fiveHourReset },
+              { id: "seven_day", utilization: 0.18, resetsAt: weekReset },
+            ],
+            extraUsage: { status: "allowed", inUse: false },
+          },
+          observedAt: now(),
+        })
+      ).status,
+    ).toBe(200);
+    const observed = (await claudeConnection(cookie)).claudePlan;
+    expect(observed).toMatchObject({
+      allowExtraUsage: false,
+      usage: {
+        status: "allowed",
+        limit: { id: "five_hour", resetsAt: fiveHourReset },
+        windows: [
+          { id: "five_hour", utilization: 0.42, resetsAt: fiveHourReset },
+          { id: "seven_day", utilization: 0.18, resetsAt: weekReset },
+        ],
+        extraUsage: { status: "allowed", inUse: false },
       },
+    });
+    expect(observed?.usage?.observedAt).toBeGreaterThanOrEqual(now() - 60);
+    expect(
+      (await post(threadId, "/claude-code-credential", route)).body,
+    ).toEqual({
+      token: TOKEN,
+      plan: { allowExtraUsage: false, limitWindow: "five_hour" },
     });
 
     // The run reports that the 5-hour window is used up and extra usage
@@ -309,11 +320,6 @@ describe("Claude Pro/Max plan usage", () => {
     expect(
       (await post(threadId, "/claude-code-credential", route)).body,
     ).toMatchObject({ plan: { blockedUntil: fiveHourReset } });
-    // A title is never worth extra usage: Anthropic is not called.
-    messageCalls.length = 0;
-    expect((await title(threadId, userId)).status).toBe(502);
-    expect(messageCalls).toEqual([]);
-
     // A malformed reading is refused and changes nothing.
     expect(
       (
@@ -490,7 +496,7 @@ describe("Claude Pro/Max plan usage", () => {
         },
       },
     });
-    // Fable Threads wait for the reset; Opus Threads and Haiku titles run.
+    // Fable Threads wait for the reset; Opus Threads run.
     expect(
       (await post(fable, "/claude-code-credential", fableRoute)).body,
     ).toMatchObject({ plan: { blockedUntil: fableReset } });
@@ -498,8 +504,6 @@ describe("Claude Pro/Max plan usage", () => {
       status: 200,
       body: { token: TOKEN, plan: { allowExtraUsage: false } },
     });
-    expect((await title(opus, userId)).status).toBe(200);
-    expect(messageCalls).toEqual([{ model: "claude-haiku-5-5" }]);
   });
 
   it("refuses a new Claude Code submission at /resolve while the plan is blocked, before the Orb wakes", async () => {

@@ -27,6 +27,11 @@ import {
   CLAUDE_CODE_API,
   catalogProviderModels,
 } from "../settings/model-routing/catalog.js";
+import { CLAUDE_CODE_SMALL_MODEL } from "../settings/model-routing/claude-code-token.js";
+import {
+  claudeCodeTitleInput,
+  sanitizeGeneratedTitle,
+} from "../threads/dx-title-agent.js";
 import {
   answerUnofferedClaudeCodeDxCalls,
   claudeCodeDxToolList,
@@ -39,6 +44,7 @@ import { mirroredToolCall } from "./tools.js";
 import {
   type ClaudeCodeInputBlock,
   type ClaudeCodeRun,
+  claudeCodeAnswer,
   claudeCodeRunKey,
 } from "./workspace-run.js";
 
@@ -90,6 +96,20 @@ export interface ClaudeCodeProviderDeps {
     reading: ClaudePlanReading,
     observedAt: number,
   ) => Promise<ClaudePlanAccess>;
+  /**
+   * A new Thread's pending title, which Claude Code answers once the first
+   * run has started (see \`titleThread\`).
+   */
+  readonly title?: {
+    /** The owner while the title is pending; undefined otherwise. */
+    readonly pendingOwner: (threadId: string) => Promise<string | undefined>;
+    /** Ends the pending state with the title, or undefined for the fallback. */
+    readonly store: (
+      threadId: string,
+      owner: string,
+      title: string | undefined,
+    ) => Promise<void>;
+  };
 }
 
 /**
@@ -139,6 +159,64 @@ export const rememberClaudeCodePrompt = (
 
 /** A failed recording is tried again after these delays, in milliseconds. */
 const RECORD_RETRY_DELAYS = [250, 1_000];
+
+/**
+ * Titles a new Thread with one \`claude -p\` answer beside its first run: the
+ * Claude plan is used only through the Claude Code CLI, and the workspace is
+ * already up for the run. The run's credential is reused, so a plan that is
+ * used up (with extra usage off) never gets this far. Never rejects.
+ */
+const titleThread = async (
+  deps: ClaudeCodeProviderDeps,
+  threadId: string,
+  sandbox: Sandbox,
+  token: string,
+  anchor: UserMessage,
+  record: (reading: ClaudePlanReading, observedAt: number) => void,
+) => {
+  const titles = deps.title;
+  const input = claudeCodeTitleInput(
+    typeof anchor.content === "string"
+      ? anchor.content
+      : anchor.content
+          .flatMap((block) => (block.type === "text" ? [block.text] : []))
+          .join("\n"),
+  );
+  if (titles === undefined || input === undefined) return;
+  try {
+    const owner = await titles.pendingOwner(threadId);
+    if (owner === undefined) return;
+    const started = Date.now();
+    const answer = await claudeCodeAnswer(sandbox, {
+      model: CLAUDE_CODE_SMALL_MODEL,
+      token,
+      input,
+    });
+    if (answer.reading !== undefined) record(answer.reading, answer.readingAt);
+    const title =
+      answer.text === undefined
+        ? undefined
+        : sanitizeGeneratedTitle(answer.text);
+    if (title === undefined)
+      claudeCodeLogger.warn("Claude Code thread title was unusable.", {
+        event: "claude_code_title_failed",
+        threadId,
+      });
+    else
+      claudeCodeLogger.info("Claude Code thread title answered.", {
+        event: "claude_code_title_generated",
+        threadId,
+        durationMs: Date.now() - started,
+      });
+    await titles.store(threadId, owner, title);
+  } catch (error) {
+    claudeCodeLogger.warn("Claude Code thread title failed.", {
+      event: "claude_code_title_failed",
+      threadId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+};
 
 const usage = (segment?: ClaudeCodeSegment): Usage => {
   const input = segment?.usage.input ?? 0;
@@ -653,6 +731,7 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
           pending.length > 0
             ? inputBlocks(pending)
             : inputBlocks(freshSession ? [anchor] : turnInput);
+        let launchedToken: string | undefined;
         const launchAttempt = async () => {
           const credential = await deps.credential(
             threadId,
@@ -680,6 +759,7 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
           nextAttempt += 1;
           // Set before launching, so Stop during the launch stops it.
           run = next;
+          launchedToken = credential.token;
           const remembered = prompts.get(threadId);
           await next.launch(
             {
@@ -727,6 +807,21 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
               emitter.prefix = { type: "text", text: note };
           }
           run = await launchAttempt();
+          // The Thread's first attempt at its first turn: the title starts
+          // beside it and never delays it.
+          if (
+            nextAttempt === 1 &&
+            launchedToken !== undefined &&
+            !context.messages.some(({ role }) => role === "assistant")
+          )
+            void titleThread(
+              deps,
+              threadId,
+              sandbox,
+              launchedToken,
+              anchor,
+              record,
+            );
         } else run = latest?.run;
         if (run === undefined)
           throw new Error("Claude Code has no run to read.");

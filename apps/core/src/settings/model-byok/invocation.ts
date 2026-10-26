@@ -17,7 +17,6 @@ import {
   claudePlanAccess,
   claudePlanBlockedCause,
   claudePlanReadable,
-  claudePlanReadingFromHeaders,
   loadClaudePlan,
   recordClaudePlanReading,
 } from "../../claude-code/plan.js";
@@ -39,6 +38,7 @@ import {
   type RunFailure,
   type RunFailureClass,
 } from "../../runtime/run-failure.js";
+import { CLAUDE_CODE_TITLE_DEFERRED } from "../../threads/dx-title-agent.js";
 import type { ConfigEncryptionKeyring } from "../config-encryption.js";
 import { loadConfigEncryptionKeyring } from "../config-encryption.js";
 import {
@@ -47,11 +47,7 @@ import {
   IN_DO_APIS,
 } from "../model-routing/catalog.js";
 import {
-  CLAUDE_CODE_IDENTITY,
-  CLAUDE_CODE_SMALL_MODEL,
   checkClaudeCodeToken,
-  claudeCodeTokenFetch,
-  claudeCodeTokenHeaders,
   claudeCodeTokenHealth,
   readClaudePlanWithToken,
 } from "../model-routing/claude-code-token.js";
@@ -411,8 +407,6 @@ const isCompleteEnvelope = (value: unknown): value is CompleteEnvelope => {
 };
 
 const COMPLETE_TIMEOUT_MS = 25_000;
-
-const CLAUDE_CODE_TITLE_MODEL = CLAUDE_CODE_SMALL_MODEL;
 
 const completionRequest = (envelope: CompleteEnvelope) =>
   JSON.stringify([
@@ -1257,8 +1251,10 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       throw new Error("CREDENTIAL_UNAVAILABLE");
     const pin: PinnedSubmission = { ...route, credential };
     const canonical = `${route.model.provider}/${route.model.id}`;
+    // The Claude plan is used only through the Claude Code CLI, so a Claude
+    // Code Thread's title waits for its first run (see claude-code/registration.ts).
     if (route.model.api === CLAUDE_CODE_API)
-      return this.#completeClaudeCode(pin, envelope, signal, started);
+      return jsonResponse({ code: CLAUDE_CODE_TITLE_DEFERRED }, 409);
     // Low effort is supported across the catalog, unlike "off" (GLM 5.3 Flash).
     const reasoning = "low";
     // pi's API adapters read the prompt only from the transcript's leading
@@ -1453,123 +1449,6 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       observedAt,
     );
     return jsonResponse({ plan: claudePlanAccess(state, pin.model.id) }, 200);
-  }
-
-  /**
-   * A Claude Code route has no wire adapter, so a one-shot completion calls
-   * the Messages API with the plan's OAuth token. Anthropic serves OAuth
-   * tokens only to requests that identify as Claude Code.
-   */
-  async #completeClaudeCode(
-    pin: PinnedSubmission,
-    envelope: CompleteEnvelope,
-    signal: AbortSignal,
-    started: number,
-  ) {
-    const token = await this.#claudeCodeToken(pin);
-    // A title is not worth paid extra usage: while the plan is used up and
-    // its owner keeps dx off extra usage, the Thread keeps its default title.
-    const plan = claudePlanAccess(
-      await loadClaudePlan(this.#db(), pin.connection.id),
-      CLAUDE_CODE_TITLE_MODEL,
-    );
-    if (plan.blockedUntil !== undefined) {
-      settingsPersistenceLogger.info("One-shot completion skipped.", {
-        event: "model_one_shot_skipped",
-        threadId: pin.threadId,
-        connectionId: pin.connection.id,
-        reason: "CLAUDE_PLAN_LIMIT",
-      });
-      return jsonResponse({ code: "COMPLETION_FAILED" }, 502);
-    }
-    const response = await claudeCodeTokenFetch
-      .current("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          ...claudeCodeTokenHeaders(token),
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: CLAUDE_CODE_TITLE_MODEL,
-          max_tokens: envelope.maxTokens,
-          system: [
-            { type: "text", text: CLAUDE_CODE_IDENTITY },
-            { type: "text", text: envelope.systemPrompt },
-          ],
-          messages: [{ role: "user", content: envelope.message }],
-        }),
-        redirect: "manual",
-        signal,
-      })
-      .catch(() => undefined);
-    const reading =
-      response === undefined
-        ? undefined
-        : claudePlanReadingFromHeaders(response.headers);
-    if (reading !== undefined)
-      await recordClaudePlanReading(
-        this.#db(),
-        pin.connection.id,
-        reading,
-      ).catch((error: unknown) =>
-        settingsPersistenceLogger.warn("Claude plan usage was not recorded.", {
-          event: "claude_plan_usage_record_failed",
-          connectionId: pin.connection.id,
-          error: error instanceof Error ? error.message : String(error),
-        }),
-      );
-    const body = (await response?.json().catch(() => undefined)) as
-      | {
-          readonly content?: ReadonlyArray<{ type: string; text?: string }>;
-          readonly usage?: {
-            readonly input_tokens?: number;
-            readonly output_tokens?: number;
-          };
-        }
-      | undefined;
-    if (response?.ok !== true || body?.content === undefined) {
-      settingsPersistenceLogger.warn("One-shot completion failed.", {
-        event: "model_one_shot_failed",
-        threadId: pin.threadId,
-        connectionId: pin.connection.id,
-        model: `${pin.model.provider}/${pin.model.id}`,
-        error: `HTTP_${response?.status ?? "NETWORK"}`,
-      });
-      if (response === undefined)
-        return failureResponse(
-          runFailure(
-            "transient",
-            "UPSTREAM_UNREACHABLE",
-            "The model provider could not be reached.",
-          ),
-        );
-      return response.ok
-        ? jsonResponse({ code: "COMPLETION_FAILED" }, 502)
-        : failureResponse(
-            classifyUpstreamRejection(
-              response.status,
-              body === undefined ? "" : JSON.stringify(body),
-            ),
-            response.status,
-          );
-    }
-    settingsPersistenceLogger.info("One-shot completion finished.", {
-      event: "model_one_shot_completed",
-      threadId: pin.threadId,
-      connectionId: pin.connection.id,
-      model: `${pin.model.provider}/${CLAUDE_CODE_TITLE_MODEL}`,
-      inputTokens: body.usage?.input_tokens ?? 0,
-      outputTokens: body.usage?.output_tokens ?? 0,
-      durationMs: Math.round(performance.now() - started),
-    });
-    return jsonResponse(
-      {
-        text: body.content
-          .flatMap((block) => (block.type === "text" ? [block.text ?? ""] : []))
-          .join(""),
-      },
-      200,
-    );
   }
 
   async #handleCheck(envelope: CheckEnvelope) {

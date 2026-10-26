@@ -323,6 +323,29 @@ const commandFor = (action: string) =>
 const bounded = (value: unknown) =>
   typeof value === "string" ? value.slice(0, 32_768) : "";
 
+/**
+ * The guest exec itself failed (the container object restarted, or the call
+ * was lost or timed out), not the command: its error stands in for stderr,
+ * and Flue retries the run at any stage.
+ */
+const guestExecLost = (cause: unknown) => {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  const failed = commandFailed({ stderr: message });
+  return new SourceWorkspaceInitializationFailed({
+    ...(failed.stderrTail === undefined
+      ? {}
+      : { stderrTail: failed.stderrTail }),
+    message: message.includes("(dx_failure:")
+      ? message
+      : markRunFailure({
+          class: "platform",
+          code: "WORKSPACE_COMMAND_LOST",
+          message: "The workspace lost a setup command before it finished.",
+          retryable: true,
+        }),
+  });
+};
+
 const runCommand = (
   preparation: WorkspacePreparation,
   command: string,
@@ -376,11 +399,7 @@ const runCommand = (
         throw cause;
       }
     },
-    // The guest exec itself failed: its error stands in for stderr.
-    catch: (cause) =>
-      commandFailed({
-        stderr: cause instanceof Error ? cause.message : String(cause),
-      }),
+    catch: guestExecLost,
   });
 
 const run = (
@@ -471,7 +490,7 @@ const installPrograms = (
         throw cause;
       }
     },
-    catch: () => new SourceWorkspaceInitializationFailed(),
+    catch: guestExecLost,
   });
 
 const Modules = Schema.Array(
@@ -714,7 +733,7 @@ const makeSourceWorkspaceService = (
                 timeoutMs: 10_000,
               },
             ),
-          catch: () => new SourceWorkspaceInitializationFailed(),
+          catch: guestExecLost,
         });
         yield* requireSuccess({
           stdout: bounded(prepared.stdout),

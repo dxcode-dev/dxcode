@@ -4,7 +4,10 @@ import {
   setProvider,
 } from "@flue/runtime";
 import type { ClaudePlanAccess } from "./plan.js";
-import { createClaudeCodeProvider } from "./provider.js";
+import {
+  type ClaudeCodeProviderDeps,
+  createClaudeCodeProvider,
+} from "./provider.js";
 import { claudeCodeSandbox } from "./runs.js";
 
 /**
@@ -16,12 +19,14 @@ import { claudeCodeSandbox } from "./runs.js";
 export const registerClaudeCodeProvider = (input: {
   readonly coordinator: DurableObjectNamespace;
   readonly execution: () => SandboxFactory;
+  readonly title?: ClaudeCodeProviderDeps["title"];
 }) => {
   const coordinator = (threadId: string) =>
     input.coordinator.get(input.coordinator.idFromName(`byok-${threadId}`));
   setProvider(
     createClaudeCodeProvider({
       invocation: getModelInvocationContext,
+      ...(input.title === undefined ? {} : { title: input.title }),
       sandbox: (threadId) =>
         claudeCodeSandbox(threadId, () =>
           input.execution().createSandbox({ id: threadId }),

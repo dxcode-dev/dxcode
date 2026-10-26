@@ -127,7 +127,7 @@ const makeSandbox = (
         });
         if (command.includes("DX_ASSET_HELPER_DIGEST")) {
           if (input?.rejectedAssetVerification === true)
-            throw new Error("asset verification unavailable");
+            throw new Error("Network connection lost.");
           const requiredTools = JSON.parse(
             options?.envs?.DX_ASSET_TOOLS ?? "[]",
           ) as Array<"git" | "gh" | "git-lfs">;
@@ -458,12 +458,20 @@ describe("SourceWorkspaceService", () => {
     });
   });
 
-  it("does not misclassify an asset-verification transport failure as template drift", async () => {
+  it("retries an asset-verification transport failure as a platform failure, not template drift", async () => {
     const fake = makeSandbox([], { rejectedAssetVerification: true });
 
-    await expect(
-      activate(fake.preparation, serviceLayer({ source: snapshot })),
-    ).rejects.toMatchObject({ _tag: "SourceWorkspaceInitializationFailed" });
+    const cause = await activate(
+      fake.preparation,
+      serviceLayer({ source: snapshot }),
+    ).catch((error: unknown) => error);
+    expect(cause).toMatchObject({
+      _tag: "SourceWorkspaceInitializationFailed",
+    });
+    // The container object restarted under the exec: Flue retries the run.
+    expect(
+      classifyRunFailure({ message: (cause as Error).message }),
+    ).toMatchObject({ class: "platform", retryable: true });
   });
 
   it("finalizes anonymous default HEAD before source setup without minting a token", async () => {

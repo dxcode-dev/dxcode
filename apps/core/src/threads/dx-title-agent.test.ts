@@ -104,6 +104,17 @@ describe("DxTitleAgent", () => {
     expect(bind).toHaveBeenLastCalledWith(job.threadId);
   });
 
+  it("leaves a Claude Code Thread's title pending for its first run", async () => {
+    const { bindings, fetch, prepare } = fakeBindings(
+      Response.json({ code: "CLAUDE_CODE_TITLE_DEFERRED" }, { status: 409 }),
+    );
+
+    await runDxTitleAgent(bindings, job);
+
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
   it("calls the model before the Thread row exists and stores nothing if creation fails", async () => {
     const { bindings, fetch, prepare } = fakeBindings(
       Response.json({ text: "OAuth refresh retries" }),
