@@ -78,7 +78,12 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("Settings routes", () => {
+// These tests load the app's real lazy route modules. Importing them the first
+// time takes 1-2 s alone and can pass 5 s when the release gate runs every
+// file in parallel, so they get a longer timeout than the default.
+const routeLoading = { timeout: 30_000 };
+
+describe("Settings routes", routeLoading, () => {
   it("reports an unknown workspace section before a malformed workspace slug", async () => {
     vi.stubGlobal(
       "fetch",
@@ -102,7 +107,7 @@ describe("Settings routes", () => {
   });
 });
 
-describe("Router Query coordination", () => {
+describe("Router Query coordination", routeLoading, () => {
   it("shares intent-preloaded project data with warm route loading", async () => {
     const network = new FrontendNetworkHarness(() =>
       Response.json({ status: "success", data: project }),

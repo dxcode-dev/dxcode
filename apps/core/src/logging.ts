@@ -102,3 +102,4 @@ export const sourceControlAuditLogger = getLogger([
   "source-control",
   "audit",
 ]);
+export const automationLogger = getLogger(["dx", "automations"]);

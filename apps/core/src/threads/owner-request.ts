@@ -30,6 +30,8 @@ export interface OwnerRequestContext {
   readonly ownerUserId: UserId;
   /** The Thread whose agent sends any message this request delivers. */
   readonly sourceThreadId?: string;
+  /** The schedule or GitHub subscription delivering this request's message. */
+  readonly automation?: "schedule" | "github";
   /** Keeps work a route starts, such as title generation, running. */
   readonly waitUntil?: (promise: Promise<unknown>) => void;
 }
@@ -57,6 +59,8 @@ export const ownerRequest = async (
     honoContext.set("requestStartedAt", Date.now());
     if (context.sourceThreadId !== undefined)
       honoContext.set("messageSourceThreadId", context.sourceThreadId);
+    if (context.automation !== undefined)
+      honoContext.set("messageAutomation", context.automation);
     await next();
   });
   app.route("/v1/threads", threadRoutes);

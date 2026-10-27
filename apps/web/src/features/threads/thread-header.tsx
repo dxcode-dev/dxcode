@@ -22,6 +22,13 @@ import { Button } from "../../shared/ui/button.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { ThreadTitleText } from "../../shared/ui/thread-title.js";
 import { useMobile } from "../../shared/use-mobile.js";
+import {
+  type AutomationView,
+  automationViews,
+  useThreadAutomations,
+} from "./automations/automations-queries.js";
+import { ThreadAutomationsButton } from "./automations/thread-automations-button.js";
+import { ThreadAutomationsSheet } from "./automations/thread-automations-sheet.js";
 import { ShareDialog } from "./sharing/share-dialog.js";
 import { useSetThreadFollowing } from "./sharing/sharing-mutations.js";
 import { ThreadParticipants } from "./sharing/thread-participants.js";
@@ -145,12 +152,22 @@ export function ThreadHeader({
   // A phone has no room for the chips: the Thread menu shows the model and
   // Project instead, and sits at the bar's end after an icon-only Share.
   const mobile = useMobile();
+  // Schedules and GitHub listeners are the owner's. A phone reaches them
+  // from the Thread menu, which opens them as a sheet.
+  const [automationsView, setAutomationsView] = React.useState<
+    AutomationView | undefined
+  >(undefined);
+  const mobileAutomations = automationViews(
+    useThreadAutomations(thread.id, own && mobile).data,
+  );
   const menu = transcript ? (
     <ThreadMenu
       thread={thread}
       project={project}
       transcript={transcript}
       onOpenShare={openShare}
+      automationViews={mobileAutomations}
+      onOpenAutomations={own && mobile ? setAutomationsView : undefined}
       showDetails={mobile}
     />
   ) : null;
@@ -192,6 +209,9 @@ export function ThreadHeader({
         ) : null}
       </div>
       <div className="thread-header-actions">
+        {own && !mobile ? (
+          <ThreadAutomationsButton threadId={thread.id} />
+        ) : null}
         {thread.sharing !== undefined ||
         (thread.participants?.length ?? 0) > 1 ? (
           <ThreadParticipants
@@ -266,6 +286,13 @@ export function ThreadHeader({
         ) : null}
         {mobile ? menu : null}
       </div>
+      {automationsView !== undefined && own && mobile ? (
+        <ThreadAutomationsSheet
+          threadId={thread.id}
+          view={automationsView}
+          onClose={() => setAutomationsView(undefined)}
+        />
+      ) : null}
       {shareOpen && own && !archived ? (
         <ShareDialog
           thread={thread}

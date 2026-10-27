@@ -1076,6 +1076,10 @@ export const createThreadRoutes = (
                   ...(messageSourceThreadId === undefined
                     ? {}
                     : { sourceThreadId: messageSourceThreadId }),
+                  // Set only by the automation sweep.
+                  ...(context.get("messageAutomation") === undefined
+                    ? {}
+                    : { automation: context.get("messageAutomation") }),
                 },
                 admitted.body,
               ),

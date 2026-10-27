@@ -191,6 +191,7 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
   const actor = context.get("actor");
   const access = context.get("threadAccess");
   const sourceThreadId = context.get("messageSourceThreadId");
+  const automation = context.get("messageAutomation");
   const delivered: unknown = await context.req.raw
     .clone()
     .json()
@@ -250,11 +251,16 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
     const { mentions } = classified;
     // Another Thread's agent always addresses this Thread's agent, and its
     // tags never switch the members' mode.
-    switchTo = sourceThreadId === undefined ? classified.mode : undefined;
+    switchTo =
+      sourceThreadId === undefined && automation === undefined
+        ? classified.mode
+        : undefined;
     // The switch is recorded once Flue admits the message, so a refused
     // message never changes the mode.
     const mode =
-      members.length === 0 || sourceThreadId !== undefined
+      members.length === 0 ||
+      sourceThreadId !== undefined ||
+      automation !== undefined
         ? "agent"
         : (switchTo ?? (await conversationMode(db, threadId.value)));
     mentioned = mentions.flatMap(({ userId }) =>
@@ -322,6 +328,7 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
         mentions,
         // Set only by the in-process Thread tools, never from a request.
         ...(sourceThreadId === undefined ? {} : { sourceThreadId }),
+        ...(automation === undefined ? {} : { automation }),
         ...(messageId === undefined ? {} : { messageId }),
       },
       admittedBody,
@@ -393,6 +400,7 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
   if (
     userMessage !== undefined &&
     sourceThreadId === undefined &&
+    automation === undefined &&
     context.get("threadSnoozed") === true
   )
     await afterResponse(

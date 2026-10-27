@@ -2,12 +2,12 @@ import { Effect, Layer } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import {
   SourceMutationConflict,
-  SourceMutationRejected,
-  SourceMutationUnavailable,
-  SourceMutationRepository,
   type SourceMutationRecord,
+  SourceMutationRejected,
+  SourceMutationRepository,
   SourceMutationService,
   SourceMutationServiceLive,
+  SourceMutationUnavailable,
 } from "./operations.js";
 
 const base: SourceMutationRecord = {

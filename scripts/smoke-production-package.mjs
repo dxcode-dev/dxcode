@@ -361,7 +361,7 @@ export const smokeProductionPackage = async (packageRoot) => {
       );
     // A cron trigger reaches only the handlers the generated entry exports.
     const sweep = await fetch(
-      `${origin}/cdn-cgi/handler/scheduled?cron=${encodeURIComponent("*/5 * * * *")}`,
+      `${origin}/cdn-cgi/handler/scheduled?cron=${encodeURIComponent("* * * * *")}`,
     );
     if (sweep.status !== 200)
       throw new Error(

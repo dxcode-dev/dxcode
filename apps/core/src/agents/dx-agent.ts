@@ -19,6 +19,7 @@ import {
   useSkill,
   useTool,
 } from "@flue/runtime";
+import { createAutomationTools } from "../automations/agent-tools.js";
 import { claudeCodeDxTools } from "../claude-code/dx-tools.js";
 import {
   rememberClaudeCodePrompt,
@@ -121,6 +122,13 @@ const dxTools = (
     promptData?.plugins?.submissionId,
     promptData?.route !== undefined &&
       isClaudeCodeModel(promptData.route.model),
+  ))
+    tools.push(withToolFailureMessage(tool));
+  // Schedules, GitHub subscriptions, and notify_user: work after the turn.
+  for (const tool of createAutomationTools(
+    threadId,
+    agentThreadToolsContext,
+    promptData?.plugins?.submissionId,
   ))
     tools.push(withToolFailureMessage(tool));
   const pluginTools = promptData?.plugins;

@@ -13,13 +13,13 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { Button } from "../../shared/ui/button.js";
-import type { AttachmentUploadState } from "./attachment-upload.js";
 import {
   attachmentPreviewKind,
   attachmentTypeLabel,
   formatAttachmentSize,
   type PreviewKind,
 } from "./attachment-presentation.js";
+import type { AttachmentUploadState } from "./attachment-upload.js";
 import type { PendingAttachment } from "./image-attachments.js";
 
 const noUploads = () => () => {};

@@ -681,6 +681,7 @@ export {
   GITHUB_APP_REPOSITORY_PERMISSIONS,
   GitHubAppConfigurationInvalid,
   type GitHubAppDeploymentConfiguration,
+  isGitHubAppEventList,
 } from "./source-control/github-app-configuration.js";
 export {
   type CanonicalGitHubRepositoryLocator,

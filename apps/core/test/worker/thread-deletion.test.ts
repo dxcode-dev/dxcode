@@ -222,6 +222,22 @@ const seedThreadData = async () => {
       `INSERT INTO thread_seen (thread_id, user_id, seen_at) VALUES (?, ?, ?)`,
     ).bind(parent.id, member, now),
     env.DB.prepare(
+      `INSERT INTO thread_schedule (thread_id, owner_user_id, title, prompt, rrule, time_zone, label, run_mode, enabled, next_run_at, created_at, updated_at)
+       VALUES (?, ?, 'Nightly', 'Run it', 'FREQ=DAILY', 'UTC', 'Daily', 'existing', 1, ?, ?, ?)`,
+    ).bind(parent.id, owner, now, now, now),
+    env.DB.prepare(
+      `INSERT INTO github_subscription (id, owner_user_id, thread_id, title, repository, filter_kind, filter_json, destination, automatic, enabled, state, equivalence_key, next_poll_at, created_at, updated_at)
+       VALUES (?, ?, ?, 'CI', 'o/r', 'ci', '{}', 'this-thread', 0, 1, 'active', ?, ?, ?, ?)`,
+    ).bind(
+      `ghs_${"d".repeat(32)}`,
+      owner,
+      parent.id,
+      "e".repeat(64),
+      now,
+      now,
+      now,
+    ),
+    env.DB.prepare(
       "UPDATE threads SET agent_instructions = ?, parent_thread_id = NULL WHERE id = ?",
     ).bind(secret, parent.id),
     env.DB.prepare("UPDATE threads SET parent_thread_id = ? WHERE id = ?").bind(
@@ -377,12 +393,15 @@ describe("Thread deletion in workerd with real D1, R2, and Durable Objects", () 
     });
     expect(deletion?.completed_at).toEqual(expect.any(String));
 
-    // Notifications, sidebar placement, and sharing records are gone.
+    // Notifications, sidebar placement, sharing records, and automations
+    // that would wake it are gone.
     for (const table of [
       "notification",
       "thread_follower",
       "thread_participant",
       "thread_seen",
+      "thread_schedule",
+      "github_subscription",
     ])
       expect(
         await count(

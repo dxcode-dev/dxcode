@@ -6,12 +6,12 @@ import {
 } from "@dx/api";
 import { newThreadId, type ProjectId, type ThreadId } from "@dx/domain";
 import {
-  createFlueClient,
-  FlueApiError,
-  type FlueClient,
   type AgentConversationObservation,
   type AgentConversationObservationSnapshot,
   type AgentSendResult,
+  createFlueClient,
+  FlueApiError,
+  type FlueClient,
   type FlueConversationSnapshot,
   FlueExecutionError,
 } from "@flue/sdk";

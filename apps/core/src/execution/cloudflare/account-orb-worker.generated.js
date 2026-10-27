@@ -2313,6 +2313,7 @@ getLogger([
 	"source-control",
 	"audit"
 ]);
+getLogger(["dx", "automations"]);
 //#endregion
 //#region apps/core/src/execution/cloudflare/orb-container.ts
 var STATE_KEY = "workspace";

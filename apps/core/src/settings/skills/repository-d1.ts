@@ -1,14 +1,14 @@
 import {
   PersistenceUnavailable,
+  type SkillId,
   SkillIntegrityConflict,
   SkillNotFound,
   SkillRepository,
+  type SkillTarget,
+  type SkillVersion,
   StoredSkill,
   StoredSkillVersion,
   Timestamp,
-  type SkillId,
-  type SkillTarget,
-  type SkillVersion,
 } from "@dx/domain";
 import { Effect, Layer, Schema, SchemaTransformation } from "effect";
 

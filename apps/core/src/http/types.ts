@@ -131,6 +131,11 @@ export interface Variables {
    * this request's message, shown as its source in the receiving Thread.
    */
   readonly messageSourceThreadId?: string;
+  /**
+   * Set only in-process by the automation sweep: the schedule or GitHub
+   * subscription that delivers this request's message.
+   */
+  readonly messageAutomation?: "schedule" | "github";
 }
 
 export interface AppEnv {

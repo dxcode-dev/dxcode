@@ -25,7 +25,7 @@ import {
   notificationPreferenceRoutes,
   notificationRoutes,
 } from "../../src/notifications/routes.js";
-import { SNOOZE_SWEEP_CRON } from "../../src/notifications/snooze-cron.js";
+import { THREAD_SWEEP_CRON } from "../../src/notifications/snooze-cron.js";
 import { sweepSnoozeWakes } from "../../src/notifications/snooze-wake.js";
 import { notifyTurnCompleted } from "../../src/notifications/turn-completed.js";
 import { observeFlueEvent } from "../../src/observability/flue.js";
@@ -912,7 +912,7 @@ describe("Push notifications, in workerd with real D1 and WebCrypto", () => {
     const context = createExecutionContext();
     await worker.scheduled(
       createScheduledController({
-        cron: SNOOZE_SWEEP_CRON,
+        cron: THREAD_SWEEP_CRON,
         scheduledTime: Date.now(),
       }),
       bindings,
@@ -1033,6 +1033,12 @@ describe("Push notifications, in workerd with real D1 and WebCrypto", () => {
         topic: "snooze_woke",
         channel: "push",
         title: "Snoozed Thread push",
+        enabled: true,
+      },
+      {
+        topic: "agent_notification",
+        channel: "push",
+        title: "Agent notification push",
         enabled: true,
       },
     ]);

@@ -1,21 +1,22 @@
 import { purgeUnsentAttachments } from "./attachments/store.js";
 import { attachmentTransfer } from "./attachments/transfer.js";
+import { sweepAutomations } from "./automations/sweep.js";
 import type { Bindings } from "./http/types.js";
 import {
   attachmentLogger,
   notificationLogger,
   threadDeletionLogger,
 } from "./logging.js";
-import { SNOOZE_SWEEP_CRON } from "./notifications/snooze-cron.js";
+import { THREAD_SWEEP_CRON } from "./notifications/snooze-cron.js";
 import { sweepSnoozeWakes } from "./notifications/snooze-wake.js";
 import { scheduleUsageRetention } from "./settings/usage/retention.js";
 import { sweepThreadDeletions } from "./thread-deletion/cleanup.js";
 import { deployedThreadCleanup } from "./thread-deletion/routes.js";
 
 /**
- * The Worker's cron handler. Every tick sweeps snoozed Threads and retries
- * unfinished Thread deletions; the daily tick also runs usage and
- * attachment retention.
+ * The Worker's cron handler. Every tick sweeps snoozed Threads, retries
+ * unfinished Thread deletions, fires due schedules, and polls GitHub
+ * subscriptions; the daily tick also runs usage and attachment retention.
  */
 export const scheduled = (
   controller: ScheduledController,
@@ -49,7 +50,14 @@ export const scheduled = (
       }),
     ),
   );
-  if (controller.cron === SNOOZE_SWEEP_CRON) return;
+  // Schedules and GitHub events wake Threads; a dx run ends with its turn,
+  // so nothing else would (automations/wake.ts).
+  context.waitUntil(
+    sweepAutomations(bindings, new Date(controller.scheduledTime), (promise) =>
+      context.waitUntil(promise),
+    ),
+  );
+  if (controller.cron === THREAD_SWEEP_CRON) return;
   scheduleUsageRetention(controller, bindings, context);
   const transfer = attachmentTransfer(bindings);
   if (transfer === undefined) return;

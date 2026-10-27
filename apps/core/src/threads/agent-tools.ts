@@ -59,7 +59,7 @@ const pause = (milliseconds: number, signal: AbortSignal | undefined) =>
     signal?.addEventListener("abort", abort, { once: true });
   });
 
-const sha256Hex = async (seed: string) =>
+export const sha256Hex = async (seed: string) =>
   Array.from(
     new Uint8Array(
       await crypto.subtle.digest("SHA-256", new TextEncoder().encode(seed)),
@@ -68,7 +68,7 @@ const sha256Hex = async (seed: string) =>
   ).join("");
 
 /** A stable Thread ID per tool call, so a retried call reuses its Thread. */
-const idempotentThreadId = async (seed: string) => {
+export const idempotentThreadId = async (seed: string) => {
   const hex = (await sha256Hex(seed)).slice(0, 32);
   const variant = ((Number.parseInt(hex[16] ?? "0", 16) & 0x3) | 0x8).toString(
     16,
@@ -130,7 +130,7 @@ const AGENT_MODES = [
  * calling Thread's Claude Code model or the default; at the calling Thread's
  * Claude Code effort or the default.
  */
-const agentModeSelection = (
+export const agentModeSelection = (
   agentMode: string,
   caller: ThreadModelSelection | undefined,
 ): ThreadModelSelection => {

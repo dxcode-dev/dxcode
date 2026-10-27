@@ -1,6 +1,6 @@
 import {
-  EnvironmentVariableConflict,
   type EnvironmentVariableAuditEvent,
+  EnvironmentVariableConflict,
   EnvironmentVariableName,
   EnvironmentVariableNotFound,
   EnvironmentVariablePlaintext,

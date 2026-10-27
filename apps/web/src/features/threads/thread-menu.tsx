@@ -8,14 +8,17 @@ import {
   Archive,
   ArchiveRestore,
   Braces,
+  CalendarClock,
   Check,
   ChevronRight,
+  CircleCheck,
   Copy,
   Ellipsis,
   FileDown,
   FileText,
   FolderGit2,
   Gauge,
+  GitPullRequest,
   Hash,
   Link2,
   Pencil,
@@ -43,6 +46,7 @@ import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
 import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
 import { ThreadColorSubmenu } from "../../shared/ui/thread-color-submenu.js";
 import { SnoozeMenuItems } from "../../shared/ui/thread-snooze-menu.js";
+import type { AutomationView } from "./automations/automations-queries.js";
 import {
   serializeThreadJson,
   serializeThreadMarkdown,
@@ -87,6 +91,8 @@ export function ThreadMenu({
   project,
   transcript,
   onOpenShare,
+  automationViews = [],
+  onOpenAutomations,
   showDetails = false,
 }: {
   readonly thread: ThreadDetailData;
@@ -94,6 +100,15 @@ export function ThreadMenu({
   /** Reads the shown transcript when an export runs. */
   readonly transcript: () => TranscriptViewModel;
   readonly onOpenShare?: () => void;
+  /**
+   * The header entries a phone has no room for: the Thread's pull requests,
+   * CI, and schedule and GitHub listeners, each opened as a sheet.
+   */
+  readonly automationViews?: ReadonlyArray<{
+    readonly view: AutomationView;
+    readonly label: string;
+  }>;
+  readonly onOpenAutomations?: (view: AutomationView) => void;
   /**
    * Adds what the Thread runs on and its Project, which a phone's header has
    * no room for.
@@ -226,6 +241,24 @@ export function ThreadMenu({
                   <span>Share…</span>
                 </Menu.Item>
               )}
+              {onOpenAutomations === undefined
+                ? null
+                : automationViews.map(({ view, label }) => (
+                    <Menu.Item
+                      key={view}
+                      className="thread-menu-item"
+                      onClick={() => onOpenAutomations(view)}
+                    >
+                      {view === "pulls" ? (
+                        <GitPullRequest />
+                      ) : view === "ci" ? (
+                        <CircleCheck />
+                      ) : (
+                        <CalendarClock />
+                      )}
+                      <span>{label}</span>
+                    </Menu.Item>
+                  ))}
               {editable ? (
                 <>
                   {thread.lifecycleState === "active" ? (

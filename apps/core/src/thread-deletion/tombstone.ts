@@ -18,8 +18,8 @@ const tombstoneOf = (column: string) => `${column} IN (
  * Turns the owner's live Threads into tombstones in one D1 transaction. Each
  * row stays, so its ID can never be issued again. Titles, instructions, and
  * snapshots are scrubbed. Their child Threads become top-level Threads.
- * Their notifications, sidebar placement, sharing records, and who saw them
- * are removed, and each deletion is recorded for cleanup. Returns the Threads
+ * Their notifications, sidebar placement, sharing records, who saw them,
+ * schedules, and GitHub subscriptions are removed, and each deletion is recorded for cleanup. Returns the Threads
  * it tombstoned: one already deleted, or not the owner's, is left out.
  */
 export const tombstoneThreads = async (
@@ -89,6 +89,16 @@ export const tombstoneThreads = async (
       .bind(ids, ownerUserId),
     db
       .prepare(`DELETE FROM thread_seen WHERE ${tombstoneOf("thread_id")}`)
+      .bind(ids, ownerUserId),
+    // A deleted Thread's schedule and GitHub subscriptions must stop waking
+    // anything; a subscription's delivered events go with it.
+    db
+      .prepare(`DELETE FROM thread_schedule WHERE ${tombstoneOf("thread_id")}`)
+      .bind(ids, ownerUserId),
+    db
+      .prepare(
+        `DELETE FROM github_subscription WHERE ${tombstoneOf("thread_id")}`,
+      )
       .bind(ids, ownerUserId),
   ]);
   return (tombstoned?.results ?? []).map((row) => (row as { id: ThreadId }).id);

@@ -92,14 +92,23 @@ const preTurnstileBindingOmissions = [
   "DX_TURNSTILE_SECRET_KEY",
   "DX_TURNSTILE_SITE_KEY",
 ];
-// SNOOZE_SWEEP_CRON in apps/core/src/notifications/snooze-cron.ts. Every
-// stage sweeps snoozed Threads; staging also keeps its daily retention pass.
+// THREAD_SWEEP_CRON in apps/core/src/notifications/snooze-cron.ts. Every
+// stage sweeps snoozed Threads, schedules, and GitHub subscriptions each
+// minute; staging also keeps its daily retention pass.
 const workerCrons = (selection) =>
   selection.environment === "staging"
-    ? ["17 3 * * *", "*/5 * * * *"]
-    : ["*/5 * * * *"];
-const prePushWorkerCrons = (selection) =>
-  selection.environment === "staging" ? ["17 3 * * *"] : [];
+    ? ["17 3 * * *", "* * * * *"]
+    : ["* * * * *"];
+// Schedules a stage may still carry from before: none before push
+// notifications, then the five-minute snooze sweep before schedules.
+const priorWorkerCrons = (selection) =>
+  selection.environment === "staging"
+    ? [["17 3 * * *"], ["17 3 * * *", "*/5 * * * *"]]
+    : [[], ["*/5 * * * *"]];
+const isPriorWorkerCrons = (crons, selection) =>
+  priorWorkerCrons(selection).some(
+    (prior) => JSON.stringify(crons) === JSON.stringify(prior),
+  );
 const destroyWorkerBindingOmissions = new Set([
   "BYOK_CREDENTIAL_COORDINATOR",
   "DX_AUTH_EMAIL_FROM",
@@ -1208,13 +1217,13 @@ const validateWorkerProps = (
     preTurnstileBindingOmissions.every((name) =>
       missingEnvironmentNames.includes(name),
     );
-  // A stage deployed before push notifications has no snooze sweep schedule;
-  // admit it only as history. Its missing VAPID pair is optional anyway.
+  // A stage deployed before push notifications has no sweep schedule, and
+  // one deployed before schedules sweeps every five minutes; admit either
+  // only as history. A missing VAPID pair is optional anyway.
   const prePushSchedule =
     !current &&
     (representation === "persisted" || representation === "prior") &&
-    JSON.stringify(props.crons) ===
-      JSON.stringify(prePushWorkerCrons(selection));
+    isPriorWorkerCrons(props.crons, selection);
   const preBranchPreviewIdentity =
     !current &&
     selection.target === "branch" &&
@@ -1842,8 +1851,7 @@ const isRecoveredWorkerAttr = (attr, selection) => {
     isExactInterruptedWorkerIdentity(attr, selection, true) &&
     (JSON.stringify(attr.crons) === "[]" ||
       JSON.stringify(attr.crons) === JSON.stringify(workerCrons(selection)) ||
-      JSON.stringify(attr.crons) ===
-        JSON.stringify(prePushWorkerCrons(selection))) &&
+      isPriorWorkerCrons(attr.crons, selection)) &&
     (JSON.stringify(attr.urls) === "[]" ||
       JSON.stringify(attr.urls) === JSON.stringify([url])) &&
     (attr.url === undefined || attr.url === url) &&
@@ -2510,12 +2518,15 @@ const droppedBranchBindingTypes = new Set(["plain_text", "secret_text"]);
  * A branch preview is deployed from the PR workflow and from Orbs, whose
  * environments set different optional variables and secrets; a deploy may
  * remove a text or secret binding that its own configuration no longer sets.
- * Staging and self-hosted deploys never drop one.
+ * Staging drops one only when the operator names it for that run in
+ * DX_DEPLOYMENT_DROP_BINDINGS; self-hosted deploys never drop one.
  */
 const isDroppedBranchBinding = (binding, node, selection) => {
   const bindings = binding.data?.bindings;
   return (
-    selection.target === "branch" &&
+    (selection.target === "branch" ||
+      (selection.target === "staging" &&
+        (selection.droppedBindings ?? []).includes(binding.sid))) &&
     binding.action === "delete" &&
     typeof binding.sid === "string" &&
     !Object.hasOwn(node.resource?.Props?.env ?? {}, binding.sid) &&

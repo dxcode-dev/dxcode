@@ -2,8 +2,8 @@ import {
   createLocalJWKSet,
   exportJWK,
   generateKeyPair,
-  SignJWT,
   type JWTPayload,
+  SignJWT,
 } from "jose";
 import { beforeAll, describe, expect, it } from "vitest";
 import {

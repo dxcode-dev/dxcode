@@ -16,7 +16,28 @@ export const GITHUB_APP_ORGANIZATION_PERMISSIONS = {
   projects: "write",
 } as const;
 
-export const GITHUB_APP_EVENTS = ["repository"] as const;
+/**
+ * The events the dx GitHub App subscribes to: `repository` for its
+ * lifecycle, and the rest for agents' GitHub subscriptions. A deployment
+ * may still list only `repository`; its subscriptions then hear nothing.
+ */
+export const GITHUB_APP_EVENTS = [
+  "repository",
+  "check_run",
+  "check_suite",
+  "status",
+  "workflow_run",
+  "pull_request",
+  "pull_request_review",
+  "pull_request_review_comment",
+  "issue_comment",
+  "issues",
+] as const;
+
+/** Exactly `repository`, or exactly every event above. */
+export const isGitHubAppEventList = (events: unknown) =>
+  JSON.stringify(events) === JSON.stringify(["repository"]) ||
+  JSON.stringify(events) === JSON.stringify(GITHUB_APP_EVENTS);
 
 const NonEmpty = Schema.String.check(
   Schema.isMinLength(1),
@@ -56,7 +77,9 @@ const DeploymentConfiguration = Schema.Struct({
   organizationPermissions: Schema.Struct({
     projects: Schema.Literal("write"),
   }),
-  events: Schema.Tuple([Schema.Literal("repository")]),
+  events: Schema.Array(Schema.Literals(GITHUB_APP_EVENTS)).check(
+    Schema.makeFilter((events) => isGitHubAppEventList(events)),
+  ),
 });
 
 export type GitHubAppDeploymentConfiguration =

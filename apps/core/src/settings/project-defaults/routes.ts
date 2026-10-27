@@ -17,10 +17,10 @@ import {
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Result, Schema } from "effect";
-import { Hono, type Context } from "hono";
+import { type Context, Hono } from "hono";
 import {
-  loadRunnerProfileCatalog,
   type LoadedRunnerProfileCatalog,
+  loadRunnerProfileCatalog,
   RunnerProfileConfigurationUnavailable,
   RunnerProfileUnavailable,
 } from "../../execution/runner-profiles/catalog.js";
@@ -38,9 +38,9 @@ import { WorkspacePolicyRepositoryD1 } from "../workspace-policy/repository-d1.j
 import { WorkspacePolicyService } from "../workspace-policy/service.js";
 import { ProjectDefaultsRepositoryD1 } from "./repository-d1.js";
 import {
+  type PersonalProjectDefaultsView,
   ProjectDefaultsService,
   ProjectPolicyForbidden,
-  type PersonalProjectDefaultsView,
   type WorkspaceProjectDefaultsView,
 } from "./service.js";
 

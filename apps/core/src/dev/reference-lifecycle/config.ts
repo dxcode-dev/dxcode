@@ -1,3 +1,4 @@
+import { ProjectId, ProjectNameInput } from "@dx/domain";
 import {
   Config,
   ConfigProvider,
@@ -6,7 +7,6 @@ import {
   type Redacted,
   Schema,
 } from "effect";
-import { ProjectId, ProjectNameInput } from "@dx/domain";
 
 export class ReferenceLifecycleConfigurationError extends Schema.TaggedError<ReferenceLifecycleConfigurationError>()(
   "ReferenceLifecycleConfigurationError",

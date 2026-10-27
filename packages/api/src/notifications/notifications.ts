@@ -11,6 +11,7 @@ export const NotificationTopicSchema = Schema.Literals([
   "mention",
   "turn_completed",
   "snooze_woke",
+  "agent_notification",
 ]);
 
 export type NotificationTopic = typeof NotificationTopicSchema.Type;

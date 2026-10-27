@@ -24,9 +24,9 @@ import {
   formatBytes,
   SandboxPdfInvalid,
   sandboxFileMetadataOptions,
-  showBlobInFrame,
   sandboxFilePreviewOptions,
   sandboxPdfOptions,
+  showBlobInFrame,
 } from "./sandbox-file-queries.js";
 
 const errorMessage = (error: unknown) =>

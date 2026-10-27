@@ -1,3 +1,4 @@
+import { isGitHubAppEventList } from "@dx/domain";
 import { Config, ConfigProvider, Effect, Predicate, Schema } from "effect";
 import migrationManifest from "../../migration-manifest.json" with {
   type: "json",
@@ -319,8 +320,7 @@ const githubConfigurationCategory = (
     value.permissionManifestVersion !== 1
   )
     return "github_app_permission_drift";
-  if (JSON.stringify(value.events) !== JSON.stringify(["repository"]))
-    return "github_app_event_drift";
+  if (!isGitHubAppEventList(value.events)) return "github_app_event_drift";
   if (value.expiringUserTokens !== true)
     return "github_app_expiring_token_drift";
   try {

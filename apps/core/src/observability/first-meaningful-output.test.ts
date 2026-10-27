@@ -1,4 +1,10 @@
 import {
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxText,
+  fauxThinking,
+} from "@earendil-works/pi-ai/providers/faux";
+import {
   type AgentProps,
   type FlueObservation,
   init,
@@ -6,12 +12,6 @@ import {
   useModel,
 } from "@flue/runtime";
 import { start } from "@flue/runtime/node";
-import {
-  fauxAssistantMessage,
-  fauxProvider,
-  fauxText,
-  fauxThinking,
-} from "@earendil-works/pi-ai/providers/faux";
 import { afterAll, beforeAll, expect, it } from "vitest";
 
 const provider = fauxProvider();

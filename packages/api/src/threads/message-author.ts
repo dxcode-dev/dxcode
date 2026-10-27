@@ -42,7 +42,15 @@ export interface MessageAuthorTag {
    * idempotency key, so a retry carries the same tag.
    */
   readonly messageId?: string;
+  /**
+   * What delivered this message on the owner's behalf after a turn ended:
+   * the Thread's schedule, or a GitHub subscription. Only the server sets it.
+   */
+  readonly automation?: MessageAutomation;
 }
+
+/** Senders that wake a Thread on the owner's behalf. */
+export type MessageAutomation = "schedule" | "github";
 
 /** Tagging the agent sends a message to it, even beside member tags. */
 export const AGENT_MENTION = "dx";
@@ -74,6 +82,7 @@ export const formatMessageAuthor = ({
   mentions = [],
   sourceThreadId,
   messageId,
+  automation,
 }: MessageAuthorTag) =>
   `<${TAG} role="${author.role}" user_id="${escapeAttribute(author.userId)}" identifier="${escapeAttribute(author.name)}"${
     author.handle === undefined
@@ -89,7 +98,7 @@ export const formatMessageAuthor = ({
       : ` source_thread="${escapeAttribute(sourceThreadId)}"`
   }${
     messageId === undefined ? "" : ` message_id="${escapeAttribute(messageId)}"`
-  } />\n`;
+  }${automation === undefined ? "" : ` automation="${automation}"`} />\n`;
 
 /**
  * Removes every author tag from text a person wrote, repeating until none is
@@ -120,6 +129,7 @@ export const parseMessageAuthor = (
   readonly mentions?: ReadonlyArray<MessageMention>;
   readonly sourceThreadId?: string;
   readonly messageId?: string;
+  readonly automation?: MessageAutomation;
   readonly text: string;
 } => {
   const match = leadingTag.exec(text);
@@ -157,6 +167,10 @@ export const parseMessageAuthor = (
       : {}),
     ...(fields.get("message_id")
       ? { messageId: fields.get("message_id") }
+      : {}),
+    ...(fields.get("automation") === "schedule" ||
+    fields.get("automation") === "github"
+      ? { automation: fields.get("automation") as MessageAutomation }
       : {}),
     text: rest,
   };

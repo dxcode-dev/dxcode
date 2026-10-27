@@ -21,6 +21,7 @@ import { installFlueObservation } from "./observability/flue.js";
 import { installRuntimeTracing } from "./observability/platform-tracing.js";
 import { threadOrbDiskRoutes } from "./orb-disk/routes.js";
 import { threadOrbMemoryRoutes } from "./orb-memory/routes.js";
+import { threadAutomationRoutes } from "./automations/routes.js";
 import { portalAuthRoutes } from "./portals/auth-routes.js";
 import { portalHostRouting } from "./portals/host-routing.js";
 import { threadPortalRoutes } from "./portals/routes.js";
@@ -126,6 +127,9 @@ app.use("/v1/threads/:threadId/memory/*", authorizeThread);
 app.route("/v1/threads", threadOrbMemoryRoutes);
 app.use("/v1/threads/:threadId/disk/*", authorizeThread);
 app.route("/v1/threads", threadOrbDiskRoutes);
+// `/automations/*` also matches `/automations`; see Portals above.
+app.use("/v1/threads/:threadId/automations/*", authorizeThread);
+app.route("/v1/threads", threadAutomationRoutes);
 app.use("/v1/threads/:threadId/desktop/*", authorizeThread);
 app.use("/v1/threads/:threadId/desktop/*", enforceThreadActive);
 app.route("/v1/threads", threadDesktopRoutes);

@@ -1,6 +1,6 @@
-import type { MessageAttachment } from "@dx/api";
 import { Dialog } from "@base-ui/react/dialog";
 import { Popover } from "@base-ui/react/popover";
+import type { MessageAttachment } from "@dx/api";
 import {
   ChevronLeft,
   ChevronRight,

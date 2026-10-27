@@ -4,8 +4,8 @@ import {
   type SettingsMembershipInvariantViolation,
   SettingsScopeForbidden,
   type SettingsWorkspaceMembership,
-  type WorkspaceSlug,
   WorkspaceRepository,
+  type WorkspaceSlug,
 } from "@dx/domain";
 import { Context, Effect, Layer, Option, type Schema } from "effect";
 

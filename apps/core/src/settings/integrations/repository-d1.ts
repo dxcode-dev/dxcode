@@ -1,16 +1,16 @@
 import {
   EnvironmentVariableId,
+  type GitIntegrationProvider,
   IntegrationConnection,
   IntegrationConnectionNotFound,
   IntegrationOAuthStateInvalid,
+  type IntegrationOwner,
   IntegrationRepository,
   IntegrationRepositoryStore,
   integrationCredentialReferenceFor,
   PersistenceUnavailable,
-  Timestamp,
-  type GitIntegrationProvider,
-  type IntegrationOwner,
   type StoredIntegrationOAuthTransaction,
+  Timestamp,
 } from "@dx/domain";
 import { Effect, Layer, Schema } from "effect";
 

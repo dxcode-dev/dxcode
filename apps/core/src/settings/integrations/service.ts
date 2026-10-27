@@ -1,13 +1,13 @@
 import {
+  type GitIntegrationProvider,
   IntegrationConnection,
   IntegrationConnectionId,
+  type IntegrationDisconnectImpact,
   IntegrationOAuthStateInvalid,
   IntegrationOAuthTransactionId,
+  type IntegrationOwner,
   IntegrationRepository,
   IntegrationRepositoryStore,
-  type GitIntegrationProvider,
-  type IntegrationDisconnectImpact,
-  type IntegrationOwner,
   type ProviderRepositoryId,
   Timestamp,
   type UserId,
@@ -19,11 +19,11 @@ import { WorkspacePolicyService } from "../workspace-policy/service.js";
 import { IntegrationCredentialVault } from "./credential-vault.js";
 import {
   createOAuthProof,
+  type GitProviderClient,
   hashOAuthState,
   IntegrationProviderRequestFailed,
   IntegrationRepositoryForbidden,
   oauthTransactionExpiresAt,
-  type GitProviderClient,
   type ProviderRepository,
   type ProviderTokenSet,
 } from "./provider-registry.js";

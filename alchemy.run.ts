@@ -19,7 +19,7 @@ import migrationManifest from "./apps/core/migration-manifest.json" with {
 import productionBindingContract from "./apps/core/production-bindings.json" with {
   type: "json",
 };
-import { SNOOZE_SWEEP_CRON } from "./apps/core/src/notifications/snooze-cron.ts";
+import { THREAD_SWEEP_CRON } from "./apps/core/src/notifications/snooze-cron.ts";
 import { portalDomainSharesSite } from "./apps/core/src/portals/portal-site.ts";
 import {
   E2BProfiles,
@@ -1010,12 +1010,13 @@ export default Alchemy.Stack(
           persist: true,
         },
       },
-      // Every stage sweeps snoozed Threads, which is how their owners hear
-      // about a wake; only staging also runs the daily retention pass.
+      // Every stage sweeps snoozed Threads, schedules, and GitHub
+      // subscriptions each minute, which is how work after a turn starts;
+      // only staging also runs the daily retention pass.
       crons:
         configuration.environment === "staging"
-          ? ["17 3 * * *", SNOOZE_SWEEP_CRON]
-          : [SNOOZE_SWEEP_CRON],
+          ? ["17 3 * * *", THREAD_SWEEP_CRON]
+          : [THREAD_SWEEP_CRON],
       workersDev: !Option.isSome(configuration.deploymentZone),
       ...(Option.isSome(configuration.deploymentZone)
         ? {

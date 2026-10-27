@@ -23,6 +23,7 @@ import {
   requireBrowserSession,
 } from "../../auth/browser-session.js";
 import { loadAuthenticationRequirements } from "../../auth/requirements.js";
+import { deliverGitHubWebhook } from "../../automations/deliver.js";
 import type { AppEnv } from "../../http/types.js";
 import { sourceControlLogger } from "../../logging.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
@@ -529,6 +530,20 @@ githubWebhookRoutes.post("/webhooks", (context) =>
           event: context.req.header("x-github-event") ?? "",
           signature: context.req.header("x-hub-signature-256") ?? "",
           body,
+          // Waking Threads outlasts GitHub's 10-second webhook budget.
+          onSubscriptionEvent: async (event, action, payload) => {
+            const waitUntil = (promise: Promise<unknown>) =>
+              context.executionCtx.waitUntil(promise);
+            waitUntil(
+              deliverGitHubWebhook(
+                context.env,
+                event,
+                action,
+                payload,
+                waitUntil,
+              ),
+            );
+          },
         }),
       );
     },

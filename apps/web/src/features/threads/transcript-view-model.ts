@@ -1,6 +1,7 @@
 import {
   type MessageAttachment,
   type MessageAuthor,
+  type MessageAutomation,
   type MessageMention,
   parseMessageAttachments,
   parseMessageAuthor,
@@ -45,6 +46,8 @@ export type TranscriptRow =
       readonly continued?: true;
       /** Another of the owner's Threads sent it with a Thread tool. */
       readonly sourceThreadId?: string;
+      /** The Thread's schedule or a GitHub subscription delivered it. */
+      readonly automation?: MessageAutomation;
       /** dx's name for a message that tags someone; notifications link to it. */
       readonly dxMessageId?: string;
     } & TranscriptRowBase &
@@ -240,7 +243,8 @@ const messageRows = (
     if (part.type === "text") {
       if (message.role === "user") {
         const parsedAuthor = parseMessageAuthor(part.text);
-        const { author, mentions, sourceThreadId, messageId } = parsedAuthor;
+        const { author, mentions, sourceThreadId, messageId, automation } =
+          parsedAuthor;
         const { attachments, text } = parseMessageAttachments(
           parsedAuthor.text,
         );
@@ -254,6 +258,7 @@ const messageRows = (
           ...(author === undefined ? {} : { author }),
           ...(mentions === undefined ? {} : { mentions }),
           ...(sourceThreadId === undefined ? {} : { sourceThreadId }),
+          ...(automation === undefined ? {} : { automation }),
           ...(messageId === undefined ? {} : { dxMessageId: messageId }),
           admitted: message.submissionId !== undefined,
           ...(sentAt === undefined ? {} : { sentAt }),
@@ -320,7 +325,8 @@ const continuesPrompt = (
   previous.author?.userId === row.author.userId &&
   // A message another Thread sent carries the owner's id; it neither
   // continues nor is continued by the owner's own messages.
-  previous.sourceThreadId === row.sourceThreadId;
+  previous.sourceThreadId === row.sourceThreadId &&
+  previous.automation === row.automation;
 
 /** What a turn derives from; the same inputs give the same turn. */
 interface TurnInputs {
@@ -989,6 +995,7 @@ export const sameTranscriptRow = (a: TranscriptRow, b: TranscriptRow) => {
       a.sentAt !== b.sentAt ||
       a.continued !== b.continued ||
       a.sourceThreadId !== b.sourceThreadId ||
+      a.automation !== b.automation ||
       a.mentions?.length !== b.mentions?.length)
   )
     return false;

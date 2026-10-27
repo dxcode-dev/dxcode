@@ -26,7 +26,7 @@ guide](https://docs.github.com/en/apps/creating-github-apps/registering-a-github
 7. Enable webhooks. Set the webhook URL to
    `<deployment-origin>/v1/integrations/github/webhooks`, create a strong random
    webhook secret, and keep SSL verification enabled.
-8. Select only the permissions and event listed below.
+8. Select only the permissions and events listed below.
 9. Choose whether the app can be installed only on its owner or on any account,
    then create it.
 
@@ -53,7 +53,12 @@ GitHub explains how each permission affects available API operations in its
 | Workflows | Read and write |
 
 Set the organization **Projects** permission to **Read and write**. Subscribe
-only to the **Repository** event.
+to the **Repository**, **Check run**, **Check suite**, **Status**, **Workflow
+run**, **Pull request**, **Pull request review**, **Pull request review
+comment**, **Issue comment**, and **Issues** events. dx uses the events after
+Repository to wake Threads that subscribed to CI results, pull request
+comments, or new issues. An App that subscribes only to Repository is still
+accepted, but its Threads receive no GitHub events.
 
 ## Create the installer JSON
 
@@ -100,7 +105,18 @@ The installer accepts this exact versioned object:
   "organizationPermissions": {
     "projects": "write"
   },
-  "events": ["repository"]
+  "events": [
+    "repository",
+    "check_run",
+    "check_suite",
+    "status",
+    "workflow_run",
+    "pull_request",
+    "pull_request_review",
+    "pull_request_review_comment",
+    "issue_comment",
+    "issues"
+  ]
 }
 ```
 

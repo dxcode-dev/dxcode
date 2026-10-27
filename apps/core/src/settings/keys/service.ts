@@ -5,15 +5,15 @@ import {
   type SigningBackendCapability,
   SigningKeyId,
   SigningKeyRepository,
+  type SigningPublicKey,
   StoredPersonalSigningKey,
   type UserId,
   VerificationKeyId,
   type VerificationKeyName,
-  type SigningPublicKey,
 } from "@dx/domain";
 import { Context, DateTime, Effect, Layer, Schema } from "effect";
-import type { ConfigEncryptionKeyring } from "../config-encryption.js";
 import { SettingsAudit } from "../audit.js";
+import type { ConfigEncryptionKeyring } from "../config-encryption.js";
 import { encryptSigningPrivateKey } from "./encryption.js";
 import {
   canonicalizeSigningPublicKey,

@@ -142,8 +142,11 @@ function AgentTranscriptHeader({
 
 function AgentTranscriptFooter({
   statusMessage,
+  idleEnd,
 }: {
   readonly statusMessage?: string;
+  /** Shown while no run is active, such as when the schedule runs next. */
+  readonly idleEnd?: React.ReactNode;
 }) {
   return (
     <>
@@ -154,6 +157,7 @@ function AgentTranscriptFooter({
           label={statusMessage}
         />
       )}
+      {idleEnd}
     </>
   );
 }
@@ -1033,6 +1037,8 @@ export interface AgentPanelOptions {
   readonly composerNotice?:
     | React.ReactNode
     | ((send: (message: string) => void) => React.ReactNode);
+  /** The transcript's last line while no run is active. */
+  readonly transcriptEnd?: React.ReactNode;
   readonly optimisticCreation?: OptimisticThreadCreation;
   readonly onInitialSubmissionObserved?: (submissionId: string) => void;
   readonly onOpenModelRouting?: () => void;
@@ -1454,6 +1460,7 @@ export function AgentPanel({
   workspaceReady = false,
   workspaceStatus,
   composerNotice,
+  transcriptEnd,
   optimisticCreation,
   onInitialSubmissionObserved,
   onOpenModelRouting,
@@ -1602,7 +1609,14 @@ export function AgentPanel({
             archived ? (
               errorCard
             ) : (
-              <AgentTranscriptFooter statusMessage={statusMessage} />
+              <AgentTranscriptFooter
+                statusMessage={statusMessage}
+                idleEnd={
+                  agentActive || statusMessage !== undefined
+                    ? undefined
+                    : transcriptEnd
+                }
+              />
             )
           }
           optimisticCreation={optimisticCreation}

@@ -9,6 +9,10 @@ import {
 import { invalidateSidebarLayout } from "../../navigation/sidebar-layout-queries.js";
 import { invalidateNotifications } from "../../notifications/notifications-queries.js";
 import {
+  invalidateAllThreadAutomations,
+  invalidateThreadAutomations,
+} from "../automations/automations-queries.js";
+import {
   invalidateAllChanges,
   invalidateChangesRanges,
 } from "../changes/changes-queries.js";
@@ -48,6 +52,7 @@ const invalidateAllRealtimeState = (
   void invalidateAllChanges(queryClient);
   void invalidateAllOrbMemory(queryClient);
   void invalidateAllOrbDisk(queryClient);
+  void invalidateAllThreadAutomations(queryClient);
   void invalidateNotifications(queryClient, userId);
   void invalidateSidebarLayout(queryClient, userId);
 };
@@ -258,6 +263,7 @@ export class RealtimeClient {
         this.#send("presence.join", `thread:${event.threadId}`);
       }
       this.#rows.threadChanged(event.threadId);
+      void invalidateThreadAutomations(this.#queryClient, event.threadId);
     } else if (event.type === "readiness.invalidated") {
       void invalidateReadinessQuery(
         this.#queryClient,

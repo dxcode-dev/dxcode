@@ -64,6 +64,16 @@ const selection = {
       }
     : {}),
   databaseId: process.env.DX_DEPLOYMENT_DATABASE_ID?.trim() || undefined,
+  // Staging only: text or secret bindings this one run may remove, by name.
+  droppedBindings: (() => {
+    const names = (process.env.DX_DEPLOYMENT_DROP_BINDINGS ?? "")
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean);
+    if (names.length > 0 && target !== "staging")
+      throw new Error("DX_DEPLOYMENT_DROP_BINDINGS applies only to staging.");
+    return names;
+  })(),
   deploymentLabel: required("DX_DEPLOYMENT_LABEL"),
   dxdChecksum: required("DX_DEPLOYMENT_DXD_CHECKSUM"),
   dxdReleaseUrl: required("DX_DEPLOYMENT_DXD_RELEASE_URL"),

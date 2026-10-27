@@ -32,15 +32,19 @@ export interface NotificationEvent {
   readonly actorUserId?: UserId;
   /** What was said, as plain text. */
   readonly excerpt: string;
+  /** A headline the sender chose (the agent's `notify_user` title). */
+  readonly subject?: string;
 }
 
 const EXCERPT_LENGTH = 280;
+/** `notify_user` promises the agent room for a 300-character body. */
+const AGENT_NOTIFICATION_EXCERPT_LENGTH = 300;
 
-const excerptOf = (text: string) => {
+const excerptOf = (text: string, limit: number) => {
   const trimmed = text.trim();
-  return trimmed.length <= EXCERPT_LENGTH
+  return trimmed.length <= limit
     ? trimmed
-    : `${trimmed.slice(0, EXCERPT_LENGTH - 1).trimEnd()}…`;
+    : `${trimmed.slice(0, limit - 1).trimEnd()}…`;
 };
 
 /**
@@ -75,7 +79,12 @@ export const publishNotification = async (
   const recipients = [...new Set(event.recipients)].filter(
     (userId) => userId !== event.actorUserId,
   );
-  const excerpt = excerptOf(event.excerpt);
+  const excerpt = excerptOf(
+    event.excerpt,
+    event.topic === "agent_notification"
+      ? AGENT_NOTIFICATION_EXCERPT_LENGTH
+      : EXCERPT_LENGTH,
+  );
   const created = await insertNotifications(db, {
     ...event,
     recipients,
@@ -107,6 +116,7 @@ export const publishNotification = async (
     actorName: actor.name,
     threadTitle: title,
     excerpt,
+    ...(event.subject === undefined ? {} : { subject: event.subject }),
   });
   const open = `${origin}/threads/${encodeURIComponent(event.threadId)}${
     event.messageId === undefined

@@ -19,7 +19,7 @@
     "DX_WORKLOAD_IDENTITY_AUDIENCE_POLICIES": "{\"version\":1,\"policies\":[]}"
   },
   "triggers": {
-    "crons": ["17 3 * * *", "*/5 * * * *"]
+    "crons": ["17 3 * * *", "* * * * *"]
   },
   "ai": {
     "binding": "AI",

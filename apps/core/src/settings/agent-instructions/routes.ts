@@ -17,7 +17,7 @@ import {
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Match, Option, Result, Schema } from "effect";
-import { Hono, type Context } from "hono";
+import { type Context, Hono } from "hono";
 import { decodeJsonBody } from "../../http/request-decoding.js";
 import type { AppEnv } from "../../http/types.js";
 import { authorizationLogger } from "../../logging.js";

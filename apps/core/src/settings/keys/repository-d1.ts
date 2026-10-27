@@ -1,12 +1,12 @@
 import {
-  PersonalVerificationKey,
   PersistenceUnavailable,
+  PersonalVerificationKey,
   SigningKeyConflict,
+  type SigningKeyId,
   SigningKeyNotFound,
   SigningKeyRepository,
   StoredPersonalSigningKey,
   Timestamp,
-  type SigningKeyId,
   type UserId,
   type VerificationKeyId,
 } from "@dx/domain";

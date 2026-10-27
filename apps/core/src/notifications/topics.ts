@@ -47,6 +47,8 @@ export interface NotificationTopicDefinition {
     readonly actorName: string;
     readonly threadTitle: string;
     readonly excerpt: string;
+    /** A headline the sender chose, for topics that take one. */
+    readonly subject?: string;
   }) => NotificationContent;
 }
 
@@ -115,10 +117,42 @@ const snoozeWoke: NotificationTopicDefinition = {
   }),
 };
 
+/**
+ * The agent's `notify_user` tool: something the owner asked to hear about
+ * happened, such as a deploy finishing. The agent writes the headline and
+ * the text. Push only, like the agent update; it never reaches the inbox.
+ */
+const agentNotification: NotificationTopicDefinition = {
+  id: "agent_notification",
+  noun: "agent notification",
+  trigger: "an agent notifies you about something you asked it to watch",
+  inbox: false,
+  defaults: { push: true },
+  content: ({ threadTitle, excerpt, subject }) => ({
+    subject: subject ?? `Update from ${threadTitle}`,
+    headline: subject ?? "The agent sent an update",
+    title: threadTitle,
+    body: excerpt,
+    // Like every push, the Thread's title on top; the agent's own headline
+    // leads the preview.
+    preview:
+      subject === undefined
+        ? plainPreview(excerpt) || excerpt
+        : `${subject}: ${plainPreview(excerpt) || excerpt}`,
+    actorName: "dx",
+    reason: "you asked an agent to notify you",
+  }),
+};
+
 /** Every topic, in the order settings list them. */
 export const NOTIFICATION_TOPICS: Readonly<
   Record<NotificationTopic, NotificationTopicDefinition>
-> = { mention, turn_completed: turnCompleted, snooze_woke: snoozeWoke };
+> = {
+  mention,
+  turn_completed: turnCompleted,
+  snooze_woke: snoozeWoke,
+  agent_notification: agentNotification,
+};
 
 /** The channels a topic is offered on, in channel order. */
 export const topicOffersChannel = (

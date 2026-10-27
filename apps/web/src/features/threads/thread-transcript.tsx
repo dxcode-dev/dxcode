@@ -13,7 +13,10 @@ import {
   MessageAuthorLabel,
   useMessageAuthor,
 } from "./sharing/message-authors.js";
-import { ThreadSourceMessage } from "./thread-source-message.js";
+import {
+  AutomationMessage,
+  ThreadSourceMessage,
+} from "./thread-source-message.js";
 import { TranscriptOutline } from "./transcript-outline.js";
 import {
   sameTranscriptRow,
@@ -103,6 +106,7 @@ function TranscriptRowShellContent({
 }: TranscriptRowShellProps) {
   const user = row.kind === "user-prompt";
   const fromThread = user ? row.sourceThreadId : undefined;
+  const automation = user ? row.automation : undefined;
   const author = useMessageAuthor(
     user ? row.author : undefined,
     user ? row.admitted : true,
@@ -121,6 +125,24 @@ function TranscriptRowShellContent({
       >
         <ThreadSourceMessage
           sourceThreadId={fromThread}
+          text={row.text}
+          pending={!row.admitted}
+        />
+      </article>
+    );
+  if (automation !== undefined && row.kind === "user-prompt")
+    return (
+      <article
+        id={row.id}
+        data-row-id={row.id}
+        data-row-kind={row.kind}
+        data-automation={automation}
+        ref={measureElement}
+        tabIndex={-1}
+        className="transcript-row conversation-message thread-source-row"
+      >
+        <AutomationMessage
+          automation={automation}
           text={row.text}
           pending={!row.admitted}
         />

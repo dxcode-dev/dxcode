@@ -34,6 +34,7 @@ import { useMobile } from "../../shared/use-mobile.js";
 import { projectQueryOptions } from "../projects/project-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { AgentPanel, type AgentPanelOptions } from "./agent-panel.js";
+import { ThreadScheduleHint } from "./automations/thread-schedule-hint.js";
 import { ChangesPane } from "./changes/changes-pane.js";
 import { CenterFilePane } from "./files/center-file-pane.js";
 import {
@@ -966,6 +967,14 @@ function ThreadSessionContent({
         }),
     ...sharedAgentPanelProps(thread),
     inboundMessages: thread.inboundMessages,
+    // The schedule is the owner's: when it runs next, at the transcript's end.
+    ...(thread.access === undefined || thread.access === "owner"
+      ? {
+          transcriptEnd: (
+            <ThreadScheduleHint key={thread.id} threadId={thread.id} />
+          ),
+        }
+      : {}),
     ...(thread.access === "contribute"
       ? {
           onAccessChanged: () =>

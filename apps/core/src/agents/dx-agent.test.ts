@@ -45,6 +45,9 @@ const plugins = vi.hoisted(() => ({
 const threadTools = vi.hoisted(() => ({
   createThreadTools: vi.fn((): unknown[] => []),
 }));
+const automationTools = vi.hoisted(() => ({
+  createAutomationTools: vi.fn((): unknown[] => []),
+}));
 const runtime = vi.hoisted(() => ({
   capabilities: "workspace" as "model-only" | "workspace",
   execution: { createSandbox: vi.fn() },
@@ -72,6 +75,7 @@ vi.mock("../settings/plugins/execution.js", () => ({
 }));
 vi.mock("../plugins/agent-context.js", () => pluginHost);
 vi.mock("../threads/agent-tools.js", () => threadTools);
+vi.mock("../automations/agent-tools.js", () => automationTools);
 vi.mock("../portals/prompt.js", () => ({ threadPortalPrompt: () => "" }));
 vi.mock("../plugins/code/providers/wasm.js", () => ({ getCodeWasm: vi.fn() }));
 vi.mock("../settings/plugins/flue.js", () => ({
@@ -193,6 +197,9 @@ describe("DxAgent", () => {
       { name: "create_thread", run: vi.fn() },
       { name: "send_thread_message", run: vi.fn() },
     ]);
+    automationTools.createAutomationTools.mockReturnValueOnce([
+      { name: "set_schedule", run: vi.fn() },
+    ]);
     hooks.usePromptData.mockReturnValueOnce({
       plugins: { submissionId: "sub_1", tools: [] },
     } as never);
@@ -203,9 +210,14 @@ describe("DxAgent", () => {
       "sub_1",
       false,
     );
+    expect(automationTools.createAutomationTools).toHaveBeenCalledWith(
+      "thr_existing",
+      pluginHost.agentThreadToolsContext,
+      "sub_1",
+    );
     expect(
       hooks.useTool.mock.calls.map(([tool]) => (tool as { name: string }).name),
-    ).toEqual(["create_thread", "send_thread_message"]);
+    ).toEqual(["create_thread", "send_thread_message", "set_schedule"]);
     expect(pluginHost.agentThreadToolsContext).not.toHaveBeenCalled();
     expect(prompt).toMatch(/create_thread/);
 

@@ -7,6 +7,7 @@ import {
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Match, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { personalTimeZoneRoutes } from "../automations/routes.js";
 import {
   personalDictationVocabularyRoutes,
   workspaceDictationVocabularyRoutes,
@@ -182,6 +183,7 @@ const handlePersonalSettingsContext = async (context: Context<AppEnv>) => {
 export const settingsRoutes = new Hono<AppEnv>();
 
 settingsRoutes.route("/personal/account", personalAccountRoutes);
+settingsRoutes.route("/personal/time-zone", personalTimeZoneRoutes);
 settingsRoutes.route(
   "/personal/agent-instructions",
   personalAgentInstructionsRoutes,

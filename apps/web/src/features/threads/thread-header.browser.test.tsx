@@ -1,5 +1,6 @@
 import type { ThreadDetailData } from "@dx/api";
 import { defaultThreadModelSelection } from "@dx/domain";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,7 +15,8 @@ vi.mock("../../shared/thread-archive.js", async (importOriginal) => ({
   useOptionalThreadArchive: () => archive,
 }));
 
-import { ThreadHeader } from "./thread-header.js";
+import { automationKeys } from "./automations/automations-queries.js";
+import { ThreadHeader as BareThreadHeader } from "./thread-header.js";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -27,6 +29,22 @@ const thread = {
   activityStatus: "idle",
   agentInitialization: { selection: defaultThreadModelSelection() },
 } as ThreadDetailData;
+
+// The app's query client; this Thread has no schedule or GitHub listeners.
+const queryClient = new QueryClient();
+queryClient.setQueryData(automationKeys.thread(thread.id), {
+  githubSubscriptions: [],
+  pullRequests: [],
+  ciRuns: [],
+});
+
+function ThreadHeader(props: React.ComponentProps<typeof BareThreadHeader>) {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <BareThreadHeader {...props} />
+    </QueryClientProvider>
+  );
+}
 
 const model = {
   rows: [],

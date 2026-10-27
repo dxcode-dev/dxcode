@@ -12,12 +12,12 @@ import type {
   UsageResourceForbidden,
 } from "@dx/domain";
 import { Effect, Layer, Match, Result, Schema } from "effect";
-import { Hono, type Context } from "hono";
+import { type Context, Hono } from "hono";
 import { decodeRequestInput } from "../../http/request-decoding.js";
 import type { AppEnv } from "../../http/types.js";
 import {
-  decodeD1Binding,
   type D1BindingUnavailable,
+  decodeD1Binding,
 } from "../../persistence/d1-binding.js";
 import { UsageRepositoryD1 } from "./repository-d1.js";
 import { PersonalUsageService } from "./service.js";

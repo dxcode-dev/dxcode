@@ -213,6 +213,7 @@ import {
   ThreadOrbProcessErrorResponseSchema,
   ThreadPortalPublicErrorResponseSchema,
   ThreadSharingErrorResponseSchema,
+  TimeZoneResponseSchema,
   TrustPluginResponseSchema,
   type UpdateConnectionRequestSchema,
   UpdateEnvironmentVariableResponseSchema,
@@ -1003,6 +1004,15 @@ export const updatePluginWorkspacePolicy = async (
       },
     )
   ).data.allowPersonalPlugins;
+
+/** Records the browser's IANA zone, where schedules without DTSTART anchor. */
+export const updateTimeZone = async (timeZone: string) =>
+  (
+    await request("/v1/settings/personal/time-zone", TimeZoneResponseSchema, {
+      method: "PUT",
+      body: JSON.stringify({ timeZone }),
+    })
+  ).data;
 
 const pluginTriggersBase = "/v1/settings/personal/triggers";
 

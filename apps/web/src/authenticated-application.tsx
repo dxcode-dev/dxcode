@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
 import { lazy, Suspense } from "react";
 import { attachInAppNavigation } from "./features/install-app/in-app-navigation.js";
+import { recordBrowserTimeZone } from "./features/threads/automations/automations-queries.js";
 import { RealtimeProvider } from "./features/threads/realtime/realtime-provider.js";
 import { ThreadSessionProvider } from "./features/threads/thread-session-provider.js";
 import { type AppRouter, createAppRouter } from "./router.js";
@@ -32,6 +33,14 @@ function InAppNavigation({ router }: { readonly router: AppRouter }) {
   return null;
 }
 
+/** Records the browser's zone once per sign-in, where schedules without DTSTART run. */
+function RecordTimeZone() {
+  useMountEffect(() => {
+    void recordBrowserTimeZone();
+  });
+  return null;
+}
+
 /** Builds the signed-in product router with the application-owned query client. */
 export function AuthenticatedApplication({
   queryClient,
@@ -56,6 +65,7 @@ export function AuthenticatedApplication({
       <RealtimeProvider queryClient={queryClient} userId={auth.identity.id}>
         <RouterProvider router={router} />
         <InAppNavigation key={auth.identity.id} router={router} />
+        <RecordTimeZone key={auth.identity.id} />
         {ReactQueryDevtools === undefined ? null : (
           <Suspense fallback={null}>
             <ReactQueryDevtools />

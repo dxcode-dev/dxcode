@@ -36,7 +36,7 @@ import {
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Option, Result, Schema } from "effect";
-import { Hono, type Context } from "hono";
+import { type Context, Hono } from "hono";
 import {
   decodeJsonBody,
   decodeRequestInput,

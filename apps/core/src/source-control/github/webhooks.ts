@@ -19,6 +19,22 @@ export class GitHubWebhookUnavailable extends Schema.TaggedError<GitHubWebhookUn
   {},
 ) {}
 
+/**
+ * Events only GitHub subscriptions (`automations/deliver.ts`) read. Any
+ * action is accepted; the subscriptions decide which they follow.
+ */
+export const GITHUB_SUBSCRIPTION_EVENTS = [
+  "check_run",
+  "check_suite",
+  "status",
+  "workflow_run",
+  "pull_request",
+  "pull_request_review",
+  "pull_request_review_comment",
+  "issue_comment",
+  "issues",
+] as const;
+
 export const GITHUB_WEBHOOK_EVENTS = [
   "ping",
   "github_app_authorization",
@@ -26,8 +42,12 @@ export const GITHUB_WEBHOOK_EVENTS = [
   "installation_repositories",
   "installation_target",
   "repository",
+  ...GITHUB_SUBSCRIPTION_EVENTS,
 ] as const;
 export type GitHubWebhookEvent = (typeof GITHUB_WEBHOOK_EVENTS)[number];
+
+const isSubscriptionEvent = (event: GitHubWebhookEvent) =>
+  (GITHUB_SUBSCRIPTION_EVENTS as ReadonlyArray<string>).includes(event);
 
 const hex = (value: Uint8Array) =>
   [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -160,7 +180,7 @@ const decodeRepository = (value: unknown) => {
   };
 };
 
-const eventActions: Record<GitHubWebhookEvent, ReadonlySet<string>> = {
+const eventActions: Partial<Record<GitHubWebhookEvent, ReadonlySet<string>>> = {
   ping: new Set(["ping"]),
   github_app_authorization: new Set(["revoked"]),
   installation: new Set([
@@ -197,6 +217,10 @@ const processEvent = async (
   reconcileInstallation: (installationId: string) => Promise<unknown>,
 ) => {
   if (event === "ping") return undefined;
+  if (isSubscriptionEvent(event)) {
+    const installation = record(payload.installation ?? {}).id;
+    return installation === undefined ? undefined : id(installation);
+  }
   if (event === "github_app_authorization") {
     const senderId = id(record(payload.sender).id);
     const authorizations = await db
@@ -538,6 +562,12 @@ export const processGitHubWebhook = (input: {
   readonly body: Uint8Array;
   readonly fetcher?: typeof fetch;
   readonly reconcileInstallation?: (installationId: string) => Promise<unknown>;
+  /** Receives each processed subscription event, once per delivery. */
+  readonly onSubscriptionEvent?: (
+    event: string,
+    action: string,
+    payload: Record<string, unknown>,
+  ) => Promise<unknown>;
 }) =>
   Effect.gen(function* () {
     if (
@@ -562,8 +592,15 @@ export const processGitHubWebhook = (input: {
             new TextDecoder("utf-8", { fatal: true }).decode(input.body),
           ),
         );
-        const action = event === "ping" ? "ping" : text(payload.action, 64);
-        if (!eventActions[event].has(action)) throw new GitHubWebhookInvalid();
+        // A status event has no action; its state stands in for one.
+        const action =
+          event === "ping"
+            ? "ping"
+            : event === "status"
+              ? text(payload.state, 64)
+              : text(payload.action, 64);
+        if (!isSubscriptionEvent(event) && !eventActions[event]?.has(action))
+          throw new GitHubWebhookInvalid();
         return { payload, action };
       },
       catch: (cause) =>
@@ -680,6 +717,15 @@ export const processGitHubWebhook = (input: {
       );
       if (settled.meta.changes !== 1)
         return yield* new GitHubWebhookUnavailable();
+      if (isSubscriptionEvent(event) && input.onSubscriptionEvent !== undefined)
+        yield* fromPromise(() =>
+          // Delivery records its own failures; the webhook is processed.
+          (
+            input.onSubscriptionEvent as NonNullable<
+              typeof input.onSubscriptionEvent
+            >
+          )(event, action, payload).catch(() => undefined),
+        );
       logger.info("GitHub webhook processed.", {
         event: "github_webhook_processed",
         deliveryId: input.deliveryId,
