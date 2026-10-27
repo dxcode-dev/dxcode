@@ -2307,6 +2307,7 @@ getLogger(["dx", "source-control"]);
 getLogger(["dx", "trace"]);
 getLogger(["dx", "dictation"]);
 getLogger(["dx", "attachments"]);
+getLogger(["dx", "thread-storage"]);
 getLogger(["dx", "portals"]);
 getLogger([
 	"dx",

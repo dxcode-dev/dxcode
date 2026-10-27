@@ -54,6 +54,7 @@ import {
   threadMemberRoutes,
   threadSharingRoutes,
 } from "./thread-sharing/routes.js";
+import { threadStorageRoutes } from "./thread-storage/routes.js";
 import { threadDaemonRoutes } from "./threads/daemon-route.js";
 import { threadRoutes } from "./threads/routes.js";
 import { threadTerminalRoutes } from "./threads/terminal-route.js";
@@ -117,6 +118,10 @@ app.route("/v1/threads", threadFilesRoutes);
 app.use("/v1/threads/:threadId/files-sandbox", authorizeThread);
 app.use("/v1/threads/:threadId/files-sandbox", enforceThreadActive);
 app.route("/v1/threads", threadSandboxFileRoutes);
+// Not `enforceThreadActive`: stored files outlive the Orb and stay readable
+// while the Thread is archived. `/storage/*` also matches `/storage`.
+app.use("/v1/threads/:threadId/storage/*", authorizeThread);
+app.route("/v1/threads", threadStorageRoutes);
 app.use("/v1/threads/:threadId/terminal", authorizeThread);
 app.use("/v1/threads/:threadId/terminal", enforceThreadActive);
 app.route("/v1/threads", threadTerminalRoutes);

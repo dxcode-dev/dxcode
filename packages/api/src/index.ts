@@ -76,6 +76,7 @@ export * from "./settings/workspace-usage.js";
 export * from "./source-control/bitbucket.js";
 export * from "./source-control/errors.js";
 export * from "./source-control/github.js";
+export * from "./thread-storage/index.js";
 export * from "./threads/archive-thread.js";
 export * from "./threads/automations.js";
 export * from "./threads/changes.js";

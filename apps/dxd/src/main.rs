@@ -14,6 +14,7 @@ mod protocol;
 mod proxy;
 mod services;
 mod session;
+mod storage;
 mod terminal;
 mod tmux;
 mod update;

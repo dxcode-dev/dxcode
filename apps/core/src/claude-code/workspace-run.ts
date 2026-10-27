@@ -863,7 +863,9 @@ export class ClaudeCodeRun {
    * Whether the run's process is gone without writing its exit marker, as
    * when its workspace cold-boots and only files survive. A lost run is
    * recorded as killed (137), so its Claude session is resumed. A failed
-   * check says nothing and counts as live.
+   * check says nothing and counts as live. The process is checked before
+   * the marker: the runner writes the marker before it ends, so a run that
+   * finishes during the check is never taken for a lost one.
    */
   async lost() {
     if (this.#exited || this.stream.finished) return false;
@@ -871,7 +873,8 @@ export class ClaudeCodeRun {
       .exec(
         `bash -c ${quote(`D=${quote(this.dir)}
 pid=$(cat "$D/pid" 2>/dev/null || true)
-if [ -f "$D/exit" ] || [ -z "$pid" ] || tr '\\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -qF "$D/runner.sh"; then echo live; exit 0; fi
+if [ -z "$pid" ] || tr '\\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -qF "$D/runner.sh"; then echo live; exit 0; fi
+if [ -f "$D/exit" ]; then echo live; exit 0; fi
 echo 137 > "$D/exit"
 echo lost`)}`,
         { timeoutMs: 15_000 },

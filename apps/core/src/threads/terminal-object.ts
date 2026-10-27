@@ -135,6 +135,7 @@ import {
   parseServicesManifest,
   SERVICES_MANIFEST_PATH,
 } from "../thread-services/manifest.js";
+import { serveDaemonStorage } from "../thread-storage/daemon.js";
 import { workloadIdentityBroker } from "../workload-identity/broker.js";
 import {
   type DaemonActivationMilestones,
@@ -718,6 +719,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     if (path === "/daemon/socket") return this.#acceptDaemon(request);
     if (path === "/daemon/attachment")
       return this.#serveDaemonAttachment(request);
+    if (path === "/daemon/storage") return this.#serveDaemonStorage(request);
     if (path === "/environment/refresh")
       return this.#refreshEnvironment(request);
     if (path === "/changes/refresh") return this.#queueChangesRefresh(request);
@@ -3205,14 +3207,14 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   }
 
   /**
-   * Describe a message attachment for `dxd files get` in the guest. The key
-   * is checked exactly as a daemon registration checks it, hash first and
-   * then its D1 row, owner, active lifecycle, and reachable Project; the
-   * download then reads as the Thread's owner. The answer is a presigned R2
-   * URL the guest fetches directly, so no bytes pass through Core; only
-   * local development streams them here.
+   * The Thread a daemon request outside its socket comes from: the key is
+   * checked exactly as a daemon registration checks it, hash first and then
+   * its D1 row, owner, active lifecycle, and reachable Project. Anything else
+   * answers 404 (not this Thread's object) or 401 (not this Thread's key).
    */
-  async #serveDaemonAttachment(request: Request) {
+  async #authenticateDaemonRequest(
+    request: Request,
+  ): Promise<ThreadId | Response> {
     const authority = this.#authority;
     const key = threadDaemonBearer(request.headers.get("authorization"));
     if (
@@ -3243,6 +3245,36 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       ))
     )
       return new Response(null, { status: 401 });
+    return threadId.value;
+  }
+
+  /**
+   * Thread storage for `dxd files put` and `dxd files get`. Only a request
+   * carrying this Thread's own key reaches it, so a Thread writes only its
+   * own storage; `thread-storage/daemon.ts` decides the rest.
+   */
+  async #serveDaemonStorage(request: Request) {
+    const threadId = await this.#authenticateDaemonRequest(request);
+    if (threadId instanceof Response) return threadId;
+    return serveDaemonStorage(this.env, {
+      threadId,
+      method: request.method,
+      path: request.headers.get("x-dx-storage-path") ?? "/invalid",
+      body: request.method === "POST" ? await request.text() : undefined,
+    });
+  }
+
+  /**
+   * Describe a message attachment for `dxd files get` in the guest. The key
+   * is checked exactly as a daemon registration checks it, hash first and
+   * then its D1 row, owner, active lifecycle, and reachable Project; the
+   * download then reads as the Thread's owner. The answer is a presigned R2
+   * URL the guest fetches directly, so no bytes pass through Core; only
+   * local development streams them here.
+   */
+  async #serveDaemonAttachment(request: Request) {
+    const threadId = await this.#authenticateDaemonRequest(request);
+    if (threadId instanceof Response) return threadId;
     const attachmentId = request.headers.get("x-dx-attachment-id") ?? undefined;
     const transfer = attachmentTransfer(this.env);
     const db = this.env.DB;
@@ -3257,7 +3289,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     // the owner could open, not only files sent in this Thread.
     const owner = await db
       .prepare("SELECT owner_user_id FROM threads WHERE id = ?")
-      .bind(threadId.value)
+      .bind(threadId)
       .first<{ readonly owner_user_id: string }>();
     const row = await findAttachment(db, attachmentId);
     if (

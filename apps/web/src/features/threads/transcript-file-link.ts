@@ -6,6 +6,7 @@ import {
 } from "@dx/api";
 import { Option, Schema } from "effect";
 import type { MarkdownMediaSource } from "../../shared/ui/markdown-file-link-context.js";
+import { fileMediaKind } from "../../shared/ui/media-kind.js";
 
 const PRIMARY_WORKTREE = "primary" as ThreadFilesWorktreeId;
 
@@ -181,62 +182,11 @@ export const sandboxFileUrl = (
     download ? { path, download: "1" } : { path },
   )}`;
 
-const IMAGE_EXTENSIONS = new Set([
-  "png",
-  "jpg",
-  "jpeg",
-  "gif",
-  "webp",
-  "avif",
-  "bmp",
-  "ico",
-  "svg",
-]);
-const VIDEO_EXTENSIONS = new Set([
-  "mp4",
-  "m4v",
-  "webm",
-  "mov",
-  "ogv",
-  "mkv",
-  "avi",
-  "mpeg",
-  "mpg",
-  "3gp",
-]);
-const AUDIO_EXTENSIONS = new Set([
-  "mp3",
-  "wav",
-  "ogg",
-  "oga",
-  "opus",
-  "m4a",
-  "aac",
-  "flac",
-  "weba",
-  "aif",
-  "aiff",
-]);
-
-/**
- * How a file is shown when it is opened. Media and PDFs stream from the
- * sandbox; every other file opens as text.
- */
-export type FileMediaKind = "image" | "video" | "audio" | "pdf";
-
-export const fileMediaKind = (path: string): FileMediaKind | undefined => {
-  const extension = path.split("/").at(-1)?.split(".").at(-1)?.toLowerCase();
-  if (extension === undefined) return undefined;
-  if (IMAGE_EXTENSIONS.has(extension)) return "image";
-  if (VIDEO_EXTENSIONS.has(extension)) return "video";
-  if (AUDIO_EXTENSIONS.has(extension)) return "audio";
-  if (extension === "pdf") return "pdf";
-  return undefined;
-};
-
 /**
  * A Markdown image in a transcript, `![alt](/path/in/the/orb.mp4)`: an
- * image, video, or audio file in the Thread's sandbox, streamed from it.
+ * image, video, or audio file in the Thread's sandbox, streamed from it
+ * while the Orb runs. Files in Thread storage resolve before this, in
+ * `markdown-media-source.ts`, so they show with or without a workspace.
  */
 export const transcriptMediaSource = (
   threadId: string,
@@ -248,5 +198,9 @@ export const transcriptMediaSource = (
   const kind = path === undefined ? undefined : fileMediaKind(path);
   return path === undefined || kind === undefined || kind === "pdf"
     ? undefined
-    : { url: sandboxFileUrl(threadId, path), kind };
+    : {
+        url: sandboxFileUrl(threadId, path),
+        kind,
+        downloadUrl: sandboxFileUrl(threadId, path, true),
+      };
 };

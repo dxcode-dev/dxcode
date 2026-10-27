@@ -1,4 +1,5 @@
-//! `dxd files get`: download a message attachment into the guest.
+//! `dxd files get`: download a message attachment, or a file from a
+//! Thread's storage, into the guest. `dxd files put` is `storage.rs`.
 //!
 //! A user's message names its files by URL. Those URLs need a dx session, so
 //! the agent asks Core with the daemon's own Thread key instead: the request
@@ -18,13 +19,23 @@ use std::time::Duration;
 
 const MAX_ATTACHMENT_BYTES: u64 = 500 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-const USAGE: &str = "usage: dxd files get <attachment-url | attachment-id> [-o <path>]";
+const USAGE: &str = "usage: dxd files get <attachment-or-storage-url | id> [-o <path>]\n       dxd files put <path>...";
 
 /// The attachment id in a URL or a bare id: `att_` and 32 lowercase hex digits.
 pub fn attachment_id(value: &str) -> Option<&str> {
+    prefixed_id(value, "att_")
+}
+
+/// The Thread storage file id in a URL or a bare id: `tsf_` and 32 lowercase
+/// hex digits.
+pub fn storage_file_id(value: &str) -> Option<&str> {
+    prefixed_id(value, "tsf_")
+}
+
+fn prefixed_id<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
     let bytes = value.as_bytes();
     let mut start = 0;
-    while let Some(offset) = value[start..].find("att_") {
+    while let Some(offset) = value[start..].find(prefix) {
         let begin = start + offset;
         let end = begin + 36;
         let hex = |b: &u8| b.is_ascii_digit() || (b'a'..=b'f').contains(b);
@@ -88,7 +99,7 @@ struct Descriptor {
 }
 
 /// `https://<daemon endpoint host>`.
-fn endpoint_origin(config: &Config) -> Option<String> {
+pub(crate) fn endpoint_origin(config: &Config) -> Option<String> {
     let (scheme, rest) = if let Some(rest) = config.endpoint.strip_prefix("wss://") {
         ("https", rest)
     } else if let Some(rest) = config.endpoint.strip_prefix("ws://") {
@@ -112,7 +123,7 @@ pub fn download_url(config: &Config, id: &str) -> Option<String> {
     ))
 }
 
-fn config_path() -> PathBuf {
+pub(crate) fn config_path() -> PathBuf {
     std::env::var("DXD_CONFIG")
         .ok()
         .map(PathBuf::from)
@@ -126,6 +137,9 @@ fn fail(message: &str) -> Result<(), ()> {
 }
 
 pub fn run_cli(arguments: &[String]) -> Result<(), ()> {
+    if arguments.first().map(String::as_str) == Some("put") {
+        return crate::storage::run_put(&arguments[1..]);
+    }
     let (source, output) = match arguments {
         [command, source] if command == "get" => (source, None),
         [command, source, flag, output]
@@ -143,14 +157,25 @@ pub fn run_cli(arguments: &[String]) -> Result<(), ()> {
             return Err(());
         }
     };
-    let Some(id) = attachment_id(source) else {
-        return fail("the argument is not a dx attachment URL or id");
+    // A stored file is asked for through this Thread's own storage route;
+    // Core decides whether this Thread's owner can open it.
+    let (id, kind) = match (attachment_id(source), storage_file_id(source)) {
+        (Some(id), _) => (id, Kind::Attachment),
+        (None, Some(id)) => (id, Kind::Stored),
+        (None, None) => {
+            return fail("the argument is not a dx attachment or Thread storage URL or id");
+        }
     };
     let config = match load_config(&config_path()) {
         Ok(config) => config,
         Err(_) => return fail("the Thread's daemon configuration is unavailable"),
     };
-    let (Some(url), Some(origin)) = (download_url(&config, id), endpoint_origin(&config)) else {
+    let url = match kind {
+        Kind::Attachment => download_url(&config, id),
+        Kind::Stored => endpoint_origin(&config)
+            .map(|origin| format!("{origin}/v1/dxd/{}/storage/{id}", config.thread_id)),
+    };
+    let (Some(url), Some(origin)) = (url, endpoint_origin(&config)) else {
         return fail("the daemon endpoint is invalid");
     };
     let agent = ureq::Agent::config_builder()
@@ -158,7 +183,7 @@ pub fn run_cli(arguments: &[String]) -> Result<(), ()> {
         .http_status_as_error(false)
         .build()
         .new_agent();
-    let descriptor = match describe(&agent, &url, &config.api_key) {
+    let descriptor = match describe(&agent, &url, &config.api_key, kind) {
         Ok(descriptor) => descriptor,
         Err(error) => return fail(&error.to_string()),
     };
@@ -170,7 +195,7 @@ pub fn run_cli(arguments: &[String]) -> Result<(), ()> {
                 .unwrap_or_else(|| id.to_owned()),
         ),
     };
-    match download(&agent, &descriptor, &origin, &config.api_key, &output) {
+    match download(&agent, &descriptor, &origin, &config.api_key, &output, kind) {
         Ok(path) => {
             println!("{}", path.display());
             Ok(())
@@ -179,16 +204,27 @@ pub fn run_cli(arguments: &[String]) -> Result<(), ()> {
     }
 }
 
-fn status_error(status: u16) -> io::Error {
-    match status {
-        401 => io::Error::other("this Thread's daemon key was rejected"),
-        404 => io::Error::other("no such attachment, or this Thread's owner cannot open it"),
-        status => io::Error::other(format!("the download answered HTTP {status}")),
+#[derive(Clone, Copy)]
+enum Kind {
+    Attachment,
+    Stored,
+}
+
+fn status_error(status: u16, kind: Kind) -> io::Error {
+    match (status, kind) {
+        (401, _) => io::Error::other("this Thread's daemon key was rejected"),
+        (404, Kind::Attachment) => {
+            io::Error::other("no such attachment, or this Thread's owner cannot open it")
+        }
+        (404, Kind::Stored) => {
+            io::Error::other("no such stored file, or this Thread's owner cannot open it")
+        }
+        (status, _) => io::Error::other(format!("the download answered HTTP {status}")),
     }
 }
 
 /// Ask Core where the attachment is.
-fn describe(agent: &ureq::Agent, url: &str, key: &str) -> io::Result<Descriptor> {
+fn describe(agent: &ureq::Agent, url: &str, key: &str, kind: Kind) -> io::Result<Descriptor> {
     let response = agent
         .get(url)
         .header("Authorization", &format!("Bearer {key}"))
@@ -197,7 +233,7 @@ fn describe(agent: &ureq::Agent, url: &str, key: &str) -> io::Result<Descriptor>
         .map_err(|error| io::Error::other(format!("request failed: {error}")))?;
     let status = response.status().as_u16();
     if status != 200 {
-        return Err(status_error(status));
+        return Err(status_error(status, kind));
     }
     let body = response
         .into_body()
@@ -219,6 +255,7 @@ fn download(
     origin: &str,
     key: &str,
     output: &Path,
+    kind: Kind,
 ) -> io::Result<PathBuf> {
     // A path is Core's own route (local development): it needs the key. A
     // presigned R2 URL carries its own signature and never gets the key.
@@ -236,7 +273,7 @@ fn download(
         .map_err(|error| io::Error::other(format!("download failed: {error}")))?;
     let status = response.status().as_u16();
     if status != 200 {
-        return Err(status_error(status));
+        return Err(status_error(status, kind));
     }
     let directory = match output.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),

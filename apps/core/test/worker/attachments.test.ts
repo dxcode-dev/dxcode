@@ -1,5 +1,4 @@
-import { env, runInDurableObject } from "cloudflare:test";
-import { createHash } from "node:crypto";
+import { env } from "cloudflare:test";
 import {
   ATTACHMENT_PART_BYTES,
   type AttachmentData,
@@ -26,11 +25,22 @@ import {
   resolveMessageAttachments,
 } from "../../src/attachments/message.js";
 import { attachmentRoutes } from "../../src/attachments/routes.js";
-import { DXD_RELEASE } from "../../src/execution/dxd/protocol.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
 import { forwardDaemonAttachment } from "../../src/threads/daemon-ingress.js";
 import { project, thread } from "./fixtures.js";
+import {
+  DAEMON_KEY,
+  digest,
+  direct,
+  pngBytes,
+  R2_ORIGIN,
+  r2Requests,
+  realFetch,
+  routeNetwork,
+  seedDaemonAuthority,
+  wokenNamespace,
+} from "./r2-harness.js";
 import { runRepositories } from "./runtime.js";
 
 /**
@@ -41,16 +51,6 @@ import { runRepositories } from "./runtime.js";
  * stands in for storage, so every byte below goes "browser" ⇄ "R2" and the
  * test can see that none passes through Core.
  */
-
-const R2_ORIGIN = "https://testaccount.r2.cloudflarestorage.com";
-const R2_BUCKET = "dx-storage-test";
-const direct: Partial<Bindings> = {
-  DX_ATTACHMENT_R2_ENDPOINT: `${R2_ORIGIN}/${R2_BUCKET}`,
-  DX_ATTACHMENT_R2_CREDENTIALS: JSON.stringify({
-    accessKeyId: "test-access-key",
-    secretAccessKey: "test-secret",
-  }),
-};
 
 const owner = Schema.decodeSync(UserId)("attachment-owner");
 const stranger = Schema.decodeSync(UserId)("attachment-stranger");
@@ -79,104 +79,7 @@ const strangerThread = thread(
   strangerProject.id,
   stranger,
 );
-const DAEMON_KEY = "dxd_attachment-test-key-0123456789";
-
-const digest = (bytes: ArrayBuffer | Uint8Array) =>
-  createHash("sha256").update(new Uint8Array(bytes)).digest("hex");
-
-/** Every request the emulated R2 receives, to prove where bytes went. */
-const r2Requests: Array<{ method: string; url: URL; signed: boolean }> = [];
 const coreRequests: string[] = [];
-
-const xmlTag = (text: string, tag: string) =>
-  [...text.matchAll(new RegExp(`<${tag}>([^<]*)</${tag}>`, "g"))].map(
-    (match) => match[1] ?? "",
-  );
-
-/** R2's S3 API, served from the test's R2 bucket. */
-const emulateR2 = async (request: Request): Promise<Response> => {
-  const url = new URL(request.url);
-  const signed =
-    url.searchParams.has("X-Amz-Signature") ||
-    (request.headers.get("authorization") ?? "").startsWith("AWS4-HMAC-SHA256");
-  r2Requests.push({ method: request.method, url, signed });
-  if (!signed) return new Response("<Error>unsigned</Error>", { status: 403 });
-  const prefix = `/${R2_BUCKET}/`;
-  if (!url.pathname.startsWith(prefix))
-    return new Response(null, { status: 404 });
-  const key = url.pathname
-    .slice(prefix.length)
-    .split("/")
-    .map(decodeURIComponent)
-    .join("/");
-  const uploadId = url.searchParams.get("uploadId");
-  if (request.method === "POST" && url.searchParams.has("uploads")) {
-    const upload = await env.DX_STORAGE.createMultipartUpload(key);
-    return new Response(
-      `<InitiateMultipartUploadResult><UploadId>${upload.uploadId}</UploadId></InitiateMultipartUploadResult>`,
-    );
-  }
-  if (request.method === "PUT" && uploadId !== null) {
-    const body = new Uint8Array(await request.arrayBuffer());
-    // The URL signs the part's length: R2 refuses any other size.
-    const signedHeaders = url.searchParams.get("X-Amz-SignedHeaders") ?? "";
-    const length = request.headers.get("x-test-signed-length");
-    if (
-      signedHeaders.split(";").includes("content-length") &&
-      length !== null &&
-      Number(length) !== body.byteLength
-    )
-      return new Response("<Error>SignatureDoesNotMatch</Error>", {
-        status: 403,
-      });
-    const part = await env.DX_STORAGE.resumeMultipartUpload(
-      key,
-      uploadId,
-    ).uploadPart(Number(url.searchParams.get("partNumber")), body);
-    return new Response(null, { headers: { etag: `"${part.etag}"` } });
-  }
-  if (request.method === "POST" && uploadId !== null) {
-    const text = await request.text();
-    const numbers = xmlTag(text, "PartNumber").map(Number);
-    const etags = xmlTag(text, "ETag").map((etag) =>
-      etag.replaceAll("&quot;", "").replaceAll('"', ""),
-    );
-    await env.DX_STORAGE.resumeMultipartUpload(key, uploadId).complete(
-      numbers.map((partNumber, index) => ({
-        partNumber,
-        etag: etags[index] ?? "",
-      })),
-    );
-    return new Response("<CompleteMultipartUploadResult/>");
-  }
-  if (request.method === "DELETE" && uploadId !== null) {
-    await env.DX_STORAGE.resumeMultipartUpload(key, uploadId).abort();
-    return new Response(null, { status: 204 });
-  }
-  if (request.method === "GET") {
-    const object = await env.DX_STORAGE.get(key);
-    if (object === null) return new Response(null, { status: 404 });
-    return new Response(object.body, {
-      headers: {
-        "content-type":
-          url.searchParams.get("response-content-type") ??
-          "application/octet-stream",
-        "content-disposition":
-          url.searchParams.get("response-content-disposition") ?? "",
-      },
-    });
-  }
-  return new Response(null, { status: 400 });
-};
-
-const realFetch = globalThis.fetch;
-const routeNetwork = () =>
-  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
-    const request = new Request(input, init);
-    return new URL(request.url).origin === R2_ORIGIN
-      ? emulateR2(request)
-      : realFetch(input, init);
-  });
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -196,13 +99,6 @@ const app = (userId: UserId, bindings: Partial<Bindings> = direct) => {
       DX_RUNTIME_MODE: "deployed",
       ...bindings,
     });
-};
-
-const pngBytes = (size: number) => {
-  const bytes = new Uint8Array(size);
-  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  for (let index = 8; index < size; index++) bytes[index] = index % 251;
-  return bytes;
 };
 
 /** What the browser does: create, PUT each part where told, complete. */
@@ -270,59 +166,6 @@ const proposal = (attachment: AttachmentData) =>
       url: "https://evil.example/",
     },
   ]);
-
-const seedDaemonAuthority = async (threadId: string, ownerId: string) => {
-  const keyId = `key-${threadId}`;
-  // The key's D1 row, which Core confirms behind the stored hash.
-  await env.DB.prepare(
-    `INSERT OR REPLACE INTO apikey
-       (id, configId, referenceId, key, enabled, createdAt, updatedAt)
-     VALUES (?, 'daemon-keys', ?, 'hashed', 1, ?, ?)`,
-  )
-    .bind(keyId, ownerId, Date.now(), Date.now())
-    .run();
-  const stub = env.THREAD_EXECUTION.getByName(threadId);
-  await runInDurableObject(stub, async (_instance, state) => {
-    await state.storage.put("daemon-authority", {
-      threadId,
-      generation: 1,
-      apiKeyId: keyId,
-      apiKeyHash: createHash("sha256").update(DAEMON_KEY).digest("hex"),
-      release: DXD_RELEASE,
-      protocolMajor: 2,
-      terminalVersion: 1,
-      workloadIdentityVersion: 1,
-      runtimeProvider: "e2b",
-      runtimeAssurance: "dx_dxd_channel_v1",
-    });
-  });
-  return keyId;
-};
-
-/**
- * The ingress forwarder in front of a freshly constructed object on the
- * Thread's storage, which loads the stored authority as a woken one does.
- */
-const wokenNamespace = (bindings: Partial<Bindings>) =>
-  ({
-    idFromName: (name: string) => env.THREAD_EXECUTION.idFromName(name),
-    get: (id: DurableObjectId) => ({
-      fetch: (request: Request) =>
-        runInDurableObject(
-          env.THREAD_EXECUTION.get(id),
-          async (instance, state) => {
-            const Woken = instance.constructor as new (
-              state: DurableObjectState,
-              bindings: typeof env,
-            ) => typeof instance;
-            const woken = new Woken(state, { ...env, ...bindings });
-            await state.blockConcurrencyWhile(async () => {});
-            const response = await woken.fetch(request);
-            return new Response(await response.arrayBuffer(), response);
-          },
-        ),
-    }),
-  }) as unknown as DurableObjectNamespace;
 
 /** What `dxd files get` does first: ask Core with the Thread's key. */
 const daemonDescribe = (

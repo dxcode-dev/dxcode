@@ -6,10 +6,10 @@ import {
   MarkdownFileLinkContext,
   MarkdownImageSourceContext,
 } from "../../../shared/ui/markdown-file-link-context.js";
+import { fileMediaKind } from "../../../shared/ui/media-kind.js";
 import { RichMarkdown } from "../../../shared/ui/rich-markdown.js";
 import {
   absolutePathFor,
-  fileMediaKind,
   sandboxFileUrl,
   type ThreadFileTarget,
 } from "../transcript-file-link.js";

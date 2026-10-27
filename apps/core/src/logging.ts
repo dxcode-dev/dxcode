@@ -96,6 +96,7 @@ export const sourceControlLogger = getLogger(["dx", "source-control"]);
 export const traceLogger = getLogger(["dx", "trace"]);
 export const dictationLogger = getLogger(["dx", "dictation"]);
 export const attachmentLogger = getLogger(["dx", "attachments"]);
+export const threadStorageLogger = getLogger(["dx", "thread-storage"]);
 export const portalLogger = getLogger(["dx", "portals"]);
 export const sourceControlAuditLogger = getLogger([
   "dx",

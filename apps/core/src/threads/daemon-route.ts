@@ -3,7 +3,9 @@ import { isolateRequestOrdinal } from "../http/request-logging.js";
 import type { AppEnv } from "../http/types.js";
 import { threadDaemonLogger } from "../logging.js";
 import {
+  DAEMON_STORAGE_PATH,
   forwardDaemonAttachment,
+  forwardDaemonStorage,
   forwardDaemonUpgrade,
 } from "./daemon-ingress.js";
 
@@ -44,6 +46,19 @@ export const threadDaemonRoutes = new Hono<AppEnv>()
         ? context.req.param("attachmentId")
         : undefined,
     ),
+  )
+  .on(
+    ["GET", "HEAD", "POST"],
+    ["/dxd/:threadId/storage", "/dxd/:threadId/storage/*"],
+    (context) => {
+      const match = DAEMON_STORAGE_PATH.exec(context.req.path);
+      return forwardDaemonStorage(
+        context.req.raw,
+        context.env.THREAD_EXECUTION,
+        match?.[1],
+        match === null ? "/invalid" : (match[2] ?? ""),
+      );
+    },
   )
   .get("/dxd/:threadId", ingress)
   .get("/threads/:threadId/dxd", ingress);

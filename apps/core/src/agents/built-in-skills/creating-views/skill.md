@@ -1,6 +1,6 @@
 ---
 name: creating-views
-description: "Renders interactive HTML views inline in a reply from fenced dx-view blocks: charts, dashboards, explorable diagrams, UI mockups, prototypes, wireframes, and side-by-side design options. Use when seeing answers the question faster than reading: a trend or comparison across many values, a system or flow the reader should click through or step through, or a UI or design question; or when asked to chart, plot, visualize, mock up, prototype, sketch, or compare designs. To show an image, video, or audio file from the workspace, use a Markdown image of its path instead."
+description: "Renders interactive HTML views inline in a reply from fenced dx-view blocks: charts, dashboards, explorable diagrams, UI mockups, prototypes, wireframes, and side-by-side design options. Use when seeing answers the question faster than reading: a trend or comparison across many values, a system or flow the reader should click through or step through, or a UI or design question; or when asked to chart, plot, visualize, mock up, prototype, sketch, or compare designs. To show an image, video, or audio file, store it with dxd files put and use a Markdown image of the printed URL instead."
 ---
 
 # Creating Views
@@ -43,12 +43,13 @@ change summary; show the diff instead.
 ## Images, video, and audio
 
 To show a file from the workspace, such as a screenshot, a recording, a rendered plot, or a sound,
-write a Markdown image of its absolute path in the reply, not a view:
+store it with `dxd files put <path>...`, which prints one URL per file, and write a Markdown image
+of each URL in the reply, not a view. Stored files stay visible after the workspace is gone:
 
 ```markdown
-![Checkout page after the fix](/home/user/artifacts/checkout/after.png)
-![Sign-in recording](/home/user/artifacts/sign-in/flow.webm)
-![Generated narration](/home/user/artifacts/voice/intro.mp3)
+![Checkout page after the fix](https://dx.example/v1/threads/thr_…/storage/tsf_…/after.png)
+![Sign-in recording](https://dx.example/v1/threads/thr_…/storage/tsf_…/flow.webm)
+![Generated narration](https://dx.example/v1/threads/thr_…/storage/tsf_…/intro.mp3)
 ```
 
 The transcript shows images inline, plays video (`.mp4`, `.webm`, `.mov`) and audio (`.mp3`,
@@ -75,7 +76,7 @@ title; for a mockup it decides which state to show.
   settles.
 - There is no network: every request is blocked. Inline all CSS, JS, images (as data URLs), and
   data. Chart libraries and web fonts cannot load, and the view cannot read files from the
-  workspace; embed what it needs, or show the file with a Markdown image instead.
+  workspace; embed what it needs, or store the file and show it with a Markdown image instead.
 - There are no popups, storage, dialogs, or form submission, and the view cannot navigate away;
   dx stops a view that tries. Clicks on `http(s)` links ask the reader before opening a new tab.
   Hover, clicks, and keys work inside the frame. Nothing can draw outside it.

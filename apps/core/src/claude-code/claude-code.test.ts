@@ -212,6 +212,8 @@ exec /usr/bin/awk "$@"
     sandbox,
     ops,
     installClaude,
+    /** Put a command on the guest's PATH ahead of the machine's. */
+    tool,
     set before(hook: (op: GuestOp) => Error | undefined) {
       before = hook;
     },
@@ -1060,6 +1062,89 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
       reason: "stop",
       message: { content: [{ type: "text", text: "All done." }] },
     });
+  });
+
+  it("keeps a run that finishes while dx checks whether it was lost, and does not run the turn again", {
+    timeout: 30_000,
+  }, async () => {
+    const guest = await createGuest();
+    await guest.script([
+      init(),
+      ...response("m1", [
+        { id: "toolu_a", name: "Bash", input: { command: "echo a" } },
+      ]),
+      toolResult("toolu_a", "a"),
+      "#wait go",
+      ...response("m2", [{ text: "All done." }]),
+      result("All done."),
+    ]);
+    // Reading a process's command line is how the check sees the runner.
+    // Once armed, it waits until the run has finished, so Claude ends
+    // between the check's reads, as it can on a loaded machine.
+    await guest.tool(
+      "tr",
+      `#!/bin/bash
+if [ -e "$HOME/hold-tr" ]; then
+  rm -f "$HOME/hold-tr"
+  for _ in $(seq 200); do
+    gone=no
+    for d in "$HOME"/.local/state/dx-claude-code/runs/*/; do
+      pid=$(cat "$d/pid" 2>/dev/null)
+      [ -f "$d/exit" ] && [ -n "$pid" ] && [ -z "$(/usr/bin/tr -d '\\0' < "/proc/$pid/cmdline" 2>/dev/null)" ] && gone=yes
+    done
+    [ "$gone" = yes ] && break
+    sleep 0.05
+  done
+fi
+exec /usr/bin/tr "$@"
+`,
+    );
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    const turn = [user("Do the work", 60)];
+    expect(await claude.answer({ messages: turn })).toMatchObject({
+      type: "done",
+      reason: "toolUse",
+    });
+    guest.before = (op) => {
+      if (op.op === "exec" && op.path.includes("echo lost")) {
+        guest.release("hold-tr");
+        guest.release("go");
+      }
+      return undefined;
+    };
+    expect(
+      await claude.answer({
+        messages: [
+          ...turn,
+          assistant(
+            [
+              {
+                type: "toolCall",
+                id: "toolu_a",
+                name: "bash",
+                arguments: { command: "echo a" },
+              },
+            ],
+            "toolUse",
+          ),
+          bashResult("toolu_a"),
+        ],
+      }),
+    ).toMatchObject({
+      type: "done",
+      reason: "stop",
+      message: { content: [{ type: "text", text: "All done." }] },
+    });
+    // The check ran, the run kept its own exit code, and no second attempt
+    // replayed the turn.
+    expect(
+      guest.ops.some(
+        ({ op, path }) => op === "exec" && path.includes("echo lost"),
+      ),
+    ).toBe(true);
+    const runs = [...runDirectories(guest.ops)];
+    expect(runs).toHaveLength(1);
+    expect(guest.file(`${STATE}/runs/${runs[0]}/exit`)?.trim()).toBe("0");
   });
 
   it("answers a dx call Flue will not run as its segment closes, so Claude's next tool and the batch finish", {

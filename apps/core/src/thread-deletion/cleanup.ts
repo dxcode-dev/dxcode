@@ -2,6 +2,7 @@ import type { ThreadId, UserId } from "@dx/domain";
 import type { Bindings } from "../http/types.js";
 import { threadDeletionLogger } from "../logging.js";
 import { ownerSearchIndex } from "../thread-search/index-client.js";
+import { deleteThreadStorage } from "../thread-storage/store.js";
 import { drainThreadDaemon } from "../threads/daemon-client.js";
 
 /** Each piece of a deleted Thread that lives outside its D1 row. */
@@ -11,7 +12,8 @@ export type ThreadCleanupStep =
   | "execution-object"
   | "search-index"
   | "changes"
-  | "attachments";
+  | "attachments"
+  | "storage";
 
 /**
  * How each piece outside D1 is removed. Every step is idempotent: a retry
@@ -114,6 +116,7 @@ export const purgeDeletedThread = async (
       },
     ],
     ["attachments", () => deleteAttachments(bindings, threadId)],
+    ["storage", () => deleteThreadStorage(bindings, threadId)],
   ];
   const failedSteps: ThreadCleanupStep[] = [];
   for (const [step, run] of steps) {

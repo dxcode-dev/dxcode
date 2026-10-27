@@ -264,7 +264,7 @@ Report as a visual transcript, in order: one line per action describing what was
 clicked, with the non-sensitive values named (say that a password, card number, or code was
 entered without reproducing it; card numbers by last four digits only), the confirmation with its
 reference or order number quoted as text, the fields you could not fill and why, and links to the
-screenshots, recording, and contact sheet. Show each capture inline
-with a Markdown image of its absolute path, such as
-`![Order confirmation](/home/user/artifacts/browser-use/acme-checkout/order-confirmation.png)`;
+screenshots, recording, and contact sheet. Store each capture with
+`dxd files put <path>...`, which prints one URL per file, and show it inline
+with a Markdown image of that URL, such as `![Order confirmation](<printed url>)`;
 recordings (`.webm`, `.mp4`) play in place the same way.

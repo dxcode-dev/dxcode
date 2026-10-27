@@ -46,9 +46,10 @@ browser-use skill instead.
   `--executable-path` wrapper instead (see Hover-gated UI).
 - Save every screenshot and recording the user should see under `~/artifacts/<topic>/` by
   absolute path, outside the repository so it never shows up in `git status`. Pass an absolute
-  path: a path starting with `.` is read as a CSS selector. Show each one in your reply
-  with a Markdown image of its absolute path, `![label](/home/user/artifacts/<topic>/name.png)`:
-  the transcript shows images inline and plays `.webm`/`.mp4` recordings and audio in place.
+  path: a path starting with `.` is read as a CSS selector. Store each one with
+  `dxd files put <path>...` and show it in your reply with a Markdown image of the printed URL,
+  `![label](<printed url>)`: the transcript shows images inline and plays `.webm`/`.mp4`
+  recordings and audio in place, even after the Orb is gone.
 
 ## Sessions
 

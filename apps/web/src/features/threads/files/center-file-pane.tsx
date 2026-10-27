@@ -6,12 +6,14 @@ import { AudioLines, Download } from "lucide-react";
 import * as React from "react";
 import { downloadFromUrl } from "../../../shared/download-from-url.js";
 import { useTheme } from "../../../shared/theme/theme-provider.js";
+import {
+  type FileMediaKind,
+  fileMediaKind,
+} from "../../../shared/ui/media-kind.js";
 import type { CenterFileTab } from "../thread-center-tabs.js";
 import {
   absolutePathFor,
-  type FileMediaKind,
   type FileReveal,
-  fileMediaKind,
   resolveReveal,
   sandboxFileUrl,
 } from "../transcript-file-link.js";

@@ -22,9 +22,11 @@ import { codeFenceBlock, settledMarkdownBlocks } from "./markdown-blocks.js";
 import {
   MarkdownFileLinkContext,
   type MarkdownFileLinkResolver,
-  MarkdownImageSourceContext,
 } from "./markdown-file-link-context.js";
+import { galleryItems, remarkMediaGalleries } from "./markdown-galleries.js";
 import { loadKatex, normalizeMathDelimiters } from "./markdown-math.js";
+import { MarkdownImageOpener, MarkdownMediaGallery } from "./markdown-media.js";
+import { useMarkdownMediaSource } from "./markdown-media-source.js";
 import {
   MarkdownMentionContext,
   type MarkdownMentions,
@@ -626,6 +628,8 @@ const remarkPlugins: React.ComponentProps<
   // Single dollars are prices more often than math; normalizeMathDelimiters
   // rewrites the math ones to double dollars.
   [remarkMath, { singleDollarTextMath: false }],
+  // Consecutive images and videos in a message show as one gallery.
+  remarkMediaGalleries,
 ];
 // A file is hard-wrapped prose: a single newline is a space, not a break.
 const documentRemarkPlugins: React.ComponentProps<
@@ -662,10 +666,10 @@ function MarkdownImage({
   title,
 }: Pick<React.ComponentProps<"img">, "alt" | "src" | "title">) {
   const insideLink = React.useContext(InsideMarkdownLink);
-  const resolveImage = React.useContext(MarkdownImageSourceContext);
+  const resolveImage = useMarkdownMediaSource();
   const name = accessibleName(alt, "Markdown image");
   const url = typeof src === "string" && src !== "" ? src : undefined;
-  const media = url === undefined ? undefined : resolveImage?.(url);
+  const media = url === undefined ? undefined : resolveImage(url);
   // Players are interactive, so a linked one stays an image or a label.
   if (media?.kind === "video" && !insideLink)
     return (
@@ -692,8 +696,10 @@ function MarkdownImage({
         preload="metadata"
       />
     );
-  if (media?.kind === "image")
+  if (media?.kind === "image" && insideLink)
     return <img src={media.url} alt={name} title={title} loading="lazy" />;
+  if (media?.kind === "image")
+    return <MarkdownImageOpener source={media} name={name} title={title} />;
   if (media === undefined && url !== undefined && sameOriginImage(url))
     return <img src={url} alt={name} title={title} loading="lazy" />;
   const label = (
@@ -761,6 +767,26 @@ const remarkMentions =
     visit(tree);
   };
 
+/** Not in react-markdown's element map, so spread in. */
+const galleryComponents = {
+  "dx-media-gallery": ({
+    "data-items": items,
+    children: content,
+  }: {
+    readonly "data-items"?: string;
+    readonly children?: React.ReactNode;
+  }) => (
+    <MarkdownMediaGallery
+      items={galleryItems(items).map((item) => ({
+        ...item,
+        src: urlTransform(item.src),
+      }))}
+    >
+      {content}
+    </MarkdownMediaGallery>
+  ),
+};
+
 const markdownComponents = (
   resolveFile: MarkdownFileLinkResolver | undefined,
   mentions: MarkdownMentions | undefined,
@@ -776,6 +802,7 @@ const markdownComponents = (
           readonly children?: React.ReactNode;
         }) => mentions.render(handle ?? "", content),
       }),
+  ...galleryComponents,
   a: ({ children: content, href }) => (
     <MarkdownLink href={href} resolveFile={resolveFile}>
       <InsideMarkdownLink value={true}>{content}</InsideMarkdownLink>

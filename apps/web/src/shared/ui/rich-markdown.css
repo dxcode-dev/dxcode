@@ -406,3 +406,112 @@
   width: min(100%, 420px);
   margin: 0.75em 0;
 }
+
+/* An image in a message opens full window when clicked. */
+.markdown.transcript-markdown .markdown-image-open {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0;
+  font: inherit;
+  vertical-align: top;
+  cursor: zoom-in;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+}
+.markdown.transcript-markdown .markdown-image-open > img {
+  display: block;
+  max-width: 100%;
+  border-radius: 4px;
+}
+.markdown.transcript-markdown .markdown-image-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Consecutive images and videos in a message, one at a time. */
+.markdown.transcript-markdown .markdown-gallery {
+  width: min(100%, 720px);
+  margin: 0.75em 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.markdown.transcript-markdown .markdown-gallery-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: min(60vh, 420px);
+  background: #000;
+}
+.markdown.transcript-markdown .markdown-gallery-open {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  cursor: zoom-in;
+  background: none;
+  border: 0;
+}
+.markdown.transcript-markdown .markdown-gallery-open > img,
+.markdown.transcript-markdown .markdown-gallery-video {
+  max-width: 100%;
+  max-height: min(60vh, 420px);
+  object-fit: contain;
+}
+.markdown.transcript-markdown .markdown-gallery-step,
+.markdown.transcript-markdown .markdown-gallery-expand {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: white;
+  background: rgb(0 0 0 / 55%);
+  border: 0;
+  border-radius: 50%;
+}
+.markdown.transcript-markdown .markdown-gallery-step:hover,
+.markdown.transcript-markdown .markdown-gallery-expand:hover {
+  background: rgb(0 0 0 / 80%);
+}
+.markdown.transcript-markdown .markdown-gallery-step svg,
+.markdown.transcript-markdown .markdown-gallery-expand svg {
+  width: 18px;
+  height: 18px;
+}
+.markdown.transcript-markdown .markdown-gallery-step {
+  top: 50%;
+  transform: translateY(-50%);
+}
+.markdown.transcript-markdown
+  .markdown-gallery-step[data-direction="previous"] {
+  left: 8px;
+}
+.markdown.transcript-markdown .markdown-gallery-step[data-direction="next"] {
+  right: 8px;
+}
+.markdown.transcript-markdown .markdown-gallery-expand {
+  top: 8px;
+  right: 8px;
+  border-radius: 6px;
+}
+.markdown.transcript-markdown .markdown-gallery-caption {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.markdown.transcript-markdown .markdown-gallery-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.markdown.transcript-markdown .markdown-gallery-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}

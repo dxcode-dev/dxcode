@@ -13521,3 +13521,8 @@ body:has(.dx-app-shell) {
 .repository-combobox-empty:empty {
   display: none;
 }
+.image-viewer-stage > video {
+  max-width: calc(100vw - 144px);
+  max-height: calc(100dvh - 120px);
+  background: #000;
+}

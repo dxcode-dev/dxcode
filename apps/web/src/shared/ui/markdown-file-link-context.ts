@@ -24,6 +24,8 @@ export const MarkdownFileLinkContext = createContext<
 export interface MarkdownMediaSource {
   readonly url: string;
   readonly kind: "image" | "video" | "audio";
+  /** Same-origin URL that downloads the file, when it can be downloaded. */
+  readonly downloadUrl?: string;
 }
 
 /**

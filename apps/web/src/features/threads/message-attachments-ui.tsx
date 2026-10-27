@@ -1,16 +1,8 @@
-import { Dialog } from "@base-ui/react/dialog";
 import { Popover } from "@base-ui/react/popover";
 import type { MessageAttachment } from "@dx/api";
-import {
-  ChevronLeft,
-  ChevronRight,
-  Download,
-  Paperclip,
-  X,
-  ZoomIn,
-  ZoomOut,
-} from "lucide-react";
+import { Download, Paperclip } from "lucide-react";
 import * as React from "react";
+import { MediaViewer } from "../../shared/ui/media-viewer.js";
 import {
   attachmentPlayable,
   attachmentPreviewKind,
@@ -43,103 +35,6 @@ const shown = (attachments: ReadonlyArray<MessageAttachment>) =>
 const isImage = (attachment: MessageAttachment) =>
   attachmentPreviewKind(attachment.mimeType) === "image";
 
-/**
- * A full-window viewer for a message's images: one at a time, stepped with
- * the arrows or the keyboard, never automatically.
- */
-function ImageViewer({
-  images,
-  index,
-  onIndexChange,
-  onClose,
-}: {
-  readonly images: ReadonlyArray<ShownAttachment>;
-  readonly index: number;
-  readonly onIndexChange: (index: number) => void;
-  readonly onClose: () => void;
-}) {
-  const [zoomed, setZoomed] = React.useState(false);
-  const image = images[index];
-  if (image === undefined) return null;
-  const step = (offset: number) => {
-    setZoomed(false);
-    onIndexChange((index + offset + images.length) % images.length);
-  };
-  const several = images.length > 1;
-  return (
-    <Dialog.Root open onOpenChange={(open) => (open ? undefined : onClose())}>
-      <Dialog.Portal>
-        <Dialog.Backdrop className="image-viewer-backdrop" />
-        <Dialog.Popup
-          className="image-viewer"
-          aria-label={image.name}
-          onKeyDown={(event) => {
-            if (!several) return;
-            if (event.key === "ArrowRight") step(1);
-            else if (event.key === "ArrowLeft") step(-1);
-          }}
-        >
-          <div className="image-viewer-bar">
-            <span className="image-viewer-count">
-              {several ? `${index + 1} / ${images.length}` : ""}
-            </span>
-            <div className="image-viewer-actions">
-              <button
-                type="button"
-                aria-label={zoomed ? "Fit to window" : "Actual size"}
-                title={zoomed ? "Fit to window" : "Actual size"}
-                onClick={() => setZoomed((value) => !value)}
-              >
-                {zoomed ? <ZoomOut /> : <ZoomIn />}
-              </button>
-              <a
-                href={`${image.href}?download=1`}
-                download={image.name}
-                aria-label={`Download ${image.name}`}
-                title="Download"
-              >
-                <Download />
-              </a>
-              <Dialog.Close aria-label="Close viewer" title="Close">
-                <X />
-              </Dialog.Close>
-            </div>
-          </div>
-          <div
-            className="image-viewer-stage"
-            data-zoomed={zoomed ? "" : undefined}
-          >
-            <img src={image.href} alt={image.name} key={image.id} />
-          </div>
-          {several ? (
-            <>
-              <button
-                type="button"
-                className="image-viewer-step"
-                data-direction="previous"
-                aria-label="Previous image"
-                onClick={() => step(-1)}
-              >
-                <ChevronLeft />
-              </button>
-              <button
-                type="button"
-                className="image-viewer-step"
-                data-direction="next"
-                aria-label="Next image"
-                onClick={() => step(1)}
-              >
-                <ChevronRight />
-              </button>
-            </>
-          ) : null}
-          <span className="image-viewer-name">{image.name}</span>
-        </Dialog.Popup>
-      </Dialog.Portal>
-    </Dialog.Root>
-  );
-}
-
 /** A sent message's images, as square tiles above its bubble. */
 export function MessageImageTiles({
   attachments,
@@ -164,8 +59,14 @@ export function MessageImageTiles({
         </button>
       ))}
       {open === undefined ? null : (
-        <ImageViewer
-          images={images}
+        <MediaViewer
+          items={images.map((image) => ({
+            key: image.id,
+            url: image.href,
+            name: image.name,
+            kind: "image",
+            downloadUrl: `${image.href}?download=1`,
+          }))}
           index={open}
           onIndexChange={setOpen}
           onClose={() => setOpen(undefined)}

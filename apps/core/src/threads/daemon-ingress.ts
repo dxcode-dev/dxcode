@@ -58,6 +58,60 @@ export const forwardDaemonAttachment = async (
   );
 };
 
+export const DAEMON_STORAGE_PATH =
+  /^\/v1\/dxd\/([^/]+)\/storage((?:\/tsf_[0-9a-f]{32}(?:\/complete)?)?)$/;
+const STORAGE_ROUTE = /^(?:\/(tsf_[0-9a-f]{32})(\/complete)?)?$/;
+/** The largest request body dxd sends to storage: a JSON list of parts. */
+const MAX_STORAGE_BODY_BYTES = 64 * 1024;
+
+/**
+ * Thread storage for the guest's dxd, with the daemon's own key: `dxd files
+ * put` creates and completes an upload into this Thread's storage (`POST
+ * /storage`, `POST /storage/<id>/complete`), and `dxd files get` describes a
+ * stored file (`GET /storage/<id>`). The Thread execution object checks the
+ * key as it does for the socket, so only the Thread itself writes there.
+ */
+export const forwardDaemonStorage = async (
+  request: Request,
+  namespace: DurableObjectNamespace | undefined,
+  threadId: string | undefined,
+  path: string,
+): Promise<Response> => {
+  const [, id, complete] = STORAGE_ROUTE.exec(path) ?? [];
+  const write = request.method === "POST";
+  const create = write && path === "";
+  const finish = write && id !== undefined && complete !== undefined;
+  const describe =
+    (request.method === "GET" || request.method === "HEAD") &&
+    id !== undefined &&
+    complete === undefined;
+  if (
+    !(create || finish || describe) ||
+    threadId === undefined ||
+    !THREAD_ID.test(threadId) ||
+    namespace === undefined
+  )
+    return new Response(null, { status: 404 });
+  if (!DAEMON_KEY.test(request.headers.get("authorization") ?? ""))
+    return new Response(null, { status: 401 });
+  const body = write ? await request.arrayBuffer() : undefined;
+  if (body !== undefined && body.byteLength > MAX_STORAGE_BODY_BYTES)
+    return new Response(null, { status: 413 });
+  return namespace.get(namespace.idFromName(threadId)).fetch(
+    new Request("https://thread.internal/daemon/storage", {
+      method: request.method,
+      headers: {
+        authorization: request.headers.get("authorization") ?? "",
+        "content-type": "application/json",
+        "x-dx-daemon-ingress": "1",
+        "x-dx-thread-id": threadId,
+        "x-dx-storage-path": path,
+      },
+      ...(body === undefined ? {} : { body }),
+    }),
+  );
+};
+
 export const forwardDaemonUpgrade = async (
   request: Request,
   namespace: DurableObjectNamespace | undefined,
@@ -100,6 +154,14 @@ export default {
         env.THREAD_EXECUTION,
         attachment[1],
         attachment[2],
+      );
+    const storage = DAEMON_STORAGE_PATH.exec(path);
+    if (storage !== null)
+      return forwardDaemonStorage(
+        request,
+        env.THREAD_EXECUTION,
+        storage[1],
+        storage[2] ?? "",
       );
     const match = DAEMON_INGRESS_PATH.exec(path);
     return forwardDaemonUpgrade(request, env.THREAD_EXECUTION, match?.[1]);
