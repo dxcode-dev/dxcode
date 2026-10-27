@@ -1,7 +1,7 @@
 {
   "name": "@dx/web",
   "private": true,
-  "version": "0.2.41",
+  "version": "0.2.42",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {

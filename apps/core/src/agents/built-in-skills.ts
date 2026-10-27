@@ -11,14 +11,19 @@ import {
   type BuiltInSkillName,
 } from "./built-in-skill-names.js";
 import browserUse from "./built-in-skills/browser-use/skill.md?raw";
+import buildingSchedules from "./built-in-skills/building-schedules/skill.md?raw";
 import buildingSkills from "./built-in-skills/building-skills/skill.md?raw";
 import creatingViewsPreview from "./built-in-skills/creating-views/scripts/preview.mjs?raw";
 import creatingViews from "./built-in-skills/creating-views/skill.md?raw";
 import explainingCode from "./built-in-skills/explaining-code/skill.md?raw";
 import orbSetup from "./built-in-skills/orb-setup/skill.md?raw";
+import planningWork from "./built-in-skills/planning-work/skill.md?raw";
 import provingChangesAgentInstructions from "./built-in-skills/proving-changes/reference/agent-instructions.md?raw";
 import provingChangesTechniques from "./built-in-skills/proving-changes/reference/techniques.md?raw";
 import provingChanges from "./built-in-skills/proving-changes/skill.md?raw";
+import researchingExternalRepositories from "./built-in-skills/researching-external-repositories/skill.md?raw";
+import reviewingCode from "./built-in-skills/reviewing-code/skill.md?raw";
+import searchingCode from "./built-in-skills/searching-code/skill.md?raw";
 import actionVideo from "./built-in-skills/using-agent-browser/scripts/action-video.mjs?raw";
 import usingAgentBrowser from "./built-in-skills/using-agent-browser/skill.md?raw";
 import writingPrompts from "./built-in-skills/writing-prompts/skill.md?raw";
@@ -44,6 +49,7 @@ const sources: ReadonlyArray<{
   readonly files: Readonly<Record<string, string>>;
 }> = [
   { name: "browser-use", files: { "SKILL.md": browserUse } },
+  { name: "building-schedules", files: { "SKILL.md": buildingSchedules } },
   { name: "building-skills", files: { "SKILL.md": buildingSkills } },
   {
     name: "creating-views",
@@ -60,6 +66,7 @@ const sources: ReadonlyArray<{
   },
   { name: "explaining-code", files: { "SKILL.md": explainingCode } },
   { name: "orb-setup", files: { "SKILL.md": orbSetup } },
+  { name: "planning-work", files: { "SKILL.md": planningWork } },
   {
     name: "proving-changes",
     files: {
@@ -68,6 +75,12 @@ const sources: ReadonlyArray<{
       "reference/techniques.md": provingChangesTechniques,
     },
   },
+  {
+    name: "researching-external-repositories",
+    files: { "SKILL.md": researchingExternalRepositories },
+  },
+  { name: "reviewing-code", files: { "SKILL.md": reviewingCode } },
+  { name: "searching-code", files: { "SKILL.md": searchingCode } },
   {
     name: "using-agent-browser",
     files: {
