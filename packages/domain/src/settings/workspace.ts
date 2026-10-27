@@ -8,6 +8,12 @@ export const WorkspaceId = Schema.String.check(
 
 export type WorkspaceId = typeof WorkspaceId.Type;
 
+/** Where an uploaded person or workspace picture is stored in DX_STORAGE. */
+export const AvatarKey = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(512),
+);
+
 export const WorkspaceDisplayName = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(128),
@@ -109,6 +115,7 @@ export const WorkspaceProfile = Schema.Struct({
   shortName: WorkspaceShortName,
   lifecycleState: WorkspaceLifecycleState,
   revision: WorkspaceProfileRevision,
+  avatarKey: Schema.optional(AvatarKey),
 });
 
 export type WorkspaceProfile = typeof WorkspaceProfile.Type;

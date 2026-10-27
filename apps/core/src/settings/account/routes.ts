@@ -18,6 +18,7 @@ import {
   normalizePersonalAccountDisplayName,
   normalizePersonalAccountUsername,
   PersonalAccountDisplayName,
+  PersonalAccountNotFound,
   PersonalAccountUsername,
   PersonalAppearance,
   PersonalPalette,
@@ -27,6 +28,13 @@ import {
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Match, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import {
+  avatarUrl,
+  readAvatarUpload,
+  removeAvatar,
+  replaceAvatar,
+  swapAvatarKey,
+} from "../../avatars/storage.js";
 import { decodeJsonBody } from "../../http/request-decoding.js";
 import type { AppEnv } from "../../http/types.js";
 import { authorizationLogger } from "../../logging.js";
@@ -92,6 +100,7 @@ const responseData = (account: {
   readonly appearance: "system" | "light" | "dark";
   readonly palette: "daydream" | "deadpan";
   readonly terminalTheme: PersonalTerminalTheme;
+  readonly avatarKey?: string;
 }) => ({
   displayName: account.displayName,
   username: account.username,
@@ -102,6 +111,9 @@ const responseData = (account: {
   appearance: account.appearance,
   palette: account.palette,
   terminalTheme: account.terminalTheme,
+  ...(account.avatarKey === undefined
+    ? {}
+    : { avatarUrl: avatarUrl(account.avatarKey) }),
 });
 
 const validateUpdate = (
@@ -557,3 +569,102 @@ personalAccountRoutes.patch("/composer", async (context) => {
     Match.exhaustive,
   );
 });
+
+const assignAvatar = (db: D1Database, userId: string, key: string | null) =>
+  swapAvatarKey(db, "personal_account", "user_id", userId, key).pipe(
+    Effect.flatMap(({ found, previous }) =>
+      found
+        ? Effect.succeed(previous)
+        : Effect.fail(new PersonalAccountNotFound()),
+    ),
+  );
+
+/** Uploads replace the caller's picture; DELETE returns them to initials. */
+const changeAvatar =
+  (change: "replace" | "remove") => async (context: Context<AppEnv>) => {
+    const requestId = context.get("requestId");
+    const principal = context.get("principal");
+    const operation = Effect.gen(function* () {
+      const db = yield* decodeD1Binding(context.env.DB);
+      return yield* Effect.gen(function* () {
+        const settings = yield* SettingsService;
+        yield* settings.personal(principal);
+        if (change === "replace") {
+          const upload = yield* readAvatarUpload(context.req.raw);
+          yield* replaceAvatar(
+            context.env.DX_STORAGE,
+            `avatars/users/${principal.userId}`,
+            upload,
+            (key) => assignAvatar(db, principal.userId, key),
+          );
+        } else {
+          yield* removeAvatar(
+            context.env.DX_STORAGE,
+            assignAvatar(db, principal.userId, null),
+          );
+        }
+        const audit = yield* SettingsAudit;
+        yield* audit.record({
+          action: "personal_account.update",
+          scope: "personal",
+          outcome: "success",
+          requestId,
+          userId: principal.userId,
+          fields: ["avatar"],
+        });
+        const accounts = yield* PersonalAccountService;
+        const account = yield* accounts.get(principal);
+        return yield* Schema.encodeUnknownEffect(
+          UpdatePersonalAccountResponseSchema,
+        )({ status: "success", data: responseData(account) });
+      }).pipe(
+        Effect.provide(Layer.merge(servicesFor(db), SettingsAudit.layer)),
+      );
+    });
+
+    const result = await Effect.runPromise(Effect.result(operation));
+    if (Result.isSuccess(result)) return context.json(result.success, 200);
+    return Match.value(result.failure).pipe(
+      Match.tags({
+        InvalidAvatarUpload: () =>
+          context.json(
+            Schema.encodeUnknownSync(
+              PersonalAccountInvalidRequestResponseSchema,
+            )({
+              status: "error",
+              data: {
+                code: "INVALID_ACCOUNT_PROFILE",
+                message: "Account profile validation failed.",
+                requestId,
+                fieldErrors: [
+                  {
+                    field: "avatar",
+                    message: "Choose a PNG, JPEG, or WebP image up to 512 KB.",
+                  },
+                ],
+              },
+            }),
+            400,
+          ),
+        SettingsScopeForbidden: () => forbidden(context),
+        PersonalAccountNotFound: () => notFound(context),
+        PersistenceUnavailable: () => unavailable(context),
+        SettingsMembershipInvariantViolation: (error) => {
+          throw error;
+        },
+        D1BindingUnavailable: (error) => {
+          throw error;
+        },
+        ConfigError: (error) => {
+          throw error;
+        },
+        SchemaError: (error) => {
+          throw error;
+        },
+      }),
+      Match.exhaustive,
+    );
+  };
+
+personalAccountRoutes.put("/avatar", changeAvatar("replace"));
+personalAccountRoutes.delete("/avatar", changeAvatar("remove"));

@@ -3474,6 +3474,7 @@ a {
 }
 .settings-workspace-mark {
   display: grid;
+  overflow: hidden;
   place-items: center;
   flex: 0 0 17px;
   width: 17px;
@@ -6030,6 +6031,31 @@ a {
   font-size: 14px;
   font-weight: 700;
   letter-spacing: -0.02em;
+  overflow: hidden;
+}
+.account-avatar > img,
+.settings-workspace-mark > img,
+.sidebar-account-avatar > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+.profile-picture-editor {
+  display: grid;
+  flex: none;
+  justify-items: center;
+  gap: 8px;
+  max-width: 140px;
+}
+.profile-picture-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+}
+.profile-picture-editor > .account-field-error {
+  text-align: center;
 }
 .account-profile-details {
   display: flex;

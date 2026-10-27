@@ -47,7 +47,11 @@ export function SidebarAccountMenu({
           aria-label="Open account menu"
         >
           <span className="sidebar-account-avatar">
-            <span>{username.slice(0, 1).toUpperCase() || "D"}</span>
+            {personalAccount?.avatarUrl === undefined ? (
+              <span>{username.slice(0, 1).toUpperCase() || "D"}</span>
+            ) : (
+              <img src={personalAccount.avatarUrl} alt="" />
+            )}
           </span>
           <span className="account-copy">
             <strong>{username}</strong>

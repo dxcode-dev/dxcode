@@ -8,6 +8,7 @@ import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { settingsNavigationState } from "../../../shared/navigation/settings-return.js";
 import { Button } from "../../../shared/ui/button.js";
 import { Input } from "../../../shared/ui/input.js";
+import { ProfilePicture, ProfilePictureEditor } from "../profile-picture.js";
 import {
   initialSettingsFormState,
   reduceSettingsFormState,
@@ -29,14 +30,6 @@ const fieldError = (
   errors: ReadonlyArray<SettingsFieldError>,
   field: "displayName" | "shortName",
 ) => errors.find((error) => error.field === field)?.message;
-
-const initials = (name: string) =>
-  name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toLocaleUpperCase())
-    .join("") || "W";
 
 function CreateWorkspaceCard({
   onDirtyChange,
@@ -219,9 +212,12 @@ function WorkspaceProfileRow({
   };
   return (
     <div className="workspace-profile-body">
-      <span className="settings-workspace-mark" aria-hidden="true">
-        {initials(workspace.displayName)}
-      </span>
+      <ProfilePicture
+        className="settings-workspace-mark"
+        name={workspace.displayName}
+        url={workspace.avatarUrl}
+        fallback="W"
+      />
       <dl className="account-profile-details">
         <div>
           <dt>Display name</dt>
@@ -383,6 +379,10 @@ export function WorkspaceProfileForm({
     initialSettingsFormState,
   );
   const [editing, setEditing] = React.useState(false);
+  const [avatar, setAvatar] = React.useState<{
+    readonly busy: boolean;
+    readonly error?: string;
+  }>({ busy: false });
   const displayNameInput = React.useRef<HTMLInputElement>(null);
   const shortNameInput = React.useRef<HTMLInputElement>(null);
   const formId = React.useId();
@@ -414,6 +414,33 @@ export function WorkspaceProfileForm({
       nextShortName !== authoritativeBaseline.shortName;
     dispatch({ type: dirty ? "changed" : "reset" });
     onDirtyChange(dirty);
+  };
+
+  const updateAvatar = async (file: File | null) => {
+    if (!canEdit || mutateWorkspace === undefined) return;
+    setAvatar({ busy: true });
+    try {
+      const workspace = await mutateWorkspace({
+        kind: "avatar",
+        workspaceSlug: authoritativeBaseline.shortName,
+        file,
+      });
+      setAvatar({ busy: false });
+      onSaved(workspace);
+    } catch (cause) {
+      const error = settingsMutationError(
+        cause,
+        file === null
+          ? "Picture could not be removed."
+          : "Picture could not be uploaded.",
+      );
+      setAvatar({
+        busy: false,
+        error:
+          error.fieldErrors?.find(({ field }) => field === "avatar")?.message ??
+          error.message,
+      });
+    }
   };
 
   const cancel = () => {
@@ -485,9 +512,21 @@ export function WorkspaceProfileForm({
       >
         {editing ? (
           <div className="workspace-profile-body">
-            <span className="settings-workspace-mark" aria-hidden="true">
-              {initials(baseline.displayName)}
-            </span>
+            <ProfilePictureEditor
+              label="Workspace picture"
+              busy={avatar.busy}
+              disabled={saving && !avatar.busy}
+              error={avatar.error}
+              url={authoritativeBaseline.avatarUrl}
+              onChange={(file) => void updateAvatar(file)}
+            >
+              <ProfilePicture
+                className="settings-workspace-mark"
+                name={baseline.displayName}
+                url={authoritativeBaseline.avatarUrl}
+                fallback="W"
+              />
+            </ProfilePictureEditor>
             <form
               id={formId}
               className="workspace-profile-form"

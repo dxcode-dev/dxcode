@@ -633,6 +633,7 @@ export {
   type SkillRepositoryShape,
 } from "./settings/skill-repository.js";
 export {
+  AvatarKey,
   CreateWorkspaceInput,
   normalizeWorkspaceDisplayName,
   normalizeWorkspaceShortName,

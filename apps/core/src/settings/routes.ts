@@ -8,6 +8,7 @@ import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Match, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import { personalTimeZoneRoutes } from "../automations/routes.js";
+import { avatarUrl } from "../avatars/storage.js";
 import {
   personalDictationVocabularyRoutes,
   workspaceDictationVocabularyRoutes,
@@ -83,6 +84,11 @@ const responseData = (
           lifecycleState: access.workspace.workspace.lifecycleState,
           revision: access.workspace.workspace.revision,
           role: access.workspace.role,
+          ...(access.workspace.workspace.avatarKey === undefined
+            ? {}
+            : {
+                avatarUrl: avatarUrl(access.workspace.workspace.avatarKey),
+              }),
         },
 });
 

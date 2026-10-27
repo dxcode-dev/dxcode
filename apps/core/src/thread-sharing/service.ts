@@ -7,6 +7,7 @@ import {
 } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import { DateTime } from "effect";
+import { userImageSql } from "../avatars/storage.js";
 import { threadProjectReachableSql } from "../settings/members/membership-sql.js";
 import { threadUnreadSql } from "../threads/attention-d1.js";
 import { sharedThreadAccessSql, sharedThreadVisibleSql } from "./access.js";
@@ -208,7 +209,8 @@ export const decorateSharingRows = async (
     .prepare(
       `SELECT thread.id AS thread_id, "user".id AS user_id,
               ${displayNameSql('"user"', "account")} AS name,
-              account.username AS handle, "user".image, 1 AS owner,
+              account.username AS handle,
+              ${userImageSql('"user"', "account")} AS image, 1 AS owner,
               0 AS rank, '' AS seen
          FROM threads AS thread
          JOIN "user" ON "user".id = thread.owner_user_id
@@ -217,7 +219,7 @@ export const decorateSharingRows = async (
        UNION ALL
        SELECT participant.thread_id, "user".id,
               ${displayNameSql('"user"', "account")}, account.username,
-              "user".image, 0, 1,
+              ${userImageSql('"user"', "account")}, 0, 1,
               COALESCE(participant.last_message_at, participant.last_seen_at)
          FROM thread_participant AS participant
          JOIN threads AS thread ON thread.id = participant.thread_id

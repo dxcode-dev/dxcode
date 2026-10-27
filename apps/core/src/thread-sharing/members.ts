@@ -6,6 +6,7 @@ import {
   type ThreadMemberData,
 } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
+import { userImageSql } from "../avatars/storage.js";
 import { activeMemberSql } from "../settings/members/membership-sql.js";
 import { displayNameSql } from "./service.js";
 
@@ -23,7 +24,8 @@ export const threadMembers = async (
       .prepare(
         `SELECT "user".id AS user_id,
                 ${displayNameSql('"user"', "account")} AS name,
-                account.username AS handle, "user".email, "user".image
+                account.username AS handle, "user".email,
+                ${userImageSql('"user"', "account")} AS image
            FROM threads AS thread
            JOIN organization ON organization.id = thread.shared_workspace_id
                             AND organization.lifecycleState = 'active'

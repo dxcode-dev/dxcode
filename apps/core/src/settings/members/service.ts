@@ -6,6 +6,7 @@ import type {
 } from "@dx/api";
 import type { Principal, WorkspaceRole } from "@dx/domain";
 import { Effect } from "effect";
+import { userImageSql } from "../../avatars/storage.js";
 import { encodeBase64Url } from "../../encoding/base64.js";
 import type { Bindings } from "../../http/types.js";
 import { settingsAuditLogger } from "../../logging.js";
@@ -125,17 +126,20 @@ interface MemberRow {
   readonly joined_at: unknown;
   readonly session_at: unknown;
   readonly thread_at: string | null;
+  readonly image: string | null;
 }
 
 const memberSelect = `
   SELECT member.userId AS user_id, "user".email, "user".name, member.role,
          member.createdAt AS joined_at,
+         ${userImageSql('"user"', "account")} AS image,
          (SELECT MAX(session.updatedAt) FROM session
            WHERE session.userId = member.userId) AS session_at,
          (SELECT MAX(threads.last_activity_at) FROM threads
            WHERE threads.owner_user_id = member.userId) AS thread_at
     FROM member
-    JOIN "user" ON "user".id = member.userId`;
+    JOIN "user" ON "user".id = member.userId
+    LEFT JOIN personal_account AS account ON account.user_id = member.userId`;
 
 const memberData = (row: MemberRow): WorkspaceMemberData => {
   const lastActiveAt = latest(
@@ -149,6 +153,9 @@ const memberData = (row: MemberRow): WorkspaceMemberData => {
     role: row.role,
     joinedAt: isoFrom(row.joined_at) ?? new Date(0).toISOString(),
     ...(lastActiveAt === undefined ? {} : { lastActiveAt }),
+    ...(row.image === null || row.image.length > 2_048
+      ? {}
+      : { image: row.image }),
   };
 };
 

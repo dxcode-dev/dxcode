@@ -17,6 +17,8 @@ export const WorkspaceProfileDataSchema = Schema.Struct({
   lifecycleState: WorkspaceLifecycleState,
   revision: WorkspaceProfileRevision,
   role: WorkspaceRole,
+  /** The uploaded picture; absent shows initials. */
+  avatarUrl: Schema.optional(Schema.String.check(Schema.isMaxLength(2_048))),
 });
 
 export const WorkspaceProfileParamsSchema = Schema.Struct({

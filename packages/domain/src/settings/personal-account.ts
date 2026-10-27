@@ -3,6 +3,7 @@ import { ProjectId } from "../projects/project-id.js";
 import { UserId } from "../users/user-id.js";
 import { ModeId, ModelId } from "./model-routing.js";
 import { RunnerProfileId } from "./runner-profile.js";
+import { AvatarKey } from "./workspace.js";
 
 export const PersonalAccountDisplayName = Schema.String.check(
   Schema.isMinLength(1),
@@ -65,6 +66,7 @@ export const PersonalAccount = Schema.Struct({
   appearance: PersonalAppearance,
   palette: PersonalPalette,
   terminalTheme: PersonalTerminalTheme,
+  avatarKey: Schema.optional(AvatarKey),
 });
 
 export type PersonalAccount = typeof PersonalAccount.Type;

@@ -2310,6 +2310,25 @@ export const updateWorkspaceProfile = async (
     )
   ).data;
 
+/** Replaces the workspace's picture with `file`, or removes it with `null`. */
+export const setWorkspaceAvatar = async (
+  workspaceSlug: WorkspaceSlug,
+  file: File | null,
+): Promise<WorkspaceProfileData> =>
+  (
+    await request(
+      `/v1/settings/workspaces/${encodeURIComponent(workspaceSlug)}/avatar`,
+      UpdateWorkspaceProfileResponseSchema,
+      file === null
+        ? { method: "DELETE" }
+        : {
+            method: "PUT",
+            body: file,
+            headers: { "content-type": file.type },
+          },
+    )
+  ).data;
+
 export const getWorkspacePolicy = async (
   workspaceSlug: WorkspaceSlug,
   signal?: AbortSignal,
@@ -2363,6 +2382,24 @@ export const updatePersonalAccount = async (input: {
       "/v1/settings/personal/account",
       UpdatePersonalAccountResponseSchema,
       { method: "PATCH", body: JSON.stringify(input) },
+    )
+  ).data;
+
+/** Replaces the caller's picture with `file`, or removes it with `null`. */
+export const setPersonalAvatar = async (
+  file: File | null,
+): Promise<PersonalAccountData> =>
+  (
+    await request(
+      "/v1/settings/personal/account/avatar",
+      UpdatePersonalAccountResponseSchema,
+      file === null
+        ? { method: "DELETE" }
+        : {
+            method: "PUT",
+            body: file,
+            headers: { "content-type": file.type },
+          },
     )
   ).data;
 

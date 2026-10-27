@@ -24,10 +24,19 @@ import {
   WorkspaceProfileConflict,
   WorkspaceShortName,
   WorkspaceShortNameUnavailable,
+  workspaceRoleHasPermission,
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import {
+  avatarUrl,
+  InvalidAvatarUpload,
+  readAvatarUpload,
+  removeAvatar,
+  replaceAvatar,
+  swapAvatarKey,
+} from "../../avatars/storage.js";
 import {
   decodeJsonBody,
   decodeRequestInput,
@@ -61,9 +70,17 @@ const responseData = (membership: {
       | "deleting"
       | "deletion-failed";
     readonly revision: number;
+    readonly avatarKey?: string;
   };
   readonly role: "owner" | "admin" | "auditor" | "member";
-}) => ({ ...membership.workspace, role: membership.role });
+}) => {
+  const { avatarKey, ...workspace } = membership.workspace;
+  return {
+    ...workspace,
+    role: membership.role,
+    ...(avatarKey === undefined ? {} : { avatarUrl: avatarUrl(avatarKey) }),
+  };
+};
 
 const validateProfile = (input: {
   readonly displayName: string;
@@ -144,6 +161,25 @@ const auditInvalid = (
 
 const failureResponse = (context: Context<AppEnv>, failure: unknown) => {
   const requestId = context.get("requestId");
+  if (failure instanceof InvalidAvatarUpload) {
+    return context.json(
+      Schema.encodeUnknownSync(WorkspaceProfileInvalidRequestResponseSchema)({
+        status: "error",
+        data: {
+          code: "INVALID_WORKSPACE_PROFILE",
+          message: "Workspace profile validation failed.",
+          requestId,
+          fieldErrors: [
+            {
+              field: "avatar",
+              message: "Choose a PNG, JPEG, or WebP image up to 512 KB.",
+            },
+          ],
+        },
+      }),
+      400,
+    );
+  }
   if (failure instanceof InvalidWorkspaceProfileRequest) {
     return context.json(
       Schema.encodeUnknownSync(WorkspaceProfileInvalidRequestResponseSchema)({
@@ -347,3 +383,83 @@ workspaceProfileRoutes.patch("/:workspaceSlug", async (context) => {
     ? context.json(result.success, 200)
     : failureResponse(context, result.failure);
 });
+
+/**
+ * Uploads replace the workspace's picture; DELETE returns it to initials.
+ * Needs workspace:update, like the name. It does not advance the profile
+ * revision, so a name edit open in another tab still saves.
+ */
+const changeAvatar =
+  (change: "replace" | "remove") => async (context: Context<AppEnv>) => {
+    const principal = context.get("principal");
+    const requestId = context.get("requestId");
+    const operation = Effect.gen(function* () {
+      const slug = yield* workspaceSlug(context);
+      const db = yield* decodeD1Binding(context.env.DB);
+      return yield* Effect.gen(function* () {
+        const service = yield* WorkspaceProfileService;
+        const audit = yield* SettingsAudit;
+        const current = yield* service.get(principal, slug);
+        if (
+          !workspaceRoleHasPermission(current.role, "workspace:update") ||
+          current.workspace.lifecycleState !== "active"
+        ) {
+          return yield* new SettingsScopeForbidden({ scope: "workspace" });
+        }
+        const assign = (key: string | null) =>
+          swapAvatarKey(
+            db,
+            "organization",
+            "id",
+            current.workspace.id,
+            key,
+          ).pipe(
+            Effect.flatMap(({ found, previous }) =>
+              found
+                ? Effect.succeed(previous)
+                : Effect.fail(
+                    new SettingsScopeForbidden({ scope: "workspace" }),
+                  ),
+            ),
+          );
+        if (change === "replace") {
+          const upload = yield* readAvatarUpload(context.req.raw);
+          yield* replaceAvatar(
+            context.env.DX_STORAGE,
+            `avatars/workspaces/${current.workspace.id}`,
+            upload,
+            assign,
+          );
+        } else {
+          yield* removeAvatar(context.env.DX_STORAGE, assign(null));
+        }
+        yield* audit.record({
+          action: "workspace.update",
+          scope: "workspace",
+          outcome: "success",
+          requestId,
+          userId: principal.userId,
+          workspaceSlug: slug,
+          fields: ["avatar"],
+        });
+        return yield* service.get(principal, slug);
+      }).pipe(
+        Effect.provide(Layer.merge(servicesFor(db), SettingsAudit.layer)),
+      );
+    }).pipe(
+      Effect.flatMap((membership) =>
+        Schema.encodeUnknownEffect(UpdateWorkspaceProfileResponseSchema)({
+          status: "success",
+          data: responseData(membership),
+        }),
+      ),
+    );
+
+    const result = await Effect.runPromise(Effect.result(operation));
+    return Result.isSuccess(result)
+      ? context.json(result.success, 200)
+      : failureResponse(context, result.failure);
+  };
+
+workspaceProfileRoutes.put("/:workspaceSlug/avatar", changeAvatar("replace"));
+workspaceProfileRoutes.delete("/:workspaceSlug/avatar", changeAvatar("remove"));

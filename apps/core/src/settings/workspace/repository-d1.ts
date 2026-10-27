@@ -21,6 +21,7 @@ const WorkspaceMembershipRow = Schema.Struct({
   short_name: Schema.String,
   lifecycle_state: Schema.String,
   profile_revision: Schema.Number,
+  avatar_key: Schema.NullOr(Schema.String),
   user_id: Schema.String,
   role: Schema.String,
 });
@@ -31,6 +32,7 @@ const WorkspaceProfileRow = Schema.Struct({
   short_name: Schema.String,
   lifecycle_state: Schema.String,
   profile_revision: Schema.Number,
+  avatar_key: Schema.NullOr(Schema.String),
 });
 
 const membershipFrom = (row: typeof WorkspaceMembershipRow.Type) =>
@@ -41,6 +43,7 @@ const membershipFrom = (row: typeof WorkspaceMembershipRow.Type) =>
       shortName: row.short_name,
       lifecycleState: row.lifecycle_state,
       revision: row.profile_revision,
+      ...(row.avatar_key === null ? {} : { avatarKey: row.avatar_key }),
     },
     userId: row.user_id,
     role: row.role,
@@ -53,6 +56,7 @@ const profileFrom = (row: typeof WorkspaceProfileRow.Type) =>
     shortName: row.short_name,
     lifecycleState: row.lifecycle_state,
     revision: row.profile_revision,
+    ...(row.avatar_key === null ? {} : { avatarKey: row.avatar_key }),
   });
 
 export const WorkspaceRepositoryD1 = (db: D1Database) =>
@@ -73,6 +77,7 @@ export const WorkspaceRepositoryD1 = (db: D1Database) =>
               organization.slug AS short_name,
               organization.lifecycleState AS lifecycle_state,
               organization.profileRevision AS profile_revision,
+              organization.avatar_key,
               member.userId AS user_id,
               member.role
             FROM member
@@ -191,7 +196,8 @@ export const WorkspaceRepositoryD1 = (db: D1Database) =>
                        name AS display_name,
                        slug AS short_name,
                        lifecycleState AS lifecycle_state,
-                       profileRevision AS profile_revision`,
+                       profileRevision AS profile_revision,
+                       avatar_key`,
                   )
                   .bind(
                     input.displayName,

@@ -4,6 +4,7 @@ import type {
   NotificationTopic,
 } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
+import { userImageSql } from "../avatars/storage.js";
 import { threadProjectReachableSql } from "../settings/members/membership-sql.js";
 import { sharedThreadVisibleSql } from "../thread-sharing/access.js";
 import { displayNameSql } from "../thread-sharing/service.js";
@@ -114,7 +115,8 @@ export const listNotifications = async (
                 notification.excerpt, notification.created_at,
                 notification.read_at, notification.actor_user_id,
                 ${displayNameSql("actor", "account")} AS actor_name,
-                account.username AS actor_handle, actor.image AS actor_image
+                account.username AS actor_handle,
+                ${userImageSql("actor", "account")} AS actor_image
            FROM notification
            JOIN threads AS thread ON thread.id = notification.thread_id
            JOIN projects AS project ON project.id = thread.project_id

@@ -4,6 +4,7 @@ import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 import {
   createWorkspace,
   leaveWorkspace,
+  setWorkspaceAvatar,
   updateWorkspaceProfile,
 } from "../../../shared/api/client.js";
 import { settingsKeys } from "../settings-context-queries.js";
@@ -16,6 +17,11 @@ export type WorkspaceMutation =
         readonly displayName: string;
         readonly shortName: string;
       };
+    }
+  | {
+      readonly kind: "avatar";
+      readonly workspaceSlug: WorkspaceSlug;
+      readonly file: File | null;
     }
   | {
       readonly kind: "update";
@@ -36,7 +42,9 @@ export const workspaceMutationOptions = (
     mutationFn: (mutation: WorkspaceMutation) =>
       mutation.kind === "create"
         ? createWorkspace(mutation.input)
-        : updateWorkspaceProfile(mutation.workspaceSlug, mutation.input),
+        : mutation.kind === "avatar"
+          ? setWorkspaceAvatar(mutation.workspaceSlug, mutation.file)
+          : updateWorkspaceProfile(mutation.workspaceSlug, mutation.input),
     onSuccess: async (workspace: WorkspaceProfileData) => {
       const detailKey = workspaceKeys.detail(userId, workspace.shortName);
       const contextKey = settingsKeys.context(userId, {

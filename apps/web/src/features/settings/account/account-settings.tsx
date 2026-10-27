@@ -5,6 +5,7 @@ import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Button } from "../../../shared/ui/button.js";
 import { Input } from "../../../shared/ui/input.js";
+import { ProfilePicture, ProfilePictureEditor } from "../profile-picture.js";
 import {
   initialSettingsFormState,
   reduceSettingsFormState,
@@ -14,16 +15,9 @@ import type { SettingsSectionProps } from "../settings-registration.js";
 import {
   personalAccountMutationError,
   personalAccountQueryOptions,
+  setPersonalAvatarMutationOptions,
   updatePersonalAccountMutationOptions,
 } from "./personal-account-queries.js";
-
-const initials = (name: string) =>
-  name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toLocaleUpperCase())
-    .join("") || "U";
 
 const fieldError = (
   errors: ReadonlyArray<SettingsFieldError>,
@@ -35,6 +29,8 @@ export function PersonalAccountForm({
   onDirtyChange,
   saveAccount,
   saving = false,
+  changeAvatar,
+  avatarSaving = false,
 }: SettingsSectionProps & {
   readonly initialAccount: PersonalAccountData;
   readonly saveAccount: (input: {
@@ -42,6 +38,8 @@ export function PersonalAccountForm({
     readonly username: string;
   }) => Promise<PersonalAccountData>;
   readonly saving?: boolean;
+  readonly changeAvatar?: (file: File | null) => Promise<PersonalAccountData>;
+  readonly avatarSaving?: boolean;
 }) {
   const [baseline, setBaseline] = React.useState(initialAccount);
   const [displayName, setDisplayName] = React.useState<string>(
@@ -55,6 +53,7 @@ export function PersonalAccountForm({
     initialSettingsFormState,
   );
   const [editing, setEditing] = React.useState(false);
+  const [avatarError, setAvatarError] = React.useState<string>();
   const displayNameInput = React.useRef<HTMLInputElement>(null);
   const usernameInput = React.useRef<HTMLInputElement>(null);
   const formId = React.useId();
@@ -70,6 +69,34 @@ export function PersonalAccountForm({
     dispatch({ type: dirty ? "changed" : "reset" });
     onDirtyChange(dirty);
   };
+
+  const updateAvatar = async (file: File | null) => {
+    if (changeAvatar === undefined) return;
+    setAvatarError(undefined);
+    try {
+      await changeAvatar(file);
+    } catch (cause) {
+      const error = personalAccountMutationError(
+        cause,
+        file === null
+          ? "Picture could not be removed."
+          : "Picture could not be uploaded.",
+      );
+      setAvatarError(
+        error.fieldErrors?.find(({ field }) => field === "avatar")?.message ??
+          error.message,
+      );
+    }
+  };
+
+  const picture = (
+    <ProfilePicture
+      className="account-avatar"
+      name={baseline.displayName}
+      url={initialAccount.avatarUrl}
+      fallback="U"
+    />
+  );
 
   const reset = () => {
     setDisplayName(baseline.displayName);
@@ -126,9 +153,20 @@ export function PersonalAccountForm({
 
         {editing ? (
           <div className="account-profile-editor">
-            <span className="account-avatar" aria-hidden="true">
-              {initials(baseline.displayName)}
-            </span>
+            {changeAvatar === undefined ? (
+              picture
+            ) : (
+              <ProfilePictureEditor
+                label="Profile picture"
+                busy={avatarSaving}
+                disabled={saving}
+                error={avatarError}
+                url={initialAccount.avatarUrl}
+                onChange={(file) => void updateAvatar(file)}
+              >
+                {picture}
+              </ProfilePictureEditor>
+            )}
             <form
               id={formId}
               className="account-profile-edit-form"
@@ -233,9 +271,7 @@ export function PersonalAccountForm({
           </div>
         ) : (
           <div className="account-profile-summary">
-            <span className="account-avatar" aria-hidden="true">
-              {initials(baseline.displayName)}
-            </span>
+            {picture}
             <dl className="account-profile-details">
               <div>
                 <dt>Name</dt>
@@ -269,6 +305,9 @@ export function PersonalAccountSettings({
   const account = useQuery(personalAccountQueryOptions(identity.id));
   const updateAccount = useMutation(
     updatePersonalAccountMutationOptions(queryClient, identity.id),
+  );
+  const setAvatar = useMutation(
+    setPersonalAvatarMutationOptions(queryClient, identity.id),
   );
 
   if (account.isPending && account.data === undefined) {
@@ -311,6 +350,8 @@ export function PersonalAccountSettings({
         onDirtyChange={onDirtyChange}
         saveAccount={updateAccount.mutateAsync}
         saving={updateAccount.isPending}
+        changeAvatar={setAvatar.mutateAsync}
+        avatarSaving={setAvatar.isPending}
       />
     </>
   );

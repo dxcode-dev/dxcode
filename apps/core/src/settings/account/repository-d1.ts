@@ -22,6 +22,7 @@ const PersonalAccountRow = Schema.Struct({
   appearance: Schema.String,
   palette: Schema.String,
   terminal_theme: Schema.String,
+  avatar_key: Schema.NullOr(Schema.String),
 });
 
 const UpdatedRow = Schema.Struct({ user_id: Schema.String });
@@ -50,6 +51,7 @@ export const PersonalAccountRepositoryD1 = Layer.effect(
             profile.appearance,
             profile.palette,
             profile.terminal_theme,
+            profile.avatar_key,
             identity.email,
             identity.emailVerified AS email_verified,
             CASE
@@ -96,6 +98,7 @@ export const PersonalAccountRepositoryD1 = Layer.effect(
           appearance: row.appearance,
           palette: row.palette,
           terminalTheme: row.terminal_theme,
+          ...(row.avatar_key === null ? {} : { avatarKey: row.avatar_key }),
         });
       },
     );

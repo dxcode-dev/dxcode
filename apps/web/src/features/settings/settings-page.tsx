@@ -88,7 +88,11 @@ function ScopeBar({
             aria-label="Workspace Settings"
           >
             <span className="settings-workspace-mark" aria-hidden="true">
-              W
+              {workspace.avatarUrl === undefined ? (
+                "W"
+              ) : (
+                <img src={workspace.avatarUrl} alt="" />
+              )}
             </span>
             <span>
               Workspace<span className="settings-scope-suffix"> Settings</span>

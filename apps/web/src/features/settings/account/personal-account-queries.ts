@@ -8,6 +8,7 @@ import {
 import {
   ApiError,
   getPersonalAccount,
+  setPersonalAvatar,
   updatePersonalAccount,
   updatePersonalAppearance,
 } from "../../../shared/api/client.js";
@@ -64,6 +65,23 @@ export const updatePersonalAccountMutationOptions = (
       });
       queryClient.setQueryData(personalAccountKeys.detail(userId), account);
     },
+  });
+
+export const setPersonalAvatarMutationOptions = (
+  queryClient: QueryClient,
+  userId: UserId,
+) =>
+  mutationOptions({
+    mutationKey: [...personalAccountKeys.detail(userId), "avatar"] as const,
+    mutationFn: (file: File | null) => setPersonalAvatar(file),
+    onSuccess: async (account: PersonalAccountData) => {
+      await queryClient.cancelQueries({
+        queryKey: personalAccountKeys.detail(userId),
+        exact: true,
+      });
+      queryClient.setQueryData(personalAccountKeys.detail(userId), account);
+    },
+    gcTime: 0,
   });
 
 export const updatePersonalAppearanceMutationOptions = (

@@ -582,7 +582,11 @@ function MembersList({
           visible.map((member) => (
             <div className="members-row members-person" key={member.userId}>
               <span className="members-avatar" aria-hidden="true">
-                {(member.name || member.email).slice(0, 1).toUpperCase()}
+                {member.image === undefined ? (
+                  (member.name || member.email).slice(0, 1).toUpperCase()
+                ) : (
+                  <img src={member.image} alt="" referrerPolicy="no-referrer" />
+                )}
               </span>
               <div className="members-identity">
                 <div>

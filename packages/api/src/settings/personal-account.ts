@@ -23,6 +23,8 @@ export const PersonalAccountDataSchema = Schema.Struct({
   appearance: PersonalAppearance,
   palette: PersonalPalette,
   terminalTheme: PersonalTerminalTheme,
+  /** The uploaded picture; absent shows initials. */
+  avatarUrl: Schema.optional(Schema.String.check(Schema.isMaxLength(2_048))),
 });
 
 export const GetPersonalAccountResponseSchema = successResponse(

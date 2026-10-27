@@ -18,6 +18,7 @@ export interface SettingsAuditEvent {
   readonly action: string;
   readonly fields?: ReadonlyArray<
     | "appearance"
+    | "avatar"
     | "displayName"
     | "expectedRevision"
     | "instructions"
