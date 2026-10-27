@@ -328,6 +328,21 @@ const processEvent = async (
         .run();
       return installation;
     }
+    if (action === "new_permissions_accepted") {
+      // Accepting the App's new permissions revokes nothing. The reconcile
+      // below reads the installation from GitHub and advances the epochs only
+      // if its status or repositories actually changed.
+      await db
+        .prepare(`
+          UPDATE github_installation
+             SET permissions_version = permissions_version + 1, updated_at = ?
+           WHERE installation_id = ?
+        `)
+        .bind(now, installation)
+        .run();
+      await reconcileInstallation(installation);
+      return installation;
+    }
     const status =
       action === "suspend"
         ? "suspended"
@@ -339,15 +354,13 @@ const processEvent = async (
       db
         .prepare(`
           UPDATE github_installation
-             SET status = ?, suspended_at = ?, removed_at = ?,
-                 permissions_version = permissions_version + ?, updated_at = ?
+             SET status = ?, suspended_at = ?, removed_at = ?, updated_at = ?
            WHERE installation_id = ?
         `)
         .bind(
           status,
           action === "suspend" ? now : null,
           action === "deleted" ? now : null,
-          action === "new_permissions_accepted" ? 1 : 0,
           now,
           installation,
         ),
@@ -377,8 +390,7 @@ const processEvent = async (
           ]
         : []),
     ]);
-    if (action === "unsuspend" || action === "new_permissions_accepted")
-      await reconcileInstallation(installation);
+    if (action === "unsuspend") await reconcileInstallation(installation);
     return installation;
   }
 

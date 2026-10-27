@@ -218,6 +218,66 @@ const reconcileProvider = async (
   return { installation, repositories };
 };
 
+/**
+ * Moves every Project binding and Thread authority on an active installation
+ * to the current epochs while the grant that captured it is still active and
+ * the repository is still entitled. An epoch guards against authority
+ * changing mid-flight; once a reconcile confirms the same authority is live
+ * again, the stale copies would otherwise refuse every Thread until a manual
+ * rebind. Workspace policy revisions are never realigned. Migration 0093
+ * applies the same rule once to existing rows.
+ */
+const realignSourceAuthority = (
+  db: D1Database,
+  installationId: string,
+  now: string,
+) => {
+  const live = (table: string) => `
+    provider_repository_id IN (
+      SELECT provider_repository_id FROM github_installation_repository
+       WHERE installation_id = ${table}.installation_id AND entitled = 1)
+    AND EXISTS (SELECT 1 FROM github_owner_grant
+       WHERE id = ${table}.owner_grant_id
+         AND installation_id = ${table}.installation_id AND status = 'active')
+    AND EXISTS (SELECT 1 FROM github_installation
+       WHERE installation_id = ${table}.installation_id AND status = 'active')`;
+  const grantEpoch = (table: string) => `COALESCE((
+    SELECT epoch FROM github_authorization_epoch
+     WHERE subject_kind = 'owner-grant'
+       AND subject_id = ${table}.owner_grant_id), 1)`;
+  const installationEpoch = (table: string) => `COALESCE((
+    SELECT epoch FROM github_authorization_epoch
+     WHERE subject_kind = 'installation'
+       AND subject_id = ${table}.installation_id), 1)`;
+  const stale = (table: string) => `(
+    authorization_epoch < ${grantEpoch(table)}
+    OR installation_epoch < ${installationEpoch(table)})`;
+  return [
+    db
+      .prepare(`
+        UPDATE project_source_authority
+           SET authorization_epoch = ${grantEpoch("project_source_authority")},
+               installation_epoch = ${installationEpoch("project_source_authority")},
+               updated_at = ?
+         WHERE provider = 'github' AND provenance = 'live-grant'
+           AND installation_id = ?
+           AND ${live("project_source_authority")}
+           AND ${stale("project_source_authority")}
+      `)
+      .bind(now, installationId),
+    db
+      .prepare(`
+        UPDATE thread_source_authority
+           SET authorization_epoch = ${grantEpoch("thread_source_authority")},
+               installation_epoch = ${installationEpoch("thread_source_authority")}
+         WHERE installation_id = ?
+           AND ${live("thread_source_authority")}
+           AND ${stale("thread_source_authority")}
+      `)
+      .bind(installationId),
+  ];
+};
+
 const writeInstallation = async (
   db: D1Database,
   config: GitHubAppConfiguration,
@@ -383,6 +443,7 @@ const writeInstallation = async (
             ),
         ]
       : []),
+    ...realignSourceAuthority(db, installation.id, now),
   ]);
   if (results[0]?.meta.changes !== 1) throw new GitHubControlPlaneInvalid();
   return { status, epoch: expectedEpoch + (authorityChanged ? 1 : 0) };
