@@ -17,11 +17,13 @@ export interface MessageAttachment {
 
 const BLOCK = "dx_attachments";
 const ITEM = "dx_attachment";
+const BLOCK_OPENING = `<${BLOCK}>`;
 const trailingBlock = new RegExp(
-  `\\n*<${BLOCK}>\\n?((?:<${ITEM}\\b[^>]*/>\\n?)*)</${BLOCK}>\\s*$`,
+  `^<${BLOCK}>\\n?((?:<${ITEM}\\b[^>]*/>\\n?)*)</${BLOCK}>\\s*$`,
 );
-const anyBlockTag = new RegExp(`</?${BLOCK}\\b[^>]*>\\n?`, "gi");
-const anyItemTag = new RegExp(`<${ITEM}\\b[^>]*/?>\\n?`, "gi");
+/** How a tag starts; any of them, then a non-word character, opens a tag. */
+const TAG_OPENINGS = [`<${ITEM}`, `<${BLOCK}`, `</${BLOCK}`];
+const wordCharacter = /\w/;
 const itemTag = new RegExp(`<${ITEM}\\b([^>]*)/>`, "g");
 const attribute = /([a-z_]+)="([^"]*)"/g;
 
@@ -51,17 +53,42 @@ export const formatMessageAttachments = (
         )
         .join("\n")}\n</${BLOCK}>`;
 
+/** Where `kept` ends with a tag opening, ignoring case, or -1. */
+const openingAtEnd = (kept: ReadonlyArray<string>) => {
+  for (const opening of TAG_OPENINGS) {
+    const start = kept.length - opening.length;
+    let matched = start >= 0;
+    for (let i = 0; matched && i < opening.length; i++)
+      matched = kept[start + i]?.toLowerCase() === opening[i];
+    if (matched) return start;
+  }
+  return -1;
+};
+
 /**
- * Removes every attachment tag from text a person wrote, repeating until none
- * is left so a tag split around another tag cannot reassemble.
+ * Removes every attachment tag from text a person wrote, in one pass. A tag
+ * ends at the first `>` after its opening, so when one closes, the text kept
+ * so far is cut back to where it opened: the text around a removed tag joins
+ * in `kept`, and a tag it forms is found at its own `>`.
  */
 export const stripMessageAttachmentTags = (text: string) => {
-  let current = text;
-  for (;;) {
-    const next = current.replace(anyBlockTag, "").replace(anyItemTag, "");
-    if (next === current) return current;
-    current = next;
+  if (!/dx_attachment/i.test(text)) return text;
+  const kept: string[] = [];
+  // The first tag opening in `kept` after its last `>`, or -1.
+  let tagStart = -1;
+  for (let i = 0; i < text.length; i++) {
+    const character = text[i] ?? "";
+    if (tagStart === -1 && !wordCharacter.test(character))
+      tagStart = openingAtEnd(kept);
+    if (character !== ">" || tagStart === -1) {
+      kept.push(character);
+      continue;
+    }
+    kept.length = tagStart;
+    tagStart = -1;
+    if (text[i + 1] === "\n") i++;
   }
+  return kept.join("");
 };
 
 /** The message text followed by its attachment block, when it has files. */
@@ -82,7 +109,9 @@ export const parseMessageAttachments = (
   readonly attachments: ReadonlyArray<MessageAttachment>;
   readonly text: string;
 } => {
-  const match = trailingBlock.exec(text);
+  // A block cannot hold its own opening tag, so only the last can trail.
+  const start = text.lastIndexOf(BLOCK_OPENING);
+  const match = start === -1 ? null : trailingBlock.exec(text.slice(start));
   if (match === null) return { attachments: [], text };
   const attachments = [...(match[1] ?? "").matchAll(itemTag)].flatMap(
     ([, attributes]): MessageAttachment[] => {
@@ -106,5 +135,5 @@ export const parseMessageAttachments = (
       ];
     },
   );
-  return { attachments, text: text.slice(0, match.index).trimEnd() };
+  return { attachments, text: text.slice(0, start).trimEnd() };
 };

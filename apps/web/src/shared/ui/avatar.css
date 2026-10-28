@@ -14,9 +14,14 @@
   font-weight: 600;
   line-height: 1;
 }
+/* A grid item's automatic minimum size follows its picture's aspect ratio,
+   so a portrait photo would grow past the frame into an oval; a zero minimum
+   keeps it in the square, cropped by object-fit. */
 .dx-avatar > img {
   width: 100%;
+  min-width: 0;
   height: 100%;
+  min-height: 0;
   border-radius: inherit;
   object-fit: cover;
 }

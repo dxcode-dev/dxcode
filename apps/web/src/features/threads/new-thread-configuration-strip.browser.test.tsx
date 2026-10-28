@@ -216,6 +216,7 @@ describe("new thread configuration strip accessibility", () => {
             scope: "personal",
             account: "team-a",
             status: "ready",
+            unavailableSizes: [],
           },
         ],
       }),
@@ -230,6 +231,7 @@ describe("new thread configuration strip accessibility", () => {
             scope: "deployment",
             account: null,
             status: "ready",
+            unavailableSizes: [],
           },
         ],
       }),
@@ -772,12 +774,14 @@ describe("new thread Orb picker", () => {
         scope: "personal",
         account: "team-a",
         status: "ready",
+        unavailableSizes: [],
       },
       {
         providerId: "cloudflare",
         scope: "deployment",
         account: null,
         status: "ready",
+        unavailableSizes: [],
       },
     ]);
     try {
@@ -804,6 +808,7 @@ describe("new thread Orb picker", () => {
         scope: "deployment",
         account: null,
         status: "ready",
+        unavailableSizes: [],
       },
     ]);
     try {
@@ -850,12 +855,14 @@ describe("new thread Orb picker", () => {
         scope: "personal",
         account: "team-a",
         status: "preparing",
+        unavailableSizes: [],
       },
       {
         providerId: "cloudflare",
         scope: "deployment",
         account: null,
         status: "ready",
+        unavailableSizes: [],
       },
     ]);
     try {

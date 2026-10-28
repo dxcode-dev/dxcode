@@ -12,7 +12,6 @@ import {
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
 import { GitHubIcon } from "../../../shared/ui/github-icon.js";
-import { SettingsHeading } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
 import {
   bitbucketAuthorizeMutationOptions,
@@ -20,6 +19,7 @@ import {
   bitbucketDisconnectMutationOptions,
   bitbucketRefreshMutationOptions,
 } from "./bitbucket-queries.js";
+import { IntegrationCard } from "./integration-card.js";
 import {
   beginPersonalGitHubAuthorization,
   beginPersonalGitHubInstallation,
@@ -27,7 +27,7 @@ import {
 } from "./integration-mutations.js";
 import { githubIntegrationQueryOptions } from "./integration-queries.js";
 import type { McpServersTarget } from "./mcp-queries.js";
-import { McpSection } from "./mcp-section.js";
+import { type IntegrationEntry, McpIntegrations } from "./mcp-section.js";
 
 const errorMessage = (cause: unknown) =>
   cause instanceof Error ? cause.message : "Request failed.";
@@ -113,69 +113,72 @@ function BitbucketIntegration() {
   };
   const reconnectRequired = connection?.status === "reauthorization-required";
   return (
-    <section className="integration-card" aria-label="Bitbucket integration">
-      <IntegrationRow
-        icon={<BitbucketIcon />}
-        title={active ? `${connection.accountName} on Bitbucket` : "Bitbucket"}
-        description={
-          connectionQuery.isPending
-            ? "Checking connection…"
-            : unavailable
-              ? "Connection status is unavailable."
-              : configured === false
-                ? "Bitbucket is not configured on this deployment."
-                : reconnectRequired
-                  ? "Authorization expired or was revoked. Reconnect to continue."
-                  : active
-                    ? undefined
-                    : "Use your Bitbucket repositories in personal projects."
-        }
-        actions={
-          <>
-            {unavailable ? (
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => void connectionQuery.refetch()}
-              >
-                Retry
-              </Button>
-            ) : active ? (
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={refresh.isPending}
-                onClick={() => refresh.mutate()}
-              >
-                {refresh.isPending ? "Refreshing…" : "Refresh status"}
-              </Button>
-            ) : configured === false ? null : (
-              <Button
-                size="xs"
-                disabled={connectionQuery.isPending || authorize.isPending}
-                onClick={() => void connect()}
-              >
-                {connection === null || connection === undefined
-                  ? "Connect"
-                  : "Reconnect"}
-              </Button>
-            )}
-            {connection === null || connection === undefined ? null : (
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={(event) => {
-                  finalFocus.current = event.currentTarget;
-                  setConfirming(true);
-                }}
-              >
-                Disconnect
-              </Button>
-            )}
-          </>
-        }
-      />
-      {error instanceof Error ? <p role="alert">{error.message}</p> : null}
+    <IntegrationCard
+      label="Bitbucket integration"
+      icon={<BitbucketIcon />}
+      title={active ? `${connection.accountName} on Bitbucket` : "Bitbucket"}
+      description={
+        connectionQuery.isPending
+          ? "Checking connection…"
+          : unavailable
+            ? "Connection status is unavailable."
+            : configured === false
+              ? "Bitbucket is not configured on this deployment."
+              : reconnectRequired
+                ? "Authorization expired or was revoked. Reconnect to continue."
+                : active
+                  ? undefined
+                  : "Use your Bitbucket repositories in personal projects."
+      }
+      status={active ? { tone: "ok", text: "Connected" } : undefined}
+    >
+      <div className="integration-tile-footer">
+        {unavailable ? (
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => void connectionQuery.refetch()}
+          >
+            Retry
+          </Button>
+        ) : active ? (
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={refresh.isPending}
+            onClick={() => refresh.mutate()}
+          >
+            {refresh.isPending ? "Refreshing…" : "Refresh status"}
+          </Button>
+        ) : configured === false ? null : (
+          <Button
+            size="xs"
+            disabled={connectionQuery.isPending || authorize.isPending}
+            onClick={() => void connect()}
+          >
+            {connection === null || connection === undefined
+              ? "Connect"
+              : "Reconnect"}
+          </Button>
+        )}
+        {connection === null || connection === undefined ? null : (
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={(event) => {
+              finalFocus.current = event.currentTarget;
+              setConfirming(true);
+            }}
+          >
+            Disconnect
+          </Button>
+        )}
+      </div>
+      {error instanceof Error ? (
+        <p className="integration-tile-error" role="alert">
+          {error.message}
+        </p>
+      ) : null}
       {!confirming || connection === null || connection === undefined ? null : (
         <DialogRoot open onOpenChange={(open) => !open && setConfirming(false)}>
           <DialogContent finalFocus={finalFocus}>
@@ -209,7 +212,7 @@ function BitbucketIntegration() {
           </DialogContent>
         </DialogRoot>
       )}
-    </section>
+    </IntegrationCard>
   );
 }
 
@@ -250,68 +253,109 @@ function DisconnectConfirmation({
   );
 }
 
+const bitbucketEntry: IntegrationEntry = {
+  key: "bitbucket",
+  search: "bitbucket source control repositories",
+  node: <BitbucketIntegration key="bitbucket" />,
+};
+
 export function IntegrationsSettings({
   onDirtyChange,
   settingsReturnTo,
   workspaceSlug,
 }: SettingsSectionProps) {
-  const [status, setStatus] = React.useState<string>();
+  const { identity } = useAuthenticatedIdentity();
+  const github = useQuery({
+    ...githubIntegrationQueryOptions(identity.id),
+    enabled: workspaceSlug === undefined,
+  });
+  const bitbucket = useQuery({
+    ...bitbucketConnectionQueryOptions(identity.id),
+    enabled: workspaceSlug === undefined,
+  });
   const target: McpServersTarget =
     workspaceSlug === undefined
       ? { scope: "personal" }
       : { scope: "workspace", workspaceSlug };
-  return (
-    <div className="integrations-settings">
-      <SettingsHeading
-        title="Integrations & MCP"
-        description={
-          workspaceSlug === undefined
-            ? "Connect dx to the tools and services you use through integrations and MCP servers."
-            : "Connect this workspace to the tools and services it uses through MCP servers."
-        }
-        actions={<span aria-live="polite">{status}</span>}
-      />
-      <section aria-labelledby="integrations-section-title">
-        <header className="integrations-section-heading">
-          <h2 id="integrations-section-title">Integrations</h2>
-        </header>
-        {workspaceSlug === undefined ? (
-          <>
-            <GitHubIntegration
-              onDirtyChange={onDirtyChange}
-              settingsReturnTo={settingsReturnTo}
-            />
-            <BitbucketIntegration />
-          </>
-        ) : (
-          <section
-            className="integration-card"
-            aria-label="Source control integration"
-          >
-            <IntegrationRow
-              icon={<GitHubIcon />}
-              title="GitHub and Bitbucket"
-              description="Each member connects their own account in personal settings to work in the workspace's repositories."
-              actions={
-                <Link
-                  to="/settings/$section"
-                  params={{ section: "integrations" }}
-                  state={(previous) => previous}
-                  className={buttonVariants({ variant: "outline", size: "xs" })}
-                >
-                  Personal integrations
-                </Link>
-              }
-            />
-          </section>
-        )}
-      </section>
-      <McpSection
-        target={target}
-        onStatus={setStatus}
+  const githubEntry: IntegrationEntry = {
+    key: "github",
+    search: "github source control repositories",
+    node: (
+      <GitHubIntegration
+        key="github"
         onDirtyChange={onDirtyChange}
+        settingsReturnTo={settingsReturnTo}
       />
-    </div>
+    ),
+  };
+  const githubConnected = (github.data?.grants.length ?? 0) > 0;
+  const bitbucketConnected = bitbucket.data?.connection?.status === "active";
+  const integrations =
+    workspaceSlug === undefined
+      ? {
+          enabled: [
+            ...(githubConnected ? [githubEntry] : []),
+            ...(bitbucketConnected ? [bitbucketEntry] : []),
+          ],
+          available: [
+            ...(githubConnected ? [] : [githubEntry]),
+            ...(bitbucketConnected ? [] : [bitbucketEntry]),
+          ],
+        }
+      : {
+          enabled: [],
+          available: [
+            {
+              key: "source-control",
+              search: "github bitbucket source control",
+              node: (
+                <IntegrationCard
+                  key="source-control"
+                  label="Source control integration"
+                  icon={<GitHubIcon />}
+                  title="GitHub and Bitbucket"
+                  description="Each member connects their own account in personal settings to work in the workspace's repositories."
+                  action={
+                    <Link
+                      to="/settings/$section"
+                      params={{ section: "integrations" }}
+                      state={(previous) => previous}
+                      className={buttonVariants({
+                        variant: "ghost",
+                        size: "xs",
+                      })}
+                    >
+                      Personal integrations
+                    </Link>
+                  }
+                />
+              ),
+            },
+          ],
+        };
+  return (
+    <McpIntegrations
+      target={target}
+      description={
+        workspaceSlug === undefined
+          ? "Connect dx to the tools and services you use."
+          : "Choose the tools and services members of this workspace can connect."
+      }
+      scopeLink={
+        workspaceSlug === undefined ? undefined : (
+          <Link
+            to="/settings/$section"
+            params={{ section: "integrations" }}
+            state={(previous) => previous}
+            className={buttonVariants({ variant: "ghost", size: "sm" })}
+          >
+            Personal Settings
+          </Link>
+        )
+      }
+      integrations={integrations}
+      onDirtyChange={onDirtyChange}
+    />
   );
 }
 
@@ -344,68 +388,89 @@ function GitHubIntegration({
       setError(errorMessage(cause));
     }
   };
+  const active = grants.filter(
+    (grant) =>
+      grant.status === "active" && grant.installationStatus === "active",
+  );
   return (
-    <>
-      <section className="integration-card" aria-label="GitHub integration">
-        {grants.length === 0 ? (
-          <IntegrationRow
-            icon={<GitHubIcon />}
-            title="GitHub"
-            description={
-              grantsQuery.isPending
-                ? "Checking connection…"
-                : grantsQuery.error !== null
-                  ? "Connection status is unavailable."
-                  : configured === false
-                    ? "GitHub is not configured on this deployment."
-                    : "Use your GitHub repositories in dx projects."
+    <IntegrationCard
+      label="GitHub integration"
+      icon={<GitHubIcon />}
+      title="GitHub"
+      action={
+        grants.length > 0 ? (
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() => void redirect("install")}
+          >
+            Connect another account
+          </Button>
+        ) : grantsQuery.error !== null ? (
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() => void grantsQuery.refetch()}
+          >
+            Retry
+          </Button>
+        ) : configured === false ? undefined : (
+          <Button
+            size="xs"
+            disabled={grantsQuery.isPending}
+            onClick={() => void redirect("connect")}
+          >
+            Connect GitHub
+          </Button>
+        )
+      }
+      description={
+        grants.length > 0
+          ? "Clone and read private GitHub repositories when the agent needs them."
+          : grantsQuery.isPending
+            ? "Checking connection…"
+            : grantsQuery.error !== null
+              ? "Connection status is unavailable."
+              : configured === false
+                ? "GitHub is not configured on this deployment."
+                : "Use your GitHub repositories in dx projects."
+      }
+      status={
+        active.length === 0
+          ? undefined
+          : {
+              tone: "ok",
+              text: active.map((grant) => `@${grant.account.login}`).join(", "),
             }
-            actions={
-              grantsQuery.error !== null ? (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  onClick={() => void grantsQuery.refetch()}
-                >
-                  Retry
-                </Button>
-              ) : configured === false ? undefined : (
-                <Button
-                  size="xs"
-                  disabled={grantsQuery.isPending}
-                  onClick={() => void redirect("connect")}
-                >
-                  Connect GitHub
-                </Button>
-              )
-            }
-          />
-        ) : (
-          grants.map((grant, index) => (
+      }
+    >
+      {grants.length === 0 ? null : (
+        <div className="integration-tile-rows">
+          {grants.map((grant) => (
             <GitHubInstallation
               key={grant.id}
               grant={grant}
-              connectAnother={index === 0}
               onDirtyChange={onDirtyChange}
               onRedirect={redirect}
             />
-          ))
-        )}
-      </section>
-      {error === undefined ? null : <p role="alert">{error}</p>}
-    </>
+          ))}
+        </div>
+      )}
+      {error === undefined ? null : (
+        <p className="integration-tile-error" role="alert">
+          {error}
+        </p>
+      )}
+    </IntegrationCard>
   );
 }
 
 function GitHubInstallation({
   grant,
-  connectAnother,
   onDirtyChange,
   onRedirect,
 }: {
   readonly grant: GitHubGrantData;
-  /** The first account's row also offers connecting another account. */
-  readonly connectAnother: boolean;
   readonly onDirtyChange: SettingsSectionProps["onDirtyChange"];
   readonly onRedirect: (operation: "connect" | "install") => Promise<void>;
 }) {
@@ -452,15 +517,6 @@ function GitHubInstallation({
         }
         actions={
           <>
-            {connectAnother ? (
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => void onRedirect("install")}
-              >
-                Connect another account
-              </Button>
-            ) : null}
             {connected ? (
               <Button
                 size="xs"

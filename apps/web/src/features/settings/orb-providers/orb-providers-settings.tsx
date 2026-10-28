@@ -31,6 +31,7 @@ import {
 import {
   orbFieldPlaceholder,
   orbProviderSource,
+  preparationStep,
 } from "./orb-providers-status.js";
 
 /** Resolves to the error message, or undefined when the action succeeded. */
@@ -96,13 +97,10 @@ const connectionNote = (
   const connection = provider.connection;
   const keepsServing = connection?.updating === true;
   if (connection?.status === "preparing") {
-    const step =
-      connection.progress === null
-        ? "Preparing your account…"
-        : `${connection.progress.step} (${connection.progress.done} of ${connection.progress.total})`;
+    const step = preparationStep(connection);
     return keepsServing
       ? `Updating: ${step} New Threads keep using the current version until it is ready.`
-      : step;
+      : `${step} This takes a few minutes; you can close this dialog.`;
   }
   if (connection?.status === "failed")
     return keepsServing
@@ -114,8 +112,22 @@ const connectionNote = (
     !data.personalKeysOnWorkspaceProjects.allowed
   )
     return "Your workspace keeps members' own accounts off its projects, so this runs your personal projects only.";
+  if (connection !== null && connection.unavailableSizes.length > 0)
+    return `${refusedSizes(provider, connection)} dx checks again daily, so new sizes appear after a plan upgrade.`;
   return connection === null ? provider.description : undefined;
 };
+
+/** The sizes the account cannot run, each with the provider's reason. */
+const refusedSizes = (
+  provider: OrbProviderData,
+  connection: NonNullable<OrbProviderData["connection"]>,
+) =>
+  connection.unavailableSizes
+    .map(({ id, reason }) => {
+      const label = provider.sizes.find((size) => size.id === id)?.label ?? id;
+      return `${label} is not available: ${reason}`;
+    })
+    .join(" ");
 
 function OrbConnectionForm({
   data,
@@ -139,6 +151,10 @@ function OrbConnectionForm({
   const formId = React.useId();
   const note = connectionNote(data, provider);
   const failed = provider.connection?.status === "failed";
+  // A plan upgrade may have opened sizes the account could not run.
+  const lacksSizes =
+    provider.connection?.status === "ready" &&
+    provider.connection.unavailableSizes.length > 0;
   const complete = provider.fields.every(
     ({ id }) => (values[id] ?? "").trim().length > 0,
   );
@@ -209,7 +225,7 @@ function OrbConnectionForm({
             Disconnect
           </Button>
         )}
-        {failed ? (
+        {failed || lacksSizes ? (
           <Button
             size="xs"
             variant="outline"
@@ -219,12 +235,14 @@ function OrbConnectionForm({
               setFailure(
                 await run(
                   { type: "retry", providerId: provider.id },
-                  `Preparing ${provider.displayName} again.`,
+                  failed
+                    ? `Preparing ${provider.displayName} again.`
+                    : `Checking ${provider.displayName} for more sizes.`,
                 ),
               );
             }}
           >
-            Retry
+            {failed ? "Retry" : "Check again"}
           </Button>
         ) : null}
         <Button size="xs" type="submit" disabled={disabled || !complete}>

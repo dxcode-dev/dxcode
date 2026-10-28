@@ -1,6 +1,10 @@
 import {
   EnvironmentVariableConfigReference,
+  McpClientName,
+  McpHeaderName,
   McpHealthStatus,
+  McpModuleId,
+  McpServerAuthType,
   McpServerEndpoint,
   McpServerId,
   McpServerName,
@@ -35,21 +39,44 @@ export const McpToolDataSchema = Schema.Struct({
   schemaHash: McpToolSchemaHash,
   approved: Schema.Boolean,
   reviewRequired: Schema.Boolean,
+  /**
+   * `allow`: agents can call it. `disabled`: someone turned it off.
+   * `review`: never reviewed, or its contract changed since it was allowed.
+   */
+  policy: Schema.Literals(["allow", "disabled", "review"]),
   discoveredAt: Timestamp,
   reviewedAt: Schema.optional(Timestamp),
 });
 
 export type McpToolData = typeof McpToolDataSchema.Type;
 
+/** A configured header; secret values are write-only and never returned. */
+export const McpHeaderDataSchema = Schema.Struct({
+  name: McpHeaderName,
+  secret: Schema.Boolean,
+  value: Schema.optional(Schema.String),
+});
+
+export type McpHeaderData = typeof McpHeaderDataSchema.Type;
+
 export const McpServerDataSchema = Schema.Struct({
   id: McpServerId,
   scope: McpServerScope,
   name: McpServerName,
+  /** The module name Code imports this server's tools under. */
+  moduleId: McpModuleId,
   endpoint: McpServerEndpoint,
   transport: McpServerTransport,
+  authType: McpServerAuthType,
   authReference: Schema.optional(EnvironmentVariableConfigReference),
   /** A bearer token is stored on the server; its value is never returned. */
   hasStoredToken: Schema.Boolean,
+  clientName: Schema.optional(McpClientName),
+  oauthClientId: Schema.optional(Schema.String),
+  hasOAuthClientSecret: Schema.Boolean,
+  /** Whether the person viewing has signed in to this OAuth server. */
+  signedIn: Schema.Boolean,
+  headers: Schema.Array(McpHeaderDataSchema),
   timeoutMs: McpServerTimeoutMs,
   enabled: Schema.Boolean,
   projectIds: McpServerProjectGrants,
@@ -78,11 +105,51 @@ const McpAuthTokenInput = Schema.String.check(
   Schema.isMaxLength(8_192),
 );
 
+/**
+ * `auto` probes the server: no auth when it answers, OAuth when it
+ * advertises an authorization server, otherwise a bearer token is required.
+ */
+export const McpAuthTypeInput = Schema.Literals([
+  "auto",
+  "none",
+  "bearer",
+  "oauth",
+]);
+
+const McpClientNameInput = Schema.String.check(Schema.isMaxLength(80));
+const McpModuleIdInput = Schema.String.check(Schema.isMaxLength(64));
+const McpOAuthClientIdInput = Schema.String.check(Schema.isMaxLength(512));
+const McpOAuthClientSecretInput = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(4_096),
+);
+
+/**
+ * The full header list. A secret header with no value keeps its stored
+ * value; a new secret header needs one.
+ */
+export const McpHeaderInputSchema = Schema.Struct({
+  name: Schema.String.check(Schema.isMaxLength(128)),
+  value: Schema.optional(Schema.String.check(Schema.isMaxLength(4_096))),
+  secret: Schema.optional(Schema.Boolean),
+});
+
+const McpHeadersInput = Schema.Array(McpHeaderInputSchema).check(
+  Schema.isMaxLength(32),
+);
+
 export const CreateMcpServerRequestSchema = Schema.Struct({
   name: McpNameInput,
   endpoint: McpEndpointInput,
+  /** Defaults to `bearer` with an `authToken`, otherwise `none`. */
+  authType: Schema.optional(McpAuthTypeInput),
   authReference: Schema.optional(EnvironmentVariableConfigReference),
   authToken: Schema.optional(McpAuthTokenInput),
+  moduleId: Schema.optional(McpModuleIdInput),
+  clientName: Schema.optional(McpClientNameInput),
+  oauthClientId: Schema.optional(McpOAuthClientIdInput),
+  oauthClientSecret: Schema.optional(McpOAuthClientSecretInput),
+  headers: Schema.optional(McpHeadersInput),
   timeoutMs: Schema.Finite,
   projectIds: Schema.optional(McpProjectGrantInputs),
   roles: Schema.optional(McpRoleGrantInputs),
@@ -98,6 +165,15 @@ export const McpServerParamsSchema = Schema.Struct({
 export const UpdateMcpServerRequestSchema = Schema.Struct({
   name: Schema.optional(McpNameInput),
   endpoint: Schema.optional(McpEndpointInput),
+  /** Switching auth type clears discovered tools and sign-ins. */
+  authType: Schema.optional(Schema.Literals(["none", "bearer", "oauth"])),
+  moduleId: Schema.optional(McpModuleIdInput),
+  /** An empty string restores the default client name. */
+  clientName: Schema.optional(McpClientNameInput),
+  /** An empty string removes the own OAuth app and its secret. */
+  oauthClientId: Schema.optional(McpOAuthClientIdInput),
+  oauthClientSecret: Schema.optional(McpOAuthClientSecretInput),
+  headers: Schema.optional(McpHeadersInput),
   /** `null` removes any auth: a stored token or a secret reference. */
   authReference: Schema.optional(
     Schema.NullOr(EnvironmentVariableConfigReference),
@@ -127,6 +203,13 @@ export const ReviewMcpToolRequestSchema = Schema.Struct({
 });
 
 export const ReviewMcpToolResponseSchema = successResponse(McpServerDataSchema);
+
+export const BeginMcpOAuthResponseSchema = successResponse(
+  Schema.Struct({ authorizationUrl: Schema.String }),
+);
+
+export const SignOutMcpOAuthResponseSchema =
+  successResponse(McpServerDataSchema);
 
 export const DeleteMcpServerResponseSchema = successResponse(
   Schema.Struct({ deletedMcpServerId: McpServerId }),
@@ -185,6 +268,15 @@ export const McpServersPolicyDeniedResponseSchema = Schema.Struct({
   }),
 });
 
+export const McpServerOAuthFailedResponseSchema = Schema.Struct({
+  status: Schema.Literal("error"),
+  data: Schema.Struct({
+    code: Schema.Literal("MCP_SERVER_OAUTH_FAILED"),
+    message: Schema.String,
+    requestId: Schema.String,
+  }),
+});
+
 export const McpServersUnavailableResponseSchema = errorResponse(
   "MCP_SERVERS_UNAVAILABLE",
   "MCP servers are temporarily unavailable.",
@@ -197,6 +289,7 @@ export const McpServersErrorResponseSchema = Schema.Union([
   McpServerNotFoundResponseSchema,
   McpServerLimitResponseSchema,
   McpServerDiscoveryFailedResponseSchema,
+  McpServerOAuthFailedResponseSchema,
   McpServersPolicyDeniedResponseSchema,
   McpServersUnavailableResponseSchema,
 ]);

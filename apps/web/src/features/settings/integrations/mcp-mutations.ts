@@ -1,10 +1,12 @@
 import type { UserId } from "@dx/domain";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 import {
+  beginMcpOAuth,
   createMcpServer,
   deleteMcpServer,
   discoverMcpServer,
   reviewMcpTool,
+  signOutMcpOAuth,
   updateMcpServer,
   updateMcpWorkspacePolicy,
 } from "../../../shared/api/client.js";
@@ -32,6 +34,10 @@ export type McpServersMutationAction =
       readonly approved: boolean;
     }
   | {
+      readonly type: "signOut";
+      readonly serverId: Parameters<typeof signOutMcpOAuth>[1];
+    }
+  | {
       readonly type: "delete";
       readonly serverId: Parameters<typeof deleteMcpServer>[1];
     }
@@ -56,6 +62,8 @@ const mutateMcpServers = async (
         action.schemaHash,
         action.approved,
       );
+    case "signOut":
+      return await signOutMcpOAuth(target, action.serverId);
     case "delete":
       return await deleteMcpServer(target, action.serverId);
     case "updatePolicy": {
@@ -83,3 +91,9 @@ export const mcpServersMutationOptions = (
         queryKey: mcpServerKeys.list(userId, target),
       }),
   });
+
+/** Starts an OAuth sign-in and returns the provider URL to send the browser to. */
+export const beginMcpServerSignIn = (
+  target: McpServersTarget,
+  serverId: Parameters<typeof beginMcpOAuth>[1],
+) => beginMcpOAuth(target, serverId);

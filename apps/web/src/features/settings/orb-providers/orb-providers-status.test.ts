@@ -22,6 +22,7 @@ const connection = (
   progress: null,
   error: null,
   updating: false,
+  unavailableSizes: [],
 });
 
 describe("Orb provider rows", () => {

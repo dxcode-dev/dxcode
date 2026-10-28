@@ -15,6 +15,7 @@ import { Effect, Layer, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
 import { SettingsAudit } from "../audit.js";
+import type { ConfigEncryptionKeyring } from "../config-encryption.js";
 import {
   decryptEnvironmentVariable,
   loadConfigEncryptionKeyring,
@@ -25,8 +26,13 @@ import { WorkspaceRepositoryD1 } from "../workspace/repository-d1.js";
 import { WorkspacePolicyRepositoryD1 } from "../workspace-policy/repository-d1.js";
 import { WorkspacePolicyService } from "../workspace-policy/service.js";
 import { readMcpServerCredential } from "./credential.js";
+import { mcpOAuthAccessToken } from "./oauth.js";
 import { McpServerRepositoryD1 } from "./repository-d1.js";
-import { filterMcpExecutionConnections } from "./service.js";
+import { mcpHeaderSecretName, readMcpServerSecrets } from "./secrets.js";
+import {
+  effectiveMcpModuleId,
+  filterMcpExecutionConnections,
+} from "./service.js";
 import {
   createMcpNetworkFetch,
   McpNetworkRejected,
@@ -52,6 +58,10 @@ export interface McpAgentConnectionData {
   readonly id: string;
   readonly name: string;
   readonly displayName?: string;
+  /** The module Code imports this server's tools from. */
+  readonly moduleId?: string;
+  /** Sent as the MCP `clientInfo.name`. */
+  readonly clientName?: string;
   readonly toolDefinitions?: ReadonlyArray<{
     readonly name: string;
     readonly description: string;
@@ -155,12 +165,27 @@ export const resolveMcpAgentConnectionsFor = Effect.fn(
     Effect.mapError(() => new McpExecutionUnavailable()),
   );
   const connections = yield* approvedConnections(db, ownerUserId, projectId);
-  return connections
-    .filter(({ tools }) => tools.length > 0)
+  const usable = connections.filter(({ tools }) => tools.length > 0);
+  // A workspace server overrides a personal server with the same module ID.
+  const workspaceModules = new Set(
+    usable
+      .filter(({ server }) => server.target.scope === "workspace")
+      .map(({ server }) => effectiveMcpModuleId(server)),
+  );
+  return usable
+    .filter(
+      ({ server }) =>
+        server.target.scope === "workspace" ||
+        !workspaceModules.has(effectiveMcpModuleId(server)),
+    )
     .map(({ server, tools }) => ({
       id: server.id,
       name: flueMcpServerName(server.id),
       displayName: server.name,
+      moduleId: effectiveMcpModuleId(server),
+      ...(server.clientName === undefined
+        ? {}
+        : { clientName: server.clientName }),
       toolDefinitions: tools.map(({ name, description, inputSchemaJson }) => ({
         name,
         description,
@@ -168,9 +193,7 @@ export const resolveMcpAgentConnectionsFor = Effect.fn(
       })),
       endpoint: server.endpoint,
       timeoutMs: server.timeoutMs,
-      authenticated:
-        server.authReference !== undefined ||
-        server.hasStoredCredential === true,
+      authenticated: server.authType !== "none",
       tools: tools.map(({ name }) => name),
     })) satisfies ReadonlyArray<McpAgentConnectionData>;
 });
@@ -180,7 +203,34 @@ interface AuthorizedConnection {
   readonly server: StoredMcpServer;
   readonly tools: ReadonlyArray<StoredMcpTool>;
   readonly credential?: string;
+  /** Configured headers with secret values decrypted. */
+  readonly headers: Readonly<Record<string, string>>;
 }
+
+/**
+ * The server's configured headers with secret values decrypted. A secret
+ * header whose value is missing fails closed.
+ */
+export const resolveMcpHeaders = async (
+  db: D1Database,
+  keyring: ConfigEncryptionKeyring | undefined,
+  server: StoredMcpServer,
+): Promise<Readonly<Record<string, string>>> => {
+  if (server.headers.length === 0) return {};
+  const secrets =
+    keyring === undefined || !server.headers.some(({ secret }) => secret)
+      ? new Map<string, string>()
+      : await readMcpServerSecrets(db, keyring, server);
+  return Object.fromEntries(
+    server.headers.map(({ name, secret, value }) => {
+      const resolved = secret
+        ? secrets.get(mcpHeaderSecretName(name))
+        : (value ?? "");
+      if (resolved === undefined) throw new McpInvocationForbidden();
+      return [name, resolved];
+    }),
+  );
+};
 
 const resolveAuthorizedConnection = Effect.fn("resolveAuthorizedMcpConnection")(
   function* (bindings: Bindings, rawThreadId: string, rawServerId: string) {
@@ -200,32 +250,67 @@ const resolveAuthorizedConnection = Effect.fn("resolveAuthorizedMcpConnection")(
     if (connection === undefined || connection.tools.length === 0) {
       return yield* new McpInvocationForbidden();
     }
-    if (connection.server.hasStoredCredential === true) {
-      const keyring = yield* loadConfigEncryptionKeyring(bindings).pipe(
-        Effect.mapError(() => new McpExecutionUnavailable()),
-      );
+    const server = connection.server;
+    const keyring =
+      server.authType === "none" && !server.headers.some(({ secret }) => secret)
+        ? undefined
+        : yield* loadConfigEncryptionKeyring(bindings).pipe(
+            Effect.mapError(() => new McpExecutionUnavailable()),
+          );
+    const headers = yield* Effect.tryPromise({
+      try: () => resolveMcpHeaders(db, keyring, server),
+      catch: (cause) =>
+        cause instanceof McpInvocationForbidden
+          ? cause
+          : new McpExecutionUnavailable(),
+    });
+    const credential = yield* resolveExecutionCredential(
+      db,
+      keyring,
+      server,
+      thread.ownerUserId,
+    );
+    return {
+      db,
+      ...connection,
+      credential,
+      headers,
+    } satisfies AuthorizedConnection;
+  },
+);
+
+/** The credential a Thread owner's calls carry, by the server's auth type. */
+const resolveExecutionCredential = Effect.fn("resolveMcpExecutionCredential")(
+  function* (
+    db: D1Database,
+    keyring: ConfigEncryptionKeyring | undefined,
+    server: StoredMcpServer,
+    ownerUserId: UserId,
+  ) {
+    if (server.authType === "none" || keyring === undefined) return undefined;
+    if (server.authType === "oauth") {
+      const token = yield* Effect.tryPromise({
+        try: () => mcpOAuthAccessToken(db, keyring, server, ownerUserId),
+        // A refresh the server refused needs the person to sign in again.
+        catch: () => new McpInvocationForbidden(),
+      });
+      if (token === undefined) return yield* new McpInvocationForbidden();
+      return token;
+    }
+    if (server.hasStoredCredential === true) {
       const credential = yield* Effect.tryPromise({
-        try: () => readMcpServerCredential(db, keyring, connection.server),
+        try: () => readMcpServerCredential(db, keyring, server),
         catch: () => new McpExecutionUnavailable(),
       });
       // The row vanished between listing and reading: fail closed.
       if (credential === undefined) return yield* new McpInvocationForbidden();
-      return { db, ...connection, credential } satisfies AuthorizedConnection;
+      return credential;
     }
-    if (connection.server.authReference === undefined) {
-      return {
-        db,
-        ...connection,
-        credential: undefined,
-      } satisfies AuthorizedConnection;
-    }
-    const authReference = connection.server.authReference;
-    const keyring = yield* loadConfigEncryptionKeyring(bindings).pipe(
-      Effect.mapError(() => new McpExecutionUnavailable()),
-    );
+    const authReference = server.authReference;
+    if (authReference === undefined) return yield* new McpInvocationForbidden();
     const variable = yield* Effect.gen(function* () {
       const repository = yield* EnvironmentVariableRepository;
-      return yield* repository.find(connection.server.target, authReference.id);
+      return yield* repository.find(server.target, authReference.id);
     }).pipe(
       Effect.provide(dependencies(db)),
       Effect.mapError(() => new McpInvocationForbidden()),
@@ -233,7 +318,7 @@ const resolveAuthorizedConnection = Effect.fn("resolveAuthorizedMcpConnection")(
     if (variable.kind !== "secret" || !variable.enabled) {
       return yield* new McpInvocationForbidden();
     }
-    const credential = yield* decryptEnvironmentVariable(
+    return yield* decryptEnvironmentVariable(
       keyring,
       {
         id: variable.id,
@@ -243,7 +328,6 @@ const resolveAuthorizedConnection = Effect.fn("resolveAuthorizedMcpConnection")(
       },
       variable.envelope,
     ).pipe(Effect.mapError(() => new McpExecutionUnavailable()));
-    return { db, ...connection, credential } satisfies AuthorizedConnection;
   },
 );
 
@@ -382,6 +466,11 @@ export const createAuthorizedMcpFetch =
     ) {
       throw new McpInvocationForbidden();
     }
+    // Core adds the configured headers itself; the caller never sees secret
+    // header values and cannot replace them.
+    const outbound = new Headers(request.headers);
+    for (const [name, value] of Object.entries(connection.headers))
+      outbound.set(name, value);
     const callNames = await toolCallNames(request);
     if (
       callNames.some(
@@ -408,5 +497,5 @@ export const createAuthorizedMcpFetch =
           }
         },
       },
-    )(request);
+    )(new Request(request, { headers: outbound }));
   };

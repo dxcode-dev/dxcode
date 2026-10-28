@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { classifyRunFailure } from "../../runtime/run-failure.js";
-import { cloudflareSandbox, type OrbContainerClient } from "./driver.js";
+import { type OrbGuestClient, orbGuestSandbox } from "./orb-guest-client.js";
 
 const client = () =>
   ({
@@ -21,12 +21,12 @@ const client = () =>
     exists: vi.fn(async () => true),
     mkdir: vi.fn(async () => undefined),
     rm: vi.fn(async () => undefined),
-  }) satisfies OrbContainerClient;
+  }) satisfies OrbGuestClient;
 
-describe("Cloudflare Orb sandbox driver", () => {
+describe("Orb guest sandbox driver", () => {
   it("returns non-zero exits and rejects only a timeout, like E2B", async () => {
     const orb = client();
-    const sandbox = cloudflareSandbox(orb, "/workspace");
+    const sandbox = orbGuestSandbox(orb, "/workspace");
     await expect(
       sandbox.exec("make", { env: { A: "b" }, timeoutMs: 5_000 }),
     ).resolves.toEqual({ stdout: "out", stderr: "err", exitCode: 2 });
@@ -54,7 +54,7 @@ describe("Cloudflare Orb sandbox driver", () => {
       exitCode: 1,
       timedOut: false,
     });
-    const sandbox = cloudflareSandbox(orb, "/workspace");
+    const sandbox = orbGuestSandbox(orb, "/workspace");
     const failed = await sandbox.snapshotWorkspaceContext!("/workspace").then(
       () => undefined,
       (error: Error) => classifyRunFailure({ message: error.message }),

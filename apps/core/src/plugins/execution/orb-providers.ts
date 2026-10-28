@@ -1,6 +1,5 @@
 import type { PluginScope, ThreadExecutionPin } from "@dx/domain";
 import { Effect, Schema } from "effect";
-import { orbProviderConnectors } from "../../execution/connectors.js";
 import { loadRunnerProfileCatalog } from "../../execution/runner-profiles/catalog.js";
 import type { Bindings } from "../../http/types.js";
 import { threadProjectReachableSql } from "../../settings/members/membership-sql.js";
@@ -41,6 +40,12 @@ export interface OrbProviderMember {
   /** Size → the target its Threads pin; only for a ready connection. */
   readonly targets?: ReadonlyMap<string, string>;
   /**
+   * Sizes the connection's account cannot run, with the provider's reason;
+   * only for a ready connection. A size with no target is unavailable even
+   * when its connector names no reason.
+   */
+  readonly unavailable?: ReadonlyMap<string, string>;
+  /**
    * The connection is preparing a new version; new Threads meanwhile pin
    * the last ready one.
    */
@@ -80,9 +85,9 @@ export const personalOrbKeysAllowed = (
   (input.policy?.allowPersonalPluginOverrides === true &&
     input.policy.allowPersonalExecutionOverrides === true);
 
-const connectionMember = (
+export const connectionMember = (
   connection: OrbConnection,
-  input: OrbProviderSetInput,
+  input: Pick<OrbProviderSetInput, "recipes" | "connectors">,
 ): OrbProviderMember => {
   const recipe = input.recipes.get(connection.providerId);
   const connector = input.connectors[connection.providerId];
@@ -100,10 +105,13 @@ const connectionMember = (
       account: served.account,
       status: "ready",
       targets: new Map(Object.entries(served.targets)),
+      unavailable: new Map(Object.entries(served.unavailable ?? {})),
       updating: true,
     };
   const targets =
     status === "ready" ? connector?.targets(connection) : undefined;
+  const unavailable =
+    targets === undefined ? undefined : connector?.unavailable?.(connection);
   return {
     providerId: connection.providerId,
     scope: connection.scope,
@@ -111,7 +119,27 @@ const connectionMember = (
     account: connection.account,
     status,
     ...(targets === undefined ? {} : { targets }),
+    ...(unavailable === undefined ? {} : { unavailable }),
   };
+};
+
+const NO_REASON = "This account cannot run this size.";
+
+/**
+ * The sizes among `sizeIds` that a ready member's account cannot run, each
+ * with the provider's reason. A deployment provider runs every size.
+ */
+export const unavailableSizes = <Id extends string>(
+  member: Pick<OrbProviderMember, "targets" | "unavailable">,
+  sizeIds: ReadonlyArray<Id>,
+): ReadonlyArray<{ readonly id: Id; readonly reason: string }> => {
+  const targets = member.targets;
+  if (targets === undefined) return [];
+  return sizeIds.flatMap((id) =>
+    targets.has(id)
+      ? []
+      : [{ id, reason: member.unavailable?.get(id) ?? NO_REASON }],
+  );
 };
 
 /** The providers a person can start a Thread on, in registry order. */
@@ -265,7 +293,14 @@ export const loadOrbScope = async (
  */
 export class OrbUnavailable extends Schema.TaggedError<OrbUnavailable>()(
   "OrbUnavailable",
-  { reason: Schema.Literals(["preparing", "failed", "no-provider"]) },
+  {
+    reason: Schema.Literals([
+      "preparing",
+      "failed",
+      "no-provider",
+      "size-unavailable",
+    ]),
+  },
 ) {}
 
 /**
@@ -284,9 +319,10 @@ export const resolveThreadExecutionPin = async (input: {
   readonly runnerProfileId: string | undefined;
   /** A projectless Thread's project defaults to this size. */
   readonly projectlessRunnerProfileId?: string;
-  readonly connectors?: OrbProviderConnectors;
+  /** The providers people and workspaces can connect (execution/orb-providers). */
+  readonly connectors: OrbProviderConnectors;
 }): Promise<ThreadExecutionPin | undefined> => {
-  const connectors = input.connectors ?? orbProviderConnectors;
+  const connectors = input.connectors;
   const catalog = await Effect.runPromise(
     loadRunnerProfileCatalog(input.bindings).pipe(
       Effect.orElseSucceed(() => undefined),
@@ -302,11 +338,7 @@ export const resolveThreadExecutionPin = async (input: {
   const profile = catalog.configuration.profiles.find(
     ({ id }) => id === profileId,
   );
-  if (
-    profile === undefined ||
-    (profile.adapter !== "e2b" && profile.adapter !== "cloudflare")
-  )
-    return undefined;
+  if (profile === undefined || profile.adapter === "local") return undefined;
   const deploymentProviders = resolveExecutionProviders(input.bindings);
   const localRuntime = isLocalRuntime(input.bindings);
   const deploymentPin: ThreadExecutionPin = {
@@ -345,6 +377,9 @@ export const resolveThreadExecutionPin = async (input: {
     });
   if (member.scope === "deployment") return deploymentPin;
   const target = member.targets?.get(profile.id);
+  // The account cannot run this size (its plan refused it).
+  if (target === undefined && member.targets !== undefined)
+    throw new OrbUnavailable({ reason: "size-unavailable" });
   if (
     target === undefined ||
     member.ownerId === null ||

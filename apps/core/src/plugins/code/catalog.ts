@@ -1,3 +1,4 @@
+import { mcpModuleIdFor } from "@dx/domain";
 import type { McpAgentConnectionData } from "../../settings/mcp-servers/execution.js";
 
 export interface CodeFunction {
@@ -23,13 +24,7 @@ export const codeModules = (
     .filter((connection) => connection.tools.length > 0)
     .map((connection) => {
       const displayName = connection.displayName ?? connection.name;
-      const slug =
-        displayName
-          .normalize("NFKD")
-          .replace(/[\u0300-\u036f]/g, "")
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "_")
-          .replace(/^_+|_+$/g, "") || "mcp";
+      const slug = connection.moduleId ?? mcpModuleIdFor(displayName);
       let name = slug;
       let suffix = 2;
       while (used.has(name)) name = `${slug}_${suffix++}`;
@@ -128,6 +123,40 @@ export const schemaType = (
   }
 };
 
+const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+const identifierFor = (name: string) =>
+  name.replace(/[^A-Za-z0-9_$]/g, "_").replace(/^(?=[0-9])/, "_");
+
+/**
+ * The identifier a tool whose name is not one (`resolve-library-id`) is
+ * also exported as, unless it would collide with another tool's name.
+ */
+export const codeAlias = (
+  module: CodeModule,
+  name: string,
+): string | undefined => {
+  if (IDENTIFIER.test(name)) return undefined;
+  const alias = identifierFor(name);
+  const taken = module.functions.filter(
+    (fn) => fn.name === alias || identifierFor(fn.name) === alias,
+  );
+  return taken.length === 1 ? alias : undefined;
+};
+
+/** A runnable import for the tool, preferring a plain identifier. */
+const importLine = (module: CodeModule, name: string) => {
+  const local = IDENTIFIER.test(name) ? name : codeAlias(module, name);
+  return local !== undefined
+    ? `import { ${local} } from ${JSON.stringify(module.name)}`
+    : `import { ${JSON.stringify(name)} as ${identifierFor(name)} } from ${JSON.stringify(module.name)}`;
+};
+
+const localName = (module: CodeModule, name: string) =>
+  IDENTIFIER.test(name)
+    ? name
+    : (codeAlias(module, name) ?? identifierFor(name));
+
 export const searchTools = (
   modules: ReadonlyArray<CodeModule>,
   query: string,
@@ -161,7 +190,7 @@ export const searchTools = (
     selected
       .map(
         ({ module, fn }) =>
-          `import { ${fn.name} } from ${JSON.stringify(module.name)}\n// ${fn.description.replace(/\r?\n/g, "\n// ")}\n${fn.name}(input: ${schemaType(fn.inputSchema)}): Promise<unknown>`,
+          `${importLine(module, fn.name)}\n// ${fn.description.replace(/\r?\n/g, "\n// ")}\n${localName(module, fn.name)}(input: ${schemaType(fn.inputSchema)}): Promise<unknown>`,
       )
       .join("\n\n") || "No matching functions."
   );

@@ -1,3 +1,4 @@
+import { DEFAULT_MCP_CLIENT_NAME } from "@dx/domain";
 import {
   Client,
   StreamableHTTPClientTransport,
@@ -9,7 +10,10 @@ import {
 import type { CodeHostCall } from "./providers/quickjs.js";
 import { mcpResultValue } from "./results.js";
 
-/** Fresh connections keep credentials and review admission current on every call. */
+/**
+ * Fresh connections keep credentials and review admission current on every
+ * call. Core's authorized fetch adds the configured headers.
+ */
 export const codeMcpCall =
   (threadId: string): CodeHostCall =>
   async (module, name, input, raw, signal) => {
@@ -26,7 +30,10 @@ export const codeMcpCall =
       connection.endpoint,
       connection.timeoutMs,
     );
-    const client = new Client({ name: "dx-code", version: "1.0.0" });
+    const client = new Client({
+      name: connection.clientName ?? DEFAULT_MCP_CLIENT_NAME,
+      version: "1.0.0",
+    });
     const transport = new StreamableHTTPClientTransport(
       new URL(connection.endpoint),
       {

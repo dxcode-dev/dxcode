@@ -2,7 +2,24 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
-const generatedPersonalAccountUsername = /^user-[a-f0-9]{24}$/;
+// The username migration 0097's sign-up trigger derives from an email
+// address: its name before any +tag, with . and _ as -, then 2 or 3 digits
+// when taken; or user-<24 hex> when the address gives no valid name.
+const isGeneratedPersonalAccountUsername = (username, email) => {
+  if (/^user-[a-f0-9]{24}$/.test(username)) return true;
+  const local = email.slice(0, email.indexOf("@")).toLowerCase();
+  const base = local
+    .split("+")[0]
+    .replace(/[._]/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 29)
+    .replace(/-+$/, "");
+  return (
+    username.startsWith(base) &&
+    /^(\d{2,3})?$/.test(username.slice(base.length))
+  );
+};
 
 const required = (name) => {
   const value = process.env[name]?.trim();
@@ -51,7 +68,7 @@ export const bootstrapDeployment = async ({
     !adopted &&
     username !== undefined &&
     username !== credentials.username &&
-    !generatedPersonalAccountUsername.test(username)
+    !isGeneratedPersonalAccountUsername(username, credentials.email)
   )
     throw new Error(
       "Deployment username identity does not match private state.",

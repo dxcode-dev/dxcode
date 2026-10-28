@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { ORB_PROVIDER_IDS } from "../orb-providers/index.js";
 
 export const WORKLOAD_IDENTITY_TOKEN_USE = "dx_workload_identity_v1" as const;
 
@@ -15,11 +16,9 @@ export const WorkloadIdentityTtlSeconds = Schema.Number.check(
 );
 export type WorkloadIdentityTtlSeconds = typeof WorkloadIdentityTtlSeconds.Type;
 
-export const WorkloadIdentityRuntimeProvider = Schema.Literals([
-  "local",
-  "e2b",
-  "cloudflare",
-]);
+/** The Orb provider the workload runs on. */
+export const WorkloadIdentityRuntimeProvider =
+  Schema.Literals(ORB_PROVIDER_IDS);
 export type WorkloadIdentityRuntimeProvider =
   typeof WorkloadIdentityRuntimeProvider.Type;
 

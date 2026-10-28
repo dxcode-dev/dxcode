@@ -2,6 +2,7 @@ import {
   EXECUTION_CAPABILITY_IDS,
   type ExecutionPauseResumePreserves,
   type FirstPartyPluginId,
+  ORB_PROVIDERS,
   type PluginCapabilityId,
   type PluginMeteringUnit,
   type PluginProviderId,
@@ -42,6 +43,12 @@ export interface ProviderDefinition {
    * fixture, and deployed runtime never selects it.
    */
   readonly development?: true;
+  /**
+   * Runs only on a person's or workspace's own connection (an Orb provider
+   * a deployment does not install), so it is never a deployment provider,
+   * built in or otherwise.
+   */
+  readonly connectionOnly?: true;
   /** What each call reports to `plugin_usage_event`; null when unmetered. */
   readonly unit: PluginMeteringUnit | null;
 }
@@ -124,59 +131,39 @@ export const FIRST_PARTY_PLUGINS: ReadonlyArray<PluginDefinition> = [
     description:
       "The isolated workspace each Thread runs in: files, commands, and the terminal. Required; configured by the deployment.",
     capabilities: EXECUTION_CAPABILITY_IDS,
-    // A required slot: always installed, never disabled, and readiness fails
-    // closed when no deployment provider resolves.
+    // A required slot: always installed and never disabled. Its providers
+    // are the Orb providers (`@dx/domain` orb-providers), in their order.
     alwaysOn: true,
     resolvedPerThread: true,
-    providers: [
-      {
-        id: "e2b",
-        displayName: "E2B",
-        // Claims only what dx implements on E2B today. E2B's snapshot and
-        // metrics APIs back execution.snapshot and execution.usage later.
-        capabilities: [
-          "execution.workspace",
-          "execution.resident-daemon",
-          "execution.pause-resume",
-        ],
-        // People and workspaces may bring their own E2B team (4b); the
-        // Orb Providers page owns those keys and builds the Orb template
-        // into that team.
-        credentialLabel: "E2B API key",
-        deploymentSecret: "E2B_API_KEY",
-        // A timeout pause keeps the sandbox's processes and memory.
-        pauseResumePreserves: "processes",
+    providers: ORB_PROVIDERS.map(
+      (provider): ProviderDefinition => ({
+        id: provider.id,
+        displayName: provider.displayName,
+        ...(provider.shortName === undefined
+          ? {}
+          : { shortName: provider.shortName }),
+        capabilities: provider.capabilities,
+        // People and workspaces connect their own accounts on the Orb
+        // Providers page, not with a plugin key.
+        credentialLabel: null,
+        ...(provider.deployment === undefined
+          ? {}
+          : "secret" in provider.deployment
+            ? { deploymentSecret: provider.deployment.secret }
+            : { deploymentBinding: provider.deployment.binding }),
+        ...(provider.pauseResumePreserves === undefined
+          ? {}
+          : { pauseResumePreserves: provider.pauseResumePreserves }),
+        ...(provider.development === true
+          ? { development: true }
+          : provider.deployment === undefined
+            ? { connectionOnly: true }
+            : {}),
         // Sandbox seconds are not metered yet; see
         // wiki/plugin-platform-direction.md "What phase 4 shipped".
         unit: null,
-      },
-      {
-        id: "cloudflare",
-        displayName: "Cloudflare Containers",
-        shortName: "Cloudflare",
-        // One container per Thread, owned by a Durable Object in the
-        // deployer's account; deployment scope only (no key to bring).
-        capabilities: [
-          "execution.workspace",
-          "execution.resident-daemon",
-          "execution.pause-resume",
-        ],
-        credentialLabel: null,
-        deploymentBinding: "ORB_CONTAINER",
-        // A pause snapshots the filesystem and stops the container;
-        // processes restart from the image entrypoint on wake.
-        pauseResumePreserves: "filesystem",
-        unit: null,
-      },
-      {
-        id: "local",
-        displayName: "Local runtime",
-        capabilities: ["execution.workspace", "execution.resident-daemon"],
-        credentialLabel: null,
-        development: true,
-        unit: null,
-      },
-    ],
+      }),
+    ),
   },
 ];
 
@@ -237,7 +224,8 @@ export const deploymentProviders = (
       provider.credentialLabel === null &&
       provider.deploymentSecret === undefined &&
       provider.deploymentBinding === undefined &&
-      provider.development !== true,
+      provider.development !== true &&
+      provider.connectionOnly !== true,
   );
   if (builtIn !== undefined) return [builtIn.id];
   if (isLocalRuntime(bindings))

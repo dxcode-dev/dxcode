@@ -3,7 +3,7 @@ import type {
   QuickJSHandle,
   QuickJSWASMModule,
 } from "quickjs-emscripten-core";
-import { type CodeModule, searchTools } from "../catalog.js";
+import { type CodeModule, codeAlias, searchTools } from "../catalog.js";
 
 /** Tagged host errors (MCP admission, transport) carry a code, not a message. */
 const hostErrorMessage = (error: unknown): string => {
@@ -202,7 +202,8 @@ export const executeCode = async (
       return module.functions
         .map((fn, index) => {
           const args = `${JSON.stringify(name)}, ${JSON.stringify(fn.name)}, JSON.stringify(input, (_key, value) => typeof value === 'function' ? value.toString() : value)`;
-          return `const f${index} = async (input = {}) => __call(${args}, false); f${index}.raw = async (input = {}) => __call(${args}, true); export { f${index} as ${JSON.stringify(fn.name)} };`;
+          const alias = codeAlias(module, fn.name);
+          return `const f${index} = async (input = {}) => __call(${args}, false); f${index}.raw = async (input = {}) => __call(${args}, true); export { f${index} as ${JSON.stringify(fn.name)} };${alias === undefined ? "" : ` export { f${index} as ${alias} };`}`;
         })
         .join("\n");
     });

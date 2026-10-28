@@ -9,6 +9,25 @@ export {
   SignInRejection,
 } from "./auth/sign-in.js";
 export {
+  defineOrbProvider,
+  type OrbProviderDescriptor,
+} from "./orb-providers/descriptor.js";
+export {
+  DOCKER_ORB_SIZES,
+  DockerOrbSize,
+  DockerRunnerProfileConfiguration,
+} from "./orb-providers/docker.js";
+export {
+  findOrbProvider,
+  isOrbProviderId,
+  ORB_PROVIDER_IDS,
+  ORB_PROVIDER_SIZES,
+  ORB_PROVIDERS,
+  OrbProviderId,
+  OrbRunnerProfileConfiguration,
+  withPinnedOrbTarget,
+} from "./orb-providers/index.js";
+export {
   type CursorPosition,
   decodeProjectPageCursor,
   decodeThreadPageCursor,
@@ -278,13 +297,19 @@ export {
   type StoredIntegrationOAuthTransaction,
 } from "./settings/integration-repository.js";
 export {
+  DEFAULT_MCP_CLIENT_NAME,
   flueMcpServerName,
+  MAX_MCP_HEADERS,
   MAX_MCP_SERVERS_PER_SCOPE,
   MAX_MCP_SERVERS_PER_THREAD,
   MAX_MCP_TIMEOUT_MS,
   MAX_MCP_TOOL_SCHEMA_BYTES,
   MAX_MCP_TOOLS_PER_SERVER,
+  McpClientName,
+  McpHeaderName,
   McpHealthStatus,
+  McpModuleId,
+  McpServerAuthType,
   McpServerEndpoint,
   McpServerId,
   McpServerName,
@@ -299,8 +324,11 @@ export {
   McpToolName,
   McpToolSchemaHash,
   MIN_MCP_TIMEOUT_MS,
+  mcpModuleIdFor,
   normalizeMcpServerName,
   PersonalMcpServerTarget,
+  RESERVED_MCP_HEADER_NAMES,
+  StoredMcpHeader,
   StoredMcpServer,
   StoredMcpTool,
   WorkspaceMcpServerTarget,
@@ -546,6 +574,9 @@ export {
   E2B_ORB_PROFILES,
   E2BOrbProfile,
   E2BRunnerProfileConfiguration,
+  FREESTYLE_ORB_SIZES,
+  FreestyleOrbSize,
+  FreestyleRunnerProfileConfiguration,
   LocalRunnerProfileConfiguration,
   RunnerAdapterCapabilityState,
   RunnerAdapterKind,
@@ -559,6 +590,10 @@ export {
   RunnerProviderPresentation,
   RunnerResources,
 } from "./settings/runner-profile.js";
+export {
+  ORB_RUNNER_CAPABILITIES,
+  RunnerProfileFields,
+} from "./settings/runner-profile-fields.js";
 export {
   SettingsScope,
   SettingsSectionSlug,

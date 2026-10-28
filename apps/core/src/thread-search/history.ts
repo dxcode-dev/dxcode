@@ -33,6 +33,11 @@ export interface HistoryPage {
    * may still be streaming.
    */
   readonly settled: ReadonlyMap<string, SettlementOutcome>;
+  /**
+   * For a message sent while a turn ran, the submission whose response
+   * answered it; Flue settles both together.
+   */
+  readonly answeredBy: ReadonlyMap<string, string>;
   /** Whether older prompts exist before this page. */
   readonly hasOlder: boolean;
 }
@@ -97,19 +102,25 @@ export const indexableMessages = (page: HistoryPage): IndexableMessage[] =>
 /**
  * Reads a Thread's history as its owner through the route the web client
  * uses. `promptLimit` reads only the latest prompts and their responses;
- * omitted, the whole active history.
+ * omitted, the whole active history. `settlementIds` adds those submissions'
+ * settlements to a limited page.
  */
 export const readHistory = async (
   bindings: Bindings,
   ownerUserId: UserId,
   threadId: string,
   promptLimit?: number,
+  settlementIds?: ReadonlyArray<string>,
 ): Promise<HistoryRead> => {
   const { response, payload } = await ownerRequest(
     { bindings, ownerUserId },
     "GET",
     `/v1/agents/dx/${encodeURIComponent(threadId)}?view=history${
       promptLimit === undefined ? "" : `&promptLimit=${promptLimit}`
+    }${
+      settlementIds === undefined
+        ? ""
+        : `&settlementIds=${encodeURIComponent(JSON.stringify(settlementIds))}`
     }`,
   );
   if (response.status === 404) return { kind: "empty" };
@@ -123,15 +134,20 @@ export const readHistory = async (
     readonly answeredBySubmissionId?: string;
   }>;
   const settled = new Map<string, SettlementOutcome>();
-  for (const { submissionId, outcome, answeredBySubmissionId } of settlements)
+  const answeredBy = new Map<string, string>();
+  for (const { submissionId, outcome, answeredBySubmissionId } of settlements) {
     for (const id of [submissionId, answeredBySubmissionId])
       if (id !== undefined && !settled.has(id))
         settled.set(id, outcome ?? "completed");
+    if (submissionId !== undefined && answeredBySubmissionId !== undefined)
+      answeredBy.set(submissionId, answeredBySubmissionId);
+  }
   return {
     kind: "page",
     page: {
       messages: (payload.messages ?? []) as ReadonlyArray<HistoryMessage>,
       settled,
+      answeredBy,
       hasOlder: typeof payload.olderCursor === "string",
     },
   };

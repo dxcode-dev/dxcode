@@ -58,6 +58,8 @@ export interface McpServerRepositoryShape {
   readonly replaceDiscovery: (
     id: McpServerId,
     tools: ReadonlyArray<StoredMcpTool>,
+    /** `approveNew` allows tools not seen before; changed tools still need review. */
+    options?: { readonly approveNew?: boolean },
   ) => Effect.Effect<void, McpRepositoryFailure | McpServerNotFound>;
   readonly reviewTool: (
     target: McpServerTarget,

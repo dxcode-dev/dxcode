@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { ORB_PROVIDER_IDS } from "../orb-providers/index.js";
 import { EXECUTION_CAPABILITY_IDS } from "./execution.js";
 
 /**
@@ -28,16 +29,15 @@ export type PluginCapabilityId = typeof PluginCapabilityId.Type;
 
 /**
  * `fixture` is the local-runtime substitute; it is never configurable.
- * `local` is Execution's development provider (the local workspace runtime).
+ * Execution's providers are the Orb providers (`orb-providers/index.ts`),
+ * `local` among them as the development provider.
  */
 export const PluginProviderId = Schema.Literals([
   "exa",
   "fixture",
   "quickjs",
   "sarvam",
-  "e2b",
-  "cloudflare",
-  "local",
+  ...ORB_PROVIDER_IDS,
 ]);
 
 export type PluginProviderId = typeof PluginProviderId.Type;

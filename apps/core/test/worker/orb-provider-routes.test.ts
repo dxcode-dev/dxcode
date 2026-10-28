@@ -344,6 +344,7 @@ describe("Orb provider connections in workerd with real D1", () => {
         scope: "personal",
         account: "team-a",
         status: "ready",
+        unavailableSizes: [],
       },
     ]);
     const threadId = await thread(
@@ -633,6 +634,7 @@ describe("Orb provider connections in workerd with real D1", () => {
       progress: null,
       error: null,
       updating: false,
+      unavailableSizes: [],
     });
     const threadId = await thread(
       "thr_00000000-0000-4000-8000-0000000004e0",

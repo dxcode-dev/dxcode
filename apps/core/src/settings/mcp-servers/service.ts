@@ -2,12 +2,14 @@ import {
   EnvironmentVariableRepository,
   MAX_MCP_SERVERS_PER_SCOPE,
   type McpExecutionConnection,
+  type McpModuleId,
   McpServerId,
   McpServerLimitExceeded,
   McpServerRepository,
   type McpServerTarget,
   type McpToolName,
   type McpToolSchemaHash,
+  mcpModuleIdFor,
   StoredMcpServer,
   type StoredMcpTool,
   type UserId,
@@ -20,6 +22,15 @@ import {
   McpDiscoveryFailed,
   type McpNetworkOptions,
 } from "./transport.js";
+
+export class McpModuleIdTaken extends Schema.TaggedError<McpModuleIdTaken>()(
+  "McpModuleIdTaken",
+  {},
+) {}
+
+/** The module ID a server's tools are imported under. */
+export const effectiveMcpModuleId = (server: StoredMcpServer): McpModuleId =>
+  server.moduleId ?? mcpModuleIdFor(server.name);
 
 export class McpAuthReferenceInvalid extends Schema.TaggedError<McpAuthReferenceInvalid>()(
   "McpAuthReferenceInvalid",
@@ -92,8 +103,14 @@ interface McpServerServiceShape {
         | "enabled"
         | "projectIds"
         | "roles"
+        | "authType"
+        | "headers"
       >
     > & {
+      /** `null` restores the default. */
+      readonly moduleId?: StoredMcpServer["moduleId"] | null;
+      readonly clientName?: StoredMcpServer["clientName"] | null;
+      readonly oauthClientId?: StoredMcpServer["oauthClientId"] | null;
       readonly clearAuthReference?: boolean;
       /**
        * The caller switched between no auth, a stored token, and a secret
@@ -110,6 +127,11 @@ interface McpServerServiceShape {
     credential: string | undefined,
     audit: { readonly userId: UserId; readonly requestId: string },
     networkOptions?: McpNetworkOptions,
+    options?: {
+      readonly headers?: Readonly<Record<string, string>>;
+      /** Allow tools not seen before, as connecting does. */
+      readonly approveNew?: boolean;
+    },
   ) => Effect.Effect<
     {
       readonly server: StoredMcpServer;
@@ -199,6 +221,14 @@ export class McpServerService extends Context.Service<
             if (existing.length >= MAX_MCP_SERVERS_PER_SCOPE) {
               return yield* new McpServerLimitExceeded();
             }
+            const moduleId = input.moduleId ?? mcpModuleIdFor(input.name);
+            if (
+              existing.some(
+                ({ server }) => effectiveMcpModuleId(server) === moduleId,
+              )
+            ) {
+              return yield* new McpModuleIdTaken();
+            }
             yield* validateAuth(target, input.authReference);
             const now = yield* DateTime.now;
             const id = yield* Schema.decodeEffect(McpServerId)(
@@ -208,6 +238,7 @@ export class McpServerService extends Context.Service<
               Schema.toType(StoredMcpServer),
             )({
               ...input,
+              moduleId,
               id,
               target,
               transport: "streamable-http",
@@ -226,6 +257,19 @@ export class McpServerService extends Context.Service<
         update: Effect.fn("McpServerService.update")(
           function* (target, id, input, auditContext) {
             const current = (yield* repository.find(target, id)).server;
+            if (input.moduleId !== undefined && input.moduleId !== null) {
+              const moduleId = input.moduleId;
+              const siblings = yield* repository.list(target);
+              if (
+                siblings.some(
+                  ({ server }) =>
+                    server.id !== id &&
+                    effectiveMcpModuleId(server) === moduleId,
+                )
+              ) {
+                return yield* new McpModuleIdTaken();
+              }
+            }
             const authReference = input.clearAuthReference
               ? undefined
               : (input.authReference ?? current.authReference);
@@ -236,14 +280,35 @@ export class McpServerService extends Context.Service<
                 input.endpoint !== current.endpoint) ||
               input.clearAuthReference === true ||
               input.authModeChanged === true ||
+              (input.authType !== undefined &&
+                input.authType !== current.authType) ||
+              (input.oauthClientId !== undefined &&
+                (input.oauthClientId ?? undefined) !== current.oauthClientId) ||
               (input.authReference !== undefined &&
                 input.authReference.id !== current.authReference?.id);
+            const {
+              moduleId,
+              clientName,
+              oauthClientId,
+              clearAuthReference: _clear,
+              authModeChanged: _changed,
+              ...rest
+            } = input;
             const server = yield* Schema.decodeEffect(
               Schema.toType(StoredMcpServer),
             )({
               ...current,
-              ...input,
+              ...rest,
               authReference,
+              ...(moduleId === undefined
+                ? {}
+                : { moduleId: moduleId ?? mcpModuleIdFor(current.name) }),
+              ...(clientName === undefined
+                ? {}
+                : { clientName: clientName ?? undefined }),
+              ...(oauthClientId === undefined
+                ? {}
+                : { oauthClientId: oauthClientId ?? undefined }),
               ...(connectionChanged
                 ? {
                     healthStatus: "unchecked",
@@ -262,44 +327,56 @@ export class McpServerService extends Context.Service<
             return server;
           },
         ),
-        discover: Effect.fn("McpServerService.discover")(
-          function* (target, id, credential, auditContext, networkOptions) {
-            const current = (yield* repository.find(target, id)).server;
-            const result = yield* Effect.result(
-              discoverMcpTools(current, credential, networkOptions),
-            );
-            const checkedAt = yield* DateTime.now;
-            if (Result.isFailure(result)) {
-              const failed = yield* Schema.decodeEffect(
-                Schema.toType(StoredMcpServer),
-              )({
-                ...current,
-                healthStatus: "unhealthy",
-                healthCheckedAt: checkedAt,
-                healthErrorCode:
-                  result.failure instanceof McpDiscoveryFailed
-                    ? result.failure.code
-                    : "DISCOVERY_FAILED",
-                updatedAt: checkedAt,
-              });
-              yield* repository.replace(failed);
-              return yield* result.failure;
-            }
-            yield* repository.replaceDiscovery(id, result.success);
-            const healthy = yield* Schema.decodeEffect(
+        discover: Effect.fn("McpServerService.discover")(function* (
+          target,
+          id,
+          credential,
+          auditContext,
+          networkOptions,
+          options = {},
+        ) {
+          const current = (yield* repository.find(target, id)).server;
+          const result = yield* Effect.result(
+            discoverMcpTools(
+              current,
+              credential,
+              networkOptions,
+              options.headers,
+            ),
+          );
+          const checkedAt = yield* DateTime.now;
+          if (Result.isFailure(result)) {
+            const failed = yield* Schema.decodeEffect(
               Schema.toType(StoredMcpServer),
             )({
               ...current,
-              healthStatus: "healthy",
+              healthStatus: "unhealthy",
               healthCheckedAt: checkedAt,
-              healthErrorCode: undefined,
+              healthErrorCode:
+                result.failure instanceof McpDiscoveryFailed
+                  ? result.failure.code
+                  : "DISCOVERY_FAILED",
               updatedAt: checkedAt,
             });
-            yield* repository.replace(healthy);
-            yield* audit("mcp_server.discover", target, auditContext, { id });
-            return yield* repository.find(target, id);
-          },
-        ),
+            yield* repository.replace(failed);
+            return yield* result.failure;
+          }
+          yield* repository.replaceDiscovery(id, result.success, {
+            approveNew: options.approveNew === true,
+          });
+          const healthy = yield* Schema.decodeEffect(
+            Schema.toType(StoredMcpServer),
+          )({
+            ...current,
+            healthStatus: "healthy",
+            healthCheckedAt: checkedAt,
+            healthErrorCode: undefined,
+            updatedAt: checkedAt,
+          });
+          yield* repository.replace(healthy);
+          yield* audit("mcp_server.discover", target, auditContext, { id });
+          return yield* repository.find(target, id);
+        }),
         reviewTool: Effect.fn("McpServerService.reviewTool")(
           function* (target, id, name, schemaHash, approved, auditContext) {
             const reviewedAt = yield* DateTime.now;

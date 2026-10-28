@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { Effect } from "effect";
-import { orbProviderConnectors } from "../../execution/connectors.js";
+import { orbProviderConnectors } from "../../execution/orb-providers.js";
 import type { Bindings } from "../../http/types.js";
 import { orbProvidersLogger } from "../../logging.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";

@@ -4,6 +4,7 @@ import { Template } from "e2b";
 import { describe, expect, it, vi } from "vitest";
 import {
   advanceTeamTemplates,
+  E2BSizeRefused,
   type E2BTeamApi,
   inlineOrbDockerfile,
   type ListedTeamTemplate,
@@ -12,6 +13,7 @@ import {
   startTeamTemplates,
   teamOf,
   teamTemplateName,
+  unavailableProfiles,
 } from "./team-templates.js";
 
 const repo = new URL("../../../../../", import.meta.url);
@@ -142,6 +144,57 @@ describe("building the Orb templates into a key's team", () => {
     expect(state).toMatchObject({ state: "ready", account: "team-a" });
     expect(api.buildBase).not.toHaveBeenCalled();
     expect(teamOf(listed)).toBe("team-a");
+  });
+
+  it("skips a larger size the team cannot build, with E2B's reason, and is ready with the rest", async () => {
+    const team = fakeTeam();
+    const { statuses } = team;
+    const [tiny, small, medium] = E2B_ORB_PROFILES;
+    const api: E2BTeamApi = {
+      ...team.api,
+      buildProfile: vi.fn(async (apiKey, name, base, profile) => {
+        // E2B refuses a template whose CPU and memory exceed the team's tier.
+        if (profile.id === medium?.id)
+          throw new E2BSizeRefused(
+            "400: Template CPU count 4 exceeds the team's limit of 2",
+          );
+        return team.api.buildProfile(apiKey, name, base, profile);
+      }),
+    };
+    let state = await startTeamTemplates(api, "key", recipe);
+    for (let step = 0; step < 10 && state.state === "building"; step += 1) {
+      for (const build of state.builds)
+        if (statuses.get(build.buildId) === "building")
+          // The small build fails on E2B's side.
+          statuses.set(
+            build.buildId,
+            build.profileId === small?.id ? "error" : "ready",
+          );
+      state = await advanceTeamTemplates(api, "key", recipe, state);
+    }
+    expect(state.state).toBe("ready");
+    expect([...(readyProfileTemplates(state)?.keys() ?? [])]).toEqual([
+      tiny?.id,
+    ]);
+    expect(Object.fromEntries(unavailableProfiles(state) ?? [])).toEqual({
+      [small?.id as string]: "E2B could not build this size's template.",
+      [medium?.id as string]:
+        "E2B refused this size: 400: Template CPU count 4 exceeds the team's limit of 2",
+    });
+  });
+
+  it("fails the key when the smallest size cannot be built", async () => {
+    const { api, statuses } = fakeTeam();
+    let state = await startTeamTemplates(api, "key", recipe);
+    for (const build of state.builds) statuses.set(build.buildId, "ready");
+    state = await advanceTeamTemplates(api, "key", recipe, state);
+    for (const build of state.builds)
+      if (build.profileId !== null) statuses.set(build.buildId, "error");
+    state = await advanceTeamTemplates(api, "key", recipe, state);
+    expect(state).toMatchObject({
+      state: "failed",
+      error: `E2B could not build ${teamTemplateName(recipe, E2B_ORB_PROFILES[0])}.`,
+    });
   });
 
   it("fails the key when a build fails, without trying other templates", async () => {

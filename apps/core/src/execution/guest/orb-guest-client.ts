@@ -12,14 +12,32 @@ import {
   WORKSPACE_CONTEXT_TIMEOUT_MS,
   workspaceContextCommand,
 } from "../workspace-context.js";
-import type {
-  OrbExecOptions,
-  OrbExecResult,
-  OrbFileStat,
-} from "./orb-container.js";
+export interface OrbExecOptions {
+  readonly cwd?: string;
+  readonly env?: Record<string, string>;
+  readonly timeoutMs?: number;
+}
 
-/** The Orb container object's RPC surface, as Core calls it. */
-export interface OrbContainerClient {
+export interface OrbExecResult {
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly exitCode: number;
+  readonly timedOut: boolean;
+}
+
+export interface OrbFileStat {
+  readonly isFile: boolean;
+  readonly isDirectory: boolean;
+  readonly isSymbolicLink: boolean;
+}
+
+/**
+ * A guest's command and file operations, as Core calls them. A provider
+ * whose API offers exec and file access implements this (the Cloudflare Orb
+ * container object, the Freestyle REST client) and gets the agent's Flue
+ * sandbox and the raw guest Core's activation pipeline prepares from it.
+ */
+export interface OrbGuestClient {
   exec(command: string, options?: OrbExecOptions): Promise<OrbExecResult>;
   readFile(path: string): Promise<Uint8Array>;
   writeFile(path: string, content: Uint8Array): Promise<void>;
@@ -38,7 +56,7 @@ const timedOut = (timeoutMs: number) =>
 
 /** Runs one command like E2B's `commands.run`: a timeout rejects. */
 const run = async (
-  client: OrbContainerClient,
+  client: OrbGuestClient,
   command: string,
   options: OrbExecOptions,
 ) => {
@@ -55,17 +73,17 @@ const bytes = (content: string | Uint8Array | ArrayBuffer) =>
       : new Uint8Array(content);
 
 /**
- * Flue's `SandboxDriver` for a Cloudflare container: every operation is one
- * RPC to the Thread's Orb container object, which runs it with
- * `ctx.container.exec()`.
+ * Flue's `SandboxDriver` over an Orb guest client: every operation is one
+ * call to the provider (an RPC to a Cloudflare Orb container object, a
+ * Freestyle REST request).
  */
-class CloudflareSandboxDriver implements SandboxDriver {
-  constructor(private readonly client: OrbContainerClient) {}
+class OrbGuestSandboxDriver implements SandboxDriver {
+  constructor(private readonly client: OrbGuestClient) {}
 
   async snapshotWorkspaceContext(
     root: string,
   ): Promise<WorkspaceContextSnapshotResult> {
-    // dx's own read-only scan: when it fails, the container did, so the
+    // dx's own read-only scan: when it fails, the guest did, so the
     // submission retries instead of settling as an internal error.
     const unavailable = (reason: string) =>
       new Error(
@@ -154,15 +172,13 @@ class CloudflareSandboxDriver implements SandboxDriver {
   }
 }
 
-/** The agent's Flue sandbox over a Cloudflare container. */
-export const cloudflareSandbox = (
-  client: OrbContainerClient,
-  cwd: string,
-): Sandbox => sandboxFromDriver(new CloudflareSandboxDriver(client), cwd);
+/** The agent's Flue sandbox over an Orb guest client. */
+export const orbGuestSandbox = (client: OrbGuestClient, cwd: string): Sandbox =>
+  sandboxFromDriver(new OrbGuestSandboxDriver(client), cwd);
 
 /** The raw guest Core's activation pipeline prepares. */
-export const cloudflareGuest = (
-  client: OrbContainerClient,
+export const orbGuest = (
+  client: OrbGuestClient,
 ): ExecutionGuest & {
   readonly commands: {
     run(

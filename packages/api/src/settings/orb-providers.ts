@@ -3,6 +3,7 @@ import {
   OrbProviderConnectionStatus,
   OrbProviderCredentials,
   OrbProviderField,
+  OrbProviderId,
   OrbProviderPreparationProgress,
   PluginScope,
   ProjectId,
@@ -13,10 +14,16 @@ import {
 import { Schema } from "effect";
 import { errorResponse, successResponse } from "../http/response.js";
 
-/** Orb (Execution) providers a deployment can list. */
-export const OrbProviderId = Schema.Literals(["e2b", "cloudflare", "local"]);
+/** Orb (Execution) providers, from `@dx/domain`'s provider list. */
+export { OrbProviderId };
 
-export type OrbProviderId = typeof OrbProviderId.Type;
+/** A size an account cannot run, with the provider's reason. */
+export const OrbUnavailableSizeSchema = Schema.Struct({
+  id: RunnerProfileId,
+  reason: Schema.String,
+});
+
+export type OrbUnavailableSize = typeof OrbUnavailableSizeSchema.Type;
 
 /**
  * A person's or workspace's own provider account. The credentials are
@@ -37,6 +44,11 @@ export const OrbProviderConnectionDataSchema = Schema.Struct({
    * using the last ready one.
    */
   updating: Schema.Boolean,
+  /**
+   * Sizes this account cannot run (its plan refused them), from the
+   * version new Threads use; empty until it is ready.
+   */
+  unavailableSizes: Schema.Array(OrbUnavailableSizeSchema),
 });
 
 export type OrbProviderConnectionData =
@@ -76,6 +88,8 @@ export const OrbResolvedProviderSchema = Schema.Struct({
   scope: PluginScope,
   account: Schema.NullOr(Schema.String),
   status: OrbProviderConnectionStatus,
+  /** Sizes this account cannot run; the Orb picker leaves them out. */
+  unavailableSizes: Schema.Array(OrbUnavailableSizeSchema),
 });
 
 export type OrbResolvedProvider = typeof OrbResolvedProviderSchema.Type;

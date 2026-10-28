@@ -1,4 +1,5 @@
 import {
+  BeginMcpOAuthResponseSchema,
   CreateMcpServerRequestSchema,
   CreateMcpServerResponseSchema,
   DeleteMcpServerResponseSchema,
@@ -8,6 +9,7 @@ import {
   McpServerDiscoveryFailedResponseSchema,
   McpServerLimitResponseSchema,
   McpServerNotFoundResponseSchema,
+  McpServerOAuthFailedResponseSchema,
   McpServerParamsSchema,
   McpServersBrowserSessionRequiredResponseSchema,
   McpServersForbiddenResponseSchema,
@@ -18,13 +20,17 @@ import {
   ReviewMcpToolRequestSchema,
   ReviewMcpToolResponseSchema,
   type SettingsFieldError,
+  SignOutMcpOAuthResponseSchema,
   UpdateMcpServerRequestSchema,
   UpdateMcpServerResponseSchema,
   UpdateMcpWorkspacePolicyRequestSchema,
   UpdateMcpWorkspacePolicyResponseSchema,
 } from "@dx/api";
 import {
+  DEFAULT_MCP_CLIENT_NAME,
   EnvironmentVariableRepository,
+  type McpClientName,
+  type McpServerAuthType,
   McpServerEndpoint,
   McpServerLimitExceeded,
   McpServerName,
@@ -47,6 +53,8 @@ import {
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { createAuth } from "../../auth/better-auth.js";
+import { loadAuthenticationRequirements } from "../../auth/requirements.js";
 import {
   decodeJsonBody,
   decodeRequestInput,
@@ -61,6 +69,10 @@ import {
   loadConfigEncryptionKeyring,
 } from "../environment-variables/encryption.js";
 import { EnvironmentVariableRepositoryD1 } from "../environment-variables/repository-d1.js";
+import {
+  createOAuthProof,
+  hashOAuthState,
+} from "../integrations/provider-registry.js";
 import { SettingsService } from "../service.js";
 import { WorkspaceRepositoryD1 } from "../workspace/repository-d1.js";
 import { WorkspacePolicyRepositoryD1 } from "../workspace-policy/repository-d1.js";
@@ -70,13 +82,42 @@ import {
   readMcpServerCredential,
   removeMcpServerCredential,
 } from "./credential.js";
+import { resolveMcpHeaders } from "./execution.js";
+import {
+  beginMcpOAuth,
+  createMcpOAuthFetch,
+  finishMcpOAuth,
+  McpOAuthFailed,
+  mcpOAuthAccessToken,
+  mcpServerAdvertisesOAuth,
+} from "./oauth.js";
 import { McpServerRepositoryD1 } from "./repository-d1.js";
 import {
+  consumeMcpOAuthTransaction,
+  insertMcpOAuthTransaction,
+  listMcpServerSecretNames,
+  type McpServerSecretName,
+  putMcpOAuthGrant,
+  putMcpServerSecret,
+  readMcpServerSecrets,
+  removeMcpOAuthGrants,
+  removeMcpServerSecrets,
+  signedInMcpServerIds,
+} from "./secrets.js";
+import {
+  checkMcpClientName,
+  checkMcpModuleId,
+  planMcpHeaders,
+} from "./server-input.js";
+import {
+  effectiveMcpModuleId,
   enforcePersonalMcpOverride,
   McpAuthReferenceInvalid,
+  McpModuleIdTaken,
   McpServerService,
 } from "./service.js";
 import {
+  discoverMcpTools,
   McpDiscoveryFailed,
   McpNetworkRejected,
   validateMcpEndpoint,
@@ -177,14 +218,26 @@ const parseServerId = (context: Context<AppEnv>) =>
     () => invalid(fieldError("mcpServerId", "Use a valid server identifier.")),
   ).pipe(Effect.map(({ mcpServerId }) => mcpServerId));
 
-const data = ({ server, tools }: McpServerWithTools): McpServerData => ({
+const data = (
+  { server, tools }: McpServerWithTools,
+  signedIn: boolean,
+): McpServerData => ({
   id: server.id,
   scope: server.target.scope,
   name: server.name,
+  moduleId: effectiveMcpModuleId(server) as McpServerData["moduleId"],
   endpoint: server.endpoint,
   transport: server.transport,
+  authType: server.authType,
   authReference: server.authReference,
   hasStoredToken: server.hasStoredCredential === true,
+  clientName: server.clientName,
+  oauthClientId: server.oauthClientId,
+  hasOAuthClientSecret: server.hasOAuthClientSecret === true,
+  signedIn: server.authType === "oauth" && signedIn,
+  headers: server.headers.map(({ name, secret, value }) =>
+    secret ? { name, secret } : { name, secret, value: value ?? "" },
+  ),
   timeoutMs: server.timeoutMs,
   enabled: server.enabled,
   projectIds: server.projectIds,
@@ -192,21 +245,37 @@ const data = ({ server, tools }: McpServerWithTools): McpServerData => ({
   healthStatus: server.healthStatus,
   healthCheckedAt: server.healthCheckedAt,
   healthErrorCode: server.healthErrorCode,
-  tools: tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    inputSchema: JSON.parse(tool.inputSchemaJson) as unknown,
-    schemaHash: tool.schemaHash,
-    approved:
+  tools: tools.map((tool) => {
+    const approved =
       tool.approvedSchemaHash !== undefined &&
-      tool.approvedSchemaHash === tool.schemaHash,
-    reviewRequired: tool.approvedSchemaHash !== tool.schemaHash,
-    discoveredAt: tool.discoveredAt,
-    reviewedAt: tool.reviewedAt,
-  })),
+      tool.approvedSchemaHash === tool.schemaHash;
+    return {
+      name: tool.name,
+      description: tool.description,
+      inputSchema: JSON.parse(tool.inputSchemaJson) as unknown,
+      schemaHash: tool.schemaHash,
+      approved,
+      reviewRequired: tool.approvedSchemaHash !== tool.schemaHash,
+      policy: approved
+        ? "allow"
+        : tool.approvedSchemaHash === undefined && tool.reviewedAt !== undefined
+          ? "disabled"
+          : "review",
+      discoveredAt: tool.discoveredAt,
+      reviewedAt: tool.reviewedAt,
+    } as const;
+  }),
   createdAt: server.createdAt,
   updatedAt: server.updatedAt,
 });
+
+/** A checked input or its field error. */
+const checked = <A>(
+  result:
+    | { readonly ok: true; readonly value: A }
+    | { readonly ok: false; readonly error: SettingsFieldError },
+) =>
+  result.ok ? Effect.succeed(result.value) : Effect.fail(invalid(result.error));
 
 const validateName = (value: string) => {
   const decoded = Schema.decodeOption(McpServerName)(
@@ -283,6 +352,48 @@ const validateGrants = Effect.fn("validateMcpGrants")(function* (
   return { projectIds: projects, roles: roleGrants };
 });
 
+/**
+ * Automatic detection: a server that answers without credentials needs none;
+ * one that refuses and advertises an authorization server uses OAuth; any
+ * other refusal needs a bearer token.
+ */
+const detectAuth = Effect.fn("detectMcpAuth")(function* (
+  endpoint: typeof McpServerEndpoint.Type,
+  headers: Readonly<Record<string, string>>,
+  clientName: McpClientName | undefined,
+) {
+  const probe = yield* Effect.result(
+    discoverMcpTools(
+      { endpoint, timeoutMs: 10_000 as never, clientName },
+      undefined,
+      {},
+      headers,
+    ),
+  );
+  if (Result.isSuccess(probe)) return "none" as const;
+  if (
+    probe.failure instanceof McpDiscoveryFailed &&
+    probe.failure.code === "AUTHENTICATION_REQUIRED"
+  ) {
+    const oauth = yield* Effect.promise(() =>
+      mcpServerAdvertisesOAuth(endpoint, createMcpOAuthFetch()),
+    );
+    if (oauth) return "oauth" as const;
+    return yield* invalid(
+      fieldError(
+        "authType",
+        "This server needs a bearer token. Choose Bearer token under Authentication.",
+      ),
+    );
+  }
+  return yield* invalid(
+    fieldError(
+      "endpoint",
+      "dx could not connect to this MCP server. Check the URL, or choose the authentication yourself.",
+    ),
+  );
+});
+
 const credentialEffect = <A>(operation: string, run: () => Promise<A>) =>
   Effect.tryPromise({
     try: run,
@@ -294,19 +405,46 @@ const credentialFor = Effect.fn("mcpCredentialForDiscovery")(function* (
   db: D1Database,
   target: McpServerTarget,
   serverId: typeof McpServerParamsSchema.Type.mcpServerId,
+  userId: string,
 ) {
   const found = yield* Effect.gen(function* () {
     const repository = yield* McpServerRepository;
     return yield* repository.find(target, serverId);
   }).pipe(Effect.provide(layers(db)));
-  if (found.server.hasStoredCredential === true) {
-    const keyring = yield* loadConfigEncryptionKeyring(context.env);
-    return yield* credentialEffect("settings.mcpServers.readCredential", () =>
-      readMcpServerCredential(db, keyring, found.server),
-    );
+  const server = found.server;
+  const keyring =
+    server.authType === "none" && !server.headers.some(({ secret }) => secret)
+      ? undefined
+      : yield* loadConfigEncryptionKeyring(context.env);
+  const headers = yield* credentialEffect(
+    "settings.mcpServers.readHeaders",
+    () => resolveMcpHeaders(db, keyring, server),
+  );
+  if (server.authType === "none" || keyring === undefined)
+    return { credential: undefined, headers };
+  if (server.authType === "oauth") {
+    const token = yield* Effect.tryPromise({
+      try: () => mcpOAuthAccessToken(db, keyring, server, userId),
+      catch: (cause) =>
+        cause instanceof McpOAuthFailed
+          ? cause
+          : new McpOAuthFailed({ reason: "Sign in again." }),
+    });
+    if (token === undefined)
+      return yield* new McpOAuthFailed({
+        reason: "Sign in to this server to discover its tools.",
+      });
+    return { credential: token, headers };
   }
-  const reference = found.server.authReference;
-  if (reference === undefined) return undefined;
+  if (server.hasStoredCredential === true) {
+    const credential = yield* credentialEffect(
+      "settings.mcpServers.readCredential",
+      () => readMcpServerCredential(db, keyring, server),
+    );
+    return { credential, headers };
+  }
+  const reference = server.authReference;
+  if (reference === undefined) return { credential: undefined, headers };
   const variable = yield* Effect.gen(function* () {
     const repository = yield* EnvironmentVariableRepository;
     return yield* repository.find(target, reference.id);
@@ -314,8 +452,7 @@ const credentialFor = Effect.fn("mcpCredentialForDiscovery")(function* (
   if (variable.kind !== "secret" || !variable.enabled) {
     return yield* new McpAuthReferenceInvalid();
   }
-  const keyring = yield* loadConfigEncryptionKeyring(context.env);
-  return yield* decryptEnvironmentVariable(
+  const credential = yield* decryptEnvironmentVariable(
     keyring,
     {
       id: variable.id,
@@ -325,7 +462,101 @@ const credentialFor = Effect.fn("mcpCredentialForDiscovery")(function* (
     },
     variable.envelope,
   );
+  return { credential, headers };
 });
+
+/** Lists or finds servers and marks the ones the person has signed in to. */
+const withSignIns = (
+  db: D1Database,
+  userId: string,
+  servers: ReadonlyArray<McpServerWithTools>,
+) =>
+  credentialEffect("settings.mcpServers.signIns", () =>
+    signedInMcpServerIds(
+      db,
+      userId,
+      servers
+        .filter(({ server }) => server.authType === "oauth")
+        .map(({ server }) => server.id),
+    ),
+  ).pipe(
+    Effect.map((signedIn) =>
+      servers.map((found) => data(found, signedIn.has(found.server.id))),
+    ),
+  );
+
+/** The callback every MCP sign-in returns to, on Core's own origin. */
+const oauthRedirectUrl = (context: Context<AppEnv>) => {
+  const url = new URL(context.env.DX_AUTH_URL as string);
+  url.pathname = "/v1/settings/personal/mcp-servers/oauth/callback";
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+};
+
+class BrowserSessionMissing extends Schema.TaggedError<BrowserSessionMissing>()(
+  "BrowserSessionMissing",
+  {},
+) {}
+
+/** Sign-ins are bound to the browser session that started them. */
+const browserSession = Effect.fn("mcpBrowserSession")(function* (
+  context: Context<AppEnv>,
+) {
+  const principal = context.get("principal");
+  if (principal.apiTokenScopes !== undefined) {
+    return yield* new BrowserSessionRequired();
+  }
+  const requirements = yield* loadAuthenticationRequirements(context.env);
+  const auth = createAuth(context.env, requirements);
+  const session = yield* Effect.tryPromise({
+    try: () =>
+      auth.api.getSession({
+        headers: context.req.raw.headers,
+        query: { disableCookieCache: true },
+      }),
+    catch: () => new BrowserSessionMissing(),
+  });
+  if (session === null || session.user.id !== principal.userId) {
+    return yield* new BrowserSessionRequired();
+  }
+  return session.session.id;
+});
+
+/** Stores the server's secret header values and drops header secrets no longer listed. */
+const storeHeaderSecrets = (
+  db: D1Database,
+  context: Context<AppEnv>,
+  server: {
+    readonly id: typeof McpServerParamsSchema.Type.mcpServerId;
+    readonly target: McpServerTarget;
+  },
+  writes: ReadonlyArray<{
+    readonly name: McpServerSecretName;
+    readonly value: string;
+  }>,
+  keep: ReadonlyArray<McpServerSecretName>,
+  stored: ReadonlyArray<string>,
+) =>
+  Effect.gen(function* () {
+    if (writes.length > 0) {
+      const keyring = yield* loadConfigEncryptionKeyring(context.env);
+      const now = new Date().toISOString();
+      for (const write of writes)
+        yield* credentialEffect("settings.mcpServers.putSecret", () =>
+          putMcpServerSecret(db, keyring, server, write.name, write.value, now),
+        );
+    }
+    const stale = stored.filter(
+      (name) =>
+        name.startsWith("header:") &&
+        !keep.includes(name as McpServerSecretName),
+    ) as Array<McpServerSecretName>;
+    if (stale.length > 0)
+      yield* credentialEffect("settings.mcpServers.removeSecrets", () =>
+        removeMcpServerSecrets(db, server, { names: stale }),
+      );
+  });
 
 const failureResponse = (context: Context<AppEnv>, failure: unknown) => {
   const requestId = context.get("requestId");
@@ -366,6 +597,46 @@ const failureResponse = (context: Context<AppEnv>, failure: unknown) => {
       403,
       "SETTINGS_SCOPE_FORBIDDEN",
       "The settings scope is unavailable for this user.",
+    );
+  }
+  if (failure instanceof McpModuleIdTaken) {
+    return context.json(
+      Schema.encodeUnknownSync(McpServersInvalidRequestResponseSchema)({
+        status: "error",
+        data: {
+          code: "INVALID_MCP_SERVER_REQUEST",
+          message: "MCP server validation failed.",
+          requestId,
+          fieldErrors: [
+            fieldError(
+              "moduleId",
+              "Another server in these settings uses this ID.",
+            ),
+          ],
+        },
+      }),
+      400,
+    );
+  }
+  if (failure instanceof McpOAuthFailed) {
+    return context.json(
+      Schema.encodeUnknownSync(McpServerOAuthFailedResponseSchema)({
+        status: "error",
+        data: {
+          code: "MCP_SERVER_OAUTH_FAILED",
+          message: failure.reason,
+          requestId,
+        },
+      }),
+      502,
+    );
+  }
+  if (failure instanceof BrowserSessionMissing) {
+    return response(
+      McpServersBrowserSessionRequiredResponseSchema,
+      403,
+      "BROWSER_SESSION_REQUIRED",
+      "A browser session is required to manage MCP servers.",
     );
   }
   if (failure instanceof BrowserSessionRequired) {
@@ -447,6 +718,8 @@ const run = async <A, E>(
 const registerRoutes = (
   router: Hono<AppEnv>,
   routeFor: (context: Context<AppEnv>) => RouteScope,
+  /** Only the personal router serves the fixed OAuth callback. */
+  withOAuthCallback = false,
 ) => {
   const access = (context: Context<AppEnv>, db: D1Database) =>
     authorize(routeFor(context), context.get("principal")).pipe(
@@ -460,6 +733,64 @@ const registerRoutes = (
     userId: context.get("principal").userId,
     requestId: context.get("requestId"),
   });
+  const findServer = (
+    db: D1Database,
+    target: McpServerTarget,
+    id: typeof McpServerParamsSchema.Type.mcpServerId,
+  ) =>
+    withService(
+      db,
+      Effect.gen(function* () {
+        const repository = yield* McpServerRepository;
+        return yield* repository.find(target, id);
+      }),
+    );
+  /** The server as the person sees it, with their own sign-in state. */
+  const present = (
+    context: Context<AppEnv>,
+    db: D1Database,
+    target: McpServerTarget,
+    id: typeof McpServerParamsSchema.Type.mcpServerId,
+  ) =>
+    findServer(db, target, id).pipe(
+      Effect.flatMap((found) =>
+        withSignIns(db, context.get("principal").userId, [found]),
+      ),
+      Effect.map((items) => items[0] as McpServerData),
+    );
+  /**
+   * Discovers the server's tools with the person's credential. Connecting
+   * and refreshing allow tools not seen before; changed ones need review.
+   */
+  const discover = (
+    context: Context<AppEnv>,
+    db: D1Database,
+    target: McpServerTarget,
+    id: typeof McpServerParamsSchema.Type.mcpServerId,
+  ) =>
+    Effect.gen(function* () {
+      const { credential, headers } = yield* credentialFor(
+        context,
+        db,
+        target,
+        id,
+        context.get("principal").userId,
+      );
+      return yield* withService(
+        db,
+        Effect.gen(function* () {
+          const service = yield* McpServerService;
+          return yield* service.discover(
+            target,
+            id,
+            credential,
+            audit(context),
+            undefined,
+            { headers, approveNew: true },
+          );
+        }),
+      );
+    });
 
   router.get("/", async (context) => {
     const operation = Effect.gen(function* () {
@@ -486,10 +817,15 @@ const registerRoutes = (
               }),
             )
           : undefined;
+      const listed = yield* withSignIns(
+        db,
+        context.get("principal").userId,
+        items,
+      );
       return yield* Schema.encodeUnknownEffect(ListMcpServersResponseSchema)({
         status: "success",
         data: {
-          items: items.map(data),
+          items: listed,
           canMutate: authorized.canMutate,
           ...(allowPersonalServers === undefined
             ? {}
@@ -527,13 +863,57 @@ const registerRoutes = (
           ),
         );
       }
+      const moduleId =
+        body.moduleId === undefined || body.moduleId.trim() === ""
+          ? undefined
+          : yield* checked(checkMcpModuleId(body.moduleId));
+      const clientName =
+        body.clientName === undefined
+          ? undefined
+          : yield* checked(checkMcpClientName(body.clientName));
+      const oauthClientId = body.oauthClientId?.trim() || undefined;
+      if (body.oauthClientSecret !== undefined && oauthClientId === undefined) {
+        return yield* invalid(
+          fieldError("oauthClientId", "Enter the OAuth app's client ID."),
+        );
+      }
+      const hasBearer =
+        body.authToken !== undefined || body.authReference !== undefined;
+      const requested = body.authType ?? (hasBearer ? "bearer" : "none");
+      // Header values typed in the form, for probing before anything is stored.
+      const typedHeaders = Object.fromEntries(
+        (body.headers ?? []).flatMap(({ name: header, value }) =>
+          value === undefined ? [] : [[header.trim(), value]],
+        ),
+      );
+      const authType: McpServerAuthType =
+        requested !== "auto"
+          ? requested
+          : hasBearer
+            ? "bearer"
+            : yield* detectAuth(endpoint, typedHeaders, clientName);
+      if (authType === "bearer" && !hasBearer) {
+        return yield* invalid(
+          fieldError("authToken", "Enter the bearer token."),
+        );
+      }
+      if (authType !== "bearer" && hasBearer) {
+        return yield* invalid(
+          fieldError("authToken", "A token only applies to bearer auth."),
+        );
+      }
+      const plan = yield* checked(
+        planMcpHeaders(body.headers ?? [], authType, new Set()),
+      );
       const grants = yield* validateGrants(
         body.projectIds,
         body.roles,
         context.get("principal"),
       ).pipe(Effect.provide(layers(db)));
       const keyring =
-        body.authToken === undefined
+        body.authToken === undefined &&
+        plan.writes.length === 0 &&
+        body.oauthClientSecret === undefined
           ? undefined
           : yield* loadConfigEncryptionKeyring(context.env);
       const created = yield* withService(
@@ -545,45 +925,62 @@ const registerRoutes = (
             {
               name,
               endpoint,
+              authType,
               authReference: body.authReference,
               timeoutMs,
+              headers: plan.headers,
+              ...(moduleId === undefined ? {} : { moduleId }),
+              ...(clientName === undefined ? {} : { clientName }),
+              ...(oauthClientId === undefined ? {} : { oauthClientId }),
               ...grants,
             },
             audit(context),
           );
         }),
       );
+      // A server whose secrets could not be stored is removed again rather
+      // than left calling its endpoint without them.
+      const removeCreated = withService(
+        db,
+        Effect.gen(function* () {
+          const repository = yield* McpServerRepository;
+          yield* repository.remove(authorized.target, created.id);
+        }),
+      ).pipe(Effect.ignore);
+      const now = new Date().toISOString();
       const authToken = body.authToken;
-      if (authToken !== undefined && keyring !== undefined) {
-        // A server whose token could not be stored is removed again rather
-        // than left calling its endpoint unauthenticated.
-        yield* credentialEffect("settings.mcpServers.putCredential", () =>
-          putMcpServerCredential(
-            db,
-            keyring,
-            created,
-            authToken,
-            new Date().toISOString(),
-          ),
-        ).pipe(
-          Effect.tapError(() =>
-            withService(
-              db,
-              Effect.gen(function* () {
-                const repository = yield* McpServerRepository;
-                yield* repository.remove(authorized.target, created.id);
-              }),
-            ).pipe(Effect.ignore),
-          ),
+      const oauthClientSecret = body.oauthClientSecret;
+      if (keyring !== undefined) {
+        yield* Effect.gen(function* () {
+          if (authToken !== undefined)
+            yield* credentialEffect("settings.mcpServers.putCredential", () =>
+              putMcpServerCredential(db, keyring, created, authToken, now),
+            );
+          if (oauthClientSecret !== undefined)
+            yield* credentialEffect("settings.mcpServers.putSecret", () =>
+              putMcpServerSecret(
+                db,
+                keyring,
+                created,
+                "oauth-client-secret",
+                oauthClientSecret,
+                now,
+              ),
+            );
+          yield* storeHeaderSecrets(db, context, created, plan.writes, [], []);
+        }).pipe(Effect.tapError(() => removeCreated));
+      }
+      // Connecting a server that needs no sign-in discovers its tools right
+      // away; a failure leaves it saved and marked unreachable.
+      if (authType !== "oauth") {
+        yield* discover(context, db, authorized.target, created.id).pipe(
+          Effect.ignore,
         );
       }
-      const server = {
-        ...created,
-        ...(authToken === undefined ? {} : { hasStoredCredential: true }),
-      };
+      const server = yield* present(context, db, authorized.target, created.id);
       return yield* Schema.encodeUnknownEffect(CreateMcpServerResponseSchema)({
         status: "success",
-        data: data({ server, tools: [] }),
+        data: server,
       });
     });
     return run(context, operation, 201);
@@ -660,49 +1057,159 @@ const registerRoutes = (
           ),
         );
       }
-      const authChanging =
-        body.authToken !== undefined || body.authReference !== undefined;
-      const current =
-        body.projectIds === undefined &&
-        body.roles === undefined &&
-        !authChanging
+      const moduleId =
+        body.moduleId === undefined
           ? undefined
-          : yield* withService(
-              db,
-              Effect.gen(function* () {
-                const repository = yield* McpServerRepository;
-                return yield* repository.find(authorized.target, id);
-              }),
+          : body.moduleId.trim() === ""
+            ? null
+            : yield* checked(checkMcpModuleId(body.moduleId));
+      const clientName =
+        body.clientName === undefined
+          ? undefined
+          : ((yield* checked(checkMcpClientName(body.clientName))) ?? null);
+      const oauthClientId =
+        body.oauthClientId === undefined
+          ? undefined
+          : body.oauthClientId.trim() || null;
+      const current = (yield* findServer(db, authorized.target, id)).server;
+      // Legacy clients change auth through authToken and authReference only.
+      const authType: McpServerAuthType =
+        body.authType ??
+        (body.authToken !== undefined
+          ? "bearer"
+          : body.authReference === null
+            ? "none"
+            : body.authReference !== undefined
+              ? "bearer"
+              : current.authType);
+      if (
+        authType === "bearer" &&
+        body.authToken === undefined &&
+        (body.authReference === undefined
+          ? current.hasStoredCredential !== true &&
+            current.authReference === undefined
+          : body.authReference === null)
+      ) {
+        return yield* invalid(
+          fieldError("authToken", "Enter the bearer token."),
+        );
+      }
+      if (
+        authType !== "bearer" &&
+        (body.authToken !== undefined ||
+          (body.authReference !== undefined && body.authReference !== null))
+      ) {
+        return yield* invalid(
+          fieldError("authToken", "A token only applies to bearer auth."),
+        );
+      }
+      const nextClientId =
+        oauthClientId === undefined
+          ? current.oauthClientId
+          : (oauthClientId ?? undefined);
+      if (body.oauthClientSecret !== undefined && nextClientId === undefined) {
+        return yield* invalid(
+          fieldError("oauthClientId", "Enter the OAuth app's client ID."),
+        );
+      }
+      const storedSecrets = yield* credentialEffect(
+        "settings.mcpServers.listSecrets",
+        () => listMcpServerSecretNames(db, { id, target: authorized.target }),
+      );
+      const plan =
+        body.headers === undefined
+          ? authType !== current.authType
+            ? yield* checked(
+                planMcpHeaders(
+                  current.headers.map((header) => ({
+                    name: header.name,
+                    secret: header.secret,
+                    value: header.value,
+                  })),
+                  authType,
+                  new Set(storedSecrets),
+                ),
+              )
+            : undefined
+          : yield* checked(
+              planMcpHeaders(body.headers, authType, new Set(storedSecrets)),
             );
       const grants =
         body.projectIds === undefined && body.roles === undefined
           ? undefined
           : yield* validateGrants(
-              body.projectIds ?? current?.server.projectIds,
-              body.roles ?? current?.server.roles,
+              body.projectIds ?? current.projectIds,
+              body.roles ?? current.roles,
               context.get("principal"),
             ).pipe(Effect.provide(layers(db)));
-      const hadToken = current?.server.hasStoredCredential === true;
+      const owner = { id, target: authorized.target };
+      const hadToken = current.hasStoredCredential === true;
       const authToken = body.authToken;
+      const now = new Date().toISOString();
       if (authToken !== undefined) {
         // Store the new token before dropping any secret reference, so the
         // server never switches to an unauthenticated state in between.
         const keyring = yield* loadConfigEncryptionKeyring(context.env);
         yield* credentialEffect("settings.mcpServers.putCredential", () =>
-          putMcpServerCredential(
-            db,
-            keyring,
-            { id, target: authorized.target },
-            authToken,
-            new Date().toISOString(),
-          ),
+          putMcpServerCredential(db, keyring, owner, authToken, now),
         );
-      } else if (body.authReference !== undefined && hadToken) {
-        // `null` clears all auth; a secret reference replaces the token.
+      } else if (
+        hadToken &&
+        (authType !== "bearer" || body.authReference !== undefined)
+      ) {
+        // Leaving bearer auth, or replacing the token with a reference.
         yield* credentialEffect("settings.mcpServers.removeCredential", () =>
-          removeMcpServerCredential(db, { id, target: authorized.target }),
+          removeMcpServerCredential(db, owner),
         );
       }
+      const oauthClientSecret = body.oauthClientSecret;
+      if (oauthClientSecret !== undefined) {
+        const keyring = yield* loadConfigEncryptionKeyring(context.env);
+        yield* credentialEffect("settings.mcpServers.putSecret", () =>
+          putMcpServerSecret(
+            db,
+            keyring,
+            owner,
+            "oauth-client-secret",
+            oauthClientSecret,
+            now,
+          ),
+        );
+      } else if (oauthClientId === null) {
+        yield* credentialEffect("settings.mcpServers.removeSecrets", () =>
+          removeMcpServerSecrets(db, owner, {
+            names: ["oauth-client-secret"],
+          }),
+        );
+      }
+      if (plan !== undefined)
+        yield* storeHeaderSecrets(
+          db,
+          context,
+          owner,
+          plan.writes,
+          plan.keep,
+          storedSecrets,
+        );
+      const endpointChanged =
+        endpoint !== undefined && endpoint !== current.endpoint;
+      // Sign-ins belong to an endpoint and a client; they end with either.
+      if (
+        current.authType === "oauth" &&
+        (authType !== "oauth" ||
+          endpointChanged ||
+          (oauthClientId !== undefined &&
+            (oauthClientId ?? undefined) !== current.oauthClientId))
+      ) {
+        yield* credentialEffect("settings.mcpServers.removeGrants", () =>
+          removeMcpOAuthGrants(db, id),
+        );
+      }
+      const leavingReference =
+        current.authReference !== undefined &&
+        (authToken !== undefined ||
+          authType !== "bearer" ||
+          body.authReference === null);
       const server = yield* withService(
         db,
         Effect.gen(function* () {
@@ -716,36 +1223,32 @@ const registerRoutes = (
               ...(timeoutMs === undefined ? {} : { timeoutMs }),
               ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
               ...(grants ?? {}),
-              ...(authToken !== undefined
-                ? {
-                    ...(current?.server.authReference === undefined
-                      ? {}
-                      : { clearAuthReference: true }),
-                    authModeChanged: !hadToken,
-                  }
-                : body.authReference === undefined
-                  ? {}
-                  : body.authReference === null
-                    ? { clearAuthReference: true, authModeChanged: hadToken }
-                    : {
-                        authReference: body.authReference,
-                        authModeChanged: hadToken,
-                      }),
+              authType,
+              ...(plan === undefined ? {} : { headers: plan.headers }),
+              ...(moduleId === undefined ? {} : { moduleId }),
+              ...(clientName === undefined ? {} : { clientName }),
+              ...(oauthClientId === undefined ? {} : { oauthClientId }),
+              ...(leavingReference ? { clearAuthReference: true } : {}),
+              ...(body.authReference !== undefined &&
+              body.authReference !== null
+                ? { authReference: body.authReference }
+                : {}),
+              // Switching between a stored token and a reference is a new
+              // credential source; rotating a stored token is not.
+              ...(authType === "bearer" &&
+              current.authType === "bearer" &&
+              ((authToken !== undefined && !hadToken) ||
+                (body.authReference !== undefined && hadToken))
+                ? { authModeChanged: true }
+                : {}),
             },
             audit(context),
           );
         }),
       );
-      const found = yield* withService(
-        db,
-        Effect.gen(function* () {
-          const repository = yield* McpServerRepository;
-          return yield* repository.find(authorized.target, server.id);
-        }),
-      );
       return yield* Schema.encodeUnknownEffect(UpdateMcpServerResponseSchema)({
         status: "success",
-        data: data(found),
+        data: yield* present(context, db, authorized.target, server.id),
       });
     });
     return run(context, operation);
@@ -763,27 +1266,103 @@ const registerRoutes = (
         authorized.target,
         context.get("principal").userId,
       ).pipe(Effect.provide(layers(db)));
-      const credential = yield* credentialFor(
-        context,
-        db,
-        authorized.target,
-        id,
+      yield* discover(context, db, authorized.target, id);
+      return yield* Schema.encodeUnknownEffect(DiscoverMcpServerResponseSchema)(
+        {
+          status: "success",
+          data: yield* present(context, db, authorized.target, id),
+        },
       );
-      const found = yield* withService(
-        db,
-        Effect.gen(function* () {
-          const service = yield* McpServerService;
-          return yield* service.discover(
-            authorized.target,
-            id,
-            credential,
-            audit(context),
-          );
+    });
+    return run(context, operation);
+  });
+
+  router.post("/:mcpServerId/oauth/authorize", async (context) => {
+    const operation = Effect.gen(function* () {
+      const id = yield* parseServerId(context);
+      const db = yield* decodeD1Binding(context.env.DB);
+      const browserSessionId = yield* browserSession(context);
+      // Members sign in to workspace servers they cannot edit: grants are
+      // always their own.
+      const authorized = yield* access(context, db);
+      yield* enforcePersonalMcpOverride(
+        authorized.target,
+        context.get("principal").userId,
+      ).pipe(Effect.provide(layers(db)));
+      const { server } = yield* findServer(db, authorized.target, id);
+      if (server.authType !== "oauth") {
+        return yield* new McpOAuthFailed({
+          reason: "This server does not use OAuth.",
+        });
+      }
+      const keyring = yield* loadConfigEncryptionKeyring(context.env);
+      const clientSecret =
+        server.oauthClientId === undefined ||
+        server.hasOAuthClientSecret !== true
+          ? undefined
+          : (yield* credentialEffect("settings.mcpServers.readSecrets", () =>
+              readMcpServerSecrets(db, keyring, server),
+            )).get("oauth-client-secret");
+      const proof = yield* Effect.promise(() => createOAuthProof());
+      const started = yield* Effect.tryPromise({
+        try: () =>
+          beginMcpOAuth({
+            endpoint: server.endpoint,
+            redirectUrl: oauthRedirectUrl(context),
+            state: proof.state,
+            client: {
+              clientName: server.clientName ?? DEFAULT_MCP_CLIENT_NAME,
+              ...(server.oauthClientId === undefined
+                ? {}
+                : { clientId: server.oauthClientId }),
+              ...(clientSecret === undefined ? {} : { clientSecret }),
+            },
+            fetchFn: createMcpOAuthFetch(),
+          }),
+        catch: (cause) =>
+          cause instanceof McpOAuthFailed
+            ? cause
+            : new McpOAuthFailed({
+                reason: "The server's OAuth sign-in is unavailable.",
+              }),
+      });
+      const route = routeFor(context);
+      yield* credentialEffect("settings.mcpServers.beginOAuth", async () =>
+        insertMcpOAuthTransaction(db, keyring, {
+          stateHash: await hashOAuthState(proof.state),
+          serverId: server.id,
+          userId: context.get("principal").userId,
+          browserSessionId,
+          endpoint: server.endpoint,
+          returnTo:
+            route.mode === "personal"
+              ? "personal"
+              : `workspace:${route.workspaceSlug}`,
+          payload: started.transaction,
+          now: new Date(),
         }),
       );
-      return yield* Schema.encodeUnknownEffect(DiscoverMcpServerResponseSchema)(
-        { status: "success", data: data(found) },
+      return yield* Schema.encodeUnknownEffect(BeginMcpOAuthResponseSchema)({
+        status: "success",
+        data: { authorizationUrl: started.authorizationUrl },
+      });
+    });
+    return run(context, operation, 201);
+  });
+
+  router.delete("/:mcpServerId/oauth", async (context) => {
+    const operation = Effect.gen(function* () {
+      const id = yield* parseServerId(context);
+      const db = yield* decodeD1Binding(context.env.DB);
+      const authorized = yield* access(context, db);
+      yield* findServer(db, authorized.target, id);
+      yield* credentialEffect("settings.mcpServers.signOut", () =>
+        removeMcpOAuthGrants(db, id, context.get("principal").userId),
       );
+      return yield* Schema.encodeUnknownEffect(SignOutMcpOAuthResponseSchema)({
+        status: "success",
+        data: yield* present(context, db, authorized.target, id),
+      });
     });
     return run(context, operation);
   });
@@ -826,16 +1405,14 @@ const registerRoutes = (
           );
         }),
       );
-      const found = yield* withService(
-        db,
-        Effect.gen(function* () {
-          const repository = yield* McpServerRepository;
-          return yield* repository.find(authorized.target, params.mcpServerId);
-        }),
-      );
       return yield* Schema.encodeUnknownEffect(ReviewMcpToolResponseSchema)({
         status: "success",
-        data: data(found),
+        data: yield* present(
+          context,
+          db,
+          authorized.target,
+          params.mcpServerId,
+        ),
       });
     });
     return run(context, operation);
@@ -867,10 +1444,136 @@ const registerRoutes = (
     });
     return run(context, operation);
   });
+
+  if (withOAuthCallback) {
+    router.get("/oauth/callback", async (context) => {
+      let returnTo = "personal";
+      let serverId: string | undefined;
+      const operation = Effect.gen(function* () {
+        const state = context.req.query("state");
+        const code = context.req.query("code");
+        const iss = context.req.query("iss");
+        const providerError = context.req.query("error");
+        if (state === undefined || state.length < 32 || state.length > 128) {
+          return yield* new McpOAuthFailed({
+            reason: "The sign-in link is invalid. Try again.",
+          });
+        }
+        const db = yield* decodeD1Binding(context.env.DB);
+        const browserSessionId = yield* browserSession(context);
+        const keyring = yield* loadConfigEncryptionKeyring(context.env);
+        const userId = context.get("principal").userId;
+        const transaction = yield* credentialEffect(
+          "settings.mcpServers.finishOAuth",
+          async () =>
+            consumeMcpOAuthTransaction(
+              db,
+              keyring,
+              await hashOAuthState(state),
+              userId,
+              browserSessionId,
+              new Date(),
+            ),
+        );
+        if (transaction === undefined) {
+          return yield* new McpOAuthFailed({
+            reason: "The sign-in expired. Try again.",
+          });
+        }
+        returnTo = transaction.returnTo;
+        serverId = transaction.serverId;
+        if (providerError !== undefined) {
+          return yield* new McpOAuthFailed({
+            reason: `The server declined the sign-in (${providerError.replace(/[^a-z_]/gi, "").slice(0, 64)}).`,
+          });
+        }
+        if (code === undefined || code.length === 0 || code.length > 4_096) {
+          return yield* new McpOAuthFailed({
+            reason: "The server returned no authorization code.",
+          });
+        }
+        const route: RouteScope = returnTo.startsWith("workspace:")
+          ? {
+              mode: "workspace",
+              workspaceSlug: returnTo.slice("workspace:".length),
+            }
+          : { mode: "personal" };
+        const authorized = yield* authorize(
+          route,
+          context.get("principal"),
+        ).pipe(Effect.provide(layers(db)));
+        const found = yield* findServer(
+          db,
+          authorized.target,
+          transaction.serverId,
+        );
+        if (
+          found.server.authType !== "oauth" ||
+          found.server.endpoint !== transaction.endpoint
+        ) {
+          return yield* new McpOAuthFailed({
+            reason: "The server changed during sign-in. Try again.",
+          });
+        }
+        const payload = yield* Effect.tryPromise({
+          try: () =>
+            finishMcpOAuth(
+              transaction.payload,
+              code,
+              iss,
+              createMcpOAuthFetch(),
+            ),
+          catch: (cause) =>
+            cause instanceof McpOAuthFailed
+              ? cause
+              : new McpOAuthFailed({
+                  reason: "The sign-in failed. Try again.",
+                }),
+        });
+        yield* credentialEffect("settings.mcpServers.putGrant", () =>
+          putMcpOAuthGrant(
+            db,
+            keyring,
+            found.server,
+            userId,
+            found.server.endpoint,
+            payload,
+            new Date(),
+          ),
+        );
+        // Whoever can edit the server refreshes its tools; a member signing
+        // in first discovers them so the server becomes usable.
+        if (authorized.canMutate || found.tools.length === 0) {
+          yield* discover(context, db, authorized.target, found.server.id).pipe(
+            Effect.ignore,
+          );
+        }
+      });
+      const result = await Effect.runPromise(Effect.result(operation));
+      const destination = new URL(context.env.DX_AUTH_URL as string);
+      destination.pathname = returnTo.startsWith("workspace:")
+        ? `/workspaces/${encodeURIComponent(returnTo.slice("workspace:".length))}/integrations`
+        : "/settings/integrations";
+      destination.hash = "";
+      destination.search = new URLSearchParams({
+        ...(serverId === undefined ? {} : { mcp: serverId }),
+        ...(Result.isSuccess(result)
+          ? { mcpStatus: "connected" }
+          : {
+              mcpStatus: "failed",
+              mcpMessage:
+                result.failure instanceof McpOAuthFailed
+                  ? result.failure.reason
+                  : "The sign-in failed. Try again.",
+            }),
+      }).toString();
+      return context.redirect(destination.toString(), 303);
+    });
+  }
 };
 
 export const personalMcpServerRoutes = new Hono<AppEnv>();
-registerRoutes(personalMcpServerRoutes, () => ({ mode: "personal" }));
+registerRoutes(personalMcpServerRoutes, () => ({ mode: "personal" }), true);
 
 export const workspaceMcpServerRoutes = new Hono<AppEnv>();
 registerRoutes(workspaceMcpServerRoutes, (context) => ({

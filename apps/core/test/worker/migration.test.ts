@@ -711,7 +711,7 @@ describe("D1 migration", () => {
     expect(profile).toMatchObject({
       user_id: "migration-profile-user",
       display_name: "Profile User",
-      username: expect.stringMatching(/^user-[a-f0-9]{24}$/),
+      username: "profile",
     });
 
     await expect(
@@ -747,6 +747,65 @@ describe("D1 migration", () => {
         .bind("unknown", "migration-profile-user")
         .run(),
     ).rejects.toBeDefined();
+  });
+
+  it("derives a new person's username from their email address", async () => {
+    const signUp = async (email: string) => {
+      const id = crypto.randomUUID();
+      await env.DB.prepare(
+        'INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, ?, ?)',
+      )
+        .bind(id, "", email, 1, 1)
+        .run();
+      return env.DB.prepare(
+        "SELECT username FROM personal_account WHERE user_id = ?",
+      )
+        .bind(id)
+        .first<string>("username");
+    };
+    const placeholder = /^user-[a-f0-9]{24}$/;
+
+    await expect(signUp("Jane.Doe+work@Example.com")).resolves.toBe("jane-doe");
+    await expect(signUp("jane_doe@other.example")).resolves.toMatch(
+      /^jane-doe\d{2,3}$/,
+    );
+    await expect(signUp("jo@example.com")).resolves.toMatch(/^jo\d{2,3}$/);
+    await expect(signUp("__x@example.com")).resolves.toMatch(/^x\d{2,3}$/);
+    await expect(signUp("名前@example.com")).resolves.toMatch(placeholder);
+    await expect(signUp("o'brien@example.com")).resolves.toMatch(placeholder);
+    const long = await signUp(`${"a".repeat(40)}.b@example.com`);
+    expect(long).toBe("a".repeat(29));
+    await expect(signUp(`${"a".repeat(40)}@other.example`)).resolves.toMatch(
+      new RegExp(`^${"a".repeat(29)}\\d{2,3}$`),
+    );
+
+    const crowd = [];
+    for (let index = 0; index < 25; index += 1) {
+      crowd.push(await signUp(`sam@crowd-${index}.example`));
+    }
+    expect(new Set(crowd).size).toBe(crowd.length);
+    expect(crowd[0]).toBe("sam");
+    expect(
+      crowd.filter((username) => /^sam\d{2,3}$/.test(username ?? "")).length,
+    ).toBeGreaterThanOrEqual(20);
+
+    // With the bare name and every suffix taken, sign-up still succeeds.
+    const taken = ["pat"];
+    for (let suffix = 10; suffix < 1000; suffix += 1)
+      taken.push(`pat${suffix}`);
+    await env.DB.batch(
+      taken.map((local) =>
+        env.DB.prepare(
+          'INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, ?, ?)',
+        ).bind(crypto.randomUUID(), "", `${local}@taken.example`, 1, 1),
+      ),
+    );
+    await expect(
+      env.DB.prepare(
+        "SELECT count(*) AS count FROM personal_account WHERE username GLOB 'pat*'",
+      ).first("count"),
+    ).resolves.toBe(taken.length);
+    await expect(signUp("pat@example.com")).resolves.toMatch(placeholder);
   });
 
   it("creates default personal instructions and preserves old Thread behavior", async () => {

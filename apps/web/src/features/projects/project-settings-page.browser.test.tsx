@@ -138,6 +138,7 @@ const seedResolvedOrbs = (
         scope: "deployment",
         account: null,
         status: "ready",
+        unavailableSizes: [],
       })),
     } satisfies OrbProviderListData,
   );

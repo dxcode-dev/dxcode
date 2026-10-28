@@ -480,6 +480,7 @@ describe("Cloudflare Containers in a person's own account", () => {
         scope: "personal",
         account: accountId,
         status: "ready",
+        unavailableSizes: [],
       },
     ]);
 

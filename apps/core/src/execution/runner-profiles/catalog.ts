@@ -1,6 +1,6 @@
 import {
-  CLOUDFLARE_ORB_PROFILES,
-  E2B_ORB_PROFILES,
+  ORB_PROVIDER_IDS,
+  ORB_PROVIDER_SIZES,
   type RunnerAdapterCapabilityState,
   type RunnerProfile,
   type RunnerProfileCatalog,
@@ -51,43 +51,14 @@ const publicProfile = (
 
 type CatalogConfiguration = typeof RunnerProfileCatalogConfiguration.Type;
 
-const orbCapabilities = [
-  "git",
-  "environment-variables",
-  "internet-access",
-  "persistent-workspace",
-  "pause-resume",
-] as const;
-
 /**
- * Every provider's own sizes. A deployment's catalog lists the sizes it
- * offers on its own account with its templates. A connection's Threads
- * pin the target their account prepared, so these profiles stand in for
- * any size the deployment does not list; the E2B template here is never
- * created from.
+ * Every provider's own sizes (`@dx/domain` orb-providers). A deployment's
+ * catalog lists the sizes it offers on its own account with its templates.
+ * A connection's Threads pin the target their account prepared, so these
+ * profiles stand in for any size the deployment does not list.
  */
-export const PROVIDER_RUNNER_PROFILES: CatalogConfiguration["profiles"] = [
-  ...E2B_ORB_PROFILES.map((profile) => ({
-    id: profile.id,
-    label: profile.label,
-    adapter: "e2b" as const,
-    template: `dx-orb-${profile.templateSuffix}`,
-    resources: profile.resources,
-    isolation: "sandbox" as const,
-    availability: "available" as const,
-    capabilities: orbCapabilities,
-  })),
-  ...CLOUDFLARE_ORB_PROFILES.map((profile) => ({
-    id: profile.id,
-    label: profile.label,
-    adapter: "cloudflare" as const,
-    instance: profile.instance,
-    resources: profile.resources,
-    isolation: "container" as const,
-    availability: "available" as const,
-    capabilities: orbCapabilities,
-  })),
-];
+export const PROVIDER_RUNNER_PROFILES: CatalogConfiguration["profiles"] =
+  ORB_PROVIDER_SIZES;
 
 /** The size a new project starts on when the deployment names none. */
 export const DEFAULT_ORB_PROFILE_ID =
@@ -139,20 +110,12 @@ const catalogFrom = (
       defaultProfileId: configuration.defaultProfileId,
       profiles: configuration.profiles.map(publicProfile),
       adapterStates: [
-        {
-          kind: "e2b",
-          state: configuredAdapters.has("e2b") ? "available" : "unavailable",
-        },
-        {
-          kind: "cloudflare",
-          state: configuredAdapters.has("cloudflare")
-            ? "available"
-            : "unavailable",
-        },
-        {
-          kind: "local",
-          state: configuredAdapters.has("local") ? "available" : "unavailable",
-        },
+        ...ORB_PROVIDER_IDS.map(
+          (kind): RunnerAdapterCapabilityState => ({
+            kind,
+            state: configuredAdapters.has(kind) ? "available" : "unavailable",
+          }),
+        ),
         ...unavailableAdapterStates,
       ],
       // The Orb picker groups sizes by provider and shows what a pause keeps.

@@ -113,9 +113,12 @@ export interface TeamTemplateBuild {
   /** Null for the base template. */
   readonly profileId: string | null;
   readonly name: string;
+  /** Empty for a size E2B refused before building. */
   readonly templateId: string;
   readonly buildId: string;
-  readonly status: TeamTemplateBuildStatus;
+  /** `skipped`: the team cannot build this size; `note` says why. */
+  readonly status: TeamTemplateBuildStatus | "skipped";
+  readonly note?: string;
 }
 
 export interface TeamTemplateState {
@@ -161,6 +164,12 @@ export class E2BKeyRejected extends Error {
   }
 }
 
+/** E2B refused to build a size's template (its CPU and memory exceed the team's tier). */
+export class E2BSizeRefused extends Error {}
+
+/** The SDK names a refused request `<status>: <message>`. */
+const REFUSED = /^(400|403|422): /;
+
 const api = (apiKey: string) =>
   new ApiClient(new ConnectionConfig({ apiKey })).api;
 
@@ -202,6 +211,10 @@ export const liveE2BTeamApi: E2BTeamApi = {
       apiKey,
       cpuCount: profile.resources.cpuCores,
       memoryMB: profile.resources.memoryMb,
+    }).catch((cause: unknown) => {
+      if (cause instanceof Error && REFUSED.test(cause.message))
+        throw new E2BSizeRefused(cause.message.slice(0, 300));
+      throw cause;
     });
     return { templateId: build.templateId, buildId: build.buildId };
   },
@@ -292,7 +305,10 @@ export const startTeamTemplates = async (
 /**
  * One step of the build: reads the status of builds in progress and starts
  * the next template when its predecessor is ready (the base, then each
- * size in catalog order, one at a time, as the deployment builds them).
+ * size in catalog order, one at a time, as the deployment builds them). A
+ * size other than the smallest that the team cannot build is skipped, so
+ * the connection is ready with the sizes it can run; the base or the
+ * smallest size failing fails the connection.
  */
 export const advanceTeamTemplates = async (
   teamApi: E2BTeamApi,
@@ -302,13 +318,25 @@ export const advanceTeamTemplates = async (
   profiles: ReadonlyArray<E2BOrbProfile> = E2B_ORB_PROFILES,
 ): Promise<TeamTemplateState> => {
   if (current.state !== "building") return current;
+  const smallest = profiles[0]?.id;
   const builds: Array<TeamTemplateBuild> = [];
-  for (const build of current.builds)
-    builds.push(
+  for (const build of current.builds) {
+    const status =
       build.status === "building"
-        ? { ...build, status: await teamApi.buildStatus(apiKey, build) }
-        : build,
+        ? await teamApi.buildStatus(apiKey, build)
+        : build.status;
+    builds.push(
+      status === "error" &&
+        build.profileId !== null &&
+        build.profileId !== smallest
+        ? {
+            ...build,
+            status: "skipped",
+            note: "E2B could not build this size's template.",
+          }
+        : { ...build, status },
     );
+  }
   const progress = { account: current.account, builds };
   const broken = builds.find(({ status }) => status === "error");
   if (broken !== undefined)
@@ -334,26 +362,57 @@ export const advanceTeamTemplates = async (
   );
   if (next === undefined) return { ...progress, state: "ready", error: null };
   const name = teamTemplateName(recipe, next);
-  const started = await teamApi.buildProfile(apiKey, name, base, next);
+  const started = await teamApi
+    .buildProfile(apiKey, name, base, next)
+    .catch((cause: unknown) => {
+      if (cause instanceof E2BSizeRefused && next.id !== smallest)
+        return { refused: cause.message };
+      throw cause;
+    });
   return {
     ...progress,
     state: "building",
     error: null,
     builds: [
       ...builds,
-      { profileId: next.id, name, ...started, status: "building" },
+      "refused" in started
+        ? {
+            profileId: next.id,
+            name,
+            templateId: "",
+            buildId: "",
+            status: "skipped",
+            note: `E2B refused this size: ${started.refused}`,
+          }
+        : { profileId: next.id, name, ...started, status: "building" },
     ],
   };
 };
 
-/** The template each size creates from, once every build is ready. */
+/** The template each size creates from, once every build is settled. */
 export const readyProfileTemplates = (
   state: Pick<TeamTemplateState, "state" | "builds">,
 ): ReadonlyMap<string, string> | undefined =>
   state.state !== "ready"
     ? undefined
     : new Map(
-        state.builds.flatMap(({ profileId, name }) =>
-          profileId === null ? [] : [[profileId, name] as const],
+        state.builds.flatMap(({ profileId, name, status }) =>
+          profileId === null || status === "skipped"
+            ? []
+            : [[profileId, name] as const],
+        ),
+      );
+
+/** Sizes the team could not build, with E2B's reason, once settled. */
+export const unavailableProfiles = (
+  state: Pick<TeamTemplateState, "state" | "builds">,
+): ReadonlyMap<string, string> | undefined =>
+  state.state !== "ready"
+    ? undefined
+    : new Map(
+        state.builds.flatMap(({ profileId, status, note }) =>
+          profileId === null || status !== "skipped"
+            ? []
+            : [[profileId, note ?? "E2B could not build this size."] as const],
         ),
       );

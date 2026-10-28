@@ -1,4 +1,5 @@
 import { Context, type Effect, type Schema } from "effect";
+import type { OrbProviderId } from "../orb-providers/index.js";
 import type { Page, PageRequest } from "../pagination/page.js";
 import type {
   InvalidPageCursor,
@@ -36,7 +37,7 @@ export interface ThreadListRequest extends PageRequest {
  * pins its provider account and the template built there.
  */
 export interface ThreadExecutionPin {
-  readonly provider: "e2b" | "cloudflare";
+  readonly provider: Exclude<OrbProviderId, "local">;
   readonly runnerProfileId: string;
   readonly credentialScope: "deployment" | "workspace" | "personal";
   readonly credentialOwnerId: string | null;

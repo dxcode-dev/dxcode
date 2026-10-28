@@ -9,6 +9,7 @@ import {
   ArchiveThreadResponseSchema,
   BeginGitHubCeremonyResponseSchema,
   BeginGitHubInstallationResponseSchema,
+  BeginMcpOAuthResponseSchema,
   BeginPersonalModelSubscriptionAuthorizationResponseSchema,
   type BrowserSessionData,
   type BulkEnvironmentVariablePreviewItem,
@@ -199,6 +200,7 @@ import {
   type SigningKeySetupGuidance,
   type SigningKeysData,
   SigningKeysErrorResponseSchema,
+  SignOutMcpOAuthResponseSchema,
   type SkillData,
   SkillsErrorResponseSchema,
   SnoozeThreadResponseSchema,
@@ -1081,9 +1083,25 @@ export const retryPluginTriggerDelivery = async (
 export interface McpServerInput {
   readonly name: string;
   readonly endpoint: string;
+  /** `auto` lets the server decide between no auth, OAuth, and a token. */
+  readonly authType?: "auto" | "none" | "bearer" | "oauth";
   readonly authReference?: EnvironmentVariableConfigReference;
   /** Write-only bearer token, stored encrypted on the server. */
   readonly authToken?: string;
+  /** The module Code imports the server's tools under. */
+  readonly moduleId?: string;
+  /** Sent as the MCP client name; empty restores the default. */
+  readonly clientName?: string;
+  /** An own OAuth app; empty removes it. */
+  readonly oauthClientId?: string;
+  /** Write-only. */
+  readonly oauthClientSecret?: string;
+  /** The full header list; a secret without a value keeps its stored value. */
+  readonly headers?: ReadonlyArray<{
+    readonly name: string;
+    readonly value?: string;
+    readonly secret?: boolean;
+  }>;
   readonly timeoutMs: number;
   /** Omitted: the server is available to all projects (API default). */
   readonly projectIds?: ReadonlyArray<string>;
@@ -1105,7 +1123,8 @@ export const createMcpServer = async (
 export const updateMcpServer = async (
   target: McpServersTarget,
   serverId: McpServerId,
-  input: Omit<Partial<McpServerInput>, "authReference"> & {
+  input: Omit<Partial<McpServerInput>, "authReference" | "authType"> & {
+    readonly authType?: "none" | "bearer" | "oauth";
     readonly authReference?: EnvironmentVariableConfigReference | null;
     readonly enabled?: boolean;
   },
@@ -1145,6 +1164,32 @@ export const reviewMcpTool = async (
         method: "POST",
         body: JSON.stringify({ schemaHash, approved }),
       },
+    )
+  ).data;
+
+/** Starts an OAuth sign-in; the caller sends the browser to the returned URL. */
+export const beginMcpOAuth = async (
+  target: McpServersTarget,
+  serverId: McpServerId,
+): Promise<string> =>
+  (
+    await request(
+      `${mcpServersBase(target)}/${encodeURIComponent(serverId)}/oauth/authorize`,
+      BeginMcpOAuthResponseSchema,
+      { method: "POST", body: JSON.stringify({}) },
+    )
+  ).data.authorizationUrl;
+
+/** Removes the person's own sign-in to the server. */
+export const signOutMcpOAuth = async (
+  target: McpServersTarget,
+  serverId: McpServerId,
+): Promise<McpServerData> =>
+  (
+    await request(
+      `${mcpServersBase(target)}/${encodeURIComponent(serverId)}/oauth`,
+      SignOutMcpOAuthResponseSchema,
+      { method: "DELETE" },
     )
   ).data;
 

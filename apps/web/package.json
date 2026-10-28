@@ -1,7 +1,7 @@
 {
   "name": "@dx/web",
   "private": true,
-  "version": "0.2.46",
+  "version": "0.2.47",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -22,6 +22,7 @@
     "test:security-settings": "node test/security-settings-proof.mjs",
     "test:workspace-profile": "node test/workspace-profile-proof.mjs",
     "test:members-settings": "node test/members-settings-proof.mjs",
+    "test:avatar-shape": "node test/avatar-shape-proof.mjs",
     "test:model-routing": "node test/model-routing-proof.mjs",
     "test:orb-providers": "node test/orb-providers-proof.mjs",
     "test:integrations-mcp": "node test/integrations-mcp-proof.mjs",

@@ -46,6 +46,8 @@ export interface OrbConnection extends OrbConnectionKey {
 export interface OrbServedVersion {
   readonly account: string;
   readonly targets: Readonly<Record<string, string>>;
+  /** Sizes the account could not run then, with the provider's reason. */
+  readonly unavailable?: Readonly<Record<string, string>>;
 }
 
 /** The state key the served version is kept under, beside provider state. */
@@ -53,15 +55,17 @@ const SERVED_KEY = "$served";
 
 const servedOf = (value: unknown): OrbServedVersion | null => {
   if (typeof value !== "object" || value === null) return null;
-  const { account, targets } = value as Record<string, unknown>;
-  if (
-    typeof account !== "string" ||
-    typeof targets !== "object" ||
-    targets === null ||
-    !Object.values(targets).every((target) => typeof target === "string")
-  )
-    return null;
-  return { account, targets: targets as Record<string, string> };
+  const { account, targets, unavailable } = value as Record<string, unknown>;
+  const strings = (record: unknown): record is Record<string, string> =>
+    typeof record === "object" &&
+    record !== null &&
+    Object.values(record).every((entry) => typeof entry === "string");
+  if (typeof account !== "string" || !strings(targets)) return null;
+  return {
+    account,
+    targets,
+    ...(strings(unavailable) ? { unavailable } : {}),
+  };
 };
 
 /** Provider state with the served version beside it, for `state_json`. */
@@ -342,6 +346,41 @@ export const recordPreparation = async (
         expected.targetId,
         expected.providerId,
         expected.configuredAt,
+        expected.revision,
+      )
+      .run()
+  ).meta.changes === 1;
+
+/**
+ * Starts a connection's preparation over at its next step (no recipe), with
+ * `served` kept beside its state so new Threads use that version until the
+ * new one is ready. Guarded by the connection's revision.
+ */
+export const restartPreparationRecord = async (
+  db: D1Database,
+  expected: Pick<
+    OrbConnection,
+    "scope" | "targetId" | "providerId" | "revision" | "state"
+  >,
+  served: OrbServedVersion | null,
+  now: string,
+) =>
+  (
+    await db
+      .prepare(
+        `UPDATE orb_connection SET
+           recipe = NULL, status = 'preparing', state_json = ?,
+           progress_json = NULL, error = NULL, revision = revision + 1,
+           updated_at = ?
+         WHERE scope = ? AND target_id = ? AND provider_id = ?
+           AND revision = ?`,
+      )
+      .bind(
+        stateJson(expected.state, served),
+        now,
+        expected.scope,
+        expected.targetId,
+        expected.providerId,
         expected.revision,
       )
       .run()

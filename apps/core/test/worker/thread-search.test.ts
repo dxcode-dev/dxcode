@@ -163,6 +163,7 @@ describe("Thread search with real D1 and per-owner FTS5 indexes", () => {
   it("indexes people's messages and final replies only", () => {
     const page: HistoryPage = {
       settled: new Map([["s1", "completed"]]),
+      answeredBy: new Map(),
       hasOlder: false,
       messages: [
         {

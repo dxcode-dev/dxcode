@@ -19,6 +19,8 @@ const server = Schema.decodeSync(StoredMcpServer)({
   name: "Synthetic tools",
   endpoint: "https://mcp.example.com/mcp",
   transport: "streamable-http",
+  authType: "none",
+  headers: [],
   timeoutMs: 5_000,
   enabled: true,
   projectIds: [],

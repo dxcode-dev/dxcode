@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import type { RunnerCapability } from "../settings/runner-profile.js";
+import type { RunnerCapability } from "../settings/runner-profile-fields.js";
 
 /**
  * The Execution ("Orb") plugin's capabilities: the isolated workspace each

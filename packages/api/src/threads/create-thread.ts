@@ -152,8 +152,15 @@ export const CreateThreadOrbUnavailableResponseSchema = Schema.Struct({
     /**
      * `preparing`/`failed`: the account's connection is not ready.
      * `no-provider`: no provider the person can use offers the size.
+     * `size-unavailable`: the account cannot run this size (its plan
+     * refused it); other sizes may run.
      */
-    reason: Schema.Literals(["preparing", "failed", "no-provider"]),
+    reason: Schema.Literals([
+      "preparing",
+      "failed",
+      "no-provider",
+      "size-unavailable",
+    ]),
   }),
 });
 

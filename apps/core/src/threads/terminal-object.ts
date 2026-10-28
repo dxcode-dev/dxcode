@@ -6,7 +6,11 @@ import {
   ThreadFilesPath,
   type ThreadTerminalServerPhase,
 } from "@dx/api";
-import { ThreadId, WorkloadIdentityUnauthorized } from "@dx/domain";
+import {
+  type OrbProviderId,
+  ThreadId,
+  WorkloadIdentityUnauthorized,
+} from "@dx/domain";
 import { Effect, Option, Redacted, Schema } from "effect";
 import { canReadAttachment, userPrincipal } from "../attachments/access.js";
 import {
@@ -328,7 +332,7 @@ interface DaemonAuthority {
   readonly protocolMajor: typeof DXD_PROTOCOL_MAJOR;
   readonly terminalVersion: typeof DXD_TERMINAL_VERSION;
   readonly workloadIdentityVersion: typeof DXD_WORKLOAD_IDENTITY_VERSION;
-  readonly runtimeProvider: "local" | "e2b" | "cloudflare";
+  readonly runtimeProvider: OrbProviderId;
   readonly runtimeAssurance: "dx_dxd_channel_v1" | "dx_provider_attested_v1";
   readonly attachmentNonce?: string;
   readonly lastSeen?: number;

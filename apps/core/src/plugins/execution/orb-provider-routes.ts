@@ -12,13 +12,14 @@ import {
 } from "@dx/api";
 import {
   type Principal,
+  type RunnerProfileId,
   SettingsScopeForbidden,
   type WorkspaceSlug,
   workspaceRoleHasPermission,
 } from "@dx/domain";
 import { Effect, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
-import { orbProviderConnectors } from "../../execution/connectors.js";
+import { orbProviderConnectors } from "../../execution/orb-providers.js";
 import { loadRunnerProfileCatalog } from "../../execution/runner-profiles/catalog.js";
 import type { AppEnv, Bindings } from "../../http/types.js";
 import { orbProvidersLogger, settingsAuditLogger } from "../../logging.js";
@@ -47,14 +48,19 @@ import {
   OrbProviderCredentialsRejected,
 } from "./connector.js";
 import {
+  connectionMember,
   loadOrbScope,
   type OrbScopeContext,
   orbProviderRecipes,
   orbProviderSet,
+  unavailableSizes,
 } from "./orb-providers.js";
 import {
   connectionStatus,
+  lacksSizes,
   PREPARATION_STALL_MS,
+  restartPreparation,
+  SIZE_RECHECK_MS,
   schedulePreparation,
   servedVersion,
 } from "./preparation.js";
@@ -161,6 +167,7 @@ const connectionData = (
   recipes: ReadonlyMap<ExecutionProviderId, string>,
   connectors: OrbProviderConnectors,
   localRuntime: boolean,
+  sizeIds: ReadonlyArray<RunnerProfileId>,
 ): OrbProviderConnectionData | null => {
   if (connection === undefined) return null;
   const recipe = recipes.get(connection.providerId);
@@ -183,6 +190,13 @@ const connectionData = (
         ? connection.progress
         : null,
     error: status === "failed" ? connection.error : null,
+    unavailableSizes:
+      status === null
+        ? []
+        : unavailableSizes(
+            connectionMember(connection, { recipes, connectors }),
+            sizeIds,
+          ),
   };
 };
 
@@ -207,6 +221,9 @@ const listData = async (
         ({ providerId }) => providerId === id,
       );
       const connector = connectors[id];
+      const sizeIds = profiles
+        .filter(({ adapter }) => adapter === id)
+        .map(({ id: sizeId }) => sizeId);
       // A provider is listed when it can run a Thread here: the deployment
       // provides it, or a connection could (its sizes are in the catalog).
       // The local runtime lists connectable providers so connections can be
@@ -240,6 +257,7 @@ const listData = async (
             recipes,
             connectors,
             localRuntime,
+            sizeIds,
           ),
           workspaceConnection:
             target.scope === "personal"
@@ -248,6 +266,7 @@ const listData = async (
                   recipes,
                   connectors,
                   localRuntime,
+                  sizeIds,
                 )
               : null,
         },
@@ -287,6 +306,12 @@ const listData = async (
       scope: member.scope,
       account: member.account,
       status: member.status,
+      unavailableSizes: unavailableSizes(
+        member,
+        profiles
+          .filter(({ adapter }) => adapter === member.providerId)
+          .map(({ id }) => id),
+      ),
     })),
   };
 };
@@ -298,18 +323,40 @@ const listData = async (
  */
 const resumeStalledPreparations = async (
   bindings: Bindings,
+  db: D1Database,
   scope: OrbScopeContext,
   recipes: ReadonlyMap<ExecutionProviderId, string>,
+  connectors: OrbProviderConnectors,
 ) => {
   const stalledBefore = Date.now() - PREPARATION_STALL_MS;
+  const recheckBefore = Date.now() - SIZE_RECHECK_MS;
   await Promise.all(
     [...scope.personal, ...scope.workspace].flatMap((connection) => {
       const recipe = recipes.get(connection.providerId);
-      if (recipe === undefined) return [];
+      const connector = connectors[connection.providerId];
+      if (recipe === undefined || connector === undefined) return [];
       const stalled =
         connection.recipe !== recipe ||
         (connection.status === "preparing" &&
           Date.parse(connection.updatedAt) < stalledBefore);
+      // A plan may have been upgraded since sizes were refused.
+      const recheck =
+        !stalled &&
+        lacksSizes(connection, connector) &&
+        Date.parse(connection.updatedAt) < recheckBefore;
+      if (recheck)
+        return [
+          restartPreparation(db, connection, connector)
+            .then((restarted) =>
+              restarted ? schedulePreparation(bindings, connection) : undefined,
+            )
+            .catch(() => {
+              orbProvidersLogger.warn("Orb size recheck could not start.", {
+                event: "orb_size_recheck_failed",
+                provider: connection.providerId,
+              });
+            }),
+        ];
       return stalled
         ? [
             schedulePreparation(bindings, connection).catch(() => {
@@ -477,8 +524,10 @@ const mount = (
       );
       await resumeStalledPreparations(
         c.env,
+        db,
         scope,
         await orbProviderRecipes(connectors),
+        connectors,
       );
       return listData(c.env, target, scope, connectors);
     }),
@@ -592,18 +641,17 @@ const mount = (
         targetId: target.targetId,
         providerId: connector.providerId,
       };
-      // No recipe means the next step starts preparation over.
-      const restarted = await db
-        .prepare(
-          `UPDATE orb_connection SET
-             recipe = NULL, status = 'preparing', progress_json = NULL,
-             error = NULL, revision = revision + 1, updated_at = ?
-           WHERE scope = ? AND target_id = ? AND provider_id = ?
-             AND status = 'failed'`,
-        )
-        .bind(new Date().toISOString(), key.scope, key.targetId, key.providerId)
-        .run();
-      if (restarted.meta.changes === 1) await schedulePreparation(c.env, key);
+      // A failed connection prepares again; so does a ready one whose
+      // account could not run every size (Check again after a plan
+      // upgrade), which keeps serving its sizes meanwhile.
+      const found = await findConnection(db, key);
+      const connection = found?.connection;
+      if (
+        connection !== undefined &&
+        (connection.status === "failed" || lacksSizes(connection, connector)) &&
+        (await restartPreparation(db, connection, connector))
+      )
+        await schedulePreparation(c.env, key);
       audit(c, target, "orb-provider.connection.retry", "success");
       return listData(
         c.env,

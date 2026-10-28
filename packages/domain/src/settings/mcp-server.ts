@@ -62,6 +62,78 @@ export const McpServerTimeoutMs = Schema.Int.check(
 
 export type McpServerTimeoutMs = typeof McpServerTimeoutMs.Type;
 
+export const McpServerAuthType = Schema.Literals(["none", "bearer", "oauth"]);
+
+export type McpServerAuthType = typeof McpServerAuthType.Type;
+
+/** Sent as the MCP `clientInfo.name` and as the OAuth registration `client_name`. */
+export const McpClientName = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(80),
+).pipe(Schema.brand("@dx/McpClientName"));
+
+export type McpClientName = typeof McpClientName.Type;
+
+export const DEFAULT_MCP_CLIENT_NAME = "dx";
+
+/**
+ * The module name Code imports a server's tools under. When a personal and
+ * a workspace server share an ID, the workspace server wins.
+ */
+export const McpModuleId = Schema.String.check(
+  Schema.isPattern(/^[a-z0-9][a-z0-9_-]{0,63}$/),
+).pipe(Schema.brand("@dx/McpModuleId"));
+
+export type McpModuleId = typeof McpModuleId.Type;
+
+/** A module ID derived from a display name. */
+export const mcpModuleIdFor = (name: string): McpModuleId =>
+  (name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 64)
+    .replace(/_+$/g, "") || "mcp") as McpModuleId;
+
+export const MAX_MCP_HEADERS = 16;
+
+export const McpHeaderName = Schema.String.check(
+  Schema.isPattern(/^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$/),
+);
+
+/**
+ * Header names dx sets itself or that would change the transport; servers
+ * cannot be configured to send them.
+ */
+export const RESERVED_MCP_HEADER_NAMES: ReadonlySet<string> = new Set([
+  "accept",
+  "accept-encoding",
+  "connection",
+  "content-length",
+  "content-type",
+  "cookie",
+  "host",
+  "last-event-id",
+  "mcp-protocol-version",
+  "mcp-session-id",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
+
+/** A configured header. Secret values are stored encrypted, never here. */
+export const StoredMcpHeader = Schema.Struct({
+  name: McpHeaderName,
+  secret: Schema.Boolean,
+  value: Schema.optional(Schema.String.check(Schema.isMaxLength(4_096))),
+});
+
+export type StoredMcpHeader = typeof StoredMcpHeader.Type;
+
 export const McpServerScope = Schema.Literals(["personal", "workspace"]);
 
 export type McpServerScope = typeof McpServerScope.Type;
@@ -146,12 +218,23 @@ export const StoredMcpServer = Schema.Struct({
   name: McpServerName,
   endpoint: McpServerEndpoint,
   transport: McpServerTransport,
+  authType: McpServerAuthType,
   authReference: Schema.optional(EnvironmentVariableConfigReference),
   /**
    * A bearer token stored on the server itself (mcp_server_credential),
    * exclusive with `authReference` and never part of a sandbox environment.
    */
   hasStoredCredential: Schema.optional(Schema.Boolean),
+  clientName: Schema.optional(McpClientName),
+  /** An own OAuth app; without it dx registers a client automatically. */
+  oauthClientId: Schema.optional(
+    Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
+  ),
+  hasOAuthClientSecret: Schema.optional(Schema.Boolean),
+  headers: Schema.Array(StoredMcpHeader).check(
+    Schema.isMaxLength(MAX_MCP_HEADERS),
+  ),
+  moduleId: Schema.optional(McpModuleId),
   timeoutMs: McpServerTimeoutMs,
   enabled: Schema.Boolean,
   projectIds: McpServerProjectGrants,

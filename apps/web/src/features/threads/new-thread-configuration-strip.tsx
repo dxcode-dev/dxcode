@@ -736,7 +736,7 @@ const pauseResumeNote = (
 /**
  * Orb sizes grouped by provider, in catalog order. With the resolved set
  * (bring-your-own keys), only its providers are offered, each with the key
- * it runs on.
+ * it runs on, and only the sizes that key's account can run.
  */
 const runnerProfileGroups = (
   profiles: ReadonlyArray<RunnerProfile>,
@@ -751,7 +751,11 @@ const runnerProfileGroups = (
         adapter,
         orb,
         provider: providers.find((provider) => provider.adapter === adapter),
-        profiles: profiles.filter((profile) => profile.adapter === adapter),
+        profiles: profiles.filter(
+          (profile) =>
+            profile.adapter === adapter &&
+            !orb?.unavailableSizes.some(({ id }) => id === profile.id),
+        ),
       },
     ];
   });

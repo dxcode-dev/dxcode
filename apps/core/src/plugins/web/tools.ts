@@ -73,12 +73,8 @@ export const webProviderFor = (
         meter.add(1);
         return transport(input, init);
       });
-    case "fixture":
-    case "quickjs":
-    case "sarvam":
-    case "e2b":
-    case "cloudflare":
-    case "local":
+    // Code, Speech, and every Orb provider search nothing.
+    default:
       return {};
   }
 };

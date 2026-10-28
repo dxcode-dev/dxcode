@@ -1,18 +1,18 @@
 import {
-  type CloudflareRunnerProfileConfiguration,
-  type E2BRunnerProfileConfiguration,
   type ExecutionCapabilityId,
   type ExecutionPauseResumePreserves,
   executionCapabilitiesForRunnerProfile,
-  type LocalRunnerProfileConfiguration,
+  findOrbProvider,
+  isOrbProviderId,
   type OrbProviderCredentials,
+  type OrbProviderId,
+  type OrbRunnerProfileConfiguration,
   type PluginProviderId,
   type RunnerProfile,
   type ThreadId,
 } from "@dx/domain";
 import type { Sandbox, SandboxFactory } from "@flue/runtime";
 import { Effect, Redacted, Schema } from "effect";
-import { orbProviderConnectors } from "../../execution/connectors.js";
 import {
   type ExecutionCredentialUnavailableReason,
   type ExecutionTargetCredential,
@@ -41,10 +41,7 @@ import { executionWorkspaceTools } from "./tools.js";
  * them; wiki/plugin-platform-direction.md "Execution roadmap" describes the
  * operations they will add.
  */
-export type ExecutionProviderId = Extract<
-  PluginProviderId,
-  "e2b" | "cloudflare" | "local"
->;
+export type ExecutionProviderId = OrbProviderId;
 
 /**
  * Whose provider account holds the workspace, and therefore who pays.
@@ -65,10 +62,7 @@ export type ExecutionAccount =
       readonly providerAccount: string;
     };
 
-export type ExecutionProfile =
-  | E2BRunnerProfileConfiguration
-  | CloudflareRunnerProfileConfiguration
-  | LocalRunnerProfileConfiguration;
+export type ExecutionProfile = OrbRunnerProfileConfiguration;
 
 /**
  * Resolved by Core for each provider operation; providers never pick an
@@ -362,8 +356,7 @@ export class ExecutionCapabilityUnavailable extends Schema.TaggedError<Execution
 
 const isExecutionProviderId = (
   providerId: PluginProviderId,
-): providerId is ExecutionProviderId =>
-  providerId === "e2b" || providerId === "cloudflare" || providerId === "local";
+): providerId is ExecutionProviderId => isOrbProviderId(providerId);
 
 export interface ResolvedExecutionProvider {
   readonly providerId: ExecutionProviderId;
@@ -523,16 +516,23 @@ const registeredProvider = (
 };
 
 /**
+ * Whether a person or workspace may run this provider on their own
+ * account: every Orb provider but the development runtime. The
+ * composition root narrows it to the providers with a connector
+ * (execution/orb-providers.ts).
+ */
+const connectableUnlessDevelopment = (providerId: ExecutionProviderId) =>
+  findOrbProvider(providerId)?.development !== true;
+
+/**
  * A provider a person or workspace can connect their own account for,
  * whether or not the deployment installed it.
  */
 export const connectableExecutionProvider = (
   adapter: string,
 ): ResolvedExecutionProvider | undefined =>
-  adapter === "e2b" || adapter === "cloudflare"
-    ? orbProviderConnectors[adapter] === undefined
-      ? undefined
-      : registeredProvider(adapter)
+  isOrbProviderId(adapter) && connectableUnlessDevelopment(adapter)
+    ? registeredProvider(adapter)
     : undefined;
 
 /**
@@ -545,7 +545,9 @@ export const connectableExecutionProvider = (
  * connection; only the `resolved` deployment providers run on the
  * deployment's account. A pin the composition cannot serve fails closed,
  * and a capability the provider does not both claim and implement is
- * unavailable. There is no fallback to another provider.
+ * unavailable. There is no fallback to another provider. `connectable`
+ * says which providers a person's or workspace's connection may run (those
+ * with a connector).
  */
 export const composeExecutionWorkspaces = (
   bindings: Bindings,
@@ -555,6 +557,9 @@ export const composeExecutionWorkspaces = (
     bindings,
   ),
   resolveTarget: ExecutionTargetResolver = executionTarget,
+  connectable: (
+    providerId: ExecutionProviderId,
+  ) => boolean = connectableUnlessDevelopment,
 ): ExecutionWorkspaces => {
   const plugin = findPlugin("execution");
   const deploymentIds = new Set(resolved.map(({ providerId }) => providerId));
@@ -562,7 +567,11 @@ export const composeExecutionWorkspaces = (
     ...resolved,
     ...(Object.keys(providers) as Array<ExecutionProviderId>).flatMap(
       (providerId) => {
-        if (deploymentIds.has(providerId) || providerId === "local") return [];
+        if (
+          deploymentIds.has(providerId) ||
+          findOrbProvider(providerId)?.development === true
+        )
+          return [];
         const provider = registeredProvider(providerId);
         return provider === undefined ? [] : [provider];
       },
@@ -653,7 +662,7 @@ export const composeExecutionWorkspaces = (
     }
     // A person's or workspace's account runs only a provider they can
     // connect.
-    if (orbProviderConnectors[entry.provider.providerId] === undefined)
+    if (!connectable(entry.provider.providerId))
       throw new ExecutionProviderUnavailable();
     return {
       account:

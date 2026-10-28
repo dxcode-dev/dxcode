@@ -30,6 +30,12 @@ const McpServerRow = Schema.Struct({
   created_at: Schema.String,
   updated_at: Schema.String,
   has_stored_credential: Schema.Finite,
+  auth_type: Schema.String,
+  client_name: Schema.NullOr(Schema.String),
+  oauth_client_id: Schema.NullOr(Schema.String),
+  has_oauth_client_secret: Schema.Finite,
+  headers_json: Schema.String,
+  module_id: Schema.NullOr(Schema.String),
 });
 
 const McpToolRow = Schema.Struct({
@@ -51,7 +57,14 @@ const columns = `
   EXISTS (
     SELECT 1 FROM mcp_server_credential
      WHERE mcp_server_credential.server_id = mcp_server.id
-  ) AS has_stored_credential
+  ) AS has_stored_credential,
+  auth_type, client_name, oauth_client_id,
+  EXISTS (
+    SELECT 1 FROM mcp_server_secret
+     WHERE mcp_server_secret.server_id = mcp_server.id
+       AND mcp_server_secret.name = 'oauth-client-secret'
+  ) AS has_oauth_client_secret,
+  headers_json, module_id
 `;
 
 const JsonString = Schema.String.pipe(
@@ -68,6 +81,7 @@ const decodeServers = (input: unknown) =>
           Effect.gen(function* () {
             const projectIds = yield* decodeJson(row.project_ids_json);
             const roles = yield* decodeJson(row.roles_json);
+            const headers = yield* decodeJson(row.headers_json);
             return yield* Schema.decodeUnknownEffect(StoredMcpServer)({
               id: row.id,
               target: { scope: row.scope, id: row.target_id },
@@ -84,6 +98,25 @@ const decodeServers = (input: unknown) =>
               ...(row.has_stored_credential === 1
                 ? { hasStoredCredential: true }
                 : {}),
+              // A stored token or secret reference always means bearer auth,
+              // however the row was written.
+              authType:
+                row.auth_type === "none" &&
+                (row.has_stored_credential === 1 ||
+                  row.auth_environment_variable_id !== null)
+                  ? "bearer"
+                  : row.auth_type,
+              ...(row.client_name === null
+                ? {}
+                : { clientName: row.client_name }),
+              ...(row.oauth_client_id === null
+                ? {}
+                : { oauthClientId: row.oauth_client_id }),
+              ...(row.has_oauth_client_secret === 1
+                ? { hasOAuthClientSecret: true }
+                : {}),
+              headers,
+              ...(row.module_id === null ? {} : { moduleId: row.module_id }),
               timeoutMs: row.timeout_ms,
               enabled: row.enabled === 1,
               projectIds,
@@ -132,6 +165,19 @@ const decodeTools = (input: unknown) =>
 
 const encodedTimestamp = (value: Timestamp) =>
   Schema.encodeSync(Timestamp)(value);
+
+/** auth_type, client_name, oauth_client_id, headers_json, module_id. */
+const newColumns = (value: StoredMcpServer) => [
+  value.authType,
+  value.clientName ?? null,
+  value.oauthClientId ?? null,
+  JSON.stringify(
+    value.headers.map(({ name, secret, value: headerValue }) =>
+      secret ? { name, secret } : { name, secret, value: headerValue ?? "" },
+    ),
+  ),
+  value.moduleId ?? null,
+];
 
 export const McpServerRepositoryD1 = (db: D1Database) =>
   Layer.effect(
@@ -240,8 +286,10 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
                      id, scope, target_id, name, endpoint, transport,
                      auth_environment_variable_id, timeout_ms, enabled,
                      project_ids_json, roles_json, health_status,
-                     health_checked_at, health_error_code, created_at, updated_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                     health_checked_at, health_error_code, created_at, updated_at,
+                     auth_type, client_name, oauth_client_id, headers_json,
+                     module_id
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 )
                 .bind(
                   value.id,
@@ -262,6 +310,7 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
                   value.healthErrorCode ?? null,
                   encodedTimestamp(value.createdAt),
                   encodedTimestamp(value.updatedAt),
+                  ...newColumns(value),
                 )
                 .run(),
             catch: unavailable("settings.mcpServers.insert"),
@@ -281,7 +330,9 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
                       SET name = ?, endpoint = ?, auth_environment_variable_id = ?,
                           timeout_ms = ?, enabled = ?, project_ids_json = ?,
                           roles_json = ?, health_status = ?, health_checked_at = ?,
-                          health_error_code = ?, updated_at = ?
+                          health_error_code = ?, updated_at = ?, auth_type = ?,
+                          client_name = ?, oauth_client_id = ?, headers_json = ?,
+                          module_id = ?
                     WHERE scope = ? AND target_id = ? AND id = ?`,
                 )
                 .bind(
@@ -298,6 +349,7 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
                     : encodedTimestamp(value.healthCheckedAt),
                   value.healthErrorCode ?? null,
                   encodedTimestamp(value.updatedAt),
+                  ...newColumns(value),
                   value.target.scope,
                   value.target.id,
                   value.id,
@@ -308,8 +360,9 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
           if (result.meta.changes !== 1) return yield* new McpServerNotFound();
         }),
         remove: Effect.fn("McpServerRepository.remove")(function* (target, id) {
-          // Delete the token explicitly too, independent of foreign-key cascade.
-          const [, result] = yield* Effect.tryPromise({
+          // Delete tokens, secrets, and sign-ins explicitly too, independent
+          // of foreign-key cascade.
+          const results = yield* Effect.tryPromise({
             try: () =>
               db.batch([
                 db
@@ -319,17 +372,32 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
                   .bind(id, target.scope, target.id),
                 db
                   .prepare(
+                    "DELETE FROM mcp_server_secret WHERE server_id = ? AND scope = ? AND target_id = ?",
+                  )
+                  .bind(id, target.scope, target.id),
+                db
+                  .prepare(
+                    `DELETE FROM mcp_oauth_grant WHERE server_id = ? AND EXISTS (
+                       SELECT 1 FROM mcp_server
+                        WHERE id = ? AND scope = ? AND target_id = ?
+                     )`,
+                  )
+                  .bind(id, id, target.scope, target.id),
+                db
+                  .prepare(
                     "DELETE FROM mcp_server WHERE scope = ? AND target_id = ? AND id = ?",
                   )
                   .bind(target.scope, target.id, id),
               ]),
             catch: unavailable("settings.mcpServers.remove"),
           });
+          const result = results.at(-1);
           if ((result?.meta.changes ?? 0) === 0)
             return yield* new McpServerNotFound();
         }),
         replaceDiscovery: Effect.fn("McpServerRepository.replaceDiscovery")(
-          function* (id, tools) {
+          function* (id, tools, options = {}) {
+            const approveNew = options.approveNew === true;
             const statements: Array<D1PreparedStatement> = [
               tools.length === 0
                 ? db
@@ -347,8 +415,8 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
                   .prepare(
                     `INSERT INTO mcp_tool (
                        server_id, name, description, input_schema_json,
-                       schema_hash, discovered_at
-                     ) VALUES (?, ?, ?, ?, ?, ?)
+                       schema_hash, discovered_at, approved_schema_hash
+                     ) VALUES (?, ?, ?, ?, ?, ?, ?)
                      ON CONFLICT(server_id, name) DO UPDATE SET
                        description = excluded.description,
                        input_schema_json = excluded.input_schema_json,
@@ -362,6 +430,9 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
                     tool.inputSchemaJson,
                     tool.schemaHash,
                     encodedTimestamp(tool.discoveredAt),
+                    // New tools start allowed when the person connecting asked
+                    // for it; a changed contract on a known tool never does.
+                    approveNew ? tool.schemaHash : null,
                   ),
               ),
             ];
@@ -476,8 +547,17 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
                    json_array_length(project_ids_json) = 0
                    OR ? IN (SELECT value FROM json_each(project_ids_json))
                  )
+                 AND (
+                   auth_type != 'oauth'
+                   OR EXISTS (
+                     SELECT 1 FROM mcp_oauth_grant grant_row
+                      WHERE grant_row.server_id = mcp_server.id
+                        AND grant_row.user_id = ?
+                        AND grant_row.endpoint = mcp_server.endpoint
+                   )
+                 )
                ORDER BY scope, name, id`,
-              [ownerUserId, ownerUserId, ownerUserId, projectId],
+              [ownerUserId, ownerUserId, ownerUserId, projectId, ownerUserId],
               "settings.mcpServers.listForExecution",
             );
             const hydrated = yield* hydrate(servers);

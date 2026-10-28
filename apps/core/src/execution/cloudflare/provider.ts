@@ -10,32 +10,29 @@ import { decodeD1Binding } from "../../persistence/d1-binding.js";
 import type {
   ExecutionContext,
   ExecutionProvider,
-  ExecutionWorkspaceHandle,
   ExecutionWorkspaceResidency,
 } from "../../plugins/execution/provider.js";
 import { markRunFailure } from "../../runtime/run-failure.js";
-import {
-  assertThreadLifecycleState,
-  atDaemonInstallationStage,
-} from "../activation.js";
+import { assertThreadLifecycleState } from "../activation.js";
 import { DEFAULT_WORKSPACE_INACTIVITY_MS } from "../activity.js";
 import {
-  type DaemonGuest,
-  ensureDaemonInGuest,
-} from "../guest/daemon-installer.js";
+  type OrbGuestClient,
+  orbGuest,
+  orbGuestSandbox,
+} from "../guest/orb-guest-client.js";
 import {
-  loadDaemonRelease,
-  loadDaemonReleaseMetadata,
-} from "../guest/daemon-release.js";
+  type DaemonGuestHandle,
+  guestResidentDaemon,
+} from "../guest/resident-daemon.js";
+import {
+  type ExecutionWorkspaceRecord,
+  type ExecutionWorkspaceRecords,
+  executionWorkspaceRecords,
+} from "../workspace-record.js";
 import {
   accountOrbContainer,
   type OrbContainerRpc,
 } from "./account-orb-client.js";
-import {
-  cloudflareGuest,
-  cloudflareSandbox,
-  type OrbContainerClient,
-} from "./driver.js";
 import {
   ORB_WORKSPACE_RESET_DETAIL,
   type OrbOpenResult,
@@ -172,100 +169,16 @@ const cloudflareProfile = (
   return profile;
 };
 
-/**
- * The Thread's row in `execution_workspace`, which pins its provider and
- * sandbox identity. A new Thread's row says `e2b` until its first
- * activation; the Containers provider claims it while `uninitialized`
- * (migration 0064 allows exactly that one change).
- */
-interface WorkspaceRecord {
-  readonly provider: string;
-  readonly state: string;
-  readonly providerSandboxId: string | null;
-  readonly initializationAttemptId: string | null;
-}
+const CLOUDFLARE = "cloudflare";
 
 const readRecord = async (
-  db: D1Database,
+  records: ExecutionWorkspaceRecords,
   threadId: string,
-): Promise<WorkspaceRecord> => {
-  const row = await db
-    .prepare(
-      `SELECT provider, state, provider_sandbox_id, initialization_attempt_id
-         FROM execution_workspace
-        WHERE thread_id = ?
-        LIMIT 1`,
-    )
-    .bind(threadId)
-    .first<{
-      provider: string;
-      state: string;
-      provider_sandbox_id: string | null;
-      initialization_attempt_id: string | null;
-    }>();
-  if (row === null) throw unavailable("no workspace record");
-  return {
-    provider: row.provider,
-    state: row.state,
-    providerSandboxId: row.provider_sandbox_id,
-    initializationAttemptId: row.initialization_attempt_id,
-  };
+): Promise<ExecutionWorkspaceRecord> => {
+  const record = await records.read(threadId);
+  if (record === null) throw unavailable("no workspace record");
+  return record;
 };
-
-const claim = async (db: D1Database, threadId: string) =>
-  (
-    await db
-      .prepare(
-        `UPDATE execution_workspace
-            SET provider = 'cloudflare',
-                state = 'provisioning',
-                initialization_attempt_id = ?,
-                updated_at = ?
-          WHERE thread_id = ? AND state = 'uninitialized'`,
-      )
-      .bind(crypto.randomUUID(), new Date().toISOString(), threadId)
-      .run()
-  ).meta.changes === 1;
-
-const initialize = async (
-  db: D1Database,
-  threadId: string,
-  record: WorkspaceRecord,
-  sandboxId: string,
-) =>
-  (
-    await db
-      .prepare(
-        `UPDATE execution_workspace
-            SET state = 'initialized',
-                provider_sandbox_id = ?,
-                initialization_attempt_id = NULL,
-                updated_at = ?
-          WHERE thread_id = ?
-            AND provider = 'cloudflare'
-            AND state = 'provisioning'
-            AND initialization_attempt_id IS ?`,
-      )
-      .bind(
-        sandboxId,
-        new Date().toISOString(),
-        threadId,
-        record.initializationAttemptId,
-      )
-      .run()
-  ).meta.changes === 1;
-
-const markLost = (db: D1Database, threadId: string) =>
-  db
-    .prepare(
-      `UPDATE execution_workspace
-          SET state = 'lost', updated_at = ?
-        WHERE thread_id = ?
-          AND provider = 'cloudflare'
-          AND state = 'initialized'`,
-    )
-    .bind(new Date().toISOString(), threadId)
-    .run();
 
 /**
  * Each Thread's workspace is the Orb container object named by its ID: in
@@ -374,19 +287,17 @@ const resilientOrb = (
 };
 
 /** The raw workspace Core's pipeline prepares, over the container object. */
-interface CloudflareWorkspaceHandle extends ExecutionWorkspaceHandle {
-  readonly guest: ExecutionWorkspaceHandle["guest"] & DaemonGuest;
-}
+type CloudflareWorkspaceHandle = DaemonGuestHandle;
 
 const handleFor = (
   stub: OrbContainerStub,
   idleMs: number,
   processesStartedAt: number | undefined,
 ): CloudflareWorkspaceHandle => {
-  const client = stub as unknown as OrbContainerClient;
+  const client = stub as unknown as OrbGuestClient;
   return {
-    guest: cloudflareGuest(client),
-    sandbox: async (cwd) => cloudflareSandbox(client, cwd),
+    guest: orbGuest(client),
+    sandbox: async (cwd) => orbGuestSandbox(client, cwd),
     setIdleDeadline: (durationMs) => stub.setIdleDeadline(durationMs),
     inactivityMs: idleMs,
     commandTimeoutMs: DEFAULT_CLOUDFLARE_COMMAND_TIMEOUT_MS,
@@ -416,6 +327,7 @@ const openCloudflareWorkspace = async (
   const profile = cloudflareProfile(context.profile);
   const idleMs = await inactivityMs(bindings);
   const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
+  const records = executionWorkspaceRecords(db, CLOUDFLARE);
   const id = Schema.decodeUnknownSync(ThreadId)(threadId);
   const container = orbContainer(context, bindings, id);
   const { sandboxId } = container;
@@ -495,21 +407,21 @@ const openCloudflareWorkspace = async (
     }
   };
   for (let attempt = 0; attempt < STATE_RETRIES; attempt += 1) {
-    const record = await readRecord(db, id);
+    const record = await readRecord(records, id);
     if (record.state === "uninitialized") {
       if (options.existingOnly) throw unavailable("not created");
       await options.authorize();
-      await claim(db, id);
+      await records.claim(id);
       continue;
     }
     // Pinned to another provider: never reached through this one.
-    if (record.provider !== "cloudflare") throw unavailable("other provider");
+    if (record.provider !== CLOUDFLARE) throw unavailable("other provider");
     if (record.state === "provisioning") {
       if (options.existingOnly) throw unavailable("not created");
       await options.authorize();
       const result = await open(true);
       const handle = ready(result);
-      if (!(await initialize(db, id, record, sandboxId))) continue;
+      if (!(await records.initialize(id, record, sandboxId))) continue;
       return handle;
     }
     if (
@@ -529,7 +441,7 @@ const openCloudflareWorkspace = async (
     await options.authorize();
     const result = await open(false);
     if (result.kind !== "ready") {
-      await markLost(db, id);
+      await records.markLost(id);
       throw unavailable(`container ${result.kind}`);
     }
     return handleFor(stub, idleMs, result.processesStartedAt);
@@ -569,10 +481,10 @@ export const cloudflareExecutionProvider: ExecutionProvider<CloudflareWorkspaceH
         cloudflareProfile(context.profile);
         const bindings = env as Bindings;
         const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
-        const record = await readRecord(db, threadId);
+        const records = executionWorkspaceRecords(db, CLOUDFLARE);
+        const record = await readRecord(records, threadId);
         if (record.state === "uninitialized") return;
-        if (record.provider !== "cloudflare")
-          throw unavailable("other provider");
+        if (record.provider !== CLOUDFLARE) throw unavailable("other provider");
         if (mode === "destroy" && record.state === "lost") return;
         // Provisioning or conflict fails closed, as on E2B.
         if (record.state !== "initialized") throw unavailable(record.state);
@@ -583,40 +495,10 @@ export const cloudflareExecutionProvider: ExecutionProvider<CloudflareWorkspaceH
           return;
         }
         await stub.destroy();
-        await markLost(db, threadId);
+        await records.markLost(threadId);
       },
     },
-    residentDaemon: {
-      // The same guest installer as E2B: the standard Orb image's entrypoint
-      // supervises dxd, so the bootstrap needs no root and no systemd.
-      async install(_context, handle, input) {
-        const bindings = env as Bindings;
-        const release = await atDaemonInstallationStage(
-          "release",
-          loadDaemonReleaseMetadata(bindings),
-        );
-        let releaseLoadedAt: number | undefined;
-        const guest = await ensureDaemonInGuest(handle.guest, {
-          threadId: input.threadId,
-          endpoint: input.endpoint,
-          sha256: release.sha256,
-          releaseUrl: release.url,
-          credential: input.credential,
-          mintCredential: input.mintCredential,
-          loadBinary: async () => {
-            const loaded = await atDaemonInstallationStage(
-              "release",
-              loadDaemonRelease(bindings),
-            );
-            releaseLoadedAt = Date.now();
-            return loaded.binary;
-          },
-          ...(input.signal === undefined ? {} : { signal: input.signal }),
-        });
-        return {
-          guest,
-          ...(releaseLoadedAt === undefined ? {} : { releaseLoadedAt }),
-        };
-      },
-    },
+    // The same guest installer as E2B: the standard Orb image's entrypoint
+    // supervises dxd, so the bootstrap needs no root and no systemd.
+    residentDaemon: guestResidentDaemon(),
   };

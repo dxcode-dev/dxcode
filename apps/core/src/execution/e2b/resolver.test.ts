@@ -1,4 +1,5 @@
 import { Effect, Redacted } from "effect";
+import { SandboxError } from "e2b";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { executionWorkspaceLogger } from "../../logging.js";
 import {
@@ -529,6 +530,55 @@ describe("resolveExecutionWorkspace", () => {
 
     expect(fake.create).not.toHaveBeenCalled();
     expect(store.current()).toEqual(provisioning("ambiguous-attempt"));
+  });
+
+  it("creates again after E2B refused the first create, and logs why", async () => {
+    const error = vi.spyOn(executionWorkspaceLogger, "error");
+    let refuse = true;
+    const fake = provider({
+      create: async () => {
+        if (refuse) throw new SandboxError("403: Team is blocked");
+        return { sandboxId: "created-after-refusal" };
+      },
+    });
+    const store = stateStore(uninitialized);
+
+    await expect(resolve(fake, store)).rejects.toBeInstanceOf(
+      ExecutionWorkspaceUnavailable,
+    );
+    expect(error).toHaveBeenCalledWith(
+      "E2B workspace resolution failed.",
+      expect.objectContaining({
+        decision: "create",
+        providerError: "SandboxError: 403: Team is blocked",
+      }),
+    );
+
+    // The account is fixed; the Thread's next message gets a workspace.
+    refuse = false;
+    await expect(resolve(fake, store)).resolves.toEqual({
+      sandboxId: "created-after-refusal",
+    });
+    expect(fake.create).toHaveBeenCalledTimes(2);
+    expect(store.current()).toEqual(initialized("created-after-refusal"));
+  });
+
+  it("keeps an attempt whose create E2B failed on its side", async () => {
+    const fake = provider({
+      create: async () => {
+        throw new SandboxError("502: Bad gateway");
+      },
+    });
+    const store = stateStore(uninitialized);
+
+    await expect(resolve(fake, store)).rejects.toBeInstanceOf(
+      ExecutionWorkspaceUnavailable,
+    );
+    await expect(resolve(fake, store)).rejects.toBeInstanceOf(
+      ExecutionWorkspaceUnavailable,
+    );
+    expect(fake.create).toHaveBeenCalledOnce();
+    expect(store.current().state).toBe("provisioning");
   });
 
   it("coalesces concurrent initializers and gives both the same physical sandbox", async () => {

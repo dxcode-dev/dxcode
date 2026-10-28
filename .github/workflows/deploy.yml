@@ -40,13 +40,15 @@ jobs:
         run: |
           auth=()
           [ -z "$UPSTREAM_TOKEN" ] || auth=(-c "http.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$UPSTREAM_TOKEN" | base64 -w0)")
-          git "${auth[@]}" fetch --quiet --force "https://github.com/$UPSTREAM.git" 'refs/tags/v*:refs/tags/v*'
-          tag="${REQUESTED:-$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)}"
-          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || ! git rev-parse --verify --quiet "refs/tags/$tag" > /dev/null; then
+          # Upstream tags get their own namespace: the checkout also brought
+          # the fork's tags, and a tag only the fork has must not deploy.
+          git "${auth[@]}" fetch --quiet --force --no-tags "https://github.com/$UPSTREAM.git" 'refs/tags/v*:refs/dx-upstream/tags/v*'
+          tag="${REQUESTED:-$(git for-each-ref --format='%(refname:lstrip=3)' 'refs/dx-upstream/tags/v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)}"
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || ! git rev-parse --verify --quiet "refs/dx-upstream/tags/$tag^{commit}" > /dev/null; then
             echo "::error::Upstream has no release tag $tag."
             exit 1
           fi
-          git checkout --quiet --detach "$tag"
+          git checkout --quiet --detach "refs/dx-upstream/tags/$tag^{commit}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Restore the deployment configuration and credentials
         id: config

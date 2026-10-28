@@ -110,6 +110,7 @@ import {
   resolveMessageAttachments,
 } from "../attachments/message.js";
 import { ExecutionWorkspaces } from "../execution/execution-workspaces.js";
+import { orbProviderConnectors } from "../execution/orb-providers.js";
 import {
   loadRunnerProfileCatalog,
   selectRunnerProfile,
@@ -875,6 +876,7 @@ export const createThreadRoutes = (
                       projectId:
                         project.kind === "project" ? project.projectId : null,
                       runnerProfileId: requestedRunnerProfileId,
+                      connectors: orbProviderConnectors,
                       ...(project.kind === "projectless"
                         ? {
                             projectlessRunnerProfileId:

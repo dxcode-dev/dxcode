@@ -8,7 +8,13 @@ import type {
   SandboxOpts,
   SandboxPauseOpts,
 } from "e2b";
-import { Sandbox, SandboxNotFoundError } from "e2b";
+import {
+  AuthenticationError,
+  RateLimitError,
+  Sandbox,
+  SandboxError,
+  SandboxNotFoundError,
+} from "e2b";
 import { Effect, Redacted, Schema, Semaphore } from "effect";
 import { executionWorkspaceLogger } from "../../logging.js";
 import { observeExternal } from "../../observability/boundaries.js";
@@ -39,6 +45,26 @@ const unavailable = (cause?: unknown) => {
   if (cause !== undefined) providerCauses.set(error, cause);
   return error;
 };
+
+/** The provider's own words for a failure, bounded for a log line. */
+const providerError = (error: unknown) => {
+  const cause =
+    typeof error === "object" && error !== null
+      ? providerCauses.get(error)
+      : undefined;
+  return cause instanceof Error
+    ? `${cause.name}: ${cause.message}`.slice(0, 200)
+    : undefined;
+};
+
+/**
+ * E2B answered the create with a client error (`4xx: …`, 401 or 429), so it
+ * made no sandbox. A timeout or a 5xx may still have made one.
+ */
+const refusedCreate = (cause: unknown) =>
+  cause instanceof AuthenticationError ||
+  cause instanceof RateLimitError ||
+  (cause instanceof SandboxError && /^4\d\d\b/.test(cause.message));
 
 interface E2BPaginator {
   readonly hasNext: boolean;
@@ -810,17 +836,26 @@ export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
             catch: (cause) => cause,
           }).pipe(
             Effect.catch((cause) =>
-              reconcile(provisioning).pipe(
-                Effect.tap(() =>
-                  Effect.sync(() => {
-                    decision = "connect";
-                    reconciledAfterCreate = true;
-                  }),
-                ),
-                Effect.catchTag("ExecutionWorkspaceUnavailable", () =>
-                  Effect.fail(unavailable(cause)),
-                ),
-              ),
+              refusedCreate(cause)
+                ? // No sandbox exists for this attempt, so the next request
+                  // may create one instead of reconciling forever.
+                  transitionState(
+                    stateStore,
+                    threadId,
+                    provisioning,
+                    record,
+                  ).pipe(Effect.andThen(Effect.fail(unavailable(cause))))
+                : reconcile(provisioning).pipe(
+                    Effect.tap(() =>
+                      Effect.sync(() => {
+                        decision = "connect";
+                        reconciledAfterCreate = true;
+                      }),
+                    ),
+                    Effect.catchTag("ExecutionWorkspaceUnavailable", () =>
+                      Effect.fail(unavailable(cause)),
+                    ),
+                  ),
             ),
           );
           if (reconciledAfterCreate) return created;
@@ -882,6 +917,7 @@ export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
             decision,
             outcome,
             durationMs: Date.now() - startedAt,
+            providerError: providerError(error),
           });
           yield* notify(resolution(decision, outcome, observedInfo));
           return yield* error;

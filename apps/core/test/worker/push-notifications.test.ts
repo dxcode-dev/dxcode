@@ -56,6 +56,7 @@ import { runRepositories } from "./runtime.js";
  *  5. A long reply is not cut to a preview.
  *  6. A history Flue cannot serve loses the notification.
  *  7. A failed turn's partial reply reads like a finished one.
+ *  8. Messages that joined a running turn each notify about that one turn.
  */
 const flue = vi.hoisted(() => ({
   /** The history page DxAgent's routes serve, or the status they fail with. */
@@ -675,7 +676,9 @@ describe("Push notifications, in workerd with real D1 and WebCrypto", () => {
     });
 
     // The reply is read as the owner, from the latest prompt only.
-    expect(flue.reads).toEqual(["?view=history&promptLimit=1"]);
+    expect(flue.reads).toEqual([
+      `?view=history&promptLimit=1&settlementIds=${encodeURIComponent('["sub-finished"]')}`,
+    ]);
     expect(pushes).toHaveLength(1);
     expect(await decryptPush(device, (pushes[0] as CapturedPush).body)).toEqual(
       {
@@ -802,6 +805,62 @@ describe("Push notifications, in workerd with real D1 and WebCrypto", () => {
         topic: "turn_completed",
       }),
     );
+  });
+
+  it("pushes a turn that also answered messages sent while it ran once", async () => {
+    const device = await newDevice("https://push.test/owner-device");
+    await registerDevice(owner, device);
+    // Three messages sent while the agent worked joined its running turn:
+    // Flue settles each with the response that answered it.
+    const steered = ["sub-steer-1", "sub-steer-2", "sub-steer-3"];
+    const turn = historyWithReply("sub-host", [
+      { type: "text", text: "Everything you asked for is done." },
+    ]);
+    flue.history = {
+      ...turn,
+      settlements: [
+        { submissionId: "sub-host", outcome: "completed" },
+        ...steered.map((submissionId) => ({
+          submissionId,
+          outcome: "completed",
+          answeredBySubmissionId: "sub-host",
+        })),
+      ],
+    };
+
+    // Flue reports all four settlements at once.
+    await Promise.all(
+      [...steered, "sub-host"].map((submissionId, eventIndex) =>
+        observeFlueEvent(
+          {
+            v: 1,
+            type: "submission_settled",
+            instanceId: sharedThread.id,
+            submissionId,
+            outcome: "completed",
+            timestamp: new Date().toISOString(),
+            eventIndex,
+          } as unknown as FlueObservation,
+          { env: bindings } as unknown as FlueEventContext,
+        ),
+      ),
+    );
+
+    expect(pushes).toHaveLength(1);
+    expect(await decryptPush(device, (pushes[0] as CapturedPush).body)).toEqual(
+      expect.objectContaining({ body: "Everything you asked for is done." }),
+    );
+
+    // The next turn is its own event and is pushed.
+    flue.history = historyWithReply("sub-next", [
+      { type: "text", text: "Next one done." },
+    ]);
+    await notifyTurnCompleted(bindings, {
+      threadId: sharedThread.id as ThreadId,
+      submissionId: "sub-next",
+      outcome: "completed",
+    });
+    expect(pushes).toHaveLength(2);
   });
 
   it("leaves a person alone when they already have the Thread open", async () => {

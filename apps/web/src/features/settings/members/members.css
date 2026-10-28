@@ -77,9 +77,12 @@
   font-weight: 600;
   overflow: hidden;
 }
+/* A zero minimum keeps a non-square picture in its square frame, centered. */
 .members-avatar > img {
   width: 100%;
+  min-width: 0;
   height: 100%;
+  min-height: 0;
   object-fit: cover;
 }
 .members-identity {

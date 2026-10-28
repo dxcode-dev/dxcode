@@ -1,5 +1,6 @@
 import {
   FirstPartyPluginId,
+  ORB_PROVIDER_IDS,
   PluginCapabilityId,
   PluginCredential,
   PluginEnablement,
@@ -12,16 +13,14 @@ import { errorResponse, successResponse } from "../http/response.js";
 
 /**
  * Providers a plugin lists (never `fixture`). Only providers with a
- * credential label can be configured by a person or workspace; QuickJS, E2B,
- * Cloudflare Containers, and the local runtime cannot.
+ * credential label can be configured by a person or workspace; QuickJS and
+ * the Orb providers cannot (Orb providers connect on the Orb Providers page).
  */
 export const ConfigurablePluginProviderId = Schema.Literals([
   "exa",
   "quickjs",
   "sarvam",
-  "e2b",
-  "cloudflare",
-  "local",
+  ...ORB_PROVIDER_IDS,
 ]);
 
 export const FirstPartyPluginProviderDataSchema = Schema.Struct({

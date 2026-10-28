@@ -120,22 +120,41 @@ export const runnableRunnerProfileId = (
   runnerProfileId: RunnerProfileId | undefined,
   catalog: ReadonlyArray<RunnerProfile> | undefined,
   resolved:
-    | ReadonlyArray<{ readonly providerId: string; readonly status: string }>
+    | ReadonlyArray<{
+        readonly providerId: string;
+        readonly status: string;
+        readonly unavailableSizes?: ReadonlyArray<{ readonly id: string }>;
+      }>
     | undefined,
 ): RunnerProfileId | undefined => {
   if (catalog === undefined || resolved === undefined) return runnerProfileId;
-  const adapter = catalog.find(({ id }) => id === runnerProfileId)?.adapter;
-  if (resolved.some(({ providerId }) => providerId === adapter))
-    return runnerProfileId;
+  // A size the account cannot run (its plan refused it) is never offered.
+  const refused = new Set(
+    resolved.flatMap(({ unavailableSizes }) =>
+      (unavailableSizes ?? []).map(({ id }) => id),
+    ),
+  );
+  const runnable = (profile: RunnerProfile) =>
+    profile.availability === "available" && !refused.has(profile.id);
+  const selected = catalog.find(({ id }) => id === runnerProfileId);
+  const adapter = selected?.adapter;
+  if (resolved.some(({ providerId }) => providerId === adapter)) {
+    if (selected === undefined || !refused.has(selected.id))
+      return runnerProfileId;
+    // The account's largest size it can run, below the refused one.
+    return (
+      catalog
+        .filter((profile) => profile.adapter === adapter && runnable(profile))
+        .at(-1)?.id ?? runnerProfileId
+    );
+  }
   const usable = new Set(
     resolved.flatMap(({ providerId, status }) =>
       status === "ready" ? [providerId] : [],
     ),
   );
   return (
-    catalog.find(
-      (profile) =>
-        usable.has(profile.adapter) && profile.availability === "available",
-    )?.id ?? runnerProfileId
+    catalog.find((profile) => usable.has(profile.adapter) && runnable(profile))
+      ?.id ?? runnerProfileId
   );
 };

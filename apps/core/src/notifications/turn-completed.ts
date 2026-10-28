@@ -2,12 +2,12 @@ import type { ThreadId, UserId } from "@dx/domain";
 import type { Bindings } from "../http/types.js";
 import { notificationLogger } from "../logging.js";
 import { threadPresentUsers } from "../realtime/publication.js";
-import { latestAgentReply } from "./latest-reply.js";
+import { settledTurn } from "./latest-reply.js";
 import { publishNotification } from "./publish.js";
 
 /**
- * The agent settled a turn. Flue reports it once per submission, so the
- * submission names the event and a replayed observation notifies once.
+ * The agent settled a submission. Flue reports it once per submission, and
+ * once for each message that joined the running turn.
  */
 export interface TurnCompletion {
   readonly threadId: ThreadId;
@@ -49,30 +49,30 @@ export const notifyTurnCompleted = async (
     const ownerUserId = thread.owner_user_id as UserId;
     const watching = await threadPresentUsers(bindings, completion.threadId);
     if (watching.has(ownerUserId)) return;
-    const reply =
-      completion.outcome === "completed"
-        ? await latestAgentReply(
-            bindings,
-            ownerUserId,
-            completion.threadId,
-            completion.submissionId,
-          ).catch((cause) => {
-            notificationLogger.warn("The finished turn's reply was not read.", {
-              event: "turn_completion_reply_read_failed",
-              threadId: completion.threadId,
-              cause,
-            });
-            return undefined;
-          })
-        : undefined;
+    const turn = await settledTurn(
+      bindings,
+      ownerUserId,
+      completion.threadId,
+      completion.submissionId,
+    ).catch((cause) => {
+      notificationLogger.warn("The finished turn's reply was not read.", {
+        event: "turn_completion_reply_read_failed",
+        threadId: completion.threadId,
+        cause,
+      });
+      return { submissionId: completion.submissionId, reply: undefined };
+    });
+    // Keyed by the turn, not the submission: messages that joined a running
+    // turn settle with it, and the person is told about that turn once.
     await publishNotification(bindings, {
       topic: "turn_completed",
-      sourceKey: `turn:${completion.submissionId}`,
+      sourceKey: `turn:${turn.submissionId}`,
       recipients: [ownerUserId],
       threadId: completion.threadId,
       excerpt:
-        reply ??
-        (completion.outcome === "completed" ? FINISHED_WITHOUT_REPLY : STOPPED),
+        completion.outcome === "completed"
+          ? (turn.reply ?? FINISHED_WITHOUT_REPLY)
+          : STOPPED,
     });
   } catch (cause) {
     notificationLogger.warn("Turn completion was not notified.", {

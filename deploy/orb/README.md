@@ -8,6 +8,13 @@ E2B builds its template from this same Dockerfile
 Containers Orb Worker ([`containers.mjs`](containers.mjs)) builds it as its
 named image `orb`, so both providers run the same filesystem.
 
+A provider that boots its own Debian or Ubuntu images instead of an OCI
+image (Freestyle VMs, Upstash Box containers) runs [`vm-setup.sh`](vm-setup.sh)
+in a fresh machine and snapshots it: the same packages, pinned downloads,
+account, and dx files as the Dockerfile, with no Desktop. A systemd unit
+starts `dx-orb-init` where systemd is PID 1; elsewhere it runs in the
+background under `tini`. Change both files together.
+
 ## Build
 
 From the repository root (the context; `Dockerfile.dockerignore` admits only
@@ -207,6 +214,8 @@ image while any Thread's snapshot still refers to it.
 
 ## Publishing
 
-The image is not yet published. The intended reference is
-`ghcr.io/dxcode-dev/dx-orb:<version>`; publishing it publicly is an
-owner/ops step (see the release tracker).
+The Release workflow publishes the image when the Dockerfile or a file it
+copies changes: one build, pushed by digest to `ghcr.io/dxcode-dev/dx-orb`
+and Docker Hub (`dockerHubRepository`), then pinned in
+[`public-image.json`](public-image.json). Its `digest` and `source` belong
+to the release; do not edit them by hand.

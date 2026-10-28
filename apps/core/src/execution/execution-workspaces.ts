@@ -6,16 +6,9 @@ import {
   type ExecutionProviderId,
 } from "../plugins/execution/provider.js";
 import { makeExecutionActivation } from "./activation.js";
-import { cloudflareExecutionProvider } from "./cloudflare/provider.js";
-import { e2bExecutionProvider } from "./e2b/provider.js";
-import { localExecutionProvider } from "./local/provider.js";
+import { executionProviders, orbProviderConnectors } from "./orb-providers.js";
 
-/** Implementations of the providers the Execution plugin registers. */
-export const executionProviders = Object.freeze({
-  e2b: e2bExecutionProvider as ExecutionProvider,
-  cloudflare: cloudflareExecutionProvider as ExecutionProvider,
-  local: localExecutionProvider,
-}) satisfies Record<ExecutionProviderId, ExecutionProvider>;
+export { executionProviders };
 
 /**
  * The deployment's Execution providers, resolved from the plugin registry and
@@ -27,6 +20,14 @@ export const makeExecutionWorkspaces = (
   providers: Readonly<
     Partial<Record<ExecutionProviderId, ExecutionProvider>>
   > = executionProviders,
-) => composeExecutionWorkspaces(bindings, providers, makeExecutionActivation());
+) =>
+  composeExecutionWorkspaces(
+    bindings,
+    providers,
+    makeExecutionActivation(),
+    undefined,
+    undefined,
+    (providerId) => orbProviderConnectors[providerId] !== undefined,
+  );
 
 export const ExecutionWorkspaces = makeExecutionWorkspaces(env as Bindings);

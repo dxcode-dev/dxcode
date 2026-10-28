@@ -3,6 +3,7 @@ import {
   RunnerProfileId,
   ThreadId,
   UserId,
+  withPinnedOrbTarget,
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Redacted, Schema } from "effect";
@@ -170,21 +171,6 @@ export const pinnedCredential = (
 };
 
 /**
- * A Thread's profile with the target its connection pinned: E2B creates
- * from the template built into the team, and Cloudflare reaches the
- * account's Orb Worker.
- */
-const withPinnedTarget = <Profile extends { readonly adapter: string }>(
-  profile: Profile,
-  target: string,
-): Profile =>
-  profile.adapter === "e2b"
-    ? { ...profile, template: target }
-    : profile.adapter === "cloudflare"
-      ? { ...profile, endpoint: target }
-      : profile;
-
-/**
  * One D1 read per activation: the Thread's runner profile inputs, its pin
  * on `execution_workspace`, the pinned scope's connection, the project's
  * workspace policy, and the owner's membership.
@@ -304,7 +290,7 @@ export const resolveExecutionTarget = Effect.fn("resolveExecutionTarget")(
     // its preparation made for the size, which the pin recorded.
     const profile =
       credential.scope !== "deployment" && row.provider_template !== null
-        ? withPinnedTarget(selected, row.provider_template)
+        ? withPinnedOrbTarget(selected, row.provider_template)
         : selected;
     if (!options.admission) return { profile, credential };
     const d1 = D1Client.layer({ db });

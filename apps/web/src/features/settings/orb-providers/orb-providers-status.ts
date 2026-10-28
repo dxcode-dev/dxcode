@@ -2,9 +2,16 @@ import type { OrbProviderConnectionData, OrbProviderData } from "@dx/api";
 
 type Scope = "personal" | "workspace";
 
+/** What preparation is doing, with how far along it is. */
+export const preparationStep = (connection: OrbProviderConnectionData) =>
+  connection.progress === null
+    ? "Preparing…"
+    : `${connection.progress.step} (${connection.progress.done} of ${connection.progress.total})`;
+
 const connectionState = (
   connection: OrbProviderConnectionData,
   owner: string,
+  sizes: number,
 ) => {
   if (connection.status === null) return "Ignored locally";
   const named =
@@ -14,11 +21,13 @@ const connectionState = (
     return connection.status === "failed"
       ? `${named} · Update failed`
       : `${named} · Updating…`;
-  return connection.status === "preparing"
-    ? "Preparing…"
-    : connection.status === "failed"
-      ? "Setup failed"
-      : named;
+  if (connection.status === "preparing") return preparationStep(connection);
+  if (connection.status === "failed") return "Setup failed";
+  const refused = connection.unavailableSizes.length;
+  // The account's plan refused some sizes; the dialog says which and why.
+  return refused === 0 || sizes === 0
+    ? named
+    : `${named} · ${sizes - refused} of ${sizes} sizes`;
 };
 
 /**
@@ -33,9 +42,14 @@ export const orbProviderSource = (
     return connectionState(
       provider.connection,
       scope === "personal" ? "Your account" : "Workspace account",
+      provider.sizes.length,
     );
   if (provider.workspaceConnection !== null)
-    return connectionState(provider.workspaceConnection, "Workspace account");
+    return connectionState(
+      provider.workspaceConnection,
+      "Workspace account",
+      provider.sizes.length,
+    );
   if (provider.deployment) return "Provided by this deployment";
   return "Not connected";
 };

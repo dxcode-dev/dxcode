@@ -34,18 +34,18 @@ const fakeDatabase = (row: Row, lifecycle = "active") => {
       },
       run: async () => {
         let changes = 0;
-        if (sql.includes("provider = 'cloudflare',")) {
+        if (sql.includes("SET provider = ?,")) {
           if (row.state === "uninitialized") {
-            row.provider = "cloudflare";
+            row.provider = String(values[0]);
             row.state = "provisioning";
-            row.initialization_attempt_id = String(values[0]);
+            row.initialization_attempt_id = String(values[1]);
             changes = 1;
           }
         } else if (sql.includes("SET state = 'initialized'")) {
           if (
-            row.provider === "cloudflare" &&
+            row.provider === values[3] &&
             row.state === "provisioning" &&
-            row.initialization_attempt_id === values[3]
+            row.initialization_attempt_id === values[4]
           ) {
             row.state = "initialized";
             row.provider_sandbox_id = String(values[0]);
@@ -53,7 +53,7 @@ const fakeDatabase = (row: Row, lifecycle = "active") => {
             changes = 1;
           }
         } else if (sql.includes("SET state = 'lost'")) {
-          if (row.provider === "cloudflare" && row.state === "initialized") {
+          if (row.provider === values[2] && row.state === "initialized") {
             row.state = "lost";
             changes = 1;
           }

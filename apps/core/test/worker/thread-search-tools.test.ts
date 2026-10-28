@@ -131,6 +131,7 @@ const history =
         ["s1", "completed"],
         ["s2", "completed"],
       ]),
+      answeredBy: new Map(),
       hasOlder: false,
     },
   });

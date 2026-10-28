@@ -115,9 +115,11 @@ describe("execution workspace identity persistence", () => {
         .bind(threadEntity.id)
         .run(),
     ).rejects.toThrow("execution workspace provider is immutable");
+    // Any Orb provider ID may claim the row (migration 0098), but only a
+    // well-formed one.
     await expect(
       env.DB.prepare(
-        "UPDATE execution_workspace SET provider = 'other', state = 'provisioning', initialization_attempt_id = 'a' WHERE thread_id = ?",
+        "UPDATE execution_workspace SET provider = 'Not A Provider', state = 'provisioning', initialization_attempt_id = 'a' WHERE thread_id = ?",
       )
         .bind(threadEntity.id)
         .run(),

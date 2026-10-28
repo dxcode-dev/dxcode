@@ -15,6 +15,7 @@ import {
   startTeamTemplates,
   type TeamTemplateBuild,
   type TeamTemplateState,
+  unavailableProfiles,
 } from "./team-templates.js";
 
 /** How often preparation reads E2B's build status. */
@@ -36,7 +37,9 @@ const buildsOf = (
 
 const progressOf = (builds: ReadonlyArray<TeamTemplateBuild>) => {
   const total = E2B_ORB_PROFILES.length + 1;
-  const done = builds.filter(({ status }) => status === "ready").length;
+  const done = builds.filter(
+    ({ status }) => status === "ready" || status === "skipped",
+  ).length;
   const building = builds.find(({ status }) => status === "building");
   const size =
     building === undefined
@@ -119,6 +122,11 @@ export const makeE2BConnector = (
   },
   targets: (preparation) =>
     readyProfileTemplates({
+      state: preparation.status === "ready" ? "ready" : "building",
+      builds: buildsOf(preparation.state),
+    }),
+  unavailable: (preparation) =>
+    unavailableProfiles({
       state: preparation.status === "ready" ? "ready" : "building",
       builds: buildsOf(preparation.state),
     }),

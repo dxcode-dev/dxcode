@@ -10,6 +10,7 @@ import {
   type OrbConnectionKey,
   type OrbServedVersion,
   recordPreparation,
+  restartPreparationRecord,
 } from "./connections-d1.js";
 import {
   failedPreparation,
@@ -46,18 +47,54 @@ export const connectionStatus = (
  */
 export const servedVersion = (
   connection: Pick<OrbConnection, "status" | "state" | "account" | "served">,
-  connector: Pick<OrbProviderConnector, "targets">,
+  connector: Pick<OrbProviderConnector, "targets" | "unavailable">,
 ): OrbServedVersion | null => {
   if (connection.status === "ready" && connection.account !== null) {
     const targets = connector.targets(connection);
+    const unavailable = connector.unavailable?.(connection);
     if (targets !== undefined)
       return {
         account: connection.account,
         targets: Object.fromEntries(targets),
+        ...(unavailable === undefined || unavailable.size === 0
+          ? {}
+          : { unavailable: Object.fromEntries(unavailable) }),
       };
   }
   return connection.served;
 };
+
+/**
+ * A ready connection whose account could not run every size is prepared
+ * again this long after its last preparation, so an upgraded plan gains its
+ * sizes without the person saving their key again.
+ */
+export const SIZE_RECHECK_MS = 24 * 60 * 60_000;
+
+/** The connection is ready, and its account cannot run some sizes. */
+export const lacksSizes = (
+  connection: Pick<OrbConnection, "status" | "state">,
+  connector: Pick<OrbProviderConnector, "unavailable">,
+) =>
+  connection.status === "ready" &&
+  (connector.unavailable?.(connection)?.size ?? 0) > 0;
+
+/**
+ * Prepares a ready or failed connection again from the start (its
+ * connector reuses what the account already has), while new Threads keep
+ * the version it served. False when another write won.
+ */
+export const restartPreparation = (
+  db: D1Database,
+  connection: OrbConnection,
+  connector: Pick<OrbProviderConnector, "targets" | "unavailable">,
+) =>
+  restartPreparationRecord(
+    db,
+    connection,
+    servedVersion(connection, connector),
+    new Date().toISOString(),
+  );
 
 export interface PreparationStepOutcome {
   /** How long to wait before the next step; undefined when done. */

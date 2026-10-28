@@ -1,4 +1,5 @@
 import {
+  DEFAULT_MCP_CLIENT_NAME,
   MAX_MCP_TOOL_SCHEMA_BYTES,
   MAX_MCP_TOOLS_PER_SERVER,
   McpServerEndpoint,
@@ -224,12 +225,15 @@ export const createMcpNetworkFetch = (
       throw new McpNetworkRejected({ code: "ENDPOINT_CHANGED" });
     }
     await validateMcpEndpoint(request.url, resolveDns);
-    if (request.body !== null) {
-      await readBounded(
-        new Response(request.clone().body),
-        MAX_MCP_REQUEST_BYTES,
-      );
-    }
+    // Forward the bounded bytes rather than the stream: a streamed body goes
+    // out chunked without Content-Length, which some MCP servers never answer.
+    const requestBody =
+      request.body === null
+        ? null
+        : await readBounded(
+            new Response(request.clone().body),
+            MAX_MCP_REQUEST_BYTES,
+          );
     const controller = new AbortController();
     const abort = () => controller.abort();
     request.signal.addEventListener("abort", abort, { once: true });
@@ -241,7 +245,20 @@ export const createMcpNetworkFetch = (
     };
     try {
       const response = await fetchImpl(
-        new Request(request, { redirect: "manual", signal: controller.signal }),
+        new Request(request.url, {
+          method: request.method,
+          headers: request.headers,
+          ...(requestBody === null
+            ? {}
+            : {
+                body: requestBody.buffer.slice(
+                  requestBody.byteOffset,
+                  requestBody.byteOffset + requestBody.byteLength,
+                ) as ArrayBuffer,
+              }),
+          redirect: "manual",
+          signal: controller.signal,
+        }),
       );
       if (response.status >= 300 && response.status < 400) {
         throw new McpNetworkRejected({ code: "REDIRECT_BLOCKED" });
@@ -348,24 +365,44 @@ const storedTool = Effect.fn("mcpStoredTool")(function* (
   });
 });
 
+/** Why discovery got no answer: a 401 or 403 means the credential is missing or rejected. */
+const httpFailureCode = (status: number) =>
+  status === 401 || status === 403 ? "AUTHENTICATION_REQUIRED" : undefined;
+
 export const discoverMcpTools = Effect.fn("discoverMcpTools")(function* (
-  server: StoredMcpServer,
+  server: Pick<StoredMcpServer, "endpoint" | "timeoutMs" | "clientName">,
   credential: string | undefined,
   networkOptions: McpNetworkOptions = {},
+  headers: Readonly<Record<string, string>> = {},
 ) {
   const discoveredAt = yield* DateTime.now;
-  const client = new Client({ name: "dx-mcp-discovery", version: "1" });
+  const client = new Client({
+    name: server.clientName ?? DEFAULT_MCP_CLIENT_NAME,
+    version: "1",
+  });
+  let rejectedStatus: number | undefined;
+  const networkFetch = createMcpNetworkFetch(
+    server.endpoint,
+    server.timeoutMs,
+    networkOptions,
+  );
   const transport = new StreamableHTTPClientTransport(
     new URL(server.endpoint),
     {
-      fetch: createMcpNetworkFetch(
-        server.endpoint,
-        server.timeoutMs,
-        networkOptions,
-      ),
-      ...(credential === undefined
-        ? {}
-        : { authProvider: { token: async () => credential } }),
+      fetch: async (input, init) => {
+        const response = await networkFetch(input, init);
+        if (response.status === 401 || response.status === 403)
+          rejectedStatus = response.status;
+        return response;
+      },
+      requestInit: {
+        headers: {
+          ...headers,
+          ...(credential === undefined
+            ? {}
+            : { Authorization: `Bearer ${credential}` }),
+        },
+      },
     },
   );
   const tools = yield* Effect.tryPromise({
@@ -395,7 +432,15 @@ export const discoverMcpTools = Effect.fn("discoverMcpTools")(function* (
     catch: (cause) =>
       cause instanceof McpDiscoveryFailed
         ? cause
-        : new McpDiscoveryFailed({ code: "CONNECTION_FAILED" }),
+        : new McpDiscoveryFailed({
+            code:
+              (rejectedStatus === undefined
+                ? undefined
+                : httpFailureCode(rejectedStatus)) ??
+              (cause instanceof McpNetworkRejected
+                ? cause.code
+                : "CONNECTION_FAILED"),
+          }),
   }).pipe(
     Effect.ensuring(Effect.promise(() => client.close()).pipe(Effect.ignore)),
   );

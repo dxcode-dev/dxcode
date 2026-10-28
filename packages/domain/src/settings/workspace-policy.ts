@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { findOrbProvider } from "../orb-providers/index.js";
 import { FirstPartyPluginId } from "../plugins/plugin.js";
 import { RunnerAdapterKind, RunnerProfileId } from "./runner-profile.js";
 import { WorkspaceId } from "./workspace.js";
@@ -96,4 +97,6 @@ export class WorkspacePolicyDenied extends Schema.TaggedError<WorkspacePolicyDen
 ) {}
 
 export const isRemoteRunnerAdapter = (adapter: RunnerAdapterKind): boolean =>
-  adapter === "e2b" || adapter === "kubernetes" || adapter === "remote";
+  adapter === "kubernetes" ||
+  adapter === "remote" ||
+  findOrbProvider(adapter)?.remote === true;

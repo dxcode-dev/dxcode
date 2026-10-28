@@ -57,6 +57,15 @@ export interface OrbProviderConnector {
   readonly targets: (
     preparation: Pick<OrbPreparation, "status" | "state">,
   ) => ReadonlyMap<string, string> | undefined;
+  /**
+   * Sizes a ready connection's account cannot run, by runner profile ID,
+   * each with the provider's reason (a plan that refuses its CPU and
+   * memory). They have no target, and the Orb picker leaves them out. A
+   * provider that runs every size on every account omits this.
+   */
+  readonly unavailable?: (
+    preparation: Pick<OrbPreparation, "status" | "state">,
+  ) => ReadonlyMap<string, string> | undefined;
 }
 
 export type OrbProviderConnectors = Readonly<

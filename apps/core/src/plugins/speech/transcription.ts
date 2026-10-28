@@ -71,11 +71,8 @@ export const speechProviderFor = (
               return transport(input, init);
             },
           );
-    case "exa":
-    case "quickjs":
-    case "e2b":
-    case "cloudflare":
-    case "local":
+    // Search, Code, and every Orb provider transcribe nothing.
+    default:
       return unavailable;
   }
 };
