@@ -587,14 +587,18 @@ describe("immutable Thread source snapshots", () => {
         .bind(operation.id)
         .run(),
     ).rejects.toThrow("cannot be deleted");
-    await env.DB.prepare(`
-      INSERT INTO github_authorization_epoch (subject_kind, subject_id, epoch, updated_at)
-      VALUES ('owner-grant', 'grant-114', 2, ?)
-    `)
-      .bind(now)
-      .run();
+    // A revoked grant: its epoch advances and it is no longer active.
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO github_authorization_epoch (subject_kind, subject_id, epoch, updated_at)
+        VALUES ('owner-grant', 'grant-114', 2, ?)
+      `).bind(now),
+      env.DB.prepare(
+        "UPDATE github_owner_grant SET status = 'disconnected' WHERE id = 'grant-114'",
+      ),
+    ]);
     await expect(resolveAuthority(owner)).rejects.toMatchObject({
-      reason: "stale-authorization-epoch",
+      reason: "grant-disconnected",
     });
     const rejectedThread = thread(
       "thr_00000000-0000-4000-8000-000000000115",
@@ -659,6 +663,9 @@ describe("immutable Thread source snapshots", () => {
       ).bind(projectEntity.id),
       env.DB.prepare(
         "UPDATE github_authorization_epoch SET epoch = 1 WHERE subject_kind = 'owner-grant' AND subject_id = 'grant-114'",
+      ),
+      env.DB.prepare(
+        "UPDATE github_owner_grant SET status = 'active' WHERE id = 'grant-114'",
       ),
     ]);
     // A workspace Project may bind its member's personal grant; the lease

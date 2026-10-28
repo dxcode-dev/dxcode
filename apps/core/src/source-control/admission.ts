@@ -22,6 +22,12 @@ import {
   GitHubProviderError,
   type GitHubResolvedSource,
 } from "./github/provider-http.js";
+import {
+  healProjectSourceAuthority,
+  healThreadSourceAuthority,
+  memberSourceGrant,
+  withHealedSource,
+} from "./heal.js";
 
 export type { SourceOwner } from "./authority.js";
 
@@ -218,46 +224,7 @@ export const authorizeSource = async (input: {
   }
 };
 
-/**
- * The member's own connection that can reach a workspace Project's repository:
- * a live GitHub grant whose installation is entitled to it, or the member's
- * live Bitbucket connection (Bitbucket decides repository access).
- */
-const memberSourceGrant = async (
-  db: D1Database,
-  input: {
-    readonly provider: "github" | "bitbucket";
-    readonly userId: string;
-    readonly repositoryId: string;
-    readonly preferredGrantId?: string;
-  },
-) =>
-  input.provider === "github"
-    ? db
-        .prepare(`
-          SELECT grant_row.id
-            FROM github_owner_grant AS grant_row
-            JOIN github_installation AS installation
-              ON installation.installation_id = grant_row.installation_id
-            JOIN github_installation_repository AS entitlement
-              ON entitlement.installation_id = grant_row.installation_id
-             AND entitlement.provider_repository_id = ?
-           WHERE grant_row.owner_scope = 'personal' AND grant_row.owner_id = ?
-             AND grant_row.status = 'active' AND installation.status = 'active'
-             AND entitlement.entitled = 1
-           ORDER BY grant_row.id = ? DESC, grant_row.created_at, grant_row.id
-           LIMIT 1
-        `)
-        .bind(input.repositoryId, input.userId, input.preferredGrantId ?? "")
-        .first<{ id: string }>()
-    : db
-        .prepare(
-          "SELECT id FROM bitbucket_connection WHERE user_id = ? AND status = 'active' LIMIT 1",
-        )
-        .bind(input.userId)
-        .first<{ id: string }>();
-
-export const authorizeProjectSource = async (input: {
+const checkProjectSource = async (input: {
   readonly db: D1Database;
   readonly bindings: Bindings;
   readonly projectId: string;
@@ -429,7 +396,7 @@ export const authorizeThreadSource = async (input: {
  * source costs the lifecycle read it already made. Credentialed commands
  * still re-check through `SourceRuntimeBroker`.
  */
-export const authorizeRunStart = async (db: D1Database, threadId: string) => {
+const checkRunStart = async (db: D1Database, threadId: string) => {
   const row = await db
     .prepare(`
       SELECT thread.lifecycle_state, thread.owner_user_id,
@@ -479,3 +446,23 @@ export const authorizeRunStart = async (db: D1Database, threadId: string) => {
   )
     throw deny("stale-authorization-epoch", "retry");
 };
+
+export const authorizeProjectSource = (
+  input: Parameters<typeof checkProjectSource>[0],
+) =>
+  withHealedSource(
+    () =>
+      healProjectSourceAuthority(input.db, input.projectId, input.ownerUserId),
+    () => checkProjectSource(input),
+  );
+
+/**
+ * Admits a run at Orb start (`checkRunStart`). A Thread whose captured
+ * connection was replaced moves to its owner's live connection to the same
+ * repository first (`healThreadSourceAuthority`).
+ */
+export const authorizeRunStart = (db: D1Database, threadId: string) =>
+  withHealedSource(
+    () => healThreadSourceAuthority(db, threadId),
+    () => checkRunStart(db, threadId),
+  );

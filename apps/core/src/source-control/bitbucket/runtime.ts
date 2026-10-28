@@ -3,6 +3,7 @@ import type { Bindings } from "../../http/types.js";
 import { hashOAuthState } from "../../settings/integrations/provider-registry.js";
 import { sourceAccessDenied } from "../authority.js";
 import { githubCommandEnvironment } from "../github/runtime-adapter.js";
+import { healThreadSourceAuthority, withHealedSource } from "../heal.js";
 import {
   SourceRuntimeBroker,
   type SourceRuntimeBrokerShape,
@@ -67,7 +68,10 @@ export const bitbucketRuntimeBroker = (
           const native = request.invocationSource === "git-helper";
           const authority = native
             ? undefined
-            : await readBitbucketThreadAuthority(db, threadId, actorUserId);
+            : await withHealedSource(
+                () => healThreadSourceAuthority(db, threadId),
+                () => readBitbucketThreadAuthority(db, threadId, actorUserId),
+              );
           if (
             authority !== undefined &&
             targetRepositoryId !== undefined &&

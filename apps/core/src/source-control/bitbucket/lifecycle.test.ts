@@ -11,6 +11,7 @@ import {
   IntegrationCredentialVault,
   IntegrationCredentialVaultD1,
 } from "../../settings/integrations/credential-vault.js";
+import { authorizeProjectSource, authorizeRunStart } from "../admission.js";
 import {
   createBitbucketControlPlane,
   disconnectBitbucket,
@@ -723,6 +724,92 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
       f.sqlite.prepare("SELECT count(*) n FROM thread_source_snapshot").get()
         ?.n,
     ).toBe(1);
+  });
+  it("keeps a Project and its Threads working across disconnect, reconnect, and another account", async () => {
+    const f = await fixture();
+    const original = await f.connect();
+    seedThread(f.sqlite, original.id);
+    vi.stubGlobal("fetch", f.fetcher);
+    const grants = () => ({
+      thread: f.sqlite
+        .prepare("SELECT owner_grant_id FROM thread_source_authority")
+        .get()?.owner_grant_id,
+      project: f.sqlite
+        .prepare("SELECT owner_grant_id FROM project_source_authority")
+        .get()?.owner_grant_id,
+    });
+    const createThread = () =>
+      authorizeProjectSource({
+        db: f.db,
+        bindings: { ...bindings, DB: f.db } as never,
+        projectId,
+        ownerUserId: userId,
+        fetcher: f.fetcher,
+      });
+    const runCommand = () =>
+      Effect.runPromise(
+        bitbucketRuntimeBroker(f.db, {
+          ...bindings,
+          DB: f.db,
+        }).withCommandEnvironment(
+          threadId,
+          userId,
+          { operation: "fetch", invocationSource: "checkout" },
+          () => Effect.void,
+        ),
+      );
+
+    // Disconnected with nothing to fall back on: still refused.
+    await disconnectBitbucket(f.db, userId);
+    await expect(authorizeRunStart(f.db, threadId)).rejects.toMatchObject({
+      reason: "stale-snapshot",
+    });
+    await expect(createThread()).rejects.toBeDefined();
+
+    // The same account again: a new connection row, and everything follows it.
+    const same = await f.connect();
+    expect(same.id).not.toBe(original.id);
+    await expect(authorizeRunStart(f.db, threadId)).resolves.toBeUndefined();
+    expect(grants()).toEqual({ thread: same.id, project: same.id });
+    await expect(createThread()).resolves.toMatchObject({ grantId: same.id });
+    await expect(runCommand()).resolves.toBeUndefined();
+
+    // Another Bitbucket account that reaches the same repository, picked up
+    // mid-run by the next source command.
+    f.fetcher.mockImplementation(async (url) => {
+      if (String(url).includes("/access_token"))
+        return Response.json({
+          access_token: "other-access",
+          refresh_token: "other-refresh",
+          expires_in: 3600,
+          scopes: "account repository:write pullrequest:write",
+        });
+      if (String(url).endsWith("/2.0/user"))
+        return Response.json({
+          uuid: "{33333333-3333-4333-8333-333333333333}",
+          nickname: "other",
+        });
+      if (String(url).includes("/commits/"))
+        return Response.json({ values: [{ hash: "b".repeat(40) }] });
+      if (String(url).startsWith("https://api.bitbucket.org/2.0/repositories/"))
+        return Response.json(repository);
+      return new Response("unknown", { status: 404 });
+    });
+    const other = await f.connect();
+    expect(other.provider_account_id).not.toBe(same.provider_account_id);
+    await expect(runCommand()).resolves.toBeUndefined();
+    expect(grants()).toEqual({ thread: other.id, project: other.id });
+    await expect(authorizeRunStart(f.db, threadId)).resolves.toBeUndefined();
+    await expect(createThread()).resolves.toMatchObject({ grantId: other.id });
+
+    // The repository itself never changes.
+    expect(() =>
+      f.sqlite
+        .prepare(
+          "UPDATE thread_source_authority SET provider_repository_id = '{44444444-4444-4444-8444-444444444444}'",
+        )
+        .run(),
+    ).toThrow("immutable");
   });
   it("returns 401 with a Basic challenge for malformed base64 credentials", async () => {
     const app = new Hono<AppEnv>();

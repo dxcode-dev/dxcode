@@ -9,6 +9,7 @@ import {
   sourceAccessDenied,
   validateLiveGrantAuthority,
 } from "./authority.js";
+import { healThreadSourceAuthority, withHealedSource } from "./heal.js";
 
 export interface RuntimeSourceAuthority {
   readonly threadId: string;
@@ -68,9 +69,12 @@ export const SourceAuthorityRepositoryD1 = (db: D1Database) =>
     SourceAuthorityRepository.of({
       resolve: (threadId, actorUserId, _request, targetProviderRepositoryId) =>
         Effect.tryPromise({
-          try: async (): Promise<RuntimeSourceAuthority> => {
-            const row = await db
-              .prepare(`
+          try: () =>
+            withHealedSource(
+              () => healThreadSourceAuthority(db, threadId),
+              async (): Promise<RuntimeSourceAuthority> => {
+                const row = await db
+                  .prepare(`
                 SELECT thread.project_id, project.owner_user_id,
                        project.workspace_id, project.ship_action,
                        snapshot.provider AS snapshot_provider,
@@ -127,125 +131,134 @@ export const SourceAuthorityRepositoryD1 = (db: D1Database) =>
                  WHERE thread.id = ? AND thread.owner_user_id = ?
                  LIMIT 1
               `)
-              .bind(actorUserId, threadId, actorUserId)
-              .first<Record<string, unknown>>();
-            if (row === null)
-              throw sourceAccessDenied("source-not-found", "retry");
-            const projectId = string(row.project_id);
-            const provider = string(row.snapshot_provider);
-            // Another member of a workspace Project's workspace works through
-            // the personal grant captured for their own Thread, not the
-            // Project creator's binding grant.
-            const memberThread =
-              row.owner_scope === "personal" &&
-              row.owner_id !== actorUserId &&
-              row.workspace_id !== null &&
-              row.workspace_lifecycle === "active" &&
-              row.member_user_id === actorUserId &&
-              row.thread_grant_owner_scope === "personal" &&
-              row.thread_grant_owner_id === actorUserId &&
-              row.thread_grant_created_by_user_id === actorUserId;
-            const ownerScope = string(row.owner_scope);
-            const ownerId = memberThread ? actorUserId : string(row.owner_id);
-            const grantId = string(
-              memberThread ? row.snapshot_grant_id : row.binding_grant_id,
-            );
-            const installationId = string(
-              memberThread
-                ? row.snapshot_installation_id
-                : row.binding_installation_id,
-            );
-            const repositoryId = string(row.binding_repository_id);
-            if (
-              projectId === undefined ||
-              provider === undefined ||
-              ownerScope === undefined ||
-              ownerId === undefined ||
-              grantId === undefined ||
-              installationId === undefined ||
-              repositoryId === undefined
-            )
-              throw sourceAccessDenied("stale-snapshot", "rebind");
-            if (provider !== "github" || row.binding_provider !== "github")
-              throw sourceAccessDenied("unsupported-provider", "rebind");
-            if (ownerScope !== "personal" && ownerScope !== "workspace")
-              throw sourceAccessDenied("stale-binding", "rebind");
-            if (
-              row.provenance !== "live-grant" ||
-              row.source_health !== "available"
-            )
-              throw sourceAccessDenied("stale-binding", "rebind");
-            if (
-              // A personal grant authorizes only its own user, in a private
-              // Project or a workspace Project the user is still a member of.
-              (ownerScope === "personal" &&
-                (ownerId !== actorUserId ||
-                  (!memberThread &&
-                    ((row.workspace_id === null &&
-                      row.owner_user_id !== actorUserId) ||
-                      row.created_by_user_id !== actorUserId)) ||
-                  (row.workspace_id !== null &&
-                    (row.workspace_lifecycle !== "active" ||
-                      row.member_user_id !== actorUserId)))) ||
-              (ownerScope === "workspace" &&
-                (ownerId !== row.workspace_id ||
-                  row.workspace_lifecycle !== "active" ||
-                  row.member_user_id !== actorUserId))
-            )
-              throw sourceAccessDenied(
-                ownerScope === "workspace"
-                  ? "policy-denied"
-                  : "source-not-found",
-                ownerScope === "workspace"
-                  ? "contact-workspace-admin"
-                  : "retry",
-              );
-            const bindingRevision = number(row.binding_revision);
-            const authorizationEpoch = number(
-              memberThread ? row.snapshot_grant_epoch : row.authorization_epoch,
-            );
-            const installationEpoch = number(
-              memberThread
-                ? row.snapshot_installation_epoch
-                : row.installation_epoch,
-            );
-            const policyRevision = number(
-              memberThread ? row.snapshot_policy_revision : row.policy_revision,
-            );
-            if (
-              row.snapshot_grant_id !== grantId ||
-              row.snapshot_installation_id !== installationId ||
-              row.snapshot_repository_id !== repositoryId ||
-              number(row.snapshot_binding_revision) !== bindingRevision ||
-              number(row.snapshot_grant_epoch) !== authorizationEpoch ||
-              number(row.snapshot_installation_epoch) !== installationEpoch ||
-              number(row.snapshot_policy_revision) !== policyRevision
-            )
-              throw sourceAccessDenied("stale-snapshot", "rebind");
-            if (row.snapshot_repository_name !== row.binding_repository_name)
-              throw sourceAccessDenied("stale-snapshot", "rebind");
-            const privateSubmoduleIds = JSON.parse(
-              string(row.private_submodule_repository_ids_json) ?? "[]",
-            ) as unknown;
-            if (
-              !Array.isArray(privateSubmoduleIds) ||
-              privateSubmoduleIds.some((id) => typeof id !== "string")
-            )
-              throw sourceAccessDenied("stale-snapshot", "rebind");
-            const targetRepositoryId =
-              targetProviderRepositoryId ?? repositoryId;
-            if (
-              targetRepositoryId !== repositoryId &&
-              !privateSubmoduleIds.includes(targetRepositoryId)
-            )
-              throw sourceAccessDenied("repository-not-selected", "rebind");
-            const targetRepositoryName =
-              targetRepositoryId === repositoryId
-                ? string(row.snapshot_repository_name)
-                : string(
-                    (
-                      await db
-                        .prepare(`
+                  .bind(actorUserId, threadId, actorUserId)
+                  .first<Record<string, unknown>>();
+                if (row === null)
+                  throw sourceAccessDenied("source-not-found", "retry");
+                const projectId = string(row.project_id);
+                const provider = string(row.snapshot_provider);
+                // Another member of a workspace Project's workspace works through
+                // the personal grant captured for their own Thread, not the
+                // Project creator's binding grant.
+                const memberThread =
+                  row.owner_scope === "personal" &&
+                  row.owner_id !== actorUserId &&
+                  row.workspace_id !== null &&
+                  row.workspace_lifecycle === "active" &&
+                  row.member_user_id === actorUserId &&
+                  row.thread_grant_owner_scope === "personal" &&
+                  row.thread_grant_owner_id === actorUserId &&
+                  row.thread_grant_created_by_user_id === actorUserId;
+                const ownerScope = string(row.owner_scope);
+                const ownerId = memberThread
+                  ? actorUserId
+                  : string(row.owner_id);
+                const grantId = string(
+                  memberThread ? row.snapshot_grant_id : row.binding_grant_id,
+                );
+                const installationId = string(
+                  memberThread
+                    ? row.snapshot_installation_id
+                    : row.binding_installation_id,
+                );
+                const repositoryId = string(row.binding_repository_id);
+                if (
+                  projectId === undefined ||
+                  provider === undefined ||
+                  ownerScope === undefined ||
+                  ownerId === undefined ||
+                  grantId === undefined ||
+                  installationId === undefined ||
+                  repositoryId === undefined
+                )
+                  throw sourceAccessDenied("stale-snapshot", "rebind");
+                if (provider !== "github" || row.binding_provider !== "github")
+                  throw sourceAccessDenied("unsupported-provider", "rebind");
+                if (ownerScope !== "personal" && ownerScope !== "workspace")
+                  throw sourceAccessDenied("stale-binding", "rebind");
+                if (
+                  row.provenance !== "live-grant" ||
+                  row.source_health !== "available"
+                )
+                  throw sourceAccessDenied("stale-binding", "rebind");
+                if (
+                  // A personal grant authorizes only its own user, in a private
+                  // Project or a workspace Project the user is still a member of.
+                  (ownerScope === "personal" &&
+                    (ownerId !== actorUserId ||
+                      (!memberThread &&
+                        ((row.workspace_id === null &&
+                          row.owner_user_id !== actorUserId) ||
+                          row.created_by_user_id !== actorUserId)) ||
+                      (row.workspace_id !== null &&
+                        (row.workspace_lifecycle !== "active" ||
+                          row.member_user_id !== actorUserId)))) ||
+                  (ownerScope === "workspace" &&
+                    (ownerId !== row.workspace_id ||
+                      row.workspace_lifecycle !== "active" ||
+                      row.member_user_id !== actorUserId))
+                )
+                  throw sourceAccessDenied(
+                    ownerScope === "workspace"
+                      ? "policy-denied"
+                      : "source-not-found",
+                    ownerScope === "workspace"
+                      ? "contact-workspace-admin"
+                      : "retry",
+                  );
+                const bindingRevision = number(row.binding_revision);
+                const authorizationEpoch = number(
+                  memberThread
+                    ? row.snapshot_grant_epoch
+                    : row.authorization_epoch,
+                );
+                const installationEpoch = number(
+                  memberThread
+                    ? row.snapshot_installation_epoch
+                    : row.installation_epoch,
+                );
+                const policyRevision = number(
+                  memberThread
+                    ? row.snapshot_policy_revision
+                    : row.policy_revision,
+                );
+                if (
+                  row.snapshot_grant_id !== grantId ||
+                  row.snapshot_installation_id !== installationId ||
+                  row.snapshot_repository_id !== repositoryId ||
+                  number(row.snapshot_binding_revision) !== bindingRevision ||
+                  number(row.snapshot_grant_epoch) !== authorizationEpoch ||
+                  number(row.snapshot_installation_epoch) !==
+                    installationEpoch ||
+                  number(row.snapshot_policy_revision) !== policyRevision
+                )
+                  throw sourceAccessDenied("stale-snapshot", "rebind");
+                if (
+                  row.snapshot_repository_name !== row.binding_repository_name
+                )
+                  throw sourceAccessDenied("stale-snapshot", "rebind");
+                const privateSubmoduleIds = JSON.parse(
+                  string(row.private_submodule_repository_ids_json) ?? "[]",
+                ) as unknown;
+                if (
+                  !Array.isArray(privateSubmoduleIds) ||
+                  privateSubmoduleIds.some((id) => typeof id !== "string")
+                )
+                  throw sourceAccessDenied("stale-snapshot", "rebind");
+                const targetRepositoryId =
+                  targetProviderRepositoryId ?? repositoryId;
+                if (
+                  targetRepositoryId !== repositoryId &&
+                  !privateSubmoduleIds.includes(targetRepositoryId)
+                )
+                  throw sourceAccessDenied("repository-not-selected", "rebind");
+                const targetRepositoryName =
+                  targetRepositoryId === repositoryId
+                    ? string(row.snapshot_repository_name)
+                    : string(
+                        (
+                          await db
+                            .prepare(`
                           SELECT full_name
                             FROM github_installation_repository
                            WHERE installation_id = ?
@@ -253,84 +266,91 @@ export const SourceAuthorityRepositoryD1 = (db: D1Database) =>
                              AND entitled = 1
                            LIMIT 1
                         `)
-                        .bind(installationId, targetRepositoryId)
-                        .first<Record<string, unknown>>()
-                    )?.full_name,
+                            .bind(installationId, targetRepositoryId)
+                            .first<Record<string, unknown>>()
+                        )?.full_name,
+                      );
+                if (targetRepositoryName === undefined)
+                  throw sourceAccessDenied(
+                    "repository-access-removed",
+                    "rebind",
                   );
-            if (targetRepositoryName === undefined)
-              throw sourceAccessDenied("repository-access-removed", "rebind");
-            const live = validateLiveGrantAuthority(
-              await readLiveGrantAuthority(
-                db,
-                { scope: ownerScope, id: ownerId },
-                grantId,
-                targetRepositoryId,
-              ),
-            );
-            if (
-              live.installation_id !== installationId ||
-              live.grant_epoch !== authorizationEpoch ||
-              live.installation_epoch !== installationEpoch ||
-              live.policy_revision !== policyRevision
-            )
-              throw sourceAccessDenied("stale-authorization-epoch", "retry");
-            const defaultBranch = string(row.default_branch);
-            const providerAccountId = string(
-              memberThread
-                ? row.thread_provider_account_id
-                : row.provider_account_id,
-            );
-            const repositorySelection = string(
-              memberThread
-                ? row.thread_repository_selection
-                : row.repository_selection,
-            );
-            const shipAction = string(row.ship_action);
-            if (
-              defaultBranch === undefined ||
-              providerAccountId === undefined ||
-              (repositorySelection !== "all" &&
-                repositorySelection !== "selected") ||
-              (shipAction !== "ship" && shipAction !== "commit")
-            )
-              throw sourceAccessDenied("stale-binding", "rebind");
-            const fingerprint = JSON.stringify([
-              provider,
-              ownerScope,
-              ownerId,
-              grantId,
-              installationId,
-              providerAccountId,
-              targetRepositoryId,
-              targetRepositoryName,
-              bindingRevision,
-              authorizationEpoch,
-              installationEpoch,
-              policyRevision,
-            ]);
-            return {
-              threadId,
-              projectId,
-              actorUserId,
-              provider: "github" as const,
-              ownerScope,
-              ownerId,
-              grantId,
-              installationId,
-              providerAccountId,
-              providerRepositoryId: targetRepositoryId,
-              repositoryName: targetRepositoryName,
-              rootProviderRepositoryId: repositoryId,
-              bindingRevision,
-              authorizationEpoch,
-              installationEpoch,
-              policyRevision,
-              defaultBranch,
-              shipAction,
-              repositorySelection,
-              fingerprint,
-            };
-          },
+                const live = validateLiveGrantAuthority(
+                  await readLiveGrantAuthority(
+                    db,
+                    { scope: ownerScope, id: ownerId },
+                    grantId,
+                    targetRepositoryId,
+                  ),
+                );
+                if (
+                  live.installation_id !== installationId ||
+                  live.grant_epoch !== authorizationEpoch ||
+                  live.installation_epoch !== installationEpoch ||
+                  live.policy_revision !== policyRevision
+                )
+                  throw sourceAccessDenied(
+                    "stale-authorization-epoch",
+                    "retry",
+                  );
+                const defaultBranch = string(row.default_branch);
+                const providerAccountId = string(
+                  memberThread
+                    ? row.thread_provider_account_id
+                    : row.provider_account_id,
+                );
+                const repositorySelection = string(
+                  memberThread
+                    ? row.thread_repository_selection
+                    : row.repository_selection,
+                );
+                const shipAction = string(row.ship_action);
+                if (
+                  defaultBranch === undefined ||
+                  providerAccountId === undefined ||
+                  (repositorySelection !== "all" &&
+                    repositorySelection !== "selected") ||
+                  (shipAction !== "ship" && shipAction !== "commit")
+                )
+                  throw sourceAccessDenied("stale-binding", "rebind");
+                const fingerprint = JSON.stringify([
+                  provider,
+                  ownerScope,
+                  ownerId,
+                  grantId,
+                  installationId,
+                  providerAccountId,
+                  targetRepositoryId,
+                  targetRepositoryName,
+                  bindingRevision,
+                  authorizationEpoch,
+                  installationEpoch,
+                  policyRevision,
+                ]);
+                return {
+                  threadId,
+                  projectId,
+                  actorUserId,
+                  provider: "github" as const,
+                  ownerScope,
+                  ownerId,
+                  grantId,
+                  installationId,
+                  providerAccountId,
+                  providerRepositoryId: targetRepositoryId,
+                  repositoryName: targetRepositoryName,
+                  rootProviderRepositoryId: repositoryId,
+                  bindingRevision,
+                  authorizationEpoch,
+                  installationEpoch,
+                  policyRevision,
+                  defaultBranch,
+                  shipAction,
+                  repositorySelection,
+                  fingerprint,
+                };
+              },
+            ),
           catch: (cause) =>
             cause instanceof SourceControlAccessDenied
               ? cause
