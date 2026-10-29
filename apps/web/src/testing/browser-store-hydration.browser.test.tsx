@@ -58,7 +58,7 @@ describe("browser external-store hydration", () => {
       keyboardShortcutStorageKey,
       JSON.stringify({
         version: 1,
-        overrides: { "navigation.projects": "Mod+Shift+P" },
+        overrides: { "navigation.projects": "Mod+Shift+Y" },
       }),
     );
     const store = createCommandRegistry({ platform: "linux", storage });

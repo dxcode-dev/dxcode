@@ -13,6 +13,9 @@ import {
 } from "./command-registry.js";
 import { KeymapDialog } from "./keymap-dialog.js";
 
+/** Dispatched on `document` with `{ view }`; the open Thread page listens. */
+export const THREAD_OPEN_VIEW_EVENT = "dx-thread-open-view";
+
 interface CommandSurfaceValue {
   readonly openPalette: () => void;
   readonly openKeymap: () => void;
@@ -210,6 +213,10 @@ const useCommandRuntime = ({
       document
         .querySelector<HTMLInputElement>("[data-command-action='add-images']")
         ?.click(),
+    openThreadView: (view) =>
+      document.dispatchEvent(
+        new CustomEvent(THREAD_OPEN_VIEW_EVENT, { detail: { view } }),
+      ),
   };
 };
 

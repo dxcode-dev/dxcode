@@ -8,17 +8,13 @@ import {
   Archive,
   ArchiveRestore,
   Braces,
-  CalendarClock,
   Check,
   ChevronRight,
-  CircleCheck,
-  Copy,
   Ellipsis,
   FileDown,
   FileText,
   FolderGit2,
   Gauge,
-  GitPullRequest,
   Hash,
   Link2,
   Pencil,
@@ -30,6 +26,11 @@ import {
   X,
 } from "lucide-react";
 import * as React from "react";
+import {
+  type CommandId,
+  getBrowserCommandRegistry,
+} from "../../shared/commands/command-registry.js";
+import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
 import { useNowMinute } from "../../shared/hooks/use-clock.js";
 import { useOptionalThreadArchive } from "../../shared/thread-archive.js";
 import {
@@ -46,7 +47,6 @@ import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
 import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
 import { ThreadColorSubmenu } from "../../shared/ui/thread-color-submenu.js";
 import { SnoozeMenuItems } from "../../shared/ui/thread-snooze-menu.js";
-import type { AutomationView } from "./automations/automations-queries.js";
 import {
   serializeThreadJson,
   serializeThreadMarkdown,
@@ -91,27 +91,17 @@ export function ThreadMenu({
   project,
   transcript,
   onOpenShare,
-  automationViews = [],
-  onOpenAutomations,
   showDetails = false,
 }: {
   readonly thread: ThreadDetailData;
   readonly project?: Pick<ProjectData, "name">;
   /** Reads the shown transcript when an export runs. */
   readonly transcript: () => TranscriptViewModel;
+  /** Share, for a title bar with no room for its button. */
   readonly onOpenShare?: () => void;
   /**
-   * The header entries a phone has no room for: the Thread's pull requests,
-   * CI, and schedule and GitHub listeners, each opened as a sheet.
-   */
-  readonly automationViews?: ReadonlyArray<{
-    readonly view: AutomationView;
-    readonly label: string;
-  }>;
-  readonly onOpenAutomations?: (view: AutomationView) => void;
-  /**
-   * Adds what the Thread runs on and its Project, which a phone's header has
-   * no room for.
+   * Adds what the Thread runs on and its Project, which a phone's title bar
+   * has no room for.
    */
   readonly showDetails?: boolean;
 }) {
@@ -122,6 +112,7 @@ export function ThreadMenu({
   // read or export.
   const own = thread.access === undefined || thread.access === "owner";
   const [announcement, setAnnouncement] = React.useState("");
+  const copyUrlKeycaps = useCommandKeycaps("navigation.copy-url");
   const copy = async (text: string, label: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -154,13 +145,21 @@ export function ThreadMenu({
     setAnnouncement(`${markdown ? "Markdown" : "JSON"} export downloaded.`);
   };
   const editable = own && editing !== undefined;
+  const pinnable = editable && thread.lifecycleState === "active";
+  const snoozable =
+    editable &&
+    thread.lifecycleState === "active" &&
+    thread.parentThreadId === undefined &&
+    snooze !== undefined;
   return (
     <>
       <Menu.Root>
         <Menu.Trigger
           render={
             <Button
-              aria-label="Thread actions"
+              className="thread-title-action"
+              aria-label="More Actions"
+              title="More Actions"
               variant="ghost"
               size="icon-xs"
             />
@@ -171,7 +170,7 @@ export function ThreadMenu({
         <Menu.Portal>
           <Menu.Positioner
             className="thread-menu-positioner"
-            align="end"
+            align="start"
             sideOffset={4}
           >
             <Menu.Popup
@@ -195,27 +194,26 @@ export function ThreadMenu({
                   <Menu.Separator className="thread-menu-separator" />
                 </>
               )}
-              <Submenu icon={<Copy />} label="Copy">
-                <Menu.Item
-                  className="thread-menu-item"
-                  onClick={() =>
-                    void copy(
-                      absoluteThreadUrl(thread.id, window.location.href),
-                      "Thread URL",
-                    )
-                  }
-                >
-                  <Link2 />
-                  <span>Thread URL</span>
-                </Menu.Item>
-                <Menu.Item
-                  className="thread-menu-item"
-                  onClick={() => void copy(thread.id, "Thread ID")}
-                >
-                  <Hash />
-                  <span>Thread ID</span>
-                </Menu.Item>
-              </Submenu>
+              <Menu.Item
+                className="thread-menu-item"
+                onClick={() =>
+                  void copy(
+                    absoluteThreadUrl(thread.id, window.location.href),
+                    "Thread URL",
+                  )
+                }
+              >
+                <Link2 />
+                <span>Copy Thread URL</span>
+                <ShortcutKeycaps keycaps={copyUrlKeycaps} emptyLabel="" />
+              </Menu.Item>
+              <Menu.Item
+                className="thread-menu-item"
+                onClick={() => void copy(thread.id, "Thread ID")}
+              >
+                <Hash />
+                <span>Copy Thread ID</span>
+              </Menu.Item>
               <Submenu icon={<FileDown />} label="Export">
                 <Menu.Item
                   className="thread-menu-item"
@@ -232,7 +230,7 @@ export function ThreadMenu({
                   <span>JSON</span>
                 </Menu.Item>
               </Submenu>
-              {onOpenShare === undefined && !editable ? null : (
+              {onOpenShare === undefined && !pinnable && !snoozable ? null : (
                 <Menu.Separator className="thread-menu-separator" />
               )}
               {onOpenShare === undefined ? null : (
@@ -241,47 +239,11 @@ export function ThreadMenu({
                   <span>Share…</span>
                 </Menu.Item>
               )}
-              {onOpenAutomations === undefined
-                ? null
-                : automationViews.map(({ view, label }) => (
-                    <Menu.Item
-                      key={view}
-                      className="thread-menu-item"
-                      onClick={() => onOpenAutomations(view)}
-                    >
-                      {view === "pulls" ? (
-                        <GitPullRequest />
-                      ) : view === "ci" ? (
-                        <CircleCheck />
-                      ) : (
-                        <CalendarClock />
-                      )}
-                      <span>{label}</span>
-                    </Menu.Item>
-                  ))}
-              {editable ? (
-                <>
-                  {thread.lifecycleState === "active" ? (
-                    <PinMenuItem threadId={thread.id} editing={editing} />
-                  ) : null}
-                  {thread.lifecycleState === "active" &&
-                  thread.parentThreadId === undefined &&
-                  snooze !== undefined ? (
-                    <SnoozeMenuItem thread={thread} snooze={snooze} />
-                  ) : null}
-                  <Menu.Item
-                    className="thread-menu-item"
-                    onClick={() => editing.openRename(thread)}
-                  >
-                    <Pencil />
-                    <span>Rename</span>
-                  </Menu.Item>
-                  <ThreadColorSubmenu
-                    thread={thread}
-                    itemClassName="thread-menu-item"
-                    onSelect={(color) => editing.setColor(thread.id, color)}
-                  />
-                </>
+              {pinnable ? (
+                <PinMenuItem threadId={thread.id} editing={editing} />
+              ) : null}
+              {snoozable ? (
+                <SnoozeMenuItem thread={thread} snooze={snooze} />
               ) : null}
               {own ? (
                 <>
@@ -311,7 +273,22 @@ export function ThreadMenu({
                     </span>
                   </Menu.Item>
                   {editable ? (
-                    <DeleteMenuItem thread={thread} editing={editing} />
+                    <>
+                      <Menu.Item
+                        className="thread-menu-item"
+                        onClick={() => editing.openRename(thread)}
+                      >
+                        <Pencil />
+                        <span>Rename</span>
+                      </Menu.Item>
+                      <ThreadColorSubmenu
+                        thread={thread}
+                        itemClassName="thread-menu-item"
+                        onSelect={(color) => editing.setColor(thread.id, color)}
+                      />
+                      <Menu.Separator className="thread-menu-separator" />
+                      <DeleteMenuItem thread={thread} editing={editing} />
+                    </>
                   ) : null}
                 </>
               ) : null}
@@ -333,6 +310,20 @@ export function ThreadMenu({
     </>
   );
 }
+
+/** The keycaps bound to a command, as the keymap shows them. */
+const useCommandKeycaps = (id: CommandId) => {
+  const registry = getBrowserCommandRegistry();
+  React.useSyncExternalStore(
+    registry.subscribe,
+    registry.getSnapshot,
+    registry.getServerSnapshot,
+  );
+  return (
+    registry.getCommands("thread").find((command) => command.id === id)
+      ?.displayedKeycaps ?? []
+  );
+};
 
 /**
  * What the Thread runs on, and its Project. The owner opens the Project from

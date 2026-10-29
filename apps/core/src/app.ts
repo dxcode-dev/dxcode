@@ -36,6 +36,7 @@ import {
 import { settingsRoutes } from "./settings/routes.js";
 import { pluginTriggerIngressRoutes } from "./settings/triggers/routes.js";
 import { sidebarLayoutRoutes } from "./sidebar-layout/routes.js";
+import { threadPaneLayoutRoutes } from "./threads/pane-layout-route.js";
 import { bitbucketGitGatewayRoutes } from "./source-control/bitbucket/git-gateway.js";
 import { bitbucketControlPlaneRoutes } from "./source-control/bitbucket/routes.js";
 import {
@@ -140,6 +141,8 @@ app.route("/v1/threads", threadAutomationRoutes);
 app.use("/v1/threads/:threadId/desktop/*", authorizeThread);
 app.use("/v1/threads/:threadId/desktop/*", enforceThreadActive);
 app.route("/v1/threads", threadDesktopRoutes);
+// Per person, not per Thread: a member's panes never replace the owner's.
+app.route("/v1/threads", threadPaneLayoutRoutes);
 app.route("/v1/agents/dx", dxAgentRoutes);
 
 app.notFound(notFoundHandler);

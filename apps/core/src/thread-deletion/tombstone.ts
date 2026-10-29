@@ -90,6 +90,11 @@ export const tombstoneThreads = async (
     db
       .prepare(`DELETE FROM thread_seen WHERE ${tombstoneOf("thread_id")}`)
       .bind(ids, ownerUserId),
+    db
+      .prepare(
+        `DELETE FROM thread_pane_layout WHERE ${tombstoneOf("thread_id")}`,
+      )
+      .bind(ids, ownerUserId),
     // A deleted Thread's schedule and GitHub subscriptions must stop waking
     // anything; a subscription's delivered events go with it.
     db

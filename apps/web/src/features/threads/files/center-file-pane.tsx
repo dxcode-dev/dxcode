@@ -2,7 +2,8 @@ import type { ThreadSandboxFilePath } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { File } from "@pierre/diffs/react";
 import { useQuery } from "@tanstack/react-query";
-import { AudioLines, Download } from "lucide-react";
+import { AudioLines, Copy, Download, EllipsisVertical } from "lucide-react";
+import { Menu } from "@base-ui/react/menu";
 import * as React from "react";
 import { downloadFromUrl } from "../../../shared/download-from-url.js";
 import { useTheme } from "../../../shared/theme/theme-provider.js";
@@ -10,13 +11,14 @@ import {
   type FileMediaKind,
   fileMediaKind,
 } from "../../../shared/ui/media-kind.js";
-import type { CenterFileTab } from "../thread-center-tabs.js";
+import type { CenterFileTab } from "./file-tab.js";
 import {
   absolutePathFor,
   type FileReveal,
   resolveReveal,
   sandboxFileUrl,
 } from "../transcript-file-link.js";
+import { PaneToolbar } from "../panes/pane-toolbar-slot.js";
 import { FilePreview } from "./file-preview.js";
 import { filePreviewKind } from "./file-preview-model.js";
 import { ThreadFilePane } from "./files-panel.js";
@@ -59,10 +61,10 @@ function DownloadCard({
   );
 }
 
+/** A read-only sandbox file's actions, in the pane's tab strip. */
 function Toolbar({
   threadId,
   path,
-  label,
   children,
 }: {
   readonly threadId: ThreadId;
@@ -71,17 +73,47 @@ function Toolbar({
   readonly children?: React.ReactNode;
 }) {
   return (
-    <header className="thread-file-toolbar">
-      <span title={path}>{label}</span>
+    <PaneToolbar className="thread-file-toolbar">
       {children}
-      <button
-        type="button"
-        onClick={() => downloadFromUrl(sandboxFileUrl(threadId, path, true))}
-      >
-        Download
-      </button>
-      <span role="status">Read-only</span>
-    </header>
+      <span className="sr-only" role="status">
+        Read-only
+      </span>
+      <Menu.Root>
+        <Menu.Trigger
+          className="thread-file-actions"
+          aria-label="File Actions"
+          title="File Actions"
+        >
+          <EllipsisVertical aria-hidden="true" />
+        </Menu.Trigger>
+        <Menu.Portal>
+          <Menu.Positioner
+            className="thread-menu-positioner"
+            align="end"
+            sideOffset={4}
+          >
+            <Menu.Popup className="thread-menu-popup thread-actions-menu">
+              <Menu.Item
+                className="thread-menu-item"
+                onClick={() =>
+                  downloadFromUrl(sandboxFileUrl(threadId, path, true))
+                }
+              >
+                <Download />
+                <span>Download</span>
+              </Menu.Item>
+              <Menu.Item
+                className="thread-menu-item"
+                onClick={() => void navigator.clipboard.writeText(path)}
+              >
+                <Copy />
+                <span>Copy Path</span>
+              </Menu.Item>
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+      </Menu.Root>
+    </PaneToolbar>
   );
 }
 
@@ -360,24 +392,16 @@ function SandboxTextView({
     <section className="thread-file-viewer" aria-label={`File ${path}`}>
       <Toolbar threadId={threadId} path={path} label={path}>
         {previewKind === undefined || preview.data?.kind !== "text" ? null : (
-          <div role="tablist" aria-label="File view mode">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={viewMode === "preview"}
-              onClick={() => setMode("preview")}
-            >
-              Preview
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={viewMode === "source"}
-              onClick={() => setMode("source")}
-            >
-              Source
-            </button>
-          </div>
+          <button
+            type="button"
+            className="thread-file-mode"
+            aria-label={`${viewMode === "preview" ? "Preview" : "Source"}, switch to ${viewMode === "preview" ? "Source" : "Preview"}`}
+            onClick={() =>
+              setMode(viewMode === "preview" ? "source" : "preview")
+            }
+          >
+            <span>{viewMode === "preview" ? "Preview" : "Source"}</span>
+          </button>
         )}
       </Toolbar>
       {body}
@@ -391,11 +415,13 @@ export function CenterFilePane({
   file,
   threadId,
   onDirtyChange,
+  onShowInFiles,
 }: {
   readonly active: boolean;
   readonly file: CenterFileTab;
   readonly threadId: ThreadId;
   readonly onDirtyChange: (dirty: boolean) => void;
+  readonly onShowInFiles?: () => void;
 }) {
   const media = fileMediaKind(file.path);
   const absolute = absolutePathFor(file);
@@ -428,6 +454,7 @@ export function CenterFilePane({
       threadId={threadId}
       worktree={file.worktree}
       onDirtyChange={onDirtyChange}
+      {...(onShowInFiles === undefined ? {} : { onShowInFiles })}
       {...(reveal === undefined ? {} : { reveal })}
       {...(sequence === undefined ? {} : { revealSequence: sequence })}
     />

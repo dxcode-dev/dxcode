@@ -66,6 +66,7 @@ const runtime = () =>
     switchThread: vi.fn(),
     openFocusedThreadMenu: vi.fn(),
     addThreadImages: vi.fn(),
+    openThreadView: vi.fn(),
   }) satisfies CommandRuntime;
 
 describe("keyboard shortcut command registry", () => {
@@ -97,13 +98,13 @@ describe("keyboard shortcut command registry", () => {
       mac.getCommands("app").find(({ id }) => id === "keymap.open")
         ?.displayedKeycaps,
     ).toEqual(["?"]);
-    expect(mac.setBinding("navigation.projects", "cmd+shift+p")).toMatchObject({
+    expect(mac.setBinding("navigation.projects", "cmd+shift+y")).toMatchObject({
       ok: true,
-      binding: "Mod+Shift+P",
+      binding: "Mod+Shift+Y",
     });
     expect(
-      windows.setBinding("navigation.projects", "ctrl+shift+p"),
-    ).toMatchObject({ ok: true, binding: "Mod+Shift+P" });
+      windows.setBinding("navigation.projects", "ctrl+shift+y"),
+    ).toMatchObject({ ok: true, binding: "Mod+Shift+Y" });
   });
 
   it("applies, clears, resets, and rehydrates device-local overrides", () => {
@@ -113,21 +114,21 @@ describe("keyboard shortcut command registry", () => {
     registry.subscribe(listener);
 
     expect(
-      registry.setBinding("navigation.projects", "Control+Shift+P"),
-    ).toMatchObject({ ok: true, binding: "Mod+Shift+P" });
-    expect(registry.getBinding("navigation.projects")).toBe("Mod+Shift+P");
+      registry.setBinding("navigation.projects", "Control+Shift+Y"),
+    ).toMatchObject({ ok: true, binding: "Mod+Shift+Y" });
+    expect(registry.getBinding("navigation.projects")).toBe("Mod+Shift+Y");
     expect(listener).toHaveBeenCalledOnce();
     expect(
       JSON.parse(storage.getItem(keyboardShortcutStorageKey) ?? ""),
     ).toEqual({
       version: 2,
-      overrides: { "navigation.projects": "Mod+Shift+P" },
+      overrides: { "navigation.projects": "Mod+Shift+Y" },
     });
     expect(
       createCommandRegistry({ platform: "linux", storage }).getBinding(
         "navigation.projects",
       ),
-    ).toBe("Mod+Shift+P");
+    ).toBe("Mod+Shift+Y");
 
     registry.clearBinding("navigation.projects");
     expect(registry.getBinding("navigation.projects")).toBeNull();
@@ -199,8 +200,17 @@ describe("keyboard shortcut command registry", () => {
       reason: "conflict",
       conflicts: [{ id: "shortcuts.focus-search" }],
     });
+    // Files uses Mod+Shift+F in a Thread; the shortcut search's binding lives
+    // only on the Keyboard Shortcuts screen, so that scope stays free.
     expect(
       registry.setBinding("thread.focus-composer", "Mod+Shift+F"),
+    ).toMatchObject({
+      ok: false,
+      reason: "conflict",
+      conflicts: [{ id: "thread.open-files" }],
+    });
+    expect(
+      registry.setBinding("shortcuts.restore-defaults", "Mod+Shift+Y"),
     ).toMatchObject({ ok: true });
   });
 
@@ -284,7 +294,7 @@ describe("keyboard shortcut command registry", () => {
     const storage = new MemoryStorage(
       JSON.stringify({
         version: 1,
-        overrides: { "navigation.projects": "Mod+Shift+P" },
+        overrides: { "navigation.projects": "Mod+Shift+Y" },
       }),
     );
     const storageEvents = new StorageEventsFixture();
@@ -296,7 +306,7 @@ describe("keyboard shortcut command registry", () => {
     const listener = vi.fn();
     const unsubscribe = registry.subscribe(listener);
 
-    expect(registry.getBinding("navigation.projects")).toBe("Mod+Shift+P");
+    expect(registry.getBinding("navigation.projects")).toBe("Mod+Shift+Y");
     expect(registry.getServerSnapshot()).toBe(registry.getServerSnapshot());
     expect(registry.getServerSnapshot().overrides).toEqual({});
 
@@ -448,13 +458,13 @@ describe("keyboard shortcut command registry", () => {
         overrides: {
           "navigation.home": { sequence: ["j", "j"] },
           "sidebar.open-menu": { sequence: ["m", "m"] },
-          "navigation.projects": "Mod+Shift+P",
+          "navigation.projects": "Mod+Shift+Y",
         },
       }),
     );
     const registry = createCommandRegistry({ platform: "linux", storage });
     expect(registry.getSnapshot().overrides).toEqual({
-      "navigation.projects": "Mod+Shift+P",
+      "navigation.projects": "Mod+Shift+Y",
     });
   });
 
@@ -490,18 +500,18 @@ describe("keyboard shortcut command registry", () => {
     for (const stored of [
       JSON.stringify({
         version: 1,
-        overrides: { "navigation.projects": "Mod+Shift+P" },
+        overrides: { "navigation.projects": "Mod+Shift+Y" },
       }),
-      JSON.stringify({ "navigation.projects": "Mod+Shift+P" }),
+      JSON.stringify({ "navigation.projects": "Mod+Shift+Y" }),
     ]) {
       const storage = new MemoryStorage(stored);
       const registry = createCommandRegistry({ platform: "linux", storage });
-      expect(registry.getBinding("navigation.projects")).toBe("Mod+Shift+P");
+      expect(registry.getBinding("navigation.projects")).toBe("Mod+Shift+Y");
       expect(
         JSON.parse(storage.getItem(keyboardShortcutStorageKey) ?? ""),
       ).toEqual({
         version: 2,
-        overrides: { "navigation.projects": "Mod+Shift+P" },
+        overrides: { "navigation.projects": "Mod+Shift+Y" },
       });
     }
   });

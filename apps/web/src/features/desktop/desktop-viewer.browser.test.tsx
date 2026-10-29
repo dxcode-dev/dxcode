@@ -31,7 +31,7 @@ import {
   it,
   vi,
 } from "vitest";
-import { ThreadDesktopLayout } from "../threads/thread-desktop-layout.js";
+import { PaneTreeHarness } from "../../testing/pane-tree-harness.js";
 import { DesktopViewer } from "./desktop-viewer.js";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -553,16 +553,31 @@ describe("DesktopViewer", () => {
   it("appears as a Desktop tab beside Terminal and connects once selected", async () => {
     vi.useFakeTimers();
     const { container, root } = await render(
-      <ThreadDesktopLayout
-        rightPaneCollapsed={false}
+      <PaneTreeHarness
         main={null}
         changes={<div>Changes</div>}
         terminal={<div>Terminal</div>}
+        open={["changes", "terminal"]}
         desktop={(active) => (
           <DesktopViewer active={active} threadId={threadA} />
         )}
       />,
     );
+    expect(FakeSocket.instances).toEqual([]);
+
+    // Opened from the pane's Open Tab menu, Desktop joins the tabs after
+    // Terminal and connects once shown.
+    const openTab = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        'button[aria-label="Open Tab"]',
+      ),
+    ].at(-1);
+    await React.act(() => openTab?.click());
+    const item = [
+      ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    ].find((candidate) => candidate.textContent?.includes("Desktop"));
+    await React.act(() => item?.click());
+    await React.act(() => vi.advanceTimersByTimeAsync(50));
     const tabs = [...container.querySelectorAll('[role="tab"]')].map(
       (tab) => tab.textContent,
     );
@@ -570,18 +585,11 @@ describe("DesktopViewer", () => {
       "Terminal",
       "Desktop",
     ]);
-    expect(FakeSocket.instances).toEqual([]);
-
-    await React.act(() =>
-      container
-        .querySelector<HTMLButtonElement>("#thread-workspace-tab-desktop")
-        ?.click(),
-    );
     await connected();
 
     await React.act(() =>
       container
-        .querySelector<HTMLButtonElement>("#thread-workspace-tab-changes")
+        .querySelector<HTMLButtonElement>("#thread-view-tab-changes")
         ?.click(),
     );
     expect(openSockets()).toHaveLength(2);

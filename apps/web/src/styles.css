@@ -266,8 +266,7 @@ a {
   outline: 0;
   box-shadow: none;
 }
-.outer-panel-group,
-.thread-panel-group {
+.outer-panel-group {
   width: 100%;
   height: 100%;
 }
@@ -460,101 +459,214 @@ a {
 .thread-refresh-error > span {
   min-width: 0;
 }
-.thread-main-panel {
-  display: flex;
-  min-width: 0;
-  height: 100%;
-  flex: 1 1 auto;
-  flex-direction: column;
-}
-.thread-panel-group {
-  display: flex;
-  min-width: 0;
-}
-.thread-panel-group[data-right-pane-focused] {
-  position: fixed;
-  z-index: 40;
-  inset: 12px;
-  width: auto;
-  height: auto;
-  overflow: hidden;
-  border-radius: 12px;
-  background: var(--surface);
-}
-.right-pane-panel {
-  flex: 0 0 auto;
-  min-width: 0;
-  max-width: 46vw;
-  height: 100%;
-  overflow: hidden;
-  transition: width 200ms linear;
-}
-.right-pane-panel[data-resizing] {
-  transition: none;
-}
-.thread-panel-group[data-right-pane-focused] > .right-pane-panel {
-  max-width: none;
-  flex: 1 1 auto;
-}
-.right-pane-resize-handle {
-  height: 100%;
-  margin: 0;
-  border: 0;
-  touch-action: none;
-  cursor: col-resize;
-}
-.right-pane-resize-handle::after {
-  position: absolute;
-  inset: 0 -4px;
-  content: "";
-}
-/* An attribute, not :has(): a :has() rule here restyled the whole page on
-   every DOM insertion, such as opening a diff or streaming a reply. */
-.right-pane-resize-handle[data-collapsed] {
-  cursor: default;
-}
-/* The title shows whole, up to its 60 characters, while the header chips
-   still have room to give: the chips shrink to their minimum first, and
-   only then does the title elide. The actions box lays its controls out in
-   the bar itself so one flex pass can order the two. */
+/* Panes replace the old main panel and right pane: see
+   features/threads/panes/panes.css. */
+/* The title bar: 36px, the title and More Actions on
+   the left, the controls on the right as 26px icon buttons and 12px text
+   buttons. Touch pointers get 44px and 36px. Below 768px (data-compact)
+   only icons remain. */
 .thread-title-bar {
   container: thread-title-bar / inline-size;
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   flex: 0 0 36px;
   height: 36px;
   min-width: 0;
-  padding: 4px 8px 4px 12px;
-  border-bottom: 1px solid var(--divider);
-  background: var(--surface);
+  padding: 0 8px 0 12px;
+  user-select: none;
+}
+.thread-title-bar::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 1px;
+  background: var(--divider);
+  content: "";
+  pointer-events: none;
+}
+.thread-title-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.thread-title-icon {
+  display: inline-flex;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--thread-color, var(--muted-foreground));
+}
+.thread-title-icon > svg {
+  width: 14px;
+  height: 14px;
 }
 .thread-title {
   min-width: 40px;
-  /* Elides ahead of the snoozed badge beside it. */
-  flex: 0 100000 auto;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--thread-title-color, var(--chat-foreground));
+  color: var(--thread-title-color, var(--foreground));
   font-size: 13px;
   font-weight: 500;
   line-height: 20px;
 }
-.thread-title-orb {
+.thread-title-actions {
   display: flex;
-  /* The explicit width matters: WebKit sizes the title group from this
-     box's content (the 14px Orb), not its flex basis, and the 2px it
-     comes up short would elide the title. */
-  width: 16px;
-  flex: 0 0 16px;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.thread-title-spacer {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.thread-title-menu {
+  display: inline-flex;
+  flex: none;
+}
+/* Every control: a 26px box, 4px corners, muted until hovered. */
+.thread-title-bar .thread-title-action,
+.thread-title-bar button.size-6,
+.thread-title-bar .automation-chip,
+.thread-title-bar .thread-participants-trigger {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--thread-color, var(--muted-foreground));
+  flex: none;
+  gap: 4px;
+  height: 26px;
+  min-width: 26px;
+  padding: 0;
+  color: var(--muted-foreground);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
 }
-.thread-title-orb > svg {
+.thread-title-bar .thread-title-action svg,
+.thread-title-bar .automation-chip svg {
   width: 14px;
   height: 14px;
+  flex: none;
+}
+.thread-title-bar .thread-title-action:hover,
+.thread-title-bar .thread-title-action[data-popup-open],
+.thread-title-bar .automation-chip:hover,
+.thread-title-bar .automation-chip[data-popup-open] {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.thread-title-bar .thread-title-action:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--ring);
+}
+.thread-title-bar .thread-title-action-text,
+.thread-title-bar .automation-chip {
+  padding: 4px 8px;
+  min-width: 0;
+}
+.thread-title-bar .thread-share-button.thread-title-action-text {
+  font-weight: 400;
+}
+.thread-title-project > span {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.thread-title-meta {
+  flex: none;
+  padding: 0 6px;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.thread-privacy-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 4px;
+  margin: 0 6px;
+  padding: 2px 6px;
+  color: var(--muted-foreground);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 13.6px;
+  white-space: nowrap;
+}
+.thread-privacy-badge > svg {
+  width: 11px;
+  height: 11px;
+  flex: none;
+}
+.thread-privacy-badge-button {
+  cursor: pointer;
+}
+.thread-privacy-badge-button:hover,
+.thread-privacy-badge-button:focus-visible {
+  color: var(--foreground);
+  outline: none;
+}
+.thread-privacy-badge[data-privacy="workspace"] {
+  color: var(--foreground);
+}
+.thread-title-bar .thread-access-chip {
+  margin: 0 4px;
+}
+.thread-title-bar button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+/* On phones the labels go; the Orb before the title stays. */
+.thread-title-bar[data-compact] .thread-title {
+  font-size: 15px;
+}
+.thread-title-bar[data-compact] .thread-title-actions {
+  gap: 0;
+}
+.thread-title-bar[data-compact] .automation-chip .thread-header-chip-label {
+  display: none;
+}
+.thread-title-bar[data-compact] .automation-chip {
+  padding: 0;
+}
+/* Touch: a 44px bar with 36px controls and 20px icons. */
+@media (pointer: coarse) {
+  .thread-title-bar {
+    flex-basis: 44px;
+    height: 44px;
+  }
+  .thread-title-bar .thread-title-action:not(.thread-title-action-text),
+  .thread-title-bar button.size-6,
+  .thread-title-bar[data-compact] .automation-chip {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+  }
+  .thread-title-bar .thread-title-action:not(.thread-title-action-text) svg,
+  .thread-title-bar[data-compact] .automation-chip svg {
+    width: 20px;
+    height: 20px;
+  }
+  .thread-title-bar[data-compact] .thread-privacy-badge {
+    margin: 0 4px;
+  }
 }
 /* Once the title is at its minimum, the label elides down to the icon and
    Wake, which stay. A narrow bar shows only the wake time, and the
@@ -636,113 +748,6 @@ a {
   font-size: 10px;
   font-weight: 600;
   line-height: 16px;
-}
-.thread-title-group {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: 0 1 auto;
-  min-width: 0;
-  /* Pushes the actions to the end. The margin sits here, not on the first
-     action: an open menu puts focus guards before its trigger, and a
-     `:first-child` margin would move to them and pull the actions left. */
-  margin-right: auto;
-  padding-right: 4px;
-}
-.thread-header-actions {
-  display: contents;
-}
-.thread-header-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  /* Shrinks ahead of the title: see .thread-title-bar. */
-  flex: 0 100000 auto;
-  max-width: 160px;
-  height: 24px;
-  min-width: 40px;
-  padding: 0 7px;
-  overflow: hidden;
-  color: var(--muted-foreground);
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  font: inherit;
-  font-size: 11px;
-  line-height: 24px;
-  text-overflow: ellipsis;
-  text-transform: capitalize;
-  white-space: nowrap;
-}
-.thread-header-chip svg {
-  width: 13px;
-  height: 13px;
-  flex: none;
-}
-.thread-header-chip-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.thread-header-chip-button {
-  cursor: pointer;
-}
-.thread-header-chip-button:hover,
-.thread-header-chip-button:focus-visible {
-  color: var(--foreground);
-  background: var(--accent);
-  outline: none;
-}
-.thread-header-chip[data-privacy="workspace"] {
-  color: var(--foreground);
-}
-.thread-share-button {
-  height: 24px;
-  padding: 0 8px;
-  color: var(--foreground);
-  font-size: 11px;
-  font-weight: 500;
-}
-.thread-title-bar .thread-share-icon-button {
-  padding: 0;
-}
-.thread-share-icon-button svg {
-  width: 15px;
-  height: 15px;
-}
-.thread-access-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex: none;
-  height: 22px;
-  padding: 0 7px;
-  color: var(--foreground);
-  border: 1px solid var(--outline);
-  border-radius: 999px;
-  background: var(--muted);
-  font-size: 10.5px;
-  font-weight: 500;
-}
-.thread-access-chip svg {
-  width: 12px;
-  height: 12px;
-}
-.thread-title-bar button.size-6 {
-  width: 26px;
-  height: 26px;
-  flex: none;
-}
-.thread-title-bar button[aria-disabled="true"] {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-.thread-right-pane-toggle {
-  color: var(--muted-foreground);
-}
-.thread-right-pane-toggle[aria-expanded="true"],
-.thread-right-pane-toggle:hover {
-  color: var(--foreground);
 }
 .thread-menu-positioner {
   z-index: 210;
@@ -1014,128 +1019,6 @@ a {
   overflow: hidden;
   background: var(--surface);
 }
-.right-pane {
-  border-left: 0;
-}
-.right-pane-topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 4px;
-  flex: 0 0 35px;
-  height: 35px;
-  min-width: 0;
-  padding: 3px 8px 4px;
-  border-bottom: 1px solid var(--divider);
-}
-.right-pane-tabs {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 4px;
-}
-.right-pane-tab {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  height: 28px;
-  padding: 0 8px;
-  color: var(--muted-foreground);
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  font-size: 12px;
-  font-weight: 400;
-  white-space: nowrap;
-}
-.right-pane-tab svg {
-  width: 14px;
-  height: 14px;
-}
-.right-pane-tab:hover,
-.right-pane-tab[data-active] {
-  color: var(--chat-foreground);
-  background: var(--secondary);
-}
-.right-pane-terminal-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 0;
-  border-radius: 6px;
-}
-.right-pane-terminal-tab:hover,
-.right-pane-terminal-tab[data-active] {
-  color: var(--chat-foreground);
-  background: var(--secondary);
-}
-.right-pane-terminal-tab .right-pane-tab {
-  padding-right: 4px;
-  border-radius: 6px 0 0 6px;
-}
-.right-pane-terminal-tab .right-pane-tab:hover,
-.right-pane-terminal-tab .right-pane-tab[data-active] {
-  background: transparent;
-}
-.right-pane-terminal-options {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 28px;
-  padding: 0;
-  color: var(--muted-foreground);
-  border: 0;
-  border-radius: 0 6px 6px 0;
-  background: transparent;
-}
-.right-pane-terminal-options:hover,
-.right-pane-terminal-options[data-popup-open] {
-  color: var(--chat-foreground);
-  background: var(--accent);
-}
-.right-pane-terminal-options svg {
-  width: 14px;
-  height: 14px;
-}
-.thread-workspace-focus-control {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  flex: none;
-  padding: 4px;
-  color: var(--muted-foreground);
-  border: 0;
-  border-radius: 4px;
-  outline: none;
-  background: transparent;
-}
-.thread-workspace-focus-control:hover,
-.thread-workspace-focus-control:focus-visible {
-  color: var(--foreground);
-  background: var(--accent);
-}
-.thread-workspace-focus-control:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
-}
-.thread-workspace-focus-control svg {
-  width: 14px;
-  height: 14px;
-}
-.right-pane-content {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex: 1;
-  overflow: hidden;
-}
-.right-pane-content[hidden] {
-  display: none;
-}
-
 .thread-terminal-shell {
   position: relative;
   display: flex;
@@ -2384,10 +2267,6 @@ a {
 .agent-pane {
   position: relative;
   background: var(--surface);
-}
-.thread-main-panel > .agent-pane {
-  min-height: 0;
-  flex: 1;
 }
 .agent-composer-dock {
   position: absolute;
@@ -8518,10 +8397,6 @@ div.claude-code-mode-main {
 .parity-fixture-evidence .parity-fixture-workspace {
   padding-top: 0;
 }
-.parity-fixture-workspace > .thread-panel-group {
-  width: 100%;
-  height: 100%;
-}
 .parity-fixture-subagent {
   position: absolute;
   z-index: 5;
@@ -8553,10 +8428,6 @@ div.claude-code-mode-main {
   .parity-fixture-controls {
     right: 4px;
     max-width: none;
-  }
-  .parity-fixture .right-pane-panel,
-  .parity-fixture .right-pane-resize-handle {
-    display: none;
   }
   .parity-fixture .agent-transcript {
     padding-top: 16px;
@@ -12983,18 +12854,6 @@ body:has(.dx-app-shell) {
 .product-shell-content > .fatal-state {
   height: 100%;
 }
-.product-shell-content > .thread-region .thread-title-bar {
-  flex-basis: 36px;
-  height: 36px;
-  padding-top: 4px;
-  padding-bottom: 4px;
-}
-.product-shell-content > .thread-region .right-pane-topbar {
-  flex-basis: 35px;
-  height: 35px;
-  padding-top: 3px;
-  padding-bottom: 4px;
-}
 .product-sidebar-trigger + .standard-page .page-topbar,
 .product-sidebar-trigger + .thread-region .thread-title-bar {
   padding-left: 42px;
@@ -13095,14 +12954,6 @@ body:has(.dx-app-shell) {
   }
   .mobile-thread-region .thread-title-bar {
     padding-left: 42px;
-  }
-  .thread-header-actions > .thread-header-chip:not([data-privacy]) {
-    display: none;
-  }
-}
-@media (max-width: 480px), (pointer: coarse) {
-  .thread-header-actions > .thread-header-chip {
-    display: none;
   }
 }
 @media (prefers-reduced-motion: reduce) {

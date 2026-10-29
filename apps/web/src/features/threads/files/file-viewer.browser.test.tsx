@@ -100,8 +100,8 @@ describe("Thread file viewer", () => {
     await React.act(() => render(1));
     expect(source()?.hidden).toBe(false);
     // The user chooses Preview again; the same reveal does not override it.
-    const preview = [...container.querySelectorAll("button")].find(
-      (button) => button.textContent === "Preview",
+    const preview = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Source, switch to Preview"]',
     );
     await React.act(() => preview?.click());
     expect(source()?.hidden).toBe(true);
@@ -179,16 +179,35 @@ describe("Thread file viewer", () => {
 
     const button = (name: string) =>
       [...container.querySelectorAll("button")].find(
-        (candidate) => candidate.textContent === name,
+        (candidate) =>
+          candidate.textContent === name ||
+          candidate.getAttribute("aria-label") === name,
       );
-    expect(button("Find")?.disabled).toBe(true);
-    await React.act(() => button("Source")?.click());
-    await React.act(() =>
-      button("Find")?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
-    );
-    await React.act(() =>
-      button("Wrap")?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
-    );
+    // Find, Wrap, and Save live in the file's actions menu.
+    const openActions = async () => {
+      await React.act(() =>
+        button("File Actions")?.dispatchEvent(
+          new MouseEvent("click", { bubbles: true }),
+        ),
+      );
+    };
+    const menuItem = (name: string) =>
+      [...document.querySelectorAll<HTMLElement>(".thread-menu-item")].find(
+        (item) => item.textContent?.trim() === name,
+      );
+    await openActions();
+    // Find needs the source editor; the preview is showing.
+    expect(menuItem("Find")?.getAttribute("aria-disabled")).toBe("true");
+    await React.act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+    await React.act(() => button("Preview, switch to Source")?.click());
+    await openActions();
+    await React.act(() => menuItem("Find")?.click());
+    await openActions();
+    await React.act(() => menuItem("Wrap Lines")?.click());
     expect(editorActions.openFind).toHaveBeenCalledOnce();
     expect(editor.dataset.wrap).toBe("true");
 
@@ -222,7 +241,7 @@ describe("Thread file viewer", () => {
     expect(container.querySelector("textarea")?.value).toBe(
       "# Local draft\n\nunsaved proof",
     );
-    await React.act(() => button("Preview")?.click());
+    await React.act(() => button("Source, switch to Preview")?.click());
     expect(
       container.querySelector(".thread-file-preview")?.textContent,
     ).toContain("Local draft");

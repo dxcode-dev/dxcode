@@ -174,10 +174,22 @@ const drag = async (page, selector, dx) => {
   }
   await page.mouse.up();
 };
-// Open the right pane so drags narrow the transcript enough to rewrap.
-const openRightPane = async (page) => {
-  await page.click('button[aria-label="Show Right Pane"]');
+// Open a view in the right-hand pane so drags narrow the transcript enough
+// to rewrap. A view already open comes forward from its tab.
+const openView = async (page, name) => {
+  const tab = page.getByRole("tab", { name, exact: true });
+  if ((await tab.count()) > 0) {
+    await tab.first().click();
+  } else {
+    await page.click('button[aria-label="Views"]');
+    await page.getByRole("menuitem", { name }).click();
+  }
   await page.waitForTimeout(500);
+};
+const openRightPane = (page) => openView(page, "Changes");
+const closeRightPane = async (page) => {
+  await page.click('button[aria-label="Close Changes"]');
+  await page.waitForTimeout(200);
 };
 // Watch the stream from the live edge, like a user following the answer.
 const toLiveEdge = (page) =>
@@ -199,9 +211,9 @@ const scrollTranscript = async (page, steps = 20) => {
 const phoneThreadReady = () =>
   document.querySelector('textarea[aria-label="Message"]:not([disabled])') &&
   document.querySelectorAll(".transcript-turn").length > 0 &&
-  document.querySelector(".thread-mobile-tabs") !== null;
+  document.querySelector(".stacked-view-row") !== null;
 const phoneTab = (page, name) =>
-  page.click(`.thread-mobile-tabs [role="tab"]#thread-mobile-tab-${name}`);
+  page.click(`.stacked-tabs .stacked-tab[data-kind="${name}"] [role="tab"]`);
 const terminalReady = async (page) => {
   await page.waitForFunction(
     () =>
@@ -224,8 +236,7 @@ const openPhoneTerminal = async (page) => {
 };
 /** Opens the Terminal in the desktop right pane and waits for Core's ready. */
 const openDesktopTerminal = async (page) => {
-  await openRightPane(page);
-  await page.click("#thread-workspace-tab-terminal");
+  await openView(page, "Terminal");
   await terminalReady(page);
 };
 /**
@@ -395,23 +406,22 @@ const SCENARIOS = [
   {
     name: "drag-right-pane",
     setup: openRightPane,
-    run: (page) => drag(page, ".right-pane-resize-handle", -300),
+    run: (page) => drag(page, ".pane-divider", -300),
   },
   {
     name: "drag-right-pane-back",
     setup: async (page) => {
       await openRightPane(page);
-      await drag(page, ".right-pane-resize-handle", -300);
+      await drag(page, ".pane-divider", -300);
     },
-    run: (page) => drag(page, ".right-pane-resize-handle", 300),
+    run: (page) => drag(page, ".pane-divider", 300),
   },
   {
     name: "toggle-right-pane",
     setup: openRightPane,
     run: async (page) => {
-      await page.click('button[aria-label="Hide Right Pane"]');
-      await page.waitForTimeout(200);
-      await page.click('button[aria-label="Show Right Pane"]');
+      await closeRightPane(page);
+      await openRightPane(page);
     },
   },
   {

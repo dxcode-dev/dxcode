@@ -61,6 +61,7 @@ import {
   ThreadTranscript,
   type TranscriptFocus,
 } from "./thread-transcript.js";
+import type { TranscriptAccess } from "./transcript-access.js";
 import {
   deriveTranscriptViewModel,
   type TranscriptViewModel,
@@ -1018,6 +1019,8 @@ export interface AgentPanelOptions {
   readonly renderHeader?: (
     transcript: () => TranscriptViewModel,
   ) => React.ReactNode;
+  /** Lets a title bar outside the panel read the shown transcript. */
+  readonly transcriptAccess?: TranscriptAccess;
   /** The owner's draft; defaults to this Thread's retained composer draft. */
   readonly draft?: PresentationValue<string>;
   readonly images?: ReadonlyArray<PendingAttachment>;
@@ -1449,6 +1452,7 @@ export function AgentPanel({
   active = true,
   additionalPanels,
   renderHeader,
+  transcriptAccess,
   draft: ownerDraft,
   images: controlledImages,
   onImagesChange,
@@ -1526,6 +1530,11 @@ export function AgentPanel({
           ) === "chat"
       : undefined;
   const [transcripts] = React.useState(createTranscriptDerivation);
+  // The reader is stable for the panel's lifetime; hand it over once mounted.
+  const provideTranscriptAccess = (node: HTMLDivElement | null) => {
+    if (node === null) return;
+    transcriptAccess?.provide(transcripts.current);
+  };
   const view: TranscriptView = {
     discardedSends,
     unconfirmed: admissionPending || submissionPending || sendFailed,
@@ -1585,6 +1594,7 @@ export function AgentPanel({
     <div
       className="agent-panel-stack"
       data-archived={archived ? "" : undefined}
+      ref={provideTranscriptAccess}
     >
       {renderHeader?.(transcripts.current)}
       {showArchivedNotice ? (

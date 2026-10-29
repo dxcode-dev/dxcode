@@ -1,0 +1,526 @@
+/*
+ * The Thread page's panes (the reference capture is in the wiki's raw
+ * sources): a 36px title bar on the canvas,
+ * then panes as cards with a 32px tab strip, 2px dividers, and bottom
+ * corners of 8px. Phones stack one view under a 44px scrolling view row.
+ */
+:root {
+  --pane-canvas: light-dark(oklab(95.68% -0.0085 0.0094), #070a0a);
+  --pane-surface: var(--surface);
+  --pane-strip-height: 32px;
+  --pane-tab-height: 26px;
+  --pane-icon-button: 26px;
+  --pane-row-height: 44px;
+}
+
+.thread-page {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--pane-canvas);
+}
+.thread-page > .thread-title-bar {
+  flex: none;
+}
+
+/* The tree: 2px at the sides and 3px below, as the capture measures. */
+.thread-pane-tree {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  padding: 0 2px 3px;
+}
+.pane-split {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.pane-split[data-direction="row"] {
+  flex-direction: row;
+}
+.pane-split[data-direction="column"] {
+  flex-direction: column;
+}
+.pane-split-child {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Dividers: 2px, a wider invisible grip, highlighted on hover and drag. */
+.pane-divider {
+  position: relative;
+  z-index: 3;
+  flex: none;
+  outline: none;
+  background: transparent;
+  transition: background-color 120ms ease;
+}
+.pane-split[data-direction="row"] > .pane-divider {
+  width: 2px;
+  cursor: ew-resize;
+}
+.pane-split[data-direction="column"] > .pane-divider {
+  height: 2px;
+  cursor: ns-resize;
+}
+.pane-divider::after {
+  position: absolute;
+  content: "";
+}
+.pane-split[data-direction="row"] > .pane-divider::after {
+  inset: 0 -3px;
+}
+.pane-split[data-direction="column"] > .pane-divider::after {
+  inset: -3px 0;
+}
+.pane-divider:hover,
+.pane-divider[data-resizing],
+.pane-divider:focus-visible {
+  background: var(--ring);
+}
+.pane-divider[data-resizing] {
+  transition: none;
+}
+.pane-divider:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 40%, transparent);
+}
+
+.thread-pane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.thread-pane-tree > .thread-pane,
+.thread-pane-tree > .pane-split,
+.pane-split-child > .thread-pane,
+.pane-split-child > .pane-split {
+  flex: 1;
+}
+
+/* The strip: 32px tall, tabs flush left, the `+` after them, the shown
+   tab's toolbar at the end. */
+.pane-strip {
+  display: flex;
+  align-items: stretch;
+  flex: none;
+  height: var(--pane-strip-height);
+  min-width: 0;
+  user-select: none;
+}
+.pane-strip-drop {
+  display: flex;
+  flex: none;
+  min-width: 0;
+}
+.pane-strip-drop > .pane-strip {
+  width: 100%;
+}
+.pane-tabs {
+  display: flex;
+  align-items: flex-end;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 2px;
+  padding: 2px 6px 0 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.pane-tabs::-webkit-scrollbar {
+  display: none;
+}
+/* Tabs never squeeze: a strip too narrow for them scrolls, as VS Code's
+   does; only a long name elides, at 208px. */
+.pane-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: none;
+  max-width: 208px;
+  min-width: 0;
+  height: 30px;
+  padding: 2px 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  border-radius: 6px 6px 0 0;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.pane-tab[data-active] {
+  color: var(--foreground);
+  background: var(--pane-surface);
+}
+.pane-tab:not([data-active]):hover {
+  color: var(--foreground);
+}
+.pane-tab-trigger {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--pane-tab-height);
+  gap: 6px;
+  padding: 0 8px;
+  color: inherit;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  outline: none;
+}
+.pane-tab[data-kind]:not([data-kind="agent"]) > .pane-tab-trigger {
+  padding-right: 0;
+}
+.pane-tab-trigger:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--ring);
+  border-radius: 6px 6px 0 0;
+}
+.pane-tab-trigger > svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.pane-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pane-tab[data-kind="file"] .pane-tab-label {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+}
+.pane-tab-dirty {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+/* The close stays when the label elides: it is a flex item that never
+   shrinks, after a label that does. */
+.pane-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 20px;
+  margin: 0 4px 0 2px;
+  padding: 0;
+  color: inherit;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  opacity: 0;
+  cursor: pointer;
+}
+.pane-tab:hover .pane-tab-close,
+.pane-tab[data-active] .pane-tab-close,
+.pane-tab-close:focus-visible {
+  opacity: 1;
+}
+.pane-tab-close:hover {
+  background: var(--accent);
+}
+.pane-tab-close > svg {
+  width: 12px;
+  height: 12px;
+}
+.pane-tab-drop-marker {
+  flex: none;
+  width: 2px;
+  height: 22px;
+  margin: 0 -1px 2px;
+  border-radius: 1px;
+  background: var(--ring);
+}
+.pane-open-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--pane-icon-button);
+  height: var(--pane-icon-button);
+  margin: 0 0 2px -2px;
+  padding: 0;
+  color: var(--muted-foreground);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+.pane-open-tab:hover,
+.pane-open-tab[data-popup-open] {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.pane-open-tab > svg {
+  width: 14px;
+  height: 14px;
+}
+.pane-strip-actions {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 2px;
+  padding: 0 3px 0 4px;
+}
+.pane-strip-actions:empty {
+  display: none;
+}
+
+/* The body is the card: pane surface, 8px lower corners. */
+.pane-body {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  border-radius: 0 0 8px 8px;
+  background: var(--pane-surface);
+}
+.pane-tab[data-active]:first-child {
+  border-top-left-radius: 6px;
+}
+.pane-body > .pane-panel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+.pane-body > .pane-panel[hidden] {
+  display: none;
+}
+.pane-panel > * {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.pane-panel > .agent-panel-stack {
+  width: 100%;
+}
+.pane-panel[data-kind="file"] > .thread-file-center-panel {
+  display: flex;
+  min-height: 0;
+}
+
+/* The translucent drop preview: 6px inset, 6px corners, foreground at 8%. */
+.pane-drop-layer {
+  position: absolute;
+  z-index: 6;
+  inset: 0;
+  pointer-events: none;
+}
+.pane-drop-preview {
+  position: absolute;
+  top: calc(var(--y) + 6px);
+  left: calc(var(--x) + 6px);
+  box-sizing: border-box;
+  width: calc(var(--w) - 12px);
+  height: calc(var(--h) - 12px);
+  border: 1px solid color-mix(in srgb, var(--foreground) 30%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  transition:
+    left 90ms ease,
+    top 90ms ease,
+    width 90ms ease,
+    height 90ms ease;
+}
+
+/* The Terminal's floating `⋯`, 22px at the body's top right. */
+.pane-terminal-view {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+}
+.pane-terminal-view > form,
+.pane-terminal-view > .thread-terminal-shell {
+  flex: 1;
+}
+.pane-terminal-actions {
+  position: absolute;
+  z-index: 3;
+  top: 6px;
+  right: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  cursor: pointer;
+}
+.pane-terminal-actions:hover,
+.pane-terminal-actions[data-popup-open] {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+.pane-terminal-actions > svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* View menus: the shortcut or "Open" sits at the item's end. */
+.pane-view-menu-item .shortcut-keycaps,
+.pane-view-menu-open {
+  margin-left: auto;
+  padding-left: 12px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.pane-view-menu-open {
+  font-weight: 400;
+}
+.pane-view-menu .thread-menu-item > span:not(.shortcut-keycaps) {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The stacked layout (phones, iPad portrait): a 44px scrolling view row. */
+.thread-page[data-stacked] {
+  background: var(--pane-surface);
+}
+.stacked-view-row {
+  display: flex;
+  align-items: center;
+  flex: none;
+  height: var(--pane-row-height);
+  min-width: 0;
+  border-bottom: 1px solid var(--divider);
+  background: var(--pane-surface);
+}
+.stacked-tabs {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 2px;
+  height: 100%;
+  padding: 0 5px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.stacked-tabs::-webkit-scrollbar {
+  display: none;
+}
+.stacked-tab {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  height: 36px;
+  color: var(--muted-foreground);
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.stacked-tab[data-active] {
+  color: var(--foreground);
+  background: var(--secondary);
+}
+.stacked-tab-trigger {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  gap: 6px;
+  padding: 0 10px;
+  color: inherit;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  -webkit-tap-highlight-color: transparent;
+}
+.stacked-tab[data-kind]:not([data-kind="agent"]) > .stacked-tab-trigger {
+  padding-right: 0;
+}
+.stacked-tab[data-kind]:not([data-kind="agent"]):not([data-active])
+  > .stacked-tab-trigger:last-child {
+  padding-right: 10px;
+}
+.stacked-tab-trigger > svg {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+.stacked-tab[data-kind="file"] .stacked-tab-label {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+}
+.stacked-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin: 0 2px;
+  padding: 0;
+  color: inherit;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+}
+.stacked-tab-close > svg {
+  width: 14px;
+  height: 14px;
+}
+.stacked-tab-trigger:focus-visible,
+.stacked-tab-close:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.stacked-row-actions {
+  padding-right: 4px;
+}
+.stacked-body {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+.stacked-body > .stacked-panel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  width: 100%;
+  overflow: hidden;
+}
+.stacked-body > .stacked-panel[hidden] {
+  display: none;
+}
+/* A view runs to the screen's bottom edge; it clears the home indicator. */
+.stacked-body > .stacked-panel:not([data-kind="agent"]) {
+  flex-direction: column;
+  padding-bottom: env(safe-area-inset-bottom);
+  background: var(--pane-surface);
+}
+.stacked-panel > .thread-files-state {
+  flex: none;
+}
+.stacked-panel > * {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}

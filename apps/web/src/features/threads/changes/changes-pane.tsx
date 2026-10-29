@@ -31,6 +31,8 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
+import { PaneToolbar } from "../panes/pane-toolbar-slot.js";
+import { useThreadLayoutMode } from "../panes/thread-layout-mode.js";
 import { useTheme } from "../../../shared/theme/theme-provider.js";
 import {
   type ChangesTransport,
@@ -157,6 +159,8 @@ export function ChangesPane({
     changes.branch !== undefined &&
     changes.ahead > 0 &&
     !pushMutation.isPending;
+  // On a phone the range chooser also sits in the view row.
+  const { stacked } = useThreadLayoutMode();
 
   const selectRange = (next: ThreadChangesRange) => {
     setRange(next);
@@ -190,6 +194,21 @@ export function ChangesPane({
 
   return (
     <section className="changes-pane" aria-label="Changes">
+      {stacked && showRangeNavigation ? (
+        <PaneToolbar>
+          <button
+            type="button"
+            className="changes-range-trigger"
+            aria-haspopup="menu"
+            aria-expanded={rangeMenuOpen}
+            aria-label="Commit Range Options"
+            title={rangeLabel(range)}
+            onClick={() => setRangeMenuOpen((current) => !current)}
+          >
+            <ChevronDown aria-hidden="true" />
+          </button>
+        </PaneToolbar>
+      ) : null}
       <ChangesToolbar
         changes={changes}
         hasFiles={hasFiles}

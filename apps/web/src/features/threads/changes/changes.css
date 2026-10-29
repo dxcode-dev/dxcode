@@ -604,3 +604,21 @@
 .changes-spin {
   animation: spin 1s linear infinite;
 }
+
+/* The phone view row's range chooser, a 36px touch target. */
+.changes-range-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+}
+.changes-range-trigger > svg {
+  width: 16px;
+  height: 16px;
+}

@@ -7,6 +7,8 @@ import type {
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import type {
+  FileTreeDirectoryHandle,
+  FileTreeItemHandle,
   FileTreeOptions,
   GitStatusEntry,
   FileTree as TreeModel,
@@ -18,11 +20,23 @@ import {
   useInfiniteQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { Download, FileText } from "lucide-react";
+import {
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Copy,
+  Download,
+  FileText,
+} from "lucide-react";
 import * as React from "react";
 import { downloadFromUrl } from "../../../shared/download-from-url.js";
 import type { ThreadFilesApi } from "./files-api.js";
 import { threadFilesKeys, threadFileTreeOptions } from "./files-queries.js";
+
+/** The handle as a directory, when it is one. */
+const asDirectory = (
+  handle: FileTreeItemHandle | null,
+): FileTreeDirectoryHandle | undefined =>
+  handle !== null && "collapse" in handle ? handle : undefined;
 
 const directoryPath = (path: string) =>
   path.endsWith("/") ? path : `${path}/`;
@@ -234,6 +248,7 @@ const TreeView = ({
   onExpandedChange,
   onOpenFile,
   downloadUrlFor,
+  collapseSignal,
 }: {
   readonly entries: readonly ThreadFileTreeEntry[];
   readonly expanded: readonly string[];
@@ -243,6 +258,8 @@ const TreeView = ({
   readonly onExpandedChange: (paths: readonly string[]) => void;
   readonly onOpenFile: (path: ThreadFilesPath) => void;
   readonly downloadUrlFor?: (path: ThreadFilesPath) => string | undefined;
+  /** Each change collapses every open folder (the toolbar's Collapse All). */
+  readonly collapseSignal: number;
 }) => {
   const paths = toTreePaths(entries);
   const statusEntries = toTreeGitStatus(gitStatus);
@@ -259,6 +276,7 @@ const TreeView = ({
     paths,
     statusEntries,
     selectedPath,
+    collapseSignal,
   });
   const attach = (node: HTMLDivElement | null) => {
     if (node === null) return;
@@ -273,7 +291,11 @@ const TreeView = ({
         model.getItem(current.selectedPath)?.deselect();
       if (selectedPath !== undefined) model.getItem(selectedPath)?.select();
     }
-    applied.current = { paths, statusEntries, selectedPath };
+    if (current.collapseSignal !== collapseSignal)
+      for (const path of expandedPaths(model)) {
+        asDirectory(model.getItem(path))?.collapse();
+      }
+    applied.current = { paths, statusEntries, selectedPath, collapseSignal };
     syncLoadingStyle(node.querySelector("file-tree-container"), loading);
     const syncHeight = () =>
       node.style.setProperty(
@@ -316,17 +338,55 @@ const TreeView = ({
         aria-label="Workspace files"
         model={model}
         renderContextMenu={(item, context) => {
-          if (item.kind !== "file") {
-            // Directories have no file actions; dismiss instead of an empty menu.
-            queueMicrotask(() => context.close());
-            return null;
-          }
           const path = plainPath(item.path) as ThreadFilesPath;
-          const downloadUrl = downloadUrlFor?.(path);
           const act = (action: () => void) => {
             context.close();
             action();
           };
+          const copyPath = (
+            <button
+              className="thread-context-item"
+              onClick={() =>
+                act(() => void navigator.clipboard.writeText(path))
+              }
+              role="menuitem"
+              type="button"
+            >
+              <Copy aria-hidden="true" /> Copy Path
+            </button>
+          );
+          if (item.kind !== "file") {
+            const expanded =
+              asDirectory(model.getItem(item.path))?.isExpanded() === true;
+            return (
+              <div
+                aria-label={`Actions for ${item.name}`}
+                className="thread-context-menu thread-files-tree-menu"
+                role="menu"
+              >
+                <button
+                  className="thread-context-item"
+                  onClick={() =>
+                    act(() => {
+                      asDirectory(model.getItem(item.path))?.toggle();
+                    })
+                  }
+                  role="menuitem"
+                  type="button"
+                >
+                  {expanded ? (
+                    <ChevronsDownUp aria-hidden="true" />
+                  ) : (
+                    <ChevronsUpDown aria-hidden="true" />
+                  )}{" "}
+                  {expanded ? "Collapse" : "Expand"}
+                </button>
+                <hr className="thread-context-separator" />
+                {copyPath}
+              </div>
+            );
+          }
+          const downloadUrl = downloadUrlFor?.(path);
           return (
             <div
               aria-label={`Actions for ${item.name}`}
@@ -339,8 +399,9 @@ const TreeView = ({
                 role="menuitem"
                 type="button"
               >
-                <FileText aria-hidden="true" /> Open file
+                <FileText aria-hidden="true" /> Open
               </button>
+              <hr className="thread-context-separator" />
               {downloadUrl === undefined ? null : (
                 <button
                   className="thread-context-item"
@@ -348,9 +409,10 @@ const TreeView = ({
                   role="menuitem"
                   type="button"
                 >
-                  <Download aria-hidden="true" /> Download file
+                  <Download aria-hidden="true" /> Download
                 </button>
               )}
+              {copyPath}
             </div>
           );
         }}
@@ -451,6 +513,7 @@ export const ThreadFilesTree = ({
   selectedPath,
   onOpenFile,
   downloadUrlFor,
+  collapseSignal = 0,
 }: {
   readonly api: ThreadFilesApi;
   readonly active?: boolean;
@@ -462,6 +525,8 @@ export const ThreadFilesTree = ({
   readonly onOpenFile: (path: ThreadFilesPath) => void;
   /** Download URL for a file, when this worktree's files can be downloaded. */
   readonly downloadUrlFor?: (path: ThreadFilesPath) => string | undefined;
+  /** Each change collapses every open folder. */
+  readonly collapseSignal?: number;
 }) => {
   const [expanded, setExpanded] = React.useState<readonly string[]>([]);
   const loadingPaths = useLoadingPaths(threadId, worktree, expanded);
@@ -478,6 +543,7 @@ export const ThreadFilesTree = ({
         onOpenFile={onOpenFile}
         {...(downloadUrlFor === undefined ? {} : { downloadUrlFor })}
         selectedPath={selectedPath}
+        collapseSignal={collapseSignal}
       />
       {expanded.map((path) => (
         <DirectoryQuery

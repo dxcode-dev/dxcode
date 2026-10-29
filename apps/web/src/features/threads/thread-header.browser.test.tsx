@@ -14,6 +14,10 @@ vi.mock("../../shared/thread-archive.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../shared/thread-archive.js")>()),
   useOptionalThreadArchive: () => archive,
 }));
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => vi.fn(),
+}));
 
 import { automationKeys } from "./automations/automations-queries.js";
 import { ThreadHeader as BareThreadHeader } from "./thread-header.js";
@@ -132,7 +136,7 @@ describe("ThreadHeader", () => {
     );
     await React.act(() =>
       container
-        .querySelector('[aria-label="Thread actions"]')
+        .querySelector('[aria-label="More Actions"]')
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
     );
     const archiveItem = Array.from(
@@ -158,7 +162,7 @@ describe("ThreadHeader", () => {
     expect(container.textContent).not.toContain("Undo");
     await React.act(() =>
       container
-        .querySelector('[aria-label="Thread actions"]')
+        .querySelector('[aria-label="More Actions"]')
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
     );
     const unarchiveItem = Array.from(

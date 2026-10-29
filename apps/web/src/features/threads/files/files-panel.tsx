@@ -13,7 +13,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { lazyRouteComponent } from "@tanstack/react-router";
-import { ChevronDown, Files } from "lucide-react";
+import { ChevronDown, ChevronsDownUp, Files } from "lucide-react";
 import * as React from "react";
 import {
   type ChangesTransport,
@@ -103,6 +103,7 @@ function FilesWorktreeRoot({
   selectedPath,
   onOpenFile,
   transport,
+  collapseSignal,
 }: {
   readonly active: boolean;
   readonly threadId: ThreadId;
@@ -113,6 +114,7 @@ function FilesWorktreeRoot({
   readonly selectedPath?: ThreadFilesPath;
   readonly onOpenFile: (location: ThreadFileLocation) => void;
   readonly transport: ThreadFilesApi;
+  readonly collapseSignal: number;
 }) {
   const [collapsed, setCollapsed] = React.useState(false);
   const online = useOnline();
@@ -177,6 +179,7 @@ function FilesWorktreeRoot({
             selectedPath={selectedPath}
             threadId={threadId}
             worktree={worktree.id}
+            collapseSignal={collapseSignal}
           />
         </React.Suspense>
         {query.hasNextPage ? (
@@ -252,11 +255,20 @@ export const ThreadFilesPanel = ({
   // a stale capture is still the best known state of the worktree.
   const files = captured?.files;
   const gitStatusByWorktree = groupGitStatusByWorktree(files);
+  const [collapseSignal, setCollapseSignal] = React.useState(0);
   return (
     <section className="thread-files-panel">
-      <header>
-        <strong>Files</strong>
-      </header>
+      <fieldset className="thread-files-toolbar" aria-label="Files actions">
+        <button
+          type="button"
+          className="thread-files-tool"
+          aria-label="Collapse all folders"
+          title="Collapse all folders"
+          onClick={() => setCollapseSignal((current) => current + 1)}
+        >
+          <ChevronsDownUp aria-hidden="true" />
+        </button>
+      </fieldset>
       <div className="thread-files-worktrees">
         {worktrees.map((worktree) => (
           <FilesWorktreeRoot
@@ -276,6 +288,7 @@ export const ThreadFilesPanel = ({
             threadId={threadId}
             transport={transport}
             worktree={worktree}
+            collapseSignal={collapseSignal}
           />
         ))}
       </div>
@@ -289,6 +302,7 @@ export const ThreadFilePane = ({
   worktree = PRIMARY_WORKTREE,
   path,
   onDirtyChange,
+  onShowInFiles,
   reveal,
   revealSequence,
   transport = api,
@@ -298,6 +312,7 @@ export const ThreadFilePane = ({
   readonly worktree?: ThreadFilesWorktreeId;
   readonly path: ThreadFilesPath;
   readonly onDirtyChange: (dirty: boolean) => void;
+  readonly onShowInFiles?: () => void;
   readonly reveal?: FileReveal;
   readonly revealSequence?: number;
   readonly transport?: ThreadFilesApi;
@@ -356,6 +371,7 @@ export const ThreadFilePane = ({
         file={query.data}
         key={`${worktree}:${path}:${reloadGeneration}`}
         onDirtyChange={onDirtyChange}
+        {...(onShowInFiles === undefined ? {} : { onShowInFiles })}
         onReload={() => {
           void query.refetch().then((result) => {
             if (!result.isSuccess) return;

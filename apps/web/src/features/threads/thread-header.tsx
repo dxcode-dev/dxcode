@@ -1,4 +1,5 @@
 import type { ProjectData, ThreadDetailData } from "@dx/api";
+import { useNavigate } from "@tanstack/react-router";
 import { DateTime } from "effect";
 import {
   AlarmClock,
@@ -6,8 +7,6 @@ import {
   Eye,
   FolderGit2,
   LockKeyhole,
-  PanelRight,
-  Share,
   UsersRound,
 } from "lucide-react";
 import * as React from "react";
@@ -21,14 +20,8 @@ import { Avatar } from "../../shared/ui/avatar.js";
 import { Button } from "../../shared/ui/button.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { ThreadTitleText } from "../../shared/ui/thread-title.js";
-import { useMobile } from "../../shared/use-mobile.js";
-import {
-  type AutomationView,
-  automationViews,
-  useThreadAutomations,
-} from "./automations/automations-queries.js";
 import { ThreadAutomationsButton } from "./automations/thread-automations-button.js";
-import { ThreadAutomationsSheet } from "./automations/thread-automations-sheet.js";
+import { useThreadLayoutMode } from "./panes/thread-layout-mode.js";
 import { ShareDialog } from "./sharing/share-dialog.js";
 import { useSetThreadFollowing } from "./sharing/sharing-mutations.js";
 import { ThreadParticipants } from "./sharing/thread-participants.js";
@@ -67,7 +60,8 @@ function ThreadSnoozeBadge({
   );
 }
 
-function PrivacyChip({
+/** The privacy badge: who can see the Thread; opens Share for the owner. */
+function PrivacyBadge({
   thread,
   onOpenShare,
 }: {
@@ -76,12 +70,6 @@ function PrivacyChip({
 }) {
   const shared = thread.sharing !== undefined;
   const label = shared ? "Workspace" : "Private";
-  const content = (
-    <>
-      {shared ? <UsersRound /> : <LockKeyhole />}
-      <span className="thread-header-chip-label">{label}</span>
-    </>
-  );
   const title = shared
     ? thread.sharing?.workspaceAccess === "contribute"
       ? "Shared with your workspace: members can contribute"
@@ -89,44 +77,60 @@ function PrivacyChip({
     : "Only you can see this thread";
   return onOpenShare === undefined ? (
     <span
-      className="thread-header-chip"
+      className="thread-privacy-badge"
       title={title}
       data-privacy={thread.visibility}
     >
-      {content}
+      {shared ? (
+        <UsersRound aria-hidden="true" />
+      ) : (
+        <LockKeyhole aria-hidden="true" />
+      )}
+      {label}
     </span>
   ) : (
     <button
       type="button"
-      className="thread-header-chip thread-header-chip-button"
-      title={title}
-      aria-label={`Privacy: ${label}. ${title}`}
+      className="thread-privacy-badge thread-privacy-badge-button"
+      title={`${title}. Share…`}
+      aria-label={`Share: ${label}. ${title}`}
       data-privacy={thread.visibility}
       onClick={onOpenShare}
     >
-      {content}
+      {shared ? (
+        <UsersRound aria-hidden="true" />
+      ) : (
+        <LockKeyhole aria-hidden="true" />
+      )}
+      {label}
     </button>
   );
 }
 
+/**
+ * The Thread's title bar: the animated Orb and the title, then More Actions
+ * on the left; on the right the Project, pull requests, checks and listeners,
+ * the agent, who is in a shared Thread, the privacy badge (which opens
+ * Share), and Views. Below 768px the labels go and the controls are icons;
+ * the Project and agent move into More Actions.
+ */
 export function ThreadHeader({
   thread,
   project,
-  rightPaneCollapsed = false,
-  onToggleRightPane,
   transcript,
   shareOpen: controlledShareOpen,
   onShareOpenChange,
+  views,
 }: {
   readonly thread: ThreadDetailData;
   readonly project?: Pick<ProjectData, "name">;
-  readonly rightPaneCollapsed?: boolean;
-  readonly onToggleRightPane?: () => void;
   /** Reads the shown transcript, for an export. */
   readonly transcript?: () => TranscriptViewModel;
   /** The Share dialog, when the Thread page also opens it (from `@`). */
   readonly shareOpen?: boolean;
   readonly onShareOpenChange?: (open: boolean) => void;
+  /** The Views button, when the page lays out in panes. */
+  readonly views?: React.ReactNode;
 }) {
   const [localShareOpen, setLocalShareOpen] = React.useState(false);
   const shareOpen = controlledShareOpen ?? localShareOpen;
@@ -149,57 +153,45 @@ export function ThreadHeader({
       ? selection.model
       : summary.label;
   const openShare = own && !archived ? () => setShareOpen(true) : undefined;
-  // A phone has no room for the chips: the Thread menu shows the model and
-  // Project instead, and sits at the bar's end after an icon-only Share.
-  const mobile = useMobile();
-  // Schedules and GitHub listeners are the owner's. A phone reaches them
-  // from the Thread menu, which opens them as a sheet.
-  const [automationsView, setAutomationsView] = React.useState<
-    AutomationView | undefined
-  >(undefined);
-  const mobileAutomations = automationViews(
-    useThreadAutomations(thread.id, own && mobile).data,
-  );
+  const { compact } = useThreadLayoutMode();
+  const navigate = useNavigate();
+  const shared =
+    thread.sharing !== undefined || (thread.participants?.length ?? 0) > 1;
   const menu = transcript ? (
     <ThreadMenu
       thread={thread}
       project={project}
       transcript={transcript}
-      onOpenShare={openShare}
-      automationViews={mobileAutomations}
-      onOpenAutomations={own && mobile ? setAutomationsView : undefined}
-      showDetails={mobile}
+      onOpenShare={compact ? openShare : undefined}
+      showDetails={compact}
     />
   ) : null;
+  const orbLabel = `${EXECUTION_ENVIRONMENT_DISPLAY_NAME} ${environmentState}`;
   return (
-    <header className="thread-title-bar">
+    <header className="thread-title-bar" data-compact={compact || undefined}>
       <div className="thread-title-group" {...threadColorAttributes(thread)}>
-        <span
-          className="thread-title-orb"
-          title={`${EXECUTION_ENVIRONMENT_DISPLAY_NAME} ${environmentState}`}
-        >
-          <OrbIcon
-            activityStatus={activityStatus}
-            aria-hidden="false"
-            aria-label={`${EXECUTION_ENVIRONMENT_DISPLAY_NAME} ${environmentState}`}
-          />
-        </span>
+        {own ? null : <FollowButton thread={thread} />}
         {own || owner === undefined ? null : (
           <span className="thread-title-owner" title={owner.name}>
             <Avatar name={owner.name} image={owner.image} seed={owner.userId} />
           </span>
         )}
+        <span className="thread-title-icon" title={orbLabel}>
+          <OrbIcon
+            activityStatus={activityStatus}
+            aria-hidden="false"
+            aria-label={orbLabel}
+          />
+        </span>
         <strong
           className="thread-title"
           title={thread.titlePending === true ? undefined : thread.title}
         >
           <ThreadTitleText thread={thread} maxCharacters={60} />
         </strong>
-        {own ? null : <FollowButton thread={thread} />}
-        {mobile ? null : menu}
         {archived ? (
           <span className="thread-archived-badge">
-            {mobile ? "Archived" : "Archived thread"}
+            {compact ? "Archived" : "Archived thread"}
           </span>
         ) : own && thread.snoozedUntil !== undefined ? (
           <ThreadSnoozeBadge
@@ -208,12 +200,41 @@ export function ThreadHeader({
           />
         ) : null}
       </div>
-      <div className="thread-header-actions">
-        {own && !mobile ? (
-          <ThreadAutomationsButton threadId={thread.id} />
-        ) : null}
-        {thread.sharing !== undefined ||
-        (thread.participants?.length ?? 0) > 1 ? (
+      <div className="thread-title-actions">
+        {compact ? null : <span className="thread-title-menu">{menu}</span>}
+        <span className="thread-title-spacer" />
+        {compact ? null : own ? (
+          <button
+            type="button"
+            className="thread-title-action thread-title-action-text thread-title-project"
+            title={projectName ?? "No project"}
+            aria-label={`Project ${projectName ?? "No project"}`}
+            onClick={() =>
+              void navigate({
+                to: "/projects/$projectId",
+                params: { projectId: thread.projectId },
+              })
+            }
+          >
+            <FolderGit2 aria-hidden="true" />
+            <span>{projectName ?? "No project"}</span>
+          </button>
+        ) : (
+          <span
+            className="thread-title-action thread-title-action-text thread-title-project"
+            title={projectName ?? "No project"}
+          >
+            <FolderGit2 aria-hidden="true" />
+            <span>{projectName ?? "No project"}</span>
+          </span>
+        )}
+        {own ? <ThreadAutomationsButton threadId={thread.id} /> : null}
+        {compact ? null : (
+          <span className="thread-title-meta" title={summary.title}>
+            {selectionLabel}
+          </span>
+        )}
+        {shared ? (
           <ThreadParticipants
             thread={thread}
             onOpenShare={openShare}
@@ -221,27 +242,7 @@ export function ThreadHeader({
           />
         ) : null}
         {own ? (
-          openShare === undefined ? null : mobile ? (
-            <Button
-              className="thread-share-button thread-share-icon-button"
-              aria-label="Share"
-              title="Share"
-              variant="ghost"
-              size="icon-xs"
-              onClick={openShare}
-            >
-              <Share />
-            </Button>
-          ) : (
-            <Button
-              className="thread-share-button"
-              variant="ghost"
-              size="xs"
-              onClick={openShare}
-            >
-              Share
-            </Button>
-          )
+          <PrivacyBadge thread={thread} onOpenShare={openShare} />
         ) : (
           <span
             className="thread-access-chip"
@@ -253,46 +254,16 @@ export function ThreadHeader({
             }
           >
             {thread.access === "view" ? <Eye /> : <UsersRound />}
-            {thread.access === "view" ? "View only" : "Contributor"}
+            {compact
+              ? null
+              : thread.access === "view"
+                ? "View only"
+                : "Contributor"}
           </span>
         )}
-        <span
-          className="thread-header-chip"
-          title={projectName ?? "No project"}
-        >
-          <FolderGit2 />
-          <span className="thread-header-chip-label">
-            {projectName ?? "No project"}
-          </span>
-        </span>
-        <span className="thread-header-chip" title={summary.title}>
-          <span className="thread-header-chip-label">{selectionLabel}</span>
-        </span>
-        <PrivacyChip thread={thread} onOpenShare={openShare} />
-        {onToggleRightPane ? (
-          <Button
-            className="thread-right-pane-toggle"
-            aria-controls="thread-right-pane"
-            aria-expanded={!rightPaneCollapsed}
-            aria-label={
-              rightPaneCollapsed ? "Show Right Pane" : "Hide Right Pane"
-            }
-            variant="ghost"
-            size="icon-xs"
-            onClick={onToggleRightPane}
-          >
-            <PanelRight />
-          </Button>
-        ) : null}
-        {mobile ? menu : null}
+        {views}
+        {compact ? <span className="thread-title-menu">{menu}</span> : null}
       </div>
-      {automationsView !== undefined && own && mobile ? (
-        <ThreadAutomationsSheet
-          threadId={thread.id}
-          view={automationsView}
-          onClose={() => setAutomationsView(undefined)}
-        />
-      ) : null}
       {shareOpen && own && !archived ? (
         <ShareDialog
           thread={thread}

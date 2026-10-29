@@ -27,6 +27,7 @@ import {
   personalAccountQueryOptions,
   updatePersonalAccountMutationOptions,
 } from "../features/settings/account/personal-account-queries.js";
+import { automationKeys } from "../features/threads/automations/automations-queries.js";
 import { settingsContextQueryOptions } from "../features/settings/settings-context-queries.js";
 import { cacheCreatedThread } from "../features/threads/thread-mutations.js";
 import {
@@ -59,6 +60,21 @@ vi.mock("../shared/use-mobile.js", async () => {
   };
   return {
     useMobile: () => useSyncExternalStore(subscribe, () => runtime.mobile),
+  };
+});
+
+// The Thread page's own breakpoint follows the same switch.
+vi.mock("../features/threads/panes/thread-layout-mode.js", async () => {
+  const { useSyncExternalStore } = await import("react");
+  const subscribe = (listener: () => void) => {
+    runtime.mobileListeners.add(listener);
+    return () => runtime.mobileListeners.delete(listener);
+  };
+  return {
+    useThreadLayoutMode: () => {
+      const mobile = useSyncExternalStore(subscribe, () => runtime.mobile);
+      return { stacked: mobile, compact: mobile, coarse: false };
+    },
   };
 });
 
@@ -427,17 +443,25 @@ describe("ProductShell route ownership across the mobile breakpoint", () => {
       executionWorkspace: { ready: true, preparationStatus: null },
       agentInitialization: { selection: defaultThreadModelSelection() },
     } as unknown as ThreadDetailData;
-    const changesUrl = `/v1/threads/${thread.id}/changes?range=all`;
+    // The page loads the person's saved panes once; Changes is a view they
+    // open, so nothing else is fetched.
+    const layoutUrl = `/v1/threads/${thread.id}/layout`;
     const network = new FrontendNetworkHarness((request) => {
-      if (request.method === "GET" && request.url === changesUrl)
+      if (request.method === "GET" && request.url === layoutUrl)
         return Response.json({
           status: "success",
-          data: { kind: "missing" },
+          data: { layout: null },
         });
       throw new Error("Breakpoint crossing performed an unexpected request.");
     });
     vi.stubGlobal("fetch", network.fetch);
     const project = { name: "Project" } as ProjectData;
+    // The title bar's pull requests, checks, and listeners are cached.
+    client.setQueryData(automationKeys.thread(thread.id), {
+      githubSubscriptions: [],
+      pullRequests: [],
+      ciRuns: [],
+    });
     const routeIdentities = new Set<symbol>();
     const ThreadRoute = () => {
       const [identity] = React.useState(() => Symbol("thread-route"));
@@ -448,7 +472,7 @@ describe("ProductShell route ownership across the mobile breakpoint", () => {
 
     runtime.mobile = false;
     await act(() => root.render(shell()));
-    await vi.waitFor(() => expect(network.getCount(changesUrl)).toBe(1));
+    await vi.waitFor(() => expect(network.getCount(layoutUrl)).toBe(1));
     expect(container.querySelector(".thread-region")).not.toBeNull();
     const navigationPanel = container.querySelector<HTMLElement>(
       "#product-navigation",
@@ -470,7 +494,7 @@ describe("ProductShell route ownership across the mobile breakpoint", () => {
           options.client === runtime.client && options.live === "sse",
       ),
     ).toBe(true);
-    expect(network.requests).toHaveLength(1);
+    expect(network.requests.map((request) => request.url)).toEqual([layoutUrl]);
     expect(container.querySelector(".mobile-thread-region")).not.toBeNull();
     expect(
       container.querySelector(".product-panel-group[data-mobile]"),

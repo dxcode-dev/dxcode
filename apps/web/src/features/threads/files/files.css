@@ -11,6 +11,79 @@
   background: var(--surface);
 }
 
+/* The Files toolbar: 36px, icon buttons, Collapse All at the end. */
+.thread-files-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: none;
+  gap: 2px;
+  height: 36px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--divider);
+}
+.thread-files-panel .thread-files-tool,
+.thread-file-save,
+.thread-file-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--muted-foreground);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+.thread-files-panel .thread-files-tool:hover,
+.thread-file-save:hover:not(:disabled),
+.thread-file-actions:hover,
+.thread-file-actions[data-popup-open] {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.thread-files-tool > svg,
+.thread-file-save > svg,
+.thread-file-actions > svg,
+.thread-file-mode > svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.thread-file-save:disabled {
+  cursor: default;
+}
+/* The file's Preview or Source toggle: a 26px text button. */
+.thread-file-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 4px 8px;
+  color: var(--foreground);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  cursor: pointer;
+}
+.thread-file-mode:hover {
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.thread-file-connection {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.thread-file-connection[role="alert"] {
+  color: var(--warning);
+}
+
 .thread-files-panel > header,
 .thread-file-toolbar {
   display: flex;
@@ -338,82 +411,6 @@
   position: fixed;
   inset: 0;
   z-index: 100;
-}
-
-.thread-center-tab-strip {
-  display: flex;
-  flex: none;
-  align-items: center;
-  min-width: 0;
-  height: 34px;
-  overflow-x: auto;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-}
-
-.thread-center-tabs,
-.thread-center-file-tab {
-  display: flex;
-  height: 100%;
-}
-
-.thread-center-tab,
-.thread-center-tab-close {
-  display: inline-flex;
-  align-items: center;
-  flex: none;
-  gap: 5px;
-  max-width: 180px;
-  border: 0;
-  border-right: 1px solid var(--border);
-  padding: 0 10px;
-  background: transparent;
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-
-.thread-center-tab svg,
-.thread-center-tab-close svg {
-  width: 13px;
-  height: 13px;
-}
-
-.thread-center-tab[aria-selected="true"] {
-  background: var(--background);
-  color: var(--foreground);
-}
-
-.thread-center-tab-worktree {
-  overflow: hidden;
-  color: var(--muted-foreground);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thread-center-file-tab {
-  position: relative;
-  border-right: 1px solid var(--border);
-}
-
-.thread-center-file-tab .thread-center-tab {
-  border-right: 0;
-  padding-right: 27px;
-}
-
-.thread-center-tab-close {
-  position: absolute;
-  top: 8px;
-  right: 5px;
-  width: 18px;
-  height: 18px;
-  padding: 2px;
-  border: 0;
-  border-radius: 4px;
-}
-
-.thread-center-tab-close:hover {
-  background: var(--secondary);
-  color: var(--foreground);
 }
 
 .agent-panel-stack > .thread-file-center-panel {

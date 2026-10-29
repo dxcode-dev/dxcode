@@ -84,6 +84,7 @@ export const threadSharingLogger = getLogger(["dx", "threads", "sharing"]);
 export const threadDeletionLogger = getLogger(["dx", "threads", "deletion"]);
 export const notificationLogger = getLogger(["dx", "notifications"]);
 export const sidebarLayoutLogger = getLogger(["dx", "sidebar-layout"]);
+export const threadPaneLayoutLogger = getLogger(["dx", "threads", "layout"]);
 export const agentLifecycleLogger = getLogger(["dx", "agent", "lifecycle"]);
 export const agentModelLogger = getLogger(["dx", "agent", "model"]);
 export const agentToolLogger = getLogger(["dx", "agent", "tool"]);

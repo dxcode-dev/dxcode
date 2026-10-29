@@ -94,7 +94,9 @@ const input = async (editor: HTMLTextAreaElement, content: string) => {
 
 const click = async (container: Element, name: string) => {
   const button = [...container.querySelectorAll("button")].find(
-    (candidate) => candidate.textContent === name,
+    (candidate) =>
+      candidate.textContent === name ||
+      candidate.getAttribute("aria-label") === name,
   );
   if (button === undefined) throw new Error(`${name} button did not mount.`);
   await React.act(() =>
@@ -326,7 +328,7 @@ describe("Thread file viewer save lifecycle", () => {
     expect(mounted.container.textContent).toContain("Your draft is retained");
     expect(
       [...mounted.container.querySelectorAll("button")].find(
-        (button) => button.textContent === "Save",
+        (button) => button.getAttribute("aria-label") === "Save",
       )?.disabled,
     ).toBe(true);
   });

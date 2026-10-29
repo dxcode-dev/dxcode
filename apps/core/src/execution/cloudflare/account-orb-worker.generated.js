@@ -2285,6 +2285,11 @@ getLogger(["dx", "notifications"]);
 getLogger(["dx", "sidebar-layout"]);
 getLogger([
 	"dx",
+	"threads",
+	"layout"
+]);
+getLogger([
+	"dx",
 	"agent",
 	"lifecycle"
 ]);

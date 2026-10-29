@@ -62,6 +62,14 @@ vi.mock("../../shared/use-mobile.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../shared/use-mobile.js")>()),
   useMobile: () => viewport.mobile,
 }));
+vi.mock("./panes/thread-layout-mode.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./panes/thread-layout-mode.js")>()),
+  useThreadLayoutMode: () => ({
+    stacked: viewport.mobile,
+    compact: viewport.mobile,
+    coarse: false,
+  }),
+}));
 vi.mock("./changes/changes-pane.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./changes/changes-pane.js")>()),
   ChangesPane: ({
@@ -208,7 +216,9 @@ vi.mock("./agent-panel.js", async (importOriginal) => ({
 
 import { MarkdownFileLinkContext } from "../../shared/ui/markdown-file-link-context.js";
 import { projectKeys } from "../projects/project-queries.js";
-import { ThreadDesktopLayout } from "./thread-desktop-layout.js";
+import { PaneTreeHarness } from "../../testing/pane-tree-harness.js";
+import { paneLayoutKeys } from "./panes/pane-layout-queries.js";
+import { defaultPaneLayout } from "./panes/pane-layout.js";
 import { ThreadFileNavigationContext } from "./thread-file-navigation.js";
 import { threadKeys } from "./thread-queries.js";
 import { ThreadSessionRegistryContext } from "./thread-session-context.js";
@@ -259,6 +269,12 @@ const renderSession = async (
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
+  // The Thread page loads the saved layout before it opens; here it is the
+  // default one.
+  queryClient.setQueryData(
+    paneLayoutKeys.layout(userId, sessionThread.id),
+    defaultPaneLayout(),
+  );
   const render = (nextThread: ThreadDetailData, nextProject: ProjectData) => (
     <QueryClientProvider client={queryClient}>
       <ThreadSession
@@ -287,8 +303,22 @@ const press = async (element: Element | null, key: string) => {
   );
 };
 
-describe("ThreadSession right pane", () => {
-  it("defaults to Changes, lazily preserves Terminal, and keeps collapse mechanics", async () => {
+/** Opens a view from the title bar's Views menu. */
+const openView = async (container: HTMLElement, label: string) => {
+  await click(container.querySelector('[aria-label="Views"]'));
+  const item = [
+    ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+  ].find((candidate) => candidate.textContent?.includes(label));
+  await click(item ?? null);
+  await React.act(async () => {});
+};
+const tabNamed = (container: HTMLElement, label: string) =>
+  [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
+    (tab) => tab.getAttribute("aria-label") === label,
+  ) ?? null;
+
+describe("ThreadSession panes", () => {
+  it("opens Changes from Views in a right pane and keeps Terminal mounted behind another tab", async () => {
     viewport.mobile = false;
     vi.stubGlobal(
       "ResizeObserver",
@@ -297,116 +327,69 @@ describe("ThreadSession right pane", () => {
         disconnect() {}
       },
     );
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
-      width: 1000,
-    } as DOMRect);
     const Terminal = vi.fn(({ threadId: id }: { threadId: ThreadId }) => (
       <div className="thread-terminal" data-thread-id={id} />
     ));
     const { container, root } = await renderSession(thread, Terminal);
-    const pane = container.querySelector<HTMLElement>("#thread-right-pane");
-    const panel = container.querySelector<HTMLElement>(".right-pane-panel");
 
-    expect(pane?.getAttribute("aria-label")).toBe("Right pane");
-    expect(pane?.querySelector('[role="status"]')).toBeNull();
-    const tabs = pane?.querySelectorAll('[role="tab"]');
-    const changesTab =
-      [...(tabs ?? [])].find((tab) => tab.textContent === "Changes") ?? null;
-    const terminalTab =
-      [...(tabs ?? [])].find((tab) => tab.textContent === "Terminal") ?? null;
-    expect(changesTab?.textContent).toBe("Changes");
+    // Only the Agent pane until a view opens; no view mounts early.
+    expect(container.querySelectorAll(".thread-pane")).toHaveLength(1);
+    expect(tabNamed(container, "Agent")?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(container.querySelector(".pane-divider")).toBeNull();
+    expect(Terminal).not.toHaveBeenCalled();
+
+    await openView(container, "Changes");
+    const panes = container.querySelectorAll<HTMLElement>(".thread-pane");
+    expect(panes).toHaveLength(2);
+    expect(container.querySelector(".pane-divider")).not.toBeNull();
+    const changesTab = tabNamed(container, "Changes");
     expect(changesTab?.getAttribute("aria-selected")).toBe("true");
     expect(changesTab?.getAttribute("tabindex")).toBe("0");
-    expect(pane?.querySelector('[data-testid="changes-pane"]')).not.toBeNull();
-    expect(terminalTab?.textContent).toBe("Terminal");
-    expect(terminalTab?.getAttribute("aria-selected")).toBe("false");
-    expect(terminalTab?.getAttribute("tabindex")).toBe("-1");
-    expect(changesTab?.getAttribute("aria-controls")).toBe(
-      "thread-changes-panel",
-    );
     expect(
-      pane
-        ?.querySelector("#thread-changes-panel")
-        ?.getAttribute("aria-labelledby"),
-    ).toBe("thread-workspace-tab-changes");
-    expect(
-      pane
-        ?.querySelector("#thread-terminal-panel")
-        ?.getAttribute("aria-labelledby"),
-    ).toBe("thread-workspace-tab-terminal");
-    expect(
-      pane?.querySelector("#thread-terminal-panel")?.hasAttribute("hidden"),
-    ).toBe(true);
-    expect(pane?.querySelector(".thread-terminal")).toBeNull();
-    expect(Terminal).not.toHaveBeenCalled();
-    expect(
-      container.querySelector(
-        '.thread-header-actions > [aria-label="Show Right Pane"]',
-      ),
+      panes[1]?.querySelector('[data-testid="changes-pane"]'),
     ).not.toBeNull();
-    expect(panel?.dataset.collapsed).toBe("true");
-    expect(panel?.style.width).toBe("0px");
-    expect(pane?.inert).toBe(true);
+    // The new pane takes the right half.
+    expect(
+      panes[1]?.closest(".pane-split-child")?.getAttribute("style"),
+    ).toContain("0.5");
 
-    await click(container.querySelector('[aria-label="Show Right Pane"]'));
-    expect(panel?.hasAttribute("data-collapsed")).toBe(false);
-    expect(panel?.style.width).toBe("360px");
-    expect(pane?.inert).toBe(false);
-
-    await click(terminalTab ?? null);
+    await openView(container, "Terminal");
+    const terminalTab = tabNamed(container, "Terminal");
     expect(terminalTab?.getAttribute("aria-selected")).toBe("true");
-    expect(pane?.querySelector('[role="tabpanel"]')).not.toBeNull();
+    expect(changesTab?.getAttribute("aria-selected")).toBe("false");
     expect(Terminal).toHaveBeenCalledOnce();
     expect(Terminal.mock.calls[0]?.[0]).toMatchObject({ threadId });
-    const mountedTerminal = pane?.querySelector(".thread-terminal");
+    const mountedTerminal = container.querySelector(".thread-terminal");
     expect(mountedTerminal).not.toBeNull();
+    const terminalPanel = mountedTerminal?.closest('[role="tabpanel"]');
+    expect(terminalPanel?.getAttribute("aria-labelledby")).toBe(
+      terminalTab?.id,
+    );
 
     await click(changesTab);
     expect(changesTab?.getAttribute("aria-selected")).toBe("true");
     expect(terminalTab?.getAttribute("aria-selected")).toBe("false");
-    expect(pane?.querySelector(".thread-terminal")).toBe(mountedTerminal);
-    expect(
-      pane?.querySelector("#thread-terminal-panel")?.hasAttribute("hidden"),
-    ).toBe(true);
-    expect(
-      pane?.querySelector("#thread-terminal-panel")?.hasAttribute("inert"),
-    ).toBe(true);
-    expect(
-      pane
-        ?.querySelector("#thread-terminal-panel")
-        ?.getAttribute("aria-labelledby"),
-    ).toBe("thread-workspace-tab-terminal");
-    await click(terminalTab);
-    expect(pane?.querySelector(".thread-terminal")).toBe(mountedTerminal);
+    expect(container.querySelector(".thread-terminal")).toBe(mountedTerminal);
+    expect(terminalPanel?.hasAttribute("hidden")).toBe(true);
+    expect(terminalPanel?.hasAttribute("inert")).toBe(true);
 
-    await click(container.querySelector('[aria-label="Hide Right Pane"]'));
-    expect(panel?.dataset.collapsed).toBe("true");
-    expect(panel?.style.width).toBe("0px");
-    expect(pane?.inert).toBe(true);
-    expect(
-      container.querySelector('[aria-label="Show Right Pane"]'),
-    ).not.toBeNull();
-    expect(
-      container
-        .querySelector('[aria-label="Resize right pane"]')
-        ?.getAttribute("tabindex"),
-    ).toBe("-1");
-    expect(
-      container
-        .querySelector('[aria-label="Resize right pane"]')
-        ?.getAttribute("role"),
-    ).toBe("slider");
-    expect(pane?.querySelector(".thread-terminal")).toBe(mountedTerminal);
+    // Opening an open view brings it forward instead of adding a tab.
+    await openView(container, "Terminal");
+    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(3);
+    expect(terminalTab?.getAttribute("aria-selected")).toBe("true");
+    expect(container.querySelector(".thread-terminal")).toBe(mountedTerminal);
 
-    await click(container.querySelector('[aria-label="Show Right Pane"]'));
-    expect(panel?.hasAttribute("data-collapsed")).toBe(false);
-    expect(panel?.style.width).toBe("360px");
-    expect(pane?.inert).toBe(false);
-    expect(pane?.querySelector(".thread-terminal")).toBe(mountedTerminal);
+    // Closing the last view tab removes its pane.
+    await click(container.querySelector('[aria-label="Close Terminal"]'));
+    await click(container.querySelector('[aria-label="Close Changes"]'));
+    expect(container.querySelectorAll(".thread-pane")).toHaveLength(1);
+    expect(container.querySelector(".pane-divider")).toBeNull();
     await React.act(() => root.unmount());
   });
 
-  it("hides every right-pane affordance until first readiness", async () => {
+  it("hides Views until the workspace is ready", async () => {
     viewport.mobile = false;
     const Terminal = vi.fn(() => <div className="thread-terminal" />);
     const { container, root } = await renderSession(
@@ -420,16 +403,9 @@ describe("ThreadSession right pane", () => {
       Terminal,
     );
 
-    expect(container.querySelector("#thread-right-pane")).toBeNull();
-    expect(
-      container.querySelector('[aria-label="Resize right pane"]'),
-    ).toBeNull();
-    expect(
-      container.querySelector('[aria-label="Show Right Pane"]'),
-    ).toBeNull();
-    expect(
-      container.querySelector('[aria-label="Hide Right Pane"]'),
-    ).toBeNull();
+    expect(container.querySelector('[aria-label="Views"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Open Tab"]')).toBeNull();
+    expect(container.querySelectorAll(".thread-pane")).toHaveLength(1);
     expect(container.querySelector('[role="status"]')?.textContent).toBe(
       "Cloning repository…",
     );
@@ -453,126 +429,62 @@ describe("ThreadSession right pane", () => {
     const root = createRoot(container);
     await React.act(() =>
       root.render(
-        <ThreadDesktopLayout
-          rightPaneCollapsed={false}
+        <PaneTreeHarness
           main={<div>Main</div>}
           changes={<div>Changes</div>}
           files={<Files />}
           terminal={<Terminal />}
+          open={["changes", "files", "terminal"]}
         />,
       ),
     );
     const changesTab = container.querySelector<HTMLButtonElement>(
-      "#thread-workspace-tab-changes",
+      "#thread-view-tab-changes",
     );
     changesTab?.focus();
 
     await press(changesTab, "ArrowRight");
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve()),
+    );
     const filesTab = container.querySelector<HTMLButtonElement>(
-      "#thread-workspace-tab-files",
+      "#thread-view-tab-files",
     );
     expect(document.activeElement).toBe(filesTab);
     expect(filesTab?.getAttribute("aria-selected")).toBe("true");
+    // Every open tab stays mounted; only the shown one is visible.
     expect(Files).toHaveBeenCalledOnce();
-    expect(Terminal).not.toHaveBeenCalled();
-
-    await press(filesTab, "ArrowRight");
-    const terminalTab = container.querySelector<HTMLButtonElement>(
-      "#thread-workspace-tab-terminal",
-    );
-    expect(document.activeElement).toBe(terminalTab);
-    expect(terminalTab?.getAttribute("aria-selected")).toBe("true");
     expect(Terminal).toHaveBeenCalledOnce();
     const mountedTerminal = container.querySelector(
       '[data-testid="terminal-instance"]',
     );
 
+    await press(filesTab, "ArrowRight");
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve()),
+    );
+    const terminalTab = container.querySelector<HTMLButtonElement>(
+      "#thread-view-tab-terminal_1",
+    );
+    expect(document.activeElement).toBe(terminalTab);
+    expect(terminalTab?.getAttribute("aria-selected")).toBe("true");
+
     await press(terminalTab, "Home");
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve()),
+    );
     expect(document.activeElement).toBe(changesTab);
     expect(changesTab?.getAttribute("aria-selected")).toBe("true");
     expect(container.querySelector('[data-testid="terminal-instance"]')).toBe(
       mountedTerminal,
     );
-    expect(container.querySelector('[data-testid="files-instance"]')).not.toBe(
-      null,
-    );
 
     await press(changesTab, "End");
-    expect(document.activeElement).toBe(terminalTab);
-    expect(Terminal).toHaveBeenCalledOnce();
-    await React.act(() => root.unmount());
-  });
-
-  it("focuses the existing Terminal pane and restores collapse and keyboard focus", async () => {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        disconnect() {}
-      },
-    );
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
-    const renderLayout = (rightPaneCollapsed: boolean) =>
-      React.act(() =>
-        root.render(
-          <ThreadDesktopLayout
-            rightPaneCollapsed={rightPaneCollapsed}
-            main={<button type="button">Main focus target</button>}
-            terminal={<div data-testid="focused-terminal">Terminal</div>}
-          />,
-        ),
-      );
-    await renderLayout(false);
-    const mainTarget = container.querySelector<HTMLButtonElement>(
-      ".thread-main-panel button",
-    );
-    mainTarget?.focus();
-    const terminalNode = container.querySelector(
-      '[data-testid="focused-terminal"]',
-    );
-
-    const focusControl = container.querySelector<HTMLButtonElement>(
-      '[aria-label="Focus Pane"]',
-    );
-    await React.act(() => {
-      focusControl?.dispatchEvent(
-        new PointerEvent("pointerdown", { bubbles: true }),
-      );
-      focusControl?.focus();
-      focusControl?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    const group = container.querySelector<HTMLElement>(".thread-panel-group");
-    const panel = container.querySelector<HTMLElement>(".right-pane-panel");
-    expect(group?.dataset.rightPaneFocused).toBe("true");
-    expect(panel?.style.width).toBe("100%");
-    expect(
-      container.querySelector("#thread-right-pane")?.hasAttribute("inert"),
-    ).toBe(false);
-    expect(
-      container.querySelector(".thread-main-panel")?.hasAttribute("hidden"),
-    ).toBe(true);
-    expect(
-      container
-        .querySelector('[aria-label="Resize right pane"]')
-        ?.hasAttribute("hidden"),
-    ).toBe(true);
-    expect(container.querySelector('[data-testid="focused-terminal"]')).toBe(
-      terminalNode,
-    );
-
-    await renderLayout(true);
-    await click(container.querySelector('[aria-label="Unfocus Pane"]'));
     await new Promise<void>((resolve) =>
       requestAnimationFrame(() => resolve()),
     );
-    expect(group?.hasAttribute("data-right-pane-focused")).toBe(false);
-    expect(panel?.style.width).toBe("0px");
-    expect(document.activeElement).toBe(mainTarget);
-    expect(container.querySelector('[data-testid="focused-terminal"]')).toBe(
-      terminalNode,
-    );
+    expect(document.activeElement).toBe(terminalTab);
+    expect(Terminal).toHaveBeenCalledOnce();
     await React.act(() => root.unmount());
   });
 
@@ -585,10 +497,8 @@ describe("ThreadSession right pane", () => {
         disconnect() {}
       },
     );
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
-      width: 1000,
-    } as DOMRect);
     const { container, root } = await renderSession();
+    await openView(container, "Changes");
 
     const reviewButton = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "Review changes",
@@ -659,7 +569,7 @@ describe("ThreadSession right pane", () => {
     await React.act(() => root.unmount());
   });
 
-  it("opens a selected Changes file in the center editor navigation", async () => {
+  it("opens a selected Changes file as a tab beside Changes", async () => {
     viewport.mobile = false;
     vi.stubGlobal(
       "ResizeObserver",
@@ -668,10 +578,8 @@ describe("ThreadSession right pane", () => {
         disconnect() {}
       },
     );
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
-      width: 1000,
-    } as DOMRect);
     const { container, root } = await renderSession();
+    await openView(container, "Changes");
 
     await click(
       [...container.querySelectorAll("button")].find(
@@ -682,10 +590,14 @@ describe("ThreadSession right pane", () => {
       '[role="tab"][title="src/selected.ts"]',
     );
     expect(selected?.getAttribute("aria-selected")).toBe("true");
+    // In the view pane, after Changes.
+    const viewPane = selected?.closest(".thread-pane");
+    expect(viewPane?.querySelector('[aria-label="Changes"]')).not.toBeNull();
+    expect(viewPane?.querySelector('[aria-label="Agent"]')).toBeNull();
     await React.act(() => root.unmount());
   });
 
-  it("opens transcript file links and edits as center tabs without navigating", async () => {
+  it("opens transcript file links and edits as tabs without navigating", async () => {
     viewport.mobile = false;
     vi.stubGlobal(
       "ResizeObserver",
@@ -694,9 +606,6 @@ describe("ThreadSession right pane", () => {
         disconnect() {}
       },
     );
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
-      width: 1000,
-    } as DOMRect);
     const { container, root } = await renderSession();
     const button = (label: string) =>
       [...container.querySelectorAll("button")].find(
@@ -712,7 +621,8 @@ describe("ThreadSession right pane", () => {
       '[role="tab"][title="/home/user/notes/todo.md"]',
     );
     expect(sandboxTab?.getAttribute("aria-selected")).toBe("true");
-    expect(sandboxTab?.textContent).toContain("Sandbox");
+    // The first file opens a right-hand pane, as a view would.
+    expect(container.querySelectorAll(".thread-pane")).toHaveLength(2);
 
     await click(button("Link src/linked.ts:4"));
     const repoTab = container.querySelector(
@@ -729,65 +639,68 @@ describe("ThreadSession right pane", () => {
     await React.act(() => root.unmount());
   });
 
-  it("keyboard-resizes in 16px steps and clamps to desktop bounds", async () => {
+  it("resizes a split from the keyboard in 2% steps and clamps at 10%", async () => {
     viewport.mobile = false;
     vi.stubGlobal(
       "ResizeObserver",
       class {
-        constructor(private readonly callback: () => void) {}
-        observe() {
-          this.callback();
-        }
+        observe() {}
         disconnect() {}
       },
     );
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
-      width: 1000,
-    } as DOMRect);
-    vi.stubGlobal("innerWidth", 1000);
     const { container, root } = await renderSession();
-    await click(container.querySelector('[aria-label="Show Right Pane"]'));
-    const handle = container.querySelector<HTMLElement>(
-      '[aria-label="Resize right pane"]',
-    );
-    const panel = container.querySelector<HTMLElement>(".right-pane-panel");
-
-    expect(handle?.getAttribute("aria-valuemin")).toBe("260");
-    expect(handle?.getAttribute("aria-valuemax")).toBe("460");
-    for (let index = 0; index < 10; index++)
-      await React.act(() =>
-        handle?.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }),
-        ),
-      );
-    expect(panel?.style.width).toBe("460px");
-    expect(handle?.getAttribute("aria-valuenow")).toBe("460");
-    for (let index = 0; index < 20; index++)
-      await React.act(() =>
-        handle?.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
-        ),
-      );
-    expect(panel?.style.width).toBe("260px");
-    expect(handle?.getAttribute("aria-valuenow")).toBe("260");
+    await openView(container, "Changes");
+    const divider = container.querySelector<HTMLElement>(".pane-divider");
+    const children =
+      container.querySelectorAll<HTMLElement>(".pane-split-child");
+    expect(divider?.getAttribute("aria-orientation")).toBe("vertical");
+    expect(divider?.getAttribute("aria-valuenow")).toBe("50");
+    await press(divider, "ArrowRight");
+    expect(divider?.getAttribute("aria-valuenow")).toBe("52");
+    expect(children[0]?.style.flexGrow).toBe("0.52");
+    for (let index = 0; index < 30; index++) await press(divider, "ArrowLeft");
+    expect(divider?.getAttribute("aria-valuenow")).toBe("10");
+    expect(children[1]?.style.flexGrow).toBe("0.9");
     await React.act(() => root.unmount());
   });
 
-  it("omits the right pane and its controls on mobile", async () => {
+  it("stacks on a phone: a view row instead of panes, and no view mounts early", async () => {
     const Terminal = vi.fn(() => <div className="thread-terminal" />);
     const { container, root } = await renderSession(thread, Terminal);
-    expect(container.querySelector("#thread-right-pane")).toBeNull();
+    expect(container.querySelector(".thread-pane")).toBeNull();
+    expect(container.querySelector(".pane-divider")).toBeNull();
+    expect(container.querySelector('[aria-label="Views"]')).toBeNull();
+    const row = container.querySelector('[aria-label="Thread views"]');
     expect(
-      container.querySelector('[aria-label="Resize right pane"]'),
-    ).toBeNull();
+      [...(row?.querySelectorAll('[role="tab"]') ?? [])].map(
+        (tab) => tab.textContent,
+      ),
+    ).toEqual(["Agent", "Changes", "Files", "Terminal"]);
     expect(
       container.querySelector('[aria-label="Thread composer"]'),
     ).not.toBeNull();
     expect(Terminal).not.toHaveBeenCalled();
+
+    // Choosing Terminal shows it full screen with a close; the Agent hides.
+    await click(
+      [...container.querySelectorAll('[role="tab"]')].find(
+        (tab) => tab.textContent === "Terminal",
+      ) ?? null,
+    );
+    expect(Terminal).toHaveBeenCalledOnce();
+    expect(
+      container.querySelector('[aria-label="Close Terminal"]'),
+    ).not.toBeNull();
+    expect(
+      container
+        .querySelector('[aria-label="Thread transcript"]')
+        ?.closest('[role="tabpanel"]')
+        ?.hasAttribute("hidden"),
+    ).toBe(true);
     await React.act(() => root.unmount());
   });
 
-  it("keeps archived desktop chat visible while omitting the composer, Terminal, and right-pane controls", async () => {
+  it("keeps archived desktop chat visible while omitting the composer, Terminal, and Views", async () => {
     viewport.mobile = false;
     const renderTerminal = vi.fn(() => <div className="thread-terminal" />);
     const { container, root } = await renderSession(
@@ -802,13 +715,8 @@ describe("ThreadSession right pane", () => {
     expect(
       container.querySelector('[aria-label="Thread composer"]'),
     ).toBeNull();
-    expect(container.querySelector("#thread-right-pane")).toBeNull();
-    expect(
-      container.querySelector('[aria-label="Show Right Pane"]'),
-    ).toBeNull();
-    expect(
-      container.querySelector('[aria-label="Hide Right Pane"]'),
-    ).toBeNull();
+    expect(container.querySelector('[aria-label="Views"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Open Tab"]')).toBeNull();
     expect(container.querySelector(".thread-terminal")).toBeNull();
     expect(renderTerminal).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Archived thread");
@@ -852,19 +760,15 @@ describe("ThreadSession right pane", () => {
       "View only",
     );
     expect(
-      [...container.querySelectorAll(".thread-header-actions button")].some(
+      [...container.querySelectorAll(".thread-title-actions button")].some(
         (button) => button.textContent === "Share",
       ),
     ).toBe(false);
 
-    await click(container.querySelector('[aria-label="Show Right Pane"]'));
-    await click(
-      [...container.querySelectorAll('[role="tab"]')].find(
-        (tab) => tab.textContent === "Terminal",
-      ) ?? null,
-    );
+    await openView(container, "Terminal");
     expect(
-      container.querySelector("#thread-terminal-panel")?.textContent,
+      container.querySelector('[role="tabpanel"][aria-label="Terminal"]')
+        ?.textContent,
     ).toContain("Only contributors can use the terminal");
     expect(Terminal).not.toHaveBeenCalled();
     await React.act(() => root.unmount());
@@ -984,6 +888,10 @@ describe("ThreadWorkspace cached metadata lifetime", () => {
       });
       queryClient.setQueryData(threadKeys.detail(userId, threadId), thread);
       queryClient.setQueryData(projectKeys.detail(userId, projectId), project);
+      queryClient.setQueryData(
+        paneLayoutKeys.layout(userId, threadId),
+        defaultPaneLayout(),
+      );
       const container = document.createElement("div");
       document.body.append(container);
       const root = createRoot(container);

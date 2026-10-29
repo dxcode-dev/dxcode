@@ -197,6 +197,8 @@ import {
   type SettingsFieldError,
   type SidebarLayoutEntry,
   SidebarLayoutResponseSchema,
+  type ThreadPaneLayout,
+  ThreadPaneLayoutResponseSchema,
   type SigningKeySetupGuidance,
   type SigningKeysData,
   SigningKeysErrorResponseSchema,
@@ -2798,6 +2800,32 @@ export const putSidebarLayoutEntry = async (entry: SidebarLayoutEntry) =>
       body: JSON.stringify(entry),
     })
   ).data;
+
+/** The signed-in person's panes and tabs on a Thread; null until saved. */
+export const getThreadPaneLayout = async (
+  threadId: ThreadId,
+  signal?: AbortSignal,
+) =>
+  (
+    await request(
+      `/v1/threads/${encodeURIComponent(threadId)}/layout`,
+      ThreadPaneLayoutResponseSchema,
+      { signal },
+    )
+  ).data.layout;
+
+/** Saves the person's panes and tabs on a Thread. */
+export const putThreadPaneLayout = async (
+  threadId: ThreadId,
+  layout: ThreadPaneLayout,
+) =>
+  (
+    await request(
+      `/v1/threads/${encodeURIComponent(threadId)}/layout`,
+      ThreadPaneLayoutResponseSchema,
+      { method: "PUT", body: JSON.stringify(layout) },
+    )
+  ).data.layout;
 
 export const markAllNotificationsRead = async () =>
   (

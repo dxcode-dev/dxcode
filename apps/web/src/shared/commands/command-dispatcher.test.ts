@@ -30,6 +30,7 @@ const runtime = () =>
     switchThread: vi.fn(),
     openFocusedThreadMenu: vi.fn(),
     addThreadImages: vi.fn(),
+    openThreadView: vi.fn(),
   }) satisfies CommandRuntime;
 
 const key = (value: string, init: KeyboardEventInit = {}) =>
@@ -262,7 +263,7 @@ describe("central command dispatcher", () => {
   it("honors explicit overrides instead of retaining catalog alternatives", () => {
     const registry = createCommandRegistry({ platform: "linux" });
     expect(
-      registry.setBinding("command-palette.open", "Mod+Shift+P"),
+      registry.setBinding("command-palette.open", "Mod+Shift+Y"),
     ).toMatchObject({ ok: true });
     const actions = runtime();
     const handler = createCommandKeydownHandler({
@@ -272,7 +273,7 @@ describe("central command dispatcher", () => {
       document,
     });
     handler(key("k", { ctrlKey: true }));
-    handler(key("p", { ctrlKey: true, shiftKey: true }));
+    handler(key("y", { ctrlKey: true, shiftKey: true }));
     expect(actions.openCommandPalette).toHaveBeenCalledOnce();
   });
 });

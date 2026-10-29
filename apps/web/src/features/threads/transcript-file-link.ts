@@ -166,12 +166,6 @@ export const resolveReveal = (
   return linesForText(content, reveal.text);
 };
 
-/** Stable identity of an open center tab. */
-export const fileTargetKey = (target: ThreadFileTarget) =>
-  target.kind === "sandbox"
-    ? `sandbox:${target.path}`
-    : `${target.worktree}:${target.path}`;
-
 /** Same-origin URL that streams a sandbox file, optionally as a download. */
 export const sandboxFileUrl = (
   threadId: string,

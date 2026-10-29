@@ -60,6 +60,10 @@ export interface CommandRuntime {
   readonly switchThread: (direction: -1 | 1) => void;
   readonly openFocusedThreadMenu: () => void;
   readonly addThreadImages: () => void;
+  /** Opens a workspace view in the open Thread, or brings it forward. */
+  readonly openThreadView: (
+    view: "files" | "changes" | "portal" | "terminal" | "desktop",
+  ) => void;
 }
 
 export interface CommandDefinition<Id extends string = string> {
@@ -311,6 +315,51 @@ const commandDefinitions = Object.freeze([
     scope: "thread",
     defaults: everyPlatform("Control+Shift+A"),
     execute: (runtime) => runtime.focusThreadComposer(),
+  },
+  {
+    id: "thread.open-files",
+    label: "Open Files",
+    description: "Open the Files view in the thread, or bring it forward.",
+    category: "Threads",
+    scope: "thread",
+    defaults: everyPlatform("Control+Shift+F"),
+    execute: (runtime) => runtime.openThreadView("files"),
+  },
+  {
+    id: "thread.open-changes",
+    label: "Open Changes",
+    description: "Open the Changes view in the thread, or bring it forward.",
+    category: "Threads",
+    scope: "thread",
+    defaults: everyPlatform("Control+Shift+G"),
+    execute: (runtime) => runtime.openThreadView("changes"),
+  },
+  {
+    id: "thread.open-portal",
+    label: "Open Portal",
+    description: "Open the Portal view in the thread, or bring it forward.",
+    category: "Threads",
+    scope: "thread",
+    defaults: everyPlatform("Control+Shift+P"),
+    execute: (runtime) => runtime.openThreadView("portal"),
+  },
+  {
+    id: "thread.open-terminal",
+    label: "Open Terminal",
+    description: "Open the Terminal view in the thread, or bring it forward.",
+    category: "Threads",
+    scope: "thread",
+    defaults: everyPlatform("Control+Shift+T"),
+    execute: (runtime) => runtime.openThreadView("terminal"),
+  },
+  {
+    id: "thread.open-desktop",
+    label: "Open Desktop",
+    description: "Open the Desktop view in the thread, or bring it forward.",
+    category: "Threads",
+    scope: "thread",
+    defaults: everyPlatform("Control+Shift+X"),
+    execute: (runtime) => runtime.openThreadView("desktop"),
   },
   {
     id: "shortcuts.focus-search",

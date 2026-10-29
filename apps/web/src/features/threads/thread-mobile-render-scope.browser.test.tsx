@@ -42,16 +42,20 @@ vi.mock("./changes/changes-pane.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./changes/changes-pane.js")>()),
   ChangesPane: () => <div data-testid="changes-pane" />,
 }));
-vi.mock("./thread-mobile-layout.js", async (importOriginal) => {
+vi.mock("./panes/thread-layout-mode.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./panes/thread-layout-mode.js")>()),
+  useThreadLayoutMode: () => ({ stacked: true, compact: true, coarse: true }),
+}));
+vi.mock("./panes/thread-stacked-layout.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("./thread-mobile-layout.js")>();
+    await importOriginal<typeof import("./panes/thread-stacked-layout.js")>();
   return {
     ...actual,
-    MobileThreadTabs: (
-      props: React.ComponentProps<typeof actual.MobileThreadTabs>,
+    ThreadStackedLayout: (
+      props: React.ComponentProps<typeof actual.ThreadStackedLayout>,
     ) => {
       counts.tabs += 1;
-      return <actual.MobileThreadTabs {...props} />;
+      return <actual.ThreadStackedLayout {...props} />;
     },
   };
 });
@@ -308,7 +312,7 @@ describe("phone thread render scope", () => {
     const { container, publish } = await renderPhoneThread(
       streaming("Streaming"),
     );
-    expect(container.querySelector(".thread-mobile-tabs")).not.toBeNull();
+    expect(container.querySelector(".stacked-view-row")).not.toBeNull();
     expect(container.textContent).toContain("Streaming");
     const tabRenders = counts.tabs;
     counts.parses.length = 0;

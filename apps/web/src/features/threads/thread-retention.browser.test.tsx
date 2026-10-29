@@ -168,6 +168,7 @@ vi.mock("./agent-panel.js", async (importOriginal) => ({
   ),
 }));
 
+import { defaultThreadModelSelection } from "@dx/domain";
 import { FlueApiError } from "@flue/sdk";
 import { ApiError } from "../../shared/api/client.js";
 import { AuthContext, useIdentity } from "../../shared/auth/auth-context.js";
@@ -333,6 +334,10 @@ it("renders retained A immediately after A-B-A with history network blocked", as
                     agentUrl: id,
                     lifecycleState: "archived",
                     executionWorkspace: { ready: false },
+                    title: "Retained",
+                    agentInitialization: {
+                      selection: defaultThreadModelSelection(),
+                    },
                   } as ThreadDetailData
                 }
                 project={{} as ProjectData}
@@ -378,6 +383,10 @@ it("keeps pending composer images across an A-B-A switch", async () => {
                   agentUrl: id,
                   lifecycleState: "active",
                   executionWorkspace: { ready: false },
+                  title: "Retained",
+                  agentInitialization: {
+                    selection: defaultThreadModelSelection(),
+                  },
                 } as ThreadDetailData
               }
               project={{} as ProjectData}
@@ -481,6 +490,10 @@ it.each([401, 403, 404])(
                   agentUrl: "A",
                   lifecycleState: "archived",
                   executionWorkspace: { ready: false },
+                  title: "Retained",
+                  agentInitialization: {
+                    selection: defaultThreadModelSelection(),
+                  },
                 } as unknown as ThreadDetailData
               }
               project={{} as ProjectData}
@@ -490,7 +503,10 @@ it.each([401, 403, 404])(
         ),
       ),
     );
-    expect(container.textContent).toBe("A");
+    // The title bar renders beside the mocked panel; the panel shows "A".
+    expect(
+      container.querySelector('[role="tabpanel"] section')?.textContent,
+    ).toBe("A");
     for (const entry of [b, a]) {
       await React.act(async () => {
         await client
@@ -707,6 +723,10 @@ it("isolates authenticated users and clears synchronously before logout", async 
                     agentUrl: "A",
                     lifecycleState: "archived",
                     executionWorkspace: { ready: false },
+                    title: "Retained",
+                    agentInitialization: {
+                      selection: defaultThreadModelSelection(),
+                    },
                   } as unknown as ThreadDetailData
                 }
                 project={{} as ProjectData}

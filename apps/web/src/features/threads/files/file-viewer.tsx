@@ -3,11 +3,32 @@ import type {
   ThreadFilesPath,
   ThreadFileVersion,
 } from "@dx/api";
+import { Menu } from "@base-ui/react/menu";
 import type { ThreadId } from "@dx/domain";
-import * as React from "react";
 import {
+  Check,
+  CloudCheck,
+  CloudUpload,
+  Code,
+  Copy,
+  Download,
+  EllipsisVertical,
+  Eye,
+  FolderTree,
+  LoaderCircle,
+  RefreshCw,
+  Save,
+  Search,
+  WrapText,
+} from "lucide-react";
+import * as React from "react";
+import { downloadFromUrl } from "../../../shared/download-from-url.js";
+import { PaneToolbar } from "../panes/pane-toolbar-slot.js";
+import {
+  absolutePathFor,
   type FileReveal,
   resolveReveal,
+  sandboxFileUrl,
   type ThreadFileTarget,
 } from "../transcript-file-link.js";
 import type { FileEditorHandle } from "./file-editor.js";
@@ -51,6 +72,7 @@ export const ThreadFileViewer = ({
   onReload,
   onPreserveLocal,
   onDirtyChange,
+  onShowInFiles,
   reveal,
   revealSequence,
   references,
@@ -86,6 +108,8 @@ export const ThreadFileViewer = ({
     onSuccess: (file: ThreadFileData) => boolean,
   ) => void;
   readonly onDirtyChange: (dirty: boolean) => void;
+  /** Brings the Files view forward with this file highlighted. */
+  readonly onShowInFiles?: () => void;
 }) => {
   // The accepted editing baseline is a transaction snapshot. Background reads
   // must not authorize overwriting a version the user has not accepted.
@@ -209,72 +233,37 @@ export const ThreadFileViewer = ({
         }
       }}
     >
-      <header className="thread-file-toolbar">
-        <span title={file.path}>{file.path}</span>
-        {previewable && editing ? (
-          <div role="tablist" aria-label="File view mode">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={viewMode === "preview"}
-              onClick={() => setMode("preview")}
-            >
-              Preview
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={viewMode === "source"}
-              onClick={() => setMode("source")}
-            >
-              Source
-            </button>
-          </div>
-        ) : null}
-        {editing ? (
-          <>
-            <button
-              type="button"
-              disabled={viewMode !== "source" || !editorReady}
-              onClick={() => editor.current?.openFind()}
-            >
-              Find
-            </button>
-            <button
-              type="button"
-              aria-pressed={wrap}
-              onClick={() => setWrap((value) => !value)}
-            >
-              Wrap
-            </button>
-            <button
-              type="button"
-              aria-pressed={zen}
-              onClick={() => setZen((value) => !value)}
-            >
-              {zen ? "Exit Zen" : "Zen"}
-            </button>
-            <button
-              type="button"
-              disabled={!dirty || saving || !file.editable || preserveReadOnly}
-              onClick={() => void save()}
-            >
-              {saving ? "Saving…" : "Save"}
-            </button>
-          </>
-        ) : null}
-        {connectionMessage === undefined ? null : (
-          <span
-            className="thread-file-connection"
-            role={connectionError ? "alert" : "status"}
-          >
-            {connectionMessage}
-          </span>
-        )}
-        <span role="status">
-          {editing ? (dirty ? "Unsaved changes" : "Saved") : ""}
-        </span>
-      </header>
+      <FileToolbar
+        path={file.path}
+        previewable={previewable && editing}
+        viewMode={viewMode}
+        onViewMode={setMode}
+        editing={editing}
+        editorReady={editorReady}
+        dirty={dirty}
+        saving={saving}
+        saveDisabled={!dirty || saving || !file.editable || preserveReadOnly}
+        wrap={wrap}
+        zen={zen}
+        onSave={() => void save()}
+        onFind={() => editor.current?.openFind()}
+        onToggleWrap={() => setWrap((value) => !value)}
+        onToggleZen={() => setZen((value) => !value)}
+        onReload={onReload}
+        {...(onShowInFiles === undefined ? {} : { onShowInFiles })}
+        {...(connectionMessage === undefined ? {} : { connectionMessage })}
+        connectionError={connectionError === true}
+        downloadUrl={
+          references === undefined
+            ? undefined
+            : (() => {
+                const absolute = absolutePathFor(references.location);
+                return absolute === undefined
+                  ? undefined
+                  : sandboxFileUrl(references.threadId, absolute, true);
+              })()
+        }
+      />
       {conflict || preserveReadOnly || (remoteChanged && !saving) ? (
         <div className="thread-file-notice" role="alert">
           <span>
@@ -336,3 +325,182 @@ export const ThreadFileViewer = ({
     </section>
   );
 };
+
+/**
+ * The file toolbar, in the pane's tab strip: Preview or Source, Save, and
+ * the `⋮` of file actions. The status text stays for assistive tech.
+ */
+function FileToolbar({
+  path,
+  previewable,
+  viewMode,
+  onViewMode,
+  editing,
+  editorReady,
+  dirty,
+  saving,
+  saveDisabled,
+  wrap,
+  zen,
+  onSave,
+  onFind,
+  onToggleWrap,
+  onToggleZen,
+  onReload,
+  onShowInFiles,
+  connectionMessage,
+  connectionError,
+  downloadUrl,
+}: {
+  readonly path: string;
+  readonly previewable: boolean;
+  readonly viewMode: "preview" | "source";
+  readonly onViewMode: (mode: "preview" | "source") => void;
+  readonly editing: boolean;
+  readonly editorReady: boolean;
+  readonly dirty: boolean;
+  readonly saving: boolean;
+  readonly saveDisabled: boolean;
+  readonly wrap: boolean;
+  readonly zen: boolean;
+  readonly onSave: () => void;
+  readonly onFind: () => void;
+  readonly onToggleWrap: () => void;
+  readonly onToggleZen: () => void;
+  readonly onReload: () => void;
+  readonly onShowInFiles?: () => void;
+  readonly connectionMessage?: string;
+  readonly connectionError: boolean;
+  readonly downloadUrl?: string;
+}) {
+  const other = viewMode === "preview" ? "Source" : "Preview";
+  const current = viewMode === "preview" ? "Preview" : "Source";
+  return (
+    <PaneToolbar className="thread-file-toolbar">
+      {connectionMessage === undefined ? null : (
+        <span
+          className="thread-file-connection"
+          role={connectionError ? "alert" : "status"}
+        >
+          {connectionMessage}
+        </span>
+      )}
+      {previewable ? (
+        <button
+          type="button"
+          className="thread-file-mode"
+          aria-label={`${current}, switch to ${other}`}
+          onClick={() =>
+            onViewMode(viewMode === "preview" ? "source" : "preview")
+          }
+        >
+          {viewMode === "preview" ? (
+            <Eye aria-hidden="true" />
+          ) : (
+            <Code aria-hidden="true" />
+          )}
+          <span>{current}</span>
+        </button>
+      ) : null}
+      {editing ? (
+        <button
+          type="button"
+          className="thread-file-save"
+          aria-label="Save"
+          title={saving ? "Saving…" : dirty ? "Save (Ctrl+S)" : "Saved"}
+          disabled={saveDisabled}
+          onClick={onSave}
+        >
+          {saving ? (
+            <LoaderCircle className="changes-spin" aria-hidden="true" />
+          ) : dirty ? (
+            <CloudUpload aria-hidden="true" />
+          ) : (
+            <CloudCheck aria-hidden="true" />
+          )}
+        </button>
+      ) : null}
+      <span className="sr-only" role="status">
+        {editing ? (dirty ? "Unsaved changes" : "Saved") : ""}
+      </span>
+      <Menu.Root>
+        <Menu.Trigger
+          className="thread-file-actions"
+          aria-label="File Actions"
+          title="File Actions"
+        >
+          <EllipsisVertical aria-hidden="true" />
+        </Menu.Trigger>
+        <Menu.Portal>
+          <Menu.Positioner
+            className="thread-menu-positioner"
+            align="end"
+            sideOffset={4}
+          >
+            <Menu.Popup className="thread-menu-popup thread-actions-menu">
+              {editing ? (
+                <>
+                  <Menu.Item
+                    className="thread-menu-item"
+                    disabled={saveDisabled}
+                    onClick={onSave}
+                  >
+                    <Save />
+                    <span>Save</span>
+                  </Menu.Item>
+                  <Menu.Item className="thread-menu-item" onClick={onToggleZen}>
+                    <span>Zen Mode</span>
+                    {zen ? <Check /> : null}
+                  </Menu.Item>
+                  <Menu.Item
+                    className="thread-menu-item"
+                    disabled={viewMode !== "source" || !editorReady}
+                    onClick={onFind}
+                  >
+                    <Search />
+                    <span>Find</span>
+                  </Menu.Item>
+                  <Menu.Item
+                    className="thread-menu-item"
+                    onClick={onToggleWrap}
+                  >
+                    <WrapText />
+                    <span>Wrap Lines</span>
+                    {wrap ? <Check /> : null}
+                  </Menu.Item>
+                  <Menu.Item className="thread-menu-item" onClick={onReload}>
+                    <RefreshCw />
+                    <span>Reload Remote</span>
+                  </Menu.Item>
+                  <Menu.Separator className="thread-menu-separator" />
+                </>
+              ) : null}
+              {onShowInFiles === undefined ? null : (
+                <Menu.Item className="thread-menu-item" onClick={onShowInFiles}>
+                  <FolderTree />
+                  <span>Show in Files</span>
+                </Menu.Item>
+              )}
+              {downloadUrl === undefined ? null : (
+                <Menu.Item
+                  className="thread-menu-item"
+                  onClick={() => downloadFromUrl(downloadUrl)}
+                >
+                  <Download />
+                  <span>Download</span>
+                </Menu.Item>
+              )}
+              <Menu.Item
+                className="thread-menu-item"
+                onClick={() => void navigator.clipboard.writeText(path)}
+              >
+                <Copy />
+                <span>Copy Path</span>
+              </Menu.Item>
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+      </Menu.Root>
+    </PaneToolbar>
+  );
+}

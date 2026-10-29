@@ -3,6 +3,7 @@ import {
   type ThreadChangesPath,
   type ThreadDetailData,
   ThreadFilesPath,
+  type ThreadPaneFileTarget,
 } from "@dx/api";
 import {
   PROJECTLESS_PROJECT_NAME,
@@ -30,13 +31,13 @@ import {
   MarkdownFileLinkContext,
   MarkdownImageSourceContext,
 } from "../../shared/ui/markdown-file-link-context.js";
-import { useMobile } from "../../shared/use-mobile.js";
 import { projectQueryOptions } from "../projects/project-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { AgentPanel, type AgentPanelOptions } from "./agent-panel.js";
 import { ThreadScheduleHint } from "./automations/thread-schedule-hint.js";
 import { ChangesPane } from "./changes/changes-pane.js";
 import { CenterFilePane } from "./files/center-file-pane.js";
+import type { CenterFileTab } from "./files/file-tab.js";
 import {
   type ThreadFileLocation,
   ThreadFilesPanel,
@@ -56,19 +57,26 @@ import {
   useSetThreadFollowing,
 } from "./sharing/sharing-mutations.js";
 import { threadMembersQueryOptions } from "./sharing/thread-chat-queries.js";
-import { type CenterFileTab, ThreadCenterTabs } from "./thread-center-tabs.js";
-import { ThreadDesktopLayout } from "./thread-desktop-layout.js";
+import {
+  threadPaneLayoutQueryOptions,
+  usePaneLayout,
+  usePaneLayoutDispatch,
+  usePaneLayoutReader,
+} from "./panes/pane-layout-queries.js";
+import {
+  fileTargetKey,
+  focusedTab,
+  listPanes,
+  locateTab,
+  type PaneLayoutAction,
+} from "./panes/pane-layout.js";
+import type { PaneContents } from "./panes/pane-views.js";
+import { ThreadPageLayout } from "./panes/thread-page-layout.js";
 import {
   type ThreadFileNavigation,
   ThreadFileNavigationContext,
 } from "./thread-file-navigation.js";
 import { ThreadHeader } from "./thread-header.js";
-import {
-  MobileThreadTabs,
-  MobileToolPanels,
-  type MobileWorkspaceTools,
-  useMobileThreadTool,
-} from "./thread-mobile-layout.js";
 import {
   invalidateThreadQueries,
   threadQueryOptions,
@@ -89,10 +97,10 @@ import {
   type ThreadSessionRegistry,
 } from "./thread-session-registry.js";
 import type { TranscriptFocus } from "./thread-transcript.js";
+import { createTranscriptAccess } from "./transcript-access.js";
 import {
   absolutePathFor,
   type FileReveal,
-  fileTargetKey,
   resolveTranscriptFileLink,
   sandboxFileUrl,
   type ThreadFileTarget,
@@ -261,6 +269,17 @@ export function ThreadWorkspace({
     id,
     !isAuthorizationError(error),
   );
+  // The saved panes load with the Thread, so the page opens in its layout
+  // instead of rebuilding from the default one.
+  const layoutQuery = useQuery({
+    ...threadPaneLayoutQueryOptions(identity.id, id),
+    enabled: !isAuthorizationError(error),
+  });
+  // A Thread created in this browser has no saved layout yet to wait for.
+  const layoutSettled =
+    layoutQuery.data !== undefined ||
+    layoutQuery.isError ||
+    optimisticCreation !== undefined;
   const retry = () => {
     if (threadQuery.data === undefined || threadQuery.error !== null)
       void threadQuery.refetch();
@@ -278,7 +297,8 @@ export function ThreadWorkspace({
     threadQuery.data === undefined ||
     project === undefined ||
     isAuthorizationError(error) ||
-    !historyReady
+    !historyReady ||
+    !layoutSettled
   ) {
     if (isDeletedThreadError(error))
       return (
@@ -364,25 +384,18 @@ function OpenThreadFilePane({
   active,
   file,
   threadId,
-  setFiles,
+  onDirtyChange,
+  onShowInFiles,
 }: {
   readonly active: boolean;
   readonly file: CenterFileTab;
   readonly threadId: ThreadId;
-  readonly setFiles: React.Dispatch<
-    React.SetStateAction<readonly CenterFileTab[]>
-  >;
+  readonly onDirtyChange: (dirty: boolean) => void;
+  readonly onShowInFiles: () => void;
 }) {
-  const onDirtyChange = (dirty: boolean) =>
-    setFiles((current) =>
-      current.map((item) =>
-        fileTargetKey(item) === fileTargetKey(file) ? { ...item, dirty } : item,
-      ),
-    );
   return (
     <section
       className="thread-file-center-panel"
-      hidden={!active}
       aria-label={`File ${file.path}`}
     >
       <CenterFilePane
@@ -390,6 +403,7 @@ function OpenThreadFilePane({
         file={file}
         threadId={threadId}
         onDirtyChange={onDirtyChange}
+        onShowInFiles={onShowInFiles}
       />
     </section>
   );
@@ -648,57 +662,51 @@ function useRetainedImageProps() {
       };
 }
 
+/** Lines to highlight in an open file, bumped each time it is opened again. */
+interface FileReveals {
+  readonly reveal: FileReveal;
+  readonly sequence: number;
+}
+
 /**
- * The center pane's open file tabs and the transcript's file links that open
- * them. Context values stay stable: a new value re-renders every transcript
- * Markdown consumer, bypassing their memoization.
+ * The open files' ephemeral state (what to reveal, unsaved edits) and the
+ * transcript's file links that open them. The tabs themselves live in the
+ * persisted pane layout. Context values stay stable: a new value re-renders
+ * every transcript Markdown consumer, bypassing their memoization.
  */
-function useCenterFileTabs(threadId: ThreadId) {
-  const [files, setFiles] = React.useState<readonly CenterFileTab[]>([]);
-  const [activeFile, setActiveFile] = React.useState<string>();
+function useFileTabs(
+  threadId: ThreadId,
+  dispatch: (action: PaneLayoutAction) => void,
+) {
+  const [reveals, setReveals] = React.useState<
+    ReadonlyMap<string, FileReveals>
+  >(() => new Map());
+  const [dirtyTabs, setDirtyTabs] = React.useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const openTarget = (target: ThreadFileTarget, reveal?: FileReveal) => {
-    const key = fileTargetKey(target);
-    setFiles((current) => {
-      const existing = current.find((file) => fileTargetKey(file) === key);
-      if (existing === undefined)
-        return [
-          ...current,
-          {
-            ...target,
-            dirty: false,
-            ...(reveal === undefined ? {} : { reveal, revealSequence: 1 }),
-          },
-        ];
-      // Reopening an open tab keeps its draft and moves the highlight.
-      if (reveal === undefined) return current;
-      return current.map((file) =>
-        fileTargetKey(file) === key
-          ? {
-              ...file,
-              reveal,
-              revealSequence: (file.revealSequence ?? 0) + 1,
-            }
-          : file,
-      );
-    });
-    setActiveFile(key);
+    const id = `file:${fileTargetKey(target)}`;
+    if (reveal !== undefined)
+      setReveals((current) => {
+        const next = new Map(current);
+        next.set(id, {
+          reveal,
+          sequence: (current.get(id)?.sequence ?? 0) + 1,
+        });
+        return next;
+      });
+    React.startTransition(() => dispatch({ type: "open-file", target }));
   };
   const openFile = (location: ThreadFileLocation) =>
     openTarget({ kind: "workspace", ...location });
-  const closeFile = (file: CenterFileTab) => {
-    const key = fileTargetKey(file);
-    const index = files.findIndex((item) => fileTargetKey(item) === key);
-    const next = files.filter((item) => fileTargetKey(item) !== key);
-    setFiles(next);
-    if (activeFile === key)
-      setActiveFile(
-        next[Math.min(index, next.length - 1)] === undefined
-          ? undefined
-          : fileTargetKey(
-              next[Math.min(index, next.length - 1)] as CenterFileTab,
-            ),
-      );
-  };
+  const setDirty = (id: string, dirty: boolean) =>
+    setDirtyTabs((current) => {
+      if (current.has(id) === dirty) return current;
+      const next = new Set(current);
+      if (dirty) next.add(id);
+      else next.delete(id);
+      return next;
+    });
   const fileDownloadUrl = (target: ThreadFileTarget) => {
     const absolute = absolutePathFor(target);
     return absolute === undefined
@@ -726,21 +734,77 @@ function useCenterFileTabs(threadId: ThreadId) {
   };
   const resolveMediaSource = (src: string) =>
     transcriptMediaSource(threadId, src);
+  const renderFile = (target: ThreadPaneFileTarget, active: boolean) => {
+    const id = `file:${fileTargetKey(target)}`;
+    const revealed = reveals.get(id);
+    const file: CenterFileTab = {
+      ...target,
+      dirty: dirtyTabs.has(id),
+      ...(revealed === undefined
+        ? {}
+        : { reveal: revealed.reveal, revealSequence: revealed.sequence }),
+    };
+    return (
+      <OpenThreadFilePane
+        active={active}
+        file={file}
+        threadId={threadId}
+        onDirtyChange={(dirty) => setDirty(id, dirty)}
+        onShowInFiles={() => dispatch({ type: "open-view", view: "files" })}
+      />
+    );
+  };
   return {
-    files,
-    setFiles,
-    activeFile,
-    setActiveFile,
     openFile,
-    closeFile,
+    dirtyTabs,
+    renderFile,
     fileNavigation,
     resolveFileLink,
     resolveMediaSource,
   };
 }
 
-/** Each workspace tool's content, shared by the phone and desktop layouts. */
-function useWorkspaceTools({
+/**
+ * The Files view. It subscribes to the layout itself, so highlighting the
+ * shown file re-renders the tree and not the page.
+ */
+function FilesView({
+  active,
+  threadId,
+  projectName,
+  onOpenFile,
+}: {
+  readonly active: boolean;
+  readonly threadId: ThreadId;
+  readonly projectName: string;
+  readonly onOpenFile: (location: ThreadFileLocation) => void;
+}) {
+  const { layout } = usePaneLayout(threadId);
+  // The shown file: the focused pane's, else the first pane showing one.
+  const shown =
+    layout === undefined
+      ? undefined
+      : [
+          focusedTab(layout),
+          ...listPanes(layout).map((pane) => pane.tabs[pane.active]),
+        ].find((tab) => tab?.kind === "file");
+  const selectedFile =
+    shown?.kind === "file" && shown.target.kind === "workspace"
+      ? { worktree: shown.target.worktree, path: shown.target.path }
+      : undefined;
+  return (
+    <ThreadFilesPanel
+      active={active}
+      threadId={threadId}
+      projectName={projectName}
+      selectedFile={selectedFile}
+      onOpenFile={onOpenFile}
+    />
+  );
+}
+
+/** Each view's content, shared by the stacked and pane layouts. */
+function usePaneViewContents({
   thread,
   project,
   Terminal,
@@ -748,7 +812,7 @@ function useWorkspaceTools({
   portalDomain,
   onReviewPrompt,
   onWorkspaceStatusChange,
-  centerFiles: { files, setFiles, activeFile, openFile },
+  openFile,
 }: {
   readonly thread: ThreadDetailData;
   readonly project: ThreadProject;
@@ -759,129 +823,85 @@ function useWorkspaceTools({
     typeof ChangesPane
   >["onReviewPrompt"];
   readonly onWorkspaceStatusChange: (status?: string) => void;
-  readonly centerFiles: ReturnType<typeof useCenterFileTabs>;
-}) {
+  readonly openFile: (location: ThreadFileLocation) => void;
+}): PaneContents["views"] {
   const [fileNavigationError, setFileNavigationError] =
     React.useState<string>();
-  const workspaceTools: MobileWorkspaceTools = {
-    terminal:
-      Terminal === undefined ? undefined : thread.access === "view" ? (
-        <div className="thread-files-state" role="note">
-          Only contributors can use the terminal in a shared thread.
-        </div>
-      ) : (
-        (active: boolean) => (
-          <Terminal
-            active={active}
-            threadId={thread.id}
-            onWorkspaceStatusChange={onWorkspaceStatusChange}
-          />
-        )
-      ),
-    preview: previewTool(thread, portalDomain),
-    desktop: desktopTool(thread, Desktop),
-    changes: (
-      <>
-        {fileNavigationError === undefined ? null : (
-          <div className="thread-files-state" role="alert">
-            {fileNavigationError}
-          </div>
-        )}
-        <ChangesPane
+  const terminal =
+    Terminal === undefined ? undefined : thread.access === "view" ? (
+      <div className="thread-files-state" role="note">
+        Only contributors can use the terminal in a shared thread.
+      </div>
+    ) : (
+      (active: boolean) => (
+        <Terminal
+          active={active}
           threadId={thread.id}
-          projectName={project.name}
-          onReviewPrompt={onReviewPrompt}
-          onOpenFile={(worktree, path, worktreeLabel) => {
-            const validated = filesPath(path);
-            if (validated === undefined) {
-              setFileNavigationError("This changed path cannot be opened.");
-              return;
-            }
-            setFileNavigationError(undefined);
-            openFile({
-              worktree,
-              ...(worktreeLabel === undefined ? {} : { worktreeLabel }),
-              path: validated,
-            });
-          }}
+          onWorkspaceStatusChange={onWorkspaceStatusChange}
         />
-      </>
-    ),
-    files: (active: boolean) => (
-      <ThreadFilesPanel
-        active={active}
+      )
+    );
+  const portal = previewTool(thread, portalDomain);
+  const desktop = desktopTool(thread, Desktop);
+  const changes = (
+    <>
+      {fileNavigationError === undefined ? null : (
+        <div className="thread-files-state" role="alert">
+          {fileNavigationError}
+        </div>
+      )}
+      <ChangesPane
         threadId={thread.id}
         projectName={project.name}
-        selectedFile={(() => {
-          const file = files.find(
-            (candidate) => fileTargetKey(candidate) === activeFile,
-          );
-          return file === undefined || file.kind !== "workspace"
-            ? undefined
-            : {
-                worktree: file.worktree,
-                path: file.path,
-              };
-        })()}
-        onOpenFile={openFile}
+        onReviewPrompt={onReviewPrompt}
+        onOpenFile={(worktree, path, worktreeLabel) => {
+          const validated = filesPath(path);
+          if (validated === undefined) {
+            setFileNavigationError("This changed path cannot be opened.");
+            return;
+          }
+          setFileNavigationError(undefined);
+          openFile({
+            worktree,
+            ...(worktreeLabel === undefined ? {} : { worktreeLabel }),
+            path: validated,
+          });
+        }}
       />
-    ),
-  };
-  const openFilePanes = files.map((file) => (
-    <OpenThreadFilePane
-      active={activeFile === fileTargetKey(file)}
-      file={file}
-      key={fileTargetKey(file)}
-      setFiles={setFiles}
-      threadId={thread.id}
-    />
-  ));
-  return { workspaceTools, openFilePanes };
-}
-
-interface TerminalOpener {
-  readonly mobile: boolean;
-  readonly mobileTool: ReturnType<typeof useMobileThreadTool>;
-  readonly setActiveFile: (file: undefined) => void;
-  readonly setRightPaneCollapsed: (collapsed: boolean) => void;
-}
-
-/** Brings the Terminal forward, as choosing its tab would. */
-function openTerminalTool({
-  mobile,
-  mobileTool,
-  setActiveFile,
-  setRightPaneCollapsed,
-}: TerminalOpener) {
-  if (mobile) {
-    setActiveFile(undefined);
-    mobileTool.select("terminal");
-    return;
-  }
-  setRightPaneCollapsed(false);
-  // The tab owns its selection; choose it as a click on it would.
-  requestAnimationFrame(() =>
-    document.getElementById("thread-workspace-tab-terminal")?.click(),
+    </>
   );
+  const files = (active: boolean) => (
+    <FilesView
+      active={active}
+      threadId={thread.id}
+      projectName={project.name}
+      onOpenFile={openFile}
+    />
+  );
+  return {
+    changes,
+    files,
+    ...(terminal === undefined ? {} : { terminal }),
+    ...(portal === undefined ? {} : { portal }),
+    ...(desktop === undefined ? {} : { desktop }),
+  };
 }
 
 function OrbNotices({
   threadId,
   onAskAgent,
-  terminal,
+  onOpenTerminal,
 }: {
   readonly threadId: ThreadId;
   readonly onAskAgent: (message: string) => void;
-  readonly terminal: TerminalOpener | undefined;
+  readonly onOpenTerminal: (() => void) | undefined;
 }) {
   return (
     <>
       <OrbDiskNotice
         threadId={threadId}
         onAskAgent={onAskAgent}
-        onOpenTerminal={
-          terminal === undefined ? undefined : () => openTerminalTool(terminal)
-        }
+        onOpenTerminal={onOpenTerminal}
       />
       <OrbMemoryNotice threadId={threadId} />
     </>
@@ -894,7 +914,7 @@ function OrbNotices({
  */
 function orbComposerNotice(
   thread: ThreadSessionProps["thread"],
-  terminal: TerminalOpener | undefined,
+  onOpenTerminal: (() => void) | undefined,
 ) {
   if (
     thread.lifecycleState === "archived" ||
@@ -907,10 +927,12 @@ function orbComposerNotice(
       key={thread.id}
       threadId={thread.id}
       onAskAgent={send}
-      terminal={terminal}
+      onOpenTerminal={onOpenTerminal}
     />
   );
 }
+
+const NO_VIEWS: PaneContents["views"] = {};
 
 function ThreadSessionContent({
   thread,
@@ -930,32 +952,30 @@ function ThreadSessionContent({
   readonly agentSource: ThreadAgentSource;
 }) {
   const { identity } = useAuthenticatedIdentity();
-  const mobile = useMobile();
   const archived = thread.lifecycleState === "archived";
   const queryClient = useQueryClient();
   const [shareOpen, setShareOpen] = React.useState(false);
   const openShare = () => setShareOpen(true);
   const mentions = useComposerMentions(thread, identity.id, openShare);
   useFollowOnOpen(thread, identity.id);
-  const headerProps = {
-    thread,
-    project,
-    shareOpen,
-    onShareOpenChange: setShareOpen,
-  };
-  const centerFiles = useCenterFileTabs(thread.id);
+  const [transcriptAccess] = React.useState(createTranscriptAccess);
+  const dispatch = usePaneLayoutDispatch(thread.id);
+  const readLayout = usePaneLayoutReader(thread.id);
+  const fileTabs = useFileTabs(thread.id, dispatch);
   const {
-    files,
-    activeFile,
-    setActiveFile,
-    closeFile,
+    dirtyTabs,
+    renderFile,
     fileNavigation,
     resolveFileLink,
     resolveMediaSource,
-  } = centerFiles;
+  } = fileTabs;
   // A notification opens the transcript at a message, so it comes forward
   // from an open file tab.
-  const onFocusRequested = () => setActiveFile(undefined);
+  const onFocusRequested = () => {
+    const located = locateTab(readLayout(), "agent");
+    if (located !== undefined)
+      dispatch({ type: "activate", pane: located.pane.id, tab: "agent" });
+  };
   const sharedPanelProps = {
     mentions,
     ...(focus === undefined
@@ -998,7 +1018,6 @@ function ThreadSessionContent({
   // Passed down without subscribing: only the composer renders the draft.
   const draft = useThreadPresentationValue("draft", "");
   const retainedImageProps = useRetainedImageProps();
-  const [rightPaneCollapsed, setRightPaneCollapsed] = React.useState(true);
   const [liveWorkspaceStatus, setLiveWorkspaceStatus] =
     React.useState<string>();
   const workspaceStatus =
@@ -1006,15 +1025,14 @@ function ThreadSessionContent({
     realtimeWorkspaceStatus ??
     thread.executionWorkspace.preparationStatus ??
     undefined;
-  const toggleRightPane = () =>
-    setRightPaneCollapsed((collapsed) => !collapsed);
-  const mobileTool = useMobileThreadTool();
-  const composerNotice = orbComposerNotice(
-    thread,
-    Terminal && { mobile, mobileTool, setActiveFile, setRightPaneCollapsed },
-  );
-
-  const { workspaceTools, openFilePanes } = useWorkspaceTools({
+  const openTerminal =
+    Terminal === undefined
+      ? undefined
+      : () => dispatch({ type: "open-view", view: "terminal" });
+  const composerNotice = orbComposerNotice(thread, openTerminal);
+  // Archived or still-preparing Threads have no workspace to show.
+  const toolsAvailable = !archived && thread.executionWorkspace.ready;
+  const views = usePaneViewContents({
     thread,
     project,
     Terminal,
@@ -1022,191 +1040,61 @@ function ThreadSessionContent({
     portalDomain: settingsQuery.data?.portalDomain,
     onReviewPrompt: draft.set,
     onWorkspaceStatusChange: setLiveWorkspaceStatus,
-    centerFiles,
+    openFile: fileTabs.openFile,
   });
-
-  if (mobile) {
-    // Archived or still-preparing Threads have no workspace to show.
-    const toolsAvailable = !archived && thread.executionWorkspace.ready;
-    // Built here, not in renderHeader, so a streamed frame that renders the
-    // header with a new model reuses this element and skips the tabs.
-    const tabs = toolsAvailable ? (
-      <MobileThreadTabs
-        tools={workspaceTools}
-        activeTool={mobileTool.tool}
-        files={files}
-        activeFile={activeFile}
-        onSelectTool={(tool) => {
-          // Showing a tool can render a whole hidden transcript; a
-          // transition lets that render yield to input.
-          React.startTransition(() => {
-            setActiveFile(undefined);
-            mobileTool.select(tool);
-          });
-        }}
-        onSelectFile={setActiveFile}
-        onCloseFile={closeFile}
-      />
-    ) : null;
-    const panel = (
-      <ThreadAgentPanel
-        {...retainedImageProps}
-        source={agentSource}
-        agentInitialization={thread.agentInitialization}
-        onOpenModelRouting={openModelRouting}
-        archived={archived}
-        dictationAvailable={dictationAvailable}
-        showArchivedNotice={archived}
-        active={
-          !toolsAvailable ||
-          (activeFile === undefined && mobileTool.tool === "agent")
-        }
-        additionalPanels={
-          toolsAvailable ? (
-            <>
-              <MobileToolPanels
-                tools={workspaceTools}
-                activeTool={mobileTool.tool}
-                opened={mobileTool.opened}
-                fileActive={activeFile !== undefined}
-              />
-              {openFilePanes}
-            </>
-          ) : undefined
-        }
-        draft={draft}
-        workspaceReady={thread.executionWorkspace.ready}
-        workspaceStatus={workspaceStatus}
-        composerNotice={composerNotice}
-        optimisticCreation={optimisticCreation}
-        onInitialSubmissionObserved={onInitialSubmissionObserved}
-        {...sharedPanelProps}
-        renderHeader={(transcript) => (
-          <>
-            <ThreadHeader {...headerProps} transcript={transcript} />
-            {tabs}
-          </>
-        )}
-      />
-    );
-    return (
-      <div className="mobile-thread-region">
-        <ThreadRefreshError message={refreshError} onRetry={onRefreshRetry} />
-        <main className="mobile-pane-content">
-          {toolsAvailable ? (
-            <ThreadFileNavigationContext value={fileNavigation}>
-              <MarkdownFileLinkContext value={resolveFileLink}>
-                <MarkdownImageSourceContext value={resolveMediaSource}>
-                  {panel}
-                </MarkdownImageSourceContext>
-              </MarkdownFileLinkContext>
-            </ThreadFileNavigationContext>
-          ) : (
-            panel
-          )}
-        </main>
-      </div>
-    );
-  }
-
-  if (archived) {
-    return (
-      <div className="thread-region">
-        <ThreadRefreshError message={refreshError} onRetry={onRefreshRetry} />
-        <section className="thread-main-panel">
-          <ThreadAgentPanel
-            {...retainedImageProps}
-            source={agentSource}
-            agentInitialization={thread.agentInitialization}
-            archived
-            dictationAvailable={dictationAvailable}
-            workspaceReady={thread.executionWorkspace.ready}
-            workspaceStatus={workspaceStatus}
-            optimisticCreation={optimisticCreation}
-            onInitialSubmissionObserved={onInitialSubmissionObserved}
-            {...sharedPanelProps}
-            renderHeader={(transcript) => (
-              <ThreadHeader {...headerProps} transcript={transcript} />
-            )}
+  const agent = (active: boolean) => (
+    <ThreadAgentPanel
+      {...retainedImageProps}
+      source={agentSource}
+      agentInitialization={thread.agentInitialization}
+      onOpenModelRouting={archived ? undefined : openModelRouting}
+      archived={archived}
+      showArchivedNotice={archived}
+      dictationAvailable={dictationAvailable}
+      active={active}
+      transcriptAccess={transcriptAccess}
+      {...(archived ? {} : { draft })}
+      workspaceReady={thread.executionWorkspace.ready}
+      workspaceStatus={workspaceStatus}
+      composerNotice={composerNotice}
+      optimisticCreation={optimisticCreation}
+      onInitialSubmissionObserved={onInitialSubmissionObserved}
+      {...sharedPanelProps}
+    />
+  );
+  const contents: PaneContents = {
+    agent,
+    views: toolsAvailable ? views : NO_VIEWS,
+    file: renderFile,
+    dirtyTabs,
+  };
+  const page = (
+    <ThreadPageLayout
+      threadId={thread.id}
+      contents={contents}
+      renderTitleBar={({ views: viewsButton }) => (
+        <>
+          <ThreadRefreshError message={refreshError} onRetry={onRefreshRetry} />
+          <ThreadHeader
+            thread={thread}
+            project={project}
+            shareOpen={shareOpen}
+            onShareOpenChange={setShareOpen}
+            transcript={transcriptAccess.current}
+            views={toolsAvailable ? viewsButton : null}
           />
-        </section>
-      </div>
-    );
-  }
-
-  if (!thread.executionWorkspace.ready) {
-    return (
-      <div className="thread-region">
-        <ThreadRefreshError message={refreshError} onRetry={onRefreshRetry} />
-        <section className="thread-main-panel">
-          <ThreadAgentPanel
-            {...retainedImageProps}
-            source={agentSource}
-            agentInitialization={thread.agentInitialization}
-            onOpenModelRouting={openModelRouting}
-            dictationAvailable={dictationAvailable}
-            draft={draft}
-            workspaceReady={thread.executionWorkspace.ready}
-            workspaceStatus={workspaceStatus}
-            optimisticCreation={optimisticCreation}
-            onInitialSubmissionObserved={onInitialSubmissionObserved}
-            {...sharedPanelProps}
-            renderHeader={(transcript) => (
-              <ThreadHeader {...headerProps} transcript={transcript} />
-            )}
-          />
-        </section>
-      </div>
-    );
-  }
-
+        </>
+      )}
+    />
+  );
+  if (!toolsAvailable) return page;
   return (
-    <div className="thread-region">
-      <ThreadRefreshError message={refreshError} onRetry={onRefreshRetry} />
-      <ThreadDesktopLayout
-        rightPaneCollapsed={rightPaneCollapsed}
-        {...workspaceTools}
-        main={
-          <ThreadFileNavigationContext value={fileNavigation}>
-            <MarkdownFileLinkContext value={resolveFileLink}>
-              <MarkdownImageSourceContext value={resolveMediaSource}>
-                <ThreadAgentPanel
-                  {...retainedImageProps}
-                  source={agentSource}
-                  agentInitialization={thread.agentInitialization}
-                  onOpenModelRouting={openModelRouting}
-                  dictationAvailable={dictationAvailable}
-                  active={activeFile === undefined}
-                  additionalPanels={openFilePanes}
-                  draft={draft}
-                  workspaceReady={thread.executionWorkspace.ready}
-                  workspaceStatus={workspaceStatus}
-                  composerNotice={composerNotice}
-                  optimisticCreation={optimisticCreation}
-                  onInitialSubmissionObserved={onInitialSubmissionObserved}
-                  {...sharedPanelProps}
-                  renderHeader={(transcript) => (
-                    <>
-                      <ThreadHeader
-                        {...headerProps}
-                        transcript={transcript}
-                        rightPaneCollapsed={rightPaneCollapsed}
-                        onToggleRightPane={toggleRightPane}
-                      />
-                      <ThreadCenterTabs
-                        activeFile={activeFile}
-                        files={files}
-                        onClose={closeFile}
-                        onSelect={setActiveFile}
-                      />
-                    </>
-                  )}
-                />
-              </MarkdownImageSourceContext>
-            </MarkdownFileLinkContext>
-          </ThreadFileNavigationContext>
-        }
-      />
-    </div>
+    <ThreadFileNavigationContext value={fileNavigation}>
+      <MarkdownFileLinkContext value={resolveFileLink}>
+        <MarkdownImageSourceContext value={resolveMediaSource}>
+          {page}
+        </MarkdownImageSourceContext>
+      </MarkdownFileLinkContext>
+    </ThreadFileNavigationContext>
   );
 }

@@ -49,7 +49,7 @@ class FakeSocket extends EventTarget {
   }
 }
 
-import { ThreadDesktopLayout } from "../threads/thread-desktop-layout.js";
+import { PaneTreeHarness } from "../../testing/pane-tree-harness.js";
 import { ThreadTerminal } from "./thread-terminal.js";
 
 // A browser resolves even a cached dynamic import in a later task, past the
@@ -119,11 +119,11 @@ const render = async (
   await React.act(() =>
     root.render(
       withTabs ? (
-        <ThreadDesktopLayout
-          rightPaneCollapsed={false}
+        <PaneTreeHarness
           main={null}
           terminal={terminal}
           changes={<div>Changes</div>}
+          open={["changes"]}
         />
       ) : (
         terminal
@@ -137,6 +137,28 @@ const render = async (
     socket: FakeSocket.instances.at(-1) as FakeSocket,
   };
 };
+
+/** Opens the Terminal view from the pane's Open Tab menu, as a person would. */
+const openTerminalTab = async (container: HTMLElement) => {
+  // The view pane's Open Tab, not the Agent pane's.
+  const openTab = [
+    ...container.querySelectorAll<HTMLButtonElement>(
+      'button[aria-label="Open Tab"]',
+    ),
+  ].at(-1);
+  await React.act(() => openTab?.click());
+  const item = [
+    ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+  ].find((candidate) => candidate.textContent?.includes("Terminal"));
+  await React.act(() => item?.click());
+  // A menu closes after its exit transition; fake timers must run it.
+  if (vi.isFakeTimers()) await React.act(() => vi.advanceTimersByTimeAsync(50));
+  await React.act(async () => {});
+};
+const terminalTabOf = (container: HTMLElement) =>
+  container.querySelector<HTMLButtonElement>("#thread-view-tab-terminal_1");
+const changesTabOf = (container: HTMLElement) =>
+  container.querySelector<HTMLButtonElement>("#thread-view-tab-changes");
 
 const ready = JSON.stringify({
   v: 1,
@@ -168,10 +190,10 @@ describe("ThreadTerminal browser protocol v1", () => {
     const root = createRoot(container);
     await React.act(() =>
       root.render(
-        <ThreadDesktopLayout
+        <PaneTreeHarness
           changes={<div>Changes</div>}
           main={<div>Agent</div>}
-          rightPaneCollapsed={false}
+          open={["changes"]}
           terminal={
             <ThreadTerminal
               loadEmulator={loadEmulator}
@@ -183,12 +205,7 @@ describe("ThreadTerminal browser protocol v1", () => {
     );
     expect(FakeSocket.instances).toHaveLength(0);
 
-    await React.act(() =>
-      container
-        .querySelector<HTMLButtonElement>("#thread-workspace-tab-terminal")
-        ?.click(),
-    );
-    await React.act(async () => {});
+    await openTerminalTab(container);
     const socket = FakeSocket.instances[0] as FakeSocket;
     socket.emit("open");
     await React.act(() =>
@@ -287,27 +304,23 @@ describe("ThreadTerminal browser protocol v1", () => {
     );
     const container = document.body.appendChild(document.createElement("div"));
     const root = createRoot(container);
-    const layout = (rightPaneCollapsed: boolean) => (
-      <ThreadDesktopLayout
-        changes={<div>Changes</div>}
-        main={<div>Agent</div>}
-        rightPaneCollapsed={rightPaneCollapsed}
-        terminal={(active) => (
-          <ThreadTerminal
-            loadEmulator={loadEmulator}
-            active={active}
-            threadId={"thr_00000000-0000-4000-8000-000000000183" as ThreadId}
-          />
-        )}
-      />
-    );
-    await React.act(() => root.render(layout(false)));
     await React.act(() =>
-      container
-        .querySelector<HTMLButtonElement>("#thread-workspace-tab-terminal")
-        ?.click(),
+      root.render(
+        <PaneTreeHarness
+          changes={<div>Changes</div>}
+          main={<div>Agent</div>}
+          open={["changes"]}
+          terminal={(active) => (
+            <ThreadTerminal
+              loadEmulator={loadEmulator}
+              active={active}
+              threadId={"thr_00000000-0000-4000-8000-000000000183" as ThreadId}
+            />
+          )}
+        />,
+      ),
     );
-    await React.act(async () => {});
+    await openTerminalTab(container);
     const socket = FakeSocket.instances[0] as FakeSocket;
     socket.emit("open");
     await React.act(() => socket.emit("message", ready));
@@ -316,11 +329,12 @@ describe("ThreadTerminal browser protocol v1", () => {
     expect(visible()).toBe(true);
     const sent = socket.sent.length;
 
-    // Hidden, the emulator must not be fitted to the closed pane: shrinking
-    // it and the shell to a few columns is what erased the scrollback.
-    await React.act(() => root.render(layout(true)));
+    // Hidden behind another tab, the emulator must not be fitted to the
+    // hidden pane: shrinking it and the shell to a few columns is what
+    // erased the scrollback.
+    await React.act(() => changesTabOf(container)?.click());
     expect(visible()).toBe(false);
-    await React.act(() => root.render(layout(false)));
+    await React.act(() => terminalTabOf(container)?.click());
     expect(visible()).toBe(true);
 
     expect(emulator.mount).toHaveBeenCalledOnce();
@@ -551,26 +565,25 @@ describe("ThreadTerminal browser protocol v1", () => {
     );
     expect(container.querySelector("form")).toBeNull();
     expect(document.querySelector('[role="menuitem"]')).toBeNull();
-    const options = container.querySelector(
-      'button[aria-label="Terminal options"]',
-    ) as HTMLButtonElement;
-    await React.act(() => options.click());
-    await React.act(async () => {});
+    await openTerminalTab(container);
     const socket = FakeSocket.instances.at(-1) as FakeSocket;
     socket.emit("open");
     const form = container.querySelector("form") as HTMLFormElement;
     await React.act(() => form.requestSubmit());
     expect(confirm).not.toHaveBeenCalled();
     await React.act(() => socket.emit("message", ready));
-    expect(
-      container
-        .querySelector("#thread-workspace-tab-terminal")
-        ?.getAttribute("aria-selected"),
-    ).toBe("true");
+    expect(terminalTabOf(container)?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    const options = container.querySelector(
+      'button[aria-label="Terminal Actions"]',
+    ) as HTMLButtonElement;
+    await React.act(() => options.click());
+    await React.act(async () => {});
     const item = document.querySelector(
       '[role="menuitem"]',
     ) as HTMLButtonElement;
-    expect(item.textContent).toContain("Refresh environment");
+    expect(item.textContent).toContain("Refresh Environment");
     expect(item.form).toBe(form);
     expect(form.querySelector("button")).toBeNull();
     await React.act(() => item.click());
@@ -739,10 +752,10 @@ describe("ThreadTerminal browser protocol v1", () => {
     const root = createRoot(container);
     await React.act(() =>
       root.render(
-        <ThreadDesktopLayout
+        <PaneTreeHarness
           changes={<div>Changes</div>}
           main={<div>Agent</div>}
-          rightPaneCollapsed={false}
+          open={["changes"]}
           terminal={(active) => (
             <ThreadTerminal
               loadEmulator={loadEmulator}
@@ -753,14 +766,9 @@ describe("ThreadTerminal browser protocol v1", () => {
         />,
       ),
     );
-    const terminalTab = container.querySelector<HTMLButtonElement>(
-      "#thread-workspace-tab-terminal",
-    );
-    const changesTab = container.querySelector<HTMLButtonElement>(
-      "#thread-workspace-tab-changes",
-    );
-    await React.act(() => terminalTab?.click());
-    await React.act(async () => {});
+    await openTerminalTab(container);
+    const terminalTab = terminalTabOf(container);
+    const changesTab = changesTabOf(container);
     const socket = FakeSocket.instances[0] as FakeSocket;
     socket.emit("open");
     await React.act(() => socket.emit("message", ready));
@@ -794,10 +802,10 @@ describe("ThreadTerminal browser protocol v1", () => {
     const root = createRoot(container);
     await React.act(() =>
       root.render(
-        <ThreadDesktopLayout
+        <PaneTreeHarness
           changes={<div>Changes</div>}
           main={<div>Agent</div>}
-          rightPaneCollapsed={false}
+          open={["changes"]}
           terminal={(active) => (
             <ThreadTerminal
               loadEmulator={loadEmulator}
@@ -808,14 +816,9 @@ describe("ThreadTerminal browser protocol v1", () => {
         />,
       ),
     );
-    const terminalTab = container.querySelector<HTMLButtonElement>(
-      "#thread-workspace-tab-terminal",
-    );
-    const changesTab = container.querySelector<HTMLButtonElement>(
-      "#thread-workspace-tab-changes",
-    );
-    await React.act(() => terminalTab?.click());
-    await React.act(async () => {});
+    await openTerminalTab(container);
+    const terminalTab = terminalTabOf(container);
+    const changesTab = changesTabOf(container);
     const socket = FakeSocket.instances[0] as FakeSocket;
     socket.emit("open");
     await React.act(() => socket.emit("message", ready));
@@ -887,10 +890,10 @@ describe("ThreadTerminal browser protocol v1", () => {
     const root = createRoot(container);
     await React.act(() =>
       root.render(
-        <ThreadDesktopLayout
+        <PaneTreeHarness
           changes={<div>Changes</div>}
           main={<div>Agent</div>}
-          rightPaneCollapsed={false}
+          open={["changes"]}
           terminal={(active) => (
             <ThreadTerminal
               loadEmulator={loadEmulator}
@@ -901,14 +904,9 @@ describe("ThreadTerminal browser protocol v1", () => {
         />,
       ),
     );
-    const terminalTab = container.querySelector<HTMLButtonElement>(
-      "#thread-workspace-tab-terminal",
-    );
-    const changesTab = container.querySelector<HTMLButtonElement>(
-      "#thread-workspace-tab-changes",
-    );
-    await React.act(() => terminalTab?.click());
-    await React.act(async () => {});
+    await openTerminalTab(container);
+    const terminalTab = terminalTabOf(container);
+    const changesTab = changesTabOf(container);
     const socket = FakeSocket.instances[0] as FakeSocket;
     socket.emit("open");
     await React.act(() => socket.emit("message", ready));
@@ -954,10 +952,10 @@ describe("ThreadTerminal browser protocol v1", () => {
     const root = createRoot(container);
     await React.act(() =>
       root.render(
-        <ThreadDesktopLayout
+        <PaneTreeHarness
           changes={<div>Changes</div>}
           main={<div>Agent</div>}
-          rightPaneCollapsed={false}
+          open={["changes"]}
           terminal={(active) => (
             <ThreadTerminal
               loadEmulator={loadEmulator}
@@ -968,14 +966,9 @@ describe("ThreadTerminal browser protocol v1", () => {
         />,
       ),
     );
-    const terminalTab = container.querySelector<HTMLButtonElement>(
-      "#thread-workspace-tab-terminal",
-    );
-    const changesTab = container.querySelector<HTMLButtonElement>(
-      "#thread-workspace-tab-changes",
-    );
-    await React.act(() => terminalTab?.click());
-    await React.act(async () => {});
+    await openTerminalTab(container);
+    const terminalTab = terminalTabOf(container);
+    const changesTab = changesTabOf(container);
     const socket = FakeSocket.instances[0] as FakeSocket;
     socket.emit("open");
     await React.act(() => socket.emit("message", ready));

@@ -140,7 +140,7 @@ vi.mock("./file-viewer.js", async () => {
 
 import type { ChangesTransport } from "../changes/changes-api.js";
 import { changesKeys } from "../changes/changes-queries.js";
-import { ThreadDesktopLayout } from "../thread-desktop-layout.js";
+import { PaneTreeHarness } from "../../../testing/pane-tree-harness.js";
 import type { ThreadFilesApi } from "./files-api.js";
 import { ThreadFilePane, ThreadFilesPanel } from "./files-panel.js";
 
@@ -219,6 +219,21 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
+/** Opens the Files view from the view pane's Open Tab menu. */
+const openFilesTab = async (container: HTMLElement) => {
+  const openTab = [
+    ...container.querySelectorAll<HTMLButtonElement>(
+      'button[aria-label="Open Tab"]',
+    ),
+  ].at(-1);
+  await React.act(() => openTab?.click());
+  const item = [
+    ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+  ].find((candidate) => candidate.textContent?.includes("Files"));
+  await React.act(() => item?.click());
+  await React.act(async () => {});
+};
+
 describe("Thread Files lazy reads", () => {
   it("opens a running workspace directly from the Files tab", async () => {
     const transport: ThreadFilesApi = {
@@ -234,7 +249,7 @@ describe("Thread Files lazy reads", () => {
     await React.act(() =>
       root.render(
         <QueryClientProvider client={client}>
-          <ThreadDesktopLayout
+          <PaneTreeHarness
             changes={<div>Changes</div>}
             files={
               <ThreadFilesPanel
@@ -245,18 +260,14 @@ describe("Thread Files lazy reads", () => {
               />
             }
             main={<div>Agent</div>}
-            rightPaneCollapsed={false}
+            open={["changes"]}
           />
         </QueryClientProvider>,
       ),
     );
     expect(transport.list).not.toHaveBeenCalled();
 
-    await React.act(() =>
-      container
-        .querySelector<HTMLButtonElement>("#thread-workspace-tab-files")
-        ?.click(),
-    );
+    await openFilesTab(container);
     await settle();
 
     expect(transport.list).toHaveBeenCalledOnce();
@@ -283,7 +294,7 @@ describe("Thread Files lazy reads", () => {
     await React.act(() =>
       root.render(
         <QueryClientProvider client={client}>
-          <ThreadDesktopLayout
+          <PaneTreeHarness
             changes={<div>Changes</div>}
             files={(active) => (
               <ThreadFilesPanel
@@ -295,22 +306,18 @@ describe("Thread Files lazy reads", () => {
               />
             )}
             main={<div>Agent</div>}
-            rightPaneCollapsed={false}
+            open={["changes"]}
           />
         </QueryClientProvider>,
       ),
     );
-    await React.act(() =>
-      container
-        .querySelector<HTMLButtonElement>("#thread-workspace-tab-files")
-        ?.click(),
-    );
+    await openFilesTab(container);
     await settle();
     expect(transport.list).toHaveBeenCalledOnce();
 
     await React.act(() =>
       container
-        .querySelector<HTMLButtonElement>("#thread-workspace-tab-changes")
+        .querySelector<HTMLButtonElement>("#thread-view-tab-changes")
         ?.click(),
     );
     await client.invalidateQueries({
@@ -341,7 +348,7 @@ describe("Thread Files lazy reads", () => {
     await React.act(() =>
       root.render(
         <QueryClientProvider client={client}>
-          <ThreadDesktopLayout
+          <PaneTreeHarness
             changes={<div>Changes</div>}
             files={(active) => (
               <ThreadFilesPanel
@@ -353,16 +360,12 @@ describe("Thread Files lazy reads", () => {
               />
             )}
             main={<div>Agent</div>}
-            rightPaneCollapsed={false}
+            open={["changes"]}
           />
         </QueryClientProvider>,
       ),
     );
-    await React.act(() =>
-      container
-        .querySelector<HTMLButtonElement>("#thread-workspace-tab-files")
-        ?.click(),
-    );
+    await openFilesTab(container);
     await settle();
     await client.invalidateQueries({
       queryKey: ["thread-files", threadId],
@@ -621,7 +624,7 @@ describe("Thread Files lazy reads", () => {
     await React.act(() =>
       root.render(
         <QueryClientProvider client={client}>
-          <ThreadDesktopLayout
+          <PaneTreeHarness
             changes={<div>Changes</div>}
             files={
               <ThreadFilesPanel
@@ -632,17 +635,13 @@ describe("Thread Files lazy reads", () => {
               />
             }
             main={<div>Agent</div>}
-            rightPaneCollapsed={false}
+            open={["changes"]}
           />
         </QueryClientProvider>,
       ),
     );
 
-    await React.act(() =>
-      container
-        .querySelector<HTMLButtonElement>("#thread-workspace-tab-files")
-        ?.click(),
-    );
+    await openFilesTab(container);
 
     expect(transport.list).toHaveBeenCalledOnce();
     expect(
@@ -679,7 +678,7 @@ describe("Thread Files lazy reads", () => {
     await React.act(() =>
       root.render(
         <QueryClientProvider client={client}>
-          <ThreadDesktopLayout
+          <PaneTreeHarness
             changes={<div>Changes</div>}
             files={
               <ThreadFilesPanel
@@ -690,17 +689,13 @@ describe("Thread Files lazy reads", () => {
               />
             }
             main={<div>Agent</div>}
-            rightPaneCollapsed={false}
+            open={["changes"]}
           />
         </QueryClientProvider>,
       ),
     );
 
-    await React.act(() =>
-      container
-        .querySelector<HTMLButtonElement>("#thread-workspace-tab-files")
-        ?.click(),
-    );
+    await openFilesTab(container);
     await settle();
 
     await vi.waitFor(() =>
