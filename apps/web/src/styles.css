@@ -463,8 +463,9 @@ a {
    features/threads/panes/panes.css. */
 /* The title bar: 36px, the title and More Actions on
    the left, the controls on the right as 26px icon buttons and 12px text
-   buttons. Touch pointers get 44px and 36px. Below 768px (data-compact)
-   only icons remain. */
+   buttons. Touch pointers get 44px and 36px. Below 1024px (data-compact)
+   only icons remain, and the controls that do not fit move into More
+   Actions (title-bar-overflow.ts). */
 .thread-title-bar {
   container: thread-title-bar / inline-size;
   position: relative;
@@ -475,6 +476,9 @@ a {
   height: 36px;
   min-width: 0;
   padding: 0 8px 0 12px;
+  /* The bar never widens the page: a compact bar moves what does not fit
+     into More Actions, and anything left over is cut, not scrolled. */
+  overflow-x: clip;
   user-select: none;
 }
 .thread-title-bar::after {
@@ -530,6 +534,15 @@ a {
 .thread-title-menu {
   display: inline-flex;
   flex: none;
+}
+/* An optional control's slot; a compact bar empties the ones that do not fit. */
+.thread-title-bar-item {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.thread-title-bar-item[data-overflow-hidden] {
+  display: none;
 }
 /* Every control: a 26px box, 4px corners, muted until hovered. */
 .thread-title-bar .thread-title-action,
@@ -633,17 +646,25 @@ a {
   cursor: not-allowed;
   opacity: 0.55;
 }
-/* On phones the labels go; the Orb before the title stays. */
+/* On phones the labels go; the Orb before the title stays. The title gives
+   way to the controls down to this width, then the controls give way. */
 .thread-title-bar[data-compact] .thread-title {
+  min-width: 72px;
   font-size: 15px;
 }
+/* The controls keep their width; the title group takes what is left. */
+.thread-title-bar[data-compact] .thread-title-group {
+  flex: 1 1 auto;
+}
 .thread-title-bar[data-compact] .thread-title-actions {
+  flex: 0 0 auto;
   gap: 0;
 }
 .thread-title-bar[data-compact] .automation-chip .thread-header-chip-label {
   display: none;
 }
 .thread-title-bar[data-compact] .automation-chip {
+  min-width: 26px;
   padding: 0;
 }
 /* Touch: a 44px bar with 36px controls and 20px icons. */
@@ -892,8 +913,10 @@ a {
 .thread-context-item[data-highlighted] svg {
   color: inherit;
 }
-.thread-actions-menu .thread-menu-item > span,
-.thread-context-item > span {
+/* The label grows; a shortcut's box (role="img", see the end of this file)
+   keeps its own width. */
+.thread-context-item > span:not([role="img"]),
+.thread-actions-menu .thread-menu-item > span:not([role="img"]) {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -14152,4 +14175,13 @@ body:has(.dx-app-shell) {
   max-width: calc(100vw - 144px);
   max-height: calc(100dvh - 120px);
   background: #000;
+}
+
+/* Menu shortcuts: the bordered box hugs its keys at the item's end instead
+   of stretching across the item's free space. Last, so it outranks the
+   generic .shortcut-keycaps rules without a descending-specificity order. */
+.thread-context-item > .shortcut-keycaps,
+.thread-actions-menu .thread-menu-item > .shortcut-keycaps {
+  flex: none;
+  margin-left: auto;
 }

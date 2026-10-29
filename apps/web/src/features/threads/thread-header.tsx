@@ -1,11 +1,15 @@
+import { Menu } from "@base-ui/react/menu";
 import type { ProjectData, ThreadDetailData } from "@dx/api";
 import { useNavigate } from "@tanstack/react-router";
 import { DateTime } from "effect";
 import {
   AlarmClock,
   Bookmark,
+  CalendarClock,
+  CircleCheck,
   Eye,
   FolderGit2,
+  GitPullRequest,
   LockKeyhole,
   UsersRound,
 } from "lucide-react";
@@ -20,13 +24,25 @@ import { Avatar } from "../../shared/ui/avatar.js";
 import { Button } from "../../shared/ui/button.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { ThreadTitleText } from "../../shared/ui/thread-title.js";
+import {
+  type AutomationView,
+  automationViews,
+  useThreadAutomations,
+} from "./automations/automations-queries.js";
 import { ThreadAutomationsButton } from "./automations/thread-automations-button.js";
+import { ThreadAutomationsSheet } from "./automations/thread-automations-sheet.js";
 import { useThreadLayoutMode } from "./panes/thread-layout-mode.js";
 import { ShareDialog } from "./sharing/share-dialog.js";
 import { useSetThreadFollowing } from "./sharing/sharing-mutations.js";
-import { ThreadParticipants } from "./sharing/thread-participants.js";
-import { ThreadMenu } from "./thread-menu.js";
+import { participantsLabel } from "./sharing/sharing-format.js";
+import {
+  ThreadParticipants,
+  ThreadParticipantsMenuContent,
+} from "./sharing/thread-participants.js";
+import { ThreadMenu, ThreadMenuSubmenu } from "./thread-menu.js";
 import { threadSelectionSummary } from "./thread-selection-summary.js";
+import { TitleBarItemSlot } from "./title-bar-item.js";
+import { useTitleBarOverflow } from "./title-bar-overflow.js";
 import type { TranscriptViewModel } from "./transcript-view-model.js";
 
 /** While the Thread sleeps: when it wakes, and Wake to bring it back now. */
@@ -111,8 +127,11 @@ function PrivacyBadge({
  * The Thread's title bar: the animated Orb and the title, then More Actions
  * on the left; on the right the Project, pull requests, checks and listeners,
  * the agent, who is in a shared Thread, the privacy badge (which opens
- * Share), and Views. Below 768px the labels go and the controls are icons;
- * the Project and agent move into More Actions.
+ * Share), and Views. Below 1024px the labels go and the controls are icons;
+ * the Project and agent move into More Actions, and the controls the bar
+ * has no room for (the privacy badge first, then the people, listeners,
+ * checks, and pull requests) follow them there, so the bar never widens
+ * the page. The title keeps at least its minimum width and elides.
  */
 export function ThreadHeader({
   thread,
@@ -157,19 +176,79 @@ export function ThreadHeader({
   const navigate = useNavigate();
   const shared =
     thread.sharing !== undefined || (thread.participants?.length ?? 0) > 1;
+  // A compact bar measures its optional controls and lists the ones that
+  // do not fit in More Actions, where the automations open as sheets.
+  const { barRef, titleGroupRef, actionsRef, itemRef, hidden } =
+    useTitleBarOverflow();
+  const [sheet, setSheet] = React.useState<AutomationView | undefined>();
+  const automations = useThreadAutomations(thread.id, own && compact).data;
+  const overflowItems =
+    hidden.size === 0
+      ? undefined
+      : [
+          ...automationViews(automations).flatMap(({ view, label }) =>
+            hidden.has(view)
+              ? [
+                  <Menu.Item
+                    key={view}
+                    className="thread-menu-item"
+                    onClick={() => setSheet(view)}
+                  >
+                    {view === "pulls" ? (
+                      <GitPullRequest />
+                    ) : view === "ci" ? (
+                      <CircleCheck />
+                    ) : (
+                      <CalendarClock />
+                    )}
+                    <span>{label}</span>
+                  </Menu.Item>,
+                ]
+              : [],
+          ),
+          ...(hidden.has("participants") && shared
+            ? [
+                <ThreadMenuSubmenu
+                  key="participants"
+                  icon={<UsersRound />}
+                  label={participantsLabel(thread.participants?.length ?? 0, 0)}
+                  popupClassName="thread-participants-menu"
+                >
+                  <ThreadParticipantsMenuContent
+                    thread={thread}
+                    onOpenShare={openShare}
+                    onEnableMultiplayer={openShare}
+                  />
+                </ThreadMenuSubmenu>,
+              ]
+            : []),
+        ];
   const menu = transcript ? (
     <ThreadMenu
       thread={thread}
       project={project}
       transcript={transcript}
       onOpenShare={compact ? openShare : undefined}
+      overflowItems={
+        overflowItems === undefined || overflowItems.length === 0
+          ? undefined
+          : overflowItems
+      }
       showDetails={compact}
     />
   ) : null;
   const orbLabel = `${EXECUTION_ENVIRONMENT_DISPLAY_NAME} ${environmentState}`;
   return (
-    <header className="thread-title-bar" data-compact={compact || undefined}>
-      <div className="thread-title-group" {...threadColorAttributes(thread)}>
+    <header
+      className="thread-title-bar"
+      data-compact={compact || undefined}
+      ref={compact ? barRef : undefined}
+    >
+      <div
+        className="thread-title-group"
+        ref={titleGroupRef}
+        {...threadColorAttributes(thread)}
+      >
         {own ? null : <FollowButton thread={thread} />}
         {own || owner === undefined ? null : (
           <span className="thread-title-owner" title={owner.name}>
@@ -200,7 +279,7 @@ export function ThreadHeader({
           />
         ) : null}
       </div>
-      <div className="thread-title-actions">
+      <div className="thread-title-actions" ref={actionsRef}>
         {compact ? null : <span className="thread-title-menu">{menu}</span>}
         <span className="thread-title-spacer" />
         {compact ? null : own ? (
@@ -228,21 +307,31 @@ export function ThreadHeader({
             <span>{projectName ?? "No project"}</span>
           </span>
         )}
-        {own ? <ThreadAutomationsButton threadId={thread.id} /> : null}
+        {own ? (
+          <ThreadAutomationsButton
+            threadId={thread.id}
+            itemRef={itemRef}
+            hidden={hidden}
+          />
+        ) : null}
         {compact ? null : (
           <span className="thread-title-meta" title={summary.title}>
             {selectionLabel}
           </span>
         )}
         {shared ? (
-          <ThreadParticipants
-            thread={thread}
-            onOpenShare={openShare}
-            onEnableMultiplayer={openShare}
-          />
+          <TitleBarItemSlot id="participants" itemRef={itemRef} hidden={hidden}>
+            <ThreadParticipants
+              thread={thread}
+              onOpenShare={openShare}
+              onEnableMultiplayer={openShare}
+            />
+          </TitleBarItemSlot>
         ) : null}
         {own ? (
-          <PrivacyBadge thread={thread} onOpenShare={openShare} />
+          <TitleBarItemSlot id="privacy" itemRef={itemRef} hidden={hidden}>
+            <PrivacyBadge thread={thread} onOpenShare={openShare} />
+          </TitleBarItemSlot>
         ) : (
           <span
             className="thread-access-chip"
@@ -272,6 +361,13 @@ export function ThreadHeader({
           onOpenChange={setShareOpen}
         />
       ) : null}
+      {sheet === undefined ? null : (
+        <ThreadAutomationsSheet
+          threadId={thread.id}
+          view={sheet}
+          onClose={() => setSheet(undefined)}
+        />
+      )}
     </header>
   );
 }

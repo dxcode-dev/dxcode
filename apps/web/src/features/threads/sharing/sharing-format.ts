@@ -33,3 +33,7 @@ export const conciseAge = (iso: string, now: number) => {
   const days = Math.floor(hours / 24);
   return days < 7 ? `${days}d` : `${Math.floor(days / 7)}w`;
 };
+
+/** "3 people in this thread, 1 here now": the trigger's and menu entry's name. */
+export const participantsLabel = (count: number, liveCount: number) =>
+  `${count} ${count === 1 ? "person" : "people"} in this thread${liveCount > 0 ? `, ${liveCount} here now` : ""}`;

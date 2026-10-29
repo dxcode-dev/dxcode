@@ -1,9 +1,10 @@
 import * as React from "react";
 
-/** Below this width the page stacks: one view at a time under a view row. */
+/**
+ * Below this width the page stacks: one view at a time under a view row,
+ * and the title bar shows icons only (phones, iPad portrait).
+ */
 export const PANES_MIN_WIDTH = 1024;
-/** Below this width the title bar shows icons only. */
-export const COMPACT_TITLE_MAX_WIDTH = 767;
 
 const useMediaQuery = (query: string) => {
   const list = window.matchMedia(query);
@@ -18,7 +19,10 @@ const useMediaQuery = (query: string) => {
 export interface ThreadLayoutMode {
   /** One view at a time under a scrolling view row (phone, iPad portrait). */
   readonly stacked: boolean;
-  /** Icon-only title bar; project, agent, and cost move to More Actions. */
+  /**
+   * Icon-only title bar; the project and agent move to More Actions, and so
+   * do the controls the bar has no room for.
+   */
   readonly compact: boolean;
   /** Touch sizes: 44px bars and 36px buttons. */
   readonly coarse: boolean;
@@ -31,7 +35,6 @@ export interface ThreadLayoutMode {
  */
 export function useThreadLayoutMode(): ThreadLayoutMode {
   const stacked = useMediaQuery(`(max-width: ${PANES_MIN_WIDTH - 1}px)`);
-  const compact = useMediaQuery(`(max-width: ${COMPACT_TITLE_MAX_WIDTH}px)`);
   const coarse = useMediaQuery("(pointer: coarse)");
-  return { stacked, compact, coarse };
+  return { stacked, compact: stacked, coarse };
 }

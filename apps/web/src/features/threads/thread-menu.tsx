@@ -55,13 +55,16 @@ import {
 import { threadSelectionSummary } from "./thread-selection-summary.js";
 import type { TranscriptViewModel } from "./transcript-view-model.js";
 
-function Submenu({
+/** A Thread menu entry that opens a submenu of its own items. */
+export function ThreadMenuSubmenu({
   icon,
   label,
+  popupClassName = "",
   children,
 }: {
   readonly icon: React.ReactNode;
   readonly label: string;
+  readonly popupClassName?: string;
   readonly children: React.ReactNode;
 }) {
   return (
@@ -77,7 +80,9 @@ function Submenu({
           sideOffset={4}
           alignOffset={-4}
         >
-          <Menu.Popup className="thread-menu-popup thread-actions-menu thread-actions-submenu">
+          <Menu.Popup
+            className={`thread-menu-popup thread-actions-menu thread-actions-submenu ${popupClassName}`}
+          >
             {children}
           </Menu.Popup>
         </Menu.Positioner>
@@ -91,6 +96,7 @@ export function ThreadMenu({
   project,
   transcript,
   onOpenShare,
+  overflowItems,
   showDetails = false,
 }: {
   readonly thread: ThreadDetailData;
@@ -99,6 +105,11 @@ export function ThreadMenu({
   readonly transcript: () => TranscriptViewModel;
   /** Share, for a title bar with no room for its button. */
   readonly onOpenShare?: () => void;
+  /**
+   * Entries for the title bar controls a narrow bar took out of its row:
+   * pull requests, CI, listeners, and the people in the Thread.
+   */
+  readonly overflowItems?: React.ReactNode;
   /**
    * Adds what the Thread runs on and its Project, which a phone's title bar
    * has no room for.
@@ -214,7 +225,7 @@ export function ThreadMenu({
                 <Hash />
                 <span>Copy Thread ID</span>
               </Menu.Item>
-              <Submenu icon={<FileDown />} label="Export">
+              <ThreadMenuSubmenu icon={<FileDown />} label="Export">
                 <Menu.Item
                   className="thread-menu-item"
                   onClick={() => download("markdown")}
@@ -229,10 +240,14 @@ export function ThreadMenu({
                   <Braces />
                   <span>JSON</span>
                 </Menu.Item>
-              </Submenu>
-              {onOpenShare === undefined && !pinnable && !snoozable ? null : (
+              </ThreadMenuSubmenu>
+              {onOpenShare === undefined &&
+              overflowItems === undefined &&
+              !pinnable &&
+              !snoozable ? null : (
                 <Menu.Separator className="thread-menu-separator" />
               )}
+              {overflowItems}
               {onOpenShare === undefined ? null : (
                 <Menu.Item className="thread-menu-item" onClick={onOpenShare}>
                   <Share2 />
@@ -403,13 +418,13 @@ function SnoozeMenuItem({
       </Menu.Item>
     );
   return (
-    <Submenu icon={<AlarmClock />} label="Snooze">
+    <ThreadMenuSubmenu icon={<AlarmClock />} label="Snooze">
       <SnoozeMenuItems
         threadId={thread.id}
         snooze={snooze}
         itemClassName="thread-menu-item"
       />
-    </Submenu>
+    </ThreadMenuSubmenu>
   );
 }
 

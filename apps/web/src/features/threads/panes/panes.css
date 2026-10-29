@@ -379,12 +379,13 @@
 /* View menus: the shortcut or "Open" sits at the item's end. */
 .pane-view-menu-item .shortcut-keycaps,
 .pane-view-menu-open {
+  flex: none;
   margin-left: auto;
-  padding-left: 12px;
   color: var(--muted-foreground);
   font-size: 11px;
 }
 .pane-view-menu-open {
+  padding-left: 12px;
   font-weight: 400;
 }
 .pane-view-menu .thread-menu-item > span:not(.shortcut-keycaps) {
