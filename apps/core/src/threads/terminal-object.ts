@@ -75,6 +75,7 @@ import {
   DxdProxyPortsResult,
   DxdResponseEnvelope,
   DxdServicesEnsureResult,
+  DxdStorageOperation,
   type DxdTerminalHeartbeat,
   DxdUpdateMessage,
   type DxdWorkloadIdentityRequest,
@@ -166,6 +167,16 @@ const TRANSIENT_ACTIVATION_RETRY_MS = 250;
 export const DAEMON_ACTIVATION_DEADLINE_MS = 90_000;
 export const DAEMON_ACTIVATION_GRACE_MS = 90_000;
 const DAEMON_REQUEST_TIMEOUT_MS = 5_000;
+/**
+ * A storage transfer moves up to 200 files of up to 500 MB each. dxd stops
+ * a minute earlier (`TRANSFER_BUDGET` in `apps/dxd/src/storage.rs`), so a
+ * file never lands after this gives up.
+ */
+const STORAGE_TRANSFER_TIMEOUT_MS = 15 * 60_000;
+/** How often a running transfer counts as workspace activity. */
+const STORAGE_TRANSFER_ACTIVITY_MS = 60_000;
+/** How long a transfer waits for an older daemon to update itself. */
+const STORAGE_DAEMON_UPDATE_WAIT_MS = 120_000;
 /** The image's desktop start script waits up to 45 s for its gateway. */
 const DESKTOP_ENSURE_TIMEOUT_MS = 50_000;
 /** How long a request waits for a service it started to listen. */
@@ -346,6 +357,8 @@ interface DaemonAuthority {
   readonly memory?: boolean;
   /** The connected daemon reports its disk and serves `disk.*` operations. */
   readonly disk?: boolean;
+  /** The connected daemon serves `storage.export` and `storage.import`. */
+  readonly storage?: boolean;
 }
 
 interface DaemonAttachment {
@@ -738,6 +751,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       return this.#serveOrbMemory(request, path);
     if (path === "/orb/disk" || path === "/orb/disk/delete")
       return this.#serveOrbDisk(request, path);
+    if (path === "/storage/transfer") return this.#transferStorage(request);
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
       return new Response(null, { status: 404 });
     const threadId = Schema.decodeUnknownOption(ThreadId)(
@@ -971,6 +985,79 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
               DAEMON_REQUEST_TIMEOUT_MS,
             ),
     });
+  }
+
+  /**
+   * Move files between this Thread's Orb and Thread storage for the agent's
+   * thread file tools (`thread-storage/agent-tools.ts`), after they have
+   * authorized the call. Wakes a paused Orb, waits for a daemon that has
+   * not yet updated to one that serves storage, and counts as workspace
+   * activity while it runs. The daemon moves the bytes straight to or from
+   * R2; only its JSON answer passes through here.
+   */
+  async #transferStorage(request: Request): Promise<Response> {
+    if (
+      request.method !== "POST" ||
+      request.headers.get("x-dx-storage-transfer") !== "1"
+    )
+      return new Response(null, { status: 404 });
+    const threadId = Schema.decodeUnknownOption(ThreadId)(
+      request.headers.get("x-dx-thread-id"),
+    );
+    if (Option.isNone(threadId)) return new Response(null, { status: 404 });
+    let operation: DxdStorageOperation;
+    try {
+      operation = Schema.decodeUnknownSync(DxdStorageOperation)(
+        await request.json(),
+        { onExcessProperty: "error" },
+      );
+    } catch {
+      return new Response(null, { status: 400 });
+    }
+    if (!(await this.#activateWithRetry(threadId.value)).ok)
+      return daemonFailureResponse("known");
+    // An older daemon was admitted and asked to update itself; its
+    // successor registers with the `storage` capability.
+    const updateDeadline = Date.now() + STORAGE_DAEMON_UPDATE_WAIT_MS;
+    while (
+      this.#authority?.threadId === threadId.value &&
+      this.#authority.storage !== true &&
+      Date.now() < updateDeadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      if (
+        this.#currentDaemonSocket() === undefined &&
+        !(await this.#activateWithRetry(threadId.value)).ok
+      )
+        return daemonFailureResponse("known");
+    }
+    const current = this.#authority;
+    if (current?.threadId !== threadId.value)
+      return daemonFailureResponse("known");
+    if (current.storage !== true)
+      return Response.json(
+        { kind: "unavailable", reason: "outdated" },
+        { status: 409 },
+      );
+    const recordActivity = () =>
+      ExecutionWorkspaces.recordResidentTerminalInput(threadId.value).catch(
+        () => undefined,
+      );
+    await recordActivity();
+    const activity = setInterval(
+      () => void recordActivity(),
+      STORAGE_TRANSFER_ACTIVITY_MS,
+    );
+    try {
+      return await this.#dispatchDaemonOperation(
+        current,
+        operation,
+        DXD_MAX_REQUEST_FRAME_BYTES,
+        STORAGE_TRANSFER_TIMEOUT_MS,
+      );
+    } finally {
+      clearInterval(activity);
+    }
   }
 
   /**
@@ -3666,6 +3753,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         proxy: control.value.capabilities.proxy !== undefined,
         memory: control.value.capabilities.memory !== undefined,
         disk: control.value.capabilities.disk !== undefined,
+        storage: control.value.capabilities.storage !== undefined,
       };
       this.#orbMemory.reset();
       this.#orbDisk.reset();

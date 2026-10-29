@@ -16,6 +16,11 @@ import {
   type DxdFilesSaveOperation,
   DxdFilesSaveResult,
   DxdSandboxChunkHeader,
+  type DxdStorageExportOperation,
+  DxdStorageExportResult,
+  type DxdStorageImportOperation,
+  DxdStorageImportResult,
+  DxdStorageOperation,
 } from "../execution/dxd/protocol.js";
 import type { Bindings } from "../http/types.js";
 
@@ -305,3 +310,70 @@ export const drainThreadDaemon = async (
     throw unavailable("unknown");
   }
 };
+
+/**
+ * Move files between a Thread's Orb and its storage: the execution object
+ * wakes the Orb and its dxd moves the bytes straight to or from R2. Throws
+ * when the workspace is unavailable or its daemon cannot transfer.
+ */
+export async function transferThreadStorage(
+  bindings: Pick<Bindings, "THREAD_EXECUTION">,
+  threadId: ThreadId,
+  operation: DxdStorageExportOperation,
+): Promise<DxdStorageExportResult>;
+export async function transferThreadStorage(
+  bindings: Pick<Bindings, "THREAD_EXECUTION">,
+  threadId: ThreadId,
+  operation: DxdStorageImportOperation,
+): Promise<DxdStorageImportResult>;
+export async function transferThreadStorage(
+  bindings: Pick<Bindings, "THREAD_EXECUTION">,
+  threadId: ThreadId,
+  operation: DxdStorageExportOperation | DxdStorageImportOperation,
+) {
+  const namespace = bindings.THREAD_EXECUTION;
+  if (namespace === undefined) throw unavailable("known");
+  try {
+    const response = await namespace
+      .get(namespace.idFromName(threadId))
+      .fetch("https://thread.internal/storage/transfer", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-dx-storage-transfer": "1",
+          "x-dx-thread-id": threadId,
+        },
+        body: JSON.stringify(
+          Schema.encodeUnknownSync(DxdStorageOperation)(operation),
+        ),
+      });
+    if (response.status === 409) {
+      await response.body?.cancel();
+      throw new StorageTransferOutdated();
+    }
+    if (!response.ok) {
+      const failure = Schema.decodeUnknownOption(DaemonFailureResponse)(
+        await response.json().catch(() => undefined),
+      );
+      throw unavailable(
+        Option.isSome(failure) ? failure.value.outcome : "unknown",
+      );
+    }
+    const result = await response.json();
+    return operation.operation === "storage.export"
+      ? Schema.decodeUnknownSync(DxdStorageExportResult)(result)
+      : Schema.decodeUnknownSync(DxdStorageImportResult)(result);
+  } catch (cause) {
+    if (
+      cause instanceof DaemonUnavailable ||
+      cause instanceof StorageTransferOutdated
+    )
+      throw cause;
+    throw unavailable("unknown");
+  }
+}
+
+/** The Thread's daemon predates storage transfers and has not updated yet. */
+export class StorageTransferOutdated extends Data.TaggedError(
+  "StorageTransferOutdated",
+) {}

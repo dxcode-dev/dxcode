@@ -29,6 +29,11 @@ export const DxAgentInitialDataSchema = v.object({
       }),
     ]),
   ),
+  /**
+   * The MCP servers when the agent was created. Flue keeps creation data for
+   * the agent's lifetime, so the agent reads current servers from each
+   * submission's prompt data instead (`resolveAgentPluginTools`).
+   */
   mcpConnections: v.optional(
     v.pipe(
       v.array(

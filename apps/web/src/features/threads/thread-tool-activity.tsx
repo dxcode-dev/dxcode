@@ -18,6 +18,10 @@ const threadLink = (threadId: string, label: string) => (
   </Link>
 );
 
+/** The last segment of a path input: `src/a.ts` shows as `a.ts`. */
+const fileName = (input: unknown, field: string) =>
+  stringField(input, field)?.split("/").filter(Boolean).at(-1) ?? "file";
+
 /** What a Thread tool did, as one line: "Sent thread message". */
 export function ThreadToolLabel({ part }: { readonly part: ToolPart }) {
   const threads = threadsFor(part);
@@ -80,6 +84,32 @@ export function ThreadToolLabel({ part }: { readonly part: ToolPart }) {
       return (
         <>Read {only === undefined ? "thread" : threadLink(only, "thread")}</>
       );
+    case "download_thread_file":
+      return (
+        <>
+          Downloaded <strong>{fileName(part.input, "path")}</strong> from{" "}
+          {only === undefined ? "thread" : threadLink(only, "thread")}
+        </>
+      );
+    case "upload_thread_file":
+      return (
+        <>
+          Uploaded <strong>{fileName(part.input, "path")}</strong> to{" "}
+          {only === undefined ? "thread" : threadLink(only, "thread")}
+        </>
+      );
+    case "download_thread_changes":
+      return (
+        <>
+          Downloaded changes from{" "}
+          {only === undefined ? "thread" : threadLink(only, "thread")}
+        </>
+      );
+    case "thread_file_url": {
+      const paths = record(part.input)?.paths;
+      const count = Array.isArray(paths) ? paths.length : 1;
+      return <>Shared {count === 1 ? "a file link" : `${count} file links`}</>;
+    }
     case "list_orbs":
       return <>Listed Orbs</>;
     case "list_agent_modes":

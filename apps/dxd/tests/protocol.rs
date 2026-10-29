@@ -2525,3 +2525,360 @@ async fn real_daemon_reports_disk_and_deletes_only_rebuildable_folders() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
+
+/// What the mock Core's storage routes and mock R2 saw and hold.
+#[derive(Default)]
+struct StorageMock {
+    /// Stored bytes by file id.
+    objects: std::collections::HashMap<String, Vec<u8>>,
+    /// Bodies of the create requests, in order.
+    created: Vec<Value>,
+    /// Requests to R2 that carried an Authorization header.
+    keyed_storage_requests: usize,
+    next_id: u32,
+}
+
+/// Serve Core's daemon storage routes and R2's presigned URLs on the
+/// listener the daemon's endpoint names, one request per connection, as
+/// `dxd files put` and `dxd files get` reach them.
+fn serve_storage(
+    listener: TcpListener,
+    port: u16,
+) -> std::sync::Arc<std::sync::Mutex<StorageMock>> {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let listener = listener.into_std().unwrap();
+    listener.set_nonblocking(false).unwrap();
+    let state = std::sync::Arc::new(std::sync::Mutex::new(StorageMock::default()));
+    let shared = std::sync::Arc::clone(&state);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() {
+                continue;
+            }
+            let mut parts = line.split_whitespace();
+            let method = parts.next().unwrap_or_default().to_owned();
+            let target = parts.next().unwrap_or_default().to_owned();
+            let (mut length, mut authorization) = (0, None::<String>);
+            loop {
+                let mut header = String::new();
+                reader.read_line(&mut header).unwrap();
+                if header == "\r\n" || header.is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':') {
+                    if name.eq_ignore_ascii_case("content-length") {
+                        length = value.trim().parse().unwrap();
+                    }
+                    if name.eq_ignore_ascii_case("authorization") {
+                        authorization = Some(value.trim().to_owned());
+                    }
+                }
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            let storage = format!("/v1/dxd/{THREAD_ID}/storage");
+            let keyed =
+                authorization.as_deref() == Some("Bearer dxd_integration-test-key-0123456789");
+            let mut mock = shared.lock().unwrap();
+            let (status, etag, reply): (u16, Option<String>, Vec<u8>) = if target
+                .starts_with("/r2/")
+            {
+                if authorization.is_some() {
+                    mock.keyed_storage_requests += 1;
+                }
+                let id = target
+                    .rsplit('/')
+                    .nth(usize::from(method == "PUT"))
+                    .unwrap()
+                    .to_owned();
+                if method == "PUT" {
+                    mock.objects.insert(id.clone(), body);
+                    (200, Some(format!("\"etag-{id}\"")), Vec::new())
+                } else {
+                    match mock.objects.get(&id) {
+                        Some(bytes) => (200, None, bytes.clone()),
+                        None => (404, None, Vec::new()),
+                    }
+                }
+            } else if !keyed {
+                (401, None, b"{\"error\":\"key\"}".to_vec())
+            } else if method == "POST" && target == storage {
+                let request: Value = serde_json::from_slice(&body).unwrap();
+                mock.next_id += 1;
+                let id = format!("tsf_{:032x}", mock.next_id);
+                mock.created.push(request);
+                let reply = json!({
+                    "id": id,
+                    "partSize": 10 * 1024 * 1024,
+                    "partCount": 1,
+                    "parts": [{"partNumber": 1, "url": format!("http://localhost:{port}/r2/{id}/1")}],
+                });
+                (201, None, reply.to_string().into_bytes())
+            } else if method == "POST" && target.ends_with("/complete") {
+                let id = target
+                    .trim_end_matches("/complete")
+                    .rsplit('/')
+                    .next()
+                    .unwrap()
+                    .to_owned();
+                let reply = json!({"id": id, "url": format!("https://dx.test/v1/threads/{THREAD_ID}/storage/{id}/f")});
+                (200, None, reply.to_string().into_bytes())
+            } else if method == "GET" && target.starts_with(&format!("{storage}/")) {
+                let id = target.rsplit('/').next().unwrap().to_owned();
+                match mock.objects.get(&id) {
+                    Some(bytes) => (
+                        200,
+                        None,
+                        json!({"url": format!("http://localhost:{port}/r2/{id}"), "name": "f", "size": bytes.len()})
+                            .to_string()
+                            .into_bytes(),
+                    ),
+                    None => (404, None, b"{\"error\":\"Not found.\"}".to_vec()),
+                }
+            } else {
+                (404, None, Vec::new())
+            };
+            drop(mock);
+            let etag = etag
+                .map(|value| format!("ETag: {value}\r\n"))
+                .unwrap_or_default();
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status} X\r\n{etag}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                reply.len()
+            );
+            let _ = stream.write_all(&reply);
+        }
+    });
+    state
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn real_daemon_moves_files_between_the_guest_and_thread_storage() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fixture = fixture(port);
+    let repo = &fixture.repo;
+    std::fs::create_dir_all(repo.join("notes")).unwrap();
+    std::fs::write(repo.join("notes/a.txt"), b"alpha \xff\x00 bytes").unwrap();
+    std::fs::write(repo.join("empty.txt"), b"").unwrap();
+    let mode = |path: &std::path::Path| {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::symlink_metadata(path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    let set_mode = |path: &std::path::Path, mode: u32| {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+    set_mode(&repo.join("notes/a.txt"), 0o755);
+    set_mode(&repo.join("empty.txt"), 0o640);
+    std::fs::write(repo.join("big.bin"), vec![9u8; 4096]).unwrap();
+    let outside = fixture.home.join("outside.log");
+    std::fs::write(&outside, b"absolute path").unwrap();
+    let _daemon = DaemonGuard(spawn_daemon(&fixture));
+    let mut socket = accept(&listener).await;
+    let register = next_text(&mut socket).await;
+    assert_eq!(
+        register["capabilities"]["storage"]["version"], 1,
+        "{register}"
+    );
+    let generation = format!("gen-{}", rand::random::<u32>());
+    send(
+        &mut socket,
+        json!({"type": "registered", "generation": generation, "heartbeatIntervalMs": 2000, "heartbeatLeaseMs": 15000}),
+    )
+    .await;
+    let mock = serve_storage(listener, port);
+
+    // Export: one result per file, in order, each the way it should go.
+    let exported = memory_request(
+        &mut socket,
+        &generation,
+        "storage-export-1",
+        json!({
+            "operation": "storage.export",
+            "maxBytes": 1024,
+            "files": [
+                {"path": "notes/a.txt"},
+                {"path": "empty.txt"},
+                {"path": "missing.txt"},
+                {"path": "notes"},
+                {"path": "big.bin"},
+                {"path": outside.to_str().unwrap()},
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(exported["kind"], "exported", "{exported}");
+    let files = exported["files"].as_array().unwrap();
+    assert_eq!(files.len(), 6);
+    assert_eq!(files[0]["kind"], "stored");
+    assert_eq!(files[0]["size"], 14);
+    assert_eq!(files[0]["mode"], 0o755, "an executable stays executable");
+    assert_eq!(files[1], json!({"kind": "empty", "mode": 0o640}));
+    assert_eq!(files[2]["reason"], "missing");
+    assert_eq!(files[3]["reason"], "not-file");
+    assert_eq!(files[4]["reason"], "too-large");
+    assert_eq!(files[5]["kind"], "stored");
+    let alpha = files[0]["id"].as_str().unwrap().to_owned();
+    let absolute = files[5]["id"].as_str().unwrap().to_owned();
+    {
+        let mock = mock.lock().unwrap();
+        assert_eq!(mock.objects[&alpha], b"alpha \xff\x00 bytes");
+        assert_eq!(mock.objects[&absolute], b"absolute path");
+        // Every stored file is temporary, and only the two real files were.
+        assert_eq!(mock.created.len(), 2);
+        assert!(
+            mock.created
+                .iter()
+                .all(|request| request["temporary"] == true)
+        );
+        assert_eq!(mock.created[0]["name"], "a.txt");
+        assert_eq!(mock.keyed_storage_requests, 0, "the key went to storage");
+    }
+
+    // Import: create parents, keep an existing file, write an empty one.
+    std::fs::write(repo.join("README.md"), "keep me\n").unwrap();
+    let imported = memory_request(
+        &mut socket,
+        &generation,
+        "storage-import-1",
+        json!({
+            "operation": "storage.import",
+            "overwrite": false,
+            "createParents": true,
+            "files": [
+                {"path": "copied/deep/a.txt", "source": {"kind": "stored", "id": alpha, "mode": 0o755}},
+                {"path": "README.md", "source": {"kind": "stored", "id": absolute}},
+                {"path": "copied/empty.txt", "source": {"kind": "empty", "mode": 0o640}},
+                {"path": "copied/gone.txt", "source": {"kind": "stored", "id": "tsf_ffffffffffffffffffffffffffffffff"}},
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(imported["kind"], "imported", "{imported}");
+    let files = imported["files"].as_array().unwrap();
+    assert_eq!(files[0]["kind"], "written");
+    assert_eq!(files[0]["size"], 14);
+    assert_eq!(
+        files[0]["path"],
+        repo.join("copied/deep/a.txt")
+            .canonicalize()
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
+    assert_eq!(files[1]["reason"], "exists");
+    assert_eq!(files[2]["kind"], "written");
+    assert_eq!(files[2]["size"], 0);
+    assert_eq!(files[3]["reason"], "failed");
+    assert_eq!(
+        std::fs::read(repo.join("copied/deep/a.txt")).unwrap(),
+        b"alpha \xff\x00 bytes"
+    );
+    assert_eq!(std::fs::read(repo.join("README.md")).unwrap(), b"keep me\n");
+    assert_eq!(std::fs::read(repo.join("copied/empty.txt")).unwrap(), b"");
+    assert_eq!(mode(&repo.join("copied/deep/a.txt")), 0o755);
+    assert_eq!(mode(&repo.join("copied/empty.txt")), 0o640);
+    assert!(!repo.join("copied/gone.txt").exists());
+    // Neither a kept file nor a failed download leaves its temporary file.
+    let leftovers = |directory: &std::path::Path| {
+        std::fs::read_dir(directory)
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".dxd-download-")
+            })
+            .count()
+    };
+    assert_eq!(leftovers(repo), 0);
+    assert_eq!(leftovers(&repo.join("copied")), 0);
+
+    // Overwrite without creating parents. A replaced executable keeps its
+    // mode when the source names none; a symlink is replaced, and the file
+    // it pointed to is untouched.
+    std::fs::write(repo.join("run.sh"), "old\n").unwrap();
+    set_mode(&repo.join("run.sh"), 0o750);
+    std::fs::write(fixture.home.join("target.txt"), "target\n").unwrap();
+    std::os::unix::fs::symlink(fixture.home.join("target.txt"), repo.join("link.txt")).unwrap();
+    std::os::unix::fs::symlink(fixture.home.join("target.txt"), repo.join("link2.txt")).unwrap();
+    let imported = memory_request(
+        &mut socket,
+        &generation,
+        "storage-import-2",
+        json!({
+            "operation": "storage.import",
+            "overwrite": true,
+            "createParents": false,
+            "files": [
+                {"path": "README.md", "source": {"kind": "stored", "id": absolute}},
+                {"path": "no/such/dir/a.txt", "source": {"kind": "stored", "id": alpha}},
+                {"path": "notes", "source": {"kind": "stored", "id": alpha}},
+                {"path": "run.sh", "source": {"kind": "stored", "id": alpha}},
+                {"path": "link.txt", "source": {"kind": "empty"}},
+                {"path": "link2.txt", "source": {"kind": "stored", "id": alpha}},
+            ],
+        }),
+    )
+    .await;
+    let files = imported["files"].as_array().unwrap();
+    assert_eq!(files[0]["kind"], "written", "{imported}");
+    assert_eq!(files[1]["reason"], "no-parent");
+    assert_eq!(files[2]["reason"], "invalid");
+    assert_eq!(files[3]["kind"], "written", "{imported}");
+    assert_eq!(files[4]["kind"], "written", "{imported}");
+    assert_eq!(files[5]["kind"], "written", "{imported}");
+    assert_eq!(
+        std::fs::read(repo.join("run.sh")).unwrap(),
+        b"alpha \xff\x00 bytes"
+    );
+    assert_eq!(mode(&repo.join("run.sh")), 0o750);
+    for link in ["link.txt", "link2.txt"] {
+        assert!(
+            std::fs::symlink_metadata(repo.join(link))
+                .unwrap()
+                .file_type()
+                .is_file(),
+            "{link} is now a regular file"
+        );
+    }
+    assert_eq!(std::fs::read(repo.join("link.txt")).unwrap(), b"");
+    assert_eq!(
+        std::fs::read(fixture.home.join("target.txt")).unwrap(),
+        b"target\n",
+        "the symlink's target is untouched"
+    );
+    assert_eq!(
+        std::fs::read(repo.join("README.md")).unwrap(),
+        b"absolute path"
+    );
+    assert!(!repo.join("no").exists());
+    assert_eq!(mock.lock().unwrap().keyed_storage_requests, 0);
+
+    // A malformed id fails the whole request rather than half of it.
+    let refused = memory_request(
+        &mut socket,
+        &generation,
+        "storage-import-3",
+        json!({
+            "operation": "storage.import",
+            "overwrite": true,
+            "createParents": true,
+            "files": [{"path": "z.txt", "source": {"kind": "stored", "id": "tsf_nothex"}}],
+        }),
+    )
+    .await;
+    assert_eq!(refused, json!({"kind": "unavailable", "reason": "invalid"}));
+    assert!(!repo.join("z.txt").exists());
+}

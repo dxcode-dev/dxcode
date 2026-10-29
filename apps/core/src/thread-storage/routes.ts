@@ -9,6 +9,7 @@ import type { AppEnv } from "../http/types.js";
 import { threadStorageLogger } from "../logging.js";
 import {
   findThreadStorageFile,
+  isReadableThreadStorageFile,
   isThreadStorageFileId,
   type ThreadStorageRow,
   threadStorageFileData,
@@ -57,7 +58,7 @@ export const threadStorageRoutes = new Hono<AppEnv>()
       const { results } = await db
         .prepare(
           `SELECT * FROM thread_storage_files
-            WHERE thread_id = ? AND state = 'ready'
+            WHERE thread_id = ? AND state = 'ready' AND expires_at IS NULL
             ORDER BY created_at DESC, rowid DESC
             LIMIT ?`,
         )
@@ -75,6 +76,7 @@ export const threadStorageRoutes = new Hono<AppEnv>()
     ["/:threadId/storage/:fileId", "/:threadId/storage/:fileId/:name"],
     handle("read", async (context) => {
       const fileId = context.req.param("fileId");
+      const now = Date.now();
       const db = context.env.DB;
       const transfer = attachmentTransfer(context.env);
       if (db === undefined || transfer === undefined)
@@ -85,7 +87,7 @@ export const threadStorageRoutes = new Hono<AppEnv>()
       // The URL's Thread is the one authorized; the file must be its own.
       if (
         row === null ||
-        row.state !== "ready" ||
+        !isReadableThreadStorageFile(row, now) ||
         row.thread_id !== context.req.param("threadId")
       )
         return refuse(context, "File not found.", 404);
@@ -101,8 +103,13 @@ export const threadStorageRoutes = new Hono<AppEnv>()
         status: 302,
         headers: {
           location,
-          // Shorter than the signature, so a cached redirect stays valid.
-          "cache-control": "private, max-age=600",
+          // Shorter than the signature, so a cached redirect stays valid,
+          // and never past a temporary file's expiry.
+          "cache-control": `private, max-age=${
+            row.expires_at === null
+              ? 600
+              : Math.min(600, Math.floor((row.expires_at - now) / 1000))
+          }`,
         },
       });
     }),

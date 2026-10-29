@@ -92,10 +92,10 @@ pub fn file_name_from_url(value: &str, id: &str) -> Option<String> {
 
 /// Core's description of one attachment: where to fetch it and its size.
 #[derive(Deserialize)]
-struct Descriptor {
-    url: String,
-    name: String,
-    size: u64,
+pub(crate) struct Descriptor {
+    pub url: String,
+    pub name: String,
+    pub size: u64,
 }
 
 /// `https://<daemon endpoint host>`.
@@ -205,7 +205,7 @@ pub fn run_cli(arguments: &[String]) -> Result<(), ()> {
 }
 
 #[derive(Clone, Copy)]
-enum Kind {
+pub(crate) enum Kind {
     Attachment,
     Stored,
 }
@@ -224,7 +224,12 @@ fn status_error(status: u16, kind: Kind) -> io::Error {
 }
 
 /// Ask Core where the attachment is.
-fn describe(agent: &ureq::Agent, url: &str, key: &str, kind: Kind) -> io::Result<Descriptor> {
+pub(crate) fn describe(
+    agent: &ureq::Agent,
+    url: &str,
+    key: &str,
+    kind: Kind,
+) -> io::Result<Descriptor> {
     let response = agent
         .get(url)
         .header("Authorization", &format!("Bearer {key}"))
@@ -257,6 +262,39 @@ fn download(
     output: &Path,
     kind: Kind,
 ) -> io::Result<PathBuf> {
+    let directory = match output.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    fs::create_dir_all(&directory)?;
+    let temporary = fetch(agent, descriptor, origin, key, &directory, kind)?;
+    fs::rename(&temporary, output).inspect_err(|_| {
+        let _ = fs::remove_file(&temporary);
+    })?;
+    Ok(fs::canonicalize(output).unwrap_or_else(|_| output.to_path_buf()))
+}
+
+/// A new, uniquely named file in `directory` for a download to fill before
+/// it takes its final name.
+pub(crate) fn temporary_file(directory: &Path) -> io::Result<(PathBuf, fs::File)> {
+    let path = directory.join(format!(".dxd-download-{}", rand::random::<u64>()));
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    Ok((path, file))
+}
+
+/// Download the file into a new temporary file in `directory`, which must
+/// exist, and return its path: the caller gives it its final name.
+pub(crate) fn fetch(
+    agent: &ureq::Agent,
+    descriptor: &Descriptor,
+    origin: &str,
+    key: &str,
+    directory: &Path,
+    kind: Kind,
+) -> io::Result<PathBuf> {
     // A path is Core's own route (local development): it needs the key. A
     // presigned R2 URL carries its own signature and never gets the key.
     let url = if descriptor.url.starts_with('/') {
@@ -275,18 +313,12 @@ fn download(
     if status != 200 {
         return Err(status_error(status, kind));
     }
-    let directory = match output.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
-        _ => PathBuf::from("."),
-    };
-    fs::create_dir_all(&directory)?;
-    let temporary = directory.join(format!(".dxd-download-{}", rand::random::<u64>()));
     let mut body = response
         .into_body()
         .into_with_config()
         .limit(MAX_ATTACHMENT_BYTES + 1)
         .reader();
-    let mut file = fs::File::create(&temporary)?;
+    let (temporary, mut file) = temporary_file(directory)?;
     let result = (|| {
         let mut buffer = vec![0_u8; 256 * 1024];
         let mut total = 0_u64;
@@ -311,8 +343,5 @@ fn download(
         let _ = fs::remove_file(&temporary);
         return Err(error);
     }
-    fs::rename(&temporary, output).inspect_err(|_| {
-        let _ = fs::remove_file(&temporary);
-    })?;
-    Ok(fs::canonicalize(output).unwrap_or_else(|_| output.to_path_buf()))
+    Ok(temporary)
 }

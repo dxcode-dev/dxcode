@@ -48,6 +48,9 @@ const threadTools = vi.hoisted(() => ({
 const automationTools = vi.hoisted(() => ({
   createAutomationTools: vi.fn((): unknown[] => []),
 }));
+const storageTools = vi.hoisted(() => ({
+  createThreadStorageTools: vi.fn((): unknown[] => []),
+}));
 const runtime = vi.hoisted(() => ({
   capabilities: "workspace" as "model-only" | "workspace",
   execution: { createSandbox: vi.fn() },
@@ -76,6 +79,7 @@ vi.mock("../settings/plugins/execution.js", () => ({
 vi.mock("../plugins/agent-context.js", () => pluginHost);
 vi.mock("../threads/agent-tools.js", () => threadTools);
 vi.mock("../automations/agent-tools.js", () => automationTools);
+vi.mock("../thread-storage/agent-tools.js", () => storageTools);
 vi.mock("../portals/prompt.js", () => ({ threadPortalPrompt: () => "" }));
 vi.mock("../plugins/code/providers/wasm.js", () => ({ getCodeWasm: vi.fn() }));
 vi.mock("../settings/plugins/flue.js", () => ({
@@ -126,13 +130,13 @@ describe("DxAgent", () => {
       [true, [{ ...connection, tools: [] }], ["code_exec"]],
     ] as const) {
       hooks.useTool.mockClear();
-      hooks.useInitialData.mockReturnValue({ mcpConnections: connections });
       hooks.usePromptData.mockReturnValueOnce({
         plugins: {
           submissionId: "sub_code",
           tools: active
             ? [{ pluginId: "code", capabilities: ["code.execute"] }]
             : [],
+          mcpConnections: connections,
         },
       } as never);
       DxAgent({ id: "thr_code" });
@@ -200,10 +204,17 @@ describe("DxAgent", () => {
     automationTools.createAutomationTools.mockReturnValueOnce([
       { name: "set_schedule", run: vi.fn() },
     ]);
+    storageTools.createThreadStorageTools.mockReturnValueOnce([
+      { name: "download_thread_file", run: vi.fn() },
+    ]);
     hooks.usePromptData.mockReturnValueOnce({
       plugins: { submissionId: "sub_1", tools: [] },
     } as never);
     const prompt = DxAgent({ id: "thr_existing" });
+    expect(storageTools.createThreadStorageTools).toHaveBeenCalledWith(
+      "thr_existing",
+      pluginHost.agentThreadToolsContext,
+    );
     expect(threadTools.createThreadTools).toHaveBeenCalledWith(
       "thr_existing",
       pluginHost.agentThreadToolsContext,
@@ -217,7 +228,12 @@ describe("DxAgent", () => {
     );
     expect(
       hooks.useTool.mock.calls.map(([tool]) => (tool as { name: string }).name),
-    ).toEqual(["create_thread", "send_thread_message", "set_schedule"]);
+    ).toEqual([
+      "create_thread",
+      "send_thread_message",
+      "download_thread_file",
+      "set_schedule",
+    ]);
     expect(pluginHost.agentThreadToolsContext).not.toHaveBeenCalled();
     expect(prompt).toMatch(/create_thread/);
 
@@ -439,21 +455,22 @@ describe("DxAgent", () => {
   });
 
   it("never mounts MCP servers directly; they are reachable only through Code", () => {
-    hooks.useInitialData.mockReturnValue({
-      personalInstructions: "",
-      settingsRevision: 0,
-      settingsVersion: 1,
-      mcpConnections: [
-        {
-          id: "mcp_00000000-0000-4000-8000-000000000036",
-          name: "dx_mcp_00000000-0000-4000-8000-000000000036",
-          endpoint: "https://mcp.example.com/mcp",
-          timeoutMs: 10_000,
-          authenticated: true,
-          tools: ["read_status"],
-        },
-      ],
-    });
+    hooks.usePromptData.mockReturnValueOnce({
+      plugins: {
+        submissionId: "sub_mcp",
+        tools: [{ pluginId: "code", capabilities: ["code.execute"] }],
+        mcpConnections: [
+          {
+            id: "mcp_00000000-0000-4000-8000-000000000036",
+            name: "dx_mcp_00000000-0000-4000-8000-000000000036",
+            endpoint: "https://mcp.example.com/mcp",
+            timeoutMs: 10_000,
+            authenticated: true,
+            tools: ["read_status"],
+          },
+        ],
+      },
+    } as never);
 
     DxAgent({ id: "thr_00000000-0000-4000-8000-000000000036" });
 

@@ -22,6 +22,12 @@ import {
 export const MAX_THREAD_STORAGE_FILE_BYTES = MAX_ATTACHMENT_BYTES;
 /** Uploads go straight to R2 in parts of this size; the last may be smaller. */
 export const THREAD_STORAGE_PART_BYTES = ATTACHMENT_PART_BYTES;
+/**
+ * How long a temporary file lasts: a link a Thread shares, or a file one
+ * Thread hands to another. Reads refuse it after this and the scheduled
+ * sweep deletes it.
+ */
+export const THREAD_STORAGE_TEMPORARY_TTL_MS = 3 * 60 * 60 * 1000;
 
 export const THREAD_STORAGE_FILE_ID_PATTERN = /^tsf_[0-9a-f]{32}$/;
 export const ThreadStorageFileIdSchema = Schema.String.check(
@@ -39,6 +45,8 @@ export const CreateThreadStorageFileRequestSchema = Schema.Struct({
     Schema.isGreaterThan(0),
     Schema.isLessThanOrEqualTo(MAX_THREAD_STORAGE_FILE_BYTES),
   ),
+  /** Expire the file after `THREAD_STORAGE_TEMPORARY_TTL_MS`. */
+  temporary: Schema.optional(Schema.Boolean),
 });
 export type CreateThreadStorageFileRequest =
   typeof CreateThreadStorageFileRequestSchema.Type;
@@ -73,6 +81,8 @@ export const ThreadStorageFileSchema = Schema.Struct({
   /** Absolute URL on dx's origin; it needs a dx session to open. */
   url: Schema.String,
   createdAt: Schema.Number,
+  /** When a temporary file stops being readable; absent for lasting files. */
+  expiresAt: Schema.optional(Schema.Number),
 });
 export type ThreadStorageFile = typeof ThreadStorageFileSchema.Type;
 

@@ -1,6 +1,7 @@
 import {
   IssueWorkloadIdentityRequestSchema,
   IssueWorkloadIdentityResultSchema,
+  MAX_THREAD_STORAGE_FILE_BYTES,
   OrbFolderPathSchema,
   OrbFolderSchema,
   OrbProcessIdSchema,
@@ -12,6 +13,7 @@ import {
   ThreadFilesWorktreeId,
   ThreadFileVersion,
   ThreadSandboxFilePath,
+  ThreadStorageFileIdSchema,
   type ThreadTerminalDimensions,
   ThreadTerminalDimensionsSchema,
 } from "@dx/api";
@@ -28,7 +30,7 @@ import {
 } from "../../thread-changes/candidate.js";
 
 export const DXD_PROTOCOL_MAJOR = 2;
-export const DXD_RELEASE = "0.12.0";
+export const DXD_RELEASE = "0.13.0";
 export const DXD_TERMINAL_VERSION = 1;
 export const DXD_WORKLOAD_IDENTITY_VERSION = 1;
 export const DXD_HEARTBEAT_INTERVAL_MS = 2_000;
@@ -112,6 +114,11 @@ export const DxdTerminalCapability = Schema.Struct({
    * `disk.snapshot` and `disk.delete` operations.
    */
   disk: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
+  /**
+   * Version 1: Core may send the `storage.export` and `storage.import`
+   * operations, which move files between the guest and Thread storage.
+   */
+  storage: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
 });
 
 export const DxdTerminalHeartbeat = Schema.Union([
@@ -818,6 +825,83 @@ export const DxdDiskDeleteOperation = Schema.Struct({
   path: OrbFolderPathSchema,
 });
 
+/** The most files one `storage.export` or `storage.import` moves. */
+export const DXD_STORAGE_TRANSFER_MAX_FILES = 200;
+
+/** A guest path: absolute, or relative to the workspace root. */
+const DxdTransferPath = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(4_096),
+  Schema.makeFilter((value) => !value.includes("\0")),
+);
+
+/**
+ * A file's permission bits (`mode & 0o777`), carried from the file a
+ * transfer reads to the file it writes. Daemons built before it omit it.
+ */
+const DxdTransferMode = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: 0o777 }),
+);
+
+/**
+ * Store guest files in this Thread's storage as temporary files: dxd uploads
+ * each straight to R2 through the same routes as `dxd files put`. An empty
+ * file is reported, not stored; a file over `maxBytes` is skipped. dxd stops
+ * starting files, and skips the rest as `timeout`, before Core stops waiting.
+ */
+export const DxdStorageExportOperation = Schema.Struct({
+  operation: Schema.Literal("storage.export"),
+  files: Schema.Array(Schema.Struct({ path: DxdTransferPath })).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(DXD_STORAGE_TRANSFER_MAX_FILES),
+  ),
+  maxBytes: Schema.Int.check(
+    Schema.isBetween({ minimum: 1, maximum: MAX_THREAD_STORAGE_FILE_BYTES }),
+  ),
+});
+export type DxdStorageExportOperation = typeof DxdStorageExportOperation.Type;
+
+/**
+ * Write stored files into the guest: dxd downloads each straight from R2
+ * through the same route as `dxd files get`, which reads as this Thread's
+ * owner. `empty` creates an empty file. An existing file is kept unless
+ * `overwrite`, without a window in which another writer's file is replaced;
+ * a missing parent directory is created only with `createParents`. The file
+ * gets `mode` when given, else an overwritten file's mode. A file not in
+ * place before Core stops waiting is skipped as `timeout`, never written.
+ */
+export const DxdStorageImportOperation = Schema.Struct({
+  operation: Schema.Literal("storage.import"),
+  files: Schema.Array(
+    Schema.Struct({
+      path: DxdTransferPath,
+      source: Schema.Union([
+        Schema.Struct({
+          kind: Schema.Literal("stored"),
+          id: ThreadStorageFileIdSchema,
+          mode: Schema.optional(DxdTransferMode),
+        }),
+        Schema.Struct({
+          kind: Schema.Literal("empty"),
+          mode: Schema.optional(DxdTransferMode),
+        }),
+      ]),
+    }),
+  ).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(DXD_STORAGE_TRANSFER_MAX_FILES),
+  ),
+  overwrite: Schema.Boolean,
+  createParents: Schema.Boolean,
+});
+export type DxdStorageImportOperation = typeof DxdStorageImportOperation.Type;
+
+export const DxdStorageOperation = Schema.Union([
+  DxdStorageExportOperation,
+  DxdStorageImportOperation,
+]);
+export type DxdStorageOperation = typeof DxdStorageOperation.Type;
+
 export const DxdOperation = Schema.Union([
   DxdFilesOperation,
   DxdEnvironmentActivateOperation,
@@ -829,6 +913,8 @@ export const DxdOperation = Schema.Union([
   DxdMemoryStopOperation,
   DxdDiskSnapshotOperation,
   DxdDiskDeleteOperation,
+  DxdStorageExportOperation,
+  DxdStorageImportOperation,
 ]);
 export type DxdOperation = typeof DxdOperation.Type;
 
@@ -1054,6 +1140,78 @@ export const DxdDiskDeleteResult = Schema.Union([
   }),
 ]);
 export type DxdDiskDeleteResult = typeof DxdDiskDeleteResult.Type;
+
+const DxdTransferMessage = Schema.String.check(Schema.isMaxLength(512));
+
+/** One result per requested file, in request order. */
+export const DxdStorageExportResult = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("exported"),
+    files: Schema.Array(
+      Schema.Union([
+        Schema.Struct({
+          kind: Schema.Literal("stored"),
+          id: ThreadStorageFileIdSchema,
+          size: DxdBytes,
+          mode: Schema.optional(DxdTransferMode),
+        }),
+        Schema.Struct({
+          kind: Schema.Literal("empty"),
+          mode: Schema.optional(DxdTransferMode),
+        }),
+        Schema.Struct({
+          kind: Schema.Literal("skipped"),
+          reason: Schema.Literals([
+            "missing",
+            "not-file",
+            "too-large",
+            "unreadable",
+            "failed",
+            "timeout",
+          ]),
+          message: Schema.optional(DxdTransferMessage),
+        }),
+      ]),
+    ).check(Schema.isMaxLength(DXD_STORAGE_TRANSFER_MAX_FILES)),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("unavailable"),
+    reason: Schema.Literals(["invalid", "failed"]),
+  }),
+]);
+export type DxdStorageExportResult = typeof DxdStorageExportResult.Type;
+
+/** One result per requested file, in request order. */
+export const DxdStorageImportResult = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("imported"),
+    files: Schema.Array(
+      Schema.Union([
+        Schema.Struct({
+          kind: Schema.Literal("written"),
+          path: Schema.String.check(Schema.isMaxLength(4_096)),
+          size: DxdBytes,
+        }),
+        Schema.Struct({
+          kind: Schema.Literal("skipped"),
+          reason: Schema.Literals([
+            "exists",
+            "no-parent",
+            "invalid",
+            "failed",
+            "timeout",
+          ]),
+          message: Schema.optional(DxdTransferMessage),
+        }),
+      ]),
+    ).check(Schema.isMaxLength(DXD_STORAGE_TRANSFER_MAX_FILES)),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("unavailable"),
+    reason: Schema.Literals(["invalid", "failed"]),
+  }),
+]);
+export type DxdStorageImportResult = typeof DxdStorageImportResult.Type;
 
 export const DxdDesktopEnsureResult = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("ready") }),

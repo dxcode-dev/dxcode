@@ -12,6 +12,11 @@ import { describe, expect, it, vi } from "vitest";
 import { DxAgentInitialDataSchema } from "../../src/agents/dx-agent-initial-data.js";
 import { errorHandler } from "../../src/http/http-errors.js";
 import type { AppEnv } from "../../src/http/types.js";
+import {
+  agentPluginHostContext,
+  resolveAgentPluginTools,
+} from "../../src/plugins/agent-context.js";
+import { firstPartyPluginTools } from "../../src/plugins/tools.js";
 import { TEST_RUNNER_PROFILE_CATALOG } from "../../src/testing/bindings.js";
 import { createThreadRoutes } from "../../src/threads/routes.js";
 import {
@@ -196,6 +201,61 @@ describe("Thread creation admission in workerd with real D1", () => {
       | { readonly mcpConnections: ReadonlyArray<unknown> }
       | undefined;
     expect(initialData?.mcpConnections).toHaveLength(21);
+  });
+
+  it("offers an MCP server connected after the Thread started on its next submission", async () => {
+    const project = await createProjectViaApi("mcp-connected-later");
+    const dispatched: Array<Parameters<Dispatch>[0]> = [];
+    const { create } = harness(flueValidatedDispatch(dispatched));
+    const threadId = newThreadId();
+    expect(
+      (await create({ projectId: project.data.id, threadId })).status,
+    ).toBe(201);
+    // Flue keeps this creation data for the agent's lifetime.
+    const created = dispatched[0]?.initialData as {
+      readonly mcpConnections: ReadonlyArray<unknown>;
+    };
+    expect(created.mcpConnections).toEqual([]);
+
+    const serverId = `mcp_${crypto.randomUUID()}`;
+    const timestamp = "2026-10-28T14:27:41.000Z";
+    const hash = "b".repeat(64);
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO mcp_server (
+           id, scope, target_id, name, endpoint, transport, timeout_ms, enabled,
+           project_ids_json, roles_json, health_status, created_at, updated_at
+         ) VALUES (?, 'personal', ?, 'Atlassian', 'https://93.184.216.34/mcp',
+                   'streamable-http', 10000, 1, '[]', '["owner","admin","member"]',
+                   'healthy', ?, ?)`,
+      ).bind(serverId, owner, timestamp, timestamp),
+      env.DB.prepare(
+        `INSERT INTO mcp_tool (
+           server_id, name, description, input_schema_json, schema_hash,
+           approved_schema_hash, discovered_at, reviewed_at, reviewed_by
+         ) VALUES (?, 'searchJiraIssuesUsingJql', 'Search Jira issues', '{}',
+                   ?, ?, ?, ?, ?)`,
+      ).bind(serverId, hash, hash, timestamp, timestamp, owner),
+    ]);
+
+    const next = await resolveAgentPluginTools(threadId, "second-submission");
+    expect(next.mcpConnections).toEqual([
+      expect.objectContaining({
+        id: serverId,
+        moduleId: "atlassian",
+        tools: ["searchJiraIssuesUsingJql"],
+      }),
+    ]);
+    const search = firstPartyPluginTools(
+      { threadId, submissionId: next.submissionId },
+      next.tools,
+      agentPluginHostContext,
+      next.mcpConnections,
+    ).find((tool) => tool.name === "tool_search");
+    if (search === undefined) throw new Error("tool_search must mount");
+    expect(await search.run({ data: { query: "" } } as never)).toContain(
+      'import { searchJiraIssuesUsingJql } from "atlassian"',
+    );
   });
 
   it("answers a permanent Flue rejection with its own code and removes the empty Thread", async () => {

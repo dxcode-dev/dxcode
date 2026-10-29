@@ -355,6 +355,7 @@ function AppSidebarContent({
         <Button
           ref={searchTriggerRef}
           aria-label="Search threads"
+          className="sidebar-search-trigger"
           data-command-action="search-threads"
           variant="ghost"
           size="icon-xs"

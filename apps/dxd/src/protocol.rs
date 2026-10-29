@@ -148,6 +148,13 @@ pub struct DiskCapability {
     pub version: u8,
 }
 
+/// Version 1: Core may send the `storage.export` and `storage.import`
+/// operations; see [`crate::storage`].
+#[derive(Serialize)]
+pub struct StorageCapability {
+    pub version: u8,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capabilities {
@@ -157,6 +164,7 @@ pub struct Capabilities {
     pub proxy: ProxyCapability,
     pub memory: MemoryCapability,
     pub disk: DiskCapability,
+    pub storage: StorageCapability,
 }
 
 impl Capabilities {
@@ -170,6 +178,7 @@ impl Capabilities {
             proxy: ProxyCapability { version: 1 },
             memory: MemoryCapability { version: 1 },
             disk: DiskCapability { version: 1 },
+            storage: StorageCapability { version: 1 },
         }
     }
 }
@@ -421,6 +430,7 @@ pub enum OperationResult {
     Portal(PortalResult),
     Memory(crate::memory::MemoryResult),
     Disk(crate::disk::DiskResult),
+    Storage(crate::storage::TransferResult),
 }
 
 /// Requests that serve Portals and the Desktop rather than one stream.
@@ -473,6 +483,25 @@ pub enum DiskOperation {
     Delete { path: String },
 }
 
+/// Moving files between the guest and Thread storage; see [`crate::storage`].
+#[derive(Deserialize)]
+#[serde(tag = "operation", deny_unknown_fields)]
+pub enum StorageOperation {
+    #[serde(rename = "storage.export")]
+    Export {
+        files: Vec<crate::storage::ExportFile>,
+        #[serde(rename = "maxBytes")]
+        max_bytes: u64,
+    },
+    #[serde(rename = "storage.import")]
+    Import {
+        files: Vec<crate::storage::ImportFile>,
+        overwrite: bool,
+        #[serde(rename = "createParents")]
+        create_parents: bool,
+    },
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 pub enum RequestOperation {
@@ -481,6 +510,7 @@ pub enum RequestOperation {
     Portal(PortalOperation),
     Memory(MemoryOperation),
     Disk(DiskOperation),
+    Storage(StorageOperation),
 }
 
 #[derive(Deserialize)]
@@ -496,7 +526,11 @@ impl RequestOperation {
     pub fn refresh(&self) -> Option<crate::changes::RefreshRequest> {
         match self {
             Self::Files(operation) => operation.refresh(),
-            Self::Environment(_) | Self::Portal(_) | Self::Memory(_) | Self::Disk(_) => None,
+            Self::Environment(_)
+            | Self::Portal(_)
+            | Self::Memory(_)
+            | Self::Disk(_)
+            | Self::Storage(_) => None,
         }
     }
 }

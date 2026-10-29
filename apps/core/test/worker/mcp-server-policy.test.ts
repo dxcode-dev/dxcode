@@ -8,6 +8,8 @@ import {
 import { Effect, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bindings } from "../../src/http/types.js";
+import { codeModules } from "../../src/plugins/code/catalog.js";
+import { codeMcpCall } from "../../src/plugins/code/mcp.js";
 import { loadConfigEncryptionKeyring } from "../../src/settings/config-encryption.js";
 import { putMcpServerCredential } from "../../src/settings/mcp-servers/credential.js";
 import {
@@ -95,6 +97,7 @@ const authorizedRequest = (body: unknown) =>
     serverId,
     endpoint,
     10_000,
+    "read_status",
   )(endpoint, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -216,6 +219,7 @@ describe("MCP current execution policy in D1", () => {
       serverId,
       "https://93.184.216.34/mcp",
       10_000,
+      "read_status",
     );
     const call = (body: unknown) =>
       authorizedFetch("https://93.184.216.34/mcp", {
@@ -290,6 +294,7 @@ describe("MCP current execution policy in D1", () => {
         serverId,
         endpoint,
         10_000,
+        "read_status",
       )(endpoint, {
         method: "POST",
         headers: {
@@ -406,4 +411,143 @@ describe("MCP current execution policy in D1", () => {
     });
     await expect(response.json()).resolves.toMatchObject({ id: 2 });
   });
+});
+
+/**
+ * Code calling a reviewed tool on a server that answers over SSE, as
+ * mcp.atlassian.com does, after the server changed a tool's description
+ * (Atlassian's `discover` names a live count of operations).
+ */
+describe("Code calls after a server changes a tool contract", () => {
+  const sse = (id: number, result: unknown) =>
+    new Response(
+      `data: ${JSON.stringify({ jsonrpc: "2.0", id, result })}\n\n`,
+      {
+        headers: { "content-type": "text/event-stream" },
+      },
+    );
+  const serve = (descriptions: Record<string, string>) =>
+    vi.fn<typeof fetch>(async (input, init) => {
+      const request = new Request(input, init);
+      if (request.method !== "POST") return new Response(null, { status: 405 });
+      const message = (await request.json()) as {
+        id?: number;
+        method: string;
+        params?: { protocolVersion?: string };
+      };
+      if (message.id === undefined) return new Response(null, { status: 202 });
+      if (message.method === "initialize")
+        return sse(message.id, {
+          protocolVersion: message.params?.protocolVersion,
+          capabilities: { tools: {} },
+          serverInfo: { name: "fixture", version: "1" },
+        });
+      if (message.method === "tools/list")
+        return sse(message.id, {
+          tools: Object.entries(descriptions).map(([name, description]) => ({
+            name,
+            description,
+            inputSchema: { type: "object" },
+          })),
+        });
+      return sse(message.id, {
+        content: [{ type: "text", text: "status ok" }],
+      });
+    });
+  const approve = async (name: string, description: string) => {
+    const contractHash = await mcpToolContractHash({
+      name,
+      description,
+      inputSchema: { type: "object" },
+    });
+    await env.DB.prepare(
+      `INSERT INTO mcp_tool (
+         server_id, name, description, input_schema_json, schema_hash,
+         approved_schema_hash, discovered_at, reviewed_at, reviewed_by
+       ) VALUES (?, ?, ?, '{"type":"object"}', ?, ?, ?, ?, ?)
+       ON CONFLICT(server_id, name) DO UPDATE SET
+         description = excluded.description,
+         schema_hash = excluded.schema_hash,
+         approved_schema_hash = excluded.approved_schema_hash`,
+    )
+      .bind(
+        serverId,
+        name,
+        description,
+        contractHash,
+        contractHash,
+        timestamp,
+        timestamp,
+        owner,
+      )
+      .run();
+  };
+  const call = async (name: string) => {
+    const connections = await Effect.runPromise(
+      resolveMcpAgentConnections(env.DB, threadId),
+    );
+    const module = codeModules(
+      connections.filter(({ id }) => id === serverId),
+    )[0];
+    if (module === undefined) throw new Error("The server must be offered");
+    const startedAt = Date.now();
+    const outcome = await codeMcpCall(threadId)(
+      module,
+      name,
+      {},
+      false,
+      new AbortController().signal,
+    ).then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    return { ...outcome, elapsedMs: Date.now() - startedAt };
+  };
+
+  beforeEach(async () => {
+    await approve("read_status", "Read status");
+    await approve("discover", "Searches ~321 operations.");
+  });
+
+  it("still calls an unchanged tool when another tool's description changed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      serve({
+        read_status: "Read status",
+        discover: "Searches ~325 operations.",
+      }),
+    );
+    const outcome = await call("read_status");
+    expect(outcome).toMatchObject({ value: "status ok" });
+  }, 30_000);
+
+  it("fails a changed tool at once, names it, and sends it to review", async () => {
+    vi.stubGlobal(
+      "fetch",
+      serve({
+        read_status: "Read status",
+        discover: "Searches ~325 operations.",
+      }),
+    );
+    const outcome = await call("discover");
+    expect(outcome.elapsedMs).toBeLessThan(5_000);
+    expect(String((outcome as { error?: unknown }).error)).toMatch(
+      /"discover" changed since it was allowed.*Integrations & MCP/s,
+    );
+    const stored = await env.DB.prepare(
+      "SELECT description, schema_hash = approved_schema_hash AS approved FROM mcp_tool WHERE server_id = ? AND name = 'discover'",
+    )
+      .bind(serverId)
+      .first();
+    expect(stored).toEqual({
+      description: "Searches ~325 operations.",
+      approved: 0,
+    });
+    const offered = await Effect.runPromise(
+      resolveMcpAgentConnections(env.DB, threadId),
+    );
+    expect(offered.find(({ id }) => id === serverId)?.tools).toEqual([
+      "read_status",
+    ]);
+  }, 30_000);
 });

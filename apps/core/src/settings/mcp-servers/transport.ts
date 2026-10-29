@@ -342,7 +342,8 @@ export const mcpToolContractHash = async (tool: {
     }),
   );
 
-const storedTool = Effect.fn("mcpStoredTool")(function* (
+/** A listed tool as discovery stores it, with its contract hash. */
+export const mcpStoredTool = Effect.fn("mcpStoredTool")(function* (
   tool: Tool,
   discoveredAt: DateTime.Utc,
 ) {
@@ -452,7 +453,7 @@ export const discoverMcpTools = Effect.fn("discoverMcpTools")(function* (
     names.add(tool.name);
   }
   return yield* Effect.all(
-    tools.map((tool) => storedTool(tool, discoveredAt)),
+    tools.map((tool) => mcpStoredTool(tool, discoveredAt)),
     { concurrency: 4 },
   );
 });

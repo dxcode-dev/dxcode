@@ -259,8 +259,7 @@ a {
   padding: 0;
   background: var(--surface);
 }
-:root[data-window-layout="full-window"] .dx-app-frame,
-:root[data-window-layout="full-window"] .settings-stage > .dx-app-frame {
+:root[data-window-layout="full-window"] .dx-app-frame {
   width: 100%;
   height: 100%;
   border-radius: 0;
@@ -3380,34 +3379,23 @@ a {
   background: color-mix(in srgb, var(--destructive) 7%, transparent);
 }
 
-.settings-stage {
-  display: grid;
-  place-items: center;
+/* Settings fill the window like a page: a top bar, a full-height rail, and
+   content that scrolls on its own. Below 768px they become a sheet. */
+:root .dx-app-shell.settings-stage {
   padding: 0;
+  background: var(--background);
 }
-.settings-stage > .dx-app-frame {
+:root .settings-stage > .dx-app-frame {
   width: 100%;
   height: 100%;
   max-height: none;
   border-radius: 0;
   outline: 0;
   box-shadow: none;
-}
-/* Settings keeps its modal frame regardless of the main app window layout. */
-@media (min-width: 768px) {
-  :root .dx-app-shell.settings-stage > .dx-app-frame {
-    width: min(1152px, calc(100vw - 32px));
-    height: 90dvh;
-    border-radius: 18px;
-    outline: 1px solid var(--outline);
-    box-shadow: 0 24px 60px #0005;
-    overflow: hidden;
-  }
-}
-.settings-stage {
-  background: #090c09;
+  background: var(--background);
 }
 .settings-shell {
+  --settings-content-width: 1160px;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -3415,18 +3403,49 @@ a {
   min-width: 0;
   overflow: hidden;
   color: var(--foreground);
-  background: var(--surface);
+  background: var(--background);
 }
-.settings-scope-bar {
+.settings-top-bar {
+  position: relative;
+  flex: none;
+  min-width: 0;
+  border-bottom: 1px solid var(--divider);
+}
+.settings-top-bar-row {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  flex: 0 0 47px;
+  height: 48px;
   min-width: 0;
-  padding: 4px 10px;
-  border-bottom: 1px solid var(--divider);
+  padding: 0 126px;
+}
+.settings-back {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted-foreground);
+  background: transparent;
+  font-size: 12px;
+  transform: translateY(-50%);
+}
+.settings-back > svg {
+  width: 16px;
+  height: 16px;
+}
+.settings-back:hover {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.settings-sheet-handle {
+  display: none;
 }
 .settings-scope-tabs {
   display: flex;
@@ -3440,14 +3459,14 @@ a {
   scrollbar-width: none;
 }
 .settings-scope-tabs::-webkit-scrollbar,
-.settings-navigation::-webkit-scrollbar {
+.settings-navigation-scroller::-webkit-scrollbar {
   display: none;
 }
 .settings-scope-link {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 28px;
+  height: 30px;
   min-width: 0;
   padding: 0 12px;
   overflow: hidden;
@@ -3456,7 +3475,12 @@ a {
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 12px;
+}
+.settings-scope-link > svg {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
 }
 .settings-scope-link:hover {
   color: var(--foreground);
@@ -3472,13 +3496,22 @@ a {
     display: none;
   }
 }
+.settings-personal-mark {
+  display: block;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  overflow: hidden;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--border);
+}
 .settings-workspace-mark {
   display: grid;
   overflow: hidden;
   place-items: center;
-  flex: 0 0 17px;
-  width: 17px;
-  height: 17px;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
   color: var(--primary-foreground);
   border-radius: 4px;
   background: var(--primary);
@@ -3487,27 +3520,9 @@ a {
 }
 .settings-dirty-state {
   position: absolute;
-  right: 48px;
+  right: 16px;
   color: var(--warning);
-  font-size: 10px;
-}
-.settings-close {
-  position: absolute;
-  right: 10px;
-  display: grid;
-  place-items: center;
-  flex: 0 0 28px;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted-foreground);
-  border-radius: 5px;
-}
-.settings-close:hover {
-  color: var(--foreground);
-  background: var(--accent);
+  font-size: 11px;
 }
 .settings-shell-body {
   display: grid;
@@ -3516,16 +3531,27 @@ a {
   min-height: 0;
 }
 .settings-sidebar {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-  overflow: auto;
+  min-height: 0;
+  padding: 8px;
+  overflow: hidden;
   border-right: 1px solid var(--divider);
-  background: color-mix(in srgb, var(--surface) 92%, var(--background));
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+}
+.settings-navigation-scroller {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
 }
 .settings-navigation {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 8px 8px 12px;
+  padding: 1px 1px 12px;
 }
 .settings-navigation-link {
   display: flex;
@@ -3537,7 +3563,7 @@ a {
   color: var(--muted-foreground);
   border-radius: 8px;
   text-decoration: none;
-  font-size: 11px;
+  font-size: 12px;
 }
 .settings-navigation-link > svg {
   flex: 0 0 14px;
@@ -3572,7 +3598,7 @@ a {
   margin: 16px 10px 4px;
   padding-bottom: 2px;
   color: color-mix(in srgb, var(--muted-foreground) 80%, transparent);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
   user-select: none;
 }
@@ -3589,6 +3615,45 @@ a {
     0 0 0 1px var(--border),
     0 1px 2px rgba(0, 0, 0, 0.08);
 }
+/* The footer card stays pinned under the scrolling rail. */
+.settings-rail-footer {
+  flex: none;
+  margin-top: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--card) 60%, transparent);
+  font-size: 11px;
+}
+.settings-rail-footer > ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.settings-rail-footer a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+  color: var(--muted-foreground);
+  text-decoration: none;
+}
+.settings-rail-footer a:hover {
+  color: var(--foreground);
+}
+.settings-rail-footer svg {
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+}
+.settings-content {
+  min-width: 0;
+  overflow: auto;
+  padding: 20px;
+}
 /* Below 1024px the rail becomes a scrolling tab row; headings become dividers. */
 @media (max-width: 1023px) {
   .settings-shell-body {
@@ -3597,15 +3662,20 @@ a {
   }
   .settings-sidebar {
     flex: 0 0 auto;
-    overflow: hidden;
+    padding: 0;
     border-right: 0;
     border-bottom: 1px solid var(--divider);
+  }
+  .settings-navigation-scroller {
+    overflow-x: auto;
+    overflow-y: hidden;
   }
   .settings-navigation {
     flex-direction: row;
     gap: 4px;
-    overflow-x: auto;
-    scrollbar-width: none;
+    width: max-content;
+    min-width: 100%;
+    padding: 8px 8px 12px;
   }
   .settings-navigation-group,
   .settings-navigation-list {
@@ -3636,22 +3706,80 @@ a {
   .settings-navigation-list > li > .settings-navigation-link {
     flex: 0 0 auto;
   }
+  .settings-rail-footer {
+    display: none;
+  }
   .settings-content {
     flex: 1;
     min-height: 0;
   }
 }
-.settings-content {
-  min-width: 0;
-  overflow: auto;
-  padding: 20px;
-  background: var(--surface);
+/* Phones: a sheet below a dimmed strip, with a grab handle and no Back
+   button. The rail and content scroll together. */
+@media (max-width: 767px) {
+  :root .dx-app-shell.settings-stage {
+    padding: calc(36px + env(safe-area-inset-top)) 0 0;
+    background: rgb(0 0 0 / 40%);
+  }
+  :root .settings-stage > .dx-app-frame {
+    border-radius: 24px 24px 0 0;
+    outline: 1px solid var(--outline);
+    transition: transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  :root .settings-stage > .dx-app-frame[data-sheet-drag] {
+    transition: none;
+  }
+  .settings-top-bar {
+    padding-top: 16px;
+  }
+  .settings-top-bar-row {
+    padding: 0 8px;
+  }
+  .settings-back,
+  .settings-dirty-state {
+    display: none;
+  }
+  .settings-sheet-handle {
+    position: absolute;
+    z-index: 1;
+    top: 0;
+    left: 50%;
+    display: flex;
+    justify-content: center;
+    width: 64px;
+    height: 16px;
+    padding: 6px 0 0;
+    border: 0;
+    background: transparent;
+    cursor: grab;
+    touch-action: none;
+    transform: translateX(-50%);
+  }
+  .settings-sheet-handle > span {
+    width: 36px;
+    height: 5px;
+    border-radius: 999px;
+    background: var(--foreground);
+    opacity: 0.2;
+  }
+  .settings-sheet-handle:focus-visible > span {
+    opacity: 0.6;
+  }
+  .settings-shell-body {
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+  .settings-content {
+    flex: none;
+    overflow: visible;
+    padding: 16px 16px 48px;
+  }
 }
 .settings-heading,
 .settings-card,
 .settings-form-actions {
   width: 100%;
-  max-width: 823px;
+  max-width: var(--settings-content-width, 823px);
   margin-right: auto;
   margin-left: auto;
 }
@@ -3848,7 +3976,7 @@ a {
     .usage-pagination
   ) {
   width: 100%;
-  max-width: 940px;
+  max-width: var(--settings-content-width, 940px);
   margin-right: auto;
   margin-left: auto;
 }
@@ -4185,7 +4313,7 @@ a {
 }
 .workspace-usage-view-tabs {
   width: 100%;
-  max-width: 940px;
+  max-width: var(--settings-content-width, 940px);
   margin: 0 auto 14px;
 }
 .workspace-usage-view-tabs button:last-child {
@@ -4436,7 +4564,7 @@ a {
   align-items: center;
   gap: 8px;
   width: 100%;
-  max-width: 823px;
+  max-width: var(--settings-content-width, 823px);
   margin: 0 auto 16px;
   padding: 9px 11px;
   color: var(--warning);
@@ -4552,7 +4680,7 @@ a {
   display: grid;
   gap: 16px;
   width: 100%;
-  max-width: 823px;
+  max-width: var(--settings-content-width, 823px);
   margin: 0 auto;
 }
 .dialog-popup form label {
@@ -4790,7 +4918,7 @@ a {
 }
 .model-routing-connection-list {
   width: 100%;
-  max-width: 823px;
+  max-width: var(--settings-content-width, 823px);
   margin: 0 auto;
   padding: 0;
   overflow: hidden;
@@ -4809,7 +4937,7 @@ a {
 }
 .model-routing-policy-disclosure {
   width: 100%;
-  max-width: 823px;
+  max-width: var(--settings-content-width, 823px);
   margin-right: auto;
   margin-left: auto;
 }
@@ -5024,7 +5152,7 @@ a {
   justify-content: space-between;
   gap: 10px;
   width: 100%;
-  max-width: 823px;
+  max-width: var(--settings-content-width, 823px);
   margin: 0 auto 8px;
   padding: 10px;
   color: var(--destructive);
@@ -5076,7 +5204,7 @@ a {
 }
 .model-routing-settings > .model-routing-dialog-error {
   width: 100%;
-  max-width: 823px;
+  max-width: var(--settings-content-width, 823px);
   margin: 0 auto;
   color: var(--destructive);
   font-size: 10px;
@@ -5455,7 +5583,7 @@ a {
   display: grid;
   gap: 10px;
   width: 100%;
-  max-width: 823px;
+  max-width: var(--settings-content-width, 823px);
   margin-right: auto;
   margin-left: auto;
 }
@@ -5671,7 +5799,7 @@ a {
 }
 .project-defaults-settings > .project-defaults-hint {
   width: 100%;
-  max-width: 823px;
+  max-width: var(--settings-content-width, 823px);
   margin: 0 auto;
 }
 .project-defaults-orb-size {
@@ -5860,7 +5988,7 @@ a {
 .shortcut-toolbar,
 .shortcut-empty {
   width: 100%;
-  max-width: 823px;
+  max-width: var(--settings-content-width, 823px);
   margin-right: auto;
   margin-left: auto;
 }
@@ -9299,29 +9427,6 @@ div.claude-code-mode-main {
   .page-topbar .topbar-link {
     display: none;
   }
-  .settings-stage {
-    padding: 0;
-  }
-  .settings-stage > .dx-app-frame {
-    width: 100%;
-    height: 100%;
-    max-height: none;
-    border-radius: 0;
-  }
-  .settings-scope-bar {
-    flex-basis: 43px;
-    padding: 4px 8px;
-  }
-  .settings-scope-tabs {
-    max-width: calc(100% - 40px);
-    padding: 2px;
-  }
-  .settings-dirty-state {
-    display: none;
-  }
-  .settings-content {
-    padding: 16px 16px 48px;
-  }
   .usage-card-header {
     align-items: flex-start;
     flex-direction: column;
@@ -9367,16 +9472,6 @@ div.claude-code-mode-main {
   }
   .project-select select {
     max-width: 160px;
-  }
-  .settings-stage {
-    padding: 0;
-  }
-  .settings-stage > .dx-app-frame {
-    border-radius: 0;
-    outline: 0;
-  }
-  .settings-content {
-    padding: 16px 16px 44px;
   }
   .settings-row {
     align-items: flex-start;
@@ -9913,7 +10008,7 @@ div.claude-code-mode-main {
 }
 .integrations-settings > * {
   width: 100%;
-  max-width: 823px;
+  max-width: var(--settings-content-width, 823px);
   margin: 0 auto;
 }
 .integrations-settings > .settings-heading {
@@ -11030,9 +11125,29 @@ body:has(.dx-app-shell) {
   flex-basis: 36px;
   height: 36px;
   padding: 0 12px;
+  gap: 0;
+}
+.product-sidebar .sidebar-topbar .dx-wordmark {
+  margin-left: 5px;
+}
+/* The toolbar's icon buttons are 26px with 14px icons; a touch screen
+   raises them below. */
+.product-sidebar .sidebar-topbar .notification-trigger,
+.product-sidebar .sidebar-topbar .sidebar-search-trigger {
+  width: 26px;
+  height: 26px;
+}
+.product-sidebar .sidebar-topbar .notification-trigger svg,
+.product-sidebar .sidebar-topbar .sidebar-search-trigger svg,
+.product-sidebar .sidebar-new-thread svg {
+  width: 14px;
+  height: 14px;
+}
+.product-sidebar .sidebar-new-thread {
+  margin-left: 4px;
 }
 .product-sidebar .sidebar-scroll {
-  padding: 8px;
+  padding: 8px 8px 0;
   overflow-x: hidden;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--muted-foreground) 28%, transparent)
@@ -11275,17 +11390,29 @@ body:has(.dx-app-shell) {
     border-radius: 12px;
   }
 }
+/* Rows, headings, and child rows sit 2px apart, and a heading keeps 2px
+   above and below it. Flex columns keep a heading's margins from collapsing
+   into its section's. */
+.thread-project-group,
+.thread-children,
+.sidebar-archive-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 .thread-project-group {
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 .thread-group-heading {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 8px;
   width: 100%;
-  height: 28px;
-  min-height: 28px;
-  padding: 4px 8px;
+  height: 20px;
+  min-height: 20px;
+  margin-block: 2px;
+  padding: 0 8px;
   color: var(--muted-foreground);
   border: 0;
   border-radius: var(--sidebar-radius-md);
@@ -11315,7 +11442,7 @@ body:has(.dx-app-shell) {
   white-space: nowrap;
 }
 .thread-group-heading small {
-  font-size: var(--sidebar-text-sm);
+  font-size: var(--sidebar-text-base);
   font-weight: 400;
   font-variant-numeric: tabular-nums;
   line-height: var(--sidebar-leading-base);
@@ -11349,9 +11476,6 @@ body:has(.dx-app-shell) {
 .thread-context-trigger {
   min-width: 0;
 }
-.thread-context-trigger + .thread-context-trigger {
-  margin-top: 1px;
-}
 /* What sits at a row's end sets distances from its right edge: where the
    owner avatar and child count leave off (--thread-row-marks), where the
    title stops at rest (--thread-row-end), and where the hover actions sit
@@ -11374,11 +11498,11 @@ body:has(.dx-app-shell) {
    Woke mark; each gives way to the hover actions. The title leaves room
    for the longest, 366d, at the status's own size. */
 .thread-row-shell[data-snooze] {
-  --thread-snooze-room: calc(var(--sidebar-text-md) * 2.4 + 10px);
+  --thread-snooze-room: calc(var(--sidebar-text-sm) * 2.4 + 10px);
   --thread-row-end: calc(var(--thread-row-marks) + var(--thread-snooze-room));
 }
 .thread-row-shell[data-snooze="woke"] {
-  --thread-snooze-room: calc(var(--sidebar-text-md) * 3 + 24px);
+  --thread-snooze-room: calc(var(--sidebar-text-sm) * 3 + 24px);
 }
 .thread-snooze-status {
   position: absolute;
@@ -11393,7 +11517,7 @@ body:has(.dx-app-shell) {
   border: 0;
   border-radius: var(--sidebar-radius-sm);
   background: transparent;
-  font-size: var(--sidebar-text-md);
+  font-size: var(--sidebar-text-sm);
   font-variant-numeric: tabular-nums;
   transform: translateY(-50%);
 }
@@ -11409,7 +11533,7 @@ body:has(.dx-app-shell) {
 .thread-row-shell[data-error] {
   --thread-row-end: calc(
     var(--thread-row-marks) +
-    var(--sidebar-text-md) *
+    var(--sidebar-text-sm) *
     2.4 +
     20px
   );
@@ -11425,7 +11549,7 @@ body:has(.dx-app-shell) {
   color: var(--destructive);
   border-radius: var(--sidebar-radius-sm);
   background: color-mix(in srgb, var(--destructive) 10%, transparent);
-  font-size: var(--sidebar-text-md);
+  font-size: var(--sidebar-text-sm);
   line-height: 1;
   transform: translateY(-50%);
   pointer-events: none;
@@ -11457,7 +11581,7 @@ body:has(.dx-app-shell) {
 .thread-row-shell[data-children] {
   --thread-children-width: calc(
     21px +
-    var(--sidebar-text-md) *
+    var(--sidebar-text-sm) *
     0.6 *
     var(--thread-children-glyphs, 1)
   );
@@ -11470,10 +11594,10 @@ body:has(.dx-app-shell) {
 }
 .product-sidebar .thread-row {
   align-items: center;
-  gap: 8px;
-  height: 30px;
-  min-height: 30px;
-  padding: 5px var(--thread-row-end) 5px 8px;
+  gap: 6px;
+  height: var(--sidebar-row-height);
+  min-height: var(--sidebar-row-height);
+  padding: 6px var(--thread-row-end) 6px 8px;
   border-radius: var(--sidebar-radius-md);
 }
 .product-sidebar .thread-row > .thread-executor-icon {
@@ -11516,17 +11640,14 @@ body:has(.dx-app-shell) {
   font-size: var(--sidebar-text-base);
   font-weight: 400;
   letter-spacing: -0.003em;
-  line-height: 18px;
+  line-height: var(--sidebar-leading-base);
 }
 .thread-row-title-text {
   display: inline-block;
   vertical-align: top;
 }
 .product-sidebar .thread-row:not(.selected):not(:hover) strong {
-  color: var(
-    --thread-title-color,
-    color-mix(in srgb, var(--foreground) 82%, var(--muted-foreground))
-  );
+  color: var(--thread-title-color, var(--foreground));
 }
 .product-sidebar .thread-row:hover,
 .product-sidebar .thread-row.selected {
@@ -11676,7 +11797,7 @@ body:has(.dx-app-shell) {
   border: 0;
   border-radius: var(--sidebar-radius-sm);
   background: transparent;
-  font-size: var(--sidebar-text-md);
+  font-size: var(--sidebar-text-sm);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   line-height: 1;
@@ -11793,11 +11914,11 @@ body:has(.dx-app-shell) {
   padding: 0 8px 4px;
   scrollbar-width: thin;
 }
+/* The bottom bar has four equal columns. */
 .sidebar-dock {
-  grid-template-columns: none;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   grid-auto-flow: column;
-  grid-auto-columns: max-content;
-  justify-content: start;
+  grid-auto-columns: minmax(0, 1fr);
   flex-basis: 60px;
   flex-shrink: 0;
   height: 60px;
@@ -11806,11 +11927,10 @@ body:has(.dx-app-shell) {
 }
 .dock-link {
   width: auto;
-  min-width: 56px;
+  min-width: 0;
   height: 48px;
-  justify-self: center;
   gap: 2px;
-  padding: 4px 8px;
+  padding: 4px;
   border: 0;
   border-radius: var(--sidebar-radius-md);
   background: transparent;
@@ -13060,24 +13180,82 @@ body:has(.dx-app-shell) {
   .mobile-sidebar-drawer {
     width: 80vw;
   }
+}
+/* A touch screen keeps the sidebar's 13px type and raises its tap targets:
+   36px Thread rows, 40px section headings, 36px toolbar buttons, and a 44px
+   account row. */
+@media (pointer: coarse) {
+  .product-sidebar {
+    --sidebar-row-height: 36px;
+  }
   .product-sidebar .thread-row {
-    height: 32px;
-    min-height: 32px;
-    padding-block: 6px;
+    padding-block: 8px;
   }
   .thread-group-heading {
+    height: 40px;
+    min-height: 40px;
+  }
+  .product-sidebar .sidebar-topbar {
+    flex-basis: 44px;
+    height: 44px;
+  }
+  .product-sidebar .sidebar-topbar .sidebar-panel-control,
+  .product-sidebar .sidebar-topbar .notification-trigger,
+  .product-sidebar .sidebar-topbar .sidebar-search-trigger,
+  .product-sidebar .sidebar-new-thread {
+    width: 36px;
+    height: 36px;
+  }
+  .product-sidebar .sidebar-topbar .sidebar-panel-control svg,
+  .product-sidebar .sidebar-topbar .notification-trigger svg,
+  .product-sidebar .sidebar-topbar .sidebar-search-trigger svg,
+  .product-sidebar .sidebar-new-thread svg {
+    width: 20px;
     height: 20px;
-    min-height: 20px;
-    padding-block: 0;
+  }
+  .product-sidebar .sidebar-account-shell {
+    flex-basis: 56px;
+    height: 56px;
+  }
+  .product-sidebar .sidebar-account-row {
+    height: 44px;
+    min-height: 44px;
+  }
+  .product-sidebar .sidebar-account-avatar {
+    width: 20px;
+    height: 20px;
+    flex-basis: 20px;
+  }
+  .product-sidebar .sidebar-account-avatar > span {
+    width: 18px;
+    height: 18px;
+    font-size: 9px;
   }
 }
-/* The phone drawer keeps the web rows, in slightly larger text. */
-@media (max-width: 767px) {
-  .mobile-sidebar-drawer .product-sidebar {
-    --sidebar-text-sm: 12px;
-    --sidebar-text-md: 13px;
-    --sidebar-text-base: 14px;
+/* A phone's toolbar is 52px with 44px buttons, and its list starts right
+   under it. */
+@media (pointer: coarse) and (max-width: 767px) {
+  .product-sidebar .sidebar-topbar {
+    flex-basis: 52px;
+    height: 52px;
+    padding: 0 8px;
+    gap: 4px;
   }
+  .product-sidebar .sidebar-topbar .sidebar-panel-control,
+  .product-sidebar .sidebar-topbar .notification-trigger,
+  .product-sidebar .sidebar-topbar .sidebar-search-trigger,
+  .product-sidebar .sidebar-new-thread {
+    width: 44px;
+    height: 44px;
+  }
+  .product-sidebar .sidebar-new-thread {
+    margin-left: 6px;
+  }
+  .product-sidebar .sidebar-scroll {
+    padding: 0 8px;
+  }
+}
+@media (max-width: 767px) {
   .mobile-sidebar-drawer .product-sidebar .thread-row {
     /* A long press opens the Thread menu, not Safari's link preview. */
     -webkit-touch-callout: none;
@@ -13360,7 +13538,7 @@ body:has(.dx-app-shell) {
   display: grid;
   gap: 16px;
   width: 100%;
-  max-width: 823px;
+  max-width: var(--settings-content-width, 823px);
   margin: 0 auto;
 }
 .project-settings-orb {

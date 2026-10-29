@@ -19,11 +19,12 @@ use crate::memory::{self, Memory};
 use crate::observer::Observer;
 use crate::protocol::{
     Capabilities, ClientMessage, DiskOperation, EnvironmentOperation, MemoryOperation,
-    OperationResult, PortalOperation, PortalResult, RequestOperation, ServerMessage, UpdateStatus,
-    WorkloadIdentityResult,
+    OperationResult, PortalOperation, PortalResult, RequestOperation, ServerMessage,
+    StorageOperation, UpdateStatus, WorkloadIdentityResult,
 };
 use crate::proxy::{self, DesktopStart, Outbound, Proxy};
 use crate::services::{ServicePaths, Services};
+use crate::storage::{Transfer, TransferResult};
 use crate::terminal::{TerminalOutbound, TerminalRuntime};
 use crate::update::{self, UpdateRequest, Updater};
 use crate::workload_identity::{LocalRequest, Relay};
@@ -1003,6 +1004,36 @@ impl Daemon {
                                 generation: &generation,
                                 request_id: &request_id,
                                 result: OperationResult::Disk(result),
+                            }) {
+                                let _ = sender.send(Outbound::Text(text));
+                            }
+                        });
+                    }
+                    RequestOperation::Storage(operation) => {
+                        // A transfer moves files to or from R2 over HTTP:
+                        // its answer returns through the proxy's lane.
+                        let sender = proxy.sender();
+                        let generation = generation.to_owned();
+                        let transfer = Transfer::new(&self.config);
+                        tokio::task::spawn_blocking(move || {
+                            let result = match (transfer, operation) {
+                                (None, _) => TransferResult::Unavailable { reason: "failed" },
+                                (Some(transfer), StorageOperation::Export { files, max_bytes }) => {
+                                    transfer.export(&files, max_bytes)
+                                }
+                                (
+                                    Some(transfer),
+                                    StorageOperation::Import {
+                                        files,
+                                        overwrite,
+                                        create_parents,
+                                    },
+                                ) => transfer.import(&files, overwrite, create_parents),
+                            };
+                            if let Ok(text) = serde_json::to_string(&ClientMessage::Response {
+                                generation: &generation,
+                                request_id: &request_id,
+                                result: OperationResult::Storage(result),
                             }) {
                                 let _ = sender.send(Outbound::Text(text));
                             }

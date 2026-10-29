@@ -8,10 +8,11 @@ import {
   type StoredMcpServer,
   type StoredMcpTool,
   ThreadId,
+  Timestamp,
   type UserId,
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
-import { Effect, Layer, Schema } from "effect";
+import { DateTime, Effect, Layer, Option, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
 import { SettingsAudit } from "../audit.js";
@@ -36,6 +37,7 @@ import {
 import {
   createMcpNetworkFetch,
   McpNetworkRejected,
+  mcpStoredTool,
   mcpToolContractHash,
 } from "./transport.js";
 
@@ -399,8 +401,53 @@ const toolCallNames = async (
   }
 };
 
+/**
+ * Stores the contract a server now lists for an allowed tool, so the tool
+ * shows for review in Settings and leaves its Threads until someone allows
+ * it again, as a refresh would. Best effort: the call fails either way.
+ */
+const recordChangedTool = async (
+  connection: AuthorizedConnection,
+  tool: {
+    readonly name: string;
+    readonly description?: string;
+    readonly inputSchema: unknown;
+  },
+) => {
+  const stored = await Effect.runPromise(
+    DateTime.now.pipe(
+      Effect.flatMap((now) => mcpStoredTool(tool as never, now)),
+      Effect.option,
+    ),
+  );
+  if (Option.isNone(stored)) return;
+  await connection.db
+    .prepare(
+      `UPDATE mcp_tool
+          SET description = ?, input_schema_json = ?, schema_hash = ?,
+              discovered_at = ?
+        WHERE server_id = ? AND name = ? AND approved_schema_hash IS NOT NULL`,
+    )
+    .bind(
+      stored.value.description,
+      stored.value.inputSchemaJson,
+      stored.value.schemaHash,
+      Schema.encodeSync(Timestamp)(stored.value.discoveredAt),
+      connection.server.id,
+      stored.value.name,
+    )
+    .run()
+    .catch(() => undefined);
+};
+
+/**
+ * Checks the listed contract of the one tool this connection calls against
+ * the contract that was allowed. Another tool's change does not block it; that
+ * tool is checked when something calls it.
+ */
 const validateToolListing = async (
   connection: AuthorizedConnection,
+  toolName: string,
   response: Response,
   body: Uint8Array,
 ) => {
@@ -423,32 +470,37 @@ const validateToolListing = async (
         readonly description?: unknown;
         readonly inputSchema?: unknown;
       };
-      if (typeof candidate.name !== "string") continue;
-      const approved = connection.tools.find(
-        ({ name }) => name === candidate.name,
-      );
+      if (candidate.name !== toolName) continue;
+      const approved = connection.tools.find(({ name }) => name === toolName);
       if (approved === undefined) continue;
-      const hash = await mcpToolContractHash({
-        name: candidate.name,
+      const listed = {
+        name: toolName,
         description:
           typeof candidate.description === "string"
             ? candidate.description
             : undefined,
         inputSchema: candidate.inputSchema,
-      });
-      if (hash !== approved.approvedSchemaHash) {
+      };
+      if ((await mcpToolContractHash(listed)) !== approved.approvedSchemaHash) {
+        await recordChangedTool(connection, listed);
         throw new McpNetworkRejected({ code: "TOOL_REVIEW_REQUIRED" });
       }
     }
   }
 };
 
+/**
+ * The fetch Code's MCP client uses to call `toolName`. Every request
+ * rechecks the server, credential, and allowed tools against current
+ * settings, and a tool listing must show `toolName` with its allowed contract.
+ */
 export const createAuthorizedMcpFetch =
   (
     rawThreadId: string,
     rawServerId: string,
     expectedEndpoint: string,
     timeoutMs: number,
+    toolName: string,
   ): typeof fetch =>
   async (input, init) => {
     const request = new Request(input, init);
@@ -487,6 +539,7 @@ export const createAuthorizedMcpFetch =
           if (callNames.length === 0) {
             await validateToolListing(
               connection,
+              toolName,
               kind === "sse-event"
                 ? new Response(null, {
                     headers: { "content-type": "application/json" },

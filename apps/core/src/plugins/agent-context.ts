@@ -1,5 +1,7 @@
 import { env, waitUntil } from "cloudflare:workers";
+import { Effect } from "effect";
 import type { Bindings } from "../http/types.js";
+import { resolveMcpAgentConnections } from "../settings/mcp-servers/execution.js";
 import type { PluginHostContext } from "./host.js";
 import { resolveSubmissionPluginTools } from "./submission-tools.js";
 
@@ -20,15 +22,20 @@ export const agentThreadToolsContext = () => ({
   waitUntil,
 });
 
-/** The plugin tool set for one agent submission, recorded with it. */
+/**
+ * The plugin tool set for one agent submission, recorded with it, and the
+ * MCP servers Code offers in it. Both come from current settings, never from
+ * the agent's creation data, so a server connected or signed in to after the
+ * Thread started reaches its next submission.
+ */
 export const resolveAgentPluginTools = async (
   threadId: string,
   submissionId: string,
-) => ({
-  submissionId,
-  tools: await resolveSubmissionPluginTools(
-    agentPluginHostContext(),
-    threadId,
-    submissionId,
-  ),
-});
+) => {
+  const context = agentPluginHostContext();
+  const [tools, mcpConnections] = await Promise.all([
+    resolveSubmissionPluginTools(context, threadId, submissionId),
+    Effect.runPromise(resolveMcpAgentConnections(context.db, threadId)),
+  ]);
+  return { submissionId, tools, mcpConnections };
+};

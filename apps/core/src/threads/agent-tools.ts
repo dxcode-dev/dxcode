@@ -384,7 +384,7 @@ export const createThreadTools = (
       description: description([
         "Start a child Thread: a new dx Thread with its own agent and its own Orb that works on a task while you continue. It belongs to this Thread's owner, stays private to them, and lists under this Thread in their sidebar.",
         "Use a child Thread for a self-contained task that can run on its own or in parallel with yours, or that needs a separate Orb. Do the work yourself when it is small, when you need its result immediately, or when it depends on files you changed here.",
-        "Files do not transfer. The child starts from its project's repository, not from this Orb, so uncommitted changes here are invisible to it. Put everything it needs in the prompt, and push any commits it must build on first.",
+        "Files do not transfer on their own. The child starts from its project's repository, not from this Orb, so uncommitted changes here are invisible to it. Put everything it needs in the prompt and push any commits it must build on first; for unpushed work, tell the child to copy it from this Thread with download_thread_changes or download_thread_file, naming the repository and branch.",
         "Returns the child's thread ID. The child sends its result to this Thread as a message when it finishes, and that message starts a new turn here. Use send_thread_message for follow-ups.",
         "Before choosing an Orb or a mode, call list_orbs for the providers and sizes the owner can start, and list_agent_modes for the modes and the models they run. Omit them to use the project's Orb and this Thread's mode.",
       ]),
@@ -506,7 +506,7 @@ export const createThreadTools = (
       name: "send_thread_message",
       description: description([
         "Send a message to another of this Thread owner's Threads, such as a child you started. It shows there as a message from this Thread. Returns as soon as the Thread accepts it. A child you started replies with a message to this Thread; ask any other Thread for a reply in the message if you want one.",
-        "Only the owner's own Threads can receive it, not Threads other people shared with them. If the Thread is working, the message steers its current turn. A message carries text only: files and commits do not transfer.",
+        "Only the owner's own Threads can receive it, not Threads other people shared with them. If the Thread is working, the message steers its current turn. A message carries text only: files and commits do not transfer. Copy files with upload_thread_file, or have the recipient copy them with download_thread_file or download_thread_changes, and name the repository and branch of any commits.",
       ]),
       input: v.object({
         thread: threadIdInput("The thread ID, as create_thread returned it."),

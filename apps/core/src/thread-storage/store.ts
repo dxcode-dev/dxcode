@@ -17,6 +17,8 @@ export interface ThreadStorageRow {
   readonly size: number;
   readonly state: "uploading" | "ready";
   readonly created_at: number;
+  /** A temporary file's end; null for a file that lasts with its Thread. */
+  readonly expires_at: number | null;
 }
 
 export const newThreadStorageFileId = () => {
@@ -43,7 +45,14 @@ export const threadStorageFileData = (
   size: row.size,
   url: `${origin}${threadStoragePath(row.thread_id, row.id, row.name)}`,
   createdAt: row.created_at,
+  ...(row.expires_at === null ? {} : { expiresAt: row.expires_at }),
 });
+
+/** A finished file that has not expired: the only kind anyone reads. */
+export const isReadableThreadStorageFile = (
+  row: ThreadStorageRow,
+  now: number,
+) => row.state === "ready" && (row.expires_at === null || row.expires_at > now);
 
 export const findThreadStorageFile = (db: D1Database, id: string) =>
   db
@@ -84,6 +93,64 @@ export const purgeUnfinishedUploads = async (
       await transfer
         .abort(row.object_key, row.upload_id)
         .catch(() => undefined);
+  }
+  return results.length;
+};
+
+/**
+ * Delete one file Core read from D1: its bytes first, so a retry still
+ * finds the row. The row must still belong to the same Thread.
+ */
+export const deleteThreadStorageFile = async (
+  bindings: Pick<Bindings, "DB" | "DX_STORAGE">,
+  row: Pick<ThreadStorageRow, "id" | "thread_id" | "object_key">,
+) => {
+  await bindings.DX_STORAGE?.delete(row.object_key);
+  await bindings.DB?.prepare(
+    "DELETE FROM thread_storage_files WHERE id = ? AND thread_id = ?",
+  )
+    .bind(row.id, row.thread_id)
+    .run();
+};
+
+/**
+ * The scheduled sweep across every Thread: temporary files past their
+ * expiry, and uploads left unfinished for a day by a Thread that never
+ * started another. Returns how many files it deleted.
+ */
+export const sweepThreadStorage = async (
+  bindings: Pick<Bindings, "DB" | "DX_STORAGE">,
+  transfer: AttachmentTransfer | undefined,
+  now: number,
+  limit = 200,
+) => {
+  const db = bindings.DB;
+  if (db === undefined) return 0;
+  // Two queries, each served by its own partial index (0100 and 0101).
+  const { results: expired } = await db
+    .prepare(
+      `SELECT * FROM thread_storage_files
+        WHERE expires_at IS NOT NULL AND expires_at <= ? LIMIT ?`,
+    )
+    .bind(now, limit)
+    .all<ThreadStorageRow>();
+  const { results: abandoned } = await db
+    .prepare(
+      `SELECT * FROM thread_storage_files
+        WHERE state = 'uploading' AND created_at < ? LIMIT ?`,
+    )
+    .bind(now - UNFINISHED_UPLOAD_RETENTION_MS, limit)
+    .all<ThreadStorageRow>();
+  const results = [
+    ...expired,
+    ...abandoned.filter(({ id }) => !expired.some((row) => row.id === id)),
+  ];
+  for (const row of results) {
+    if (row.state === "uploading" && row.upload_id !== null)
+      await transfer
+        ?.abort(row.object_key, row.upload_id)
+        .catch(() => undefined);
+    await deleteThreadStorageFile(bindings, row);
   }
   return results.length;
 };

@@ -6,17 +6,20 @@ import {
   attachmentLogger,
   notificationLogger,
   threadDeletionLogger,
+  threadStorageLogger,
 } from "./logging.js";
 import { THREAD_SWEEP_CRON } from "./notifications/snooze-cron.js";
 import { sweepSnoozeWakes } from "./notifications/snooze-wake.js";
 import { scheduleUsageRetention } from "./settings/usage/retention.js";
 import { sweepThreadDeletions } from "./thread-deletion/cleanup.js";
 import { deployedThreadCleanup } from "./thread-deletion/routes.js";
+import { sweepThreadStorage } from "./thread-storage/store.js";
 
 /**
  * The Worker's cron handler. Every tick sweeps snoozed Threads, retries
- * unfinished Thread deletions, fires due schedules, and polls GitHub
- * subscriptions; the daily tick also runs usage and attachment retention.
+ * unfinished Thread deletions, deletes expired Thread storage files, fires
+ * due schedules, and polls GitHub subscriptions; the daily tick also runs
+ * usage and attachment retention.
  */
 export const scheduled = (
   controller: ScheduledController,
@@ -49,6 +52,28 @@ export const scheduled = (
         cause,
       }),
     ),
+  );
+  // A temporary Thread storage file lasts three hours, so its sweep cannot
+  // wait for the daily tick either.
+  context.waitUntil(
+    sweepThreadStorage(
+      bindings,
+      attachmentTransfer(bindings),
+      controller.scheduledTime,
+    )
+      .then((deleted) => {
+        if (deleted > 0)
+          threadStorageLogger.info("Expired Thread storage files deleted.", {
+            event: "thread_storage_sweep_completed",
+            deleted,
+          });
+      })
+      .catch((cause) =>
+        threadStorageLogger.error("Thread storage sweep failed.", {
+          event: "thread_storage_sweep_failed",
+          cause,
+        }),
+      ),
   );
   // Schedules and GitHub events wake Threads; a dx run ends with its turn,
   // so nothing else would (automations/wake.ts).

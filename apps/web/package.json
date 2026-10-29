@@ -1,7 +1,7 @@
 {
   "name": "@dx/web",
   "private": true,
-  "version": "0.2.47",
+  "version": "0.2.48",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -39,6 +39,8 @@
     "test:history-first-paint": "node test/history-first-paint-proof.mjs",
     "test:instructions-settings": "node test/instructions-settings-proof.mjs",
     "test:settings-menu": "node test/settings-menu-proof.mjs",
+    "test:settings-shell": "node test/settings-shell-proof.mjs",
+    "test:profile-avatar": "node test/profile-avatar-proof.mjs",
     "test:account-composer-settings": "node test/settings-account-composer-proof.mjs",
     "test:keyboard-shortcuts": "node test/keyboard-shortcuts-proof.mjs",
     "test:mention-names": "node test/mention-names-proof.mjs",

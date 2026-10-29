@@ -3,6 +3,7 @@ import {
   CreateThreadStorageFileRequestSchema,
   type CreateThreadStorageFileResponse,
   sanitizeAttachmentFilename,
+  THREAD_STORAGE_TEMPORARY_TTL_MS,
   type ThreadStorageError,
   type ThreadStorageFile,
 } from "@dx/api";
@@ -23,6 +24,7 @@ import type { Bindings } from "../http/types.js";
 import { threadStorageLogger } from "../logging.js";
 import {
   findThreadStorageFile,
+  isReadableThreadStorageFile,
   isThreadStorageFileId,
   newThreadStorageFileId,
   purgeUnfinishedUploads,
@@ -85,7 +87,8 @@ export const serveDaemonStorage = async (
       const input = decode(CreateThreadStorageFileRequestSchema, request.body);
       if (input === undefined)
         return refuse("The storage request is invalid.", 400);
-      await purgeUnfinishedUploads(db, transfer, threadId, Date.now());
+      const now = Date.now();
+      await purgeUnfinishedUploads(db, transfer, threadId, now);
       const fileId = newThreadStorageFileId();
       const key = threadStorageObjectKey(threadId, fileId);
       const uploadId = await transfer.create(key);
@@ -93,8 +96,8 @@ export const serveDaemonStorage = async (
         .prepare(
           `INSERT INTO thread_storage_files
              (id, thread_id, object_key, upload_id, name, mime_type, size,
-              state, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'uploading', ?)`,
+              state, created_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'uploading', ?, ?)`,
         )
         .bind(
           fileId,
@@ -104,7 +107,10 @@ export const serveDaemonStorage = async (
           sanitizeAttachmentFilename(input.name),
           input.mimeType.trim().slice(0, 255) || "application/octet-stream",
           input.size,
-          Date.now(),
+          now,
+          input.temporary === true
+            ? now + THREAD_STORAGE_TEMPORARY_TTL_MS
+            : null,
         )
         .run();
       const partCount = attachmentPartCount(input.size);
@@ -205,7 +211,11 @@ export const serveDaemonStorage = async (
       complete === undefined
     ) {
       const row = await findThreadStorageFile(db, id);
-      if (!isThreadStorageFileId(id) || row === null || row.state !== "ready")
+      if (
+        !isThreadStorageFileId(id) ||
+        row === null ||
+        !isReadableThreadStorageFile(row, Date.now())
+      )
         return refuse("Not found.", 404);
       // The key reads as the Thread's owner: any Thread's file they could
       // open in dx, which is how one Thread hands a file to another.

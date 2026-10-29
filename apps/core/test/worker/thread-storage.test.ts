@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import {
   type CreateThreadStorageFileResponse,
   THREAD_STORAGE_PART_BYTES,
+  THREAD_STORAGE_TEMPORARY_TTL_MS,
   type ThreadStorageFile,
   type ThreadStorageListResponse,
 } from "@dx/api";
@@ -18,7 +19,12 @@ import { authorizeThread } from "../../src/auth/authorize-thread.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
 import { purgeDeletedThread } from "../../src/thread-deletion/cleanup.js";
+import { createThreadStorageTools } from "../../src/thread-storage/agent-tools.js";
 import { threadStorageRoutes } from "../../src/thread-storage/routes.js";
+import {
+  findThreadStorageFile,
+  sweepThreadStorage,
+} from "../../src/thread-storage/store.js";
 import { forwardDaemonStorage } from "../../src/threads/daemon-ingress.js";
 import { project, thread } from "./fixtures.js";
 import {
@@ -50,7 +56,12 @@ import { runRepositories } from "./runtime.js";
  * - another of the owner's Threads cannot fetch the file, or a stranger's
  *   Thread can;
  * - deleting the Thread leaves rows or bytes behind;
- * - abandoned uploads pile up.
+ * - abandoned uploads pile up;
+ * - a temporary file stays readable, or listed, past its three hours, or
+ *   its bytes outlive it; the sweep removes a lasting file;
+ * - a thread file tool reaches a stranger's Thread, or a private Thread from
+ *   a shared one; a guest that names a file it did not stage gets that file
+ *   deleted or shared.
  */
 
 const owner = Schema.decodeSync(UserId)("storage-owner");
@@ -139,11 +150,17 @@ const put = async (
   name: string,
   mimeType: string,
   key = DAEMON_KEY,
+  temporary = false,
 ) => {
   const created = await daemon(
     threadId,
     "",
-    json({ name, mimeType, size: bytes.byteLength }),
+    json({
+      name,
+      mimeType,
+      size: bytes.byteLength,
+      ...(temporary ? { temporary: true } : {}),
+    }),
     key,
   );
   expect(created.status).toBe(201);
@@ -492,6 +509,122 @@ describe("Thread storage", () => {
     ).toBeNull();
   });
 
+  it("serves a temporary file for three hours, then refuses and sweeps it", async () => {
+    routeNetwork();
+    await seedThreads();
+    await seedDaemonAuthority(threadEntity.id, owner);
+    await seedDaemonAuthority(siblingThread.id, owner, SIBLING_KEY);
+    const asOwner = browser(owner);
+    const { file: lasting } = await put(
+      threadEntity.id,
+      pngBytes(48),
+      "kept.png",
+      "image/png",
+    );
+    const startedAt = Date.now();
+    const { file: temporary } = await put(
+      threadEntity.id,
+      pngBytes(64),
+      "handoff.png",
+      "image/png",
+      DAEMON_KEY,
+      true,
+    );
+    expect(lasting.expiresAt).toBeUndefined();
+    expect(temporary.expiresAt).toBeGreaterThanOrEqual(
+      startedAt + THREAD_STORAGE_TEMPORARY_TTL_MS,
+    );
+    expect(temporary.expiresAt).toBeLessThanOrEqual(
+      Date.now() + THREAD_STORAGE_TEMPORARY_TTL_MS,
+    );
+
+    // Within its three hours: the owner and another of their Threads read
+    // it, but the Thread's file list, which the transcript uses, omits it.
+    const read = await asOwner(new URL(temporary.url).pathname);
+    expect(read.status).toBe(302);
+    await read.arrayBuffer();
+    const fetched = await daemon(
+      siblingThread.id,
+      `/${temporary.id}`,
+      { method: "GET" },
+      SIBLING_KEY,
+    );
+    expect(fetched.status).toBe(200);
+    await fetched.arrayBuffer();
+    const listed = (await (
+      await asOwner(`/v1/threads/${threadEntity.id}/storage`)
+    ).json()) as ThreadStorageListResponse;
+    expect(listed.files.map(({ id }) => id)).toEqual([lasting.id]);
+
+    // Near its end, a cached redirect lasts no longer than the file.
+    await env.DB.prepare(
+      "UPDATE thread_storage_files SET expires_at = ? WHERE id = ?",
+    )
+      .bind(Date.now() + 5_000, temporary.id)
+      .run();
+    const late = await asOwner(new URL(temporary.url).pathname);
+    expect(late.status).toBe(302);
+    expect(late.headers.get("cache-control")).toMatch(
+      /^private, max-age=[0-5]$/,
+    );
+    await late.arrayBuffer();
+
+    // Three hours later the same reads are refused.
+    await env.DB.prepare(
+      "UPDATE thread_storage_files SET expires_at = ? WHERE id = ?",
+    )
+      .bind(Date.now() - 1, temporary.id)
+      .run();
+    const expired = await asOwner(new URL(temporary.url).pathname);
+    expect(expired.status).toBe(404);
+    await expired.arrayBuffer();
+    const expiredFetch = await daemon(
+      siblingThread.id,
+      `/${temporary.id}`,
+      { method: "GET" },
+      SIBLING_KEY,
+    );
+    expect(expiredFetch.status).toBe(404);
+    await expiredFetch.arrayBuffer();
+
+    // An upload the sibling abandoned and never followed with another.
+    const abandoned = (await (
+      await daemon(
+        siblingThread.id,
+        "",
+        json({ name: "old.png", mimeType: "image/png", size: 5 }),
+        SIBLING_KEY,
+      )
+    ).json()) as CreateThreadStorageFileResponse;
+    await env.DB.prepare(
+      "UPDATE thread_storage_files SET created_at = 0 WHERE id = ?",
+    )
+      .bind(abandoned.id)
+      .run();
+
+    // The scheduled sweep deletes both, rows and bytes, and nothing else.
+    expect(
+      await sweepThreadStorage(
+        { DB: env.DB, DX_STORAGE: env.DX_STORAGE },
+        undefined,
+        Date.now(),
+      ),
+    ).toBe(2);
+    expect(await findThreadStorageFile(env.DB, temporary.id)).toBeNull();
+    expect(await findThreadStorageFile(env.DB, abandoned.id)).toBeNull();
+    expect(
+      await env.DX_STORAGE.head(
+        `thread-storage/${threadEntity.id}/${temporary.id}`,
+      ),
+    ).toBeNull();
+    expect(await findThreadStorageFile(env.DB, lasting.id)).not.toBeNull();
+    expect(
+      await env.DX_STORAGE.head(
+        `thread-storage/${threadEntity.id}/${lasting.id}`,
+      ),
+    ).not.toBeNull();
+  });
+
   it("clears a Thread's abandoned uploads when it starts another", async () => {
     routeNetwork();
     await seedThreads();
@@ -523,5 +656,147 @@ describe("Thread storage", () => {
           .first(),
       ).toBeNull(),
     );
+  });
+
+  it("moves files only between the owner's reachable Threads, and only files the source staged", async () => {
+    await seedThreads();
+    const now = Date.now();
+    // A stranger's file, and a lasting file of the owner's source Thread:
+    // a guest that names either must not get it deleted or shared.
+    const seedFile = async (threadId: string, id: string) => {
+      const key = `thread-storage/${threadId}/${id}`;
+      await env.DB.prepare(
+        `INSERT INTO thread_storage_files
+           (id, thread_id, object_key, name, mime_type, size, state, created_at)
+         VALUES (?, ?, ?, 'kept.txt', 'text/plain', 4, 'ready', ?)`,
+      )
+        .bind(id, threadId, key, now)
+        .run();
+      await env.DX_STORAGE.put(key, "kept");
+      return key;
+    };
+    const victim = `tsf_${"a".repeat(32)}`;
+    const lasting = `tsf_${"b".repeat(32)}`;
+    const victimKey = await seedFile(strangerThread.id, victim);
+    const lastingKey = await seedFile(siblingThread.id, lasting);
+
+    // Each Thread's daemon, as the execution object relays it: the source
+    // answers an export with whatever ID it likes.
+    let forged = victim;
+    const transfers: Array<{ thread: string; operation: string }> = [];
+    const daemons = {
+      idFromName: (name: string) => name,
+      get: (name: string) => ({
+        fetch: async (_url: string, init: RequestInit) => {
+          const body = JSON.parse(String(init.body)) as {
+            operation: string;
+            files: Array<{ path: string }>;
+          };
+          transfers.push({ thread: name, operation: body.operation });
+          return Response.json(
+            body.operation === "storage.export"
+              ? {
+                  kind: "exported",
+                  files: body.files.map(() => ({
+                    kind: "stored",
+                    id: forged,
+                    size: 4,
+                    mode: 0o644,
+                  })),
+                }
+              : {
+                  kind: "imported",
+                  files: body.files.map(({ path }) => ({
+                    kind: "written",
+                    path,
+                    size: 4,
+                  })),
+                },
+          );
+        },
+      }),
+    } as unknown as DurableObjectNamespace;
+    const tools = Object.fromEntries(
+      createThreadStorageTools(threadEntity.id, () => ({
+        db: env.DB,
+        bindings: {
+          ...coreBindings,
+          DB: env.DB,
+          DX_STORAGE: env.DX_STORAGE,
+          THREAD_EXECUTION: daemons,
+        } as Bindings,
+      })).map((tool) => [tool.name, tool]),
+    );
+    const call = async (name: string, data: Record<string, unknown>) =>
+      (
+        (await (
+          tools[name] as { run: (input: unknown) => Promise<unknown> }
+        ).run({ data, toolCallId: crypto.randomUUID() })) as {
+          output: Record<string, unknown>;
+        }
+      ).output;
+
+    // A stranger's Thread is not found, and its workspace is never asked.
+    await expect(
+      call("download_thread_file", {
+        thread: strangerThread.id,
+        path: "kept.txt",
+      }),
+    ).rejects.toThrow(/not found among this Thread owner's Threads/);
+    expect(transfers).toEqual([]);
+
+    // A forged export: neither file is written, deleted, or shared.
+    for (const id of [victim, lasting]) {
+      forged = id;
+      transfers.length = 0;
+      await expect(
+        call("download_thread_file", {
+          thread: siblingThread.id,
+          path: "kept.txt",
+        }),
+      ).rejects.toThrow(/named a file it did not store/);
+      expect(transfers).toEqual([
+        { thread: siblingThread.id, operation: "storage.export" },
+      ]);
+      const shared = await call("thread_file_url", {
+        thread: siblingThread.id,
+        paths: ["kept.txt"],
+      });
+      expect(shared.files).toEqual([
+        {
+          path: "kept.txt",
+          error: "failed: the workspace named a file it did not store",
+        },
+      ]);
+    }
+    for (const [id, key] of [
+      [victim, victimKey],
+      [lasting, lastingKey],
+    ] as const) {
+      expect(await findThreadStorageFile(env.DB, id)).not.toBeNull();
+      expect(await env.DX_STORAGE.get(key)).not.toBeNull();
+    }
+
+    // Shared, the calling Thread reaches only its family: the owner's other
+    // Thread until it becomes a child.
+    await env.DB.prepare(
+      "UPDATE threads SET workspace_access = 'view' WHERE id = ?",
+    )
+      .bind(threadEntity.id)
+      .run();
+    transfers.length = 0;
+    await expect(
+      call("upload_thread_file", { thread: siblingThread.id, path: "a.txt" }),
+    ).rejects.toThrow(/not reachable from this shared Thread/);
+    expect(transfers).toEqual([]);
+    await env.DB.prepare("UPDATE threads SET parent_thread_id = ? WHERE id = ?")
+      .bind(threadEntity.id, siblingThread.id)
+      .run();
+    await expect(
+      call("upload_thread_file", { thread: siblingThread.id, path: "a.txt" }),
+    ).rejects.toThrow(/named a file it did not store/);
+    expect(transfers).toEqual([
+      { thread: threadEntity.id, operation: "storage.export" },
+    ]);
   });
 });

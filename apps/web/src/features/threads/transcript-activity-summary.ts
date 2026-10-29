@@ -57,6 +57,10 @@ type SummaryKind =
   | "thread-read"
   | "thread-start"
   | "thread-message"
+  | "thread-download"
+  | "thread-upload"
+  | "thread-changes"
+  | "thread-link"
   | "thread-wait"
   | "thread-check"
   | "thread-update"
@@ -87,6 +91,10 @@ const threadSummaryKinds: Readonly<Record<string, SummaryKind>> = {
   list_agent_modes: "thread-modes",
   find_thread: "thread-find",
   read_thread: "thread-read",
+  download_thread_file: "thread-download",
+  upload_thread_file: "thread-upload",
+  download_thread_changes: "thread-changes",
+  thread_file_url: "thread-link",
 };
 
 /**
@@ -136,6 +144,14 @@ const summaryPhrase = (kind: SummaryKind, count: number) => {
       return `started ${plural(count, "thread")}`;
     case "thread-message":
       return `sent ${plural(count, "thread message")}`;
+    case "thread-download":
+      return `downloaded ${plural(count, "thread file")}`;
+    case "thread-upload":
+      return `uploaded ${plural(count, "thread file")}`;
+    case "thread-changes":
+      return `downloaded thread changes ${plural(count, "time")}`;
+    case "thread-link":
+      return `shared ${plural(count, "file link")}`;
     case "thread-wait":
       return `waited for ${plural(count, "thread")}`;
     case "thread-check":

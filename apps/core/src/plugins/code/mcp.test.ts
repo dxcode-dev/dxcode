@@ -97,6 +97,7 @@ describe("Code MCP host calls", () => {
       "mcp_a",
       connection.endpoint,
       connection.timeoutMs,
+      "execute",
     );
     expect(
       requests

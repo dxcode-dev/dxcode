@@ -45,9 +45,11 @@ import {
   type DxPromptData,
 } from "../runtime/agent-composition.js";
 import { AGENT_RUN_LIMIT_MS } from "../runtime/agent-run-limit.js";
+import type { McpAgentConnectionData } from "../settings/mcp-servers/execution.js";
 import { invokePluginLive } from "../settings/plugins/execution.js";
 import { createPluginTool } from "../settings/plugins/flue.js";
 import { createSkillResourceTool } from "../settings/skills/execution.js";
+import { createThreadStorageTools } from "../thread-storage/agent-tools.js";
 import { createThreadTools } from "../threads/agent-tools.js";
 import {
   builtInSkillDefinitions,
@@ -69,6 +71,8 @@ interface DxAgentPromptData {
   readonly plugins?: {
     readonly submissionId: string;
     readonly tools: PluginToolSet;
+    /** The Thread owner's MCP servers as of this submission. */
+    readonly mcpConnections: ReadonlyArray<McpAgentConnectionData>;
   };
 }
 
@@ -99,12 +103,12 @@ const withToolFailureMessage = <T extends ToolDefinition>(tool: T): T =>
 /**
  * dx's own tools for one submission: skill resources, the thread tools,
  * first-party plugin tools (MCP servers reach the model only as Code's
- * modules, never mounted directly), and installed plugins. Plugin tools come
- * from the submission's resolved set, never from Thread creation data;
- * providers and keys resolve again on every call. Every tool DxAgent offers
- * belongs here: Claude Code mode serves this same list to Claude as
- * `mcp__dx__<name>`, so a tool mounted anywhere else would be missing there
- * (wiki/claude-code-tool-parity.md).
+ * modules, never mounted directly), and installed plugins. Plugin tools and
+ * MCP servers come from the submission's resolved set, never from Thread
+ * creation data; providers and keys resolve again on every call. Every tool
+ * DxAgent offers belongs here: Claude Code mode serves this same list to
+ * Claude as `mcp__dx__<name>`, so a tool mounted anywhere else would be
+ * missing there (wiki/claude-code-tool-parity.md).
  */
 const dxTools = (
   threadId: string,
@@ -124,6 +128,13 @@ const dxTools = (
       isClaudeCodeModel(promptData.route.model),
   ))
     tools.push(withToolFailureMessage(tool));
+  // Files between the owner's Threads, and temporary links, through
+  // Thread storage.
+  for (const tool of createThreadStorageTools(
+    threadId,
+    agentThreadToolsContext,
+  ))
+    tools.push(withToolFailureMessage(tool));
   // Schedules, GitHub subscriptions, and notify_user: work after the turn.
   for (const tool of createAutomationTools(
     threadId,
@@ -139,7 +150,7 @@ const dxTools = (
         ({ pluginId }) => !withoutPlugins.includes(pluginId),
       ),
       agentPluginHostContext,
-      initialData?.mcpConnections ?? [],
+      pluginTools.mcpConnections,
     ))
       tools.push(withToolFailureMessage(tool));
   for (const plugin of initialData?.plugins ?? [])
@@ -322,7 +333,8 @@ DxAgent.initialData = DxAgentInitialDataSchema;
  * Runs once per submission before rendering. The model route and the plugin
  * tool set are both resolved here from current settings and recorded for the
  * submission, so retries and recovery reuse them and the next submission sees
- * changes. A resolution failure fails the submission visibly.
+ * changes. The MCP servers Code offers resolve here too, on every attempt.
+ * A resolution failure fails the submission visibly.
  */
 DxAgent.resolvePromptData = async (
   _initialData: unknown,
