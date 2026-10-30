@@ -9,6 +9,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { ChevronRight, UsersRound } from "lucide-react";
 import {
   type Dispatch,
+  type KeyboardEvent,
   type PointerEvent,
   type ReactNode,
   type SetStateAction,
@@ -63,6 +64,15 @@ type DialogState =
 
 const isClaudeConnection = (connection: ConnectionData) =>
   connection.providerId === CLAUDE_CODE_PROVIDER_ID;
+
+/** "Claude Pro/Max", then "Claude Pro/Max 2", and so on: the first name free. */
+const nextClaudePlanName = (plans: ReadonlyArray<ConnectionData>) => {
+  const names = new Set(plans.map(({ name }) => name));
+  let name = "Claude Pro/Max";
+  for (let index = 2; names.has(name); index += 1)
+    name = `Claude Pro/Max ${index}`;
+  return name;
+};
 
 /** A Claude Pro/Max connection edits only its token, in its own dialog. */
 const editDialog = (connection: ConnectionData): DialogState =>
@@ -142,6 +152,7 @@ function ScopeRow({
 
 function ConnectionList({
   rows,
+  order = rows,
   empty,
   leading,
   trailing,
@@ -166,6 +177,8 @@ function ConnectionList({
   readonly expanded: ReadonlyArray<string>;
   readonly onExpand: (id: string) => void;
   readonly rows: ReadonlyArray<ConnectionData>;
+  /** The order Move Up and Down change, when it holds more than `rows`. */
+  readonly order?: ReadonlyArray<ConnectionData>;
   readonly canMutate: boolean;
   readonly checkingConnectionId?: string;
   readonly onReorder: (ids: ReadonlyArray<string>) => void;
@@ -202,10 +215,10 @@ function ConnectionList({
   };
 
   const move = (connection: ConnectionData, direction: -1 | 1) => {
-    const index = rows.findIndex((row) => row.id === connection.id);
+    const index = order.findIndex((row) => row.id === connection.id);
     const swap = index + direction;
-    if (index < 0 || swap < 0 || swap >= rows.length) return;
-    const ids = rows.map((row) => row.id);
+    if (index < 0 || swap < 0 || swap >= order.length) return;
+    const ids = order.map((row) => row.id);
     const id = ids[index];
     const swapId = ids[swap];
     if (id === undefined || swapId === undefined) return;
@@ -217,60 +230,108 @@ function ConnectionList({
   return (
     <ol className="model-routing-connection-list">
       {leading}
-      {rows.map((connection, index) => (
-        <li
-          key={connection.id}
-          id={`routing-connection-${connection.id}`}
-          data-connection-row
-          data-dragging={drag?.id === connection.id || undefined}
-          data-drop={
-            drag && drag.insertion === index
-              ? "above"
-              : drag?.insertion === rows.length && index === rows.length - 1
-                ? "below"
-                : undefined
-          }
-        >
-          <ConnectionRow
-            connection={connection}
-            canMutate={canMutate}
-            canReorderUp={index > 0 && canMutate}
-            canReorderDown={index < rows.length - 1 && canMutate}
-            expanded={expandedIds.has(connection.id)}
-            onExpand={() => onExpand(connection.id)}
-            onPointerDown={(event) => {
-              if (!canMutate || event.button !== 0) return;
-              event.preventDefault();
-              event.currentTarget.setPointerCapture(event.pointerId);
-              setDrag({ id: connection.id, insertion: index });
-            }}
-            onPointerMove={(event) => {
-              if (!drag) return;
-              setDrag({ ...drag, insertion: insertionAt(event) });
-            }}
-            onPointerUp={drop}
-            onPointerCancel={() => setDrag(undefined)}
-            onToggle={(enabled) => onToggle(connection.id, enabled)}
-            onMove={(direction) => move(connection, direction)}
-            onCheckAccess={() => onCheckAccess(connection.id)}
-            onEdit={() => onEdit(connection)}
-            onDelete={() => onDelete(connection)}
-            onDisconnect={() => onDisconnect(connection)}
-            checkingAccess={checkingConnectionId === connection.id}
+      {rows.map((connection, index) => {
+        const position = order.findIndex(({ id }) => id === connection.id);
+        return (
+          <li
+            key={connection.id}
+            id={`routing-connection-${connection.id}`}
+            data-connection-row
+            data-dragging={drag?.id === connection.id || undefined}
+            data-drop={
+              drag && drag.insertion === index
+                ? "above"
+                : drag?.insertion === rows.length && index === rows.length - 1
+                  ? "below"
+                  : undefined
+            }
           >
-            {renderPanel?.(connection)}
-          </ConnectionRow>
-        </li>
-      ))}
+            <ConnectionRow
+              connection={connection}
+              canMutate={canMutate}
+              canReorderUp={position > 0 && canMutate}
+              canReorderDown={position < order.length - 1 && canMutate}
+              expanded={expandedIds.has(connection.id)}
+              onExpand={() => onExpand(connection.id)}
+              onPointerDown={(event) => {
+                if (!canMutate || event.button !== 0) return;
+                event.preventDefault();
+                event.currentTarget.setPointerCapture(event.pointerId);
+                setDrag({ id: connection.id, insertion: index });
+              }}
+              onPointerMove={(event) => {
+                if (!drag) return;
+                setDrag({ ...drag, insertion: insertionAt(event) });
+              }}
+              onPointerUp={drop}
+              onPointerCancel={() => setDrag(undefined)}
+              onToggle={(enabled) => onToggle(connection.id, enabled)}
+              onMove={(direction) => move(connection, direction)}
+              onCheckAccess={() => onCheckAccess(connection.id)}
+              onEdit={() => onEdit(connection)}
+              onDelete={() => onDelete(connection)}
+              onDisconnect={() => onDisconnect(connection)}
+              checkingAccess={checkingConnectionId === connection.id}
+            >
+              {renderPanel?.(connection)}
+            </ConnectionRow>
+          </li>
+        );
+      })}
       {empty === undefined ? null : <li className="routing-empty">{empty}</li>}
       {trailing}
     </ol>
   );
 }
 
+/** One tab per Claude plan, in the order Threads take them. */
+function ClaudePlanTabs({
+  plans,
+  selected,
+  onSelect,
+}: {
+  readonly plans: ReadonlyArray<ConnectionData>;
+  readonly selected: ConnectionData;
+  readonly onSelect: (id: string) => void;
+}) {
+  const step = (event: KeyboardEvent<HTMLButtonElement>) => {
+    const direction =
+      event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    if (direction === 0) return;
+    event.preventDefault();
+    const index = plans.findIndex(({ id }) => id === selected.id);
+    const next = plans[(index + direction + plans.length) % plans.length];
+    if (next === undefined) return;
+    onSelect(next.id);
+    event.currentTarget.parentElement
+      ?.querySelector<HTMLButtonElement>(`[data-plan="${next.id}"]`)
+      ?.focus();
+  };
+  return (
+    <li className="claude-plan-tabs">
+      <div className="usage-tabs" role="tablist" aria-label="Claude plans">
+        {plans.map((plan) => (
+          <button
+            key={plan.id}
+            type="button"
+            role="tab"
+            data-plan={plan.id}
+            aria-selected={plan.id === selected.id}
+            tabIndex={plan.id === selected.id ? 0 : -1}
+            onClick={() => onSelect(plan.id)}
+            onKeyDown={step}
+          >
+            {plan.name}
+          </button>
+        ))}
+      </div>
+    </li>
+  );
+}
+
 /**
- * The routing connections in priority order, then Claude Pro/Max in its own
- * card, with the row actions' progress and failures.
+ * The routing connections in priority order, then the Claude plans as tabs
+ * in their own card, with the row actions' progress and failures.
  */
 function RoutingConnections({
   target,
@@ -300,6 +361,9 @@ function RoutingConnections({
   const checkAccessMutation = useMutation(options.checkAccess);
   const removeMutation = useMutation(options.remove);
   const disconnectMutation = useMutation(options.disconnectSubscription);
+  const [selectedPlan, setSelectedPlan] = useState<string>();
+  const plan =
+    claudeRows.find(({ id }) => id === selectedPlan) ?? claudeRows[0];
   const listProps = {
     expanded,
     onExpand: (id: string) =>
@@ -344,17 +408,30 @@ function RoutingConnections({
               : undefined
           }
           rows={routingRows}
-          // Reorder lists every connection; Claude Pro/Max keeps its place.
+          // Reorder lists every connection; Claude plans keep their place.
           onReorder={(ids) =>
             reorderMutation.mutate([...ids, ...claudeRows.map(({ id }) => id)])
           }
         />
       ) : null}
-      {claudeRows.length > 0 ? (
+      {plan !== undefined ? (
         <ConnectionList
           {...listProps}
-          rows={claudeRows}
-          onReorder={() => undefined}
+          leading={
+            claudeRows.length > 1 ? (
+              <ClaudePlanTabs
+                plans={claudeRows}
+                selected={plan}
+                onSelect={setSelectedPlan}
+              />
+            ) : undefined
+          }
+          rows={[plan]}
+          order={claudeRows}
+          // A new Thread takes the first plan that is not used up.
+          onReorder={(ids) =>
+            reorderMutation.mutate([...routingRows.map(({ id }) => id), ...ids])
+          }
           renderPanel={(connection) =>
             connection.claudePlan === undefined ? null : (
               <ClaudePlanPanel
@@ -507,7 +584,6 @@ export const ModelRoutingSettings = ({
     (connection) => connection.kind === "subscription",
   );
   const claudeRows = rows.filter(isClaudeConnection);
-  const claudeRow = claudeRows[0];
   const routingRows = rows.filter(
     (connection) => !isClaudeConnection(connection),
   );
@@ -522,18 +598,13 @@ export const ModelRoutingSettings = ({
               showCopilot={personal && copilotRow === undefined}
               showClaude={personal}
               onPick={(pick) =>
-                setDialog(
-                  // One plan per owner: picking it again replaces the token.
-                  pick === "claude" && claudeRow !== undefined
-                    ? editDialog(claudeRow)
-                    : { kind: pick === "custom" ? "add-custom" : pick },
-                )
+                setDialog({ kind: pick === "custom" ? "add-custom" : pick })
               }
             />
           ) : undefined
         }
       />
-      {personal && claudeRow === undefined && connections.isSuccess ? (
+      {personal && claudeRows.length === 0 && connections.isSuccess ? (
         <ClaudeCodeNotice onConnect={() => setDialog({ kind: "claude" })} />
       ) : null}
       {connections.isError ? (
@@ -655,6 +726,7 @@ export const ModelRoutingSettings = ({
         <ClaudeConnectDialog
           target={target}
           connection={dialog.connection}
+          name={nextClaudePlanName(claudeRows)}
           onClose={closeDialog}
         />
       ) : null}

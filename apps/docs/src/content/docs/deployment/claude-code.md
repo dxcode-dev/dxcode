@@ -14,7 +14,7 @@ threads.
 1. On your own computer, install Claude Code and run `claude setup-token`.
 2. Sign in with your Claude Pro or Max account and approve access. The command
    prints a token that starts with `sk-ant-oat`. It is valid for one year.
-3. In dx, open **Settings → Model routing** and choose **Add → Claude Pro/Max**.
+3. In dx, open **Personal Settings → Model Routing** and choose **Add → Claude Pro/Max**.
 4. Paste the token and choose **Connect Subscription**.
 
 dx checks the token with Anthropic before storing it and refuses a token
@@ -36,22 +36,18 @@ including `find_thread` and `read_thread`, Code's `code_exec` and
 tools. The transcript, Stop, Retry, Changes, and Files work as in any other
 thread.
 
-`read_thread` reads another thread with a separate reader model. A Claude
-Code thread has no such model yet, so there `read_thread` answers "Subagent
-not configured"; `find_thread` works as usual.
-
 ## Plan limits and extra usage
 
 Claude plans have usage limits: a 5-hour window, a weekly window, and on
-some plans a weekly limit for one model (Claude Code calls it the Fable
-limit). A Claude account can also have extra usage turned on, which
+some plans weekly limits for one model (the Opus, Sonnet, and Fable
+limits). A Claude account can also have extra usage turned on, which
 Anthropic bills at API rates once a limit is used up.
 
-The Claude Pro/Max card in Model Routing shows the limits Anthropic last
-reported to one of your Claude Code threads, with when each resets. dx
-cannot ask Anthropic for them directly, so they appear after your first
-Claude Code thread runs, and the card shows only the windows Anthropic
-reports for your plan.
+The Claude Pro/Max card in Model Routing shows the limits Anthropic reports
+for your plan, with when each resets. dx reads them from Anthropic when Model
+Routing loads and when you choose the refresh button beside **Plan Usage**. While a limit is
+used up and extra usage could be billed, dx shows the last reported values
+instead.
 
 The card's **Claude Usage** choice decides what happens at a limit:
 
@@ -70,19 +66,21 @@ resets or after you allow extra usage.
 ## Orb requirements
 
 The standard Orb image includes Claude Code, Python 3 for dx's tool server,
-and `awk`. A workspace created from an older image installs Claude Code the
-first time it runs a Claude Code thread. A custom image needs network access
+and `awk`. A workspace whose Claude Code is missing or older than 2.1.310 installs
+the current release the first time it runs a Claude Code thread. A custom image needs network access
 to `claude.ai` for that install, or Claude Code on the `PATH`.
 
 ## Token handling
 
-The token reaches Claude Code only as process environment for one run, and
+The token reaches Claude Code only on a file descriptor for one run, and
 only for the thread's pinned Claude Code model. dx removes `ANTHROPIC_*` and
 `CLAUDE_CODE_USE_*` variables from Claude Code's environment and passes
 command-line settings that fix the API URL and clear proxy and CA variables.
 Workspace variables and a repository's `.claude` settings therefore cannot
-replace the token or send it to another endpoint. Secrets Claude prints are
-redacted from the transcript.
+point Claude Code at another API URL or proxy. Hidden secret values Claude
+prints are redacted from the transcript. Commands that a repository's setup
+or the agent runs in the Orb run as the Thread's owner, so people should
+connect a plan only for repositories they trust.
 
 ## Troubleshooting
 
@@ -90,5 +88,5 @@ redacted from the transcript.
   expired. Run `claude setup-token` again and replace the token.
 - **"Anthropic could not be reached"**: retry later; dx stores no token it has
   not checked.
-- **Claude Code mode is missing from the picker**: connect a plan first, in
-  personal Model routing.
+- **The Claude Code row shows Connect Claude Pro/Max**: connect a plan
+  first, in personal Model Routing.

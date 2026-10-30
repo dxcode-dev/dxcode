@@ -1,5 +1,4 @@
 import {
-  CLAUDE_CODE_PROVIDER_ID,
   MAX_MODEL_CONNECTIONS_PER_SCOPE,
   type ModelConnectionId,
   ModelConnectionNotFound,
@@ -115,11 +114,7 @@ export const insertConnectionStatements = (
     .prepare(
       `INSERT INTO model_connection (${connectionColumns})
        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-       WHERE (SELECT COUNT(*) FROM model_connection WHERE scope = ? AND target_id = ?) < ?
-         -- One Claude plan per owner, even when two creates race.
-         AND NOT (? = ? AND EXISTS (
-           SELECT 1 FROM model_connection
-           WHERE scope = ? AND target_id = ? AND provider_id = ?))`,
+       WHERE (SELECT COUNT(*) FROM model_connection WHERE scope = ? AND target_id = ?) < ?`,
     )
     .bind(
       connection.id,
@@ -144,11 +139,6 @@ export const insertConnectionStatements = (
       connection.target.scope,
       connection.target.id,
       MAX_MODEL_CONNECTIONS_PER_SCOPE,
-      connection.providerId,
-      CLAUDE_CODE_PROVIDER_ID,
-      connection.target.scope,
-      connection.target.id,
-      CLAUDE_CODE_PROVIDER_ID,
     ),
   ...connection.models.map((model, position) =>
     db
@@ -467,6 +457,12 @@ export const ModelRoutingRepositoryD1 = (db: D1Database) =>
                   db
                     .prepare(
                       "DELETE FROM claude_code_plan WHERE connection_id = ?",
+                    )
+                    .bind(id),
+                  // Its Threads take another plan at their next submission.
+                  db
+                    .prepare(
+                      "UPDATE threads SET claude_connection_id = NULL WHERE claude_connection_id = ?",
                     )
                     .bind(id),
                   db

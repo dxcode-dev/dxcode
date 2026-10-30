@@ -63,7 +63,7 @@ const cards = [
     accent: "starts somewhere.",
     label: "THIS IS OUR FIRST CHAPTER",
     caption:
-      "Building dx on my own, alongside my day job. Getting the first version ready for people who like trying things early.",
+      "Building dx on my own. Getting the first version ready for people who like trying things early.",
   },
   {
     name: "07-meet-dx",

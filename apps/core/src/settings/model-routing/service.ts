@@ -83,11 +83,6 @@ export type UpdateConnectionInput = typeof UpdateConnectionRequestSchema.Type;
 const CLAUDE_CODE_MODEL_ONLY =
   "Claude Code models run only through a Claude Pro/Max connection.";
 
-const CLAUDE_CODE_ALREADY_CONNECTED: SettingsFieldError = {
-  field: "providerId",
-  message: "Claude Pro/Max is already connected. Replace its token.",
-};
-
 /** Field-level validation failure rendered as `fieldErrors` on 400s. */
 export class ModelRoutingValidationError extends Error {
   readonly _tag = "ModelRoutingValidationError";
@@ -559,15 +554,6 @@ export class ModelRoutingService {
         message: `At most ${MAX_MODEL_CONNECTIONS_PER_SCOPE} connections per scope.`,
       });
     }
-    // One Claude plan per owner: Claude Code mode has no routing order.
-    if (
-      input.providerId === CLAUDE_CODE_PROVIDER_ID &&
-      existing.some(
-        (connection) => connection.providerId === CLAUDE_CODE_PROVIDER_ID,
-      )
-    ) {
-      fieldErrors.push(CLAUDE_CODE_ALREADY_CONNECTED);
-    }
     if (existing.some((connection) => connection.name === input.name)) {
       fieldErrors.push({
         field: "name",
@@ -619,29 +605,17 @@ export class ModelRoutingService {
       createdAt: timestamp,
       updatedAt: timestamp,
     });
-    try {
-      await this.#run(
-        Effect.gen(function* () {
-          if (credential === undefined) {
-            const repository = yield* ModelRoutingRepository;
-            yield* repository.insertConnection(connection);
-          } else {
-            const credentials = yield* ModelCredentialRepository;
-            yield* credentials.insertConnection(connection, credential);
-          }
-        }),
-      );
-    } catch (error) {
-      // A concurrent create connected the plan between the check and here.
-      if (
-        input.providerId === CLAUDE_CODE_PROVIDER_ID &&
-        (await loadConnectionsForTarget(this.db, target)).some(
-          ({ providerId }) => providerId === CLAUDE_CODE_PROVIDER_ID,
-        )
-      )
-        throw new ModelRoutingValidationError([CLAUDE_CODE_ALREADY_CONNECTED]);
-      throw error;
-    }
+    await this.#run(
+      Effect.gen(function* () {
+        if (credential === undefined) {
+          const repository = yield* ModelRoutingRepository;
+          yield* repository.insertConnection(connection);
+        } else {
+          const credentials = yield* ModelCredentialRepository;
+          yield* credentials.insertConnection(connection, credential);
+        }
+      }),
+    );
     return this.#connectionData(connection);
   }
 

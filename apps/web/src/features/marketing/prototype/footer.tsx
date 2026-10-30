@@ -49,9 +49,9 @@ export function Footer() {
             <div id={noteId} className="license-note-panel">
               <strong>A little room to keep building.</strong>
               <p>
-                I’m building dx on my own, alongside a full-time job, without
-                funding. FSL gives me room to grow it into something I can work
-                on full-time. An MIT license is something I may consider later.
+                I’m building dx on my own, without outside funding. FSL gives me
+                room to keep building it. An MIT license is something I may
+                consider later.
               </p>
               <a href="https://fsl.software/" target="_blank" rel="noreferrer">
                 About FSL <ArrowIcon direction="up-right" />

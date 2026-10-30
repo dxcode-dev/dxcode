@@ -56,5 +56,5 @@ Git commits created by the agent or in Terminal use
 `dx-Thread-Id` trailer linking to its dx thread. Choosing your own commit
 identity in project settings changes the author but keeps the thread trailer.
 
-If the model selector says **Not configured**, an administrator must configure
-a model route. See [Models and providers](/docs/deployment/models-providers/).
+If the picker marks a mode or model **Not served**, connect a model or ask an
+administrator to add one. See [Connecting a model](/docs/use/connect-a-model/).

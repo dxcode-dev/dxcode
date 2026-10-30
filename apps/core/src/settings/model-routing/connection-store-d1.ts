@@ -307,6 +307,8 @@ export interface ThreadRoute {
   readonly threadId: string;
   readonly ownerUserId: string;
   readonly selection: ThreadModelSelection;
+  /** The Claude Pro/Max connection a Claude Code Thread stays on. */
+  readonly claudeConnectionId?: string;
 }
 
 export const loadThreadRoute = async (
@@ -315,7 +317,7 @@ export const loadThreadRoute = async (
 ): Promise<ThreadRoute | undefined> => {
   const row = await db
     .prepare(
-      `SELECT id, owner_user_id, model_selection
+      `SELECT id, owner_user_id, model_selection, claude_connection_id
        FROM threads WHERE id = ? AND lifecycle_state = 'active'`,
     )
     .bind(threadId)
@@ -323,6 +325,7 @@ export const loadThreadRoute = async (
       id: string;
       owner_user_id: string;
       model_selection: string;
+      claude_connection_id: string | null;
     }>();
   if (row === null) return undefined;
   return {
@@ -331,7 +334,36 @@ export const loadThreadRoute = async (
     selection: Schema.decodeUnknownSync(ThreadModelSelection)(
       JSON.parse(row.model_selection),
     ),
+    ...(row.claude_connection_id === null
+      ? {}
+      : { claudeConnectionId: row.claude_connection_id }),
   };
+};
+
+/**
+ * Puts a Thread on a Claude connection unless another submission moved it
+ * first; returns the connection the Thread is on afterwards.
+ */
+export const bindThreadClaudeConnection = async (
+  db: D1Database,
+  threadId: string,
+  previous: string | undefined,
+  connectionId: string,
+): Promise<string | undefined> => {
+  const row = await db
+    .prepare(
+      `UPDATE threads SET claude_connection_id = ?
+       WHERE id = ? AND claude_connection_id IS ?
+       RETURNING claude_connection_id`,
+    )
+    .bind(connectionId, threadId, previous ?? null)
+    .first<{ claude_connection_id: string }>();
+  if (row !== null) return row.claude_connection_id;
+  const current = await db
+    .prepare("SELECT claude_connection_id FROM threads WHERE id = ?")
+    .bind(threadId)
+    .first<{ claude_connection_id: string | null }>();
+  return current?.claude_connection_id ?? undefined;
 };
 
 export const updateConnectionHealth = async (

@@ -3,16 +3,20 @@ title: Models and providers
 description: Configure model access for a deployment, workspace, or user.
 ---
 
-Model routing is separate from workspace execution. An Orb provider (E2B or
-Cloudflare Containers) is mandatory, but no particular model provider is.
+Model routing is separate from workspace execution. Threads need an Orb
+provider, one the deployment offers or one a person or workspace
+[connects](/docs/use/connect-an-orb-provider/), but no particular model
+provider.
 
 ## Configuration scopes
 
 **Deployment credentials** provide operator-managed access such as Workers AI.
 
-**Workspace BYOK** is shared under workspace policy.
+**Workspace connections** are Custom URL connections that workspace admins
+add. Every member's Threads can use them after their own.
 
-**Personal BYOK** belongs to one user and is not exposed to other members.
+**Personal connections** belong to one user and are not exposed to other
+members: Claude Pro/Max, GitHub Copilot, and Custom URL.
 
 dx encrypts stored provider secrets and does not return their plaintext.
 
@@ -21,7 +25,6 @@ dx encrypts stored provider secrets and does not return their plaintext.
 | Provider path | Credential or connection |
 | --- | --- |
 | Cloudflare Workers AI | Optional deployment binding |
-| Personal and workspace BYOK | Provider API key stored by dx |
 | GitHub Copilot | Personal GitHub device authorization |
 | Claude Pro/Max (Claude Code mode) | Personal `claude setup-token` token |
 | GitHub source access | GitHub App installation |
@@ -38,27 +41,28 @@ a person's own Claude plan.
 - [Configure GitHub Copilot](/docs/deployment/github-copilot/)
 - [Connect Claude Pro/Max](/docs/deployment/claude-code/)
 
-The installer asks which API-key providers to expose in the model picker. After
-deployment, open **Settings → Model routing**, add a personal or workspace
-connection, enter its API key, and assign models to agent slots. dx encrypts
-the key and returns only masked metadata.
+People add connections in **Personal Settings → Model Routing**; see
+[Connecting a model](/docs/use/connect-a-model/). A provider API key goes in
+a Custom URL connection that points at the provider's API. dx encrypts the
+key and returns only masked metadata.
 
 ## Custom endpoint protocols
 
-Custom endpoints support the OpenAI Completions, OpenAI Responses, Anthropic
-Messages, and Google Generative AI formats. Enter one canonical model per line
+Custom endpoints support the OpenAI Chat Completions, OpenAI Responses, and
+Anthropic Messages formats. Enter one canonical model per line
 as `provider/model`. Use `provider/model -> upstream-id` when the endpoint uses
 a different model name.
 
 The base URL must use HTTPS. Operators can restrict allowed endpoint origins
-with `modelEndpointAllowlist`. Keep the list narrow when workspace members may
-add routes. Test one model after saving because protocol compatibility depends
+with `modelEndpointAllowlist`. Keep the list narrow when many people
+add connections. Test one model after saving because protocol compatibility depends
 on the endpoint implementation.
 
-## "Not configured"
+## "Not served"
 
-**Not configured** means no usable route exists for that model and scope. dx
-does not choose another provider. Add a credential or ask an administrator.
+**Not served** means no active connection serves that model. dx uses the
+first active connection that serves the model and never swaps in a
+different model. Add a connection or ask an administrator.
 
-If all models show **Not configured**, the rest of the application can still
-run. Threads cannot obtain model output until a route is configured.
+If every model shows **Not served**, the rest of the application can still
+run. Threads cannot obtain model output until a connection serves a model.

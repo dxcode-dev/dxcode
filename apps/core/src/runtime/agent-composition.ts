@@ -1,6 +1,10 @@
 import { env } from "cloudflare:workers";
 import { isClaudeCodeModel, type ThinkingLevel } from "@dx/domain";
-import type { ModelResolutionContext, SandboxFactory } from "@flue/runtime";
+import {
+  FlueError,
+  type ModelResolutionContext,
+  type SandboxFactory,
+} from "@flue/runtime";
 import { Effect } from "effect";
 import { ExecutionWorkspaces } from "../execution/execution-workspaces.js";
 import type { Bindings } from "../http/types.js";
@@ -74,8 +78,15 @@ const resolvePromptData =
       }
       const { code = "UNKNOWN", message } = body;
       // The Claude plan's limit text is what the Thread's limit card shows.
+      // Flue keeps only a FlueError's message on the failed settlement.
       if (code === "CLAUDE_PLAN_LIMIT" && message !== undefined)
-        throw new Error(message);
+        throw new FlueError({
+          type: "claude_plan_limit",
+          message,
+          details: "",
+          dev: "",
+          meta: { code },
+        });
       if (body.class !== undefined && message !== undefined)
         throw new Error(
           markRunFailure({

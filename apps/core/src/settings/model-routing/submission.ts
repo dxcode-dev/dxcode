@@ -1,4 +1,5 @@
 import {
+  isClaudeCodeModel,
   normalizeCustomModelBaseUrl,
   type StoredModelConnection,
   type ThinkingLevel,
@@ -6,6 +7,7 @@ import {
   type UserId,
 } from "@dx/domain";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { claudePlanAccess, loadClaudePlan } from "../../claude-code/plan.js";
 import type { Bindings } from "../../http/types.js";
 import {
   DEV_PROFILE,
@@ -14,6 +16,7 @@ import {
 } from "../../runtime/model-routing-dev-defaults.js";
 import { catalogProviderModels } from "./catalog.js";
 import {
+  bindThreadClaudeConnection,
   loadModeProfileOverrides,
   loadRoutableConnections,
   loadSubscriptionModelIds,
@@ -24,10 +27,76 @@ import { effectiveContextWindow } from "./context-window.js";
 import { copilotModelForCanonical } from "./copilot-mapping.js";
 import { DEFAULT_PROFILE } from "./defaults.js";
 import {
+  type CopilotEntitlements,
   findServingConnection,
   pinThinking,
   resolveSubmissionModel,
+  type ServingMatch,
 } from "./resolver.js";
+
+/**
+ * The first Claude plan, in routing order, that is not used up for `model`;
+ * when every plan is, the one that resets first, so `/resolve` refuses with
+ * its limit.
+ */
+const openClaudePlan = async (
+  db: D1Database,
+  connections: ReadonlyArray<StoredModelConnection>,
+  model: string,
+  entitlements: CopilotEntitlements,
+): Promise<{ match: ServingMatch; open: boolean } | undefined> => {
+  const modelId = model.slice(model.indexOf("/") + 1);
+  let remaining = connections;
+  let soonest: { match: ServingMatch; until: number } | undefined;
+  for (;;) {
+    const match = findServingConnection(remaining, model, entitlements);
+    if (match === undefined)
+      return soonest === undefined
+        ? undefined
+        : { match: soonest.match, open: false };
+    const until = claudePlanAccess(
+      await loadClaudePlan(db, match.connection.id),
+      modelId,
+    ).blockedUntil;
+    if (until === undefined) return { match, open: true };
+    if (soonest === undefined || until < soonest.until)
+      soonest = { match, until };
+    remaining = remaining.filter(({ id }) => id !== match.connection.id);
+  }
+};
+
+/**
+ * A Claude Code Thread stays on one plan, used up or not. Its first
+ * submission that finds a plan not used up puts it on that plan; a deleted
+ * or disabled plan lets it take another.
+ */
+const threadClaudePlan = async (
+  db: D1Database,
+  thread: ThreadRoute,
+  connections: ReadonlyArray<StoredModelConnection>,
+  model: string,
+  entitlements: CopilotEntitlements,
+): Promise<ServingMatch | undefined> => {
+  const serving = (id: string | undefined) =>
+    id === undefined
+      ? undefined
+      : findServingConnection(
+          connections.filter((connection) => connection.id === id),
+          model,
+          entitlements,
+        );
+  const bound = serving(thread.claudeConnectionId);
+  if (bound !== undefined) return bound;
+  const picked = await openClaudePlan(db, connections, model, entitlements);
+  if (picked === undefined || !picked.open) return picked?.match;
+  const current = await bindThreadClaudeConnection(
+    db,
+    thread.threadId,
+    thread.claudeConnectionId,
+    picked.match.connection.id,
+  );
+  return serving(current) ?? picked.match;
+};
 
 /**
  * Resolves a proposed selection against current routing state without
@@ -270,9 +339,16 @@ export const resolveRouteSubmission = async (
         ),
     ),
   );
-  const match = findServingConnection(connections, slot.model, (id) =>
-    entitlements.get(id),
-  );
+  const servingEntitlements = (id: string) => entitlements.get(id);
+  const match = isClaudeCodeModel(slot.model)
+    ? await threadClaudePlan(
+        db,
+        thread,
+        connections,
+        slot.model,
+        servingEntitlements,
+      )
+    : findServingConnection(connections, slot.model, servingEntitlements);
   if (match === undefined) throw new Error(`MODEL_NOT_SERVED: ${slot.model}`);
   return {
     threadId,

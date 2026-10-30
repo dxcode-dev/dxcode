@@ -58,23 +58,22 @@ continue to work.
 ## Connect and verify
 
 1. Confirm the GitHub account has an active Copilot subscription.
-2. Open **Settings → Model routing** in dx and choose **Connect GitHub Copilot**.
+2. Open **Personal Settings → Model Routing** in dx, choose **Add → GitHub Copilot**,
+   then **Connect**.
 3. Open the displayed `https://github.com/login/device` link and enter the
    one-time code.
 4. Return to dx and wait for the connection to complete.
-5. Assign an available Copilot model to one agent slot and run a small prompt.
+5. Pick a Copilot model in the model picker and run a small prompt.
 
-dx encrypts the resulting personal OAuth credential. Refresh rechecks the
-GitHub identity, subscription access, and model catalog. Disconnect is blocked
-while a model route still uses the connection; remove those routes first.
+dx encrypts the resulting personal OAuth credential. **Check Access**
+rechecks the GitHub identity, subscription access, and model catalog.
 
 ## Rotate or disconnect
 
 To replace the OAuth App, update `githubCopilotClientId` in
 `deploy.selfhost.json` and rerun `pnpm dx:deploy`. Ask users to disconnect and
 authorize through the replacement app, then delete the old OAuth App after
-verification. A user disconnects from **Settings → Model routing** after
-removing routes that use the subscription. They can also revoke the grant in
+verification. A user disconnects from **Personal Settings → Model Routing**. They can also revoke the grant in
 GitHub's application settings.
 
 ## Troubleshooting
@@ -89,5 +88,3 @@ GitHub's application settings.
 - **Inference fails after a successful connection:** the compatibility API may
   have changed or rejected the client. Use another configured provider; a
   successful OAuth grant does not prove Copilot inference compatibility.
-- **Disconnect is blocked:** remove every model route that uses the Copilot
-  connection, then disconnect again.

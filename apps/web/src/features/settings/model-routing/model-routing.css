@@ -718,3 +718,14 @@ a.model-routing-scope-content:focus-visible {
     margin-top: -6px;
   }
 }
+.model-routing-connection-list > li.claude-plan-tabs {
+  display: flex;
+  padding: 8px 12px;
+}
+.claude-plan-tabs .usage-tabs {
+  overflow-x: auto;
+}
+.claude-plan-tabs .usage-tabs button {
+  white-space: nowrap;
+  text-transform: none;
+}

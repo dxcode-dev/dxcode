@@ -73,7 +73,7 @@ so a failed push leaves nothing partial.
 
 ## Provider errors
 
-**Not configured** means routing has no usable credential. Configure a route.
+**Not served** means no active connection serves the model. Add a connection.
 Authentication, quota, and rate-limit errors come from the selected provider.
 
 For a custom endpoint, verify the HTTPS origin, protocol selection, allowlist,

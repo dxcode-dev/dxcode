@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { parseClaudePlanLimit } from "@dx/domain";
-import type { SandboxFactory } from "@flue/runtime";
+import { FlueError, type SandboxFactory } from "@flue/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import app from "../../src/app.js";
 import type { Bindings } from "../../src/http/types.js";
@@ -592,8 +592,131 @@ describe("Claude Pro/Max plan usage", () => {
         () => undefined,
         (error: unknown) => error,
       );
-    expect(failure).toBeInstanceOf(Error);
+    // Flue settles any other error as a generic internal error.
+    expect(failure).toBeInstanceOf(FlueError);
     expect(parseClaudePlanLimit((failure as Error).message)).toEqual(limit);
+  });
+
+  it("puts each new Thread on the first plan in order that is not used up, and keeps it there", async () => {
+    const { cookie, userId } = await signup(
+      "claude-plan-fallback@example.com",
+      175,
+    );
+    const connect = async (name: string, apiKey: string) => {
+      const response = await call(`${base}/connections`, cookie, "POST", {
+        name,
+        kind: "provider",
+        providerId: "claude-code",
+        apiKey,
+      });
+      expect(response.status).toBe(200);
+      return ((await response.json()) as { data: { id: string } }).data.id;
+    };
+    const first = await connect("Claude Pro/Max", TOKEN);
+    const second = await connect("Claude Pro/Max 2", NEW_TOKEN);
+    const reorder = async (orderedIds: string[]) =>
+      expect(
+        (
+          await call(`${base}/connections/reorder`, cookie, "POST", {
+            orderedIds,
+          })
+        ).status,
+      ).toBe(200);
+    let submissions = 0;
+    const submit = async (threadId: string) => {
+      submissions += 1;
+      const route = {
+        threadId,
+        submissionId: `${threadId}-${submissions}`,
+        canonical: MODEL,
+      };
+      const resolved = await post(threadId, "/resolve", {
+        threadId,
+        submissionId: route.submissionId,
+        recovery: false,
+      });
+      return { resolved, route };
+    };
+    const tokenOf = async (threadId: string) => {
+      const { resolved, route } = await submit(threadId);
+      expect(resolved.status).toBe(200);
+      const credential = await post(threadId, "/claude-code-credential", route);
+      return { route, token: (credential.body as { token: string }).token };
+    };
+    const limitOf = async (threadId: string) => {
+      const { resolved } = await submit(threadId);
+      expect(resolved.status).toBe(400);
+      return parseClaudePlanLimit(
+        (resolved.body as { message: string }).message,
+      )?.resetsAt;
+    };
+    const useUp = async (
+      route: { threadId: string; submissionId: string; canonical: string },
+      resetsAt: number,
+    ) =>
+      expect(
+        (
+          await post(route.threadId, "/claude-code-usage", {
+            ...route,
+            reading: {
+              status: "rejected",
+              limit: { id: "five_hour", resetsAt },
+              windows: [{ id: "five_hour", utilization: 1, resetsAt }],
+              extraUsage: { status: "allowed", inUse: true },
+            },
+            observedAt: now(),
+          })
+        ).status,
+      ).toBe(200);
+    const minute = (seconds: number) => Math.floor(seconds / 60) * 60;
+    const boundTo = async (threadId: string) =>
+      (
+        await env.DB.prepare(
+          "SELECT claude_connection_id FROM threads WHERE id = ?",
+        )
+          .bind(threadId)
+          .first<{ claude_connection_id: string | null }>()
+      )?.claude_connection_id;
+    const [one, two, three, four] = [1, 2, 3, 4].map(
+      (index) => `claude-plan-fallback-thread-${index}`,
+    );
+    for (const threadId of [one, two, three, four])
+      await seedThread(userId, threadId);
+
+    // A Thread starts on the first plan in order, and stays on it when the
+    // order changes; a new Thread takes the new first plan.
+    const onFirst = await tokenOf(one);
+    expect(onFirst.token).toBe(TOKEN);
+    expect(await boundTo(one)).toBe(first);
+    await reorder([second, first]);
+    expect((await tokenOf(one)).token).toBe(TOKEN);
+    const onSecond = await tokenOf(two);
+    expect(onSecond.token).toBe(NEW_TOKEN);
+    expect(await boundTo(two)).toBe(second);
+
+    // The first plan is used up. Its Thread waits for that plan's reset
+    // instead of moving; a new Thread skips it for the second plan.
+    await reorder([first, second]);
+    const firstReset = now() + 2 * hour;
+    await useUp(onFirst.route, firstReset);
+    expect(await limitOf(one)).toBe(minute(firstReset));
+    expect(await boundTo(one)).toBe(first);
+    expect((await tokenOf(three)).token).toBe(NEW_TOKEN);
+    expect(await boundTo(three)).toBe(second);
+
+    // Both used up: a new Thread is refused with the limit of the plan that
+    // resets first, not the first in order, and stays on no plan.
+    const secondReset = now() + hour;
+    await useUp(onSecond.route, secondReset);
+    expect(await limitOf(four)).toBe(minute(secondReset));
+    expect(await boundTo(four)).toBeNull();
+
+    // Deleting the second plan frees its Threads to take another.
+    expect(
+      (await call(`${base}/connections/${second}`, cookie, "DELETE")).status,
+    ).toBe(200);
+    expect(await boundTo(two)).toBeNull();
+    expect(await limitOf(two)).toBe(minute(firstReset));
   });
 
   it("reads the plan's limits on an access check, and gives no extra usage choice to an account that has none", async () => {

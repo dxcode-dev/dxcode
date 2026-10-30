@@ -2,6 +2,9 @@ import starlight from "@astrojs/starlight";
 import { defineConfig } from "astro/config";
 
 export default defineConfig({
+  // Canonical URLs and the sitemap point at the hosted docs, including when a
+  // self-hosted deployment serves the same pages.
+  site: "https://dxcode.dev",
   base: "/docs",
   integrations: [
     starlight({
@@ -18,6 +21,35 @@ export default defineConfig({
       ],
       sidebar: [
         {
+          label: "Use dx",
+          items: [
+            { label: "Getting started", slug: "use/getting-started" },
+            { label: "Connecting a model", slug: "use/connect-a-model" },
+            {
+              label: "Connecting an Orb provider",
+              slug: "use/connect-an-orb-provider",
+            },
+          ],
+        },
+        {
+          label: "Guides",
+          items: [
+            {
+              label: "Run Claude Code in the cloud",
+              slug: "guides/run-claude-code-in-the-cloud",
+            },
+            {
+              label: "Your Claude Pro or Max plan",
+              slug: "guides/claude-pro-max-plan-in-the-cloud",
+            },
+            {
+              label: "Sandboxes compared",
+              slug: "guides/sandboxes-for-ai-coding-agents",
+            },
+            { label: "E2B", slug: "guides/e2b" },
+          ],
+        },
+        {
           label: "Get started",
           items: [
             { label: "Overview", slug: "get-started/overview" },
@@ -27,7 +59,7 @@ export default defineConfig({
               slug: "get-started/first-project",
             },
             {
-              label: "Terminal, Desktop, and Preview",
+              label: "Terminal, Desktop, and Portal",
               slug: "get-started/workspace-tools",
             },
             {

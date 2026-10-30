@@ -1,6 +1,6 @@
 ---
-title: Terminal, Desktop, and Preview
-description: The shared Terminal, the Linux Desktop, Preview links, and when a thread's Orb sleeps.
+title: Terminal, Desktop, and Portal
+description: The shared Terminal, the Linux Desktop, Portal links, and when a thread's Orb sleeps.
 ---
 
 Each thread runs in its own Orb, a Linux sandbox. Besides Files and Changes,
@@ -37,19 +37,19 @@ there, so nothing in the Orb can replace your clipboard on its own.
 - There is no GPU: WebGL works through software rendering, and full-screen
   animation is slower than on a local machine.
 
-## Preview
+## Portal
 
 When the deployment has a [Portal domain](/docs/deployment/configuration/),
 a web app the agent or you start in the Orb is reachable at
 `https://t-<thread>-p<port>.<portal domain>/` behind dx sign-in. The
-**Preview** tab lists the ports listening in the Orb and opens them. A
+**Portal** tab lists the ports listening in the Orb and opens them. A
 thread's owner can make up to three ports public at once, each for 1 hour,
 1 day, or 7 days, and revoke them at any time; public visitors see a notice
 first and get no access to the thread. Without a Portal
-domain the Preview tab is hidden, and the agent shows running apps in the
+domain the Portal tab is hidden, and the agent shows running apps in the
 Desktop's Chromium instead.
 
-Declare a dev server you keep using in `.dx/services.yaml` so a Preview
+Declare a dev server you keep using in `.dx/services.yaml` so a Portal
 request starts it again after the Orb wakes:
 
 ```yaml
@@ -63,8 +63,10 @@ services:
 ## When the Orb sleeps
 
 An Orb pauses five minutes after the last activity, and wakes on the next
-message, Terminal, Files, Desktop, or Preview request. Sleeping keeps memory
-on E2B, so running processes continue where they stopped.
+message, Terminal, Files, Desktop, or Portal request. Sleeping keeps memory
+on E2B and Freestyle, so running processes continue where they stopped. On
+Cloudflare Containers and Docker Cloud Sandboxes the files stay and processes
+start again.
 
 | Activity | Keeps the Orb awake |
 | --- | --- |
@@ -72,7 +74,7 @@ on E2B, so running processes continue where they stopped.
 | Typing in the Terminal | Five minutes from the last key |
 | A command running in the Terminal | Up to five minutes after the Terminal or agent was last used |
 | The Desktop in use | Until five minutes without input, then five minutes |
-| A Preview request | Five minutes from the request |
+| A Portal request | Five minutes from the request |
 | A server listening, unused | No |
 
 A forgotten dev server, build, or Desktop tab therefore keeps an Orb awake

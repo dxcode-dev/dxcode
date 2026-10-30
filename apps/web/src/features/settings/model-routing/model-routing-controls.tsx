@@ -157,7 +157,7 @@ export const ConnectionRow = ({
       data-disabled={!connection.enabled || undefined}
     >
       <div className="model-routing-connection-head">
-        {/* Claude Code mode has no routing order to drag. */}
+        {/* Claude plans are tabs: they reorder from the row's menu. */}
         {claude ? null : (
           <button
             type="button"
@@ -302,9 +302,8 @@ export const ConnectionRow = ({
                 ) : null}
                 <ConnectionMenu
                   connection={connection}
-                  // Claude Pro/Max has no routing order to move in.
-                  canReorderUp={!claude && canReorderUp}
-                  canReorderDown={!claude && canReorderDown}
+                  canReorderUp={canReorderUp}
+                  canReorderDown={canReorderDown}
                   onMove={onMove}
                   onRemove={
                     connection.kind === "subscription" ? onDisconnect : onDelete
@@ -332,47 +331,53 @@ const ConnectionMenu = ({
   readonly canReorderDown: boolean;
   readonly onMove: (direction: -1 | 1) => void;
   readonly onRemove: () => void;
-}) => (
-  <Menu.Root>
-    <Menu.Trigger
-      render={
-        <Button
-          size="icon-xs"
-          variant="ghost"
-          aria-label={`More actions for ${connection.name}`}
-        />
-      }
-    >
-      <Ellipsis />
-    </Menu.Trigger>
-    <Menu.Portal>
-      <Menu.Positioner
-        className="routing-menu-positioner"
-        align="end"
-        sideOffset={4}
+}) => {
+  const claudeTab = connection.providerId === CLAUDE_CODE_PROVIDER_ID;
+  return (
+    <Menu.Root>
+      <Menu.Trigger
+        render={
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            aria-label={`More actions for ${connection.name}`}
+          />
+        }
       >
-        <Menu.Popup className="thread-menu-popup">
-          {canReorderUp ? (
-            <Menu.Item className="thread-menu-item" onClick={() => onMove(-1)}>
-              Move Up
+        <Ellipsis />
+      </Menu.Trigger>
+      <Menu.Portal>
+        <Menu.Positioner
+          className="routing-menu-positioner"
+          align="end"
+          sideOffset={4}
+        >
+          <Menu.Popup className="thread-menu-popup">
+            {canReorderUp ? (
+              <Menu.Item
+                className="thread-menu-item"
+                onClick={() => onMove(-1)}
+              >
+                {claudeTab ? "Move Left" : "Move Up"}
+              </Menu.Item>
+            ) : null}
+            {canReorderDown ? (
+              <Menu.Item className="thread-menu-item" onClick={() => onMove(1)}>
+                {claudeTab ? "Move Right" : "Move Down"}
+              </Menu.Item>
+            ) : null}
+            <Menu.Item
+              className="thread-menu-item routing-menu-danger"
+              onClick={onRemove}
+            >
+              {connection.kind === "subscription" ? "Disconnect" : "Delete"}
             </Menu.Item>
-          ) : null}
-          {canReorderDown ? (
-            <Menu.Item className="thread-menu-item" onClick={() => onMove(1)}>
-              Move Down
-            </Menu.Item>
-          ) : null}
-          <Menu.Item
-            className="thread-menu-item routing-menu-danger"
-            onClick={onRemove}
-          >
-            {connection.kind === "subscription" ? "Disconnect" : "Delete"}
-          </Menu.Item>
-        </Menu.Popup>
-      </Menu.Positioner>
-    </Menu.Portal>
-  </Menu.Root>
-);
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
+  );
+};
 
 const parseHeaders = (
   input: string,

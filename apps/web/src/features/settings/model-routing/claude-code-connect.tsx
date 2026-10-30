@@ -75,11 +75,14 @@ export const ClaudeCodeNotice = ({
 export const ClaudeConnectDialog = ({
   target,
   connection,
+  name,
   onClose,
 }: {
   readonly target: ModelRoutingTarget;
   /** Set to replace this connection's token instead of connecting. */
   readonly connection?: ConnectionData | undefined;
+  /** The new connection's name. */
+  readonly name: string;
   readonly onClose: () => void;
 }) => {
   const queryClient = useQueryClient();
@@ -89,8 +92,8 @@ export const ClaudeConnectDialog = ({
   const failure = create.error ?? update.error;
   const fieldErrors = failure === null ? {} : fieldErrorsOf(failure);
   const tokenError = fieldErrors.apiKey;
-  // A field error other than the token's (already connected, a name in use,
-  // the connection limit) says more than the request's generic message.
+  // A field error other than the token's (a name in use, the connection
+  // limit) says more than the request's generic message.
   const error =
     failure === null
       ? undefined
@@ -108,7 +111,7 @@ export const ClaudeConnectDialog = ({
     else
       create.mutate(
         {
-          name: "Claude Pro/Max",
+          name,
           kind: "provider",
           providerId: CLAUDE_CODE_PROVIDER_ID,
           fields: {},

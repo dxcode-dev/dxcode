@@ -157,15 +157,24 @@ describe("Claude Pro/Max connection", () => {
       catalog.data.providers.find(({ id }) => id === "claude-code"),
     ).toMatchObject({ transport: "agent" });
 
-    // One plan per owner: a second connection is refused, under any name.
+    // An owner connects another plan beside the first, after it in order.
     const second = await call(`${base}/connections`, cookie, "POST", {
-      name: "Another Claude plan",
+      name: "Claude Pro/Max 2",
       kind: "provider",
       providerId: "claude-code",
       apiKey: VALID,
     });
-    expect(second.status).toBe(400);
-    expect(JSON.stringify(await second.json())).toContain("already connected");
+    expect(second.status).toBe(200);
+    const listed = (await (
+      await call(`${base}/connections`, cookie)
+    ).json()) as {
+      data: { connections: { name: string; providerId: string }[] };
+    };
+    expect(
+      listed.data.connections
+        .filter(({ providerId }) => providerId === "claude-code")
+        .map(({ name }) => name),
+    ).toEqual(["Claude Pro/Max", "Claude Pro/Max 2"]);
 
     const replaced = await call(
       `${base}/connections/${connection.id}`,

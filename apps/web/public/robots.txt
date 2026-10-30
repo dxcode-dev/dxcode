@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://dxcode.dev/sitemap.xml
+Sitemap: https://dxcode.dev/docs/sitemap-index.xml
