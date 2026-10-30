@@ -1,5 +1,6 @@
 import type { ThreadPaneFileTarget, ThreadPaneLayout } from "@dx/api";
 import { describe, expect, it } from "vitest";
+import { paneLayoutWith } from "../../../testing/pane-layouts.js";
 import {
   defaultPaneLayout,
   flattenPaneTabs,
@@ -27,6 +28,12 @@ const sketch = (layout: ThreadPaneLayout) =>
 
 const sizesOf = (layout: ThreadPaneLayout) =>
   layout.root.kind === "split" ? layout.root.sizes : undefined;
+
+const activeTabOf = (layout: ThreadPaneLayout, pane: string) => {
+  const found = paneOf(layout, pane);
+  const tab = found?.tabs[found.active];
+  return tab === undefined ? undefined : tabId(tab);
+};
 
 describe("pane layout reducer", () => {
   it("starts with one pane holding the Agent", () => {
@@ -139,14 +146,124 @@ describe("pane layout reducer", () => {
     expect(paneOf(layout, "p1")?.active).toBe(0);
   });
 
-  it("closing the active tab shows its right-hand neighbour, or the last tab", () => {
-    const three = run(
+  it("closing the active tab returns to the tab active before it", () => {
+    // #1113: Files, then Changes, Terminal, Desktop; a file opened from Files.
+    const opened = run(
+      paneLayoutWith(["files", "changes", "terminal", "desktop"]),
+      { type: "open-file", target: file("README.md") },
+    );
+    expect(sketch(opened)).toBe(
+      "p0[agent] p1[files,changes,terminal:1,desktop,file:primary:README.md]",
+    );
+    const closed = reducePaneLayout(opened, {
+      type: "close",
+      tab: "file:primary:README.md",
+    });
+    expect(sketch(closed)).toBe(
+      "p0[agent] p1[files,changes,terminal:1,desktop]",
+    );
+    expect(activeTabOf(closed, "p1")).toBe("files");
+  });
+
+  it("walks back through earlier active tabs as they close, skipping closed ones", () => {
+    const layout = run(
       defaultPaneLayout(),
       { type: "open-view", view: "files" },
       { type: "open-view", view: "changes" },
       { type: "open-view", view: "terminal" },
+      { type: "activate", pane: "p1", tab: "files" },
+      { type: "open-file", target: file("a.ts") },
       { type: "activate", pane: "p1", tab: "changes" },
+      { type: "open-file", target: file("b.ts") },
     );
+    // Closing a tab that is not shown leaves the shown tab alone.
+    const closedHidden = reducePaneLayout(layout, {
+      type: "close",
+      tab: "changes",
+    });
+    expect(activeTabOf(closedHidden, "p1")).toBe("file:primary:b.ts");
+    const order = ["file:primary:b.ts", "file:primary:a.ts", "files"];
+    let current = closedHidden;
+    for (const [index, id] of order.entries()) {
+      current = reducePaneLayout(current, { type: "close", tab: id });
+      expect(activeTabOf(current, "p1")).toBe(
+        index === 0
+          ? "file:primary:a.ts"
+          : index === 1
+            ? "files"
+            : "terminal:1",
+      );
+    }
+  });
+
+  it("keeps the earlier active tab across a reorder and a move to another pane", () => {
+    const base = run(
+      defaultPaneLayout(),
+      { type: "open-view", view: "files" },
+      { type: "open-view", view: "changes" },
+      { type: "open-view", view: "terminal" },
+      { type: "activate", pane: "p1", tab: "files" },
+      { type: "open-file", target: file("a.ts") },
+    );
+    // Reordering Files to the end shifts every index after it.
+    const reordered = run(
+      base,
+      { type: "move", tab: "files", to: { pane: "p1" } },
+      { type: "activate", pane: "p1", tab: "file:primary:a.ts" },
+    );
+    expect(sketch(reordered)).toBe(
+      "p0[agent] p1[changes,terminal:1,file:primary:a.ts,files]",
+    );
+    expect(
+      activeTabOf(
+        reducePaneLayout(reordered, {
+          type: "close",
+          tab: "file:primary:a.ts",
+        }),
+        "p1",
+      ),
+    ).toBe("files");
+    // Dragging the shown tab into the Agent pane leaves its pane on the
+    // tab shown before it.
+    const moved = reducePaneLayout(base, {
+      type: "move",
+      tab: "file:primary:a.ts",
+      to: { pane: "p0" },
+    });
+    expect(sketch(moved)).toBe(
+      "p0[agent,file:primary:a.ts] p1[files,changes,terminal:1]",
+    );
+    expect(activeTabOf(moved, "p1")).toBe("files");
+    expect(activeTabOf(moved, "p0")).toBe("file:primary:a.ts");
+  });
+
+  it("closing the active tab with no earlier one shows its right-hand neighbour, or the last tab", () => {
+    // A layout saved before panes remembered earlier tabs.
+    const three: ThreadPaneLayout = {
+      version: 1,
+      root: {
+        kind: "split",
+        id: "s1",
+        direction: "row",
+        children: [
+          { kind: "pane", id: "p0", tabs: [{ kind: "agent" }], active: 0 },
+          {
+            kind: "pane",
+            id: "p1",
+            tabs: [
+              { kind: "files" },
+              { kind: "changes" },
+              { kind: "terminal", ordinal: 1 },
+            ],
+            active: 1,
+          },
+        ],
+        sizes: [0.5, 0.5],
+      },
+      focused: "p1",
+      nextPane: 2,
+      nextTerminal: 2,
+    };
     const closedMiddle = reducePaneLayout(three, {
       type: "close",
       tab: "changes",
@@ -158,6 +275,35 @@ describe("pane layout reducer", () => {
       tab: "terminal:1",
     });
     expect(paneOf(closedLast, "p1")?.active).toBe(0);
+  });
+
+  it("repairs earlier-tab indices a saved layout no longer fits", () => {
+    const saved = paneLayoutWith(["files", "changes"]);
+    if (saved.root.kind !== "split") throw new Error("expected split");
+    const broken: ThreadPaneLayout = {
+      ...saved,
+      root: {
+        ...saved.root,
+        children: [
+          saved.root.children[0] as ThreadPaneLayout["root"],
+          {
+            kind: "pane",
+            id: "p1",
+            tabs: [{ kind: "files" }, { kind: "changes" }],
+            active: 0,
+            recent: [0, 7, 1, 1],
+          },
+        ],
+      },
+    };
+    const repaired = repairPaneLayout(broken);
+    expect(paneOf(repaired, "p1")?.recent).toEqual([1]);
+    expect(
+      activeTabOf(
+        reducePaneLayout(repaired, { type: "close", tab: "files" }),
+        "p1",
+      ),
+    ).toBe("changes");
   });
 
   it("closing the last tab removes the pane and its split, and refocuses", () => {

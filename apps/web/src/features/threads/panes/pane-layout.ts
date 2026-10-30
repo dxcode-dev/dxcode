@@ -183,9 +183,60 @@ export const focusedTab = (layout: ThreadPaneLayout) => {
   return pane?.tabs[pane.active];
 };
 
+/** The pane's tabs that were active before its active tab, most recent first. */
+const recentTabs = (pane: ThreadPane): ReadonlyArray<ThreadPaneTab> =>
+  (pane.recent ?? []).flatMap((index) => {
+    const tab = pane.tabs[index];
+    return tab === undefined ? [] : [tab];
+  });
+
+/**
+ * The pane with new tabs, the tab to show, and the tabs shown before it, most
+ * recent first. Tabs no longer in `tabs` leave the history. When the tab to
+ * show is gone, the most recent remaining one shows, else the tab at
+ * `fallback` or the last.
+ */
+const withTabs = (
+  pane: ThreadPane,
+  tabs: ReadonlyArray<ThreadPaneTab>,
+  shown: ThreadPaneTab | undefined,
+  earlier: ReadonlyArray<ThreadPaneTab | undefined>,
+  fallback: number,
+): ThreadPane => {
+  const history = earlier.flatMap((tab) => {
+    const index = tab === undefined ? -1 : tabs.indexOf(tab);
+    return index === -1 ? [] : [index];
+  });
+  const shownIndex = shown === undefined ? -1 : tabs.indexOf(shown);
+  const active = Math.max(
+    0,
+    shownIndex !== -1
+      ? shownIndex
+      : (history[0] ?? Math.min(fallback, tabs.length - 1)),
+  );
+  const recent = [...new Set(history)].filter((index) => index !== active);
+  const { recent: _previous, ...rest } = pane;
+  return recent.length === 0
+    ? { ...rest, tabs, active }
+    : { ...rest, tabs, active, recent };
+};
+
 const clampActive = (pane: ThreadPane): ThreadPane => {
   const active = Math.min(Math.max(0, pane.active), pane.tabs.length - 1);
-  return active === pane.active ? pane : { ...pane, active };
+  const next = withTabs(
+    pane,
+    pane.tabs,
+    pane.tabs[active],
+    recentTabs(pane),
+    active,
+  );
+  const recent = pane.recent ?? [];
+  const nextRecent = next.recent ?? [];
+  return next.active === pane.active &&
+    nextRecent.length === recent.length &&
+    nextRecent.every((index, at) => index === recent[at])
+    ? pane
+    : next;
 };
 
 const normalizeSizes = (sizes: ReadonlyArray<number>, count: number) => {
@@ -284,11 +335,17 @@ export const repairPaneLayout = (
   })();
   if (!panes.some((pane) => pane.tabs.some((tab) => tab.kind === "agent"))) {
     const first = panes[0] as ThreadPane;
-    root = replacePane(root, first.id, {
-      ...first,
-      tabs: [AGENT_TAB, ...first.tabs],
-      active: first.active + 1,
-    });
+    root = replacePane(
+      root,
+      first.id,
+      withTabs(
+        first,
+        [AGENT_TAB, ...first.tabs],
+        first.tabs[first.active],
+        recentTabs(first),
+        first.active + 1,
+      ),
+    );
   }
   const paneIds = new Set(
     listPanes({ ...layout, root }).map((pane) => pane.id),
@@ -378,28 +435,29 @@ const withRoot = (
   });
 };
 
-const removeTab = (pane: ThreadPane, index: number): ThreadPane => {
-  const tabs = pane.tabs.filter((_, tabIndex) => tabIndex !== index);
-  const active =
-    pane.active > index
-      ? pane.active - 1
-      : pane.active === index
-        ? Math.min(index, tabs.length - 1)
-        : pane.active;
-  return { ...pane, tabs, active: Math.max(0, active) };
-};
+const removeTab = (pane: ThreadPane, index: number): ThreadPane =>
+  withTabs(
+    pane,
+    pane.tabs.filter((_, tabIndex) => tabIndex !== index),
+    pane.tabs[pane.active],
+    recentTabs(pane),
+    index,
+  );
 
+/** Adds a tab and shows it; the tab shown until now becomes the most recent. */
 const insertTab = (
   pane: ThreadPane,
   tab: ThreadPaneTab,
   index?: number,
 ): ThreadPane => {
   const at = Math.min(Math.max(0, index ?? pane.tabs.length), pane.tabs.length);
-  return {
-    ...pane,
-    tabs: [...pane.tabs.slice(0, at), tab, ...pane.tabs.slice(at)],
-    active: at,
-  };
+  return withTabs(
+    pane,
+    [...pane.tabs.slice(0, at), tab, ...pane.tabs.slice(at)],
+    tab,
+    [pane.tabs[pane.active], ...recentTabs(pane)],
+    at,
+  );
 };
 
 /** Where a new view goes: the asked pane, the focused non-Agent pane, or a new right half. */
@@ -453,7 +511,17 @@ const activateTab = (
   index: number,
 ): ThreadPaneLayout => {
   if (pane.active === index && layout.focused === pane.id) return layout;
-  const root = replacePane(layout.root, pane.id, { ...pane, active: index });
+  const next =
+    pane.active === index
+      ? pane
+      : withTabs(
+          pane,
+          pane.tabs,
+          pane.tabs[index],
+          [pane.tabs[pane.active], ...recentTabs(pane)],
+          index,
+        );
+  const root = replacePane(layout.root, pane.id, next);
   return { ...layout, root, focused: pane.id };
 };
 
@@ -462,17 +530,17 @@ const closeTabs = (
   pane: ThreadPane,
   keep: (tab: ThreadPaneTab, index: number) => boolean,
 ): ThreadPaneLayout => {
-  const activeTab = pane.tabs[pane.active];
   const tabs = pane.tabs.filter(keep);
   if (tabs.length === pane.tabs.length) return layout;
-  const activeIndex = activeTab === undefined ? -1 : tabs.indexOf(activeTab);
-  const next: ThreadPane = {
-    ...pane,
+  // A closed active tab gives way to the most recent earlier tab still open,
+  // else the tab now at its index, or the last.
+  const next = withTabs(
+    pane,
     tabs,
-    // A closed active tab gives way to the tab now at its index, or the last.
-    active:
-      activeIndex !== -1 ? activeIndex : Math.min(pane.active, tabs.length - 1),
-  };
+    pane.tabs[pane.active],
+    recentTabs(pane),
+    pane.active,
+  );
   const root = replacePane(layout.root, pane.id, next);
   return withRoot({ ...layout, root }, root);
 };

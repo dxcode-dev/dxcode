@@ -26,6 +26,8 @@ import { CHUNK_END_LINE, ClaudeCodeStream } from "./stream.js";
  */
 const STATE_ROOT = "/home/user/.local/state/dx-claude-code";
 export const claudeCodeRunsRoot = `${STATE_ROOT}/runs`;
+/** Title answers, each in its own directory; see `claudeCodeAnswer`. */
+const claudeCodeAnswersRoot = `${STATE_ROOT}/answers`;
 
 /** Where dx writes a dx tool's result for the \`dx\` MCP server to return. */
 export const claudeCodeToolResultPath = (toolCallId: string) => {
@@ -83,18 +85,29 @@ export const CLAUDE_CODE_DISALLOWED_TOOLS = [
  * Command-line settings outrank a repository's `.claude` settings, whose
  * `env` could otherwise send the plan token to another endpoint, through an
  * intercepting proxy, or to another provider, or run the turn on a token of
- * its own. The plan token is read from descriptor 3 (see the runner).
+ * its own, and whose `apiKeyHelper`, which Claude Code ranks above the plan
+ * token, would run the turn on the helper's key. Claude Code drops some of
+ * these variables from project settings itself; they are pinned here too so
+ * dx does not depend on that. The plan token is read from descriptor 3 (see
+ * the runner).
  */
 const CLI_SETTINGS = JSON.stringify({
+  apiKeyHelper: "",
   env: {
     CLAUDE_CODE_OAUTH_TOKEN: "",
     CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3",
+    CLAUDE_CODE_CUSTOM_OAUTH_URL: "",
     ANTHROPIC_BASE_URL: "https://api.anthropic.com",
+    ANTHROPIC_UNIX_SOCKET: "",
     ANTHROPIC_API_KEY: "",
     ANTHROPIC_AUTH_TOKEN: "",
     CLAUDE_CODE_USE_BEDROCK: "",
     CLAUDE_CODE_USE_VERTEX: "",
     CLAUDE_CODE_USE_FOUNDRY: "",
+    CLAUDE_CODE_USE_GATEWAY: "",
+    CLAUDE_CODE_USE_MANTLE: "",
+    CLAUDE_CODE_USE_ANTHROPIC_AWS: "",
+    CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD: "",
     HTTPS_PROXY: "",
     HTTP_PROXY: "",
     ALL_PROXY: "",
@@ -245,16 +258,34 @@ const LAUNCH_FILES = "launch-files.sh";
  */
 const CLAUDE_CODE_DISK_FULL_NOTE = `dx note: this Orb's disk filled up completely during this turn, which stopped Claude Code. dx freed its own emergency space so it could restart. Before anything else, free regenerable space (build outputs and caches such as node_modules, target, dist, build, .cache, and package manager caches; find them with \`du -xh -d 2 ~ 2>/dev/null | sort -h | tail -n 20\`), never source files or uncommitted work, then continue the task.`;
 
-/** Moves the plan token from the command's environment to descriptor 3. */
-const TOKEN_TO_DESCRIPTOR = `# The plan token arrives in this command's environment, which every process
-# of the workspace user can read through /proc while the process lives, and
-# which children inherit. It moves into a pipe on descriptor 3 and this
-# script restarts without it; the CLI alone reads the pipe, once.
-if [ -n "\${CLAUDE_CODE_OAUTH_TOKEN-}" ]; then
-  exec 3< <(printf '%s\\n' "$CLAUDE_CODE_OAUTH_TOKEN")
-  unset CLAUDE_CODE_OAUTH_TOKEN
-  exec bash -c "$BASH_EXECUTION_STRING"
-fi`;
+/**
+ * Moves the plan token from the file named by `$1` to descriptor 3. The token
+ * never travels in a command's environment or text: providers run commands
+ * under `bash -l`, whose profile the repository or the agent can edit, and
+ * every process of the workspace user can read a live process's environment
+ * through /proc. dx writes the file with `writeFile`, which runs no login
+ * shell, only after the process waiting here has started; the wait deletes
+ * it as soon as it is complete (it ends with a newline) and keeps the token
+ * in a pipe the CLI alone reads, once.
+ */
+const TOKEN_FROM_FILE = `token_to_descriptor() {
+  local waited=0 token
+  until [ -s "$1" ] && [ -z "$(tail -c 1 "$1")" ]; do
+    waited=$((waited + 1))
+    if [ "$waited" -gt 600 ]; then rm -f "$1"; return 1; fi
+    sleep 0.1
+  done
+  token="$(cat "$1")"
+  rm -f "$1"
+  exec 3< <(printf '%s\\n' "$token")
+}`;
+
+/** The plan token as `writeFile` delivers it to `token_to_descriptor`. */
+const tokenFileContents = (token: string) => {
+  if (token.length === 0 || /[\r\n\0]/.test(token))
+    throw new Error("The Claude plan token is malformed.");
+  return `${token}\n`;
+};
 
 const SCRUB_CREDENTIALS = `# The plan token is the only credential Claude Code may use. Workspace
 # variables could otherwise switch it to an API key or another provider, or
@@ -269,6 +300,8 @@ const launchScript = (
   launch: ClaudeCodeLaunch,
   /** The files' shell, or undefined when it was written to LAUNCH_FILES. */
   files: string | undefined,
+  /** Where dx writes the plan token once the runner is waiting for it. */
+  tokenFile: string,
 ) => {
   const args = [
     "--output-format",
@@ -293,13 +326,13 @@ const launchScript = (
   ]
     .map(quote)
     .join(" ");
-  return `${TOKEN_TO_DESCRIPTOR}
-set -eu
+  return `set -eu
 # A full disk must not keep Claude Code from starting: the guard frees dx's
 # reserve and leftovers first, and the agent is told to free space.
 ${workspaceDiskGuard(false)}D=${quote(dir)}
 S=${quote(STATE_ROOT)}
 mkdir -p "$D"
+chmod 700 "$D"
 if [ -e "$D/pid" ]; then echo running; exit 0; fi
 # Stopped before it started: never start it.
 if [ -e "$D/exit" ]; then echo stopped; exit 0; fi
@@ -327,6 +360,8 @@ for other in "$S"/runs/*/; do
     if ours "$o" "$p"; then kill -TERM -- "-$p" 2>/dev/null || true; fi
     [ -f "$o/exit" ] || echo 143 > "$o/exit"
   fi
+  # A token a stopped runner never took.
+  rm -f "$o"/token-*
 done
 # Keep the newest settled runs; older ones only cost disk and lookups.
 ls -1t "$S/runs" 2>/dev/null | tail -n +${KEPT_RUNS + 1} | while read -r n; do
@@ -335,23 +370,22 @@ done
 # A workspace image or a repository's setup can carry an older Claude Code;
 # one older than ${CLAUDE_CODE_MIN_VERSION} is replaced as a missing one is installed, from
 # the latest channel, since the stable one can lag behind that minimum.
-version() { "$1" --version 2>/dev/null < /dev/null 3<&- | sed -n '1s/^\\([0-9][0-9.]*\\).*/\\1/p'; }
+version() { "$1" --version 2>/dev/null < /dev/null | sed -n '1s/^\\([0-9][0-9.]*\\).*/\\1/p'; }
 current() {
   v="$(version "$1")"
   [ -n "$v" ] && [ "$(printf '%s\\n%s\\n' ${CLAUDE_CODE_MIN_VERSION} "$v" | sort -V | head -n 1)" = ${CLAUDE_CODE_MIN_VERSION} ]
 }
-CLAUDE="$(command -v claude || true)"
-if [ -z "$CLAUDE" ] && [ -x "$HOME/.local/bin/claude" ]; then CLAUDE="$HOME/.local/bin/claude"; fi
-OUTDATED=""
-if [ -n "$CLAUDE" ] && ! current "$CLAUDE"; then
-  OUTDATED="$(version "$CLAUDE")"
-  OUTDATED="Claude Code \${OUTDATED:-of an unknown version} is older than ${CLAUDE_CODE_MIN_VERSION}, the oldest dx can run, and could not be updated. Run \\\`claude update\\\` in the workspace's terminal, then retry."
-  CLAUDE=""
-  if current "$HOME/.local/bin/claude"; then CLAUDE="$HOME/.local/bin/claude"; fi
-fi
-if [ -z "$CLAUDE" ]; then
-  CLAUDE="$HOME/.local/bin/claude"
-  if ! (set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash -s latest) > "$D/install.log" 2>&1 3<&- || ! current "$CLAUDE"; then
+# The CLI runs from where its installer puts it, never from PATH, which a
+# login profile can change: a \`claude\` earlier on PATH would be handed the
+# plan token on descriptor 3.
+CLAUDE="$HOME/.local/bin/claude"
+if ! current "$CLAUDE"; then
+  OUTDATED=""
+  if [ -e "$CLAUDE" ]; then
+    OUTDATED="$(version "$CLAUDE")"
+    OUTDATED="Claude Code \${OUTDATED:-of an unknown version} is older than ${CLAUDE_CODE_MIN_VERSION}, the oldest dx can run, and could not be updated. Run \\\`claude update\\\` in the workspace's terminal, then retry."
+  fi
+  if ! (set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash -s latest) > "$D/install.log" 2>&1 || ! current "$CLAUDE"; then
     { echo "\${OUTDATED:-Claude Code could not be installed.}"; tail -n 20 "$D/install.log"; } | tee "$D/stderr.log" >&2
     exit 3
   fi
@@ -384,7 +418,11 @@ if [ -d ${quote(`${WORKSPACE}/.agents/skills`)} ]; then
 fi
 ${SCRUB_CREDENTIALS}
 cd ${quote(WORKSPACE)}
-setsid nohup bash "$D/runner.sh" "$CLAUDE" ${args} $RESUME > /dev/null 2>&1 < /dev/null &
+# The runner waits for the plan token, which dx writes once this command,
+# and the login profile it ran under, have finished.
+TOKEN=${quote(tokenFile)}
+(umask 077 && : > "$TOKEN")
+setsid nohup bash "$D/runner.sh" "$CLAUDE" "$TOKEN" ${args} $RESUME > /dev/null 2>&1 < /dev/null &
 echo $! > "$D/pid"
 launched=1
 echo started`;
@@ -427,25 +465,40 @@ export const claudeCodeAnswer = async (
     encodeBase64(new TextEncoder().encode(request.input)).match(/.{1,76}/g) ??
     []
   ).join("\n");
-  const script = `${TOKEN_TO_DESCRIPTOR}
-set -eu
-CLAUDE="$(command -v claude || true)"
-if [ -z "$CLAUDE" ] && [ -x "$HOME/.local/bin/claude" ]; then CLAUDE="$HOME/.local/bin/claude"; fi
-if [ -z "$CLAUDE" ]; then echo "Claude Code is not installed." >&2; exit 3; fi
+  const dir = `${claudeCodeAnswersRoot}/${crypto.randomUUID()}`;
+  const token = tokenFileContents(request.token);
+  const script = `set -eu
+CLAUDE="$HOME/.local/bin/claude"
+if [ ! -x "$CLAUDE" ]; then echo "Claude Code is not installed." >&2; exit 3; fi
 ${SCRUB_CREDENTIALS}
-T="$(mktemp -d)"
-trap 'rm -rf "$T"' EXIT
-cd "$T"
-base64 -d > "$T/input" <<'DX_FILE'
+A=${quote(dir)}
+# Answers dx never collected, such as one whose Durable Object restarted.
+find "\${A%/*}" -mindepth 1 -maxdepth 1 -mmin +10 -exec rm -rf {} + 2> /dev/null || true
+mkdir -p "$A/cwd"
+chmod 700 "$A"
+(umask 077 && : > "$A/token")
+base64 -d > "$A/input" <<'DX_FILE'
 ${input}
 DX_FILE
-CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3 timeout 50 "$CLAUDE" ${args} < "$T/input" 2> /dev/null`;
-  const result = await sandbox.exec(`bash -c ${quote(script)}`, {
-    env: { ...CLI_ENVIRONMENT, CLAUDE_CODE_OAUTH_TOKEN: request.token },
-    timeoutMs: 60_000,
+cd "$A/cwd"
+setsid nohup bash -c ${quote(ANSWER_RUNNER)} answer "$CLAUDE" "$A" ${args} > /dev/null 2>&1 < /dev/null &
+echo started`;
+  const started = await sandbox.exec(`bash -c ${quote(script)}`, {
+    env: CLI_ENVIRONMENT,
+    timeoutMs: 30_000,
   });
   const stream = new ClaudeCodeStream();
-  for (const line of result.stdout.split("\n")) stream.push(line);
+  if (started.exitCode === 0 && /^started$/m.test(started.stdout)) {
+    await sandbox.writeFile(`${dir}/token`, token);
+    const deadline = Date.now() + 60_000;
+    while (
+      Date.now() < deadline &&
+      !(await sandbox.exists(`${dir}/done`).catch(() => false))
+    )
+      await sleep(POLL_MS);
+    const stdout = await sandbox.readFile(`${dir}/out`).catch(() => "");
+    for (const line of stdout.split("\n")) stream.push(line);
+  }
   return {
     text:
       stream.result === undefined || stream.result.isError
@@ -455,6 +508,19 @@ CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3 timeout 50 "$CLAUDE" ${args} < "$T/inp
     readingAt: stream.planReadingAt,
   };
 };
+
+/**
+ * Answers one print-mode request in the background, from an empty directory:
+ * `$1` is the CLI and `$2` the answer's directory, which holds its input and
+ * receives its output and a `done` marker. The rest are the CLI's arguments.
+ */
+const ANSWER_RUNNER = `CLAUDE="$1"
+A="$2"
+shift 2
+trap 'rm -f "$A/token"; : > "$A/done"' EXIT
+${TOKEN_FROM_FILE}
+token_to_descriptor "$A/token" || exit 1
+CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3 timeout 50 "$CLAUDE" "$@" < "$A/input" > "$A/out" 2> /dev/null || true`;
 
 /**
  * Runs the CLI, keeps a heartbeat while it lives, and splits its stdout into
@@ -469,11 +535,18 @@ const RUNNER = `#!/bin/bash
 set -o pipefail
 D="$(cd "$(dirname "$0")" && pwd)"
 CLAUDE="$1"
-shift
-# Descriptor 3 holds the plan token for the CLI; nothing else keeps it.
-( while :; do date +%s > "$D/alive.tmp" && mv "$D/alive.tmp" "$D/alive"; sleep 5; done ) 3<&- &
+TOKEN="$2"
+shift 2
+( while :; do date +%s > "$D/alive.tmp" && mv "$D/alive.tmp" "$D/alive"; sleep 5; done ) &
 HEARTBEAT=$!
-trap 'kill "$HEARTBEAT" 2>/dev/null' EXIT
+trap 'kill "$HEARTBEAT" 2>/dev/null; rm -f "$TOKEN"' EXIT
+${TOKEN_FROM_FILE}
+# Descriptor 3 holds the plan token for the CLI; nothing else keeps it.
+if ! token_to_descriptor "$TOKEN"; then
+  echo "Claude Code did not receive the plan token." > "$D/stderr.log"
+  echo 1 > "$D/exit.tmp" && mv "$D/exit.tmp" "$D/exit"
+  exit 1
+fi
 GUEST=/home/user
 # Paths as Claude sees them: inside the local runtime's namespace the
 # Thread's home is /home/user.
@@ -639,10 +712,12 @@ export class ClaudeCodeRun {
       await this.#sandbox.writeFile(`${this.dir}/${LAUNCH_FILES}`, files);
       files = undefined;
     }
+    const tokenFile = `${this.dir}/token-${crypto.randomUUID()}`;
+    const token = tokenFileContents(launch.token);
     const result = await this.#sandbox.exec(
-      `bash -c ${quote(launchScript(this.dir, launch, files))}`,
+      `bash -c ${quote(launchScript(this.dir, launch, files, tokenFile))}`,
       {
-        env: { ...CLI_ENVIRONMENT, CLAUDE_CODE_OAUTH_TOKEN: launch.token },
+        env: CLI_ENVIRONMENT,
         timeoutMs: 180_000,
         signal,
       },
@@ -657,6 +732,10 @@ export class ClaudeCodeRun {
         stderr || result.stdout.trim() || "Claude Code could not start.",
       );
     }
+    // A launch that found its attempt already running or stopped started no
+    // runner to take the token.
+    if (/^started$/m.test(result.stdout) && signal?.aborted !== true)
+      await this.#sandbox.writeFile(tokenFile, token);
   }
 
   async #read(path: string) {

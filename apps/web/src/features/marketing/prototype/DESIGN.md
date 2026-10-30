@@ -11,7 +11,7 @@ Status: historical design exploration. Concept 1 was integrated into the homepag
 - The parrots complement the existing dx wordmark. They do not replace the product's Orb or loading-state identity.
 - Remove the starburst motif. No borrowed competitor symbols, names, or parity claims in the landing page.
 - Put a working email-entry interaction in the hero. A submit button acts on that form without scrolling. Keep the second invitation at the bottom.
-- Owner chose FSL. MIT conversion is proposed; actual license adoption and public distribution are separate release work.
+- Owner chose FSL-1.1-ALv2, which converts each version to Apache-2.0 after two years. Public distribution is separate release work.
 
 ## Who this page is for
 

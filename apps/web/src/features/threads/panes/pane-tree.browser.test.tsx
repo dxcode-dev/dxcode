@@ -223,6 +223,43 @@ describe("pane tree", () => {
     expect(document.querySelector('[role="menuitem"]')).toBeNull();
   });
 
+  it("returns to Files when a file opened from it closes, whichever tab sits last", async () => {
+    const container = await mount(
+      <PaneTreeHarness
+        main={<div>Agent</div>}
+        files={<div>Files tree</div>}
+        changes={<div>Changes list</div>}
+        terminal={<div>Terminal</div>}
+        desktop={<div>Desktop</div>}
+        initialLayout={reducePaneLayout(
+          paneLayoutWith(["files", "changes", "terminal", "desktop"]),
+          { type: "open-file", target: fileTarget("README.md") },
+        )}
+      />,
+    );
+    const selected = () =>
+      container
+        .querySelector<HTMLElement>(
+          '.thread-pane[data-pane="p1"] [role="tab"][aria-selected="true"]',
+        )
+        ?.closest<HTMLElement>(".pane-tab")?.dataset.tab;
+    expect(selected()).toBe("file:primary:README.md");
+    const close = tabElement(
+      container,
+      "file:primary:README.md",
+    )?.querySelector<HTMLElement>(".pane-tab-close");
+    await React.act(() => close?.click());
+    expect(sketch(container)).toBe(
+      "p0[agent] p1[files,changes,terminal:1,desktop]",
+    );
+    expect(selected()).toBe("files");
+    const filesPanel = bodyOf(container, "p1").querySelector<HTMLElement>(
+      '[role="tabpanel"][data-kind="files"]',
+    );
+    expect(filesPanel?.hidden).toBe(false);
+    expect(filesPanel?.textContent).toContain("Files tree");
+  });
+
   it("moves a tab into a new pane beside its own from Move To", async () => {
     const container = await mount(
       <PaneTreeHarness

@@ -14,6 +14,6 @@ This uses a separate Vite HTML entry so reviewing marketing does not load the cu
 
 All product data is illustrative. Forms do not transmit or persist data. Public distribution, BYOK, and self-host copy describe the intended v0.1.0 release, not verification of a shipped package. Bot channels and broader compute portability are exploratory direction, not dated commitments.
 
-Owner selected FSL. FSL-1.1-MIT is a proposed fit for the stated future MIT preference: each version automatically converts after two years. Final licensing files and publication remain separate work.
+Owner selected FSL-1.1-ALv2: each version converts to Apache-2.0 after two years. Public distribution remains separate release work.
 
 Generated illustration: original cloud workshop with mechanical birds; imagegen source copied into `workshop.png`.

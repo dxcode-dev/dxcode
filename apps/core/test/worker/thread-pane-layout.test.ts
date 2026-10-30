@@ -67,6 +67,7 @@ const layout: ThreadPaneLayout = {
         kind: "pane",
         id: "p2",
         active: 2,
+        recent: [0],
         tabs: [
           { kind: "files" },
           { kind: "terminal", ordinal: 1 },

@@ -19,8 +19,8 @@ threads.
 
 dx checks the token with Anthropic before storing it and refuses a token
 Anthropic rejects. It encrypts the token like an API key and never returns it.
-Each person has one plan connection; adding it again replaces the token.
-Workspace routing does not offer it.
+To swap a token, choose **Replace Token** on the connection.
+Workspace routing does not offer Claude Pro/Max.
 
 ## Start a Claude Code thread
 
@@ -68,19 +68,25 @@ resets or after you allow extra usage.
 The standard Orb image includes Claude Code, Python 3 for dx's tool server,
 and `awk`. A workspace whose Claude Code is missing or older than 2.1.310 installs
 the current release the first time it runs a Claude Code thread. A custom image needs network access
-to `claude.ai` for that install, or Claude Code on the `PATH`.
+to `claude.ai` for that install, or Claude Code at `~/.local/bin/claude`, where its
+installer puts it. dx never runs a `claude` found elsewhere on the `PATH`.
 
 ## Token handling
 
 The token reaches Claude Code only on a file descriptor for one run, and
-only for the thread's pinned Claude Code model. dx removes `ANTHROPIC_*` and
+only for the thread's pinned Claude Code model. dx sends it after the run's
+command has started, never in a command's environment, so a shell profile
+does not see it. dx removes `ANTHROPIC_*` and
 `CLAUDE_CODE_USE_*` variables from Claude Code's environment and passes
 command-line settings that fix the API URL and clear proxy and CA variables.
 Workspace variables and a repository's `.claude` settings therefore cannot
-point Claude Code at another API URL or proxy. Hidden secret values Claude
+point Claude Code at another API URL or proxy, and a repository's
+`apiKeyHelper` cannot replace the token. Hidden secret values Claude
 prints are redacted from the transcript. Commands that a repository's setup
-or the agent runs in the Orb run as the Thread's owner, so people should
-connect a plan only for repositories they trust.
+or the agent runs in the Orb run as the Thread's owner, and so does
+everything a person the Thread is shared with does in it, including the
+Terminal. People should connect a plan only for repositories they trust, and
+share a Claude Code Thread only with people they would give the plan to.
 
 ## Troubleshooting
 

@@ -57,26 +57,29 @@ account and prints a long-lived token for that plan.
 
 dx checks the token with Anthropic before it saves it. If Anthropic rejects
 it, the dialog says so; run `claude setup-token` again and paste the new
-token. Each person connects one Claude plan. To swap the token, choose
-**Replace Token** on the connection.
+token. To swap the token, choose **Replace Token** on the connection.
 
 ## How dx protects the token
 
 - dx stores the token encrypted. Settings shows only that a token is
   stored, never the token itself.
 - In the sandbox, the token reaches the Claude Code process on a file
-  descriptor for one run, not as a variable in Claude Code's environment.
+  descriptor for one run. dx sends it after the run's command has started,
+  so neither Claude Code's environment nor a shell profile sees it.
 - Before Claude Code starts, dx unsets `ANTHROPIC_*` and
   `CLAUDE_CODE_USE_*` variables and extra CA certificates. Command-line
   settings, which outrank a repository's `.claude` settings, pin
   Anthropic's API URL and blank the proxy variables. A repository's `.claude` settings or a workspace
-  variable cannot point Claude Code at another API URL or proxy.
+  variable cannot point Claude Code at another API URL or proxy, and a
+  repository's `apiKeyHelper` cannot replace your token.
 - When Claude Code prints the value of a secret environment variable that
   dx hides, dx redacts it from the transcript. Settings warns when a secret
   is too short to hide.
 
-Commands that a repository's setup or the agent runs in the Orb run as you.
-Connect your plan only for repositories you trust.
+Commands that a repository's setup or the agent runs in the Orb run as you,
+and so does everything a person you share the Thread with does in it,
+including the Terminal. Connect your plan only for repositories you trust,
+and share a Claude Code Thread only with people you would give your plan to.
 
 ## Limits
 

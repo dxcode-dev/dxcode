@@ -61,6 +61,15 @@ export const ThreadPaneSchema = Schema.Struct({
   ),
   /** Index into `tabs`. */
   active: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  /**
+   * Indices into `tabs` of the tabs active before `active`, most recent
+   * first. Closing the active tab shows the first of them.
+   */
+  recent: Schema.optional(
+    Schema.Array(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))).check(
+      Schema.isMaxLength(THREAD_PANE_LAYOUT_TAB_LIMIT),
+    ),
+  ),
 });
 export type ThreadPane = typeof ThreadPaneSchema.Type;
 

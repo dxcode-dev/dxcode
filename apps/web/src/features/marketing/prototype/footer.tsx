@@ -50,8 +50,8 @@ export function Footer() {
               <strong>A little room to keep building.</strong>
               <p>
                 I’m building dx on my own, without outside funding. FSL gives me
-                room to keep building it. An MIT license is something I may
-                consider later.
+                room to keep building it. Each release converts to Apache-2.0
+                after two years.
               </p>
               <a href="https://fsl.software/" target="_blank" rel="noreferrer">
                 About FSL <ArrowIcon direction="up-right" />

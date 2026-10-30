@@ -36,8 +36,8 @@ A Claude Pro or Max plan runs Claude Code inside your Thread's Orb.
    before saving it.
 
 If Anthropic rejects the token, run `claude setup-token` again and paste the
-new one. To replace a token later, choose **Add → Claude Pro/Max** again or
-**Replace Token** on the connection. You can connect one Claude plan.
+new one. To replace a token later, choose **Replace Token** on the
+connection.
 
 ### Use it in a Thread
 

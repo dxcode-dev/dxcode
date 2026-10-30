@@ -34,9 +34,8 @@ export function SelfHost({
         <summary>Release status & license</summary>
         <p>
           Public package and deployment guide are being prepared. FSL restricts
-          competing use for two years per release, then converts to MIT or
-          Apache-2.0 according to the selected variant. MIT is the proposed
-          conversion for dx; license files have not been changed.
+          competing use for two years per release, then converts to Apache-2.0.
+          dx uses FSL-1.1-ALv2.
         </p>
       </details>
     </section>

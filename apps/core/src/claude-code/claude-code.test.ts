@@ -33,6 +33,7 @@ import { createClaudeCodeProvider } from "./provider.js";
 import { claudeCodeSandbox } from "./runs.js";
 import { ClaudeCodeStream } from "./stream.js";
 import { claudeCodeMirrorTools } from "./tools.js";
+import { claudeCodeAnswer } from "./workspace-run.js";
 
 /**
  * Claude Code mode against a Thread workspace on this machine: guest paths
@@ -127,7 +128,7 @@ exit 1
 const createGuest = async (
   options: {
     readonly claude?: boolean;
-    /** A Claude Code of this version on PATH instead of the current one. */
+    /** A Claude Code of this version instead of the current one. */
     readonly oldClaude?: string;
     /** The downloaded installer installs the current Claude Code. */
     readonly installerWorks?: boolean;
@@ -167,9 +168,14 @@ exec /usr/bin/awk "$@"
       ? `#!/bin/sh\necho 'mkdir -p "$HOME/.local/bin" && cp ${join(root, "claude-latest")} "$HOME/.local/bin/claude"'\n`
       : "#!/bin/sh\necho 'echo \"Installation failed: checksum mismatch\" >&2; exit 1'\n",
   );
-  const installClaude = () => tool("claude", FAKE_CLAUDE);
+  // dx runs Claude Code from where its installer puts it, never from PATH.
+  const claudeAt = (body: string) =>
+    mkdir(join(home, ".local/bin"), { recursive: true }).then(() =>
+      writeFile(join(home, ".local/bin/claude"), body, { mode: 0o755 }),
+    );
+  const installClaude = () => claudeAt(FAKE_CLAUDE);
   if (options.oldClaude !== undefined)
-    await tool("claude", OLD_CLAUDE(options.oldClaude));
+    await claudeAt(OLD_CLAUDE(options.oldClaude));
   else if (options.claude !== false) await installClaude();
   const base = await local({
     cwd: join(home, "workspace/repo"),
@@ -177,6 +183,14 @@ exec /usr/bin/awk "$@"
   }).createSandbox({ id: "guest" });
   const map = (value: string) => value.replaceAll(GUEST_HOME, home);
   const ops: GuestOp[] = [];
+  /**
+   * What each command carried to the provider: a provider runs it under
+   * \`bash -l\`, whose profile sees its text and environment.
+   */
+  const commands: Array<{
+    readonly command: string;
+    readonly env: Readonly<Record<string, string>>;
+  }> = [];
   /** Runs before each operation; a returned error fails it. */
   let before: (op: GuestOp) => Error | undefined = () => undefined;
   const track = async <A>(
@@ -193,8 +207,10 @@ exec /usr/bin/awk "$@"
   const sandbox: Sandbox = {
     cwd: `${GUEST_HOME}/workspace/repo`,
     resolvePath: (path) => path,
-    exec: (command, execOptions) =>
-      track("exec", command, () => base.exec(map(command), execOptions)),
+    exec: (command, execOptions) => {
+      commands.push({ command, env: execOptions?.env ?? {} });
+      return track("exec", command, () => base.exec(map(command), execOptions));
+    },
     readFile: (path) => track("read", path, () => base.readFile(map(path))),
     readFileBuffer: (path) =>
       track("read", path, () => base.readFileBuffer(map(path))),
@@ -208,9 +224,23 @@ exec /usr/bin/awk "$@"
     rm: (path, rmOptions) =>
       track("write", path, () => base.rm(map(path), rmOptions)),
   };
+  /** Files under the guest's home, other than the fake CLI's, that hold it. */
+  const filesHolding = async (value: string) => {
+    const found: string[] = [];
+    for (const name of await readdir(home, { recursive: true })) {
+      if (name === "claude-token") continue;
+      const contents = await readFile(join(home, name), "latin1").catch(
+        () => undefined,
+      );
+      if (contents?.includes(value) === true) found.push(name);
+    }
+    return found;
+  };
   return {
     sandbox,
     ops,
+    commands,
+    filesHolding,
     installClaude,
     /** Put a command on the guest's PATH ahead of the machine's. */
     tool,
@@ -486,7 +516,7 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
     expect(await guest.sandbox.exists(userInstructions)).toBe(false);
   });
 
-  it("hands the plan token to the CLI alone, never to a process environment", async () => {
+  it("hands the plan token to the CLI alone, never to a process environment, a command, or a file left behind", async () => {
     const guest = await createGuest();
     await guest.script([
       init(),
@@ -501,6 +531,42 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
     expect(done).toMatchObject({ type: "done", reason: "stop" });
     expect(guest.home("claude-token")).toBe(claude.token);
     expect(guest.home("claude-token-readers")).toBe("");
+    expect(guest.commands.length).toBeGreaterThan(0);
+    expect(
+      guest.commands.filter(
+        ({ command, env }) =>
+          command.includes(claude.token) ||
+          Object.values(env).some((value) => value.includes(claude.token)),
+      ),
+    ).toEqual([]);
+    expect(await guest.filesHolding(claude.token)).toEqual([]);
+  });
+
+  it("answers a title on the plan token without giving it to a command or leaving it in a file", async () => {
+    const guest = await createGuest();
+    await guest.script([
+      init(),
+      ...response("m1", [{ text: "Greeting" }]),
+      result("Greeting"),
+    ]);
+    const token = `plan-token-${crypto.randomUUID()}`;
+    const answer = await claudeCodeAnswer(guest.sandbox, {
+      model: "claude-haiku-5-5",
+      token,
+      input: "Title this: say hello",
+    });
+    expect(answer.text).toBe("Greeting");
+    expect(guest.home("claude-token")).toBe(token);
+    expect(guest.home("claude-token-readers")).toBe("");
+    expect(guest.home("claude-stdin.jsonl")).toBe("Title this: say hello");
+    expect(
+      guest.commands.filter(
+        ({ command, env }) =>
+          command.includes(token) ||
+          Object.values(env).some((value) => value.includes(token)),
+      ),
+    ).toEqual([]);
+    expect(await guest.filesHolding(token)).toEqual([]);
   });
 
   it("launches with a prompt too large for one command line", async () => {

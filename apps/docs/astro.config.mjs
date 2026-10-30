@@ -43,6 +43,10 @@ export default defineConfig({
               slug: "guides/claude-pro-max-plan-in-the-cloud",
             },
             {
+              label: "Claude Code usage limits",
+              slug: "guides/claude-code-usage-limits",
+            },
+            {
               label: "Sandboxes compared",
               slug: "guides/sandboxes-for-ai-coding-agents",
             },
