@@ -49,6 +49,7 @@ import {
   ProjectNotFound,
   ProjectRepository,
   parseEnvironmentVariableAssignments,
+  projectReaderOf,
   SettingsMembershipInvariantViolation,
   SettingsScopeForbidden,
   type StoredEnvironmentVariable,
@@ -226,7 +227,7 @@ const authorizeTarget = Effect.fn("authorizeEnvironmentVariableTarget")(
     }
     const projects = yield* ProjectRepository;
     const project = yield* projects
-      .findOwnedById(projectId.value, principal.userId)
+      .findOwnedById(projectId.value, projectReaderOf(principal))
       .pipe(
         Effect.catchTag("ProjectNotFound", () =>
           Effect.fail(new SettingsScopeForbidden({ scope: "personal" })),

@@ -12,6 +12,7 @@ import type { ProjectSourceAuthority } from "../source-control/source-control.js
 import type { UserId } from "../users/user-id.js";
 import type { Project, ProjectRepositoryIdentity } from "./project.js";
 import type { ProjectId } from "./project-id.js";
+import type { ProjectReader } from "./project-reader.js";
 
 export interface ProjectUpdate {
   readonly name?: Project["name"];
@@ -38,13 +39,13 @@ export interface ProjectRepositoryShape {
   >;
   readonly findOwnedById: (
     projectId: ProjectId,
-    ownerUserId: UserId,
+    reader: ProjectReader,
   ) => Effect.Effect<
     Project,
     Schema.SchemaError | PersistenceUnavailable | ProjectNotFound
   >;
   readonly listOwned: (
-    ownerUserId: UserId,
+    reader: ProjectReader,
     request: PageRequest,
   ) => Effect.Effect<
     Page<Project>,

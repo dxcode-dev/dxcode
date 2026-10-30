@@ -34,7 +34,8 @@ describe("ProjectRepository D1", () => {
         });
         expect(second).toBe(first);
         expect(
-          (yield* repository.findOwnedById(first, owner)).configuration,
+          (yield* repository.findOwnedById(first, { userId: owner }))
+            .configuration,
         ).toEqual(configuration);
         expect(
           (yield* Effect.flip(
@@ -93,11 +94,11 @@ describe("ProjectRepository D1", () => {
       Effect.gen(function* () {
         const repository = yield* ProjectRepository;
         yield* repository.insert(entity);
-        expect((yield* repository.findOwnedById(entity.id, owner)).name).toBe(
-          "Alpha",
-        );
+        expect(
+          (yield* repository.findOwnedById(entity.id, { userId: owner })).name,
+        ).toBe("Alpha");
         const error = yield* Effect.flip(
-          repository.findOwnedById(entity.id, otherOwner),
+          repository.findOwnedById(entity.id, { userId: otherOwner }),
         );
         expect(error._tag).toBe("ProjectNotFound");
       }),
@@ -187,7 +188,8 @@ describe("ProjectRepository D1", () => {
           policyRevision: 0,
         });
         expect(
-          (yield* repository.findOwnedById(entity.id, owner)).repository,
+          (yield* repository.findOwnedById(entity.id, { userId: owner }))
+            .repository,
         ).toMatchObject({
           fullName: "owner/repository",
         });
@@ -256,7 +258,7 @@ describe("ProjectRepository D1", () => {
       Effect.gen(function* () {
         const repository = yield* ProjectRepository;
         return yield* Effect.flip(
-          repository.listOwned(owner, { cursor: "not-a-cursor" }),
+          repository.listOwned({ userId: owner }, { cursor: "not-a-cursor" }),
         );
       }),
     );
@@ -284,16 +286,22 @@ describe("ProjectRepository D1", () => {
       Effect.gen(function* () {
         const repository = yield* ProjectRepository;
         yield* Effect.all(entities.map(repository.insert));
-        const first = yield* repository.listOwned(owner, { limit: 2 });
+        const first = yield* repository.listOwned(
+          { userId: owner },
+          { limit: 2 },
+        );
         expect(first.items.map(({ id }) => id)).toEqual([
           entities[0]?.id,
           entities[2]?.id,
         ]);
         expect(first.nextCursor).toBeDefined();
-        const second = yield* repository.listOwned(owner, {
-          limit: 2,
-          cursor: first.nextCursor,
-        });
+        const second = yield* repository.listOwned(
+          { userId: owner },
+          {
+            limit: 2,
+            cursor: first.nextCursor,
+          },
+        );
         expect(second.items.map(({ id }) => id)).toEqual([entities[1]?.id]);
         expect(second.nextCursor).toBeUndefined();
       }),

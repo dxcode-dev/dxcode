@@ -77,8 +77,10 @@ const resolvePromptData =
         );
       }
       const { code = "UNKNOWN", message } = body;
-      // The Claude plan's limit text is what the Thread's limit card shows.
-      // Flue keeps only a FlueError's message on the failed settlement.
+      // Flue keeps only a FlueError's message on the failed settlement, so
+      // the texts the Thread's error card reads are thrown as one: the
+      // Claude plan's limit text, and the coordinator's classified failures,
+      // whose `(dx_failure:class:CODE)` stamp also drives the retry policy.
       if (code === "CLAUDE_PLAN_LIMIT" && message !== undefined)
         throw new FlueError({
           type: "claude_plan_limit",
@@ -88,14 +90,18 @@ const resolvePromptData =
           meta: { code },
         });
       if (body.class !== undefined && message !== undefined)
-        throw new Error(
-          markRunFailure({
+        throw new FlueError({
+          type: "model_routing_failure",
+          message: markRunFailure({
             class: body.class,
             code,
             message,
             retryable: body.class === "transient" || body.class === "platform",
           }),
-        );
+          details: "",
+          dev: "",
+          meta: { code, class: body.class },
+        });
       if (code.startsWith("MODEL_NOT_SERVED:"))
         throw new Error(
           markRunFailure({

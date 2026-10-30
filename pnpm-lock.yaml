@@ -199,6 +199,9 @@ importers:
       alchemy:
         specifier: 2.0.0-beta.83
         version: 2.0.0-beta.83(patch_hash=c8af9cd8da57452113765f1e029b6a3864c5458844afdec44fc360da3771bce6)(@effect/platform-node@4.0.5(effect@4.0.5)(redis@6.2.1(@opentelemetry/api@1.9.0)))(@types/node@26.2.0)(@types/react@19.2.14)(effect@4.0.5)(hono@4.11.4)(typescript@7.0.2)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(ws@8.21.3)
+      aws4fetch:
+        specifier: 1.0.20
+        version: 1.0.20
       e2b:
         specifier: 2.44.0
         version: 2.44.0

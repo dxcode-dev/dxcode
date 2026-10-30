@@ -10,6 +10,7 @@ import {
   type ProjectId,
   type ProjectNotFound,
   ProjectRepository,
+  projectReaderOf,
   type RunnerProfileId,
   type SettingsMembershipInvariantViolation,
   type Thread,
@@ -174,7 +175,10 @@ export class ThreadService extends Context.Service<
             const parent =
               parentThreadId === undefined
                 ? Effect.succeed(undefined)
-                : threads.findOwnedById(parentThreadId, principal.userId);
+                : threads.findOwnedById(
+                    parentThreadId,
+                    projectReaderOf(principal),
+                  );
             const currentInstructions = instructions
               .findOwnedByUser(principal.userId)
               .pipe(
@@ -205,7 +209,10 @@ export class ThreadService extends Context.Service<
               [
                 parent,
                 project.kind === "project"
-                  ? projects.findOwnedById(projectId, principal.userId)
+                  ? projects.findOwnedById(
+                      projectId,
+                      projectReaderOf(principal),
+                    )
                   : Effect.succeed(undefined),
                 currentInstructions,
                 pluginService.resolveForThread(principal, projectId),
@@ -279,15 +286,15 @@ export class ThreadService extends Context.Service<
           },
         ),
         get: Effect.fn("ThreadService.get")((principal, threadId) =>
-          threads.findOwnedById(threadId, principal.userId),
+          threads.findOwnedById(threadId, projectReaderOf(principal)),
         ),
         list: Effect.fn("ThreadService.list")((principal, projectId, request) =>
-          threads.listOwned(principal.userId, projectId, request),
+          threads.listOwned(projectReaderOf(principal), projectId, request),
         ),
         listChildren: Effect.fn("ThreadService.listChildren")(
           (principal, parentThreadIds, lifecycleState, perParent) =>
             threads.listChildrenOwned(
-              principal.userId,
+              projectReaderOf(principal),
               parentThreadIds,
               lifecycleState,
               perParent,

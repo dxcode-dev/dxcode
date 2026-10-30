@@ -81,6 +81,8 @@ import {
   type PageCursor,
   PersistenceUnavailable,
   type ProjectId,
+  ProjectRepository,
+  projectReaderOf,
   type RunnerProfileId,
   SourceControlAccessDenied,
   SourceControlGrantId,
@@ -783,6 +785,26 @@ export const createThreadRoutes = (
               const projectId = input.projectId;
               const requestedRunnerProfileId = input.runnerProfileId;
               const service = yield* ThreadService;
+              // An External API App reaches only its workspace's Projects:
+              // refuse any other before source admission or the Orb pin
+              // reads it.
+              if (
+                projectId !== undefined &&
+                principal.application !== undefined
+              )
+                yield* Effect.gen(function* () {
+                  const projects = yield* ProjectRepository;
+                  return yield* projects.findOwnedById(
+                    projectId,
+                    projectReaderOf(principal),
+                  );
+                }).pipe(
+                  Effect.provide(
+                    ProjectRepositoryD1.pipe(
+                      Layer.provide(D1Client.layer({ db })),
+                    ),
+                  ),
+                );
               const modelRoute = Effect.tryPromise({
                 try: () =>
                   resolveSelectionForUser(
@@ -2514,14 +2536,18 @@ export const createThreadRoutes = (
         return yield* service.get(context.get("principal"), params.threadId);
       }).pipe(
         Effect.provide(threadServiceLayer(db)),
-        // The owner learns their Thread was deleted.
+        // The owner learns their Thread was deleted. An External API App
+        // does not: the tombstone check reads ownership only, so it would
+        // confirm Threads outside the app's workspace.
         Effect.catchTag("ThreadNotFound", (notFound) =>
-          Effect.promise(() =>
-            isDeletedThread(
-              db,
-              params.threadId,
-              context.get("principal").userId,
-            ),
+          Effect.promise(async () =>
+            context.get("principal").application === undefined
+              ? isDeletedThread(
+                  db,
+                  params.threadId,
+                  context.get("principal").userId,
+                )
+              : false,
           ).pipe(
             Effect.flatMap((deleted) =>
               Effect.fail<ThreadDeleted | ThreadNotFound>(

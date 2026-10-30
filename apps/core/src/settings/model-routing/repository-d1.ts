@@ -459,7 +459,8 @@ export const ModelRoutingRepositoryD1 = (db: D1Database) =>
                       "DELETE FROM claude_code_plan WHERE connection_id = ?",
                     )
                     .bind(id),
-                  // Its Threads take another plan at their next submission.
+                  // The FK clears the binding too; `claude_connection_bound_at`
+                  // stays, so its Threads take no other plan.
                   db
                     .prepare(
                       "UPDATE threads SET claude_connection_id = NULL WHERE claude_connection_id = ?",

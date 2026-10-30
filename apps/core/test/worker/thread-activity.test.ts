@@ -67,7 +67,7 @@ describe("Thread activity projection", () => {
     const working = await runRepositories(
       Effect.gen(function* () {
         const threads = yield* ThreadRepository;
-        return yield* threads.findOwnedById(target.id, owner);
+        return yield* threads.findOwnedById(target.id, { userId: owner });
       }),
     );
     expect(working.activityStatus).toBe("working");
@@ -84,7 +84,7 @@ describe("Thread activity projection", () => {
     let current = await runRepositories(
       Effect.gen(function* () {
         const threads = yield* ThreadRepository;
-        return yield* threads.findOwnedById(target.id, owner);
+        return yield* threads.findOwnedById(target.id, { userId: owner });
       }),
     );
     expect(current.activityStatus).toBe("working");
@@ -104,7 +104,7 @@ describe("Thread activity projection", () => {
     current = await runRepositories(
       Effect.gen(function* () {
         const threads = yield* ThreadRepository;
-        return yield* threads.findOwnedById(target.id, owner);
+        return yield* threads.findOwnedById(target.id, { userId: owner });
       }),
     );
     expect(current.activityStatus).toBe("idle");
@@ -138,7 +138,9 @@ describe("Thread activity projection", () => {
     const first = await runRepositories(
       Effect.gen(function* () {
         const threads = yield* ThreadRepository;
-        return yield* threads.listOwned(owner, entity.id, { limit: 1 });
+        return yield* threads.listOwned({ userId: owner }, entity.id, {
+          limit: 1,
+        });
       }),
     );
     expect(first.items.map(({ id }) => id)).toEqual([targets[0]?.id]);
@@ -152,7 +154,7 @@ describe("Thread activity projection", () => {
     const second = await runRepositories(
       Effect.gen(function* () {
         const threads = yield* ThreadRepository;
-        return yield* threads.listOwned(owner, entity.id, {
+        return yield* threads.listOwned({ userId: owner }, entity.id, {
           limit: 1,
           cursor: first.nextCursor,
         });
@@ -161,7 +163,7 @@ describe("Thread activity projection", () => {
     const third = await runRepositories(
       Effect.gen(function* () {
         const threads = yield* ThreadRepository;
-        return yield* threads.listOwned(owner, entity.id, {
+        return yield* threads.listOwned({ userId: owner }, entity.id, {
           limit: 1,
           cursor: second.nextCursor,
         });
@@ -182,7 +184,9 @@ describe("Thread activity projection", () => {
     const refreshed = await runRepositories(
       Effect.gen(function* () {
         const threads = yield* ThreadRepository;
-        return yield* threads.listOwned(owner, entity.id, { limit: 1 });
+        return yield* threads.listOwned({ userId: owner }, entity.id, {
+          limit: 1,
+        });
       }),
     );
     const refreshedItem = refreshed.items[0];

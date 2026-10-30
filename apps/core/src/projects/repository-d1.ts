@@ -8,6 +8,7 @@ import {
   ProjectId,
   ProjectNameConflict,
   ProjectNotFound,
+  type ProjectReader,
   ProjectRepository,
   ProjectSourceAuthority,
 } from "@dx/domain";
@@ -174,12 +175,17 @@ export const ProjectRepositoryD1 = Layer.effect(
         WHERE member.userId = ${userId}
           AND organization.lifecycleState = 'active')`;
     // A private Project of the user, or any workspace Project of the user's
-    // active workspace. Another member's projectless scope stays private.
-    const accessibleBy = (userId: string) => sql`
-      ((workspace_id IS NULL AND owner_user_id = ${userId})
-        OR (workspace_id IS NOT NULL
+    // active workspace. Another member's projectless scope stays private. A
+    // reader held to one workspace (an External API App) reaches only that
+    // workspace's Projects, never the user's private ones.
+    const accessibleBy = ({ userId, workspaceId }: ProjectReader) => {
+      const inWorkspace = sql`(workspace_id IS NOT NULL
           AND workspace_id = ${activeWorkspaceOf(userId)}
-          AND (name != ${PROJECTLESS_PROJECT_NAME} OR owner_user_id = ${userId})))`;
+          AND (name != ${PROJECTLESS_PROJECT_NAME} OR owner_user_id = ${userId}))`;
+      return workspaceId === undefined
+        ? sql`((workspace_id IS NULL AND owner_user_id = ${userId}) OR ${inWorkspace})`
+        : sql`(workspace_id = ${workspaceId} AND ${inWorkspace})`;
+    };
     // Changing a workspace Project takes its creator or a workspace admin,
     // while either is still an active member.
     const manageableBy = (userId: string) => sql`
@@ -410,13 +416,13 @@ export const ProjectRepositoryD1 = Layer.effect(
           ),
         ),
 
-      findOwnedById: (projectId, ownerUserId) =>
+      findOwnedById: (projectId, reader) =>
         observe(
           "project.findOwnedById",
           { projectId },
           sql<ProjectRow>`
             SELECT * FROM project_read_model
-            WHERE id = ${projectId} AND ${accessibleBy(ownerUserId)}
+            WHERE id = ${projectId} AND ${accessibleBy(reader)}
           `.pipe(
             Effect.catchTag("SqlError", (cause) =>
               Effect.fail(unavailable("project.findOwnedById")(cause)),
@@ -430,7 +436,7 @@ export const ProjectRepositoryD1 = Layer.effect(
           ),
         ),
 
-      listOwned: (ownerUserId, request) =>
+      listOwned: (reader, request) =>
         observe(
           "project.listOwned",
           {},
@@ -448,7 +454,7 @@ export const ProjectRepositoryD1 = Layer.effect(
               cursor
                 ? sql<ProjectRow>`
                   SELECT * FROM project_read_model
-                  WHERE ${accessibleBy(ownerUserId)}
+                  WHERE ${accessibleBy(reader)}
                     AND name != ${PROJECTLESS_PROJECT_NAME}
                     AND (created_at, id) < (${cursorTime}, ${cursor.id})
                   ORDER BY created_at DESC, id DESC
@@ -456,7 +462,7 @@ export const ProjectRepositoryD1 = Layer.effect(
                 `
                 : sql<ProjectRow>`
                   SELECT * FROM project_read_model
-                  WHERE ${accessibleBy(ownerUserId)}
+                  WHERE ${accessibleBy(reader)}
                     AND name != ${PROJECTLESS_PROJECT_NAME}
                   ORDER BY created_at DESC, id DESC
                   LIMIT ${limit + 1}

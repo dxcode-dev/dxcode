@@ -1,6 +1,7 @@
 import type { ThreadDeletedResponse, ThreadNotFoundResponse } from "@dx/api";
 import {
   type Principal,
+  projectReaderOf,
   ThreadId,
   type ThreadLifecycleState,
   ThreadRepository,
@@ -44,7 +45,10 @@ export const authorizeThreadRequest = Effect.fn("authorizeThreadRequest")(
     );
     const owned = yield* Effect.gen(function* () {
       const repository = yield* ThreadRepository;
-      return yield* repository.findOwnedById(threadId, principal.userId);
+      return yield* repository.findOwnedById(
+        threadId,
+        projectReaderOf(principal),
+      );
     }).pipe(
       Effect.catchTag("ThreadNotFound", () => Effect.succeed(undefined)),
       Effect.provide(repositoryLayer),

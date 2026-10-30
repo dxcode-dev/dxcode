@@ -669,6 +669,27 @@ describe("Claude Pro/Max plan usage", () => {
         ).status,
       ).toBe(200);
     const minute = (seconds: number) => Math.floor(seconds / 60) * 60;
+    // A later reading with the window reset: the plan is open again.
+    const reopen = async (route: {
+      threadId: string;
+      submissionId: string;
+      canonical: string;
+    }) =>
+      expect(
+        (
+          await post(route.threadId, "/claude-code-usage", {
+            ...route,
+            reading: {
+              status: "allowed",
+              windows: [
+                { id: "five_hour", utilization: 0.1, resetsAt: now() + hour },
+              ],
+              extraUsage: { status: "allowed", inUse: false },
+            },
+            observedAt: now(),
+          })
+        ).status,
+      ).toBe(200);
     const boundTo = async (threadId: string) =>
       (
         await env.DB.prepare(
@@ -711,12 +732,245 @@ describe("Claude Pro/Max plan usage", () => {
     expect(await limitOf(four)).toBe(minute(secondReset));
     expect(await boundTo(four)).toBeNull();
 
-    // Deleting the second plan frees its Threads to take another.
+    // Disabling the second plan holds its Threads: Thread two is refused
+    // with the plan's name instead of moving to the first plan, which is
+    // open again, and keeps its binding.
+    await reopen(onFirst.route);
+    expect(
+      (
+        await call(`${base}/connections/${second}/enabled`, cookie, "POST", {
+          enabled: false,
+        })
+      ).status,
+    ).toBe(200);
+    const disabled = await submit(two);
+    expect(disabled.resolved.status).toBe(400);
+    expect(disabled.resolved.body).toEqual({
+      code: "CLAUDE_PLAN_UNAVAILABLE",
+      class: "account",
+      message: expect.stringContaining('"Claude Pro/Max 2", which is disabled'),
+    });
+    expect(await boundTo(two)).toBe(second);
+    // The agent's prompt data resolution fails with the same text, as a
+    // FlueError so the settlement keeps it, stamped as an account failure
+    // for the Thread's error card.
+    const runtime = makeAgentRuntimeComposition(
+      {
+        DB: env.DB,
+        DX_RUNTIME_MODE: "local",
+        DX_LOCAL_CLAUDE_CODE: "1",
+        BYOK_CREDENTIAL_COORDINATOR: env.BYOK_CREDENTIAL_COORDINATOR,
+      },
+      {
+        createSandbox: () => {
+          throw new Error("The workspace must not wake.");
+        },
+      } as unknown as SandboxFactory,
+    );
+    const failure = await runtime.model
+      .resolvePromptData({
+        instanceId: two,
+        agentName: "dx",
+        scope: { kind: "prompt", submissionId: `${two}-disabled-agent` },
+        signal: new AbortController().signal,
+        recovery: false,
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(FlueError);
+    expect((failure as Error).message).toContain(
+      '"Claude Pro/Max 2", which is disabled',
+    );
+    expect((failure as Error).message).toContain(
+      "(dx_failure:account:CLAUDE_PLAN_UNAVAILABLE)",
+    );
+    // A new Thread skips the disabled plan for the first.
+    const five = "claude-plan-fallback-thread-5";
+    await seedThread(userId, five);
+    expect((await tokenOf(five)).token).toBe(TOKEN);
+    // Enabled again, Thread two is back on its own plan.
+    expect(
+      (
+        await call(`${base}/connections/${second}/enabled`, cookie, "POST", {
+          enabled: true,
+        })
+      ).status,
+    ).toBe(200);
+    await reopen(onSecond.route);
+    expect((await tokenOf(two)).token).toBe(NEW_TOKEN);
+
+    // Deleting the second plan holds its Threads too: Thread two has no
+    // plan to run on and takes no other, while the first plan is open.
     expect(
       (await call(`${base}/connections/${second}`, cookie, "DELETE")).status,
     ).toBe(200);
     expect(await boundTo(two)).toBeNull();
-    expect(await limitOf(two)).toBe(minute(firstReset));
+    const removed = await submit(two);
+    expect(removed.resolved.status).toBe(400);
+    expect(removed.resolved.body).toEqual({
+      code: "CLAUDE_PLAN_UNAVAILABLE",
+      class: "account",
+      message: expect.stringContaining("was removed"),
+    });
+    expect(await boundTo(two)).toBeNull();
+    // The title completion, which runs without the Thread's route, holds too.
+    expect((await title(two, userId)).status).toBe(400);
+    expect(await boundTo(two)).toBeNull();
+    // A Thread that never had a plan still takes the open one.
+    const six = "claude-plan-fallback-thread-6";
+    await seedThread(userId, six);
+    expect((await tokenOf(six)).token).toBe(TOKEN);
+  });
+
+  it("keeps a Thread that ran before it had a plan on the plan of its last turn", async () => {
+    const { cookie, userId } = await signup(
+      "claude-plan-backfill@example.com",
+      176,
+    );
+    const connect = async (name: string, apiKey: string) => {
+      const response = await call(`${base}/connections`, cookie, "POST", {
+        name,
+        kind: "provider",
+        providerId: "claude-code",
+        apiKey,
+      });
+      expect(response.status).toBe(200);
+      return ((await response.json()) as { data: { id: string } }).data.id;
+    };
+    const first = await connect("Claude Pro/Max", TOKEN);
+    const second = await connect("Claude Pro/Max 2", NEW_TOKEN);
+    const resolve = (threadId: string, submissionId: string) =>
+      post(threadId, "/resolve", { threadId, submissionId, recovery: false });
+    const planOf = async (threadId: string) =>
+      env.DB.prepare(
+        "SELECT claude_connection_id AS id, claude_connection_bound_at AS at FROM threads WHERE id = ?",
+      )
+        .bind(threadId)
+        .first<{ id: string | null; at: string | null }>();
+    // The first plan is used up, so a Thread without a plan would take the
+    // second at its next message.
+    const seeded = "claude-plan-backfill-seed";
+    await seedThread(userId, seeded);
+    expect((await resolve(seeded, `${seeded}-1`)).status).toBe(200);
+    expect(
+      (
+        await post(seeded, "/claude-code-usage", {
+          threadId: seeded,
+          submissionId: `${seeded}-1`,
+          canonical: MODEL,
+          reading: {
+            status: "rejected",
+            limit: { id: "five_hour", resetsAt: now() + hour },
+            windows: [
+              { id: "five_hour", utilization: 1, resetsAt: now() + hour },
+            ],
+            extraUsage: { status: "allowed", inUse: true },
+          },
+          observedAt: now(),
+        })
+      ).status,
+    ).toBe(200);
+
+    // Threads from before migration 0103 ran turns with no plan recorded on
+    // them; the usage ledger names each turn's connection.
+    const ran = "claude-plan-backfill-ran";
+    const neverRan = "claude-plan-backfill-never-ran";
+    const planGone = "claude-plan-backfill-plan-gone";
+    for (const threadId of [ran, neverRan, planGone])
+      await seedThread(userId, threadId);
+    const turn = async (
+      threadId: string,
+      connectionId: string,
+      occurredAt: string,
+    ) => {
+      await env.DB.prepare(
+        `INSERT INTO usage_event (
+           id, kind, owner_user_id, thread_id, project_id, occurred_at,
+           expires_at, outcome, turn_id, turn_purpose, connection_id,
+           provider_id, model_id, model_route_version, model_profile_id,
+           model_profile_version, model_configuration_revision,
+           observed_provider_id, observed_provider_name, observed_model_id
+         ) VALUES (?, 'model', ?, ?, ?, ?, ?, 'success', ?, 'agent', ?,
+           'claude-code', 'claude-opus-5-5', 2, 'model', 1, 0,
+           'claude-code', 'Claude Code', 'claude-opus-5-5')`,
+      )
+        .bind(
+          `${threadId}-${occurredAt}`,
+          userId,
+          threadId,
+          `${threadId}-project`,
+          occurredAt,
+          "2027-04-30T00:00:00.000Z",
+          `${threadId}-turn-${occurredAt}`,
+          connectionId,
+        )
+        .run();
+    };
+    // An earlier turn on the second plan, then the latest on the first.
+    await turn(ran, second, "2026-10-29T10:00:00.000Z");
+    await turn(ran, first, "2026-10-30T10:00:00.000Z");
+    await turn(
+      planGone,
+      "mcon_deleted-before-0104",
+      "2026-10-30T11:00:00.000Z",
+    );
+
+    // The backfill statement of migration 0104, as deployed, against the
+    // pre-0103 state: no plan and no time on any of them.
+    await env.DB.prepare(
+      "UPDATE threads SET claude_connection_id = NULL, claude_connection_bound_at = NULL WHERE id IN (?, ?, ?, ?)",
+    )
+      .bind(seeded, ran, neverRan, planGone)
+      .run();
+    const migration = env.TEST_MIGRATIONS.find(({ name }) =>
+      name.startsWith("0104_"),
+    );
+    if (migration === undefined) throw new Error("Expected migration 0104.");
+    const backfill = migration.queries.filter(
+      (query) =>
+        query.includes("claude_connection_id IS NULL") &&
+        query.includes("usage_event"),
+    );
+    expect(backfill).toHaveLength(1);
+    await env.DB.prepare(backfill[0] ?? "").run();
+    // The Thread that ran goes to the plan of its latest turn, used up or
+    // not; one whose plan is gone, or that never ran, is left for `/resolve`.
+    expect((await planOf(ran))?.id).toBe(first);
+    expect((await planOf(ran))?.at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(await planOf(neverRan)).toEqual({ id: null, at: null });
+    expect(await planOf(planGone)).toEqual({ id: null, at: null });
+    expect(await planOf(seeded)).toEqual({ id: null, at: null });
+
+    // `/resolve` applies the same rule to a Thread the backfill missed.
+    // The backfilled Thread is refused with the first plan's limit.
+    const held = await resolve(ran, `${ran}-1`);
+    expect(held.status).toBe(400);
+    expect(
+      parseClaudePlanLimit((held.body as { message: string }).message),
+    ).toBeDefined();
+    // The Thread whose latest turn ran on the first plan is refused with
+    // that plan's limit and bound to it, never moved to the second.
+    await turn(seeded, first, "2026-10-30T12:00:00.000Z");
+    const resolved = await resolve(seeded, `${seeded}-2`);
+    expect(resolved.status).toBe(400);
+    expect(
+      parseClaudePlanLimit((resolved.body as { message: string }).message),
+    ).toBeDefined();
+    expect((await planOf(seeded))?.id).toBe(first);
+    // A Thread whose plan was deleted before any binding is refused too.
+    const gone = await resolve(planGone, `${planGone}-1`);
+    expect(gone.status).toBe(400);
+    expect(gone.body).toEqual({
+      code: "CLAUDE_PLAN_UNAVAILABLE",
+      class: "account",
+      message: expect.stringContaining("was removed"),
+    });
+    expect(await planOf(planGone)).toEqual({ id: null, at: null });
+    // A Thread that never ran takes the open second plan.
+    expect((await resolve(neverRan, `${neverRan}-1`)).status).toBe(200);
+    expect((await planOf(neverRan))?.id).toBe(second);
   });
 
   it("reads the plan's limits on an access check, and gives no extra usage choice to an account that has none", async () => {

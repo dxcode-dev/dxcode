@@ -91,6 +91,13 @@ export function resourceName(
 /** The Cloudflare Containers Orb Worker's script name for a stage. */
 export function orbWorkerName(stage: string): string;
 
+export function abortBranchPreviewUploads(options: {
+  readonly operation: string;
+  readonly target: string;
+  readonly bucketName: string;
+  readonly s3: (method: "GET" | "DELETE", path: string) => Promise<Response>;
+}): Promise<number>;
+
 export function emptyBranchPreviewBucket(options: {
   readonly operation: string;
   readonly target: string;

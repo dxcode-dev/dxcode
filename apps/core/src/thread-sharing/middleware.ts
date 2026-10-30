@@ -102,7 +102,9 @@ const ownerAgentInitialization = (
   Effect.runPromise(
     Effect.gen(function* () {
       const threads = yield* ThreadRepository;
-      const thread = yield* threads.findOwnedById(threadId, ownerUserId);
+      const thread = yield* threads.findOwnedById(threadId, {
+        userId: ownerUserId,
+      });
       return (yield* threadDetailData(bindings.DB, db, thread))
         .agentInitialization;
     }).pipe(

@@ -362,6 +362,63 @@ export const emptyBranchPreviewBucket = async ({
   }
 };
 
+const xmlText = (xml, tag) =>
+  xml
+    .match(new RegExp(`<${tag}>([^<]*)</${tag}>`))?.[1]
+    ?.replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+
+// R2 also refuses to delete a bucket with unfinished multipart uploads, which
+// its REST object listing omits; Thread storage leaves them when a Worker
+// stops mid-upload. A branch preview's destroy aborts them through R2's S3
+// API before emptying the bucket. `s3(method, path)` returns the response.
+export const abortBranchPreviewUploads = async ({
+  operation,
+  target,
+  bucketName,
+  s3,
+}) => {
+  if (operation !== "destroy" || target !== "branch") return 0;
+  const bucket = `/${encodeURIComponent(bucketName)}`;
+  let aborted = 0;
+  let previousFirstUpload;
+  for (;;) {
+    const listing = await s3("GET", `${bucket}?uploads`);
+    if (listing.status === 404) return aborted;
+    if (!listing.ok)
+      throw new Error(
+        `R2 multipart upload listing failed (${listing.status}).`,
+      );
+    const uploads = [
+      ...(await listing.text()).matchAll(/<Upload>([\s\S]*?)<\/Upload>/g),
+    ].map(([, upload]) => ({
+      key: xmlText(upload, "Key"),
+      uploadId: xmlText(upload, "UploadId"),
+    }));
+    if (uploads.some(({ key, uploadId }) => !key || !uploadId))
+      throw new Error("R2 returned an invalid multipart upload listing.");
+    if (uploads.length === 0) return aborted;
+    if (uploads[0].uploadId === previousFirstUpload)
+      throw new Error("R2 multipart uploads survived abort.");
+    previousFirstUpload = uploads[0].uploadId;
+    for (const { key, uploadId } of uploads) {
+      const path = key.split("/").map(encodeURIComponent).join("/");
+      const response = await s3(
+        "DELETE",
+        `${bucket}/${path}?uploadId=${encodeURIComponent(uploadId)}`,
+      );
+      if (!response.ok && response.status !== 404)
+        throw new Error(
+          `R2 multipart upload abort failed (${response.status}).`,
+        );
+      aborted += 1;
+    }
+  }
+};
+
 export const reconcileDeploymentMigrationAliases = async ({
   operation,
   query,
@@ -1219,10 +1276,13 @@ const validateWorkerProps = (
     );
   // A stage deployed before push notifications has no sweep schedule, and
   // one deployed before schedules sweeps every five minutes; admit either
-  // only as history. A missing VAPID pair is optional anyway.
+  // only as history. A missing VAPID pair is optional anyway. A destroy plan
+  // replays the recorded props as desired, so a destroy admits them too.
   const prePushSchedule =
     !current &&
-    (representation === "persisted" || representation === "prior") &&
+    (representation === "persisted" ||
+      representation === "prior" ||
+      allowDestroyWorkerBindingOmissions) &&
     isPriorWorkerCrons(props.crons, selection);
   const preBranchPreviewIdentity =
     !current &&

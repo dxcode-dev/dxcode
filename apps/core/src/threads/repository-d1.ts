@@ -3,6 +3,7 @@ import {
   encodeThreadPageCursor,
   InvalidPageCursor,
   PersistenceUnavailable,
+  type ProjectReader,
   ResolvedPluginSnapshots,
   ResolvedSkillSnapshots,
   Thread,
@@ -195,17 +196,29 @@ export const ThreadRepositoryD1 = Layer.effect(
     const unavailable = (operation: string) => (cause: unknown) =>
       PersistenceUnavailable.new({ operation }, cause);
     // A Thread in a workspace Project stays with the workspace: its owner
-    // reaches it only while a member, and again after rejoining.
-    const inReachableScope = (projectIdColumn: string, userId: string) => sql`
-      EXISTS (
-        SELECT 1 FROM projects AS scope_project
-         WHERE scope_project.id = ${sql.literal(projectIdColumn)}
-           AND (scope_project.workspace_id IS NULL OR EXISTS (
+    // reaches it only while a member, and again after rejoining. A reader
+    // held to one workspace (an External API App) reaches only Threads in
+    // that workspace's Projects, never those in private Projects.
+    const inReachableScope = (
+      projectIdColumn: string,
+      { userId, workspaceId }: ProjectReader,
+    ) => {
+      const member = sql`EXISTS (
              SELECT 1 FROM member
                JOIN organization ON organization.id = member.organizationId
               WHERE member.organizationId = scope_project.workspace_id
                 AND member.userId = ${userId}
-                AND organization.lifecycleState = 'active')))`;
+                AND organization.lifecycleState = 'active')`;
+      return sql`
+      EXISTS (
+        SELECT 1 FROM projects AS scope_project
+         WHERE scope_project.id = ${sql.literal(projectIdColumn)}
+           AND ${
+             workspaceId === undefined
+               ? sql`(scope_project.workspace_id IS NULL OR ${member})`
+               : sql`scope_project.workspace_id = ${workspaceId} AND ${member}`
+})`;
+    };
 
     return ThreadRepository.of({
       insert: (thread, source, executionPin) =>
@@ -495,7 +508,7 @@ export const ThreadRepositoryD1 = Layer.effect(
           ),
         ),
 
-      findOwnedById: (threadId, ownerUserId) =>
+      findOwnedById: (threadId, reader) =>
         observe(
           "thread.findOwnedById",
           { threadId },
@@ -527,8 +540,8 @@ export const ThreadRepositoryD1 = Layer.effect(
               snooze_woke_at
             FROM threads
             WHERE id = ${threadId}
-              AND owner_user_id = ${ownerUserId}
-              AND ${inReachableScope("project_id", ownerUserId)}
+              AND owner_user_id = ${reader.userId}
+              AND ${inReachableScope("project_id", reader)}
               AND lifecycle_state != 'deleted'
           `.pipe(
             Effect.catchTag("SqlError", (cause) =>
@@ -566,7 +579,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   updated_at = ${encodedPinnedAt ?? new Date().toISOString()}
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
-                AND ${inReachableScope("project_id", ownerUserId)}
+                AND ${inReachableScope("project_id", { userId: ownerUserId })}
                 AND lifecycle_state != 'deleted'
                 AND (${encodedPinnedAt} IS NULL OR lifecycle_state = 'active')
             `.pipe(
@@ -585,7 +598,7 @@ export const ThreadRepositoryD1 = Layer.effect(
               FROM threads
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
-                AND ${inReachableScope("project_id", ownerUserId)}
+                AND ${inReachableScope("project_id", { userId: ownerUserId })}
                 AND lifecycle_state != 'deleted'
                 AND (${encodedPinnedAt} IS NULL OR lifecycle_state = 'active')
             `.pipe(
@@ -626,7 +639,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   updated_at = ${now}
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
-                AND ${inReachableScope("project_id", ownerUserId)}
+                AND ${inReachableScope("project_id", { userId: ownerUserId })}
                 AND lifecycle_state != 'deleted'
                 AND (${encodedUntil} IS NULL
                   OR (lifecycle_state = 'active' AND parent_thread_id IS NULL))
@@ -671,7 +684,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   updated_at = ${updatedAt}
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
-                AND ${inReachableScope("project_id", ownerUserId)}
+                AND ${inReachableScope("project_id", { userId: ownerUserId })}
                 AND lifecycle_state != 'deleted'
               RETURNING id, title, project_id, owner_user_id, agent_instructions,
                 agent_instructions_revision, agent_instructions_version,
@@ -718,7 +731,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   updated_at = ${updatedAt}
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
-                AND ${inReachableScope("project_id", ownerUserId)}
+                AND ${inReachableScope("project_id", { userId: ownerUserId })}
                 AND lifecycle_state != 'deleted'
               RETURNING id, title, project_id, owner_user_id, agent_instructions,
                 agent_instructions_revision, agent_instructions_version,
@@ -743,7 +756,7 @@ export const ThreadRepositoryD1 = Layer.effect(
           }),
         ),
 
-      listOwned: (ownerUserId, projectId, request) =>
+      listOwned: (reader, projectId, request) =>
         observe(
           "thread.listOwned",
           projectId ? { projectId } : {},
@@ -766,7 +779,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                        WHERE parent.id = thread.parent_thread_id
                          AND parent.owner_user_id = thread.owner_user_id
                          AND parent.lifecycle_state = thread.lifecycle_state
-                         AND ${inReachableScope("parent.project_id", ownerUserId)}))`;
+                         AND ${inReachableScope("parent.project_id", reader)}))`;
             const cursor = request.cursor
               ? yield* decodeThreadPageCursor(request.cursor)
               : undefined;
@@ -826,7 +839,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       INNER JOIN threads AS scoped
                         ON scoped.id = candidate.thread_id
                       WHERE candidate.sequence <= ${snapshotSequence}
-                        AND scoped.owner_user_id = ${ownerUserId}
+                        AND scoped.owner_user_id = ${reader.userId}
                         AND scoped.project_id = ${projectId}
                       GROUP BY candidate.thread_id
                     )
@@ -845,8 +858,8 @@ export const ThreadRepositoryD1 = Layer.effect(
                     FROM threads AS thread
                     INNER JOIN snapshot_activity AS activity
                       ON activity.thread_id = thread.id
-                    WHERE thread.owner_user_id = ${ownerUserId}
-                      AND ${inReachableScope("thread.project_id", ownerUserId)}
+                    WHERE thread.owner_user_id = ${reader.userId}
+                      AND ${inReachableScope("thread.project_id", reader)}
                       AND thread.project_id = ${projectId}
                       AND thread.lifecycle_state != 'deleted'
                       AND ${treeFilterFor("thread.pinned_at")}
@@ -864,7 +877,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       INNER JOIN threads AS scoped
                         ON scoped.id = candidate.thread_id
                       WHERE candidate.sequence <= ${snapshotSequence}
-                        AND scoped.owner_user_id = ${ownerUserId}
+                        AND scoped.owner_user_id = ${reader.userId}
                         AND scoped.project_id = ${projectId}
                       GROUP BY candidate.thread_id
                     ), pin_snapshot AS (
@@ -893,8 +906,8 @@ export const ThreadRepositoryD1 = Layer.effect(
                     INNER JOIN snapshot_activity AS activity
                       ON activity.thread_id = thread.id
                     LEFT JOIN pin_snapshot AS pin ON pin.thread_id = thread.id
-                    WHERE thread.owner_user_id = ${ownerUserId}
-                      AND ${inReachableScope("thread.project_id", ownerUserId)}
+                    WHERE thread.owner_user_id = ${reader.userId}
+                      AND ${inReachableScope("thread.project_id", reader)}
                       AND thread.project_id = ${projectId}
                       AND thread.lifecycle_state != 'deleted'
                       AND ${treeFilterFor("pin.pinned_at")}
@@ -918,7 +931,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       INNER JOIN threads AS scoped
                         ON scoped.id = candidate.thread_id
                       WHERE candidate.sequence <= ${snapshotSequence}
-                        AND scoped.owner_user_id = ${ownerUserId}
+                        AND scoped.owner_user_id = ${reader.userId}
                         AND scoped.project_id = ${projectId}
                       GROUP BY candidate.thread_id
                     ), pin_snapshot AS (
@@ -947,8 +960,8 @@ export const ThreadRepositoryD1 = Layer.effect(
                     INNER JOIN snapshot_activity AS activity
                       ON activity.thread_id = thread.id
                     LEFT JOIN pin_snapshot AS pin ON pin.thread_id = thread.id
-                    WHERE thread.owner_user_id = ${ownerUserId}
-                      AND ${inReachableScope("thread.project_id", ownerUserId)}
+                    WHERE thread.owner_user_id = ${reader.userId}
+                      AND ${inReachableScope("thread.project_id", reader)}
                       AND thread.project_id = ${projectId}
                       AND thread.lifecycle_state != 'deleted'
                       AND ${treeFilterFor("pin.pinned_at")}
@@ -966,7 +979,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       INNER JOIN threads AS scoped
                         ON scoped.id = candidate.thread_id
                       WHERE candidate.sequence <= ${snapshotSequence}
-                        AND scoped.owner_user_id = ${ownerUserId}
+                        AND scoped.owner_user_id = ${reader.userId}
                       GROUP BY candidate.thread_id
                     )
                     SELECT
@@ -984,8 +997,8 @@ export const ThreadRepositoryD1 = Layer.effect(
                     FROM threads AS thread
                     INNER JOIN snapshot_activity AS activity
                       ON activity.thread_id = thread.id
-                    WHERE thread.owner_user_id = ${ownerUserId}
-                      AND ${inReachableScope("thread.project_id", ownerUserId)}
+                    WHERE thread.owner_user_id = ${reader.userId}
+                      AND ${inReachableScope("thread.project_id", reader)}
                       AND thread.lifecycle_state != 'deleted'
                       AND ${treeFilterFor("thread.pinned_at")}
                       AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
@@ -1002,7 +1015,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       INNER JOIN threads AS scoped
                         ON scoped.id = candidate.thread_id
                       WHERE candidate.sequence <= ${snapshotSequence}
-                        AND scoped.owner_user_id = ${ownerUserId}
+                        AND scoped.owner_user_id = ${reader.userId}
                       GROUP BY candidate.thread_id
                     ), pin_snapshot AS (
                       SELECT history.thread_id, history.pinned_at
@@ -1030,8 +1043,8 @@ export const ThreadRepositoryD1 = Layer.effect(
                     INNER JOIN snapshot_activity AS activity
                       ON activity.thread_id = thread.id
                     LEFT JOIN pin_snapshot AS pin ON pin.thread_id = thread.id
-                    WHERE thread.owner_user_id = ${ownerUserId}
-                      AND ${inReachableScope("thread.project_id", ownerUserId)}
+                    WHERE thread.owner_user_id = ${reader.userId}
+                      AND ${inReachableScope("thread.project_id", reader)}
                       AND thread.lifecycle_state != 'deleted'
                       AND ${treeFilterFor("pin.pinned_at")}
                       AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
@@ -1054,7 +1067,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       INNER JOIN threads AS scoped
                         ON scoped.id = candidate.thread_id
                       WHERE candidate.sequence <= ${snapshotSequence}
-                        AND scoped.owner_user_id = ${ownerUserId}
+                        AND scoped.owner_user_id = ${reader.userId}
                       GROUP BY candidate.thread_id
                     ), pin_snapshot AS (
                       SELECT history.thread_id, history.pinned_at
@@ -1082,8 +1095,8 @@ export const ThreadRepositoryD1 = Layer.effect(
                     INNER JOIN snapshot_activity AS activity
                       ON activity.thread_id = thread.id
                     LEFT JOIN pin_snapshot AS pin ON pin.thread_id = thread.id
-                    WHERE thread.owner_user_id = ${ownerUserId}
-                      AND ${inReachableScope("thread.project_id", ownerUserId)}
+                    WHERE thread.owner_user_id = ${reader.userId}
+                      AND ${inReachableScope("thread.project_id", reader)}
                       AND thread.lifecycle_state != 'deleted'
                       AND ${treeFilterFor("pin.pinned_at")}
                       AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
@@ -1122,12 +1135,7 @@ export const ThreadRepositoryD1 = Layer.effect(
           }),
         ),
 
-      listChildrenOwned: (
-        ownerUserId,
-        parentThreadIds,
-        lifecycleState,
-        perParent,
-      ) =>
+      listChildrenOwned: (reader, parentThreadIds, lifecycleState, perParent) =>
         observe(
           "thread.listChildrenOwned",
           { parents: parentThreadIds.length },
@@ -1153,10 +1161,10 @@ export const ThreadRepositoryD1 = Layer.effect(
                   ) AS position
                   FROM threads AS thread
                   WHERE ${sql.in("thread.parent_thread_id", parents)}
-                    AND thread.owner_user_id = ${ownerUserId}
+                    AND thread.owner_user_id = ${reader.userId}
                     AND thread.pinned_at IS NULL
                     AND thread.lifecycle_state = ${lifecycleState}
-                    AND ${inReachableScope("thread.project_id", ownerUserId)}
+                    AND ${inReachableScope("thread.project_id", reader)}
                 )
                 WHERE position <= ${perParent}
                 ORDER BY last_activity_at DESC, id DESC

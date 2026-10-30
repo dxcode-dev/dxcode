@@ -7,6 +7,7 @@ import type {
   ThreadNotFound,
 } from "../persistence/errors.js";
 import type { ProjectId } from "../projects/project-id.js";
+import type { ProjectReader } from "../projects/project-reader.js";
 import type { ThreadSourceAdmission } from "../source-control/source-control.js";
 import type { UserId } from "../users/user-id.js";
 import type { Thread, ThreadColor } from "./thread.js";
@@ -53,7 +54,7 @@ export interface ThreadRepositoryShape {
   ) => Effect.Effect<void, Schema.SchemaError | PersistenceUnavailable>;
   readonly findOwnedById: (
     threadId: ThreadId,
-    ownerUserId: UserId,
+    reader: ProjectReader,
   ) => Effect.Effect<
     Thread,
     Schema.SchemaError | PersistenceUnavailable | ThreadNotFound
@@ -96,7 +97,7 @@ export interface ThreadRepositoryShape {
     Schema.SchemaError | PersistenceUnavailable | ThreadNotFound
   >;
   readonly listOwned: (
-    ownerUserId: UserId,
+    reader: ProjectReader,
     projectId: ProjectId | undefined,
     request: ThreadListRequest,
   ) => Effect.Effect<
@@ -109,7 +110,7 @@ export interface ThreadRepositoryShape {
    * projects. At most `perParent` per parent, most recent activity first.
    */
   readonly listChildrenOwned: (
-    ownerUserId: UserId,
+    reader: ProjectReader,
     parentThreadIds: ReadonlyArray<ThreadId>,
     lifecycleState: "active" | "archived",
     perParent: number,

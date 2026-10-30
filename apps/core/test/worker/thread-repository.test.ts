@@ -111,18 +111,26 @@ describe("ThreadRepository D1", () => {
         }
         for (const projectId of [undefined, entity.id]) {
           for (const lifecycleState of ["active", "archived"] as const) {
-            const first = yield* threads.listOwned(owner, projectId, {
-              limit: 1,
-              lifecycleState,
-            });
+            const first = yield* threads.listOwned(
+              { userId: owner },
+              projectId,
+              {
+                limit: 1,
+                lifecycleState,
+              },
+            );
             expect(first.items).toHaveLength(1);
             expect(first.items[0]?.lifecycleState).toBe(lifecycleState);
             expect(first.nextCursor).toBeDefined();
-            const second = yield* threads.listOwned(owner, projectId, {
-              limit: 1,
-              lifecycleState,
-              cursor: first.nextCursor,
-            });
+            const second = yield* threads.listOwned(
+              { userId: owner },
+              projectId,
+              {
+                limit: 1,
+                lifecycleState,
+                cursor: first.nextCursor,
+              },
+            );
             expect(second.items).toHaveLength(1);
             expect(second.items[0]?.lifecycleState).toBe(lifecycleState);
             expect(second.items[0]?.id).not.toBe(first.items[0]?.id);
@@ -130,20 +138,24 @@ describe("ThreadRepository D1", () => {
           }
         }
         expect(
-          (yield* threads.listOwned(otherOwner, undefined, {
+          (yield* threads.listOwned({ userId: otherOwner }, undefined, {
             lifecycleState: "archived",
           })).items,
         ).toEqual([]);
         expect(
-          (yield* threads.listOwned(owner, entity.id, {})).items,
+          (yield* threads.listOwned({ userId: owner }, entity.id, {})).items,
         ).toHaveLength(4);
 
-        const activePage = yield* threads.listOwned(owner, undefined, {
-          limit: 1,
-          lifecycleState: "active",
-        });
+        const activePage = yield* threads.listOwned(
+          { userId: owner },
+          undefined,
+          {
+            limit: 1,
+            lifecycleState: "active",
+          },
+        );
         const mismatchedCursor = yield* Effect.flip(
-          threads.listOwned(owner, undefined, {
+          threads.listOwned({ userId: owner }, undefined, {
             limit: 1,
             lifecycleState: "archived",
             cursor: activePage.nextCursor,
@@ -182,7 +194,7 @@ describe("ThreadRepository D1", () => {
         yield* projects.insert(entity);
         yield* threads.insert(entityThread);
         expect(
-          yield* threads.findOwnedById(entityThread.id, owner),
+          yield* threads.findOwnedById(entityThread.id, { userId: owner }),
         ).toMatchObject({
           title: "Test thread",
           agentInstructions: snapshot,
@@ -237,16 +249,17 @@ describe("ThreadRepository D1", () => {
         yield* threads.insert(betaThread);
 
         expect(
-          (yield* threads.listOwned(owner, alpha.id, {})).items.map(
+          (yield* threads.listOwned({ userId: owner }, alpha.id, {})).items.map(
             ({ id }) => id,
           ),
         ).toEqual([alphaThread.id]);
         expect(
-          (yield* threads.listOwned(otherOwner, undefined, {})).items,
+          (yield* threads.listOwned({ userId: otherOwner }, undefined, {}))
+            .items,
         ).toEqual([]);
         expect(
           (yield* Effect.flip(
-            threads.findOwnedById(alphaThread.id, otherOwner),
+            threads.findOwnedById(alphaThread.id, { userId: otherOwner }),
           ))._tag,
         ).toBe("ThreadNotFound");
       }),
@@ -284,7 +297,7 @@ describe("ThreadRepository D1", () => {
         );
         expect(pinned.pinnedAt).toEqual(pinnedAt);
         expect(
-          (yield* threads.findOwnedById(target.id, owner)).pinnedAt,
+          (yield* threads.findOwnedById(target.id, { userId: owner })).pinnedAt,
         ).toEqual(pinnedAt);
 
         const unpinned = yield* threads.setPinnedAtOwned(
@@ -294,7 +307,7 @@ describe("ThreadRepository D1", () => {
         );
         expect(unpinned.pinnedAt).toBeUndefined();
         expect(
-          (yield* threads.findOwnedById(target.id, owner)).pinnedAt,
+          (yield* threads.findOwnedById(target.id, { userId: owner })).pinnedAt,
         ).toBeUndefined();
       }),
     );
@@ -383,19 +396,23 @@ describe("ThreadRepository D1", () => {
         );
         expect(archived.lifecycleState).toBe("archived");
         expect(archived.pinnedAt).toBeUndefined();
-        expect(yield* threads.findOwnedById(target.id, owner)).toMatchObject({
+        expect(
+          yield* threads.findOwnedById(target.id, { userId: owner }),
+        ).toMatchObject({
           lifecycleState: "archived",
           pinnedAt: undefined,
         });
         expect(
-          (yield* threads.listOwned(owner, entity.id, {})).items,
+          (yield* threads.listOwned({ userId: owner }, entity.id, {})).items,
         ).toMatchObject([{ id: target.id, lifecycleState: "archived" }]);
 
         const pinError = yield* Effect.flip(
           threads.setPinnedAtOwned(target.id, owner, pinnedAt),
         );
         expect(pinError._tag).toBe("ThreadNotFound");
-        expect(yield* threads.findOwnedById(target.id, owner)).toMatchObject({
+        expect(
+          yield* threads.findOwnedById(target.id, { userId: owner }),
+        ).toMatchObject({
           lifecycleState: "archived",
           pinnedAt: undefined,
           updatedAt: archived.updatedAt,
@@ -424,7 +441,9 @@ describe("ThreadRepository D1", () => {
       Effect.gen(function* () {
         const repository = yield* ThreadRepository;
         return yield* Effect.flip(
-          repository.listOwned(owner, undefined, { cursor: "not-a-cursor" }),
+          repository.listOwned({ userId: owner }, undefined, {
+            cursor: "not-a-cursor",
+          }),
         );
       }),
     );
@@ -459,17 +478,25 @@ describe("ThreadRepository D1", () => {
         const repository = yield* ThreadRepository;
         yield* projects.insert(entity);
         yield* Effect.all(threads.map((item) => repository.insert(item)));
-        const first = yield* repository.listOwned(owner, entity.id, {
-          limit: 2,
-        });
+        const first = yield* repository.listOwned(
+          { userId: owner },
+          entity.id,
+          {
+            limit: 2,
+          },
+        );
         expect(first.items.map(({ id }) => id)).toEqual([
           threads[0]?.id,
           threads[2]?.id,
         ]);
-        const second = yield* repository.listOwned(owner, entity.id, {
-          limit: 2,
-          cursor: first.nextCursor,
-        });
+        const second = yield* repository.listOwned(
+          { userId: owner },
+          entity.id,
+          {
+            limit: 2,
+            cursor: first.nextCursor,
+          },
+        );
         expect(second.items.map(({ id }) => id)).toEqual([threads[1]?.id]);
       }),
     );
@@ -509,10 +536,14 @@ describe("ThreadRepository D1", () => {
         const ids: Array<string> = [];
         let cursor: string | undefined;
         do {
-          const page = yield* repository.listOwned(owner, entity.id, {
-            limit: 2,
-            cursor,
-          });
+          const page = yield* repository.listOwned(
+            { userId: owner },
+            entity.id,
+            {
+              limit: 2,
+              cursor,
+            },
+          );
           ids.push(...page.items.map(({ id }) => id));
           cursor = page.nextCursor;
         } while (cursor !== undefined);
@@ -558,14 +589,22 @@ describe("ThreadRepository D1", () => {
         const repository = yield* ThreadRepository;
         yield* projects.insert(entity);
         yield* Effect.all(targets.map((item) => repository.insert(item)));
-        const first = yield* repository.listOwned(owner, entity.id, {
-          limit: 1,
-        });
+        const first = yield* repository.listOwned(
+          { userId: owner },
+          entity.id,
+          {
+            limit: 1,
+          },
+        );
         yield* repository.setPinnedAtOwned(firstTarget.id, owner, pinnedAt);
-        const second = yield* repository.listOwned(owner, entity.id, {
-          limit: 2,
-          cursor: first.nextCursor,
-        });
+        const second = yield* repository.listOwned(
+          { userId: owner },
+          entity.id,
+          {
+            limit: 2,
+            cursor: first.nextCursor,
+          },
+        );
         expect([
           ...first.items.map(({ id }) => id),
           ...second.items.map(({ id }) => id),
@@ -604,9 +643,13 @@ describe("ThreadRepository D1", () => {
         const repository = yield* ThreadRepository;
         yield* projects.insert(entity);
         yield* Effect.all(targets.map((item) => repository.insert(item)));
-        const first = yield* repository.listOwned(owner, entity.id, {
-          limit: 1,
-        });
+        const first = yield* repository.listOwned(
+          { userId: owner },
+          entity.id,
+          {
+            limit: 1,
+          },
+        );
         const position = first.items[0];
         if (position === undefined) throw new Error("Expected a first page.");
         const legacyCursor = Base64Url.encode(
@@ -620,17 +663,25 @@ describe("ThreadRepository D1", () => {
           }),
         );
         yield* repository.setPinnedAtOwned(firstTarget.id, owner, pinnedAt);
-        const second = yield* repository.listOwned(owner, entity.id, {
-          limit: 1,
-          cursor: legacyCursor as never,
-        });
+        const second = yield* repository.listOwned(
+          { userId: owner },
+          entity.id,
+          {
+            limit: 1,
+            cursor: legacyCursor as never,
+          },
+        );
 
         expect(first.items.map(({ id }) => id)).toEqual([thirdTarget.id]);
         expect(second.items.map(({ id }) => id)).toEqual([secondTarget.id]);
-        const continued = yield* repository.listOwned(owner, entity.id, {
-          limit: 1,
-          cursor: second.nextCursor,
-        });
+        const continued = yield* repository.listOwned(
+          { userId: owner },
+          entity.id,
+          {
+            limit: 1,
+            cursor: second.nextCursor,
+          },
+        );
         expect(continued.items.map(({ id }) => id)).toEqual([firstTarget.id]);
       }),
     );

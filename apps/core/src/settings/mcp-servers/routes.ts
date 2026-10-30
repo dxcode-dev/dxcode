@@ -45,6 +45,7 @@ import {
   PersistenceUnavailable,
   type Principal,
   ProjectRepository,
+  projectReaderOf,
   SettingsMembershipInvariantViolation,
   SettingsScopeForbidden,
   WorkspacePolicyDenied,
@@ -336,7 +337,7 @@ const validateGrants = Effect.fn("validateMcpGrants")(function* (
   yield* Effect.all(
     projects.map((projectId) =>
       repository
-        .findOwnedById(projectId, principal.userId)
+        .findOwnedById(projectId, projectReaderOf(principal))
         .pipe(
           Effect.catchTag("ProjectNotFound", () =>
             Effect.fail(

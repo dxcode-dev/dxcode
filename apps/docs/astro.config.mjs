@@ -47,6 +47,15 @@ export default defineConfig({
               slug: "guides/sandboxes-for-ai-coding-agents",
             },
             { label: "E2B", slug: "guides/e2b" },
+            {
+              label: "Cloudflare Containers",
+              slug: "guides/cloudflare-containers",
+            },
+            { label: "Freestyle", slug: "guides/freestyle" },
+            {
+              label: "Docker Cloud Sandboxes",
+              slug: "guides/docker-cloud-sandboxes",
+            },
           ],
         },
         {

@@ -29,6 +29,8 @@ const auditor = Schema.decodeUnknownSync(UserId)("applications-auditor");
 const member = Schema.decodeUnknownSync(UserId)("applications-member");
 const outsider = Schema.decodeUnknownSync(UserId)("applications-outsider");
 const otherOwner = Schema.decodeUnknownSync(UserId)("applications-other-owner");
+const personalProjectId = "prj_00000000-0000-4000-8000-000000000050";
+const workspaceProjectId = "prj_00000000-0000-4000-8000-000000000051";
 const workspaceSlug = "dx-team" as WorkspaceSlug;
 const otherWorkspaceSlug = "other-team" as WorkspaceSlug;
 const allScopes = [
@@ -199,11 +201,21 @@ beforeEach(async () => {
     env.DB.prepare(
       "INSERT INTO projects (id, owner_user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
     ).bind(
-      "prj_00000000-0000-4000-8000-000000000050",
+      personalProjectId,
       owner,
       "Owner project",
       new Date(1).toISOString(),
       new Date(1).toISOString(),
+    ),
+    env.DB.prepare(
+      "INSERT INTO projects (id, owner_user_id, workspace_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+    ).bind(
+      workspaceProjectId,
+      owner,
+      "applications-workspace",
+      "Workspace project",
+      new Date(2).toISOString(),
+      new Date(2).toISOString(),
     ),
   ]);
 });
@@ -423,7 +435,7 @@ describe("workspace external API applications in workerd with real D1", () => {
           method: "POST",
           headers: jsonHeaders,
           body: JSON.stringify({
-            projectId: "prj_00000000-0000-4000-8000-000000000050",
+            projectId: workspaceProjectId,
             title: "Test thread",
           }),
         },
@@ -435,7 +447,7 @@ describe("workspace external API applications in workerd with real D1", () => {
           method: "POST",
           headers: jsonHeaders,
           body: JSON.stringify({
-            projectId: "prj_00000000-0000-4000-8000-000000000050",
+            projectId: workspaceProjectId,
             title: "Test thread",
           }),
         },
@@ -498,6 +510,83 @@ describe("workspace external API applications in workerd with real D1", () => {
     expect(invalidSecret.headers.get("www-authenticate")).toBe(
       'Basic realm="dx external API"',
     );
+  });
+
+  it("reaches only its workspace's Projects and Threads, never its creator's personal ones", async () => {
+    const personalThreadId = "thr_00000000-0000-4000-8000-000000000060";
+    const workspaceThreadId = "thr_00000000-0000-4000-8000-000000000061";
+    const deletedPersonalThreadId = "thr_00000000-0000-4000-8000-000000000062";
+    const at = new Date(3).toISOString();
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO threads (id, project_id, owner_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      ).bind(personalThreadId, personalProjectId, owner, at, at),
+      env.DB.prepare(
+        "INSERT INTO threads (id, project_id, owner_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      ).bind(workspaceThreadId, workspaceProjectId, owner, at, at),
+      env.DB.prepare(
+        "INSERT INTO threads (id, project_id, owner_user_id, lifecycle_state, created_at, updated_at) VALUES (?, ?, ?, 'deleted', ?, ?)",
+      ).bind(deletedPersonalThreadId, personalProjectId, owner, at, at),
+    ]);
+    const { application, clientSecret } = (
+      await createApplication(owner, { name: "Workspace-bound app" })
+    ).data;
+    const read = async (path: string, init?: RequestInit) => {
+      const response = await productRequest(
+        application,
+        clientSecret,
+        path,
+        init,
+      );
+      return { status: response.status, body: (await response.json()) as any };
+    };
+    const ids = (body: { data: { items: ReadonlyArray<{ id: string }> } }) =>
+      body.data.items.map(({ id }) => id);
+
+    const projects = await read("/v1/projects");
+    expect(projects.status).toBe(200);
+    expect(ids(projects.body)).toEqual([workspaceProjectId]);
+    expect((await read(`/v1/projects/${workspaceProjectId}`)).status).toBe(200);
+    expect((await read(`/v1/projects/${personalProjectId}`)).status).toBe(404);
+
+    const threads = await read("/v1/threads");
+    expect(threads.status).toBe(200);
+    expect(ids(threads.body)).toEqual([workspaceThreadId]);
+    const personalProjectThreads = await read(
+      `/v1/threads?projectId=${personalProjectId}`,
+    );
+    expect(personalProjectThreads.status).toBe(200);
+    expect(ids(personalProjectThreads.body)).toEqual([]);
+    expect((await read(`/v1/threads/${workspaceThreadId}`)).status).toBe(200);
+    expect((await read(`/v1/threads/${personalThreadId}`)).status).toBe(404);
+
+    // A deleted personal Thread reads as missing, not as deleted.
+    expect((await read(`/v1/threads/${deletedPersonalThreadId}`)).status).toBe(
+      404,
+    );
+
+    const create = (body: Record<string, unknown>) =>
+      read("/v1/threads", {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ title: "From the app", ...body }),
+      });
+    expect((await create({ projectId: personalProjectId })).status).toBe(404);
+    expect(
+      (
+        await create({
+          projectId: workspaceProjectId,
+          parentThreadId: personalThreadId,
+        })
+      ).status,
+    ).toBe(400);
+    const threadCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM threads WHERE owner_user_id = ?",
+    )
+      .bind(owner)
+      .first<{ count: number }>();
+    expect(threadCount?.count).toBe(3);
+    expect((await create({ projectId: workspaceProjectId })).status).toBe(201);
   });
 
   it("enforces current workspace policy for application-authenticated product writes", async () => {

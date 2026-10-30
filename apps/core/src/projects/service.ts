@@ -15,6 +15,7 @@ import {
   type ProjectRepositoryIdentity,
   type ProjectSourceAuthority,
   type ProjectUpdate,
+  projectReaderOf,
 } from "@dx/domain";
 import { Context, Effect, Layer, type Schema } from "effect";
 import type { ProjectCreationSnapshot } from "../settings/project-defaults/service.js";
@@ -96,10 +97,10 @@ export class ProjectService extends Context.Service<
           },
         ),
         get: Effect.fn("ProjectService.get")((principal, projectId) =>
-          repository.findOwnedById(projectId, principal.userId),
+          repository.findOwnedById(projectId, projectReaderOf(principal)),
         ),
         list: Effect.fn("ProjectService.list")((principal, request) =>
-          repository.listOwned(principal.userId, request),
+          repository.listOwned(projectReaderOf(principal), request),
         ),
         update: Effect.fn("ProjectService.update")(
           (principal, projectId, revision, update) =>

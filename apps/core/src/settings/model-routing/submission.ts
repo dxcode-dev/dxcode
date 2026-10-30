@@ -17,10 +17,13 @@ import {
 import { catalogProviderModels } from "./catalog.js";
 import {
   bindThreadClaudeConnection,
+  lastThreadClaudeConnection,
   loadModeProfileOverrides,
   loadRoutableConnections,
   loadSubscriptionModelIds,
+  loadThreadClaudePlan,
   loadThreadRoute,
+  type ThreadClaudePlan,
   type ThreadRoute,
 } from "./connection-store-d1.js";
 import { effectiveContextWindow } from "./context-window.js";
@@ -66,9 +69,29 @@ const openClaudePlan = async (
 };
 
 /**
- * A Claude Code Thread stays on one plan, used up or not. Its first
- * submission that finds a plan not used up puts it on that plan; a deleted
- * or disabled plan lets it take another.
+ * A Claude Code Thread's plan is disabled, deleted, or out of its owner's
+ * reach. The Thread takes no other plan; `/resolve` refuses with this text.
+ */
+export class ClaudePlanUnavailable extends Error {
+  readonly code = "CLAUDE_PLAN_UNAVAILABLE";
+  constructor(
+    readonly cause: "disabled" | "removed",
+    planName?: string,
+  ) {
+    super(
+      cause === "disabled"
+        ? `This Thread runs on the Claude plan "${planName}", which is disabled. Enable it in Model Routing, or start a new Thread.`
+        : "The Claude plan this Thread ran on was removed. A Thread never moves to another plan: start a new Thread.",
+    );
+  }
+}
+
+/**
+ * A Claude Code Thread stays on one plan, whatever happens to it: used up,
+ * disabled, or deleted. A Thread that ran turns before it had a binding is
+ * on the plan of its latest turn. Only a Thread that never ran Claude Code
+ * takes a plan, the first not used up, at its first submission that finds
+ * one.
  */
 const threadClaudePlan = async (
   db: D1Database,
@@ -77,25 +100,44 @@ const threadClaudePlan = async (
   model: string,
   entitlements: CopilotEntitlements,
 ): Promise<ServingMatch | undefined> => {
-  const serving = (id: string | undefined) =>
-    id === undefined
-      ? undefined
-      : findServingConnection(
-          connections.filter((connection) => connection.id === id),
-          model,
-          entitlements,
-        );
-  const bound = serving(thread.claudeConnectionId);
+  // The Thread's own plan, never another: disabled or gone, it is refused.
+  const own = (connectionId: string): ServingMatch => {
+    const connection = connections.find(({ id }) => id === connectionId);
+    if (connection === undefined) throw new ClaudePlanUnavailable("removed");
+    if (!connection.enabled)
+      throw new ClaudePlanUnavailable("disabled", connection.name);
+    const match = findServingConnection([connection], model, entitlements);
+    if (match === undefined) throw new Error(`MODEL_NOT_SERVED: ${model}`);
+    return match;
+  };
+  // Nothing only when the Thread never had a plan.
+  const held = (plan: ThreadClaudePlan): ServingMatch | undefined => {
+    if (plan.connectionId !== undefined) return own(plan.connectionId);
+    if (plan.boundAt !== undefined) throw new ClaudePlanUnavailable("removed");
+    return undefined;
+  };
+  const bound = held(await loadThreadClaudePlan(db, thread.threadId));
   if (bound !== undefined) return bound;
+  const bind = async (match: ServingMatch) => {
+    const current = await bindThreadClaudeConnection(
+      db,
+      thread.threadId,
+      match.connection.id,
+    );
+    return current.connectionId === match.connection.id ||
+      (current.connectionId === undefined && current.boundAt === undefined)
+      ? match
+      : held(current);
+  };
+  const earlier = await lastThreadClaudeConnection(
+    db,
+    thread.ownerUserId,
+    thread.threadId,
+  );
+  if (earlier !== undefined) return bind(own(earlier));
   const picked = await openClaudePlan(db, connections, model, entitlements);
   if (picked === undefined || !picked.open) return picked?.match;
-  const current = await bindThreadClaudeConnection(
-    db,
-    thread.threadId,
-    thread.claudeConnectionId,
-    picked.match.connection.id,
-  );
-  return serving(current) ?? picked.match;
+  return bind(picked.match);
 };
 
 /**

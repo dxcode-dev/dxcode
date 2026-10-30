@@ -922,8 +922,14 @@ describe("D1 migration", () => {
     await runRepositories(
       Effect.gen(function* () {
         const repository = yield* ThreadRepository;
-        const detail = yield* repository.findOwnedById(threadId, user);
-        const list = yield* repository.listOwned(user, undefined, {});
+        const detail = yield* repository.findOwnedById(threadId, {
+          userId: user,
+        });
+        const list = yield* repository.listOwned(
+          { userId: user },
+          undefined,
+          {},
+        );
         expect(detail.lastActivityAt).toEqual(list.items[0]?.lastActivityAt);
         expect(
           Schema.encodeSync(Schema.DateTimeUtcFromString)(

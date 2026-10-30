@@ -47,8 +47,9 @@ choose **Check again**.
 Preparation leaves resources in your provider account, depending on the
 provider: E2B templates; a copy of the Orb image, a Worker, and a container
 application on Cloudflare; Freestyle snapshots. New dx releases prepare the
-account again when the Orb changes. Threads that already started keep the
-version they started with.
+account again when the Orb changes. On E2B, Threads that already started
+keep the templates they started with. On Cloudflare, dx updates the same
+Orb Worker.
 
 ## Personal and workspace connections
 

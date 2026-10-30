@@ -117,6 +117,10 @@ export {
 } from "./projects/project.js";
 export { ProjectId } from "./projects/project-id.js";
 export {
+  type ProjectReader,
+  projectReaderOf,
+} from "./projects/project-reader.js";
+export {
   ProjectRepository,
   type ProjectRepositoryShape,
   type ProjectUpdate,

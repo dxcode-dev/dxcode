@@ -1,13 +1,16 @@
+import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import * as Alchemist from "alchemy/Alchemist";
 import { apply } from "alchemy/Apply";
 import { LoggingCli } from "alchemy/Cli/LoggingCli";
 import * as Plan from "alchemy/Plan";
 import { runMain } from "alchemy/Util/PlatformServices";
+import { AwsClient } from "aws4fetch";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import {
+  abortBranchPreviewUploads,
   applyValidatedAlchemyPlan,
   configureHostedDeploymentPolicy,
   deploymentPortals,
@@ -126,6 +129,32 @@ const cloudflareR2Request = async (method, path, body) => {
   return result.result;
 };
 
+// R2's S3 API with the deploy token's derived credentials: its ID as the
+// access key and the SHA-256 of its value as the secret.
+let r2S3Client;
+const r2S3Request = async (method, path) => {
+  if (r2S3Client === undefined) {
+    const token = required("CLOUDFLARE_API_TOKEN");
+    const response = await fetch(
+      "https://api.cloudflare.com/client/v4/user/tokens/verify",
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const body = await response.json();
+    if (!response.ok || typeof body.result?.id !== "string")
+      throw new Error(`Cloudflare token lookup failed (${response.status}).`);
+    r2S3Client = new AwsClient({
+      accessKeyId: body.result.id,
+      secretAccessKey: createHash("sha256").update(token).digest("hex"),
+      service: "s3",
+      region: "auto",
+    });
+  }
+  return r2S3Client.fetch(
+    `https://${required("CLOUDFLARE_ACCOUNT_ID")}.r2.cloudflarestorage.com${path}`,
+    { method },
+  );
+};
+
 const program = Effect.gen(function* () {
   // Alchemy's own session: the stack, its providers and state store, and the
   // stage, adopt and state-store settings below, without the CLI's prompts.
@@ -144,6 +173,23 @@ const program = Effect.gen(function* () {
       selection,
       apply: (validatedPlan) =>
         Effect.sync(() => writeFileSync(applyStartedFile, "validated\n")).pipe(
+          Effect.andThen(
+            Effect.tryPromise(() =>
+              abortBranchPreviewUploads({
+                operation,
+                target,
+                bucketName: selection.bucketName,
+                s3: r2S3Request,
+              }),
+            ),
+          ),
+          Effect.tap((aborted) =>
+            aborted > 0
+              ? Console.log(
+                  `Aborted ${aborted} unfinished uploads in ${selection.bucketName}.`,
+                )
+              : Effect.void,
+          ),
           Effect.andThen(
             Effect.tryPromise(() =>
               emptyBranchPreviewBucket({

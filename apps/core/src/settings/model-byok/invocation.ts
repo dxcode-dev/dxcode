@@ -62,6 +62,7 @@ import {
 } from "../model-routing/credential-access.js";
 import { validateAllowedModelEndpoint } from "../model-routing/endpoint-policy.js";
 import {
+  ClaudePlanUnavailable,
   connectionModel,
   resolveRouteSubmission,
   resolveThreadSubmission,
@@ -1738,6 +1739,15 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
           { code: "CLAUDE_PLAN_LIMIT", message: error.message },
           400,
         );
+      // The Thread's plan is disabled or gone; it takes no other. The
+      // Thread's error card shows the text with a Model Routing button.
+      if (error instanceof ClaudePlanUnavailable)
+        return failureResponse({
+          class: "account",
+          code: error.code,
+          message: error.message,
+          retryable: false,
+        });
       if (error instanceof CoordinatorFailure) {
         settingsPersistenceLogger.warn("BYOK invocation failed.", {
           event: "byok_invocation_failed",

@@ -1,4 +1,5 @@
 import {
+  CLAUDE_CODE_PROVIDER_ID,
   ModeConfig,
   ModeId,
   StoredModelConnection,
@@ -307,8 +308,6 @@ export interface ThreadRoute {
   readonly threadId: string;
   readonly ownerUserId: string;
   readonly selection: ThreadModelSelection;
-  /** The Claude Pro/Max connection a Claude Code Thread stays on. */
-  readonly claudeConnectionId?: string;
 }
 
 export const loadThreadRoute = async (
@@ -317,7 +316,7 @@ export const loadThreadRoute = async (
 ): Promise<ThreadRoute | undefined> => {
   const row = await db
     .prepare(
-      `SELECT id, owner_user_id, model_selection, claude_connection_id
+      `SELECT id, owner_user_id, model_selection
        FROM threads WHERE id = ? AND lifecycle_state = 'active'`,
     )
     .bind(threadId)
@@ -325,7 +324,6 @@ export const loadThreadRoute = async (
       id: string;
       owner_user_id: string;
       model_selection: string;
-      claude_connection_id: string | null;
     }>();
   if (row === null) return undefined;
   return {
@@ -334,36 +332,93 @@ export const loadThreadRoute = async (
     selection: Schema.decodeUnknownSync(ThreadModelSelection)(
       JSON.parse(row.model_selection),
     ),
-    ...(row.claude_connection_id === null
-      ? {}
-      : { claudeConnectionId: row.claude_connection_id }),
   };
 };
 
 /**
- * Puts a Thread on a Claude connection unless another submission moved it
- * first; returns the connection the Thread is on afterwards.
+ * The Claude Pro/Max plan a Claude Code Thread is on. `connectionId` is
+ * unset once the connection is deleted; `boundAt` stays, so the Thread is
+ * known to have had a plan and takes no other.
+ */
+export interface ThreadClaudePlan {
+  readonly connectionId?: string;
+  readonly boundAt?: string;
+}
+
+interface ThreadClaudePlanRow {
+  claude_connection_id: string | null;
+  claude_connection_bound_at: string | null;
+}
+
+const threadClaudePlanOf = (
+  row: ThreadClaudePlanRow | null,
+): ThreadClaudePlan => ({
+  ...(row?.claude_connection_id == null
+    ? {}
+    : { connectionId: row.claude_connection_id }),
+  ...(row?.claude_connection_bound_at == null
+    ? {}
+    : { boundAt: row.claude_connection_bound_at }),
+});
+
+/** Read on every submission: the binding never comes from a cached route. */
+export const loadThreadClaudePlan = async (
+  db: D1Database,
+  threadId: string,
+): Promise<ThreadClaudePlan> =>
+  threadClaudePlanOf(
+    await db
+      .prepare(
+        "SELECT claude_connection_id, claude_connection_bound_at FROM threads WHERE id = ?",
+      )
+      .bind(threadId)
+      .first<ThreadClaudePlanRow>(),
+  );
+
+/**
+ * The plan a Thread's latest Claude Code turn ran on, from the usage ledger.
+ * Threads from before `threads.claude_connection_id` existed ran turns
+ * without a binding; the ledger keeps each turn's connection for 180 days.
+ */
+export const lastThreadClaudeConnection = async (
+  db: D1Database,
+  ownerUserId: string,
+  threadId: string,
+): Promise<string | undefined> => {
+  const row = await db
+    .prepare(
+      `SELECT connection_id FROM usage_event
+       WHERE owner_user_id = ? AND thread_id = ? AND provider_id = ?
+       ORDER BY occurred_at DESC, id DESC LIMIT 1`,
+    )
+    .bind(ownerUserId, threadId, CLAUDE_CODE_PROVIDER_ID)
+    .first<{ connection_id: string }>();
+  return row?.connection_id;
+};
+
+/**
+ * Puts a Thread that never had a Claude plan on one, unless another
+ * submission did first; returns the plan the Thread is on afterwards. A
+ * Thread whose row does not exist yet (its title starts during creation)
+ * stays unbound.
  */
 export const bindThreadClaudeConnection = async (
   db: D1Database,
   threadId: string,
-  previous: string | undefined,
   connectionId: string,
-): Promise<string | undefined> => {
+): Promise<ThreadClaudePlan> => {
   const row = await db
     .prepare(
-      `UPDATE threads SET claude_connection_id = ?
-       WHERE id = ? AND claude_connection_id IS ?
-       RETURNING claude_connection_id`,
+      `UPDATE threads SET claude_connection_id = ?, claude_connection_bound_at = ?
+       WHERE id = ? AND claude_connection_id IS NULL
+         AND claude_connection_bound_at IS NULL
+       RETURNING claude_connection_id, claude_connection_bound_at`,
     )
-    .bind(connectionId, threadId, previous ?? null)
-    .first<{ claude_connection_id: string }>();
-  if (row !== null) return row.claude_connection_id;
-  const current = await db
-    .prepare("SELECT claude_connection_id FROM threads WHERE id = ?")
-    .bind(threadId)
-    .first<{ claude_connection_id: string | null }>();
-  return current?.claude_connection_id ?? undefined;
+    .bind(connectionId, new Date().toISOString(), threadId)
+    .first<ThreadClaudePlanRow>();
+  return row !== null
+    ? threadClaudePlanOf(row)
+    : loadThreadClaudePlan(db, threadId);
 };
 
 export const updateConnectionHealth = async (

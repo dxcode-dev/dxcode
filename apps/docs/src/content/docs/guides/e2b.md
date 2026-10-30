@@ -3,7 +3,7 @@ title: Run coding agents in E2B sandboxes
 description: Connect your E2B team to dx so each coding-agent Thread runs in its own E2B sandbox, with templates dx builds for you and pauses that keep running processes.
 ---
 
-dx can run every Thread's Orb, the Linux computer a coding agent works in,
+dx can run a Thread's Orb, the Linux computer a coding agent works in,
 as a sandbox in your own E2B team. You connect an E2B API key, dx builds its
 Orb templates in your team, and new Threads start from them.
 
