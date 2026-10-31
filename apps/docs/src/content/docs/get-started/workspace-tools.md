@@ -18,6 +18,9 @@ The session lives in the Orb, not in the browser or in dx's daemon: closing
 the tab, a network drop, or a dx update keeps your shell and its running
 commands.
 
+![A Thread's Terminal tab next to its transcript, showing ls -l and cat hello.txt run in the Orb's tmux session.](../../../assets/screenshots/terminal-pane-light.webp)
+![A Thread's Terminal tab next to its transcript, showing ls -l and cat hello.txt run in the Orb's tmux session.](../../../assets/screenshots/terminal-pane-dark.webp)
+
 ## Desktop
 
 The Desktop tab streams a Linux desktop from the Orb, with Chromium and a
@@ -36,6 +39,12 @@ there, so nothing in the Orb can replace your clipboard on its own.
   **Resume** to continue. Chromium and its tabs keep running in the Orb.
 - There is no GPU: WebGL works through software rendering, and full-screen
   animation is slower than on a local machine.
+
+Here the agent started a web server in the Orb and opened `hello.txt` from it
+in the Desktop's Chromium:
+
+![A Thread's Desktop tab streaming the Orb's Chromium, open at 127.0.0.1:8000/hello.txt, next to the agent's reply about starting the server and opening the page.](../../../assets/screenshots/desktop-pane-light.webp)
+![A Thread's Desktop tab streaming the Orb's Chromium, open at 127.0.0.1:8000/hello.txt, next to the agent's reply about starting the server and opening the page.](../../../assets/screenshots/desktop-pane-dark.webp)
 
 ## Portal
 

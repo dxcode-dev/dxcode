@@ -5,8 +5,15 @@ sidebar:
   order: 2
 ---
 
-dx uses the models you connect. Open **Personal Settings → Model Routing**
-and choose **Add**. The **Add a Provider** dialog lists:
+dx uses the models you connect. Open **Personal Settings → Model Routing**.
+The page draws each mode and model to the connection that serves it.
+Here, with no personal or workspace connections, they all go to the
+deployment's own:
+
+![Personal Settings, Model Routing: no personal connections yet, and the Low, Medium, High, and Ultra modes and a list of raw models, each drawn to the deployment's Cloudflare Workers AI connection.](../../../assets/screenshots/model-routing-light.webp)
+![Personal Settings, Model Routing: no personal connections yet, and the Low, Medium, High, and Ultra modes and a list of raw models, each drawn to the deployment's Cloudflare Workers AI connection.](../../../assets/screenshots/model-routing-dark.webp)
+
+Choose **Add**. The **Add a Provider** dialog lists:
 
 | Entry | What it gives you | Scope |
 | --- | --- | --- |
@@ -14,6 +21,9 @@ and choose **Add**. The **Add a Provider** dialog lists:
 | **GitHub Copilot** | The models your Copilot subscription includes | Personal |
 | A provider, such as **Anthropic** or **OpenAI** | That provider's models, on your API key | Personal |
 | **Custom URL** | Models behind any OpenAI- or Anthropic-compatible endpoint, with your API key | Personal or workspace |
+
+![The Add a Provider dialog: Claude Pro/Max at the top, then providers from Amazon Bedrock to Z.ai, including Anthropic, GitHub Copilot, OpenAI, and Custom URL.](../../../assets/screenshots/add-a-provider-light.webp)
+![The Add a Provider dialog: Claude Pro/Max at the top, then providers from Amazon Bedrock to Z.ai, including Anthropic, GitHub Copilot, OpenAI, and Custom URL.](../../../assets/screenshots/add-a-provider-dark.webp)
 
 ## Claude Pro/Max
 
@@ -144,6 +154,9 @@ Settings → Composer** sets the mode new Threads start in.
   [`add-provider-dialog.tsx`](https://github.com/dxcode-dev/dxcode/blob/main/apps/web/src/features/settings/model-routing/add-provider-dialog.tsx),
   [`provider-key-sheet.tsx`](https://github.com/dxcode-dev/dxcode/blob/main/apps/web/src/features/settings/model-routing/provider-key-sheet.tsx),
   [`connection-dialog.tsx`](https://github.com/dxcode-dev/dxcode/blob/main/apps/web/src/features/settings/model-routing/connection-dialog.tsx)
+- Model Routing page and its routing graph:
+  [`model-routing-settings.tsx`](https://github.com/dxcode-dev/dxcode/blob/main/apps/web/src/features/settings/model-routing/model-routing-settings.tsx),
+  [`model-routing-graph.tsx`](https://github.com/dxcode-dev/dxcode/blob/main/apps/web/src/features/settings/model-routing/model-routing-graph.tsx)
 - Model mapping lines:
   [`provider-model-mapping.ts`](https://github.com/dxcode-dev/dxcode/blob/main/packages/domain/src/settings/provider-model-mapping.ts)
 - Claude Pro/Max connect flow:

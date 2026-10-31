@@ -1,0 +1,68 @@
+---
+import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
+import LogCard from "../../components/LogCard.astro";
+import LogList from "../../components/LogList.astro";
+import { getLogEntries, logPath } from "../../lib/log";
+
+const entries = await getLogEntries();
+// The newest featured entry leads the row; on the same day, a note leads.
+const featured = entries
+  .filter((entry) => entry.data.featured)
+  .sort(
+    (a, b) =>
+      b.data.date.getTime() - a.data.date.getTime() ||
+      Number(b.data.kind === "note") - Number(a.data.kind === "note"),
+  );
+const news = entries.filter((entry) => entry.data.kind === "news");
+const notes = entries.filter((entry) => entry.data.kind === "note");
+---
+
+<StarlightPage
+  frontmatter={{
+    title: "dx Log",
+    description:
+      "What changed in dx, and why: product news and short notes from the team.",
+    editUrl: false,
+    prev: false,
+    next: false,
+  }}
+  headings={[
+    ...(featured.length ? [{ depth: 2, slug: "featured", text: "Featured" }] : []),
+    { depth: 2, slug: "news", text: "News" },
+    ...(notes.length ? [{ depth: 2, slug: "notes", text: "Notes" }] : []),
+  ]}
+>
+  <div class="not-content dx-log">
+    <p class="dx-log-intro">
+      What changed in dx, and why. Follow along with the{" "}
+      <a href={`${logPath()}rss.xml`}>RSS feed</a>.
+    </p>
+
+    {
+      featured.length > 0 && (
+        <section aria-labelledby="featured">
+          <h2 id="featured">Featured</h2>
+          <div class="dx-log-featured">
+            {featured.map((entry, index) => (
+              <LogCard entry={entry} lead={index === 0} />
+            ))}
+          </div>
+        </section>
+      )
+    }
+
+    <section aria-labelledby="news">
+      <h2 id="news">News</h2>
+      <LogList entries={news} />
+    </section>
+
+    {
+      notes.length > 0 && (
+        <section aria-labelledby="notes">
+          <h2 id="notes">Notes</h2>
+          <LogList entries={notes} />
+        </section>
+      )
+    }
+  </div>
+</StarlightPage>

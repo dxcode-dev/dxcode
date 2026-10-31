@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
-import { extname, relative, resolve } from "node:path";
+import { dirname, extname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -10,8 +10,16 @@ const scanRoot =
   rootArgument === -1
     ? resolve(root, built ? "dist" : "src/content/docs")
     : resolve(process.argv[rootArgument + 1] ?? "");
+// dx Log entries are public pages too: scan them with the docs source.
+const logRoot = resolve(root, "src/content/log");
+const scanRoots =
+  rootArgument === -1 && !built && existsSync(logRoot)
+    ? [scanRoot, logRoot]
+    : [scanRoot];
 const scannedExtensions = new Set(
-  built ? [".css", ".html", ".js", ".json", ".svg"] : [".md", ".mdx"],
+  built
+    ? [".css", ".html", ".js", ".json", ".md", ".svg", ".xml"]
+    : [".md", ".mdx"],
 );
 const forbiddenAssistantName = ["a", "m", "p"].join("");
 const forbiddenJourneyCommand = ["journey", ":"].join("");
@@ -62,7 +70,7 @@ if (!existsSync(scanRoot)) {
   throw new Error(`${relative(root, scanRoot)} does not exist`);
 }
 
-const files = await walk(scanRoot);
+const files = (await Promise.all(scanRoots.map(walk))).flat();
 const failures = [];
 const contentsByPath = new Map();
 
@@ -122,7 +130,21 @@ for (const path of files) {
     }
     continue;
   }
-  const linkPattern = /\[[^\]]*\]\(([^)]+)\)/g;
+  // Images use relative paths, which Astro needs to optimize them; each must
+  // name a file that exists and say what it shows.
+  const imagePattern =
+    /!\[([^\]]*)\]\(([^)\s]+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\)/g;
+  for (const match of contents.matchAll(imagePattern)) {
+    const [, alt, src] = match;
+    if (!alt.trim()) {
+      failures.push(`${relative(root, path)} has an image without alt text`);
+    }
+    if (src.startsWith("https://")) continue;
+    if (!existsSync(resolve(dirname(path), src))) {
+      failures.push(`${relative(root, path)} shows missing image ${src}`);
+    }
+  }
+  const linkPattern = /(?<!!)\[[^\]]*\]\(([^)]+)\)/g;
   for (const match of contents.matchAll(linkPattern)) {
     const href = match[1].split("#", 1)[0];
     if (!href || href.startsWith("https://") || href.startsWith("mailto:")) {
@@ -138,14 +160,19 @@ for (const path of files) {
       .replace(/^\/docs(?=\/|$)/, "")
       .replace(/^\//, "")
       .replace(/\/$/, "");
-    const candidates = slug
-      ? [
-          resolve(scanRoot, `${slug}.md`),
-          resolve(scanRoot, `${slug}.mdx`),
-          resolve(scanRoot, slug, "index.md"),
-          resolve(scanRoot, slug, "index.mdx"),
-        ]
-      : [resolve(scanRoot, "index.md"), resolve(scanRoot, "index.mdx")];
+    const logSlug = /^log(?:\/(.*))?$/.exec(slug);
+    const candidates = logSlug
+      ? logSlug[1]
+        ? [resolve(logRoot, `${logSlug[1]}.md`)]
+        : [resolve(root, "src/pages/log/index.astro")]
+      : slug
+        ? [
+            resolve(scanRoot, `${slug}.md`),
+            resolve(scanRoot, `${slug}.mdx`),
+            resolve(scanRoot, slug, "index.md"),
+            resolve(scanRoot, slug, "index.mdx"),
+          ]
+        : [resolve(scanRoot, "index.md"), resolve(scanRoot, "index.mdx")];
     if (!candidates.some(existsSync)) {
       failures.push(`${relative(root, path)} links to missing page ${href}`);
     }

@@ -9,9 +9,32 @@ export default defineConfig({
   integrations: [
     starlight({
       title: "dx docs",
-      description: "Deploy, operate, and contribute to dx.",
+      description:
+        "Run coding agents in the cloud with dx: Threads, Orbs, and the models you bring.",
       favicon: "/favicon.svg",
-      customCss: ["./src/styles/custom.css"],
+      head: [
+        {
+          tag: "link",
+          attrs: {
+            rel: "alternate",
+            type: "application/rss+xml",
+            title: "dx Log",
+            href: "/docs/log/rss.xml",
+          },
+        },
+      ],
+      components: {
+        PageTitle: "./src/components/PageTitle.astro",
+      },
+      customCss: [
+        "@fontsource/dm-sans/400.css",
+        "@fontsource/dm-sans/400-italic.css",
+        "@fontsource/dm-sans/500.css",
+        "@fontsource/dm-sans/600.css",
+        "@fontsource/instrument-serif/400.css",
+        "@fontsource/dm-mono/400.css",
+        "./src/styles/custom.css",
+      ],
       social: [
         {
           icon: "github",
@@ -20,8 +43,9 @@ export default defineConfig({
         },
       ],
       sidebar: [
+        { label: "dx Log", link: "/log/" },
         {
-          label: "Use dx",
+          label: "Get started",
           items: [
             { label: "Getting started", slug: "use/getting-started" },
             { label: "Connecting a model", slug: "use/connect-a-model" },
@@ -29,10 +53,18 @@ export default defineConfig({
               label: "Connecting an Orb provider",
               slug: "use/connect-an-orb-provider",
             },
+            {
+              label: "Terminal, Desktop, and Portal",
+              slug: "get-started/workspace-tools",
+            },
+            {
+              label: "Workspace members",
+              slug: "get-started/workspace-members",
+            },
           ],
         },
         {
-          label: "Guides",
+          label: "Claude Code",
           items: [
             {
               label: "Run Claude Code in the cloud",
@@ -46,6 +78,11 @@ export default defineConfig({
               label: "Claude Code usage limits",
               slug: "guides/claude-code-usage-limits",
             },
+          ],
+        },
+        {
+          label: "Orb providers",
+          items: [
             {
               label: "Sandboxes compared",
               slug: "guides/sandboxes-for-ai-coding-agents",
@@ -60,30 +97,19 @@ export default defineConfig({
               label: "Docker Cloud Sandboxes",
               slug: "guides/docker-cloud-sandboxes",
             },
+            { label: "Boat", slug: "guides/boat" },
           ],
         },
         {
-          label: "Get started",
+          label: "Self-host",
+          collapsed: true,
           items: [
-            { label: "Overview", slug: "get-started/overview" },
+            { label: "Before you deploy", slug: "get-started/overview" },
             { label: "Install and deploy", slug: "get-started/install" },
             {
               label: "First project and thread",
               slug: "get-started/first-project",
             },
-            {
-              label: "Terminal, Desktop, and Portal",
-              slug: "get-started/workspace-tools",
-            },
-            {
-              label: "Workspace members",
-              slug: "get-started/workspace-members",
-            },
-          ],
-        },
-        {
-          label: "Deploy and operate",
-          items: [
             {
               label: "Deployment configuration",
               slug: "deployment/configuration",
@@ -97,32 +123,29 @@ export default defineConfig({
               label: "Models and providers",
               slug: "deployment/models-providers",
             },
-            {
-              label: "GitHub source access",
-              slug: "deployment/github-source",
-            },
+            { label: "GitHub source access", slug: "deployment/github-source" },
             {
               label: "Bitbucket source access",
               slug: "deployment/bitbucket-source",
             },
-            {
-              label: "GitHub Copilot",
-              slug: "deployment/github-copilot",
-            },
-            {
-              label: "Claude Pro/Max",
-              slug: "deployment/claude-code",
-            },
+            { label: "GitHub Copilot", slug: "deployment/github-copilot" },
+            { label: "Claude Pro/Max", slug: "deployment/claude-code" },
             { label: "Deploy from a fork", slug: "deployment/fork" },
             {
               label: "Upgrade and recovery",
               slug: "operations/upgrade-recovery",
             },
+          ],
+        },
+        {
+          label: "Support",
+          items: [
             { label: "Troubleshooting", slug: "operations/troubleshooting" },
           ],
         },
         {
           label: "Contribute",
+          collapsed: true,
           items: [
             {
               label: "Local development",

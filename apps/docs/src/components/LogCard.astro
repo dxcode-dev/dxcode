@@ -1,0 +1,37 @@
+---
+import { Image } from "astro:assets";
+import { formatLogDate, isoLogDate, type LogEntry, logPath } from "../lib/log";
+
+interface Props {
+  entry: LogEntry;
+  /** The first card in the Featured row spans the full width. */
+  lead?: boolean;
+}
+
+const { entry, lead = false } = Astro.props;
+const { title, date, summary, cover, kind } = entry.data;
+---
+
+<article class:list={["dx-log-card", { lead }]}>
+  <a href={logPath(entry)}>
+    {
+      cover && (
+        <Image
+          src={cover}
+          alt=""
+          widths={[480, 800, 1280]}
+          sizes={lead ? "(min-width: 72rem) 46rem, 100vw" : "(min-width: 72rem) 23rem, 100vw"}
+          loading={lead ? "eager" : "lazy"}
+        />
+      )
+    }
+    <div class="dx-log-card-body">
+      <p class="dx-log-meta">
+        <time datetime={isoLogDate(date)}>{formatLogDate(date)}</time>
+        {kind === "note" && <span class="dx-log-kind">Note</span>}
+      </p>
+      <h3>{title}</h3>
+      <p class="dx-log-summary">{summary}</p>
+    </div>
+  </a>
+</article>

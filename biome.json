@@ -32,6 +32,17 @@
   },
   "overrides": [
     {
+      "includes": ["**/*.astro"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUnusedImports": "off",
+            "noUnusedVariables": "off"
+          }
+        }
+      }
+    },
+    {
       "includes": ["apps/core/src/**/*.ts", "!apps/core/src/**/*.test.ts"],
       "linter": {
         "rules": {

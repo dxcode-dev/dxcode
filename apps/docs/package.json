@@ -1,7 +1,7 @@
 {
   "name": "@dx/docs",
   "private": true,
-  "version": "0.2.55",
+  "version": "0.2.56",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -12,7 +12,11 @@
     "scan:built": "node scripts/check-content.mjs --built"
   },
   "dependencies": {
+    "@astrojs/rss": "4.0.19",
     "@astrojs/starlight": "0.42.3",
+    "@fontsource/dm-mono": "5.3.0",
+    "@fontsource/dm-sans": "5.3.0",
+    "@fontsource/instrument-serif": "5.3.0",
     "astro": "7.3.5",
     "sharp": "0.35.4"
   },

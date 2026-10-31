@@ -83,6 +83,16 @@ Open the project and choose **New Thread**. Below the prompt box you choose:
   available, the picker shows **Connect an Orb provider**, which opens
   Settings.
 
+The mode picker opens from the mode button below the prompt box:
+
+![The new-Thread composer with the mode picker open: a dial set to medium, a Claude Code row with Connect Claude Pro/Max, and the ultra, high, medium, and low modes, with medium checked.](../../../assets/screenshots/composer-mode-picker-light.webp)
+![The new-Thread composer with the mode picker open: a dial set to medium, a Claude Code row with Connect Claude Pro/Max, and the ultra, high, medium, and low modes, with medium checked.](../../../assets/screenshots/composer-mode-picker-dark.webp)
+
+The Orb picker lists each provider, and each provider's sizes:
+
+![The new-Thread composer with the Orb picker open: the Cloudflare provider and its sizes, standard-1 at 0.5 CPU and 4 GB up to standard-4 at 4 CPU and 12 GB, with standard-2 selected.](../../../assets/screenshots/composer-orb-picker-light.webp)
+![The new-Thread composer with the Orb picker open: the Cloudflare provider and its sizes, standard-1 at 0.5 CPU and 4 GB up to standard-4 at 4 CPU and 12 GB, with standard-2 selected.](../../../assets/screenshots/composer-orb-picker-dark.webp)
+
 Write a small task you can check, such as "Add a test for the date parser
 and run it", and send it. dx starts the Orb, clones the project's repository
 into `~/workspace/repo`, and the agent starts work. The mode and Orb are fixed
@@ -99,6 +109,12 @@ When the Orb is ready, the Thread's side pane has these views:
 | Portal | Web servers listening in the Orb, at their own URLs |
 | Terminal | A tmux session you share with the agent |
 | Desktop | A Linux desktop with Chromium the agent can drive |
+
+Here the agent was asked to create `hello.txt` and show it. The transcript
+is on the left, and the Changes view shows the new file:
+
+![A Thread page: the prompt "Create hello.txt with one line and show it", the agent's reply with the file's contents, and the Changes view listing hello.txt with its one added line.](../../../assets/screenshots/thread-page-light.webp)
+![A Thread page: the prompt "Create hello.txt with one line and show it", the agent's reply with the file's contents, and the Changes view listing hello.txt with its one added line.](../../../assets/screenshots/thread-page-dark.webp)
 
 Portal appears only when the deployment has a Portal domain. See
 [Terminal, Desktop, and Portal](/docs/get-started/workspace-tools/).

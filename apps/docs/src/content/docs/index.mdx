@@ -1,44 +1,109 @@
 ---
 title: dx documentation
-description: Deploy a coding-agent workspace to infrastructure you control.
+description: dx runs coding agents in the cloud, each in its own computer, on the models you bring and the Orb providers you or your deployment connect.
 template: splash
 hero:
-  title: Your coding agent, on your infrastructure.
-  tagline: Deploy dx to Cloudflare and run isolated agent workspaces on the Orb providers you connect. Keep projects, model credentials, and operational control in your account.
+  title: Cloud agents, on your terms.
+  tagline: dx runs coding agents in the cloud. Each Thread gets its own Linux computer with the project's repository, a terminal, and a desktop, and keeps working after you close the tab.
   actions:
     - text: Get started
       link: /docs/use/getting-started/
       icon: right-arrow
       variant: primary
-    - text: Deploy dx
+    - text: Self-host dx
       link: /docs/get-started/install/
-      icon: right-arrow
-      variant: secondary
-    - text: Deployment guide
-      link: /docs/deployment/configuration/
       icon: open-book
+      variant: minimal
 ---
 
-import { Card, CardGrid } from "@astrojs/starlight/components";
+import { Card, CardGrid, LinkCard, Steps } from "@astrojs/starlight/components";
+import LatestLog from "../../components/LatestLog.astro";
+import { Image } from "astro:assets";
+import threadPageLight from "../../assets/screenshots/thread-page-light.webp";
+import threadPageDark from "../../assets/screenshots/thread-page-dark.webp";
+
+<Image
+  src={threadPageLight}
+  alt="A dx Thread: the agent created hello.txt and showed its contents, and the Changes view beside the transcript lists the new file with its one added line."
+/>
+<Image
+  src={threadPageDark}
+  alt="A dx Thread: the agent created hello.txt and showed its contents, and the Changes view beside the transcript lists the new file with its one added line."
+/>
+
+## What you get
 
 <CardGrid>
-  <Card title="One deployment command" icon="rocket">
-    Configure Cloudflare and E2B. The deployment workflow creates and verifies
-    the application resources.
+  <Card title="A computer per Thread" icon="laptop">
+    Every [Thread](/docs/use/getting-started/#start-a-thread) runs in its own
+    Orb: a Linux sandbox with the project's repository cloned in, a Terminal you share
+    with the agent, and a Desktop with Chromium.
   </Card>
-  <Card title="Isolated workspaces" icon="seti:shell">
-    Each agent runs in an E2B sandbox with a resident `dxd` process for files,
-    changes, and terminal sessions.
+  <Card title="Your models" icon="puzzle">
+    Run Claude Code on your Claude Pro or Max plan, serve models from GitHub
+    Copilot, add a provider's API key, or point at any OpenAI- or
+    Anthropic-compatible endpoint.
   </Card>
-  <Card title="Bring your model access" icon="puzzle">
-    Route models through deployment credentials, personal keys, workspace keys,
-    subscriptions, or compatible custom endpoints.
+  <Card title="Your Orb providers" icon="setting">
+    Orbs run on a provider your deployment offers, or in your own E2B,
+    Cloudflare, Freestyle, Docker, or Boat account, on your plan and bill.
   </Card>
-  <Card title="Built for recovery" icon="approve-check-circle">
-    Re-run the same release, rotate supplied secrets, reset the administrator,
-    or destroy the deployment through explicit operator actions.
+  <Card title="Agents that start agents" icon="rocket">
+    An agent can start child Threads that work in parallel in their own Orbs,
+    then report back to the Thread that started them.
   </Card>
 </CardGrid>
 
-dxcode is source-available under the
+## Quickstart
+
+<Steps>
+
+1. **Sign in.** Open dx and sign in with an email link, a password, or
+   Google, whichever your deployment offers.
+
+2. **Connect a model.** In **Personal Settings → Model Routing**, choose
+   **Add**. See [Connecting a model](/docs/use/connect-a-model/).
+
+3. **Connect an Orb provider.** Open **Personal Settings → Orb Providers**.
+   If a provider reads **Provided by this deployment**, skip this step;
+   otherwise choose **Connect** next to one. See
+   [Connecting an Orb provider](/docs/use/connect-an-orb-provider/).
+
+4. **Start a Thread.** Create a project from a repository, choose
+   **New Thread**, and describe a task you can check. See
+   [Getting started](/docs/use/getting-started/).
+
+</Steps>
+
+## Latest from the dx Log
+
+<LatestLog />
+
+## Explore
+
+<CardGrid>
+  <LinkCard
+    title="Run Claude Code in the cloud"
+    description="Claude Code on your Claude plan, in a sandbox that keeps working when your laptop is closed."
+    href="/docs/guides/run-claude-code-in-the-cloud/"
+  />
+  <LinkCard
+    title="Sandboxes compared"
+    description="E2B, Cloudflare Containers, Freestyle, Docker Cloud Sandboxes, and Boat, side by side."
+    href="/docs/guides/sandboxes-for-ai-coding-agents/"
+  />
+  <LinkCard
+    title="Terminal, Desktop, and Portal"
+    description="Work in the same Orb as the agent, and open the web servers it runs."
+    href="/docs/get-started/workspace-tools/"
+  />
+  <LinkCard
+    title="Self-host dx"
+    description="Deploy dx to your own Cloudflare account with one command."
+    href="/docs/get-started/install/"
+  />
+</CardGrid>
+
+dx is source-available under the
 [Functional Source License 1.1, Apache 2.0 Future License](https://fsl.software/).
+Each release becomes available under Apache 2.0 two years after it ships.

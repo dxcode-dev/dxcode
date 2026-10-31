@@ -24,7 +24,13 @@ create it.
 
 ## Connect a provider
 
-1. Open **Personal Settings → Orb Providers**.
+1. Open **Personal Settings → Orb Providers**. Each provider has a row with
+   its state. One you can connect has a **Connect** button, which becomes
+   **Manage** once connected.
+
+   ![Personal Settings, Orb Providers: rows for E2B, Freestyle, Docker Cloud Sandboxes, and Boat marked Not connected, and Cloudflare Containers marked Provided by this deployment, each with a Connect button.](../../../assets/screenshots/orb-providers-light.webp)
+   ![Personal Settings, Orb Providers: rows for E2B, Freestyle, Docker Cloud Sandboxes, and Boat marked Not connected, and Cloudflare Containers marked Provided by this deployment, each with a Connect button.](../../../assets/screenshots/orb-providers-dark.webp)
+
 2. Choose **Connect** next to the provider.
 3. Fill in every field and choose **Connect**. dx checks the credentials
    with the provider first and says so if the provider refuses them.
