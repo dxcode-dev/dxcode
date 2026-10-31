@@ -88,6 +88,7 @@ const makeSandbox = (
       readonly stderr: string;
       readonly exitCode: number;
     };
+    readonly preCloneResult?: Record<string, unknown>;
   },
 ) => {
   const calls: Array<{
@@ -203,9 +204,18 @@ const makeSandbox = (
             "unshallow-anonymous",
             "hooks",
             "mark-provisioned",
+            "pre-clone",
           ].includes(action)
         )
           input?.timeline?.push(action);
+        if (action === "pre-clone")
+          return {
+            stdout: JSON.stringify(
+              input?.preCloneResult ?? { status: "success" },
+            ),
+            stderr: "",
+            exitCode: 0,
+          };
         if (action === "snapshot") {
           const exitCode = inspectExitCodes.shift() ?? 0;
           return {
@@ -286,6 +296,10 @@ const serviceLayer = (input: {
     readonly providerRepositoryId: string;
     readonly repositoryName: string;
   }>;
+  readonly orbScripts?: {
+    readonly preClone?: string;
+    readonly preSetup?: string;
+  };
 }) => {
   const leases = input.leases ?? [];
   return SourceWorkspaceServiceLive.pipe(
@@ -305,6 +319,9 @@ const serviceLayer = (input: {
                   ? {}
                   : { authority }),
                 privateSubmodules: input.privateSubmodules ?? [],
+                ...(input.orbScripts === undefined
+                  ? {}
+                  : { orbScripts: input.orbScripts }),
               }),
             finalizeAnonymous: (sourceIntent, finalization) => {
               input.timeline?.push("finalize");
@@ -515,6 +532,146 @@ describe("SourceWorkspaceService", () => {
         ({ environment }) => environment?.GH_TOKEN === undefined,
       ),
     ).toBe(true);
+  });
+
+  const encoded = (body: string) =>
+    Buffer.from(body, "utf8").toString("base64");
+  const orbScripts = {
+    preClone: "echo pré-clone\n",
+    preSetup: "echo pre-setup\n",
+  };
+
+  it("runs the project's pre-clone script before an absent checkout clones, and sends each script only where it runs", async () => {
+    const timeline: string[] = [];
+    const fake = makeSandbox([10], { timeline });
+
+    await expect(
+      activate(
+        fake.preparation,
+        serviceLayer({ source: snapshot, timeline, orbScripts }),
+      ),
+    ).resolves.toBe(SOURCE_WORKSPACE_CWD);
+
+    expect(timeline).toEqual(["activate", "pre-clone", "initialize", "hooks"]);
+    const preClone = fake.calls.filter(
+      ({ environment }) => environment?.DX_PRE_CLONE_SCRIPT !== undefined,
+    );
+    expect(preClone).toHaveLength(1);
+    expect(preClone[0]?.command.endsWith(" pre-clone")).toBe(true);
+    expect(preClone[0]?.environment?.DX_PRE_CLONE_SCRIPT).toBe(
+      encoded(orbScripts.preClone),
+    );
+    expect(preClone[0]?.environment?.GH_TOKEN).toBeUndefined();
+    const preSetup = fake.calls.filter(
+      ({ environment }) =>
+        environment?.DX_PRE_SETUP_SCRIPT === encoded(orbScripts.preSetup),
+    );
+    expect(
+      preSetup.map(({ command, environment }) =>
+        command.includes("DX_ASSET_HELPER_DIGEST")
+          ? environment?.DX_ASSET_ACTION
+          : command.split(" ").at(-1),
+      ),
+    ).toEqual(["activate", "hooks"]);
+  });
+
+  it("runs pre-clone before an anonymous clone and before a clone without hooks, never for an existing checkout", async () => {
+    const anonymousTimeline: string[] = [];
+    const anonymous = makeSandbox([0], { timeline: anonymousTimeline });
+    await activate(
+      anonymous.preparation,
+      serviceLayer({
+        intent,
+        anonymous: true,
+        timeline: anonymousTimeline,
+        orbScripts,
+      }),
+    );
+    expect(anonymousTimeline).toEqual([
+      "pre-clone",
+      "initialize-anonymous",
+      "finalize",
+      "snapshot",
+      "hooks",
+    ]);
+
+    const preparedTimeline: string[] = [];
+    const prepared = makeSandbox([10], { timeline: preparedTimeline });
+    await prepare(
+      prepared.preparation,
+      serviceLayer({
+        source: snapshot,
+        timeline: preparedTimeline,
+        orbScripts,
+      }),
+    );
+    expect(preparedTimeline).toEqual([
+      "snapshot",
+      "pre-clone",
+      "initialize",
+      "mark-provisioned",
+    ]);
+
+    const existingTimeline: string[] = [];
+    const existing = makeSandbox([0], { timeline: existingTimeline });
+    await activate(
+      existing.preparation,
+      serviceLayer({
+        source: snapshot,
+        timeline: existingTimeline,
+        orbScripts,
+      }),
+    );
+    expect(existingTimeline).toEqual(["activate"]);
+    expect(
+      existing.calls.some(
+        ({ environment }) => environment?.DX_PRE_CLONE_SCRIPT !== undefined,
+      ),
+    ).toBe(false);
+  });
+
+  it("stops preparation without cloning when the pre-clone script fails, and says why without retrying", async () => {
+    const timeline: string[] = [];
+    const fake = makeSandbox([10], {
+      timeline,
+      preCloneResult: {
+        status: "failed",
+        exitCode: 7,
+        // A token-shaped value the script printed, assembled so the release
+        // leak scan does not mistake the fixture for a real token.
+        output: `curl: (6) Could not resolve host: proxy.internal\nGH_TOKEN=${["ghp", "abcdefghijklmnopqrstuvwxyz0123"].join("_")}\n`,
+      },
+    });
+
+    const cause = await activate(
+      fake.preparation,
+      serviceLayer({ source: snapshot, timeline, orbScripts }),
+    ).catch((error: unknown) => error);
+
+    expect(timeline).toEqual(["activate", "pre-clone"]);
+    expect(cause).toMatchObject({
+      _tag: "SourceWorkspaceInitializationFailed",
+    });
+    const failure = classifyRunFailure({ message: (cause as Error).message });
+    expect(failure).toMatchObject({
+      class: "internal",
+      code: "PRE_CLONE_SCRIPT_FAILED",
+      retryable: false,
+    });
+    expect(failure.message).toContain("exited with code 7");
+    expect(failure.message).toContain("Could not resolve host: proxy.internal");
+    expect(failure.message).not.toContain("ghp_abcdefghij");
+
+    const timedOut = makeSandbox([10], {
+      preCloneResult: { status: "failed", timedOut: true, output: "" },
+    });
+    const timeout = await activate(
+      timedOut.preparation,
+      serviceLayer({ source: snapshot, orbScripts }),
+    ).catch((error: unknown) => error);
+    expect(
+      classifyRunFailure({ message: (timeout as Error).message }).message,
+    ).toContain("did not finish within 5 minutes");
   });
 
   it("clones an anonymous repository when optional provider tools are absent", async () => {

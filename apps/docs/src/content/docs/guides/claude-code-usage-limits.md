@@ -19,7 +19,7 @@ percent used and when the limit resets. The bar turns to a warning color at
 80% and to a red color at 100%. A limit that has already reset shows **Reset**
 and its time instead of a percent.
 
-dx lists only the limits Anthropic reported for your plan. They can be:
+dx lists only the limits Claude Code reported for your plan. They can be:
 
 | Row | What it limits |
 | --- | --- |
@@ -29,26 +29,19 @@ dx lists only the limits Anthropic reported for your plan. They can be:
 | Sonnet limit | Sonnet models, over a week |
 | Fable limit | Fable models, over a week |
 
-A plan with no reading yet shows "Anthropic reported no limits yet."
+A plan with no reading yet shows "Limits show after Claude Code's first run."
 
 ## How dx reads them
 
-The token from `claude setup-token` cannot call Anthropic's usage endpoint.
-dx reads your limits from the rate-limit headers Anthropic sends back on
-each call made with your plan:
+dx does not ask Anthropic for your limits. Claude Code reports them,
+including the per-model ones, while it runs in a Thread, and dx stores what
+it reported. The refresh button next to **Plan Usage** loads the latest
+report. Until Claude Code first runs on the plan, the limits are unknown and
+dx does not hold Threads for them.
 
-- The connection check, which runs when you open **Model Routing** and when
-  you choose the refresh button next to **Plan Usage**. This reads the
-  5-hour and weekly limits.
-- Claude Code itself, which reports the limits, including the per-model
-  ones, while it runs in a Thread.
-
-The time after **As of** says when dx last read them. While your plan is
-used up and extra usage on your Claude account is not **Off**, the
-connection check does not read new limits, because the call could draw on
-paid extra usage. The rows update again once Claude Code runs or the limit
-resets. Replacing the token clears the stored limits, since the new token
-may belong to another account.
+The time after **As of** says when Claude Code last reported them.
+Replacing the token clears the stored limits, since the new token may belong
+to another account.
 
 ## Subscription Only or Allow Extra Usage
 
@@ -108,7 +101,7 @@ after it read the limit.
 - Limit names, per-model limits, extra usage states, and the one-hour
   fallback:
   [`claude-code.ts`](https://github.com/dxcode-dev/dxcode/blob/main/packages/domain/src/settings/claude-code.ts)
-- Reading limits from headers and Claude Code, the default choice, and
+- Reading limits from Claude Code, the default choice, and
   clearing limits on a new token:
   [`plan.ts`](https://github.com/dxcode-dev/dxcode/blob/main/apps/core/src/claude-code/plan.ts)
 - Not starting and stopping Claude Code at a limit:

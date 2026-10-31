@@ -142,8 +142,18 @@ describe("sidebar selection and pending titles", () => {
       ...thread,
       id: "thr_00000000-0000-4000-8000-000000000097" as ThreadId,
       projectId: hiddenProjectId,
+      projectless: true,
       title: "Earlier No Project thread",
       lastActivityAt: DateTime.makeUnsafe(Date.now() - 60_000),
+    } as ThreadData;
+    // From before the person joined a workspace: their personal No Project.
+    const personal = {
+      ...thread,
+      id: "thr_00000000-0000-4000-8000-000000000098" as ThreadId,
+      projectId: "prj_personal-no-project" as ProjectId,
+      projectless: true,
+      title: "Personal No Project thread",
+      lastActivityAt: DateTime.makeUnsafe(Date.now() - 90_000),
     } as ThreadData;
     const named = {
       ...thread,
@@ -201,15 +211,25 @@ describe("sidebar selection and pending titles", () => {
           ...container.querySelectorAll("[data-thread-section]"),
         ].indexOf(section as HTMLElement),
         pending: row?.querySelector(".thread-title-pending") !== null,
+        // Every scope's No Project Threads share one section.
+        noProjectSections: [
+          ...container.querySelectorAll(".thread-group-heading"),
+        ].filter((heading) => heading.textContent?.includes("No Project"))
+          .length,
+        noProjectRows: container.querySelectorAll(
+          '[data-thread-section="no-project"] .thread-row',
+        ).length,
       };
     };
 
-    await React.act(() => render([named, earlier]));
+    await React.act(() => render([named, earlier, personal]));
     expect(placement()).toEqual({
       section: expect.stringContaining("No Project"),
       index: 0,
       sectionIndex: 0,
       pending: true,
+      noProjectSections: 1,
+      noProjectRows: 3,
     });
     expect(container.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
 
@@ -219,21 +239,25 @@ describe("sidebar selection and pending titles", () => {
       section: expect.stringContaining("No Project"),
       index: 0,
       sectionIndex: 0,
+      noProjectSections: 1,
     });
 
     const listed = {
       ...thread,
       id: pendingId,
       projectId: hiddenProjectId,
+      projectless: true,
       title: "Canonical pending title",
       lastActivityAt: DateTime.makeUnsafe(pending[0]?.startedAt ?? 0),
     } as ThreadData;
-    await React.act(() => render([listed, named, earlier]));
+    await React.act(() => render([listed, named, earlier, personal]));
     expect(placement()).toEqual({
       section: expect.stringContaining("No Project"),
       index: 0,
       sectionIndex: 0,
       pending: false,
+      noProjectSections: 1,
+      noProjectRows: 3,
     });
     expect(container.textContent).toContain("Canonical pending title");
     expect(container.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
@@ -332,9 +356,12 @@ describe("pending creations in the sidebar", () => {
       withPendingThreads([unloadedProject], [creation], projectNames, true),
     );
 
-    expect(incomplete?.label).toBe("No Project");
-    expect(incomplete?.id).not.toBe("prj_second-page");
-    expect(complete?.id).toBe("prj_second-page");
+    // Only a Thread Core marks projectless joins it; an unnamed Project
+    // keeps its own section either way.
+    for (const section of [incomplete, complete]) {
+      expect(section?.label).toBe("No Project");
+      expect(section?.id).toBe("no-project");
+    }
   });
 });
 

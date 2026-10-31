@@ -78,6 +78,7 @@ type SummaryKind =
   | "guidance"
   | "search"
   | "check"
+  | "skill"
   | "subagent"
   | "generic";
 
@@ -186,6 +187,8 @@ const summaryPhrase = (kind: SummaryKind, count: number) => {
       return `searched ${plural(count, "time")}`;
     case "check":
       return `checked on ${plural(count, "command")}`;
+    case "skill":
+      return `activated ${plural(count, "skill")}`;
     case "subagent":
       return `ran ${plural(count, "subagent")}`;
     case "generic":

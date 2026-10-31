@@ -16,7 +16,6 @@ import { Effect, Option, Schema } from "effect";
 import {
   claudePlanAccess,
   claudePlanBlockedCause,
-  claudePlanReadable,
   loadClaudePlan,
   recordClaudePlanReading,
 } from "../../claude-code/plan.js";
@@ -46,11 +45,7 @@ import {
   catalogProviderModels,
   IN_DO_APIS,
 } from "../model-routing/catalog.js";
-import {
-  checkClaudeCodeToken,
-  claudeCodeTokenHealth,
-  readClaudePlanWithToken,
-} from "../model-routing/claude-code-token.js";
+import { isClaudePlanToken } from "../model-routing/claude-code-token.js";
 import {
   loadConnectionForTarget,
   updateConnectionHealth,
@@ -166,6 +161,24 @@ class CoordinatorFailure extends Error {
  * The coordinator's failure body. Retryable classes answer 502 and permanent
  * ones 400, so the transport retries only what can succeed on retry.
  */
+/**
+ * A Claude plan token saved on another connection before dx refused that.
+ * Core never sends it: only Claude Code in an Orb may.
+ */
+const planTokenElsewhere = (
+  connection: StoredModelConnection,
+  apiKey: string | undefined,
+) =>
+  apiKey !== undefined &&
+  connection.providerId !== CLAUDE_CODE_PROVIDER_ID &&
+  isClaudePlanToken(apiKey);
+
+const PLAN_TOKEN_ELSEWHERE = runFailure(
+  "account",
+  "CLAUDE_PLAN_TOKEN_ELSEWHERE",
+  "A Claude plan token works only in a Claude Pro/Max connection. Replace this connection's key in Settings, then retry.",
+);
+
 const failureResponse = (failure: RunFailure, upstreamStatus?: number) =>
   jsonResponse(
     {
@@ -941,6 +954,10 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
         ),
       );
     }
+    if (planTokenElsewhere(connection, apiKey)) {
+      this.#recordOutcome(connection, PLAN_TOKEN_ELSEWHERE);
+      return failureResponse(PLAN_TOKEN_ELSEWHERE);
+    }
 
     const base = new URL(pin.model.baseUrl);
     const target = new URL(envelope.request.url);
@@ -1073,6 +1090,10 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
           );
     if (apiKey === undefined) {
       return jsonResponse({ code: "CREDENTIAL_UNAVAILABLE" }, 403);
+    }
+    if (planTokenElsewhere(connection, apiKey)) {
+      this.#recordOutcome(connection, PLAN_TOKEN_ELSEWHERE);
+      return failureResponse(PLAN_TOKEN_ELSEWHERE);
     }
     const minted = entry;
     if (
@@ -1495,9 +1516,20 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       const apiKey = await connectionApiKey(this.#db(), keyring, connection);
       if (apiKey === undefined) {
         health = { state: "unhealthy", code: "CREDENTIAL_UNAVAILABLE" };
+      } else if (planTokenElsewhere(connection, apiKey)) {
+        health = { state: "unhealthy", code: PLAN_TOKEN_ELSEWHERE.code };
       } else if (connection.providerId === CLAUDE_CODE_PROVIDER_ID) {
-        health = claudeCodeTokenHealth(
-          await this.#checkClaudePlan(connection.id, apiKey),
+        // Only the Claude Code binary sends a plan token to Anthropic, and
+        // its runs report the plan's limits. The check reads nothing and
+        // keeps the stored health.
+        return jsonResponse(
+          {
+            health: {
+              state: connection.health.state,
+              code: connection.health.code,
+            },
+          },
+          200,
         );
       } else if (connection.providerId === "amazon-bedrock") {
         health = await this.#probeBedrock(connection, apiKey);
@@ -1544,27 +1576,6 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     }
     await updateConnectionHealth(this.#db(), connection, health);
     return jsonResponse({ health }, 200);
-  }
-
-  /**
-   * Checks a Claude Pro/Max token and, unless that could spend paid extra
-   * usage, records the plan's current limits from the same call.
-   */
-  async #checkClaudePlan(connectionId: string, token: string) {
-    const state = await loadClaudePlan(this.#db(), connectionId);
-    if (!claudePlanReadable(state)) return checkClaudeCodeToken(token);
-    const { check, reading, refusal } = await readClaudePlanWithToken(token);
-    if (refusal !== undefined)
-      settingsPersistenceLogger.warn("Claude plan reading was refused.", {
-        event: "claude_plan_read_refused",
-        connectionId,
-        refusal,
-      });
-    if (reading !== undefined)
-      await recordClaudePlanReading(this.#db(), connectionId, reading);
-    // Anthropic also answers 403 for a location it does not serve; the free
-    // model list, which judged the token when it was saved, decides.
-    return check === "rejected" ? checkClaudeCodeToken(token) : check;
   }
 
   async #probeJsonGet(

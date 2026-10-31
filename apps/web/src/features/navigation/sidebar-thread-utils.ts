@@ -24,16 +24,22 @@ export interface ThreadSection {
 const PENDING_PROJECTLESS_ID = "prj_pending-no-project" as ProjectId;
 
 /**
+ * The one section for every No Project Thread. A person has a hidden No
+ * Project per scope (personal, and each workspace they joined).
+ */
+const NO_PROJECT_SECTION_ID = "no-project";
+
+/**
  * The listed Threads plus those this browser is still creating. A pending
  * Thread comes from the creation itself, not the list cache, so no list
  * refetch can drop it before Core admits it. Admission caches the server's
  * row in the lists first, so the pending row hands over without a gap, and
  * from then the server's list alone decides whether the Thread is shown.
  *
- * A No Project Thread's hidden Project is unknown until Core answers. When
+ * A pending No Project Thread is marked projectless, so it joins the one No
+ * Project section. Its hidden Project is unknown until Core answers. When
  * every Project's name is loaded, an owned Thread under an unnamed Project
- * can only be under that hidden one, so the pending row joins its section;
- * otherwise it gets a No Project section of its own.
+ * can only be under that hidden one, so the pending row takes its ID.
  */
 export function withPendingThreads(
   threads: ReadonlyArray<ThreadData>,
@@ -56,14 +62,15 @@ export function withPendingThreads(
         )?.projectId
       : undefined) ?? PENDING_PROJECTLESS_ID;
   return [
-    ...unlisted.map((creation) =>
-      optimisticThreadData(
+    ...unlisted.map((creation) => ({
+      ...optimisticThreadData(
         creation.id,
         creation.project?.id ?? projectlessId,
         creation.title,
         creation.startedAt,
       ),
-    ),
+      ...(creation.project === undefined ? { projectless: true as const } : {}),
+    })),
     ...threads,
   ];
 }
@@ -149,7 +156,7 @@ export function buildThreadSections(
   const snoozed: Array<ThreadData> = [];
   const inactive: Array<ThreadData> = [];
   const archived: Array<ThreadData> = [];
-  const groups = new Map<ThreadData["projectId"], Array<ThreadData>>();
+  const groups = new Map<string, Array<ThreadData>>();
 
   const owned = new Set(threads.map(({ id }) => id));
   for (const thread of [
@@ -171,9 +178,12 @@ export function buildThreadSections(
       ) {
         inactive.push(thread);
       } else {
-        const group = groups.get(thread.projectId) ?? [];
+        const key = thread.projectless
+          ? NO_PROJECT_SECTION_ID
+          : thread.projectId;
+        const group = groups.get(key) ?? [];
         group.push(thread);
-        groups.set(thread.projectId, group);
+        groups.set(key, group);
       }
     }
   }
@@ -184,7 +194,8 @@ export function buildThreadSections(
     ...(pinned.length === 0 ? [] : [{ id: "pinned", threads: pinned }]),
     ...Array.from(groups, ([id, groupedThreads]) => ({
       id,
-      // Project lists leave out each person's No Project.
+      // Project lists leave out each person's No Project; a Project not
+      // loaded yet keeps its own section.
       label: projectNames.get(id) ?? PROJECTLESS_PROJECT_NAME,
       project: true,
       threads: groupedThreads,

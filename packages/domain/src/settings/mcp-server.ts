@@ -3,6 +3,7 @@ import { Timestamp } from "../persistence/timestamp.js";
 import { ProjectId } from "../projects/project-id.js";
 import { UserId } from "../users/user-id.js";
 import { EnvironmentVariableConfigReference } from "./environment-variable.js";
+import { PluginId } from "./plugin-id.js";
 import { WorkspaceId, WorkspaceRole } from "./workspace.js";
 
 export const MAX_MCP_SERVERS_PER_SCOPE = 20;
@@ -244,6 +245,8 @@ export const StoredMcpServer = Schema.Struct({
   healthErrorCode: Schema.optional(
     Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64)),
   ),
+  /** The plugin bundle that installed this server, when one did. */
+  pluginId: Schema.optional(PluginId),
   createdAt: Timestamp,
   updatedAt: Timestamp,
 });

@@ -1,18 +1,17 @@
 import { env } from "cloudflare:test";
 import { parseClaudePlanLimit } from "@dx/domain";
 import { FlueError, type SandboxFactory } from "@flue/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "../../src/app.js";
 import type { Bindings } from "../../src/http/types.js";
 import { makeAgentRuntimeComposition } from "../../src/runtime/agent-composition.js";
-import { claudeCodeTokenFetch } from "../../src/settings/model-routing/claude-code-token.js";
 import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
 
 /**
  * A Claude Pro/Max plan's limits and extra usage choice, through the
  * settings API and the credential coordinator that Claude Code runs use.
- * Anthropic is replaced by a fake that answers the token check and Messages
- * calls with the plan's rate-limit headers; titles never call it.
+ * Only Claude Code runs report the limits; Core calls Anthropic only for
+ * the model list check when a plan is saved.
  */
 
 const origin = "http://dx.test";
@@ -34,55 +33,26 @@ const MODEL = "claude-code/claude-opus-5-5";
 const hour = 3_600;
 const now = () => Math.floor(Date.now() / 1000);
 
-const messageCalls: { model: unknown }[] = [];
-const messageBodies: Record<string, unknown>[] = [];
-const modelListCalls: string[] = [];
-let planHeaders: Record<string, string> = {};
-let planStatus = 200;
+const anthropicCalls: string[] = [];
 
-claudeCodeTokenFetch.current = async (input, init) => {
-  const request = new Request(input, init);
-  const authorization = request.headers.get("authorization");
-  if (
-    authorization !== `Bearer ${TOKEN}` &&
-    authorization !== `Bearer ${NEW_TOKEN}`
-  )
-    return Response.json({ type: "error" }, { status: 401 });
-  if (request.url.startsWith("https://api.anthropic.com/v1/models")) {
-    modelListCalls.push(request.url);
-    return Response.json({ data: [{ id: "claude-haiku-5-5" }] });
-  }
-  const body = (await request.json()) as Record<string, unknown>;
-  messageCalls.push({ model: body.model });
-  messageBodies.push(body);
-  if (planStatus === 403)
-    return Response.json(
-      {
-        type: "error",
-        error: { type: "forbidden", message: "Request not allowed" },
-      },
-      { status: 403 },
-    );
-  return planStatus === 429
-    ? Response.json(
-        { type: "error", error: { type: "rate_limit_error" } },
-        { status: 429, headers: planHeaders },
-      )
-    : Response.json(
-        {
-          content: [{ type: "text", text: "Plan usage card" }],
-          usage: { input_tokens: 40, output_tokens: 4 },
-        },
-        { headers: planHeaders },
-      );
-};
+beforeEach(() => {
+  const real = globalThis.fetch;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    if (!new URL(request.url).hostname.endsWith("anthropic.com"))
+      return real(input, init);
+    // Saving a plan asks the model list whether the token is valid.
+    if (request.url === "https://api.anthropic.com/v1/models?limit=1")
+      return Response.json({ data: [{ id: "claude-haiku-5-5" }] });
+    anthropicCalls.push(request.url);
+    return Response.json({ type: "error" }, { status: 500 });
+  });
+});
 
 afterEach(() => {
-  messageCalls.length = 0;
-  messageBodies.length = 0;
-  modelListCalls.length = 0;
-  planHeaders = {};
-  planStatus = 200;
+  vi.restoreAllMocks();
+  expect(anthropicCalls).toEqual([]);
+  anthropicCalls.length = 0;
 });
 
 const signup = async (email: string, index: number) => {
@@ -224,7 +194,6 @@ describe("Claude Pro/Max plan usage", () => {
       status: 409,
       body: { code: "CLAUDE_CODE_TITLE_DEFERRED" },
     });
-    expect(messageCalls).toEqual([]);
 
     // A Claude Code run gets the token with the plan's choice.
     const submissionId = "claude-plan-submission";
@@ -973,9 +942,9 @@ describe("Claude Pro/Max plan usage", () => {
     expect((await planOf(neverRan))?.id).toBe(second);
   });
 
-  it("reads the plan's limits on an access check, and gives no extra usage choice to an account that has none", async () => {
+  it("gives no extra usage choice to an account that has none", async () => {
     const { cookie, userId } = await signup(
-      "claude-plan-refresh@example.com",
+      "claude-plan-no-extra@example.com",
       174,
     );
     expect(
@@ -989,80 +958,8 @@ describe("Claude Pro/Max plan usage", () => {
       ).status,
     ).toBe(200);
     const { id } = await claudeConnection(cookie);
-    // Saving proved the token on the model list.
-    modelListCalls.length = 0;
-    const check = async () => {
-      const response = await call(
-        `${base}/connections/${id}/check-access`,
-        cookie,
-        "POST",
-      );
-      expect(response.status).toBe(200);
-      return (
-        (await response.json()) as {
-          data: {
-            health: { state: string; code: string };
-            claudePlan?: Plan;
-          };
-        }
-      ).data;
-    };
-
-    // Before any Thread runs, the check reads the limits with one token on
-    // the small model, identifying as Claude Code, the way the Claude Code
-    // CLI's quota check does. This account's organization turned extra
-    // usage off, as Anthropic answered for a real Team plan token.
-    const reset = now() + 3 * hour;
-    planHeaders = {
-      "anthropic-ratelimit-unified-status": "allowed",
-      "anthropic-ratelimit-unified-representative-claim": "five_hour",
-      "anthropic-ratelimit-unified-reset": String(reset),
-      "anthropic-ratelimit-unified-5h-utilization": "0.15",
-      "anthropic-ratelimit-unified-5h-reset": String(reset),
-      "anthropic-ratelimit-unified-5h-status": "allowed",
-      "anthropic-ratelimit-unified-overage-status": "rejected",
-      "anthropic-ratelimit-unified-overage-disabled-reason":
-        "org_level_disabled",
-    };
-    const checked = await check();
-    expect(checked.health).toMatchObject({
-      state: "healthy",
-      code: "CONNECTED",
-    });
-    expect(messageBodies).toEqual([
-      {
-        model: "claude-haiku-5-5",
-        max_tokens: 1,
-        system: [
-          {
-            type: "text",
-            text: "You are Claude Code, Anthropic's official CLI for Claude.",
-          },
-        ],
-        messages: [{ role: "user", content: "quota" }],
-      },
-    ]);
-    expect(checked.claudePlan).toMatchObject({
-      allowExtraUsage: false,
-      usage: {
-        status: "allowed",
-        limit: { id: "five_hour", resetsAt: reset },
-        windows: [{ id: "five_hour", utilization: 0.15, resetsAt: reset }],
-        extraUsage: {
-          status: "rejected",
-          disabledReason: "org_level_disabled",
-          inUse: false,
-        },
-      },
-    });
-    // The list the page loads shows the same reading.
-    expect((await claudeConnection(cookie)).claudePlan).toEqual(
-      checked.claudePlan,
-    );
-
-    // The owner had chosen extra usage, but the account has none: a used-up
-    // plan answers 429 with its headers, the token stays healthy, and dx
-    // holds new work without telling the owner to allow extra usage.
+    // The owner chose extra usage, but the account's organization turned it
+    // off, as Anthropic answered for a real Team plan.
     expect(
       (
         await call(`${base}/connections/${id}/claude-plan`, cookie, "POST", {
@@ -1070,27 +967,48 @@ describe("Claude Pro/Max plan usage", () => {
         })
       ).status,
     ).toBe(200);
-    planStatus = 429;
-    planHeaders = {
-      ...planHeaders,
-      "anthropic-ratelimit-unified-status": "rejected",
-      "anthropic-ratelimit-unified-5h-utilization": "1.0",
-      "anthropic-ratelimit-unified-5h-status": "rejected",
-    };
-    const usedUp = await check();
-    expect(usedUp.health).toMatchObject({ state: "healthy" });
-    expect(usedUp.claudePlan).toMatchObject({
-      allowExtraUsage: true,
-      usage: {
-        status: "rejected",
-        windows: [{ id: "five_hour", utilization: 1, resetsAt: reset }],
-      },
-    });
-    const threadId = "claude-plan-refresh-thread";
+    const threadId = "claude-plan-no-extra-thread";
     await seedThread(userId, threadId);
+    const submissionId = `${threadId}-1`;
+    expect(
+      (
+        await post(threadId, "/resolve", {
+          threadId,
+          submissionId,
+          recovery: false,
+        })
+      ).status,
+    ).toBe(200);
+    const reset = now() + 3 * hour;
+    expect(
+      (
+        await post(threadId, "/claude-code-usage", {
+          threadId,
+          submissionId,
+          canonical: MODEL,
+          reading: {
+            status: "rejected",
+            limit: { id: "five_hour", resetsAt: reset },
+            windows: [{ id: "five_hour", utilization: 1, resetsAt: reset }],
+            extraUsage: {
+              status: "rejected",
+              inUse: false,
+              disabledReason: "org_level_disabled",
+            },
+          },
+          observedAt: now(),
+        })
+      ).status,
+    ).toBe(200);
+    expect((await claudeConnection(cookie)).claudePlan).toMatchObject({
+      allowExtraUsage: true,
+      usage: { extraUsage: { disabledReason: "org_level_disabled" } },
+    });
+
+    // dx holds new work without telling the owner to allow extra usage.
     const refused = await post(threadId, "/resolve", {
       threadId,
-      submissionId: "claude-plan-refresh-next",
+      submissionId: `${threadId}-2`,
       recovery: false,
     });
     expect(refused.status).toBe(400);
@@ -1100,52 +1018,6 @@ describe("Claude Pro/Max plan usage", () => {
       window: "five_hour",
       resetsAt: Math.floor(reset / 60) * 60,
       cause: "exhausted",
-    });
-
-    // With no extra usage to spend, checking again still reads the limits.
-    messageBodies.length = 0;
-    await check();
-    expect(messageBodies).toHaveLength(1);
-    expect(modelListCalls).toEqual([]);
-
-    // Once the account has extra usage on, a used-up plan could bill a
-    // reading to it: the check proves the token on the free model list and
-    // keeps the last reading until the window resets.
-    planStatus = 200;
-    planHeaders = {
-      ...planHeaders,
-      "anthropic-ratelimit-unified-overage-status": "allowed",
-      "anthropic-ratelimit-unified-overage-disabled-reason": "",
-    };
-    await check();
-    expect(messageBodies).toHaveLength(2);
-    const before = (await claudeConnection(cookie)).claudePlan;
-    expect(before?.usage?.extraUsage).toMatchObject({ status: "allowed" });
-    messageBodies.length = 0;
-    const held = await check();
-    expect(messageBodies).toEqual([]);
-    expect(modelListCalls).toHaveLength(1);
-    expect(held.health).toMatchObject({ state: "healthy" });
-    expect(held.claudePlan).toEqual(before);
-
-    // Anthropic refuses a call from a location it does not serve with 403
-    // "Request not allowed". The token still works, so the check asks the
-    // model list before calling it rejected, and keeps the last reading.
-    await env.DB.prepare(
-      "UPDATE claude_code_plan SET usage = NULL WHERE connection_id = ?",
-    )
-      .bind(id)
-      .run();
-    planStatus = 403;
-    planHeaders = {};
-    messageBodies.length = 0;
-    modelListCalls.length = 0;
-    const elsewhere = await check();
-    expect(messageBodies).toHaveLength(1);
-    expect(modelListCalls).toHaveLength(1);
-    expect(elsewhere.health).toMatchObject({
-      state: "healthy",
-      code: "CONNECTED",
     });
   });
 });

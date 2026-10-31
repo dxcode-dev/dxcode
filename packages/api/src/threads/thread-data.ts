@@ -87,8 +87,19 @@ export const ThreadDataSchema = Schema.Struct({
   ),
   /** For members of a shared Thread, who cannot read the owner's Project. */
   projectName: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
-  /** The Thread whose agent started this one. */
+  /**
+   * Lists only: the Thread is in its owner's hidden No Project. A person has
+   * one per scope (personal, and each workspace), and lists show them as one.
+   */
+  projectless: Schema.optional(Schema.Literal(true)),
+  /** The root of the Thread's family, for a child Thread. */
   parentThreadId: Schema.optional(ThreadIdSchema),
+  /**
+   * The family member whose agent started this Thread: the root or another
+   * child. Absent for a root, and for a child started before dx recorded
+   * starters or whose starter was deleted; show that child under the root.
+   */
+  startedByThreadId: Schema.optional(ThreadIdSchema),
   /**
    * The parent's chosen color, when it has one. A child without its own
    * color takes its parent's, on the orb only.
@@ -253,8 +264,14 @@ export const ThreadDetailDataSchema = Schema.Struct({
       }),
     ).check(Schema.isMaxLength(50)),
   ),
-  /** The Thread whose agent started this one. */
+  /** The root of the Thread's family, for a child Thread. */
   parentThreadId: Schema.optional(ThreadIdSchema),
+  /**
+   * The family member whose agent started this Thread: the root or another
+   * child. Absent for a root, and for a child started before dx recorded
+   * starters or whose starter was deleted; show that child under the root.
+   */
+  startedByThreadId: Schema.optional(ThreadIdSchema),
   /**
    * The parent's chosen color, when it has one. A child without its own
    * color takes its parent's, on the orb only.

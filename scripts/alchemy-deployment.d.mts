@@ -90,6 +90,8 @@ export function resourceName(
 
 /** The Cloudflare Containers Orb Worker's script name for a stage. */
 export function orbWorkerName(stage: string): string;
+/** The Orb Worker name before consecutive dashes collapsed; see the .mjs. */
+export function legacyOrbWorkerName(stage: string): string;
 
 export function abortBranchPreviewUploads(options: {
   readonly operation: string;

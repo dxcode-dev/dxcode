@@ -37,7 +37,8 @@ Key invariants:
   user or service during setup. Install its client in setup and authenticate it during resume or
   when the agent first needs it; the resume run by the workspace daemon receives the Project's
   environment variables.
-- Hook output goes to bounded logs (32 KiB each) under `~/.cache/dx/logs`.
+- Each hook's full output goes to its log under `~/.cache/dx/logs` (`setup.log`, `resume.log`),
+  replaced on each run. Only the exit code decides whether the hook succeeded.
 - Orbs are Debian sandboxes with passwordless `sudo`. The standard image has Node.js 24 with
   corepack (pnpm, yarn), OpenJDK 21, Python 3 with pip and venv, `build-essential`, git, git-lfs,
   GitHub CLI, ripgrep, jq, curl, wget, tmux, and Chromium; Orbs from older images can lack some of

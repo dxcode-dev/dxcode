@@ -198,6 +198,8 @@ export const useDictation = ({
     live?: LiveDictation,
   ) => {
     const id = crypto.randomUUID();
+    const startedAt = new Date().toISOString();
+    const mode = live === undefined ? "upload" : "live";
     const controller = new AbortController();
     abort.current = controller;
     jobId.current = id;
@@ -206,6 +208,15 @@ export const useDictation = ({
       { audio, id, live, signal: controller.signal },
       {
         onSuccess: (text) => {
+          recovery.remember({
+            audio,
+            transcript: text,
+            outcome: "completed",
+            mode,
+            jobId: id,
+            startedAt,
+            finishedAt: new Date().toISOString(),
+          });
           if (
             generation.current === ownGeneration &&
             text.trim() &&
@@ -216,6 +227,18 @@ export const useDictation = ({
           }
         },
         onError: (cause) => {
+          recovery.remember({
+            audio,
+            outcome: "failed",
+            error:
+              cause instanceof Error
+                ? cause.message
+                : "Dictation could not be completed.",
+            mode,
+            jobId: id,
+            startedAt,
+            finishedAt: new Date().toISOString(),
+          });
           if (generation.current === ownGeneration)
             recovery.fail(
               audio,

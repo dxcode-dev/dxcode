@@ -2,6 +2,7 @@ import {
   MAX_SKILLS_PER_SCOPE,
   McpServerRepository,
   type PersistenceUnavailable,
+  type PluginId,
   type Principal,
   type ProjectId,
   type ResolvedSkillSnapshot,
@@ -54,6 +55,16 @@ interface SkillServiceShape {
     reviewedIntegrity: SkillIntegrity,
     audit: AuditContext,
     enabled?: boolean,
+  ) => Effect.Effect<SkillWithVersion, unknown>;
+  /**
+   * Saves a skill another importer already previewed, such as one from a
+   * plugin bundle, which then owns it through `pluginId`.
+   */
+  readonly createFromPreview: (
+    target: SkillTarget,
+    preview: SkillPreview,
+    audit: AuditContext,
+    options: { readonly enabled: boolean; readonly pluginId?: PluginId },
   ) => Effect.Effect<SkillWithVersion, unknown>;
   readonly update: (
     target: SkillTarget,
@@ -184,21 +195,18 @@ export class SkillService extends Context.Service<
         });
       });
 
-      return SkillService.of({
-        preview: previewSkillImport,
-        list: repository.list,
-        create: Effect.fn("SkillService.create")(function* (
-          target,
-          bundle,
-          reviewedIntegrity,
-          auditContext,
-          enabled = false,
+      const createFromPreview = Effect.fn("SkillService.createFromPreview")(
+        function* (
+          target: SkillTarget,
+          preview: SkillPreview,
+          auditContext: AuditContext,
+          options: { readonly enabled: boolean; readonly pluginId?: PluginId },
         ) {
+          const { enabled } = options;
           const existing = yield* repository.list(target);
           if (existing.length >= MAX_SKILLS_PER_SCOPE) {
             return yield* new SkillLimitExceeded();
           }
-          const preview = yield* checkedPreview(bundle, reviewedIntegrity);
           if (
             existing.some(({ skill }) => skill.name === preview.manifest.name)
           ) {
@@ -228,6 +236,9 @@ export class SkillService extends Context.Service<
             enabled,
             activeVersion: versionNumber,
             pinned: false,
+            ...(options.pluginId === undefined
+              ? {}
+              : { pluginId: options.pluginId }),
             createdAt: now,
             updatedAt: now,
           });
@@ -243,7 +254,26 @@ export class SkillService extends Context.Service<
             );
           }
           return yield* repository.find(target, id);
+        },
+      );
+
+      return SkillService.of({
+        preview: previewSkillImport,
+        list: repository.list,
+        create: Effect.fn("SkillService.create")(function* (
+          target,
+          bundle,
+          reviewedIntegrity,
+          auditContext,
+          enabled = false,
+        ) {
+          const preview = yield* checkedPreview(bundle, reviewedIntegrity);
+          return yield* createFromPreview(target, preview, auditContext, {
+            enabled,
+          });
         }),
+        createFromPreview: (target, preview, auditContext, options) =>
+          createFromPreview(target, preview, auditContext, options),
         update: Effect.fn("SkillService.update")(
           function* (
             target,

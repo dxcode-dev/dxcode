@@ -34,6 +34,8 @@ const SourceRow = Schema.Struct({
   installation_epoch: Schema.NullOr(Schema.Number),
   policy_revision: Schema.NullOr(Schema.Number),
   private_submodule_repository_ids_json: Schema.NullOr(Schema.String),
+  pre_clone_script: Schema.optional(Schema.NullOr(Schema.String)),
+  pre_setup_script: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const unavailable = (operation: string) => (cause: unknown) =>
@@ -64,7 +66,13 @@ const load = async (db: D1Database, threadId: string) => {
              authority.provider_workspace_id,
              authority.provider_repository_id, authority.authorization_epoch,
              authority.installation_epoch, authority.policy_revision,
-             authority.private_submodule_repository_ids_json
+             authority.private_submodule_repository_ids_json,
+             (SELECT body FROM project_orb_script
+               WHERE project_id = thread.project_id AND kind = 'pre-clone')
+               AS pre_clone_script,
+             (SELECT body FROM project_orb_script
+               WHERE project_id = thread.project_id AND kind = 'pre-setup')
+               AS pre_setup_script
         FROM threads AS thread
         LEFT JOIN thread_source_snapshot AS snapshot ON snapshot.thread_id = thread.id
         LEFT JOIN thread_source_intent AS intent ON intent.thread_id = thread.id
@@ -140,12 +148,22 @@ const load = async (db: D1Database, threadId: string) => {
       repositoryName: repository.full_name,
     });
   }
+  const preClone = row.pre_clone_script ?? undefined;
+  const preSetup = row.pre_setup_script ?? undefined;
   return {
     actorUserId: row.owner_user_id,
     ...(snapshot === undefined ? {} : { snapshot }),
     ...(intent === undefined ? {} : { intent }),
     ...(authority === undefined ? {} : { authority }),
     privateSubmodules,
+    ...(preClone === undefined && preSetup === undefined
+      ? {}
+      : {
+          orbScripts: {
+            ...(preClone === undefined ? {} : { preClone }),
+            ...(preSetup === undefined ? {} : { preSetup }),
+          },
+        }),
   };
 };
 

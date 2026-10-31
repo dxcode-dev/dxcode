@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect";
 import { Timestamp } from "../persistence/timestamp.js";
 import { UserId } from "../users/user-id.js";
 import { McpServerId } from "./mcp-server.js";
+import { PluginId } from "./plugin-id.js";
 import { WorkspaceId } from "./workspace.js";
 
 export const MAX_SKILLS_PER_SCOPE = 20;
@@ -142,6 +143,8 @@ export const StoredSkill = Schema.Struct({
   enabled: Schema.Boolean,
   activeVersion: SkillVersion,
   pinned: Schema.Boolean,
+  /** The plugin bundle that installed this skill, when one did. */
+  pluginId: Schema.optional(PluginId),
   createdAt: Timestamp,
   updatedAt: Timestamp,
   removedAt: Schema.optional(Timestamp),

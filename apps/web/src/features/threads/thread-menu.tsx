@@ -8,6 +8,7 @@ import {
   Archive,
   ArchiveRestore,
   Braces,
+  Bug,
   Check,
   ChevronRight,
   Ellipsis,
@@ -17,6 +18,7 @@ import {
   Gauge,
   Hash,
   Link2,
+  Network,
   Pencil,
   Pin,
   PinOff,
@@ -47,12 +49,15 @@ import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
 import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
 import { ThreadColorSubmenu } from "../../shared/ui/thread-color-submenu.js";
 import { SnoozeMenuItems } from "../../shared/ui/thread-snooze-menu.js";
+import { BugReportDialog } from "./bug-reports/bug-report-dialog.js";
+import type { DictationRecord } from "./dictation/dictation-session.js";
 import {
   serializeThreadJson,
   serializeThreadMarkdown,
   threadExportFilename,
 } from "./thread-export.js";
 import { threadSelectionSummary } from "./thread-selection-summary.js";
+import { ThreadPresentationContext } from "./thread-session-context.js";
 import type { TranscriptViewModel } from "./transcript-view-model.js";
 
 /** A Thread menu entry that opens a submenu of its own items. */
@@ -123,6 +128,11 @@ export function ThreadMenu({
   // read or export.
   const own = thread.access === undefined || thread.access === "owner";
   const [announcement, setAnnouncement] = React.useState("");
+  const retained = React.useContext(ThreadPresentationContext);
+  const [reportingBug, setReportingBug] = React.useState<{
+    readonly changesOpen: boolean;
+    readonly dictation?: DictationRecord;
+  }>();
   const copyUrlKeycaps = useCommandKeycaps("navigation.copy-url");
   const copy = async (text: string, label: string) => {
     try {
@@ -187,24 +197,39 @@ export function ThreadMenu({
             <Menu.Popup
               className={`thread-menu-popup thread-actions-menu${showDetails ? " thread-actions-menu-details" : ""}`}
             >
-              {/* A family shares as one unit, so members reach the parent too. */}
+              {/* A family shares as one unit, so members reach the Thread
+                  that started this one too: its starter, or for a Thread
+                  started before dx recorded starters, the family's root. */}
               {thread.parentThreadId === undefined ? null : (
-                <>
-                  <Menu.Item
-                    className="thread-menu-item"
-                    render={
-                      <Link
-                        to="/threads/$threadId"
-                        params={{ threadId: thread.parentThreadId }}
-                      />
-                    }
-                  >
-                    <SubthreadIcon strokeWidth={2} />
-                    <span>Open Source Thread</span>
-                  </Menu.Item>
-                  <Menu.Separator className="thread-menu-separator" />
-                </>
+                <Menu.Item
+                  className="thread-menu-item"
+                  render={
+                    <Link
+                      to="/threads/$threadId"
+                      params={{
+                        threadId:
+                          thread.startedByThreadId ?? thread.parentThreadId,
+                      }}
+                    />
+                  }
+                >
+                  <SubthreadIcon strokeWidth={2} />
+                  <span>Open Source Thread</span>
+                </Menu.Item>
               )}
+              <Menu.Item
+                className="thread-menu-item"
+                render={
+                  <Link
+                    to="/threads/$threadId/tree"
+                    params={{ threadId: thread.id }}
+                  />
+                }
+              >
+                <Network />
+                <span>Open Thread Tree</span>
+              </Menu.Item>
+              <Menu.Separator className="thread-menu-separator" />
               <Menu.Item
                 className="thread-menu-item"
                 onClick={() =>
@@ -307,6 +332,23 @@ export function ThreadMenu({
                   ) : null}
                 </>
               ) : null}
+              <Menu.Separator className="thread-menu-separator" />
+              <Menu.Item
+                className="thread-menu-item"
+                onClick={() => {
+                  const dictation = retained?.dictation.latest();
+                  setReportingBug({
+                    changesOpen:
+                      document.querySelector(
+                        `.changes-pane[data-thread-id="${thread.id}"]`,
+                      ) !== null,
+                    ...(dictation === undefined ? {} : { dictation }),
+                  });
+                }}
+              >
+                <Bug />
+                <span>Report Bug</span>
+              </Menu.Item>
               {showDetails ? (
                 <ThreadDetailItems thread={thread} project={project} />
               ) : null}
@@ -314,6 +356,16 @@ export function ThreadMenu({
           </Menu.Positioner>
         </Menu.Portal>
       </Menu.Root>
+      {reportingBug === undefined ? null : (
+        <BugReportDialog
+          thread={thread}
+          project={project}
+          transcript={transcript}
+          changesOpen={reportingBug.changesOpen}
+          dictation={reportingBug.dictation}
+          onClose={() => setReportingBug(undefined)}
+        />
+      )}
       <span className="sr-only" aria-live="polite">
         {announcement}
         {announcement.startsWith("Could") ? (

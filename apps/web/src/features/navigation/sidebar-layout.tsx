@@ -62,7 +62,6 @@ const toggleEntry = (
       id: id as ThreadData["id"],
       open: !layout.expandedThreads.has(id as ThreadData["id"]),
     };
-  // A pending No Project section has no id the server knows yet.
   return isSyncedSection(id)
     ? { kind, id, open: layout.collapsedSections.has(id) }
     : undefined;

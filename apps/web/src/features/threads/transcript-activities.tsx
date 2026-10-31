@@ -1,4 +1,4 @@
-import { ChevronRight, FileSymlink } from "lucide-react";
+import { ChevronRight, FileSymlink, Sparkles } from "lucide-react";
 import * as React from "react";
 import { FileContextMenu } from "../../shared/ui/file-context-menu.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
@@ -6,6 +6,11 @@ import {
   parseShellResult,
   shellCommandOperations,
 } from "./shell-command-operation.js";
+import {
+  type SkillActivation,
+  skillActivation,
+  skillActivationLabel,
+} from "./skill-activation.js";
 import { SubagentActivity } from "./subagent-activity.js";
 import { ThreadFileNavigationContext } from "./thread-file-navigation.js";
 import { ThreadToolDetail, ThreadToolLabel } from "./thread-tool-activity.js";
@@ -51,8 +56,16 @@ const numberField = (value: unknown, ...names: ReadonlyArray<string>) => {
 
 const basename = (path: string) => path.split(/[\\/]/).at(-1) ?? path;
 
+/** A call that Stop ended, rather than one that failed. */
+const stopped = (part: ToolPart) =>
+  part.state === "output-error" &&
+  /\b(?:stopped|aborted)\b/i.test(part.errorText);
+
 const failureCount = (rows: ReadonlyArray<WorkRow>) =>
-  rows.filter((row) => toolPart(row)?.state === "output-error").length;
+  rows.filter((row) => {
+    const part = toolPart(row);
+    return part?.state === "output-error" && !stopped(part);
+  }).length;
 
 const serialize = (value: unknown) => {
   if (typeof value === "string") return value;
@@ -186,7 +199,7 @@ function ToolLabel({
   readonly part: ToolPart;
 }) {
   const failed =
-    part.state === "output-error" ||
+    (part.state === "output-error" && !stopped(part)) ||
     (parseShellResult(textualOutputFor(part) ?? "").exitCode ?? 0) !== 0;
   if (category === "explore") return <ExploreOperationLabel part={part} />;
   if (category === "thread") return <ThreadToolLabel part={part} />;
@@ -195,6 +208,7 @@ function ToolLabel({
       <span className="transcript-command-label">
         <span className={failed ? "is-failed" : undefined}>$</span>
         <code>{commandFor(part) ?? part.toolName}</code>
+        {stopped(part) ? <small>Stopped</small> : null}
       </span>
     );
   }
@@ -240,6 +254,12 @@ function ToolOutput({
   if (output === undefined) return null;
   if (category === "thread")
     return <ThreadToolDetail part={part} output={output} />;
+  if (category === "skill")
+    return (
+      <pre className="transcript-read-output">
+        {textualOutputFor(part) ?? output}
+      </pre>
+    );
   if (part.toolName.startsWith("shell_command")) {
     const result = parseShellResult(output);
     const operations =
@@ -443,8 +463,62 @@ function ToolActivityRow({
   );
 }
 
+/**
+ * A skill activation on its own row, named and with its outcome, and the
+ * loaded instructions behind a disclosure.
+ */
+function SkillActivationRow({
+  activation,
+  part,
+}: {
+  readonly activation: SkillActivation;
+  readonly part: ToolPart;
+}) {
+  const [expanded, setExpanded] = React.useState(false);
+  const label = (
+    <>
+      <Sparkles aria-hidden="true" className="transcript-skill-icon" />
+      <span className="transcript-activity-label">
+        {skillActivationLabel(activation)}
+      </span>
+    </>
+  );
+  const attributes = {
+    className: "transcript-activity-row transcript-skill-activation",
+    "data-tool-category": "skill",
+    "data-skill-state": activation.state,
+  };
+  if (outputFor(part) === undefined) return <div {...attributes}>{label}</div>;
+  return (
+    <details
+      {...attributes}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary>
+        {label}
+        <ChevronRight className="transcript-activity-chevron" />
+      </summary>
+      {expanded ? <ToolOutput category="skill" part={part} /> : null}
+    </details>
+  );
+}
+
 /** One tool call: its label, and its output behind a disclosure. */
 function ToolPartRow({
+  category,
+  part,
+}: {
+  readonly category: ToolCategory;
+  readonly part: ToolPart;
+}) {
+  if (category === "skill")
+    return (
+      <SkillActivationRow activation={skillActivation(part)} part={part} />
+    );
+  return <GenericToolPartRow category={category} part={part} />;
+}
+
+function GenericToolPartRow({
   category,
   part,
 }: {
@@ -569,6 +643,12 @@ export function TranscriptActivityList({
             key={activity.row.id}
             view={activity.view}
             renderStep={renderSubagentStep}
+          />
+        ) : activity.kind === "skill" ? (
+          <SkillActivationRow
+            activation={activity.activation}
+            key={activity.row.id}
+            part={activity.part}
           />
         ) : (
           <ActivityGroup

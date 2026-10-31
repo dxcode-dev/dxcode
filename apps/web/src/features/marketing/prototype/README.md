@@ -12,8 +12,8 @@ This uses a separate Vite HTML entry so reviewing marketing does not load the cu
 - 2: The field guide. Editorial typography, founder story, product demonstration.
 - 3: Mission control. Dark, product-first view with desktop/mobile framing.
 
-All product data is illustrative. Forms do not transmit or persist data. Public distribution, BYOK, and self-host copy describe the intended v0.1.0 release, not verification of a shipped package. Bot channels and broader compute portability are exploratory direction, not dated commitments.
+All product data is illustrative. Forms do not transmit or persist data. The source is public at `github.com/dxcode-dev/dxcode`; check BYOK and self-host copy against the current release. Bot channels and broader compute portability are exploratory direction, not dated commitments.
 
-Owner selected FSL-1.1-ALv2: each version converts to Apache-2.0 after two years. Public distribution remains separate release work.
+Owner selected FSL-1.1-ALv2: each version converts to Apache-2.0 after two years.
 
 Generated illustration: original cloud workshop with mechanical birds; imagegen source copied into `workshop.png`.

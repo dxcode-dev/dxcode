@@ -1,17 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
+import {
+  inviteCheckFailedMessage,
+  inviteUnavailableMessage,
+} from "../../../shared/invite-unavailable.js";
 import { AppFrame } from "../../../shared/layout/app-frame.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
   acceptInviteMutationOptions,
   workspaceInviteQueryOptions,
 } from "./members-queries.js";
-
-const invalidMessage = {
-  expired: "This invite link has expired. Ask a workspace admin for a new one.",
-  revoked: "This invite link was revoked. Ask a workspace admin for a new one.",
-  "not-found": "This invite link is not valid.",
-} as const;
 
 /** Signed-in landing for a workspace invite link. */
 export function JoinWorkspacePage() {
@@ -42,20 +40,12 @@ export function JoinWorkspacePage() {
             <p role="status">Checking invite link…</p>
           ) : invite.isError ? (
             <p className="auth-local-error" role="alert">
-              The invite link could not be checked. Try again.
+              {inviteCheckFailedMessage}
             </p>
           ) : invite.data.status !== "valid" || workspace === undefined ? (
             <>
               <strong>Invite unavailable</strong>
-              <p>
-                {
-                  invalidMessage[
-                    invite.data.status === "valid"
-                      ? "not-found"
-                      : invite.data.status
-                  ]
-                }
-              </p>
+              <p>{inviteUnavailableMessage(invite.data.status)}</p>
               <Button
                 variant="outline"
                 onClick={() => void navigate({ to: "/" })}

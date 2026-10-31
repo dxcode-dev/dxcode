@@ -6,6 +6,7 @@ import {
   isSessionEndedClose,
   reportSessionEnded,
 } from "../../../shared/auth/session-ended.js";
+import { recordConnectionEvent } from "../../../shared/diagnostics/client-diagnostics.js";
 import { invalidateSidebarLayout } from "../../navigation/sidebar-layout-queries.js";
 import { invalidateNotifications } from "../../notifications/notifications-queries.js";
 import {
@@ -192,11 +193,17 @@ export class RealtimeClient {
       if (this.#socket === socket) this.#receive(event.data);
     };
     socket.onopen = () => {
-      if (this.#socket === socket) this.#attempt = 0;
+      if (this.#socket !== socket) return;
+      recordConnectionEvent("realtime.open");
+      this.#attempt = 0;
     };
     socket.onerror = () => socket.close();
     socket.onclose = (event) => {
       if (this.#socket !== socket) return;
+      recordConnectionEvent(
+        "realtime.closed",
+        `${event.code}${event.reason ? ` ${event.reason}` : ""}`,
+      );
       this.#socket = undefined;
       this.#clearWorkspaceStatuses();
       if (this.#heartbeat !== undefined) clearInterval(this.#heartbeat);

@@ -71,6 +71,7 @@ import { WorkspacePolicyRepositoryD1 } from "../settings/workspace-policy/reposi
 import { WorkspacePolicyService } from "../settings/workspace-policy/service.js";
 import { authorizeSource } from "../source-control/admission.js";
 import { projectViewerAccess } from "./access.js";
+import { projectOrbScriptRoutes } from "./orb-scripts.js";
 import { ProjectRepositoryD1 } from "./repository-d1.js";
 import { ProjectService } from "./service.js";
 
@@ -1326,3 +1327,5 @@ projectRoutes.put("/:projectId/icon", async (context) => {
     Match.exhaustive,
   );
 });
+
+projectRoutes.route("/", projectOrbScriptRoutes);

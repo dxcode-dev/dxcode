@@ -107,6 +107,101 @@ describe("Settings routes", routeLoading, () => {
   });
 });
 
+describe("Project routes", routeLoading, () => {
+  const missingProjectId = "prj_00000000-0000-4000-8000-000000000000";
+  const projectResponse = (request: { readonly url: string }) => {
+    if (request.url === `/v1/projects/${projectId}`)
+      return Response.json({ status: "success", data: project });
+    if (request.url.startsWith("/v1/projects/"))
+      return Response.json(
+        {
+          status: "error",
+          data: { code: "PROJECT_NOT_FOUND", message: "Project not found." },
+        },
+        { status: 404 },
+      );
+    return Response.json({ status: "success", data: {} });
+  };
+  const loadAt = async (path: string) => {
+    vi.stubGlobal("fetch", new FrontendNetworkHarness(projectResponse).fetch);
+    const router = createAppRouter(
+      { queryClient: createQueryClient(), userId },
+      createMemoryHistory({ initialEntries: [path] }),
+    );
+    await router.load();
+    return router;
+  };
+  const matchAt = (
+    router: Awaited<ReturnType<typeof loadAt>>,
+    routeId: string,
+  ) => router.state.matches.find((match) => match.routeId === routeId);
+
+  it.each([
+    ["/projects/$projectId", `/projects/${missingProjectId}`],
+    ["/projects/$projectId/settings", `/projects/${missingProjectId}/settings`],
+    [
+      "/projects/$projectId/settings/$section",
+      `/projects/${missingProjectId}/settings/orb`,
+    ],
+  ])("keeps the shell for a missing project at %s", async (route, path) => {
+    const router = await loadAt(path);
+
+    expect(matchAt(router, "/_product")?.status).toBe("success");
+    const match = matchAt(router, `/_product${route}`);
+    expect(match?.status).toBe("notFound");
+    expect(match?.error).toMatchObject({
+      data: { code: "PROJECT_NOT_FOUND" },
+    });
+  });
+
+  it.each([
+    ["/projects/$projectId", "/projects/not-a-project"],
+    ["/projects/$projectId/settings", "/projects/abc/settings"],
+    ["/projects/$projectId/settings/$section", "/projects/abc/settings/orb"],
+  ])(
+    "keeps the shell for a malformed project ID at %s",
+    async (route, path) => {
+      const router = await loadAt(path);
+
+      expect(matchAt(router, "/_product")?.status).toBe("success");
+      const match = matchAt(router, `/_product${route}`);
+      expect(match?.status).toBe("notFound");
+      expect(match?.error).toMatchObject({
+        data: { code: "INVALID_PROJECT_ID" },
+      });
+    },
+  );
+
+  it("reports an unknown project settings section instead of opening General", async () => {
+    const router = await loadAt(`/projects/${projectId}/settings/bogus`);
+
+    const match = matchAt(
+      router,
+      "/_product/projects/$projectId/settings/$section",
+    );
+    expect(match?.status).toBe("notFound");
+    expect(match?.error).toMatchObject({
+      data: {
+        code: "PROJECT_SETTINGS_SECTION_NOT_FOUND",
+        projectId,
+        section: "bogus",
+      },
+    });
+  });
+
+  it.each(["general", "orb", "secrets"])(
+    "opens the %s project settings section",
+    async (section) => {
+      const router = await loadAt(`/projects/${projectId}/settings/${section}`);
+
+      expect(
+        matchAt(router, "/_product/projects/$projectId/settings/$section")
+          ?.status,
+      ).toBe("success");
+    },
+  );
+});
+
 describe("Router Query coordination", routeLoading, () => {
   it("shares intent-preloaded project data with warm route loading", async () => {
     const network = new FrontendNetworkHarness(() =>
@@ -299,8 +394,8 @@ describe("Router Query coordination", routeLoading, () => {
         .fn<typeof globalThis.fetch>()
         .mockResolvedValue(
           Response.json(
-            { status: "error", error: { code: "NOT_FOUND" } },
-            { status: 404 },
+            { status: "error", error: { code: "PERSISTENCE_UNAVAILABLE" } },
+            { status: 503 },
           ),
         ),
     );

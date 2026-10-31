@@ -436,7 +436,7 @@ export const listSharedThreadRows = async (
                 thread.agent_instructions, thread.agent_instructions_revision,
                 thread.agent_instructions_version, thread.model_selection,
                 thread.runner_profile_id, thread.title_pending_until, thread.color,
-                thread.parent_thread_id,
+                thread.parent_thread_id, thread.started_by_thread_id,
                 thread.plugin_snapshot_json, thread.skill_snapshot_json,
                 thread.visibility, thread.created_at, thread.updated_at,
                 COALESCE(thread.last_activity_at, thread.updated_at) AS last_activity_at,

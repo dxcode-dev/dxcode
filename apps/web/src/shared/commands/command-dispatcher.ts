@@ -12,10 +12,64 @@ const SEQUENCE_TIMEOUT_MS = 700;
 const EDITABLE_SELECTOR =
   "input, textarea, select, [role='textbox'], [role='application']";
 
-const isEditableEvent = (event: KeyboardEvent) => {
-  const origin = [...event.composedPath(), event.target].find(
+// Controls that act on Enter or Space themselves.
+const ACTIVATABLE_SELECTOR = [
+  "a[href]",
+  "button",
+  "summary",
+  "[role='button']",
+  "[role='link']",
+  "[role='checkbox']",
+  "[role='switch']",
+].join(", ");
+
+// Widgets that also own the arrows, Home, End, paging, and letter typeahead.
+const COMPOSITE_SELECTOR = [
+  "menu",
+  "menubar",
+  "menuitem",
+  "menuitemcheckbox",
+  "menuitemradio",
+  "listbox",
+  "option",
+  "combobox",
+  "tablist",
+  "tab",
+  "radiogroup",
+  "radio",
+  "tree",
+  "treeitem",
+  "treegrid",
+  "grid",
+  "gridcell",
+  "slider",
+  "spinbutton",
+  "scrollbar",
+  "toolbar",
+]
+  .map((role) => `[role='${role}']`)
+  .join(", ");
+
+const ACTIVATION_KEYS = new Set(["Enter", " "]);
+const COMPOSITE_KEYS = new Set([
+  "Enter",
+  " ",
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "Home",
+  "End",
+  "PageUp",
+  "PageDown",
+]);
+
+const eventOrigin = (event: KeyboardEvent) =>
+  [...event.composedPath(), event.target].find(
     (target): target is Element => target instanceof Element,
   );
+
+const isEditable = (origin: Element | undefined) => {
   if (origin === undefined) return false;
   if (origin.closest(EDITABLE_SELECTOR) !== null) return true;
   const contentEditable = origin.closest<HTMLElement>("[contenteditable]");
@@ -25,7 +79,35 @@ const isEditableEvent = (event: KeyboardEvent) => {
   );
 };
 
+/**
+ * Whether the focused control acts on this unmodified key itself, so a
+ * command must leave it alone: Enter on a button or link, or an arrow or
+ * typeahead letter in a menu, tab list, or slider. Sidebar rows are the
+ * command system's own controls.
+ */
+const isKeyOwnedByControl = (
+  event: KeyboardEvent,
+  origin: Element | undefined,
+) => {
+  if (origin === undefined || event.ctrlKey || event.altKey || event.metaKey)
+    return false;
+  if (origin.closest("[data-command-sidebar-item]") !== null) return false;
+  if (origin.closest(COMPOSITE_SELECTOR) !== null)
+    return COMPOSITE_KEYS.has(event.key) || /^[a-z0-9]$/i.test(event.key);
+  return (
+    origin.closest(ACTIVATABLE_SELECTOR) !== null &&
+    ACTIVATION_KEYS.has(event.key)
+  );
+};
+
 const surfaceExists = (id: CommandId, document: Document) => {
+  // Enter opens the row that has focus, never one marked before focus moved.
+  if (id === "sidebar.open-focused")
+    return (
+      document.activeElement?.closest("[data-command-focused='true']") != null
+    );
+  if (id === "sidebar.open-menu")
+    return document.querySelector("[data-command-focused='true']") !== null;
   if (id === "sidebar.toggle-focus")
     return (
       document.querySelector("[data-command-action='toggle-sidebar']") !== null
@@ -87,11 +169,13 @@ export const createCommandKeydownHandler = ({
       }
     }
     const commands = registry.getCommands(getContext());
-    const editable = isEditableEvent(event);
+    const origin = eventOrigin(event);
+    const targetHandlesKey =
+      isEditable(origin) || isKeyOwnedByControl(event, origin);
     const modalOpen = document.querySelector(
       "[role='dialog']:not(.mobile-sidebar-drawer), [data-command-modal='true']",
     );
-    if (editable || modalOpen !== null) {
+    if (targetHandlesKey || modalOpen !== null) {
       sequenceIndex = 0;
       return;
     }

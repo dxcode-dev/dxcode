@@ -255,6 +255,11 @@ export interface SourceWorkspaceRecord {
   readonly intent?: ThreadSourceIntent;
   readonly authority?: ThreadSourceAuthority;
   readonly privateSubmodules: ReadonlyArray<SourceSubmoduleRepository>;
+  /** The Project's saved pre-clone and pre-setup scripts. */
+  readonly orbScripts?: {
+    readonly preClone?: string;
+    readonly preSetup?: string;
+  };
 }
 
 export interface AnonymousSourceFinalization {

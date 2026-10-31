@@ -39,6 +39,11 @@ import {
   focusSidebarCommandItem,
   noteSidebarContextPress,
 } from "./sidebar-command-focus.js";
+import {
+  countControlAttributes,
+  startedCountOf,
+} from "./sidebar-thread-count.js";
+import { SidebarThreadStartedCount } from "./sidebar-thread-started-count.js";
 import { observeTitleOverflow } from "./sidebar-title-overflow.js";
 import { ThreadContextMenu } from "./thread-context-menu.js";
 
@@ -245,6 +250,7 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
     ? childActivity(thread, childCount)
     : undefined;
   const parentThreadId = thread.parentThreadId;
+  const startedCount = startedCountOf(thread);
   const sharedWithMe = thread.access !== undefined && thread.access !== "owner";
   const owner = thread.participants?.find((person) => person.owner);
   // A shared Thread shows only its owner at the row's end; hover actions
@@ -311,12 +317,13 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
           : undefined
       }
       sourceThread={
-        // A family shares as one unit, so a shared child's parent is too.
+        // A family shares as one unit, so a shared child's starter is too.
         parentThreadId === undefined
           ? undefined
           : {
-              id: parentThreadId,
-              onOpen: () => onThreadNavigate(parentThreadId),
+              id: thread.startedByThreadId ?? parentThreadId,
+              onOpen: () =>
+                onThreadNavigate(thread.startedByThreadId ?? parentThreadId),
             }
       }
       onSetArchived={(archived, includeChildren) =>
@@ -333,17 +340,12 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
         className="thread-row-shell"
         data-avatars={avatars === null ? undefined : ""}
         data-actions={actionCount === 0 ? undefined : actionCount}
-        data-children={hasChildren ? "" : undefined}
+        {...countControlAttributes(
+          childStatus?.text ?? (startedCount > 0 ? `${startedCount}` : ""),
+        )}
         data-child={child ? "" : undefined}
         data-snooze={snoozed ? "snoozed" : woke ? "woke" : undefined}
         data-error={failed && !snoozed && !woke ? "" : undefined}
-        style={
-          childStatus === undefined
-            ? undefined
-            : ({
-                "--thread-children-glyphs": childStatus.text.length,
-              } as React.CSSProperties)
-        }
         onPointerEnter={(event) => {
           // A tap is not a hover: touch opens the Thread, not its preview.
           if (event.pointerType === "touch") return;
@@ -438,7 +440,9 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
             expanded={expanded}
             onToggle={() => onToggleChildren(thread.id)}
           />
-        ) : null}
+        ) : (
+          <SidebarThreadStartedCount thread={thread} />
+        )}
         {sharedWithMe ? (
           onUnfollow === undefined ? null : (
             <span className="thread-hover-actions">

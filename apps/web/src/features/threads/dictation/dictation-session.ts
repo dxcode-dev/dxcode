@@ -13,10 +13,23 @@ export type DictationRecoverySnapshot =
 
 const emptySnapshot: DictationRecoverySnapshot = { state: "empty" };
 
+/** The latest dictation's audio and outcome, for Dictation Diagnostics. */
+export interface DictationRecord {
+  readonly audio: Blob;
+  readonly transcript?: string;
+  readonly outcome: "completed" | "failed";
+  readonly error?: string;
+  readonly mode: "live" | "upload";
+  readonly jobId: string;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+}
+
 /** Keeps captured voice in memory for the lifetime of its browser session. */
 export class DictationRecoverySession {
   private snapshot: DictationRecoverySnapshot = emptySnapshot;
   private retained: RetainedDictation[] = [];
+  private record: DictationRecord | undefined;
   private readonly listeners = new Set<() => void>();
 
   readonly subscribe = (listener: () => void) => {
@@ -49,8 +62,18 @@ export class DictationRecoverySession {
     this.publishCurrent();
   }
 
+  /** Keeps the latest dictation in memory, on this device only. */
+  remember(record: DictationRecord) {
+    this.record = record;
+  }
+
+  latest() {
+    return this.record;
+  }
+
   clear() {
     this.retained = [];
+    this.record = undefined;
     this.publish(emptySnapshot);
   }
 

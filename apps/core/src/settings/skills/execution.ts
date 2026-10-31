@@ -10,9 +10,7 @@ import {
   type Thread,
   ThreadId,
 } from "@dx/domain";
-import { defineTool } from "@flue/runtime";
-import { Effect, Schema } from "effect";
-import * as v from "valibot";
+import { Effect, Result, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
 
@@ -266,26 +264,20 @@ export const readSkillResource = Effect.fn("readSkillResource")(function* (
   };
 });
 
-export const createSkillResourceTool = (threadId: string) =>
-  defineTool({
-    name: "read_dx_skill_resource",
-    description:
-      "Read one reviewed text resource from an immutable skill version resolved for this Thread. Use only the skill ID, version, and resource path listed in the system instructions.",
-    input: v.object({
-      skillId: v.pipe(v.string(), v.minLength(1), v.maxLength(128)),
-      version: v.pipe(v.number(), v.integer(), v.minValue(1)),
-      path: v.pipe(v.string(), v.minLength(1), v.maxLength(256)),
-    }),
-    async run({ data }) {
-      const output = await Effect.runPromise(
-        readSkillResource(
-          env as Bindings,
-          threadId,
-          data.skillId,
-          data.version,
-          data.path,
-        ),
-      );
-      return { output };
-    },
-  });
+/**
+ * A resource's text for a skill in the Thread's snapshot, or undefined when
+ * the read is refused or fails.
+ */
+export const readThreadSkillResource = async (
+  threadId: string,
+  skillId: string,
+  version: number,
+  path: string,
+) => {
+  const result = await Effect.runPromise(
+    Effect.result(
+      readSkillResource(env as Bindings, threadId, skillId, version, path),
+    ),
+  );
+  return Result.isSuccess(result) ? result.success.content : undefined;
+};

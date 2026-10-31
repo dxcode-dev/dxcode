@@ -401,8 +401,9 @@ if [ -f "$D/user-instructions.md" ]; then
 fi
 # Claude Code reads skills from ~/.claude/skills, not the repository's .agents.
 # dx's built-in skills come first; a repository skill with a built-in name is
-# skipped, as for the dx agent. Links are relative, so they resolve inside the
-# local runtime's namespace too.
+# skipped, as for the dx agent. The Thread's personal and workspace skills
+# come last and replace a skill of the same name, as for the dx agent. Links
+# are relative, so they resolve inside the local runtime's namespace too.
 mkdir -p "$HOME/.claude/skills"
 find "$HOME/.claude/skills" -maxdepth 1 -xtype l -delete
 for skill in "$HOME/.local/share/dx/skills"/*/; do
@@ -416,6 +417,10 @@ if [ -d ${quote(`${WORKSPACE}/.agents/skills`)} ]; then
     [ -f "$skill/SKILL.md" ] && ln -sfn "../../workspace/repo/.agents/skills/$name" "$HOME/.claude/skills/$name"
   done
 fi
+for skill in "$HOME/.local/share/dx/settings-skills"/*/; do
+  name=$(basename "$skill")
+  [ -f "$skill/SKILL.md" ] && ln -sfn "../../.local/share/dx/settings-skills/$name" "$HOME/.claude/skills/$name"
+done
 ${SCRUB_CREDENTIALS}
 cd ${quote(WORKSPACE)}
 # The runner waits for the plan token, which dx writes once this command,

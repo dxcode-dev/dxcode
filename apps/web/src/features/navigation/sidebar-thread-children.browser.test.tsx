@@ -11,14 +11,14 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   Link: ({
     children,
-    params: _params,
-    to: _to,
+    params,
+    to,
     ...props
   }: React.AnchorHTMLAttributes<HTMLAnchorElement> & {
-    readonly params: unknown;
+    readonly params: { readonly threadId: string };
     readonly to: string;
   }) => (
-    <a href="/thread" {...props}>
+    <a href={to.replace("$threadId", params.threadId)} {...props}>
       {children}
     </a>
   ),
@@ -242,6 +242,57 @@ describe("sidebar child threads", () => {
         `lifecycleState=active&parentThreadId=${parentId}`,
       );
       expect(container.querySelector(".thread-children-more")).toBeNull();
+    } finally {
+      await React.act(() => root.unmount());
+      client.clear();
+    }
+  });
+
+  it("counts on a child the Threads below it and opens their tree", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    vi.stubGlobal("fetch", fetch);
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const lead = {
+      ...listedChild(childId, "Engineering lead"),
+      startedCount: 12,
+    };
+    const issueOwner = listedChild(
+      "thr_00000000-0000-4000-8000-000000000103",
+      "Issue owner #1100",
+    );
+    try {
+      // The root counts its whole family: two listed, twelve under the lead.
+      await renderHarness(root, client, {
+        threads: [{ ...parent, childCount: 14 }],
+        childThreads: new Map([[parentId, [lead, issueOwner]]]) as never,
+      });
+      await React.act(async () => {
+        container
+          .querySelector<HTMLButtonElement>(".thread-children-toggle")
+          ?.click();
+      });
+      const rows = [...container.querySelectorAll<HTMLElement>("[data-child]")];
+      expect(rows).toHaveLength(2);
+      const count = rows[0]?.querySelector<HTMLAnchorElement>(
+        "a.thread-started-count",
+      );
+      expect(count?.textContent).toBe("12");
+      expect(count?.getAttribute("href")).toBe(`/threads/${childId}/tree`);
+      expect(count?.getAttribute("aria-label")).toBe(
+        "Open the tree of the 12 threads below this one",
+      );
+      // The count makes room as the children toggle does.
+      expect(rows[0]?.hasAttribute("data-children")).toBe(true);
+      expect(rows[1]?.querySelector(".thread-started-count")).toBeNull();
+      expect(rows[1]?.hasAttribute("data-children")).toBe(false);
+      // Every child the root lists is loaded: nothing more to page.
+      expect(container.querySelector(".thread-children-more")).toBeNull();
+      expect(fetch).not.toHaveBeenCalled();
     } finally {
       await React.act(() => root.unmount());
       client.clear();

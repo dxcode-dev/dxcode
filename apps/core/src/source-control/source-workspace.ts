@@ -502,6 +502,84 @@ const requireSuccess = (
   return Effect.fail(commandFailed(result));
 };
 
+/** A project script for the guest program's environment: UTF-8, base64. */
+const encodedProjectScript = (body: string) => {
+  let binary = "";
+  for (const byte of new TextEncoder().encode(body))
+    binary += String.fromCharCode(byte);
+  return btoa(binary);
+};
+
+/** The pre-setup script for every command that can run setup. */
+const preSetupEnvironment = (
+  source: SourceWorkspaceRecord,
+): Record<string, string> =>
+  source.orbScripts?.preSetup === undefined
+    ? {}
+    : { DX_PRE_SETUP_SCRIPT: encodedProjectScript(source.orbScripts.preSetup) };
+
+const PreCloneState = Schema.Struct({
+  status: Schema.Literals(["skipped", "success", "failed"]),
+  exitCode: Schema.optional(Schema.Int),
+  timedOut: Schema.optional(Schema.Boolean),
+  output: Schema.optional(Schema.String),
+});
+
+const PRE_CLONE_REPORTED_OUTPUT = 600;
+
+/**
+ * The project's pre-clone script failed. The person fixes it in Project
+ * Settings, so a retry without that change fails again: not retried.
+ */
+const preCloneFailed = (state: typeof PreCloneState.Type) => {
+  const how =
+    state.timedOut === true
+      ? "did not finish within 5 minutes"
+      : state.exitCode === undefined
+        ? "could not run"
+        : `exited with code ${state.exitCode}`;
+  const output = stderrTail(state.output ?? "").slice(
+    -PRE_CLONE_REPORTED_OUTPUT,
+  );
+  return new SourceWorkspaceInitializationFailed({
+    message: markRunFailure({
+      class: "internal",
+      code: "PRE_CLONE_SCRIPT_FAILED",
+      message: `The project's pre-clone script ${how}, so dx did not clone the repository. Fix it in Project Settings, Orb, then retry.${
+        output === "" ? "" : ` Its output ended with: ${output}`
+      }`,
+      retryable: false,
+    }),
+  });
+};
+
+/**
+ * Runs the project's pre-clone script, when it has one, right before dx
+ * clones the repository. Its failure stops preparation.
+ */
+const runPreClone = (
+  preparation: WorkspacePreparation,
+  source: SourceWorkspaceRecord,
+  environment: Readonly<Record<string, string>>,
+) =>
+  Effect.gen(function* () {
+    const body = source.orbScripts?.preClone;
+    if (body === undefined) return;
+    const result = yield* run(preparation, "pre-clone", {
+      ...environment,
+      DX_PRE_CLONE_SCRIPT: encodedProjectScript(body),
+    });
+    yield* requireSuccess(result);
+    const state = yield* Effect.try({
+      try: () =>
+        Schema.decodeUnknownSync(PreCloneState)(
+          JSON.parse(result.stdout || "{}") as unknown,
+        ),
+      catch: () => commandFailed(result),
+    });
+    if (state.status === "failed") return yield* preCloneFailed(state);
+  });
+
 const installPrograms = (
   preparation: WorkspacePreparation,
   invocationId: string,
@@ -562,7 +640,7 @@ const CheckoutState = Schema.Struct({
   fullHistoryNeeded: Schema.Boolean,
 });
 
-const HookName = Schema.Literals(["setup", "resume"]);
+const HookName = Schema.Literals(["pre-setup", "setup", "resume"]);
 
 const HooksState = Schema.Struct({
   status: Schema.Literals([
@@ -847,6 +925,7 @@ const makeSourceWorkspaceService = (
               action: runThreadHooks ? "activate" : "snapshot",
               environment: {
                 ...prefetchedBase,
+                ...(runThreadHooks ? preSetupEnvironment(source) : {}),
                 DX_RUN_RESUME: options?.runResume === false ? "false" : "true",
               },
               timeoutMs: runThreadHooks ? HOOKS_TIMEOUT_MS : COMMAND_TIMEOUT_MS,
@@ -879,16 +958,20 @@ const makeSourceWorkspaceService = (
         stage = "initialize-anonymous-checkout";
         if (onPreparationPhase !== undefined)
           yield* onPreparationPhase("cloning-repository");
+        const anonymousBase = baseEnvironment(
+          threadId,
+          intent,
+          invocationId,
+          configDigest,
+          shallowClone,
+        );
+        stage = "pre-clone";
+        yield* runPreClone(preparation, source, anonymousBase);
+        stage = "initialize-anonymous-checkout";
         const initialized = yield* run(
           preparation,
           "initialize-anonymous",
-          baseEnvironment(
-            threadId,
-            intent,
-            invocationId,
-            configDigest,
-            shallowClone,
-          ),
+          anonymousBase,
         );
         yield* requireSuccess(initialized);
         const discovered = yield* Effect.try({
@@ -934,9 +1017,11 @@ const makeSourceWorkspaceService = (
         checkout = yield* decodeCheckoutState(verifiedOperation);
       }
       if (checkout.status === "absent") {
-        stage = "initialize-checkout";
         if (onPreparationPhase !== undefined)
           yield* onPreparationPhase("cloning-repository");
+        stage = "pre-clone";
+        yield* runPreClone(preparation, source, base);
+        stage = "initialize-checkout";
         const checkoutResult =
           source.authority === undefined
             ? yield* run(preparation, "initialize-exact-anonymous", base)
@@ -1018,6 +1103,7 @@ const makeSourceWorkspaceService = (
                 "hooks",
                 {
                   ...base,
+                  ...preSetupEnvironment(source),
                   DX_RUN_RESUME:
                     options?.runResume === false ? "false" : "true",
                 },

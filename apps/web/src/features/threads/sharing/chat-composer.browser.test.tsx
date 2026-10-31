@@ -1,4 +1,3 @@
-import type { ThreadAgentInitializationData } from "@dx/api";
 import type { UseFlueAgentResult } from "@flue/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
@@ -15,9 +14,6 @@ vi.mock("../thread-transcript.js", async (importOriginal) => ({
 import { AgentPanel } from "../agent-panel.js";
 import type { ComposerMentions } from "./chat-composer.js";
 
-const agentInitialization = {
-  skills: [],
-} as unknown as ThreadAgentInitializationData;
 const member = (userId: string, name: string, handle: string) => ({
   userId: userId as never,
   name,
@@ -49,7 +45,6 @@ const mount = async (mentions: ComposerMentions) => {
                 status: "ready",
               } as unknown as UseFlueAgentResult
             }
-            agentInitialization={agentInitialization}
             mentions={next}
           />
         </QueryClientProvider>,

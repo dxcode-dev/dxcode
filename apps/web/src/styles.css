@@ -1336,29 +1336,6 @@ a {
   contain: layout;
   overflow-wrap: anywhere;
 }
-.thread-skill-snapshot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 16px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--muted-foreground);
-  font-size: 11px;
-}
-.thread-skill-snapshot > strong {
-  flex: 0 0 auto;
-  color: var(--foreground);
-}
-.thread-skill-snapshot > div {
-  display: flex;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 5px;
-}
 .empty-conversation {
   display: flex;
   align-items: center;
@@ -1902,6 +1879,27 @@ a {
 .transcript-activity-row[open] > summary .transcript-activity-chevron {
   transform: rotate(90deg);
 }
+.transcript-skill-activation > summary,
+.transcript-skill-activation:not(details) {
+  align-items: center;
+  gap: 6px;
+  color: var(--chat-foreground);
+}
+.transcript-skill-icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+}
+.transcript-skill-activation[data-skill-state="unavailable"] > summary,
+.transcript-skill-activation[data-skill-state="unavailable"]:not(details),
+.transcript-skill-activation[data-skill-state="failed"] > summary,
+.transcript-skill-activation[data-skill-state="failed"]:not(details),
+.transcript-skill-activation[data-skill-state="unavailable"]
+  .transcript-skill-icon,
+.transcript-skill-activation[data-skill-state="failed"] .transcript-skill-icon {
+  color: var(--destructive);
+}
 .subagent-row {
   display: flex;
   align-items: baseline;
@@ -2087,7 +2085,8 @@ a {
   min-width: 0;
   font-family: var(--font-mono-family);
 }
-.transcript-command-label > span {
+.transcript-command-label > span,
+.transcript-command-label > small {
   flex: 0 0 auto;
 }
 .transcript-command-label > span.is-failed,
@@ -9580,6 +9579,249 @@ div.claude-code-mode-main {
   gap: 6px;
   padding-top: 12px;
 }
+.first-party-plugin-creator svg {
+  width: 13px;
+  height: 13px;
+}
+/* Import and details dialogs for plugin bundles: the MCP connect dialog's
+   field layout and the MCP tool list's bordered rows. */
+.dialog-popup.plugin-bundle-dialog {
+  width: min(520px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+}
+.plugin-bundle-form {
+  display: grid;
+  gap: 14px;
+}
+.plugin-bundle-form > header {
+  display: grid;
+  gap: 6px;
+  padding-right: 24px;
+}
+.plugin-bundle-form > header h2 {
+  margin: 0;
+}
+.dialog-popup p.plugin-bundle-description,
+.dialog-popup .plugin-bundle-form > header > p {
+  font-size: 12px;
+  line-height: 1.5;
+}
+.dialog-popup p.plugin-bundle-description {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+.dialog-popup p.plugin-bundle-source-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.plugin-bundle-source-line svg {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+.plugin-bundle-source-line span:first-of-type {
+  overflow: hidden;
+  font-family: var(--font-mono-family);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugin-bundle-source-line span + span::before {
+  content: "·";
+  margin-right: 6px;
+}
+.plugin-bundle-field {
+  display: grid;
+  gap: 5px;
+}
+.plugin-bundle-field > label {
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 500;
+}
+.plugin-bundle-field input {
+  height: 30px;
+  font-size: 12px;
+}
+.dialog-popup p.plugin-bundle-help {
+  font-size: 11px;
+  line-height: 1.45;
+}
+.plugin-bundle-or {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.plugin-bundle-or::before,
+.plugin-bundle-or::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--divider);
+}
+.plugin-bundle-zip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px;
+  color: var(--foreground);
+  text-align: left;
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.plugin-bundle-zip:hover:not(:disabled) {
+  background: var(--accent);
+}
+.plugin-bundle-zip:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.plugin-bundle-zip > svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--muted-foreground);
+}
+.plugin-bundle-zip > span {
+  display: grid;
+  gap: 2px;
+}
+.plugin-bundle-zip strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.plugin-bundle-zip span span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.dialog-popup p.plugin-bundle-error {
+  color: var(--destructive);
+  font-size: 11px;
+  line-height: 16px;
+}
+.plugin-bundle-items {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.plugin-bundle-group + .plugin-bundle-group {
+  border-top: 1px solid var(--divider);
+}
+.plugin-bundle-group h3,
+.plugin-bundle-group summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 14px;
+  color: var(--foreground);
+  background: var(--secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+.plugin-bundle-group summary {
+  cursor: pointer;
+  list-style: none;
+}
+.plugin-bundle-group summary::-webkit-details-marker {
+  display: none;
+}
+.plugin-bundle-group h3 svg,
+.plugin-bundle-group summary svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  color: var(--muted-foreground);
+}
+.plugin-bundle-count {
+  margin-left: auto;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 400;
+}
+.plugin-bundle-skipped:not([open]) summary {
+  background: transparent;
+}
+.plugin-bundle-group ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.plugin-bundle-group li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  border-top: 1px solid var(--divider);
+  font-size: 12px;
+}
+.plugin-bundle-group li code {
+  flex: 0 0 auto;
+  max-width: 45%;
+  overflow: hidden;
+  font: 11.5px / 1.4 var(--font-mono-family);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugin-bundle-group li > span {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugin-bundle-status-pill {
+  flex: none;
+  margin-left: auto;
+  color: var(--warning);
+  font-size: 11px;
+  font-style: normal;
+}
+.plugin-bundle-conflicts {
+  display: grid;
+  gap: 4px;
+  padding: 10px 14px;
+  color: var(--destructive);
+  border: 1px solid color-mix(in srgb, var(--destructive) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--destructive) 8%, transparent);
+  font-size: 12px;
+}
+.plugin-bundle-conflicts strong {
+  font-weight: 500;
+}
+.plugin-bundle-conflicts ul {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 11.5px;
+}
+.plugin-bundle-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 2px;
+}
+.plugin-bundle-actions .plugin-bundle-remove {
+  margin-right: auto;
+  color: var(--destructive);
+}
+.dialog-popup .plugin-bundle-confirm p {
+  flex: 1;
+  color: var(--foreground);
+  font-size: 12px;
+}
 
 .skills-page {
   display: grid;
@@ -10543,6 +10785,74 @@ div.claude-code-mode-main {
 }
 .mcp-danger {
   color: var(--destructive);
+}
+.mcp-projects-title {
+  flex: 1 1 auto;
+  padding: 4px 0;
+  font-size: 12px;
+  font-weight: 500;
+}
+.mcp-projects-scope {
+  flex: 0 0 auto;
+}
+.mcp-projects .mcp-projects-search {
+  height: 30px;
+  padding: 0 14px;
+  border-top: 1px solid var(--divider);
+  border-bottom: 0;
+}
+.mcp-projects-list {
+  max-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.mcp-tools .mcp-projects-list li {
+  padding: 0;
+}
+.mcp-project-option {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) 13px;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 12px 6px 14px;
+  color: var(--foreground);
+  font-size: 12px;
+  cursor: pointer;
+  position: relative;
+}
+.mcp-project-option:hover:not(:has(input:disabled)),
+.mcp-project-option:has(input:focus-visible) {
+  background: var(--accent);
+}
+.mcp-project-option:has(input:disabled) {
+  cursor: default;
+}
+.mcp-project-option > span:nth-of-type(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mcp-project-option > svg {
+  width: 13px;
+  height: 13px;
+  color: var(--muted-foreground);
+}
+.mcp-tools .mcp-projects-empty {
+  padding: 8px 14px;
+  color: var(--muted-foreground);
+}
+.mcp-projects-more {
+  display: flex;
+  justify-content: center;
+  padding: 4px;
+  border-top: 1px solid var(--divider);
+}
+.mcp-projects-actions {
+  justify-content: flex-end;
+  padding: 8px;
+  border-top: 1px solid var(--divider);
 }
 .mcp-tools {
   overflow: hidden;
@@ -11735,6 +12045,10 @@ body:has(.dx-app-shell) {
   .thread-children-icon > svg {
     transition: none;
   }
+}
+/* A child's count of the Threads below it is a link to their tree. */
+.thread-started-count {
+  text-decoration: none;
 }
 .thread-row-shell[data-children] .thread-row-avatars {
   right: calc(var(--thread-children-width) + 16px);
@@ -13561,6 +13875,44 @@ body:has(.dx-app-shell) {
 }
 .project-orb-size-card .settings-form-actions {
   margin-top: 16px;
+}
+.project-orb-scripts-card {
+  gap: 0;
+}
+.project-orb-script {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 16px 0 0;
+  border: 0;
+}
+.project-orb-script > legend {
+  float: left;
+  width: 100%;
+  padding: 0;
+}
+.project-orb-script > legend > label {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+}
+.project-orb-script > p,
+.project-orb-scripts-state {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 16px;
+}
+.project-orb-script-input {
+  min-height: 112px;
+  resize: vertical;
+  font: 12px / 18px var(--font-mono-family);
+  tab-size: 2;
+  white-space: pre;
+}
+.project-orb-script .settings-form-actions {
+  margin-top: 4px;
 }
 .project-settings-content .settings-form-actions > button,
 .project-settings-content .project-icon-control > button {

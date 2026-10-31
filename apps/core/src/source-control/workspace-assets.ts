@@ -292,7 +292,7 @@ const acquireLock = () => {
     lockSleep(50);
   }
 };
-const MAX_OUTPUT = 32768;
+const MAX_GIT_OUTPUT = 16 * 1024 * 1024;
 const MAX_MARKER = 65536;
 const FULL_HISTORY_DIRECTIVE = "# dx-requires: full-history";
 const SHALLOW_CLONE = __SHALLOW_CLONE__ || process.env.DX_SOURCE_SHALLOW_CLONE === "true";
@@ -416,12 +416,17 @@ const hardening = (repositoryName, credential) => [
 const git = (cwd, repositoryName, args, credential = false, timeout = 120000, allowedStatuses = [0], deferFailure = false) => {
   assertDirectoryChain(dirname(HELPER));
   readRegular(HELPER, MAX_MARKER);
-  const result = spawnSync("git", [...hardening(repositoryName, credential), ...args], { cwd, env: gitEnv(repositoryName, credential), encoding: "utf8", timeout, maxBuffer: MAX_OUTPUT });
+  // Some output grows with the repository (git grep -l over every
+  // .gitattributes, the .gitmodules listing), and Git LFS prints a line per
+  // object it cannot fetch. Nothing reads stderr, so it is discarded, and
+  // stdout may be large: a buffer that overflows kills Git and silently
+  // drops LFS or submodules.
+  const result = spawnSync("git", [...hardening(repositoryName, credential), ...args], { cwd, env: gitEnv(repositoryName, credential), encoding: "utf8", timeout, maxBuffer: MAX_GIT_OUTPUT, stdio: ["pipe", "pipe", "ignore"] });
   if (!allowedStatuses.includes(result.status)) {
     if (deferFailure) throw new Error("git-command-failed");
     fail("initialization", String(result.status));
   }
-  return (result.stdout ?? "").slice(0, MAX_OUTPUT);
+  return result.stdout ?? "";
 };
 const readJson = path => {
   try { return JSON.parse(readRegular(path)); } catch { fail("conflict"); }
@@ -452,17 +457,6 @@ const assertNetworkConfiguration = (cwd, repositoryName) => {
     const normalized = key.toLowerCase();
     return normalized.startsWith("url.") && (normalized.endsWith(".insteadof") || normalized.endsWith(".pushinsteadof"));
   })) fail("conflict");
-};
-const writeLog = (name, output) => {
-  assertDirectoryChain(LOG_DIR);
-  const path = join(LOG_DIR, name + ".log");
-  if (lstat(path) !== undefined) readRegular(path, MAX_OUTPUT);
-  let descriptor;
-  try {
-    descriptor = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
-    writeFileSync(descriptor, output);
-  } catch (error) { fail(writeFailure(error) === "disk-full" ? "disk-full" : "conflict"); }
-  finally { if (descriptor !== undefined) closeSync(descriptor); }
 };
 const atomicJson = (path, state) => {
   assertDirectoryChain(dirname(path));
@@ -759,36 +753,118 @@ const runLfs = expected => {
 // finish that work itself. A failing hook is recorded and logged, never fatal.
 const failedHooks = [];
 const hooksReady = () => (failedHooks.length === 0 ? { status: "ready" } : { status: "ready", failed: failedHooks });
+// Runs a hook with its output streamed to its log, which each run replaces.
+// Nothing buffers the output, so a hook that prints a lot (an install, say)
+// is judged by its exit code alone.
+const runLogged = (name, command, args, cwd) => {
+  ensureDirectoryChain(LOG_DIR);
+  const log = join(LOG_DIR, name + ".log");
+  const existing = lstat(log);
+  if (existing !== undefined && (existing.isSymbolicLink() || !existing.isFile())) fail("conflict");
+  let descriptor;
+  try {
+    descriptor = openSync(log, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
+  } catch (error) { fail(writeFailure(error) === "disk-full" ? "disk-full" : "conflict"); }
+  try {
+    return spawnSync(command, args, {
+      cwd,
+      env: { PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", HOME, USER: "user", LOGNAME: "user", SHELL: "/bin/bash", GIT_TERMINAL_PROMPT: "0" },
+      stdio: ["ignore", descriptor, descriptor],
+      timeout: 300000
+    });
+  } finally { closeSync(descriptor); }
+};
+// The project's pre-clone and pre-setup scripts, saved in its settings, arrive
+// base64-encoded in this command's environment. They run like the
+// repository's hooks: as the user, with none of dx's credentials.
+const PROJECT_SCRIPT_MAX_BYTES = 32768;
+const PROJECT_SCRIPT_REPORTED_OUTPUT = 2000;
+const projectScript = name => {
+  const encoded = process.env[name];
+  if (encoded === undefined || encoded === "") return undefined;
+  if (encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) fail("invalid-input", name);
+  const bytes = Buffer.from(encoded, "base64");
+  if (bytes.length === 0 || bytes.length > PROJECT_SCRIPT_MAX_BYTES || bytes.includes(0)) fail("invalid-input", name);
+  return bytes.toString("utf8");
+};
+// Writes the script to dx's state directory and runs it from cwd like a hook;
+// the end of its log is reported.
+const runProjectScript = (name, body, cwd) => {
+  const directory = join(dirname(STATE), "project-scripts");
+  ensureDirectoryChain(directory);
+  const path = join(directory, name);
+  const temporary = path + "." + required("DX_INVOCATION_ID") + ".tmp";
+  try {
+    writeFileSync(temporary, body, { mode: 0o700, flag: "wx" });
+    renameSync(temporary, path);
+  } catch (error) {
+    try { rmSync(temporary, { force: true }); } catch {}
+    fail(writeFailure(error) === "disk-full" ? "disk-full" : "conflict");
+  }
+  // Without a shebang the script is Bash, as in the settings editor.
+  const result = body.startsWith("#!") ? runLogged(name, path, [], cwd) : runLogged(name, "/bin/bash", [path], cwd);
+  let output = "";
+  try {
+    const bytes = readFileSync(join(LOG_DIR, name + ".log"));
+    output = bytes.subarray(Math.max(0, bytes.length - PROJECT_SCRIPT_REPORTED_OUTPUT)).toString("utf8");
+  } catch {}
+  output = output.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "?");
+  const timedOut = result.error?.code === "ETIMEDOUT";
+  return {
+    ok: result.status === 0,
+    report: { ...(typeof result.status === "number" ? { exitCode: result.status } : {}), ...(timedOut ? { timedOut } : {}), output }
+  };
+};
+const preClone = () => {
+  const body = projectScript("DX_PRE_CLONE_SCRIPT");
+  if (body === undefined) return { status: "skipped" };
+  ensureDirectoryChain(WORKSPACE_PARENT);
+  const run = runProjectScript("pre-clone", body, WORKSPACE_PARENT);
+  return run.ok ? { status: "success" } : { status: "failed", ...run.report };
+};
 const hook = (expected, name, current) => {
   const path = join(ROOT, ".agents", name);
   let digest;
+  let preSetupFailed = false;
   if (name === "setup") {
     // Setup runs once per snapshot. The file that runs is whatever the user's
-    // current checkout holds; a missing snapshot commit or setup file skips it.
+    // current checkout holds; a missing snapshot commit or setup file skips
+    // it. The project's pre-setup script runs first, with or without one,
+    // and an edit to it runs setup again.
+    const preSetup = projectScript("DX_PRE_SETUP_SCRIPT");
     let immutableSetup;
     try {
       const tree = git(ROOT, required("DX_REPOSITORY_NAME"), ["ls-tree", expected.sourceSha, "--", ".agents/setup"], false, 120000, [0], true).trim();
-      if (tree === "" || !tree.startsWith("100755 blob ")) return current;
-      immutableSetup = git(ROOT, required("DX_REPOSITORY_NAME"), ["show", expected.sourceSha + ":.agents/setup"], false, 120000, [0], true);
-    } catch { return current; }
-    digest = sha(expected.sourceSha + "\0" + required("DX_SOURCE_CONFIG_DIGEST") + "\0" + immutableSetup);
+      if (tree !== "" && tree.startsWith("100755 blob "))
+        immutableSetup = git(ROOT, required("DX_REPOSITORY_NAME"), ["show", expected.sourceSha + ":.agents/setup"], false, 120000, [0], true);
+    } catch { immutableSetup = undefined; }
+    if (immutableSetup === undefined && preSetup === undefined) return current;
+    digest = sha(expected.sourceSha + "\0" + required("DX_SOURCE_CONFIG_DIGEST") + "\0" + (immutableSetup ?? "") + (preSetup === undefined ? "" : "\0pre-setup\0" + preSetup));
     if (current.setup?.status === "success" && current.setup?.digest === digest) return current;
+    if (preSetup !== undefined && !runProjectScript("pre-setup", preSetup, ROOT).ok) {
+      preSetupFailed = true;
+      failedHooks.push("pre-setup");
+    }
+    if (immutableSetup === undefined) {
+      const afterPreSetup = verify(expected);
+      atomicState({ ...afterPreSetup, setup: { status: preSetupFailed ? "failed" : "success", digest } });
+      return afterPreSetup;
+    }
   }
   let hookStat;
-  try { hookStat = statSync(path); } catch { return current; }
-  if (!hookStat.isFile() || (hookStat.mode & 0o111) === 0) return current;
-  ensureDirectoryChain(LOG_DIR);
-  const environment = { PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", HOME, USER: "user", LOGNAME: "user", SHELL: "/bin/bash", GIT_TERMINAL_PROMPT: "0" };
-  const result = spawnSync(path, [], { cwd: ROOT, env: environment, encoding: "utf8", timeout: 300000, maxBuffer: MAX_OUTPUT });
-  const output = ((result.stdout ?? "") + (result.stderr ?? "")).slice(0, MAX_OUTPUT).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "?");
-  writeLog(name, output);
+  try { hookStat = statSync(path); } catch { hookStat = undefined; }
+  if (hookStat === undefined || !hookStat.isFile() || (hookStat.mode & 0o111) === 0) {
+    if (name === "setup" && preSetupFailed) atomicState({ ...current, setup: { status: "failed", digest } });
+    return current;
+  }
+  const result = runLogged(name, path, [], ROOT);
   const afterHook = verify(expected);
   if (result.status !== 0) {
     if (name === "setup") atomicState({ ...afterHook, setup: { status: "failed", digest } });
     failedHooks.push(name);
     return afterHook;
   }
-  if (name === "setup") atomicState({ ...afterHook, setup: { status: "success", digest } });
+  if (name === "setup") atomicState({ ...afterHook, setup: { status: preSetupFailed ? "failed" : "success", digest } });
   return afterHook;
 };
 
@@ -836,6 +912,8 @@ try {
   if (action === "initialize-anonymous") {
     const discovered = initializeAnonymous(sourceIdentity);
     process.stdout.write(JSON.stringify({ sourceRevision: discovered.sourceSha, defaultBranch: discovered.defaultBranch, initialRef: discovered.initialRef }));
+  } else if (action === "pre-clone") {
+    process.stdout.write(JSON.stringify(preClone()));
   } else {
     const expected = snapshot(sourceIdentity);
     if (action === "snapshot") process.stdout.write(JSON.stringify(checkoutPayload(expected)));

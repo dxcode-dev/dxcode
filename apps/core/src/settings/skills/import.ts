@@ -290,6 +290,100 @@ export const previewSkillImport = Effect.fn("previewSkillImport")(function* (
   } satisfies SkillPreview;
 });
 
+/**
+ * A skill preview built from content another importer already read and
+ * checked, such as a skill inside a plugin bundle. Resource paths keep the
+ * layout of the skill's folder.
+ */
+export const previewSkillContent = Effect.fn("previewSkillContent")(
+  function* (input: {
+    readonly name: string;
+    readonly description: string;
+    readonly instructions: string;
+    readonly resources: ReadonlyArray<{
+      readonly path: string;
+      readonly mediaType: string;
+      readonly content: string;
+    }>;
+    readonly source: SkillSource;
+  }) {
+    const manifest = yield* Schema.decodeUnknownEffect(SkillManifest)({
+      schemaVersion: 1,
+      name: input.name,
+      description: input.description,
+    }).pipe(
+      Effect.mapError(
+        () =>
+          new SkillImportRejected({
+            field: "SKILL.md",
+            reason: "Use a kebab-case name and a description.",
+          }),
+      ),
+    );
+    const instructions = yield* Schema.decodeUnknownEffect(SkillInstructions)(
+      input.instructions,
+    ).pipe(
+      Effect.mapError(
+        () =>
+          new SkillImportRejected({
+            field: "SKILL.md",
+            reason: "Instructions must contain 1–32,768 characters.",
+          }),
+      ),
+    );
+    let totalBytes = textEncoder.encode(instructions).byteLength;
+    const resources = yield* Effect.all(
+      input.resources.map((file) =>
+        Effect.gen(function* () {
+          const sizeBytes = textEncoder.encode(file.content).byteLength;
+          totalBytes += sizeBytes;
+          const integrity = yield* Effect.promise(() =>
+            sha256(file.content),
+          ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(SkillIntegrity)));
+          return yield* Schema.decodeUnknownEffect(SkillResource)({
+            path: file.path,
+            mediaType: file.mediaType,
+            content: file.content,
+            sizeBytes,
+            integrity,
+          }).pipe(
+            Effect.mapError(
+              () =>
+                new SkillImportRejected({
+                  field: file.path,
+                  reason: "The resource is too large or its path too long.",
+                }),
+            ),
+          );
+        }),
+      ),
+    );
+    if (resources.length > MAX_SKILL_RESOURCE_FILES) {
+      return yield* reject(
+        "resources",
+        `Use at most ${MAX_SKILL_RESOURCE_FILES} resource files.`,
+      );
+    }
+    if (totalBytes > MAX_SKILL_TOTAL_BYTES) {
+      return yield* reject(
+        "resources",
+        `Skill exceeds the ${MAX_SKILL_TOTAL_BYTES.toLocaleString()} byte limit.`,
+      );
+    }
+    const integrity = yield* Effect.promise(() =>
+      sha256(canonicalPayload({ manifest, instructions, resources })),
+    ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(SkillIntegrity)));
+    return {
+      manifest,
+      instructions,
+      resources,
+      source: input.source,
+      integrity,
+      totalBytes,
+    } satisfies SkillPreview;
+  },
+);
+
 export const exportSkillVersion = (
   version: StoredSkillVersion,
 ): SkillImportBundle => ({

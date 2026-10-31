@@ -89,6 +89,7 @@ import {
   GetThreadMembersResponseSchema,
   GetThreadReadinessResponseSchema,
   GetThreadResponseSchema,
+  GetThreadTreeResponseSchema,
   GetWorkspacePolicyResponseSchema,
   GetWorkspaceProfileResponseSchema,
   GetWorkspaceUsageResponseSchema,
@@ -97,6 +98,7 @@ import {
   GraphResponseSchema,
   ImportSkillResponseSchema,
   InspectWorkspacePrivateThreadResponseSchema,
+  InstallPluginBundleResponseSchema,
   IntegrationsErrorResponseSchema,
   LeaveWorkspaceResponseSchema,
   ListBrowserSessionsResponseSchema,
@@ -111,6 +113,7 @@ import {
   ListPersonalApiTokensResponseSchema,
   ListPersonalIntegrationsResponseSchema,
   ListPersonalModelSubscriptionsResponseSchema,
+  ListPluginBundlesResponseSchema,
   ListPluginsResponseSchema,
   ListPluginTriggersResponseSchema,
   ListProjectsResponseSchema,
@@ -146,16 +149,20 @@ import {
   PersonalUsageErrorResponseSchema,
   type PersonalUsageExportData,
   PinThreadResponseSchema,
+  type PluginBundlePreviewData,
+  PluginBundlesErrorResponseSchema,
   PluginsErrorResponseSchema,
   PluginTriggersErrorResponseSchema,
   PollPersonalModelSubscriptionAuthorizationResponseSchema,
   PreviewBulkEnvironmentVariablesResponseSchema,
+  PreviewPluginBundleResponseSchema,
   PreviewPluginResponseSchema,
   PreviewSkillResponseSchema,
   ProfileResponseSchema,
   type ProjectData,
   type ProjectDefaultsData,
   ProjectDefaultsErrorResponseSchema,
+  ProjectOrbScriptsForbiddenResponseSchema,
   PublishPluginVersionResponseSchema,
   PublishSkillVersionResponseSchema,
   PushStateResponseSchema,
@@ -163,6 +170,7 @@ import {
   RebindProjectSourceResponseSchema,
   RefreshPersonalModelSubscriptionResponseSchema,
   type RegisterPushDeviceRequest,
+  RemovePluginBundleResponseSchema,
   RemovePluginResponseSchema,
   type RemovePushDeviceRequest,
   RemoveSkillResponseSchema,
@@ -197,8 +205,6 @@ import {
   type SettingsFieldError,
   type SidebarLayoutEntry,
   SidebarLayoutResponseSchema,
-  type ThreadPaneLayout,
-  ThreadPaneLayoutResponseSchema,
   type SigningKeySetupGuidance,
   type SigningKeysData,
   SigningKeysErrorResponseSchema,
@@ -215,6 +221,8 @@ import {
   ThreadIdUnavailableResponseSchema,
   type ThreadListItem,
   ThreadOrbProcessErrorResponseSchema,
+  type ThreadPaneLayout,
+  ThreadPaneLayoutResponseSchema,
   ThreadPortalPublicErrorResponseSchema,
   ThreadSharingErrorResponseSchema,
   TimeZoneResponseSchema,
@@ -233,6 +241,7 @@ import {
   type UpdatePersonalComposerDefaultsRequest,
   UpdatePersonalComposerDefaultsResponseSchema,
   UpdatePersonalExperimentalFeatureResponseSchema,
+  UpdatePluginBundleResponseSchema,
   UpdatePluginStateResponseSchema,
   UpdatePluginTriggerStateResponseSchema,
   UpdatePluginWorkspacePolicyResponseSchema,
@@ -299,6 +308,7 @@ import type {
 } from "@dx/domain";
 import { Schema } from "effect";
 import { noticeUnauthenticated } from "../auth/session-ended.js";
+import { observeRequest } from "../diagnostics/client-diagnostics.js";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -332,17 +342,19 @@ export const request = async <
   schema: SchemaType,
   init?: RequestInit,
 ): Promise<SchemaType["Type"]> => {
-  const response = await fetch(path, {
-    ...init,
-    credentials: "same-origin",
-    headers: {
-      accept: "application/json",
-      ...(init?.body === undefined
-        ? {}
-        : { "content-type": "application/json" }),
-      ...init?.headers,
-    },
-  });
+  const response = await observeRequest(path, init?.method, () =>
+    fetch(path, {
+      ...init,
+      credentials: "same-origin",
+      headers: {
+        accept: "application/json",
+        ...(init?.body === undefined
+          ? {}
+          : { "content-type": "application/json" }),
+        ...init?.headers,
+      },
+    }),
+  );
   noticeUnauthenticated(response);
   if (!response.ok) {
     const body: unknown = await response.json().catch(() => undefined);
@@ -367,6 +379,7 @@ export const request = async <
         McpServersErrorResponseSchema,
         SkillsErrorResponseSchema,
         PluginsErrorResponseSchema,
+        PluginBundlesErrorResponseSchema,
         FirstPartyPluginErrorResponseSchema,
         DictationVocabularyErrorResponseSchema,
         OrbProviderErrorResponseSchema,
@@ -382,6 +395,7 @@ export const request = async <
         CreateProjectPolicyDeniedResponseSchema,
         CreateProjectRunnerUnavailableResponseSchema,
         UpdateProjectNameConflictResponseSchema,
+        ProjectOrbScriptsForbiddenResponseSchema,
         CreateThreadInitialAdmissionUnavailableResponseSchema,
         CreateThreadInitialMessageRejectedResponseSchema,
         CreateThreadInitialMessageTooLargeResponseSchema,
@@ -449,6 +463,7 @@ export type ThreadListClientItem = ThreadData &
       | "mode"
       | "changes"
       | "childCount"
+      | "startedCount"
       | "unread"
       | "turnFailed"
       | "childActivity"
@@ -736,6 +751,97 @@ const pluginsBase = (target: PluginsTarget) =>
   target.scope === "personal"
     ? "/v1/settings/personal/plugins"
     : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/plugins`;
+
+/** Plugin bundles in Claude Code's format: skills, commands, and MCP servers. */
+const pluginBundlesBase = (target: PluginsTarget) =>
+  target.scope === "personal"
+    ? "/v1/settings/personal/plugin-bundles"
+    : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/plugin-bundles`;
+
+export type PluginBundleUpload =
+  | { readonly type: "zip"; readonly file: File }
+  | { readonly type: "github"; readonly url: string };
+
+export const listPluginBundles = async (
+  target: PluginsTarget,
+  signal?: AbortSignal,
+) =>
+  (
+    await request(pluginBundlesBase(target), ListPluginBundlesResponseSchema, {
+      signal,
+    })
+  ).data;
+
+const zipInit = (file: File): RequestInit => ({
+  method: "POST",
+  body: file,
+  headers: { "content-type": "application/zip" },
+});
+
+export const previewPluginBundle = async (
+  target: PluginsTarget,
+  upload: PluginBundleUpload,
+) =>
+  (
+    await request(
+      upload.type === "zip"
+        ? `${pluginBundlesBase(target)}/preview?name=${encodeURIComponent(upload.file.name)}`
+        : `${pluginBundlesBase(target)}/preview`,
+      PreviewPluginBundleResponseSchema,
+      upload.type === "zip"
+        ? zipInit(upload.file)
+        : { method: "POST", body: JSON.stringify({ url: upload.url }) },
+    )
+  ).data;
+
+/** Installs what the person reviewed: the same ZIP, or the pinned commit. */
+export const installPluginBundle = async (
+  target: PluginsTarget,
+  upload: PluginBundleUpload,
+  preview: PluginBundlePreviewData,
+) =>
+  (
+    await request(
+      upload.type === "zip"
+        ? `${pluginBundlesBase(target)}?name=${encodeURIComponent(upload.file.name)}&integrity=${preview.integrity}`
+        : pluginBundlesBase(target),
+      InstallPluginBundleResponseSchema,
+      upload.type === "zip"
+        ? zipInit(upload.file)
+        : {
+            method: "POST",
+            body: JSON.stringify({
+              source: preview.source,
+              reviewedIntegrity: preview.integrity,
+            }),
+          },
+    )
+  ).data;
+
+export const setPluginBundleEnabled = async (
+  target: PluginsTarget,
+  pluginId: PluginId,
+  enabled: boolean,
+) =>
+  (
+    await request(
+      `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}`,
+      UpdatePluginBundleResponseSchema,
+      { method: "PATCH", body: JSON.stringify({ enabled }) },
+    )
+  ).data;
+
+export const removePluginBundle = async (
+  target: PluginsTarget,
+  pluginId: PluginId,
+) =>
+  (
+    await request(
+      `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}`,
+      RemovePluginBundleResponseSchema,
+      { method: "DELETE" },
+    )
+  ).data;
 
 /** First-party plugins (Search, …): enablement, provider, and credential per scope. */
 const firstPartyPluginsBase = (target: PluginsTarget) =>
@@ -1626,6 +1732,16 @@ export const getThreadListItem = async (
     await request(
       `/v1/threads/${encodeURIComponent(threadId)}/list-item`,
       GetThreadListItemResponseSchema,
+      { signal },
+    )
+  ).data;
+
+/** The Thread's family as the requester may read it, for its tree page. */
+export const getThreadTree = async (threadId: ThreadId, signal?: AbortSignal) =>
+  (
+    await request(
+      `/v1/threads/${encodeURIComponent(threadId)}/tree`,
+      GetThreadTreeResponseSchema,
       { signal },
     )
   ).data;

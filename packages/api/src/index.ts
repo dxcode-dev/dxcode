@@ -22,6 +22,7 @@ export {
   type UnauthenticatedResponse,
   UnauthenticatedResponseSchema,
 } from "./auth/unauthenticated-response.js";
+export * from "./bug-reports/bug-reports.js";
 export * from "./dictation/index.js";
 export {
   type HealthResponse,
@@ -41,6 +42,7 @@ export * from "./projects/create-project.js";
 export * from "./projects/get-project.js";
 export * from "./projects/list-projects.js";
 export * from "./projects/project-data.js";
+export * from "./projects/project-orb-scripts.js";
 export * from "./projects/rebind-project-source.js";
 export * from "./projects/update-project.js";
 export {
@@ -64,6 +66,7 @@ export * from "./settings/personal-account.js";
 export * from "./settings/personal-agent-instructions.js";
 export * from "./settings/personal-security.js";
 export * from "./settings/personal-usage.js";
+export * from "./settings/plugin-bundles.js";
 export * from "./settings/plugin-triggers.js";
 export * from "./settings/plugins.js";
 export * from "./settings/project-defaults.js";
@@ -87,6 +90,7 @@ export * from "./threads/files.js";
 export * from "./threads/get-thread.js";
 export * from "./threads/get-thread-list-item.js";
 export * from "./threads/get-thread-readiness.js";
+export * from "./threads/get-thread-tree.js";
 export * from "./threads/github-delivery.js";
 export * from "./threads/list-threads.js";
 export * from "./threads/mark-thread-seen.js";

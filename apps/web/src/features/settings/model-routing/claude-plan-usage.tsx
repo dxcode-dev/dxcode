@@ -96,9 +96,9 @@ const EXTRA_USAGE_LABELS = {
 } as const;
 
 /**
- * The Claude Pro/Max card's plan section: the limits Anthropic reports,
- * read again each time the panel opens and on Refresh, only the windows it
- * reported, and whether Claude Code may keep working on the account's paid
+ * The Claude Pro/Max card's plan section: the limits Claude Code runs last
+ * reported, loaded again each time the panel opens and on Refresh, only the
+ * windows they reported, and whether Claude Code may keep working on the account's paid
  * extra usage once one is used up. An account with extra usage off leaves
  * nothing to choose.
  */
@@ -174,14 +174,14 @@ export const ClaudePlanPanel = ({
         </div>
         {refresh.isError ? (
           <p className="model-routing-field-error" role="alert">
-            Could not read limits from Anthropic. {apiMessage(refresh.error)}
+            Could not load plan usage. {apiMessage(refresh.error)}
           </p>
         ) : null}
         {usage === undefined || usage.windows.length === 0 ? (
           <p className="claude-plan-empty">
             {refresh.isFetching
-              ? "Reading limits from Anthropic…"
-              : "Anthropic reported no limits yet."}
+              ? "Loading plan usage…"
+              : "Limits show after Claude Code's first run."}
           </p>
         ) : (
           <ul className="claude-plan-windows">

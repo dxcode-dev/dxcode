@@ -7,6 +7,7 @@
 // or point DX_TEST_CHROMIUM at another Chromium binary.
 import { createHash } from "node:crypto";
 import { playwright } from "@vitest/browser-playwright";
+import type { BrowserContext } from "playwright";
 import { defineProject } from "vitest/config";
 import { appPlugins } from "./vite.config.js";
 
@@ -17,6 +18,48 @@ const root = import.meta.dirname;
 // the next free port when two runs share a checkout.
 const checkoutPort =
   41_000 + (createHash("sha256").update(root).digest().readUInt32BE(0) % 8000);
+
+// Vitest mocks modules with Playwright routes: each file's `vi.mock` turns
+// Chromium's request interception on, and its cleanup turns it off again.
+// With that switching, a page's module requests sometimes stayed pending
+// forever and the run hung on the next file's import (#1241). A route that
+// lasts the whole context keeps interception on; mock routes, added later,
+// still answer first.
+const chromium = playwright({
+  launchOptions: {
+    executablePath: process.env.DX_TEST_CHROMIUM || undefined,
+    // Tests must not reach the network; only the test server resolves.
+    args: [
+      "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1",
+    ],
+  },
+});
+const createProvider = chromium.providerFactory;
+chromium.providerFactory = (project) => {
+  const provider = createProvider(project) as ReturnType<
+    typeof createProvider
+  > & {
+    createContext?: (...args: unknown[]) => Promise<BrowserContext>;
+  };
+  const createContext = provider.createContext?.bind(provider);
+  if (createContext === undefined)
+    throw new Error(
+      "@vitest/browser-playwright no longer has createContext; move the always-on route in vitest.browser.config.ts.",
+    );
+  const routed = new WeakSet<BrowserContext>();
+  provider.createContext = async (...args) => {
+    const context = await createContext(...args);
+    if (!routed.has(context)) {
+      routed.add(context);
+      await context.route(
+        () => true,
+        (route) => route.continue(),
+      );
+    }
+    return context;
+  };
+  return provider;
+};
 
 export default defineProject({
   root,
@@ -49,15 +92,7 @@ export default defineProject({
       // layout ask for it.
       viewport: { width: 1280, height: 800 },
       api: { host: "127.0.0.1", port: checkoutPort },
-      provider: playwright({
-        launchOptions: {
-          executablePath: process.env.DX_TEST_CHROMIUM || undefined,
-          // Tests must not reach the network; only the test server resolves.
-          args: [
-            "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1",
-          ],
-        },
-      }),
+      provider: chromium,
       instances: [{ browser: "chromium" }],
     },
   },

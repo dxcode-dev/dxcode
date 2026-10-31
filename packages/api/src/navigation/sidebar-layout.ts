@@ -3,12 +3,12 @@ import { Schema } from "effect";
 import { errorResponse, successResponse } from "../http/response.js";
 
 /**
- * A sidebar section that opens and closes: a Project, Snoozed, Inactive, or
- * Archived.
+ * A sidebar section that opens and closes: a Project, No Project (every
+ * scope's in one), Snoozed, Inactive, or Archived.
  */
 export const SidebarSectionIdSchema = Schema.Union([
   ProjectId,
-  Schema.Literals(["snoozed", "inactive", "archived"]),
+  Schema.Literals(["no-project", "snoozed", "inactive", "archived"]),
 ]);
 
 /**

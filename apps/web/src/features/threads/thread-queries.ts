@@ -48,6 +48,9 @@ export const threadKeys = {
    */
   members: (userId: UserId, threadId: ThreadId) =>
     [...threadKeys.detail(userId, threadId), "members"] as const,
+  /** The family tree of a Thread, as its tree page shows it. */
+  tree: (userId: UserId, threadId: ThreadId) =>
+    [...threadKeys.all(userId), "tree", threadId] as const,
   /** Threads other workspace members shared with this user. */
   shared: (userId: UserId) => [...threadKeys.all(userId), "shared"] as const,
   /** One Thread search query's pages. */

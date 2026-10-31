@@ -1,6 +1,11 @@
 import type { FlueConversationPart } from "@flue/react";
 import { shellCommandOperations } from "./shell-command-operation.js";
 import {
+  isSkillActivationTool,
+  type SkillActivation,
+  skillActivation,
+} from "./skill-activation.js";
+import {
   isSubagentPart,
   type SubagentView,
   subagentView,
@@ -21,6 +26,7 @@ export type ToolCategory =
   | "edit"
   | "explore"
   | "generic"
+  | "skill"
   | "subagent"
   | "thread";
 
@@ -53,6 +59,13 @@ export type TranscriptActivity =
       readonly kind: "subagent";
       readonly row: WorkRow;
       readonly view: SubagentView;
+    }
+  /** So is each skill activation, named and with its outcome. */
+  | {
+      readonly kind: "skill";
+      readonly row: WorkRow;
+      readonly part: ToolPart;
+      readonly activation: SkillActivation;
     };
 
 const record = (value: unknown): Record<string, unknown> | undefined =>
@@ -75,6 +88,7 @@ export const categoryForTool = (
   toolName: string,
   input: unknown,
 ): ToolCategory => {
+  if (isSkillActivationTool(toolName)) return "skill";
   const name = toolName.toLowerCase();
   if (THREAD_TOOL_NAMES.has(name)) return "thread";
   if (name === "code_exec") return "generic";
@@ -161,6 +175,15 @@ export const projectTranscriptActivities = (
     const view = part === undefined ? undefined : subagentView(part);
     if (view !== undefined) {
       activities.push({ kind: "subagent", row: work, view });
+      continue;
+    }
+    if (part !== undefined && isSkillActivationTool(part.toolName)) {
+      activities.push({
+        kind: "skill",
+        row: work,
+        part,
+        activation: skillActivation(part),
+      });
       continue;
     }
     const previous = activities.at(-1);

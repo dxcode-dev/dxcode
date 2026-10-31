@@ -36,6 +36,7 @@ const McpServerRow = Schema.Struct({
   has_oauth_client_secret: Schema.Finite,
   headers_json: Schema.String,
   module_id: Schema.NullOr(Schema.String),
+  plugin_id: Schema.NullOr(Schema.String),
 });
 
 const McpToolRow = Schema.Struct({
@@ -64,7 +65,7 @@ const columns = `
      WHERE mcp_server_secret.server_id = mcp_server.id
        AND mcp_server_secret.name = 'oauth-client-secret'
   ) AS has_oauth_client_secret,
-  headers_json, module_id
+  headers_json, module_id, plugin_id
 `;
 
 const JsonString = Schema.String.pipe(
@@ -117,6 +118,7 @@ const decodeServers = (input: unknown) =>
                 : {}),
               headers,
               ...(row.module_id === null ? {} : { moduleId: row.module_id }),
+              ...(row.plugin_id === null ? {} : { pluginId: row.plugin_id }),
               timeoutMs: row.timeout_ms,
               enabled: row.enabled === 1,
               projectIds,
@@ -288,8 +290,8 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
                      project_ids_json, roles_json, health_status,
                      health_checked_at, health_error_code, created_at, updated_at,
                      auth_type, client_name, oauth_client_id, headers_json,
-                     module_id
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                     module_id, plugin_id
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 )
                 .bind(
                   value.id,
@@ -311,6 +313,7 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
                   encodedTimestamp(value.createdAt),
                   encodedTimestamp(value.updatedAt),
                   ...newColumns(value),
+                  value.pluginId ?? null,
                 )
                 .run(),
             catch: unavailable("settings.mcpServers.insert"),
@@ -519,6 +522,14 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
           function* (ownerUserId, projectId) {
             const servers = yield* queryServers(
               `WHERE enabled = 1
+                 AND (
+                   plugin_id IS NULL OR EXISTS (
+                     SELECT 1 FROM trusted_plugin
+                      WHERE trusted_plugin.id = mcp_server.plugin_id
+                        AND trusted_plugin.enabled = 1
+                        AND trusted_plugin.removed_at IS NULL
+                   )
+                 )
                  AND (
                    (
                      scope = 'personal' AND target_id = ?

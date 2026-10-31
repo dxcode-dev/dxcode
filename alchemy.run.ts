@@ -39,6 +39,7 @@ import { decodeGitHubAppDeploymentConfiguration } from "./packages/domain/src/so
 import {
   attachmentBucketCors,
   attachmentSigningTokenProps,
+  workerLogsTokenProps,
 } from "./scripts/attachment-deployment.mjs";
 
 type RecordValue<T> = T extends Record<string, infer Value> ? Value : never;
@@ -363,6 +364,17 @@ export default Alchemy.Stack(
       githubCopilotClientId: Config.option(
         Config.NonEmptyString("DX_GITHUB_COPILOT_CLIENT_ID"),
       ),
+      // Where Core files in-app bug reports, with which labels, and who
+      // may open any report's files; see wiki/product-architecture.md.
+      bugReportRepository: Config.option(
+        Config.NonEmptyString("DX_BUG_REPORT_REPOSITORY"),
+      ),
+      bugReportLabels: Config.option(
+        Config.NonEmptyString("DX_BUG_REPORT_LABELS"),
+      ),
+      bugReportReaders: Config.option(
+        Config.NonEmptyString("DX_BUG_REPORT_READERS"),
+      ),
       modelDeploymentProviders: Config.option(
         Config.NonEmptyString("DX_MODEL_DEPLOYMENT_PROVIDERS"),
       ),
@@ -650,13 +662,26 @@ export default Alchemy.Stack(
           credentials: (yield* HeldSecret("AttachmentR2Credentials", {
             value: Option.getOrUndefined(configuration.attachmentR2Credentials),
           })).value,
+          workerLogs: undefined,
         };
       const token = yield* Cloudflare.ApiToken.AccountApiToken(
         "AttachmentSigningToken",
         attachmentSigningTokenProps(accountId, configuration.bucketName),
       );
+      // Read-only Workers Observability on this account, for the Worker
+      // logs a bug report carries. Self-hosts that cannot mint tokens go
+      // without, and their reports say Worker logs are unavailable.
+      const logsToken = yield* Cloudflare.ApiToken.AccountApiToken(
+        "WorkerLogsToken",
+        workerLogsTokenProps(accountId, configuration.workerName),
+      );
       return {
         endpoint,
+        workerLogs: Output.map(logsToken.value, (value) =>
+          Redacted.make(
+            JSON.stringify({ accountId, token: Redacted.value(value) }),
+          ),
+        ),
         credentials: Output.map(
           Output.all(token.tokenId, token.value),
           ([tokenId, value]) =>
@@ -863,6 +888,17 @@ export default Alchemy.Stack(
                 configuration.githubCopilotClientId.value,
             }
           : {}),
+        ...(Option.isSome(configuration.bugReportRepository)
+          ? {
+              DX_BUG_REPORT_REPOSITORY: configuration.bugReportRepository.value,
+            }
+          : {}),
+        ...(Option.isSome(configuration.bugReportLabels)
+          ? { DX_BUG_REPORT_LABELS: configuration.bugReportLabels.value }
+          : {}),
+        ...(Option.isSome(configuration.bugReportReaders)
+          ? { DX_BUG_REPORT_READERS: configuration.bugReportReaders.value }
+          : {}),
         ...(Option.isSome(configuration.modelDeploymentProviders)
           ? {
               DX_MODEL_DEPLOYMENT_PROVIDERS:
@@ -901,6 +937,9 @@ export default Alchemy.Stack(
           : { DX_TURNSTILE_SECRET_KEY: turnstile.secret }),
         DX_CONFIG_ENCRYPTION_KEYS: encryptionKeyring,
         DX_ATTACHMENT_R2_CREDENTIALS: attachmentSigning.credentials,
+        ...(attachmentSigning.workerLogs === undefined
+          ? {}
+          : { DX_WORKER_LOGS: attachmentSigning.workerLogs }),
         DX_INTEGRATION_GITHUB_APP: githubApp,
         DX_WORKLOAD_IDENTITY_SIGNING_KEYS: workloadIdentitySigningKeys,
         ...(e2bApiKey === undefined ? {} : { E2B_API_KEY: e2bApiKey }),

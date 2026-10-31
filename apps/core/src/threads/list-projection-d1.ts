@@ -6,13 +6,17 @@ import {
 } from "@dx/api";
 import {
   isThreadTitlePending,
+  PROJECTLESS_PROJECT_NAME,
   type Thread,
   type ThreadColor,
   type ThreadId,
   type UserId,
 } from "@dx/domain";
 import { Effect, Schema } from "effect";
-import { activeMemberSql } from "../settings/members/membership-sql.js";
+import {
+  activeMemberSql,
+  threadProjectReachableSql,
+} from "../settings/members/membership-sql.js";
 import {
   sharedThreadAccessSql,
   sharedThreadVisibleSql,
@@ -54,6 +58,19 @@ const summaryFrom = (row: typeof SummaryRowSchema.Type) =>
       }
     : undefined;
 
+/**
+ * SQL over `project`: the Project is its owner's hidden No Project. The name
+ * is inlined because a list statement already binds 100 Thread IDs, D1's
+ * limit; no named Project can take it, since names allow no spaces.
+ */
+const projectlessSql = `project.name = '${PROJECTLESS_PROJECT_NAME}'`;
+
+/** The list item's marker for a Thread in its owner's hidden No Project. */
+export const projectlessField = (projectName: string | undefined) =>
+  projectName === PROJECTLESS_PROJECT_NAME
+    ? { projectless: true as const }
+    : {};
+
 export const threadListItem = (
   thread: Thread,
   changes?: ThreadChangesSummary,
@@ -75,6 +92,9 @@ export const threadListItem = (
   ...(thread.parentThreadId === undefined
     ? {}
     : { parentThreadId: thread.parentThreadId }),
+  ...(thread.startedByThreadId === undefined
+    ? {}
+    : { startedByThreadId: thread.startedByThreadId }),
   mode:
     thread.selection.kind === "mode"
       ? thread.selection.mode
@@ -83,8 +103,9 @@ export const threadListItem = (
 });
 
 /**
- * Each owned Thread's Changes totals and what its row draws attention to,
- * for its owner: these lists hold only the requester's own Threads.
+ * Each owned Thread's Changes totals, what its row draws attention to, and
+ * whether it is in its owner's hidden No Project, for its owner: these lists
+ * hold only the requester's own Threads.
  */
 export const readThreadListProjection = async (
   db: D1Database,
@@ -95,6 +116,7 @@ export const readThreadListProjection = async (
     ThreadId,
     ReturnType<typeof threadAttentionFields>
   >();
+  const projectless = new Map<ThreadId, { readonly projectless: true }>();
   // D1 binds at most 100 parameters per statement.
   const results = await Promise.all(
     Array.from({ length: Math.ceil(threadIds.length / 100) }, (_, index) => {
@@ -105,13 +127,15 @@ export const readThreadListProjection = async (
                   summary.dirty_since, summary.summary_additions,
                   summary.summary_deletions, summary.summary_files,
                   thread.turn_failed,
-                  ${threadUnreadSql("thread", "thread.owner_user_id")} AS unread
+                  ${threadUnreadSql("thread", "thread.owner_user_id")} AS unread,
+                  ${projectlessSql} AS projectless
              FROM threads AS thread
+             JOIN projects AS project ON project.id = thread.project_id
              LEFT JOIN thread_changes_state AS summary
                ON summary.thread_id = thread.id
             WHERE thread.id IN (${ids.map(() => "?").join(", ")})
               AND (summary.thread_id IS NOT NULL OR thread.turn_failed = 1
-                OR thread.turn_settled_at IS NOT NULL)`,
+                OR thread.turn_settled_at IS NOT NULL OR ${projectlessSql})`,
         )
         .bind(...ids)
         .all();
@@ -123,6 +147,7 @@ export const readThreadListProjection = async (
         ...SummaryRowSchema.fields,
         turn_failed: Schema.Number,
         unread: Schema.Number,
+        projectless: Schema.Number,
       }),
     ),
   )(results.flatMap((result) => result.results));
@@ -132,8 +157,9 @@ export const readThreadListProjection = async (
     if (summary !== undefined) changes.set(id, summary);
     const marks = threadAttentionFields(row);
     if (Object.keys(marks).length > 0) attention.set(id, marks);
+    if (row.projectless === 1) projectless.set(id, { projectless: true });
   }
-  return { changes, attention };
+  return { changes, attention, projectless };
 };
 
 /**
@@ -145,6 +171,70 @@ export const listedUnderParentSql = `child.owner_user_id = parent.owner_user_id
           AND child.pinned_at IS NULL
           AND (child_project.workspace_id IS NULL
             OR ${activeMemberSql("child_project.workspace_id", "child.owner_user_id")})`;
+
+/**
+ * A recursive CTE `started_below(top, id)`: for each child Thread whose id
+ * `anchor` (SQL over `starter.id`) selects, every Thread below it that the
+ * sidebar does not list under the root, as `listedUnderRootSql` decides.
+ */
+const startedBelowCteSql = (anchor: string) => {
+  const hidden = `started.parent_thread_id = starter.parent_thread_id
+          AND starter.parent_thread_id IS NOT NULL
+          AND started.owner_user_id = starter.owner_user_id
+          AND started.lifecycle_state = starter.lifecycle_state
+          AND starter.pinned_at IS NULL
+          AND started.pinned_at IS NULL
+          AND (started_project.workspace_id IS NULL
+            OR ${activeMemberSql("started_project.workspace_id", "started.owner_user_id")})`;
+  return `started_below(top, id) AS (
+      SELECT starter.id, started.id
+        FROM threads AS starter
+        JOIN threads AS started ON started.started_by_thread_id = starter.id
+        JOIN projects AS started_project ON started_project.id = started.project_id
+       WHERE ${anchor} AND ${hidden}
+      UNION
+      SELECT started_below.top, started.id
+        FROM started_below
+        JOIN threads AS starter ON starter.id = started_below.id
+        JOIN threads AS started ON started.started_by_thread_id = starter.id
+        JOIN projects AS started_project ON started_project.id = started.project_id
+       WHERE ${hidden})`;
+};
+
+/**
+ * How many Threads sit below each of these child Threads without listing
+ * in the sidebar: those it started, and theirs. Threads with none are
+ * absent.
+ */
+export const readThreadStartedCounts = async (
+  db: D1Database,
+  threadIds: readonly ThreadId[],
+) => {
+  const counts = new Map<ThreadId, number>();
+  // D1 binds at most 100 parameters per statement.
+  const results = await Promise.all(
+    Array.from({ length: Math.ceil(threadIds.length / 100) }, (_, index) => {
+      const ids = threadIds.slice(index * 100, index * 100 + 100);
+      return db
+        .prepare(
+          `WITH RECURSIVE ${startedBelowCteSql(
+            `starter.id IN (${ids.map(() => "?").join(", ")})`,
+          )}
+           SELECT top, COUNT(*) AS started_count
+             FROM started_below GROUP BY top`,
+        )
+        .bind(...ids)
+        .all<{ top: ThreadId; started_count: number }>();
+    }),
+  );
+  for (const result of results)
+    for (const row of result.results) counts.set(row.top, row.started_count);
+  return counts;
+};
+
+/** The list item field for a child Thread's count; absent when zero. */
+export const startedCountField = (count: number | undefined) =>
+  count === undefined || count === 0 ? {} : { startedCount: count };
 
 /**
  * How many child Threads list under each root: unpinned children that
@@ -217,11 +307,12 @@ export const readThreadListItem = async (
 ): Promise<ThreadListItem | undefined> => {
   const row = await db
     .prepare(
-      `SELECT thread.id, thread.title, thread.project_id, thread.owner_user_id,
+      `WITH RECURSIVE ${startedBelowCteSql("starter.id = ?1 AND starter.owner_user_id = ?2")}
+       SELECT thread.id, thread.title, thread.project_id, thread.owner_user_id,
               thread.agent_instructions, thread.agent_instructions_revision,
               thread.agent_instructions_version, thread.model_selection,
               thread.runner_profile_id, thread.title_pending_until, thread.color,
-              thread.parent_thread_id,
+              thread.parent_thread_id, thread.started_by_thread_id,
               thread.plugin_snapshot_json, thread.skill_snapshot_json,
               thread.visibility, thread.created_at, thread.updated_at,
               COALESCE(thread.last_activity_at, thread.updated_at) AS last_activity_at,
@@ -240,6 +331,7 @@ export const readThreadListItem = async (
                 WHERE parent.id = thread.parent_thread_id) AS parent_color,
               thread.turn_failed, ${threadUnreadSql("thread", "?2")} AS unread,
               COALESCE(family.child_count, 0) AS child_count,
+              (SELECT COUNT(*) FROM started_below) AS started_count,
               family.child_working, family.child_unread, family.child_failed
          FROM threads AS thread
          JOIN projects AS project ON project.id = thread.project_id
@@ -281,6 +373,7 @@ export const readThreadListItem = async (
           readonly parent_color: ThreadColor | null;
           readonly turn_failed: number;
           readonly unread: number;
+          readonly started_count: number;
         } & ChildActivityRow
     >();
   if (row === null) return undefined;
@@ -295,6 +388,7 @@ export const readThreadListItem = async (
       ...threadListItem(thread),
       access: row.access,
       projectName: row.project_name.slice(0, 256),
+      ...projectlessField(row.project_name),
       ...decoration,
       ...threadAttentionFields(row),
     };
@@ -308,6 +402,7 @@ export const readThreadListItem = async (
         }),
       ),
     ),
+    ...projectlessField(row.project_name),
     ...decoration,
     ...threadAttentionFields(row),
     ...(row.child_count > 0
@@ -317,6 +412,133 @@ export const readThreadListItem = async (
         }
       : {}),
     ...(row.parent_color === null ? {} : { parentColor: row.parent_color }),
+    ...startedCountField(row.started_count),
+  };
+};
+
+/**
+ * SQL predicate over `thread` and its `project`: the requester bound to `?2`
+ * may read the Thread. The owner reads it in a Project they still reach, or,
+ * through an External API App held to the workspace bound to `?5`, only in
+ * that workspace's Projects. A member reads it while it is shared with them
+ * and `?4` is 1.
+ */
+const readableThreadSql = `(
+  (thread.owner_user_id = ?2
+    AND ((?5 IS NULL AND ${threadProjectReachableSql("project", "?2")})
+      OR (?5 IS NOT NULL AND project.workspace_id = ?5
+        AND ${activeMemberSql("project.workspace_id", "?2")})))
+  OR (?4 = 1 AND ${sharedThreadVisibleSql("thread", "project", "?2")}))`;
+
+/**
+ * The family of `threadId` as the requester may read it: its root and the
+ * root's children, active and archived, oldest first, up to `limit`. A member
+ * of a shared family gets only the members shared with them, without the
+ * owner's pins or snoozes. Undefined when the requester cannot read the
+ * Thread itself.
+ */
+export const readThreadFamily = async (
+  db: D1Database,
+  threadId: ThreadId,
+  requester: {
+    readonly userId: UserId;
+    /** An External API App's workspace, which holds it to its Projects. */
+    readonly workspaceId?: string;
+    readonly sharedThreads: boolean;
+  },
+  limit: number,
+  now = new Date(),
+): Promise<
+  | {
+      readonly rootThreadId: ThreadId;
+      readonly items: ReadonlyArray<ThreadListItem>;
+      readonly truncated: boolean;
+    }
+  | undefined
+> => {
+  const rows = (
+    await db
+      .prepare(
+        `WITH target AS (
+           SELECT COALESCE(thread.parent_thread_id, thread.id) AS root_id,
+                  thread.owner_user_id
+             FROM threads AS thread
+             JOIN projects AS project ON project.id = thread.project_id
+            WHERE thread.id = ?1
+              AND thread.lifecycle_state != 'deleted'
+              AND ${readableThreadSql}
+         )
+         SELECT target.root_id,
+                thread.id, thread.title, thread.project_id, thread.owner_user_id,
+                thread.agent_instructions, thread.agent_instructions_revision,
+                thread.agent_instructions_version, thread.model_selection,
+                thread.runner_profile_id, thread.title_pending_until, thread.color,
+                thread.parent_thread_id, thread.started_by_thread_id,
+                thread.plugin_snapshot_json, thread.skill_snapshot_json,
+                thread.visibility, thread.created_at, thread.updated_at,
+                COALESCE(thread.last_activity_at, thread.updated_at) AS last_activity_at,
+                thread.activity_status, thread.lifecycle_state,
+                CASE WHEN thread.owner_user_id = ?2 THEN thread.pinned_at END AS pinned_at,
+                CASE WHEN thread.owner_user_id = ?2 THEN thread.snoozed_until END AS snoozed_until,
+                CASE WHEN thread.owner_user_id = ?2 THEN thread.snoozed_at END AS snoozed_at,
+                CASE WHEN thread.owner_user_id = ?2 THEN thread.snooze_woke_at END AS snooze_woke_at,
+                thread.owner_user_id = ?2 AS owned,
+                ${sharedThreadAccessSql("thread", "?3")} AS access,
+                project.name AS project_name,
+                thread.turn_failed, ${threadUnreadSql("thread", "?2")} AS unread
+           FROM target
+           JOIN threads AS thread
+             ON thread.id = target.root_id OR thread.parent_thread_id = target.root_id
+           JOIN projects AS project ON project.id = thread.project_id
+          WHERE thread.owner_user_id = target.owner_user_id
+            AND thread.lifecycle_state != 'deleted'
+            AND ${readableThreadSql}
+          ORDER BY thread.created_at, thread.id
+          LIMIT ?6`,
+      )
+      .bind(
+        threadId,
+        requester.userId,
+        now.toISOString(),
+        requester.sharedThreads ? 1 : 0,
+        requester.workspaceId ?? null,
+        limit + 1,
+      )
+      .all<
+        Record<string, unknown> & {
+          readonly root_id: ThreadId;
+          readonly owned: number;
+          readonly access: "contribute" | "view";
+          readonly project_name: string;
+          readonly turn_failed: number;
+          readonly unread: number;
+        }
+      >()
+  ).results;
+  const rootThreadId = rows[0]?.root_id;
+  if (rootThreadId === undefined) return undefined;
+  const listed = rows.slice(0, limit);
+  const threads = await Effect.runPromise(decodeThreadRows(listed));
+  return {
+    rootThreadId,
+    items: threads.flatMap((thread, index) => {
+      const row = listed[index];
+      if (row === undefined) return [];
+      return [
+        {
+          ...threadListItem(thread),
+          ...threadAttentionFields(row),
+          // As the shared list returns another member's Thread.
+          ...(row.owned === 1
+            ? {}
+            : {
+                access: row.access,
+                projectName: row.project_name.slice(0, 256),
+              }),
+        },
+      ];
+    }),
+    truncated: rows.length > limit,
   };
 };
 

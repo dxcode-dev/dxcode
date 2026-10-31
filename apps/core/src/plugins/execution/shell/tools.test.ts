@@ -138,25 +138,122 @@ it("caps bytes and lines and consumes discarded output", async () => {
     "<output></output>",
   );
 });
-it("aborts the wait but leaves the background command running", async () => {
+const startedPid = async () =>
+  (await readdir(join(home, ".local/state/dx-shell")).catch(() => [])).find(
+    (entry) => /^\d+$/.test(entry),
+  );
+const until = async (check: () => Promise<boolean>, timeoutMs = 10_000) => {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await check())) {
+    if (Date.now() > deadline) throw new Error("Timed out waiting");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+};
+const gone = async (pid: number) => {
+  const state = (await sandbox.exec(`ps -o stat= -p ${pid}`)).stdout.trim();
+  return state === "" || state.startsWith("Z");
+};
+
+it("Stop during shell_command ends the command and its TERM-resistant children", async () => {
   const controller = new AbortController();
+  const probe = join(home, "probe.txt");
   const pending = call(
     0,
-    { command: "sleep 0.5; echo survived", timeout_ms: 10000 },
+    {
+      command: `trap '' TERM; (trap '' TERM; while true; do echo tick >> ${probe}; sleep 0.1; done) & echo $! > ${join(home, "child")}; wait`,
+      timeout_ms: 10000,
+    },
     controller.signal,
   );
+  await until(
+    async () => (await readFile(probe, "utf8").catch(() => "")) !== "",
+  );
+  controller.abort();
+  await expect(pending).rejects.toThrow("Stopped with the turn");
+  // The start directory, not the pid alias: Stop can end the start script
+  // before it links the alias.
   const root = join(home, ".local/state/dx-shell");
-  const startedPid = async () =>
-    (await readdir(root).catch(() => [])).find((entry) => /^\d+$/.test(entry));
-  // Abort the wait only once the command has started, however slow bash is.
-  while ((await startedPid()) === undefined) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+  const start = (await readdir(root)).find((entry) =>
+    entry.startsWith("start."),
+  );
+  const pid = Number(await readFile(join(root, String(start), "pid"), "utf8"));
+  const child = Number(await readFile(join(home, "child"), "utf8"));
+  expect(pid).toBeGreaterThan(0);
+  await until(async () => (await gone(pid)) && (await gone(child)));
+  // The runner records SIGTERM; SIGKILL then ends the children ignoring it.
+  await until(
+    async () =>
+      (await readFile(join(root, String(start), "exit"), "utf8").catch(
+        () => "",
+      )) !== "",
+  );
+  expect(await readFile(join(root, String(start), "exit"), "utf8")).toBe("143");
+  const lines = (await readFile(probe, "utf8")).length;
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  expect((await readFile(probe, "utf8")).length).toBe(lines);
+});
+it("Stop while following with shell_command_status leaves the background command running", async () => {
+  const started = await call(0, {
+    command: "sleep 0.8; echo survived",
+    timeout_ms: 0,
+  });
+  const controller = new AbortController();
+  const pending = call(
+    1,
+    { pid: started.details.pid, timeout_ms: 10000 },
+    controller.signal,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 100));
   controller.abort();
   await expect(pending).rejects.toThrow();
-  const pid = Number(await startedPid());
-  expect((await call(1, { pid, timeout_ms: 2000 })).text).toContain(
-    "survived\n</output>",
+  expect(
+    (await call(1, { pid: started.details.pid, timeout_ms: 5000 })).text,
+  ).toContain("survived\n</output>\n<exitCode>0</exitCode>");
+});
+it("a Stop that reaches the Orb before the start never runs the command", async () => {
+  // Flue rejects an aborted exec at once and leaves it running, so the start
+  // can reach the Orb after the stop does.
+  const real = sandbox;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let first = true;
+  sandbox = {
+    exec: (command, options) => {
+      const { signal, ...rest } = options ?? {};
+      const delayed = first;
+      first = false;
+      const run = delayed
+        ? held.then(() => real.exec(command, rest))
+        : real.exec(command, rest);
+      if (signal === undefined) return run;
+      return new Promise((resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        });
+        run.then(resolve, reject);
+      });
+    },
+  } as Sandbox;
+  const controller = new AbortController();
+  const marker = join(home, "ran");
+  const pending = call(
+    0,
+    { command: `touch ${marker}`, timeout_ms: 10000 },
+    controller.signal,
   );
-  expect(await readFile(join(root, String(pid), "exit"), "utf8")).toBe("0");
+  controller.abort();
+  await expect(pending).rejects.toThrow("Stopped with the turn");
+  const root = join(home, ".local/state/dx-shell");
+  await until(async () =>
+    (await readdir(root).catch(() => [])).some((entry) =>
+      entry.startsWith("start."),
+    ),
+  );
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  sandbox = real;
+  await expect(readFile(marker)).rejects.toThrow();
+  expect(await startedPid()).toBeUndefined();
 });

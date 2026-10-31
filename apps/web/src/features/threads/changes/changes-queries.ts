@@ -153,3 +153,31 @@ export const pushChangesMutationOptions = (
       ]);
     },
   });
+
+/**
+ * The Changes queries loaded for a Thread, for a bug report's Diff
+ * Diagnostics: each key and its data, any that would pass `budget`
+ * characters replaced by its size.
+ */
+export const loadedChanges = (
+  client: QueryClient,
+  threadId: ThreadId,
+  budget: number,
+) => {
+  let remaining = budget;
+  let truncated = false;
+  const loaded = client
+    .getQueriesData({ queryKey: changesKeys.all(threadId) })
+    .slice(0, 200)
+    .flatMap(([key, data]) => {
+      if (data === undefined) return [];
+      const size = JSON.stringify(data).length;
+      if (size > remaining) {
+        truncated = true;
+        return [{ key, data: { omitted: `${size} characters` } }];
+      }
+      remaining -= size;
+      return [{ key, data }];
+    });
+  return { loaded, truncated };
+};

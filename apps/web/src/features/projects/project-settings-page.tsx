@@ -31,6 +31,7 @@ import {
   SettingsSelect,
   type SettingsSelectOption,
 } from "../../shared/ui/settings.js";
+import { UnsavedChangesGuard } from "../../shared/ui/unsaved-changes-guard.js";
 import {
   bitbucketConnectionQueryOptions,
   bitbucketRepositoriesQueryOptions,
@@ -48,8 +49,13 @@ import {
   updateProjectMutationOptions,
   uploadProjectIconMutationOptions,
 } from "./project-mutations.js";
+import { ProjectOrbScriptsCard } from "./project-orb-scripts-card.js";
 import { projectQueryOptions } from "./project-queries.js";
 import { ProjectRepositoryIcon } from "./project-repository-icon.js";
+import {
+  isProjectSettingsSection,
+  type ProjectSettingsSection,
+} from "./project-settings-sections.js";
 import {
   connectedRepositoryOptions,
   type RepositoryOption,
@@ -70,7 +76,6 @@ const sections = [
   },
   { id: "secrets", label: "Secrets & Env Vars", icon: KeyRound },
 ] as const;
-type Section = (typeof sections)[number]["id"];
 
 export function ProjectSettingsPage({
   renderEnvironmentSettings,
@@ -90,8 +95,10 @@ export function ProjectSettingsPage({
   );
   const settingsQuery = useQuery(settingsContextQueryOptions(identity.id));
   const project = projectQuery.data;
-  const section: Section = sections.some(({ id }) => id === params.section)
-    ? (params.section as Section)
+  const section: ProjectSettingsSection = isProjectSettingsSection(
+    params.section,
+  )
+    ? params.section
     : "general";
   const ownerName =
     project?.workspaceId === undefined
@@ -451,6 +458,10 @@ function GeneralProjectSettings({
           onReset={() => undefined}
         />
       </SettingsCard>
+      <UnsavedChangesGuard
+        dirty={dirty}
+        onDiscard={() => dispatch({ type: "reset", project })}
+      />
     </div>
   );
 }
@@ -962,6 +973,13 @@ function ResolvedOrbProjectSettings({
           onReset={() => undefined}
         />
       </SettingsCard>
+      <UnsavedChangesGuard
+        dirty={dirty}
+        onDiscard={() =>
+          setRunnerProfileId(baseline.configuration.runnerProfileId)
+        }
+      />
+      <ProjectOrbScriptsCard projectId={project.id} userId={userId} />
     </div>
   );
 }
@@ -977,6 +995,8 @@ function ProjectSecretsSettings({
   ) => React.ReactNode;
 }) {
   const returnTo = useLocation({ select: (location) => location.href });
+  // The environment-variables form reports an entry typed but not added.
+  const [dirty, setDirty] = React.useState(false);
   return (
     <div className="project-settings-content project-settings-secrets">
       <SettingsHeading
@@ -998,7 +1018,8 @@ function ProjectSecretsSettings({
           </>
         }
       />
-      {renderEnvironmentSettings(projectId, () => undefined)}
+      {renderEnvironmentSettings(projectId, setDirty)}
+      <UnsavedChangesGuard dirty={dirty} onDiscard={() => setDirty(false)} />
     </div>
   );
 }

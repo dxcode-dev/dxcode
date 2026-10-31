@@ -16,6 +16,7 @@ import {
   type PaneContents,
   renderPaneContent,
 } from "./pane-views.js";
+import { TerminalView } from "./terminal-view.js";
 
 type Dispatch = (action: PaneLayoutAction) => void;
 
@@ -246,7 +247,11 @@ export function ThreadStackedLayout({
               inert={!active}
             >
               <PaneToolbarSlotContext value={active ? toolbarSlot : null}>
-                {content}
+                {tab.kind === "terminal" ? (
+                  <TerminalView>{content}</TerminalView>
+                ) : (
+                  content
+                )}
               </PaneToolbarSlotContext>
             </section>
           );

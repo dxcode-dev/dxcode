@@ -9,6 +9,10 @@ import { enforceThreadActive } from "./auth/enforce-thread-active.js";
 import { authRoutes } from "./auth/routes.js";
 import { threadAutomationRoutes } from "./automations/routes.js";
 import { avatarRoutes } from "./avatars/routes.js";
+import {
+  bugReportRoutes,
+  threadBugReportRoutes,
+} from "./bug-reports/routes.js";
 import { dictationRoutes } from "./dictation/routes.js";
 import { healthHandler } from "./health/handler.js";
 import { errorHandler, notFoundHandler } from "./http/http-errors.js";
@@ -36,7 +40,6 @@ import {
 import { settingsRoutes } from "./settings/routes.js";
 import { pluginTriggerIngressRoutes } from "./settings/triggers/routes.js";
 import { sidebarLayoutRoutes } from "./sidebar-layout/routes.js";
-import { threadPaneLayoutRoutes } from "./threads/pane-layout-route.js";
 import { bitbucketGitGatewayRoutes } from "./source-control/bitbucket/git-gateway.js";
 import { bitbucketControlPlaneRoutes } from "./source-control/bitbucket/routes.js";
 import {
@@ -57,6 +60,7 @@ import {
 } from "./thread-sharing/routes.js";
 import { threadStorageRoutes } from "./thread-storage/routes.js";
 import { threadDaemonRoutes } from "./threads/daemon-route.js";
+import { threadPaneLayoutRoutes } from "./threads/pane-layout-route.js";
 import { threadRoutes } from "./threads/routes.js";
 import { threadTerminalRoutes } from "./threads/terminal-route.js";
 import { workloadIdentityRoutes } from "./workload-identity/routes.js";
@@ -89,6 +93,7 @@ app.use("/v1/*", authenticate);
 app.use("/v1/*", authorizeApiTokenScope);
 app.route("/v1/attachments", attachmentRoutes);
 app.route("/v1/avatars", avatarRoutes);
+app.route("/v1/bug-reports", bugReportRoutes);
 app.route("/v1/dictation", dictationRoutes);
 app.route("/v1/invites", inviteAcceptRoutes);
 app.route("/v1/notifications", notificationRoutes);
@@ -108,6 +113,8 @@ app.route("/v1/threads", threadSharingRoutes);
 app.use("/v1/threads/:threadId/members", authorizeThread);
 app.use("/v1/threads/:threadId/follow", authorizeThread);
 app.route("/v1/threads", threadMemberRoutes);
+app.use("/v1/threads/:threadId/bug-reports", authorizeThread);
+app.route("/v1/threads", threadBugReportRoutes);
 app.use("/v1/threads/:threadId/changes", authorizeThread);
 app.use("/v1/threads/:threadId/changes/*", authorizeThread);
 app.route("/v1/threads", threadChangesRoutes);

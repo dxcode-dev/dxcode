@@ -419,6 +419,10 @@ const makeHarness = async (input?: {
   readonly bitbucketLfs?: boolean;
   /** With `bitbucketLfs`, a second LFS asset whose object the provider no longer has. */
   readonly missingLfsObject?: boolean;
+  /** Thousands of directories, each with its own LFS `.gitattributes`. */
+  readonly manyLfsAttributes?: number;
+  /** Commit no `.agents/setup` or `.agents/resume`. */
+  readonly withoutHooks?: boolean;
 }): Promise<HarnessFixture> => {
   const base = await mkdtemp(
     join(realpathSync(tmpdir()), "dx-workspace-harness-"),
@@ -459,20 +463,27 @@ const makeHarness = async (input?: {
     if (input.missingLfsObject === true)
       writeFileSync(join(source, "assets", "missing.bin"), randomBytes(1_024));
   }
-  mkdirSync(join(source, ".agents"));
   writeFileSync(join(source, "README.md"), "snapshot\n");
+  for (let index = 0; index < (input?.manyLfsAttributes ?? 0); index += 1) {
+    const directory = join(source, "packages", `package-${index}`);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, ".gitattributes"), "*.bin filter=lfs\n");
+  }
   if (input?.lfsAttributes === true)
     writeFileSync(join(source, ".gitattributes"), "*.bin filter=lfs\n");
-  writeFileSync(
-    join(source, ".agents", "setup"),
-    `#!/bin/sh\n${input?.requiresFullHistory === true ? "# dx-requires: full-history\n" : ""}[ ! -f "$HOME/fail-setup" ] || exit 7\nprintf "setup\\n" >> "$HOME/hook-order"\n`,
-    { mode: 0o755 },
-  );
-  writeFileSync(
-    join(source, ".agents", "resume"),
-    '#!/bin/sh\nprintf "resume\\n" >> "$HOME/hook-order"\n',
-    { mode: 0o755 },
-  );
+  if (input?.withoutHooks !== true) {
+    mkdirSync(join(source, ".agents"));
+    writeFileSync(
+      join(source, ".agents", "setup"),
+      `#!/bin/sh\n${input?.requiresFullHistory === true ? "# dx-requires: full-history\n" : ""}[ ! -f "$HOME/fail-setup" ] || exit 7\nprintf "setup\\n" >> "$HOME/hook-order"\n`,
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      join(source, ".agents", "resume"),
+      '#!/bin/sh\nprintf "resume\\n" >> "$HOME/hook-order"\n',
+      { mode: 0o755 },
+    );
+  }
   git(source, "add", ".");
   git(source, "commit", "-m", "fixture");
   const sourceSha = git(source, "rev-parse", "HEAD");
@@ -1122,6 +1133,85 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     );
   });
 
+  it("reads Git output that grows with the repository past 32 KiB", async () => {
+    // 3,000 .gitattributes paths make `git grep -l` print about 100 KiB.
+    const fixture = await makeHarness({ manyLfsAttributes: 3_000 });
+    const result = runHarness(fixture, "initialize");
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      status: "ready",
+      lfsNeeded: true,
+    });
+  });
+
+  it("judges setup and resume by their exit codes alone, however much they print, and logs all of it", async () => {
+    const fixture = await makeHarness();
+    initialize(fixture);
+    // About 1 MB on stdout and stderr: far past what a buffered child may
+    // print before Node kills it.
+    const chatty = (name: string, exitCode: number) =>
+      `#!/bin/sh
+head -c 524288 /dev/zero | tr '\\0' 'o'
+head -c 524288 /dev/zero | tr '\\0' 'e' >&2
+printf "\\n${name} finished\\n"
+printf "${name}\\n" >> "$HOME/hook-order"
+exit ${exitCode}
+`;
+    writeFileSync(
+      join(fixture.paths.root, ".agents", "setup"),
+      chatty("setup", 0),
+      {
+        mode: 0o755,
+      },
+    );
+    writeFileSync(
+      join(fixture.paths.root, ".agents", "resume"),
+      chatty("resume", 0),
+      {
+        mode: 0o755,
+      },
+    );
+
+    expect(hooksState(fixture)).toEqual({ status: "ready" });
+    expect(
+      JSON.parse(readFileSync(fixture.paths.state, "utf8")).setup.status,
+    ).toBe("success");
+    expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
+      "setup\nresume\n",
+    );
+    for (const name of ["setup", "resume"]) {
+      const log = readFileSync(
+        join(fixture.paths.logDirectory, `${name}.log`),
+        "utf8",
+      );
+      expect(log.length).toBeGreaterThanOrEqual(1_048_576);
+      expect(log.endsWith(`${name} finished\n`)).toBe(true);
+    }
+
+    // The same output with a failing exit still fails, and a shorter run
+    // replaces the log instead of appending to it.
+    writeFileSync(
+      join(fixture.paths.root, ".agents", "resume"),
+      chatty("resume", 3),
+      {
+        mode: 0o755,
+      },
+    );
+    expect(hooksState(fixture)).toEqual({
+      status: "ready",
+      failed: ["resume"],
+    });
+    writeFileSync(
+      join(fixture.paths.root, ".agents", "resume"),
+      "#!/bin/sh\necho short\n",
+      { mode: 0o755 },
+    );
+    expect(hooksState(fixture)).toEqual({ status: "ready" });
+    expect(
+      readFileSync(join(fixture.paths.logDirectory, "resume.log"), "utf8"),
+    ).toBe("short\n");
+  });
+
   it("reports a failing resume hook without failing the workspace", async () => {
     const fixture = await makeHarness();
     initialize(fixture);
@@ -1164,6 +1254,137 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     expect(() =>
       readFileSync(join(fixture.paths.home, "hook-order"), "utf8"),
     ).toThrow();
+  });
+
+  const projectScript = (body: string) =>
+    Buffer.from(body, "utf8").toString("base64");
+  // Each probe records where it ran, whether the checkout existed, and
+  // whether dx's own credential leaked into the person's script.
+  const probe = (name: string) =>
+    `printf "%s|%s|%s\\n" "$PWD" "$(test -e "$PWD/repo" && echo cloned || echo absent)" "\${GH_TOKEN:-none}" > "$HOME/${name}"\nprintf "${name}\\n" >> "$HOME/hook-order"\n`;
+
+  it("runs the project's pre-clone script from the workspace directory before the clone, without dx's credentials", async () => {
+    const fixture = await makeHarness();
+    const result = runHarness(fixture, "pre-clone", {
+      DX_PRE_CLONE_SCRIPT: projectScript(probe("pre-clone")),
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ status: "success" });
+    expect(readFileSync(join(fixture.paths.home, "pre-clone"), "utf8")).toBe(
+      `${fixture.paths.workspaceParent}|absent|none\n`,
+    );
+    initialize(fixture);
+    expect(hooksState(fixture)).toEqual({ status: "ready" });
+    expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
+      "pre-clone\nsetup\nresume\n",
+    );
+  });
+
+  it("reports a failing pre-clone script with its exit code and output", async () => {
+    const fixture = await makeHarness();
+    const result = runHarness(fixture, "pre-clone", {
+      DX_PRE_CLONE_SCRIPT: projectScript(
+        "#!/bin/sh\necho 'proxy.internal unreachable' >&2\nexit 7\n",
+      ),
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      status: "failed",
+      exitCode: 7,
+      output: "proxy.internal unreachable\n",
+    });
+    expect(
+      readFileSync(join(fixture.paths.logDirectory, "pre-clone.log"), "utf8"),
+    ).toBe("proxy.internal unreachable\n");
+  });
+
+  it("skips pre-clone without a script and rejects a malformed one", async () => {
+    const fixture = await makeHarness();
+    const skipped = runHarness(fixture, "pre-clone");
+    expect(skipped.status, skipped.stderr).toBe(0);
+    expect(JSON.parse(skipped.stdout)).toEqual({ status: "skipped" });
+
+    const malformed = runHarness(fixture, "pre-clone", {
+      DX_PRE_CLONE_SCRIPT: "not base64!",
+    });
+    expect(malformed.status).toBe(40);
+    expect(malformed.stderr).toContain("invalid-input");
+  });
+
+  it("runs the project's pre-setup script before setup and reruns setup only when the script changes", async () => {
+    const fixture = await makeHarness();
+    initialize(fixture);
+    const first = projectScript(probe("pre-setup"));
+
+    expect(hooksState(fixture, { DX_PRE_SETUP_SCRIPT: first })).toEqual({
+      status: "ready",
+    });
+    expect(readFileSync(join(fixture.paths.home, "pre-setup"), "utf8")).toBe(
+      `${fixture.paths.root}|absent|none\n`,
+    );
+    expect(hooksState(fixture, { DX_PRE_SETUP_SCRIPT: first })).toEqual({
+      status: "ready",
+    });
+    expect(
+      hooksState(fixture, {
+        DX_PRE_SETUP_SCRIPT: projectScript(`${probe("pre-setup")}# edited\n`),
+      }),
+    ).toEqual({ status: "ready" });
+    expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
+      "pre-setup\nsetup\nresume\nresume\npre-setup\nsetup\nresume\n",
+    );
+  });
+
+  it("runs pre-setup in a repository without setup hooks, and the resume hook it writes runs uncommitted", async () => {
+    const fixture = await makeHarness({ withoutHooks: true });
+    initialize(fixture);
+    const preSetup = projectScript(
+      [
+        'printf "pre-setup\\n" >> "$HOME/hook-order"',
+        "mkdir -p .agents",
+        `printf '#!/bin/sh\\nprintf "resume\\\\n" >> "$HOME/hook-order"\\n' > .agents/resume`,
+        "chmod +x .agents/resume",
+        "mkdir -p .git/info",
+        "printf '.agents/resume\\n' >> .git/info/exclude",
+        "",
+      ].join("\n"),
+    );
+
+    expect(hooksState(fixture, { DX_PRE_SETUP_SCRIPT: preSetup })).toEqual({
+      status: "ready",
+    });
+    expect(hooksState(fixture, { DX_PRE_SETUP_SCRIPT: preSetup })).toEqual({
+      status: "ready",
+    });
+    expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
+      "pre-setup\nresume\nresume\n",
+    );
+    expect(git(fixture.paths.root, "status", "--porcelain")).toBe("");
+  });
+
+  it("keeps the workspace ready when pre-setup fails, still runs setup, and retries both", async () => {
+    const fixture = await makeHarness();
+    initialize(fixture);
+    const failing = projectScript(
+      '#!/bin/sh\nprintf "pre-setup\\n" >> "$HOME/hook-order"\n[ -f "$HOME/pre-setup-ok" ] || exit 3\n',
+    );
+
+    expect(hooksState(fixture, { DX_PRE_SETUP_SCRIPT: failing })).toEqual({
+      status: "ready",
+      failed: ["pre-setup"],
+    });
+    expect(
+      JSON.parse(readFileSync(fixture.paths.state, "utf8")).setup.status,
+    ).toBe("failed");
+    writeFileSync(join(fixture.paths.home, "pre-setup-ok"), "");
+    expect(hooksState(fixture, { DX_PRE_SETUP_SCRIPT: failing })).toEqual({
+      status: "ready",
+    });
+    expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
+      "pre-setup\nsetup\nresume\npre-setup\nsetup\nresume\n",
+    );
   });
 
   it("checks out a Bitbucket LFS repository through the dx gateway the way a laptop clone does", async () => {

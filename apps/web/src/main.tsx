@@ -6,8 +6,12 @@ import { AuthGate } from "./features/authentication/auth-gate.js";
 import { sessionQueryOptions } from "./features/authentication/sign-in-queries.js";
 import { AccountThemeProvider } from "./features/settings/account/account-theme-provider.js";
 import { onSessionEnded } from "./shared/auth/session-ended.js";
+import { installClientDiagnostics } from "./shared/diagnostics/client-diagnostics.js";
 import { queryClient } from "./shared/query/query-client.js";
 import "./styles.css";
+
+// Before anything renders, so a bug report holds the earliest failures.
+installClientDiagnostics();
 
 const AuthenticatedApplication = lazy(() =>
   import("./authenticated-application.js").then((module) => ({

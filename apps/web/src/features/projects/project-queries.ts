@@ -6,10 +6,15 @@ import {
   queryOptions,
 } from "@tanstack/react-query";
 import {
+  ApiError,
   getProject,
   listProjects,
   type ProjectPage,
 } from "../../shared/api/client.js";
+
+/** `GET /v1/projects/<id>` answered that the project does not exist. */
+export const isMissingProjectError = (error: unknown) =>
+  error instanceof ApiError && error.status === 404;
 
 const staleTime = 30_000;
 const gcTime = 5 * 60_000;

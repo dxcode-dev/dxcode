@@ -22,8 +22,8 @@ export function SelfHost({
       <h2>A little cloud of your own.</h2>
       <p>
         The v0.1.0 self-hosting path targets your Cloudflare and E2B accounts,
-        with your own model access. Source-available under the planned FSL
-        release. You cover infrastructure and model usage.
+        with your own model access. Source-available under FSL-1.1-ALv2. You
+        cover infrastructure and model usage.
       </p>
       <div className="facts">
         <span>Cloudflare + E2B</span>
@@ -33,9 +33,9 @@ export function SelfHost({
       <details>
         <summary>Release status & license</summary>
         <p>
-          Public package and deployment guide are being prepared. FSL restricts
-          competing use for two years per release, then converts to Apache-2.0.
-          dx uses FSL-1.1-ALv2.
+          The source and a deployment guide are public. FSL restricts competing
+          use for two years per release, then converts to Apache-2.0. dx uses
+          FSL-1.1-ALv2.
         </p>
       </details>
     </section>

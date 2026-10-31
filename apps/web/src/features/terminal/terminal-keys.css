@@ -1,6 +1,14 @@
 .thread-terminal-shell:has(> .terminal-keys) {
   flex-direction: column;
 }
+/* With the key bar, the notice takes a row above it instead of covering it. */
+.thread-terminal-shell:has(> .terminal-keys)
+> .thread-terminal-environment-notice {
+  position: static;
+  flex: none;
+  margin: 0 8px 6px;
+  box-shadow: none;
+}
 .terminal-keys {
   display: flex;
   align-items: center;

@@ -23,3 +23,16 @@ export function operatorR2Credentials(keys: {
   accessKeyId?: string;
   secretAccessKey?: string;
 }): string;
+export const WORKER_LOGS_PERMISSION: "Workers Observability Read";
+export function workerLogsTokenProps(
+  accountId: string,
+  workerName: string,
+): {
+  name: string;
+  accountId: string;
+  policies: {
+    effect: "allow";
+    permissionGroups: "Workers Observability Read"[];
+    resources: Record<`com.cloudflare.api.account.${string}`, string>;
+  }[];
+};

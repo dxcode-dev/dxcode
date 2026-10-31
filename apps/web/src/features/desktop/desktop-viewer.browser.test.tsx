@@ -17,7 +17,14 @@
 //   cannot decode the stream, instead of saying so and offering a retry that
 //   can succeed;
 // - the Desktop tab is missing beside Terminal or connects before selection;
-// - keys typed into the remote desktop trigger dx shortcuts.
+// - keys typed into the remote desktop trigger dx shortcuts;
+// - it shows the desktop as live before a picture is drawn, with nothing
+//   covering the black canvas, so a click there reaches the remote screen
+//   unseen;
+// - it loses the gateway's latest full picture when that picture, with the
+//   frames after it, arrives before the decoder is set up, and then waits
+//   for the next full picture, which a still desktop never sends;
+// - it waits forever on a stream that opens but draws nothing.
 
 import type { ThreadId } from "@dx/domain";
 import * as React from "react";
@@ -31,6 +38,8 @@ import {
   it,
   vi,
 } from "vitest";
+import { userEvent } from "vitest/browser";
+import "../../styles.css";
 import { PaneTreeHarness } from "../../testing/pane-tree-harness.js";
 import { DesktopViewer } from "./desktop-viewer.js";
 
@@ -75,7 +84,95 @@ class FakeSocket extends EventTarget {
       new MessageEvent("message", { data: JSON.stringify(message) }),
     );
   }
+  receiveBinary(data: ArrayBuffer) {
+    this.dispatchEvent(new MessageEvent("message", { data }));
+  }
 }
+
+/**
+ * A WebCodecs decoder that, like a real one, decodes nothing until it has a
+ * key frame, and works off its queue after the current task: frames decoded
+ * in one burst all count in `decodeQueueSize` until then. Its setup check
+ * also answers after a task, as Chromium's does.
+ */
+class FakeVideoDecoder {
+  static decoded: string[] = [];
+  static async isConfigSupported() {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return { supported: true };
+  }
+  state = "unconfigured";
+  decodeQueueSize = 0;
+  #keyed = false;
+  #epoch = 0;
+  constructor(private readonly init: { output: (frame: unknown) => void }) {}
+  configure() {
+    this.state = "configured";
+  }
+  reset() {
+    this.state = "unconfigured";
+    this.decodeQueueSize = 0;
+    this.#keyed = false;
+    this.#epoch += 1;
+  }
+  close() {
+    this.reset();
+    this.state = "closed";
+  }
+  decode(chunk: EncodedVideoChunk) {
+    FakeVideoDecoder.decoded.push(chunk.type);
+    this.decodeQueueSize += 1;
+    const epoch = this.#epoch;
+    setTimeout(() => {
+      if (epoch !== this.#epoch) return;
+      this.decodeQueueSize -= 1;
+      if (chunk.type === "key") this.#keyed = true;
+      if (!this.#keyed) return;
+      this.init.output({
+        displayWidth: 1280,
+        displayHeight: 720,
+        timestamp: chunk.timestamp,
+        close() {},
+      });
+    }, 0);
+  }
+}
+
+/** One H.264 access unit as the gateway frames it. */
+const videoChunk = (key: boolean, index: number) => {
+  const buffer = new ArrayBuffer(48);
+  const view = new DataView(buffer);
+  view.setUint8(0, 2);
+  view.setUint8(1, 1);
+  view.setUint8(2, key ? 1 : 0);
+  view.setBigUint64(12, BigInt(index * 33_333), true);
+  view.setUint32(20, 1, true);
+  view.setUint16(24, 1280, true);
+  view.setUint16(26, 720, true);
+  return buffer;
+};
+/**
+ * The most frames the Waymote 0.1.6 gateway sends a new viewer: its latest
+ * full picture and up to 240 frames since (`hub.broadcast` in its
+ * gateway/main.go). The SDK must hold that many while its decoder is set up.
+ */
+const GATEWAY_LATEST_PICTURE_FRAMES = 241;
+/**
+ * What the gateway sends a new viewer: its decoder settings, then the
+ * latest full picture and every frame since.
+ */
+const sendLatestPicture = (stream: FakeSocket, frames = 21) => {
+  stream.receive({
+    type: "video-config",
+    version: 1,
+    codec: "avc1.42E034",
+    frameRate: 30,
+  });
+  for (let index = 0; index < frames; index += 1)
+    stream.receiveBinary(videoChunk(index === 0, index));
+};
+let draws: ReturnType<typeof vi.fn>;
+const roots: ReturnType<typeof createRoot>[] = [];
 
 type DesktopAnswer = "ready" | "unsupported" | "unavailable" | number;
 let desktopAnswers: DesktopAnswer[] = [];
@@ -142,9 +239,8 @@ beforeEach(() => {
   desktopChecks = [];
   vi.stubGlobal("fetch", vi.fn(fakeCore));
   vi.stubGlobal("WebSocket", FakeSocket);
-  vi.stubGlobal("VideoDecoder", {
-    isConfigSupported: async () => ({ supported: true }),
-  });
+  FakeVideoDecoder.decoded = [];
+  vi.stubGlobal("VideoDecoder", FakeVideoDecoder);
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -152,12 +248,16 @@ beforeEach(() => {
       disconnect() {}
     },
   );
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
-    {} as RenderingContext,
-  );
+  draws = vi.fn();
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+    drawImage: draws,
+  } as unknown as RenderingContext);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // A failed test leaves its viewer mounted; unmount it here so its sockets
+  // do not leak into the next test.
+  for (const root of roots.splice(0)) await React.act(() => root.unmount());
   vi.useRealTimers();
   document.body.replaceChildren();
   FakeSocket.instances = [];
@@ -168,6 +268,7 @@ afterEach(() => {
 const render = async (element: React.ReactElement) => {
   const container = document.body.appendChild(document.createElement("div"));
   const root = createRoot(container);
+  roots.push(root);
   await React.act(() => root.render(element));
   await settle();
   return { container, root };
@@ -193,7 +294,7 @@ describe("DesktopViewer", () => {
     expect(openSockets()).toEqual([]);
   });
 
-  it("shows starting, then the live desktop, then reconnecting compactly", async () => {
+  it("shows starting until the first picture is drawn, then the live desktop, then reconnecting compactly", async () => {
     const { container, root } = await render(
       <DesktopViewer active threadId={threadA} />,
     );
@@ -202,18 +303,124 @@ describe("DesktopViewer", () => {
       "Starting desktop",
     );
 
-    const stream = FakeSocket.instances.find((socket) =>
-      socket.url.endsWith("/stream"),
-    ) as FakeSocket;
+    const stream = socketFor("stream") as FakeSocket;
     await React.act(async () => stream.open());
+    // Connected, but nothing drawn yet: still starting.
+    expect(container.querySelector(".thread-desktop-loading")).not.toBeNull();
+
+    await React.act(async () => sendLatestPicture(stream));
+    await vi.waitFor(() => expect(draws).toHaveBeenCalled());
+    await settle();
     expect(container.querySelector(".thread-desktop-loading")).toBeNull();
     expect(container.textContent).not.toContain("Reconnecting");
 
+    // The last picture stays on the canvas while the stream reconnects.
     await React.act(async () => {
       stream.readyState = FakeSocket.CLOSED;
       stream.dispatchEvent(new CloseEvent("close", { code: 1006 }));
     });
     expect(container.textContent).toContain("Reconnecting");
+    expect(container.querySelector(".thread-desktop-loading")).toBeNull();
+    await React.act(() => root.unmount());
+  });
+
+  it("draws the latest full picture when it arrives before the decoder is set up", async () => {
+    // Returning to a Thread whose desktop is still: the gateway sends its
+    // latest full picture and the frames after it in one burst, and no new
+    // full picture follows until the screen changes enough.
+    const { container, root } = await render(
+      <DesktopViewer active threadId={threadA} />,
+    );
+    await connected();
+    const stream = socketFor("stream") as FakeSocket;
+    await React.act(async () => {
+      stream.open();
+      socketFor("control")?.open();
+      sendLatestPicture(stream, GATEWAY_LATEST_PICTURE_FRAMES);
+    });
+    await vi.waitFor(() => expect(draws).toHaveBeenCalled());
+    expect(FakeVideoDecoder.decoded[0]).toBe("key");
+    await settle();
+    expect(container.querySelector(".thread-desktop-loading")).toBeNull();
+    await React.act(() => root.unmount());
+  });
+
+  it("covers the desktop until its first picture, so a click there never reaches the remote screen", async () => {
+    const { container, root } = await render(
+      <div style={{ display: "flex", width: 800, height: 500 }}>
+        <DesktopViewer active threadId={threadA} />
+      </div>,
+    );
+    await connected();
+    const control = socketFor("control") as FakeSocket;
+    await React.act(async () => {
+      socketFor("stream")?.open();
+      control.open();
+    });
+    const surface = container.querySelector(
+      '[role="application"]',
+    ) as HTMLElement;
+    const box = surface.getBoundingClientRect();
+    const hit = document.elementFromPoint(
+      box.left + box.width / 2,
+      box.top + box.height / 2,
+    );
+    expect(hit?.closest(".thread-desktop-loading")).not.toBeNull();
+
+    await userEvent.click(surface, { force: true });
+    await settle();
+    expect(document.activeElement).not.toBe(surface);
+    expect(control.sent).toEqual(
+      control.sent.filter((message) => typeof message === "string"),
+    );
+    expect(control.sent).not.toContain("acquire");
+    await React.act(() => root.unmount());
+  });
+
+  it("reconnects a stream that opens but draws nothing", async () => {
+    vi.useFakeTimers();
+    const { container, root } = await render(
+      <DesktopViewer active threadId={threadA} />,
+    );
+    await connected();
+    const stream = socketFor("stream") as FakeSocket;
+    // dx Core's relay may not finish a close handshake the browser starts,
+    // so a closed stream can stay closing for a long time.
+    stream.close = () => {
+      stream.readyState = FakeSocket.CLOSING;
+    };
+    await React.act(async () => {
+      stream.open();
+      // Only frames that depend on a full picture this viewer never got.
+      stream.receive({
+        type: "video-config",
+        version: 1,
+        codec: "avc1.42E034",
+        frameRate: 30,
+      });
+      stream.receiveBinary(videoChunk(false, 1));
+    });
+    await React.act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(draws).not.toHaveBeenCalled();
+    expect(socketFor("stream")).toBe(stream);
+
+    await React.act(() => vi.advanceTimersByTimeAsync(10_000));
+    const again = FakeSocket.instances
+      .filter((socket) => socket.url.endsWith("/stream"))
+      .at(-1) as FakeSocket;
+    expect(again).not.toBe(stream);
+    expect(stream.readyState).toBe(FakeSocket.CLOSING);
+    expect(container.querySelector(".thread-desktop-loading")).not.toBeNull();
+
+    await React.act(async () => {
+      again.open();
+      sendLatestPicture(again);
+    });
+    await vi.waitFor(async () => {
+      await vi.advanceTimersByTimeAsync(20);
+      expect(draws).toHaveBeenCalled();
+    });
+    await settle();
     expect(container.querySelector(".thread-desktop-loading")).toBeNull();
     await React.act(() => root.unmount());
   });
@@ -286,9 +493,7 @@ describe("DesktopViewer", () => {
     expect(container.querySelector(".thread-desktop-loading")).toBeNull();
     expect(container.textContent).toContain("WebCodecs");
 
-    vi.stubGlobal("VideoDecoder", {
-      isConfigSupported: async () => ({ supported: true }),
-    });
+    vi.stubGlobal("VideoDecoder", FakeVideoDecoder);
     const retry = [...container.querySelectorAll("button")].find((button) =>
       button.textContent?.includes("Retry"),
     );
@@ -440,7 +645,13 @@ describe("DesktopViewer", () => {
       <DesktopViewer active threadId={threadA} />,
     );
     await connected();
-    await React.act(async () => socketFor("stream")?.open());
+    await React.act(async () => {
+      const stream = socketFor("stream") as FakeSocket;
+      stream.open();
+      sendLatestPicture(stream);
+    });
+    await React.act(() => vi.advanceTimersByTimeAsync(100));
+    expect(draws).toHaveBeenCalled();
     await React.act(async () => socketFor("control")?.open());
     const surface = container.querySelector(
       '[role="application"]',
@@ -485,7 +696,13 @@ describe("DesktopViewer", () => {
       <DesktopViewer active threadId={threadA} />,
     );
     await connected();
-    await React.act(async () => socketFor("stream")?.open());
+    await React.act(async () => {
+      const stream = socketFor("stream") as FakeSocket;
+      stream.open();
+      sendLatestPicture(stream);
+    });
+    await React.act(() => vi.advanceTimersByTimeAsync(100));
+    expect(draws).toHaveBeenCalled();
     const control = socketFor("control") as FakeSocket;
     await React.act(async () => control.open());
     const surface = container.querySelector(

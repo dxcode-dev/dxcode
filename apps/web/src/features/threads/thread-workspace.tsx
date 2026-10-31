@@ -45,6 +45,21 @@ import {
 import type { PendingAttachment } from "./image-attachments.js";
 import { OrbDiskNotice } from "./orb-disk/orb-disk-notice.js";
 import { OrbMemoryNotice } from "./orb-memory/orb-memory-notice.js";
+import {
+  fileTargetKey,
+  focusedTab,
+  listPanes,
+  locateTab,
+  type PaneLayoutAction,
+} from "./panes/pane-layout.js";
+import {
+  threadPaneLayoutQueryOptions,
+  usePaneLayout,
+  usePaneLayoutDispatch,
+  usePaneLayoutReader,
+} from "./panes/pane-layout-queries.js";
+import type { PaneContents } from "./panes/pane-views.js";
+import { ThreadPageLayout } from "./panes/thread-page-layout.js";
 import { ThreadPortalsPane } from "./portals/portals-pane.js";
 import {
   useThreadPresence,
@@ -57,21 +72,6 @@ import {
   useSetThreadFollowing,
 } from "./sharing/sharing-mutations.js";
 import { threadMembersQueryOptions } from "./sharing/thread-chat-queries.js";
-import {
-  threadPaneLayoutQueryOptions,
-  usePaneLayout,
-  usePaneLayoutDispatch,
-  usePaneLayoutReader,
-} from "./panes/pane-layout-queries.js";
-import {
-  fileTargetKey,
-  focusedTab,
-  listPanes,
-  locateTab,
-  type PaneLayoutAction,
-} from "./panes/pane-layout.js";
-import type { PaneContents } from "./panes/pane-views.js";
-import { ThreadPageLayout } from "./panes/thread-page-layout.js";
 import {
   type ThreadFileNavigation,
   ThreadFileNavigationContext,
@@ -1046,7 +1046,6 @@ function ThreadSessionContent({
     <ThreadAgentPanel
       {...retainedImageProps}
       source={agentSource}
-      agentInitialization={thread.agentInitialization}
       onOpenModelRouting={archived ? undefined : openModelRouting}
       archived={archived}
       showArchivedNotice={archived}

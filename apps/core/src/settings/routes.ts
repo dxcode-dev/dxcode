@@ -48,6 +48,10 @@ import {
 } from "./model-routing/routes.js";
 import { personalModelSubscriptionRoutes } from "./model-subscriptions/routes.js";
 import {
+  personalPluginBundleRoutes,
+  workspacePluginBundleRoutes,
+} from "./plugins/bundles/routes.js";
+import {
   personalPluginRoutes,
   workspacePluginRoutes,
 } from "./plugins/routes.js";
@@ -215,6 +219,7 @@ settingsRoutes.route(
   personalFirstPartyPluginRoutes,
 );
 settingsRoutes.route("/personal/orb-providers", personalOrbProviderRoutes);
+settingsRoutes.route("/personal/plugin-bundles", personalPluginBundleRoutes);
 settingsRoutes.route("/personal/plugins", personalPluginRoutes);
 settingsRoutes.route("/personal/skills", personalSkillRoutes);
 settingsRoutes.route("/personal/usage", personalUsageRoutes);
@@ -250,6 +255,10 @@ settingsRoutes.route(
 settingsRoutes.route(
   "/workspaces/:workspaceSlug/orb-providers",
   workspaceOrbProviderRoutes,
+);
+settingsRoutes.route(
+  "/workspaces/:workspaceSlug/plugin-bundles",
+  workspacePluginBundleRoutes,
 );
 settingsRoutes.route(
   "/workspaces/:workspaceSlug/plugins",

@@ -31,9 +31,9 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
+import { useTheme } from "../../../shared/theme/theme-provider.js";
 import { PaneToolbar } from "../panes/pane-toolbar-slot.js";
 import { useThreadLayoutMode } from "../panes/thread-layout-mode.js";
-import { useTheme } from "../../../shared/theme/theme-provider.js";
 import {
   type ChangesTransport,
   defaultChangesTransport,
@@ -193,7 +193,17 @@ export function ChangesPane({
   };
 
   return (
-    <section className="changes-pane" aria-label="Changes">
+    <section
+      className="changes-pane"
+      aria-label="Changes"
+      // What Diff Diagnostics report about how the pane shows the changes.
+      data-thread-id={threadId}
+      data-range={JSON.stringify(range)}
+      data-diff-style={diffStyle}
+      data-overflow={overflow}
+      data-sort={sortByName ? "name" : "path"}
+      data-expanded={[...expanded].join("\n")}
+    >
       {stacked && showRangeNavigation ? (
         <PaneToolbar>
           <button

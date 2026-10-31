@@ -46,7 +46,7 @@ import {
 import {
   CLAUDE_CODE_TOKEN_PREFIX,
   checkClaudeCodeToken,
-  claudeCodeTokenHealth,
+  isClaudePlanToken,
 } from "./claude-code-token.js";
 import {
   loadConnectionsForTarget,
@@ -110,10 +110,11 @@ const CLAUDE_CODE_TOKEN_SHAPE =
 const claudeCodeTokenShaped = (token: string) =>
   token.trim().startsWith(CLAUDE_CODE_TOKEN_PREFIX) && !/\s/.test(token.trim());
 
-/** Anthropic must accept the token before dx stores it. */
+/** Anthropic's model list must accept the token before dx stores it. */
 const verifiedClaudeCodeHealth = async (token: string) => {
   const check = await checkClaudeCodeToken(token.trim());
-  if (check === "valid") return claudeCodeTokenHealth(check);
+  if (check === "valid")
+    return { state: "healthy", code: "CONNECTED" } as const;
   throw new ModelRoutingValidationError([
     {
       field: "apiKey",
@@ -124,6 +125,9 @@ const verifiedClaudeCodeHealth = async (token: string) => {
     },
   ]);
 };
+
+const CLAUDE_PLAN_TOKEN_ELSEWHERE =
+  "A Claude plan token works only in a Claude Pro/Max connection.";
 
 /** Headers a connection may never set — auth and transport stay owned. */
 const RESERVED_HEADERS = new Set([
@@ -224,6 +228,11 @@ const validateHeaders = (
       });
     }
     seen.add(normalizedName);
+    if (isClaudePlanToken(header.value))
+      fieldErrors.push({
+        field: `headers.${index}.value`,
+        message: CLAUDE_PLAN_TOKEN_ELSEWHERE,
+      });
   });
   if (headers.length > MAX_CONNECTION_HEADERS) {
     fieldErrors.push({
@@ -488,6 +497,14 @@ export class ModelRoutingService {
       validateModels(input.models ?? [], fieldErrors);
     }
     validateHeaders(input.headers ?? [], fieldErrors);
+    if (
+      input.providerId !== CLAUDE_CODE_PROVIDER_ID &&
+      isClaudePlanToken(input.apiKey ?? "")
+    )
+      fieldErrors.push({
+        field: "apiKey",
+        message: CLAUDE_PLAN_TOKEN_ELSEWHERE,
+      });
     return fieldErrors;
   }
 
@@ -668,6 +685,14 @@ export class ModelRoutingService {
         validateModels(merged.models, fieldErrors);
     }
     validateHeaders(merged.headers ?? [], fieldErrors);
+    if (
+      current.providerId !== CLAUDE_CODE_PROVIDER_ID &&
+      isClaudePlanToken(input.apiKey ?? "")
+    )
+      fieldErrors.push({
+        field: "apiKey",
+        message: CLAUDE_PLAN_TOKEN_ELSEWHERE,
+      });
     const siblings = (await loadConnectionsForTarget(this.db, target)).filter(
       (connection) => connection.id !== id,
     );

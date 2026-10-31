@@ -752,6 +752,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     if (path === "/orb/disk" || path === "/orb/disk/delete")
       return this.#serveOrbDisk(request, path);
     if (path === "/storage/transfer") return this.#transferStorage(request);
+    if (path === "/diagnostics") return this.#diagnostics(request);
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
       return new Response(null, { status: 404 });
     const threadId = Schema.decodeUnknownOption(ThreadId)(
@@ -1065,6 +1066,82 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
    * heartbeat, a folder snapshot, or a delete, relayed only to a live
    * daemon. None wakes a paused workspace or renews its inactivity deadline.
    */
+  /**
+   * What this object holds about its Orb, for a bug report: the daemon's
+   * release, capabilities, and liveness, the activation and environment
+   * state, the terminal, open sockets by kind, and pending requests. Never
+   * the daemon key, its hash, or attachment nonces.
+   */
+  #diagnostics(request: Request) {
+    const threadId = request.headers.get("x-dx-thread-id");
+    const authority = this.#authority;
+    if (
+      threadId === null ||
+      (authority !== undefined && authority.threadId !== threadId)
+    )
+      return new Response(null, { status: 404 });
+    const now = Date.now();
+    const ago = (at: number | undefined) =>
+      at === undefined ? null : Math.max(now - at, 0);
+    const until = (at: number | undefined) =>
+      at === undefined ? null : at - now;
+    const sockets: Record<string, number> = {};
+    for (const socket of this.ctx.getWebSockets()) {
+      const kind =
+        (socket.deserializeAttachment() as { kind?: unknown } | null)?.kind ??
+        "unknown";
+      const key = typeof kind === "string" ? kind : "unknown";
+      sockets[key] = (sockets[key] ?? 0) + 1;
+    }
+    return Response.json({
+      capturedAt: new Date(now).toISOString(),
+      daemon:
+        authority === undefined
+          ? null
+          : {
+              connected: this.#currentDaemonSocket() !== undefined,
+              generation: authority.generation,
+              release: authority.release,
+              daemonRelease: authority.daemonRelease ?? null,
+              protocolMajor: authority.protocolMajor,
+              terminalVersion: authority.terminalVersion,
+              runtimeProvider: authority.runtimeProvider,
+              runtimeAssurance: authority.runtimeAssurance,
+              capabilities: {
+                proxy: authority.proxy === true,
+                memory: authority.memory === true,
+                disk: authority.disk === true,
+                storage: authority.storage === true,
+                chunkAcks: authority.chunkAcks === true,
+              },
+              lastSeenAgoMs: ago(authority.lastSeen),
+              heartbeatAgoMs: ago(this.#lastHeartbeatAt),
+            },
+      activation:
+        this.#activation === undefined
+          ? null
+          : {
+              id: this.#activation.id,
+              startedAgoMs: ago(this.#activation.startedAt),
+            },
+      environment: {
+        ready: this.#environmentReady,
+        dirty: this.#environmentDirty,
+        nextGeneration: this.#nextEnvironmentGeneration,
+        applied: this.#appliedEnvironment !== undefined,
+      },
+      terminal: this.#terminalHeartbeat ?? null,
+      terminalResetRequired: this.#terminalResetRequired,
+      disk: this.#orbDiskUsage ?? null,
+      processesStartedAgoMs: ago(this.#processesStartedAt),
+      plannedHandoffInMs: until(this.#plannedHandoffUntil),
+      leaseCheckInMs: until(this.#leaseCheckAt),
+      pendingDaemonRequests: this.#pendingRequests.size,
+      changesObserved: this.#changesObserved,
+      sockets,
+    });
+  }
+
   #serveOrbDisk(request: Request, path: "/orb/disk" | "/orb/disk/delete") {
     const threadId = Schema.decodeUnknownOption(ThreadId)(
       request.headers.get("x-dx-thread-id"),

@@ -375,6 +375,17 @@
   width: 14px;
   height: 14px;
 }
+/* A phone gets a touch-sized `⋯`. */
+.stacked-panel .pane-terminal-actions {
+  right: 8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+}
+.stacked-panel .pane-terminal-actions > svg {
+  width: 16px;
+  height: 16px;
+}
 
 /* View menus: the shortcut or "Open" sits at the item's end. */
 .pane-view-menu-item .shortcut-keycaps,

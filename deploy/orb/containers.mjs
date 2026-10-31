@@ -321,11 +321,61 @@ export const assertDockerReady = async (
 const containerSettingsInterrupted =
   "could not finish applying its Durable Object-managed Container application settings";
 
+// What the API-error hook (wrangler-api-errors.mjs) prints for each failed
+// Cloudflare API call.
+const apiAnswer = /Cloudflare API [A-Z]+ \S+ answered (\d{3})/g;
+
 /**
- * Runs `deploy` again, up to three runs in all, only while Wrangler reports
- * that it could not finish the container settings. Any other result returns.
+ * Why a failed `wrangler deploy` of the Orb Worker is worth running again,
+ * or undefined when another run would fail the same way. Cloudflare
+ * refusing a request (a 4xx other than a timeout or rate limit, such as a
+ * name with two consecutive dashes) is never retried, whatever else the run
+ * printed. Retried: a 5xx, 408, or 429 answer; Cloudflare's internal error
+ * 10500; a push to Cloudflare's registry that timed out or lost its
+ * connection; and Wrangler asking for the same deploy again.
  */
-export const retryContainerSettings = async ({
+export const transientDeployFailure = (output) => {
+  const statuses = [...output.matchAll(apiAnswer)].map(([, status]) =>
+    Number(status),
+  );
+  if (
+    statuses.some(
+      (status) =>
+        status >= 400 && status < 500 && ![404, 408, 429].includes(status),
+    )
+  )
+    return undefined;
+  const transientStatus = statuses.find(
+    (status) => status >= 500 || status === 408 || status === 429,
+  );
+  if (transientStatus !== undefined)
+    return `Cloudflare answered ${transientStatus}`;
+  if (/\[code: 10500\]|"code":\s*10500\b/.test(output))
+    return "Cloudflare internal error 10500";
+  if (
+    output
+      .split("\n")
+      .some(
+        (line) =>
+          line.includes("registry.cloudflare.com") &&
+          /timeout|connection reset|broken pipe|EOF|unexpected HTTP status: 5\d\d/i.test(
+            line,
+          ),
+      )
+  )
+    return "the push to Cloudflare's registry timed out or lost its connection";
+  if (output.includes(containerSettingsInterrupted))
+    return "Wrangler did not finish the Orb Worker's container settings";
+  return undefined;
+};
+
+/**
+ * Runs `deploy` again, up to three runs in all, waiting longer before each,
+ * while its failure is one `transientDeployFailure` recognizes. Any other
+ * result returns. `wrangler deploy` is idempotent: a run after a failure
+ * rebuilds from Docker's cache and finishes what the last one began.
+ */
+export const retryOrbWorkerDeploy = async ({
   deploy,
   wait = sleep,
   runs = 3,
@@ -337,17 +387,42 @@ export const retryContainerSettings = async ({
     process.stderr.write(
       `[OrbContainers] wrangler deploy run ${run} of ${runs} exited ${result.status ?? result.signal} after ${Math.round((Date.now() - started) / 1000)} s.\n`,
     );
-    if (
-      result.status === 0 ||
-      run === runs ||
-      !`${result.stdout}${result.stderr}`.includes(containerSettingsInterrupted)
-    )
-      return result;
+    if (result.status === 0 || run === runs) return result;
+    const reason = transientDeployFailure(`${result.stdout}${result.stderr}`);
+    if (reason === undefined) return result;
     process.stderr.write(
-      `[OrbContainers] Wrangler did not finish the Orb Worker's container settings; running the same deploy again in ${(delayMilliseconds * run) / 1000} s (${run + 1} of ${runs}).\n`,
+      `[OrbContainers] Transient failure: ${reason}. Running the same deploy again in ${(delayMilliseconds * run) / 1000} s (${run + 1} of ${runs}).\n`,
     );
     await wait(delayMilliseconds * run);
   }
+};
+
+/**
+ * The recorded failures DX_ORB_DEPLOY_FAULTS names (comma-separated), one
+ * per run, replayed in place of that run's `wrangler deploy`. Only a preview
+ * deploy accepts them.
+ */
+const injectedFaults = async (environment) => {
+  const names = (environment.DX_ORB_DEPLOY_FAULTS ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+  if (names.length === 0) return [];
+  if (environment.DX_DEPLOYMENT_ENVIRONMENT !== "preview")
+    throw new Error(
+      "DX_ORB_DEPLOY_FAULTS replays recorded failures only on a preview deploy.",
+    );
+  const { permanentDeployFailures, transientDeployFailures } = await import(
+    "./recorded-deploy-failures.mjs"
+  );
+  const recorded = { ...transientDeployFailures, ...permanentDeployFailures };
+  return names.map((name) => {
+    if (!Object.hasOwn(recorded, name))
+      throw new Error(
+        `DX_ORB_DEPLOY_FAULTS: no recorded failure ${name}. Known: ${Object.keys(recorded).join(", ")}.`,
+      );
+    return { name, stderr: recorded[name] };
+  });
 };
 
 /** Builds the image and deploys the Orb Worker; idempotent. */
@@ -357,7 +432,9 @@ export const deployOrbWorker = async ({
   stateDirectory,
   environment = process.env,
   signal,
+  retryDelayMilliseconds,
 }) => {
+  const faults = await injectedFaults(environment);
   mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
   const dockerEnvironment = orbDockerEnvironment({
     environment,
@@ -370,15 +447,25 @@ export const deployOrbWorker = async ({
     `${JSON.stringify(orbWorkerConfig({ workerName, workspaceRoot }), null, 2)}\n`,
     { mode: 0o600 },
   );
-  const result = await retryContainerSettings({
-    deploy: () =>
-      wrangler(
-        workspaceRoot,
-        ["deploy", "--config", configPath],
-        dockerEnvironment,
-        { echo: true, reportApiErrors: true, signal },
-      ),
+  const result = await retryOrbWorkerDeploy({
+    deploy: () => {
+      const fault = faults.shift();
+      if (fault === undefined)
+        return wrangler(
+          workspaceRoot,
+          ["deploy", "--config", configPath],
+          dockerEnvironment,
+          { echo: true, reportApiErrors: true, signal },
+        );
+      process.stderr.write(
+        `[OrbContainers] Replaying the recorded failure ${fault.name} (DX_ORB_DEPLOY_FAULTS) instead of running wrangler deploy:\n${fault.stderr}\n`,
+      );
+      return { status: 1, stdout: "", stderr: fault.stderr };
+    },
     wait: (milliseconds) => sleep(milliseconds, undefined, { signal }),
+    ...(retryDelayMilliseconds === undefined
+      ? {}
+      : { delayMilliseconds: retryDelayMilliseconds }),
   });
   if (result.status !== 0)
     throw new Error(

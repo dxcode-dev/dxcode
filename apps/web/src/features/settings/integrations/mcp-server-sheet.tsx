@@ -26,6 +26,7 @@ import {
   mcpUpdateInput,
 } from "./mcp-server-fields.js";
 import { McpServerForm } from "./mcp-server-form.js";
+import { McpServerProjects } from "./mcp-server-projects.js";
 
 export type McpRun = (
   action: McpServersMutationAction,
@@ -575,6 +576,12 @@ export function McpServerSheet({
               )}
             </section>
           ) : null}
+          <McpServerProjects
+            server={server}
+            canMutate={canMutate}
+            busy={busy}
+            run={run}
+          />
           <ToolsPanel
             server={server}
             disabled={disabled}

@@ -15,11 +15,11 @@ import { Option, Schema } from "effect";
 /**
  * A Claude Pro/Max plan's limits as Anthropic reports them. The OAuth token
  * from `claude setup-token` carries only the `user:inference` scope, so dx
- * cannot ask Anthropic's usage endpoint. Instead, every response on the plan
- * carries `anthropic-ratelimit-unified-*` headers: the title call and the
- * connection's access check read them directly, and the Claude Code CLI
- * reports them as `rate_limit_event` lines
- * on its stream-json output.
+ * cannot ask Anthropic's usage endpoint, and Core never calls Anthropic
+ * with it. The Claude Code CLI reports the limits Anthropic sends it as
+ * `rate_limit_event` lines on its stream-json output, during runs and title
+ * answers in the Orb. Until one reports, the limits are unknown, which never
+ * holds a Thread.
  */
 
 type Json = Record<string, unknown>;
@@ -102,38 +102,6 @@ export const claudePlanReadingFromEvent = (
   });
 };
 
-const HEADER = "anthropic-ratelimit-unified-";
-
-/** The plan's limits from a Messages API response's headers. */
-export const claudePlanReadingFromHeaders = (
-  headers: Headers,
-): ClaudePlanReading | undefined => {
-  const header = (name: string) => headers.get(`${HEADER}${name}`) ?? undefined;
-  const status = header("status");
-  if (!isStatus(status)) return undefined;
-  const claim = header("representative-claim");
-  const limitId = isWindowId(claim) ? claim : undefined;
-  const limitReset = seconds(header("reset"));
-  const overageStatus = header("overage-status");
-  const overageReset = seconds(header("overage-reset"));
-  return decodeReading({
-    status,
-    ...(limitId === undefined || limitReset === undefined
-      ? {}
-      : { limit: { id: limitId, resetsAt: limitReset } }),
-    windows: [
-      ...window("five_hour", header("5h-utilization"), header("5h-reset")),
-      ...window("seven_day", header("7d-utilization"), header("7d-reset")),
-    ],
-    extraUsage: {
-      ...(isStatus(overageStatus) ? { status: overageStatus } : {}),
-      ...(overageReset === undefined ? {} : { resetsAt: overageReset }),
-      inUse: header("overage-in-use") === "true",
-      ...reason(header("overage-disabled-reason")),
-    },
-  });
-};
-
 export interface ClaudePlanState {
   readonly allowExtraUsage: boolean;
   readonly usage?: ClaudePlanUsage;
@@ -210,15 +178,6 @@ export const claudePlanAccess = (state: ClaudePlanState, model: string) => {
 export const claudePlanBlockedCause = (
   plan: ClaudePlanAccess,
 ): ClaudePlanLimitCause => (plan.extraUsageOff ? "exhausted" : "not-started");
-
-/**
- * Whether a one-token Messages call may read the plan's limits now. While
- * the plan is used up, a call could draw on paid extra usage unless the
- * account has none, so dx waits for the limit to reset.
- */
-export const claudePlanReadable = (state: ClaudePlanState) =>
-  claudePlanExtraUsage(state.usage) === "off" ||
-  claudePlanBlockedUntil(state.usage, false, nowSeconds()) === undefined;
 
 export type ClaudePlanAccess = ReturnType<typeof claudePlanAccess>;
 

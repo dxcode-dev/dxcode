@@ -1,6 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { getRouteApi, useNavigate } from "@tanstack/react-router";
+import {
+  inviteCheckFailedMessage,
+  inviteUnavailableMessage,
+} from "../../shared/invite-unavailable.js";
 import { workspaceInviteQueryOptions } from "../settings/members/members-queries.js";
+import { InviteUnavailablePage } from "./invite-unavailable-page.js";
 import { SignInPage } from "./sign-in-page.js";
 import { signInOptionsQueryOptions } from "./sign-in-queries.js";
 
@@ -14,6 +19,20 @@ export function JoinSignInRoute() {
   const { data: options } = useQuery(signInOptionsQueryOptions);
   const invite = useQuery(workspaceInviteQueryOptions(token));
   if (options === undefined || invite.isPending) return null;
+  if (invite.isError)
+    return (
+      <InviteUnavailablePage
+        message={inviteCheckFailedMessage}
+        onRetry={() => void invite.refetch()}
+      />
+    );
+  const workspace = invite.data.workspace;
+  if (invite.data.status !== "valid" || workspace === undefined)
+    return (
+      <InviteUnavailablePage
+        message={inviteUnavailableMessage(invite.data.status)}
+      />
+    );
   const path = `/join/${token}`;
   return (
     <SignInPage
@@ -29,11 +48,7 @@ export function JoinSignInRoute() {
             replace: true,
           });
       }}
-      invite={
-        invite.data?.status === "valid" && invite.data.workspace
-          ? { path, workspace: invite.data.workspace.displayName }
-          : undefined
-      }
+      invite={{ path, workspace: workspace.displayName }}
     />
   );
 }

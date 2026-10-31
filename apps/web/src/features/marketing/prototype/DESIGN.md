@@ -11,7 +11,7 @@ Status: historical design exploration. Concept 1 was integrated into the homepag
 - The parrots complement the existing dx wordmark. They do not replace the product's Orb or loading-state identity.
 - Remove the starburst motif. No borrowed competitor symbols, names, or parity claims in the landing page.
 - Put a working email-entry interaction in the hero. A submit button acts on that form without scrolling. Keep the second invitation at the bottom.
-- Owner chose FSL-1.1-ALv2, which converts each version to Apache-2.0 after two years. Public distribution is separate release work.
+- Owner chose FSL-1.1-ALv2, which converts each version to Apache-2.0 after two years.
 
 ## Who this page is for
 
@@ -84,7 +84,7 @@ The current prototype sends no requests and stores no email. Its confirmation ex
 
 ## Claim boundaries and next design pass
 
-The v0.1.0 self-hosting target remains Cloudflare plus E2B. Broader compute portability, bots, and autonomous plugins are a direction, not current availability. Framework capabilities are not automatically dx features. FSL is source available; the selected conversion variant must be fixed before license copy is finalized.
+The v0.1.0 self-hosting target remains Cloudflare plus E2B. Broader compute portability, bots, and autonomous plugins are a direction, not current availability. Framework capabilities are not automatically dx features. FSL is source available. dx uses FSL-1.1-ALv2 (the repository's `LICENSE`): each released version becomes available under Apache-2.0 on the second anniversary of its release.
 
 Next review should choose the mascot reference and chapter sequence, refine copy against release evidence, and design each section's desktop/mobile composition. Only then promote the selected prototype into production. Keep Storybook and a wider theme migration outside this design pass.
 

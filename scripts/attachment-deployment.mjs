@@ -74,3 +74,25 @@ export const operatorR2Credentials = ({ accessKeyId, secretAccessKey }) => {
     );
   return JSON.stringify({ accessKeyId: id, secretAccessKey: secret });
 };
+
+/** The one permission the Worker logs token has. */
+export const WORKER_LOGS_PERMISSION = "Workers Observability Read";
+
+/**
+ * The account token a deployment mints so Core can read its own Workers
+ * logs for a bug report: Workers Observability read on the deployment's
+ * account and nothing else. A deployment that can mint its attachment
+ * signing token mints this one too; one that cannot reports Worker logs as
+ * unavailable.
+ */
+export const workerLogsTokenProps = (accountId, workerName) => ({
+  name: `dx worker logs · ${workerName}`,
+  accountId,
+  policies: [
+    {
+      effect: "allow",
+      permissionGroups: [WORKER_LOGS_PERMISSION],
+      resources: { [`com.cloudflare.api.account.${accountId}`]: "*" },
+    },
+  ],
+});

@@ -117,6 +117,12 @@ export {
 } from "./projects/project.js";
 export { ProjectId } from "./projects/project-id.js";
 export {
+  MAX_PROJECT_ORB_SCRIPT_BYTES,
+  PROJECT_ORB_SCRIPT_KINDS,
+  ProjectOrbScriptBody,
+  ProjectOrbScriptKind,
+} from "./projects/project-orb-script.js";
+export {
   type ProjectReader,
   projectReaderOf,
 } from "./projects/project-reader.js";
@@ -513,6 +519,22 @@ export {
   StoredPluginVersion,
   WorkspacePluginTarget,
 } from "./settings/plugin.js";
+export {
+  MAX_PLUGIN_ARCHIVE_BYTES,
+  MAX_PLUGIN_ARCHIVE_ENTRIES,
+  MAX_PLUGIN_BUNDLE_MCP_SERVERS,
+  MAX_PLUGIN_BUNDLE_SKIPPED,
+  MAX_PLUGIN_BUNDLE_TEXT_BYTES,
+  PluginBundleGitHubRepository,
+  PluginBundleManifest,
+  PluginBundleMcpHeader,
+  PluginBundleMcpServer,
+  PluginBundleRepository,
+  type PluginBundleRepositoryShape,
+  PluginBundleSkipped,
+  PluginBundleSource,
+  StoredPluginBundle,
+} from "./settings/plugin-bundle.js";
 export {
   PluginIntegrityConflict,
   PluginInvocationForbidden,

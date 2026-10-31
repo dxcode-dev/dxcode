@@ -21,6 +21,15 @@ import {
   SettingsToggle,
 } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
+import { ImportPluginDialog } from "./import-plugin-dialog.js";
+import { PluginBundleDetails } from "./plugin-bundle-details.js";
+import {
+  pluginBundlePreviewMutationOptions,
+  pluginBundlesMutationOptions,
+} from "./plugin-bundle-mutations.js";
+import type { BundleRun } from "./plugin-bundle-presentation.js";
+import { pluginBundlesQueryOptions } from "./plugin-bundle-queries.js";
+import { PluginBundleRow } from "./plugin-bundle-row.js";
 import {
   type FirstPartyPluginAction,
   firstPartyPluginsMutationOptions,
@@ -278,6 +287,26 @@ export function PluginsSettings({
     mutation.reset();
     return outcome.ok;
   };
+  const bundles = useQuery(pluginBundlesQueryOptions(identity.id, target));
+  const bundleMutation = useMutation(
+    pluginBundlesMutationOptions(queryClient, identity.id, target),
+  );
+  const previewMutation = useMutation(
+    pluginBundlePreviewMutationOptions(target),
+  );
+  const [importing, setImporting] = React.useState(false);
+  const runBundle: BundleRun = async (action, success) => {
+    setBusy(true);
+    setMessage(undefined);
+    const outcome = await settle(async () => {
+      await bundleMutation.mutateAsync(action);
+      setMessage(success);
+    });
+    if (!outcome.ok) setMessage(errorMessage(outcome.error));
+    setBusy(false);
+    bundleMutation.reset();
+    return outcome.ok;
+  };
   const close = () => {
     setEditing(undefined);
     onDirtyChange(false);
@@ -285,7 +314,10 @@ export function PluginsSettings({
   const data = resource.data;
   const plugins = listedPlugins(data?.plugins ?? []);
   const canUpdate = data?.canUpdate ?? false;
+  const installed = bundles.data?.items ?? [];
+  const canImport = bundles.data?.canMutate ?? false;
   const editingPlugin = plugins.find(({ id }) => id === editing);
+  const editingBundle = installed.find(({ id }) => id === editing);
   return (
     <div className="first-party-plugins-settings">
       <SettingsHeading
@@ -313,12 +345,22 @@ export function PluginsSettings({
               workspace={workspace}
               settingsReturnTo={settingsReturnTo}
             />
+            {canImport ? (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={busy}
+                onClick={() => setImporting(true)}
+              >
+                Import
+              </Button>
+            ) : null}
           </span>
         }
       />
       {data === undefined ? null : (
         <SettingsCard>
-          {plugins.length === 0 ? (
+          {plugins.length === 0 && installed.length === 0 ? (
             <p className="settings-card-empty">
               No plugins are installed on this deployment.
             </p>
@@ -338,6 +380,19 @@ export function PluginsSettings({
               />
             ))
           )}
+          {installed.map((bundle) => (
+            <PluginBundleRow
+              key={bundle.id}
+              bundle={bundle}
+              canMutate={canImport}
+              busy={busy}
+              run={runBundle}
+              onOpen={(trigger) => {
+                finalFocus.current = trigger;
+                setEditing(bundle.id);
+              }}
+            />
+          ))}
           {target.scope === "workspace" && plugins.length > 0 ? (
             <SettingsRow
               title="Members can use their own keys"
@@ -360,6 +415,37 @@ export function PluginsSettings({
           ) : null}
         </SettingsCard>
       )}
+      <ImportPluginDialog
+        open={importing}
+        busy={busy}
+        preview={(upload) => previewMutation.mutateAsync(upload)}
+        run={runBundle}
+        onClose={() => setImporting(false)}
+      />
+      <DialogRoot
+        open={editingBundle !== undefined}
+        onOpenChange={(open) => {
+          if (!open) close();
+        }}
+      >
+        {editingBundle === undefined ? null : (
+          <DialogContent
+            finalFocus={finalFocus}
+            className="plugin-bundle-dialog"
+          >
+            <PluginBundleDetails
+              bundle={editingBundle}
+              canMutate={canImport}
+              busy={busy}
+              run={runBundle}
+              workspace={workspace}
+              settingsReturnTo={settingsReturnTo}
+              onDone={close}
+              key={editingBundle.id}
+            />
+          </DialogContent>
+        )}
+      </DialogRoot>
       <DialogRoot
         open={editingPlugin !== undefined}
         onOpenChange={(open) => {

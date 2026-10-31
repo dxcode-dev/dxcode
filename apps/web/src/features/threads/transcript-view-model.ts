@@ -15,6 +15,7 @@ import type {
   FlueConversationSettlement,
 } from "@flue/react";
 import { presentableToolPart } from "./claude-code-tools.js";
+import { isSkillActivationTool } from "./skill-activation.js";
 import { terminalToolActivityRowIds } from "./transcript-activity-projection.js";
 
 export type TranscriptTurnId = `turn:${string}`;
@@ -92,9 +93,12 @@ export interface TranscriptTurn {
     readonly provenance: ThreadSettlementProvenance;
   };
   readonly workDisclosure?: {
-    readonly kind: "elapsed" | "show";
+    /** `stopped` is a turn the person stopped. */
+    readonly kind: "elapsed" | "stopped" | "show";
     readonly collapsedRowIds: ReadonlyArray<TranscriptRowId>;
     readonly retainedRowIds: ReadonlyArray<TranscriptRowId>;
+    /** Skill activations, shown above the disclosure in every outcome. */
+    readonly pinnedRowIds: ReadonlyArray<TranscriptRowId>;
   };
 }
 
@@ -411,17 +415,31 @@ const deriveTurn = (id: TranscriptTurnId, inputs: TurnInputs): DerivedTurn => {
     status === "completed" || status === "active"
       ? []
       : terminalToolActivityRowIds(rows);
-  const retainedIds = new Set(terminalActivityIds);
+  const pinnedRowIds = toolRows.flatMap((row) =>
+    row.part.type === "dynamic-tool" && isSkillActivationTool(row.part.toolName)
+      ? [row.id]
+      : [],
+  );
+  const pinnedIds = new Set(pinnedRowIds);
+  const retainedRowIds = terminalActivityIds.filter(
+    (rowId) => !pinnedIds.has(rowId),
+  );
+  const retainedIds = new Set(retainedRowIds);
   const workDisclosure =
     toolRows.length === 0 || status === "active"
       ? undefined
       : {
           kind:
-            status === "completed" ? ("elapsed" as const) : ("show" as const),
+            status === "completed"
+              ? ("elapsed" as const)
+              : status === "aborted" && provenance === "user-stop"
+                ? ("stopped" as const)
+                : ("show" as const),
           collapsedRowIds: intermediateRowIds.filter(
-            (rowId) => !retainedIds.has(rowId),
+            (rowId) => !retainedIds.has(rowId) && !pinnedIds.has(rowId),
           ),
-          retainedRowIds: terminalActivityIds,
+          retainedRowIds,
+          pinnedRowIds,
         };
   return {
     ...inputs,
@@ -1040,4 +1058,5 @@ export const sameTranscriptTurn = (a: TranscriptTurn, b: TranscriptTurn) =>
     sameIds(
       a.workDisclosure?.retainedRowIds,
       b.workDisclosure?.retainedRowIds,
-    ));
+    ) &&
+    sameIds(a.workDisclosure?.pinnedRowIds, b.workDisclosure?.pinnedRowIds));

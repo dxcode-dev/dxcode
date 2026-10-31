@@ -64,6 +64,24 @@ export interface Bindings {
   readonly DX_MANAGED_SSH_SIGNING_ENABLED?: string;
   readonly DX_SIGNUP_ENABLED?: string;
   readonly DX_INTEGRATION_GITHUB_APP?: string;
+  /**
+   * `owner/name`: the GitHub repository bug reports are filed in, through
+   * the GitHub App above. Absent keeps reports in this deployment only.
+   */
+  readonly DX_BUG_REPORT_REPOSITORY?: string;
+  /** Comma-separated labels for a filed issue; absent means `intake`. */
+  readonly DX_BUG_REPORT_LABELS?: string;
+  /**
+   * Comma-separated emails of people who may open any report's images and
+   * diagnostics, besides its reporter: those who triage filed issues.
+   */
+  readonly DX_BUG_REPORT_READERS?: string;
+  /**
+   * `{ accountId, token }`: the read-only Workers Observability token the
+   * deploy mints, which bug reports read the Thread's Worker logs with.
+   * Absent marks Worker logs unavailable.
+   */
+  readonly DX_WORKER_LOGS?: string;
   readonly DX_INTEGRATION_BITBUCKET_OAUTH?: string;
   readonly DX_GITHUB_COPILOT_CLIENT_ID?: string;
   readonly DX_INTEGRATION_GITLAB_OAUTH?: string;

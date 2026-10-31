@@ -1,8 +1,10 @@
 import { Type } from "@earendil-works/pi-ai";
+import { getLogger } from "@logtape/logtape";
 import type { Sandbox, SandboxToolFactory } from "@flue/runtime";
 import { shellDefinitions } from "./definitions.js";
 
 type AgentTool = ReturnType<SandboxToolFactory>[number];
+const logger = getLogger(["dx", "execution", "shell"]);
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const shellWaitMs = (value?: number) =>
   value === undefined || !Number.isFinite(value)
@@ -34,15 +36,55 @@ printf '%s\\n%s\\n%s\\n%s\\n' "$pid" "$running" "$code" "$truncated"
 cat "$state/read"
 `;
 
+// A Stop that wrote `$state/stop` before this check finds no pid, or finds
+// this pid and kills its group; either way the command never outlives it.
 const runner = `state="$1"
 printf '%s' "$$" > "$state/pid"
 finish() { printf '%s' "$1" > "$state/exit.tmp"; mv "$state/exit.tmp" "$state/exit"; }
 trap 'finish 143; exit 143' TERM
 trap 'finish 129; exit 129' HUP
+[[ -f "$state/stop" ]] && { finish 143; exit 143; }
 bash "$state/command" > "$state/output" 2>&1 &
 wait $!
 finish $?
 `;
+
+// SIGTERM to the group, then SIGKILL after a second, as shell_command_kill.
+const killGroup = `
+if [[ ! -f "$state/exit" ]]; then
+  kill -TERM -- "-$pid" 2>/dev/null || true
+  sleep 1
+  if kill -0 -- "-$pid" 2>/dev/null; then kill -KILL -- "-$pid" 2>/dev/null || true; fi
+  # SIGKILL cannot run the runner's exit trap.
+  if [[ ! -f "$state/exit" ]]; then echo 137 > "$state/exit"; fi
+fi
+`;
+
+// Stop during shell_command ends the command it started. Claiming the state
+// directory first keeps a start that has not reached the guest from running.
+const stopScript = (state: string) => `umask 077
+root="$HOME/.local/state/dx-shell"
+state="$root/${state}"
+mkdir -p "$root"
+mkdir "$state" 2>/dev/null && exit 0
+: > "$state/stop"
+deadline=$(( $(date +%s%3N) + 5000 ))
+while [[ ! -f "$state/pid" && $(date +%s%3N) -lt $deadline ]]; do sleep 0.05; done
+[[ -f "$state/pid" ]] || exit 0
+pid=$(cat "$state/pid")
+${killGroup}`;
+
+const stoppedError = (signal: AbortSignal) => {
+  const error = new DOMException(
+    "Stopped with the turn. dx ends the command and its child processes with SIGTERM, then SIGKILL after one second.",
+    "AbortError",
+  );
+  Object.defineProperty(error, "cause", {
+    value: signal.reason,
+    configurable: true,
+  });
+  return error;
+};
 
 export const createShellTools = (
   sandbox: Sandbox,
@@ -69,13 +111,16 @@ export const createShellTools = (
       const wait = index === 2 ? 2000 : shellWaitMs(params.timeout_ms);
       const prefix = `umask 077\nroot="$HOME/.local/state/dx-shell"\n`;
       let script: string;
+      // Core names the start directory so Stop can find it before the pid.
+      const startState = `start.${crypto.randomUUID()}`;
       if (index === 0) {
         const cwd = params.workdir ?? options?.defaultWorkdir ?? sandbox.cwd;
         script = `${prefix}
 [[ -d ${quote(cwd)} ]] || { echo 'Working directory does not exist:' ${quote(cwd)} >&2; exit 1; }
 cd -- ${quote(cwd)} || exit 1
 mkdir -p "$root"
-state=$(mktemp -d "$root/start.XXXXXXXXXX")
+state="$root/${startState}"
+mkdir "$state" 2>/dev/null || { echo 'Stopped before the command started.' >&2; exit 1; }
 printf '%s' ${quote(params.command)} > "$state/command"
 printf '%s' ${quote(runner)} > "$state/runner"
 : > "$state/output"; echo 0 > "$state/cursor"
@@ -93,26 +138,54 @@ ${readScript(wait)}`;
 pid=${params.pid}
 state="$root/$pid"
 [[ -d "$state" ]] || { echo "Unknown shell process pid: $pid" >&2; exit 1; }
-${
-  index === 2
-    ? `
-if [[ ! -f "$state/exit" ]]; then
-  kill -TERM -- "-$pid" 2>/dev/null || true
-  sleep 1
-  if kill -0 -- "-$pid" 2>/dev/null; then kill -KILL -- "-$pid" 2>/dev/null || true; fi
-  # SIGKILL cannot run the runner's exit trap.
-  if [[ ! -f "$state/exit" ]]; then echo 137 > "$state/exit"; fi
-fi
-`
-    : ""
-}
+${index === 2 ? killGroup : ""}
 ${readScript(index === 2 ? 1000 : wait)}`;
       }
-      const result = await sandbox.exec(`bash -c ${quote(script)}`, {
-        timeoutMs: wait + 5000,
-        signal,
+      let result: Awaited<ReturnType<Sandbox["exec"]>>;
+      // Listening before Flue does (execute runs before Flue's abort race
+      // subscribes) settles this call with the error below, not Flue's
+      // "may still be running".
+      let onAbort = () => {};
+      const aborted = new Promise<never>((_, reject) => {
+        onAbort = () => reject(signal?.reason);
       });
-      signal?.throwIfAborted();
+      aborted.catch(() => undefined);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      try {
+        result = await Promise.race([
+          sandbox.exec(`bash -c ${quote(script)}`, {
+            timeoutMs: wait + 5000,
+            signal,
+          }),
+          aborted,
+        ]);
+        signal?.throwIfAborted();
+      } catch (error) {
+        // Stop ends a command the agent is still waiting on. One it already
+        // left running, and now follows with shell_command_status, keeps
+        // running. Flue abandons this call on abort, so the stop runs on.
+        if (index !== 0 || signal?.aborted !== true) throw error;
+        void sandbox
+          .exec(`bash -c ${quote(stopScript(startState))}`, {
+            timeoutMs: 15_000,
+          })
+          .then(
+            (stopped) => {
+              if (stopped.exitCode !== 0)
+                logger.warn("Stopping a shell command failed", {
+                  exitCode: stopped.exitCode,
+                  stderr: stopped.stderr,
+                });
+            },
+            (cause: unknown) =>
+              logger.warn("Stopping a shell command failed", {
+                error: String(cause),
+              }),
+          );
+        throw stoppedError(signal);
+      } finally {
+        signal?.removeEventListener("abort", onAbort);
+      }
       if (result.exitCode !== 0)
         throw new Error(
           result.stderr || result.stdout || "Shell process operation failed",

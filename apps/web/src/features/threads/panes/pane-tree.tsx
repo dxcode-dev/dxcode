@@ -6,8 +6,7 @@ import type {
   ThreadPaneTab,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
-import { Menu } from "@base-ui/react/menu";
-import { Ellipsis, RefreshCw, X } from "lucide-react";
+import { X } from "lucide-react";
 import * as React from "react";
 import { OrbIcon } from "../../../shared/ui/orb-icon.js";
 import { absolutePathFor, sandboxFileUrl } from "../transcript-file-link.js";
@@ -37,6 +36,7 @@ import {
   type PaneContents,
   renderPaneContent,
 } from "./pane-views.js";
+import { TerminalView } from "./terminal-view.js";
 import "./panes.css";
 
 type Dispatch = (action: PaneLayoutAction) => void;
@@ -403,44 +403,6 @@ function PaneTabPanel({
           content
         )}
       </PaneToolbarSlotContext>
-    </div>
-  );
-}
-
-/** The Terminal with a floating `⋯` of Terminal actions at its top right. */
-function TerminalView({ children }: { readonly children: React.ReactNode }) {
-  return (
-    <div className="pane-terminal-view">
-      {children}
-      <Menu.Root>
-        <Menu.Trigger
-          className="pane-terminal-actions"
-          aria-label="Terminal Actions"
-          title="Terminal Actions"
-        >
-          <Ellipsis aria-hidden="true" />
-        </Menu.Trigger>
-        <Menu.Portal>
-          <Menu.Positioner
-            className="thread-menu-positioner"
-            align="end"
-            sideOffset={4}
-          >
-            <Menu.Popup className="thread-menu-popup thread-actions-menu">
-              <Menu.Item
-                className="thread-menu-item"
-                nativeButton
-                render={
-                  <button type="submit" form="thread-terminal-environment" />
-                }
-              >
-                <RefreshCw aria-hidden="true" />
-                <span>Refresh Environment</span>
-              </Menu.Item>
-            </Menu.Popup>
-          </Menu.Positioner>
-        </Menu.Portal>
-      </Menu.Root>
     </div>
   );
 }

@@ -123,8 +123,12 @@ const matchingActiveList = (
   );
 };
 
-const createdThreadListItem = (thread: ThreadDetailData): ThreadListItem => ({
+const createdThreadListItem = (
+  thread: ThreadDetailData,
+  projectless: boolean,
+): ThreadListItem => ({
   ...thread,
+  ...(projectless ? { projectless: true as const } : {}),
   mode:
     thread.agentInitialization.selection.kind === "mode"
       ? thread.agentInitialization.selection.mode
@@ -154,6 +158,8 @@ export const cacheCreatedThread = (
   queryClient: QueryClient,
   userId: UserId,
   thread: ThreadDetailData,
+  /** Created in No Project, which the detail does not say. */
+  projectless = false,
 ) =>
   Promise.all([
     queryClient.cancelQueries({
@@ -166,7 +172,7 @@ export const cacheCreatedThread = (
       threadKeys.detail(userId, thread.id),
       (cached) => withSettledTitle(thread, cached),
     );
-    const listItem = createdThreadListItem(thread);
+    const listItem = createdThreadListItem(thread, projectless);
     for (const query of queryClient.getQueryCache().findAll({
       queryKey: threadKeys.lists(userId),
     })) {
@@ -230,8 +236,13 @@ export const createThreadMutationOptions = (
       if (project !== undefined)
         seedProjectDetail(queryClient, userId, project);
     },
-    onSuccess: (response) =>
-      cacheCreatedThread(queryClient, userId, response.data),
+    onSuccess: (response, { project }) =>
+      cacheCreatedThread(
+        queryClient,
+        userId,
+        response.data,
+        project === undefined,
+      ),
   });
 
 interface CreateBlankThreadMutationInput {

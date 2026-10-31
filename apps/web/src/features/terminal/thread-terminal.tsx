@@ -156,7 +156,7 @@ function TerminalStatus({
       )}
       {!failed && !loading && restartRequired ? (
         <span className="thread-terminal-environment-notice" role="status">
-          Environment changed. Use the Terminal tab menu to refresh and restart.
+          Environment changed. Use Terminal Actions to refresh and restart.
         </span>
       ) : null}
       {failed ? (

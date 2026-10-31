@@ -55,7 +55,7 @@ import {
   ensureGithubCliWrapper,
   withSourceRuntimeAdmission,
 } from "./source-preparation.js";
-import { withoutReservedSkills } from "./workspace-context.js";
+import { withoutRepositorySkills } from "./workspace-context.js";
 import {
   markExecutionWorkspaceReady,
   readExecutionWorkspaceReadiness,
@@ -330,19 +330,28 @@ const admitRunStart = async (db: D1Database, threadId: string) => {
 };
 
 /**
- * A source preparation that failed with WORKSPACE_DISK_FULL, as the run's
+ * A source preparation that failed in a way the person fixes, as the run's
  * error: Flue settles other activation failures as a generic internal error,
- * so the Thread could not say the disk is full.
+ * so the Thread could not say the disk is full or the project's pre-clone
+ * script failed.
  */
-const asDiskFullRunError = (cause: unknown): never => {
+const PERSON_FIXED_SOURCE_FAILURES = [
+  { code: "WORKSPACE_DISK_FULL", type: "workspace_disk_full" },
+  { code: "PRE_CLONE_SCRIPT_FAILED", type: "pre_clone_script_failed" },
+] as const;
+
+const asSourceRunError = (cause: unknown): never => {
   const message = cause instanceof Error ? cause.message : "";
-  if (!message.includes(":WORKSPACE_DISK_FULL)")) throw cause;
+  const failure = PERSON_FIXED_SOURCE_FAILURES.find(({ code }) =>
+    message.includes(`:${code})`),
+  );
+  if (failure === undefined) throw cause;
   throw new FlueError({
-    type: "workspace_disk_full",
+    type: failure.type,
     message,
     details: "",
     dev: "",
-    meta: { code: "WORKSPACE_DISK_FULL" },
+    meta: { code: failure.code },
   });
 };
 
@@ -505,7 +514,7 @@ export const makeExecutionActivation =
                     rememberWorkspaceDisk(threadId, reading),
                 },
               ),
-          ).catch(asDiskFullRunError);
+          ).catch(asSourceRunError);
           if (source === undefined) {
             await ensureGithubCliWrapper(db, id, handle.guest);
             await cloneAdditionalRepositories(bindings, db, id, handle.guest);
@@ -585,32 +594,26 @@ export const makeExecutionActivation =
           authorize,
         ).createSandbox({ id });
         const snapshotWorkspaceContext = flueSandbox.snapshotWorkspaceContext;
-        // Flue lists repository skills from this snapshot, or from readdir
-        // when the snapshot declines; neither may shadow a skill dx mounts.
-        const skillsDirectory = `${flueSandbox.cwd.replace(/\/$/, "")}/.agents/skills`;
-        const readdir = async (path: string) => {
-          const entries = await flueSandbox.readdir(path);
-          return flueSandbox.resolvePath(path) === skillsDirectory
-            ? entries.filter((entry) => !RESERVED_SKILL_NAMES.has(entry))
-            : entries;
-        };
+        // No repository skill may shadow a skill dx mounts itself.
         if (snapshotWorkspaceContext === undefined)
-          return { ...flueSandbox, readdir };
-        return {
-          ...flueSandbox,
-          readdir,
-          async snapshotWorkspaceContext(root: string) {
-            const snapshot = await snapshotWorkspaceContext(root);
-            if ("kind" in snapshot) return snapshot;
-            void recordActiveSubmissionPhase(
-              bindings,
-              id,
-              "context_discovered",
-              { operationCount: 1 },
-            );
-            return withoutReservedSkills(snapshot, RESERVED_SKILL_NAMES);
+          return withoutRepositorySkills(flueSandbox, RESERVED_SKILL_NAMES);
+        return withoutRepositorySkills(
+          {
+            ...flueSandbox,
+            async snapshotWorkspaceContext(root: string) {
+              const snapshot = await snapshotWorkspaceContext(root);
+              if (!("kind" in snapshot))
+                void recordActiveSubmissionPhase(
+                  bindings,
+                  id,
+                  "context_discovered",
+                  { operationCount: 1 },
+                );
+              return snapshot;
+            },
           },
-        };
+          RESERVED_SKILL_NAMES,
+        );
       } catch (cause) {
         if (needsFirstReadiness) reportPreparation(null);
         // Queued after waking, ready clears it in the browser.

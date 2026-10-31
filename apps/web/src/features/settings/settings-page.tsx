@@ -13,8 +13,10 @@ import {
   settingsReturnToFromState,
 } from "../../shared/navigation/settings-return.js";
 import { Button } from "../../shared/ui/button.js";
+import { UnsavedChangesGuard } from "../../shared/ui/unsaved-changes-guard.js";
 import { personalAccountQueryOptions } from "./account/personal-account-queries.js";
 import { settingsManifest } from "./foundation-sections.js";
+import { isModeOnlyNavigation } from "./mode-search-navigation.js";
 import {
   settingsContextQueryOptions,
   settingsKeys,
@@ -28,7 +30,6 @@ import {
   type SettingsSectionRegistration,
   settingsPath,
 } from "./settings-registration.js";
-import { UnsavedChangesGuard } from "./unsaved-changes-guard.js";
 
 /** Public links in the rail's footer card. */
 const railLinks = [
@@ -543,7 +544,11 @@ export function SettingsPage(props: SettingsPageProps) {
       </main>
       <UnsavedChangesGuard
         dirty={dirty}
-        allowModeChanges={registration.id === "personal-mode-dial"}
+        allowNavigation={
+          registration.id === "personal-mode-dial"
+            ? isModeOnlyNavigation
+            : undefined
+        }
         onDiscard={() => setDirty(false)}
       />
     </AppFrame>

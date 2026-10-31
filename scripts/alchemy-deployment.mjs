@@ -8,6 +8,7 @@ import { alchemyStage } from "./alchemy-stage.mjs";
 import {
   attachmentBucketCors,
   attachmentSigningTokenProps,
+  workerLogsTokenProps,
 } from "./attachment-deployment.mjs";
 
 export const reservedBranches = new Set([
@@ -169,8 +170,23 @@ const commonDeploymentResourceTypes = new Map([
   ["Verify", "Command.Exec"],
   ["Worker", "Cloudflare.Worker"],
 ]);
-/** The Cloudflare Containers Orb Worker; see deploy/orb/containers.mjs. */
-export const orbWorkerName = (stage) => resourceName("orb", stage, 54);
+/**
+ * The Cloudflare Containers Orb Worker; see deploy/orb/containers.mjs.
+ * Containers refuses an application name with consecutive dashes, which
+ * resourceName leaves when its cut ends on a dash, so this name collapses
+ * them. A name without `--` stays exactly as it was.
+ */
+export const orbWorkerName = (stage) =>
+  legacyOrbWorkerName(stage).replace(/-{2,}/g, "-");
+/**
+ * The Orb Worker name a stage recorded before orbWorkerName collapsed
+ * dashes. Its create never finished, but its state and its uploaded Worker
+ * may hold this name until a deploy or destroy removes them.
+ */
+export const legacyOrbWorkerName = (stage) => resourceName("orb", stage, 54);
+/** Every Orb Worker name this stage's recorded state may hold. */
+const recordedOrbWorkerNames = (stage) =>
+  new Set([orbWorkerName(stage), legacyOrbWorkerName(stage)]);
 const ORB_PROVIDER_IDS = new Set(["e2b", "cloudflare"]);
 /**
  * Default Orb size a new deployment's first project uses. Hosted stages run
@@ -227,8 +243,14 @@ const deploymentResourceTypes = ({
     // The R2 credentials Core signs attachment URLs with: a minted
     // bucket-scoped token, or, for Alchemy OAuth self-hosts, which cannot
     // mint one, the R2 API token the operator created.
+    // A deployment that mints the signing token also mints its read-only
+    // Worker logs token, which bug reports read the reported Thread's logs
+    // with.
     ...(attachmentSigning === "token"
-      ? [["AttachmentSigningToken", "Cloudflare.ApiToken.AccountApiToken"]]
+      ? [
+          ["AttachmentSigningToken", "Cloudflare.ApiToken.AccountApiToken"],
+          ["WorkerLogsToken", "Cloudflare.ApiToken.AccountApiToken"],
+        ]
       : [["AttachmentR2Credentials", "Dx.HeldSecret"]]),
     ...(orbProviders.includes("cloudflare")
       ? [["OrbContainers", "Dx.OrbContainers"]]
@@ -1537,6 +1559,8 @@ const validOrbContainerBinding = (
     typeof binding === "object" &&
     binding.className === "OrbContainerObject" &&
     (scriptName === orbWorkerName(selection.stage) ||
+      // Recorded state may still bind the name Containers refused.
+      (!current && recordedOrbWorkerNames(selection.stage).has(scriptName)) ||
       (["desired", "evaluated"].includes(representation) &&
         dependsExactlyOn(scriptName, "OrbContainers", "workerName")) ||
       // A create interrupted before the Orb Worker existed persisted the
@@ -1551,19 +1575,29 @@ const validOrbContainerBinding = (
 };
 
 const assertExactOrbContainersIdentity = (node, operation, selection) => {
+  // A deploy names only the current Orb Worker; recorded state, and every
+  // representation a destroy reads from it, may hold the legacy name.
+  const recorded = recordedOrbWorkerNames(selection.stage);
+  const desired = new Set([orbWorkerName(selection.stage)]);
   const representations =
     operation === "deploy"
       ? [
-          node.resource?.Props,
-          node.props,
-          node.state?.props,
-          node.state?.old?.props,
+          [node.resource?.Props, desired],
+          [node.props, desired],
+          [node.state?.props, recorded],
+          [node.state?.old?.props, recorded],
         ]
-      : [node.resource?.Props, node.state?.props, node.state?.old?.props];
-  for (const props of representations.filter((value) => value !== undefined))
+      : [
+          [node.resource?.Props, recorded],
+          [node.state?.props, recorded],
+          [node.state?.old?.props, recorded],
+        ];
+  for (const [props, names] of representations.filter(
+    ([value]) => value !== undefined,
+  ))
     if (
       !exactKeys(props, ["recipeHash", "workerName"]) ||
-      props.workerName !== orbWorkerName(selection.stage) ||
+      !names.has(props.workerName) ||
       !/^[a-f0-9]{64}$/.test(props.recipeHash ?? "")
     )
       throw new Error("OrbContainers plan is outside the exact allowlist.");
@@ -1578,7 +1612,7 @@ const assertExactOrbContainersIdentity = (node, operation, selection) => {
         (exactKeys(attr, ["recipeHash", "workerName"]) &&
           /^[a-f0-9]{64}$/.test(attr.recipeHash ?? ""))
       ) ||
-      attr.workerName !== orbWorkerName(selection.stage)
+      !recorded.has(attr.workerName)
     )
       throw new Error("OrbContainers plan is outside the exact allowlist.");
 };
@@ -2172,6 +2206,32 @@ const assertExactAttachmentSigningTokenIdentity = (node, selection) => {
     );
 };
 
+/**
+ * The Worker logs token: exactly one allow policy, Workers Observability
+ * read on this deployment's account. Nothing broader is ever minted.
+ */
+const assertExactWorkerLogsTokenIdentity = (node, selection) => {
+  const expected = JSON.stringify(
+    workerLogsTokenProps(selection.accountId, selection.workerName),
+  );
+  for (const props of [
+    node.resource?.Props,
+    node.props,
+    node.state?.props,
+    node.state?.old?.props,
+  ].filter(Boolean)) {
+    if (JSON.stringify(props) !== expected)
+      throw new Error(
+        "WorkerLogsToken plan identity is outside the exact allowlist.",
+      );
+  }
+  const attr = node.state?.attr ?? node.state?.old?.attr;
+  if (attr && attr.accountId !== selection.accountId)
+    throw new Error(
+      "Persisted WorkerLogsToken identity is outside the exact allowlist.",
+    );
+};
+
 const assertExactTurnstileIdentity = (node, selection) => {
   const expectedProps = {
     domains: [selection.domain],
@@ -2639,6 +2699,7 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
   if (
     (id === "AccessTurnstile" ||
       id === "AttachmentSigningToken" ||
+      id === "WorkerLogsToken" ||
       id === "PortalDns") &&
     node.mode !== undefined
   )
@@ -2707,6 +2768,8 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
   if (id === "AccessTurnstile") assertExactTurnstileIdentity(node, selection);
   if (id === "AttachmentSigningToken")
     assertExactAttachmentSigningTokenIdentity(node, selection);
+  if (id === "WorkerLogsToken")
+    assertExactWorkerLogsTokenIdentity(node, selection);
   if (id === "Bootstrap" || id === "Verify")
     assertExactCommandIdentity(node, operation, selection, id, context);
 };

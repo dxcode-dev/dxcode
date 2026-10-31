@@ -19,9 +19,15 @@ import {
 import { InstallAppBanner } from "./features/install-app/install-app-banner.js";
 import { ProductShell } from "./features/navigation/product-shell.js";
 import {
+  isMissingProjectError,
   projectQueryOptions,
   seedProjectDetailFromList,
 } from "./features/projects/project-queries.js";
+import {
+  ProjectRouteError,
+  ProjectRouteNotFound,
+} from "./features/projects/project-route-states.js";
+import { isProjectSettingsSection } from "./features/projects/project-settings-sections.js";
 import { settingsContextQueryOptions } from "./features/settings/settings-context-queries.js";
 import { resolveSettingsSection } from "./features/settings/settings-registration.js";
 import { SettingsRouteNotFound } from "./features/settings/settings-route-not-found.js";
@@ -60,6 +66,18 @@ const page = {
     "ProjectSettingsRoute",
   ),
   thread: lazyRouteComponent(() => import("./thread-route.js"), "ThreadRoute"),
+  threadTree: lazyRouteComponent(
+    () => import("./thread-tree-route.js"),
+    "ThreadTreeRoute",
+  ),
+  bugReports: lazyRouteComponent(
+    () => import("./features/threads/bug-reports/bug-report-page.js"),
+    "BugReportsRoute",
+  ),
+  bugReport: lazyRouteComponent(
+    () => import("./features/threads/bug-reports/bug-report-page.js"),
+    "BugReportRoute",
+  ),
   joinWorkspace: lazyRouteComponent(
     () => import("./features/settings/members/join-workspace-page.js"),
     "JoinWorkspacePage",
@@ -146,31 +164,74 @@ export const ensureProjectRouteData = async (
 ) => {
   const id = projectId(projectIdParam);
   seedProjectDetailFromList(queryClient, userId, id);
-  await queryClient.ensureQueryData(projectQueryOptions(userId, id));
+  await queryClient
+    .ensureQueryData(projectQueryOptions(userId, id))
+    .catch((error: unknown) => {
+      // A missing project renders the route's not-found state inside the
+      // shell. Other failures reach the route's error state.
+      if (isMissingProjectError(error))
+        throw notFound({
+          data: { code: "PROJECT_NOT_FOUND", projectId: id },
+        });
+      throw error;
+    });
+  return id;
 };
+
+const projectRouteStates = {
+  notFoundComponent: ProjectRouteNotFound,
+  errorComponent: ProjectRouteError,
+} as const;
 
 const projectRoute = createRoute({
   getParentRoute: () => productRoute,
   path: "/projects/$projectId",
-  loader: ({ context, params }) =>
-    ensureProjectRouteData(context, params.projectId),
+  loader: async ({ context, params }) => {
+    await ensureProjectRouteData(context, params.projectId);
+  },
   component: page.project,
+  ...projectRouteStates,
+});
+
+const bugReportsRoute = createRoute({
+  getParentRoute: () => productRoute,
+  path: "/bug-reports",
+  component: page.bugReports,
+});
+
+const bugReportRoute = createRoute({
+  getParentRoute: () => productRoute,
+  path: "/bug-reports/$reportId",
+  component: page.bugReport,
 });
 
 const projectSettingsRoute = createRoute({
   getParentRoute: () => productRoute,
   path: "/projects/$projectId/settings",
-  loader: ({ context, params }) =>
-    ensureProjectRouteData(context, params.projectId),
+  loader: async ({ context, params }) => {
+    await ensureProjectRouteData(context, params.projectId);
+  },
   component: page.projectSettings,
+  ...projectRouteStates,
 });
 
 const projectSettingsSectionRoute = createRoute({
   getParentRoute: () => productRoute,
   path: "/projects/$projectId/settings/$section",
-  loader: ({ context, params }) =>
-    ensureProjectRouteData(context, params.projectId),
+  // A missing project takes precedence over an unknown section.
+  loader: async ({ context, params }) => {
+    const id = await ensureProjectRouteData(context, params.projectId);
+    if (!isProjectSettingsSection(params.section))
+      throw notFound({
+        data: {
+          code: "PROJECT_SETTINGS_SECTION_NOT_FOUND",
+          projectId: id,
+          section: params.section,
+        },
+      });
+  },
   component: page.projectSettings,
+  ...projectRouteStates,
 });
 
 const newThreadRoute = createRoute({
@@ -217,6 +278,12 @@ const threadRoute = createRoute({
   onEnter: seeOpenedThread,
   onStay: seeOpenedThread,
   component: page.thread,
+});
+
+const threadTreeRoute = createRoute({
+  getParentRoute: () => productRoute,
+  path: "/threads/$threadId/tree",
+  component: page.threadTree,
 });
 
 const registeredSettingsSection = async (
@@ -363,6 +430,9 @@ const routeTree = rootRoute.addChildren([
     projectSettingsSectionRoute,
     newThreadRoute,
     threadRoute,
+    threadTreeRoute,
+    bugReportsRoute,
+    bugReportRoute,
   ]),
   personalSettingsRoute,
   personalAdvancedSettingsRedirectRoute,

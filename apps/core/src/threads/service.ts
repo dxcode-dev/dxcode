@@ -171,7 +171,8 @@ export class ThreadService extends Context.Service<
             titlePending,
             parentThreadId,
           ) {
-            // Children never nest: a child's child becomes its sibling.
+            // A family has one root: a child's child keeps the root as its
+            // parent and records the child as the Thread that started it.
             const parent =
               parentThreadId === undefined
                 ? Effect.succeed(undefined)
@@ -238,6 +239,7 @@ export class ThreadService extends Context.Service<
                 : {
                     parentThreadId:
                       parentThread.parentThreadId ?? parentThread.id,
+                    startedByThreadId: parentThread.id,
                     // The insert copies the family's sharing too.
                     ...(parentThread.visibility === undefined
                       ? {}

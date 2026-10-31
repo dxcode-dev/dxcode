@@ -27,6 +27,7 @@ import {
 } from "../claude-code/provider.js";
 import { rememberClaudeCodeSandbox } from "../claude-code/runs.js";
 import { claudeCodeMirrorTools } from "../claude-code/tools.js";
+import { withoutRepositorySkills } from "../execution/workspace-context.js";
 import { traceSpan } from "../observability/tracing.js";
 import {
   takeWorkspaceDisk,
@@ -48,7 +49,6 @@ import { AGENT_RUN_LIMIT_MS } from "../runtime/agent-run-limit.js";
 import type { McpAgentConnectionData } from "../settings/mcp-servers/execution.js";
 import { invokePluginLive } from "../settings/plugins/execution.js";
 import { createPluginTool } from "../settings/plugins/flue.js";
-import { createSkillResourceTool } from "../settings/skills/execution.js";
 import { createThreadStorageTools } from "../thread-storage/agent-tools.js";
 import { createThreadTools } from "../threads/agent-tools.js";
 import {
@@ -64,6 +64,10 @@ import {
   composeDxAgentPrompt,
   dxWorkspaceSkill,
 } from "./dx-agent-prompt.js";
+import {
+  installSettingsSkills,
+  settingsSkillDefinitions,
+} from "./settings-skills.js";
 
 /** Per-submission data from `resolvePromptData`. */
 interface DxAgentPromptData {
@@ -101,7 +105,7 @@ const withToolFailureMessage = <T extends ToolDefinition>(tool: T): T =>
   }) as T;
 
 /**
- * dx's own tools for one submission: skill resources, the thread tools,
+ * dx's own tools for one submission: the thread tools,
  * first-party plugin tools (MCP servers reach the model only as Code's
  * modules, never mounted directly), and installed plugins. Plugin tools and
  * MCP servers come from the submission's resolved set, never from Thread
@@ -117,8 +121,6 @@ const dxTools = (
   withoutPlugins: ReadonlyArray<string> = [],
 ): ToolDefinition[] => {
   const tools: ToolDefinition[] = [];
-  if ((initialData?.skills ?? []).some((skill) => skill.resources.length > 0))
-    tools.push(withToolFailureMessage(createSkillResourceTool(threadId)));
   // Built in, not a plugin: the owner's other Threads are always in reach.
   for (const tool of createThreadTools(
     threadId,
@@ -206,15 +208,33 @@ const agentSandbox: SandboxFactory | undefined =
       };
 
 /**
+ * The Thread's sandbox without repository skills named like one of its
+ * settings skills: Flue fails a Thread whose repository skill shares a
+ * mounted skill's name, so the settings skill wins.
+ */
+const withSettingsSkills = (
+  factory: SandboxFactory,
+  names: ReadonlySet<string>,
+): SandboxFactory =>
+  names.size === 0
+    ? factory
+    : {
+        ...factory,
+        createSandbox: async (request) =>
+          withoutRepositorySkills(await factory.createSandbox(request), names),
+      };
+
+/**
  * Installed plugins' agent-start and agent-finish hooks. The agent-start
- * hook first writes dx's built-in skills into the workspace, for the dx
- * agent and Claude Code alike, then tells the agent when its disk is nearly
+ * hook first writes dx's built-in skills and the Thread's settings skills
+ * into the workspace, for the dx agent and Claude Code alike, then tells the agent when its disk is nearly
  * or completely full; Flue runs separate start hooks concurrently, so all
  * stay in one.
  */
 const usePluginLifecycle = (
   threadId: string,
   plugins: DxAgentInitialData["plugins"],
+  skills: NonNullable<DxAgentInitialData["skills"]>,
 ) => {
   const hook =
     (name: "agent-start" | "agent-finish") =>
@@ -245,6 +265,7 @@ const usePluginLifecycle = (
   useAgentStart(async (context) => {
     // Opening the sandbox runs this turn's activation and its disk guard.
     await installBuiltInSkills(context.harness.sandbox);
+    await installSettingsSkills(context.harness.sandbox, threadId, skills);
     const disk = takeWorkspaceDisk(threadId);
     const note = disk === undefined ? undefined : workspaceDiskNote(disk);
     if (note !== undefined)
@@ -268,11 +289,14 @@ export function DxAgent(props: AgentProps) {
     dxResponseStartedAt: new Date().toISOString(),
   }));
   const skills = initialData?.skills ?? [];
+  const settingsSkillNames = new Set(skills.map(({ name }) => name));
   const plugins = initialData?.plugins ?? [];
   if (agentRuntimeComposition.capabilities === "workspace") {
     // A workspace composition always has an execution factory.
-    useSandbox(agentSandbox as SandboxFactory);
-    usePluginLifecycle(props.id, plugins);
+    useSandbox(
+      withSettingsSkills(agentSandbox as SandboxFactory, settingsSkillNames),
+    );
+    usePluginLifecycle(props.id, plugins, skills);
     // Claude Code mode: the CLI in the workspace runs the loop and its own
     // tools; Flue records each call through a mirror of the same name. dx's
     // own tools reach Claude through the dx MCP server, except web search
@@ -294,7 +318,6 @@ export function DxAgent(props: AgentProps) {
         rememberClaudeCodeSandbox(props.id, harness.sandbox);
       });
       const prompt = composeClaudeCodePrompt(
-        skills,
         threadPortalPrompt(props.id),
         initialData?.startedByThreadId,
       );
@@ -310,15 +333,16 @@ export function DxAgent(props: AgentProps) {
     for (const tool of dxTools(props.id, initialData, promptData))
       useTool(tool);
     // Flue lists them in the Available Skills catalog and loads each on
-    // demand through activate_skill, like a repository's .agents/skills.
-    useSkill(dxWorkspaceSkill);
-    for (const skill of builtInSkillDefinitions) useSkill(skill);
+    // demand through activate_skill, like a repository's .agents/skills. A
+    // settings skill replaces dx's own skill of the same name.
+    for (const skill of [dxWorkspaceSkill, ...builtInSkillDefinitions])
+      if (!settingsSkillNames.has(skill.name)) useSkill(skill);
+    for (const skill of settingsSkillDefinitions(skills)) useSkill(skill);
   }
   if (agentRuntimeComposition.capabilities === "model-only")
     return localModelPreviewPrompt;
   return composeDxAgentPrompt(
     initialData?.personalInstructions ?? "",
-    skills,
     agentRuntimeComposition.capabilities === "workspace"
       ? threadPortalPrompt(props.id)
       : "",

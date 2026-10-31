@@ -1,4 +1,3 @@
-import type { ThreadAgentInitializationData } from "@dx/api";
 import type { UseFlueAgentResult } from "@flue/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
@@ -132,9 +131,6 @@ const agent = {
   sendMessage: vi.fn(),
   status: "ready",
 } as unknown as UseFlueAgentResult;
-const agentInitialization = {
-  skills: [],
-} as unknown as ThreadAgentInitializationData;
 const optimisticCreation = {
   id: "thread-optimistic",
   project: { id: "project-optimistic" },
@@ -174,7 +170,6 @@ const mountPanel = async (
       <QueryClientProvider client={queryClient}>
         <AgentPanel
           agent={{ ...agent, ...agentOverride } as UseFlueAgentResult}
-          agentInitialization={agentInitialization}
           archived={archived}
           showArchivedNotice={archived}
           workspaceReady={workspace.ready}
@@ -568,7 +563,6 @@ describe("thread composer ownership", () => {
         <QueryClientProvider client={queryClient}>
           <AgentPanel
             agent={{ ...agent, ...override } as UseFlueAgentResult}
-            agentInitialization={agentInitialization}
             archived={false}
           />
         </QueryClientProvider>,

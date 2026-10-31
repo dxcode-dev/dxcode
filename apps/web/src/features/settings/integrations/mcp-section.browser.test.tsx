@@ -3,6 +3,7 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthContext } from "../../../shared/auth/auth-context.js";
+import { projectKeys } from "../../projects/project-queries.js";
 import { environmentVariableKeys } from "../environment-variables/environment-variables-queries.js";
 import { IntegrationsSettings } from "./integrations-settings.js";
 import {
@@ -10,6 +11,7 @@ import {
   type McpServerData,
   type McpServersTarget,
   mcpServerKeys,
+  type ProjectData,
 } from "./mcp-queries.js";
 import {
   emptyMcpFields,
@@ -78,6 +80,12 @@ const server = (overrides: Partial<McpServerData> = {}) =>
     ...overrides,
   }) as McpServerData;
 
+const projects = [
+  { id: "prj_web", name: "web" },
+  { id: "prj_infra", name: "infra" },
+  { id: "prj_team", name: "team-site", workspaceId: "org_team" },
+] as unknown as ReadonlyArray<ProjectData>;
+
 let root: Root | undefined;
 let container: HTMLDivElement | undefined;
 afterEach(() => {
@@ -90,6 +98,7 @@ const mount = (
   items: ReadonlyArray<McpServerData>,
   workspaceSlug?: string,
   allowPersonalServers?: boolean,
+  projectList: ReadonlyArray<ProjectData> = projects,
 ) => {
   const target: McpServersTarget =
     workspaceSlug === undefined
@@ -103,6 +112,10 @@ const mount = (
   });
   queryClient.setQueryData(environmentVariableKeys.list(userId, target), {
     items: [secret],
+  });
+  queryClient.setQueryData(projectKeys.lists(userId), {
+    pages: [{ items: projectList }],
+    pageParams: [undefined],
   });
   container = document.createElement("div");
   document.body.append(container);
@@ -367,5 +380,118 @@ describe("Integrations & MCP", () => {
       toolName: "read_page",
       approved: false,
     });
+  });
+
+  const scopeButton = () =>
+    document.querySelector<HTMLButtonElement>(
+      'section[aria-label="Projects"] button[aria-label^="Projects:"]',
+    );
+  const chooseScope = async (label: string) => {
+    await act(async () => scopeButton()?.click());
+    const item = await vi.waitUntil(() =>
+      [
+        ...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'),
+      ].find((element) => element.textContent?.startsWith(label)),
+    );
+    await act(async () => item.click());
+  };
+  const projectRows = () => [
+    ...document.querySelectorAll<HTMLLabelElement>(
+      'section[aria-label="Projects"] label',
+    ),
+  ];
+  const projectBox = (name: string) =>
+    projectRows()
+      .find((element) => element.textContent?.trim() === name)
+      ?.querySelector<HTMLInputElement>('input[type="checkbox"]') ?? undefined;
+  const projectNames = () =>
+    projectRows().map((element) => element.textContent?.trim());
+  const savedIds = (call: number) =>
+    (
+      mutate.mock.calls[call]?.[0] as
+        | { readonly input: { readonly projectIds: ReadonlyArray<string> } }
+        | undefined
+    )?.input.projectIds;
+
+  it("keeps All projects to one row and limits a server to picked projects", async () => {
+    mount([server()]);
+    act(() => button("Configure Docs")?.click());
+    expect(scopeButton()?.textContent).toBe("All projects");
+    expect(projectBox("web")).toBeUndefined();
+    await chooseScope("Only these");
+    // A personal server reaches personal and workspace projects alike.
+    expect(projectNames()).toEqual(["web", "infra", "team-site"]);
+    // No pick would mean every project, so Save waits for one.
+    expect(button("Save")?.disabled).toBe(true);
+    await act(async () => projectBox("web")?.click());
+    expect(projectBox("web")?.checked).toBe(true);
+    await act(async () => button("Save")?.click());
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(mutate.mock.calls[0]?.[0]).toEqual({
+      type: "update",
+      serverId: "mcp_docs",
+      input: { projectIds: ["prj_web"] },
+    });
+  });
+
+  it("cancels an unsaved Only these back to All projects", async () => {
+    mount([server()]);
+    act(() => button("Configure Docs")?.click());
+    await chooseScope("Only these");
+    await act(async () => projectBox("infra")?.click());
+    await act(async () => button("Cancel")?.click());
+    expect(scopeButton()?.textContent).toBe("All projects");
+    expect(projectBox("infra")).toBeUndefined();
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("drops deleted projects and opens a server to every project", async () => {
+    mount([server({ projectIds: ["prj_infra", "prj_gone"] as never })]);
+    act(() => button("Configure Docs")?.click());
+    expect(scopeButton()?.textContent).toBe("Only these");
+    expect(projectBox("infra")?.checked).toBe(true);
+    expect(projectBox("web")?.checked).toBe(false);
+    // Nothing changed yet, so there is nothing to save.
+    expect(button("Save")).toBeUndefined();
+    await act(async () => projectBox("web")?.click());
+    await act(async () => button("Save")?.click());
+    expect(savedIds(0)).toEqual(["prj_web", "prj_infra"]);
+    let answer: (value: unknown) => void = () => undefined;
+    mutate.mockImplementationOnce(
+      () => new Promise((resolve) => (answer = resolve)),
+    );
+    await chooseScope("All projects");
+    // The row shows the choice while the server saves it.
+    expect(scopeButton()?.textContent).toBe("All projects");
+    expect(projectBox("infra")).toBeUndefined();
+    await act(async () => answer(undefined));
+    expect(mutate.mock.calls[1]?.[0]).toEqual({
+      type: "update",
+      serverId: "mcp_docs",
+      input: { projectIds: [] },
+    });
+  });
+
+  it("offers a workspace server only the workspace's projects", async () => {
+    mount([server({ scope: "workspace" })], "team");
+    act(() => button("Configure Docs")?.click());
+    await chooseScope("Only these");
+    expect(projectNames()).toEqual(["team-site"]);
+  });
+
+  it("searches a long project list", async () => {
+    const many = Array.from({ length: 8 }, (_, index) => ({
+      id: `prj_${index}`,
+      name: index === 5 ? "billing-api" : `site-${index}`,
+    })) as unknown as ReadonlyArray<ProjectData>;
+    mount([server()], undefined, undefined, many);
+    act(() => button("Configure Docs")?.click());
+    await chooseScope("Only these");
+    const search = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Search projects"]',
+    );
+    if (!search) throw new Error("Project search missing");
+    act(() => typeInto(search, "bill"));
+    expect(projectNames()).toEqual(["billing-api"]);
   });
 });

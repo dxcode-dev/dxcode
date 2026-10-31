@@ -39,6 +39,8 @@ export const SkillEffectiveStateSchema = Schema.Literals([
   "blocked-by-policy",
   /** A workspace skill the viewer's own skill of the same name replaces. */
   "replaced-by-personal",
+  /** A skill a plugin bundle installed while that bundle is off. */
+  "plugin-disabled",
 ]);
 
 export const SkillDataSchema = Schema.Struct({

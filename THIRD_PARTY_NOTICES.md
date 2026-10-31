@@ -24,6 +24,18 @@ without a second, embedded copy.
 - License: MIT
 - License text: <https://github.com/coder/ghostty-web/blob/main/LICENSE>
 
+## Waymote video startup
+
+`third-party/waymote/@rockorager__waymote@0.1.6.patch` makes Waymote's
+browser SDK decode everything its gateway sends a new viewer, the latest full
+picture and up to 240 frames since. The SDK holds 241 frames instead of 6
+while its decoder is set up, and drops frames for a long decoder queue only
+once a picture is showing.
+
+- Source: <https://github.com/rockorager/waymote>
+- License: MIT
+- License text: <https://github.com/rockorager/waymote/blob/main/LICENSE>
+
 ## ElevenLabs UI waveform
 
 `apps/web/src/shared/ui/waveform.tsx` adapts the base canvas waveform from

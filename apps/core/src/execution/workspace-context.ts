@@ -241,7 +241,7 @@ const frontmatterName = (content: string) => {
  * The snapshot without repository skills whose directory or declared name is
  * reserved, so a repository can never shadow a skill dx mounts itself.
  */
-export const withoutReservedSkills = (
+const withoutReservedSkills = (
   snapshot: WorkspaceContextSnapshot,
   reserved: ReadonlySet<string>,
 ): WorkspaceContextSnapshot => ({
@@ -253,3 +253,43 @@ export const withoutReservedSkills = (
     return name === undefined || !reserved.has(name);
   }),
 });
+
+interface SkillDiscoverySandbox {
+  readonly cwd: string;
+  readdir(path: string): Promise<string[]>;
+  resolvePath(path: string): string;
+  snapshotWorkspaceContext?(
+    root: string,
+  ): Promise<WorkspaceContextSnapshotResult>;
+}
+
+/**
+ * The sandbox as Flue's skill discovery sees it, without repository skills
+ * named in `reserved`. Flue lists repository skills from the workspace-context
+ * snapshot, or from a readdir of `.agents/skills` when the snapshot declines,
+ * and fails a Thread whose repository skill shares a mounted skill's name.
+ */
+export const withoutRepositorySkills = <Sandbox extends SkillDiscoverySandbox>(
+  sandbox: Sandbox,
+  reserved: ReadonlySet<string>,
+): Sandbox => {
+  const skillsDirectory = `${sandbox.cwd.replace(/\/$/, "")}/.agents/skills`;
+  const readdir = async (path: string) => {
+    const entries = await sandbox.readdir(path);
+    return sandbox.resolvePath(path) === skillsDirectory
+      ? entries.filter((entry) => !reserved.has(entry))
+      : entries;
+  };
+  const snapshotWorkspaceContext = sandbox.snapshotWorkspaceContext;
+  if (snapshotWorkspaceContext === undefined) return { ...sandbox, readdir };
+  return {
+    ...sandbox,
+    readdir,
+    async snapshotWorkspaceContext(root: string) {
+      const snapshot = await snapshotWorkspaceContext(root);
+      return "kind" in snapshot
+        ? snapshot
+        : withoutReservedSkills(snapshot, reserved);
+    },
+  };
+};

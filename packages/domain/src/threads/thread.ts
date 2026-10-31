@@ -64,8 +64,17 @@ export const Thread = Schema.Struct({
   color: Schema.optional(ThreadColor),
   /** Until this time clients show a loading title while one is generated. */
   titlePendingUntil: Schema.optional(Timestamp),
-  /** The Thread whose agent started this one; never itself a child. */
+  /**
+   * The root of the Thread's family; never itself a child. Sharing, archive,
+   * and delete act on the family through it.
+   */
   parentThreadId: Schema.optional(ThreadId),
+  /**
+   * The family member whose agent started this Thread: the root or any of
+   * its children. Absent for a root, and for a child started before dx
+   * recorded it or whose starter was deleted; that child sits under the root.
+   */
+  startedByThreadId: Schema.optional(ThreadId),
 });
 
 export type Thread = typeof Thread.Type;
@@ -88,6 +97,7 @@ export const CreateThreadInput = Schema.Struct({
   visibility: Schema.optional(ThreadVisibility),
   titlePending: Schema.optional(Schema.Boolean),
   parentThreadId: Schema.optional(ThreadId),
+  startedByThreadId: Schema.optional(ThreadId),
 });
 
 export type CreateThreadInput = typeof CreateThreadInput.Type;

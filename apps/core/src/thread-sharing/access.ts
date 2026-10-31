@@ -103,4 +103,6 @@ export const viewerMayRequest = (method: string, path: string) =>
     // The Desktop's sockets carry keyboard and pointer input.
     !/\/desktop\/[a-z]+\/?$/.test(path)) ||
   // Following changes only the viewer's own sidebar.
-  (["PUT", "DELETE"].includes(method) && /\/follow\/?$/.test(path));
+  (["PUT", "DELETE"].includes(method) && /\/follow\/?$/.test(path)) ||
+  // A bug report is the viewer's own and changes nothing in the Thread.
+  (method === "POST" && /\/bug-reports\/?$/.test(path));

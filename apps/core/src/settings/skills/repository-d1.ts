@@ -20,6 +20,7 @@ const SkillRow = Schema.Struct({
   enabled: Schema.Finite,
   active_version: Schema.Finite,
   pinned: Schema.Finite,
+  plugin_id: Schema.NullOr(Schema.String),
   created_at: Schema.String,
   updated_at: Schema.String,
   removed_at: Schema.NullOr(Schema.String),
@@ -52,9 +53,19 @@ const SkillResourceRow = Schema.Struct({
 });
 
 const skillColumns = `
-  id, scope, target_id, name, enabled, active_version, pinned,
+  id, scope, target_id, name, enabled, active_version, pinned, plugin_id,
   created_at, updated_at, removed_at
 `;
+
+/** A skill a plugin bundle installed loads only while that bundle is on. */
+const pluginEnabledSql = `(
+  skill.plugin_id IS NULL OR EXISTS (
+    SELECT 1 FROM trusted_plugin
+     WHERE trusted_plugin.id = skill.plugin_id
+       AND trusted_plugin.enabled = 1
+       AND trusted_plugin.removed_at IS NULL
+  )
+)`;
 
 const unavailable = (operation: string) => (cause: unknown) =>
   PersistenceUnavailable.new({ operation }, cause);
@@ -82,6 +93,7 @@ const decodeSkill = (row: SkillRow) =>
     enabled: row.enabled === 1,
     activeVersion: row.active_version,
     pinned: row.pinned === 1,
+    ...(row.plugin_id === null ? {} : { pluginId: row.plugin_id }),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(row.removed_at === null ? {} : { removedAt: row.removed_at }),
@@ -335,8 +347,8 @@ export const SkillRepositoryD1 = (db: D1Database) =>
                   .prepare(
                     `INSERT INTO skill (
                        id, scope, target_id, name, enabled, active_version,
-                       pinned, created_at, updated_at
-                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                       pinned, plugin_id, created_at, updated_at
+                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                   )
                   .bind(
                     skill.id,
@@ -346,6 +358,7 @@ export const SkillRepositoryD1 = (db: D1Database) =>
                     skill.enabled ? 1 : 0,
                     skill.activeVersion,
                     skill.pinned ? 1 : 0,
+                    skill.pluginId ?? null,
                     encodedTimestamp(skill.createdAt),
                     encodedTimestamp(skill.updatedAt),
                   ),
@@ -428,6 +441,7 @@ export const SkillRepositoryD1 = (db: D1Database) =>
           function* (ownerUserId) {
             const skills = yield* querySkills(
               `WHERE enabled = 1 AND removed_at IS NULL
+                 AND ${pluginEnabledSql}
                  AND (
                    (
                      scope = 'personal' AND target_id = ?

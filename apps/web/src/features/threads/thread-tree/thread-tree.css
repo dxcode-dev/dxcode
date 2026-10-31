@@ -1,0 +1,143 @@
+.thread-tree-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+}
+.thread-tree-back {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-foreground);
+  border-radius: 5px;
+}
+.thread-tree-back:hover {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.thread-tree-back > svg {
+  width: 14px;
+  height: 14px;
+}
+.thread-tree-count {
+  color: var(--muted-foreground);
+}
+.thread-tree-content {
+  padding: 16px clamp(12px, 4vw, 48px) 48px;
+}
+.thread-tree-note {
+  margin: 12px 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+.thread-tree-note > button {
+  color: var(--foreground);
+  text-decoration: underline;
+}
+.thread-tree {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.thread-tree .thread-tree {
+  margin-left: 11px;
+  padding-left: 9px;
+  border-left: 1px solid var(--divider);
+}
+.thread-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  max-width: 880px;
+  padding: 0 6px 0 2px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.thread-tree-row:hover {
+  background: var(--accent);
+}
+.thread-tree-row[data-current] {
+  background: color-mix(
+    in srgb,
+    var(--thread-color, var(--foreground)) 14%,
+    transparent
+  );
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--foreground) 18%, transparent);
+}
+.thread-tree-toggle,
+.thread-tree-toggle-space {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-foreground);
+  border-radius: 4px;
+}
+.thread-tree-toggle:hover {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.thread-tree-toggle > svg {
+  width: 14px;
+  height: 14px;
+}
+.thread-tree-link {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  color: var(--foreground);
+  text-decoration: none;
+}
+.thread-tree-link[data-archived] {
+  color: var(--muted-foreground);
+}
+.thread-tree-orb {
+  display: flex;
+  width: 16px;
+  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+  color: var(--thread-color, var(--muted-foreground));
+}
+.thread-tree-orb > svg {
+  width: 14px;
+  height: 14px;
+}
+.thread-tree-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-tree-hidden,
+.thread-tree-mark {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  color: var(--muted-foreground);
+  border-radius: 4px;
+  background: var(--accent);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.thread-tree-error {
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 10%, transparent);
+}
+.thread-tree-time {
+  flex: 0 0 auto;
+  min-width: 52px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  text-align: right;
+  white-space: nowrap;
+}

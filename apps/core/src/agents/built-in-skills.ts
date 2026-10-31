@@ -40,7 +40,8 @@ import writingPrompts from "./built-in-skills/writing-prompts/skill.md?raw";
  * packages every import of a file named `SKILL.md` and rejects one with
  * `?raw`. The workspace copy is named `SKILL.md`.
  */
-export const BUILT_IN_SKILLS_DIRECTORY = "/home/user/.local/share/dx/skills";
+const DX_SHARE = "/home/user/.local/share/dx";
+export const BUILT_IN_SKILLS_DIRECTORY = `${DX_SHARE}/skills`;
 const DIGEST_FILE = ".dx-digest";
 
 /** Every file of every built-in skill, keyed by its path in the skill. */
@@ -127,7 +128,7 @@ export const builtInSkillDefinitions: ReadonlyArray<SkillDefinition> =
 
 const encoder = new TextEncoder();
 
-const sha256 = async (value: string) =>
+export const sha256 = async (value: string) =>
   Array.from(
     new Uint8Array(
       await crypto.subtle.digest("SHA-256", encoder.encode(value)),
@@ -135,7 +136,13 @@ const sha256 = async (value: string) =>
     (byte) => byte.toString(16).padStart(2, "0"),
   ).join("");
 
-const files = sources.flatMap(({ name, files }) =>
+/** One file of an installed skill, at `<skill name>/<path in the skill>`. */
+export interface SkillFile {
+  readonly path: string;
+  readonly content: string;
+}
+
+const files: ReadonlyArray<SkillFile> = sources.flatMap(({ name, files }) =>
   Object.entries(files).map(([path, content]) => ({
     path: `${name}/${path}`,
     content,
@@ -155,7 +162,11 @@ const contentDigest = () => {
  * reader never sees half an install. Base64, so no content is read as shell
  * or rewritten by the local runtime's command-text path mapping.
  */
-const installScript = (version: string) => {
+const installScript = (
+  directory: string,
+  files: ReadonlyArray<SkillFile>,
+  version: string,
+) => {
   const writes = files
     .map(({ path, content }) => {
       const directory = path.slice(0, path.lastIndexOf("/"));
@@ -167,7 +178,7 @@ const installScript = (version: string) => {
     })
     .join("\n");
   return `set -eu
-root="$HOME/.local/share/dx/skills"
+root="$HOME/.local/share/dx/${directory}"
 stage="$root.stage.$$"
 old="$root.old.$$"
 rm -rf "$stage"
@@ -181,25 +192,52 @@ rm -rf "$old"
 };
 
 /**
+ * Replaces `~/.local/share/dx/<directory>` with the loaded files unless the
+ * copy there is already `version`; `load` runs only when it is not. An
+ * incomplete load is installed under another version, so the next turn
+ * tries again.
+ */
+export const installSkillFiles = async (
+  sandbox: Sandbox,
+  directory: string,
+  version: string,
+  load: () => Promise<{
+    readonly files: ReadonlyArray<SkillFile>;
+    readonly complete: boolean;
+  }>,
+) => {
+  const root = `${DX_SHARE}/${directory}`;
+  const installed = await sandbox
+    .readFile(`${root}/${DIGEST_FILE}`)
+    .catch(() => undefined);
+  if (installed === version) return;
+  const script = `${root}.install.sh`;
+  const { files, complete } = await load();
+  await sandbox.writeFile(
+    script,
+    installScript(directory, files, complete ? version : `${version}.partial`),
+  );
+  const result = await sandbox.exec(
+    `bash ${script}; status=$?; rm -f ${script}; exit $status`,
+    { timeoutMs: 60_000 },
+  );
+  if (result.exitCode !== 0)
+    throw new Error(result.stderr.trim() || "install script failed");
+};
+
+/**
  * Writes the built-in skills into the workspace unless the copy there is
  * already this version. A failure is logged, not thrown: the instructions
  * still load, only their supporting files and scripts are missing.
  */
 export const installBuiltInSkills = async (sandbox: Sandbox) => {
-  const version = await contentDigest();
   try {
-    const installed = await sandbox
-      .readFile(`${BUILT_IN_SKILLS_DIRECTORY}/${DIGEST_FILE}`)
-      .catch(() => undefined);
-    if (installed === version) return;
-    const script = `${BUILT_IN_SKILLS_DIRECTORY}.install.sh`;
-    await sandbox.writeFile(script, installScript(version));
-    const result = await sandbox.exec(
-      `bash ${script}; status=$?; rm -f ${script}; exit $status`,
-      { timeoutMs: 60_000 },
+    await installSkillFiles(
+      sandbox,
+      "skills",
+      await contentDigest(),
+      async () => ({ files, complete: true }),
     );
-    if (result.exitCode !== 0)
-      throw new Error(result.stderr.trim() || "install script failed");
   } catch (error) {
     builtInSkillsLogger.error("Built-in skills could not be installed.", {
       error: error instanceof Error ? error.message : String(error),

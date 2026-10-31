@@ -40,10 +40,25 @@ const ThreadRow = Schema.Struct({
   color: Schema.optional(Schema.NullOr(Schema.String)),
   title_pending_until: Schema.optional(Schema.NullOr(Schema.String)),
   parent_thread_id: Schema.optional(Schema.NullOr(Schema.String)),
+  started_by_thread_id: Schema.optional(Schema.NullOr(Schema.String)),
   snoozed_until: Schema.optional(Schema.NullOr(Schema.String)),
   snoozed_at: Schema.optional(Schema.NullOr(Schema.String)),
   snooze_woke_at: Schema.optional(Schema.NullOr(Schema.String)),
 });
+
+/**
+ * SQL predicate over a child Thread aliased `thread`: the sidebar lists it
+ * directly under its root. A child whose starter is another child listed
+ * with it (same lifecycle state, unpinned) sits under that starter instead,
+ * which the sidebar shows as a count and the tree page in full.
+ */
+export const listedUnderRootSql = `NOT EXISTS (
+  SELECT 1 FROM threads AS starter
+   WHERE starter.id = thread.started_by_thread_id
+     AND starter.parent_thread_id = thread.parent_thread_id
+     AND starter.owner_user_id = thread.owner_user_id
+     AND starter.lifecycle_state = thread.lifecycle_state
+     AND starter.pinned_at IS NULL)`;
 
 type ThreadRow = typeof ThreadRow.Type;
 type ThreadObservationError =
@@ -119,6 +134,10 @@ export const decodeThreadRows = (rows: ReadonlyArray<unknown>) =>
               row.parent_thread_id === undefined
                 ? {}
                 : { parentThreadId: row.parent_thread_id }),
+              ...(row.started_by_thread_id === null ||
+              row.started_by_thread_id === undefined
+                ? {}
+                : { startedByThreadId: row.started_by_thread_id }),
               ...(row.snoozed_until === null || row.snoozed_until === undefined
                 ? {}
                 : { snoozedUntil: row.snoozed_until }),
@@ -253,6 +272,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   lifecycle_state,
                   title_pending_until,
                   parent_thread_id,
+                  started_by_thread_id,
                   created_at,
                   updated_at
                 )
@@ -273,6 +293,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   ${encoded.lifecycleState},
                   ${encoded.titlePendingUntil ?? null},
                   ${encoded.parentThreadId ?? null},
+                  ${encoded.startedByThreadId ?? null},
                   ${encoded.createdAt}, ${encoded.updatedAt}
                 )
               `;
@@ -535,6 +556,7 @@ export const ThreadRepositoryD1 = Layer.effect(
               title_pending_until,
               color,
               parent_thread_id,
+              started_by_thread_id,
               snoozed_until,
               snoozed_at,
               snooze_woke_at
@@ -593,7 +615,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                 model_selection, runner_profile_id, plugin_snapshot_json, skill_snapshot_json,
                 visibility, created_at, updated_at,
                 last_activity_at, activity_status, lifecycle_state, pinned_at,
-                title_pending_until, color, parent_thread_id,
+                title_pending_until, color, parent_thread_id, started_by_thread_id,
                 snoozed_until, snoozed_at, snooze_woke_at
               FROM threads
               WHERE id = ${threadId}
@@ -648,7 +670,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                 model_selection, runner_profile_id, plugin_snapshot_json, skill_snapshot_json,
                 visibility, created_at, updated_at,
                 last_activity_at, activity_status, lifecycle_state, pinned_at,
-                title_pending_until, color, parent_thread_id,
+                title_pending_until, color, parent_thread_id, started_by_thread_id,
                 snoozed_until, snoozed_at, snooze_woke_at
             `.pipe(
               Effect.catchTag("SqlError", (cause) =>
@@ -691,7 +713,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                 model_selection, runner_profile_id, plugin_snapshot_json, skill_snapshot_json,
                 visibility, created_at, updated_at,
                 last_activity_at, activity_status, lifecycle_state, pinned_at,
-                title_pending_until, color, parent_thread_id,
+                title_pending_until, color, parent_thread_id, started_by_thread_id,
                 snoozed_until, snoozed_at, snooze_woke_at
             `.pipe(
               Effect.catchTag("SqlError", (cause) =>
@@ -738,7 +760,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                 model_selection, runner_profile_id, plugin_snapshot_json, skill_snapshot_json,
                 visibility, created_at, updated_at,
                 last_activity_at, activity_status, lifecycle_state, pinned_at,
-                title_pending_until, color, parent_thread_id,
+                title_pending_until, color, parent_thread_id, started_by_thread_id,
                 snoozed_until, snoozed_at, snooze_woke_at
             `.pipe(
               Effect.catchTag("SqlError", (cause) =>
@@ -773,7 +795,7 @@ export const ThreadRepositoryD1 = Layer.effect(
               request.tree === undefined
                 ? sql`1 = 1`
                 : request.tree.kind === "children"
-                  ? sql`(thread.parent_thread_id = ${request.tree.parentThreadId} AND ${sql.literal(pinnedAt)} IS NULL)`
+                  ? sql`(thread.parent_thread_id = ${request.tree.parentThreadId} AND ${sql.literal(pinnedAt)} IS NULL AND ${sql.literal(listedUnderRootSql)})`
                   : sql`(thread.parent_thread_id IS NULL OR ${sql.literal(pinnedAt)} IS NOT NULL OR NOT EXISTS (
                       SELECT 1 FROM threads AS parent
                        WHERE parent.id = thread.parent_thread_id
@@ -849,7 +871,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.agent_instructions_version, thread.model_selection,
                       thread.runner_profile_id, thread.title_pending_until, thread.color,
                       thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
-                      thread.parent_thread_id,
+                      thread.parent_thread_id, thread.started_by_thread_id,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
                       thread.updated_at, activity.last_activity_at,
@@ -896,7 +918,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.agent_instructions_version, thread.model_selection,
                       thread.runner_profile_id, thread.title_pending_until, thread.color,
                       thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
-                      thread.parent_thread_id,
+                      thread.parent_thread_id, thread.started_by_thread_id,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
                       thread.updated_at, activity.last_activity_at,
@@ -950,7 +972,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.agent_instructions_version, thread.model_selection,
                       thread.runner_profile_id, thread.title_pending_until, thread.color,
                       thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
-                      thread.parent_thread_id,
+                      thread.parent_thread_id, thread.started_by_thread_id,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
                       thread.updated_at, activity.last_activity_at,
@@ -988,7 +1010,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.agent_instructions_version, thread.model_selection,
                       thread.runner_profile_id, thread.title_pending_until, thread.color,
                       thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
-                      thread.parent_thread_id,
+                      thread.parent_thread_id, thread.started_by_thread_id,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
                       thread.updated_at, activity.last_activity_at,
@@ -1033,7 +1055,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.agent_instructions_version, thread.model_selection,
                       thread.runner_profile_id, thread.title_pending_until, thread.color,
                       thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
-                      thread.parent_thread_id,
+                      thread.parent_thread_id, thread.started_by_thread_id,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
                       thread.updated_at, activity.last_activity_at,
@@ -1085,7 +1107,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       thread.agent_instructions_version, thread.model_selection,
                       thread.runner_profile_id, thread.title_pending_until, thread.color,
                       thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
-                      thread.parent_thread_id,
+                      thread.parent_thread_id, thread.started_by_thread_id,
                       thread.plugin_snapshot_json, thread.skill_snapshot_json,
                       thread.visibility, thread.created_at,
                       thread.updated_at, activity.last_activity_at,
@@ -1150,7 +1172,8 @@ export const ThreadRepositoryD1 = Layer.effect(
                 SELECT id, title, project_id, owner_user_id, agent_instructions,
                   agent_instructions_revision, agent_instructions_version,
                   model_selection, runner_profile_id, title_pending_until, color,
-                  parent_thread_id, plugin_snapshot_json, skill_snapshot_json,
+                  parent_thread_id, started_by_thread_id,
+                  plugin_snapshot_json, skill_snapshot_json,
                   visibility, created_at, updated_at, last_activity_at,
                   activity_status, lifecycle_state, pinned_at,
                   snoozed_until, snoozed_at, snooze_woke_at
@@ -1161,6 +1184,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   ) AS position
                   FROM threads AS thread
                   WHERE ${sql.in("thread.parent_thread_id", parents)}
+                    AND ${sql.literal(listedUnderRootSql)}
                     AND thread.owner_user_id = ${reader.userId}
                     AND thread.pinned_at IS NULL
                     AND thread.lifecycle_state = ${lifecycleState}

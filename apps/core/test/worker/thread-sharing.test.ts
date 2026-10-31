@@ -16,6 +16,7 @@ import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
 import { TEST_RUNNER_PROFILE_CATALOG } from "../../src/testing/bindings.js";
+import { tombstoneThreads } from "../../src/thread-deletion/tombstone.js";
 import {
   attributeSubmission,
   shareThreadReads,
@@ -69,7 +70,15 @@ const bindings: Bindings = {
   DX_RUNNER_PROFILE_CATALOG: TEST_RUNNER_PROFILE_CATALOG,
 };
 
-const createApp = (userId: UserId) => {
+/** An External API App credential held to `workspaceId`, acting as `userId`. */
+const application = {
+  id: "app-sharing",
+  workspaceId,
+  clientId: "dxa_sharing-application",
+  credentialId: "cred-sharing",
+};
+
+const createApp = (userId: UserId, viaApplication = false) => {
   const app = new Hono<AppEnv>();
   app.use("*", requestId);
   app.use("*", async (context, next) => {
@@ -78,6 +87,7 @@ const createApp = (userId: UserId) => {
       Schema.decodeUnknownSync(Principal)({
         userId,
         credentialScopes: ["personal", "workspace"],
+        ...(viaApplication ? { application } : {}),
       }),
     );
     await next();
@@ -677,5 +687,202 @@ describe("Thread families share as one unit", () => {
     expect(await accessOf(member, unrelated.id)).toBe("contribute");
     expect(await accessOf(member, lateChild.id)).toBe("contribute");
     expect(await accessOf(member, lonerThread.id)).toBe(404);
+  });
+});
+
+describe("A family tree shows only the Threads the requester may read", () => {
+  // sharedThread ─ starter ─ middle ─ gone (deleted)
+  //                        └ hidden (not shared)
+  const starter = thread(
+    "thr_00000000-0000-4000-8000-000000000cb1",
+    personalProject.id as ProjectId,
+    owner,
+    "2026-08-20T12:01:00.000Z",
+  );
+  const middle = thread(
+    "thr_00000000-0000-4000-8000-000000000cb2",
+    personalProject.id as ProjectId,
+    owner,
+    "2026-08-20T12:02:00.000Z",
+  );
+  const hidden = thread(
+    "thr_00000000-0000-4000-8000-000000000cb3",
+    personalProject.id as ProjectId,
+    owner,
+    "2026-08-20T12:03:00.000Z",
+  );
+  const gone = thread(
+    "thr_00000000-0000-4000-8000-000000000cb4",
+    personalProject.id as ProjectId,
+    owner,
+    "2026-08-20T12:04:00.000Z",
+  );
+  const workspaceProject = {
+    ...project(
+      "prj_00000000-0000-4000-8000-000000000cb1",
+      owner,
+      "owner-workspace",
+    ),
+    workspaceId,
+  } as typeof personalProject;
+  const workspaceRoot = thread(
+    "thr_00000000-0000-4000-8000-000000000cb5",
+    workspaceProject.id as ProjectId,
+    owner,
+  );
+  const workspaceChild = thread(
+    "thr_00000000-0000-4000-8000-000000000cb6",
+    workspaceProject.id as ProjectId,
+    owner,
+    "2026-08-20T12:01:00.000Z",
+  );
+
+  beforeEach(async () => {
+    const family = { parentThreadId: sharedThread.id };
+    await runRepositories(
+      Effect.gen(function* () {
+        const projects = yield* ProjectRepository;
+        const threads = yield* ThreadRepository;
+        yield* threads.insert({
+          ...starter,
+          ...family,
+          startedByThreadId: sharedThread.id,
+        });
+        yield* threads.insert({
+          ...middle,
+          ...family,
+          startedByThreadId: starter.id,
+        });
+        yield* threads.insert({
+          ...hidden,
+          ...family,
+          startedByThreadId: starter.id,
+        });
+        yield* threads.insert({
+          ...gone,
+          ...family,
+          startedByThreadId: middle.id,
+        });
+        yield* projects.insert(workspaceProject);
+        yield* threads.insert(workspaceRoot);
+        yield* threads.insert({
+          ...workspaceChild,
+          parentThreadId: workspaceRoot.id,
+          startedByThreadId: workspaceRoot.id,
+        });
+      }),
+    );
+  });
+
+  const treeOf = async (
+    userId: UserId,
+    threadId: string,
+    viaApplication = false,
+  ) => {
+    const response = await createApp(userId, viaApplication).request(
+      `/threads/${threadId}/tree`,
+      {},
+      bindings,
+    );
+    if (response.status !== 200) return response.status;
+    const { data } = await response.json<{
+      data: {
+        rootThreadId: string;
+        items: Array<{
+          id: string;
+          access?: string;
+          pinnedAt?: string;
+          startedByThreadId?: string;
+        }>;
+      };
+    }>();
+    return data;
+  };
+
+  it("lists for a member the shared, live family members and nothing else", async () => {
+    expect(
+      (
+        await send(owner, `/threads/${sharedThread.id}/sharing`, "PUT", {
+          workspaceAccess: "contribute",
+          contributeFor: "1h",
+        })
+      ).status,
+    ).toBe(200);
+    // One child no longer shared, one deleted, and a pin only the owner sees.
+    await env.DB.prepare(
+      `UPDATE threads SET workspace_access = 'none', shared_workspace_id = NULL
+        WHERE id = ?`,
+    )
+      .bind(hidden.id)
+      .run();
+    expect(
+      await tombstoneThreads(
+        env.DB,
+        [gone.id],
+        owner,
+        new Date().toISOString(),
+      ),
+    ).toEqual([gone.id]);
+    await env.DB.prepare("UPDATE threads SET pinned_at = ? WHERE id = ?")
+      .bind("2026-08-21T00:00:00.000Z", sharedThread.id)
+      .run();
+
+    const seen = await treeOf(member, middle.id);
+    if (typeof seen === "number") throw new Error(`Tree failed: ${seen}`);
+    expect(seen.rootThreadId).toBe(sharedThread.id);
+    expect(seen.items).toEqual([
+      expect.objectContaining({ id: sharedThread.id, access: "contribute" }),
+      expect.objectContaining({
+        id: starter.id,
+        access: "contribute",
+        startedByThreadId: sharedThread.id,
+      }),
+      expect.objectContaining({
+        id: middle.id,
+        access: "contribute",
+        startedByThreadId: starter.id,
+      }),
+    ]);
+    expect(seen.items.every((item) => item.pinnedAt === undefined)).toBe(true);
+    // The Thread the member may not read has no tree for them.
+    expect(await treeOf(member, hidden.id)).toBe(404);
+    expect(await treeOf(member, gone.id)).toBe(404);
+
+    // The owner sees every live member, with the pin.
+    const own = await treeOf(owner, middle.id);
+    if (typeof own === "number") throw new Error(`Tree failed: ${own}`);
+    expect(own.items.map(({ id }) => id)).toEqual([
+      sharedThread.id,
+      starter.id,
+      middle.id,
+      hidden.id,
+    ]);
+    expect(own.items[0]).toMatchObject({
+      pinnedAt: "2026-08-21T00:00:00.000Z",
+    });
+    expect(own.items.every((item) => item.access === undefined)).toBe(true);
+
+    // Other workspaces and the owner's unshared Threads stay hidden.
+    expect(await treeOf(outsider, middle.id)).toBe(404);
+    expect(await treeOf(member, lonerThread.id)).toBe(404);
+  });
+
+  it("holds an External API App to its workspace's Projects and the owner's own Threads", async () => {
+    await send(owner, `/threads/${sharedThread.id}/sharing`, "PUT", {
+      workspaceAccess: "view",
+    });
+    // The owner's personal Project is outside the App's workspace.
+    expect(await treeOf(owner, middle.id, true)).toBe(404);
+    // A Project of that workspace is inside it.
+    const inWorkspace = await treeOf(owner, workspaceChild.id, true);
+    if (typeof inWorkspace === "number")
+      throw new Error(`Tree failed: ${inWorkspace}`);
+    expect(inWorkspace.items.map(({ id }) => id)).toEqual([
+      workspaceRoot.id,
+      workspaceChild.id,
+    ]);
+    // An App never reads another member's shared Threads.
+    expect(await treeOf(member, middle.id, true)).toBe(404);
+    expect(typeof (await treeOf(member, middle.id))).toBe("object");
   });
 });

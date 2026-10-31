@@ -44,6 +44,7 @@ export const tombstoneThreads = async (
                 snoozed_at = NULL,
                 color = NULL,
                 parent_thread_id = NULL,
+                started_by_thread_id = NULL,
                 visibility = 'private',
                 workspace_access = 'none',
                 shared_workspace_id = NULL,
@@ -64,10 +65,18 @@ export const tombstoneThreads = async (
          ON CONFLICT (thread_id) DO NOTHING`,
       )
       .bind(ids, ownerUserId, deletedAt),
+    // A child of a deleted root becomes a root, which no Thread started.
     db
       .prepare(
-        `UPDATE threads SET parent_thread_id = NULL
+        `UPDATE threads SET parent_thread_id = NULL, started_by_thread_id = NULL
           WHERE ${tombstoneOf("parent_thread_id")}`,
+      )
+      .bind(ids, ownerUserId),
+    // What a deleted child started moves under its family's root.
+    db
+      .prepare(
+        `UPDATE threads SET started_by_thread_id = NULL
+          WHERE ${tombstoneOf("started_by_thread_id")}`,
       )
       .bind(ids, ownerUserId),
     db

@@ -17,8 +17,10 @@ threads.
 3. In dx, open **Personal Settings → Model Routing** and choose **Add → Claude Pro/Max**.
 4. Paste the token and choose **Connect Subscription**.
 
-dx checks the token with Anthropic before storing it and refuses a token
-Anthropic rejects. It encrypts the token like an API key and never returns it.
+dx checks the token on Anthropic's model list before storing it and refuses
+a token Anthropic rejects. That check spends no plan usage; everything else
+that uses the token runs in Claude Code inside your Orb. dx encrypts the
+token like an API key and never returns it.
 To swap a token, choose **Replace Token** on the connection.
 Workspace routing does not offer Claude Pro/Max.
 
@@ -43,11 +45,9 @@ some plans weekly limits for one model (the Opus, Sonnet, and Fable
 limits). A Claude account can also have extra usage turned on, which
 Anthropic bills at API rates once a limit is used up.
 
-The Claude Pro/Max card in Model Routing shows the limits Anthropic reports
-for your plan, with when each resets. dx reads them from Anthropic when Model
-Routing loads and when you choose the refresh button beside **Plan Usage**. While a limit is
-used up and extra usage could be billed, dx shows the last reported values
-instead.
+The Claude Pro/Max card in Model Routing shows the limits Claude Code last
+reported for your plan while it ran, with when each resets. A plan that has
+not run Claude Code yet shows no limits, and dx does not hold its threads.
 
 The card's **Claude Usage** choice decides what happens at a limit:
 

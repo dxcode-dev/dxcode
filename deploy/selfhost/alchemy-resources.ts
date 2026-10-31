@@ -166,6 +166,23 @@ const orbContainersProvider = () =>
                   news.workerName,
                 ),
               });
+              // A stage whose earlier name Containers refused left that
+              // Worker and its image behind; nothing binds them.
+              if (
+                output?.workerName !== undefined &&
+                output.workerName !== news.workerName
+              ) {
+                await destroyOrbWorker({
+                  signal,
+                  workerName: output.workerName,
+                  accountId: process.env.CLOUDFLARE_ACCOUNT_ID ?? "",
+                  apiToken: process.env.CLOUDFLARE_API_TOKEN ?? "",
+                  workspaceRoot,
+                });
+                process.stderr.write(
+                  `[OrbContainers] Removed the Orb Worker ${output.workerName}, renamed ${news.workerName}.\n`,
+                );
+              }
               return {
                 workerName: news.workerName,
                 recipeHash: news.recipeHash,

@@ -192,9 +192,12 @@ const listData = Effect.fn("skillsListData")(function* (
         ? "disabled"
         : scope === "personal" && personalBlocked
           ? "blocked-by-policy"
-          : scope === "workspace" && !loads && sameName("personal", loaded)
-            ? "replaced-by-personal"
-            : "effective";
+          : item.skill.pluginId !== undefined &&
+              !candidates.some(({ skill }) => skill.id === item.skill.id)
+            ? "plugin-disabled"
+            : scope === "workspace" && !loads && sameName("personal", loaded)
+              ? "replaced-by-personal"
+              : "effective";
       return skillData(
         item,
         state,

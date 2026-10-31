@@ -3,6 +3,7 @@ import { Timestamp } from "../persistence/timestamp.js";
 import { UserId } from "../users/user-id.js";
 import { EnvironmentVariableConfigReference } from "./environment-variable.js";
 import { McpServerId } from "./mcp-server.js";
+import { PluginId } from "./plugin-id.js";
 import { WorkspaceId } from "./workspace.js";
 
 export const MAX_PLUGINS_PER_SCOPE = 20;
@@ -17,13 +18,7 @@ export const MAX_PLUGIN_SECRET_REFERENCES = 20;
 export const MAX_PLUGIN_MCP_REFERENCES = 10;
 export const MAX_PLUGIN_TRIGGERS = 20;
 
-export const PluginId = Schema.String.check(
-  Schema.isPattern(
-    /^plg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-  ),
-).pipe(Schema.brand("@dx/PluginId"));
-
-export type PluginId = typeof PluginId.Type;
+export { PluginId };
 
 export const PluginName = Schema.String.check(
   Schema.isMinLength(1),

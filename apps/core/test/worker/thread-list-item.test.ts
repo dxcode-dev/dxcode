@@ -240,6 +240,60 @@ describe("Thread list item", () => {
     expect(counted.statements).toBeGreaterThan(5);
   });
 
+  it("marks every No Project Thread, personal and workspace, in the lists and rows", async () => {
+    const createProjectless = async () => {
+      const response = await send(owner, "/threads", "POST", {
+        title: "No Project fixture",
+      });
+      expect(response.status).toBe(201);
+      return response.body.data as { id: string; projectId: string };
+    };
+    // Before joining the workspace: the owner's personal No Project.
+    await env.DB.prepare("DELETE FROM member WHERE userId = ?")
+      .bind(owner)
+      .run();
+    const personal = await createProjectless();
+    await env.DB.prepare(
+      `INSERT INTO member (id, organizationId, userId, role, createdAt)
+       VALUES ('r-owner', ?, ?, 'owner', 1)`,
+    )
+      .bind(workspaceId, owner)
+      .run();
+    const inWorkspace = await createProjectless();
+    // Two hidden Projects, one per scope.
+    expect(inWorkspace.projectId).not.toBe(personal.projectId);
+    const named = await send(owner, "/projects", "POST", { name: "Named" });
+    const namedThread = await create(named.body.data.id as string);
+
+    const active = await roots("active");
+    const listed = (id: string) => active.items.find((item) => item.id === id);
+    expect(listed(personal.id)).toMatchObject({ projectless: true });
+    expect(listed(inWorkspace.id)).toMatchObject({ projectless: true });
+    expect(listed(namedThread)).not.toHaveProperty("projectless");
+    for (const id of [personal.id, inWorkspace.id, namedThread])
+      expect((await row(owner, id)).body.data).toEqual(listed(id));
+
+    // A member following a shared No Project Thread sees it marked too.
+    expect(
+      (
+        await send(owner, `/threads/${inWorkspace.id}/sharing`, "PUT", {
+          workspaceAccess: "view",
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (await send(member, `/threads/${inWorkspace.id}/follow`, "PUT")).status,
+    ).toBe(200);
+    const shared = (await send(member, "/shared-threads")).body.data
+      .items as Row[];
+    expect(shared.find(({ id }) => id === inWorkspace.id)).toMatchObject({
+      projectless: true,
+    });
+    expect((await row(member, inWorkspace.id)).body.data).toEqual(
+      shared.find(({ id }) => id === inWorkspace.id),
+    );
+  });
+
   it("measures the D1 statements one turn costs a viewer whose sidebar holds 100 roots", async () => {
     const project = await send(owner, "/projects", "POST", { name: "Wide" });
     const projectId = project.body.data.id as string;

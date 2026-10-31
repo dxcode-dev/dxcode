@@ -17,8 +17,13 @@ import {
   destroyOrbWorker,
   orbDockerEnvironment,
   orbWorkerExists,
-  retryContainerSettings,
+  retryOrbWorkerDeploy,
+  transientDeployFailure,
 } from "./containers.mjs";
+import {
+  permanentDeployFailures,
+  transientDeployFailures,
+} from "./recorded-deploy-failures.mjs";
 
 const workspaceRoot = resolve(import.meta.dirname, "../..");
 
@@ -125,49 +130,77 @@ describe("Orb Worker lookup after an interrupted create", () => {
   });
 });
 
-describe("Wrangler's interrupted container settings", () => {
-  // Wrangler's own words when the Worker version is live but the container
-  // application settings were not applied (preview runs 39445094840 and
-  // 39523973423).
-  const interrupted = {
-    status: 1,
-    stdout: "",
-    stderr:
-      "✘ [ERROR] The Worker version was deployed, but Wrangler could not finish applying its Durable Object-managed Container application settings. Re-run the same `wrangler deploy` command to retry and finish deployment.",
-  };
+describe("Retrying a failed Orb Worker deploy", () => {
+  const failed = (stderr) => ({ status: 1, stdout: "", stderr });
+  const succeeded = { status: 0, stdout: "", stderr: "" };
   const run = (...results) => {
     const deploy = vi.fn(() => results.shift());
     const wait = vi.fn();
     return { deploy, wait };
   };
-
-  it("re-runs the same deploy until Wrangler finishes, waiting between runs", async () => {
-    const { deploy, wait } = run(interrupted, interrupted, {
-      status: 0,
-      stdout: "",
-      stderr: "",
-    });
-    expect((await retryContainerSettings({ deploy, wait })).status).toBe(0);
-    expect(deploy).toHaveBeenCalledTimes(3);
-    expect(wait).toHaveBeenCalledTimes(2);
-  });
-
-  it("stops after three runs and returns Wrangler's failure", async () => {
-    const { deploy, wait } = run(interrupted, interrupted, interrupted, {
-      status: 0,
-    });
-    expect(await retryContainerSettings({ deploy, wait })).toBe(interrupted);
-    expect(deploy).toHaveBeenCalledTimes(3);
-  });
-
-  it("never repeats a successful deploy or any other failure", async () => {
-    const failed = { status: 1, stdout: "", stderr: "image build failed" };
-    for (const result of [{ status: 0, stdout: "", stderr: "" }, failed]) {
-      const { deploy, wait } = run(result, { status: 0 });
-      expect(await retryContainerSettings({ deploy, wait })).toBe(result);
-      expect(deploy).toHaveBeenCalledTimes(1);
-      expect(wait).not.toHaveBeenCalled();
+  const quietly = async (body) => {
+    const write = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      return await body();
+    } finally {
+      write.mockRestore();
     }
+  };
+
+  for (const [name, stderr] of Object.entries(transientDeployFailures))
+    it(`runs the same deploy again after ${name}`, () =>
+      quietly(async () => {
+        const { deploy, wait } = run(failed(stderr), succeeded);
+        expect(await retryOrbWorkerDeploy({ deploy, wait })).toBe(succeeded);
+        expect(deploy).toHaveBeenCalledTimes(2);
+        expect(wait).toHaveBeenCalledTimes(1);
+      }));
+
+  it("waits longer before each run and stops after three, returning the last failure", () =>
+    quietly(async () => {
+      const last = failed(transientDeployFailures["registry-push-timeout"]);
+      const { deploy, wait } = run(
+        failed(transientDeployFailures["cloudflare-10500"]),
+        failed(transientDeployFailures["image-preparation-500"]),
+        last,
+        succeeded,
+      );
+      expect(await retryOrbWorkerDeploy({ deploy, wait })).toBe(last);
+      expect(deploy).toHaveBeenCalledTimes(3);
+      expect(wait.mock.calls).toEqual([[20_000], [40_000]]);
+    }));
+
+  for (const [name, stderr] of Object.entries(permanentDeployFailures))
+    it(`never repeats ${name}`, () =>
+      quietly(async () => {
+        const result = failed(stderr);
+        const { deploy, wait } = run(result, succeeded);
+        expect(await retryOrbWorkerDeploy({ deploy, wait })).toBe(result);
+        expect(deploy).toHaveBeenCalledTimes(1);
+        expect(wait).not.toHaveBeenCalled();
+      }));
+
+  it("never repeats a successful deploy or a failure it does not recognize", () =>
+    quietly(async () => {
+      for (const result of [succeeded, failed("image build failed")]) {
+        const { deploy, wait } = run(result, succeeded);
+        expect(await retryOrbWorkerDeploy({ deploy, wait })).toBe(result);
+        expect(deploy).toHaveBeenCalledTimes(1);
+        expect(wait).not.toHaveBeenCalled();
+      }
+    }));
+
+  it("says why it runs the deploy again", () => {
+    expect(
+      transientDeployFailure(transientDeployFailures["registry-push-timeout"]),
+    ).toMatch(/registry/i);
+    expect(
+      transientDeployFailure(transientDeployFailures["cloudflare-10500"]),
+    ).toMatch(/10500/);
+    for (const stderr of Object.values(permanentDeployFailures))
+      expect(transientDeployFailure(stderr)).toBeUndefined();
   });
 });
 
@@ -324,6 +357,79 @@ describe("Orb Worker deploy alongside other deploy steps", {
     } finally {
       write.mockRestore();
     }
+  });
+
+  // DX_ORB_DEPLOY_FAULTS proves the retry on a real preview deploy without
+  // waiting for Cloudflare to fail.
+  describe("with recorded failures injected", () => {
+    const deployWithFaults = async (faults, deployment = "preview") => {
+      const workspace = slowWranglerWorkspace({ seconds: 0 });
+      const written = [];
+      const write = vi
+        .spyOn(process.stderr, "write")
+        .mockImplementation((chunk) => written.push(String(chunk)) > 0);
+      try {
+        const outcome = await deployOrbWorker({
+          workerName: "dx-orb-test",
+          ...workspace,
+          environment: {
+            ...workspace.environment,
+            DX_DEPLOYMENT_ENVIRONMENT: deployment,
+            DX_ORB_DEPLOY_FAULTS: faults,
+          },
+          retryDelayMilliseconds: 10,
+        }).then(
+          (value) => ({ value }),
+          (error) => ({ error }),
+        );
+        const output = written.join("");
+        return {
+          ...outcome,
+          output,
+          wranglerRuns: output.split("building the Orb image").length - 1,
+        };
+      } finally {
+        write.mockRestore();
+      }
+    };
+
+    it("replays each failure in place of a run, then deploys with Wrangler", async () => {
+      const { value, output, wranglerRuns } = await deployWithFaults(
+        "registry-push-timeout,cloudflare-10500",
+      );
+      expect(value).toEqual({ workerName: "dx-orb-test" });
+      expect(wranglerRuns).toBe(1);
+      expect(output).toContain(
+        "Replaying the recorded failure registry-push-timeout",
+      );
+      expect(output).toContain("net/http: timeout awaiting response headers");
+      expect(output).toContain(
+        "Replaying the recorded failure cloudflare-10500",
+      );
+      expect(output).toContain("wrangler deploy run 3 of 3 exited 0");
+    });
+
+    it("fails at once on a recorded refusal, without running Wrangler", async () => {
+      const { error, wranglerRuns } =
+        await deployWithFaults("consecutive-dashes");
+      expect(error.message).toContain("has two consecutive dashes");
+      expect(wranglerRuns).toBe(0);
+    });
+
+    it("refuses faults outside a preview deploy and names it cannot know", async () => {
+      for (const [faults, deployment, message] of [
+        ["cloudflare-10500", "staging", /only on a preview deploy/],
+        ["cloudflare-10500", "selfhost", /only on a preview deploy/],
+        ["cloudflare-1050", "preview", /no recorded failure cloudflare-1050/],
+      ]) {
+        const { error, wranglerRuns } = await deployWithFaults(
+          faults,
+          deployment,
+        );
+        expect(error.message).toMatch(message);
+        expect(wranglerRuns).toBe(0);
+      }
+    });
   });
 
   it("stops Wrangler and what it started when the deploy is interrupted", async () => {

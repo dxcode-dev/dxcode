@@ -57,6 +57,14 @@ const RECOVERY_LIMIT = 2;
 /** A socket open this long proves the desktop healthy again. */
 const STABLE_SOCKET_MS = 30_000;
 /**
+ * The gateway sends a new viewer its latest full picture at once, so a stream
+ * open this long with nothing drawn is stuck: reconnect it to get the picture
+ * again.
+ */
+const DESKTOP_PICTURE_WAIT_MS = 5_000;
+/** Stream reconnects without a picture before the viewer gives up. */
+const BLANK_STREAM_LIMIT = 3;
+/**
  * The remote clipboard reaches the local one only this soon after a key
  * press or click on the desktop by the person holding control, so guest
  * code cannot replace the local clipboard on its own.
@@ -105,18 +113,20 @@ type DesktopStatus =
       readonly reload?: boolean;
     };
 
+// The desktop is live only once a picture is drawn. Until then the starting
+// cover hides the black canvas and keeps clicks off the unseen remote screen.
+// After that, the last picture stays on the canvas while the stream
+// reconnects.
 const nextStatus = (
   state: WaymoteSessionState,
-  connectedOnce: boolean,
+  drawn: boolean,
 ): DesktopStatus => {
-  switch (state.video.state) {
-    case "connected":
-      return { phase: "live", inputBusy: state.input.state === "busy" };
-    case "error":
-      return { phase: "failed", message: state.video.message };
-    default:
-      return connectedOnce ? { phase: "reconnecting" } : { phase: "starting" };
-  }
+  if (state.video.state === "error")
+    return { phase: "failed", message: state.video.message };
+  if (!drawn) return { phase: "starting" };
+  return state.video.state === "connected"
+    ? { phase: "live", inputBusy: state.input.state === "busy" }
+    : { phase: "reconnecting" };
 };
 
 /** Starts the desktop through Core and says whether it can stream. */
@@ -186,12 +196,14 @@ function DesktopSession({
     const disposed = () => controller.signal.aborted;
     let session: WaymoteSession | undefined;
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    let pictureTimer: ReturnType<typeof setTimeout> | undefined;
     // Set once the viewer gives up; the SDK's own states no longer show.
     let halted = false;
     const stop = (next: DesktopStatus) => {
       if (disposed()) return;
       halted = true;
       clearTimeout(idleTimer);
+      clearTimeout(pictureTimer);
       session?.disconnect();
       setStatus(next);
     };
@@ -242,10 +254,33 @@ function DesktopSession({
       let failures = 0;
       let recoveries = 0;
       let recovering = false;
+      // Whether this session has drawn a picture, and stream sockets in a
+      // row that opened and drew nothing.
+      let drawn = false;
+      let blankStreams = 0;
+      let watchedStream: WebSocket | undefined;
+      const awaitPicture = (stream: WebSocket) => {
+        clearTimeout(pictureTimer);
+        watchedStream = stream;
+        pictureTimer = setTimeout(() => {
+          if (watchedStream !== stream) return;
+          blankStreams += 1;
+          if (blankStreams > BLANK_STREAM_LIMIT)
+            return stop({
+              phase: "failed",
+              message: "The desktop isn't sending a picture.",
+            });
+          // Closing only the stream waits for the relay to finish the close
+          // handshake, which can take far longer, before the SDK reconnects.
+          // Reconnecting the session opens a new stream at once.
+          session?.disconnect();
+          session?.connect();
+        }, DESKTOP_PICTURE_WAIT_MS);
+      };
       const recover = async () => {
         recovering = true;
         session?.disconnect();
-        setStatus({ phase: "reconnecting" });
+        setStatus(drawn ? { phase: "reconnecting" } : { phase: "starting" });
         const again = await checkDesktop(threadId, controller.signal);
         if (disposed()) return;
         if (again !== "ready") return stop(again);
@@ -265,8 +300,13 @@ function DesktopSession({
         socket.addEventListener("open", () => {
           openedAt = Date.now();
           failures = 0;
+          if (channel === "stream") awaitPicture(socket);
         });
         socket.addEventListener("close", (event) => {
+          if (socket === watchedStream) {
+            clearTimeout(pictureTimer);
+            watchedStream = undefined;
+          }
           if (disposed() || recovering) return;
           if (isSessionEndedClose(event.code)) {
             session?.disconnect();
@@ -283,7 +323,6 @@ function DesktopSession({
         return socket;
       };
 
-      let connectedOnce = false;
       session = new waymote.WaymoteSession({
         audio: false,
         remoteDisplay: remoteDisplay(),
@@ -292,8 +331,15 @@ function DesktopSession({
       const current = session;
       current.on("state", (state) => {
         if (recovering || halted) return;
-        if (state.video.state === "connected") connectedOnce = true;
-        setStatus(nextStatus(state, connectedOnce));
+        setStatus(nextStatus(state, drawn));
+      });
+      // The SDK reports stats after each frame it draws on the canvas.
+      current.on("stats", () => {
+        clearTimeout(pictureTimer);
+        blankStreams = 0;
+        if (drawn || recovering || halted) return;
+        drawn = true;
+        setStatus(nextStatus(current.state, drawn));
       });
       // The SDK's automatic sync writes every remote clipboard change to
       // the local clipboard while the page has focus, so guest code could
@@ -328,6 +374,7 @@ function DesktopSession({
     return () => {
       controller.abort();
       clearTimeout(idleTimer);
+      clearTimeout(pictureTimer);
       remoteRef.current = undefined;
       void session?.dispose();
     };
@@ -387,6 +434,27 @@ function DesktopSession({
           onPress={press}
         />
       ) : null}
+      <DesktopStatusLayer
+        status={status}
+        onRetry={onRetry}
+        reloadPage={reloadPage}
+      />
+    </>
+  );
+}
+
+/** The cover, notice, or message that shows the viewer's status. */
+function DesktopStatusLayer({
+  status,
+  onRetry,
+  reloadPage,
+}: {
+  readonly status: DesktopStatus;
+  readonly onRetry: () => void;
+  readonly reloadPage: () => void;
+}) {
+  return (
+    <>
       {status.phase === "starting" ? (
         <div
           className="thread-desktop-loading"

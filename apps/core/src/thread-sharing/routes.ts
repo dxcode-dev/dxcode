@@ -14,7 +14,10 @@ import type { AppEnv } from "../http/types.js";
 import { threadSharingLogger } from "../logging.js";
 import { scheduleRealtimeInvalidation } from "../realtime/publication.js";
 import { threadAttentionFields } from "../threads/attention-d1.js";
-import { threadListItem } from "../threads/list-projection-d1.js";
+import {
+  projectlessField,
+  threadListItem,
+} from "../threads/list-projection-d1.js";
 import { decodeThreadRows } from "../threads/repository-d1.js";
 import { canUseSharedThreads } from "./access.js";
 import { followThread, threadMembers, unfollowThread } from "./members.js";
@@ -202,6 +205,7 @@ export const sharedThreadRoutes = new Hono<AppEnv>().get("/", (context) =>
             access:
               access.get(thread.id) === "contribute" ? "contribute" : "view",
             projectName: projectNames.get(thread.id),
+            ...projectlessField(projectNames.get(thread.id)),
             ...decorations.get(thread.id),
             ...attention.get(thread.id),
           })),

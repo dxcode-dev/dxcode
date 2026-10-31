@@ -1,7 +1,7 @@
 {
   "name": "@dx/web",
   "private": true,
-  "version": "0.2.53",
+  "version": "0.2.54",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -43,6 +43,7 @@
     "test:profile-avatar": "node test/profile-avatar-proof.mjs",
     "test:account-composer-settings": "node test/settings-account-composer-proof.mjs",
     "test:keyboard-shortcuts": "node test/keyboard-shortcuts-proof.mjs",
+    "test:sidebar-keys": "node test/sidebar-keys-proof.mjs",
     "test:mention-names": "node test/mention-names-proof.mjs",
     "test:header-menu-layout": "node test/header-menu-layout-proof.mjs",
     "test:dictation-vocabulary": "node test/dictation-vocabulary-proof.mjs",

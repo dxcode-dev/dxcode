@@ -33,10 +33,9 @@ const mcp = vi.hoisted(() => ({
   resolveMcpCredential: vi.fn(),
 }));
 const skills = vi.hoisted(() => ({
-  createSkillResourceTool: vi.fn(() => ({
-    name: "read_dx_skill_resource",
-    run: vi.fn(),
-  })),
+  readThreadSkillResource: vi.fn(
+    async (): Promise<string | undefined> => undefined,
+  ),
 }));
 const plugins = vi.hoisted(() => ({
   createPluginTool: vi.fn((_threadId, { name }) => ({ name, run: vi.fn() })),
@@ -103,7 +102,7 @@ describe("DxAgent", () => {
     hooks.useResponseStart.mockReset();
     hooks.useSandbox.mockClear();
     hooks.useTool.mockReset();
-    skills.createSkillResourceTool.mockClear();
+    skills.readThreadSkillResource.mockClear();
     plugins.createPluginTool.mockClear();
     plugins.invokePluginLive.mockReset();
     runtime.execution.createSandbox.mockReset().mockResolvedValue({});
@@ -478,49 +477,137 @@ describe("DxAgent", () => {
     expect(mcp.createAuthorizedMcpFetch).not.toHaveBeenCalled();
   });
 
-  it("injects immutable skill instructions once and mounts lazy resources without prompt blobs", () => {
+  it("offers settings skills as skill directories like dx's own, written into the workspace at agent start", async () => {
     const instruction = "EXACTLY-ONCE-SKILL-INSTRUCTION";
+    const settingsSkill = (name: string, index: number) => ({
+      id: `skl_00000000-0000-4000-8000-00000000004${index}`,
+      version: 3,
+      name,
+      scope: "workspace" as const,
+      integrity: "a".repeat(64),
+      description: `${name} guidance.`,
+      instructions: `${instruction} ${name}`,
+      resources:
+        index === 4
+          ? [
+              {
+                path: "resources/private.md",
+                mediaType: "text/markdown",
+                sizeBytes: 24,
+                integrity: "b".repeat(64),
+              },
+              {
+                path: "resources/../escape.md",
+                mediaType: "text/markdown",
+                sizeBytes: 24,
+                integrity: "c".repeat(64),
+              },
+            ]
+          : [],
+    });
     hooks.useInitialData.mockReturnValue({
       personalInstructions: "",
       settingsRevision: 0,
       settingsVersion: 1,
       skills: [
-        {
-          id: "skl_00000000-0000-4000-8000-000000000044",
-          version: 3,
-          name: "review-guidelines",
-          scope: "workspace",
-          integrity: "a".repeat(64),
-          description: "Repository review guidance.",
-          instructions: instruction,
-          resources: [
-            {
-              path: "resources/private.md",
-              mediaType: "text/markdown",
-              sizeBytes: 24,
-              integrity: "b".repeat(64),
-            },
-          ],
-        },
+        settingsSkill("review-guidelines", 4),
+        settingsSkill("reviewing-code", 5),
       ],
     });
-
-    const prompt = DxAgent({
-      id: "thr_00000000-0000-4000-8000-000000000044",
+    skills.readThreadSkillResource.mockResolvedValue("PRIVATE-RESOURCE-BODY");
+    runtime.execution.createSandbox.mockResolvedValue({
+      cwd: "/home/user/workspace/repo",
+      resolvePath: (path: string) => path,
+      readdir: async () => ["review-guidelines", "repo-only"],
     });
+    const threadId = "thr_00000000-0000-4000-8000-000000000044";
 
-    expect(prompt.split(instruction)).toHaveLength(2);
-    expect(prompt).toContain("skl_00000000-0000-4000-8000-000000000044 v3");
-    expect(prompt).toContain("resources/private.md");
-    expect(prompt).not.toContain("PRIVATE-RESOURCE-BODY");
-    expect(skills.createSkillResourceTool).toHaveBeenCalledOnce();
-    expect(skills.createSkillResourceTool).toHaveBeenCalledWith(
-      "thr_00000000-0000-4000-8000-000000000044",
+    const prompt = DxAgent({ id: threadId });
+
+    const mounted = hooks.useSkill.mock.calls.map(
+      ([skill]) =>
+        skill as { name: string; description: string; instructions: string },
     );
-    expect(hooks.useTool).toHaveBeenCalledOnce();
-    expect(hooks.useTool).toHaveBeenCalledWith(
+    // Each name is mounted once: the settings skill replaces dx's own.
+    expect(mounted.map(({ name }) => name)).toEqual([
+      "dx-workspace",
+      ...BUILT_IN_SKILL_NAMES.filter((name) => name !== "reviewing-code"),
+      "review-guidelines",
+      "reviewing-code",
+    ]);
+    const review = mounted.find(({ name }) => name === "review-guidelines");
+    expect(review?.description).toBe("review-guidelines guidance.");
+    expect(review?.instructions).toBe(
+      `This skill's directory is \`/home/user/.local/share/dx/settings-skills/review-guidelines/\`; resolve relative paths in these instructions from there.\n\n${instruction} review-guidelines`,
+    );
+    expect(
+      mounted.find(({ name }) => name === "reviewing-code")?.instructions,
+    ).toContain(`${instruction} reviewing-code`);
+    expect(prompt).not.toContain(instruction);
+    expect(hooks.useTool).not.toHaveBeenCalledWith(
       expect.objectContaining({ name: "read_dx_skill_resource" }),
     );
+
+    // Agent start writes each skill's SKILL.md and resources into the
+    // workspace, where activated instructions and Claude Code read them.
+    const written = new Map<string, string>();
+    const workspace = {
+      readFile: async () => {
+        throw new Error("missing");
+      },
+      writeFile: async (path: string, content: string) => {
+        written.set(path, content);
+      },
+      exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+    };
+    await hooks.useAgentStart.mock.calls[0]?.[0]({
+      harness: { sandbox: workspace },
+      log: { error: vi.fn() },
+      append: vi.fn(),
+    });
+    const script =
+      written.get("/home/user/.local/share/dx/settings-skills.install.sh") ??
+      "";
+    const files = Object.fromEntries(
+      [
+        ...script.matchAll(
+          /base64 -d > "\$stage\/(.+?)" <<'DX_FILE'\n([\s\S]*?)\nDX_FILE/g,
+        ),
+      ].map(([, path, encoded]) => [
+        path,
+        Buffer.from(encoded ?? "", "base64").toString("utf8"),
+      ]),
+    );
+    expect(files).toEqual({
+      "review-guidelines/SKILL.md": `---\nname: "review-guidelines"\ndescription: "review-guidelines guidance."\n---\n\n${instruction} review-guidelines\n`,
+      "review-guidelines/resources/private.md": "PRIVATE-RESOURCE-BODY",
+      "reviewing-code/SKILL.md": `---\nname: "reviewing-code"\ndescription: "reviewing-code guidance."\n---\n\n${instruction} reviewing-code\n`,
+    });
+    expect(skills.readThreadSkillResource).toHaveBeenCalledOnce();
+    expect(skills.readThreadSkillResource).toHaveBeenCalledWith(
+      threadId,
+      "skl_00000000-0000-4000-8000-000000000044",
+      3,
+      "resources/private.md",
+    );
+
+    // A repository skill with a settings skill's name would fail the Thread
+    // in Flue, so discovery no longer sees it.
+    const [factory] = hooks.useSandbox.mock.calls.at(-1) as [
+      {
+        createSandbox(request: { id: string }): Promise<{
+          readdir(path: string): Promise<string[]>;
+        }>;
+      },
+    ];
+    const sandbox = await factory.createSandbox({ id: threadId });
+    expect(
+      await sandbox.readdir("/home/user/workspace/repo/.agents/skills"),
+    ).toEqual(["repo-only"]);
+    expect(await sandbox.readdir("/home/user/workspace/repo")).toEqual([
+      "review-guidelines",
+      "repo-only",
+    ]);
   });
 
   it("mounts trusted plugin tools and dispatches lifecycle hooks through the isolated runtime", async () => {

@@ -415,13 +415,7 @@ function SessionPanel({
   ...props
 }: PanelProps & { readonly session: FlueAgentSession }) {
   const source = useFrameCoalescedAgentSource(session);
-  return (
-    <AgentPanel
-      source={source}
-      agentInitialization={agentInitialization}
-      {...props}
-    />
-  );
+  return <AgentPanel source={source} {...props} />;
 }
 
 const open = async (

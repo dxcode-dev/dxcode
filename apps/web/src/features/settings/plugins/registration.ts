@@ -9,7 +9,7 @@ const common = {
   label: "Plugins",
   title: "Plugins",
   description:
-    "Turn first-party plugins on or off and choose their provider keys.",
+    "Turn plugins on or off, choose provider keys, and import Claude Code plugins.",
   icon: Blocks,
   component: PluginsSettings,
 } as const;

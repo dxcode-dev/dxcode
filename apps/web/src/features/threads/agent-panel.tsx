@@ -1,5 +1,4 @@
 import {
-  type ThreadAgentInitializationData,
   type ThreadDetailData,
   threadSettlementProvenance,
   withMessageAuthor,
@@ -21,7 +20,6 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { settle } from "../../shared/settle.js";
-import { Badge } from "../../shared/ui/badge.js";
 import { Button } from "../../shared/ui/button.js";
 import { buttonVariants } from "../../shared/ui/button-variants.js";
 import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
@@ -98,33 +96,16 @@ function OptimisticInitialMessage({
 }
 
 function AgentTranscriptHeader({
-  agentInitialization,
   archived,
   historyReady,
   messageCount,
 }: {
-  readonly agentInitialization: ThreadAgentInitializationData;
   readonly archived: boolean;
   readonly historyReady: boolean;
   readonly messageCount: number;
 }) {
   return (
     <>
-      {agentInitialization.skills.length > 0 ? (
-        <aside
-          className="thread-skill-snapshot"
-          aria-label="Resolved skill versions"
-        >
-          <strong>Resolved skills</strong>
-          <div>
-            {agentInitialization.skills.map((skill) => (
-              <Badge key={`${skill.id}:${skill.version}`}>
-                {skill.name} v{skill.version} · {skill.scope}
-              </Badge>
-            ))}
-          </div>
-        </aside>
-      ) : null}
       {historyReady && messageCount === 0 ? (
         <div className="empty-conversation">
           <strong>
@@ -294,6 +275,26 @@ const diskFullPresentation = (
   };
 };
 
+/**
+ * The project's pre-clone script failed, so dx did not clone the repository
+ * (`(dx_failure:…:PRE_CLONE_SCRIPT_FAILED)`). Core's text says how it failed
+ * and ends with its output.
+ */
+const preCloneFailurePresentation = (
+  id: string,
+  text: string,
+): ThreadErrorPresentation | undefined => {
+  const stamp = /\(dx_failure:[a-z]+:PRE_CLONE_SCRIPT_FAILED\)/.exec(text);
+  if (stamp === null) return undefined;
+  const start = text.indexOf("The project's pre-clone script");
+  return {
+    id,
+    title: "Pre-clone script failed",
+    message: text.slice(Math.max(start, 0), stamp.index).trim(),
+    action: "resume",
+  };
+};
+
 /** Core refused the run at Orb start because its source grant changed. */
 const sourceAccessDenial = (error: unknown) => {
   if (typeof error !== "object" || error === null) return undefined;
@@ -350,6 +351,13 @@ const threadErrorPresentation = (
         )
       : undefined;
     if (diskFull !== undefined) return diskFull;
+    const preCloneFailure = latestSettlementFailed
+      ? preCloneFailurePresentation(
+          `settlement:${latestSettlement.submissionId}`,
+          errorSearchText(latestSettlement.error),
+        )
+      : undefined;
+    if (preCloneFailure !== undefined) return preCloneFailure;
     const sourceDenied = latestSettlementFailed
       ? sourceAccessDenial(latestSettlement.error)
       : undefined;
@@ -403,6 +411,9 @@ const threadErrorPresentation = (
       return claudePlanLimitPresentation(id, claudePlanLimit);
     const diskFull = diskFullPresentation(id, failureText);
     if (!dismissed.has(id) && diskFull !== undefined) return diskFull;
+    const preCloneFailure = preCloneFailurePresentation(id, failureText);
+    if (!dismissed.has(id) && preCloneFailure !== undefined)
+      return preCloneFailure;
     if (!dismissed.has(id)) {
       return {
         id,
@@ -1010,7 +1021,6 @@ export interface AgentPanelOptions {
   readonly onAccessChanged?: () => void;
   /** Replaces the composer for people who can only view this Thread. */
   readonly readOnlyNotice?: React.ReactNode;
-  readonly agentInitialization: ThreadAgentInitializationData;
   readonly archived?: boolean;
   readonly showArchivedNotice?: boolean;
   readonly active?: boolean;
@@ -1354,7 +1364,6 @@ function AgentConversation({
   source,
   transcripts,
   view,
-  agentInitialization,
   archived,
   active,
   showProcessingIndicator,
@@ -1368,7 +1377,6 @@ function AgentConversation({
   readonly source: AgentSource<PanelAgent>;
   readonly transcripts: ReturnType<typeof createTranscriptDerivation>;
   readonly view: TranscriptView;
-  readonly agentInitialization: ThreadAgentInitializationData;
   readonly archived: boolean;
   readonly active: boolean;
   readonly showProcessingIndicator: boolean;
@@ -1417,7 +1425,6 @@ function AgentConversation({
       showProcessingIndicator={showProcessingIndicator}
       header={
         <AgentTranscriptHeader
-          agentInitialization={agentInitialization}
           archived={archived}
           historyReady={agent.historyReady}
           messageCount={
@@ -1446,7 +1453,6 @@ const composerDockRef = (node: HTMLDivElement | null) =>
 export function AgentPanel({
   source: retainedSource,
   agent: renderedAgent,
-  agentInitialization,
   archived = false,
   showArchivedNotice = false,
   active = true,
@@ -1611,7 +1617,6 @@ export function AgentPanel({
           source={source}
           transcripts={transcripts}
           view={view}
-          agentInitialization={agentInitialization}
           archived={archived}
           active={active}
           showProcessingIndicator={!archived && statusMessage === undefined}

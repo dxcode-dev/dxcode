@@ -253,7 +253,7 @@ export const PluginRepositoryD1 = (db: D1Database) =>
         target: PluginTarget,
       ) {
         const plugins = yield* queryPlugins(
-          `WHERE scope = ? AND target_id = ? AND removed_at IS NULL
+          `WHERE kind = 'code' AND scope = ? AND target_id = ? AND removed_at IS NULL
            ORDER BY name, id`,
           [target.scope, target.id],
           "settings.plugins.list",
@@ -266,7 +266,7 @@ export const PluginRepositoryD1 = (db: D1Database) =>
         id: PluginId,
       ) {
         const plugins = yield* queryPlugins(
-          `WHERE scope = ? AND target_id = ? AND id = ?
+          `WHERE kind = 'code' AND scope = ? AND target_id = ? AND id = ?
              AND removed_at IS NULL LIMIT 1`,
           [target.scope, target.id, id],
           "settings.plugins.find",
@@ -281,7 +281,7 @@ export const PluginRepositoryD1 = (db: D1Database) =>
         "PluginRepository.listEffectiveForUser",
       )(function* (ownerUserId: UserId) {
         const plugins = yield* queryPlugins(
-          `WHERE enabled = 1 AND removed_at IS NULL
+          `WHERE kind = 'code' AND enabled = 1 AND removed_at IS NULL
              AND (
                (
                  scope = 'workspace' AND EXISTS (
@@ -305,6 +305,7 @@ export const PluginRepositoryD1 = (db: D1Database) =>
                      ON workspace_plugin.scope = 'workspace'
                     AND workspace_plugin.target_id = member.organizationId
                     AND workspace_plugin.name = trusted_plugin.name
+                    AND workspace_plugin.kind = 'code'
                     AND workspace_plugin.enabled = 1
                     AND workspace_plugin.removed_at IS NULL
                   WHERE member.userId = ?
@@ -477,6 +478,7 @@ export const PluginRepositoryD1 = (db: D1Database) =>
                      FROM trusted_plugin
                      JOIN threads ON threads.id = ?
                     WHERE trusted_plugin.id = ?
+                      AND trusted_plugin.kind = 'code'
                       AND trusted_plugin.enabled = 1
                       AND trusted_plugin.removed_at IS NULL
                       AND EXISTS (
@@ -514,6 +516,7 @@ export const PluginRepositoryD1 = (db: D1Database) =>
                               ON workspace_plugin.scope = 'workspace'
                              AND workspace_plugin.target_id = member.organizationId
                              AND workspace_plugin.name = trusted_plugin.name
+                    AND workspace_plugin.kind = 'code'
                              AND workspace_plugin.enabled = 1
                              AND workspace_plugin.removed_at IS NULL
                            WHERE member.userId = threads.owner_user_id

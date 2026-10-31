@@ -1,27 +1,37 @@
 import { useBlocker } from "@tanstack/react-router";
-import { Button } from "../../shared/ui/button.js";
+import { Button } from "./button.js";
 import {
   DialogContent,
   DialogDescription,
   DialogRoot,
   DialogTitle,
-} from "../../shared/ui/dialog.js";
-import { isModeOnlyNavigation } from "./mode-search-navigation.js";
-import { shouldBlockUnsavedChanges } from "./unsaved-changes.js";
+} from "./dialog.js";
 
+interface GuardedLocation {
+  readonly pathname: string;
+  readonly search: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Asks "Discard unsaved changes?" before navigating away from a dirty
+ * settings form, and enables the browser's beforeunload prompt.
+ */
 export function UnsavedChangesGuard({
   dirty,
   onDiscard,
-  allowModeChanges = false,
+  allowNavigation,
 }: {
   readonly dirty: boolean;
-  readonly allowModeChanges?: boolean;
+  /** Navigations that keep the form mounted and so need no prompt. */
+  readonly allowNavigation?: (
+    current: GuardedLocation,
+    next: GuardedLocation,
+  ) => boolean;
   readonly onDiscard: () => void;
 }) {
   const blocker = useBlocker({
     shouldBlockFn: ({ current, next }) =>
-      shouldBlockUnsavedChanges(dirty) &&
-      !(allowModeChanges && isModeOnlyNavigation(current, next)),
+      dirty && !(allowNavigation?.(current, next) ?? false),
     enableBeforeUnload: dirty,
     disabled: !dirty,
     withResolver: true,

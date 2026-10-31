@@ -76,6 +76,8 @@ function TranscriptTurnContent({
     collapsedIds.has(row.id),
   );
   const retained = visibleIntermediate.filter((row) => retainedIds.has(row.id));
+  const pinnedIds = new Set(turn.workDisclosure?.pinnedRowIds);
+  const pinned = visibleIntermediate.filter((row) => pinnedIds.has(row.id));
   return (
     <section className="transcript-turn" data-turn-id={turn.id}>
       {prompt.map(renderRow)}
@@ -88,6 +90,13 @@ function TranscriptTurnContent({
         />
       ) : turn.workDisclosure ? (
         <>
+          {pinned.length > 0 ? (
+            <TranscriptActivityList
+              rows={pinned}
+              renderRow={renderRow}
+              processing={false}
+            />
+          ) : null}
           <details
             className="transcript-turn-work"
             open={workExpanded}
@@ -99,7 +108,9 @@ function TranscriptTurnContent({
                   ? duration
                     ? `Worked for ${duration}`
                     : "Worked"
-                  : "Show Work"}
+                  : turn.workDisclosure.kind === "stopped"
+                    ? "Stopped"
+                    : "Show Work"}
                 <ChevronRight />
               </span>
             </summary>

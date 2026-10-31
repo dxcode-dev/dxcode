@@ -84,6 +84,11 @@ describe("Sidebar layout", () => {
       (await choose(owner, { kind: "section", id: projectId, open: false }))
         .status,
     ).toBe(200);
+    // Every scope's No Project Threads share one section.
+    expect(
+      (await choose(owner, { kind: "section", id: "no-project", open: false }))
+        .status,
+    ).toBe(200);
 
     expect((await layout(owner)).toSorted(byId)).toEqual(
       [
@@ -91,6 +96,7 @@ describe("Sidebar layout", () => {
         { kind: "thread", id: threadId(2), open: true },
         { kind: "section", id: "inactive", open: true },
         { kind: "section", id: projectId, open: false },
+        { kind: "section", id: "no-project", open: false },
       ].toSorted(byId),
     );
     expect(await layout(other)).toEqual([]);
@@ -110,6 +116,7 @@ describe("Sidebar layout", () => {
         { kind: "thread", id: threadId(2), open: true },
         { kind: "section", id: "inactive", open: false },
         { kind: "section", id: projectId, open: false },
+        { kind: "section", id: "no-project", open: false },
       ].toSorted(byId),
     );
   });

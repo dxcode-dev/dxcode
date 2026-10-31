@@ -36,6 +36,11 @@ import {
   GetThreadReadinessPersistenceUnavailableResponseSchema,
   GetThreadReadinessResponseSchema,
   GetThreadResponseSchema,
+  GetThreadTreeInvalidRequestResponseSchema,
+  GetThreadTreeNotFoundResponseSchema,
+  GetThreadTreeParamsSchema,
+  GetThreadTreePersistenceUnavailableResponseSchema,
+  GetThreadTreeResponseSchema,
   ListThreadsInvalidRequestResponseSchema,
   ListThreadsPersistenceUnavailableResponseSchema,
   ListThreadsQuerySchema,
@@ -61,6 +66,7 @@ import {
   SnoozeThreadUnavailableResponseSchema,
   SourceControlDeniedResponseSchema,
   SourceControlProviderFailureResponseSchema,
+  THREAD_TREE_MAX_ITEMS,
   type ThreadData,
   ThreadDeletedResponseSchema,
   type ThreadDetailData,
@@ -184,8 +190,11 @@ import {
   readInboundMessages,
   readParentColors,
   readThreadChildCounts,
+  readThreadFamily,
   readThreadListItem,
   readThreadListProjection,
+  readThreadStartedCounts,
+  startedCountField,
   threadListItem,
 } from "./list-projection-d1.js";
 import { ThreadRepositoryD1 } from "./repository-d1.js";
@@ -312,6 +321,9 @@ const threadData = (thread: Thread): ThreadData => ({
   ...(thread.parentThreadId === undefined
     ? {}
     : { parentThreadId: thread.parentThreadId }),
+  ...(thread.startedByThreadId === undefined
+    ? {}
+    : { startedByThreadId: thread.startedByThreadId }),
 });
 
 /**
@@ -1610,8 +1622,30 @@ export const createThreadRoutes = (
         );
       const [childProjection, childSharing] =
         children.length === 0
-          ? [{ changes: new Map(), attention: new Map() }, new Map()]
+          ? [
+              {
+                changes: new Map(),
+                attention: new Map(),
+                projectless: new Map(),
+              },
+              new Map(),
+            ]
           : yield* decorate(children.map(({ id }) => id));
+      // Each child Thread counts what sits below it unlisted, for the tree.
+      const startedCounts = yield* Effect.tryPromise({
+        try: () =>
+          readThreadStartedCounts(
+            db,
+            [...page.items, ...children].flatMap((thread) =>
+              thread.parentThreadId === undefined ? [] : [thread.id],
+            ),
+          ),
+        catch: (cause) =>
+          PersistenceUnavailable.new(
+            { operation: "thread.listProjection" },
+            cause,
+          ),
+      });
       // A child's parent is a root on this page.
       const rootColors = new Map(
         page.items.flatMap((thread) =>
@@ -1625,10 +1659,12 @@ export const createThreadRoutes = (
         data: {
           items: page.items.map((thread) => ({
             ...threadListItem(thread, projection.changes.get(thread.id)),
+            ...projection.projectless.get(thread.id),
             ...sharing.get(thread.id),
             ...projection.attention.get(thread.id),
             ...childCountFields(childCounts.get(thread.id)),
             ...parentColorField(parentColors, thread),
+            ...startedCountField(startedCounts.get(thread.id)),
           })),
           ...(query.roots === undefined
             ? {}
@@ -1638,9 +1674,11 @@ export const createThreadRoutes = (
                     thread,
                     childProjection.changes.get(thread.id),
                   ),
+                  ...childProjection.projectless.get(thread.id),
                   ...childSharing.get(thread.id),
                   ...childProjection.attention.get(thread.id),
                   ...parentColorField(rootColors, thread),
+                  ...startedCountField(startedCounts.get(thread.id)),
                 })),
               }),
           nextCursor: page.nextCursor,
@@ -2242,6 +2280,102 @@ export const createThreadRoutes = (
 
   // One sidebar row, so a realtime hint patches it instead of refetching
   // every loaded list.
+  // The Thread's family as the requester may read it, for its tree page.
+  threadRoutes.get("/:threadId/tree", async (context) => {
+    const requestId = context.get("requestId");
+    const operation = Effect.gen(function* () {
+      const params = yield* decodeRequestInput(
+        GetThreadTreeParamsSchema,
+        { threadId: context.req.param("threadId") },
+        () => new InvalidThreadRequest(),
+      );
+      const db = yield* decodeD1Binding(context.env.DB);
+      const principal = context.get("principal");
+      const family = yield* Effect.tryPromise({
+        try: () =>
+          readThreadFamily(
+            db,
+            params.threadId,
+            {
+              userId: principal.userId as UserId,
+              ...(principal.application === undefined
+                ? {}
+                : { workspaceId: principal.application.workspaceId }),
+              sharedThreads: canUseSharedThreads(principal),
+            },
+            THREAD_TREE_MAX_ITEMS,
+          ),
+        catch: (cause) =>
+          PersistenceUnavailable.new({ operation: "thread.family" }, cause),
+      });
+      if (family === undefined)
+        return yield* Effect.fail(
+          new ThreadNotFound({ threadId: params.threadId }),
+        );
+      return yield* Schema.encodeUnknownEffect(GetThreadTreeResponseSchema)({
+        status: "success",
+        data: {
+          rootThreadId: family.rootThreadId,
+          items: family.items,
+          ...(family.truncated ? { truncated: true } : {}),
+        },
+      });
+    });
+    const result = await Effect.runPromise(Effect.result(operation));
+    if (Result.isSuccess(result)) return context.json(result.success, 200);
+    return Match.value(result.failure).pipe(
+      Match.tags({
+        InvalidThreadRequest: () =>
+          context.json(
+            Schema.encodeUnknownSync(GetThreadTreeInvalidRequestResponseSchema)(
+              {
+                status: "error",
+                data: {
+                  code: "INVALID_REQUEST",
+                  message: "Request validation failed.",
+                  requestId,
+                },
+              },
+            ),
+            400,
+          ),
+        ThreadNotFound: () =>
+          context.json(
+            Schema.encodeUnknownSync(GetThreadTreeNotFoundResponseSchema)({
+              status: "error",
+              data: {
+                code: "THREAD_NOT_FOUND",
+                message: "Thread not found.",
+                requestId,
+              },
+            }),
+            404,
+          ),
+        PersistenceUnavailable: () =>
+          context.json(
+            Schema.encodeUnknownSync(
+              GetThreadTreePersistenceUnavailableResponseSchema,
+            )({
+              status: "error",
+              data: {
+                code: "PERSISTENCE_UNAVAILABLE",
+                message: "Persistence is temporarily unavailable.",
+                requestId,
+              },
+            }),
+            503,
+          ),
+        D1BindingUnavailable: (error) => {
+          throw error;
+        },
+        SchemaError: (error) => {
+          throw error;
+        },
+      }),
+      Match.exhaustive,
+    );
+  });
+
   threadRoutes.get("/:threadId/list-item", async (context) => {
     const requestId = context.get("requestId");
     const operation = Effect.gen(function* () {

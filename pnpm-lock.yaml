@@ -171,6 +171,7 @@ overrides:
   '@flue/runtime': file:third-party/flue/runtime-de1dda9ae8b4791dea431cbdcbc818f4b5f22f71.tgz
 
 patchedDependencies:
+  '@rockorager/waymote@0.1.6': 23a0d6f7d9853a32372f5f6269fe6da2ed71841ae0f1d3153c5d443dca80632a
   alchemy@2.0.0-beta.83: c8af9cd8da57452113765f1e029b6a3864c5458844afdec44fc360da3771bce6
   ghostty-web@0.4.0: 163a1876bd76ac053cf7ac0493d1a322b7d4db70c5e8efe6cdff451692057b74
 
@@ -407,7 +408,7 @@ importers:
         version: 1.0.0-beta.6(@pierre/theme@2.0.0)(@shikijs/themes@4.4.3)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(shiki@4.4.3)
       '@rockorager/waymote':
         specifier: 0.1.6
-        version: 0.1.6
+        version: 0.1.6(patch_hash=23a0d6f7d9853a32372f5f6269fe6da2ed71841ae0f1d3153c5d443dca80632a)
       '@tanstack/react-hotkeys':
         specifier: 0.10.0
         version: 0.10.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -10832,7 +10833,7 @@ snapshots:
     dependencies:
       '@redis/client': 6.2.1(@opentelemetry/api@1.9.0)
 
-  '@rockorager/waymote@0.1.6': {}
+  '@rockorager/waymote@0.1.6(patch_hash=23a0d6f7d9853a32372f5f6269fe6da2ed71841ae0f1d3153c5d443dca80632a)': {}
 
   '@rolldown/binding-android-arm-eabi@1.2.5':
     optional: true

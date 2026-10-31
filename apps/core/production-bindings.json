@@ -50,6 +50,24 @@
       "provenance": "alchemy"
     },
     {
+      "name": "DX_BUG_REPORT_LABELS",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_BUG_REPORT_READERS",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_BUG_REPORT_REPOSITORY",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
       "name": "DX_CONFIG_ENCRYPTION_KEYS",
       "type": "secret",
       "provenance": "authored-wrangler"
@@ -253,6 +271,12 @@
     {
       "name": "DX_TURNSTILE_SITE_KEY",
       "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_WORKER_LOGS",
+      "type": "secret",
       "provenance": "alchemy",
       "optional": true
     },

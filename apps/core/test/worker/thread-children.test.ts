@@ -72,7 +72,7 @@ const archive = (threadId: string) =>
     .run();
 
 describe("Child Threads", () => {
-  it("records a child's parent and makes a child's child its sibling", async () => {
+  it("records a child's parent and keeps a child's child in the root's family", async () => {
     const project = await createProjectViaApi("children-nesting");
     const parent = await createThreadViaApi(project.data.id);
     const child = await createChild(project.data.id, parent.data.id);

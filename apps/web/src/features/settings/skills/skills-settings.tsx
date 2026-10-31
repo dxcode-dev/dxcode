@@ -48,7 +48,9 @@ const stateHint = (state: SkillData["effectiveState"]) =>
     ? "Replaced by your personal skill"
     : state === "blocked-by-policy"
       ? "Blocked by workspace policy"
-      : undefined;
+      : state === "plugin-disabled"
+        ? "Its plugin is off"
+        : undefined;
 
 const filesBundle = async (selected: FileList): Promise<SkillImportBundle> => {
   if (selected.length === 1) {

@@ -55,9 +55,12 @@ account and prints a long-lived token for that plan.
    **Add → Claude Pro/Max**.
 2. Paste the token and choose **Connect Subscription**.
 
-dx checks the token with Anthropic before it saves it. If Anthropic rejects
-it, the dialog says so; run `claude setup-token` again and paste the new
-token. To swap the token, choose **Replace Token** on the connection.
+dx checks the token on Anthropic's model list before it saves it. If
+Anthropic rejects it, the dialog says so; run `claude setup-token` again and
+paste the new token. After that, only Claude Code uses the token, inside
+your Orb. To swap the token, choose
+**Replace Token** on the connection. dx refuses a plan token in any other connection,
+such as an Anthropic API key or a custom endpoint.
 
 ## How dx protects the token
 

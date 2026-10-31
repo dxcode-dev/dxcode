@@ -17,6 +17,7 @@ const route = vi.hoisted(() => ({ section: "orb" }));
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   Link: ({ children }: { children: ReactNode }) => <a href="/">{children}</a>,
+  useBlocker: () => ({ status: "idle" }),
   useParams: () => ({ projectId: "project-1", section: route.section }),
   useLocation: ({
     select,

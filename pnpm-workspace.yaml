@@ -13,6 +13,7 @@ overrides:
   "@flue/runtime": file:third-party/flue/runtime-de1dda9ae8b4791dea431cbdcbc818f4b5f22f71.tgz
 
 patchedDependencies:
+  '@rockorager/waymote@0.1.6': third-party/waymote/@rockorager__waymote@0.1.6.patch
   alchemy@2.0.0-beta.83: third-party/alchemy/alchemy@2.0.0-beta.83.patch
   ghostty-web@0.4.0: third-party/ghostty-web/ghostty-web@0.4.0.patch
 

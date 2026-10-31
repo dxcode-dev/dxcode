@@ -83,8 +83,6 @@ beforeEach(async () => {
         SELECT RAISE(ABORT, 'trusted plugin versions are immutable');
       END
     `),
-    env.DB.prepare("DELETE FROM trusted_plugin"),
-    env.DB.prepare("DELETE FROM trusted_plugin_workspace_policy"),
     env.DB.prepare("DELETE FROM skill_resource"),
     env.DB.prepare("DELETE FROM skill_version"),
     env.DB.prepare("DELETE FROM skill"),
@@ -92,6 +90,9 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM mcp_tool"),
     env.DB.prepare("DELETE FROM mcp_server"),
     env.DB.prepare("DELETE FROM mcp_workspace_policy"),
+    // Skills and MCP servers a plugin bundle installed reference their plugin.
+    env.DB.prepare("DELETE FROM trusted_plugin"),
+    env.DB.prepare("DELETE FROM trusted_plugin_workspace_policy"),
     env.DB.prepare("DELETE FROM integration_resource_binding"),
     env.DB.prepare("DELETE FROM integration_repository"),
     env.DB.prepare("DELETE FROM integration_connection"),

@@ -122,6 +122,28 @@ export function ProductShell({
     };
   };
 
+  // A collapsed sidebar is inert, so focus inside it would fall to the page
+  // body. Collapsing from inside the sidebar focuses the open button, and
+  // opening from that button focuses the sidebar's own toggle.
+  const focusOpenTriggerRef = React.useRef(false);
+  const attachOpenTrigger = (node: HTMLButtonElement) => {
+    if (focusOpenTriggerRef.current) {
+      focusOpenTriggerRef.current = false;
+      node.focus();
+    }
+    return () => {
+      if (document.activeElement !== node) return;
+      // Runs after the commit that removes `inert` from the sidebar.
+      queueMicrotask(() =>
+        document
+          .querySelector<HTMLElement>(
+            ".product-navigation-panel [data-command-action='toggle-sidebar']",
+          )
+          ?.focus(),
+      );
+    };
+  };
+
   const toggleSidebar = () => {
     if (mobile) {
       setMobileSidebarOpen((open) => !open);
@@ -132,10 +154,15 @@ export function ProductShell({
       );
       if (sidebarCollapsed) {
         const expandedGrow = expandedSidebarGrowRef.current;
+        // Drop `inert` now rather than at the panel's next resize report, so
+        // a caller can focus a sidebar row on the next frame.
+        setSidebarCollapsed(false);
         expandResizablePanel(panel, expandedGrow, () =>
           sidebarRef.current?.expand(),
         );
       } else {
+        focusOpenTriggerRef.current =
+          panel?.contains(document.activeElement) === true;
         const currentGrow =
           panel === null ? "1" : getComputedStyle(panel).flexGrow;
         expandedSidebarGrowRef.current = currentGrow;
@@ -228,6 +255,7 @@ export function ProductShell({
             maxSize={`${PRODUCT_SIDEBAR_MAX_SIZE}px`}
             collapsible
             collapsedSize="0px"
+            inert={sidebarCollapsed}
             onResize={(size) => {
               const collapsed = size.asPercentage === 0;
               if (size.inPixels >= PRODUCT_SIDEBAR_MIN_SIZE)
@@ -260,6 +288,7 @@ export function ProductShell({
                   </Dialog.Trigger>
                 ) : (
                   <Button
+                    ref={attachOpenTrigger}
                     className="product-sidebar-trigger sidebar-panel-control"
                     data-command-action="toggle-sidebar"
                     aria-label="Open sidebar"

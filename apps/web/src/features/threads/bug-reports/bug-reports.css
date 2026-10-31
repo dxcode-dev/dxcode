@@ -1,0 +1,324 @@
+/* Report Bug, and Your Reports with its report dialog. */
+.dialog-popup.bug-report-dialog {
+  width: min(600px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 20px;
+}
+.bug-report-dialog .bug-report-form,
+.bug-report-dialog .bug-report-sent {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+/* The close button sits on the title's line. */
+.bug-report-dialog .dialog-close,
+.bug-report-detail .dialog-close {
+  top: 18px;
+  right: 16px;
+}
+.bug-report-dialog h2 {
+  margin: 0;
+  padding-right: 32px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
+}
+.bug-report-dialog .bug-report-sent > p {
+  margin: -8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.bug-report-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  white-space: nowrap;
+}
+a.bug-report-status {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.bug-report-status svg {
+  width: 12px;
+  height: 12px;
+}
+.bug-report-status[data-status="failed"] {
+  color: var(--destructive);
+}
+.bug-report-message {
+  border: 1px solid var(--input);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--background) 60%, transparent);
+}
+.bug-report-message:focus-within {
+  border-color: var(--ring);
+}
+.bug-report-message textarea {
+  display: block;
+  width: 100%;
+  min-height: 132px;
+  padding: 12px 14px 6px;
+  color: var(--foreground);
+  background: transparent;
+  border: 0;
+  outline: none;
+  resize: none;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.bug-report-message textarea::placeholder {
+  color: var(--muted-foreground);
+}
+.bug-report-message-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 8px 6px;
+}
+.bug-report-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0;
+  padding: 6px 14px 8px;
+  list-style: none;
+}
+.bug-report-images li {
+  position: relative;
+  width: 56px;
+  height: 56px;
+}
+.bug-report-images img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border: 1px solid var(--outline);
+  border-radius: 6px;
+}
+.bug-report-images button {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: var(--foreground);
+  background: var(--popover);
+  border: 1px solid var(--outline);
+  border-radius: 999px;
+}
+.bug-report-images button svg {
+  width: 11px;
+  height: 11px;
+}
+.bug-report-diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bug-report-diagnostics h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+/* Scoped past `.dialog-popup form label`, which stacks a label's parts. */
+.bug-report-dialog .bug-report-option {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  column-gap: 10px;
+  row-gap: 2px;
+  align-items: start;
+  padding: 10px 12px;
+  border: 1px solid var(--outline);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.bug-report-dialog .bug-report-option:hover {
+  background: var(--accent);
+}
+.bug-report-dialog .bug-report-option[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.bug-report-dialog .bug-report-option[data-disabled]:hover {
+  background: transparent;
+}
+.bug-report-dialog .bug-report-option input {
+  grid-row: span 2;
+  width: 14px;
+  height: 14px;
+  margin: 3px 0 0;
+  accent-color: var(--primary);
+}
+.bug-report-option-title {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+}
+.bug-report-option-detail {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.bug-report-error {
+  color: var(--destructive);
+  font-size: 12px;
+}
+.bug-report-dialog p.bug-report-error {
+  margin: 0;
+}
+.bug-report-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.bug-report-reports-link {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-decoration: none;
+}
+.bug-report-reports-link:hover {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.bug-report-footer .shortcut-keycaps {
+  margin-left: 4px;
+  padding: 0 3px;
+  border-color: color-mix(in srgb, currentColor 35%, transparent);
+}
+.bug-report-footer .shortcut-keycaps kbd {
+  color: inherit;
+  font-size: 11px;
+  line-height: 16px;
+}
+/* Your Reports: one row per report; a row opens its report. */
+.bug-reports-content {
+  padding: 16px 27px 26px;
+  overflow: auto;
+}
+.bug-reports-list {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--outline);
+  border-radius: 6px;
+  list-style: none;
+}
+.bug-reports-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  min-height: 52px;
+  padding: 8px 14px;
+  color: var(--foreground);
+  border-bottom: 1px solid var(--divider);
+  text-decoration: none;
+}
+.bug-reports-list li:last-child .bug-reports-row {
+  border-bottom: 0;
+}
+.bug-reports-row:hover {
+  background: var(--accent);
+}
+.bug-reports-row-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.bug-reports-row-copy strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bug-reports-row-copy small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.bug-reports-empty {
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+/* One report, opened from its row. */
+.dialog-popup.bug-report-detail {
+  display: flex;
+  width: min(640px, 100%);
+  max-height: calc(100dvh - 32px);
+  flex-direction: column;
+  gap: 16px;
+  overflow: auto;
+  padding: 20px;
+}
+.bug-report-detail h2 {
+  margin: 0;
+  padding-right: 32px;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
+}
+.bug-report-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 16px;
+  margin: 0;
+  font-size: 12px;
+}
+.bug-report-facts dt {
+  color: var(--muted-foreground);
+}
+.bug-report-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.bug-report-facts a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.bug-report-detail-message {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--outline);
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.bug-report-detail-images {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.bug-report-detail-images img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border: 1px solid var(--outline);
+  border-radius: 6px;
+}
+.bug-report-detail audio {
+  width: 100%;
+}

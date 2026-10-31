@@ -536,7 +536,7 @@ describe("ThreadTerminal browser protocol v1", () => {
       ),
     );
     expect(container.textContent).toContain(
-      "Environment changed. Use the Terminal tab menu to refresh and restart.",
+      "Environment changed. Use Terminal Actions to refresh and restart.",
     );
     const form = container.querySelector("form") as HTMLFormElement;
 

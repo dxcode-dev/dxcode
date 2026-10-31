@@ -1,0 +1,70 @@
+diff --git a/waymote.js b/waymote.js
+index 445334b..f602bc0 100644
+--- a/waymote.js
++++ b/waymote.js
+@@ -86,6 +86,11 @@ let videoReconnectTimer = null;
+ let videoConnectAttempt = null;
+ let decoderConfiguration = null;
+ let waitingForKeyframe = true;
++// dx patch: false from a decoder (re)start until it shows a picture. Until
++// then every frame from the key frame on must reach the decoder: dropping
++// them for a long decoder queue leaves the canvas black on a still desktop,
++// which sends no new key frame.
++let pictureShown = false;
+ let decoderGeneration = 0;
+ let receivedChunks = 0;
+ let receivedKeyframes = 0;
+@@ -1313,6 +1318,7 @@ async function configureDecoder(configuration) {
+     optimizeForLatency: true,
+   };
+   waitingForKeyframe = true;
++  pictureShown = false;
+   renderedFrameTimes.length = 0;
+   let support;
+   try {
+@@ -1417,6 +1423,7 @@ function renderFrame() {
+     display.height = frame.displayHeight;
+   }
+   context.drawImage(frame, 0, 0, display.width, display.height);
++  pictureShown = true;
+   const presentation = expectedPresentationTime(frame.timestamp);
+   videoLateness = presentation === null ? 0 : now - presentation;
+   lastVideoCaptureMicros = frame.timestamp;
+@@ -1475,6 +1482,7 @@ function decodeMessage(buffer) {
+   if (generation !== currentGeneration) {
+     currentGeneration = generation;
+     decoder.reset(); decoder.configure(decoderConfiguration); waitingForKeyframe = true;
++    pictureShown = false;
+   }
+   for (const [id, request] of resizeRequests) {
+     if (request.generation === generation) {
+@@ -1491,11 +1499,15 @@ function decodeMessage(buffer) {
+     }
+   }
+ 
+-  if (discontinuity || decoder.decodeQueueSize > 6) {
++  // dx patch: a new viewer receives the latest key frame and every frame
++  // since in one burst, which fills the decode queue before the first
++  // picture. Drop for a long queue only once a picture is showing.
++  if (discontinuity || (pictureShown && decoder.decodeQueueSize > 6)) {
+     droppedFrames += decoder.decodeQueueSize;
+     decoder.reset();
+     decoder.configure(decoderConfiguration);
+     waitingForKeyframe = true;
++    pictureShown = false;
+   }
+   if (waitingForKeyframe && !keyframe) {
+     return;
+@@ -1643,7 +1655,11 @@ async function connectVideo() {
+       pendingDecoderMessages.length = 0;
+     }
+     if (!keyframe && !discontinuity && pendingDecoderMessages.length === 0) return;
+-    if (pendingDecoderMessages.length >= 6) {
++    // dx patch: a new viewer receives the gateway's latest full picture and
++    // every frame since, up to 241, often before the decoder is set up.
++    // Dropping them at 6 left the canvas black until the next full picture,
++    // which a still desktop never sends.
++    if (pendingDecoderMessages.length >= 241) {
+       pendingDecoderMessages.length = 0;
+       return;
+     }
