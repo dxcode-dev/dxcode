@@ -18,6 +18,7 @@ import {
 } from "../../shared/new-thread-surface.js";
 import { useThreadArchive } from "../../shared/thread-archive.js";
 import { Button } from "../../shared/ui/button.js";
+import { NeedsYouInbox } from "./needs-you-inbox.js";
 import { NotificationInbox } from "./notification-inbox.js";
 import { SidebarAccountMenu } from "./sidebar-account-menu.js";
 import { SidebarArchive } from "./sidebar-archive.js";
@@ -349,6 +350,9 @@ function AppSidebarContent({
           dx
         </Link>
         <span className="sidebar-top-spacer" />
+        {userId === undefined ? null : (
+          <NeedsYouInbox userId={userId} onNavigate={onNavigate} />
+        )}
         {userId === undefined ? null : (
           <NotificationInbox userId={userId} onNavigate={onNavigate} />
         )}

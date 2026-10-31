@@ -21,7 +21,6 @@ import type {
   ExecutionProvider,
   ExecutionWorkspaceCreateOptions,
   ExecutionWorkspaceHandle,
-  ExecutionWorkspaceResidency,
 } from "../plugins/execution/provider.js";
 import { executionWorkspaceTools } from "../plugins/execution/tools.js";
 import {
@@ -49,6 +48,11 @@ import type {
   CloudflareOpenPhase,
   CloudflareOpenPhaseReporter,
 } from "./cloudflare/provider.js";
+import {
+  noOrbBilling,
+  type OrbBillingPolicy,
+  withOrbBilling,
+} from "./orb-billing.js";
 import {
   activateSourceWorkspace,
   cloneAdditionalRepositories,
@@ -355,17 +359,19 @@ const asSourceRunError = (cause: unknown): never => {
   });
 };
 
-/**
- * Between source preparation and the workspace's first use, for 4e's warm
- * snapshot capture. Nothing registers one yet.
- */
 export interface ExecutionActivationHooks {
+  /**
+   * Between source preparation and the workspace's first use, for 4e's warm
+   * snapshot capture. Nothing registers one yet.
+   */
   readonly prepared?: (event: {
     readonly context: ExecutionContext;
     readonly threadId: ThreadId;
     readonly handle: ExecutionWorkspaceHandle;
     readonly firstPreparation: boolean;
   }) => Promise<void>;
+  /** Admits and meters every Orb start; `noOrbBilling` by default. */
+  readonly orbBilling?: OrbBillingPolicy;
 }
 
 type DaemonInstallationStage = "release" | "workspace" | "source" | "guest";
@@ -397,7 +403,11 @@ export const atDaemonInstallationStage = async <Value>(
 /** Core's activation pipeline over one provider's raw handles. */
 export const makeExecutionActivation =
   (hooks: ExecutionActivationHooks = {}) =>
-  (provider: ExecutionProvider): ExecutionActivation => {
+  (unbilledProvider: ExecutionProvider): ExecutionActivation => {
+    const provider = withOrbBilling(
+      unbilledProvider,
+      hooks.orbBilling ?? noOrbBilling,
+    );
     const open = async (
       context: ExecutionContext,
       { id }: SandboxRequest,
@@ -424,9 +434,6 @@ export const makeExecutionActivation =
       if (needsFirstReadiness) reportPreparation("Preparing workspace…");
       let wakeStatusPublished = false;
       try {
-        const residency: { value: ExecutionWorkspaceResidency } = {
-          value: "unknown",
-        };
         const handle = existingOnly
           ? await observeCall(
               "execution.activation.workspace",
@@ -456,7 +463,6 @@ export const makeExecutionActivation =
                       }
                     : {}),
                   observeResidency: (observed) => {
-                    residency.value = observed;
                     if (observed === "paused" && !needsFirstReadiness) {
                       wakeStatusPublished = true;
                       publish(() =>
@@ -506,7 +512,6 @@ export const makeExecutionActivation =
                         reportPreparation(sourcePreparationStatus[phase]),
                       )
                   : undefined,
-                residency.value !== "running" || needsFirstReadiness,
                 {
                   reserve: context.profile.adapter !== "local",
                   // The turn this activation starts tells its agent.
@@ -707,7 +712,6 @@ export const makeExecutionActivation =
             false,
             source,
             undefined,
-            true,
             { reserve: context.profile.adapter !== "local" },
           );
           throwIfAborted(input.signal);

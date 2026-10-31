@@ -54,6 +54,8 @@ export function NewThreadComposer({
   onModelChange,
   effort,
   onEffortChange,
+  claudePlan,
+  onClaudePlanChange,
   choices,
   routingGraph,
   dictationControls,
@@ -91,6 +93,8 @@ export function NewThreadComposer({
   readonly onModelChange: (model: string | undefined) => void;
   readonly effort?: ClaudeCodeEffort;
   readonly onEffortChange?: (effort: ClaudeCodeEffort) => void;
+  readonly claudePlan?: string;
+  readonly onClaudePlanChange?: (connectionId: string) => void;
   readonly choices?: ChoicesData;
   readonly routingGraph?: GraphData;
   readonly dictationControls?: React.ReactNode;
@@ -176,6 +180,8 @@ export function NewThreadComposer({
         onProfileChange={onProfileChange}
         onModelChange={onModelChange}
         onEffortChange={onEffortChange}
+        claudePlan={claudePlan}
+        onClaudePlanChange={onClaudePlanChange}
         dictationControls={dictationControls}
         dictationActive={dictationActive}
         dictationHideSubmit={dictationHideSubmit}

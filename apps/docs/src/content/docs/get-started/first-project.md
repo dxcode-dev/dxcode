@@ -53,8 +53,11 @@ connection associated with that workspace.
 
 Git commits created by the agent or in Terminal use
 `dxcodeagent <agent@dxcode.dev>` by default. Each commit includes a
-`dx-Thread-Id` trailer linking to its dx thread. Choosing your own commit
-identity in project settings changes the author but keeps the thread trailer.
+`dx-Thread-Id` trailer linking to its dx thread. Choosing yourself as the
+commit author in Settings > Project Defaults changes the author but keeps the
+thread trailer, and adds `Co-authored-by: dxcodeagent <agent@dxcode.dev>`
+unless you turn off **Add dx as co-author**. Claude Code runs never add a
+Claude co-author or a "Generated with Claude Code" line.
 
 If the picker marks a mode or model **Not served**, connect a model or ask an
 administrator to add one. See [Connecting a model](/docs/use/connect-a-model/).

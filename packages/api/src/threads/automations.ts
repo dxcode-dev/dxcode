@@ -73,6 +73,25 @@ export const ThreadPullRequestDataSchema = Schema.Struct({
 
 export type ThreadPullRequestData = typeof ThreadPullRequestDataSchema.Type;
 
+/**
+ * A GitHub issue the Thread works on: linked by its comment subscription or
+ * the agent's link_github_issue, and kept current by the dx GitHub App's
+ * issues webhooks.
+ */
+export const ThreadIssueDataSchema = Schema.Struct({
+  repository: Schema.String,
+  number: Schema.Number,
+  url: Schema.String,
+  state: Schema.Literals(["open", "closed"]),
+  title: Schema.optional(Schema.String),
+  /** The description's opening, on one line. */
+  summary: Schema.optional(Schema.String),
+  /** When it opened or closed: its current state's start. */
+  changedAt: Schema.optional(Schema.String),
+});
+
+export type ThreadIssueData = typeof ThreadIssueDataSchema.Type;
+
 /** One commit's CI as the Thread was told it, or still running. */
 export const ThreadCiRunDataSchema = Schema.Struct({
   repository: Schema.String,
@@ -93,6 +112,8 @@ export const ThreadAutomationsResponseSchema = successResponse(
   Schema.Struct({
     schedule: Schema.optional(ThreadScheduleDataSchema),
     githubSubscriptions: Schema.Array(GitHubSubscriptionDataSchema),
+    /** Newest first. */
+    issues: Schema.Array(ThreadIssueDataSchema),
     /** Newest first. */
     pullRequests: Schema.Array(ThreadPullRequestDataSchema),
     /** Newest first. */

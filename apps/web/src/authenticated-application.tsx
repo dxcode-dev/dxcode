@@ -8,6 +8,7 @@ import { ThreadSessionProvider } from "./features/threads/thread-session-provide
 import { type AppRouter, createAppRouter } from "./router.js";
 import { useIdentity } from "./shared/auth/auth-context.js";
 import { useMountEffect } from "./shared/hooks/use-mount-effect.js";
+import { Toaster } from "./shared/ui/sonner.js";
 
 const ReactQueryDevtools = import.meta.env.DEV
   ? lazy(() =>
@@ -66,6 +67,7 @@ export function AuthenticatedApplication({
         <RouterProvider router={router} />
         <InAppNavigation key={auth.identity.id} router={router} />
         <RecordTimeZone key={auth.identity.id} />
+        <Toaster position="bottom-right" closeButton />
         {ReactQueryDevtools === undefined ? null : (
           <Suspense fallback={null}>
             <ReactQueryDevtools />

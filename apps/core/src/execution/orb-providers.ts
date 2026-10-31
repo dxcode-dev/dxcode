@@ -7,6 +7,8 @@ import type {
   ExecutionProvider,
   ExecutionProviderId,
 } from "../plugins/execution/provider.js";
+import { makeBoatConnector } from "./boat/connector.js";
+import { boatExecutionProvider } from "./boat/provider.js";
 import { makeCloudflareConnector } from "./cloudflare/connector.js";
 import { cloudflareExecutionProvider } from "./cloudflare/provider.js";
 import { makeDockerConnector } from "./docker/connector.js";
@@ -58,6 +60,10 @@ export const ORB_PROVIDER_MODULES: Readonly<
   docker: {
     execution: dockerExecutionProvider as ExecutionProvider,
     ...(dockerConnector === undefined ? {} : { connector: dockerConnector }),
+  },
+  boat: {
+    execution: boatExecutionProvider as ExecutionProvider,
+    connector: makeBoatConnector(),
   },
   local: { execution: localExecutionProvider },
 });

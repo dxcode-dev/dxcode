@@ -8,11 +8,13 @@ import {
 import {
   type CreateProjectInput,
   createProject,
+  deleteProject,
   type ProjectPage,
   rebindProjectSource,
   updateProject,
   uploadProjectIcon,
 } from "../../shared/api/client.js";
+import { threadKeys } from "../threads/thread-queries.js";
 import { projectKeys, seedProjectDetailFromList } from "./project-queries.js";
 
 type ProjectListData = InfiniteData<ProjectPage, unknown>;
@@ -132,4 +134,39 @@ export const uploadProjectIconMutationOptions = (
     }) => uploadProjectIcon(projectId, revision, file),
     onSuccess: (project) => cacheProject(queryClient, userId, project),
     gcTime: 0,
+  });
+
+/**
+ * Deletes the project. Every project and Thread list refreshes: kept
+ * Threads move to Archived and deleted ones disappear. The caller leaves
+ * the project's pages, then drops its detail with `forgetDeletedProject`.
+ */
+export const deleteProjectMutationOptions = (
+  queryClient: QueryClient,
+  userId: UserId,
+  projectId: ProjectId,
+) =>
+  mutationOptions({
+    mutationKey: [...projectKeys.detail(userId, projectId), "delete"] as const,
+    mutationFn: (input: {
+      readonly confirmName: string;
+      readonly threads: "keep" | "delete";
+    }) => deleteProject(projectId, input),
+    // Not awaited: the caller leaves the project's pages while lists refresh.
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: projectKeys.lists(userId),
+      });
+      void queryClient.invalidateQueries({ queryKey: threadKeys.all(userId) });
+    },
+  });
+
+/** Drops a deleted project's detail, which would only refetch a 404. */
+export const forgetDeletedProject = (
+  queryClient: QueryClient,
+  userId: UserId,
+  projectId: ProjectId,
+) =>
+  queryClient.removeQueries({
+    queryKey: projectKeys.detail(userId, projectId),
   });

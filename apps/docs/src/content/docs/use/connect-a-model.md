@@ -1,17 +1,18 @@
 ---
 title: Connecting a model
-description: Run Claude Code on your Claude Pro/Max plan, serve models from GitHub Copilot, or connect any compatible endpoint with your API key.
+description: Run Claude Code on your Claude Pro/Max plan, serve models from GitHub Copilot, add a provider's API key, or connect any compatible endpoint.
 sidebar:
   order: 2
 ---
 
 dx uses the models you connect. Open **Personal Settings → Model Routing**
-and choose **Add**. The menu offers up to three entries:
+and choose **Add**. The **Add a Provider** dialog lists:
 
 | Entry | What it gives you | Scope |
 | --- | --- | --- |
 | **Claude Pro/Max** | The Claude Code mode, on your Claude plan | Personal |
 | **GitHub Copilot** | The models your Copilot subscription includes | Personal |
+| A provider, such as **Anthropic** or **OpenAI** | That provider's models, on your API key | Personal |
 | **Custom URL** | Models behind any OpenAI- or Anthropic-compatible endpoint, with your API key | Personal or workspace |
 
 ## Claude Pro/Max
@@ -57,9 +58,9 @@ covered by it.
 ### Plan usage
 
 The connection shows **Plan Usage**: your 5-hour, weekly, and per-model
-limits, read from Anthropic when Model Routing loads and when you choose the
-refresh button beside **Plan Usage**. Under **Claude Usage**, choose what happens at a
-limit:
+limits, as Claude Code last reported them while it ran in a Thread. Before
+Claude Code's first run on the plan, no limits show. Under **Claude Usage**,
+choose what happens at a limit:
 
 - **Subscription Only** (the default) stops Claude Code at a plan limit.
 - **Allow Extra Usage** keeps it working on paid extra usage from your
@@ -82,11 +83,29 @@ account is entitled to; **Check Access** refreshes that list. If the
 deployment has not set up Copilot sign-in, connecting fails with "Personal
 model subscriptions are temporarily unavailable."
 
+## A provider's API key
+
+1. Choose **Add**, then the provider, such as **Anthropic**. A sheet titled
+   **New Anthropic API Key** opens.
+2. Paste your **API Key**. dx stores it encrypted.
+3. Fill in the provider's own fields: OpenAI's **Region**, or Cloudflare AI
+   Gateway's account and gateway IDs.
+4. Under **Models**, every model in the provider's catalog is on, plus
+   **All other _provider_ models** for models added later. Clear a box to
+   leave that model to your other connections. **Advanced** shows the same
+   choice as mapping lines: `anthropic/*` serves every Anthropic model,
+   `-anthropic/claude-opus-5` excludes one, and the last matching line wins.
+5. Optionally set a **Display Name** or, for gateways, **Headers**, then
+   choose **Create**.
+
+The providers listed are the ones the deployment offers. A self-hosted
+deployment can limit them with `modelDeploymentProviders`.
+
 ## Custom URL with an API key
 
 Use **Custom URL** for a provider's API, a gateway, or your own server.
 
-1. Choose **Add → Custom URL**.
+1. Choose **Add**, then **Custom URL**.
 2. Enter the **Base URL**, such as `https://api.example.com/v1`. It must be a
    public HTTPS address. The dialog shows the full URL requests go to.
 3. Choose the **API format**: OpenAI Chat Completions, OpenAI Responses, or
@@ -121,9 +140,12 @@ Settings → Composer** sets the mode new Threads start in.
 
 ## Source
 
-- Add menu and Custom URL dialog:
-  [`model-routing-controls.tsx`](https://github.com/dxcode-dev/dxcode/blob/main/apps/web/src/features/settings/model-routing/model-routing-controls.tsx),
-  [`model-routing-settings.tsx`](https://github.com/dxcode-dev/dxcode/blob/main/apps/web/src/features/settings/model-routing/model-routing-settings.tsx)
+- Add a Provider dialog, provider API key sheet, and Custom URL dialog:
+  [`add-provider-dialog.tsx`](https://github.com/dxcode-dev/dxcode/blob/main/apps/web/src/features/settings/model-routing/add-provider-dialog.tsx),
+  [`provider-key-sheet.tsx`](https://github.com/dxcode-dev/dxcode/blob/main/apps/web/src/features/settings/model-routing/provider-key-sheet.tsx),
+  [`connection-dialog.tsx`](https://github.com/dxcode-dev/dxcode/blob/main/apps/web/src/features/settings/model-routing/connection-dialog.tsx)
+- Model mapping lines:
+  [`provider-model-mapping.ts`](https://github.com/dxcode-dev/dxcode/blob/main/packages/domain/src/settings/provider-model-mapping.ts)
 - Claude Pro/Max connect flow:
   [`claude-code-connect.tsx`](https://github.com/dxcode-dev/dxcode/blob/main/apps/web/src/features/settings/model-routing/claude-code-connect.tsx),
   [`claude-code-token.ts`](https://github.com/dxcode-dev/dxcode/blob/main/apps/core/src/settings/model-routing/claude-code-token.ts)

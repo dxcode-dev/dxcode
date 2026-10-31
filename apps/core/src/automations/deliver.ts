@@ -11,6 +11,7 @@ import {
   pullSubject,
   readCi,
 } from "./github.js";
+import { saveLinkSubject } from "./links.js";
 import {
   automaticCiOn,
   createSubscription,
@@ -439,6 +440,47 @@ const savePullFromWebhook = async (
 };
 
 /**
+ * Keeps the header's title and state of a linked issue. An issue's own
+ * events and every comment on it carry the issue.
+ */
+const saveIssueFromWebhook = async (
+  db: D1Database,
+  event: string,
+  action: string,
+  payload: Record<string, unknown>,
+) => {
+  if (
+    !(
+      (event === "issues" &&
+        ["opened", "edited", "closed", "reopened"].includes(action)) ||
+      (event === "issue_comment" && action === "created")
+    )
+  )
+    return;
+  const issue = payload.issue as
+    | { number?: unknown; pull_request?: unknown }
+    | undefined;
+  const repository = (payload.repository as { full_name?: string } | undefined)
+    ?.full_name;
+  // A PR's comment says too little of its state; its own webhooks save it.
+  if (issue?.pull_request !== undefined) return;
+  const subject = pullSubject(issue);
+  if (
+    repository === undefined ||
+    typeof issue?.number !== "number" ||
+    subject === undefined
+  )
+    return;
+  await saveLinkSubject(db, repository, issue.number, "issue", subject).catch(
+    (cause) =>
+      automationLogger.warn("Saving an issue's title failed.", {
+        event: "github_issue_save_failed",
+        cause,
+      }),
+  );
+};
+
+/**
  * Delivers one verified webhook to the subscriptions it matches. Never
  * throws: a failure is noted on its subscription and the rest go on.
  */
@@ -468,6 +510,7 @@ export const deliverGitHubWebhook = async (
     );
     await savePullFromWebhook(db, action, payload);
   }
+  await saveIssueFromWebhook(db, event, action, payload);
   const happening = fromWebhook(event, action, payload);
   if (happening === undefined) return 0;
   const rows = (

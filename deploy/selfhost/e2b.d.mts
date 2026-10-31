@@ -23,6 +23,8 @@ export function reconcileE2BProfiles(input: {
     name: string,
     options: { apiKey: string; cpuCount: number; memoryMB: number },
   ): Promise<{ name: string; buildId: string }>;
+  /** How to wait for a build another deployment started. */
+  wait?: { pollMs: number; timeoutMs: number };
 }): Promise<{
   recipeHash: string;
   base: { name: string; buildId: string };

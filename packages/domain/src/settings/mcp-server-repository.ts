@@ -55,6 +55,14 @@ export interface McpServerRepositoryShape {
     target: McpServerTarget,
     id: McpServerId,
   ) => Effect.Effect<void, McpRepositoryFailure | McpServerNotFound>;
+  /**
+   * Deletes everything that authenticates to the server: its stored token,
+   * secret headers and OAuth client secret, and every person's sign-in.
+   */
+  readonly clearCredentials: (
+    target: McpServerTarget,
+    id: McpServerId,
+  ) => Effect.Effect<void, McpRepositoryFailure>;
   readonly replaceDiscovery: (
     id: McpServerId,
     tools: ReadonlyArray<StoredMcpTool>,

@@ -4,6 +4,7 @@ import { Building2, Check, ChevronDown, UserRound } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Button } from "../../../shared/ui/button.js";
+import { MenuItemText } from "../../../shared/ui/menu-item-text.js";
 import { projectsQueryOptions } from "../../projects/project-queries.js";
 import type { McpServerData, ProjectData } from "./mcp-queries.js";
 import type { McpRun } from "./mcp-server-sheet.js";
@@ -81,15 +82,15 @@ function ScopeMenu({
                 <Menu.RadioItem
                   key={scope}
                   value={scope}
-                  className="thread-menu-item mcp-menu-radio mcp-menu-detailed"
+                  className="thread-menu-item mcp-menu-radio"
                 >
                   <Menu.RadioItemIndicator className="mcp-menu-indicator">
                     <Check />
                   </Menu.RadioItemIndicator>
-                  <span>
-                    <strong>{SCOPE_COPY[scope].label}</strong>
-                    <span>{SCOPE_COPY[scope].detail}</span>
-                  </span>
+                  <MenuItemText
+                    title={SCOPE_COPY[scope].label}
+                    description={SCOPE_COPY[scope].detail}
+                  />
                 </Menu.RadioItem>
               ))}
             </Menu.RadioGroup>

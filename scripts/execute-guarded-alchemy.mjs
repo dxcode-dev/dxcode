@@ -80,7 +80,6 @@ const selection = {
   deploymentLabel: required("DX_DEPLOYMENT_LABEL"),
   dxdChecksum: required("DX_DEPLOYMENT_DXD_CHECKSUM"),
   dxdReleaseUrl: required("DX_DEPLOYMENT_DXD_RELEASE_URL"),
-  e2bTemplateBuildId: required("DX_DEPLOYMENT_E2B_TEMPLATE_BUILD_ID"),
   environment: required("DX_DEPLOYMENT_ENVIRONMENT"),
   origin: required("DX_DEPLOYMENT_ORIGIN"),
   packageDirectory: required("DX_DEPLOYMENT_PACKAGE_DIR"),

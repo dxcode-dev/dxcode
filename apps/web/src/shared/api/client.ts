@@ -6,6 +6,7 @@ import {
   ArchiveThreadInvalidRequestResponseSchema,
   ArchiveThreadNotFoundResponseSchema,
   ArchiveThreadPersistenceUnavailableResponseSchema,
+  ArchiveThreadProjectDeletedResponseSchema,
   ArchiveThreadResponseSchema,
   BeginGitHubCeremonyResponseSchema,
   BeginGitHubInstallationResponseSchema,
@@ -35,6 +36,7 @@ import {
   CreateProjectResponseSchema,
   CreateProjectRunnerUnavailableResponseSchema,
   CreateThreadAlreadyStartedResponseSchema,
+  CreateThreadClaudePlanRefusedResponseSchema,
   CreateThreadInitialAdmissionUnavailableResponseSchema,
   CreateThreadInitialMessageRejectedResponseSchema,
   CreateThreadInitialMessageTooLargeResponseSchema,
@@ -52,10 +54,18 @@ import {
   DeleteConnectionResponseSchema,
   DeleteEnvironmentVariableResponseSchema,
   DeleteMcpServerResponseSchema,
+  DeleteProjectInvalidRequestResponseSchema,
+  DeleteProjectNameMismatchResponseSchema,
+  DeleteProjectNotFoundResponseSchema,
+  DeleteProjectPersistenceUnavailableResponseSchema,
+  type DeleteProjectRequest,
+  DeleteProjectResponseSchema,
   DeleteThreadInvalidRequestResponseSchema,
   DeleteThreadNotFoundResponseSchema,
   DeleteThreadPersistenceUnavailableResponseSchema,
   DeleteThreadResponseSchema,
+  type DeleteWorkspaceRequest,
+  DeleteWorkspaceResponseSchema,
   type DictationVocabularyData,
   DictationVocabularyErrorResponseSchema,
   DictationVocabularyResponseSchema,
@@ -128,6 +138,7 @@ import {
   type McpServerData,
   McpServersErrorResponseSchema,
   ModelRoutingErrorResponseSchema,
+  NeedsYouResponseSchema,
   NotificationPreferencesResponseSchema,
   OrbProviderErrorResponseSchema,
   type OrbProviderId,
@@ -151,11 +162,13 @@ import {
   PinThreadResponseSchema,
   type PluginBundlePreviewData,
   PluginBundlesErrorResponseSchema,
+  type PluginBundleUpdatePreviewData,
   PluginsErrorResponseSchema,
   PluginTriggersErrorResponseSchema,
   PollPersonalModelSubscriptionAuthorizationResponseSchema,
   PreviewBulkEnvironmentVariablesResponseSchema,
   PreviewPluginBundleResponseSchema,
+  PreviewPluginBundleUpdateResponseSchema,
   PreviewPluginResponseSchema,
   PreviewSkillResponseSchema,
   ProfileResponseSchema,
@@ -242,6 +255,7 @@ import {
   UpdatePersonalComposerDefaultsResponseSchema,
   UpdatePersonalExperimentalFeatureResponseSchema,
   UpdatePluginBundleResponseSchema,
+  UpdatePluginBundleSourceResponseSchema,
   UpdatePluginStateResponseSchema,
   UpdatePluginTriggerStateResponseSchema,
   UpdatePluginWorkspacePolicyResponseSchema,
@@ -405,6 +419,7 @@ export const request = async <
         CreateThreadProjectNotFoundResponseSchema,
         CreateThreadPersistenceUnavailableResponseSchema,
         CreateThreadModelRouteUnavailableResponseSchema,
+        CreateThreadClaudePlanRefusedResponseSchema,
         CreateThreadOrbUnavailableResponseSchema,
         CreateThreadPolicyDeniedResponseSchema,
         CreateThreadProjectlessForbiddenResponseSchema,
@@ -413,6 +428,11 @@ export const request = async <
         ArchiveThreadNotFoundResponseSchema,
         ArchiveThreadPersistenceUnavailableResponseSchema,
         ArchiveThreadExecutionUnavailableResponseSchema,
+        ArchiveThreadProjectDeletedResponseSchema,
+        DeleteProjectInvalidRequestResponseSchema,
+        DeleteProjectNameMismatchResponseSchema,
+        DeleteProjectNotFoundResponseSchema,
+        DeleteProjectPersistenceUnavailableResponseSchema,
         DeleteThreadInvalidRequestResponseSchema,
         DeleteThreadNotFoundResponseSchema,
         DeleteThreadPersistenceUnavailableResponseSchema,
@@ -815,6 +835,52 @@ export const installPluginBundle = async (
               reviewedIntegrity: preview.integrity,
             }),
           },
+    )
+  ).data;
+
+/**
+ * Reads an installed plugin's source again: the latest commit of its GitHub
+ * ref, or `file` for a plugin imported from a ZIP.
+ */
+export const previewPluginBundleUpdate = async (
+  target: PluginsTarget,
+  pluginId: PluginId,
+  file?: File,
+) =>
+  (
+    await request(
+      file === undefined
+        ? `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}/update/preview`
+        : `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}/update/preview?name=${encodeURIComponent(file.name)}`,
+      PreviewPluginBundleUpdateResponseSchema,
+      file === undefined
+        ? { method: "POST", body: JSON.stringify({}) }
+        : zipInit(file),
+    )
+  ).data;
+
+/** Installs the reviewed update: the same ZIP, or the previewed commit. */
+export const updatePluginBundle = async (
+  target: PluginsTarget,
+  pluginId: PluginId,
+  preview: PluginBundleUpdatePreviewData,
+  file?: File,
+) =>
+  (
+    await request(
+      file === undefined
+        ? `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}/update`
+        : `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}/update?name=${encodeURIComponent(file.name)}&integrity=${preview.integrity}`,
+      UpdatePluginBundleSourceResponseSchema,
+      file === undefined
+        ? {
+            method: "POST",
+            body: JSON.stringify({
+              source: preview.source,
+              reviewedIntegrity: preview.integrity,
+            }),
+          }
+        : zipInit(file),
     )
   ).data;
 
@@ -1492,6 +1558,18 @@ export const updateProject = async (
     )
   ).data;
 
+export const deleteProject = async (
+  projectId: ProjectId,
+  input: DeleteProjectRequest,
+) =>
+  (
+    await request(
+      `/v1/projects/${encodeURIComponent(projectId)}/delete`,
+      DeleteProjectResponseSchema,
+      { method: "POST", body: JSON.stringify(input) },
+    )
+  ).data;
+
 export const rebindProjectSource = async (
   projectId: ProjectId,
   input: {
@@ -1926,6 +2004,30 @@ export const removeWorkspaceMember = async (
       `${workspaceSettingsBase(workspaceSlug)}/members/${encodeURIComponent(userId)}`,
       RemoveWorkspaceMemberResponseSchema,
       { method: "DELETE" },
+    )
+  ).data;
+
+export const transferWorkspaceOwnership = async (
+  workspaceSlug: WorkspaceSlug,
+  userId: string,
+) =>
+  (
+    await request(
+      `${workspaceSettingsBase(workspaceSlug)}/members/${encodeURIComponent(userId)}/transfer-ownership`,
+      WorkspaceMemberResponseSchema,
+      { method: "POST" },
+    )
+  ).data;
+
+export const deleteWorkspace = async (
+  workspaceSlug: WorkspaceSlug,
+  input: DeleteWorkspaceRequest,
+) =>
+  (
+    await request(
+      `${workspaceSettingsBase(workspaceSlug)}/delete`,
+      DeleteWorkspaceResponseSchema,
+      { method: "POST", body: JSON.stringify(input) },
     )
   ).data;
 
@@ -2903,6 +3005,20 @@ export const markNotificationsRead = async (ids: ReadonlyArray<string>) =>
     )
   ).data;
 
+/** The signed-in person's Threads that wait on them, newest first. */
+export const listNeedsYou = async (signal?: AbortSignal) =>
+  (await request("/v1/needs-you", NeedsYouResponseSchema, { signal })).data;
+
+/** Dismisses what one Thread asks and returns the rest of the list. */
+export const dismissNeedsYou = async (threadId: ThreadId) =>
+  (
+    await request(
+      `/v1/needs-you/${encodeURIComponent(threadId)}`,
+      NeedsYouResponseSchema,
+      { method: "DELETE" },
+    )
+  ).data;
+
 /** The signed-in person's sidebar layout, shared by their devices. */
 export const getSidebarLayout = async (signal?: AbortSignal) =>
   (await request("/v1/sidebar-layout", SidebarLayoutResponseSchema, { signal }))
@@ -2914,6 +3030,24 @@ export const putSidebarLayoutEntry = async (entry: SidebarLayoutEntry) =>
     await request("/v1/sidebar-layout", SidebarLayoutResponseSchema, {
       method: "PUT",
       body: JSON.stringify(entry),
+    })
+  ).data;
+
+/** Records the desktop sidebar's width and returns the whole layout. */
+export const putSidebarWidth = async (width: number) =>
+  (
+    await request("/v1/sidebar-layout", SidebarLayoutResponseSchema, {
+      method: "PUT",
+      body: JSON.stringify({ kind: "width", width }),
+    })
+  ).data;
+
+/** Records whether the desktop sidebar is collapsed; returns the layout. */
+export const putSidebarCollapsed = async (collapsed: boolean) =>
+  (
+    await request("/v1/sidebar-layout", SidebarLayoutResponseSchema, {
+      method: "PUT",
+      body: JSON.stringify({ kind: "collapsed", collapsed }),
     })
   ).data;
 

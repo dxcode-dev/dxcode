@@ -37,6 +37,7 @@ const ProjectRow = Schema.Struct({
   signing_preference: Schema.String,
   runner_profile_id: Schema.String,
   public_code_enabled: Schema.Number,
+  dx_co_author: Schema.Number,
   created_at: Schema.String,
   updated_at: Schema.String,
   additional_repositories_json: Schema.optional(Schema.NullOr(Schema.String)),
@@ -96,6 +97,7 @@ const decodeProjectRows = (rows: ReadonlyArray<unknown>) =>
               signingPreference: row.signing_preference,
               runnerProfileId: row.runner_profile_id,
               publicCodeEnabled: row.public_code_enabled === 1,
+              dxCoAuthor: row.dx_co_author === 1,
             },
             createdAt: row.created_at,
             updatedAt: row.updated_at,
@@ -187,16 +189,17 @@ export const ProjectRepositoryD1 = Layer.effect(
         : sql`(workspace_id = ${workspaceId} AND ${inWorkspace})`;
     };
     // Changing a workspace Project takes its creator or a workspace admin,
-    // while either is still an active member.
+    // while either is still an active member. A deleted Project never
+    // changes.
     const manageableBy = (userId: string) => sql`
-      ((workspace_id IS NULL AND owner_user_id = ${userId})
+      (deleted_at IS NULL AND ((workspace_id IS NULL AND owner_user_id = ${userId})
         OR (workspace_id IS NOT NULL
           AND workspace_id = ${activeWorkspaceOf(userId)}
           AND (owner_user_id = ${userId} OR EXISTS (
             SELECT 1 FROM member
              WHERE member.userId = ${userId}
                AND member.organizationId = workspace_id
-               AND member.role IN ('owner', 'admin')))))`;
+               AND member.role IN ('owner', 'admin'))))))`;
 
     return ProjectRepository.of({
       ensureProjectless: (ownerUserId, snapshot) =>
@@ -222,7 +225,7 @@ export const ProjectRepositoryD1 = Layer.effect(
                 ship_action, commit_author_preference,
                 commit_author_name, commit_author_email,
                 signing_preference, runner_profile_id, public_code_enabled,
-                created_at, updated_at
+                dx_co_author, created_at, updated_at
               ) VALUES (
                 ${id}, ${ownerUserId}, ${snapshot.workspaceId ?? null},
                 ${PROJECTLESS_PROJECT_NAME},
@@ -233,6 +236,7 @@ export const ProjectRepositoryD1 = Layer.effect(
                 ${configuration.signingPreference},
                 ${configuration.runnerProfileId},
                 ${configuration.publicCodeEnabled ? 1 : 0},
+                ${configuration.dxCoAuthor ? 1 : 0},
                 ${now}, ${now}
               )
             `.pipe(
@@ -279,7 +283,7 @@ export const ProjectRepositoryD1 = Layer.effect(
                   ship_action, commit_author_preference,
                   commit_author_name, commit_author_email,
                   signing_preference, runner_profile_id, public_code_enabled,
-                  created_at, updated_at
+                  dx_co_author, created_at, updated_at
                 )
                 VALUES (
                   ${encoded.id}, ${encoded.ownerUserId},
@@ -292,6 +296,7 @@ export const ProjectRepositoryD1 = Layer.effect(
                   ${encoded.configuration.signingPreference},
                   ${encoded.configuration.runnerProfileId},
                   ${encoded.configuration.publicCodeEnabled ? 1 : 0},
+                  ${encoded.configuration.dxCoAuthor ? 1 : 0},
                   ${encoded.createdAt}, ${encoded.updatedAt}
                 )
               `;
@@ -578,6 +583,7 @@ export const ProjectRepositoryD1 = Layer.effect(
                 signing_preference = ${encoded.configuration.signingPreference},
                 runner_profile_id = ${encoded.configuration.runnerProfileId},
                 public_code_enabled = ${encoded.configuration.publicCodeEnabled ? 1 : 0},
+                dx_co_author = ${encoded.configuration.dxCoAuthor ? 1 : 0},
                 updated_at = ${encoded.updatedAt}
               WHERE id = ${projectId} AND ${manageableBy(ownerUserId)}
                 AND revision = ${expectedRevision}

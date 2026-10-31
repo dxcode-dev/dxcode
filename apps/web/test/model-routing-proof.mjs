@@ -161,17 +161,20 @@ const waitForMutation = (page, method, path) =>
       response.ok(),
   );
 
-/** Adds a Custom URL connection serving `model` through the Add menu. */
+/** Adds a Custom URL connection serving `model` through Add a Provider. */
 const addConnection = async (page, scope, name, model) => {
   await page.getByRole("button", { name: "Add", exact: true }).click();
-  const items = await page.getByRole("menuitem").allInnerTexts();
+  const picker = page.getByRole("dialog", { name: "Add a Provider" });
+  const items = await picker
+    .locator(".routing-provider-option")
+    .allInnerTexts();
   if (scope.name === "workspace")
     assert.deepEqual(
       items.map((item) => item.trim()),
       ["Custom URL"],
-      "The workspace Add menu offers more than Custom URL.",
+      "The workspace Add a Provider dialog offers more than Custom URL.",
     );
-  await page.getByRole("menuitem", { name: "Custom URL" }).click();
+  await picker.getByRole("button", { name: "Custom URL" }).click();
   const dialog = page.getByRole("dialog");
   await dialog
     .getByLabel("Base URL", { exact: true })

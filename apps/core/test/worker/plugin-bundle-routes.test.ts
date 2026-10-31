@@ -7,7 +7,7 @@ import {
 } from "@dx/domain";
 import { Effect, Layer } from "effect";
 import { HttpResponse, http } from "msw";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "../../src/app.js";
 import type { Bindings } from "../../src/http/types.js";
 import { McpServerRepositoryD1 } from "../../src/settings/mcp-servers/repository-d1.js";
@@ -16,6 +16,7 @@ import {
   type FixtureEntry,
 } from "../../src/settings/plugins/bundles/zip-fixture.js";
 import { SkillRepositoryD1 } from "../../src/settings/skills/repository-d1.js";
+import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
 import { network } from "./network-boundary.js";
 
 const origin = "http://dx.test";
@@ -25,11 +26,14 @@ const bindings: Bindings = {
   DX_AUTH_URL: origin,
   DX_AUTH_TRUSTED_ORIGINS: origin,
   BETTER_AUTH_SECRET: "plugin-bundle-route-secret-0000000000",
+  DX_CONFIG_ENCRYPTION_KEYS: TEST_CONFIG_ENCRYPTION_KEYS,
 };
 const endpoint = "/v1/settings/personal/plugin-bundles";
 const commit = "d4dfed4e1c578cfea8bd6e64873e4f5e5b7e36f0";
 
+let signups = 40;
 const signup = async (email: string) => {
+  signups += 1;
   const response = await app.request(
     "/api/auth/sign-up/email",
     {
@@ -37,7 +41,8 @@ const signup = async (email: string) => {
       headers: {
         "content-type": "application/json",
         origin,
-        "cf-connecting-ip": "203.0.113.46",
+        // Sign-ups are rate limited per address.
+        "cf-connecting-ip": `203.0.113.${signups}`,
       },
       body: JSON.stringify({
         name: "Bundle Owner",
@@ -354,4 +359,483 @@ describe("plugin bundle routes with D1", () => {
     });
     expect(notGitHub.status).toBe(400);
   });
+
+  it("updates a GitHub plugin to its ref's latest commit, replacing changed items and keeping unchanged ones", async () => {
+    const { cookie, userId } = await signup("bundle-update@example.com");
+    const first = "1111111111111111111111111111111111111111";
+    const second = "2222222222222222222222222222222222222222";
+    const version = (
+      skills: ReadonlyArray<readonly [string, string]>,
+      servers: Record<string, unknown>,
+      sha: string,
+    ) =>
+      buildZip(
+        [
+          {
+            name: "kit-main/.claude-plugin/plugin.json",
+            content: JSON.stringify({ name: "update-kit", version: "1.0.0" }),
+          },
+          ...skills.map(([name, body]) => ({
+            name: `kit-main/skills/${name}/SKILL.md`,
+            content: `---\nname: ${name}\ndescription: Use ${name}.\n---\n\n${body}\n`,
+          })),
+          { name: "kit-main/.mcp.json", content: JSON.stringify(servers) },
+        ],
+        sha,
+      );
+    const archives = new Map<string, Uint8Array>([
+      [
+        first,
+        await version(
+          [
+            ["kept-skill", "Version one."],
+            ["old-skill", "Going away."],
+          ],
+          {
+            docs: { type: "http", url: "https://mcp.example.com/mcp" },
+            gone: { type: "http", url: "https://gone.example.com/mcp" },
+          },
+          first,
+        ),
+      ],
+      [
+        second,
+        await version(
+          [
+            ["kept-skill", "Version two."],
+            ["new-skill", "Arrived."],
+          ],
+          {
+            docs: { type: "http", url: "https://mcp.example.com/mcp" },
+            extra: { type: "http", url: "https://extra.example.com/mcp" },
+          },
+          second,
+        ),
+      ],
+    ]);
+    let head = first;
+    network.use(
+      http.get(
+        "https://codeload.github.com/acme/kit/zip/:ref",
+        ({ params }) => {
+          const ref = String(params.ref);
+          const archive = archives.get(ref === "HEAD" ? head : ref);
+          return archive === undefined
+            ? new HttpResponse(null, { status: 404 })
+            : new HttpResponse(archive.slice(), {
+                headers: { "content-type": "application/zip" },
+              });
+        },
+      ),
+    );
+
+    const preview = await call(`${endpoint}/preview`, cookie, {
+      json: { url: "https://github.com/acme/kit" },
+    });
+    const reviewed = await preview.json<PreviewBody>();
+    const installed = await call(endpoint, cookie, {
+      json: {
+        source: reviewed.data.source,
+        reviewedIntegrity: reviewed.data.integrity,
+      },
+    });
+    expect(installed.status).toBe(201);
+    const bundle = await installed.json<{
+      data: {
+        id: string;
+        skills: ReadonlyArray<{ id: string; name: string }>;
+        mcpServers: ReadonlyArray<{ id: string; name: string }>;
+      };
+    }>();
+    const updates = `${endpoint}/${bundle.data.id}/update`;
+
+    // Nothing new on the ref yet.
+    const unchanged = await call(`${updates}/preview`, cookie, { json: {} });
+    expect(unchanged.status).toBe(200);
+    expect(
+      (await unchanged.json<{ data: { upToDate: boolean } }>()).data.upToDate,
+    ).toBe(true);
+
+    head = second;
+    const update = await call(`${updates}/preview`, cookie, { json: {} });
+    expect(update.status).toBe(200);
+    const changes = await update.json<{
+      data: {
+        upToDate: boolean;
+        integrity: string;
+        conflicts: ReadonlyArray<string>;
+        source: { commit: string };
+        skills: ReadonlyArray<{ name: string; change: string }>;
+        mcpServers: ReadonlyArray<{ name: string; change: string }>;
+      };
+    }>();
+    expect(changes.data.upToDate).toBe(false);
+    expect(changes.data.conflicts).toEqual([]);
+    expect(changes.data.source.commit).toBe(second);
+    expect(changes.data.skills).toEqual([
+      { name: "kept-skill", change: "changed" },
+      { name: "new-skill", change: "added" },
+      { name: "old-skill", change: "removed" },
+    ]);
+    expect(
+      changes.data.mcpServers.map(({ name, change }) => ({ name, change })),
+    ).toEqual([
+      { name: "docs", change: "unchanged" },
+      { name: "extra", change: "added" },
+      { name: "gone", change: "removed" },
+    ]);
+
+    const stale = await call(updates, cookie, {
+      json: {
+        source: changes.data.source,
+        reviewedIntegrity: "0".repeat(64),
+      },
+    });
+    expect(stale.status).toBe(409);
+
+    const applied = await call(updates, cookie, {
+      json: {
+        source: changes.data.source,
+        reviewedIntegrity: changes.data.integrity,
+      },
+    });
+    expect(applied.status).toBe(200);
+    const after = await applied.json<{
+      data: {
+        source: { commit: string };
+        skills: ReadonlyArray<{ id: string; name: string }>;
+        mcpServers: ReadonlyArray<{ id: string; name: string }>;
+      };
+    }>();
+    expect(after.data.source.commit).toBe(second);
+    const id = (
+      items: ReadonlyArray<{ id: string; name: string }>,
+      name: string,
+    ) => items.find((item) => item.name === name)?.id;
+    // A changed skill keeps its identity and gets a new active version.
+    expect(id(after.data.skills, "kept-skill")).toBe(
+      id(bundle.data.skills, "kept-skill"),
+    );
+    expect(after.data.skills.map(({ name }) => name).sort()).toEqual([
+      "kept-skill",
+      "new-skill",
+    ]);
+    // An unchanged server keeps its identity, and with it its approvals.
+    expect(id(after.data.mcpServers, "docs")).toBe(
+      id(bundle.data.mcpServers, "docs"),
+    );
+    expect(after.data.mcpServers.map(({ name }) => name).sort()).toEqual([
+      "docs",
+      "extra",
+    ]);
+    const skills = await call("/v1/settings/personal/skills", cookie);
+    const kept = (
+      await skills.json<{
+        data: {
+          items: ReadonlyArray<{
+            name: string;
+            activeVersion: number;
+            active: { instructions: string };
+          }>;
+        };
+      }>()
+    ).data.items.find(({ name }) => name === "kept-skill");
+    expect(kept?.activeVersion).toBe(2);
+    expect(kept?.active.instructions).toBe("Version two.");
+    expect((await resolution(userId)).skills.sort()).toEqual([
+      "kept-skill",
+      "new-skill",
+    ]);
+    expect((await resolution(userId)).mcp.sort()).toEqual(["docs", "extra"]);
+
+    const again = await call(`${updates}/preview`, cookie, { json: {} });
+    expect(
+      (await again.json<{ data: { upToDate: boolean } }>()).data.upToDate,
+    ).toBe(true);
+    const repeat = await call(updates, cookie, {
+      json: {
+        source: changes.data.source,
+        reviewedIntegrity: changes.data.integrity,
+      },
+    });
+    expect(repeat.status).toBe(400);
+    expect(await repeat.text()).toContain("already up to date");
+  });
+
+  it("updates a ZIP plugin from a new upload", async () => {
+    const { cookie } = await signup("bundle-zip-update@example.com");
+    const first = await buildZip(plugin("example-plugin/"));
+    const preview = await call(`${endpoint}/preview?name=example.zip`, cookie, {
+      zip: first,
+    });
+    const reviewed = await preview.json<PreviewBody>();
+    const installed = await call(
+      `${endpoint}?name=example.zip&integrity=${reviewed.data.integrity}`,
+      cookie,
+      { zip: first },
+    );
+    const { data } = await installed.json<{ data: { id: string } }>();
+    const updates = `${endpoint}/${data.id}/update`;
+
+    // Without a new upload there is nothing to read.
+    const missing = await call(`${updates}/preview`, cookie, { json: {} });
+    expect(missing.status).toBe(400);
+
+    const second = await buildZip([
+      ...plugin("example-plugin/").filter(
+        ({ name }) => !name.endsWith(".mcp.json"),
+      ),
+      {
+        name: "example-plugin/skills/bundle-skill/reference/notes.md",
+        content: "New notes.",
+      },
+    ]);
+    const update = await call(`${updates}/preview?name=example-2.zip`, cookie, {
+      zip: second,
+    });
+    const changes = await update.json<{
+      data: {
+        integrity: string;
+        skills: ReadonlyArray<{ name: string; change: string }>;
+        mcpServers: ReadonlyArray<{ name: string; change: string }>;
+      };
+    }>();
+    expect(changes.data.skills).toEqual([
+      { name: "bundle-skill", change: "changed" },
+    ]);
+    expect(changes.data.mcpServers).toEqual([
+      {
+        name: "docs",
+        endpoint: "https://mcp.example.com/mcp",
+        change: "removed",
+        credentialsCleared: false,
+      },
+    ]);
+    const applied = await call(
+      `${updates}?name=example-2.zip&integrity=${changes.data.integrity}`,
+      cookie,
+      { zip: second },
+    );
+    expect(applied.status).toBe(200);
+    const after = await applied.json<{
+      data: { source: unknown; mcpServers: ReadonlyArray<unknown> };
+    }>();
+    expect(after.data.source).toEqual({ type: "zip", label: "example-2.zip" });
+    expect(after.data.mcpServers).toEqual([]);
+  });
+
+  it("clears a server's secrets when an update moves it to another origin, and keeps them for a new path on the same origin", async () => {
+    const { cookie } = await signup("bundle-origin@example.com");
+    const first = "3333333333333333333333333333333333333333";
+    const second = "4444444444444444444444444444444444444444";
+    const secret = "header-secret-that-must-not-move";
+    const version = (servers: Record<string, unknown>, sha: string) =>
+      buildZip(
+        [
+          {
+            name: "moves-main/.claude-plugin/plugin.json",
+            content: JSON.stringify({ name: "origin-kit" }),
+          },
+          { name: "moves-main/.mcp.json", content: JSON.stringify(servers) },
+        ],
+        sha,
+      );
+    const archives = new Map<string, Uint8Array>([
+      [
+        first,
+        await version(
+          {
+            moving: { type: "http", url: "https://mcp.move.test/mcp" },
+            staying: { type: "http", url: "https://mcp.stay.test/mcp" },
+          },
+          first,
+        ),
+      ],
+      [
+        second,
+        await version(
+          {
+            moving: { type: "http", url: "https://mcp.elsewhere.test/mcp" },
+            staying: { type: "http", url: "https://mcp.stay.test/v2/mcp" },
+          },
+          second,
+        ),
+      ],
+    ]);
+    let head = first;
+    // Everything an MCP server receives, by host.
+    const received: Array<{ host: string; headers: Record<string, string> }> =
+      [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init);
+        const url = new URL(request.url);
+        if (url.hostname === "codeload.github.com") {
+          const ref = url.pathname.split("/").at(-1) ?? "";
+          const archive = archives.get(ref === "main" ? head : ref);
+          return archive === undefined
+            ? new Response(null, { status: 404 })
+            : new Response(archive.slice(), {
+                headers: { "content-type": "application/zip" },
+              });
+        }
+        if (url.hostname === "1.1.1.1") {
+          return Response.json({
+            Status: 0,
+            Answer:
+              url.searchParams.get("type") === "A"
+                ? [{ type: 1, data: "93.184.216.34" }]
+                : [],
+          });
+        }
+        if (url.hostname.endsWith(".test") && request.method === "POST") {
+          received.push({
+            host: url.hostname,
+            headers: Object.fromEntries(request.headers),
+          });
+          const message = (await request.json()) as {
+            readonly id?: number;
+            readonly method: string;
+          };
+          if (message.id === undefined)
+            return new Response(null, { status: 202 });
+          return Response.json({
+            jsonrpc: "2.0",
+            id: message.id,
+            result:
+              message.method === "initialize"
+                ? {
+                    protocolVersion: "2025-06-18",
+                    capabilities: { tools: {} },
+                    serverInfo: { name: "fake", version: "1" },
+                  }
+                : message.method === "tools/list"
+                  ? {
+                      tools: [
+                        {
+                          name: "lookup",
+                          description: "Look something up.",
+                          inputSchema: { type: "object", properties: {} },
+                        },
+                      ],
+                    }
+                  : {},
+          });
+        }
+        if (request.method === "GET")
+          return new Response(null, { status: 405 });
+        return new Response("unexpected", { status: 599 });
+      }),
+    );
+
+    const preview = await call(`${endpoint}/preview`, cookie, {
+      json: { url: "https://github.com/acme/moves/tree/main" },
+    });
+    expect(preview.status).toBe(200);
+    const reviewed = await preview.json<PreviewBody>();
+    const installed = await call(endpoint, cookie, {
+      json: {
+        source: reviewed.data.source,
+        reviewedIntegrity: reviewed.data.integrity,
+      },
+    });
+    expect(installed.status).toBe(201);
+    const bundle = await installed.json<{
+      data: {
+        id: string;
+        mcpServers: ReadonlyArray<{ id: string; name: string }>;
+      };
+    }>();
+    const serverId = (name: string) =>
+      bundle.data.mcpServers.find((server) => server.name === name)?.id ?? "";
+
+    // The person adds an API key to each server in MCP settings.
+    for (const name of ["moving", "staying"]) {
+      const patched = await call(
+        `/v1/settings/personal/mcp-servers/${serverId(name)}`,
+        cookie,
+        {
+          method: "PATCH",
+          json: {
+            headers: [{ name: "X-Api-Key", value: secret, secret: true }],
+          },
+        },
+      );
+      expect(patched.status).toBe(200);
+    }
+    const secrets = async (name: string) =>
+      (
+        await env.DB.prepare(
+          "SELECT name FROM mcp_server_secret WHERE server_id = ?",
+        )
+          .bind(serverId(name))
+          .all()
+      ).results.length;
+    expect(await secrets("moving")).toBe(1);
+    expect(await secrets("staying")).toBe(1);
+
+    head = second;
+    const updates = `${endpoint}/${bundle.data.id}/update`;
+    const update = await call(`${updates}/preview`, cookie, { json: {} });
+    const changes = await update.json<{
+      data: {
+        integrity: string;
+        source: unknown;
+        mcpServers: ReadonlyArray<{
+          name: string;
+          change: string;
+          credentialsCleared: boolean;
+        }>;
+      };
+    }>();
+    expect(
+      changes.data.mcpServers.map(({ name, change, credentialsCleared }) => ({
+        name,
+        change,
+        credentialsCleared,
+      })),
+    ).toEqual([
+      { name: "moving", change: "changed", credentialsCleared: true },
+      { name: "staying", change: "changed", credentialsCleared: false },
+    ]);
+    const applied = await call(updates, cookie, {
+      json: {
+        source: changes.data.source,
+        reviewedIntegrity: changes.data.integrity,
+      },
+    });
+    expect(applied.status).toBe(200);
+    expect(await secrets("moving")).toBe(0);
+    expect(await secrets("staying")).toBe(1);
+
+    // Connecting each server again: the key reaches the same host only.
+    received.length = 0;
+    for (const name of ["moving", "staying"]) {
+      const discovered = await call(
+        `/v1/settings/personal/mcp-servers/${serverId(name)}/discover`,
+        cookie,
+        { method: "POST", json: {} },
+      );
+      expect(discovered.status).toBe(200);
+    }
+    const sent = (host: string) =>
+      received.filter((request) => request.host === host);
+    expect(sent("mcp.elsewhere.test").length).toBeGreaterThan(0);
+    expect(
+      sent("mcp.elsewhere.test").some(
+        ({ headers }) => headers["x-api-key"] !== undefined,
+      ),
+    ).toBe(false);
+    expect(sent("mcp.stay.test").length).toBeGreaterThan(0);
+    expect(
+      sent("mcp.stay.test").every(
+        ({ headers }) => headers["x-api-key"] === secret,
+      ),
+    ).toBe(true);
+  });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });

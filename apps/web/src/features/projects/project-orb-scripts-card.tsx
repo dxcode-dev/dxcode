@@ -7,7 +7,8 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import * as React from "react";
-import { SettingsCard, SettingsFormActions } from "../../shared/ui/settings.js";
+import { Button } from "../../shared/ui/button.js";
+import { SettingsCard } from "../../shared/ui/settings.js";
 import { Textarea } from "../../shared/ui/textarea.js";
 import { UnsavedChangesGuard } from "../../shared/ui/unsaved-changes-guard.js";
 import {
@@ -37,6 +38,18 @@ const SCRIPTS: ReadonlyArray<{
       <>
         Runs before <code>.agents/setup</code> and is not committed to the
         repository.
+      </>
+    ),
+  },
+  {
+    kind: "desktop-resume",
+    title: "Desktop Resume Script",
+    description: (
+      <>
+        Runs from the repository root each time the Desktop starts, in place of
+        the blank Chromium window, unless the repository contains{" "}
+        <code>.agents/desktop/resume</code>. Open a page with{" "}
+        <code>/opt/dx/desktop/chromium &lt;url&gt;</code>.
       </>
     ),
   },
@@ -141,41 +154,53 @@ function OrbScriptEditor({
   );
   const id = React.useId();
   const tooLarge = scriptBytes(draft) > MAX_PROJECT_ORB_SCRIPT_BYTES;
+  const error = tooLarge
+    ? `Scripts are limited to ${MAX_PROJECT_ORB_SCRIPT_BYTES / 1024} KB.`
+    : mutation.error instanceof Error
+      ? mutation.error.message
+      : undefined;
+  // One row per script: the heading, description, and editor on the left,
+  // Save at the bottom right.
   return (
-    <fieldset className="project-orb-script">
-      <legend>
-        <label htmlFor={id}>{title}</label>
-      </legend>
-      <p id={`${id}-description`}>{description}</p>
-      <Textarea
-        id={id}
-        className="project-orb-script-input"
-        aria-describedby={`${id}-description`}
-        aria-invalid={tooLarge || undefined}
-        value={draft}
-        rows={6}
-        spellCheck={false}
-        autoCapitalize="off"
-        autoCorrect="off"
-        placeholder={"#!/bin/bash\nset -euo pipefail\n"}
-        disabled={mutation.isPending}
-        onChange={(event) => onDraftChange(event.target.value)}
-      />
-      <SettingsFormActions
-        dirty={draft !== savedBody && !tooLarge}
-        saving={mutation.isPending}
-        error={
-          tooLarge
-            ? `Scripts are limited to ${MAX_PROJECT_ORB_SCRIPT_BYTES / 1024} KB.`
-            : mutation.error instanceof Error
-              ? mutation.error.message
-              : undefined
-        }
-        showStatus={false}
-        showReset={false}
-        onSave={() => mutation.mutate(draft, { onSuccess: onSaved })}
-        onReset={() => onDraftChange(savedBody)}
-      />
-    </fieldset>
+    <form
+      className="project-orb-script"
+      aria-labelledby={`${id}-title`}
+      onSubmit={(event) => {
+        event.preventDefault();
+        mutation.mutate(draft, { onSuccess: onSaved });
+      }}
+    >
+      <div className="project-orb-script-body">
+        <h4 id={`${id}-title`}>{title}</h4>
+        <p id={`${id}-description`}>{description}</p>
+        <Textarea
+          className="project-orb-script-input"
+          aria-label={title}
+          aria-describedby={`${id}-description`}
+          aria-invalid={tooLarge || undefined}
+          value={draft}
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          placeholder={"#!/usr/bin/env bash\nset -euo pipefail"}
+          disabled={mutation.isPending}
+          onChange={(event) => onDraftChange(event.target.value)}
+        />
+        {error === undefined ? null : (
+          <p className="project-orb-script-error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+      <div className="project-orb-script-actions">
+        <Button
+          size="xs"
+          type="submit"
+          disabled={draft === savedBody || tooLarge || mutation.isPending}
+        >
+          {mutation.isPending ? "Saving…" : "Save"}
+        </Button>
+      </div>
+    </form>
   );
 }

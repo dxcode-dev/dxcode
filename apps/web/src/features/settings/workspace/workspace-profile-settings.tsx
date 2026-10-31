@@ -21,6 +21,7 @@ import {
 } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
 import { LeaveWorkspaceCard } from "./leave-workspace-card.js";
+import { OwnerWorkspaceCard } from "./owner-workspace-card.js";
 import {
   type WorkspaceMutation,
   workspaceMutationOptions,
@@ -613,7 +614,12 @@ export function WorkspaceProfileSettings({
     <WorkspaceProfileForm
       initialWorkspace={workspace}
       footer={
-        workspace.role === "owner" ? undefined : (
+        workspace.role === "owner" ? (
+          <OwnerWorkspaceCard
+            workspaceSlug={workspace.shortName}
+            displayName={workspace.displayName}
+          />
+        ) : (
           <LeaveWorkspaceCard
             workspaceSlug={workspace.shortName}
             displayName={workspace.displayName}

@@ -9,6 +9,7 @@ import {
   DialogRoot,
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
+import { MenuItemText } from "../../../shared/ui/menu-item-text.js";
 import { SettingsToggle } from "../settings-primitives.js";
 import { McpLogo } from "./integration-card.js";
 import type { McpServersMutationAction } from "./mcp-mutations.js";
@@ -127,15 +128,15 @@ function ToolPolicyMenu({
                 <Menu.RadioItem
                   key={policy}
                   value={policy}
-                  className="thread-menu-item mcp-menu-radio mcp-menu-detailed"
+                  className="thread-menu-item mcp-menu-radio"
                 >
                   <Menu.RadioItemIndicator className="mcp-menu-indicator">
                     <Check />
                   </Menu.RadioItemIndicator>
-                  <span>
-                    <strong>{POLICY_COPY[policy].label}</strong>
-                    <span>{POLICY_COPY[policy].detail}</span>
-                  </span>
+                  <MenuItemText
+                    title={POLICY_COPY[policy].label}
+                    description={POLICY_COPY[policy].detail}
+                  />
                 </Menu.RadioItem>
               ))}
             </Menu.RadioGroup>

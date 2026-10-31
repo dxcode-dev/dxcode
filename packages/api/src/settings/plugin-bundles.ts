@@ -71,6 +71,42 @@ export const PreviewPluginBundleResponseSchema = successResponse(
   PluginBundlePreviewDataSchema,
 );
 
+export const PluginBundleChangeSchema = Schema.Literals([
+  "added",
+  "changed",
+  "removed",
+  "unchanged",
+]);
+
+/** A new version of an installed bundle and what installing it changes. */
+export const PluginBundleUpdatePreviewDataSchema = Schema.Struct({
+  ...PluginBundlePreviewDataSchema.fields,
+  upToDate: Schema.Boolean,
+  skills: Schema.Array(
+    Schema.Struct({ name: Schema.String, change: PluginBundleChangeSchema }),
+  ),
+  mcpServers: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      endpoint: Schema.String,
+      change: PluginBundleChangeSchema,
+      /** The server moves to another origin, so its secrets are deleted. */
+      credentialsCleared: Schema.Boolean,
+    }),
+  ),
+});
+
+export type PluginBundleUpdatePreviewData =
+  typeof PluginBundleUpdatePreviewDataSchema.Type;
+
+export const PreviewPluginBundleUpdateResponseSchema = successResponse(
+  PluginBundleUpdatePreviewDataSchema,
+);
+
+export const UpdatePluginBundleSourceResponseSchema = successResponse(
+  PluginBundleDataSchema,
+);
+
 export const InstallPluginBundleResponseSchema = successResponse(
   PluginBundleDataSchema,
 );

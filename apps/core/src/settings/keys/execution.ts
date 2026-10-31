@@ -28,6 +28,7 @@ const ExecutionSigningRow = Schema.Struct({
   commit_author_name: GitAuthorName,
   commit_author_email: GitAuthorEmail,
   signing_preference: CommitSigningPreference,
+  dx_co_author: Schema.Literals([0, 1]),
   runner_profile_id: Schema.String,
 });
 
@@ -42,6 +43,11 @@ export interface SigningExecutionPlan {
     readonly name: typeof GitAuthorName.Type;
     readonly email: typeof GitAuthorEmail.Type;
   };
+  /**
+   * Whether commits credit dx as co-author: the project adds dx and the
+   * person, not dx, authors them.
+   */
+  readonly dxCoAuthor: boolean;
   readonly runnerProfileId: typeof RunnerProfileId.Type;
   readonly runnerProfileVersion: number;
   readonly runnerAdapter: RunnerAdapterKind;
@@ -80,6 +86,8 @@ export const resolveExecutionSigningPlan = Effect.fn(
                   THEN owner.email ELSE projects.commit_author_email END
                AS commit_author_email,
              projects.signing_preference,
+             CASE WHEN projects.commit_author_preference = 'user'
+                  THEN projects.dx_co_author ELSE 0 END AS dx_co_author,
              COALESCE(threads.runner_profile_id, projects.runner_profile_id)
                AS runner_profile_id
            FROM threads
@@ -119,6 +127,7 @@ export const resolveExecutionSigningPlan = Effect.fn(
       name: row.commit_author_name,
       email: row.commit_author_email,
     },
+    dxCoAuthor: row.dx_co_author === 1,
     runnerProfileId: runnerProfile.id,
     runnerProfileVersion: catalog.configuration.version,
     runnerAdapter: runnerProfile.adapter,

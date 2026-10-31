@@ -1,10 +1,11 @@
-import { ThreadId, Timestamp } from "@dx/domain";
+import { ThreadId, Timestamp, type UserId } from "@dx/domain";
 import type { FlueEventContext, FlueObservation } from "@flue/runtime";
 import { Data, DateTime, Effect, Option, Schema } from "effect";
 import type { Bindings } from "../http/types.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
 import {
   publishRealtimeInvalidation,
+  publishUserInvalidation,
   threadPresentUsers,
 } from "../realtime/publication.js";
 import { markThreadSeen } from "./attention-d1.js";
@@ -71,7 +72,43 @@ const record = (bindings: Bindings, activity: ThreadActivityInput) =>
     // for; one they aborted they were watching.
     const finished =
       activity.outcome === "completed" || activity.outcome === "failed";
-    const [, recorded, projected] = yield* Effect.tryPromise({
+    // Needs you: a turn starting answers what the Thread asked of its owner
+    // before it. A root Thread whose turn failed, with no other turn under
+    // way, asks unless it already asks something; only the observation that
+    // recorded the settlement does, so a replay cannot list a Thread the
+    // owner dismissed. Each returns the owner when it changed the list.
+    const returningOwner = `RETURNING (SELECT owner_user_id FROM threads
+        WHERE threads.id = thread_attention_request.thread_id) AS owner_user_id`;
+    const needsYou =
+      activity.state === "working"
+        ? db
+            .prepare(
+              `DELETE FROM thread_attention_request
+                WHERE thread_id = ?1 AND requested_at < ?2
+               ${returningOwner}`,
+            )
+            .bind(activity.threadId, occurredAt)
+        : activity.outcome === "failed"
+          ? db
+              .prepare(
+                `INSERT INTO thread_attention_request (
+                   thread_id, kind, requested_at
+                 )
+                 SELECT id, 'failed', ?3 FROM threads
+                  WHERE id = ?1 AND parent_thread_id IS NULL
+                    AND EXISTS (
+                      SELECT 1 FROM thread_activity
+                       WHERE thread_id = ?1 AND event_key = ?2
+                         AND recorded_at = ?4)
+                    AND NOT EXISTS (
+                      SELECT 1 FROM thread_activity_submission
+                       WHERE thread_id = ?1 AND state = 'working')
+                 ON CONFLICT (thread_id) DO NOTHING
+                 ${returningOwner}`,
+              )
+              .bind(activity.threadId, eventKey, occurredAt, recordedAt)
+          : undefined;
+    const [, recorded, projected, listChanged] = yield* Effect.tryPromise({
       try: () =>
         db.batch([
           db
@@ -185,9 +222,17 @@ const record = (bindings: Bindings, activity: ThreadActivityInput) =>
               finished ? 1 : 0,
               occurredAt,
             ),
+          ...(needsYou === undefined ? [] : [needsYou]),
         ]),
       catch: (cause) => new ThreadActivityPersistenceError({ cause }),
     });
+    const owner = (
+      listChanged?.results[0] as { owner_user_id?: UserId } | undefined
+    )?.owner_user_id;
+    if (owner !== undefined)
+      yield* Effect.promise(() =>
+        publishUserInvalidation(bindings, owner, "needs-you.invalidated"),
+      );
     // A repeated observation, such as running after queued or a retried
     // settlement, records no event and leaves the Thread row as it was:
     // there is nothing for a client to refetch.

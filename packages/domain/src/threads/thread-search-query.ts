@@ -15,6 +15,7 @@ export const THREAD_SEARCH_FILTER_KEYS = [
   "author",
   "visibility",
   "repo",
+  "issue",
   "pinned",
   "snoozed",
   "archived",
@@ -37,6 +38,12 @@ export interface ThreadSearchFilters {
   readonly visibility?: "private" | "workspace" | "none";
   /** `owner/repo`, lowercased. */
   readonly repo?: string;
+  /** A GitHub issue or pull request a Thread is linked to. */
+  readonly issue?: {
+    /** `owner/repo`, lowercased. */
+    readonly repository: string;
+    readonly number: number;
+  };
   readonly pinned?: boolean;
   /** The requester's own Threads that are snoozed now, or that are not. */
   readonly snoozed?: boolean;
@@ -118,6 +125,23 @@ const repoValue = (value: string) =>
     .replace(/\.git$/, "")
     .replace(/\/+$/, "");
 
+/**
+ * `owner/repo#12`, or an issue or pull request URL on github.com, such as
+ * `https://github.com/owner/repo/issues/12`.
+ */
+const issueValue = (value: string) => {
+  const match =
+    /^(?:https?:\/\/)?github\.com\/([^/\s]+\/[^/\s#]+)\/(?:issues|pull)\/(\d+)(?:[/?#].*)?$/i.exec(
+      value,
+    ) ?? /^([^/\s#]+\/[^/\s#]+)#(\d+)$/.exec(value);
+  const number = Number(match?.[2]);
+  if (match?.[1] === undefined || !Number.isSafeInteger(number) || number < 1)
+    throw new ThreadSearchQueryError(
+      "issue: takes owner/repo#12 or a GitHub issue or pull request URL.",
+    );
+  return { repository: match[1].toLowerCase(), number };
+};
+
 const later = (left: string | undefined, right: string) =>
   left === undefined || right > left ? right : left;
 const earlier = (left: string | undefined, right: string) =>
@@ -167,6 +191,9 @@ export const parseThreadSearchQuery = (
         break;
       case "repo":
         filters.repo = repoValue(value);
+        break;
+      case "issue":
+        filters.issue = issueValue(value);
         break;
       case "pinned":
       case "snoozed":

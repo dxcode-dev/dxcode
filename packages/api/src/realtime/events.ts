@@ -71,6 +71,12 @@ export const RealtimeSidebarLayoutEvent = Schema.Struct({
   revision: Revision,
 });
 
+/** A Thread of the user started or stopped waiting on them; refetch Needs you. */
+export const RealtimeNeedsYouEvent = Schema.Struct({
+  type: Schema.Literal("needs-you.invalidated"),
+  revision: Revision,
+});
+
 export const RealtimePresenceSnapshotEvent = Schema.Struct({
   type: Schema.Literal("presence.snapshot"),
   topic: PresenceTopic,
@@ -93,6 +99,7 @@ export const RealtimeServerEvent = Schema.Union([
   RealtimeWorkspaceStatusEvent,
   RealtimeNotificationsEvent,
   RealtimeSidebarLayoutEvent,
+  RealtimeNeedsYouEvent,
   RealtimePresenceSnapshotEvent,
   Schema.Struct({
     type: Schema.Literal("presence.heartbeat"),

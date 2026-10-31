@@ -65,8 +65,8 @@ services:
 An Orb pauses five minutes after the last activity, and wakes on the next
 message, Terminal, Files, Desktop, or Portal request. Sleeping keeps memory
 on E2B and Freestyle, so running processes continue where they stopped. On
-Cloudflare Containers and Docker Cloud Sandboxes the files stay and processes
-start again.
+Cloudflare Containers, Docker Cloud Sandboxes, and Boat the files stay and
+processes start again.
 
 | Activity | Keeps the Orb awake |
 | --- | --- |

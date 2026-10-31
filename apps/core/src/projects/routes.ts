@@ -7,6 +7,13 @@ import {
   CreateProjectRequestSchema,
   CreateProjectResponseSchema,
   CreateProjectRunnerUnavailableResponseSchema,
+  DeleteProjectInvalidRequestResponseSchema,
+  DeleteProjectNameMismatchResponseSchema,
+  DeleteProjectNotFoundResponseSchema,
+  DeleteProjectParamsSchema,
+  DeleteProjectPersistenceUnavailableResponseSchema,
+  DeleteProjectRequestSchema,
+  DeleteProjectResponseSchema,
   GetProjectInvalidRequestResponseSchema,
   GetProjectNotFoundResponseSchema,
   GetProjectParamsSchema,
@@ -46,11 +53,13 @@ import {
   projectAdditionalRepositoryFromUrl,
   SourceControlAccessDenied,
   SourceControlProviderFailure,
+  type UserId,
   type WorkspacePolicyDenied,
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
-import { Effect, Layer, Match, Result, Schema } from "effect";
+import { Effect, Layer, Match, Option, Result, Schema } from "effect";
 import { Hono } from "hono";
+import { ExecutionWorkspaces } from "../execution/execution-workspaces.js";
 import {
   loadRunnerProfileCatalog,
   selectRunnerProfile,
@@ -60,7 +69,9 @@ import {
   decodeRequestInput,
 } from "../http/request-decoding.js";
 import type { AppEnv } from "../http/types.js";
+import { projectPersistenceLogger } from "../logging.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
+import { publishRealtimeInvalidation } from "../realtime/publication.js";
 import { SettingsAudit } from "../settings/audit.js";
 import { signingBackendCapabilities } from "../settings/keys/backend.js";
 import { projectDefaultsLayersFor } from "../settings/project-defaults/routes.js";
@@ -70,7 +81,15 @@ import { WorkspaceRepositoryD1 } from "../settings/workspace/repository-d1.js";
 import { WorkspacePolicyRepositoryD1 } from "../settings/workspace-policy/repository-d1.js";
 import { WorkspacePolicyService } from "../settings/workspace-policy/service.js";
 import { authorizeSource } from "../source-control/admission.js";
+import { purgeDeletedThread } from "../thread-deletion/cleanup.js";
+import { deployedThreadCleanup } from "../thread-deletion/routes.js";
 import { projectViewerAccess } from "./access.js";
+import {
+  deleteProject,
+  type ProjectDeletion,
+  ProjectDeletionNameMismatch,
+  ProjectDeletionNotFound,
+} from "./deletion.js";
 import { projectOrbScriptRoutes } from "./orb-scripts.js";
 import { ProjectRepositoryD1 } from "./repository-d1.js";
 import { ProjectService } from "./service.js";
@@ -1329,3 +1348,158 @@ projectRoutes.put("/:projectId/icon", async (context) => {
 });
 
 projectRoutes.route("/", projectOrbScriptRoutes);
+/**
+ * `POST /v1/projects/:projectId/delete`: the project's creator, or a
+ * workspace admin for a workspace project, deletes it for good (#1128).
+ * After the response, kept Threads' Orbs stop, deleted Threads are purged
+ * (the cron retries what does not finish), open apps refresh each changed
+ * Thread, and the icon is removed.
+ */
+projectRoutes.post("/:projectId/delete", async (context) => {
+  const requestId = context.get("requestId");
+  const unavailable = () =>
+    context.json(
+      Schema.encodeUnknownSync(
+        DeleteProjectPersistenceUnavailableResponseSchema,
+      )({
+        status: "error",
+        data: {
+          code: "PERSISTENCE_UNAVAILABLE",
+          message: "Persistence is temporarily unavailable.",
+          requestId,
+        },
+      }),
+      503,
+    );
+  const params = Schema.decodeUnknownOption(DeleteProjectParamsSchema)({
+    projectId: context.req.param("projectId"),
+  });
+  const body = Schema.decodeUnknownOption(DeleteProjectRequestSchema)(
+    await context.req.json().catch(() => undefined),
+  );
+  if (Option.isNone(params) || Option.isNone(body))
+    return context.json(
+      Schema.encodeUnknownSync(DeleteProjectInvalidRequestResponseSchema)({
+        status: "error",
+        data: {
+          code: "INVALID_REQUEST",
+          message: "Request validation failed.",
+          requestId,
+        },
+      }),
+      400,
+    );
+  const db = context.env.DB;
+  if (db === undefined) return unavailable();
+  let deletion: ProjectDeletion;
+  try {
+    deletion = await deleteProject(
+      db,
+      context.get("principal").userId,
+      params.value.projectId,
+      body.value,
+    );
+  } catch (cause) {
+    if (cause instanceof ProjectDeletionNotFound)
+      return context.json(
+        Schema.encodeUnknownSync(DeleteProjectNotFoundResponseSchema)({
+          status: "error",
+          data: {
+            code: "PROJECT_NOT_FOUND",
+            message: "Project not found.",
+            requestId,
+          },
+        }),
+        404,
+      );
+    if (cause instanceof ProjectDeletionNameMismatch)
+      return context.json(
+        Schema.encodeUnknownSync(DeleteProjectNameMismatchResponseSchema)({
+          status: "error",
+          data: {
+            code: "PROJECT_NAME_MISMATCH",
+            message: "Type the project name to confirm.",
+            requestId,
+          },
+        }),
+        400,
+      );
+    projectPersistenceLogger.error("Project deletion failed.", {
+      event: "project_delete_failed",
+      requestId,
+      projectId: params.value.projectId,
+      cause,
+    });
+    return unavailable();
+  }
+  const background = (task: () => Promise<unknown>) =>
+    context.executionCtx.waitUntil(task().catch(() => undefined));
+  for (const threadId of deletion.runningKeptThreadIds)
+    background(() =>
+      ExecutionWorkspaces.archive(threadId).catch((cause) => {
+        projectPersistenceLogger.warn("Kept Thread Orb stop failed.", {
+          event: "project_delete_orb_stop_failed",
+          requestId,
+          threadId,
+          cause,
+        });
+      }),
+    );
+  if (deletion.deletedThreads.length > 0) {
+    const cleanup = deployedThreadCleanup(context.env);
+    const pending = [...deletion.deletedThreads];
+    // A few at a time: each one calls its Orb provider.
+    background(() =>
+      Promise.all(
+        Array.from({ length: Math.min(4, pending.length) }, async () => {
+          for (
+            let next = pending.shift();
+            next !== undefined;
+            next = pending.shift()
+          )
+            await purgeDeletedThread(
+              context.env,
+              cleanup,
+              next.threadId,
+              next.ownerUserId as UserId,
+            ).catch((cause) => {
+              projectPersistenceLogger.warn(
+                "Deleted project Thread purge failed.",
+                {
+                  event: "project_delete_thread_purge_failed",
+                  requestId,
+                  threadId: next.threadId,
+                  cause,
+                },
+              );
+            });
+        }),
+      ),
+    );
+  }
+  // Open apps drop deleted Threads and show kept ones archived.
+  if (deletion.changedThreadIds.length > 0)
+    background(async () => {
+      for (const threadId of deletion.changedThreadIds)
+        await publishRealtimeInvalidation(
+          context.env,
+          threadId,
+          "thread.invalidated",
+        ).catch(() => undefined);
+    });
+  const iconKey = deletion.iconKey;
+  const storage = context.env.DX_STORAGE;
+  if (iconKey !== undefined && storage !== undefined)
+    background(() => storage.delete(iconKey));
+  return context.json(
+    Schema.encodeUnknownSync(DeleteProjectResponseSchema)({
+      status: "success",
+      data: {
+        deleted: true,
+        keptThreadCount: deletion.keptThreadCount,
+        deletedThreadCount: deletion.deletedThreadCount,
+      },
+    }),
+    200,
+  );
+});

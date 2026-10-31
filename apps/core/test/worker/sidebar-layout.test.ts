@@ -140,6 +140,96 @@ describe("Sidebar layout", () => {
     expect(await layout(owner)).toEqual([]);
   });
 
+  it("keeps each person's sidebar width beside their choices", async () => {
+    const owner = "sidebar-width-owner" as UserId;
+    const other = "sidebar-width-other" as UserId;
+    const read = async (userId: UserId) => {
+      const response = await app(userId).request(
+        "/sidebar-layout",
+        {},
+        bindings,
+      );
+      return (await response.json<{ data: unknown }>()).data;
+    };
+    // No width until the person resizes the sidebar.
+    expect(await read(owner)).toEqual({ entries: [] });
+
+    const resized = await choose(owner, { kind: "width", width: 380 });
+    expect(resized.status).toBe(200);
+    await expect(resized.json()).resolves.toEqual({
+      status: "success",
+      data: { entries: [], width: 380 },
+    });
+    expect(
+      (await choose(owner, { kind: "thread", id: threadId(4), open: true }))
+        .status,
+    ).toBe(200);
+    expect((await choose(owner, { kind: "width", width: 412 })).status).toBe(
+      200,
+    );
+    expect(await read(owner)).toEqual({
+      entries: [{ kind: "thread", id: threadId(4), open: true }],
+      width: 412,
+    });
+    expect(await read(other)).toEqual({ entries: [] });
+
+    // Outside the sidebar's drag range, or not a whole pixel.
+    for (const width of [0, 249, 481, 300.5, "300"]) {
+      const response = await choose(owner, { kind: "width", width });
+      expect(response.status).toBe(400);
+    }
+    expect(await read(owner)).toMatchObject({ width: 412 });
+
+    // A stored width the current range rejects falls back to the default.
+    await env.DB.prepare(
+      "UPDATE sidebar_panel SET width = 1000 WHERE user_id = ?1",
+    )
+      .bind(owner)
+      .run();
+    expect(await read(owner)).toEqual({
+      entries: [{ kind: "thread", id: threadId(4), open: true }],
+    });
+  });
+
+  it("keeps whether each person's sidebar is collapsed, apart from its width", async () => {
+    const owner = "sidebar-collapsed-owner" as UserId;
+    const read = async () =>
+      (
+        await (
+          await app(owner).request("/sidebar-layout", {}, bindings)
+        ).json<{ data: unknown }>()
+      ).data;
+
+    // Collapsing before ever resizing keeps the default width.
+    expect(
+      (await choose(owner, { kind: "collapsed", collapsed: true })).status,
+    ).toBe(200);
+    expect(await read()).toEqual({ entries: [], collapsed: true });
+
+    expect((await choose(owner, { kind: "width", width: 300 })).status).toBe(
+      200,
+    );
+    expect(await read()).toEqual({ entries: [], width: 300, collapsed: true });
+
+    expect(
+      (await choose(owner, { kind: "collapsed", collapsed: false })).status,
+    ).toBe(200);
+    expect(await read()).toEqual({ entries: [], width: 300 });
+    expect(
+      await app("sidebar-collapsed-other" as UserId)
+        .request("/sidebar-layout", {}, bindings)
+        .then((response) => response.json<{ data: unknown }>())
+        .then((body) => body.data),
+    ).toEqual({ entries: [] });
+
+    for (const entry of [
+      { kind: "collapsed" },
+      { kind: "collapsed", collapsed: "yes" },
+      { kind: "collapsed", collapsed: 1 },
+    ])
+      expect((await choose(owner, entry)).status).toBe(400);
+  });
+
   it("keeps only the newest 500 choices", async () => {
     const owner = "sidebar-pruned" as UserId;
     const old = new Date("2026-01-01T00:00:00.000Z").toISOString();

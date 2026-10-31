@@ -13,7 +13,7 @@ its Orb lifecycle files.
 | File | When it runs | Purpose |
 |------|--------------|---------|
 | `.agents/setup` | Once for each new Thread's Orb, after dx checks out the repository and before the agent's first turn | Install toolchains, dependencies, databases, and other prerequisites |
-| `.agents/resume` | After setup on first activation, and again each time a paused Orb is activated | Fast, idempotent authentication, reconnect, or repair steps |
+| `.agents/resume` | Once after setup on first activation, once each time a paused Orb wakes, and when the Project's environment variables change | Fast, idempotent authentication, reconnect, or repair steps |
 | `.dx/services.yaml` | When the user opens a Portal URL whose service is stopped | Start long-running dev servers and other services on demand |
 
 Key invariants:
@@ -28,15 +28,14 @@ Key invariants:
   the setup file's contents, and does not run it again for that Thread unless one of them changes.
   A failed or timed-out setup is logged and retried on the next activation; it never blocks the
   Thread. The workspace is usable without it, so the agent can finish setup work by hand.
-- Each hook run is limited to 5 minutes. dx also runs `.agents/resume` when it reconnects the
-  workspace daemon and stops that run after 120 seconds. Resume can therefore run more than once
-  per wake: keep it idempotent and finish within seconds; never install dependencies there.
-- Hooks run at the repository root as `user` with a minimal environment: `PATH`, `HOME`, `USER`,
-  `LOGNAME`, `SHELL`, and `GIT_TERMINAL_PROMPT=0`. Setup gets no GitHub token, no source
+- Setup is limited to 5 minutes. The workspace daemon runs `.agents/resume` and stops it after
+  120 seconds; the agent's turn does not wait for it. A daemon restart also runs it, so keep it
+  idempotent and finish within seconds; never install dependencies there.
+- Hooks run at the repository root as `user`. Setup has a minimal environment: `PATH`, `HOME`,
+  `USER`, `LOGNAME`, `SHELL`, and `GIT_TERMINAL_PROMPT=0`. Setup gets no GitHub token, no source
   credentials, and none of the Project's environment variables or secrets. Never authenticate a
   user or service during setup. Install its client in setup and authenticate it during resume or
-  when the agent first needs it; the resume run by the workspace daemon receives the Project's
-  environment variables.
+  when the agent first needs it; resume receives the Project's environment variables.
 - Each hook's full output goes to its log under `~/.cache/dx/logs` (`setup.log`, `resume.log`),
   replaced on each run. Only the exit code decides whether the hook succeeded.
 - Orbs are Debian sandboxes with passwordless `sudo`. The standard image has Node.js 24 with

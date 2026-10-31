@@ -228,10 +228,12 @@
   min-width: 24px;
   text-transform: none;
 }
-.automation-chip svg[data-pr="open"] {
+.automation-chip svg[data-pr="open"],
+.automation-chip svg[data-issue="open"] {
   color: light-dark(#1a7f37, #3fb950);
 }
-.automation-chip svg[data-pr="merged"] {
+.automation-chip svg[data-pr="merged"],
+.automation-chip svg[data-issue="closed"] {
   color: light-dark(#8250df, #a371f7);
 }
 .automation-chip svg[data-pr="closed"],
@@ -436,10 +438,12 @@
   margin-top: 2px;
   color: var(--muted-foreground);
 }
-.automation-list-row > svg[data-pr="open"] {
+.automation-list-row > svg[data-pr="open"],
+.automation-list-row > svg[data-issue="open"] {
   color: light-dark(#1a7f37, #3fb950);
 }
-.automation-list-row > svg[data-pr="merged"] {
+.automation-list-row > svg[data-pr="merged"],
+.automation-list-row > svg[data-issue="closed"] {
   color: light-dark(#8250df, #a371f7);
 }
 .automation-list-row > svg[data-pr="closed"] {

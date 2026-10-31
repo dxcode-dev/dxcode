@@ -14,6 +14,7 @@ import {
   type PullSubject,
   targetUrl,
 } from "./github.js";
+import { type LinkRow, threadLinks } from "./links.js";
 import { isTimeZone } from "./recurrence.js";
 import { deleteSchedule, patchSchedule, readSchedule } from "./schedules.js";
 import {
@@ -88,10 +89,11 @@ const listed = async (
   userId: string,
   threadId: string,
 ) => {
-  const [schedule, subscriptions, ciResults] = await Promise.all([
+  const [schedule, subscriptions, ciResults, links] = await Promise.all([
     readSchedule(db, threadId),
     listOwnerSubscriptions(db, userId, threadId),
     threadCiResults(db, userId, threadId),
+    threadLinks(db, threadId),
   ]);
   return context.json(
     Schema.encodeUnknownSync(ThreadAutomationsResponseSchema)({
@@ -133,7 +135,8 @@ const listed = async (
           ...optional("lastEvent", row.last_event_summary),
           createdAt: row.created_at,
         })),
-        pullRequests: pullRequestsOf(subscriptions),
+        issues: issuesOf(links),
+        pullRequests: pullRequestsOf(subscriptions, links),
         ciRuns: ciRunsOf(subscriptions, ciResults),
       },
     }),
@@ -153,10 +156,47 @@ const parse = <A>(json: string | null): A | undefined => {
   }
 };
 
-/** The PRs the Thread follows, once each, as their webhooks left them. */
-const pullRequestsOf = (subscriptions: ReadonlyArray<ListedSubscription>) => {
+/** What a saved subject adds to an issue or PR row. */
+const subjectFields = (subject: PullSubject | undefined) =>
+  subject === undefined
+    ? {}
+    : {
+        title: subject.title,
+        ...(subject.summary === "" ? {} : { summary: subject.summary }),
+        ...(subject.changedAt === undefined
+          ? {}
+          : { changedAt: subject.changedAt }),
+      };
+
+/** The issues the Thread is linked to, as their webhooks left them. */
+const issuesOf = (links: ReadonlyArray<LinkRow>) =>
+  links.flatMap((link) => {
+    if (link.kind !== "issue") return [];
+    const subject = parse<PullSubject>(link.subject_json);
+    return [
+      {
+        repository: link.repository,
+        number: link.number,
+        url: `https://github.com/${link.repository}/issues/${link.number}`,
+        state:
+          subject?.state === "closed" || subject?.state === "merged"
+            ? ("closed" as const)
+            : ("open" as const),
+        ...subjectFields(subject),
+      },
+    ];
+  });
+
+/**
+ * The PRs the Thread follows, once each, as their webhooks left them: its
+ * PR comment subscriptions, then PRs linked without one.
+ */
+const pullRequestsOf = (
+  subscriptions: ReadonlyArray<ListedSubscription>,
+  links: ReadonlyArray<LinkRow>,
+) => {
   const seen = new Set<string>();
-  return subscriptions.flatMap((row) => {
+  const followed = subscriptions.flatMap((row) => {
     const number = filterOf(row).prNumber;
     const key = `${row.repository.toLowerCase()}#${number}`;
     if (
@@ -181,18 +221,26 @@ const pullRequestsOf = (subscriptions: ReadonlyArray<ListedSubscription>) => {
         number,
         url: `https://github.com/${row.repository}/pull/${number}`,
         state,
-        ...(subject === undefined
-          ? {}
-          : {
-              title: subject.title,
-              ...(subject.summary === "" ? {} : { summary: subject.summary }),
-              ...(subject.changedAt === undefined
-                ? {}
-                : { changedAt: subject.changedAt }),
-            }),
+        ...subjectFields(subject),
       },
     ];
   });
+  const linked = links.flatMap((link) => {
+    const key = `${link.repository.toLowerCase()}#${link.number}`;
+    if (link.kind !== "pull" || seen.has(key)) return [];
+    seen.add(key);
+    const subject = parse<PullSubject>(link.subject_json);
+    return [
+      {
+        repository: link.repository,
+        number: link.number,
+        url: `https://github.com/${link.repository}/pull/${link.number}`,
+        state: subject?.state ?? ("open" as const),
+        ...subjectFields(subject),
+      },
+    ];
+  });
+  return [...followed, ...linked];
 };
 
 /**

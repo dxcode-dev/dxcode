@@ -1,12 +1,25 @@
-import type { ThreadCiRunData, ThreadPullRequestData } from "@dx/api";
+import type {
+  ThreadCiRunData,
+  ThreadIssueData,
+  ThreadPullRequestData,
+} from "@dx/api";
 import {
   Check,
+  CircleCheck,
   CircleDashed,
+  CircleDot,
   GitMerge,
   GitPullRequest,
   GitPullRequestClosed,
   X,
 } from "lucide-react";
+
+export const issueIcon = (state: ThreadIssueData["state"]) =>
+  state === "closed" ? (
+    <CircleCheck aria-hidden="true" data-issue="closed" />
+  ) : (
+    <CircleDot aria-hidden="true" data-issue="open" />
+  );
 
 export const pullIcon = (state: ThreadPullRequestData["state"]) =>
   state === "merged" ? (

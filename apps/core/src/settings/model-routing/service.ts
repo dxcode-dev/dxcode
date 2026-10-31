@@ -23,6 +23,7 @@ import {
   ModelCredentialId,
   ModelRoutingRepository,
   ModeProfileOverrideRepository,
+  modelMappingLineError,
   type Profile,
   StoredModelConnection,
   Timestamp,
@@ -167,7 +168,11 @@ const toConnectionData = (
   priority: connection.priority,
   health: connection.health,
   ...(credential === undefined ? {} : { credential }),
-  serves: connection.kind === "custom" ? "declared" : "catalog",
+  serves:
+    connection.kind === "custom" ||
+    (connection.kind === "provider" && connection.models.length > 0)
+      ? "declared"
+      : "catalog",
   ...(claudePlan === undefined ? {} : { claudePlan }),
   createdAt: connection.createdAt,
   updatedAt: connection.updatedAt,
@@ -293,6 +298,30 @@ const validateModels = (
       });
     }
     seen.add(model.canonical);
+  });
+};
+
+/** A provider connection's model mapping lines; none serves its catalog. */
+const validateProviderMapping = (
+  lines: ReadonlyArray<{ canonical: string; upstream?: string }>,
+  fieldErrors: SettingsFieldError[],
+) => {
+  if (lines.length > MAX_CONNECTION_MODELS) {
+    fieldErrors.push({
+      field: "models",
+      message: `At most ${MAX_CONNECTION_MODELS} mapping lines.`,
+    });
+  }
+  const seen = new Set<string>();
+  lines.forEach((line, index) => {
+    const message =
+      modelMappingLineError(line) ??
+      (seen.has(line.canonical)
+        ? `Duplicate line ${line.canonical}.`
+        : undefined);
+    if (message !== undefined)
+      fieldErrors.push({ field: `models.${index}.canonical`, message });
+    seen.add(line.canonical);
   });
 };
 
@@ -459,12 +488,7 @@ export class ModelRoutingService {
       ) {
         fieldErrors.push({ field: "apiKey", message: CLAUDE_CODE_TOKEN_SHAPE });
       }
-      if (input.models !== undefined && input.models.length > 0) {
-        fieldErrors.push({
-          field: "models",
-          message: "Provider connections serve their whole catalog.",
-        });
-      }
+      validateProviderMapping(input.models ?? [], fieldErrors);
       if (input.format !== undefined) {
         fieldErrors.push({
           field: "format",
@@ -667,12 +691,7 @@ export class ModelRoutingService {
       const spec = supportedProvider(current.providerId);
       if (spec !== undefined)
         validateFields(spec.fields, merged.fields ?? {}, fieldErrors);
-      if (merged.models !== undefined && merged.models.length > 0) {
-        fieldErrors.push({
-          field: "models",
-          message: "Provider connections serve their whole catalog.",
-        });
-      }
+      validateProviderMapping(merged.models ?? [], fieldErrors);
     }
     if (current.kind === "custom") {
       if (input.baseUrl === null) {
@@ -1108,7 +1127,26 @@ export class ModelRoutingService {
         return match === undefined ? [] : [[canonical, match] as const];
       }),
     );
+    // Each plan's last-known limits, as Claude Code runs reported them.
+    const claudePlans = await Promise.all(
+      connections
+        .filter(({ providerId }) => providerId === CLAUDE_CODE_PROVIDER_ID)
+        .map(async (connection) => {
+          const { usage, allowExtraUsage } = await loadClaudePlan(
+            this.db,
+            connection.id,
+          );
+          return {
+            connectionId: connection.id,
+            name: connection.name,
+            enabled: connection.enabled,
+            allowExtraUsage,
+            ...(usage === undefined ? {} : { usage }),
+          };
+        }),
+    );
     return {
+      claudePlans,
       modes: MODE_IDS.map((mode) => {
         const resolution = modeResolution(modes, mode);
         const match = findServingConnection(

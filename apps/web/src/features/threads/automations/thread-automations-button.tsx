@@ -11,8 +11,12 @@ import {
   hasThreadAutomations,
   useThreadAutomations,
 } from "./automations-queries.js";
-import { CiRunList, PullRequestList } from "./github-header-lists.js";
-import { ciIcon, ciWords, pullIcon } from "./github-status.js";
+import {
+  CiRunList,
+  IssueList,
+  PullRequestList,
+} from "./github-header-lists.js";
+import { ciIcon, ciWords, issueIcon, pullIcon } from "./github-status.js";
 
 /** The open PR wins the icon; else merged when all merged, else closed. */
 const pullState = (pulls: ThreadAutomationsData["pullRequests"]) =>
@@ -51,7 +55,9 @@ export function AutomationViewContent({
   readonly data: ThreadAutomationsData;
   readonly view: AutomationView;
 }) {
-  return view === "pulls" ? (
+  return view === "issues" ? (
+    <IssueList issues={data.issues} />
+  ) : view === "pulls" ? (
     <PullRequestList pulls={data.pullRequests} />
   ) : view === "ci" ? (
     <CiRunList runs={data.ciRuns} />
@@ -61,7 +67,8 @@ export function AutomationViewContent({
 }
 
 /**
- * The header's entries: the pull requests the Thread opened, CI on its
+ * The header's entries: the issues the Thread works on, the pull requests
+ * it opened, CI on its
  * commits, and its schedule and GitHub listeners. Each shows only when it
  * has something. In a compact bar each sits in a slot the bar can take out
  * of the row when it runs out of room.
@@ -77,6 +84,7 @@ export function ThreadAutomationsButton({
 }) {
   const data = useThreadAutomations(threadId).data;
   if (data === undefined) return null;
+  const issues = data.issues;
   const pulls = data.pullRequests;
   const latestCi = data.ciRuns[0];
   const listeners = listening(data);
@@ -88,6 +96,35 @@ export function ThreadAutomationsButton({
   );
   return (
     <>
+      {issues.length === 0
+        ? null
+        : slot(
+            "issues",
+            <AutomationsPopover
+              triggerClassName={chip}
+              triggerLabel={
+                issues.length === 1
+                  ? `GitHub issue #${issues[0]?.number} (${issues[0]?.state})`
+                  : `${issues.length} GitHub issues (${issues.filter(({ state }) => state === "open").length} open)`
+              }
+              trigger={
+                <>
+                  {issueIcon(
+                    issues.some(({ state }) => state === "open")
+                      ? "open"
+                      : "closed",
+                  )}
+                  <span className="thread-header-chip-label">
+                    {issues.length === 1
+                      ? `#${issues[0]?.number}`
+                      : issues.length}
+                  </span>
+                </>
+              }
+            >
+              <IssueList issues={issues} />
+            </AutomationsPopover>,
+          )}
       {pulls.length === 0
         ? null
         : slot(

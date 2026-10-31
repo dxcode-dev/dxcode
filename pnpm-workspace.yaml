@@ -10,7 +10,7 @@ overrides:
   "@earendil-works/pi-ai": 1.1.0
   "@earendil-works/pi-agent-core": 1.1.0
   "@earendil-works/pi-telemetry": 1.1.0
-  "@flue/runtime": file:third-party/flue/runtime-de1dda9ae8b4791dea431cbdcbc818f4b5f22f71.tgz
+  "@flue/runtime": file:third-party/flue/runtime-c3d40fde8d0711a62d0d7cb7b99ccec8dbba5552.tgz
 
 patchedDependencies:
   '@rockorager/waymote@0.1.6': third-party/waymote/@rockorager__waymote@0.1.6.patch

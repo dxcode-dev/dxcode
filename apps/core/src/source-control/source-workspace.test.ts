@@ -299,6 +299,7 @@ const serviceLayer = (input: {
   readonly orbScripts?: {
     readonly preClone?: string;
     readonly preSetup?: string;
+    readonly desktopResume?: string;
   };
 }) => {
   const leases = input.leases ?? [];
@@ -630,6 +631,33 @@ describe("SourceWorkspaceService", () => {
     ).toBe(false);
   });
 
+  it("sends the project's Desktop resume script, or its removal, with every source command", async () => {
+    const desktopResume = '/opt/dx/desktop/chromium "http://localhost:3000"\n';
+    const withScript = makeSandbox([10]);
+    await activate(
+      withScript.preparation,
+      serviceLayer({ source: snapshot, orbScripts: { desktopResume } }),
+    );
+    const sourceCommands = (calls: typeof withScript.calls) =>
+      calls.filter(({ environment }) => environment?.DX_THREAD_ID === threadId);
+    expect(sourceCommands(withScript.calls).length).toBeGreaterThanOrEqual(3);
+    for (const { environment } of sourceCommands(withScript.calls)) {
+      expect(environment?.DX_DESKTOP_RESUME_SYNC).toBe("true");
+      expect(environment?.DX_DESKTOP_RESUME_SCRIPT).toBe(
+        encoded(desktopResume),
+      );
+    }
+
+    // A project without the script clears a copy an earlier Orb start left.
+    const without = makeSandbox([0]);
+    await prepare(without.preparation, serviceLayer({ source: snapshot }));
+    expect(sourceCommands(without.calls).length).toBeGreaterThanOrEqual(1);
+    for (const { environment } of sourceCommands(without.calls)) {
+      expect(environment?.DX_DESKTOP_RESUME_SYNC).toBe("true");
+      expect(environment?.DX_DESKTOP_RESUME_SCRIPT).toBe("");
+    }
+  });
+
   it("stops preparation without cloning when the pre-clone script fails, and says why without retrying", async () => {
     const timeline: string[] = [];
     const fake = makeSandbox([10], {
@@ -842,21 +870,6 @@ describe("SourceWorkspaceService", () => {
     } finally {
       logged.mockRestore();
     }
-  });
-
-  it("keeps setup verification but skips resume after a known-running reconnect", async () => {
-    const fake = makeSandbox([0]);
-
-    await expect(
-      activate(fake.preparation, serviceLayer({ source: snapshot }), {
-        runResume: false,
-      }),
-    ).resolves.toBe(SOURCE_WORKSPACE_CWD);
-
-    const hooksCall = fake.calls.find(
-      ({ environment }) => environment?.DX_ASSET_ACTION === "activate",
-    );
-    expect(hooksCall?.environment?.DX_RUN_RESUME).toBe("false");
   });
 
   it("uses separate exact-repository leases for a selected submodule and root LFS", async () => {

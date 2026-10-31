@@ -51,6 +51,8 @@ export interface ThreadRepositoryShape {
     thread: Thread,
     source?: ThreadSourceAdmission,
     executionPin?: ThreadExecutionPin,
+    /** The Claude plan a Claude Code Thread is bound to for its life. */
+    claudeConnectionId?: string,
   ) => Effect.Effect<void, Schema.SchemaError | PersistenceUnavailable>;
   readonly findOwnedById: (
     threadId: ThreadId,

@@ -295,10 +295,18 @@ const preCloneFailurePresentation = (
   };
 };
 
-/** Core refused the run at Orb start because its source grant changed. */
-const sourceAccessDenial = (error: unknown) => {
+/**
+ * Core refused the run at Orb start: its source grant changed, or the
+ * deployment's Orb billing policy refused it with a reason.
+ */
+const orbStartDenial = (error: unknown) => {
   if (typeof error !== "object" || error === null) return undefined;
   const { type, message, details } = error as Record<string, unknown>;
+  if (type === "orb_start_refused")
+    return {
+      title: "Orb not started",
+      message: typeof message === "string" ? message : "",
+    };
   if (type !== "source_authorization_denied") return undefined;
   return {
     title: typeof message === "string" ? message : "Source access needed",
@@ -358,13 +366,13 @@ const threadErrorPresentation = (
         )
       : undefined;
     if (preCloneFailure !== undefined) return preCloneFailure;
-    const sourceDenied = latestSettlementFailed
-      ? sourceAccessDenial(latestSettlement.error)
+    const startDenied = latestSettlementFailed
+      ? orbStartDenial(latestSettlement.error)
       : undefined;
-    if (sourceDenied !== undefined)
+    if (startDenied !== undefined)
       return {
         id: `settlement:${latestSettlement.submissionId}`,
-        ...sourceDenied,
+        ...startDenied,
         action: "resume",
       };
     const accountFailure = latestSettlementFailed
@@ -1023,6 +1031,8 @@ export interface AgentPanelOptions {
   readonly readOnlyNotice?: React.ReactNode;
   readonly archived?: boolean;
   readonly showArchivedNotice?: boolean;
+  /** The Thread's Project was deleted, so it can never be unarchived. */
+  readonly projectDeleted?: boolean;
   readonly active?: boolean;
   readonly additionalPanels?: React.ReactNode;
   /** The header; `transcript` reads the shown transcript when asked. */
@@ -1455,6 +1465,7 @@ export function AgentPanel({
   agent: renderedAgent,
   archived = false,
   showArchivedNotice = false,
+  projectDeleted = false,
   active = true,
   additionalPanels,
   renderHeader,
@@ -1605,7 +1616,9 @@ export function AgentPanel({
       {renderHeader?.(transcripts.current)}
       {showArchivedNotice ? (
         <div className="archived-thread-warning" role="note">
-          Archived. Unarchive to resume or run commands.
+          {projectDeleted
+            ? "Archived. Its project was deleted, so this thread is read-only."
+            : "Archived. Unarchive to resume or run commands."}
         </div>
       ) : null}
       <section

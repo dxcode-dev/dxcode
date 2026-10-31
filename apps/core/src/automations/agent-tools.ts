@@ -16,10 +16,17 @@ import {
   type FilterKind,
   githubToken,
   isRepository,
+  readItemSubject,
   readPullSubject,
   resolveCommit,
   type SubscriptionFilter,
 } from "./github.js";
+import {
+  linkOfSubscription,
+  linkThread,
+  saveLinkSubject,
+  threadLinks,
+} from "./links.js";
 import { RecurrenceInvalid } from "./recurrence.js";
 import {
   deleteSchedule,
@@ -264,26 +271,45 @@ export const createAutomationTools = (
   };
 
   /**
-   * A PR subscribed to after it opened missed its opening webhook: read it
-   * once, so the header lists its title. Webhooks keep it current after.
+   * An issue or PR subscribed to after it opened missed its opening
+   * webhook: read it once, so the header lists its title. Webhooks keep it
+   * current after.
    */
-  const savePullOnce = async (
+  const saveSubjectOnce = async (
     context: ThreadToolsContext,
     row: SubscriptionRow,
   ) => {
-    const number = filterOf(row).prNumber;
+    const link = linkOfSubscription(row.filter_kind, filterOf(row));
     const token = await githubToken(
       context.bindings,
       context.db,
       row.thread_id,
       row.owner_user_id,
     );
-    if (number === undefined || token === undefined) return;
-    const subject = await readPullSubject(token, row.repository, number).catch(
-      () => undefined,
-    );
-    if (subject !== undefined)
-      await savePullSubject(context.db, row.repository, number, subject);
+    if (link === undefined || token === undefined) return;
+    if (link.kind === "pull") {
+      const subject = await readPullSubject(
+        token,
+        row.repository,
+        link.number,
+      ).catch(() => undefined);
+      if (subject !== undefined)
+        await savePullSubject(context.db, row.repository, link.number, subject);
+      return;
+    }
+    const item = await readItemSubject(
+      token,
+      row.repository,
+      link.number,
+    ).catch(() => undefined);
+    if (item?.subject !== undefined)
+      await saveLinkSubject(
+        context.db,
+        row.repository,
+        link.number,
+        item.kind,
+        item.subject,
+      );
   };
 
   /** Validates the arguments and reads GitHub as the Thread's gh would. */
@@ -602,8 +628,12 @@ export const createAutomationTools = (
             input,
           );
           await catchUpCi(context.bindings, row);
-          if (!existed && row.filter_kind === "pr-comments")
-            await savePullOnce(context, row);
+          if (
+            !existed &&
+            (row.filter_kind === "pr-comments" ||
+              row.filter_kind === "issue-comments")
+          )
+            await saveSubjectOnce(context, row);
           const current = (await readSubscription(context.db, row.id)) ?? row;
           return { output: { ...subscriptionView(current), existed } };
         }),
@@ -752,6 +782,71 @@ export const createAutomationTools = (
           );
           return {
             output: { deleted: await deleteSubscription(context.db, row.id) },
+          };
+        }),
+    }),
+
+    // --- Issue links ---------------------------------------------------
+    defineTool({
+      name: "link_github_issue",
+      description: description([
+        "Record that this Thread works on a GitHub issue or pull request. The Thread header then lists it with its title and state, and find_thread finds this Thread with issue:owner/repo#N. Use it when you take on an issue or PR, such as when you add an Owner thread: line for this Thread to an issue's body.",
+        "A comment subscription (pr-comments or issue-comments) on an issue or PR links it already, and a PR this Thread opens is linked when it opens. The link stays after the subscription ends. dx reads the item once as this Thread's gh does; the dx GitHub App's webhooks keep its title and state current.",
+      ]),
+      input: v.object({
+        repository: text(200, "GitHub repository as owner/name."),
+        number: v.pipe(
+          v.number(),
+          v.integer(),
+          v.minValue(1),
+          v.description("The issue or pull request number."),
+        ),
+      }),
+      run: async ({ data }) =>
+        withOwner(async (context, owner) => {
+          if (!isRepository(data.repository))
+            throw new Error(
+              "repository must be a GitHub repository as owner/name.",
+            );
+          const token = await githubToken(
+            context.bindings,
+            context.db,
+            callingThreadId,
+            owner.ownerUserId,
+          );
+          // Without credentials the link is still useful: find_thread
+          // finds it, and webhooks fill in its title and state.
+          const item =
+            token === undefined
+              ? undefined
+              : await readItemSubject(token, data.repository, data.number);
+          await linkThread(context.db, {
+            threadId: callingThreadId,
+            repository: data.repository,
+            number: data.number,
+            kind: item?.kind ?? "issue",
+            subject: item?.subject,
+          });
+          return {
+            output: {
+              linked: {
+                repository: data.repository,
+                number: data.number,
+                kind: item?.kind ?? "issue",
+                ...(item?.subject === undefined
+                  ? {}
+                  : { title: item.subject.title, state: item.subject.state }),
+              },
+              links: (await threadLinks(context.db, callingThreadId)).map(
+                ({ repository, number, kind }) =>
+                  `${repository}#${number} (${kind === "pull" ? "PR" : "issue"})`,
+              ),
+              ...(token === undefined
+                ? {
+                    note: "No GitHub credentials, so dx could not read its title or check that it exists. Webhooks from the dx GitHub App fill them in.",
+                  }
+                : {}),
+            },
           };
         }),
     }),

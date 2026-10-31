@@ -531,10 +531,11 @@ export const collectDeploymentConfig = async ({
     : undefined;
   const workersAi = await yes("Enable Workers AI", true);
   const workerTraces = await yes(WORKER_TRACES_PROMPT, false);
+  // Without a list, people can add a key for every catalog provider.
   const modelDeploymentProviders = (await yes(
-    "Configure other deployment model integrations",
+    "Limit the API-key model providers people can add",
   ))
-    ? await answer("Deployment provider IDs, comma-separated")
+    ? await answer("Provider IDs, comma-separated, or none", "none")
     : undefined;
   return validateSelfhostConfig({
     name,

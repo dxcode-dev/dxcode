@@ -170,6 +170,7 @@ export const listedUnderParentSql = `child.owner_user_id = parent.owner_user_id
           AND child.lifecycle_state = parent.lifecycle_state
           AND child.pinned_at IS NULL
           AND (child_project.workspace_id IS NULL
+            OR child_project.deleted_at IS NOT NULL
             OR ${activeMemberSql("child_project.workspace_id", "child.owner_user_id")})`;
 
 /**
@@ -349,6 +350,7 @@ export const readThreadListItem = async (
           AND thread.lifecycle_state != 'deleted'
           AND ((thread.owner_user_id = ?2
                 AND (project.workspace_id IS NULL
+                  OR project.deleted_at IS NOT NULL
                   OR ${activeMemberSql("project.workspace_id", "?2")}))
             OR (?4 = 1
                 AND thread.lifecycle_state = 'active'
@@ -432,7 +434,10 @@ const readableThreadSql = `(
 
 /**
  * The family of `threadId` as the requester may read it: its root and the
- * root's children, active and archived, oldest first, up to `limit`. A member
+ * root's active children, oldest first, up to `limit`. The root and
+ * `threadId` itself list even when archived, so an archived root still heads
+ * its active children; a child whose starter is archived names it anyway,
+ * and the tree page lists it under the root. A member
  * of a shared family gets only the members shared with them, without the
  * owner's pins or snoozes. Undefined when the requester cannot read the
  * Thread itself.
@@ -491,7 +496,9 @@ export const readThreadFamily = async (
              ON thread.id = target.root_id OR thread.parent_thread_id = target.root_id
            JOIN projects AS project ON project.id = thread.project_id
           WHERE thread.owner_user_id = target.owner_user_id
-            AND thread.lifecycle_state != 'deleted'
+            AND (thread.lifecycle_state = 'active'
+              OR (thread.lifecycle_state = 'archived'
+                AND (thread.id = target.root_id OR thread.id = ?1)))
             AND ${readableThreadSql}
           ORDER BY thread.created_at, thread.id
           LIMIT ?6`,

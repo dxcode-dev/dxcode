@@ -203,7 +203,6 @@ export const activateSourceWorkspace = (
   onPreparationPhase?: (
     phase: SourceWorkspacePreparationPhase,
   ) => Effect.Effect<void>,
-  runResume = true,
   disk?: SourceWorkspaceDiskOptions,
 ) =>
   Effect.runPromise(
@@ -211,10 +210,12 @@ export const activateSourceWorkspace = (
       const service = yield* SourceWorkspaceService;
       const preparation = workspacePreparationFor(sandbox);
       return yield* runThreadHooks
-        ? service.activate(threadId, preparation, onPreparationPhase, {
-            runResume,
-            ...(disk === undefined ? {} : { disk }),
-          })
+        ? service.activate(
+            threadId,
+            preparation,
+            onPreparationPhase,
+            disk === undefined ? {} : { disk },
+          )
         : service.prepare(threadId, preparation, disk);
     }).pipe(
       Effect.provide(sourceWorkspaceLayer(bindings, db, options).activation),

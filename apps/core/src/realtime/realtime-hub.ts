@@ -483,7 +483,7 @@ export class RealtimeHub extends DurableObject<Bindings> {
     return Response.json({ revision });
   }
 
-  /** An event for one user only: their inbox or sidebar layout changed. */
+  /** An event for one user only: their inbox, sidebar layout, or Needs you changed. */
   async #publishUserEvent(
     request: Request,
     audience: AudienceKey,
@@ -500,7 +500,8 @@ export class RealtimeHub extends DurableObject<Bindings> {
       body === null ||
       !("type" in body) ||
       (body.type !== "notifications.invalidated" &&
-        body.type !== "sidebar.invalidated") ||
+        body.type !== "sidebar.invalidated" &&
+        body.type !== "needs-you.invalidated") ||
       Object.keys(body).length !== 2
     )
       return new Response(null, { status: 400 });

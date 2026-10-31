@@ -1,5 +1,5 @@
 import "./model-routing.css";
-import type { CatalogProviderData, ConnectionData } from "@dx/api";
+import type { ConnectionData } from "@dx/api";
 import {
   CLAUDE_CODE_PROVIDER_ID,
   workspaceRoleHasPermission,
@@ -26,18 +26,15 @@ import {
   type SettingsSectionProps,
   settingsPath,
 } from "../settings-registration.js";
+import { AddProviderDialog } from "./add-provider-dialog.js";
 import {
   ClaudeCodeNotice,
   ClaudeConnectDialog,
 } from "./claude-code-connect.js";
 import { ClaudePlanPanel } from "./claude-plan-usage.js";
-import {
-  AddConnectionMenu,
-  ConnectionDialog,
-  type ConnectionDialogSubmit,
-  ConnectionRow,
-  CopilotConnectDialog,
-} from "./model-routing-controls.js";
+import type { ConnectionDialogSubmit } from "./connection-dialog.js";
+import { ConnectionRow } from "./connection-row.js";
+import { CopilotConnectDialog } from "./copilot-connect-dialog.js";
 import { ModelRoutingGraph } from "./model-routing-graph.js";
 import {
   apiMessage,
@@ -54,13 +51,10 @@ import {
 
 const message = apiMessage;
 
-type DialogState =
-  | { readonly kind: "closed" }
-  | { readonly kind: "add-provider"; readonly provider: CatalogProviderData }
-  | { readonly kind: "add-custom" }
-  | { readonly kind: "edit"; readonly connection: ConnectionData }
-  | { readonly kind: "copilot" }
-  | { readonly kind: "claude"; readonly connection?: ConnectionData };
+import {
+  ConnectionFormDialog,
+  type DialogState,
+} from "./connection-form-dialog.js";
 
 const isClaudeConnection = (connection: ConnectionData) =>
   connection.providerId === CLAUDE_CODE_PROVIDER_ID;
@@ -79,32 +73,6 @@ const editDialog = (connection: ConnectionData): DialogState =>
   isClaudeConnection(connection)
     ? { kind: "claude", connection }
     : { kind: "edit", connection };
-
-type FormDialog = Extract<
-  DialogState,
-  { readonly kind: "add-provider" | "add-custom" | "edit" }
->;
-
-const formDialogKey = (dialog: FormDialog) =>
-  dialog.kind === "add-provider"
-    ? dialog.provider.id
-    : dialog.kind === "edit"
-      ? dialog.connection.id
-      : "custom";
-
-const formDialogProvider = (
-  dialog: FormDialog,
-  catalog:
-    | { readonly providers: ReadonlyArray<CatalogProviderData> }
-    | undefined,
-) =>
-  dialog.kind === "add-provider"
-    ? dialog.provider
-    : dialog.kind === "edit" && dialog.connection.kind === "provider"
-      ? catalog?.providers.find(
-          (provider) => provider.id === dialog.connection.providerId,
-        )
-      : undefined;
 
 /**
  * Another scope's routing in its place in the order: members' own
@@ -587,6 +555,15 @@ export const ModelRoutingSettings = ({
   const routingRows = rows.filter(
     (connection) => !isClaudeConnection(connection),
   );
+  // The deployment chooses these with DX_MODEL_DEPLOYMENT_PROVIDERS. Core
+  // accepts provider API keys on personal routing only.
+  const apiKeyProviders = personal
+    ? (catalog.data?.providers ?? []).filter(
+        (provider) =>
+          provider.connectionKind === "provider" &&
+          provider.id !== CLAUDE_CODE_PROVIDER_ID,
+      )
+    : [];
 
   return (
     <div className="model-routing-settings routing-parity">
@@ -594,11 +571,17 @@ export const ModelRoutingSettings = ({
         title="Model Routing"
         actions={
           canMutate ? (
-            <AddConnectionMenu
-              showCopilot={personal && copilotRow === undefined}
+            <AddProviderDialog
+              showCopilot={personal}
+              copilotConnected={copilotRow !== undefined}
               showClaude={personal}
+              providers={apiKeyProviders}
               onPick={(pick) =>
-                setDialog({ kind: pick === "custom" ? "add-custom" : pick })
+                setDialog(
+                  typeof pick === "object"
+                    ? { kind: "add-provider", provider: pick }
+                    : { kind: pick === "custom" ? "add-custom" : pick },
+                )
               }
             />
           ) : undefined
@@ -708,11 +691,10 @@ export const ModelRoutingSettings = ({
       {dialog.kind === "add-provider" ||
       dialog.kind === "add-custom" ||
       dialog.kind === "edit" ? (
-        <ConnectionDialog
-          key={formDialogKey(dialog)}
-          open
-          provider={formDialogProvider(dialog, catalog.data)}
-          {...(dialog.kind === "edit" ? { existing: dialog.connection } : {})}
+        <ConnectionFormDialog
+          dialog={dialog}
+          catalog={catalog.data}
+          rows={rows}
           busy={
             (dialog.kind === "edit" ? updateMutation : createMutation).isPending
           }

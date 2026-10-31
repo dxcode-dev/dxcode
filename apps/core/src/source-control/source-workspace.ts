@@ -172,8 +172,6 @@ export interface SourceWorkspaceDiskOptions {
 }
 
 export interface SourceWorkspaceActivationOptions {
-  /** Skip the per-activation resume hook after a confirmed running reconnect. */
-  readonly runResume?: boolean;
   readonly disk?: SourceWorkspaceDiskOptions;
 }
 
@@ -517,6 +515,20 @@ const preSetupEnvironment = (
   source.orbScripts?.preSetup === undefined
     ? {}
     : { DX_PRE_SETUP_SCRIPT: encodedProjectScript(source.orbScripts.preSetup) };
+
+/**
+ * The Desktop resume script for /opt/dx/desktop/resume. Every source command
+ * carries it, or an empty value that removes a copy an earlier start left.
+ */
+const desktopResumeEnvironment = (
+  source: SourceWorkspaceRecord,
+): Record<string, string> => ({
+  DX_DESKTOP_RESUME_SYNC: "true",
+  DX_DESKTOP_RESUME_SCRIPT:
+    source.orbScripts?.desktopResume === undefined
+      ? ""
+      : encodedProjectScript(source.orbScripts.desktopResume),
+});
 
 const PreCloneState = Schema.Struct({
   status: Schema.Literals(["skipped", "success", "failed"]),
@@ -899,13 +911,16 @@ const makeSourceWorkspaceService = (
       const prefetchedBase =
         snapshot === undefined
           ? undefined
-          : baseEnvironment(
-              threadId,
-              snapshot,
-              invocationId,
-              configDigest,
-              shallowClone,
-            );
+          : {
+              ...baseEnvironment(
+                threadId,
+                snapshot,
+                invocationId,
+                configDigest,
+                shallowClone,
+              ),
+              ...desktopResumeEnvironment(source),
+            };
       let setupPhasePublished = false;
       if (
         prefetchedBase !== undefined &&
@@ -926,7 +941,6 @@ const makeSourceWorkspaceService = (
               environment: {
                 ...prefetchedBase,
                 ...(runThreadHooks ? preSetupEnvironment(source) : {}),
-                DX_RUN_RESUME: options?.runResume === false ? "false" : "true",
               },
               timeoutMs: runThreadHooks ? HOOKS_TIMEOUT_MS : COMMAND_TIMEOUT_MS,
             },
@@ -958,13 +972,16 @@ const makeSourceWorkspaceService = (
         stage = "initialize-anonymous-checkout";
         if (onPreparationPhase !== undefined)
           yield* onPreparationPhase("cloning-repository");
-        const anonymousBase = baseEnvironment(
-          threadId,
-          intent,
-          invocationId,
-          configDigest,
-          shallowClone,
-        );
+        const anonymousBase = {
+          ...baseEnvironment(
+            threadId,
+            intent,
+            invocationId,
+            configDigest,
+            shallowClone,
+          ),
+          ...desktopResumeEnvironment(source),
+        };
         stage = "pre-clone";
         yield* runPreClone(preparation, source, anonymousBase);
         stage = "initialize-anonymous-checkout";
@@ -984,13 +1001,16 @@ const makeSourceWorkspaceService = (
           capturedAt: yield* DateTime.now,
         });
       }
-      const base = baseEnvironment(
-        threadId,
-        snapshot,
-        invocationId,
-        configDigest,
-        shallowClone,
-      );
+      const base = {
+        ...baseEnvironment(
+          threadId,
+          snapshot,
+          invocationId,
+          configDigest,
+          shallowClone,
+        ),
+        ...desktopResumeEnvironment(source),
+      };
       stage = "read-checkout-state";
       let prefetchedHooks: typeof HooksState.Type | undefined;
       let prefetchedHooksStderr = "";
@@ -1104,8 +1124,6 @@ const makeSourceWorkspaceService = (
                 {
                   ...base,
                   ...preSetupEnvironment(source),
-                  DX_RUN_RESUME:
-                    options?.runResume === false ? "false" : "true",
                 },
                 HOOKS_TIMEOUT_MS,
               ).pipe(

@@ -10,9 +10,11 @@ import {
   PluginBundlesForbiddenResponseSchema,
   PluginBundlesUnavailableResponseSchema,
   PreviewPluginBundleResponseSchema,
+  PreviewPluginBundleUpdateResponseSchema,
   RemovePluginBundleResponseSchema,
   UpdatePluginBundleRequestSchema,
   UpdatePluginBundleResponseSchema,
+  UpdatePluginBundleSourceResponseSchema,
 } from "@dx/api";
 import {
   MAX_PLUGIN_ARCHIVE_BYTES,
@@ -507,6 +509,69 @@ const registerRoutes = (
         { mutate: true },
       ),
       201,
+    ),
+  );
+
+  router.post("/:pluginId/update/preview", (context) =>
+    run(
+      context,
+      operation(
+        context,
+        (access) =>
+          Effect.gen(function* () {
+            const id = yield* parseId(context);
+            const zip = isZip(context)
+              ? yield* previewInput(context)
+              : undefined;
+            const service = yield* PluginBundleService;
+            const preview = yield* service.previewUpdate(
+              access.target,
+              id,
+              zip?.type === "zip" ? zip : undefined,
+            );
+            return yield* Schema.encodeUnknownEffect(
+              PreviewPluginBundleUpdateResponseSchema,
+            )({
+              status: "success",
+              data: {
+                manifest: preview.bundle.manifest,
+                source: preview.source,
+                integrity: preview.bundle.integrity,
+                conflicts: preview.conflicts,
+                upToDate: preview.upToDate,
+                skills: preview.skills,
+                mcpServers: preview.mcpServers,
+              },
+            });
+          }),
+        { mutate: true },
+      ),
+    ),
+  );
+
+  router.post("/:pluginId/update", (context) =>
+    run(
+      context,
+      operation(
+        context,
+        (access) =>
+          Effect.gen(function* () {
+            const id = yield* parseId(context);
+            const { input, integrity } = yield* installInput(context);
+            const service = yield* PluginBundleService;
+            const updated = yield* service.update(
+              access.target,
+              id,
+              input,
+              integrity,
+              audit(context),
+            );
+            return yield* Schema.encodeUnknownEffect(
+              UpdatePluginBundleSourceResponseSchema,
+            )({ status: "success", data: yield* bundleData(updated) });
+          }),
+        { mutate: true },
+      ),
     ),
   );
 

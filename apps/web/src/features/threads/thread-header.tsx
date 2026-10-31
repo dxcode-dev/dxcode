@@ -7,6 +7,7 @@ import {
   Bookmark,
   CalendarClock,
   CircleCheck,
+  CircleDot,
   Eye,
   FolderGit2,
   GitPullRequest,
@@ -33,8 +34,8 @@ import { ThreadAutomationsButton } from "./automations/thread-automations-button
 import { ThreadAutomationsSheet } from "./automations/thread-automations-sheet.js";
 import { useThreadLayoutMode } from "./panes/thread-layout-mode.js";
 import { ShareDialog } from "./sharing/share-dialog.js";
-import { useSetThreadFollowing } from "./sharing/sharing-mutations.js";
 import { participantsLabel } from "./sharing/sharing-format.js";
+import { useSetThreadFollowing } from "./sharing/sharing-mutations.js";
 import {
   ThreadParticipants,
   ThreadParticipantsMenuContent,
@@ -194,7 +195,9 @@ export function ThreadHeader({
                     className="thread-menu-item"
                     onClick={() => setSheet(view)}
                   >
-                    {view === "pulls" ? (
+                    {view === "issues" ? (
+                      <CircleDot />
+                    ) : view === "pulls" ? (
                       <GitPullRequest />
                     ) : view === "ci" ? (
                       <CircleCheck />

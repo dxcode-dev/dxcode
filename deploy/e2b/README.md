@@ -27,9 +27,10 @@ The script prints the template name and immutable build id. Put the name in
 ```
 
 `pnpm deploy:selfhost` verifies the template exists with a ready immutable
-build before touching any Cloudflare resource. Branch previews name an
-existing template in `DX_E2B_TEMPLATE` and build only the per-size aliases
-from it.
+build before touching any Cloudflare resource. Staging and branch previews
+need no template name: each deploy builds the base and per-size templates
+from this recipe, by recipe hash, and reuses them while the recipe is
+unchanged ([Orb image updates](../../wiki/runtime-architecture.md#orb-image-updates)).
 
 ## What the image contains
 

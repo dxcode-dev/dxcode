@@ -74,6 +74,14 @@ interface SkillServiceShape {
     activate: boolean,
     audit: AuditContext,
   ) => Effect.Effect<SkillWithVersion, unknown>;
+  /** Publishes a version another importer already previewed. */
+  readonly publishFromPreview: (
+    target: SkillTarget,
+    id: typeof SkillId.Type,
+    preview: SkillPreview,
+    activate: boolean,
+    audit: AuditContext,
+  ) => Effect.Effect<SkillWithVersion, unknown>;
   readonly changeState: (
     target: SkillTarget,
     id: typeof SkillId.Type,
@@ -257,6 +265,46 @@ export class SkillService extends Context.Service<
         },
       );
 
+      const publishFromPreview = Effect.fn("SkillService.publishFromPreview")(
+        function* (
+          target: SkillTarget,
+          id: typeof SkillId.Type,
+          preview: SkillPreview,
+          activate: boolean,
+          auditContext: AuditContext,
+        ) {
+          const current = yield* repository.find(target, id);
+          if (preview.manifest.name !== current.skill.name) {
+            return yield* new SkillIntegrityConflict();
+          }
+          if (activate) yield* requireReviewedMcp(target, preview);
+          const latest = Math.max(...current.versions);
+          const versionNumber = yield* Schema.decodeEffect(SkillVersion)(
+            latest + 1,
+          );
+          const version = yield* makeVersion(
+            id,
+            versionNumber,
+            preview,
+            auditContext.userId,
+          );
+          yield* repository.insertVersion(
+            target,
+            version,
+            activate,
+            version.createdAt,
+          );
+          yield* audit(
+            activate ? "skill.update_activate" : "skill.update_publish",
+            target,
+            auditContext,
+            id,
+            versionNumber,
+          );
+          return yield* repository.find(target, id);
+        },
+      );
+
       return SkillService.of({
         preview: previewSkillImport,
         list: repository.list,
@@ -283,38 +331,18 @@ export class SkillService extends Context.Service<
             activate,
             auditContext,
           ) {
-            const current = yield* repository.find(target, id);
             const preview = yield* checkedPreview(bundle, reviewedIntegrity);
-            if (preview.manifest.name !== current.skill.name) {
-              return yield* new SkillIntegrityConflict();
-            }
-            if (activate) yield* requireReviewedMcp(target, preview);
-            const latest = Math.max(...current.versions);
-            const versionNumber = yield* Schema.decodeEffect(SkillVersion)(
-              latest + 1,
-            );
-            const version = yield* makeVersion(
+            return yield* publishFromPreview(
+              target,
               id,
-              versionNumber,
               preview,
-              auditContext.userId,
-            );
-            yield* repository.insertVersion(
-              target,
-              version,
               activate,
-              version.createdAt,
-            );
-            yield* audit(
-              activate ? "skill.update_activate" : "skill.update_publish",
-              target,
               auditContext,
-              id,
-              versionNumber,
             );
-            return yield* repository.find(target, id);
           },
         ),
+        publishFromPreview: (target, id, preview, activate, auditContext) =>
+          publishFromPreview(target, id, preview, activate, auditContext),
         changeState: Effect.fn("SkillService.changeState")(
           function* (target, id, input, auditContext) {
             const current = yield* repository.find(target, id);

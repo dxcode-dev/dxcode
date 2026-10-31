@@ -62,11 +62,12 @@ COPY deploy/orb/desktop/start /opt/dx/desktop/start
 COPY deploy/orb/desktop/stop /opt/dx/desktop/stop
 COPY deploy/orb/desktop/session /opt/dx/desktop/session
 COPY deploy/orb/desktop/chromium /opt/dx/desktop/chromium
+COPY deploy/orb/desktop/resume /opt/dx/desktop/resume
 COPY deploy/orb/desktop/bin/ffmpeg /opt/dx/desktop/bin/ffmpeg
 COPY deploy/orb/desktop/labwc/autostart /opt/dx/desktop/labwc/autostart
 COPY deploy/orb/desktop/labwc/rc.xml /opt/dx/desktop/labwc/rc.xml
 COPY deploy/orb/desktop/labwc/menu.xml /opt/dx/desktop/labwc/menu.xml
-RUN chown -R root:root /opt/dx && chmod 0755 /opt/dx /opt/dx/desktop /opt/dx/desktop/bin /opt/dx/desktop/labwc /opt/dx/desktop/start /opt/dx/desktop/stop /opt/dx/desktop/session /opt/dx/desktop/chromium /opt/dx/desktop/bin/ffmpeg && chmod 0644 /opt/dx/desktop/labwc/autostart /opt/dx/desktop/labwc/rc.xml /opt/dx/desktop/labwc/menu.xml && for bin in labwc Xwayland foot chromium ffmpeg wlr-randr dbus-run-session flock setsid pgrep pkill unshare awk paste; do command -v "$bin" >/dev/null || { echo "missing desktop binary: $bin"; exit 1; }; done && ! ldd /opt/dx/desktop/waymote/bin/waymote-streamd | grep "not found"
+RUN chown -R root:root /opt/dx && chmod 0755 /opt/dx /opt/dx/desktop /opt/dx/desktop/bin /opt/dx/desktop/labwc /opt/dx/desktop/start /opt/dx/desktop/stop /opt/dx/desktop/session /opt/dx/desktop/chromium /opt/dx/desktop/resume /opt/dx/desktop/bin/ffmpeg && chmod 0644 /opt/dx/desktop/labwc/autostart /opt/dx/desktop/labwc/rc.xml /opt/dx/desktop/labwc/menu.xml && for bin in labwc Xwayland foot chromium ffmpeg wlr-randr dbus-run-session flock setsid pgrep pkill unshare awk paste; do command -v "$bin" >/dev/null || { echo "missing desktop binary: $bin"; exit 1; }; done && ! ldd /opt/dx/desktop/waymote/bin/waymote-streamd | grep "not found"
 
 # Every binary Core's daemon installer and source runtime invoke.
 RUN for bin in sudo curl sha256sum install cmp git git-lfs gh bash setpriv setsid readlink tini rg jq node java python3 awk tmux; do command -v "$bin" >/dev/null || { echo "missing required binary: $bin"; exit 1; }; done

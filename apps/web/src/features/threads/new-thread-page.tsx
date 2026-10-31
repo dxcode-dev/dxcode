@@ -25,6 +25,7 @@ import {
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Option, Schema } from "effect";
 import * as React from "react";
+import { toast } from "sonner";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { CommandProvider } from "../../shared/commands/command-provider.js";
 import {
@@ -62,6 +63,7 @@ import {
 import { orbProvidersQueryOptions } from "../settings/orb-providers/orb-providers-queries.js";
 import { projectDefaultsQueryOptions } from "../settings/project-defaults/project-defaults-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
+import { claudePlanPick } from "./claude-code-mode-options.js";
 import { useDictation } from "./dictation/use-dictation.js";
 import {
   addScreenshot,
@@ -297,7 +299,11 @@ function NewThreadStillCreating({ onRetry }: { readonly onRetry: () => void }) {
   );
 }
 
-function NewThreadError({
+/**
+ * A composer error as a toast, raised when it mounts and dismissed when the
+ * error clears; key it by the error so a new one raises a new toast.
+ */
+function NewThreadErrorToast({
   message,
   acceptedThreadId,
   onAccepted,
@@ -307,30 +313,32 @@ function NewThreadError({
   readonly onAccepted: () => void;
 }) {
   const navigate = useNavigate();
-  const [navigationError, setNavigationError] = React.useState<string>();
-  return (
-    <div className="notice error-notice">
-      {navigationError ?? message}
-      {acceptedThreadId === undefined ? null : (
-        <Button
-          type="button"
-          variant="secondary"
-          onClick={() => {
-            void navigate({
-              to: "/threads/$threadId",
-              params: { threadId: acceptedThreadId },
-            }).then(onAccepted, () => {
-              setNavigationError(
-                "Thread was created, but still could not be opened.",
-              );
-            });
-          }}
-        >
-          Open created thread
-        </Button>
-      )}
-    </div>
-  );
+  useMountEffect(() => {
+    const id = toast.error(message, {
+      duration: Number.POSITIVE_INFINITY,
+      ...(acceptedThreadId === undefined
+        ? {}
+        : {
+            action: {
+              label: "Open created thread",
+              onClick: () => {
+                void navigate({
+                  to: "/threads/$threadId",
+                  params: { threadId: acceptedThreadId },
+                }).then(onAccepted, () => {
+                  toast.error(
+                    "Thread was created, but still could not be opened.",
+                  );
+                });
+              },
+            },
+          }),
+    });
+    return () => {
+      toast.dismiss(id);
+    };
+  });
+  return null;
 }
 
 const updatePendingImages = async (
@@ -412,6 +420,7 @@ function useComposerModeSelection(
   const [effort, chooseEffort] = React.useState<ClaudeCodeEffort>(
     CLAUDE_CODE_DEFAULT_EFFORT,
   );
+  const [chosenPlan, chooseClaudePlan] = React.useState<string>();
   const choicesQuery = useQuery(modelRoutingChoicesQueryOptions(userId));
   const profile = chosenProfile ?? startingMode(remembered.mode);
   const model =
@@ -447,9 +456,12 @@ function useComposerModeSelection(
     profile,
     model,
     effort,
+    claudePlan: claudePlanPick(choicesQuery.data, chosenPlan).current
+      ?.connectionId,
     chooseProfile,
     chooseModel,
     chooseEffort,
+    chooseClaudePlan,
   };
 }
 
@@ -589,9 +601,11 @@ function ScopedNewThreadModal({
     profile,
     model,
     effort,
+    claudePlan,
     chooseProfile,
     chooseModel,
     chooseEffort,
+    chooseClaudePlan,
   } = useComposerModeSelection(identity.id, remembered, rememberComposer);
   const routingGraphQuery = useQuery(
     modelRoutingGraphQueryOptions({ scope: "personal" }, identity.id),
@@ -670,6 +684,7 @@ function ScopedNewThreadModal({
         profile,
         model,
         effort,
+        claudePlan,
         runnerProfileId: effectiveRunnerProfileId,
         projects,
         imageCollection,
@@ -786,6 +801,8 @@ function ScopedNewThreadModal({
           onProfileChange={chooseProfile}
           onModelChange={chooseModel}
           onEffortChange={chooseEffort}
+          claudePlan={claudePlan}
+          onClaudePlanChange={chooseClaudePlan}
           dictationControls={dictation.controls}
           dictationActive={dictation.active}
           dictationHideSubmit={dictation.hideSubmit}
@@ -796,7 +813,8 @@ function ScopedNewThreadModal({
                 <NewThreadStillCreating onRetry={creation.retry} />
               ) : null}
               {visibleError === undefined ? null : (
-                <NewThreadError
+                <NewThreadErrorToast
+                  key={`${visibleError}:${acceptedNavigationTarget ?? ""}`}
                   message={visibleError}
                   acceptedThreadId={acceptedNavigationTarget}
                   onAccepted={onAccepted}

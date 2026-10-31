@@ -3,6 +3,9 @@ import {
   CLAUDE_CODE_DEFAULT_MODEL,
   CLAUDE_CODE_MODELS,
   CLAUDE_CODE_PROVIDER_ID,
+  type ClaudePlanUsage,
+  claudePlanBlockedUntil,
+  claudePlanWindowName,
   isClaudeCodeModel,
   ModeId,
   PROJECTLESS_PROJECT_NAME,
@@ -157,6 +160,52 @@ export const agentModeSelection = (
     model,
     thinking: claudeCaller?.thinking ?? CLAUDE_CODE_DEFAULT_EFFORT,
   } as ThreadModelSelection;
+};
+
+const isoSeconds = (seconds: number) => new Date(seconds * 1000).toISOString();
+
+/**
+ * A Claude plan as list_agent_modes reports it: the limits Claude Code runs
+ * last reported on it, a window past its reset at 0%, and until when it is
+ * used up for `model`. Unknown until Claude Code first runs on the plan.
+ */
+const claudePlanListing = (
+  plan: {
+    readonly connectionId: string;
+    readonly name: string;
+    readonly enabled: boolean;
+    readonly allowExtraUsage: boolean;
+    readonly usage?: ClaudePlanUsage;
+  },
+  model: string,
+) => {
+  const now = Math.floor(Date.now() / 1000);
+  const usedUpUntil = claudePlanBlockedUntil(
+    plan.usage,
+    plan.allowExtraUsage,
+    now,
+    model.slice(model.indexOf("/") + 1),
+  );
+  return {
+    plan: plan.connectionId,
+    name: plan.name,
+    enabled: plan.enabled,
+    ...(usedUpUntil === undefined
+      ? {}
+      : { usedUpUntil: isoSeconds(usedUpUntil) }),
+    limits:
+      plan.usage === undefined || plan.usage.windows.length === 0
+        ? "unknown until Claude Code runs on this plan"
+        : plan.usage.windows.map(({ id, utilization, resetsAt }) => ({
+            limit: claudePlanWindowName(id),
+            usedPercent:
+              resetsAt <= now ? 0 : Math.round(Math.min(utilization, 1) * 100),
+            resetsAt: isoSeconds(resetsAt),
+          })),
+    ...(plan.usage === undefined
+      ? {}
+      : { reportedAt: isoSeconds(plan.usage.observedAt) }),
+  };
 };
 
 /**
@@ -441,6 +490,15 @@ export const createThreadTools = (
             ),
           ),
         ),
+        claude_plan: v.optional(
+          v.pipe(
+            v.string(),
+            v.maxLength(128),
+            v.description(
+              "For a Claude Code child: the plan ID from list_agent_modes' claudePlans that it runs on for its whole life. Required when the owner has more than one enabled plan. A plan that is used up is refused with its reset time.",
+            ),
+          ),
+        ),
       }),
       run: async ({ data, toolCallId, signal }) =>
         withContext(async (context, owner) => {
@@ -476,6 +534,9 @@ export const createThreadTools = (
                 : { title: data.title, generateTitle: false }),
               ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
               ...(selection === undefined ? {} : { selection }),
+              ...(data.claude_plan === undefined
+                ? {}
+                : { claudeConnectionId: data.claude_plan }),
               initialMessage: { body: data.prompt, attachments: [] },
             },
           );
@@ -820,8 +881,8 @@ export const createThreadTools = (
     defineTool({
       name: "list_agent_modes",
       description: description([
-        "List the agent modes a child Thread can run in (low, medium, high, ultra) with the model and thinking level each uses for this Thread's owner, and whether a connection serves that model now. When the owner has connected a Claude Pro/Max plan, it also lists claude-code/<model> modes, which run the child through Claude Code on that plan. Also returns this Thread's mode, which a child gets by default.",
-        "Call it before create_thread when the user asks for a mode or a model. Pass the mode to create_thread as agent_mode.",
+        "List the agent modes a child Thread can run in (low, medium, high, ultra) with the model and thinking level each uses for this Thread's owner, and whether a connection serves that model now. When the owner has connected a Claude Pro/Max plan, it also lists claude-code/<model> modes, which run the child through Claude Code, and claudePlans: each plan's ID, its limits and reset times as Claude Code last reported them, and until when it is used up. Also returns this Thread's mode, which a child gets by default.",
+        "Call it before create_thread when the user asks for a mode or a model. Pass the mode to create_thread as agent_mode, and for Claude Code the plan's ID as claude_plan. A child stays on its plan; it never moves to another.",
       ]),
       input: v.object({}),
       run: async () =>
@@ -848,6 +909,13 @@ export const createThreadTools = (
                 readonly models?: ReadonlyArray<{
                   readonly canonical: string;
                   readonly connectionName?: string | null;
+                }>;
+                readonly claudePlans?: ReadonlyArray<{
+                  readonly connectionId: string;
+                  readonly name: string;
+                  readonly enabled: boolean;
+                  readonly allowExtraUsage: boolean;
+                  readonly usage?: ClaudePlanUsage;
                 }>;
               }
             | undefined;
@@ -886,11 +954,18 @@ export const createThreadTools = (
                       claudeCaller?.thinking ?? CLAUDE_CODE_DEFAULT_EFFORT,
                     served: true,
                     agent: "Claude Code",
-                    ...(model.connectionName == null
-                      ? {}
-                      : { connection: model.connectionName }),
                   })),
               ],
+              ...((choices?.claudePlans ?? []).length === 0
+                ? {}
+                : {
+                    claudePlans: (choices?.claudePlans ?? []).map((plan) =>
+                      claudePlanListing(
+                        plan,
+                        claudeCaller?.model ?? CLAUDE_CODE_DEFAULT_MODEL,
+                      ),
+                    ),
+                  }),
             },
           };
         }),

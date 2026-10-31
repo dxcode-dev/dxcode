@@ -6,6 +6,7 @@ import desktopChromium from "../../../../../deploy/orb/desktop/chromium?raw";
 import labwcAutostart from "../../../../../deploy/orb/desktop/labwc/autostart?raw";
 import labwcMenu from "../../../../../deploy/orb/desktop/labwc/menu.xml?raw";
 import labwcRc from "../../../../../deploy/orb/desktop/labwc/rc.xml?raw";
+import desktopResume from "../../../../../deploy/orb/desktop/resume?raw";
 import desktopSession from "../../../../../deploy/orb/desktop/session?raw";
 import desktopStart from "../../../../../deploy/orb/desktop/start?raw";
 import desktopStop from "../../../../../deploy/orb/desktop/stop?raw";
@@ -33,6 +34,7 @@ const COPIED_FILES: Readonly<Record<string, string>> = {
   "deploy/orb/desktop/stop": desktopStop,
   "deploy/orb/desktop/session": desktopSession,
   "deploy/orb/desktop/chromium": desktopChromium,
+  "deploy/orb/desktop/resume": desktopResume,
   "deploy/orb/desktop/bin/ffmpeg": desktopFfmpeg,
   "deploy/orb/desktop/labwc/autostart": labwcAutostart,
   "deploy/orb/desktop/labwc/rc.xml": labwcRc,

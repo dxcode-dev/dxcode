@@ -8,8 +8,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import { resolve } from "node:path";
-import { ApiClient, ConnectionConfig, Template } from "e2b";
-import { dxOrbTemplate } from "../deploy/e2b/template.mjs";
 import {
   assertDockerReady,
   orbDockerEnvironment,
@@ -30,9 +28,6 @@ import {
   verifyDxdBytes,
 } from "../deploy/selfhost/dxd-release.mjs";
 import { preflightPortalZone } from "../deploy/selfhost/portals.mjs";
-import e2bOrbProfiles from "../packages/domain/e2b-orb-profiles.json" with {
-  type: "json",
-};
 import {
   assertCleanRevision,
   assertDeploymentAccount,
@@ -59,7 +54,6 @@ import {
   prepareDeploymentPackage,
   reconcileDeploymentMigrationAliases,
   resolveCloudflareDatabaseId,
-  resolveE2BTemplateEvidence,
   resourceName,
   securePrivateDeploymentState,
   selfhostDeploymentShape,
@@ -580,26 +574,6 @@ if (databaseId !== undefined) {
 
 let e2bApiKey = "destroy-does-not-select-e2b";
 let workloadIdentitySigningKeys;
-let templateEvidence = {
-  name: "destroy-does-not-select-e2b",
-  buildId: "destroy-does-not-select-e2b",
-};
-const profileTemplateName = (template, templateSuffix) =>
-  `${template}-${templateSuffix}`;
-const buildE2BOrbTemplates = async (templateEvidence, apiKey) => {
-  const baseTemplate = `${templateEvidence.name}:${templateEvidence.buildId}`;
-  for (const profile of e2bOrbProfiles) {
-    await Template.build(
-      dxOrbTemplate(baseTemplate),
-      profileTemplateName(templateEvidence.name, profile.templateSuffix),
-      {
-        apiKey,
-        cpuCount: profile.resources.cpuCores,
-        memoryMB: profile.resources.memoryMb,
-      },
-    );
-  }
-};
 if (target === "staging" && operation === "destroy")
   workloadIdentitySigningKeys = JSON.stringify({
     version: 1,
@@ -608,7 +582,6 @@ if (target === "staging" && operation === "destroy")
   });
 if (operation === "deploy" && !e2bInstalled) {
   e2bApiKey = "";
-  templateEvidence = { name: "not-installed", buildId: "not-installed" };
   if (target === "staging")
     workloadIdentitySigningKeys = required("DX_WORKLOAD_IDENTITY_SIGNING_KEYS");
   assertDxdChecksum(dxdChecksum);
@@ -622,33 +595,8 @@ if (operation === "deploy" && !e2bInstalled) {
   if (target === "staging")
     workloadIdentitySigningKeys = required("DX_WORKLOAD_IDENTITY_SIGNING_KEYS");
   assertDxdChecksum(dxdChecksum);
-  const e2bTemplate =
-    target === "selfhost"
-      ? "alchemy-held-selfhost-template"
-      : required("DX_E2B_TEMPLATE");
-  if (!e2bTemplate)
-    throw new Error(
-      target === "selfhost"
-        ? "e2bTemplate is required in deploy.selfhost.json (or DX_E2B_TEMPLATE)."
-        : "DX_E2B_TEMPLATE is required.",
-    );
-  templateEvidence =
-    target === "selfhost"
-      ? {
-          name: e2bTemplate,
-          buildId: "alchemy-held-selfhost-build",
-        }
-      : await resolveE2BTemplateEvidence(e2bTemplate, async () => {
-          const config = new ConnectionConfig({ apiKey: e2bApiKey });
-          const response = await new ApiClient(config).api.GET("/templates");
-          if (!response.data)
-            throw new Error(
-              `E2B template preflight read failed (${response.response.status}).`,
-            );
-          return response.data;
-        });
-  if (target !== "selfhost")
-    await buildE2BOrbTemplates(templateEvidence, e2bApiKey);
+  // The E2BProfiles resource builds this deployment's E2B templates from
+  // the Orb recipe during the apply, and rebuilds them when it changes.
 }
 
 console.log(`Cloudflare account: ${account.name}`);
@@ -664,10 +612,6 @@ console.log(
 console.log(
   `Attachments: direct to R2 (${attachmentSigning === "token" ? "bucket-scoped signing token" : "operator's R2 API token"})`,
 );
-if (operation === "deploy" && e2bInstalled)
-  console.log(
-    `E2B template: ${templateEvidence.name} (${templateEvidence.buildId})`,
-  );
 
 const authHome =
   target === "selfhost" && selfhostCloudflareAuth.method === "alchemy-oauth"
@@ -802,8 +746,6 @@ const environment = {
     ? {}
     : { DX_DEPLOYMENT_TURNSTILE: String(selfhostShape.turnstile) }),
   DX_DEPLOYMENT_ORB_WORKER_NAME: orbWorkerName(stage),
-  DX_DEPLOYMENT_E2B_TEMPLATE: templateEvidence.name,
-  DX_DEPLOYMENT_E2B_TEMPLATE_BUILD_ID: templateEvidence.buildId,
   DX_DEPLOYMENT_DXD_CHECKSUM: dxdChecksum,
   DX_DEPLOYMENT_DXD_RELEASE_URL: dxdReleaseUrl,
   DX_DEPLOYMENT_STAGE: stage,

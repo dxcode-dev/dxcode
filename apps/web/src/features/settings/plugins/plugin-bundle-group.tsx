@@ -6,9 +6,13 @@ interface Item {
   readonly detail?: string;
   /** A short status after the detail, such as "Needs review". */
   readonly status?: string;
+  /** Colors the status: an update's added, changed, or removed item. */
+  readonly tone?: "added" | "changed" | "removed" | "unchanged";
 }
 
 /** One kind of item in a bundle, as a titled list. */
+export type PluginBundleGroupItem = Item;
+
 export function PluginBundleGroup({
   icon,
   title,
@@ -34,7 +38,9 @@ export function PluginBundleGroup({
               <span title={item.detail}>{item.detail}</span>
             )}
             {item.status === undefined ? null : (
-              <em className="plugin-bundle-status-pill">{item.status}</em>
+              <em className="plugin-bundle-status-pill" data-tone={item.tone}>
+                {item.status}
+              </em>
             )}
           </li>
         ))}

@@ -49,6 +49,12 @@ The Claude Pro/Max card in Model Routing shows the limits Claude Code last
 reported for your plan while it ran, with when each resets. A plan that has
 not run Claude Code yet shows no limits, and dx does not hold its threads.
 
+With more than one plan connected, you pick the plan when you start a Claude
+Code thread. The new-thread composer lists each plan with its last-reported
+limit, and an agent passes the plan to `create_thread`. A thread stays on its
+plan for its whole life. dx refuses to start a thread on a plan that is used
+up and shows when that plan resets.
+
 The card's **Claude Usage** choice decides what happens at a limit:
 
 - **Subscription Only** (the default): dx stops Claude Code when Anthropic

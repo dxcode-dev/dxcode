@@ -53,6 +53,29 @@ export const LeaveWorkspaceResponseSchema = successResponse(
   Schema.Struct({ left: Schema.Literal(true) }),
 );
 
+/**
+ * Deleting a workspace. `confirmShortName` must repeat its short name.
+ * `threads`: keep moves every Thread in its Projects to its owner, archived
+ * and read-only; delete deletes them as deleting a Thread does.
+ */
+export const DeleteWorkspaceRequestSchema = Schema.Struct({
+  confirmShortName: Schema.String,
+  threads: Schema.Literals(["keep", "delete"]),
+});
+
+export type DeleteWorkspaceRequest = typeof DeleteWorkspaceRequestSchema.Type;
+
+export const DeleteWorkspaceResponseSchema = successResponse(
+  Schema.Struct({
+    deleted: Schema.Literal(true),
+    keptThreadCount: Schema.Int,
+    deletedThreadCount: Schema.Int,
+  }),
+);
+
+export type DeleteWorkspaceData =
+  (typeof DeleteWorkspaceResponseSchema.Type)["data"];
+
 export const WorkspaceInviteLinkStatusSchema = Schema.Literals([
   "active",
   "expired",
@@ -132,6 +155,7 @@ export const WorkspaceMembersErrorCode = Schema.Literals([
   "WORKSPACE_ADMIN_REQUIRED",
   "WORKSPACE_MEMBER_NOT_FOUND",
   "WORKSPACE_OWNER_IMMUTABLE",
+  "WORKSPACE_OWNER_REQUIRED",
   "WORKSPACE_INVITE_LINK_NOT_FOUND",
   "WORKSPACE_INVITE_INVALID",
   "WORKSPACE_MEMBERSHIP_EXISTS",

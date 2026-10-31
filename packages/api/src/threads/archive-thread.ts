@@ -37,6 +37,11 @@ export const ArchiveThreadExecutionUnavailableResponseSchema = errorResponse(
   "THREAD_ARCHIVE_UNAVAILABLE",
   "The Thread was archived, but its sandbox could not be stopped.",
 );
+/** Unarchiving a Thread whose Project, or its workspace, was deleted. */
+export const ArchiveThreadProjectDeletedResponseSchema = errorResponse(
+  "THREAD_PROJECT_DELETED",
+  "This thread's project was deleted, so the thread stays archived.",
+);
 export const ThreadArchivedResponseSchema = errorResponse(
   "THREAD_ARCHIVED",
   "Thread is archived. Unarchive it before continuing.",

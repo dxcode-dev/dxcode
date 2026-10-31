@@ -1,4 +1,5 @@
 import {
+  ModelConnectionId,
   ProjectId,
   RunnerProfileId,
   ThreadId,
@@ -91,6 +92,11 @@ export const CreateThreadRequestSchema = Schema.Struct({
    * records that child's parent instead, so children never nest.
    */
   parentThreadId: Schema.optional(ThreadId),
+  /**
+   * The Claude Pro/Max plan a Claude Code Thread runs on, for its whole life.
+   * Required when the owner has more than one enabled plan.
+   */
+  claudeConnectionId: Schema.optional(ModelConnectionId),
 }).check(
   Schema.makeFilter((request) =>
     request.initialMessage === undefined && request.threadId === undefined
@@ -177,6 +183,22 @@ export const CreateThreadModelRouteUnavailableResponseSchema = Schema.Struct({
     requestId: Schema.String,
     model: Schema.String,
     reason: Schema.Literals(["no-connection", "disabled", "unknown-model"]),
+  }),
+});
+
+/** The Claude plan was not picked, cannot be used, or is used up. */
+export const CreateThreadClaudePlanRefusedResponseSchema = Schema.Struct({
+  status: Schema.Literal("error"),
+  data: Schema.Struct({
+    code: Schema.Literals([
+      "CLAUDE_PLAN_REQUIRED",
+      "CLAUDE_PLAN_UNAVAILABLE",
+      "CLAUDE_PLAN_USED_UP",
+    ]),
+    message: Schema.String,
+    requestId: Schema.String,
+    /** When a used-up plan resets. */
+    resetsAt: Schema.optional(Schema.String),
   }),
 });
 

@@ -83,9 +83,12 @@ set `authEmailFrom`, or remove `allowSignup` to stay invite-only.
 
 Cloudflare, D1, R2, generated authentication keys, E2B, the three E2B runner
 profiles, and the pinned dxd asset are required. GitHub, Bitbucket, Sarvam,
-Copilot, and deployment model integrations are optional. If omitted, their
-bindings are absent or carry the product's disabled sentinel. They do not block
-`/readyz`. User and workspace model keys remain product configuration.
+and Copilot are optional. If omitted, their bindings are absent or carry the
+product's disabled sentinel. They do not block `/readyz`. User and workspace
+model keys remain product configuration. `modelDeploymentProviders` limits the
+catalog providers people can add an API key for in Model Routing: omitted
+offers every one, a comma-separated list offers those IDs, and `"none"` offers
+none.
 
 First-party plugins are chosen at install: `plugins: ["search", "speech"]`
 installs the Search and Speech plugins and becomes the `DX_INSTALLED_PLUGINS`

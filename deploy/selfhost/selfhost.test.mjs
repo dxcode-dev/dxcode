@@ -474,6 +474,68 @@ describe("E2B profile reconciliation", () => {
       `${prefix}-a1-medium:medium-build`,
     ]);
   });
+  it("builds each recipe its own templates, so a branch recipe never replaces staging's", async () => {
+    const built = async (recipeHash) => {
+      const names = [];
+      await reconcileE2BProfiles({
+        deploymentName: "staging",
+        apiKey: "redacted",
+        listTemplates: async () => [],
+        buildTemplate: async (_template, name) => {
+          names.push(name);
+          return { name, buildId: `${name}-build` };
+        },
+        recipeHash,
+      });
+      return names;
+    };
+    const main = await built("a".repeat(64));
+    const branch = await built("b".repeat(64));
+    expect(main).toHaveLength(4);
+    expect(
+      main.every((name) => name.startsWith(`dx-staging-${"a".repeat(16)}-`)),
+    ).toBe(true);
+    expect(branch.filter((name) => main.includes(name))).toEqual([]);
+  });
+
+  it("waits for a build another deployment of the team started instead of building again", async () => {
+    const prefix = "dx-staging-0123456789abcdef";
+    const listing = (baseStatus) => [
+      { ...ready(`${prefix}-base`, "base-build"), buildStatus: baseStatus },
+      ready(`${prefix}-a1-tiny`, "tiny-build"),
+      ready(`${prefix}-a1-small`, "small-build"),
+      ready(`${prefix}-a1-medium`, "medium-build"),
+    ];
+    const listTemplates = vi
+      .fn()
+      .mockResolvedValueOnce(listing("building"))
+      .mockResolvedValueOnce(listing("waiting"))
+      .mockResolvedValue(listing("ready"));
+    const buildTemplate = vi.fn();
+    const result = await reconcileE2BProfiles({
+      deploymentName: "staging",
+      apiKey: "redacted",
+      listTemplates,
+      buildTemplate,
+      recipeHash: "0123456789abcdef".padEnd(64, "0"),
+      wait: { pollMs: 1, timeoutMs: 60_000 },
+    });
+    expect(buildTemplate).not.toHaveBeenCalled();
+    expect(result.base).toEqual({
+      name: `${prefix}-base`,
+      buildId: "base-build",
+    });
+    await expect(
+      reconcileE2BProfiles({
+        deploymentName: "staging",
+        apiKey: "redacted",
+        listTemplates: async () => listing("building"),
+        buildTemplate,
+        recipeHash: "0123456789abcdef".padEnd(64, "0"),
+        wait: { pollMs: 1, timeoutMs: 5 },
+      }),
+    ).rejects.toThrow("still building");
+  });
 });
 
 describe("dxd release integrity", () => {

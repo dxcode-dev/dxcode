@@ -68,6 +68,7 @@ const projectDefaultOverrides = {
   commitAuthor: null,
   signingPreference: null,
   runnerProfileId: null,
+  dxCoAuthor: null,
 } as const;
 
 const mutationData = (client: QueryClient) =>

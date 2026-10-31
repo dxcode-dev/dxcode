@@ -38,6 +38,7 @@ In **Personal Settings → Model Routing**, choose **Add** and pick one of:
 
 - **Claude Pro/Max** to run Claude Code in your Threads on your Claude plan.
 - **GitHub Copilot** to serve the models your Copilot subscription includes.
+- A provider, such as **Anthropic** or **OpenAI**, with your API key.
 - **Custom URL** for any endpoint that speaks the OpenAI or Anthropic API,
   with your API key.
 
@@ -46,9 +47,9 @@ See [Connecting a model](/docs/use/connect-a-model/) for each one.
 ## Connect an Orb provider
 
 In **Personal Settings → Orb Providers**, choose **Connect** next to E2B,
-Cloudflare Containers, Freestyle, or Docker Cloud Sandboxes and enter the
-key or token it asks for. dx then prepares your account, which takes a few
-minutes for most providers and about ten for Freestyle. The provider's row
+Cloudflare Containers, Freestyle, Docker Cloud Sandboxes, or Boat and enter
+the key or token it asks for. dx then prepares your account, which takes a
+few minutes for most providers and about ten for Freestyle and Boat. The provider's row
 shows each step while it runs.
 
 A provider listed as **Provided by this deployment** already works and needs

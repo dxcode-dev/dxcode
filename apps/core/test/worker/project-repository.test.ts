@@ -21,6 +21,7 @@ describe("ProjectRepository D1", () => {
       signingPreference: "preferred" as const,
       runnerProfileId: "e2b-large",
       publicCodeEnabled: false,
+      dxCoAuthor: true,
     };
 
     const projectId = await runRepositories(
@@ -164,6 +165,7 @@ describe("ProjectRepository D1", () => {
         signingPreference: "disabled",
         runnerProfileId: "e2b-default",
         publicCodeEnabled: false,
+        dxCoAuthor: true,
       },
       createdAt: now,
       updatedAt: now,

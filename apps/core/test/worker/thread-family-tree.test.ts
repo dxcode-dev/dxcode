@@ -41,6 +41,16 @@ const startersOf = (data: GetThreadTreeResponse["data"]) =>
     data.items.map((item) => [item.id, item.startedByThreadId ?? null]),
   );
 
+const setLifecycle = async (
+  threadIds: readonly string[],
+  lifecycleState: "active" | "archived",
+) => {
+  for (const id of threadIds)
+    await env.DB.prepare("UPDATE threads SET lifecycle_state = ? WHERE id = ?")
+      .bind(lifecycleState, id)
+      .run();
+};
+
 describe("Thread family tree", () => {
   it("records which Thread started each one while the family keeps its root", async () => {
     const project = await createProjectViaApi("tree-starter");
@@ -92,39 +102,66 @@ describe("Thread family tree", () => {
     expect(lone.items.map(({ id }) => id)).toEqual([unrelated.data.id]);
   });
 
-  it("keeps archived members, drops deleted ones, and moves what a deleted Thread started under the root", async () => {
+  it("lists only active members besides the root and the viewed Thread, and drops deleted ones", async () => {
     const project = await createProjectViaApi("tree-lifecycle");
     const root = await createThreadViaApi(project.data.id);
-    const child = await createChild(project.data.id, root.data.id);
-    const archived = await createChild(project.data.id, child.id);
-    const orphan = await createChild(project.data.id, child.id);
-    await env.DB.prepare(
-      "UPDATE threads SET lifecycle_state = 'archived' WHERE id = ?",
-    )
-      .bind(archived.id)
-      .run();
+    const lead = await createChild(project.data.id, root.data.id);
+    const archived = await createChild(project.data.id, lead.id);
+    const worker = await createChild(project.data.id, archived.id);
+    const done = await createChild(project.data.id, root.data.id);
+    await setLifecycle([archived.id, done.id], "archived");
 
-    const before = await treeOf(root.data.id);
+    // Archived children leave the tree; what they started stays, naming its
+    // starter, so the page lists it under the root.
+    const active = await treeOf(root.data.id);
+    expect(startersOf(active)).toEqual({
+      [root.data.id]: null,
+      [lead.id]: root.data.id,
+      [worker.id]: archived.id,
+    });
+    // The sidebar counts only the active children too.
+    const listed = await roots();
+    expect(shape(listed.items)).toContainEqual({
+      id: root.data.id,
+      childCount: 2,
+    });
+    expect(shape(await childrenOf(root.data.id))).toEqual(
+      shape([{ id: lead.id }, { id: worker.id }]),
+    );
+
+    // The Thread being viewed shows even when archived.
+    expect(Object.keys(startersOf(await treeOf(archived.id))).sort()).toEqual(
+      [root.data.id, lead.id, archived.id, worker.id].sort(),
+    );
+
+    // An archived root still heads its active children.
+    await setLifecycle([root.data.id], "archived");
+    const headless = await treeOf(lead.id);
+    expect(headless.rootThreadId).toBe(root.data.id);
     expect(
-      before.items.find(({ id }) => id === archived.id)?.lifecycleState,
-    ).toBe("archived");
+      Object.fromEntries(
+        headless.items.map(({ id, lifecycleState }) => [id, lifecycleState]),
+      ),
+    ).toEqual({
+      [root.data.id]: "archived",
+      [lead.id]: "active",
+      [worker.id]: "active",
+    });
+    await setLifecycle([root.data.id], "active");
 
     expect(
       await tombstoneThreads(
         env.DB,
-        [child.id],
+        [lead.id],
         owner,
         new Date().toISOString(),
       ),
-    ).toEqual([child.id]);
-
-    const after = await treeOf(root.data.id);
-    expect(startersOf(after)).toEqual({
+    ).toEqual([lead.id]);
+    expect(startersOf(await treeOf(root.data.id))).toEqual({
       [root.data.id]: null,
-      [archived.id]: null,
-      [orphan.id]: null,
+      [worker.id]: archived.id,
     });
-    expect((await tree(child.id)).status).toBe(404);
+    expect((await tree(lead.id)).status).toBe(404);
   });
 
   it("lists a Thread started before starters were recorded under its root", async () => {

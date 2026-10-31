@@ -49,6 +49,7 @@ Scope broad searches by repository, project, or date when that context is known.
 - **Parent filter**: \`parent:thread\` to find the direct children of a thread ID or dx thread URL, including threads spawned with create_thread. Grandchildren and other descendants are not included
 - **Project filter**: \`project:name\` to scope to a project by name or ID
 - **Repo filter**: \`repo:url\` to scope to a repository: \`repo:github.com/owner/repo\` or \`repo:owner/repo\`
+- **Issue filter**: \`issue:owner/repo#N\` or a GitHub issue or pull request URL to find the threads linked to that issue or PR, by a comment subscription or link_github_issue
 - **Pinned filter**: \`pinned:true\` for pinned threads or \`pinned:false\` for unpinned threads
 - **Snoozed filter**: \`snoozed:true\` for the thread owner's threads snoozed right now, hidden from their sidebar until a wake time, or \`snoozed:false\` for the rest
 - **Author filter**: \`author:name\` to find threads by a user: \`author:alice\` or \`author:me\` for the thread owner's own threads
@@ -63,7 +64,7 @@ All matching is case-insensitive. Keywords match by word stem; there is no prefi
 
 ## Results
 
-Each thread has threadId, title, projectName, ownerName, ownedByYou, parentThreadId when it has one, color, archived, pinned, snoozedUntil while snoozed, visibility, state, lastActivityAt, and createdAt. Keyword results add matchedSearchText, an excerpt of the newest message holding the first keyword.
+Each thread has threadId, title, projectName, ownerName, ownedByYou, parentThreadId when it has one, color, archived, pinned, snoozedUntil while snoozed, visibility, state, lastActivityAt, and createdAt. A thread kept, archived and read-only, after its project was deleted adds projectDeleted, and workspaceDeleted when its workspace was deleted. Keyword results add matchedSearchText, an excerpt of the newest message holding the first keyword.
 
 ## Pagination
 

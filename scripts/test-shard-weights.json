@@ -149,7 +149,7 @@
   "apps/web/src/features/settings/keyboard-shortcuts/keyboard-shortcuts-settings.editing.browser.test.tsx": 0.8,
   "apps/web/src/features/settings/mode-dial/mode-dial-settings.browser.test.tsx": 0.1,
   "apps/web/src/features/settings/mode-search-navigation.test.ts": 0,
-  "apps/web/src/features/settings/model-routing/model-routing-controls.browser.test.tsx": 0.2,
+  "apps/web/src/features/settings/model-routing/connection-dialog.browser.test.tsx": 0.2,
   "apps/web/src/features/settings/model-routing/model-routing-settings.browser.test.tsx": 0,
   "apps/web/src/features/settings/orb-providers/orb-providers-status.test.ts": 0,
   "apps/web/src/features/settings/plugins/plugins-settings.test.ts": 0,

@@ -6,6 +6,7 @@ import {
   ModelNotServed,
   type ModelRoutingRepositoryShape,
   type ModeProfileOverrideRepositoryShape,
+  modelMappingServes,
   type PersistenceUnavailable,
   type Profile,
   type ResolvedSubmissionModel,
@@ -94,10 +95,14 @@ export const connectionUpstreamFor = (
     case "provider":
     case "deployment": {
       const { provider, model } = canonicalParts(canonical);
-      return connection.providerId === provider &&
-        findCatalogModel(provider, model) !== undefined
-        ? model
-        : undefined;
+      if (
+        connection.providerId !== provider ||
+        findCatalogModel(provider, model) === undefined
+      )
+        return undefined;
+      // A provider key's mapping narrows its catalog; none serves it all.
+      const mapping = modelMappingServes(connection.models, canonical);
+      return mapping.served ? (mapping.upstream ?? model) : undefined;
     }
   }
 };

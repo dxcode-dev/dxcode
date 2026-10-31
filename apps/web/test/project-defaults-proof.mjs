@@ -2,7 +2,7 @@
 // preview. Creates a personal and a workspace project first, then saves new
 // personal and workspace defaults through the settings pages and checks over
 // the API that new projects take them while the earlier projects keep their
-// own configuration. Checks that Save Defaults is enabled only while something
+// own configuration, including Add dx as co-author. Checks that Save Defaults is enabled only while something
 // changed and that leaving with unsaved edits asks first. Writes desktop
 // (1440) and mobile (390) screenshots, a HAR without bodies, console.json,
 // and summary.json to <output>, then restores the original defaults.
@@ -164,6 +164,19 @@ try {
   await page
     .getByRole("combobox", { name: "Default commit author" })
     .selectOption(personalAuthor);
+  // Add dx as co-author: on until someone turns it off (#1303).
+  const coAuthor = page.getByRole("button", { name: "Add dx as co-author" });
+  const personalCoAuthor = !originalPersonal.resolved.dxCoAuthor.value;
+  assert.equal(
+    await coAuthor.getAttribute("aria-pressed"),
+    String(originalPersonal.resolved.dxCoAuthor.value),
+    "Add dx as co-author does not show the saved value.",
+  );
+  await coAuthor.click();
+  assert.equal(
+    await coAuthor.getAttribute("aria-pressed"),
+    String(personalCoAuthor),
+  );
   assert(
     await save.isEnabled(),
     "Save Defaults stays disabled after a change.",
@@ -172,6 +185,7 @@ try {
   step("a change enables Save Defaults", {
     runnerProfileId: personalSize.id,
     commitAuthor: personalAuthor,
+    dxCoAuthor: personalCoAuthor,
   });
 
   await page.getByRole("link", { name: "Account" }).first().click();
@@ -186,6 +200,7 @@ try {
   const savedPersonal = await api("GET", personalPath);
   assert.equal(savedPersonal.overrides.runnerProfileId, personalSize.id);
   assert.equal(savedPersonal.overrides.commitAuthor, personalAuthor);
+  assert.equal(savedPersonal.overrides.dxCoAuthor, personalCoAuthor);
   step("personal defaults saved on the server", {
     overrides: savedPersonal.overrides,
   });
@@ -196,6 +211,7 @@ try {
     newPersonal.configuration.commitAuthor.preference,
     personalAuthor,
   );
+  assert.equal(newPersonal.configuration.dxCoAuthor, personalCoAuthor);
   assert.deepEqual(
     await projectConfiguration(existingPersonal.id),
     existingPersonal.configuration,
@@ -218,6 +234,11 @@ try {
         .count(),
       0,
       "The workspace page shows a commit author default.",
+    );
+    assert.equal(
+      await page.getByRole("button", { name: "Add dx as co-author" }).count(),
+      0,
+      "The workspace page shows a co-author default.",
     );
     await shot(page, "05-workspace.desktop");
     const workspaceDefaults = await api("GET", workspacePath);
@@ -309,6 +330,8 @@ try {
   await phone.goto(`${base}/settings/projects`);
   await phone.getByRole("radiogroup").first().waitFor();
   await shot(phone, "07-personal.mobile");
+  await phone.getByRole("button", { name: "Add dx as co-author" }).click();
+  await shot(phone, "07b-personal-co-author-changed.mobile");
   if (workspaceSlug !== undefined) {
     await phone.goto(`${base}/workspaces/${workspaceSlug}/projects`);
     await phone.getByRole("radiogroup").first().waitFor();

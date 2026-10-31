@@ -465,7 +465,7 @@ export const listSharedThreadRows = async (
       >()
   ).results;
 
-/** Sharing fields of Thread detail for the requester. */
+/** Sharing and Project fields of Thread detail for the requester. */
 export const threadSharingDetail = async (
   db: D1Database,
   threadId: ThreadId,
@@ -480,7 +480,9 @@ export const threadSharingDetail = async (
       : Promise.resolve(undefined),
     db
       .prepare(
-        `SELECT project.name AS project_name, thread.conversation_mode,
+        `SELECT project.name AS project_name,
+                project.deleted_at IS NOT NULL AS project_deleted,
+                thread.conversation_mode,
                 EXISTS (SELECT 1 FROM thread_follower AS follower
                          WHERE follower.thread_id = thread.id
                            AND follower.user_id = ?2) AS following
@@ -491,6 +493,7 @@ export const threadSharingDetail = async (
       .bind(threadId, viewerUserId)
       .first<{
         project_name: string;
+        project_deleted: number;
         conversation_mode: "agent" | "chat";
         following: number;
       }>(),
@@ -510,6 +513,14 @@ export const threadSharingDetail = async (
           projectName: thread.project_name.slice(0, 256),
           following: thread.following === 1,
         }),
+    // The owner can no longer read a deleted Project, so its name comes
+    // with the Thread.
+    ...(thread?.project_deleted === 1
+      ? {
+          projectName: thread.project_name.slice(0, 256),
+          projectDeleted: true,
+        }
+      : {}),
     conversationMode:
       sharing === undefined ? "agent" : (thread?.conversation_mode ?? "agent"),
     ...(skipConfirmation === undefined

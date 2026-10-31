@@ -2,6 +2,8 @@ import type { ChoicesData } from "@dx/api";
 import {
   CLAUDE_CODE_DEFAULT_MODEL,
   type ClaudeCodeEffort,
+  claudePlanBlockedUntil,
+  claudePlanWindowName,
   isClaudeCodeModel,
 } from "@dx/domain";
 import { modelDisplayName } from "../../shared/model-display-name.js";
@@ -60,4 +62,58 @@ export const claudeCodeDial = (
     model: claudeCodeShortName(current.name).toUpperCase(),
     effort: effort === "xhigh" ? "X-HIGH" : effort.toUpperCase(),
   };
+};
+
+type ClaudePlanChoice = ChoicesData["claudePlans"][number];
+
+/**
+ * The enabled Claude plans a new Claude Code Thread can be bound to, in
+ * routing order, and the one it would take: the one picked, else the first.
+ */
+export const claudePlanPick = (
+  choices: ChoicesData | undefined,
+  picked: string | undefined,
+) => {
+  const plans = (choices?.claudePlans ?? []).filter(({ enabled }) => enabled);
+  return {
+    plans,
+    current:
+      plans.find(({ connectionId }) => connectionId === picked) ?? plans[0],
+  };
+};
+
+const clock = new Intl.DateTimeFormat(undefined, {
+  weekday: "short",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
+/**
+ * A plan as the composer lists it, from the limits Claude Code last
+ * reported: used up until when, else its fullest window and when that
+ * resets.
+ */
+export const claudePlanLabel = (
+  plan: ClaudePlanChoice,
+  model: string,
+  nowSeconds: number,
+) => {
+  const usedUpUntil = claudePlanBlockedUntil(
+    plan.usage,
+    plan.allowExtraUsage,
+    nowSeconds,
+    model.slice(model.indexOf("/") + 1),
+  );
+  if (usedUpUntil !== undefined)
+    return `${plan.name} · used up until ${clock.format(usedUpUntil * 1000)}`;
+  const fullest = (plan.usage?.windows ?? [])
+    .filter(({ resetsAt }) => resetsAt > nowSeconds)
+    .sort((a, b) => b.utilization - a.utilization)[0];
+  if (fullest === undefined)
+    return plan.usage === undefined
+      ? `${plan.name} · no limits reported yet`
+      : plan.name;
+  return `${plan.name} · ${claudePlanWindowName(fullest.id)} ${Math.round(
+    Math.min(fullest.utilization, 1) * 100,
+  )}%, resets ${clock.format(fullest.resetsAt * 1000)}`;
 };

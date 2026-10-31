@@ -1,5 +1,5 @@
-import { Effect, Redacted } from "effect";
 import { SandboxError } from "e2b";
+import { Effect, Redacted } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { executionWorkspaceLogger } from "../../logging.js";
 import {

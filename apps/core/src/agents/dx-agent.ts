@@ -28,6 +28,7 @@ import {
 import { rememberClaudeCodeSandbox } from "../claude-code/runs.js";
 import { claudeCodeMirrorTools } from "../claude-code/tools.js";
 import { withoutRepositorySkills } from "../execution/workspace-context.js";
+import { createNeedsYouTools } from "../needs-you/agent-tools.js";
 import { traceSpan } from "../observability/tracing.js";
 import {
   takeWorkspaceDisk,
@@ -143,6 +144,9 @@ const dxTools = (
     agentThreadToolsContext,
     promptData?.plugins?.submissionId,
   ))
+    tools.push(withToolFailureMessage(tool));
+  // request_attention: the owner's Needs-you inbox.
+  for (const tool of createNeedsYouTools(threadId, agentThreadToolsContext))
     tools.push(withToolFailureMessage(tool));
   const pluginTools = promptData?.plugins;
   if (pluginTools !== undefined)

@@ -6,6 +6,7 @@ import {
   type ExecutionProviderId,
 } from "../plugins/execution/provider.js";
 import { makeExecutionActivation } from "./activation.js";
+import { registeredOrbBilling } from "./orb-billing-registration.js";
 import { executionProviders, orbProviderConnectors } from "./orb-providers.js";
 
 export { executionProviders };
@@ -24,7 +25,7 @@ export const makeExecutionWorkspaces = (
   composeExecutionWorkspaces(
     bindings,
     providers,
-    makeExecutionActivation(),
+    makeExecutionActivation({ orbBilling: registeredOrbBilling }),
     undefined,
     undefined,
     (providerId) => orbProviderConnectors[providerId] !== undefined,

@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ConnectionDialog,
   type ConnectionDialogSubmit,
-} from "./model-routing-controls.js";
+} from "./connection-dialog.js";
 
 const existing = {
   id: "mcon_1",

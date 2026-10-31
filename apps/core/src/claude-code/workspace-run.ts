@@ -93,6 +93,10 @@ export const CLAUDE_CODE_DISALLOWED_TOOLS = [
  */
 const CLI_SETTINGS = JSON.stringify({
   apiKeyHelper: "",
+  // Claude Code never credits itself: no Co-Authored-By trailer in a commit
+  // and no "Generated with Claude Code" line in a pull request. dx adds its
+  // own co-author through Git when the project asks for it (#1303).
+  attribution: { commit: "", pr: "" },
   env: {
     CLAUDE_CODE_OAUTH_TOKEN: "",
     CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3",

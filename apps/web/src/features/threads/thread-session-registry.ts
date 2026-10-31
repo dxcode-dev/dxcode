@@ -426,7 +426,12 @@ export class ThreadSessionRegistry {
           ...projectQueryOptions(this.userId, projectId),
           enabled: false,
         });
-        releaseProject = project.subscribe((result) => revoke(result.error));
+        releaseProject = project.subscribe((result) => {
+          // A Thread kept from a deleted Project stays readable; its
+          // Project answers 404 for good.
+          if (thread.getCurrentResult().data?.projectDeleted !== true)
+            revoke(result.error);
+        });
       };
       const releaseThread = thread.subscribe((result) => {
         watchProject(result.data?.projectId);

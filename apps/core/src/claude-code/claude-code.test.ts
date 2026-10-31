@@ -470,6 +470,35 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
     ]);
   });
 
+  // #1303: Claude Code must not credit itself in a commit or a pull request.
+  // Its attribution defaults add a Co-Authored-By: Claude trailer and a
+  // "Generated with Claude Code" line; the settings dx passes on the command
+  // line rank above the user, project, and local files a repository controls.
+  it("starts Claude Code with its commit and pull request attribution turned off", async () => {
+    const guest = await createGuest();
+    await guest.script([
+      init(),
+      ...response("m1", [{ text: "Committed." }]),
+      result("Committed."),
+    ]);
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    await claude.answer({
+      systemPrompt: "Commit the change.",
+      messages: [user("Commit it", 1)],
+    });
+    const args = guest.home("claude-args").split("\n");
+    const sources = args[args.indexOf("--setting-sources") + 1];
+    expect(sources).toBe("user,project,local");
+    const settings = args.indexOf("--settings");
+    expect(settings).toBeGreaterThan(-1);
+    expect(args.lastIndexOf("--settings")).toBe(settings);
+    const passed = JSON.parse(args[settings + 1] ?? "") as Record<
+      string,
+      unknown
+    >;
+    expect(passed.attribution).toEqual({ commit: "", pr: "" });
+  });
+
   it("gives Claude Code dx's own prompt, not Flue's composition, and the person's instructions as its user-level CLAUDE.md", async () => {
     const guest = await createGuest();
     guest.write(

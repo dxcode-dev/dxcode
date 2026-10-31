@@ -129,6 +129,9 @@ pub struct GitConfiguration {
     pub author_email: String,
     pub thread_url: String,
     pub signing_enabled: bool,
+    /// `Name <email>` for a `Co-authored-by` trailer on every commit, when
+    /// the project credits dx and the person is the author.
+    pub co_author: Option<String>,
     pub bitbucket_gateway: Option<GitBitbucketGateway>,
 }
 
@@ -220,6 +223,8 @@ pub struct Materialized {
     pub outcome: EnvironmentOutcome,
     /// Hash of the `.env` and Git configuration bytes as written, when known.
     files: Option<String>,
+    /// When this materialization started `.agents/resume`, if it did.
+    resumed_at: Option<ClockMark>,
 }
 
 pub struct EnvironmentRuntime {
@@ -230,6 +235,33 @@ pub struct EnvironmentRuntime {
     applied_files: Option<String>,
     pending_generation: Option<u64>,
     pending_changed: bool,
+    /// When `.agents/resume` last started, to tell a wake from a reconnect.
+    resumed_at: Option<ClockMark>,
+}
+
+/// Both clocks at one moment. E2B pauses freeze the monotonic clock and step
+/// the wall clock on resume, so the wall clock moving past the monotonic one
+/// means the guest was suspended in between.
+#[derive(Clone, Copy)]
+struct ClockMark {
+    wall: std::time::SystemTime,
+    monotonic: std::time::Instant,
+}
+
+impl ClockMark {
+    fn now() -> Self {
+        Self {
+            wall: std::time::SystemTime::now(),
+            monotonic: std::time::Instant::now(),
+        }
+    }
+
+    fn suspended_since(&self) -> bool {
+        crate::session::suspended_between(
+            self.wall.elapsed().unwrap_or_default(),
+            self.monotonic.elapsed(),
+        )
+    }
 }
 
 impl EnvironmentRuntime {
@@ -246,6 +278,23 @@ impl EnvironmentRuntime {
             applied_files: None,
             pending_generation: None,
             pending_changed: false,
+            resumed_at: None,
+        }
+    }
+
+    /// The guest was suspended since `.agents/resume` last started, so this
+    /// activation follows a wake and runs it again.
+    fn woke(&self) -> bool {
+        self.resumed_at
+            .as_ref()
+            .is_some_and(ClockMark::suspended_since)
+    }
+
+    /// Pretends the guest was paused for `duration` since resume last ran.
+    #[cfg(test)]
+    fn suspended_for(&mut self, duration: Duration) {
+        if let Some(mark) = self.resumed_at.as_mut() {
+            mark.wall -= duration;
         }
     }
 
@@ -263,6 +312,7 @@ impl EnvironmentRuntime {
             return EnvironmentOutcome::Superseded;
         }
         if (check.generation == self.applied_generation || self.pending_generation.is_none())
+            && !self.woke()
             && self.applied_digest.as_deref() == Some(check.digest.as_str())
             && self.applied_files.is_some()
             && written_files(&self.paths).ok() == self.applied_files
@@ -299,6 +349,7 @@ impl EnvironmentRuntime {
             applied_generation: self.applied_generation,
             retrying_pending,
             pending_changed: self.pending_changed,
+            woke: self.woke(),
         })
     }
 
@@ -311,6 +362,9 @@ impl EnvironmentRuntime {
                 self.applied_files = materialized.files.clone();
                 self.pending_generation = None;
                 self.pending_changed = false;
+                if materialized.resumed_at.is_some() {
+                    self.resumed_at = materialized.resumed_at;
+                }
             }
             _ => {
                 self.pending_changed |= materialized.changed;
@@ -329,6 +383,7 @@ pub struct Admitted {
     applied_generation: u64,
     retrying_pending: bool,
     pending_changed: bool,
+    woke: bool,
 }
 
 impl Admitted {
@@ -336,7 +391,8 @@ impl Admitted {
     pub fn materialize(self, workspace_root: &Path) -> Materialized {
         let generation = self.generation;
         let digest = self.digest.clone();
-        let (outcome, changed) = match materialize(&self, workspace_root) {
+        let mut resumed_at = None;
+        let (outcome, changed) = match materialize(&self, workspace_root, &mut resumed_at) {
             Ok(changed) => (
                 if changed {
                     EnvironmentOutcome::Applied
@@ -363,6 +419,7 @@ impl Admitted {
             digest,
             outcome,
             files,
+            resumed_at,
         }
     }
 }
@@ -378,7 +435,11 @@ impl From<io::Error> for MaterializeError {
     }
 }
 
-fn materialize(admitted: &Admitted, workspace_root: &Path) -> Result<bool, MaterializeError> {
+fn materialize(
+    admitted: &Admitted,
+    workspace_root: &Path,
+    resumed_at: &mut Option<ClockMark>,
+) -> Result<bool, MaterializeError> {
     let paths = &admitted.paths;
     let values = &admitted.values;
     let state_directory = ensure_state_directory(paths)?;
@@ -404,8 +465,12 @@ fn materialize(admitted: &Admitted, workspace_root: &Path) -> Result<bool, Mater
         sync_dir(&home)?;
     }
     remove_legacy_fragment(&state_directory)?;
-    let should_resume = changed || admitted.applied_generation == 0 || admitted.retrying_pending;
+    // dxd is the only runner of `.agents/resume`: on this process's first
+    // activation, after a wake, and when the environment it sees changed.
+    let should_resume =
+        changed || admitted.applied_generation == 0 || admitted.retrying_pending || admitted.woke;
     if should_resume {
+        *resumed_at = Some(ClockMark::now());
         match run_resume(workspace_root, values, paths) {
             Ok(()) => {}
             Err(ResumeError::Timeout) => {
@@ -446,6 +511,13 @@ pub fn activation_digest(operation: &EnvironmentActivate) -> String {
         hasher.update(gateway.origin.as_bytes());
     }
     hasher.update(b"\n");
+    // Absent from the text when unset, so an activation without it keeps the
+    // digest an earlier Core computes.
+    if let Some(co_author) = &operation.git.co_author {
+        hasher.update(b"git.coAuthor=");
+        hasher.update(co_author.as_bytes());
+        hasher.update(b"\n");
+    }
     format!("{:x}", hasher.finalize())
 }
 
@@ -501,6 +573,10 @@ pub fn install_git_config(state_directory: &Path, git: &GitConfiguration) -> io:
         || git.author_name.contains(['\r', '\n', '\0'])
         || git.author_email.contains(['\r', '\n', '\0'])
         || !valid_thread_url(&git.thread_url)
+        || git
+            .co_author
+            .as_deref()
+            .is_some_and(|value| !valid_co_author(value))
         || git.bitbucket_gateway.as_ref().is_some_and(|gateway| {
             !gateway.origin.starts_with("https://")
                 || gateway.origin.len() > 255
@@ -555,7 +631,7 @@ pub fn install_git_config(state_directory: &Path, git: &GitConfiguration) -> io:
         "post-index-change",
     ] {
         let trailer = if hook_name == "commit-msg" {
-            "thread_url=$(git config --global --get dx.threadUrl)\ngit interpret-trailers --if-exists replace --if-missing add --trailer \"dx-Thread-Id: $thread_url\" --in-place \"$1\"\n"
+            "co_author=$(git config --global --get dx.coAuthor || true)\nif [ -n \"$co_author\" ]; then\n  git interpret-trailers --if-exists addIfDifferent --if-missing add --trailer \"Co-authored-by: $co_author\" --in-place \"$1\"\nfi\nthread_url=$(git config --global --get dx.threadUrl)\ngit interpret-trailers --if-exists replace --if-missing add --trailer \"dx-Thread-Id: $thread_url\" --in-place \"$1\"\n"
         } else {
             ""
         };
@@ -576,8 +652,13 @@ pub fn install_git_config(state_directory: &Path, git: &GitConfiguration) -> io:
     } else {
         ""
     };
+    let co_author = git
+        .co_author
+        .as_deref()
+        .map(|value| format!("\tcoAuthor = {}\n", git_config_value(value)))
+        .unwrap_or_default();
     let content = format!(
-        "# Generated by dx; do not edit.\n[commit]\n\tgpgsign = {}\n[core]\n\thooksPath = {}\n[dx]\n\tthreadUrl = {}\n[gpg]\n\tformat = ssh\n[gpg \"ssh\"]\n\tprogram = {}\n[user]\n\tname = {}\n\temail = {}\n\tsigningkey = dx-managed\n[credential]\n\thelper =\n\thelper = {}\n\tuseHttpPath = true\n\tinteractive = false\n[url \"https://github.com/\"]\n\tinsteadOf = git@github.com:\n\tinsteadOf = ssh://git@github.com/\n",
+        "# Generated by dx; do not edit.\n[commit]\n\tgpgsign = {}\n[core]\n\thooksPath = {}\n[dx]\n\tthreadUrl = {}\n{co_author}[gpg]\n\tformat = ssh\n[gpg \"ssh\"]\n\tprogram = {}\n[user]\n\tname = {}\n\temail = {}\n\tsigningkey = dx-managed\n[credential]\n\thelper =\n\thelper = {}\n\tuseHttpPath = true\n\tinteractive = false\n[url \"https://github.com/\"]\n\tinsteadOf = git@github.com:\n\tinsteadOf = ssh://git@github.com/\n",
         git.signing_enabled,
         git_config_value(&state_directory.to_string_lossy()),
         git_config_value(&git.thread_url),
@@ -597,6 +678,28 @@ fn write_private(path: &Path, bytes: &[u8], mode: u32) -> io::Result<()> {
 fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(mode))
+}
+
+/// Core's `DxdCoAuthor`: `Name <email>`, with no character a shell, Git's
+/// configuration syntax, or a trailer would read specially.
+fn valid_co_author(value: &str) -> bool {
+    let Some((name, rest)) = value.split_once(" <") else {
+        return false;
+    };
+    let Some(email) = rest.strip_suffix('>') else {
+        return false;
+    };
+    let plain = |part: &str, extra: &[u8]| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || extra.contains(&byte))
+    };
+    value.len() <= 256
+        && plain(name, b" .-_")
+        && !name.starts_with(' ')
+        && plain(email, b".-_+@")
+        && email.matches('@').count() == 1
 }
 
 /// Core's `DxdThreadUrl`: `https://<host>[:port]` or a loopback
@@ -1057,27 +1160,45 @@ fn run_resume(
     paths: &EnvironmentPaths,
 ) -> Result<(), ResumeError> {
     let hook = root.join(".agents/resume");
-    let metadata = match fs::symlink_metadata(&hook) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error.into()),
-    };
-    if !metadata.is_file() || metadata.file_type().is_symlink() || !is_executable(&metadata) {
-        return Err(io::Error::from(io::ErrorKind::PermissionDenied).into());
+    // Like setup, resume is a convenience the agent can finish by hand: a
+    // missing, unrunnable, or failing hook never blocks the environment.
+    match fs::symlink_metadata(&hook) {
+        Ok(metadata)
+            if metadata.is_file()
+                && !metadata.file_type().is_symlink()
+                && is_executable(&metadata) => {}
+        _ => return Ok(()),
     }
-    let mut child = Command::new(&hook)
+    let (stdout, stderr) = match resume_log(&paths.home) {
+        Ok(log) => (Stdio::from(log.try_clone()?), Stdio::from(log)),
+        Err(error) => {
+            eprintln!("dxd could not open the resume log: {error}");
+            (Stdio::null(), Stdio::null())
+        }
+    };
+    let mut child = match Command::new(&hook)
         .current_dir(root)
         .env_clear()
         .envs(base_environment_for(values, &paths.home, &paths.user))
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
+        .stdout(stdout)
+        .stderr(stderr)
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            eprintln!("dxd could not start .agents/resume: {error}");
+            return Ok(());
+        }
+    };
     let deadline = std::time::Instant::now() + RESUME_TIMEOUT;
     loop {
         match child.try_wait()? {
             Some(status) if status.success() => return Ok(()),
-            Some(_) => return Err(io::Error::other("resume unavailable").into()),
+            Some(status) => {
+                eprintln!("dxd: .agents/resume failed ({status})");
+                return Ok(());
+            }
             None if std::time::Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -1086,6 +1207,24 @@ fn run_resume(
             None => std::thread::sleep(Duration::from_millis(20)),
         }
     }
+}
+
+/// `~/.cache/dx/logs/resume.log`, replaced on each run, beside the setup log
+/// source activation writes.
+fn resume_log(home: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    let directory = home.join(".cache/dx/logs");
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&directory)?;
+    fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(directory.join("resume.log"))
 }
 
 fn is_executable(metadata: &fs::Metadata) -> bool {
@@ -1118,6 +1257,7 @@ mod tests {
             thread_url: "https://dx.example/threads/thr_0123abcd-4567-4abc-8def-0123456789ab"
                 .into(),
             signing_enabled: false,
+            co_author: None,
             bitbucket_gateway: None,
         }
     }
@@ -1372,6 +1512,9 @@ mod tests {
         );
         other.git.signing_enabled = true;
         assert_ne!(first, activation_digest(&other));
+        other.git.signing_enabled = false;
+        other.git.co_author = Some("dxcodeagent <agent@dxcode.dev>".into());
+        assert_ne!(first, activation_digest(&other));
     }
 
     #[test]
@@ -1552,6 +1695,125 @@ mod tests {
         assert_eq!(fs::read_to_string(&marker).unwrap(), "resumed");
     }
 
+    /// Core activates the environment on every daemon registration: the
+    /// first, each plain reconnect, and the one after a wake. dxd is the only
+    /// runner of `.agents/resume` (#1266), so it must run once on the first
+    /// activation and once after each wake, never on a reconnect.
+    #[test]
+    fn resume_runs_once_on_the_first_activation_and_once_per_wake() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("repo");
+        fs::create_dir_all(workspace.join(".agents")).unwrap();
+        let runs_file = root.path().join("resume-runs");
+        fs::write(
+            workspace.join(".agents/resume"),
+            format!("#!/bin/sh\necho resumed >> '{}'\n", runs_file.display()),
+        )
+        .unwrap();
+        set_mode(&workspace.join(".agents/resume"), 0o755).unwrap();
+        let mut runtime = EnvironmentRuntime::new(prepare(root.path()));
+        let runs = || {
+            fs::read_to_string(&runs_file)
+                .unwrap_or_default()
+                .lines()
+                .count()
+        };
+        // Core's activation: the digest check, then the full activation only
+        // when the daemon does not hold it.
+        let activate = |runtime: &mut EnvironmentRuntime, generation| {
+            let operation = EnvironmentActivate {
+                generation,
+                entries: entries(&[("A", "same")]),
+                git: git(),
+            };
+            let digest = activation_digest(&operation);
+            if runtime.check(&EnvironmentCheck { generation, digest })
+                == EnvironmentOutcome::Unchanged
+            {
+                return;
+            }
+            let materialized = runtime
+                .admit(&operation)
+                .ok()
+                .unwrap()
+                .materialize(&workspace);
+            assert!(matches!(
+                materialized.outcome,
+                EnvironmentOutcome::Applied | EnvironmentOutcome::Unchanged
+            ));
+            runtime.complete(&materialized);
+        };
+
+        activate(&mut runtime, 1);
+        assert_eq!(runs(), 1, "the first activation");
+        activate(&mut runtime, 2);
+        assert_eq!(runs(), 1, "a reconnect is not a wake");
+        // An NTP-style step of the wall clock under the one-second
+        // suspension threshold is not a wake either.
+        runtime.suspended_for(Duration::from_millis(500));
+        activate(&mut runtime, 2);
+        assert_eq!(runs(), 1, "a small clock step is not a wake");
+        // E2B freezes the monotonic clock while paused and steps the wall
+        // clock on resume.
+        runtime.suspended_for(Duration::from_secs(90));
+        activate(&mut runtime, 3);
+        assert_eq!(runs(), 2, "the first activation after a wake");
+        activate(&mut runtime, 4);
+        assert_eq!(runs(), 2, "a reconnect after that wake");
+        runtime.suspended_for(Duration::from_secs(2));
+        activate(&mut runtime, 5);
+        assert_eq!(runs(), 3, "a second, short wake");
+    }
+
+    /// Like `.agents/setup`, resume is a convenience: a failing or
+    /// unrunnable hook never makes the environment unavailable, is not
+    /// retried until the next wake, and leaves its output in
+    /// `~/.cache/dx/logs/resume.log`.
+    #[test]
+    fn a_failing_resume_is_logged_and_never_blocks_the_environment() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("repo");
+        fs::create_dir_all(workspace.join(".agents")).unwrap();
+        let hook = workspace.join(".agents/resume");
+        fs::write(&hook, "#!/bin/sh\necho out-$A\necho err >&2\nexit 3\n").unwrap();
+        set_mode(&hook, 0o755).unwrap();
+        let paths = prepare(root.path());
+        let log = paths.home.join(".cache/dx/logs/resume.log");
+        let mut runtime = EnvironmentRuntime::new(paths);
+        let operation = |generation, value| EnvironmentActivate {
+            generation,
+            entries: entries(&[("A", value)]),
+            git: git(),
+        };
+
+        let materialized = runtime
+            .admit(&operation(1, "one"))
+            .ok()
+            .unwrap()
+            .materialize(&workspace);
+        assert_eq!(materialized.outcome, EnvironmentOutcome::Applied);
+        runtime.complete(&materialized);
+        assert_eq!(fs::read_to_string(&log).unwrap(), "out-one\nerr\n");
+        let digest = activation_digest(&operation(2, "one"));
+        assert_eq!(
+            runtime.check(&EnvironmentCheck {
+                generation: 2,
+                digest
+            }),
+            EnvironmentOutcome::Unchanged
+        );
+
+        // A hook that is not executable is not run.
+        set_mode(&hook, 0o644).unwrap();
+        let materialized = runtime
+            .admit(&operation(3, "two"))
+            .ok()
+            .unwrap()
+            .materialize(&workspace);
+        assert_eq!(materialized.outcome, EnvironmentOutcome::Applied);
+        assert_eq!(fs::read_to_string(&log).unwrap(), "out-one\nerr\n");
+    }
+
     #[test]
     fn quotes_git_author_values_without_changing_them() {
         let root = tempfile::tempdir().unwrap();
@@ -1566,6 +1828,157 @@ mod tests {
         let mut invalid = git();
         invalid.thread_url = "https://dx.example/threads/not-a-thread".into();
         assert!(install_git_config(&state, &invalid).is_err());
+    }
+
+    /// Commits in the Orb, from the terminal, the dx agent, or Claude Code,
+    /// all run Git with this configuration and its commit-msg hook, so the
+    /// remote's provider never changes the author or the trailers (#1303).
+    #[test]
+    fn commits_carry_exactly_the_configured_author_and_trailers_on_every_provider() {
+        let thread_url = "https://dx.example/threads/thr_0123abcd-4567-4abc-8def-0123456789ab";
+        let dx = ("dxcodeagent", "agent@dxcode.dev");
+        let user = ("Ada Lovelace", "ada@example.com");
+        let co_author = "dxcodeagent <agent@dxcode.dev>";
+        /// Name, author, co-author, message, and the trailers Git must show.
+        type Case<'a> = (
+            &'a str,
+            (&'a str, &'a str),
+            Option<&'a str>,
+            &'a str,
+            Vec<String>,
+        );
+        let cases: [Case; 5] = [
+            (
+                "you, with dx as co-author",
+                user,
+                Some(co_author),
+                "Change\n",
+                vec![
+                    format!("Co-authored-by: {co_author}"),
+                    format!("dx-Thread-Id: {thread_url}"),
+                ],
+            ),
+            (
+                "you, without dx as co-author",
+                user,
+                None,
+                "Change\n",
+                vec![format!("dx-Thread-Id: {thread_url}")],
+            ),
+            (
+                "dx as author",
+                dx,
+                None,
+                "Change\n",
+                vec![format!("dx-Thread-Id: {thread_url}")],
+            ),
+            (
+                "an agent that already wrote the dx trailer",
+                user,
+                Some(co_author),
+                "Change\n\nCo-authored-by: dxcodeagent <agent@dxcode.dev>\n",
+                vec![
+                    format!("Co-authored-by: {co_author}"),
+                    format!("dx-Thread-Id: {thread_url}"),
+                ],
+            ),
+            (
+                "another co-author kept beside dx",
+                user,
+                Some(co_author),
+                "Change\n\nCo-authored-by: Grace <grace@example.com>\n",
+                vec![
+                    "Co-authored-by: Grace <grace@example.com>".to_owned(),
+                    format!("Co-authored-by: {co_author}"),
+                    format!("dx-Thread-Id: {thread_url}"),
+                ],
+            ),
+        ];
+        for remote in [
+            "https://github.com/acme/app.git",
+            "https://bitbucket.org/acme/app.git",
+            "https://gitlab.com/acme/app.git",
+        ] {
+            for (name, (author_name, author_email), co_author, message, trailers) in &cases {
+                let root = tempfile::tempdir().unwrap();
+                let state = root.path().join("state");
+                let repo = root.path().join("repo");
+                fs::create_dir_all(&state).unwrap();
+                fs::create_dir_all(&repo).unwrap();
+                install_git_config(
+                    &state,
+                    &GitConfiguration {
+                        author_name: (*author_name).into(),
+                        author_email: (*author_email).into(),
+                        thread_url: thread_url.into(),
+                        co_author: co_author.map(Into::into),
+                        bitbucket_gateway: remote.contains("bitbucket").then(|| {
+                            GitBitbucketGateway {
+                                origin: "https://dx.example.test".into(),
+                            }
+                        }),
+                        ..git()
+                    },
+                )
+                .unwrap();
+                let run = |args: &[&str]| {
+                    let output = Command::new("git")
+                        .args(args)
+                        .current_dir(&repo)
+                        .env_clear()
+                        .env("GIT_CONFIG_GLOBAL", state.join(GIT_CONFIG_FILE))
+                        .env("GIT_CONFIG_NOSYSTEM", "1")
+                        .env("HOME", root.path())
+                        .env("PATH", "/usr/bin:/bin")
+                        .output()
+                        .unwrap();
+                    assert!(
+                        output.status.success(),
+                        "{name} on {remote}: git {args:?}: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    String::from_utf8(output.stdout).unwrap()
+                };
+                run(&["init", "-q"]);
+                run(&["remote", "add", "origin", remote]);
+                run(&["commit", "-q", "--allow-empty", "-m", message]);
+                let author = run(&["log", "-1", "--format=%an <%ae>|%cn <%ce>"]);
+                assert_eq!(
+                    author.trim(),
+                    format!("{author_name} <{author_email}>|{author_name} <{author_email}>"),
+                    "{name} on {remote}"
+                );
+                let found = run(&["log", "-1", "--format=%(trailers:only,unfold)"]);
+                assert_eq!(
+                    found
+                        .lines()
+                        .filter(|line| !line.is_empty())
+                        .collect::<Vec<_>>(),
+                    trailers.iter().map(String::as_str).collect::<Vec<_>>(),
+                    "{name} on {remote}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_a_co_author_that_could_break_the_trailer() {
+        let root = tempfile::tempdir().unwrap();
+        for invalid in [
+            "",
+            "dx",
+            "dx <agent@dxcode.dev>\nSigned-off-by: x <x@x.x>",
+            "dx <agent@dxcode.dev> \"$(id)\"",
+        ] {
+            let configuration = GitConfiguration {
+                co_author: Some(invalid.into()),
+                ..git()
+            };
+            assert!(
+                install_git_config(root.path(), &configuration).is_err(),
+                "{invalid:?}"
+            );
+        }
     }
 
     #[test]

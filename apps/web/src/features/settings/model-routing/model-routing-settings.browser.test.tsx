@@ -114,7 +114,7 @@ describe("routing presentation preserves dx authority", () => {
     expect(destinations.some((d) => d.kind === "dx")).toBe(false);
   });
   it("shows standalone models only when the direct model picker offers them", () => {
-    const choices: ChoicesData = { modes: [], models: [] };
+    const choices: ChoicesData = { modes: [], models: [], claudePlans: [] };
     expect(
       routingPresentation({ graph: graphFixture, choices }).groups.map(
         (g) => g.id,
@@ -122,6 +122,7 @@ describe("routing presentation preserves dx authority", () => {
     ).toEqual(["low", "high"]);
     const servedChoices: ChoicesData = {
       modes: [],
+      claudePlans: [],
       models: [
         {
           canonical: "openai/gpt-5.6-terra",

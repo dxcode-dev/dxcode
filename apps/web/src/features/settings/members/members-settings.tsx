@@ -127,11 +127,14 @@ function MemberMenu({
   onConfirm,
   setRole,
   remove,
+  transferOwnership,
 }: {
   readonly member: WorkspaceMemberData;
   readonly onConfirm: (confirmation: Confirmation) => void;
   readonly setRole: (role: "admin" | "member") => Promise<unknown>;
   readonly remove: () => Promise<unknown>;
+  /** Set only for the owner, who can hand the workspace to this member. */
+  readonly transferOwnership?: () => Promise<unknown>;
 }) {
   const label = member.name || member.email;
   return (
@@ -181,6 +184,22 @@ function MemberMenu({
                 }
               >
                 Promote to Workspace Admin
+              </Menu.Item>
+            )}
+            {transferOwnership === undefined ? null : (
+              <Menu.Item
+                className="thread-menu-item"
+                onClick={() =>
+                  onConfirm({
+                    title: `Make ${label} the owner?`,
+                    body: "They become the workspace owner and you become an admin. Only the owner can delete the workspace or hand it on.",
+                    action: "Transfer",
+                    destructive: true,
+                    run: transferOwnership,
+                  })
+                }
+              >
+                Transfer Ownership
               </Menu.Item>
             )}
             <Menu.Item
@@ -503,6 +522,7 @@ function MembersList({
   );
   const setRole = useMutation(options.setRole);
   const remove = useMutation(options.remove);
+  const transferOwnership = useMutation(options.transferOwnership);
   const createLink = useMutation(options.createLink);
   const viewer = members.data?.viewer;
   const isAdmin = viewer?.role === "owner" || viewer?.role === "admin";
@@ -613,6 +633,12 @@ function MembersList({
                       setRole.mutateAsync({ userId: member.userId, role })
                     }
                     remove={() => remove.mutateAsync(member.userId)}
+                    {...(viewer?.role === "owner"
+                      ? {
+                          transferOwnership: () =>
+                            transferOwnership.mutateAsync(member.userId),
+                        }
+                      : {})}
                   />
                 ) : null}
               </div>

@@ -7,29 +7,34 @@ export const DELETED_THREAD_TITLE = "Deleted thread";
 /** The JSON array of Thread IDs bound as `?1`. */
 const inThreads = "SELECT value FROM json_each(?1)";
 
-/** Whether the owner's Thread `column` names is deleted. */
+/**
+ * Whether the Thread `column` names is one of these deleted Threads, and the
+ * owner's when `?2` names one.
+ */
 const tombstoneOf = (column: string) => `${column} IN (
   SELECT id FROM threads
-   WHERE id IN (${inThreads}) AND owner_user_id = ?2
+   WHERE id IN (${inThreads}) AND (?2 IS NULL OR owner_user_id = ?2)
      AND lifecycle_state = 'deleted'
 )`;
 
 /**
- * Turns the owner's live Threads into tombstones in one D1 transaction. Each
- * row stays, so its ID can never be issued again. Titles, instructions, and
- * snapshots are scrubbed. Their child Threads become top-level Threads.
- * Their notifications, sidebar placement, sharing records, who saw them,
- * schedules, and GitHub subscriptions are removed, and each deletion is recorded for cleanup. Returns the Threads
- * it tombstoned: one already deleted, or not the owner's, is left out.
+ * The statements that turn live Threads into tombstones, for one D1
+ * transaction. Each row stays, so its ID can never be issued again. Titles,
+ * instructions, and snapshots are scrubbed. Their child Threads become
+ * top-level Threads. Their notifications, sidebar placement, sharing
+ * records, who saw them, Needs-you asks, schedules, GitHub subscriptions, and GitHub issue links are removed,
+ * and each deletion is recorded for cleanup. With `ownerUserId`, only that
+ * owner's Threads change. The first statement returns the Threads it
+ * tombstoned.
  */
-export const tombstoneThreads = async (
+export const tombstoneStatements = (
   db: D1Database,
   threadIds: ReadonlyArray<ThreadId>,
-  ownerUserId: UserId,
+  ownerUserId: UserId | null,
   deletedAt: string,
-): Promise<ReadonlyArray<ThreadId>> => {
+): ReadonlyArray<D1PreparedStatement> => {
   const ids = JSON.stringify(threadIds);
-  const [tombstoned] = await db.batch([
+  return [
     db
       .prepare(
         `UPDATE threads
@@ -53,7 +58,7 @@ export const tombstoneThreads = async (
                 turn_settled_at = NULL,
                 turn_failed = 0,
                 updated_at = ?4
-          WHERE id IN (${inThreads}) AND owner_user_id = ?2
+          WHERE id IN (${inThreads}) AND (?2 IS NULL OR owner_user_id = ?2)
             AND lifecycle_state != 'deleted'
          RETURNING id`,
       )
@@ -61,7 +66,7 @@ export const tombstoneThreads = async (
     db
       .prepare(
         `INSERT INTO thread_deletion (thread_id, owner_user_id, requested_at)
-         SELECT id, ?2, ?3 FROM threads WHERE ${tombstoneOf("id")}
+         SELECT id, owner_user_id, ?3 FROM threads WHERE ${tombstoneOf("id")}
          ON CONFLICT (thread_id) DO NOTHING`,
       )
       .bind(ids, ownerUserId, deletedAt),
@@ -101,6 +106,12 @@ export const tombstoneThreads = async (
       .bind(ids, ownerUserId),
     db
       .prepare(
+        `DELETE FROM thread_attention_request
+          WHERE ${tombstoneOf("thread_id")}`,
+      )
+      .bind(ids, ownerUserId),
+    db
+      .prepare(
         `DELETE FROM thread_pane_layout WHERE ${tombstoneOf("thread_id")}`,
       )
       .bind(ids, ownerUserId),
@@ -114,6 +125,27 @@ export const tombstoneThreads = async (
         `DELETE FROM github_subscription WHERE ${tombstoneOf("thread_id")}`,
       )
       .bind(ids, ownerUserId),
+    db
+      .prepare(
+        `DELETE FROM thread_github_link WHERE ${tombstoneOf("thread_id")}`,
+      )
+      .bind(ids, ownerUserId),
+  ];
+};
+
+/**
+ * Turns the owner's live Threads into tombstones in one D1 transaction (see
+ * `tombstoneStatements`). Returns the Threads it tombstoned: one already
+ * deleted, or not the owner's, is left out.
+ */
+export const tombstoneThreads = async (
+  db: D1Database,
+  threadIds: ReadonlyArray<ThreadId>,
+  ownerUserId: UserId,
+  deletedAt: string,
+): Promise<ReadonlyArray<ThreadId>> => {
+  const [tombstoned] = await db.batch([
+    ...tombstoneStatements(db, threadIds, ownerUserId, deletedAt),
   ]);
   return (tombstoned?.results ?? []).map((row) => (row as { id: ThreadId }).id);
 };

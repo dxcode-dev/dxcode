@@ -40,6 +40,7 @@ import { utf8ByteLength, utf8ExceedsBytes } from "../encoding/utf8.js";
 import {
   type DaemonGeneration,
   DaemonGeneration as DaemonGenerationSchema,
+  DX_CO_AUTHOR,
   DXD_HEARTBEAT_INTERVAL_MS,
   DXD_HEARTBEAT_LEASE_MS,
   DXD_MAX_CHANGES_CANDIDATE_BYTES,
@@ -81,6 +82,7 @@ import {
   type DxdWorkloadIdentityRequest,
   DxdWorkloadIdentityRequestMessage,
   decodeDxdSandboxChunkFrame,
+  dxdAcceptsCoAuthor,
   dxdAcceptsCurrentEnvironment,
   environmentActivationDigest,
   isDxdProxyFrame,
@@ -2789,6 +2791,11 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         // available. Required signing stays fail-closed through Git's signer.
         signingEnabled:
           signing.policy === "required" || "credential" in signing,
+        // A daemon before the co-author release rejects the field, so its
+        // commits carry no dx co-author until it updates.
+        ...(signing.dxCoAuthor && dxdAcceptsCoAuthor(authority.daemonRelease)
+          ? { coAuthor: DX_CO_AUTHOR }
+          : {}),
         ...(bitbucketGateway === undefined ? {} : { bitbucketGateway }),
       },
       { current: dxdAcceptsCurrentEnvironment(authority.daemonRelease) },

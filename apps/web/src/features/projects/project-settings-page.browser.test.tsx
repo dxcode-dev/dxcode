@@ -78,6 +78,7 @@ const defaults = {
     commitAuthor: null,
     signingPreference: null,
     runnerProfileId: null,
+    dxCoAuthor: null,
   },
   resolved: {
     shipAction: { value: "commit", source: "deployment" },
@@ -87,6 +88,7 @@ const defaults = {
       value: "standard" as RunnerProfileId,
       source: "deployment",
     },
+    dxCoAuthor: { value: true, source: "deployment" },
   },
   catalog: {
     version: 1,

@@ -26,6 +26,8 @@ import {
   createTestBindings,
   TEST_CONFIG_ENCRYPTION_KEYS,
 } from "../../src/testing/bindings.js";
+import { tombstoneThreads } from "../../src/thread-deletion/tombstone.js";
+import { searchThreads } from "../../src/thread-search/service.js";
 import { project, thread } from "./fixtures.js";
 import { runRepositories } from "./runtime.js";
 
@@ -272,6 +274,7 @@ beforeEach(async () => {
     ).bind(owner, new Date().toISOString()),
     env.DB.prepare("DELETE FROM thread_schedule"),
     env.DB.prepare("DELETE FROM github_subscription"),
+    env.DB.prepare("DELETE FROM thread_github_link"),
     env.DB.prepare("DELETE FROM notification"),
     env.DB.prepare(
       "UPDATE threads SET lifecycle_state = 'active' WHERE id = ?",
@@ -919,6 +922,200 @@ describe("GitHub subscriptions", () => {
         subscription_id: first?.subscriptionId,
       }),
     ).rejects.toThrow(/not found/);
+  });
+
+  /** The owner's Threads find_thread returns for a query. */
+  const findThreads = async (query: string) =>
+    (
+      await searchThreads({
+        db: env.DB,
+        bindings,
+        scope: { userId: owner },
+        query,
+        limit: 50,
+      })
+    ).items.map(({ id }) => id);
+
+  it("links a Thread to the issue it follows, keeps it current from webhooks, and finds the Thread from it", async () => {
+    github[`/repos/${REPO}/issues/41`] = {
+      number: 41,
+      title: "Widgets crash on save",
+      body: "Steps:\n\n1. Save a widget.",
+      state: "open",
+      created_at: "2026-10-01T00:00:00Z",
+    };
+    const subscribed = await call(main.id, "create_github_subscription", {
+      title: "Issue 41 comments",
+      repository: REPO,
+      filter_kind: "issue-comments",
+      issue_number: 41,
+    });
+    const issue41 = {
+      repository: REPO,
+      number: 41,
+      url: `https://github.com/${REPO}/issues/41`,
+    };
+    expect((await shownTo(main.id)).issues).toEqual([
+      {
+        ...issue41,
+        state: "open",
+        title: "Widgets crash on save",
+        summary: "Steps: 1. Save a widget.",
+        changedAt: "2026-10-01T00:00:00Z",
+      },
+    ]);
+    expect(await findThreads(`issue:${REPO}#41`)).toEqual([main.id]);
+    expect(
+      await findThreads(`issue:https://github.com/${REPO}/issues/41`),
+    ).toEqual([main.id]);
+    expect(await findThreads("issue:ACME/Widgets#41")).toEqual([main.id]);
+    expect(await findThreads(`issue:${REPO}#42`)).toEqual([]);
+    await expect(findThreads("issue:widgets#41")).rejects.toThrow(
+      /owner\/repo#12/,
+    );
+
+    // The link outlives the subscription.
+    await call(main.id, "delete_github_subscription", {
+      subscription_id: subscribed?.subscriptionId,
+    });
+    expect((await shownTo(main.id)).githubSubscriptions).toEqual([]);
+    expect(await findThreads(`issue:${REPO}#41`)).toEqual([main.id]);
+
+    // The issue's webhooks keep its title and state.
+    await webhook("issues", {
+      action: "closed",
+      issue: {
+        number: 41,
+        title: "Widgets crash on save (fixed)",
+        body: "",
+        state: "closed",
+        created_at: "2026-10-01T00:00:00Z",
+        closed_at: "2026-10-03T00:00:00Z",
+      },
+    });
+    expect((await shownTo(main.id)).issues).toEqual([
+      {
+        ...issue41,
+        state: "closed",
+        title: "Widgets crash on save (fixed)",
+        changedAt: "2026-10-03T00:00:00Z",
+      },
+    ]);
+    // So does each comment on it, which carries the issue.
+    await webhook("issue_comment", {
+      action: "created",
+      issue: {
+        number: 41,
+        title: "Widgets crash on save (again)",
+        body: "",
+        state: "open",
+        created_at: "2026-10-01T00:00:00Z",
+      },
+      comment: { id: 410, body: "Still broken.", user: { login: "bob" } },
+    });
+    expect((await shownTo(main.id)).issues).toEqual([
+      expect.objectContaining({
+        number: 41,
+        state: "open",
+        title: "Widgets crash on save (again)",
+      }),
+    ]);
+    // A Thread without the link is not found.
+    expect(await findThreads(`issue:${REPO}#41`)).not.toContain(other.id);
+  });
+
+  it("link_github_issue links an issue or a pull request as GitHub describes it", async () => {
+    github[`/repos/${REPO}/issues/7`] = {
+      number: 7,
+      title: "Ship the widget",
+      state: "open",
+      pull_request: { url: `https://api.github.com/repos/${REPO}/pulls/7` },
+    };
+    github[`/repos/${REPO}/pulls/7`] = {
+      number: 7,
+      title: "Ship the widget",
+      body: "Adds the widget.",
+      state: "closed",
+      merged: true,
+      merged_at: "2026-10-05T00:00:00Z",
+      closed_at: "2026-10-05T00:00:00Z",
+    };
+    github[`/repos/${REPO}/issues/5`] = {
+      number: 5,
+      title: "Track widget work",
+      state: "open",
+      created_at: "2026-09-01T00:00:00Z",
+    };
+    expect(
+      await call(main.id, "link_github_issue", { repository: REPO, number: 7 }),
+    ).toEqual({
+      linked: {
+        repository: REPO,
+        number: 7,
+        kind: "pull",
+        title: "Ship the widget",
+        state: "merged",
+      },
+      links: [`${REPO}#7 (PR)`],
+    });
+    await call(main.id, "link_github_issue", { repository: REPO, number: 5 });
+    // Linking again changes nothing.
+    await call(main.id, "link_github_issue", { repository: REPO, number: 5 });
+    const shown = await shownTo(main.id);
+    expect(shown.pullRequests).toEqual([
+      {
+        repository: REPO,
+        number: 7,
+        url: `https://github.com/${REPO}/pull/7`,
+        state: "merged",
+        title: "Ship the widget",
+        summary: "Adds the widget.",
+        changedAt: "2026-10-05T00:00:00Z",
+      },
+    ]);
+    expect(shown.issues).toEqual([
+      expect.objectContaining({ number: 5, title: "Track widget work" }),
+    ]);
+    expect(await findThreads(`issue:${REPO}#7`)).toEqual([main.id]);
+    expect(await findThreads(`issue:${REPO}#5`)).toEqual([main.id]);
+
+    // An item GitHub does not show is not linked.
+    await expect(
+      call(main.id, "link_github_issue", { repository: REPO, number: 99 }),
+    ).rejects.toThrow(/404/);
+    await expect(
+      call(main.id, "link_github_issue", { repository: "nope", number: 1 }),
+    ).rejects.toThrow(/owner\/name/);
+    expect(await findThreads(`issue:${REPO}#99`)).toEqual([]);
+
+    // Deleting the Thread removes its links.
+    const doomed = thread(
+      "thr_00000000-0000-4000-8000-00000000a5f9",
+      ownerProject.id as ProjectId,
+      owner,
+    );
+    await runRepositories(
+      Effect.gen(function* () {
+        yield* (yield* ThreadRepository).insert(doomed);
+      }),
+    );
+    await call(doomed.id, "link_github_issue", { repository: REPO, number: 5 });
+    expect(await findThreads(`issue:${REPO}#5`)).toEqual(
+      expect.arrayContaining([main.id, doomed.id]),
+    );
+    await tombstoneThreads(
+      env.DB,
+      [doomed.id as never],
+      owner,
+      new Date().toISOString(),
+    );
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM thread_github_link WHERE thread_id = ?",
+      )
+        .bind(doomed.id)
+        .first<number>("count"),
+    ).toBe(0);
   });
 });
 

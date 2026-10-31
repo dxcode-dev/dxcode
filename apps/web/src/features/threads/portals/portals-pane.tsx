@@ -51,6 +51,38 @@ type PublicChange = (
   duration: ThreadPortalPublicDuration | "private",
 ) => void;
 
+const OWNER_ONLY = "Only the Thread's owner can make a port public.";
+
+/**
+ * A member sees the globe too, disabled, so the control is not just
+ * missing: it says whether the port is public and who can change that.
+ */
+function PublicStatus({
+  port,
+  link,
+}: {
+  readonly port: number;
+  readonly link: ThreadPortalPublicLink | undefined;
+}) {
+  const state =
+    link === undefined
+      ? `Port ${port} is private.`
+      : `Port ${port} is public until ${until(link)}.`;
+  return (
+    <Button
+      size="icon-xs"
+      variant="ghost"
+      className="thread-portals-public-trigger"
+      data-public={link === undefined ? undefined : ""}
+      aria-disabled="true"
+      aria-label={`${state} ${OWNER_ONLY}`}
+      title={OWNER_ONLY}
+    >
+      <Globe aria-hidden="true" />
+    </Button>
+  );
+}
+
 /** The owner's control: make the port public for a while, or private. */
 function PublicMenu({
   port,
@@ -141,7 +173,9 @@ function PortalActions({
     <>
       {canPublish ? (
         <PublicMenu port={portal.port} link={link} onChange={onPublicChange} />
-      ) : null}
+      ) : (
+        <PublicStatus port={portal.port} link={link} />
+      )}
       <Button
         size="icon-xs"
         variant="ghost"

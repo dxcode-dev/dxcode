@@ -749,8 +749,9 @@ const runLfs = expected => {
   const reason = fetch ?? checkout;
   return reason === undefined ? { status: "complete" } : { status: "incomplete", reason };
 };
-// Setup and resume prepare the workspace for convenience; the agent can
-// finish that work itself. A failing hook is recorded and logged, never fatal.
+// Setup prepares the workspace for convenience; the agent can finish that
+// work itself. A failing hook is recorded and logged, never fatal. dxd's
+// environment activation, not this program, runs .agents/resume.
 const failedHooks = [];
 const hooksReady = () => (failedHooks.length === 0 ? { status: "ready" } : { status: "ready", failed: failedHooks });
 // Runs a hook with its output streamed to its log, which each run replaces.
@@ -814,6 +815,31 @@ const runProjectScript = (name, body, cwd) => {
     ok: result.status === 0,
     report: { ...(typeof result.status === "number" ? { exitCode: result.status } : {}), ...(timedOut ? { timedOut } : {}), output }
   };
+};
+// The project's Desktop resume script, which /opt/dx/desktop/resume runs when
+// the Desktop starts. Core sends it, or an empty value once it is cleared,
+// with every command that carries DX_DESKTOP_RESUME_SYNC.
+const syncDesktopResume = () => {
+  const directory = join(dirname(STATE), "project-scripts");
+  const path = join(directory, "desktop-resume");
+  const body = projectScript("DX_DESKTOP_RESUME_SCRIPT");
+  const existing = lstat(path);
+  if (body === undefined) {
+    if (existing === undefined) return;
+    if (!existing.isFile() || existing.isSymbolicLink()) fail("conflict");
+    try { rmSync(path); } catch { fail("conflict"); }
+    return;
+  }
+  if (existing !== undefined && existing.isFile() && !existing.isSymbolicLink() && readRegular(path, PROJECT_SCRIPT_MAX_BYTES) === body) return;
+  ensureDirectoryChain(directory);
+  const temporary = path + "." + required("DX_INVOCATION_ID") + ".tmp";
+  try {
+    writeFileSync(temporary, body, { mode: 0o700, flag: "wx" });
+    renameSync(temporary, path);
+  } catch (error) {
+    try { rmSync(temporary, { force: true }); } catch {}
+    fail(writeFailure(error) === "disk-full" ? "disk-full" : "conflict");
+  }
 };
 const preClone = () => {
   const body = projectScript("DX_PRE_CLONE_SCRIPT");
@@ -909,6 +935,7 @@ try {
   const sourceIdentity = identity();
   ensureDirectoryChain(dirname(STATE));
   acquireLock();
+  if (process.env.DX_DESKTOP_RESUME_SYNC === "true") syncDesktopResume();
   if (action === "initialize-anonymous") {
     const discovered = initializeAnonymous(sourceIdentity);
     process.stdout.write(JSON.stringify({ sourceRevision: discovered.sourceSha, defaultBranch: discovered.defaultBranch, initialRef: discovered.initialRef }));
@@ -923,8 +950,7 @@ try {
         process.stdout.write(JSON.stringify({ checkout: inspected.payload }));
       else {
         try {
-          const afterSetup = hook(expected, "setup", markProvisioned(inspected.verified));
-          if (process.env.DX_RUN_RESUME !== "false") hook(expected, "resume", afterSetup);
+          hook(expected, "setup", markProvisioned(inspected.verified));
           process.stdout.write(JSON.stringify({ checkout: inspected.payload, hooks: hooksReady() }));
         } catch (cause) {
           const failure = settledFailure(cause);
@@ -953,9 +979,7 @@ try {
     }
     else if (action === "mark-provisioned") markProvisioned(verify(expected));
     else if (action === "hooks") {
-      const current = markProvisioned(verify(expected));
-      const afterSetup = hook(expected, "setup", current);
-      if (process.env.DX_RUN_RESUME !== "false") hook(expected, "resume", afterSetup);
+      hook(expected, "setup", markProvisioned(verify(expected)));
       process.stdout.write(JSON.stringify(hooksReady()));
     }
     else fail("invalid-input", "action");

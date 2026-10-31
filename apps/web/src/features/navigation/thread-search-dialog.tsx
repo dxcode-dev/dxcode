@@ -20,6 +20,7 @@ const FILTERS = [
   { key: "author:", hint: "Threads by a person, or author:me" },
   { key: "visibility:", hint: "private or workspace" },
   { key: "repo:", hint: "Threads on a repository" },
+  { key: "issue:", hint: "Threads on owner/repo#12" },
   { key: "pinned:", hint: "true or false" },
   { key: "snoozed:", hint: "true or false" },
   { key: "archived:", hint: "true or false" },
@@ -154,7 +155,11 @@ function ThreadSearchResult({
               "Workspace"
             )}
           </span>
-          {item.archived ? (
+          {item.workspaceDeleted === true ? (
+            <span className="thread-search-badge">Deleted workspace</span>
+          ) : item.projectDeleted === true ? (
+            <span className="thread-search-badge">Deleted project</span>
+          ) : item.archived ? (
             <span className="thread-search-badge">Archived</span>
           ) : item.state === "working" ? (
             <span className="thread-search-badge" data-active="">

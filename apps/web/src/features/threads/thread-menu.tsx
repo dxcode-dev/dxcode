@@ -288,30 +288,33 @@ export function ThreadMenu({
               {own ? (
                 <>
                   <Menu.Separator className="thread-menu-separator" />
-                  <Menu.Item
-                    className="thread-menu-item"
-                    disabled={
-                      archive === undefined ||
-                      archive.pendingThreadId === thread.id
-                    }
-                    onClick={() =>
-                      archive?.setArchived(
-                        thread.id,
-                        thread.lifecycleState !== "archived",
-                      )
-                    }
-                  >
-                    {thread.lifecycleState === "archived" ? (
-                      <ArchiveRestore />
-                    ) : (
-                      <Archive />
-                    )}
-                    <span>
-                      {thread.lifecycleState === "archived"
-                        ? "Unarchive"
-                        : "Archive"}
-                    </span>
-                  </Menu.Item>
+                  {/* A Thread kept from a deleted project stays archived. */}
+                  {thread.projectDeleted === true ? null : (
+                    <Menu.Item
+                      className="thread-menu-item"
+                      disabled={
+                        archive === undefined ||
+                        archive.pendingThreadId === thread.id
+                      }
+                      onClick={() =>
+                        archive?.setArchived(
+                          thread.id,
+                          thread.lifecycleState !== "archived",
+                        )
+                      }
+                    >
+                      {thread.lifecycleState === "archived" ? (
+                        <ArchiveRestore />
+                      ) : (
+                        <Archive />
+                      )}
+                      <span>
+                        {thread.lifecycleState === "archived"
+                          ? "Unarchive"
+                          : "Archive"}
+                      </span>
+                    </Menu.Item>
+                  )}
                   {editable ? (
                     <>
                       <Menu.Item

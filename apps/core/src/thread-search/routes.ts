@@ -41,6 +41,8 @@ export const searchThreadsItem = (hit: ThreadSearchHit): SearchThreadsItem => ({
   state: hit.activity_status,
   lastActivityAt: hit.activity_at,
   createdAt: hit.created_at,
+  ...(hit.project_deleted === 1 ? { projectDeleted: true as const } : {}),
+  ...(hit.workspace_deleted === 1 ? { workspaceDeleted: true as const } : {}),
   ...(hit.matchedSearchText === undefined
     ? {}
     : { matchedSearchText: hit.matchedSearchText }),

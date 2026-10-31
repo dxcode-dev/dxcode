@@ -946,6 +946,33 @@ a {
 .thread-menu-item-danger[data-highlighted] {
   background: color-mix(in srgb, var(--destructive) 14%, transparent);
 }
+/* An item with a description (MenuItemText): the title over its
+   description, as tall as the two lines, which wrap inside the menu. */
+.thread-menu-item:has(> .menu-item-text) {
+  align-items: flex-start;
+  height: auto;
+  min-height: 28px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.menu-item-text {
+  display: grid;
+  flex: 1;
+  gap: 1px;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.menu-item-title {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+.menu-item-description {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 14px;
+}
 .thread-actions-menu .thread-menu-item svg:last-child:not(:first-child),
 .thread-context-item svg:last-child:not(:first-child) {
   width: 13px;
@@ -7114,6 +7141,79 @@ a {
 .delete-thread-dialog-name {
   color: var(--foreground);
 }
+/* Deleting a workspace or project: what happens to its Threads, then the
+   typed name. Laid out like the delete-thread dialog. */
+.delete-scope-dialog {
+  width: min(440px, 100%);
+}
+.delete-scope-dialog .modal-surface-header {
+  height: auto;
+  padding: 18px 14px 0 22px;
+}
+.delete-scope-dialog-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+}
+.delete-scope-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 6px 22px 22px;
+}
+.delete-scope-dialog-body > p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 19px;
+}
+.delete-scope-choices {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.delete-scope-choices > legend {
+  margin-bottom: 8px;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 500;
+}
+.delete-scope-choices > label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 18px;
+  cursor: pointer;
+}
+.delete-scope-choices input {
+  flex: none;
+  margin: 3px 0 0;
+  accent-color: var(--foreground);
+}
+.delete-scope-confirm {
+  margin-top: 2px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.delete-scope-dialog-body > input {
+  margin-top: -6px;
+}
+.delete-scope-dialog-body .notice {
+  margin: 0;
+}
+.delete-scope-dialog-body > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
 .rename-thread-dialog {
   width: min(560px, 100%);
 }
@@ -7320,6 +7420,32 @@ a {
   flex: none;
   cursor: pointer;
 }
+.new-thread-claude-plan {
+  position: relative;
+  min-width: 0;
+  padding: 0;
+}
+.new-thread-claude-plan select {
+  height: 100%;
+  min-width: 0;
+  max-width: 280px;
+  padding: 0 26px 0 10px;
+  overflow: hidden;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  appearance: none;
+  cursor: pointer;
+}
+.new-thread-claude-plan svg {
+  position: absolute;
+  right: 9px;
+  pointer-events: none;
+}
 .new-thread-project > span:last-child {
   min-width: 0;
   max-width: 220px;
@@ -7447,26 +7573,11 @@ a {
 .orb-picker-provider[data-popup-open] {
   background: var(--accent);
 }
-.orb-picker-size {
-  height: auto;
-  min-height: 36px;
-  padding: 5px 8px;
-}
 .orb-picker-size[data-disabled] {
   color: var(--muted-foreground);
 }
-.orb-picker-size-details {
-  display: grid;
-  min-width: 0;
-  font-size: 12px;
-  line-height: 16px;
-}
-.orb-picker-size-details small {
-  color: var(--muted-foreground);
-  font-size: 11px;
-  line-height: 14px;
-}
 .orb-picker-dot {
+  align-self: center;
   width: 6px;
   height: 6px;
   margin-left: auto;
@@ -9648,6 +9759,9 @@ div.claude-code-mode-main {
   height: 30px;
   font-size: 12px;
 }
+.dialog-popup p.plugin-bundle-warning {
+  color: var(--warning);
+}
 .dialog-popup p.plugin-bundle-help {
   font-size: 11px;
   line-height: 1.45;
@@ -9787,6 +9901,15 @@ div.claude-code-mode-main {
   color: var(--warning);
   font-size: 11px;
   font-style: normal;
+}
+.plugin-bundle-status-pill[data-tone="added"] {
+  color: var(--success);
+}
+.plugin-bundle-status-pill[data-tone="removed"] {
+  color: var(--destructive);
+}
+.plugin-bundle-status-pill[data-tone="unchanged"] {
+  color: var(--muted-foreground);
 }
 .plugin-bundle-conflicts {
   display: grid;
@@ -10637,16 +10760,10 @@ div.claude-code-mode-main {
   width: 12px;
   height: 12px;
 }
-.mcp-menu-detailed > span {
-  display: grid;
-  gap: 1px;
-}
-.mcp-menu-detailed strong {
-  font-weight: 500;
-}
-.mcp-menu-detailed span > span {
-  color: var(--muted-foreground);
-  font-size: 11px;
+/* Beside the title line of a described item. */
+.mcp-menu-radio:has(> .menu-item-text) .mcp-menu-indicator {
+  top: 8px;
+  transform: none;
 }
 
 /* The server sheet: a right-hand panel, or a bottom sheet on a phone. */
@@ -13879,40 +13996,61 @@ body:has(.dx-app-shell) {
 .project-orb-scripts-card {
   gap: 0;
 }
+/* Orb Scripts rows: a divider between scripts, the editor on the left and
+   Save in a 14rem column at the bottom right. */
 .project-orb-script {
+  display: grid;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+.project-orb-script:last-of-type {
+  border-bottom: 1px solid var(--border);
+}
+@media (min-width: 640px) {
+  .project-orb-script {
+    grid-template-columns: minmax(0, 1fr) 14rem;
+    gap: 16px;
+  }
+}
+.project-orb-script-body {
   display: grid;
   gap: 6px;
   min-width: 0;
+}
+/* The settings rows' title and description sizes, so a script's heading
+   reads at the same level as the card title, not above it. */
+.project-orb-script-body > h4 {
   margin: 0;
-  padding: 16px 0 0;
-  border: 0;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  letter-spacing: -0.025em;
 }
-.project-orb-script > legend {
-  float: left;
-  width: 100%;
-  padding: 0;
-}
-.project-orb-script > legend > label {
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 18px;
-}
-.project-orb-script > p,
+.project-orb-script-body > p,
 .project-orb-scripts-state {
   margin: 0;
   color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 17.875px;
+}
+.project-orb-script-body > .project-orb-script-error {
+  color: var(--destructive);
   font-size: 12px;
   line-height: 16px;
 }
 .project-orb-script-input {
-  min-height: 112px;
+  min-height: 192px;
   resize: vertical;
+  border-radius: 0;
   font: 12px / 18px var(--font-mono-family);
   tab-size: 2;
   white-space: pre;
 }
-.project-orb-script .settings-form-actions {
-  margin-top: 4px;
+.project-orb-script-actions {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
 }
 .project-settings-content .settings-form-actions > button,
 .project-settings-content .project-icon-control > button {

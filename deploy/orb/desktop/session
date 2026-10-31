@@ -121,7 +121,9 @@ wlr-randr --output HEADLESS-1 --custom-mode 1280x720@30Hz ||
 started=1
 
 foot --working-directory="$HOME" >>"$state/foot.log" 2>&1 </dev/null &
-"$desktop/chromium" --foreground about:blank >>"$state/chromium.log" 2>&1 </dev/null &
+# The repository's or project's Desktop resume script, or else Chromium at
+# about:blank (./resume).
+"$desktop/resume" </dev/null &
 
 while kill -0 "$labwc_pid" 2>/dev/null; do
   wait "$labwc_pid"

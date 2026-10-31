@@ -1,6 +1,6 @@
 ---
 title: Connecting an Orb provider
-description: Run your Threads' Orbs in your own E2B, Cloudflare, Freestyle, or Docker account.
+description: Run your Threads' Orbs in your own E2B, Cloudflare, Freestyle, Docker, or Boat account.
 sidebar:
   order: 3
 ---
@@ -17,6 +17,7 @@ provider account and your Threads' Orbs run there, on your plan and bill.
 | Cloudflare Containers | A Cloudflare account ID and API token, on the Workers Paid plan | A few minutes | 0.5 to 4 CPU, 4 to 12 GB | Files; processes restart |
 | Freestyle | A Freestyle API key | About ten minutes | 2 to 8 CPU, 4 to 16 GB | Running processes |
 | Docker Cloud Sandboxes | A Docker ID and personal access token, on the Docker Agentic Platform plan | A few minutes | 2 to 16 CPU, 4 to 32 GB | Files; processes restart |
+| Boat | A Boat API key, on a paid Boat plan without zero data retention | About ten minutes | 2 to 16 CPU, 4 to 32 GB | Files; processes restart |
 
 The dialog for each provider says what the key or token needs and where to
 create it.
@@ -46,7 +47,7 @@ choose **Check again**.
 
 Preparation leaves resources in your provider account, depending on the
 provider: E2B templates; a copy of the Orb image, a Worker, and a container
-application on Cloudflare; Freestyle snapshots. New dx releases prepare the
+application on Cloudflare; Freestyle and Boat snapshots. New dx releases prepare the
 account again when the Orb changes. On E2B, Threads that already started
 keep the templates they started with. On Cloudflare, dx updates the same
 Orb Worker.
@@ -85,8 +86,9 @@ unavailable, dx says so before it creates the Thread.
 
 By default an Orb pauses after five minutes without activity and resumes
 when the Thread needs it. On E2B and Freestyle a pause keeps memory, so
-running processes continue where they were. On Cloudflare Containers and
-Docker Cloud Sandboxes the files stay and processes start again.
+running processes continue where they were. On Cloudflare Containers,
+Docker Cloud Sandboxes, and Boat the files stay and processes start again.
+Boat deletes the disk of an Orb that has stayed stopped for 14 days.
 
 ## Update or disconnect
 
@@ -109,12 +111,14 @@ Choose **Manage** on a connected provider.
   [`e2b/provider.ts`](https://github.com/dxcode-dev/dxcode/blob/main/apps/core/src/execution/e2b/provider.ts),
   [`cloudflare/provider.ts`](https://github.com/dxcode-dev/dxcode/blob/main/apps/core/src/execution/cloudflare/provider.ts),
   [`freestyle/provider.ts`](https://github.com/dxcode-dev/dxcode/blob/main/apps/core/src/execution/freestyle/provider.ts),
-  [`docker/provider.ts`](https://github.com/dxcode-dev/dxcode/blob/main/apps/core/src/execution/docker/provider.ts)
+  [`docker/provider.ts`](https://github.com/dxcode-dev/dxcode/blob/main/apps/core/src/execution/docker/provider.ts),
+  [`boat/provider.ts`](https://github.com/dxcode-dev/dxcode/blob/main/apps/core/src/execution/boat/provider.ts)
 - Connection fields and preparation per provider:
   [`e2b/connector.ts`](https://github.com/dxcode-dev/dxcode/blob/main/apps/core/src/execution/e2b/connector.ts),
   [`cloudflare/connector.ts`](https://github.com/dxcode-dev/dxcode/blob/main/apps/core/src/execution/cloudflare/connector.ts),
   [`freestyle/connector.ts`](https://github.com/dxcode-dev/dxcode/blob/main/apps/core/src/execution/freestyle/connector.ts),
-  [`docker/connector.ts`](https://github.com/dxcode-dev/dxcode/blob/main/apps/core/src/execution/docker/connector.ts)
+  [`docker/connector.ts`](https://github.com/dxcode-dev/dxcode/blob/main/apps/core/src/execution/docker/connector.ts),
+  [`boat/connector.ts`](https://github.com/dxcode-dev/dxcode/blob/main/apps/core/src/execution/boat/connector.ts)
 - Settings page:
   [`orb-providers-settings.tsx`](https://github.com/dxcode-dev/dxcode/blob/main/apps/web/src/features/settings/orb-providers/orb-providers-settings.tsx),
   [`orb-providers-status.ts`](https://github.com/dxcode-dev/dxcode/blob/main/apps/web/src/features/settings/orb-providers/orb-providers-status.ts)

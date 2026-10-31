@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { page, userEvent } from "vitest/browser";
 import { AuthContext } from "../../../shared/auth/auth-context.js";
 import { projectKeys } from "../../projects/project-queries.js";
 import { environmentVariableKeys } from "../environment-variables/environment-variables-queries.js";
@@ -21,6 +22,7 @@ import {
   mcpUpdateInput,
   parsePastedHeaders,
 } from "./mcp-server-fields.js";
+import "../../../styles.css";
 
 const mutate = vi.hoisted(() =>
   vi.fn(async (_action: unknown): Promise<unknown> => undefined),
@@ -494,4 +496,65 @@ describe("Integrations & MCP", () => {
     act(() => typeInto(search, "bill"));
     expect(projectNames()).toEqual(["billing-api"]);
   });
+
+  // Each item's title and description stack inside the item, the items
+  // stack without touching, and all of it stays inside the menu (#1307).
+  const expectStackedMenu = () => {
+    const popup = document.querySelector<HTMLElement>('[role="menu"]');
+    if (!popup) throw new Error("Menu missing");
+    const menu = popup.getBoundingClientRect();
+    const items = [
+      ...popup.querySelectorAll<HTMLElement>('[role="menuitemradio"]'),
+    ];
+    expect(items.length).toBeGreaterThan(1);
+    const inside = (inner: DOMRect, outer: DOMRect, what: string) => {
+      expect(inner.left, what).toBeGreaterThanOrEqual(outer.left - 0.5);
+      expect(inner.right, what).toBeLessThanOrEqual(outer.right + 0.5);
+      expect(inner.top, what).toBeGreaterThanOrEqual(outer.top - 0.5);
+      expect(inner.bottom, what).toBeLessThanOrEqual(outer.bottom + 0.5);
+    };
+    items.forEach((item, index) => {
+      const box = item.getBoundingClientRect();
+      inside(box, menu, `${item.textContent} inside the menu`);
+      for (const part of item.querySelectorAll<HTMLElement>("*")) {
+        const rect = part.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) continue;
+        inside(rect, box, `${part.textContent} inside its item`);
+        expect(part.scrollWidth, part.textContent ?? "").toBeLessThanOrEqual(
+          part.clientWidth + 1,
+        );
+      }
+      const next = items[index + 1];
+      if (next)
+        expect(
+          box.bottom,
+          `${item.textContent} above the next item`,
+        ).toBeLessThanOrEqual(next.getBoundingClientRect().top + 0.5);
+    });
+  };
+
+  it.each([
+    [1440, 900],
+    [390, 844],
+  ])(
+    "lays out menu descriptions under their titles at %ipx",
+    async (width, height) => {
+      await page.viewport(width, height);
+      try {
+        mount([server({ tools: [tool("read_page", "allow")] })]);
+        act(() => button("Configure Docs")?.click());
+        await act(async () => scopeButton()?.click());
+        await vi.waitUntil(() => document.querySelector('[role="menu"]'));
+        expectStackedMenu();
+        await userEvent.keyboard("{Escape}");
+        await vi.waitUntil(() => !document.querySelector('[role="menu"]'));
+        act(() => button("Expand tools")?.click());
+        await act(async () => button("read_page: Allow")?.click());
+        await vi.waitUntil(() => document.querySelector('[role="menu"]'));
+        expectStackedMenu();
+      } finally {
+        await page.viewport(1280, 800);
+      }
+    },
+  );
 });

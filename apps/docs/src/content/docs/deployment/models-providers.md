@@ -16,7 +16,7 @@ provider.
 add. Every member's Threads can use them after their own.
 
 **Personal connections** belong to one user and are not exposed to other
-members: Claude Pro/Max, GitHub Copilot, and Custom URL.
+members: Claude Pro/Max, GitHub Copilot, a provider's API key, and Custom URL.
 
 dx encrypts stored provider secrets and does not return their plaintext.
 
@@ -27,6 +27,7 @@ dx encrypts stored provider secrets and does not return their plaintext.
 | Cloudflare Workers AI | Optional deployment binding |
 | GitHub Copilot | Personal GitHub device authorization |
 | Claude Pro/Max (Claude Code mode) | Personal `claude setup-token` token |
+| Provider API key, such as Anthropic or OpenAI | Personal API key; the deployment chooses which providers with `modelDeploymentProviders` |
 | GitHub source access | GitHub App installation |
 | Bitbucket source access | OAuth consumer authorization |
 | Sarvam dictation (Speech plugin) | Optional deployment API key; people and workspaces can add their own in Settings → Plugins |
@@ -42,9 +43,11 @@ a person's own Claude plan.
 - [Connect Claude Pro/Max](/docs/deployment/claude-code/)
 
 People add connections in **Personal Settings → Model Routing**; see
-[Connecting a model](/docs/use/connect-a-model/). A provider API key goes in
-a Custom URL connection that points at the provider's API. dx encrypts the
-key and returns only masked metadata.
+[Connecting a model](/docs/use/connect-a-model/). A provider API key gets its
+own connection under **Add**; a Custom URL connection covers any other
+compatible endpoint. dx encrypts the key and returns only masked metadata.
+Unless `modelDeploymentProviders` lists provider IDs (or `"none"`), every
+catalog provider is offered.
 
 ## Custom endpoint protocols
 

@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { boatOrbProvider } from "./boat.js";
 import { cloudflareOrbProvider } from "./cloudflare.js";
 import { dockerOrbProvider } from "./docker.js";
 import { e2bOrbProvider } from "./e2b.js";
@@ -15,6 +16,7 @@ export const ORB_PROVIDERS = [
   cloudflareOrbProvider,
   freestyleOrbProvider,
   dockerOrbProvider,
+  boatOrbProvider,
   localOrbProvider,
 ] as const;
 

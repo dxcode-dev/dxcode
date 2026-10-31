@@ -398,6 +398,34 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
           if ((result?.meta.changes ?? 0) === 0)
             return yield* new McpServerNotFound();
         }),
+        clearCredentials: Effect.fn("McpServerRepository.clearCredentials")(
+          function* (target, id) {
+            yield* Effect.tryPromise({
+              try: () =>
+                db.batch([
+                  db
+                    .prepare(
+                      "DELETE FROM mcp_server_credential WHERE server_id = ? AND scope = ? AND target_id = ?",
+                    )
+                    .bind(id, target.scope, target.id),
+                  db
+                    .prepare(
+                      "DELETE FROM mcp_server_secret WHERE server_id = ? AND scope = ? AND target_id = ?",
+                    )
+                    .bind(id, target.scope, target.id),
+                  db
+                    .prepare(
+                      `DELETE FROM mcp_oauth_grant WHERE server_id = ? AND EXISTS (
+                         SELECT 1 FROM mcp_server
+                          WHERE id = ? AND scope = ? AND target_id = ?
+                       )`,
+                    )
+                    .bind(id, id, target.scope, target.id),
+                ]),
+              catch: unavailable("settings.mcpServers.clearCredentials"),
+            });
+          },
+        ),
         replaceDiscovery: Effect.fn("McpServerRepository.replaceDiscovery")(
           function* (id, tools, options = {}) {
             const approveNew = options.approveNew === true;

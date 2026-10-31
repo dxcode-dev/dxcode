@@ -2,9 +2,12 @@ import type { ChoicesData } from "@dx/api";
 import { CLAUDE_CODE_EFFORTS, type ClaudeCodeEffort } from "@dx/domain";
 import { Check, ChevronDown } from "lucide-react";
 import type { KeyboardEvent } from "react";
+import { useNowMinute } from "../../shared/hooks/use-clock.js";
 import { modelDisplayName } from "../../shared/model-display-name.js";
 import {
   claudeCodeEffortLabel,
+  claudePlanLabel,
+  claudePlanPick,
   currentClaudeCodeModel,
 } from "./claude-code-mode-options.js";
 
@@ -172,5 +175,45 @@ export function ClaudeCodeModeOption({
         </span>
       )}
     </div>
+  );
+}
+
+/**
+ * The Claude plan a new Claude Code Thread runs on for its whole life,
+ * shown when more than one plan is enabled. Each option carries the limits
+ * Claude Code last reported on that plan.
+ */
+export function ClaudePlanPicker({
+  choices,
+  model,
+  plan,
+  locked,
+  onPlanChange,
+}: {
+  readonly choices: ChoicesData | undefined;
+  readonly model: string;
+  readonly plan: string | undefined;
+  readonly locked: boolean;
+  readonly onPlanChange: (connectionId: string) => void;
+}) {
+  const nowSeconds = Math.floor(useNowMinute() / 1000);
+  const { plans, current } = claudePlanPick(choices, plan);
+  if (plans.length < 2 || current === undefined) return null;
+  return (
+    <span className="new-thread-config-pill new-thread-claude-plan">
+      <select
+        aria-label="Claude plan"
+        value={current.connectionId}
+        disabled={locked}
+        onChange={(event) => onPlanChange(event.target.value)}
+      >
+        {plans.map((option) => (
+          <option key={option.connectionId} value={option.connectionId}>
+            {claudePlanLabel(option, model, nowSeconds)}
+          </option>
+        ))}
+      </select>
+      <ChevronDown aria-hidden="true" />
+    </span>
   );
 }

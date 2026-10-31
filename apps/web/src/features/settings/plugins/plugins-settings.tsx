@@ -26,6 +26,7 @@ import { PluginBundleDetails } from "./plugin-bundle-details.js";
 import {
   pluginBundlePreviewMutationOptions,
   pluginBundlesMutationOptions,
+  pluginBundleUpdatePreviewMutationOptions,
 } from "./plugin-bundle-mutations.js";
 import type { BundleRun } from "./plugin-bundle-presentation.js";
 import { pluginBundlesQueryOptions } from "./plugin-bundle-queries.js";
@@ -294,6 +295,9 @@ export function PluginsSettings({
   const previewMutation = useMutation(
     pluginBundlePreviewMutationOptions(target),
   );
+  const updatePreviewMutation = useMutation(
+    pluginBundleUpdatePreviewMutationOptions(target),
+  );
   const [importing, setImporting] = React.useState(false);
   const runBundle: BundleRun = async (action, success) => {
     setBusy(true);
@@ -438,6 +442,12 @@ export function PluginsSettings({
               canMutate={canImport}
               busy={busy}
               run={runBundle}
+              previewUpdate={(file) =>
+                updatePreviewMutation.mutateAsync({
+                  pluginId: editingBundle.id,
+                  ...(file === undefined ? {} : { file }),
+                })
+              }
               workspace={workspace}
               settingsReturnTo={settingsReturnTo}
               onDone={close}

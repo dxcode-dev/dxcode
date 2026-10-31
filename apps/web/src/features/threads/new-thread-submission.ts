@@ -36,6 +36,7 @@ const sameRequest = (
   previous.profile === next.profile &&
   previous.model === next.model &&
   previous.effort === next.effort &&
+  previous.claudeConnectionId === next.claudeConnectionId &&
   previous.runnerProfileId === next.runnerProfileId &&
   previous.body === next.body &&
   previous.attachmentIds.length === next.attachmentIds.length &&
@@ -56,6 +57,7 @@ export async function submitNewThread({
   profile,
   model,
   effort,
+  claudePlan,
   runnerProfileId,
   projects,
   imageCollection,
@@ -74,6 +76,8 @@ export async function submitNewThread({
   readonly model: string | undefined;
   /** Claude Code effort, sent only with a Claude Code model. */
   readonly effort?: ClaudeCodeEffort;
+  /** The Claude plan, sent only with a Claude Code model. */
+  readonly claudePlan?: string;
   readonly runnerProfileId?: RunnerProfileId;
   readonly projects: ReadonlyArray<ProjectData>;
   readonly imageCollection: PendingAttachmentCollection;
@@ -123,11 +127,14 @@ export async function submitNewThread({
     // so a recovered attempt without one still matches.
     const claudeEffort =
       model !== undefined && isClaudeCodeModel(model) ? effort : undefined;
+    const claudeConnectionId =
+      model !== undefined && isClaudeCodeModel(model) ? claudePlan : undefined;
     const request = {
       projectId: project?.id,
       profile: selectedProfile,
       model,
       ...(claudeEffort === undefined ? {} : { effort: claudeEffort }),
+      ...(claudeConnectionId === undefined ? {} : { claudeConnectionId }),
       runnerProfileId,
       body,
       attachmentIds,
@@ -167,6 +174,7 @@ export async function submitNewThread({
               ...(claudeEffort === undefined ? {} : { thinking: claudeEffort }),
             },
       ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
+      ...(claudeConnectionId === undefined ? {} : { claudeConnectionId }),
       threadId,
       initialMessage: {
         body: sentBody,

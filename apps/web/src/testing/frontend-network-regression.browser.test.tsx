@@ -27,8 +27,8 @@ import {
   personalAccountQueryOptions,
   updatePersonalAccountMutationOptions,
 } from "../features/settings/account/personal-account-queries.js";
-import { automationKeys } from "../features/threads/automations/automations-queries.js";
 import { settingsContextQueryOptions } from "../features/settings/settings-context-queries.js";
+import { automationKeys } from "../features/threads/automations/automations-queries.js";
 import { cacheCreatedThread } from "../features/threads/thread-mutations.js";
 import {
   threadKeys,
@@ -459,6 +459,7 @@ describe("ProductShell route ownership across the mobile breakpoint", () => {
     // The title bar's pull requests, checks, and listeners are cached.
     client.setQueryData(automationKeys.thread(thread.id), {
       githubSubscriptions: [],
+      issues: [],
       pullRequests: [],
       ciRuns: [],
     });

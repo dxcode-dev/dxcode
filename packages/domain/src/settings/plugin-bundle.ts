@@ -141,6 +141,16 @@ export interface PluginBundleRepositoryShape {
   readonly insert: (
     bundle: StoredPluginBundle,
   ) => Effect.Effect<void, BundleRepositoryFailure | PluginIntegrityConflict>;
+  /**
+   * Records a new version of an installed bundle and makes it active. A
+   * version with the active one's integrity is an integrity conflict.
+   */
+  readonly insertVersion: (
+    bundle: StoredPluginBundle,
+  ) => Effect.Effect<
+    void,
+    BundleRepositoryFailure | PluginNotFound | PluginIntegrityConflict
+  >;
   readonly setEnabled: (
     target: PluginTarget,
     id: PluginId,

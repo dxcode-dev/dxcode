@@ -217,9 +217,12 @@ export const ThreadRepositoryD1 = Layer.effect(
     // A Thread in a workspace Project stays with the workspace: its owner
     // reaches it only while a member, and again after rejoining. A reader
     // held to one workspace (an External API App) reaches only Threads in
-    // that workspace's Projects, never those in private Projects.
+    // that workspace's Projects, never those in private Projects. A Thread
+    // in a deleted Project (`projects.deleted_at`, set when the Project or
+    // its workspace is deleted) stays with its owner alone, archived and
+    // read-only. `thread` names the threads table in the query.
     const inReachableScope = (
-      projectIdColumn: string,
+      thread: "threads" | "thread" | "parent",
       { userId, workspaceId }: ProjectReader,
     ) => {
       const member = sql`EXISTS (
@@ -231,16 +234,20 @@ export const ThreadRepositoryD1 = Layer.effect(
       return sql`
       EXISTS (
         SELECT 1 FROM projects AS scope_project
-         WHERE scope_project.id = ${sql.literal(projectIdColumn)}
+         WHERE scope_project.id = ${sql.literal(`${thread}.project_id`)}
            AND ${
              workspaceId === undefined
-               ? sql`(scope_project.workspace_id IS NULL OR ${member})`
-               : sql`scope_project.workspace_id = ${workspaceId} AND ${member}`
+               ? sql`((scope_project.deleted_at IS NULL
+                     AND (scope_project.workspace_id IS NULL OR ${member}))
+                   OR (scope_project.deleted_at IS NOT NULL
+                     AND ${sql.literal(`${thread}.owner_user_id`)} = ${userId}))`
+               : sql`scope_project.workspace_id = ${workspaceId}
+                   AND scope_project.deleted_at IS NULL AND ${member}`
 })`;
     };
 
     return ThreadRepository.of({
-      insert: (thread, source, executionPin) =>
+      insert: (thread, source, executionPin, claudeConnectionId) =>
         observe(
           "thread.insert",
           { threadId: thread.id },
@@ -316,8 +323,25 @@ export const ThreadRepositoryD1 = Layer.effect(
                            AND account_scope IS NULL
                       `,
                     ];
+              // A Claude Code Thread's plan, picked at creation, lands with
+              // its row, before any submission or title could bind another.
+              const plan =
+                claudeConnectionId === undefined
+                  ? []
+                  : [
+                      sql`
+                        UPDATE threads
+                           SET claude_connection_id = ${claudeConnectionId},
+                               claude_connection_bound_at = ${encoded.createdAt}
+                         WHERE id = ${encoded.id}
+                           AND claude_connection_id IS NULL
+                           AND claude_connection_bound_at IS NULL
+                      `,
+                    ];
               if (source === undefined)
-                return d1.batch([insertThread, ...pin]).pipe(Effect.asVoid);
+                return d1
+                  .batch([insertThread, ...pin, ...plan])
+                  .pipe(Effect.asVoid);
               if (source.kind === "pending")
                 return Schema.encodeEffect(ThreadSourceIntent)(
                   source.intent,
@@ -327,6 +351,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       .batch([
                         insertThread,
                         ...pin,
+                        ...plan,
                         sql`
                           INSERT INTO thread_source_intent (
                             thread_id, project_id, binding_revision, provider,
@@ -382,6 +407,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                         .batch([
                           insertThread,
                           ...pin,
+                          ...plan,
                           snapshotInsert,
                           sql`
                         INSERT INTO thread_source_authority (
@@ -563,7 +589,7 @@ export const ThreadRepositoryD1 = Layer.effect(
             FROM threads
             WHERE id = ${threadId}
               AND owner_user_id = ${reader.userId}
-              AND ${inReachableScope("project_id", reader)}
+              AND ${inReachableScope("threads", reader)}
               AND lifecycle_state != 'deleted'
           `.pipe(
             Effect.catchTag("SqlError", (cause) =>
@@ -601,7 +627,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   updated_at = ${encodedPinnedAt ?? new Date().toISOString()}
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
-                AND ${inReachableScope("project_id", { userId: ownerUserId })}
+                AND ${inReachableScope("threads", { userId: ownerUserId })}
                 AND lifecycle_state != 'deleted'
                 AND (${encodedPinnedAt} IS NULL OR lifecycle_state = 'active')
             `.pipe(
@@ -620,7 +646,7 @@ export const ThreadRepositoryD1 = Layer.effect(
               FROM threads
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
-                AND ${inReachableScope("project_id", { userId: ownerUserId })}
+                AND ${inReachableScope("threads", { userId: ownerUserId })}
                 AND lifecycle_state != 'deleted'
                 AND (${encodedPinnedAt} IS NULL OR lifecycle_state = 'active')
             `.pipe(
@@ -661,7 +687,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   updated_at = ${now}
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
-                AND ${inReachableScope("project_id", { userId: ownerUserId })}
+                AND ${inReachableScope("threads", { userId: ownerUserId })}
                 AND lifecycle_state != 'deleted'
                 AND (${encodedUntil} IS NULL
                   OR (lifecycle_state = 'active' AND parent_thread_id IS NULL))
@@ -706,7 +732,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   updated_at = ${updatedAt}
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
-                AND ${inReachableScope("project_id", { userId: ownerUserId })}
+                AND ${inReachableScope("threads", { userId: ownerUserId })}
                 AND lifecycle_state != 'deleted'
               RETURNING id, title, project_id, owner_user_id, agent_instructions,
                 agent_instructions_revision, agent_instructions_version,
@@ -753,8 +779,13 @@ export const ThreadRepositoryD1 = Layer.effect(
                   updated_at = ${updatedAt}
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
-                AND ${inReachableScope("project_id", { userId: ownerUserId })}
+                AND ${inReachableScope("threads", { userId: ownerUserId })}
                 AND lifecycle_state != 'deleted'
+                -- A Thread kept from a deleted Project stays archived.
+                AND (${lifecycleState} != 'active' OR NOT EXISTS (
+                  SELECT 1 FROM projects AS deleted_project
+                   WHERE deleted_project.id = threads.project_id
+                     AND deleted_project.deleted_at IS NOT NULL))
               RETURNING id, title, project_id, owner_user_id, agent_instructions,
                 agent_instructions_revision, agent_instructions_version,
                 model_selection, runner_profile_id, plugin_snapshot_json, skill_snapshot_json,
@@ -801,7 +832,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                        WHERE parent.id = thread.parent_thread_id
                          AND parent.owner_user_id = thread.owner_user_id
                          AND parent.lifecycle_state = thread.lifecycle_state
-                         AND ${inReachableScope("parent.project_id", reader)}))`;
+                         AND ${inReachableScope("parent", reader)}))`;
             const cursor = request.cursor
               ? yield* decodeThreadPageCursor(request.cursor)
               : undefined;
@@ -881,7 +912,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                     INNER JOIN snapshot_activity AS activity
                       ON activity.thread_id = thread.id
                     WHERE thread.owner_user_id = ${reader.userId}
-                      AND ${inReachableScope("thread.project_id", reader)}
+                      AND ${inReachableScope("thread", reader)}
                       AND thread.project_id = ${projectId}
                       AND thread.lifecycle_state != 'deleted'
                       AND ${treeFilterFor("thread.pinned_at")}
@@ -929,7 +960,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       ON activity.thread_id = thread.id
                     LEFT JOIN pin_snapshot AS pin ON pin.thread_id = thread.id
                     WHERE thread.owner_user_id = ${reader.userId}
-                      AND ${inReachableScope("thread.project_id", reader)}
+                      AND ${inReachableScope("thread", reader)}
                       AND thread.project_id = ${projectId}
                       AND thread.lifecycle_state != 'deleted'
                       AND ${treeFilterFor("pin.pinned_at")}
@@ -983,7 +1014,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       ON activity.thread_id = thread.id
                     LEFT JOIN pin_snapshot AS pin ON pin.thread_id = thread.id
                     WHERE thread.owner_user_id = ${reader.userId}
-                      AND ${inReachableScope("thread.project_id", reader)}
+                      AND ${inReachableScope("thread", reader)}
                       AND thread.project_id = ${projectId}
                       AND thread.lifecycle_state != 'deleted'
                       AND ${treeFilterFor("pin.pinned_at")}
@@ -1020,7 +1051,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                     INNER JOIN snapshot_activity AS activity
                       ON activity.thread_id = thread.id
                     WHERE thread.owner_user_id = ${reader.userId}
-                      AND ${inReachableScope("thread.project_id", reader)}
+                      AND ${inReachableScope("thread", reader)}
                       AND thread.lifecycle_state != 'deleted'
                       AND ${treeFilterFor("thread.pinned_at")}
                       AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
@@ -1066,7 +1097,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       ON activity.thread_id = thread.id
                     LEFT JOIN pin_snapshot AS pin ON pin.thread_id = thread.id
                     WHERE thread.owner_user_id = ${reader.userId}
-                      AND ${inReachableScope("thread.project_id", reader)}
+                      AND ${inReachableScope("thread", reader)}
                       AND thread.lifecycle_state != 'deleted'
                       AND ${treeFilterFor("pin.pinned_at")}
                       AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
@@ -1118,7 +1149,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                       ON activity.thread_id = thread.id
                     LEFT JOIN pin_snapshot AS pin ON pin.thread_id = thread.id
                     WHERE thread.owner_user_id = ${reader.userId}
-                      AND ${inReachableScope("thread.project_id", reader)}
+                      AND ${inReachableScope("thread", reader)}
                       AND thread.lifecycle_state != 'deleted'
                       AND ${treeFilterFor("pin.pinned_at")}
                       AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
@@ -1188,7 +1219,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                     AND thread.owner_user_id = ${reader.userId}
                     AND thread.pinned_at IS NULL
                     AND thread.lifecycle_state = ${lifecycleState}
-                    AND ${inReachableScope("thread.project_id", reader)}
+                    AND ${inReachableScope("thread", reader)}
                 )
                 WHERE position <= ${perParent}
                 ORDER BY last_activity_at DESC, id DESC

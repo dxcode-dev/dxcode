@@ -128,7 +128,10 @@ The wizard writes this nonsecret JSON file:
 ```
 
 `version`, `cloudflareAccountId`, `domain`, `zone`, and every optional field may
-be omitted. `domain` and `zone` must appear together. Without them, the deploy
+be omitted. `modelDeploymentProviders` limits which providers people can add an
+API key for in Settings → Model Routing → Add → API key. Omit it to offer every
+catalog provider, list provider IDs such as `"anthropic,openai"` to offer only
+those, or set `"none"` to offer none. `domain` and `zone` must appear together. Without them, the deploy
 uses the account's `workers.dev` subdomain. `dxdBinary` selects the checked local
 fallback instead of downloading the release asset.
 

@@ -111,6 +111,27 @@ export const readPullSubject = async (
     await get<unknown>(token, `/repos/${repository}/pulls/${number}`),
   );
 
+/**
+ * Reads an issue or a pull request by number: GitHub numbers both in one
+ * sequence, and its issues API answers for both.
+ */
+export const readItemSubject = async (
+  token: string,
+  repository: string,
+  number: number,
+) => {
+  const item = await get<{ pull_request?: unknown }>(
+    token,
+    `/repos/${repository}/issues/${number}`,
+  );
+  return item.pull_request === undefined
+    ? { kind: "issue" as const, subject: pullSubject(item) }
+    : {
+        kind: "pull" as const,
+        subject: await readPullSubject(token, repository, number),
+      };
+};
+
 export class GitHubUnavailable extends Error {
   override readonly name = "GitHubUnavailable";
 }

@@ -1,4 +1,6 @@
 import {
+  CLAUDE_CODE_PROVIDER_ID,
+  ClaudePlanRefused,
   isClaudeCodeModel,
   normalizeCustomModelBaseUrl,
   type StoredModelConnection,
@@ -140,14 +142,72 @@ const threadClaudePlan = async (
   return bind(picked.match);
 };
 
+const resetText = (seconds: number) =>
+  `${new Date(seconds * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+
+/**
+ * The Claude plan a new Thread is bound to at creation: the one picked, if
+ * it is the owner's, enabled, and not used up for `model`. With no pick, a
+ * Thread whose owner has one enabled plan takes it at its first submission;
+ * with more, a plan must be picked. A Thread that does not run Claude Code
+ * takes no plan.
+ */
+const pickedClaudePlan = async (
+  db: D1Database,
+  connections: ReadonlyArray<StoredModelConnection>,
+  model: string,
+  picked: string | undefined,
+): Promise<string | undefined> => {
+  const plans = connections.filter(
+    ({ providerId, enabled }) =>
+      providerId === CLAUDE_CODE_PROVIDER_ID && enabled,
+  );
+  if (!isClaudeCodeModel(model)) {
+    if (picked === undefined) return undefined;
+    throw new ClaudePlanRefused({
+      reason: "unavailable",
+      message: "A Claude plan applies only to a Thread that runs Claude Code.",
+    });
+  }
+  if (picked === undefined) {
+    if (plans.length <= 1) return undefined;
+    throw new ClaudePlanRefused({
+      reason: "required",
+      message: `Pick the Claude plan this Thread runs on: ${plans
+        .map(({ id, name }) => `${name} (${id})`)
+        .join(", ")}.`,
+    });
+  }
+  const plan = plans.find(({ id }) => id === picked);
+  if (plan === undefined)
+    throw new ClaudePlanRefused({
+      reason: "unavailable",
+      message:
+        "That Claude plan is not one of your enabled Claude Pro/Max plans.",
+    });
+  const blockedUntil = claudePlanAccess(
+    await loadClaudePlan(db, plan.id),
+    model.slice(model.indexOf("/") + 1),
+  ).blockedUntil;
+  if (blockedUntil !== undefined)
+    throw new ClaudePlanRefused({
+      reason: "used-up",
+      message: `${plan.name} is used up until ${resetText(blockedUntil)}. Pick another plan or start the Thread after then.`,
+      resetsAt: blockedUntil,
+    });
+  return plan.id;
+};
+
 /**
  * Resolves a proposed selection against current routing state without
- * reading credentials, pinning a connection, or persisting anything.
+ * reading credentials, pinning a connection, or persisting anything, and the
+ * Claude plan a new Thread is bound to (see `pickedClaudePlan`).
  */
 export const resolveSelectionForUser = async (
   bindings: Bindings,
   userId: UserId,
   selection: ThreadModelSelection,
+  claudeConnectionId?: string,
 ) => {
   const db = bindings.DB;
   if (db === undefined) throw new Error("Model routing is not configured.");
@@ -175,13 +235,28 @@ export const resolveSelectionForUser = async (
         ),
     ),
   );
-  return resolveSubmissionModel({
-    selection,
+  const defaultProfile = deployment ? DEV_PROFILE : DEFAULT_PROFILE;
+  const model =
+    selection.kind === "mode"
+      ? (overrides.get(selection.mode) ?? defaultProfile.modes[selection.mode])
+          .agent.model
+      : selection.model;
+  const claudePlan = await pickedClaudePlan(
+    db,
     connections,
-    defaultProfile: deployment ? DEV_PROFILE : DEFAULT_PROFILE,
-    modeOverrides: overrides,
-    copilotEntitlements: (id) => entitlements.get(id),
-  });
+    model,
+    claudeConnectionId,
+  );
+  return {
+    ...resolveSubmissionModel({
+      selection,
+      connections,
+      defaultProfile,
+      modeOverrides: overrides,
+      copilotEntitlements: (id) => entitlements.get(id),
+    }),
+    ...(claudePlan === undefined ? {} : { claudeConnectionId: claudePlan }),
+  };
 };
 
 /** Kept only in the credential DO, never in Flue history or the sandbox. */

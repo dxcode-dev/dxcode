@@ -261,11 +261,13 @@ export const StoredModelConnection = Schema.Struct({
   .check(
     Schema.makeFilter(
       (connection) =>
-        connection.models.length === 0 || connection.kind === "custom",
+        connection.models.length === 0 ||
+        connection.kind === "custom" ||
+        connection.kind === "provider",
       {
         identifier: "ModelConnectionModelsKind",
         description:
-          "Only custom connections declare explicit served models; an empty list serves the provider's whole catalog.",
+          "Custom connections declare their served models and provider connections their model mapping; an empty provider mapping serves the provider's whole catalog.",
       },
     ),
   )
@@ -396,5 +398,19 @@ export class ModelNotServed extends Schema.TaggedError<ModelNotServed>()(
   {
     model: ModelId,
     reason: Schema.Literals(["no-connection", "disabled", "unknown-model"]),
+  },
+) {}
+
+/**
+ * A new Claude Code Thread's Claude Pro/Max plan was not picked, cannot be
+ * used, or is used up for the Thread's model until `resetsAt` (epoch
+ * seconds). A Thread is bound to its plan at creation and takes no other.
+ */
+export class ClaudePlanRefused extends Schema.TaggedError<ClaudePlanRefused>()(
+  "ClaudePlanRefused",
+  {
+    reason: Schema.Literals(["required", "unavailable", "used-up"]),
+    message: Schema.String,
+    resetsAt: Schema.optional(Schema.Number),
   },
 ) {}

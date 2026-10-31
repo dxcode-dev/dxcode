@@ -1109,11 +1109,11 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     );
   });
 
-  it("runs setup once, retries failure, and resumes on every activation in order", async () => {
+  it("runs setup once and retries failure", async () => {
     const fixture = await makeHarness();
     initialize(fixture);
     writeFileSync(join(fixture.paths.home, "fail-setup"), "fail\n");
-    // A failing setup leaves the workspace ready and still resumes.
+    // A failing setup leaves the workspace ready.
     expect(hooksState(fixture)).toEqual({ status: "ready", failed: ["setup"] });
     const immutableSetup = readFileSync(
       join(fixture.paths.root, ".agents", "setup"),
@@ -1129,7 +1129,26 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     expect(hooksState(fixture)).toEqual({ status: "ready" });
     expect(hooksState(fixture)).toEqual({ status: "ready" });
     expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
-      "resume\nsetup\nresume\nresume\n",
+      "setup\n",
+    );
+  });
+
+  // dxd's environment activation runs `.agents/resume` on the first
+  // activation and after every wake, with the Project's environment. Source
+  // activation running it too made a first activation run it twice (#1266).
+  it("never runs .agents/resume, on a first activation or a wake", async () => {
+    const fixture = await makeHarness();
+    initialize(fixture);
+    // A first agent activation, then an agent turn that wakes a paused Orb.
+    for (let activation = 0; activation < 2; activation += 1)
+      expect(activationState(fixture, { DX_RUN_RESUME: "true" })).toMatchObject(
+        { hooks: { status: "ready" } },
+      );
+    expect(hooksState(fixture, { DX_RUN_RESUME: "true" })).toEqual({
+      status: "ready",
+    });
+    expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
+      "setup\n",
     );
   });
 
@@ -1144,103 +1163,39 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     });
   });
 
-  it("judges setup and resume by their exit codes alone, however much they print, and logs all of it", async () => {
+  it("judges setup by its exit code alone, however much it prints, and logs all of it", async () => {
     const fixture = await makeHarness();
     initialize(fixture);
     // About 1 MB on stdout and stderr: far past what a buffered child may
     // print before Node kills it.
-    const chatty = (name: string, exitCode: number) =>
+    const chatty = (exitCode: number) =>
       `#!/bin/sh
 head -c 524288 /dev/zero | tr '\\0' 'o'
 head -c 524288 /dev/zero | tr '\\0' 'e' >&2
-printf "\\n${name} finished\\n"
-printf "${name}\\n" >> "$HOME/hook-order"
+printf "\\nsetup finished\\n"
+printf "setup\\n" >> "$HOME/hook-order"
 exit ${exitCode}
 `;
-    writeFileSync(
-      join(fixture.paths.root, ".agents", "setup"),
-      chatty("setup", 0),
-      {
-        mode: 0o755,
-      },
-    );
-    writeFileSync(
-      join(fixture.paths.root, ".agents", "resume"),
-      chatty("resume", 0),
-      {
-        mode: 0o755,
-      },
-    );
+    const setup = join(fixture.paths.root, ".agents", "setup");
+    const log = () =>
+      readFileSync(join(fixture.paths.logDirectory, "setup.log"), "utf8");
 
+    writeFileSync(setup, chatty(3), { mode: 0o755 });
+    expect(hooksState(fixture)).toEqual({ status: "ready", failed: ["setup"] });
+    expect(log().length).toBeGreaterThanOrEqual(1_048_576);
+    // A shorter run replaces the log instead of appending to it.
+    writeFileSync(setup, "#!/bin/sh\necho short\nexit 3\n", { mode: 0o755 });
+    expect(hooksState(fixture)).toEqual({ status: "ready", failed: ["setup"] });
+    expect(log()).toBe("short\n");
+    writeFileSync(setup, chatty(0), { mode: 0o755 });
     expect(hooksState(fixture)).toEqual({ status: "ready" });
     expect(
       JSON.parse(readFileSync(fixture.paths.state, "utf8")).setup.status,
     ).toBe("success");
+    expect(log().length).toBeGreaterThanOrEqual(1_048_576);
+    expect(log().endsWith("setup finished\n")).toBe(true);
     expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
-      "setup\nresume\n",
-    );
-    for (const name of ["setup", "resume"]) {
-      const log = readFileSync(
-        join(fixture.paths.logDirectory, `${name}.log`),
-        "utf8",
-      );
-      expect(log.length).toBeGreaterThanOrEqual(1_048_576);
-      expect(log.endsWith(`${name} finished\n`)).toBe(true);
-    }
-
-    // The same output with a failing exit still fails, and a shorter run
-    // replaces the log instead of appending to it.
-    writeFileSync(
-      join(fixture.paths.root, ".agents", "resume"),
-      chatty("resume", 3),
-      {
-        mode: 0o755,
-      },
-    );
-    expect(hooksState(fixture)).toEqual({
-      status: "ready",
-      failed: ["resume"],
-    });
-    writeFileSync(
-      join(fixture.paths.root, ".agents", "resume"),
-      "#!/bin/sh\necho short\n",
-      { mode: 0o755 },
-    );
-    expect(hooksState(fixture)).toEqual({ status: "ready" });
-    expect(
-      readFileSync(join(fixture.paths.logDirectory, "resume.log"), "utf8"),
-    ).toBe("short\n");
-  });
-
-  it("reports a failing resume hook without failing the workspace", async () => {
-    const fixture = await makeHarness();
-    initialize(fixture);
-    writeFileSync(
-      join(fixture.paths.root, ".agents", "resume"),
-      "#!/bin/sh\nexit 7\n",
-      { mode: 0o755 },
-    );
-
-    expect(hooksState(fixture)).toEqual({
-      status: "ready",
-      failed: ["resume"],
-    });
-  });
-
-  it("runs setup but not resume when a running workspace reconnects", async () => {
-    const fixture = await makeHarness();
-    initialize(fixture);
-    writeFileSync(
-      join(fixture.paths.root, ".agents", "resume"),
-      "#!/bin/sh\nexit 7\n",
-      { mode: 0o755 },
-    );
-
-    expect(hooksState(fixture, { DX_RUN_RESUME: "false" })).toEqual({
-      status: "ready",
-    });
-    expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
-      "setup\n",
+      "setup\nsetup\n",
     );
   });
 
@@ -1277,7 +1232,7 @@ exit ${exitCode}
     initialize(fixture);
     expect(hooksState(fixture)).toEqual({ status: "ready" });
     expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
-      "pre-clone\nsetup\nresume\n",
+      "pre-clone\nsetup\n",
     );
   });
 
@@ -1333,11 +1288,11 @@ exit ${exitCode}
       }),
     ).toEqual({ status: "ready" });
     expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
-      "pre-setup\nsetup\nresume\nresume\npre-setup\nsetup\nresume\n",
+      "pre-setup\nsetup\npre-setup\nsetup\n",
     );
   });
 
-  it("runs pre-setup in a repository without setup hooks, and the resume hook it writes runs uncommitted", async () => {
+  it("runs pre-setup in a repository without setup hooks and keeps the resume hook it writes uncommitted", async () => {
     const fixture = await makeHarness({ withoutHooks: true });
     initialize(fixture);
     const preSetup = projectScript(
@@ -1359,7 +1314,7 @@ exit ${exitCode}
       status: "ready",
     });
     expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
-      "pre-setup\nresume\nresume\n",
+      "pre-setup\n",
     );
     expect(git(fixture.paths.root, "status", "--porcelain")).toBe("");
   });
@@ -1383,8 +1338,42 @@ exit ${exitCode}
       status: "ready",
     });
     expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
-      "pre-setup\nsetup\nresume\npre-setup\nsetup\nresume\n",
+      "pre-setup\nsetup\npre-setup\nsetup\n",
     );
+  });
+
+  it("keeps the project's Desktop resume script where the Desktop reads it, and removes it once cleared", async () => {
+    const fixture = await makeHarness();
+    initialize(fixture);
+    const stored = join(
+      dirname(fixture.paths.state),
+      "project-scripts",
+      "desktop-resume",
+    );
+    const body = '/opt/dx/desktop/chromium "http://localhost:3000"\n';
+
+    // Only a command that carries the sync flag touches the file.
+    expect(
+      checkoutState(fixture, { DX_DESKTOP_RESUME_SCRIPT: projectScript(body) }),
+    ).toMatchObject({ status: "ready" });
+    expect(existsSync(stored)).toBe(false);
+
+    expect(
+      checkoutState(fixture, {
+        DX_DESKTOP_RESUME_SYNC: "true",
+        DX_DESKTOP_RESUME_SCRIPT: projectScript(body),
+      }),
+    ).toMatchObject({ status: "ready" });
+    expect(readFileSync(stored, "utf8")).toBe(body);
+    expect(lstatSync(stored).mode & 0o777).toBe(0o700);
+
+    expect(
+      checkoutState(fixture, {
+        DX_DESKTOP_RESUME_SYNC: "true",
+        DX_DESKTOP_RESUME_SCRIPT: "",
+      }),
+    ).toMatchObject({ status: "ready" });
+    expect(existsSync(stored)).toBe(false);
   });
 
   it("checks out a Bitbucket LFS repository through the dx gateway the way a laptop clone does", async () => {
@@ -1803,7 +1792,7 @@ exit ${exitCode}
     });
     expect(hooksState(fixture)).toEqual({ status: "ready" });
     expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
-      "setup\nresume\nlinked-resume\nlinked-resume\n",
+      "setup\n",
     );
     expect(readFileSync(join(root, "feature.txt"), "utf8")).toBe(
       "feature work\n",
@@ -1962,7 +1951,7 @@ describe("template source asset verifier", () => {
       },
     });
     expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
-      "setup\nresume\n",
+      "setup\n",
     );
 
     rmSync(join(fixture.paths.home, "hook-order"));

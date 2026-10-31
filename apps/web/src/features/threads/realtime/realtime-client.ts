@@ -8,6 +8,7 @@ import {
 } from "../../../shared/auth/session-ended.js";
 import { recordConnectionEvent } from "../../../shared/diagnostics/client-diagnostics.js";
 import { invalidateSidebarLayout } from "../../navigation/sidebar-layout-queries.js";
+import { invalidateNeedsYou } from "../../notifications/needs-you-queries.js";
 import { invalidateNotifications } from "../../notifications/notifications-queries.js";
 import {
   invalidateAllThreadAutomations,
@@ -55,6 +56,7 @@ const invalidateAllRealtimeState = (
   void invalidateAllOrbDisk(queryClient);
   void invalidateAllThreadAutomations(queryClient);
   void invalidateNotifications(queryClient, userId);
+  void invalidateNeedsYou(queryClient, userId);
   void invalidateSidebarLayout(queryClient, userId);
 };
 
@@ -287,6 +289,8 @@ export class RealtimeClient {
       void invalidateOrbDisk(this.#queryClient, event.threadId);
     } else if (event.type === "notifications.invalidated") {
       void invalidateNotifications(this.#queryClient, this.#userId);
+    } else if (event.type === "needs-you.invalidated") {
+      void invalidateNeedsYou(this.#queryClient, this.#userId);
     } else if (event.type === "sidebar.invalidated") {
       void invalidateSidebarLayout(this.#queryClient, this.#userId);
     } else if (event.type === "workspace.status") {

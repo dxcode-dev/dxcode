@@ -1500,7 +1500,7 @@ impl SuspensionClock {
     }
 }
 
-fn suspended_between(wall_elapsed: Duration, monotonic_elapsed: Duration) -> bool {
+pub(crate) fn suspended_between(wall_elapsed: Duration, monotonic_elapsed: Duration) -> bool {
     wall_elapsed > monotonic_elapsed + SUSPENSION_GAP
 }
 

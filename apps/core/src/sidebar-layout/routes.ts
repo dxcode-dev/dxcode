@@ -9,7 +9,12 @@ import { type Context, Hono } from "hono";
 import type { AppEnv } from "../http/types.js";
 import { sidebarLayoutLogger } from "../logging.js";
 import { scheduleUserInvalidation } from "../realtime/publication.js";
-import { readSidebarLayout, writeSidebarLayoutEntry } from "./repository.js";
+import {
+  readSidebarLayout,
+  writeSidebarCollapsed,
+  writeSidebarLayoutEntry,
+  writeSidebarWidth,
+} from "./repository.js";
 
 const unavailable = (context: Context<AppEnv>) =>
   context.json(
@@ -50,7 +55,7 @@ const layoutResponse = async (
   context.json(
     Schema.encodeUnknownSync(SidebarLayoutResponseSchema)({
       status: "success",
-      data: { entries: await readSidebarLayout(db, userId) },
+      data: await readSidebarLayout(db, userId),
     }),
     200,
   );
@@ -77,7 +82,11 @@ export const sidebarLayoutRoutes = new Hono<AppEnv>()
           }),
           400,
         );
-      await writeSidebarLayoutEntry(db, userId, entry.value);
+      if (entry.value.kind === "width")
+        await writeSidebarWidth(db, userId, entry.value.width);
+      else if (entry.value.kind === "collapsed")
+        await writeSidebarCollapsed(db, userId, entry.value.collapsed);
+      else await writeSidebarLayoutEntry(db, userId, entry.value);
       // The person's other devices refetch the layout.
       await scheduleUserInvalidation(
         () => context.executionCtx,

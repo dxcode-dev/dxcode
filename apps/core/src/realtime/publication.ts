@@ -195,11 +195,12 @@ const publishRealtimeThreadEvent = async (
 /** An event for one user's open apps only. */
 export type UserInvalidationType =
   | "notifications.invalidated"
-  | "sidebar.invalidated";
+  | "sidebar.invalidated"
+  | "needs-you.invalidated";
 
 /**
- * Tells a user's open apps that their notification inbox or sidebar layout
- * changed. It goes only to that user, on their own revision stream in their
+ * Tells a user's open apps that their notification inbox, sidebar layout,
+ * or Needs-you list changed. It goes only to that user, on their own revision stream in their
  * home hub.
  */
 export const publishUserInvalidation = async (

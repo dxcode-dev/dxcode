@@ -101,6 +101,15 @@ export const requireAdmin = (access: WorkspaceAccess) => {
   if (!isAdmin(access.role)) throw adminRequired();
 };
 
+export const requireOwner = (access: WorkspaceAccess) => {
+  if (access.role !== "owner")
+    throw new WorkspaceMembersError(
+      "WORKSPACE_OWNER_REQUIRED",
+      403,
+      "Only the workspace owner can do this.",
+    );
+};
+
 // Better Auth stores dates as epoch milliseconds or ISO strings depending on
 // the writer; normalize both.
 const isoFrom = (value: unknown): string | undefined => {
@@ -304,11 +313,66 @@ export const removeMember = async (
   return runningWorkspaceThreads(db, access.workspaceId, targetUserId);
 };
 
+/**
+ * The owner hands the workspace to another member and becomes an admin, in
+ * one transaction: the new owner is promoted before the old one steps down,
+ * so the workspace always has an owner.
+ */
+export const transferOwnership = async (
+  db: D1Database,
+  access: WorkspaceAccess,
+  targetUserId: string,
+): Promise<WorkspaceMemberData> => {
+  requireOwner(access);
+  if (targetUserId === access.userId)
+    throw new WorkspaceMembersError(
+      "INVALID_WORKSPACE_MEMBERS_REQUEST",
+      400,
+      "You already own this workspace.",
+    );
+  const target = await findMember(db, access.workspaceId, targetUserId);
+  if (target === null) throw memberNotFound();
+  const [promoted] = await db.batch([
+    db
+      .prepare(
+        `UPDATE member SET role = 'owner'
+          WHERE organizationId = ?1 AND userId = ?2
+            AND EXISTS (SELECT 1 FROM member AS current
+                         WHERE current.organizationId = ?1
+                           AND current.userId = ?3 AND current.role = 'owner')
+          RETURNING userId`,
+      )
+      .bind(access.workspaceId, targetUserId, access.userId),
+    db
+      .prepare(
+        `UPDATE member SET role = 'admin'
+          WHERE organizationId = ?1 AND userId = ?2 AND role = 'owner'
+            AND EXISTS (SELECT 1 FROM member AS next
+                         WHERE next.organizationId = ?1
+                           AND next.userId = ?3 AND next.role = 'owner')`,
+      )
+      .bind(access.workspaceId, access.userId, targetUserId),
+  ]);
+  if (promoted?.results.length !== 1) throw memberNotFound();
+  settingsAuditLogger.info("Workspace ownership transferred.", {
+    event: "workspace_ownership_transferred",
+    workspaceId: access.workspaceId,
+    userId: access.userId,
+    targetUserId,
+  });
+  return memberData({ ...target, role: "owner" });
+};
+
 export const leaveWorkspace = async (
   db: D1Database,
   access: WorkspaceAccess,
 ) => {
-  if (access.role === "owner") throw ownerImmutable();
+  if (access.role === "owner")
+    throw new WorkspaceMembersError(
+      "WORKSPACE_OWNER_IMMUTABLE",
+      409,
+      "Transfer ownership to another member before you leave, or delete the workspace.",
+    );
   if (!(await deleteMembership(db, access.workspaceId, access.userId)))
     throw memberNotFound();
   settingsAuditLogger.info("Workspace member left.", {

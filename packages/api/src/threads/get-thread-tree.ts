@@ -11,8 +11,9 @@ export const GetThreadTreeParamsSchema = Schema.Struct({
 export const THREAD_TREE_MAX_ITEMS = 500;
 
 /**
- * The Thread's family as the requester may read it: its root and every child
- * of that root, active and archived, oldest first. A workspace member of a
+ * The Thread's family as the requester may read it: its root and every
+ * active child of that root, oldest first. The root and the requested Thread
+ * list even when archived; archived children are left out. A workspace member of a
  * shared family gets only the members shared with them, each with `access`
  * and `projectName` as the shared list returns them; the root can be absent.
  * Each child names the member that started it in `startedByThreadId`; a child

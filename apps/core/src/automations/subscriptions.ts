@@ -6,6 +6,7 @@ import {
   type PullSubject,
   type SubscriptionFilter,
 } from "./github.js";
+import { linkOfSubscription, linkThread, saveLinkSubject } from "./links.js";
 
 /** A GitHub event subscription (D1 `github_subscription`). */
 export interface SubscriptionRow {
@@ -162,6 +163,21 @@ export const subscriptionView = (row: SubscriptionRow) => ({
   createdAt: row.created_at,
 });
 
+/** A this-thread comment subscription links its Thread to its issue or PR. */
+const linkFollowed = async (
+  db: D1Database,
+  input: SubscriptionInput,
+  now: Date,
+) => {
+  const link = linkOfSubscription(input.kind, input.filter);
+  if (link === undefined || input.destination !== "this-thread") return;
+  await linkThread(
+    db,
+    { threadId: input.threadId, repository: input.repository, ...link },
+    now,
+  );
+};
+
 /**
  * Saves a subscription, or returns the equivalent one already saved with
  * its paused state and instructions kept. An automatic CI follow-up on the
@@ -197,6 +213,7 @@ export const createSubscription = async (
         )
         .bind(existing.id, JSON.stringify(input.filter), at, input.expiresAt)
         .run();
+    await linkFollowed(db, input, now);
     return {
       row: (await readSubscription(db, existing.id)) as SubscriptionRow,
       existed: true,
@@ -227,6 +244,7 @@ export const createSubscription = async (
       at,
     )
     .run();
+  await linkFollowed(db, input, now);
   return {
     row: (await readSubscription(db, id)) as SubscriptionRow,
     existed: false,
@@ -271,6 +289,7 @@ export const replaceSubscription = async (
       at,
     )
     .run();
+  await linkFollowed(db, input, now);
   return readSubscription(db, current.id);
 };
 
@@ -354,16 +373,17 @@ export const automaticCiOn = async (
   ).results;
 
 /**
- * Saves what the header shows of a pull request on every subscription that
- * follows it: one write per pull_request webhook, so no view reads GitHub.
+ * Saves what the header shows of a pull request on every subscription and
+ * Thread link that follows it: one write each per pull_request webhook, so
+ * no view reads GitHub.
  */
-export const savePullSubject = (
+export const savePullSubject = async (
   db: D1Database,
   repository: string,
   number: number,
   subject: PullSubject,
-) =>
-  db
+) => {
+  await db
     .prepare(
       `UPDATE github_subscription SET subject_json = ?3
         WHERE repository = ?1 COLLATE NOCASE AND filter_kind = 'pr-comments'
@@ -371,6 +391,8 @@ export const savePullSubject = (
     )
     .bind(repository, number, JSON.stringify(subject))
     .run();
+  await saveLinkSubject(db, repository, number, "pull", subject);
+};
 
 /** The Thread's delivered CI results with their checks, newest first. */
 export const threadCiResults = async (

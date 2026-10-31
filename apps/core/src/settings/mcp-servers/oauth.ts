@@ -7,6 +7,7 @@ import {
   refreshAuthorization,
   registerClient,
   resourceUrlFromServerUrl,
+  selectClientAuthMethod,
   startAuthorization,
 } from "@modelcontextprotocol/client";
 import { Schema } from "effect";
@@ -331,6 +332,61 @@ const refresh = async (
   } catch {
     throw failure("Sign in again.");
   }
+};
+
+const stringList = (value: unknown): Array<string> | undefined =>
+  Array.isArray(value) && value.every((item) => typeof item === "string")
+    ? value
+    : undefined;
+
+/**
+ * Asks the grant's authorization server to revoke it (RFC 7009): the
+ * refresh token when there is one, since revoking it ends the grant, else
+ * the access token. Returns "unsupported", sending nothing, when the
+ * server's metadata names no `revocation_endpoint`; throws when the server
+ * cannot be reached or does not answer 200.
+ */
+export const revokeMcpOAuthGrant = async (
+  payload: McpOAuthGrantPayload,
+  fetchFn: typeof fetch,
+): Promise<"completed" | "unsupported"> => {
+  const metadata =
+    typeof payload.metadata === "object" && payload.metadata !== null
+      ? (payload.metadata as Record<string, unknown>)
+      : {};
+  const endpoint = metadata.revocation_endpoint;
+  if (typeof endpoint !== "string") return "unsupported";
+  const refreshToken = payload.tokens.refresh_token;
+  const body = new URLSearchParams({
+    token: refreshToken ?? payload.tokens.access_token,
+    token_type_hint:
+      refreshToken === undefined ? "access_token" : "refresh_token",
+  });
+  const headers = new Headers({
+    accept: "application/json",
+    "content-type": "application/x-www-form-urlencoded",
+  });
+  const client = payload.clientInformation;
+  const method = selectClientAuthMethod(
+    client as OAuthClientInformationMixed,
+    stringList(metadata.revocation_endpoint_auth_methods_supported) ??
+      stringList(metadata.token_endpoint_auth_methods_supported) ??
+      [],
+  );
+  if (method === "client_secret_basic" && client.client_secret !== undefined)
+    headers.set(
+      "authorization",
+      `Basic ${btoa(`${client.client_id}:${client.client_secret}`)}`,
+    );
+  else {
+    body.set("client_id", client.client_id);
+    if (method !== "none" && client.client_secret !== undefined)
+      body.set("client_secret", client.client_secret);
+  }
+  const response = await fetchFn(endpoint, { method: "POST", headers, body });
+  if (response.status !== 200)
+    throw failure("The authorization server refused to revoke the token.");
+  return "completed";
 };
 
 /**

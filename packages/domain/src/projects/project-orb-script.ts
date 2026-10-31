@@ -3,9 +3,14 @@ import { Schema } from "effect";
 /**
  * Scripts a Project saves in its Orb settings. Pre-clone runs from
  * `/home/user/workspace` before dx clones the repository; pre-setup runs
- * from the repository root before `.agents/setup`.
+ * from the repository root before `.agents/setup`; desktop-resume runs when
+ * the Desktop starts, unless the repository has `.agents/desktop/resume`.
  */
-export const PROJECT_ORB_SCRIPT_KINDS = ["pre-clone", "pre-setup"] as const;
+export const PROJECT_ORB_SCRIPT_KINDS = [
+  "pre-clone",
+  "pre-setup",
+  "desktop-resume",
+] as const;
 
 export const ProjectOrbScriptKind = Schema.Literals(PROJECT_ORB_SCRIPT_KINDS);
 

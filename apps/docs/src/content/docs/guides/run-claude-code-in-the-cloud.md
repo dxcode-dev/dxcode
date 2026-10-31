@@ -13,7 +13,7 @@ close your laptop. You follow and steer them from the dx web app.
 - A Claude Pro or Max plan.
 - [Claude Code](https://code.claude.com/docs/en/setup) on your own computer,
   once, to create a token.
-- An Orb provider: an E2B, Cloudflare, Freestyle, or Docker account you
+- An Orb provider: an E2B, Cloudflare, Freestyle, Docker, or Boat account you
   connect, or one your dx deployment provides.
 
 ## Set it up

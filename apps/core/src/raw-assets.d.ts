@@ -48,6 +48,11 @@ declare module "*/desktop/chromium?raw" {
   export default source;
 }
 
+declare module "*/desktop/resume?raw" {
+  const source: string;
+  export default source;
+}
+
 declare module "*/desktop/bin/ffmpeg?raw" {
   const source: string;
   export default source;

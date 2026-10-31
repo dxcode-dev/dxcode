@@ -12,8 +12,10 @@
  *  4. A file name does not find its full path; a partial path or a path
  *     without an extension matches too loosely.
  *  5. Access leaks: another member's private Thread, an outsider's Thread, a
- *     workspace-Project Thread after its owner left, or (from a shared
- *     calling Thread) the owner's private non-family Threads.
+ *     workspace-Project Thread after its owner left, a Thread kept from a
+ *     deleted workspace to a former member, or (from a shared calling
+ *     Thread) the owner's private non-family Threads; or the owner loses a
+ *     Thread kept from a deleted project or workspace.
  *  6. Filters, ordering, or keyset pages are wrong; pages repeat or skip.
  *  7. Re-indexing duplicates; a renamed title keeps matching; a dropped Thread
  *     still matches.
@@ -35,12 +37,17 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
+import { deleteProject } from "../../src/projects/deletion.js";
+import { deleteWorkspace } from "../../src/settings/workspace/deletion.js";
 import {
   type HistoryPage,
   indexableMessages,
 } from "../../src/thread-search/history.js";
 import { ownerSearchIndex } from "../../src/thread-search/index-client.js";
-import { threadSearchRoutes } from "../../src/thread-search/routes.js";
+import {
+  searchThreadsItem,
+  threadSearchRoutes,
+} from "../../src/thread-search/routes.js";
 import {
   searchThreads,
   type ThreadSearchScope,
@@ -64,6 +71,7 @@ const ids = {
   ownerWorkspace: "prj_00000000-0000-4000-8000-000000000002" as ProjectId,
   memberPersonal: "prj_00000000-0000-4000-8000-000000000003" as ProjectId,
   outsiderPersonal: "prj_00000000-0000-4000-8000-000000000004" as ProjectId,
+  ownerScratch: "prj_00000000-0000-4000-8000-000000000005" as ProjectId,
 };
 
 const newId = () => `thr_${crypto.randomUUID()}`;
@@ -319,6 +327,80 @@ describe("Thread search with real D1 and per-owner FTS5 indexes", () => {
     // Leaving the workspace hides its Projects' Threads and shared Threads.
     await env.DB.prepare("DELETE FROM member WHERE id = 'q-owner'").run();
     expect(await found("kestrel")).toEqual([mine.id]);
+  });
+
+  it("finds Threads kept from a deleted project or workspace for their owner alone, marked", async () => {
+    await runRepositories(
+      Effect.gen(function* () {
+        const projects = yield* ProjectRepository;
+        yield* projects.insert(project(ids.ownerScratch, owner, "Scratch"));
+      }),
+    );
+    const live = await seed(owner, ids.ownerPersonal, "Live", [
+      "cormorant live notes",
+    ]);
+    const projectKept = await seed(owner, ids.ownerScratch, "Scratch kept", [
+      "cormorant scratch notes",
+    ]);
+    const workspaceKept = await seed(owner, ids.ownerWorkspace, "Team kept", [
+      "cormorant team notes",
+    ]);
+    await env.DB.prepare(
+      "UPDATE threads SET workspace_access = 'view', shared_workspace_id = ? WHERE id = ?",
+    )
+      .bind(workspaceId, workspaceKept.id)
+      .run();
+    expect(await found("cormorant", { userId: member })).toEqual([
+      workspaceKept.id,
+    ]);
+
+    await deleteProject(env.DB, owner, ids.ownerScratch, {
+      confirmName: "Scratch",
+      threads: "keep",
+    });
+    await deleteWorkspace(
+      env.DB,
+      {
+        workspaceId,
+        displayName: "Search Team",
+        shortName: "search-team",
+        role: "owner",
+        userId: owner,
+      },
+      { confirmShortName: "search-team", threads: "keep" },
+    );
+
+    // The owner finds both kept Threads, by keyword and by filter, each
+    // marked with what was deleted; a live Thread carries no marker.
+    const items = (await search("cormorant")).items.map(searchThreadsItem);
+    expect(items.map(({ id }) => id)).toEqual([
+      workspaceKept.id,
+      projectKept.id,
+      live.id,
+    ]);
+    expect(items[0]).toMatchObject({
+      archived: true,
+      visibility: "private",
+      projectName: "Team repo",
+      projectDeleted: true,
+      workspaceDeleted: true,
+    });
+    expect(items[1]).toMatchObject({
+      archived: true,
+      projectName: "Scratch",
+      projectDeleted: true,
+    });
+    expect(items[1]?.workspaceDeleted).toBeUndefined();
+    expect(items[2]?.projectDeleted).toBeUndefined();
+    expect(new Set(await found("archived:true author:me"))).toEqual(
+      new Set([workspaceKept.id, projectKept.id]),
+    );
+    expect(await found("project:Scratch")).toEqual([projectKept.id]);
+
+    // The former member, who found the shared Thread before, no longer does.
+    expect(await found("cormorant", { userId: member })).toEqual([]);
+    expect(await found("archived:true", { userId: member })).toEqual([]);
+    expect(await found("cormorant", { userId: outsider })).toEqual([]);
   });
 
   it("applies filters and pages by last activity without repeats", async () => {

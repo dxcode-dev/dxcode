@@ -45,6 +45,10 @@ export interface ThreadSearchRow {
   readonly pinned_at: string | null;
   readonly snoozed_until: string | null;
   readonly workspace_access: string | null;
+  /** 1 when the Project was deleted and the Thread kept, else 0. */
+  readonly project_deleted: number;
+  /** 1 when the Project's workspace was deleted, else 0. */
+  readonly workspace_deleted: number;
   readonly created_at: string;
   readonly activity_at: string;
 }
@@ -121,8 +125,11 @@ const accessClause = (scope: ThreadSearchScope, parameters: Parameters) => {
           const root = parameters.add(scope.familyRoot);
           return ` AND (thread.id = ${root} OR thread.parent_thread_id = ${root})`;
         })();
+  // A Thread kept from a deleted Project (or workspace) stays with its owner
+  // alone, whatever their membership, as `GET /threads/:id` reads it.
   return `((thread.owner_user_id = ${user}
-      AND ${threadProjectReachableSql("project", user)}${family})
+      AND (project.deleted_at IS NOT NULL
+        OR ${threadProjectReachableSql("project", user)})${family})
     OR ${sharedThreadVisibleSql("thread", "project", user)})`;
 };
 
@@ -161,6 +168,11 @@ const filterClauses = (
     clauses.push(`EXISTS (SELECT 1 FROM thread_source_snapshot AS source
       WHERE source.thread_id = thread.id
         AND lower(source.repository_full_name) = ${parameters.add(filters.repo)})`);
+  if (filters.issue !== undefined)
+    clauses.push(`EXISTS (SELECT 1 FROM thread_github_link AS link
+      WHERE link.thread_id = thread.id
+        AND link.repository_key = ${parameters.add(filters.issue.repository)}
+        AND link.number = ${parameters.add(filters.issue.number)})`);
   if (filters.pinned !== undefined)
     clauses.push(
       filters.pinned
@@ -199,6 +211,10 @@ const SELECTED = `thread.id, thread.title, thread.project_id, project.name AS pr
   thread.parent_thread_id, thread.color, thread.lifecycle_state,
   thread.activity_status, thread.pinned_at, thread.workspace_access, thread.created_at,
   thread.snoozed_until,
+  project.deleted_at IS NOT NULL AS project_deleted,
+  EXISTS (SELECT 1 FROM organization
+           WHERE organization.id = project.workspace_id
+             AND organization.deletedAt IS NOT NULL) AS workspace_deleted,
   ${ACTIVITY} AS activity_at`;
 
 export interface SearchThreadsInput {

@@ -99,6 +99,17 @@
   color: var(--success);
 }
 
+/* A member's globe: the title bar's disabled look, still hoverable so its
+   title says who can make the port public. */
+.thread-portals-public-trigger[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.thread-portals-public-trigger[aria-disabled="true"]:hover {
+  background: transparent;
+}
+
 .thread-portals-menu-label {
   padding: 6px 8px 4px;
   color: var(--muted-foreground);

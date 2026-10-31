@@ -40,6 +40,38 @@ export const GUEST_TARGET = "x86_64-unknown-linux-musl";
 const has = (command, args) =>
   spawnSync(command, args, { stdio: "ignore" }).status === 0;
 
+// zig links musl by compiling its libc, holding one open cache manifest per
+// source file (over 1,100) at once. It raises its soft open-file limit to the
+// hard limit itself, but containers, Orbs included, start every process at a
+// hard limit of 1024, and zig then fails with ProcessFdQuotaExceeded. Raise
+// this process's hard limit, which cargo and zig inherit, where passwordless
+// sudo allows it (every Orb). Agent commands enter an Orb outside its
+// entrypoint, so the image cannot raise the limit for them.
+const OPEN_FILE_LIMIT = 524288;
+const raiseOpenFileLimit = () => {
+  if (process.platform !== "linux") return;
+  let limits;
+  try {
+    limits = readFileSync("/proc/self/limits", "utf8");
+  } catch {
+    return;
+  }
+  const [, soft, hard] = limits.match(/^Max open files\s+(\S+)\s+(\S+)/m) ?? [];
+  if (hard === undefined || hard === "unlimited") return;
+  if (Number(hard) >= OPEN_FILE_LIMIT) return;
+  const raised = has("sudo", [
+    "-n",
+    "prlimit",
+    "--pid",
+    String(process.pid),
+    `--nofile=${soft}:${OPEN_FILE_LIMIT}`,
+  ]);
+  if (!raised && Number(hard) < 4096)
+    console.warn(
+      `The open-file hard limit is ${hard}; zig needs more to link dxd. Raise it (as root: ulimit -Hn ${OPEN_FILE_LIMIT}) if the build fails with ProcessFdQuotaExceeded.`,
+    );
+};
+
 /**
  * Build one target. Deployments pass their own clean `targetDirectory` and
  * isolated `environment`; the binary then stays in that directory.
@@ -65,6 +97,7 @@ export const buildTarget = (target, options = {}) => {
   const targetDirectory =
     options.targetDirectory ?? resolve(outputRoot, "target");
   mkdirSync(targetDirectory, { recursive: true });
+  raiseOpenFileLimit();
   const build = spawnSync(
     "cargo",
     [

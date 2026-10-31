@@ -66,6 +66,7 @@ const thread = {
 const queryClient = new QueryClient();
 queryClient.setQueryData(automationKeys.thread(thread.id), {
   githubSubscriptions: [],
+  issues: [],
   pullRequests: [],
   ciRuns: [],
 });
@@ -241,6 +242,7 @@ describe("ThreadHeader", () => {
           createdAt: "2026-10-29T00:00:00.000Z",
         },
       ],
+      issues: [],
       pullRequests: [
         {
           repository: "acme/app",

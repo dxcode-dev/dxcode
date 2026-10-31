@@ -31,6 +31,13 @@ export const SearchThreadsItemSchema = Schema.Struct({
   state: Schema.Literals(["idle", "working"]),
   lastActivityAt: Schema.String,
   createdAt: Schema.String,
+  /**
+   * The Thread's Project was deleted and the owner kept the Thread, archived
+   * and read-only. Only its owner finds it.
+   */
+  projectDeleted: Schema.optional(Schema.Literal(true)),
+  /** The Project was deleted with its workspace. */
+  workspaceDeleted: Schema.optional(Schema.Literal(true)),
   /** An excerpt of the newest message holding the first keyword. */
   matchedSearchText: Schema.optional(Schema.String),
 });

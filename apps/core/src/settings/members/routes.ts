@@ -1,6 +1,8 @@
 import {
   AcceptWorkspaceInviteResponseSchema,
   CreateWorkspaceInviteLinkRequestSchema,
+  DeleteWorkspaceRequestSchema,
+  DeleteWorkspaceResponseSchema,
   LeaveWorkspaceResponseSchema,
   ListWorkspaceInviteLinksResponseSchema,
   ListWorkspaceMembersResponseSchema,
@@ -12,12 +14,16 @@ import {
   WorkspaceMemberResponseSchema,
   WorkspaceMembersErrorResponseSchema,
 } from "@dx/api";
-import type { ThreadId } from "@dx/domain";
+import type { ThreadId, UserId } from "@dx/domain";
 import { Schema } from "effect";
 import { type Context, Hono } from "hono";
 import { ExecutionWorkspaces } from "../../execution/execution-workspaces.js";
 import type { AppEnv } from "../../http/types.js";
 import { httpErrorLogger } from "../../logging.js";
+import { purgeDeletedThread } from "../../thread-deletion/cleanup.js";
+import { deployedThreadCleanup } from "../../thread-deletion/routes.js";
+import { workspaceCredentialRevoker } from "../workspace/credential-revocation.js";
+import { deleteWorkspace } from "../workspace/deletion.js";
 import {
   acceptInvite,
   createInviteLink,
@@ -28,6 +34,7 @@ import {
   removeMember,
   revokeInviteLink,
   setMemberRole,
+  transferOwnership,
   WorkspaceMembersError,
   workspaceAccess,
 } from "./service.js";
@@ -180,6 +187,81 @@ workspaceMemberRoutes.delete("/members/:userId", (c) =>
     releaseThreads(c, await removeMember(database(c), viewer, userId));
     return c.json(
       respond(RemoveWorkspaceMemberResponseSchema, { removedUserId: userId }),
+      200,
+    );
+  }),
+);
+
+workspaceMemberRoutes.post("/members/:userId/transfer-ownership", (c) =>
+  handle(c, async () => {
+    const viewer = await access(c);
+    return c.json(
+      respond(
+        WorkspaceMemberResponseSchema,
+        await transferOwnership(database(c), viewer, c.req.param("userId")),
+      ),
+      200,
+    );
+  }),
+);
+
+/**
+ * The owner deletes the workspace. Before the erase, each provider is asked
+ * to revoke the OAuth tokens it holds for the workspace. After the response,
+ * kept Threads' Orbs stop, deleted Threads are purged (the cron retries what
+ * does not finish), and the workspace picture is removed.
+ */
+workspaceMemberRoutes.post("/delete", (c) =>
+  handle(c, async () => {
+    const viewer = await access(c);
+    const input = await decodeBody(c, DeleteWorkspaceRequestSchema);
+    const deletion = await deleteWorkspace(
+      database(c),
+      viewer,
+      input,
+      await workspaceCredentialRevoker(c.env),
+    );
+    releaseThreads(c, deletion.runningKeptThreadIds);
+    const pending = [...deletion.deletedThreads];
+    if (pending.length > 0) {
+      const cleanup = deployedThreadCleanup(c.env);
+      // A few at a time: each one calls its Orb provider.
+      c.executionCtx.waitUntil(
+        Promise.all(
+          Array.from({ length: Math.min(4, pending.length) }, async () => {
+            for (
+              let next = pending.shift();
+              next !== undefined;
+              next = pending.shift()
+            )
+              await purgeDeletedThread(
+                c.env,
+                cleanup,
+                next.threadId,
+                next.ownerUserId as UserId,
+              ).catch((error) => {
+                httpErrorLogger.warn("Deleted workspace Thread purge failed.", {
+                  event: "workspace_thread_purge_failed",
+                  requestId: c.get("requestId"),
+                  threadId: next.threadId,
+                  error,
+                });
+              });
+          }),
+        ),
+      );
+    }
+    const avatarKey = deletion.avatarKey;
+    if (avatarKey !== undefined && c.env.DX_STORAGE !== undefined)
+      c.executionCtx.waitUntil(
+        c.env.DX_STORAGE.delete(avatarKey).catch(() => undefined),
+      );
+    return c.json(
+      respond(DeleteWorkspaceResponseSchema, {
+        deleted: true,
+        keptThreadCount: deletion.keptThreadCount,
+        deletedThreadCount: deletion.deletedThreadCount,
+      }),
       200,
     );
   }),

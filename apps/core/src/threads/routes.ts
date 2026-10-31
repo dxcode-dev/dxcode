@@ -4,9 +4,11 @@ import {
   ArchiveThreadNotFoundResponseSchema,
   ArchiveThreadParamsSchema,
   ArchiveThreadPersistenceUnavailableResponseSchema,
+  ArchiveThreadProjectDeletedResponseSchema,
   ArchiveThreadRequestSchema,
   ArchiveThreadResponseSchema,
   CreateThreadAlreadyStartedResponseSchema,
+  CreateThreadClaudePlanRefusedResponseSchema,
   CreateThreadInitialAdmissionUnavailableResponseSchema,
   CreateThreadInitialMessageRejectedResponseSchema,
   CreateThreadInitialMessageTooLargeResponseSchema,
@@ -81,6 +83,7 @@ import {
   withMessageAuthor,
 } from "@dx/api";
 import {
+  ClaudePlanRefused,
   defaultThreadModelSelection,
   isThreadTitlePending,
   ModelNotServed,
@@ -213,6 +216,11 @@ class ThreadSnoozeUnavailable extends Schema.TaggedError<ThreadSnoozeUnavailable
 
 class InvalidThreadRequest extends Schema.TaggedError<InvalidThreadRequest>()(
   "InvalidThreadRequest",
+  {},
+) {}
+
+class ThreadProjectDeleted extends Schema.TaggedError<ThreadProjectDeleted>()(
+  "ThreadProjectDeleted",
   {},
 ) {}
 
@@ -773,6 +781,7 @@ export const createThreadRoutes = (
         readonly insert?: {
           readonly source?: ReturnType<typeof threadSourceDraft>;
           readonly pin?: ThreadExecutionPin;
+          readonly claudeConnectionId?: string;
         };
       } =
         existingThread !== undefined
@@ -823,9 +832,14 @@ export const createThreadRoutes = (
                     context.env,
                     principal.userId,
                     input.selection ?? defaultThreadModelSelection(),
+                    input.claudeConnectionId,
                   ),
                 catch: (cause) => {
-                  if (cause instanceof ModelNotServed) return cause;
+                  if (
+                    cause instanceof ModelNotServed ||
+                    cause instanceof ClaudePlanRefused
+                  )
+                    return cause;
                   return PersistenceUnavailable.new(
                     { operation: "thread.resolveModelSelection" },
                     cause,
@@ -977,7 +991,7 @@ export const createThreadRoutes = (
                 );
                 return { thread: prepared.thread, pin, detail };
               });
-              const [, , source, next] = yield* Effect.all(
+              const [route, , source, next] = yield* Effect.all(
                 [
                   modelRoute,
                   requestedRunner,
@@ -992,6 +1006,7 @@ export const createThreadRoutes = (
                 detail: next.detail,
                 insert: {
                   pin: next.pin,
+                  claudeConnectionId: route.claudeConnectionId,
                   source:
                     projectId === undefined || source === undefined
                       ? undefined
@@ -1025,7 +1040,12 @@ export const createThreadRoutes = (
           : yield* Effect.gen(function* () {
               const service = yield* ThreadService;
               return yield* service
-                .insert(target.thread, insert.source, insert.pin)
+                .insert(
+                  target.thread,
+                  insert.source,
+                  insert.pin,
+                  insert.claudeConnectionId,
+                )
                 .pipe(
                   Effect.tap(() =>
                     Effect.sync(() => {
@@ -1297,6 +1317,30 @@ export const createThreadRoutes = (
               },
             }),
             422,
+          ),
+        ClaudePlanRefused: (failure: ClaudePlanRefused) =>
+          context.json(
+            Schema.encodeUnknownSync(
+              CreateThreadClaudePlanRefusedResponseSchema,
+            )({
+              status: "error",
+              data: {
+                code:
+                  failure.reason === "required"
+                    ? "CLAUDE_PLAN_REQUIRED"
+                    : failure.reason === "used-up"
+                      ? "CLAUDE_PLAN_USED_UP"
+                      : "CLAUDE_PLAN_UNAVAILABLE",
+                message: failure.message,
+                requestId,
+                ...(failure.resetsAt === undefined
+                  ? {}
+                  : {
+                      resetsAt: new Date(failure.resetsAt * 1000).toISOString(),
+                    }),
+              },
+            }),
+            failure.reason === "used-up" ? 409 : 400,
           ),
         ThreadIdUnavailable: () =>
           context.json(
@@ -2108,6 +2152,27 @@ export const createThreadRoutes = (
       );
       const db = yield* decodeD1Binding(context.env.DB);
       const principal = context.get("principal");
+      // A Thread kept from a deleted Project stays archived for good.
+      if (!body.archived) {
+        const deleted = yield* Effect.tryPromise({
+          try: () =>
+            db
+              .prepare(
+                `SELECT 1 AS deleted FROM threads
+                   JOIN projects ON projects.id = threads.project_id
+                  WHERE threads.id = ?1 AND threads.owner_user_id = ?2
+                    AND projects.deleted_at IS NOT NULL`,
+              )
+              .bind(params.threadId, principal.userId)
+              .first(),
+          catch: (cause) =>
+            PersistenceUnavailable.new(
+              { operation: "thread.archive.projectDeleted" },
+              cause,
+            ),
+        });
+        if (deleted !== null) return yield* new ThreadProjectDeleted();
+      }
       const [thread, children, childFailed] = yield* Effect.gen(function* () {
         const service = yield* ThreadService;
         const parent = yield* service.setArchived(
@@ -2234,6 +2299,21 @@ export const createThreadRoutes = (
               },
             }),
             404,
+          ),
+        ThreadProjectDeleted: () =>
+          context.json(
+            Schema.encodeUnknownSync(ArchiveThreadProjectDeletedResponseSchema)(
+              {
+                status: "error",
+                data: {
+                  code: "THREAD_PROJECT_DELETED",
+                  message:
+                    "This thread's project was deleted, so the thread stays archived.",
+                  requestId,
+                },
+              },
+            ),
+            409,
           ),
         ThreadArchiveExecutionUnavailable: () =>
           context.json(

@@ -24,19 +24,52 @@ export const e2bRecipeHash = async () =>
     profileCatalog: profiles,
   });
 
+const BUILDING = new Set(["building", "waiting"]);
+
+/**
+ * The template's ready build, or undefined when there is none. E2B lists a
+ * team's template as `team/name`, with the bare name as an alias.
+ */
 const exactReadyBuild = (templates, name) => {
-  const matches = templates.filter((template) =>
-    template.names?.includes(name),
+  const matches = templates.filter(
+    (template) =>
+      template.names?.includes(name) ||
+      template.aliases?.includes(name) ||
+      template.names?.some((full) => full.endsWith(`/${name}`)),
   );
   if (matches.length > 1)
     throw new Error(`E2B returned more than one template named ${name}.`);
   if (matches.length === 0) return undefined;
   const [match] = matches;
+  if (BUILDING.has(match.buildStatus)) return { name, building: true };
   if (match.buildStatus !== "ready" || !match.buildID)
     throw new Error(
       `E2B template ${name} exists but has no immutable ready build.`,
     );
   return { name, buildId: match.buildID };
+};
+
+/**
+ * Another deployment of the same E2B team (a parallel branch preview) may be
+ * building a template this one needs; wait for its build instead of
+ * starting a second one.
+ */
+const settledBuild = async (
+  listTemplates,
+  apiKey,
+  templates,
+  name,
+  { pollMs, timeoutMs },
+) => {
+  const deadline = Date.now() + timeoutMs;
+  let build = exactReadyBuild(templates, name);
+  while (build?.building) {
+    if (Date.now() > deadline)
+      throw new Error(`E2B is still building ${name}; deploy again later.`);
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    build = exactReadyBuild(await listTemplates(apiKey), name);
+  }
+  return build;
 };
 
 export const reconcileE2BProfiles = async ({
@@ -45,10 +78,17 @@ export const reconcileE2BProfiles = async ({
   listTemplates,
   buildTemplate,
   recipeHash,
+  wait = { pollMs: 15_000, timeoutMs: 45 * 60_000 },
 }) => {
   const prefix = `dx-${deploymentName}-${recipeHash.slice(0, 16)}`;
   let templates = await listTemplates(apiKey);
-  let base = exactReadyBuild(templates, `${prefix}-base`);
+  let base = await settledBuild(
+    listTemplates,
+    apiKey,
+    templates,
+    `${prefix}-base`,
+    wait,
+  );
   if (base === undefined) {
     try {
       base = await buildTemplate(dxWorkspaceTemplate, `${prefix}-base`, {
@@ -67,7 +107,13 @@ export const reconcileE2BProfiles = async ({
   const result = [];
   for (const profile of profiles) {
     const name = `${prefix}-${profile.templateSuffix}`;
-    let build = exactReadyBuild(templates, name);
+    let build = await settledBuild(
+      listTemplates,
+      apiKey,
+      templates,
+      name,
+      wait,
+    );
     if (build === undefined) {
       try {
         build = await buildTemplate(

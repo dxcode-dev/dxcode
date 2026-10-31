@@ -60,6 +60,11 @@ vi.mock("./notification-inbox.js", async (importOriginal) => ({
   NotificationInbox: () => null,
 }));
 
+vi.mock("./needs-you-inbox.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./needs-you-inbox.js")>()),
+  NeedsYouInbox: () => null,
+}));
+
 vi.mock("../../shared/new-thread-surface.js", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("../../shared/new-thread-surface.js")
@@ -154,6 +159,12 @@ describe("sidebar thread preview intent", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-25T13:00:00Z"));
     container = document.createElement("div");
+    // These tests drive hover with dispatched pointer events. An earlier
+    // file's real click can leave Playwright's cursor where these rows
+    // render; Chromium then sends its own pointerover at a random step and
+    // restarts the 500 ms intent (#1296). Rows that real input cannot hit
+    // see only the dispatched events.
+    container.style.pointerEvents = "none";
     document.body.append(container);
     root = createRoot(container);
     mounted = true;

@@ -319,8 +319,21 @@ export const SUPPORTED_PROVIDERS: ReadonlyArray<SupportedProvider> = [
 ];
 
 /**
- * Providers presented by the picker. API-key providers need an explicit
- * deployment opt-in, while the personal Copilot flow stays available.
+ * The API-key providers a deployment offers when `DX_MODEL_DEPLOYMENT_PROVIDERS`
+ * is unset: every catalog provider people connect with their own key.
+ */
+export const DEFAULT_DEPLOYMENT_PROVIDERS = SUPPORTED_PROVIDERS.filter(
+  (provider) =>
+    provider.connectionKind === "provider" &&
+    provider.id !== CLAUDE_CODE_PROVIDER_ID,
+)
+  .map((provider) => provider.id)
+  .join(",");
+
+/**
+ * Providers presented by the picker. API-key providers are those the
+ * deployment lists (an empty list offers none), while the personal Copilot
+ * and Claude Pro/Max flows stay available.
  */
 export const pickerProviders = (
   deploymentProviders: string | undefined,

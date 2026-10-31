@@ -23,6 +23,7 @@ import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
 import { modelDisplayName } from "../../shared/model-display-name.js";
 import { Button } from "../../shared/ui/button.js";
 import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
+import { MenuItemText } from "../../shared/ui/menu-item-text.js";
 import {
   angularDistance,
   DIAL_MODE_ORDER,
@@ -33,6 +34,7 @@ import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import {
   ClaudeCodeDialControls,
   ClaudeCodeModeOption,
+  ClaudePlanPicker,
 } from "./claude-code-mode.js";
 import {
   claudeCodeDial,
@@ -878,12 +880,10 @@ function OrbPicker({
                                 !isProfileAllowed(runnerProfile)
                               }
                             >
-                              <span className="orb-picker-size-details">
-                                <span>{runnerProfile.label}</span>
-                                <small>
-                                  {formatOrbResources(runnerProfile)}
-                                </small>
-                              </span>
+                              <MenuItemText
+                                title={runnerProfile.label}
+                                description={formatOrbResources(runnerProfile)}
+                              />
                               <Menu.RadioItemIndicator className="orb-picker-dot" />
                             </Menu.RadioItem>
                           ))}
@@ -929,6 +929,8 @@ export function NewThreadConfigurationStrip({
   onConnectOrbProvider,
   onProfileChange,
   onModelChange,
+  claudePlan,
+  onClaudePlanChange,
   dictationControls,
   dictationActive = false,
   dictationHideSubmit = false,
@@ -962,6 +964,9 @@ export function NewThreadConfigurationStrip({
   readonly onConnectOrbProvider?: () => void;
   readonly onProfileChange: (profile: ModeId) => void;
   readonly onModelChange: (model: string | undefined) => void;
+  /** The Claude plan a Claude Code Thread is bound to; picked when several. */
+  readonly claudePlan?: string;
+  readonly onClaudePlanChange?: (connectionId: string) => void;
   readonly dictationControls?: ReactNode;
   readonly dictationActive?: boolean;
   readonly dictationHideSubmit?: boolean;
@@ -1100,6 +1105,17 @@ export function NewThreadConfigurationStrip({
         effort={effort}
         onEffortChange={onEffortChange}
       />
+      {model !== undefined &&
+      isClaudeCodeModel(model) &&
+      onClaudePlanChange !== undefined ? (
+        <ClaudePlanPicker
+          choices={choices}
+          model={model}
+          plan={claudePlan}
+          locked={locked}
+          onPlanChange={onClaudePlanChange}
+        />
+      ) : null}
       <span className="new-thread-config-spacer" />
       {dictationControls}
       {dictationHideSubmit ? null : (

@@ -135,6 +135,15 @@ sandbox. Everything lives under `/opt/dx/desktop` (sources in
   (`chromium`), and `waymote-gateway -listen 127.0.0.1:5900 -bitrate 4000
   -frame-rate 30`, which it restarts when it exits. The session ends when
   labwc exits; the next `start` begins a new one.
+- `resume` runs when the session starts, in place of the session's own
+  Chromium window: the repository's executable `.agents/desktop/resume`, or
+  else the project's Desktop Resume script from Project Settings, which
+  source preparation keeps at
+  `~/.local/state/dx/project-scripts/desktop-resume` (a symlink at either
+  path is ignored). It runs from `~/workspace/repo` with the desktop's
+  environment, logs to `desktop-resume.log`, and what it starts stays in the
+  session. Without a script, or when the script exits non-zero, it opens
+  Chromium at `about:blank` as before.
 - `chromium` opens Chromium with DevTools on `127.0.0.1:9222` and a profile in
   the state directory, so an agent in the sandbox drives the browser the user
   watches. Run it with a URL to open a window in the running browser; it
@@ -144,7 +153,7 @@ sandbox. Everything lives under `/opt/dx/desktop` (sources in
 - `bin/ffmpeg` keeps the encoder's RTP sockets on loopback; nothing in the
   session listens on another address.
 - State and logs: `~/.local/state/dx-desktop/` (`session.log`,
-  `waymote.log`, `chromium.log`, `foot.log`, the Chromium profile, and
+  `waymote.log`, `chromium.log`, `foot.log`, `desktop-resume.log`, the Chromium profile, and
   `environment`, which a program sources to open windows on the desktop).
 
 Waymote has no authentication; the gateway listens on loopback only and the

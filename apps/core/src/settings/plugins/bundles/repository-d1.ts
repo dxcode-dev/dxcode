@@ -140,6 +140,54 @@ export const PluginBundleRepositoryD1 = (db: D1Database) =>
               : unavailable("settings.pluginBundles.insert")(cause),
         });
       }),
+      insertVersion: Effect.fn("PluginBundleRepository.insertVersion")(
+        function* (bundle) {
+          const results = yield* Effect.tryPromise({
+            try: () =>
+              db.batch([
+                db
+                  .prepare(
+                    `INSERT INTO trusted_plugin_version (
+                       plugin_id, version, manifest_json, grants_json,
+                       source_json, integrity, trusted, trusted_at,
+                       trusted_by_user_id
+                     ) VALUES (?, ?, ?, '{}', ?, ?, 1, ?, ?)`,
+                  )
+                  .bind(
+                    bundle.id,
+                    bundle.version,
+                    JSON.stringify(bundle.manifest),
+                    JSON.stringify(bundle.source),
+                    bundle.integrity,
+                    encodedTimestamp(bundle.updatedAt),
+                    bundle.installedByUserId,
+                  ),
+                db
+                  .prepare(
+                    `UPDATE trusted_plugin
+                        SET active_version = ?, updated_at = ?
+                      WHERE id = ? AND scope = ? AND target_id = ?
+                        AND kind = 'bundle' AND removed_at IS NULL`,
+                  )
+                  .bind(
+                    bundle.version,
+                    encodedTimestamp(bundle.updatedAt),
+                    bundle.id,
+                    bundle.target.scope,
+                    bundle.target.id,
+                  ),
+              ]),
+            catch: (cause) =>
+              String(cause).includes("UNIQUE") ||
+              String(cause).includes("PRIMARY KEY")
+                ? new PluginIntegrityConflict()
+                : unavailable("settings.pluginBundles.insertVersion")(cause),
+          });
+          if (results[1]?.meta.changes !== 1) {
+            return yield* new PluginNotFound();
+          }
+        },
+      ),
       setEnabled: Effect.fn("PluginBundleRepository.setEnabled")(
         function* (target, id, enabled, updatedAt) {
           yield* change(

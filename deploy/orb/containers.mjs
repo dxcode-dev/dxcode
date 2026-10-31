@@ -43,6 +43,7 @@ export const orbRecipeFiles = [
   "deploy/orb/desktop/stop",
   "deploy/orb/desktop/session",
   "deploy/orb/desktop/chromium",
+  "deploy/orb/desktop/resume",
   "deploy/orb/desktop/bin/ffmpeg",
   "deploy/orb/desktop/labwc/autostart",
   "deploy/orb/desktop/labwc/rc.xml",

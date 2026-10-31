@@ -41,6 +41,7 @@ import {
 import { loadConfigEncryptionKeyring } from "../config-encryption.js";
 import { SettingsService } from "../service.js";
 import { WorkspaceRepositoryD1 } from "../workspace/repository-d1.js";
+import { DEFAULT_DEPLOYMENT_PROVIDERS } from "./catalog.js";
 import {
   ModelConnectionNotFoundError,
   ModelRoutingService,
@@ -174,7 +175,9 @@ const dependencies = async (c: Context<AppEnv>): Promise<Deps> => {
           ]
         : undefined,
       c.env.DX_MODEL_ENDPOINT_ALLOWLIST,
-      c.env.DX_MODEL_DEPLOYMENT_PROVIDERS,
+      // Unset offers every API-key provider; "" or "none" (no known ID)
+      // offers none.
+      c.env.DX_MODEL_DEPLOYMENT_PROVIDERS ?? DEFAULT_DEPLOYMENT_PROVIDERS,
     ),
     checkAccess: checkAccessProbe(c.env),
   };

@@ -3,6 +3,7 @@ import type { UserId, WorkspaceSlug } from "@dx/domain";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 import {
   createWorkspace,
+  deleteWorkspace,
   leaveWorkspace,
   setWorkspaceAvatar,
   updateWorkspaceProfile,
@@ -70,4 +71,13 @@ export const leaveWorkspaceMutationOptions = (
   workspaceSlug: WorkspaceSlug,
 ) => ({
   mutationFn: () => leaveWorkspace(workspaceSlug),
+});
+
+export const deleteWorkspaceMutationOptions = (
+  workspaceSlug: WorkspaceSlug,
+) => ({
+  mutationFn: (input: {
+    readonly confirmShortName: string;
+    readonly threads: "keep" | "delete";
+  }) => deleteWorkspace(workspaceSlug, input),
 });

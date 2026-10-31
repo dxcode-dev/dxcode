@@ -144,6 +144,7 @@ const deploymentResolved = (
   commitAuthor: { value: "dx", source: "deployment" },
   signingPreference: { value: "disabled", source: "deployment" },
   runnerProfileId: { value: defaultProfileId, source: "deployment" },
+  dxCoAuthor: { value: true, source: "deployment" },
 });
 
 const resolveOverrides = (
@@ -167,6 +168,10 @@ const resolveOverrides = (
     overrides.runnerProfileId === null
       ? current.runnerProfileId
       : { value: overrides.runnerProfileId, source },
+  dxCoAuthor:
+    overrides.dxCoAuthor === null
+      ? current.dxCoAuthor
+      : { value: overrides.dxCoAuthor, source },
 });
 
 /**
@@ -575,6 +580,7 @@ export class ProjectDefaultsService extends Context.Service<
               signingPreference,
               runnerProfileId: resolved.runnerProfileId.value,
               publicCodeEnabled: input.publicCodeEnabled,
+              dxCoAuthor: resolved.dxCoAuthor.value,
             },
           } satisfies ProjectCreationSnapshot;
         }),

@@ -18,6 +18,7 @@ import {
 } from "./features/authentication/sign-in-paths.js";
 import { InstallAppBanner } from "./features/install-app/install-app-banner.js";
 import { ProductShell } from "./features/navigation/product-shell.js";
+import { ensureProductShellData } from "./features/navigation/sidebar-width.js";
 import {
   isMissingProjectError,
   projectQueryOptions,
@@ -110,6 +111,8 @@ const rootRoute = createRootRouteWithContext<RouterContext>()({
 const productRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: "_product",
+  loader: ({ context }) =>
+    ensureProductShellData(context.queryClient, context.userId),
   component: () => (
     <ThreadArchiveProvider>
       <ThreadSnoozeProvider>

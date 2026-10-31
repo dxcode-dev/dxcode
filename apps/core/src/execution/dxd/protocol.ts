@@ -30,7 +30,7 @@ import {
 } from "../../thread-changes/candidate.js";
 
 export const DXD_PROTOCOL_MAJOR = 2;
-export const DXD_RELEASE = "0.13.0";
+export const DXD_RELEASE = "0.14.0";
 export const DXD_TERMINAL_VERSION = 1;
 export const DXD_WORKLOAD_IDENTITY_VERSION = 1;
 export const DXD_HEARTBEAT_INTERVAL_MS = 2_000;
@@ -200,15 +200,20 @@ export const DxdChangesDirtyMessage = Schema.Struct({
  */
 export const DXD_CURRENT_ENVIRONMENT_RELEASE = "0.11.0";
 
+/**
+ * The first release whose `environment.activate` accepts `git.coAuthor`.
+ * An earlier daemon rejects unknown fields, so it gets none.
+ */
+export const DXD_CO_AUTHOR_RELEASE = "0.14.0";
+
 const releaseParts = (release: string) => {
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(release);
   return match === null ? undefined : match.slice(1).map(Number);
 };
 
-/** Whether a daemon on `release` accepts Core's current environment rule. */
-export const dxdAcceptsCurrentEnvironment = (release: string | undefined) => {
+const releaseAtLeast = (release: string | undefined, floorRelease: string) => {
   const parts = release === undefined ? undefined : releaseParts(release);
-  const minimum = releaseParts(DXD_CURRENT_ENVIRONMENT_RELEASE) ?? [];
+  const minimum = releaseParts(floorRelease) ?? [];
   if (parts === undefined) return false;
   for (const [index, part] of parts.entries()) {
     const floor = minimum[index] ?? 0;
@@ -216,6 +221,14 @@ export const dxdAcceptsCurrentEnvironment = (release: string | undefined) => {
   }
   return true;
 };
+
+/** Whether a daemon on `release` accepts Core's current environment rule. */
+export const dxdAcceptsCurrentEnvironment = (release: string | undefined) =>
+  releaseAtLeast(release, DXD_CURRENT_ENVIRONMENT_RELEASE);
+
+/** Whether a daemon on `release` accepts `git.coAuthor`. */
+export const dxdAcceptsCoAuthor = (release: string | undefined) =>
+  releaseAtLeast(release, DXD_CO_AUTHOR_RELEASE);
 
 /** A release the daemon reports; Core compares it with `DXD_RELEASE`. */
 export const DxdReleaseVersion = Schema.String.check(
@@ -679,6 +692,20 @@ const DxdThreadUrl = Schema.String.check(
   ),
 );
 
+/**
+ * `Name <email>` for a `Co-authored-by` trailer. Must match
+ * `valid_co_author` in `apps/dxd/src/environment.rs`.
+ */
+const DxdCoAuthor = Schema.String.check(
+  Schema.isMaxLength(256),
+  Schema.isPattern(
+    /^[A-Za-z0-9._-][A-Za-z0-9 ._-]* <[A-Za-z0-9._+-]+@[A-Za-z0-9._+-]+>$/,
+  ),
+);
+
+/** dx's commit identity as a co-author of the person's commits. */
+export const DX_CO_AUTHOR = "dxcodeagent <agent@dxcode.dev>";
+
 export const DxdEnvironmentActivateOperation = Schema.Struct({
   operation: Schema.Literal("environment.activate"),
   generation: Schema.Int.check(
@@ -692,6 +719,7 @@ export const DxdEnvironmentActivateOperation = Schema.Struct({
     authorEmail: DxdGitConfigValue,
     threadUrl: DxdThreadUrl,
     signingEnabled: Schema.Boolean,
+    coAuthor: Schema.optional(DxdCoAuthor),
     bitbucketGateway: Schema.optional(
       Schema.Struct({
         origin: Schema.String.check(
@@ -753,6 +781,9 @@ export const environmentActivationDigest = async (
   if (operation.git.bitbucketGateway !== undefined)
     text += operation.git.bitbucketGateway.origin;
   text += "\n";
+  // Absent when unset, so the digest matches an earlier daemon's.
+  if (operation.git.coAuthor !== undefined)
+    text += `git.coAuthor=${operation.git.coAuthor}\n`;
   const digest = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(text),

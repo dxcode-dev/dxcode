@@ -18,6 +18,7 @@ const PersonalDefaultsRow = Schema.Struct({
   commit_author_preference: Schema.NullOr(Schema.String),
   signing_preference: Schema.NullOr(Schema.String),
   runner_profile_id: Schema.NullOr(Schema.String),
+  dx_co_author: Schema.NullOr(Schema.Number),
   revision: Schema.Number,
   updated_at: Schema.String,
 });
@@ -28,6 +29,7 @@ const WorkspaceDefaultsRow = Schema.Struct({
   commit_author_preference: Schema.NullOr(Schema.String),
   signing_preference: Schema.NullOr(Schema.String),
   runner_profile_id: Schema.NullOr(Schema.String),
+  dx_co_author: Schema.NullOr(Schema.Number),
   allow_member_project_creation: Schema.Number,
   allow_public_code_access: Schema.Number,
   allowed_runner_profile_ids: Schema.NullOr(Schema.String),
@@ -40,7 +42,14 @@ const emptyOverrides = {
   commitAuthor: null,
   signingPreference: null,
   runnerProfileId: null,
+  dxCoAuthor: null,
 } as const;
+
+const booleanColumn = (value: number | null) =>
+  value === null ? null : value === 1;
+
+const integerColumn = (value: boolean | null) =>
+  value === null ? null : value ? 1 : 0;
 
 const decodePersonal = (row: typeof PersonalDefaultsRow.Type) =>
   Schema.decodeUnknownEffect(PersonalProjectDefaults)({
@@ -50,6 +59,7 @@ const decodePersonal = (row: typeof PersonalDefaultsRow.Type) =>
       commitAuthor: row.commit_author_preference,
       signingPreference: row.signing_preference,
       runnerProfileId: row.runner_profile_id,
+      dxCoAuthor: booleanColumn(row.dx_co_author),
     },
     revision: row.revision,
     updatedAt: row.updated_at,
@@ -72,6 +82,7 @@ const decodeWorkspace = Effect.fn("decodeWorkspaceProjectDefaults")(function* (
       commitAuthor: row.commit_author_preference,
       signingPreference: row.signing_preference,
       runnerProfileId: row.runner_profile_id,
+      dxCoAuthor: booleanColumn(row.dx_co_author),
     },
     policy: {
       allowMemberProjectCreation: row.allow_member_project_creation === 1,
@@ -96,7 +107,8 @@ export const ProjectDefaultsRepositoryD1 = Layer.effect(
       function* (userId: UserId) {
         const rows = yield* sql`
           SELECT user_id, ship_action, commit_author_preference,
-            signing_preference, runner_profile_id, revision, updated_at
+            signing_preference, runner_profile_id, dx_co_author, revision,
+            updated_at
           FROM personal_project_defaults
           WHERE user_id = ${userId}
         `.pipe(
@@ -123,7 +135,7 @@ export const ProjectDefaultsRepositoryD1 = Layer.effect(
       function* (workspaceId: WorkspaceId) {
         const rows = yield* sql`
           SELECT workspace_id, ship_action, commit_author_preference,
-            signing_preference, runner_profile_id,
+            signing_preference, runner_profile_id, dx_co_author,
             allow_member_project_creation, allow_public_code_access,
             allowed_runner_profile_ids, revision, updated_at
           FROM workspace_project_defaults
@@ -163,11 +175,13 @@ export const ProjectDefaultsRepositoryD1 = Layer.effect(
           const rows = yield* sql`
             INSERT INTO personal_project_defaults (
               user_id, ship_action, commit_author_preference,
-              signing_preference, runner_profile_id, revision, updated_at
+              signing_preference, runner_profile_id, dx_co_author, revision,
+            updated_at
             )
             SELECT ${userId}, ${overrides.shipAction},
               ${overrides.commitAuthor}, ${overrides.signingPreference},
-              ${overrides.runnerProfileId}, 1, ${updatedAt}
+              ${overrides.runnerProfileId},
+              ${integerColumn(overrides.dxCoAuthor)}, 1, ${updatedAt}
             WHERE ${expectedRevision} = 0
               OR EXISTS (
                 SELECT 1 FROM personal_project_defaults
@@ -178,11 +192,13 @@ export const ProjectDefaultsRepositoryD1 = Layer.effect(
               commit_author_preference = excluded.commit_author_preference,
               signing_preference = excluded.signing_preference,
               runner_profile_id = excluded.runner_profile_id,
+              dx_co_author = excluded.dx_co_author,
               revision = personal_project_defaults.revision + 1,
               updated_at = excluded.updated_at
             WHERE personal_project_defaults.revision = ${expectedRevision}
             RETURNING user_id, ship_action, commit_author_preference,
-              signing_preference, runner_profile_id, revision, updated_at
+              signing_preference, runner_profile_id, dx_co_author, revision,
+            updated_at
           `.pipe(
             Effect.catchTag("SqlError", (cause) =>
               Effect.fail(unavailable("projectDefaults.putPersonal")(cause)),
@@ -212,13 +228,14 @@ export const ProjectDefaultsRepositoryD1 = Layer.effect(
           const rows = yield* sql`
             INSERT INTO workspace_project_defaults (
               workspace_id, ship_action, commit_author_preference,
-              signing_preference, runner_profile_id,
+              signing_preference, runner_profile_id, dx_co_author,
               allow_member_project_creation, allow_public_code_access,
               allowed_runner_profile_ids, revision, updated_at
             )
             SELECT ${workspaceId}, ${overrides.shipAction},
               ${overrides.commitAuthor}, ${overrides.signingPreference},
               ${overrides.runnerProfileId},
+              ${integerColumn(overrides.dxCoAuthor)},
               ${policy.allowMemberProjectCreation ? 1 : 0},
               ${policy.allowPublicCodeAccess ? 1 : 0},
               ${allowedRunnerProfileIds}, 1, ${updatedAt}
@@ -233,6 +250,7 @@ export const ProjectDefaultsRepositoryD1 = Layer.effect(
               commit_author_preference = excluded.commit_author_preference,
               signing_preference = excluded.signing_preference,
               runner_profile_id = excluded.runner_profile_id,
+              dx_co_author = excluded.dx_co_author,
               allow_member_project_creation = excluded.allow_member_project_creation,
               allow_public_code_access = excluded.allow_public_code_access,
               allowed_runner_profile_ids = excluded.allowed_runner_profile_ids,
@@ -240,7 +258,7 @@ export const ProjectDefaultsRepositoryD1 = Layer.effect(
               updated_at = excluded.updated_at
             WHERE workspace_project_defaults.revision = ${expectedRevision}
             RETURNING workspace_id, ship_action, commit_author_preference,
-              signing_preference, runner_profile_id,
+              signing_preference, runner_profile_id, dx_co_author,
               allow_member_project_creation, allow_public_code_access,
               allowed_runner_profile_ids, revision, updated_at
           `.pipe(

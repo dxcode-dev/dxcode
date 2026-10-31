@@ -18,6 +18,7 @@ import {
   SettingsHeading,
   SettingsRow,
   SettingsSelect,
+  SettingsToggle,
 } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
 import { projectDefaultsMutationOptions } from "./project-defaults-mutations.js";
@@ -133,6 +134,7 @@ function ProjectDefaultsForm({
 
   const isDirty = (next: ProjectDefaultOverrides) =>
     next.commitAuthor !== baseline.overrides.commitAuthor ||
+    next.dxCoAuthor !== baseline.overrides.dxCoAuthor ||
     next.runnerProfileId !== baseline.overrides.runnerProfileId;
 
   const dirty = isDirty(overrides);
@@ -206,6 +208,24 @@ function ProjectDefaultsForm({
                   ["dx", "dx"],
                   ["user", "You"],
                 ]}
+              />
+            }
+          />
+        ) : null}
+        {target.scope === "personal" ? (
+          <SettingsRow
+            title="Add dx as co-author"
+            description="Adds dx as a co-author to commits you author in new projects."
+            control={
+              <SettingsToggle
+                checked={
+                  overrides.dxCoAuthor ?? initial.resolved.dxCoAuthor.value
+                }
+                disabled={disabled}
+                label="Add dx as co-author"
+                onCheckedChange={(dxCoAuthor) =>
+                  update({ ...overrides, dxCoAuthor })
+                }
               />
             }
           />

@@ -1,0 +1,54 @@
+#!/bin/bash
+# Runs the Desktop resume script when ./session starts, in place of the
+# default browser window: the repository's executable .agents/desktop/resume,
+# or else the project's Desktop Resume script from Project Settings, which dx
+# keeps at ~/.local/state/dx/project-scripts/desktop-resume. It runs from the
+# repository root with the desktop's environment, and what it starts keeps
+# running with the desktop. Without a script, or when the script fails, the
+# Desktop opens Chromium at about:blank. Output: desktop-resume.log in the
+# desktop's state directory. DX_DESKTOP_DIR overrides /opt/dx/desktop for
+# tests.
+set -u
+
+desktop="${DX_DESKTOP_DIR:-/opt/dx/desktop}"
+state="${HOME:?HOME is not set}/.local/state/dx-desktop"
+repo="$HOME/workspace/repo"
+project="$HOME/.local/state/dx/project-scripts/desktop-resume"
+log="$state/desktop-resume.log"
+
+note() {
+  printf '%s desktop resume: %s\n' "$(date -u +%FT%TZ)" "$*" >>"$log"
+}
+
+default_browser() {
+  cd "$HOME" || exit 1
+  exec "$desktop/chromium" --foreground about:blank >>"$state/chromium.log" 2>&1 </dev/null
+}
+
+repository_script="$repo/.agents/desktop/resume"
+if [ -f "$repository_script" ] && [ ! -L "$repository_script" ] && [ -x "$repository_script" ]; then
+  name=".agents/desktop/resume"
+  command=("$repository_script")
+elif [ -f "$project" ] && [ ! -L "$project" ] && [ -s "$project" ]; then
+  name="the project's Desktop Resume script"
+  # Without a shebang the script is Bash, as in the settings editor.
+  if [ "$(head -c 2 "$project")" = "#!" ]; then
+    command=("$project")
+  else
+    command=(/bin/bash "$project")
+  fi
+else
+  default_browser
+fi
+
+: >"$log"
+cwd="$repo"
+[ -d "$cwd" ] || cwd="$HOME"
+note "running $name from $cwd"
+(cd "$cwd" && DX_DESKTOP_DIR="$desktop" exec "${command[@]}") >>"$log" 2>&1 </dev/null
+status=$?
+if [ "$status" -ne 0 ]; then
+  note "$name exited with status $status; opening the default browser"
+  default_browser
+fi
+note "$name finished"

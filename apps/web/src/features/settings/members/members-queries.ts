@@ -8,8 +8,10 @@ import {
   listWorkspaceMembers,
   removeWorkspaceMember,
   revokeWorkspaceInviteLink,
+  transferWorkspaceOwnership,
   updateWorkspaceMemberRole,
 } from "../../../shared/api/client.js";
+import { settingsKeys } from "../settings-context-queries.js";
 import { workspaceKeys } from "../workspace/workspace-queries.js";
 
 export const memberKeys = {
@@ -59,6 +61,13 @@ export const memberMutationOptions = (
         readonly role: "admin" | "member";
       }) => updateWorkspaceMemberRole(workspaceSlug, input.userId, input.role),
       onSettled: refreshMembers,
+    },
+    transferOwnership: {
+      mutationFn: (memberUserId: string) =>
+        transferWorkspaceOwnership(workspaceSlug, memberUserId),
+      // The viewer's own role changes too, which every settings page reads.
+      onSettled: () =>
+        queryClient.invalidateQueries({ queryKey: settingsKeys.all(userId) }),
     },
     remove: {
       mutationFn: (memberUserId: string) =>

@@ -27,6 +27,7 @@ const target = { scope: "personal" } as const satisfies ProjectDefaultsTarget;
 const defaults = (
   revision: number,
   commitAuthor: ProjectDefaultsData["overrides"]["commitAuthor"] = null,
+  dxCoAuthor: ProjectDefaultsData["overrides"]["dxCoAuthor"] = null,
 ): ProjectDefaultsData => ({
   scope: "personal",
   revision,
@@ -35,6 +36,7 @@ const defaults = (
     commitAuthor,
     signingPreference: null,
     runnerProfileId: null,
+    dxCoAuthor,
   },
   resolved: {
     shipAction: { value: "ship", source: "deployment" },
@@ -43,6 +45,10 @@ const defaults = (
     runnerProfileId: {
       value: "e2b-standard" as never,
       source: "deployment",
+    },
+    dxCoAuthor: {
+      value: dxCoAuthor ?? true,
+      source: dxCoAuthor === null ? "deployment" : "personal",
     },
   },
   catalog: {
@@ -104,6 +110,50 @@ const selectCommitAuthor = (container: HTMLElement, value: "dx" | "user") => {
 };
 
 describe("project defaults settings", () => {
+  // #1303: on until someone turns it off; saving sends only that change.
+  it("shows Add dx as co-author on by default and saves it turned off", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const saved = defaults(2, null, false);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(Response.json({ status: "success", data: saved }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { container, root } = await renderSettings(queryClient, defaults(1));
+
+    const toggle = () =>
+      container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Add dx as co-author"]',
+      );
+    expect(toggle()?.getAttribute("aria-pressed")).toBe("true");
+    expect(container.textContent).toContain("Add dx as co-author");
+    await React.act(async () => toggle()?.click());
+    expect(toggle()?.getAttribute("aria-pressed")).toBe("false");
+    const save = [...container.querySelectorAll("button")].find(
+      ({ textContent }) => textContent === "Save Defaults",
+    );
+    await React.act(async () => save?.click());
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      expectedRevision: 1,
+      overrides: { commitAuthor: null, dxCoAuthor: false },
+    });
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain(
+        "Project defaults saved for new projects.",
+      ),
+    );
+    expect(toggle()?.getAttribute("aria-pressed")).toBe("false");
+
+    await React.act(() => root.unmount());
+    vi.unstubAllGlobals();
+  });
+
   it("keeps the saved confirmation mounted through the authoritative Query write", async () => {
     const queryClient = new QueryClient({
       defaultOptions: {

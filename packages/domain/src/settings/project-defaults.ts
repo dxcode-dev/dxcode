@@ -57,6 +57,8 @@ export const ProjectConfiguration = Schema.Struct({
   signingPreference: CommitSigningPreference,
   runnerProfileId: RunnerProfileId,
   publicCodeEnabled: Schema.Boolean,
+  /** Adds dx as co-author to commits the person authors. */
+  dxCoAuthor: Schema.Boolean,
 });
 
 export type ProjectConfiguration = typeof ProjectConfiguration.Type;
@@ -66,6 +68,7 @@ export const ProjectDefaultOverrides = Schema.Struct({
   commitAuthor: Schema.NullOr(CommitAuthorPreference),
   signingPreference: Schema.NullOr(CommitSigningPreference),
   runnerProfileId: Schema.NullOr(RunnerProfileId),
+  dxCoAuthor: Schema.NullOr(Schema.Boolean),
 });
 
 export type ProjectDefaultOverrides = typeof ProjectDefaultOverrides.Type;
@@ -112,6 +115,10 @@ export const ResolvedProjectDefaults = Schema.Struct({
   }),
   runnerProfileId: Schema.Struct({
     value: RunnerProfileId,
+    source: ProjectDefaultSource,
+  }),
+  dxCoAuthor: Schema.Struct({
+    value: Schema.Boolean,
     source: ProjectDefaultSource,
   }),
 });

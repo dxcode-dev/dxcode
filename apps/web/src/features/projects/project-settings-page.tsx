@@ -42,6 +42,7 @@ import {
   projectDefaultsQueryOptions,
 } from "../settings/project-defaults/project-defaults-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
+import { DeleteProjectCard } from "./delete-project-card.js";
 import { AdditionalRepositoriesPicker } from "./new-project-dialog.js";
 import { buildProjectMetadataChanges } from "./project-metadata.js";
 import {
@@ -458,6 +459,7 @@ function GeneralProjectSettings({
           onReset={() => undefined}
         />
       </SettingsCard>
+      <DeleteProjectCard project={project} userId={userId} />
       <UnsavedChangesGuard
         dirty={dirty}
         onDiscard={() => dispatch({ type: "reset", project })}

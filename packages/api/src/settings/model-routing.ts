@@ -252,10 +252,25 @@ export const ServedModelChoiceDataSchema = Schema.Struct({
   vision: Schema.Boolean,
 });
 
+/**
+ * A connected Claude Pro/Max plan a new Claude Code Thread can be bound to,
+ * in routing order, with the limits Claude Code runs last reported on it.
+ */
+export const ClaudePlanChoiceDataSchema = Schema.Struct({
+  connectionId: ModelConnectionId,
+  name: Schema.String,
+  enabled: Schema.Boolean,
+  allowExtraUsage: Schema.Boolean,
+  usage: Schema.optional(ClaudePlanUsage),
+});
+
+export type ClaudePlanChoiceData = typeof ClaudePlanChoiceDataSchema.Type;
+
 export const ChoicesResponseSchema = successResponse(
   Schema.Struct({
     modes: Schema.Array(ModeChoiceDataSchema),
     models: Schema.Array(ServedModelChoiceDataSchema),
+    claudePlans: Schema.Array(ClaudePlanChoiceDataSchema),
   }),
 );
 

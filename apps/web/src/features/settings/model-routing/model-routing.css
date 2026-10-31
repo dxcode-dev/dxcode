@@ -90,6 +90,14 @@ a.model-routing-scope-content:focus-visible {
   width: 16px;
   height: 16px;
 }
+.routing-add-menu .routing-add-submenu-chevron {
+  margin-left: auto;
+  color: var(--muted-foreground);
+}
+.routing-add-providers {
+  max-height: min(360px, var(--available-height));
+  overflow-y: auto;
+}
 .routing-empty {
   padding: 12px 16px;
   color: var(--muted-foreground);
@@ -728,4 +736,488 @@ a.model-routing-scope-content:focus-visible {
 .claude-plan-tabs .usage-tabs button {
   white-space: nowrap;
   text-transform: none;
+}
+
+/* Add a Provider: a dialog of provider buttons. */
+.dialog-popup.routing-add-provider-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: min(576px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: hidden;
+  padding: 24px;
+  border-radius: 8px;
+}
+.routing-add-provider-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+}
+.routing-add-provider-body {
+  min-height: 0;
+  overflow-y: auto;
+}
+.routing-provider-grid {
+  display: grid;
+  gap: 8px;
+}
+@media (min-width: 640px) {
+  .routing-provider-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+.routing-provider-popular {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.routing-provider-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+}
+.routing-provider-option:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--foreground) 5%, var(--background));
+}
+.routing-provider-option:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.routing-provider-option svg {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.routing-provider-option-fallback {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.routing-provider-option-note {
+  margin: 0;
+  padding: 4px 4px 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+/* Provider API key sheet, on the right. */
+.routing-sheet {
+  position: fixed;
+  inset-block: 0;
+  right: 0;
+  z-index: 51;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: 0 0 40px #0004;
+  outline: none;
+}
+@media (min-width: 640px) {
+  .routing-sheet {
+    max-width: 672px;
+  }
+}
+@media (min-width: 1024px) {
+  .routing-sheet {
+    max-width: 768px;
+  }
+}
+@media (min-width: 1280px) {
+  .routing-sheet {
+    max-width: 896px;
+  }
+}
+.routing-sheet-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 20px 56px 20px 24px;
+  border-bottom: 1px solid var(--border);
+}
+.routing-sheet-mark {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  background: var(--muted);
+  color: var(--foreground);
+}
+.routing-sheet-mark svg {
+  width: 24px;
+  height: 24px;
+}
+.routing-sheet-heading {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding-top: 2px;
+}
+.routing-sheet-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
+  letter-spacing: -0.01em;
+}
+.routing-sheet-description {
+  max-width: 65ch;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 16px;
+}
+.routing-sheet-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  opacity: 0.7;
+  cursor: pointer;
+}
+.routing-sheet-close:hover {
+  opacity: 1;
+}
+.routing-sheet-close svg {
+  width: 16px;
+  height: 16px;
+}
+.routing-sheet-body {
+  flex: 1;
+  padding: 24px;
+}
+.routing-sheet-form {
+  display: grid;
+  gap: 12px;
+}
+.routing-sheet-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.routing-sheet-field > label,
+.routing-sheet-label {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+}
+.routing-sheet-control {
+  height: auto;
+  min-height: 26px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 16px;
+}
+.routing-sheet-select {
+  width: 100%;
+  border: 1px solid var(--input);
+  background: transparent;
+  color: var(--foreground);
+}
+.routing-sheet-help {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.routing-sheet-secret {
+  position: relative;
+}
+.routing-sheet-secret .routing-sheet-control {
+  padding-right: 32px;
+}
+.routing-sheet-secret > span {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  display: flex;
+  color: var(--muted-foreground);
+  opacity: 0.6;
+  transform: translateY(-50%);
+}
+.routing-sheet-secret svg {
+  width: 14px;
+  height: 14px;
+}
+.routing-sheet-models {
+  display: grid;
+  gap: 8px;
+}
+.routing-sheet-models-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.routing-sheet-models-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.routing-sheet-models-title > span:first-child {
+  font-size: 12px;
+  font-weight: 500;
+}
+.routing-sheet-models-title > span + span,
+.routing-sheet-advanced {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.routing-sheet-advanced {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.routing-switch {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  width: 28px;
+  height: 16px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--muted-foreground) 20%, transparent);
+  cursor: pointer;
+}
+.routing-switch[data-checked] {
+  background: var(--primary);
+}
+.routing-switch-thumb {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: var(--muted-foreground);
+  transition: transform 150ms;
+}
+.routing-switch[data-checked] .routing-switch-thumb {
+  background: var(--background);
+  transform: translateX(12px);
+}
+.routing-model-list {
+  max-height: 288px;
+  overflow-y: auto;
+}
+.routing-model-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+}
+.routing-model-row + .routing-model-row {
+  border-top: 1px solid var(--border);
+}
+.routing-model-row-label {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 0;
+  cursor: pointer;
+}
+.routing-model-row-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.routing-checkbox {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--primary);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--primary-foreground);
+}
+.routing-checkbox[data-checked] {
+  background: var(--primary);
+}
+.routing-checkbox-indicator {
+  display: flex;
+}
+.routing-checkbox-indicator[data-unchecked] {
+  display: none;
+}
+.routing-checkbox svg {
+  width: 12px;
+  height: 12px;
+}
+.routing-model-details-trigger {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.routing-model-details-trigger:hover,
+.routing-model-details-trigger[data-popup-open] {
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  color: var(--foreground);
+}
+.routing-model-details-trigger svg {
+  width: 14px;
+  height: 14px;
+}
+.routing-model-details {
+  display: grid;
+  gap: 8px;
+  width: 260px;
+  padding: 12px;
+  border: 1px solid var(--outline);
+  border-radius: 6px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 8px 28px #0005;
+  font-size: 12px;
+}
+.routing-model-details p {
+  margin: 0;
+}
+.routing-model-details-id {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.routing-model-details dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0;
+}
+.routing-model-details dt {
+  color: var(--muted-foreground);
+}
+.routing-model-details dd {
+  margin: 0;
+}
+.routing-model-details-copy {
+  justify-self: start;
+}
+.routing-mapping-syntax {
+  width: 360px;
+}
+.routing-mapping-syntax pre {
+  margin: 0;
+  padding: 8px;
+  border-radius: 4px;
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+.routing-sheet-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.routing-sheet-header-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+}
+.routing-sheet-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--foreground);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.routing-sheet-footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 0 -16px -16px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--background);
+}
+.routing-sheet-label-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+}
+.routing-sheet-badge {
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-weight: 400;
+}
+.routing-sheet-control.routing-sheet-select {
+  width: fit-content;
+  min-width: 240px;
+  height: 36px;
+  padding: 4px 12px;
+  border-radius: 4px;
+}
+.routing-model-row-mark {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.routing-sheet-button {
+  height: 25px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
 }

@@ -83,6 +83,46 @@ describe("execution workspace identity persistence", () => {
     });
   });
 
+  it("returns a refused create's attempt to uninitialized, but never a workspace that has a sandbox", async () => {
+    const suffix = crypto.randomUUID();
+    const projectEntity = project(`prj_${suffix}`, owner, "Refused create");
+    const threadEntity = thread(`thr_${suffix}`, projectEntity.id, owner);
+    await runRepositories(
+      Effect.gen(function* () {
+        yield* (yield* ProjectRepository).insert(projectEntity);
+        yield* (yield* ThreadRepository).insert(threadEntity);
+      }),
+    );
+    const store = makeD1ExecutionWorkspaceStateStore(env.DB);
+    const uninitialized = (await store.read(
+      threadEntity.id,
+    )) as ExecutionWorkspaceRecord;
+    const provisioning: ExecutionWorkspaceRecord = {
+      ...uninitialized,
+      state: "provisioning",
+      initializationAttemptId: "refused-attempt",
+    };
+    await store.transition(threadEntity.id, uninitialized, provisioning);
+
+    // E2B refused the create, so no sandbox exists: the next request creates.
+    await expect(
+      store.transition(threadEntity.id, provisioning, uninitialized),
+    ).resolves.toBe(true);
+    await expect(store.read(threadEntity.id)).resolves.toEqual(uninitialized);
+
+    await store.transition(threadEntity.id, uninitialized, provisioning);
+    const initialized: ExecutionWorkspaceRecord = {
+      ...provisioning,
+      state: "initialized",
+      providerSandboxId: "sandbox-one",
+      initializationAttemptId: null,
+    };
+    await store.transition(threadEntity.id, provisioning, initialized);
+    await expect(
+      store.transition(threadEntity.id, initialized, uninitialized),
+    ).rejects.toThrow("invalid execution workspace transition");
+  });
+
   it("lets the first activation pin Cloudflare Containers, and only then", async () => {
     const suffix = crypto.randomUUID();
     const projectEntity = project(`prj_${suffix}`, owner, "Orb provider pin");

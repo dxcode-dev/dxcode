@@ -1,4 +1,5 @@
 import { Dialog } from "@base-ui/react/dialog";
+import { SIDEBAR_WIDTH_MAX_PX, SIDEBAR_WIDTH_MIN_PX } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import {
   useInfiniteQuery,
@@ -33,10 +34,11 @@ import { sidebarDrawerDrag } from "./sidebar-drawer-drag.js";
 import { SidebarExtensionRegion } from "./sidebar-extensions.js";
 import { SidebarPanelIcon } from "./sidebar-panel-icon.js";
 import { childThreadsByParent } from "./sidebar-thread-utils.js";
+import { SIDEBAR_PANEL_ID, useSavedSidebarPanel } from "./sidebar-width.js";
 import { ThreadSearchDialog } from "./thread-search-dialog.js";
 
-const PRODUCT_SIDEBAR_MIN_SIZE = 250;
-const PRODUCT_SIDEBAR_MAX_SIZE = 480;
+const PRODUCT_SIDEBAR_MIN_SIZE = SIDEBAR_WIDTH_MIN_PX;
+const PRODUCT_SIDEBAR_MAX_SIZE = SIDEBAR_WIDTH_MAX_PX;
 const sidebarExtensionRegion = <SidebarExtensionRegion />;
 
 /**
@@ -86,9 +88,11 @@ export function ProductShell({
       (page) => page.items.length > 0 || page.nextCursor !== undefined,
     ) === true;
   const sidebarRef = usePanelRef();
-  const expandedSidebarGrowRef = React.useRef("20");
   const mobile = useMobile();
-  const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
+  const sidebarPanel = useSavedSidebarPanel(identity.id, mobile);
+  const [sidebarCollapsed, setSidebarCollapsed] = React.useState(
+    sidebarPanel.startsCollapsed,
+  );
   // A phone opens on the page itself; the sidebar button shows the drawer.
   const [mobileSidebarOpen, setMobileSidebarOpen] = React.useState(false);
   // The drawer's sidebar mounts on first open and then stays mounted, so
@@ -153,19 +157,20 @@ export function ProductShell({
         ".product-panel-group > :first-child",
       );
       if (sidebarCollapsed) {
-        const expandedGrow = expandedSidebarGrowRef.current;
         // Drop `inert` now rather than at the panel's next resize report, so
         // a caller can focus a sidebar row on the next frame.
         setSidebarCollapsed(false);
-        expandResizablePanel(panel, expandedGrow, () =>
-          sidebarRef.current?.expand(),
-        );
+        // A sidebar that loaded collapsed has no earlier size to expand to,
+        // so it opens at its saved width.
+        expandResizablePanel(panel, sidebarPanel.expandedGrow(), () => {
+          sidebarRef.current?.expand();
+          sidebarRef.current?.resize(`${sidebarPanel.width()}px`);
+        });
       } else {
         focusOpenTriggerRef.current =
           panel?.contains(document.activeElement) === true;
         const currentGrow =
           panel === null ? "1" : getComputedStyle(panel).flexGrow;
-        expandedSidebarGrowRef.current = currentGrow;
         collapseResizablePanel(panel, currentGrow, () =>
           sidebarRef.current?.collapse(),
         );
@@ -243,14 +248,16 @@ export function ProductShell({
           orientation="horizontal"
           className="product-panel-group"
           data-mobile={mobile || undefined}
+          elementRef={sidebarPanel.groupRef}
+          onLayoutChanged={sidebarPanel.onLayoutChanged}
         >
           <Panel
-            id="product-navigation"
+            id={SIDEBAR_PANEL_ID}
             className="product-navigation-panel"
             hidden={mobile}
             groupResizeBehavior="preserve-pixel-size"
             panelRef={sidebarRef}
-            defaultSize="300px"
+            defaultSize={sidebarPanel.defaultSize}
             minSize={`${PRODUCT_SIDEBAR_MIN_SIZE}px`}
             maxSize={`${PRODUCT_SIDEBAR_MAX_SIZE}px`}
             collapsible
@@ -258,9 +265,8 @@ export function ProductShell({
             inert={sidebarCollapsed}
             onResize={(size) => {
               const collapsed = size.asPercentage === 0;
-              if (size.inPixels >= PRODUCT_SIDEBAR_MIN_SIZE)
-                expandedSidebarGrowRef.current = String(size.asPercentage);
               setSidebarCollapsed(collapsed);
+              sidebarPanel.onCollapsedChange(collapsed);
             }}
           >
             {mobile ? null : sidebar}

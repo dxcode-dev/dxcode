@@ -132,7 +132,6 @@ describe("Project Orb script routes in workerd with real D1", () => {
       ["pre-clone", "x".repeat(32_769)],
       ["pre-clone", "é".repeat(16_385)],
       ["pre-setup", "echo a\0b\n"],
-      ["desktop-resume", "echo desktop\n"],
       ["post-setup", "echo\n"],
     ] as const) {
       const response = await put(projectId, kind, { body });
@@ -142,6 +141,27 @@ describe("Project Orb script routes in workerd with real D1", () => {
       (await put(projectId, "pre-clone", { body: "x".repeat(32_768) })).status,
     ).toBe(200);
     expect((await auditRows(projectId)).length).toBe(1);
+  });
+
+  it("saves the Desktop resume script and hands it to source preparation", async () => {
+    const project = await createProjectViaApi("DesktopScripts");
+    const body = '/opt/dx/desktop/chromium "http://localhost:3000"\n';
+    const saved = await put(project.data.id, "desktop-resume", { body });
+    expect(saved.status).toBe(200);
+    expect(
+      (await saved.json<GetProjectOrbScriptsResponse>()).data.scripts.map(
+        ({ kind, body: script }) => ({ kind, body: script }),
+      ),
+    ).toEqual([{ kind: "desktop-resume", body }]);
+    const thread = await createThreadViaApi(project.data.id);
+    const record = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* (yield* SourceWorkspaceRepository).findByThreadId(
+          Schema.decodeUnknownSync(ThreadId)(thread.data.id),
+        );
+      }).pipe(Effect.provide(SourceWorkspaceRepositoryD1(env.DB))),
+    );
+    expect(record.orbScripts).toEqual({ desktopResume: body });
   });
 
   it("hides another person's project the way it hides an absent one", async () => {

@@ -42,6 +42,7 @@ export interface InitialThreadCreationAttempt {
   readonly profile: ModeId;
   readonly model?: string;
   readonly effort?: ClaudeCodeEffort;
+  readonly claudeConnectionId?: string;
   readonly runnerProfileId?: RunnerProfileId;
   readonly body: string;
   readonly attachmentIds: ReadonlyArray<string>;

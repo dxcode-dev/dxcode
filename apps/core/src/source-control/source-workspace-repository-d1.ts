@@ -36,6 +36,7 @@ const SourceRow = Schema.Struct({
   private_submodule_repository_ids_json: Schema.NullOr(Schema.String),
   pre_clone_script: Schema.optional(Schema.NullOr(Schema.String)),
   pre_setup_script: Schema.optional(Schema.NullOr(Schema.String)),
+  desktop_resume_script: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const unavailable = (operation: string) => (cause: unknown) =>
@@ -72,7 +73,10 @@ const load = async (db: D1Database, threadId: string) => {
                AS pre_clone_script,
              (SELECT body FROM project_orb_script
                WHERE project_id = thread.project_id AND kind = 'pre-setup')
-               AS pre_setup_script
+               AS pre_setup_script,
+             (SELECT body FROM project_orb_script
+               WHERE project_id = thread.project_id AND kind = 'desktop-resume')
+               AS desktop_resume_script
         FROM threads AS thread
         LEFT JOIN thread_source_snapshot AS snapshot ON snapshot.thread_id = thread.id
         LEFT JOIN thread_source_intent AS intent ON intent.thread_id = thread.id
@@ -150,18 +154,22 @@ const load = async (db: D1Database, threadId: string) => {
   }
   const preClone = row.pre_clone_script ?? undefined;
   const preSetup = row.pre_setup_script ?? undefined;
+  const desktopResume = row.desktop_resume_script ?? undefined;
   return {
     actorUserId: row.owner_user_id,
     ...(snapshot === undefined ? {} : { snapshot }),
     ...(intent === undefined ? {} : { intent }),
     ...(authority === undefined ? {} : { authority }),
     privateSubmodules,
-    ...(preClone === undefined && preSetup === undefined
+    ...(preClone === undefined &&
+    preSetup === undefined &&
+    desktopResume === undefined
       ? {}
       : {
           orbScripts: {
             ...(preClone === undefined ? {} : { preClone }),
             ...(preSetup === undefined ? {} : { preSetup }),
+            ...(desktopResume === undefined ? {} : { desktopResume }),
           },
         }),
   };

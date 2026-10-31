@@ -287,8 +287,6 @@ export default Alchemy.Stack(
         "",
       ),
       packageDirectory: Config.String("DX_DEPLOYMENT_PACKAGE_DIR"),
-      e2bTemplate: Config.String("DX_DEPLOYMENT_E2B_TEMPLATE"),
-      e2bTemplateBuildId: Config.String("DX_DEPLOYMENT_E2B_TEMPLATE_BUILD_ID"),
       dxdChecksum: Config.String("DX_DEPLOYMENT_DXD_CHECKSUM"),
       dxdReleaseUrl: Config.String("DX_DEPLOYMENT_DXD_RELEASE_URL"),
       sourceShallowClone: Config.withDefault(
@@ -512,14 +510,17 @@ export default Alchemy.Stack(
           })).value
         : undefined
       : Option.getOrUndefined(configuration.exaApiKey);
-    const selfhostProfiles =
-      selfhost && e2bApiKey !== undefined
+    // Every deployment that installs E2B builds its Orb templates from the
+    // recipe at deploy time and rebuilds them when the recipe changes, as
+    // OrbContainers does for Cloudflare. Staging and branch previews share
+    // one E2B team, so they share one set, named for staging.
+    const e2bProfiles =
+      e2bApiKey !== undefined
         ? yield* E2BProfiles("E2BProfiles", {
             apiKey: e2bApiKey,
-            deploymentName: Option.getOrElse(
-              configuration.deploymentName,
-              () => "",
-            ),
+            deploymentName: selfhost
+              ? Option.getOrElse(configuration.deploymentName, () => "")
+              : "staging",
             recipeHash: yield* Effect.promise(() => e2bRecipeHash()),
           } as never)
         : undefined;
@@ -789,14 +790,10 @@ export default Alchemy.Stack(
         DX_AUTH_TRUSTED_ORIGINS: configuration.origin,
         ...(portals === undefined ? {} : { DX_PORTAL_DOMAIN: portals.domain }),
         DX_ATTACHMENT_R2_ENDPOINT: attachmentSigning.endpoint,
-        ...(e2bInstalled
+        ...(e2bProfiles !== undefined
           ? {
-              DX_E2B_TEMPLATE:
-                selfhostProfiles?.defaultTemplate ??
-                `${configuration.e2bTemplate}-${defaultE2BOrbProfile.templateSuffix}`,
-              DX_E2B_TEMPLATE_BUILD_ID:
-                selfhostProfiles?.defaultBuildId ??
-                configuration.e2bTemplateBuildId,
+              DX_E2B_TEMPLATE: e2bProfiles.defaultTemplate,
+              DX_E2B_TEMPLATE_BUILD_ID: e2bProfiles.defaultBuildId,
               DX_E2B_TIMEOUT_MS: "300000",
             }
           : {}),
@@ -816,30 +813,21 @@ export default Alchemy.Stack(
         DX_DXD_RELEASE_SHA256: configuration.dxdChecksum,
         DX_MIGRATION_MANIFEST_VERSION: String(migrationManifest.version),
         DX_RUNNER_PROFILE_CATALOG:
-          selfhostProfiles === undefined
+          e2bProfiles === undefined
             ? runnerProfileCatalog(
-                e2bInstalled
-                  ? E2B_ORB_PROFILES.map((profile) => ({
+                cloudflareInstalled
+                  ? []
+                  : // No provider: the sizes people's own E2B teams run.
+                    E2B_ORB_PROFILES.map((profile) => ({
                       ...profile,
                       adapter: "e2b",
-                      template: `${configuration.e2bTemplate}-${profile.templateSuffix}`,
+                      template: `dx-orb-${profile.templateSuffix}`,
                       isolation: "sandbox",
                       availability: "available",
                       capabilities: deployedOrbCapabilities,
-                    }))
-                  : cloudflareInstalled
-                    ? []
-                    : // No provider: the sizes people's own E2B teams run.
-                      E2B_ORB_PROFILES.map((profile) => ({
-                        ...profile,
-                        adapter: "e2b",
-                        template: `dx-orb-${profile.templateSuffix}`,
-                        isolation: "sandbox",
-                        availability: "available",
-                        capabilities: deployedOrbCapabilities,
-                      })),
+                    })),
               )
-            : Output.map(selfhostProfiles.profilesJson, (profilesJson) =>
+            : Output.map(e2bProfiles.profilesJson, (profilesJson) =>
                 runnerProfileCatalog(
                   JSON.parse(profilesJson).map(
                     (profile: Record<string, unknown>) => ({

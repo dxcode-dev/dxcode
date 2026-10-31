@@ -1,12 +1,18 @@
-import type { PluginBundleData } from "@dx/api";
+import type { PluginBundleData, PluginBundleUpdatePreviewData } from "@dx/api";
 import * as React from "react";
+import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
 import { DialogDescription, DialogTitle } from "../../../shared/ui/dialog.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
 import { BundleItems } from "./plugin-bundle-items.js";
 import { McpSettingsLink } from "./plugin-bundle-mcp-link.js";
-import { type BundleRun, plural } from "./plugin-bundle-presentation.js";
+import {
+  type BundleRun,
+  errorMessage,
+  plural,
+} from "./plugin-bundle-presentation.js";
 import { PluginBundleSourceLine } from "./plugin-bundle-source.js";
+import { PluginBundleUpdate } from "./plugin-bundle-update.js";
 
 /** What removing a bundle also removes, for the confirmation. */
 const removalSummary = (bundle: PluginBundleData) =>
@@ -26,6 +32,7 @@ export function PluginBundleDetails({
   canMutate,
   busy,
   run,
+  previewUpdate,
   workspace,
   settingsReturnTo,
   onDone,
@@ -34,10 +41,46 @@ export function PluginBundleDetails({
   readonly canMutate: boolean;
   readonly busy: boolean;
   readonly run: BundleRun;
+  /** Reads the plugin's source again; `file` is a new ZIP. */
+  readonly previewUpdate: (
+    file?: File,
+  ) => Promise<PluginBundleUpdatePreviewData>;
   readonly onDone: () => void;
 }) {
   const [confirming, setConfirming] = React.useState(false);
+  const [update, setUpdate] = React.useState<{
+    readonly data: PluginBundleUpdatePreviewData;
+    readonly file?: File;
+  }>();
+  const [checking, setChecking] = React.useState(false);
+  const [error, setError] = React.useState<string>();
+  const fileInput = React.useRef<HTMLInputElement>(null);
   const removes = removalSummary(bundle);
+  const check = async (file?: File) => {
+    setError(undefined);
+    setChecking(true);
+    const outcome = await settle(() => previewUpdate(file));
+    setChecking(false);
+    if (outcome.ok)
+      setUpdate({
+        data: outcome.value,
+        ...(file === undefined ? {} : { file }),
+      });
+    else setError(errorMessage(outcome.error));
+  };
+  if (update !== undefined) {
+    return (
+      <PluginBundleUpdate
+        bundle={bundle}
+        update={update.data}
+        {...(update.file === undefined ? {} : { file: update.file })}
+        busy={busy}
+        run={run}
+        onBack={() => setUpdate(undefined)}
+        onDone={onDone}
+      />
+    );
+  }
   return (
     <div className="plugin-bundle-form">
       <header>
@@ -56,6 +99,23 @@ export function PluginBundleDetails({
         skills={bundle.skills}
         mcpServers={bundle.mcpServers}
         skipped={bundle.skipped}
+      />
+      {error === undefined ? null : (
+        <p className="plugin-bundle-error" role="alert">
+          {error}
+        </p>
+      )}
+      <input
+        ref={fileInput}
+        className="skill-file-input"
+        type="file"
+        aria-label="Choose the plugin's new ZIP"
+        accept=".zip,application/zip"
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          event.currentTarget.value = "";
+          if (file !== undefined) void check(file);
+        }}
       />
       {confirming ? (
         <footer className="plugin-bundle-actions plugin-bundle-confirm">
@@ -97,6 +157,24 @@ export function PluginBundleDetails({
               onClick={() => setConfirming(true)}
             >
               Remove
+            </Button>
+          ) : null}
+          {canMutate ? (
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={busy || checking}
+              onClick={() =>
+                bundle.source.type === "github"
+                  ? void check()
+                  : fileInput.current?.click()
+              }
+            >
+              {checking
+                ? "Checking…"
+                : bundle.source.type === "github"
+                  ? "Check for updates"
+                  : "Upload new ZIP"}
             </Button>
           ) : null}
           {bundle.mcpServers.some(({ reviewed }) => !reviewed) ? (

@@ -11,6 +11,7 @@ import {
 import { createMemoryHistory } from "@tanstack/react-router";
 import { Schema } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { sidebarLayoutKeys } from "./features/navigation/sidebar-layout-queries.js";
 import {
   projectKeys,
   projectQueryOptions,
@@ -46,6 +47,7 @@ const project = Schema.decodeUnknownSync(ProjectDataSchema)({
     signingPreference: "disabled",
     runnerProfileId: Schema.decodeUnknownSync(RunnerProfileId)("e2b-default"),
     publicCodeEnabled: false,
+    dxCoAuthor: true,
   },
   revision: 0,
   createdAt: "2026-08-25T00:00:00.000Z",
@@ -351,6 +353,10 @@ describe("Router Query coordination", routeLoading, () => {
     queryClient.setQueryData(projectKeys.lists(userId), {
       pages: [{ items: [project] }],
       pageParams: [undefined],
+    });
+    // The shell, already open where the Thread was created, loaded this.
+    queryClient.setQueryData(sidebarLayoutKeys.layout(userId), {
+      entries: [],
     });
     const mutation = queryClient
       .getMutationCache()

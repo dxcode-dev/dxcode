@@ -59,6 +59,7 @@ const createThread = async (
   initialMessage?: InitialThreadMessage,
   threadId?: ThreadId,
   signal?: AbortSignal,
+  claudeConnectionId?: string,
 ): Promise<typeof CreateThreadResponseSchema.Type> =>
   request("/v1/threads", CreateThreadResponseSchema, {
     method: "POST",
@@ -70,6 +71,7 @@ const createThread = async (
       ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
       ...(initialMessage === undefined ? {} : { initialMessage }),
       ...(threadId === undefined ? {} : { threadId }),
+      ...(claudeConnectionId === undefined ? {} : { claudeConnectionId }),
     }),
   });
 
@@ -221,12 +223,17 @@ export const createThreadMutationOptions = (
               input.initialMessage,
               input.threadId,
               input.signal,
+              input.claudeConnectionId,
             )
           : await createThread(
               input.project?.id,
               input.title,
               input.selection,
               input.runnerProfileId,
+              undefined,
+              undefined,
+              undefined,
+              input.claudeConnectionId,
             );
       if ("initialMessage" in input && response.initialSubmission === undefined)
         throw new Error("The initial message receipt was missing.");
@@ -250,6 +257,8 @@ interface CreateBlankThreadMutationInput {
   readonly title: ThreadDetailData["title"];
   readonly selection?: ThreadModelSelection;
   readonly runnerProfileId?: RunnerProfileId;
+  /** The Claude plan a Claude Code Thread is bound to for its life. */
+  readonly claudeConnectionId?: string;
 }
 
 interface CreateThreadWithInitialMessageMutationInput

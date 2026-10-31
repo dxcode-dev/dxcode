@@ -6,6 +6,7 @@ import * as React from "react";
  * Thread menu lists them instead.
  */
 export const TITLE_BAR_ITEMS = [
+  "issues",
   "pulls",
   "ci",
   "listeners",

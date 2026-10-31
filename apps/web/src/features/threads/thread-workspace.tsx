@@ -236,22 +236,28 @@ export function ThreadWorkspace({
   // The page opens only once the server admitted the creation.
   const optimisticCreation = useOptimisticThreadCreation(registry, id);
   const threadQuery = useQuery(threadQueryOptions(identity.id, id));
-  // A member of a shared Thread cannot read the owner's Project; the Thread
-  // detail carries its name instead.
+  // A member of a shared Thread cannot read the owner's Project, and nobody
+  // reads a deleted one; the Thread detail carries its name instead.
   const sharedWithMe =
     threadQuery.data?.access !== undefined &&
     threadQuery.data.access !== "owner";
+  const projectDeleted = threadQuery.data?.projectDeleted === true;
+  const projectUnreadable = sharedWithMe || projectDeleted;
   const projectQuery = useQuery({
     ...projectQueryOptions(
       identity.id,
       threadQuery.data?.projectId as ProjectId,
     ),
-    enabled: threadQuery.data !== undefined && !sharedWithMe,
+    enabled: threadQuery.data !== undefined && !projectUnreadable,
   });
   // A Thread created in this browser knows its Project's name and scope, so
   // it opens without waiting for the Project (a hidden one for No Project).
-  const project: ThreadProject | undefined = sharedWithMe
-    ? { name: threadQuery.data?.projectName ?? "Shared project" }
+  const project: ThreadProject | undefined = projectUnreadable
+    ? {
+        name:
+          threadQuery.data?.projectName ??
+          (projectDeleted ? "Deleted project" : "Shared project"),
+      }
     : (projectQuery.data ??
       (optimisticCreation === undefined
         ? undefined
@@ -259,7 +265,7 @@ export function ThreadWorkspace({
             name: optimisticCreation.project?.name ?? PROJECTLESS_PROJECT_NAME,
             workspaceId: optimisticCreation.project?.workspaceId,
           }));
-  const projectError = sharedWithMe ? null : projectQuery.error;
+  const projectError = projectUnreadable ? null : projectQuery.error;
   const error =
     [threadQuery.error, projectError].find(isAuthorizationError) ??
     threadQuery.error ??
@@ -283,7 +289,8 @@ export function ThreadWorkspace({
   const retry = () => {
     if (threadQuery.data === undefined || threadQuery.error !== null)
       void threadQuery.refetch();
-    if (threadQuery.data !== undefined) void projectQuery.refetch();
+    if (threadQuery.data !== undefined && !projectUnreadable)
+      void projectQuery.refetch();
   };
 
   const metadataReady =
@@ -1049,6 +1056,7 @@ function ThreadSessionContent({
       onOpenModelRouting={archived ? undefined : openModelRouting}
       archived={archived}
       showArchivedNotice={archived}
+      projectDeleted={thread.projectDeleted === true}
       dictationAvailable={dictationAvailable}
       active={active}
       transcriptAccess={transcriptAccess}

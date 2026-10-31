@@ -50,6 +50,9 @@ const automationTools = vi.hoisted(() => ({
 const storageTools = vi.hoisted(() => ({
   createThreadStorageTools: vi.fn((): unknown[] => []),
 }));
+const needsYouTools = vi.hoisted(() => ({
+  createNeedsYouTools: vi.fn((): unknown[] => []),
+}));
 const runtime = vi.hoisted(() => ({
   capabilities: "workspace" as "model-only" | "workspace",
   execution: { createSandbox: vi.fn() },
@@ -79,6 +82,7 @@ vi.mock("../plugins/agent-context.js", () => pluginHost);
 vi.mock("../threads/agent-tools.js", () => threadTools);
 vi.mock("../automations/agent-tools.js", () => automationTools);
 vi.mock("../thread-storage/agent-tools.js", () => storageTools);
+vi.mock("../needs-you/agent-tools.js", () => needsYouTools);
 vi.mock("../portals/prompt.js", () => ({ threadPortalPrompt: () => "" }));
 vi.mock("../plugins/code/providers/wasm.js", () => ({ getCodeWasm: vi.fn() }));
 vi.mock("../settings/plugins/flue.js", () => ({
@@ -206,6 +210,9 @@ describe("DxAgent", () => {
     storageTools.createThreadStorageTools.mockReturnValueOnce([
       { name: "download_thread_file", run: vi.fn() },
     ]);
+    needsYouTools.createNeedsYouTools.mockReturnValueOnce([
+      { name: "request_attention", run: vi.fn() },
+    ]);
     hooks.usePromptData.mockReturnValueOnce({
       plugins: { submissionId: "sub_1", tools: [] },
     } as never);
@@ -232,7 +239,12 @@ describe("DxAgent", () => {
       "send_thread_message",
       "download_thread_file",
       "set_schedule",
+      "request_attention",
     ]);
+    expect(needsYouTools.createNeedsYouTools).toHaveBeenCalledWith(
+      "thr_existing",
+      pluginHost.agentThreadToolsContext,
+    );
     expect(pluginHost.agentThreadToolsContext).not.toHaveBeenCalled();
     expect(prompt).toMatch(/create_thread/);
 

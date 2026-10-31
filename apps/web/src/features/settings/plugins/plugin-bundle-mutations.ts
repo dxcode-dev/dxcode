@@ -1,4 +1,7 @@
-import type { PluginBundlePreviewData } from "@dx/api";
+import type {
+  PluginBundlePreviewData,
+  PluginBundleUpdatePreviewData,
+} from "@dx/api";
 import type { PluginId, UserId } from "@dx/domain";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 import {
@@ -6,8 +9,10 @@ import {
   type PluginBundleUpload,
   type PluginsTarget,
   previewPluginBundle,
+  previewPluginBundleUpdate,
   removePluginBundle,
   setPluginBundleEnabled,
+  updatePluginBundle,
 } from "../../../shared/api/client.js";
 import { mcpServerKeys } from "../integrations/mcp-queries.js";
 import { skillKeys } from "../skills/skills-queries.js";
@@ -26,6 +31,13 @@ export type PluginBundleAction =
       readonly pluginId: PluginId;
       readonly enabled: boolean;
     }
+  | {
+      readonly type: "update";
+      readonly pluginId: PluginId;
+      readonly preview: PluginBundleUpdatePreviewData;
+      /** The new ZIP, for a plugin imported from one. */
+      readonly file?: File;
+    }
   | { readonly type: "remove"; readonly pluginId: PluginId };
 
 const mutate = async (
@@ -38,6 +50,14 @@ const mutate = async (
       return;
     case "enabled":
       await setPluginBundleEnabled(target, action.pluginId, action.enabled);
+      return;
+    case "update":
+      await updatePluginBundle(
+        target,
+        action.pluginId,
+        action.preview,
+        action.file,
+      );
       return;
     case "remove":
       await removePluginBundle(target, action.pluginId);
@@ -63,6 +83,21 @@ export const pluginBundlesMutationOptions = (
         queryClient.invalidateQueries({ queryKey: skillKeys.all(userId) }),
         queryClient.invalidateQueries({ queryKey: mcpServerKeys.all(userId) }),
       ]),
+  });
+
+/** Reads an installed bundle's source again; installs nothing. */
+export const pluginBundleUpdatePreviewMutationOptions = (
+  target: PluginsTarget,
+) =>
+  mutationOptions({
+    gcTime: 0,
+    mutationFn: ({
+      pluginId,
+      file,
+    }: {
+      readonly pluginId: PluginId;
+      readonly file?: File;
+    }) => previewPluginBundleUpdate(target, pluginId, file),
   });
 
 /** Reads a bundle without installing anything; nothing is cached. */

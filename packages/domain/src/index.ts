@@ -9,6 +9,12 @@ export {
   SignInRejection,
 } from "./auth/sign-in.js";
 export {
+  BOAT_ORB_SIZES,
+  BoatMachineType,
+  BoatOrbSize,
+  BoatRunnerProfileConfiguration,
+} from "./orb-providers/boat.js";
+export {
   defineOrbProvider,
   type OrbProviderDescriptor,
 } from "./orb-providers/descriptor.js";
@@ -352,6 +358,7 @@ export {
   type McpServerWithTools,
 } from "./settings/mcp-server-repository.js";
 export {
+  ClaudePlanRefused,
   ConnectionKind,
   ConnectionModel,
   CustomApiFormat,
@@ -592,6 +599,14 @@ export {
   WorkspaceProjectDefaults,
   WorkspaceProjectPolicy,
 } from "./settings/project-defaults.js";
+export {
+  type ModelMappingLine,
+  type ModelMappingParse,
+  modelMappingLineError,
+  modelMappingServes,
+  modelMappingText,
+  parseModelMappingText,
+} from "./settings/provider-model-mapping.js";
 export {
   CLOUDFLARE_ORB_PROFILES,
   CloudflareContainerInstance,

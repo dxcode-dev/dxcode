@@ -242,8 +242,16 @@ export const ThreadDetailDataSchema = Schema.Struct({
   participants: Schema.optional(
     Schema.Array(ThreadParticipantDataSchema).check(Schema.isMaxLength(50)),
   ),
-  /** For members of a shared Thread, who cannot read the owner's Project. */
+  /**
+   * For members of a shared Thread, who cannot read the owner's Project,
+   * and for the owner when `projectDeleted` is set.
+   */
   projectName: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
+  /**
+   * The Thread's Project was deleted: the Thread stays archived and
+   * read-only for good, and the Project can no longer be read.
+   */
+  projectDeleted: Schema.optional(Schema.Literal(true)),
   /** Who messages go to; see ThreadConversationModeSchema. */
   conversationMode: Schema.optional(ThreadConversationModeSchema),
   /** Members only: whether they follow this shared Thread. */

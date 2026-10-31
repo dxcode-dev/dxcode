@@ -255,6 +255,10 @@ const deploymentResourceTypes = ({
     ...(orbProviders.includes("cloudflare")
       ? [["OrbContainers", "Dx.OrbContainers"]]
       : []),
+    // Every deployment that installs E2B builds its templates at deploy time.
+    ...(orbProviders.includes("e2b")
+      ? [["E2BProfiles", "Dx.E2BProfiles"]]
+      : []),
     // The dxd ingress Worker is served on the account's workers.dev subdomain.
     ...(workersDevSubdomain === undefined
       ? []
@@ -271,10 +275,7 @@ const deploymentResourceTypes = ({
       ? [
           ["AdminPassword", "Dx.HeldSecret"],
           ...(orbProviders.includes("e2b")
-            ? [
-                ["E2BApiKey", "Dx.HeldSecret"],
-                ["E2BProfiles", "Dx.E2BProfiles"],
-              ]
+            ? [["E2BApiKey", "Dx.HeldSecret"]]
             : []),
           ...(integrations.includes("github")
             ? [["GitHubAppSecret", "Dx.HeldSecret"]]
@@ -523,33 +524,6 @@ export const assertRequestedStage = ({ requested, stage }) => {
     throw new Error(
       `DX_DEPLOYMENT_STAGE is ${value}, but this checkout deploys ${stage}; nothing was deployed.`,
     );
-};
-
-export const assertE2BTemplate = (template) => {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(template)) {
-    throw new Error("DX_E2B_TEMPLATE is not a valid E2B template name.");
-  }
-  if (template === "base")
-    throw new Error("DX_E2B_TEMPLATE must not select E2B base.");
-};
-
-export const resolveE2BTemplateEvidence = async (template, listTemplates) => {
-  assertE2BTemplate(template);
-  // E2B lists templates as `team/name` with the bare name as an alias.
-  const matches = (await listTemplates()).filter(
-    ({ names = [], aliases = [] }) =>
-      names.includes(template) ||
-      aliases.includes(template) ||
-      names.some((name) => name.endsWith(`/${template}`)),
-  );
-  if (matches.length !== 1)
-    throw new Error(
-      `DX_E2B_TEMPLATE must name one existing E2B template: ${template}.`,
-    );
-  const selected = matches[0];
-  if (selected.buildStatus !== "ready" || !selected.buildID)
-    throw new Error(`E2B template ${template} has no immutable ready build.`);
-  return { name: template, buildId: selected.buildID };
 };
 
 export const resourceName = (kind, stage, maximumLength = 63) => {
@@ -2102,7 +2076,7 @@ const assertExactHeldSecretIdentity = (node, operation, id) => {
     throw new Error(`${id} held-secret plan is outside the exact allowlist.`);
 };
 
-const assertExactE2BProfilesIdentity = (node, operation) => {
+const assertExactE2BProfilesIdentity = (node, operation, selection) => {
   const props =
     operation === "deploy"
       ? [
@@ -2117,6 +2091,10 @@ const assertExactE2BProfilesIdentity = (node, operation) => {
       !exactKeys(value, ["apiKey", "deploymentName", "recipeHash"]) ||
       (value.deploymentName !== undefined &&
         !/^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])$/.test(value.deploymentName)) ||
+      // Staging and branch previews share staging's E2B templates.
+      (selection.target !== "selfhost" &&
+        typeof value.deploymentName === "string" &&
+        value.deploymentName !== "staging") ||
       (value.recipeHash !== undefined &&
         !/^[a-f0-9]{64}$/.test(value.recipeHash))
     )
@@ -2760,7 +2738,8 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
     id === "SarvamApiKey"
   )
     assertExactHeldSecretIdentity(node, operation, id);
-  if (id === "E2BProfiles") assertExactE2BProfilesIdentity(node, operation);
+  if (id === "E2BProfiles")
+    assertExactE2BProfilesIdentity(node, operation, selection);
   if (id === "OrbContainers")
     assertExactOrbContainersIdentity(node, operation, selection);
   if (id === "Database" || id === "Storage")

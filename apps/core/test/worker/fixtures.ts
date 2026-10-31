@@ -28,6 +28,7 @@ export const project = (
       signingPreference: "disabled",
       runnerProfileId: "e2b-default",
       publicCodeEnabled: false,
+      dxCoAuthor: true,
     },
     createdAt,
     updatedAt: createdAt,

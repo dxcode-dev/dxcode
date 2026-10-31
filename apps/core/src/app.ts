@@ -19,6 +19,7 @@ import { errorHandler, notFoundHandler } from "./http/http-errors.js";
 import { requestId } from "./http/request-id.js";
 import { requestLogging } from "./http/request-logging.js";
 import type { AppEnv } from "./http/types.js";
+import { needsYouRoutes } from "./needs-you/routes.js";
 import {
   notificationRoutes,
   notificationUnsubscribeRoutes,
@@ -96,6 +97,7 @@ app.route("/v1/avatars", avatarRoutes);
 app.route("/v1/bug-reports", bugReportRoutes);
 app.route("/v1/dictation", dictationRoutes);
 app.route("/v1/invites", inviteAcceptRoutes);
+app.route("/v1/needs-you", needsYouRoutes);
 app.route("/v1/notifications", notificationRoutes);
 app.route("/v1/integrations/bitbucket", bitbucketControlPlaneRoutes);
 app.route("/v1/integrations/github", githubControlPlaneRoutes);

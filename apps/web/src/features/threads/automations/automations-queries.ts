@@ -44,13 +44,16 @@ export const hasThreadAutomations = (data: ThreadAutomationsData | undefined) =>
   data !== undefined &&
   (data.schedule !== undefined || data.githubSubscriptions.length > 0);
 
-export type AutomationView = "pulls" | "ci" | "listeners";
+export type AutomationView = "issues" | "pulls" | "ci" | "listeners";
 
 /** The entries the Thread has, in header order, with their names. */
 export const automationViews = (data: ThreadAutomationsData | undefined) =>
   data === undefined
     ? []
     : [
+        ...(data.issues.length === 0
+          ? []
+          : [{ view: "issues" as const, label: "Issues" }]),
         ...(data.pullRequests.length === 0
           ? []
           : [{ view: "pulls" as const, label: "Pull requests" }]),
