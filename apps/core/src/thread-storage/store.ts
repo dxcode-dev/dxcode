@@ -98,6 +98,45 @@ export const purgeUnfinishedUploads = async (
 };
 
 /**
+ * Keep bytes Core holds as a file in the Thread's storage for as long as
+ * the Thread lasts, such as work dx copied out of a broken Orb.
+ */
+export const putThreadStorageFile = async (
+  bindings: Pick<Bindings, "DB" | "DX_STORAGE">,
+  input: {
+    readonly threadId: string;
+    readonly name: string;
+    readonly mimeType: string;
+    readonly bytes: Uint8Array;
+  },
+) => {
+  if (bindings.DB === undefined || bindings.DX_STORAGE === undefined)
+    throw new Error("Thread storage is not configured.");
+  const id = newThreadStorageFileId();
+  const key = threadStorageObjectKey(input.threadId, id);
+  await bindings.DX_STORAGE.put(key, input.bytes, {
+    httpMetadata: { contentType: input.mimeType },
+  });
+  await bindings.DB.prepare(
+    `INSERT INTO thread_storage_files
+       (id, thread_id, object_key, upload_id, name, mime_type, size,
+        state, created_at, expires_at)
+     VALUES (?, ?, ?, NULL, ?, ?, ?, 'ready', ?, NULL)`,
+  )
+    .bind(
+      id,
+      input.threadId,
+      key,
+      input.name,
+      input.mimeType,
+      input.bytes.byteLength,
+      Date.now(),
+    )
+    .run();
+  return id;
+};
+
+/**
  * Delete one file Core read from D1: its bytes first, so a retry still
  * finds the row. The row must still belong to the same Thread.
  */

@@ -9,10 +9,13 @@ import {
   type OrbBillingPolicy,
   type OrbStartRequest,
   type OrbUsage,
+  type OrbUsageOutcome,
+  withOrbBilling,
 } from "../../src/execution/orb-billing.js";
 import type { Bindings } from "../../src/http/types.js";
 import {
   composeExecutionWorkspaces,
+  type ExecutionContext,
   type ExecutionWorkspaceHandle,
 } from "../../src/plugins/execution/provider.js";
 import { TEST_RUNNER_PROFILE_CATALOG } from "../../src/testing/bindings.js";
@@ -94,6 +97,7 @@ const recordingPolicy = (
     },
     recordUsage: async (reported) => {
       usage.push(reported);
+      return "continue";
     },
   };
   return { policy, requests, usage };
@@ -181,5 +185,48 @@ describe("Orb billing policy, in workerd with real D1", () => {
     const [reported] = metering.usage;
     expect(reported?.from).toBeGreaterThanOrEqual(before);
     expect((reported?.until ?? 0) - (reported?.from ?? 0)).toBe(600_000);
+  });
+
+  it("a renewal the policy stops keeps the Orb's deadline where it is", async () => {
+    let outcome: OrbUsageOutcome = "continue";
+    const usage: OrbUsage[] = [];
+    const setIdleDeadline = vi.fn(async (_durationMs: number) => undefined);
+    const raw = {
+      inactivityMs: 600_000,
+      setIdleDeadline,
+    } as unknown as ExecutionWorkspaceHandle;
+    const provider = withOrbBilling(
+      {
+        workspace: {
+          create: vi.fn(async () => raw),
+          connect: vi.fn(async () => raw),
+          release: vi.fn(async () => undefined),
+        },
+      },
+      {
+        admitOrbStart: async () => ({ outcome: "meter" }),
+        recordUsage: async (reported) => {
+          usage.push(reported);
+          return outcome;
+        },
+      },
+    );
+    const context = {
+      account: { scope: "deployment" },
+      credentials: undefined,
+      profile: { id: "a1.medium", adapter: "e2b" },
+    } as unknown as ExecutionContext;
+    const handle = await provider.workspace.connect(
+      context,
+      { threadId: billedThread.id },
+      { authorize: async () => undefined },
+    );
+    await handle.setIdleDeadline(600_000);
+    expect(setIdleDeadline).toHaveBeenCalledOnce();
+    outcome = "stop";
+    await handle.setIdleDeadline(600_000);
+    expect(setIdleDeadline).toHaveBeenCalledOnce();
+    // The start and both renewals were reported.
+    expect(usage).toHaveLength(3);
   });
 });

@@ -6,6 +6,7 @@ import { AlertTriangle, ArrowLeft, Bug, UserRound } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { DxLoading } from "../../shared/brand/dx-loading.js";
+import { ReportBugSlot } from "../../shared/bug-reports/report-bug-slot.js";
 import { AppFrame } from "../../shared/layout/app-frame.js";
 import {
   isValidSettingsReturnTo,
@@ -30,6 +31,7 @@ import {
   type SettingsSectionRegistration,
   settingsPath,
 } from "./settings-registration.js";
+import { settingsSheetDrag } from "./settings-sheet-drag.js";
 
 /** Public links in the rail's footer card. */
 const railLinks = [
@@ -39,12 +41,30 @@ const railLinks = [
     Icon: GitHubMark,
   },
   { label: "@dxcode_dev", href: "https://x.com/dxcode_dev", Icon: XMark },
-  {
-    label: "Report a Bug",
-    href: "https://github.com/dxcode-dev/dxcode/issues/new",
-    Icon: Bug,
-  },
 ] as const;
+
+/**
+ * Report Bug in the rail's footer card: the Report Bug dialog with no
+ * Thread, so the report carries no Thread's details.
+ */
+function SettingsReportBug() {
+  const BugReportDialog = React.use(ReportBugSlot);
+  const [open, setOpen] = React.useState(false);
+  if (BugReportDialog === undefined) return null;
+  return (
+    <li>
+      <button type="button" onClick={() => setOpen(true)}>
+        <Bug aria-hidden="true" />
+        <span>Report Bug</span>
+      </button>
+      {open ? (
+        <React.Suspense fallback={null}>
+          <BugReportDialog onClose={() => setOpen(false)} />
+        </React.Suspense>
+      ) : null}
+    </li>
+  );
+}
 
 function GitHubMark(props: React.SVGProps<SVGSVGElement>) {
   return (
@@ -62,60 +82,42 @@ function XMark(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
-/** A finger drag down this far on the phone sheet's handle closes settings. */
-const sheetDismissDistance = 96;
-
-const sheetOf = (handle: HTMLElement) =>
-  handle.closest<HTMLElement>(".dx-app-frame");
-
 /**
- * The phone sheet's grab handle. Dragging it down moves the sheet with the
- * finger and closes settings past `sheetDismissDistance`; a tap closes too.
+ * The phone sheet's grab handle. A tap closes settings; dragging it, like
+ * dragging anywhere on the sheet's header, is `settingsSheetDrag`.
  */
 function SettingsSheetHandle({ onClose }: { readonly onClose: () => void }) {
-  const drag = React.useRef<{ pointerId: number; startY: number } | null>(null);
-  const release = (event: React.PointerEvent<HTMLButtonElement>) => {
-    const current = drag.current;
-    if (current === null || current.pointerId !== event.pointerId) return;
-    drag.current = null;
-    const sheet = sheetOf(event.currentTarget);
-    if (sheet !== null) {
-      delete sheet.dataset.sheetDrag;
-      sheet.style.transform = "";
-    }
-    return event.clientY - current.startY;
-  };
   return (
     <button
       type="button"
       className="settings-sheet-handle"
       aria-label="Close settings"
       onClick={onClose}
-      onPointerDown={(event) => {
-        if (event.pointerType === "mouse") return;
-        event.currentTarget.setPointerCapture(event.pointerId);
-        drag.current = { pointerId: event.pointerId, startY: event.clientY };
-      }}
-      onPointerMove={(event) => {
-        const current = drag.current;
-        if (current === null || current.pointerId !== event.pointerId) return;
-        const sheet = sheetOf(event.currentTarget);
-        if (sheet === null) return;
-        const offset = Math.max(0, event.clientY - current.startY);
-        sheet.dataset.sheetDrag = "";
-        sheet.style.transform = `translateY(${offset}px)`;
-      }}
-      onPointerUp={(event) => {
-        const distance = release(event);
-        if (distance !== undefined && distance > sheetDismissDistance)
-          onClose();
-      }}
-      onPointerCancel={release}
     >
       <span aria-hidden="true" />
     </button>
   );
 }
+
+/**
+ * Keeps the open section's pill in view when the menu is a sideways row: on
+ * arrival, and whenever the row's width changes as sections load in.
+ */
+const revealActiveLink = (link: HTMLElement | null) => {
+  if (link === null) return;
+  const row = link.closest<HTMLElement>(".settings-navigation-scroller");
+  const menu = link.closest<HTMLElement>(".settings-navigation");
+  if (row === null || menu === null) return;
+  const reveal = () => {
+    const box = row.getBoundingClientRect();
+    const pill = link.getBoundingClientRect();
+    if (pill.left >= box.left && pill.right <= box.right) return;
+    row.scrollLeft += pill.left + pill.width / 2 - (box.left + box.width / 2);
+  };
+  const observer = new ResizeObserver(reveal);
+  observer.observe(menu);
+  return () => observer.disconnect();
+};
 
 function SettingsTopBar({
   scope,
@@ -269,6 +271,7 @@ function SettingsNavigation(props: SettingsNavigationProps) {
         data-active={active || undefined}
         aria-label={registration.label}
         aria-current={active ? "page" : undefined}
+        ref={active ? revealActiveLink : undefined}
       >
         <Icon />
         <span>{registration.label}</span>
@@ -321,6 +324,7 @@ function SettingsNavigation(props: SettingsNavigationProps) {
               </a>
             </li>
           ))}
+          <SettingsReportBug />
         </ul>
       </nav>
     </aside>
@@ -474,7 +478,11 @@ export function SettingsPage(props: SettingsPageProps) {
 
   return (
     <AppFrame className="settings-stage" onBackdropClick={closeSettings}>
-      <main className="settings-shell" aria-label="Settings">
+      <main
+        className="settings-shell"
+        aria-label="Settings"
+        ref={settingsSheetDrag(closeSettings)}
+      >
         <SettingsTopBar
           scope={scope}
           workspace={workspace}

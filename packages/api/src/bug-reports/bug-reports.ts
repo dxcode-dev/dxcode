@@ -15,9 +15,13 @@ export const BugReportIdSchema = Schema.String.check(
 );
 export type BugReportId = typeof BugReportIdSchema.Type;
 
-/** The diagnostics a person can choose to send. */
+/**
+ * The diagnostics a person can choose to send: from a Thread, Thread and App
+ * Diagnostics, Diff, and Dictation; from Settings, App Diagnostics alone.
+ */
 export const BugReportDiagnosticKindSchema = Schema.Literals([
   "thread-and-app",
+  "app",
   "changes",
   "dictation",
 ]);
@@ -52,11 +56,7 @@ export const BugReportConnectionEventSchema = Schema.Struct({
   detail: Schema.optional(Text(512)),
 });
 
-/**
- * Thread and App Diagnostics as the web app collects them. Core adds what it
- * holds for the Thread before it files the report.
- */
-export const BugReportThreadAndAppDiagnosticsSchema = Schema.Struct({
+const appDiagnosticsFields = {
   app: Schema.Struct({
     path: Text(2_048),
     userAgent: Text(1_024),
@@ -72,6 +72,22 @@ export const BugReportThreadAndAppDiagnosticsSchema = Schema.Struct({
   connection: Schema.Array(BugReportConnectionEventSchema).check(
     Schema.isMaxLength(100),
   ),
+};
+
+/**
+ * App Diagnostics, sent from Settings: the web app's state, recent errors,
+ * failed requests, and connection events, with nothing about a Thread.
+ */
+export const BugReportAppDiagnosticsSchema =
+  Schema.Struct(appDiagnosticsFields);
+export type BugReportAppDiagnostics = typeof BugReportAppDiagnosticsSchema.Type;
+
+/**
+ * Thread and App Diagnostics as the web app collects them: App Diagnostics
+ * and the Thread's transcript. Core adds what it holds for the Thread.
+ */
+export const BugReportThreadAndAppDiagnosticsSchema = Schema.Struct({
+  ...appDiagnosticsFields,
   /** The Thread as its JSON export writes it. */
   transcript: Schema.optional(Schema.Unknown),
 });
@@ -139,37 +155,38 @@ export const CreateBugReportRequestSchema = Schema.Struct({
 export type CreateBugReportRequest = typeof CreateBugReportRequestSchema.Type;
 
 /**
- * Where a report is: `filing` while Core files it, `filed` as a new issue,
- * `commented` on an open issue it duplicates, `saved` when this deployment
- * files reports nowhere, and `failed` when filing failed.
+ * The `report` part of `POST /v1/bug-reports`, sent from Settings: a report
+ * about no Thread, whose `image` parts are the attached images.
  */
-export const BugReportStatusSchema = Schema.Literals([
-  "filing",
-  "filed",
-  "commented",
-  "saved",
-  "failed",
-]);
-export type BugReportStatus = typeof BugReportStatusSchema.Type;
+export const CreateAppBugReportRequestSchema = Schema.Struct({
+  message: CreateBugReportRequestSchema.fields.message,
+  diagnostics: Schema.Struct({
+    app: Schema.optional(BugReportAppDiagnosticsSchema),
+  }),
+});
+export type CreateAppBugReportRequest =
+  typeof CreateAppBugReportRequestSchema.Type;
 
+/**
+ * A bug report as this deployment keeps it. It is never filed anywhere:
+ * its reporter and the deployment's report readers open it in dx, and
+ * their agents read it with the bug report tools.
+ */
 export const BugReportDataSchema = Schema.Struct({
   id: BugReportIdSchema,
-  threadId: ThreadId,
+  /** Absent for a report sent from Settings. */
+  threadId: Schema.optional(ThreadId),
   message: Text(BUG_REPORT_MESSAGE_MAX_LENGTH),
   createdAt: Schema.String,
-  status: BugReportStatusSchema,
-  issue: Schema.optional(
-    Schema.Struct({
-      number: Schema.Int.check(Schema.isGreaterThan(0)),
-      url: Text(2_048),
-    }),
-  ),
   imageCount: Count,
   diagnostics: Schema.Array(BugReportDiagnosticKindSchema),
 });
 export type BugReportData = typeof BugReportDataSchema.Type;
 
-/** `POST /v1/threads/:threadId/bug-reports`: the report, now filing. */
+/**
+ * `POST /v1/threads/:threadId/bug-reports` and `POST /v1/bug-reports`: the
+ * report as Core keeps it.
+ */
 export const CreateBugReportResponseSchema =
   successResponse(BugReportDataSchema);
 

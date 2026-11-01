@@ -10,17 +10,17 @@ import {
   DialogRoot,
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
-import { firstLine, statusText } from "./bug-report-format.js";
+import { firstLine, reportSource } from "./bug-report-format.js";
 import {
   bugReportFileUrl,
   bugReportQueryOptions,
   bugReportsQueryOptions,
 } from "./bug-report-queries.js";
-import { ReportStatus } from "./bug-report-status.js";
 import "./bug-reports.css";
 
 const DIAGNOSTIC_LABELS = {
   "thread-and-app": "Thread and App Diagnostics",
+  app: "App Diagnostics",
   changes: "Diff Diagnostics",
   dictation: "Dictation Diagnostics",
 } as const;
@@ -33,7 +33,7 @@ const sentAt = (createdAt: string) =>
     minute: "2-digit",
   });
 
-/** One report, opened from its row: what was sent and where it went. */
+/** One report, opened from its row: what was sent, and from where. */
 function BugReportDialog({
   reportId,
   onClose,
@@ -65,24 +65,24 @@ function BugReportDialog({
           <>
             <DialogTitle>{firstLine(detail.data.report.message)}</DialogTitle>
             <dl className="bug-report-facts">
-              <dt>Status</dt>
-              <dd>
-                <ReportStatus report={detail.data.report} />
-              </dd>
               <dt>Sent</dt>
               <dd>
                 <time dateTime={detail.data.report.createdAt}>
                   {sentAt(detail.data.report.createdAt)}
                 </time>
               </dd>
-              <dt>Thread</dt>
+              <dt>From</dt>
               <dd>
-                <Link
-                  to="/threads/$threadId"
-                  params={{ threadId: detail.data.report.threadId }}
-                >
-                  {detail.data.report.threadId}
-                </Link>
+                {detail.data.report.threadId === undefined ? (
+                  "Settings"
+                ) : (
+                  <Link
+                    to="/threads/$threadId"
+                    params={{ threadId: detail.data.report.threadId }}
+                  >
+                    {detail.data.report.threadId}
+                  </Link>
+                )}
               </dd>
               <dt>Diagnostics</dt>
               <dd>
@@ -167,9 +167,7 @@ function ReportRow({ report }: { readonly report: BugReportData }) {
           <strong>{firstLine(report.message)}</strong>
           <small>{sentAt(report.createdAt)}</small>
         </span>
-        <span className="bug-report-status" data-status={report.status}>
-          {statusText(report)}
-        </span>
+        <span className="bug-report-status">{reportSource(report)}</span>
       </Link>
     </li>
   );
@@ -177,7 +175,7 @@ function ReportRow({ report }: { readonly report: BugReportData }) {
 
 /**
  * Your Reports: one row per bug report the person sent. A row opens its
- * report in a dialog, and `/bug-reports/<id>` (an issue's link) opens the
+ * report in a dialog, and `/bug-reports/<id>` (a report's link) opens the
  * list with that report open.
  */
 export function BugReportsPage({ reportId }: { readonly reportId?: string }) {
@@ -195,7 +193,9 @@ export function BugReportsPage({ reportId }: { readonly reportId?: string }) {
       ) : reports.data.length === 0 ? (
         <div className="empty-state bug-reports-empty">
           <strong>No bug reports yet</strong>
-          <span>Report Bug is in a Thread's More Actions menu.</span>
+          <span>
+            Report Bug is in Settings and in a Thread's More Actions menu.
+          </span>
         </div>
       ) : (
         <ul className="bug-reports-list">

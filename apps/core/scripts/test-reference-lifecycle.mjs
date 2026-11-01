@@ -1,6 +1,14 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+} from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -45,19 +53,60 @@ run([
   "--config",
   "test/lifecycle-fixture/vite.config.ts",
 ]);
-run([
-  "exec",
-  "wrangler",
-  "d1",
-  "migrations",
-  "apply",
-  "dx-lifecycle-fixture",
-  "--local",
-  "--persist-to",
-  persistencePath,
-  "--config",
-  fixtureConfig,
-]);
+// Wrangler starts a local runtime for each of the 120-odd migrations, which
+// took about 45 s per run. Apply them once per set of migrations, Wrangler
+// version, and fixture database, then start every run from a copy of that
+// state.
+const migratedStateKey = createHash("sha256");
+const migrationsPath = path.resolve("migrations");
+for (const name of (await readdir(migrationsPath)).sort())
+  migratedStateKey
+    .update(name)
+    .update("\0")
+    .update(await readFile(path.join(migrationsPath, name)))
+    .update("\0");
+migratedStateKey
+  .update(
+    JSON.stringify(
+      JSON.parse(await readFile(fixtureConfig, "utf8")).d1_databases,
+    ),
+  )
+  .update(
+    JSON.parse(
+      await readFile(
+        path.resolve("node_modules/wrangler/package.json"),
+        "utf8",
+      ),
+    ).version,
+  );
+const migratedStateCache = path.resolve(
+  "../../node_modules/.cache/dx-lifecycle-d1",
+  migratedStateKey.digest("hex"),
+);
+try {
+  await cp(migratedStateCache, persistencePath, { recursive: true });
+} catch (error) {
+  if (error?.code !== "ENOENT") throw error;
+  run([
+    "exec",
+    "wrangler",
+    "d1",
+    "migrations",
+    "apply",
+    "dx-lifecycle-fixture",
+    "--local",
+    "--persist-to",
+    persistencePath,
+    "--config",
+    fixtureConfig,
+  ]);
+  const staged = `${migratedStateCache}.${process.pid}`;
+  await mkdir(path.dirname(migratedStateCache), { recursive: true });
+  await cp(persistencePath, staged, { recursive: true });
+  await rename(staged, migratedStateCache).catch(() =>
+    rm(staged, { recursive: true, force: true }),
+  );
+}
 
 const fixtureToken = "dxu_fixture-token-0000000000000000000";
 const fixtureUserId = "00000000-0000-4000-8000-000000000001";

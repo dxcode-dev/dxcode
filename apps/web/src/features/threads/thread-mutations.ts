@@ -286,12 +286,53 @@ export const setThreadPinnedMutationOptions = (
       threadId: ThreadId;
       pinned: boolean;
     }) => setThreadPinned(threadId, pinned),
+    // The sidebar moves the row at once and puts it back if the server
+    // refuses, as it does for a snooze.
+    onMutate: async ({ threadId, pinned }) => {
+      await queryClient.cancelQueries({ queryKey: threadKeys.lists(userId) });
+      const previousLists = queryClient.getQueriesData<ThreadListData>({
+        queryKey: threadKeys.lists(userId),
+      });
+      const now = Date.now();
+      queryClient.setQueriesData<ThreadListData>(
+        { queryKey: threadKeys.lists(userId) },
+        (current) =>
+          current === undefined
+            ? current
+            : {
+                ...current,
+                pages: current.pages.map((page) =>
+                  flatMapListedThreads(page, (thread) => {
+                    if (thread.id !== threadId) return [thread];
+                    const { pinnedAt: _pinnedAt, ...unpinned } = thread;
+                    // Pinning wakes a snoozed Thread.
+                    return [
+                      pinned
+                        ? {
+                            ...withSnooze(thread, null, now),
+                            pinnedAt: DateTime.makeUnsafe(now),
+                          }
+                        : unpinned,
+                    ];
+                  }),
+                ),
+              },
+      );
+      return { previousLists };
+    },
     onSuccess: (thread: ThreadData) => {
       // Pinning wakes a snoozed Thread.
       queryClient.setQueryData<ThreadDetailData>(
         threadKeys.detail(userId, thread.id),
         (detail) => withThreadRow(detail, thread),
       );
+      return queryClient.invalidateQueries({
+        queryKey: threadKeys.lists(userId),
+      });
+    },
+    onError: (_error, _variables, rollback) => {
+      for (const [queryKey, data] of rollback?.previousLists ?? [])
+        queryClient.setQueryData(queryKey, data);
       return queryClient.invalidateQueries({
         queryKey: threadKeys.lists(userId),
       });

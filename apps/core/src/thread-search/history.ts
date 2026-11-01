@@ -26,6 +26,15 @@ export interface HistoryPart {
 
 export type SettlementOutcome = "completed" | "failed" | "aborted";
 
+/** Why a submission failed, as Flue settled it. */
+export interface SettlementFailure {
+  readonly type?: string;
+  readonly message?: string;
+  readonly details?: string;
+  /** The `FlueError`'s `meta.code`, such as `WORKSPACE_READ_ONLY`. */
+  readonly code?: string;
+}
+
 export interface HistoryPage {
   readonly messages: ReadonlyArray<HistoryMessage>;
   /**
@@ -33,6 +42,8 @@ export interface HistoryPage {
    * may still be streaming.
    */
   readonly settled: ReadonlyMap<string, SettlementOutcome>;
+  /** Why each failed or aborted submission ended, when Flue said. */
+  readonly failures: ReadonlyMap<string, SettlementFailure>;
   /**
    * For a message sent while a turn ran, the submission whose response
    * answered it; Flue settles both together.
@@ -99,6 +110,28 @@ export const indexableMessages = (page: HistoryPage): IndexableMessage[] =>
     ];
   });
 
+const text = (value: unknown) =>
+  typeof value === "string" && value !== "" ? value.slice(0, 2_000) : undefined;
+
+/** A settlement's error, kept to the fields that say why. */
+const settlementFailure = (error: unknown): SettlementFailure | undefined => {
+  if (typeof error !== "object" || error === null) return undefined;
+  const record = error as Record<string, unknown>;
+  const meta =
+    typeof record.meta === "object" && record.meta !== null
+      ? (record.meta as Record<string, unknown>)
+      : {};
+  const failure = Object.fromEntries(
+    Object.entries({
+      type: text(record.type),
+      message: text(record.message),
+      details: text(record.details),
+      code: text(meta.code),
+    }).filter(([, value]) => value !== undefined),
+  ) as SettlementFailure;
+  return Object.keys(failure).length === 0 ? undefined : failure;
+};
+
 /**
  * Reads a Thread's history as its owner through the route the web client
  * uses. `promptLimit` reads only the latest prompts and their responses;
@@ -132,13 +165,29 @@ export const readHistory = async (
     readonly outcome?: SettlementOutcome;
     /** A steered message settles with the response that answered it. */
     readonly answeredBySubmissionId?: string;
+    readonly error?: unknown;
   }>;
   const settled = new Map<string, SettlementOutcome>();
+  const failures = new Map<string, SettlementFailure>();
   const answeredBy = new Map<string, string>();
-  for (const { submissionId, outcome, answeredBySubmissionId } of settlements) {
+  for (const {
+    submissionId,
+    outcome,
+    answeredBySubmissionId,
+    error,
+  } of settlements) {
     for (const id of [submissionId, answeredBySubmissionId])
       if (id !== undefined && !settled.has(id))
         settled.set(id, outcome ?? "completed");
+    const failure = settlementFailure(error);
+    if (
+      submissionId !== undefined &&
+      outcome !== undefined &&
+      outcome !== "completed" &&
+      failure !== undefined &&
+      !failures.has(submissionId)
+    )
+      failures.set(submissionId, failure);
     if (submissionId !== undefined && answeredBySubmissionId !== undefined)
       answeredBy.set(submissionId, answeredBySubmissionId);
   }
@@ -147,6 +196,7 @@ export const readHistory = async (
     page: {
       messages: (payload.messages ?? []) as ReadonlyArray<HistoryMessage>,
       settled,
+      failures,
       answeredBy,
       hasOlder: typeof payload.olderCursor === "string",
     },

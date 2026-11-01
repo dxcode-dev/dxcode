@@ -1,6 +1,7 @@
 import type { UserId, WorkspaceSlug } from "@dx/domain";
 import { type QueryClient, queryOptions } from "@tanstack/react-query";
 import {
+  ApiError,
   acceptWorkspaceInvite,
   createWorkspaceInviteLink,
   getWorkspaceInvite,
@@ -100,3 +101,24 @@ export const workspaceInviteQueryOptions = (token: string) =>
 export const acceptInviteMutationOptions = (token: string) => ({
   mutationFn: () => acceptWorkspaceInvite(token),
 });
+
+export interface InviteLinkFieldErrors {
+  readonly title?: string;
+  readonly expiresAt?: string;
+}
+
+/** The server's per-field messages, when it rejected only the dialog's fields. */
+export const inviteLinkFieldErrors = (
+  error: unknown,
+): InviteLinkFieldErrors | undefined => {
+  const errors = error instanceof ApiError ? error.fieldErrors : undefined;
+  if (
+    errors === undefined ||
+    errors.length === 0 ||
+    !errors.every(({ field }) => field === "title" || field === "expiresAt")
+  )
+    return undefined;
+  return Object.fromEntries(
+    errors.map(({ field, message }) => [field, message]),
+  );
+};

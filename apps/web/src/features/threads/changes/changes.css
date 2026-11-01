@@ -386,12 +386,6 @@
   color: var(--muted-foreground);
 }
 
-.changes-copy-status {
-  padding: 4px 14px;
-  color: var(--muted-foreground);
-  font-size: 11px;
-}
-
 /* Offscreen diffs skip style and layout, so expanding one file does not lay
    out every diff already open. The browser keeps each diff's last size. */
 .changes-diff-region {
@@ -605,18 +599,25 @@
   animation: spin 1s linear infinite;
 }
 
-/* The phone view row's range chooser, a 36px touch target. */
+/*
+ * The Changes tab's range chooser in the phone view row: a 44px touch target
+ * centered on the 36px tab, after a divider from the tab's label.
+ */
 .changes-range-trigger {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  flex: none;
+  width: 44px;
+  height: 44px;
   padding: 0;
   color: var(--muted-foreground);
   border: 0;
   border-radius: 4px;
-  background: transparent;
+  background:
+    linear-gradient(var(--divider), var(--divider)) left center / 1px 16px
+    no-repeat;
+  -webkit-tap-highlight-color: transparent;
 }
 .changes-range-trigger > svg {
   width: 16px;

@@ -16,7 +16,19 @@ const route = vi.hoisted(() => ({ section: "orb" }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
-  Link: ({ children }: { children: ReactNode }) => <a href="/">{children}</a>,
+  Link: ({
+    children,
+    to = "/",
+    params = {},
+  }: {
+    readonly children: ReactNode;
+    readonly to?: string;
+    readonly params?: Record<string, string>;
+  }) => (
+    <a href={to.replace(/\$(\w+)/g, (_, name: string) => params[name] ?? "")}>
+      {children}
+    </a>
+  ),
   useBlocker: () => ({ status: "idle" }),
   useParams: () => ({ projectId: "project-1", section: route.section }),
   useLocation: ({
@@ -275,7 +287,44 @@ describe("project settings workspace state", () => {
     await React.act(() => mounted.root.unmount());
   });
 
-  it("retries GitHub grants and active Bitbucket connection and repositories", async () => {
+  it("offers to connect GitHub or Bitbucket, not Retry, when no connection reaches a repository", async () => {
+    const fetch = vi.fn(() => new Promise(() => undefined));
+    vi.stubGlobal("fetch", fetch);
+    const mounted = await renderSettings(
+      "general",
+      project(1, {
+        repository: {
+          provider: "github",
+          fullName: "octocat/Hello-World",
+          webUrl: "https://github.com/octocat/Hello-World",
+        },
+      } as Partial<ProjectData>),
+      {},
+      (queryClient) => {
+        queryClient.setQueryData(sourceGrantKeys.personal(userId), []);
+        queryClient.setQueryData(bitbucketKeys.connection(userId), {
+          configured: true,
+          connection: null,
+        });
+      },
+    );
+
+    const buttons = [...mounted.container.querySelectorAll("button")].map(
+      (button) => button.textContent,
+    );
+    expect(buttons).not.toContain("Retry");
+    expect(mounted.container.textContent).toContain(
+      "Connect GitHub or Bitbucket to choose a repository.",
+    );
+    const connect = [...mounted.container.querySelectorAll("a")].find(
+      (link) => link.textContent === "Connect",
+    );
+    expect(connect?.getAttribute("href")).toBe("/settings/integrations");
+    expect(fetch).not.toHaveBeenCalled();
+    await React.act(() => mounted.root.unmount());
+  });
+
+  it("retries GitHub grants and active Bitbucket connection and repositories after loading fails", async () => {
     const fetch = vi
       .fn()
       .mockResolvedValue(new Response(undefined, { status: 503 }));
@@ -285,7 +334,6 @@ describe("project settings workspace state", () => {
       project(),
       {},
       (queryClient) => {
-        queryClient.setQueryData(sourceGrantKeys.personal(userId), []);
         queryClient.setQueryData(bitbucketKeys.connection(userId), {
           configured: true,
           connection: {
@@ -300,11 +348,28 @@ describe("project settings workspace state", () => {
         );
       },
     );
+    await React.act(() =>
+      vi.waitFor(() =>
+        expect(
+          mounted.queryClient.getQueryState(sourceGrantKeys.personal(userId))
+            ?.status,
+        ).toBe("error"),
+      ),
+    );
+    expect(mounted.container.textContent).toContain(
+      "Your repositories could not be loaded.",
+    );
+    expect(
+      [...mounted.container.querySelectorAll("a")].some(
+        (link) => link.textContent === "Connect",
+      ),
+    ).toBe(false);
     fetch.mockClear();
 
     const retry = [...mounted.container.querySelectorAll("button")].find(
       (button) => button.textContent === "Retry",
     );
+    expect(retry).toBeDefined();
     await React.act(() => retry?.click());
 
     const paths = fetch.mock.calls.map(([path]) => String(path));
@@ -482,6 +547,185 @@ describe("project settings workspace state", () => {
     ]);
     expect(radios[0]?.checked).toBe(true);
     expect(radios[0]?.disabled).toBe(true);
+    await React.act(() => root.unmount());
+  });
+
+  it("shows a connection's list price and who bills it, and only the deployment's own label on its account", async () => {
+    const { container, root } = await renderSettings(
+      "orb",
+      project(),
+      {},
+      (queryClient) => {
+        seedTwoProviderCatalog(queryClient);
+        queryClient.setQueryData(
+          projectDefaultsKeys.detail(userId, personalTarget),
+          (data: ProjectDefaultsData) => ({
+            ...data,
+            catalog: {
+              ...data.catalog,
+              profiles: data.catalog.profiles.map((size) =>
+                size.id === "large"
+                  ? { ...size, costLabel: "Included in your plan" }
+                  : size,
+              ),
+            },
+          }),
+        );
+        queryClient.setQueryData(
+          orbProviderKeys.list(userId, { scope: "personal" }, projectId),
+          (data: OrbProviderListData) => ({
+            ...data,
+            resolved: [
+              { ...data.resolved[0], providerId: "e2b", scope: "personal" },
+              {
+                ...data.resolved[0],
+                providerId: "cloudflare",
+                scope: "deployment",
+              },
+            ],
+          }),
+        );
+      },
+    );
+    const card = (id: string) =>
+      [...container.querySelectorAll("label.runner-profile-card")].find(
+        (label) => label.querySelector("strong")?.textContent === id,
+      );
+    const cost = (id: string) =>
+      card(id)?.querySelector(".orb-size-card-cost")?.textContent;
+    const billing = (id: string) =>
+      card(id)?.querySelector(".orb-size-card-billing")?.textContent;
+
+    // E2B bills 2 vCPU and 4 GiB per second: 2 x $0.0504 + 4 x $0.0162.
+    expect(cost("Standard")).toBe("$0.17/hour");
+    expect(billing("Standard")).toBe(
+      "Billed by E2B to your account, paused when inactive",
+    );
+    // On the person's own E2B account, the deployment's label does not apply.
+    expect(cost("Large")).toBe("$0.17/hour");
+    // The deployment's account shows no list price and no billing note.
+    expect(cost("standard-1")).toBeUndefined();
+    expect(billing("standard-1")).toBeUndefined();
+    await React.act(() => root.unmount());
+  });
+
+  it("prices a Boat connection's sizes from Boat's per-size list", async () => {
+    const boatProfile = (id: string, label: string) => ({
+      ...profile(id, label),
+      adapter: "boat" as const,
+    });
+    const { container, root } = await renderSettings(
+      "orb",
+      project(1, {
+        configuration: {
+          runnerProfileId: "bt.small" as RunnerProfileId,
+        } as ProjectData["configuration"],
+      }),
+      {},
+      (queryClient) => {
+        queryClient.setQueryData(
+          projectDefaultsKeys.detail(userId, personalTarget),
+          {
+            ...defaults,
+            catalog: {
+              ...defaults.catalog,
+              defaultProfileId: "bt.small" as RunnerProfileId,
+              profiles: [
+                boatProfile("bt.small", "small"),
+                boatProfile("bt.large", "large"),
+                // Not one of Boat's sizes, so dx knows no price for it.
+                boatProfile("bt.custom", "custom"),
+              ],
+              providers: [
+                {
+                  adapter: "boat",
+                  displayName: "Boat",
+                  pauseResume: "filesystem",
+                },
+              ],
+            },
+          },
+        );
+        seedResolvedOrbs(queryClient, []);
+        queryClient.setQueryData(
+          orbProviderKeys.list(userId, { scope: "personal" }, projectId),
+          (data: OrbProviderListData) => ({
+            ...data,
+            resolved: [
+              {
+                providerId: "boat",
+                scope: "personal",
+                account: null,
+                status: "ready",
+                unavailableSizes: [],
+              },
+            ],
+          }),
+        );
+      },
+    );
+    const labels = [
+      ...container.querySelectorAll("label.runner-profile-card"),
+    ].map((label) => label.textContent);
+    expect(labels).toEqual([
+      "small2 CPU4GB memory20GB disk$0.018/hourBilled by Boat to your account, paused when inactive",
+      "large2 CPU4GB memory20GB disk$0.072/hourBilled by Boat to your account, paused when inactive",
+      "custom2 CPU4GB memory20GB diskBilled by Boat to your account, paused when inactive",
+    ]);
+    await React.act(() => root.unmount());
+  });
+
+  it("names the workspace's account and omits a price dx does not know", async () => {
+    const { container, root } = await renderSettings(
+      "orb",
+      project(1, {
+        configuration: {
+          runnerProfileId: "local" as RunnerProfileId,
+        } as ProjectData["configuration"],
+      }),
+      {},
+      (queryClient) => {
+        seedTwoProviderCatalog(queryClient);
+        queryClient.setQueryData(
+          projectDefaultsKeys.detail(userId, personalTarget),
+          (data: ProjectDefaultsData) => ({
+            ...data,
+            catalog: {
+              ...data.catalog,
+              profiles: [
+                ...data.catalog.profiles,
+                {
+                  ...profile("local", "local"),
+                  adapter: "local" as const,
+                },
+              ],
+            },
+          }),
+        );
+        queryClient.setQueryData(
+          orbProviderKeys.list(userId, { scope: "personal" }, projectId),
+          (data: OrbProviderListData) => ({
+            ...data,
+            resolved: [
+              {
+                ...data.resolved[0],
+                providerId: "cloudflare",
+                scope: "workspace",
+              },
+            ],
+          }),
+        );
+      },
+    );
+    const labels = [
+      ...container.querySelectorAll("label.runner-profile-card"),
+    ].map((label) => label.textContent);
+    expect(labels).toEqual([
+      "standard-10.5 CPU4GB memory8GB diskUp to $0.074/hourBilled by Cloudflare to the workspace's account, paused when inactive",
+      "standard-21 CPU4GB memory8GB diskUp to $0.11/hourBilled by Cloudflare to the workspace's account, paused when inactive",
+      // The saved local size: no known price, and no account pays for it.
+      "local2 CPU4GB memory20GB disk",
+    ]);
     await React.act(() => root.unmount());
   });
 });

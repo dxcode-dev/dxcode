@@ -7,8 +7,10 @@ import { RealtimeProvider } from "./features/threads/realtime/realtime-provider.
 import { ThreadSessionProvider } from "./features/threads/thread-session-provider.js";
 import { type AppRouter, createAppRouter } from "./router.js";
 import { useIdentity } from "./shared/auth/auth-context.js";
+import { ReportBugSlot } from "./shared/bug-reports/report-bug-slot.js";
 import { useMountEffect } from "./shared/hooks/use-mount-effect.js";
 import { Toaster } from "./shared/ui/sonner.js";
+import { useMobile } from "./shared/use-mobile.js";
 
 const ReactQueryDevtools = import.meta.env.DEV
   ? lazy(() =>
@@ -17,6 +19,13 @@ const ReactQueryDevtools = import.meta.env.DEV
       })),
     )
   : undefined;
+
+/** Report Bug with no Thread, for Settings; loaded when it first opens. */
+const AppBugReportDialog = lazy(() =>
+  import("./features/threads/bug-reports/bug-report-dialog.js").then(
+    (module) => ({ default: module.BugReportDialog }),
+  ),
+);
 
 /**
  * Lends the router to notification clicks, app launches, and dx links in the
@@ -42,6 +51,17 @@ function RecordTimeZone() {
   return null;
 }
 
+/**
+ * The app's one Toaster: bottom right on desktop, top center in the phone
+ * layout, where the bottom holds the composer.
+ */
+function AppToaster() {
+  const mobile = useMobile();
+  return (
+    <Toaster position={mobile ? "top-center" : "bottom-right"} closeButton />
+  );
+}
+
 /** Builds the signed-in product router with the application-owned query client. */
 export function AuthenticatedApplication({
   queryClient,
@@ -64,10 +84,12 @@ export function AuthenticatedApplication({
       queryClient={queryClient}
     >
       <RealtimeProvider queryClient={queryClient} userId={auth.identity.id}>
-        <RouterProvider router={router} />
+        <ReportBugSlot.Provider value={AppBugReportDialog}>
+          <RouterProvider router={router} />
+        </ReportBugSlot.Provider>
         <InAppNavigation key={auth.identity.id} router={router} />
         <RecordTimeZone key={auth.identity.id} />
-        <Toaster position="bottom-right" closeButton />
+        <AppToaster />
         {ReactQueryDevtools === undefined ? null : (
           <Suspense fallback={null}>
             <ReactQueryDevtools />

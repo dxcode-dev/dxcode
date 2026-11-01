@@ -3,12 +3,14 @@
   display: grid;
   gap: 12px;
 }
+/* Same width as the heading and cards, so search starts at the list's left
+   edge and Invite ends at its right edge. */
 .members-toolbar {
   display: flex;
   align-items: center;
   gap: 6px;
   width: 100%;
-  max-width: 823px;
+  max-width: var(--settings-content-width, 823px);
   margin: 0 auto;
 }
 .members-search {

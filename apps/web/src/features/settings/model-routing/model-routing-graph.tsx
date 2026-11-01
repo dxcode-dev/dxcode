@@ -1,5 +1,4 @@
 import type {
-  CatalogData,
   ChoicesData,
   ConnectionData,
   DictationProviderData,
@@ -95,14 +94,12 @@ function RoutingCard({
 
 export function ModelRoutingGraph({
   graph,
-  catalog,
   choices,
   connections,
   dictation,
   onConnectionClick,
 }: {
   readonly graph: GraphData;
-  readonly catalog?: CatalogData;
   readonly choices?: ChoicesData;
   readonly connections?: ReadonlyArray<ConnectionData>;
   readonly dictation?: DictationProviderData;
@@ -110,7 +107,6 @@ export function ModelRoutingGraph({
 }) {
   const { groups, destinations } = routingPresentation({
     graph,
-    catalog,
     choices,
     connections,
     dictation,

@@ -5,6 +5,8 @@
  *   2. A checked option sends nothing, or an unchecked one sends its data.
  *   3. The dictation's audio leaves the device without the option checked.
  *   4. Diff Diagnostics miss the open pane's view or its loaded diffs.
+ *   5. Opened from Settings, it offers or sends a Thread's diagnostics, or
+ *      posts to a Thread.
  */
 import type { ThreadDetailData } from "@dx/api";
 import { defaultThreadModelSelection } from "@dx/domain";
@@ -73,10 +75,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const render = (props: {
-  readonly changesOpen: boolean;
-  readonly dictation?: DictationRecord;
-}) => {
+const render = (
+  props:
+    | { readonly changesOpen: boolean; readonly dictation?: DictationRecord }
+    | { readonly fromSettings: true },
+) => {
   const queryClient = new QueryClient();
   queryClient.setQueryData(changesKeys.range(thread.id, { kind: "all" }), {
     kind: "changes",
@@ -88,14 +91,18 @@ const render = (props: {
   act(() =>
     root?.render(
       <QueryClientProvider client={queryClient}>
-        <BugReportDialog
-          thread={thread}
-          transcript={() =>
-            deriveTranscriptViewModel({ messages: [], settlements: [] })
-          }
-          onClose={() => undefined}
-          {...props}
-        />
+        {"fromSettings" in props ? (
+          <BugReportDialog onClose={() => undefined} />
+        ) : (
+          <BugReportDialog
+            thread={thread}
+            transcript={() =>
+              deriveTranscriptViewModel({ messages: [], settlements: [] })
+            }
+            onClose={() => undefined}
+            {...props}
+          />
+        )}
       </QueryClientProvider>,
     ),
   );
@@ -111,8 +118,10 @@ const option = (name: RegExp) =>
 /** Sends the report and answers what the dialog posted. */
 const sendReport = async () => {
   const posted: FormData[] = [];
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+  const urls: string[] = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     posted.push(init?.body as FormData);
+    urls.push(String(input instanceof Request ? input.url : input));
     return Response.json(
       {
         status: "success",
@@ -121,7 +130,6 @@ const sendReport = async () => {
           threadId: thread.id,
           message: "Bug",
           createdAt: "2026-10-31T00:00:00.000Z",
-          status: "saved",
           imageCount: 0,
           diagnostics: [],
         },
@@ -150,6 +158,7 @@ const sendReport = async () => {
       diagnostics: Record<string, unknown>;
     },
     audio: form.get("audio"),
+    url: new URL(urls[0] ?? "", location.href).pathname,
   };
 };
 
@@ -164,7 +173,8 @@ describe("Report Bug's Diff and Dictation Diagnostics", () => {
     expect(document.body.textContent).toContain(
       "Dictate in this Thread to include it.",
     );
-    const { report, audio } = await sendReport();
+    const { report, audio, url } = await sendReport();
+    expect(url).toBe(`/v1/threads/${thread.id}/bug-reports`);
     expect(Object.keys(report.diagnostics)).toEqual(["threadAndApp"]);
     expect(audio).toBeNull();
   });
@@ -222,5 +232,39 @@ describe("Report Bug's Diff and Dictation Diagnostics", () => {
       ],
       truncated: false,
     });
+  });
+});
+
+describe("Report Bug from Settings", () => {
+  it("offers App Diagnostics alone and sends no Thread's details", async () => {
+    render({ fromSettings: true });
+    const labels = [...document.querySelectorAll(".bug-report-option")].map(
+      (label) => label.querySelector(".bug-report-option-title")?.textContent,
+    );
+    expect(labels).toEqual(["App Diagnostics"]);
+    expect(option(/App Diagnostics/).checked).toBe(true);
+    expect(document.body.textContent).toContain(
+      `Reports stay in ${location.host} and are never posted publicly.`,
+    );
+    const { report, audio, url } = await sendReport();
+    expect(url).toBe("/v1/bug-reports");
+    expect(Object.keys(report.diagnostics)).toEqual(["app"]);
+    expect(Object.keys(report.diagnostics.app as object).sort()).toEqual([
+      "app",
+      "connection",
+      "failedRequests",
+      "logs",
+    ]);
+    expect(audio).toBeNull();
+    await vi.waitFor(() =>
+      expect(document.body.textContent).toContain("Bug Report Sent"),
+    );
+  });
+
+  it("sends the message alone with App Diagnostics unchecked", async () => {
+    render({ fromSettings: true });
+    act(() => option(/App Diagnostics/).click());
+    const { report } = await sendReport();
+    expect(report.diagnostics).toEqual({});
   });
 });

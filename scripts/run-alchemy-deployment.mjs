@@ -1,13 +1,14 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import {
   assertDockerReady,
   orbDockerEnvironment,
@@ -454,17 +455,33 @@ if (operation === "deploy") {
     dxdBinary = resolve(releaseDirectory, release.asset);
     writeFileSync(dxdBinary, bytes, { mode: 0o700 });
   } else {
-    // The same build path as the published release asset: a static musl
-    // binary linked through zig (scripts/build-dxd.mjs), from any host.
-    const targetDirectory = resolve(
-      workspaceRoot,
-      `.dx/alchemy/${stage}/dxd-target`,
-    );
-    rmSync(targetDirectory, { recursive: true, force: true });
-    dxdBinary = buildTarget(GUEST_TARGET, {
-      targetDirectory,
-      environment: deploymentBuildEnvironment,
-    }).binary;
+    // DX_DXD_BUILD_CACHE: a directory the workflow restores and saves under
+    // a key over every dxd build input (preview.yml, staging.yml). A branch
+    // preview reuses the binary built there for the same sources; every
+    // deployment that builds one stores it there.
+    const cacheDirectory = process.env.DX_DXD_BUILD_CACHE?.trim();
+    const cachedBinary =
+      cacheDirectory && resolve(workspaceRoot, cacheDirectory, "dxd");
+    if (target === "branch" && cachedBinary && existsSync(cachedBinary)) {
+      dxdBinary = cachedBinary;
+      console.log("dxd: reusing the build cached for these sources.");
+    } else {
+      // The same build path as the published release asset: a static musl
+      // binary linked through zig (scripts/build-dxd.mjs), from any host.
+      const targetDirectory = resolve(
+        workspaceRoot,
+        `.dx/alchemy/${stage}/dxd-target`,
+      );
+      rmSync(targetDirectory, { recursive: true, force: true });
+      dxdBinary = buildTarget(GUEST_TARGET, {
+        targetDirectory,
+        environment: deploymentBuildEnvironment,
+      }).binary;
+      if (cachedBinary) {
+        mkdirSync(dirname(cachedBinary), { recursive: true });
+        copyFileSync(dxdBinary, cachedBinary);
+      }
+    }
   }
   dxdChecksum = createHash("sha256")
     .update(readFileSync(dxdBinary))

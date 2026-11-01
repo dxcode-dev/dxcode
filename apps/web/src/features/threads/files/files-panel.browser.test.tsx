@@ -138,9 +138,9 @@ vi.mock("./file-viewer.js", async () => {
   };
 });
 
+import { PaneTreeHarness } from "../../../testing/pane-tree-harness.js";
 import type { ChangesTransport } from "../changes/changes-api.js";
 import { changesKeys } from "../changes/changes-queries.js";
-import { PaneTreeHarness } from "../../../testing/pane-tree-harness.js";
 import type { ThreadFilesApi } from "./files-api.js";
 import { ThreadFilePane, ThreadFilesPanel } from "./files-panel.js";
 

@@ -45,6 +45,13 @@ const generatedEnvironmentNames = [
   "CLOUDFLARE_VITE_WRANGLER_CONFIG_PATH",
 ];
 const packageIdentityGeneratorPath = "scripts/production-package.mjs";
+/** Where a package built without the docs site sends `/docs` and `/docs/*`. */
+export const HOSTED_DOCS_ORIGIN = "https://dxcode.dev";
+const docsRedirectsPath = "assets/_redirects";
+// Workers static assets apply these before any asset or the Worker.
+const docsRedirects = `/docs ${HOSTED_DOCS_ORIGIN}/docs 302
+/docs/* ${HOSTED_DOCS_ORIGIN}/docs/:splat 302
+`;
 const forbiddenPath =
   /(^|\/)(?:__fixtures__?|fixtures?|recordings?|certification|testing|tests?|private)(?:\/|$)|(?:^|\/)[^/]+\.(?:test|spec)\.[^/]+$|(?:^|\/)\.dev\.vars(?:\.|$)|\.har$|\.map$/i;
 const forbiddenSignatures = [
@@ -285,17 +292,18 @@ export const deriveGeneratorPackageProvenance = ({
   webPackage,
   webVitePackage,
 }) => {
-  const astroPin = docsPackage.dependencies?.astro;
+  // A tree without the docs site (the public release) packages none.
+  const astroPin = docsPackage?.dependencies?.astro;
   const cloudflarePin =
     corePackage.devDependencies?.["@cloudflare/vite-plugin"];
   const coreVitePin = corePackage.devDependencies?.vite;
   const webVitePin = webPackage.devDependencies?.vite;
   if (
-    astroPackage.name !== "astro" ||
+    (docsPackage !== undefined && astroPackage?.name !== "astro") ||
     cloudflarePackage.name !== "@cloudflare/vite-plugin" ||
     coreVitePackage.name !== "vite" ||
     webVitePackage.name !== "vite" ||
-    astroPin !== astroPackage.version ||
+    (docsPackage !== undefined && astroPin !== astroPackage?.version) ||
     cloudflarePin !== cloudflarePackage.version ||
     coreVitePin !== coreVitePackage.version ||
     webVitePin !== webVitePackage.version ||
@@ -305,7 +313,11 @@ export const deriveGeneratorPackageProvenance = ({
       "Resolved production generators drifted from pinned package metadata.",
     );
   return {
-    docs: { package: astroPackage.name, version: astroPackage.version },
+    ...(docsPackage === undefined
+      ? {}
+      : {
+          docs: { package: astroPackage.name, version: astroPackage.version },
+        }),
     worker: {
       package: cloudflarePackage.name,
       version: cloudflarePackage.version,
@@ -314,14 +326,24 @@ export const deriveGeneratorPackageProvenance = ({
   };
 };
 
+/** Whether this tree has the docs site; the public release does not. */
+export const hasDocsSite = () =>
+  existsSync(resolve(workspaceRoot, "apps/docs/package.json"));
+
 const loadGeneratorPackageProvenance = () =>
   deriveGeneratorPackageProvenance({
     corePackage: readJson(resolve(workspaceRoot, "apps/core/package.json")),
-    docsPackage: readJson(resolve(workspaceRoot, "apps/docs/package.json")),
     webPackage: readJson(resolve(workspaceRoot, "apps/web/package.json")),
-    astroPackage: readJson(
-      resolve(workspaceRoot, "apps/docs/node_modules/astro/package.json"),
-    ),
+    ...(hasDocsSite()
+      ? {
+          docsPackage: readJson(
+            resolve(workspaceRoot, "apps/docs/package.json"),
+          ),
+          astroPackage: readJson(
+            resolve(workspaceRoot, "apps/docs/node_modules/astro/package.json"),
+          ),
+        }
+      : {}),
     cloudflarePackage: readJson(
       resolve(
         workspaceRoot,
@@ -576,7 +598,9 @@ export const createProductionPackage = async ({
     nonGraphFiles: webStaticFiles,
   });
   const webOutputs = [...new Set([...web.outputs, ...webStaticFiles])].sort();
-  const docs = readDocsOutputs(docsBuildRoot);
+  // Without a docs build the package redirects docs paths instead.
+  const docs =
+    docsBuildRoot === undefined ? undefined : readDocsOutputs(docsBuildRoot);
   const migrations = await loadMigrationManifest();
   const bindings = loadProductionBindingContract().bindings;
   const generators = loadGeneratorPackageProvenance();
@@ -589,7 +613,16 @@ export const createProductionPackage = async ({
   mkdirSync(resolve(outputRoot, "assets"), { recursive: true });
   copyOutputs(coreBuildRoot, resolve(outputRoot, "worker"), worker.outputs);
   copyOutputs(webBuildRoot, resolve(outputRoot, "assets"), webOutputs);
-  copyOutputs(docsBuildRoot, resolve(outputRoot, "assets/docs"), docs.outputs);
+  if (docs === undefined)
+    writeFileSync(resolve(outputRoot, docsRedirectsPath), docsRedirects, {
+      mode: 0o644,
+    });
+  else
+    copyOutputs(
+      docsBuildRoot,
+      resolve(outputRoot, "assets/docs"),
+      docs.outputs,
+    );
   const releaseMetadata = dxdReleaseMetadata();
   const binaryMetadata = lstatSync(dxdBinary);
   if (
@@ -654,7 +687,11 @@ export const createProductionPackage = async ({
       generatedNames: generatedEnvironmentNames,
     },
     entrypoints,
-    graph: { docs: docs.outputs, worker: worker.graph, web: web.graph },
+    graph: {
+      docs: docs?.outputs ?? [],
+      worker: worker.graph,
+      web: web.graph,
+    },
     files,
     migrations: {
       manifestVersion: migrations.version,
@@ -678,11 +715,13 @@ export const createProductionPackage = async ({
         generator: generators.worker,
         importManifestSha256: worker.manifestSha256,
       },
-      {
-        path: "assets/docs/",
-        generator: generators.docs,
-        importManifestSha256: docs.manifestSha256,
-      },
+      docs === undefined
+        ? { path: docsRedirectsPath, generator: packageIdentityGenerator() }
+        : {
+            path: "assets/docs/",
+            generator: generators.docs,
+            importManifestSha256: docs.manifestSha256,
+          },
       {
         path: "assets/",
         generator: generators.web,
@@ -719,9 +758,14 @@ export const validateProductionPackage = async (root) => {
   const bindingContract = loadProductionBindingContract();
   const generators = loadGeneratorPackageProvenance();
   const releaseMetadata = dxdReleaseMetadata();
+  const servesDocs = manifest.generatedCode?.[1]?.path === "assets/docs/";
+  if (servesDocs && generators.docs === undefined)
+    throw new Error("Production package serves docs this tree cannot build.");
   const expectedGeneratedCode = [
     { path: "worker/", generator: generators.worker },
-    { path: "assets/docs/", generator: generators.docs },
+    servesDocs
+      ? { path: "assets/docs/", generator: generators.docs }
+      : { path: docsRedirectsPath, generator: packageIdentityGenerator() },
     { path: "assets/", generator: generators.web },
     {
       path: "assets/deployment-bootstrap.json",
@@ -754,8 +798,9 @@ export const validateProductionPackage = async (root) => {
         path !== expectedGeneratedCode[index].path ||
         JSON.stringify(generator) !==
           JSON.stringify(expectedGeneratedCode[index].generator) ||
-        (index < 3 && !/^[a-f0-9]{64}$/.test(importManifestSha256 ?? "")) ||
-        (index === 3 && importManifestSha256 !== undefined),
+        (expectedGeneratedCode[index].path.endsWith("/")
+          ? !/^[a-f0-9]{64}$/.test(importManifestSha256 ?? "")
+          : importManifestSha256 !== undefined),
     ) ||
     manifest.sourceMaps?.policy !== "forbidden" ||
     manifest.sourceMaps.files?.length !== 0 ||
@@ -879,6 +924,7 @@ export const validateProductionPackage = async (root) => {
     ),
     ...validateGraph(manifest.graph?.web, "index.html", "assets"),
     ...(manifest.graph?.docs ?? []).map((path) => `assets/docs/${path}`),
+    ...(servesDocs ? [] : [docsRedirectsPath]),
     "assets/apple-touch-icon.png",
     "assets/deployment-bootstrap.json",
     "assets/favicon.svg",
@@ -899,18 +945,22 @@ export const validateProductionPackage = async (root) => {
       ? undefined
       : { path, size: file.size, sha256: file.sha256 };
   });
+  const redirectsFile = files.find(({ path }) => path === docsRedirectsPath);
   if (
     !Array.isArray(manifest.graph?.docs) ||
-    manifest.graph.docs.length === 0 ||
+    docsFiles.some((file) => file === undefined) ||
+    (servesDocs
+      ? manifest.graph.docs.length === 0 ||
+        canonicalArtifactHash(docsFiles) !==
+          manifest.generatedCode[1].importManifestSha256
+      : manifest.graph.docs.length !== 0 ||
+        redirectsFile?.sha256 !== sha256(docsRedirects)) ||
     manifest.graph.docs.some(
       (path) =>
         !isPackagePath(path) ||
         forbiddenPath.test(path) ||
         path.endsWith(".map"),
     ) ||
-    docsFiles.some((file) => file === undefined) ||
-    canonicalArtifactHash(docsFiles) !==
-      manifest.generatedCode[1].importManifestSha256 ||
     files.some(({ path }) => !graphFiles.has(path)) ||
     [...graphFiles].some((path) => !files.some((file) => file.path === path))
   )

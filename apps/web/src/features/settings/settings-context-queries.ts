@@ -1,6 +1,6 @@
 import type { UserId, WorkspaceSlug } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
-import { getSettingsContext } from "../../shared/api/client.js";
+import { ApiError, getSettingsContext } from "../../shared/api/client.js";
 
 export type SettingsContextScope =
   | { readonly scope: "personal" }
@@ -31,3 +31,11 @@ export const settingsContextQueryOptions = (
     gcTime: 5 * 60_000,
     refetchOnWindowFocus: true,
   });
+
+/**
+ * The server answered that the user cannot open this workspace: it does not
+ * exist, was renamed away, or the user is not a member. It answers all three
+ * alike, so it does not reveal which workspaces exist.
+ */
+export const isMissingWorkspaceError = (error: unknown) =>
+  error instanceof ApiError && (error.status === 403 || error.status === 404);

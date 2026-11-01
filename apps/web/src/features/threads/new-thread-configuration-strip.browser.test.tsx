@@ -83,7 +83,9 @@ const choices = {
       vision: false,
     },
   ],
-} as unknown as Parameters<typeof NewThreadConfigurationStrip>[0]["choices"];
+} as unknown as NonNullable<
+  Parameters<typeof NewThreadConfigurationStrip>[0]["choices"]
+>;
 
 const runnerProfiles = [
   {
@@ -305,8 +307,8 @@ describe("new thread configuration strip accessibility", () => {
       return (
         <NewThreadConfigurationStrip
           choices={{
-            ...choices!,
-            modes: choices!.modes.map((mode) => ({
+            ...choices,
+            modes: choices.modes.map((mode) => ({
               ...mode,
               servingConnectionName: "Different mode provider",
             })),

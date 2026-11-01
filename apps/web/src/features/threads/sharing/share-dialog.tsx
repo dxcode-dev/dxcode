@@ -11,6 +11,7 @@ import {
   UsersRound,
 } from "lucide-react";
 import * as React from "react";
+import { toast } from "sonner";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { absoluteThreadUrl } from "../../../shared/thread-url.js";
 import { Button } from "../../../shared/ui/button.js";
@@ -224,7 +225,6 @@ export function ShareDialog({
   const mutation = useUpdateThreadSharing(identity.id, thread.id);
   const [confirming, setConfirming] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
-  const [notice, setNotice] = React.useState<string>();
   const url = absoluteThreadUrl(thread.id, window.location.href);
   const current: Access = thread.sharing?.workspaceAccess ?? "none";
 
@@ -242,8 +242,10 @@ export function ShareDialog({
       {
         onSuccess: () => {
           setConfirming(false);
-          setNotice("Sharing updated");
-          window.setTimeout(() => setNotice(undefined), 2_500);
+          toast.success("Sharing updated", {
+            id: "thread-sharing",
+            duration: 2_500,
+          });
         },
       },
     );
@@ -387,12 +389,6 @@ export function ShareDialog({
         onCancel={() => setConfirming(false)}
         onConfirm={(skip) => apply("contribute", skip ? true : undefined)}
       />
-      {notice === undefined ? null : (
-        <div className="thread-archive-toast" role="status" aria-live="polite">
-          <Check aria-hidden="true" />
-          <strong>{notice}</strong>
-        </div>
-      )}
     </>
   );
 }

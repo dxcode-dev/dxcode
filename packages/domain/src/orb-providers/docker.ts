@@ -88,6 +88,17 @@ export const dockerOrbProvider = defineOrbProvider({
   // Each sandbox is a microVM with its own kernel.
   isolation: "sandbox",
   requiredCapabilities: ORB_RUNNER_CAPABILITIES,
+  // Cloud Sandboxes compute, metered per second.
+  pricing: {
+    usdPerSizeHour: {
+      "dk.small": 0.14,
+      "dk.medium": 0.28,
+      "dk.large": 0.56,
+      "dk.xl": 1.12,
+    },
+    source: "https://www.docker.com/products/docker-sandboxes/",
+    checkedOn: "2026-10-31",
+  },
   sizes: DOCKER_ORB_SIZES.map((size) => ({
     id: size.id,
     label: size.label,

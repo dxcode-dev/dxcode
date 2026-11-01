@@ -2,7 +2,15 @@ import { env, evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { createModels, isContextOverflow } from "@earendil-works/pi-ai";
 import { Effect } from "effect";
 import { HttpResponse, http } from "msw";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  assert,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { settingsPersistenceLogger } from "../../src/logging.js";
 import { loadConfigEncryptionKeyring } from "../../src/settings/config-encryption.js";
 import { createDxModelRoutingProvider } from "../../src/settings/model-byok/flue-provider.js";
@@ -472,7 +480,10 @@ describe("ByokCredentialCoordinatorObject", () => {
   const COPILOT_ORIGIN = "https://api.githubcopilot.com";
 
   /** Runs one `/proxy` call on the seeded route turned into a Copilot pin. */
-  const callCopilotProxy = async (rows: ReadonlyArray<unknown>) => {
+  const callCopilotProxy = async (
+    rows: ReadonlyArray<unknown>,
+    body?: unknown,
+  ) => {
     if (COPILOT_MODEL === undefined) throw new Error("No Copilot model");
     const find = vi.spyOn(
       PersonalModelSubscriptionRepositoryD1.prototype,
@@ -513,7 +524,13 @@ describe("ByokCredentialCoordinatorObject", () => {
           await coordinator.fetch(
             new Request(
               "https://coordinator/proxy",
-              proxyInit(proxyEnvelope()),
+              proxyInit(
+                body === undefined
+                  ? proxyEnvelope()
+                  : proxyEnvelope({
+                      request: { ...proxyEnvelope().request, body },
+                    }),
+              ),
             ),
           ),
         );
@@ -567,6 +584,134 @@ describe("ByokCredentialCoordinatorObject", () => {
         model: COPILOT_MODEL.id,
       }),
     );
+  });
+
+  /** pi's own Anthropic request body for a conversation, as dx sends it. */
+  const anthropicPayload = async (messages: ReadonlyArray<unknown>) => {
+    const { streamSimple } = await import(
+      "@earendil-works/pi-ai/api/anthropic-messages"
+    );
+    let payload: unknown;
+    await streamSimple(
+      {
+        id: "claude-opus-5-5",
+        name: "Claude Opus 5.5",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        baseUrl: "https://payload.test",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 1_000,
+      },
+      { messages: messages as never },
+      {
+        apiKey: "dx-placeholder",
+        onPayload: (params: unknown) => {
+          payload = params;
+        },
+        fetch: async () => new Response("{}", { status: 400 }),
+      } as never,
+    ).result();
+    if (payload === undefined) throw new Error("pi built no request");
+    return payload;
+  };
+
+  it("tells Copilot a request carries an image when a tool result holds one", {
+    // Two proxied requests and pi's Anthropic adapter load.
+    timeout: 20_000,
+  }, async () => {
+    await seed();
+    if (COPILOT_MODEL === undefined) throw new Error("No Copilot model");
+    const sent: Array<{ vision: string | null; body: string }> = [];
+    network.use(
+      http.post(
+        `${COPILOT_ORIGIN}${COPILOT_MODEL.endpoint}`,
+        async ({ request }) => {
+          sent.push({
+            vision: request.headers.get("copilot-vision-request"),
+            body: await request.text(),
+          });
+          return new HttpResponse("event: message_stop\ndata: {}\n\n", {
+            headers: { "content-type": "text/event-stream" },
+          });
+        },
+      ),
+    );
+    const row = copilotRow(
+      [COPILOT_MODEL.id],
+      new Date(Date.now() + 60 * 60_000).toISOString(),
+    );
+    const image =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+    const call = {
+      type: "toolCall",
+      id: "toolu_view",
+      name: "view_media",
+      arguments: { path: "/tmp/shot.png" },
+    };
+    const conversation = [
+      { role: "user", content: "What is in /tmp/shot.png?", timestamp: 0 },
+      {
+        role: "assistant",
+        content: [call],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-opus-5-5",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "toolUse",
+        timestamp: 0,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "toolu_view",
+        toolName: "view_media",
+        content: [
+          { type: "text", text: "/tmp/shot.png: PNG, 1×1." },
+          { type: "image", data: image, mimeType: "image/png" },
+        ],
+        isError: false,
+        timestamp: 0,
+      },
+    ];
+    const withImage = await callCopilotProxy(
+      [row],
+      await anthropicPayload(conversation),
+    );
+    expect(withImage.response.status).toBe(200);
+    const textOnly = await callCopilotProxy(
+      [row],
+      await anthropicPayload([
+        { role: "user", content: "Say hello", timestamp: 0 },
+      ]),
+    );
+    expect(textOnly.response.status).toBe(200);
+
+    expect(sent).toHaveLength(2);
+    expect(sent[0]?.vision).toBe("true");
+    const body = JSON.parse(sent[0]?.body ?? "{}") as {
+      model: string;
+      messages: Array<{ role: string; content: unknown }>;
+    };
+    expect(body.model).toBe(COPILOT_MODEL.id);
+    const toolResult = body.messages
+      .flatMap(({ content }) => (Array.isArray(content) ? content : []))
+      .find((block: { type?: string }) => block.type === "tool_result") as
+      | { content: unknown }
+      | undefined;
+    expect(toolResult?.content).toContainEqual({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: image },
+    });
+    expect(sent[1]?.vision).toBeNull();
   });
 
   it("classifies a Copilot rejection from its status and logs its redacted body", async () => {
@@ -693,8 +838,8 @@ describe("ByokCredentialCoordinatorObject", () => {
     );
     const connections = await loadRoutableConnections(env.DB, OWNER);
     expect(connections).toHaveLength(1);
-    expect(connections[0]!.credentialId).toBe(CREDENTIAL);
-    const plaintext = await connectionApiKey(env.DB, keyring, connections[0]!);
+    expect(connections[0].credentialId).toBe(CREDENTIAL);
+    const plaintext = await connectionApiKey(env.DB, keyring, connections[0]);
     expect(plaintext).toBe("sk-litellm-real");
   });
 
@@ -711,12 +856,10 @@ describe("ByokCredentialCoordinatorObject", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { ok: boolean };
     expect(body.ok).toBe(true);
-    expect(upstreamHeaders).toBeDefined();
-    expect(upstreamHeaders!.get("authorization")).toBe(
-      "Bearer sk-litellm-real",
-    );
-    expect(upstreamHeaders!.get("x-tenant")).toBe("tenant-1");
-    expect(upstreamHeaders!.get("host")).toBeNull();
+    assert.exists(upstreamHeaders);
+    expect(upstreamHeaders.get("authorization")).toBe("Bearer sk-litellm-real");
+    expect(upstreamHeaders.get("x-tenant")).toBe("tenant-1");
+    expect(upstreamHeaders.get("host")).toBeNull();
     const parsed = JSON.parse(upstreamBody) as { model?: string };
     expect(parsed.model).toBe("astra-litellm");
   });
@@ -900,7 +1043,8 @@ describe("ByokCredentialCoordinatorObject", () => {
       invocation: () =>
         ({ scope: { kind: "prompt", submissionId: "sub-1" } }) as never,
     });
-    const model = await options.resolveModel!(
+    assert.exists(options.resolveModel);
+    const model = await options.resolveModel(
       { providerId: "openai", modelId: "gpt-6-astra" },
       {
         instanceId: THREAD,
@@ -1245,7 +1389,8 @@ describe("ByokCredentialCoordinatorObject", () => {
       invocation: () =>
         ({ scope: { kind: "prompt", submissionId: "sub-1" } }) as never,
     });
-    const model = await options.resolveModel!(
+    assert.exists(options.resolveModel);
+    const model = await options.resolveModel(
       { providerId: "openai", modelId: "gpt-6-astra" },
       {
         instanceId: THREAD,
@@ -1305,7 +1450,8 @@ describe("ByokCredentialCoordinatorObject", () => {
       invocation: () =>
         ({ scope: { kind: "prompt", submissionId: "sub-1" } }) as never,
     });
-    const model = await options.resolveModel!(
+    assert.exists(options.resolveModel);
+    const model = await options.resolveModel(
       { providerId: "openai", modelId: "gpt-6-astra" },
       {
         instanceId: THREAD,
@@ -1397,7 +1543,8 @@ describe("ByokCredentialCoordinatorObject", () => {
       invocation: () =>
         ({ scope: { kind: "prompt", submissionId: "sub-anthropic" } }) as never,
     });
-    const model = await options.resolveModel!(
+    assert.exists(options.resolveModel);
+    const model = await options.resolveModel(
       { providerId: "openai", modelId: "gpt-6-astra" },
       {
         instanceId: THREAD,
@@ -1578,7 +1725,8 @@ describe("ByokCredentialCoordinatorObject", () => {
       invocation: () =>
         ({ scope: { kind: "prompt", submissionId: "sub-1" } }) as never,
     });
-    const model = await options.resolveModel!(
+    assert.exists(options.resolveModel);
+    const model = await options.resolveModel(
       { providerId: "openai", modelId: "gpt-6-astra" },
       {
         instanceId: THREAD,
@@ -1682,6 +1830,166 @@ describe("ByokCredentialCoordinatorObject /complete", () => {
     expect(calls[0]?.body).not.toHaveProperty("tools");
     expect(calls[0]?.body).toMatchObject({ reasoning_effort: "low" });
     expect(await storageKeys()).toEqual(before);
+  });
+
+  // view_media's analysis subagent sends the media with the objective.
+  const PNG_1X1 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+  const PDF = btoa("%PDF-1.4\n%dx test\n");
+  const anthropicAnswer = (text: string) =>
+    new Response(
+      [
+        {
+          type: "message_start",
+          message: {
+            id: "msg_media",
+            type: "message",
+            role: "assistant",
+            model: "astra-litellm",
+            content: [],
+            stop_reason: null,
+            usage: { input_tokens: 3, output_tokens: 0 },
+          },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { output_tokens: 4 },
+        },
+        { type: "message_stop" },
+      ]
+        .map(
+          (event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+        )
+        .join(""),
+      { headers: { "content-type": "text/event-stream" } },
+    );
+
+  it("sends a media attachment with the objective, beside a title completion in flight", async () => {
+    await seed();
+    const bodies: Array<{
+      messages: Array<{ role: string; content: unknown }>;
+    }> = [];
+    let releaseTitle: () => void = () => {};
+    const titleHeld = new Promise<void>((resolve) => {
+      releaseTitle = resolve;
+    });
+    stubFetch(async (request) => {
+      const body = (await request.json()) as (typeof bodies)[number];
+      bodies.push(body);
+      const media = JSON.stringify(body).includes("image_url");
+      if (!media) await titleHeld;
+      return new Response(
+        `data: ${JSON.stringify({
+          id: "chat-media",
+          object: "chat.completion.chunk",
+          created: 0,
+          model: "astra-litellm",
+          choices: [
+            {
+              index: 0,
+              delta: {
+                role: "assistant",
+                content: media ? "A red square." : "Title",
+              },
+              finish_reason: "stop",
+            },
+          ],
+        })}\n\ndata: [DONE]\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    const title = complete({});
+    const media = await complete({
+      systemPrompt: "Analyze media.",
+      message: "What color is the square?",
+      attachments: [{ data: PNG_1X1, mimeType: "image/png" }],
+    });
+    releaseTitle();
+    expect(media.status).toBe(200);
+    await expect(media.json()).resolves.toEqual({ text: "A red square." });
+    expect((await title).status).toBe(200);
+    const sent = bodies.find((body) =>
+      JSON.stringify(body).includes("image_url"),
+    );
+    expect(sent?.messages.at(-1)).toEqual({
+      role: "user",
+      content: [
+        {
+          type: "image_url",
+          image_url: { url: `data:image/png;base64,${PNG_1X1}` },
+        },
+        { type: "text", text: "What color is the square?" },
+      ],
+    });
+  });
+
+  it("sends a PDF to an Anthropic route as a document block and refuses it elsewhere", async () => {
+    await seed();
+    let calls = 0;
+    stubFetch(async () => {
+      calls++;
+      return new Response("unexpected", { status: 500 });
+    });
+    const refused = await complete({
+      message: "Summarize it.",
+      attachments: [{ data: PDF, mimeType: "application/pdf" }],
+    });
+    expect(refused.status).toBe(422);
+    await expect(refused.json()).resolves.toEqual({
+      code: "MODEL_CANNOT_READ_PDF",
+    });
+    expect(calls).toBe(0);
+
+    await env.DB.prepare(
+      "UPDATE model_connection SET base_url = ?, format = 'anthropic-messages' WHERE id = ?",
+    )
+      .bind(`${UPSTREAM}/v1`, CONNECTION)
+      .run();
+    const sent: Array<{ messages: Array<{ content: unknown }> }> = [];
+    stubFetch(async (request) => {
+      sent.push((await request.json()) as (typeof sent)[number]);
+      return anthropicAnswer("A one-line test PDF.");
+    });
+    const answered = await complete({
+      message: "Summarize it.",
+      attachments: [{ data: PDF, mimeType: "application/pdf" }],
+    });
+    expect(answered.status).toBe(200);
+    await expect(answered.json()).resolves.toEqual({
+      text: "A one-line test PDF.",
+    });
+    expect(sent[0]?.messages.at(-1)?.content).toEqual([
+      {
+        type: "document",
+        source: { type: "base64", media_type: "application/pdf", data: PDF },
+      },
+      expect.objectContaining({ type: "text", text: "Summarize it." }),
+    ]);
+  });
+
+  it("refuses media for another owner's Thread and malformed attachments", async () => {
+    await seed();
+    const other = await complete({
+      ownerUserId: "someone-else",
+      attachments: [{ data: PNG_1X1, mimeType: "image/png" }],
+    });
+    expect(other.status).toBe(403);
+    const svg = await complete({
+      attachments: [{ data: "PHN2Zy8+", mimeType: "image/svg+xml" }],
+    });
+    expect(svg.status).toBe(400);
   });
 
   it("lets DxTitleAgent settle only a pending title", async () => {

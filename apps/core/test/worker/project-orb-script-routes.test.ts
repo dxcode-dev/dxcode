@@ -54,6 +54,21 @@ const auditRows = async (projectId: string) =>
   ).results;
 
 describe("Project Orb script routes in workerd with real D1", () => {
+  it("answers a project without a connected repository as not connected, and hides another person's project", async () => {
+    const project = await createProjectViaApi("Repository-files");
+    const projectId = project.data.id;
+    const files = (app = createProductApp()) =>
+      app.request(`/projects/${projectId}/orb-files`, {}, bindings);
+
+    const response = await files();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      status: "success",
+      data: { state: "not-connected" },
+    });
+    expect((await files(createProductApp(otherPrincipal))).status).toBe(404);
+  });
+
   it("saves, reads, and clears each script, audits every change, and hands the scripts to source preparation", async () => {
     const project = await createProjectViaApi("Scripts");
     const projectId = project.data.id;

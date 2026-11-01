@@ -529,9 +529,9 @@ describe("ThreadRepository D1", () => {
         const repository = yield* ThreadRepository;
         yield* projects.insert(entity);
         yield* Effect.all(targets.map((item) => repository.insert(item)));
-        yield* repository.setPinnedAtOwned(targets[1]!.id, owner, earlierPin);
-        yield* repository.setPinnedAtOwned(targets[2]!.id, owner, earlierPin);
-        yield* repository.setPinnedAtOwned(targets[3]!.id, owner, laterPin);
+        yield* repository.setPinnedAtOwned(targets[1].id, owner, earlierPin);
+        yield* repository.setPinnedAtOwned(targets[2].id, owner, earlierPin);
+        yield* repository.setPinnedAtOwned(targets[3].id, owner, laterPin);
 
         const ids: Array<string> = [];
         let cursor: string | undefined;
@@ -549,11 +549,11 @@ describe("ThreadRepository D1", () => {
         } while (cursor !== undefined);
 
         expect(ids).toEqual([
-          targets[3]!.id,
-          targets[2]!.id,
-          targets[1]!.id,
-          targets[0]!.id,
-          targets[4]!.id,
+          targets[3].id,
+          targets[2].id,
+          targets[1].id,
+          targets[0].id,
+          targets[4].id,
         ]);
       }),
     );

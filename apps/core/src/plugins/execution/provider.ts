@@ -243,6 +243,30 @@ export interface ExecutionWorkspaceProvider<
     owner: ExecutionWorkspaceOwner,
     mode: "archive" | "destroy",
   ): Promise<void>;
+  /**
+   * The workspace's filesystem turned read-only: stop it and leave it to
+   * start again on the next `create`, keeping its files where the provider
+   * can. Unless `discardUnsaved`, a workspace whose current files cannot be
+   * kept is left as it is (`unsaved`). Optional; without it Core says it
+   * cannot restart the Orb.
+   */
+  recover?(
+    context: ExecutionContext,
+    owner: ExecutionWorkspaceOwner,
+    options: { readonly discardUnsaved: boolean },
+  ): Promise<ExecutionWorkspaceRecovery>;
+}
+
+/** What a `recover` kept of the workspace's files. */
+export interface ExecutionWorkspaceRecovery {
+  /**
+   * `kept`: as they were. `earlier`: as at the last save (`savedAt`), later
+   * changes lost. `lost`: the workspace starts over and is set up again.
+   * `unsaved`: not restarted, since its files could not be kept.
+   */
+  readonly files: "kept" | "earlier" | "lost" | "unsaved";
+  /** When the restored files were saved (epoch ms). */
+  readonly savedAt?: number;
 }
 
 export interface DaemonInstallInput {

@@ -33,6 +33,20 @@ const canonicalParts = (canonical: string) => {
 export const canonicalModelKnown = (canonical: string): boolean =>
   catalogModelExists(canonical) || COPILOT_SERVED_MODELS.has(canonical);
 
+/**
+ * A canonical model's display name: the model catalog's name, else the Copilot
+ * catalog's, else the model id. The one name every settings page shows.
+ */
+export const canonicalModelName = (canonical: string): string => {
+  const { provider, model } = canonicalParts(canonical);
+  return (
+    findCatalogModel(provider, model)?.name ??
+    COPILOT_SERVED_MODELS.get(canonical)?.name ??
+    model.split("/").at(-1) ??
+    model
+  );
+};
+
 /** Capabilities for a canonical id from the owning catalog. */
 export const canonicalCapabilities = (
   canonical: string,
@@ -87,8 +101,7 @@ export const connectionUpstreamFor = (
     case "subscription": {
       const served = COPILOT_SERVED_MODELS.get(canonical);
       if (served === undefined) return undefined;
-      return entitledCopilotIds !== undefined &&
-        entitledCopilotIds.has(served.upstream)
+      return entitledCopilotIds?.has(served.upstream)
         ? served.upstream
         : undefined;
     }
@@ -190,18 +203,16 @@ export interface ResolveSubmissionInput {
 export const resolveSubmissionModel = (
   input: ResolveSubmissionInput,
 ): ResolvedSubmissionModel => {
-  const modeConfig =
+  const { model, thinking } =
     input.selection.kind === "mode"
-      ? (input.modeOverrides.get(input.selection.mode) ??
-        input.defaultProfile.modes[input.selection.mode])
-      : undefined;
-  const slot = modeConfig?.agent;
-  const model =
-    input.selection.kind === "mode" ? slot!.model : input.selection.model;
-  const thinking =
-    input.selection.kind === "mode"
-      ? slot!.thinking
-      : pinThinking(input.selection);
+      ? (
+          input.modeOverrides.get(input.selection.mode) ??
+          input.defaultProfile.modes[input.selection.mode]
+        ).agent
+      : {
+          model: input.selection.model,
+          thinking: pinThinking(input.selection),
+        };
   const entitlements = input.copilotEntitlements ?? (() => undefined);
   const match = findServingConnection(input.connections, model, entitlements);
   if (match === undefined) {

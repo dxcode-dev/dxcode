@@ -1,4 +1,5 @@
 import type {
+  BugReportAppDiagnostics,
   BugReportChangesDiagnostics,
   BugReportDictationDiagnostics,
   BugReportThreadAndAppDiagnostics,
@@ -29,8 +30,8 @@ import { loadedChanges } from "../changes/changes-queries.js";
 import type { DictationRecord } from "../dictation/dictation-session.js";
 import { serializeThreadJson } from "../thread-export.js";
 import type { TranscriptViewModel } from "../transcript-view-model.js";
+import { reportDestination } from "./bug-report-format.js";
 import { sendBugReportMutationOptions } from "./bug-report-queries.js";
-import { ReportStatus } from "./bug-report-status.js";
 import "./bug-reports.css";
 
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -60,11 +61,8 @@ const transcriptExport = (input: Parameters<typeof serializeThreadJson>[0]) => {
   return omitted === 0 ? exported : { ...exported, omittedTurns: omitted };
 };
 
-const collectThreadAndApp = (
-  thread: ThreadDetailData,
-  project: Pick<ProjectData, "name"> | undefined,
-  transcript: () => TranscriptViewModel,
-): BugReportThreadAndAppDiagnostics => ({
+/** App Diagnostics: the page and the app's recent errors and requests. */
+const collectApp = (): BugReportAppDiagnostics => ({
   app: {
     path: window.location.pathname,
     userAgent: navigator.userAgent.slice(0, 1_024),
@@ -73,6 +71,14 @@ const collectThreadAndApp = (
     visibility: document.visibilityState,
   },
   ...clientDiagnostics(),
+});
+
+const collectThreadAndApp = (
+  thread: ThreadDetailData,
+  project: Pick<ProjectData, "name"> | undefined,
+  transcript: () => TranscriptViewModel,
+): BugReportThreadAndAppDiagnostics => ({
+  ...collectApp(),
   transcript: transcriptExport({ thread, project, model: transcript() }),
 });
 
@@ -130,14 +136,6 @@ const dictationDetails = (
   audioType: dictation.audio.type || "audio/wav",
 });
 
-const SENT_TEXT = {
-  saved: "This dx deployment keeps reports without filing them on GitHub.",
-  failed: "It was saved, but it could not be filed on GitHub.",
-  filing: "It is being filed. Your Reports shows the issue once it is.",
-  commented: "It matches an open issue, so it was added there.",
-  filed: "It was filed as a new issue.",
-} as const;
-
 /** Your Reports, as a link that closes the dialog by leaving the Thread. */
 function YourReportsLink() {
   return (
@@ -148,18 +146,119 @@ function YourReportsLink() {
 }
 
 /**
- * Report Bug: the person describes the problem, attaches images, and chooses
- * the diagnostics sent with it. Core redacts secrets, then files the report
- * as a GitHub issue or comments on an open issue it duplicates.
+ * Diagnostic Data: from a Thread, Thread and App, Diff, and Dictation
+ * Diagnostics; from Settings, App Diagnostics alone.
  */
-export function BugReportDialog({
-  thread,
-  project,
-  transcript,
+function DiagnosticOptions({
+  inThread,
+  pending,
+  threadAndApp,
+  setThreadAndApp,
   changesOpen,
+  diff,
+  setDiff,
   dictation,
-  onClose,
+  dictated,
+  setDictated,
 }: {
+  readonly inThread: boolean;
+  readonly pending: boolean;
+  readonly threadAndApp: boolean;
+  readonly setThreadAndApp: (checked: boolean) => void;
+  readonly changesOpen: boolean;
+  readonly diff: boolean;
+  readonly setDiff: (checked: boolean) => void;
+  readonly dictation: DictationRecord | undefined;
+  readonly dictated: boolean;
+  readonly setDictated: (checked: boolean) => void;
+}) {
+  return (
+    <section
+      className="bug-report-diagnostics"
+      aria-labelledby="bug-report-diagnostics-title"
+    >
+      <h3 id="bug-report-diagnostics-title">Diagnostic Data</h3>
+      {!inThread ? (
+        <label className="bug-report-option">
+          <input
+            type="checkbox"
+            checked={threadAndApp}
+            disabled={pending}
+            onChange={(event) => setThreadAndApp(event.currentTarget.checked)}
+          />
+          <span className="bug-report-option-title">App Diagnostics</span>
+          <span className="bug-report-option-detail">
+            Recent app errors and failed requests, and connection state. Nothing
+            from your Threads. Secrets are redacted.
+          </span>
+        </label>
+      ) : (
+        <>
+          <label className="bug-report-option">
+            <input
+              type="checkbox"
+              checked={threadAndApp}
+              disabled={pending}
+              onChange={(event) => setThreadAndApp(event.currentTarget.checked)}
+            />
+            <span className="bug-report-option-title">
+              Thread and App Diagnostics
+            </span>
+            <span className="bug-report-option-detail">
+              This Thread's transcript, recent app errors and failed requests,
+              connection state, its Worker logs, the Orb and agent state dx
+              holds, and the Orb's setup scripts. Secrets are redacted.
+            </span>
+          </label>
+          <label
+            className="bug-report-option"
+            data-disabled={changesOpen ? undefined : ""}
+          >
+            <input
+              type="checkbox"
+              checked={diff && changesOpen}
+              disabled={pending || !changesOpen}
+              onChange={(event) => setDiff(event.currentTarget.checked)}
+            />
+            <span className="bug-report-option-title">Diff Diagnostics</span>
+            <span className="bug-report-option-detail">
+              The changes and diffs Changes has loaded, with how it shows them.
+              Secrets are redacted.
+              {changesOpen
+                ? null
+                : " Open Changes to include diff diagnostics."}
+            </span>
+          </label>
+          <label
+            className="bug-report-option"
+            data-disabled={dictation === undefined ? "" : undefined}
+          >
+            <input
+              type="checkbox"
+              checked={dictated && dictation !== undefined}
+              disabled={pending || dictation === undefined}
+              onChange={(event) => setDictated(event.currentTarget.checked)}
+            />
+            <span className="bug-report-option-title">
+              Dictation Diagnostics
+            </span>
+            <span className="bug-report-option-detail">
+              The latest dictation's original audio, transcript, and
+              transcription details. Audio stays on this device unless you
+              select this option and send the report.
+              {dictation === undefined
+                ? " Dictate in this Thread to include it."
+                : null}
+            </span>
+          </label>
+        </>
+      )}
+    </section>
+  );
+}
+
+/** Report Bug from a Thread: Thread, Diff, and Dictation Diagnostics. */
+interface ThreadReportProps {
   readonly thread: ThreadDetailData;
   readonly project?: Pick<ProjectData, "name">;
   readonly transcript: () => TranscriptViewModel;
@@ -167,6 +266,31 @@ export function BugReportDialog({
   readonly changesOpen: boolean;
   /** The Thread's latest dictation, kept on this device. */
   readonly dictation?: DictationRecord;
+}
+
+/** Report Bug from Settings: no Thread, and App Diagnostics at most. */
+interface AppReportProps {
+  readonly thread?: undefined;
+  readonly project?: undefined;
+  readonly transcript?: undefined;
+  readonly changesOpen?: undefined;
+  readonly dictation?: undefined;
+}
+
+/**
+ * Report Bug: the person describes the problem, attaches images, and chooses
+ * the diagnostics sent with it. Core redacts secrets and keeps the report in
+ * this dx deployment; it is never filed on GitHub. Opened from Settings, it
+ * concerns no Thread and offers App Diagnostics alone.
+ */
+export function BugReportDialog({
+  thread,
+  project,
+  transcript,
+  changesOpen = false,
+  dictation,
+  onClose,
+}: (ThreadReportProps | AppReportProps) & {
   readonly onClose: () => void;
 }) {
   const { identity } = useAuthenticatedIdentity();
@@ -177,6 +301,7 @@ export function BugReportDialog({
   const [message, setMessage] = React.useState("");
   const [images, setImages] = React.useState<ReadonlyArray<PendingImage>>([]);
   const [imageError, setImageError] = React.useState<string>();
+  // Thread and App Diagnostics in a Thread, App Diagnostics in Settings.
   const [threadAndApp, setThreadAndApp] = React.useState(true);
   const [diff, setDiff] = React.useState(false);
   const [dictated, setDictated] = React.useState(false);
@@ -222,6 +347,16 @@ export function BugReportDialog({
   const canSend = message.trim() !== "" && !send.isPending;
   const submit = () => {
     if (!canSend) return;
+    if (thread === undefined || transcript === undefined) {
+      send.mutate({
+        report: {
+          message: message.trim(),
+          diagnostics: threadAndApp ? { app: collectApp() } : {},
+        },
+        images: images.map(({ file }) => file),
+      });
+      return;
+    }
     send.mutate({
       threadId: thread.id,
       report: {
@@ -259,8 +394,9 @@ export function BugReportDialog({
         {sent !== undefined ? (
           <div className="bug-report-sent">
             <DialogTitle>Bug Report Sent</DialogTitle>
-            <DialogDescription>{SENT_TEXT[sent.status]}</DialogDescription>
-            <ReportStatus report={sent} />
+            <DialogDescription>
+              {reportDestination()} keeps it, and Your Reports lists it.
+            </DialogDescription>
             <footer className="bug-report-footer">
               <YourReportsLink />
               <Button size="sm" onClick={close}>
@@ -357,74 +493,22 @@ export function BugReportDialog({
                 )}
               </div>
             </div>
-            <section
-              className="bug-report-diagnostics"
-              aria-labelledby="bug-report-diagnostics-title"
-            >
-              <h3 id="bug-report-diagnostics-title">Diagnostic Data</h3>
-              <label className="bug-report-option">
-                <input
-                  type="checkbox"
-                  checked={threadAndApp}
-                  disabled={send.isPending}
-                  onChange={(event) =>
-                    setThreadAndApp(event.currentTarget.checked)
-                  }
-                />
-                <span className="bug-report-option-title">
-                  Thread and App Diagnostics
-                </span>
-                <span className="bug-report-option-detail">
-                  This Thread's transcript, recent app errors and failed
-                  requests, connection state, its Worker logs, the Orb and agent
-                  state dx holds, and the Orb's setup scripts. Secrets are
-                  redacted.
-                </span>
-              </label>
-              <label
-                className="bug-report-option"
-                data-disabled={changesOpen ? undefined : ""}
-              >
-                <input
-                  type="checkbox"
-                  checked={diff && changesOpen}
-                  disabled={send.isPending || !changesOpen}
-                  onChange={(event) => setDiff(event.currentTarget.checked)}
-                />
-                <span className="bug-report-option-title">
-                  Diff Diagnostics
-                </span>
-                <span className="bug-report-option-detail">
-                  The changes and diffs Changes has loaded, with how it shows
-                  them. Secrets are redacted.
-                  {changesOpen
-                    ? null
-                    : " Open Changes to include diff diagnostics."}
-                </span>
-              </label>
-              <label
-                className="bug-report-option"
-                data-disabled={dictation === undefined ? "" : undefined}
-              >
-                <input
-                  type="checkbox"
-                  checked={dictated && dictation !== undefined}
-                  disabled={send.isPending || dictation === undefined}
-                  onChange={(event) => setDictated(event.currentTarget.checked)}
-                />
-                <span className="bug-report-option-title">
-                  Dictation Diagnostics
-                </span>
-                <span className="bug-report-option-detail">
-                  The latest dictation's original audio, transcript, and
-                  transcription details. Audio stays on this device unless you
-                  select this option and send the report.
-                  {dictation === undefined
-                    ? " Dictate in this Thread to include it."
-                    : null}
-                </span>
-              </label>
-            </section>
+            <DiagnosticOptions
+              inThread={thread !== undefined}
+              pending={send.isPending}
+              threadAndApp={threadAndApp}
+              setThreadAndApp={setThreadAndApp}
+              changesOpen={changesOpen}
+              diff={diff}
+              setDiff={setDiff}
+              dictation={dictation}
+              dictated={dictated}
+              setDictated={setDictated}
+            />
+            <p className="bug-report-destination">
+              Reports stay in {reportDestination()} and are never posted
+              publicly.
+            </p>
             {send.isError ? (
               <p className="bug-report-error" role="alert">
                 {send.error instanceof Error

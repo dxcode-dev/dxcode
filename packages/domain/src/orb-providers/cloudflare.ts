@@ -89,6 +89,16 @@ export const cloudflareOrbProvider = defineOrbProvider({
   // sandbox; its pause-resume keeps the filesystem only.
   isolation: "container",
   requiredCapabilities: ORB_RUNNER_CAPABILITIES,
+  // Workers Paid rates beyond its monthly allowance. Memory and disk are
+  // billed as provisioned, CPU only while active.
+  pricing: {
+    usdPerVcpuHour: 0.00002 * 3600,
+    usdPerGibMemoryHour: 0.0000025 * 3600,
+    usdPerGbDiskHour: 0.00000007 * 3600,
+    cpuBilledWhenActive: true,
+    source: "https://developers.cloudflare.com/containers/pricing/",
+    checkedOn: "2026-10-30",
+  },
   sizes: CLOUDFLARE_ORB_PROFILES.map((profile) => ({
     id: profile.id,
     label: profile.label,

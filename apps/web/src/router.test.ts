@@ -107,6 +107,66 @@ describe("Settings routes", routeLoading, () => {
       data: { code: "SETTINGS_SECTION_NOT_FOUND", section: "nope" },
     });
   });
+
+  // The server answers 403 for a workspace that does not exist, an old short
+  // name after a rename, and one the user is not in, so it does not reveal
+  // which workspaces exist.
+  const workspaceResponse =
+    (status: number, code: string) => (request: { readonly url: string }) =>
+      request.url.startsWith("/v1/settings/workspaces/")
+        ? Response.json(
+            {
+              status: "error",
+              data: { code, message: "Unavailable.", requestId: "req-1" },
+            },
+            { status },
+          )
+        : Response.json({ status: "success", data: {} });
+  const loadWorkspaceAt = async (
+    path: string,
+    respond: ReturnType<typeof workspaceResponse>,
+  ) => {
+    vi.stubGlobal("fetch", new FrontendNetworkHarness(respond).fetch);
+    const router = createAppRouter(
+      { queryClient: createQueryClient(), userId },
+      createMemoryHistory({ initialEntries: [path] }),
+    );
+    await router.load();
+    return router;
+  };
+
+  it.each([
+    ["/workspaces/$workspaceSlug", "/workspaces/nope-ws"],
+    ["/workspaces/$workspaceSlug/$section", "/workspaces/nope-ws/members"],
+  ])(
+    "reports a workspace the user cannot open at %s as not found",
+    async (routeId, path) => {
+      const router = await loadWorkspaceAt(
+        path,
+        workspaceResponse(403, "SETTINGS_SCOPE_FORBIDDEN"),
+      );
+
+      const match = router.state.matches.find(
+        (candidate) => candidate.routeId === routeId,
+      );
+      expect(match?.status).toBe("notFound");
+      expect(match?.error).toMatchObject({
+        data: { code: "WORKSPACE_NOT_FOUND", workspaceSlug: "nope-ws" },
+      });
+    },
+  );
+
+  it("leaves another load failure to the settings page's retry state", async () => {
+    const router = await loadWorkspaceAt(
+      "/workspaces/qa-ws/members",
+      workspaceResponse(503, "PERSISTENCE_UNAVAILABLE"),
+    );
+
+    const match = router.state.matches.find(
+      ({ routeId }) => routeId === "/workspaces/$workspaceSlug/$section",
+    );
+    expect(match?.status).not.toBe("notFound");
+  });
 });
 
 describe("Project routes", routeLoading, () => {

@@ -52,6 +52,12 @@ vi.mock("./threads/terminal-object.js", () => ({
   ThreadExecutionObject: class {},
 }));
 
+// Each test imports the Worker entry afresh. Import it once here, outside any
+// test's timeout, so the tests reuse its transformed module graph: the first
+// import transforms all of Core, about 3 s alone and more under load.
+registration.env = { DX_RUNTIME_MODE: "local" };
+await import("./cloudflare.js");
+
 describe("Cloudflare model provider registration", () => {
   beforeEach(() => {
     vi.resetModules();

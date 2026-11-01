@@ -51,7 +51,6 @@ const mount = async (submitting: boolean) => {
         onModelChange={vi.fn()}
         dictationActive={false}
         dictationHideSubmit={false}
-        footer={null}
       />,
     ),
   );

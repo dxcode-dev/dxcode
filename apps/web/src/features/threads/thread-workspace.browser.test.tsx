@@ -215,10 +215,10 @@ vi.mock("./agent-panel.js", async (importOriginal) => ({
 }));
 
 import { MarkdownFileLinkContext } from "../../shared/ui/markdown-file-link-context.js";
-import { projectKeys } from "../projects/project-queries.js";
 import { PaneTreeHarness } from "../../testing/pane-tree-harness.js";
-import { paneLayoutKeys } from "./panes/pane-layout-queries.js";
+import { projectKeys } from "../projects/project-queries.js";
 import { defaultPaneLayout } from "./panes/pane-layout.js";
+import { paneLayoutKeys } from "./panes/pane-layout-queries.js";
 import { ThreadFileNavigationContext } from "./thread-file-navigation.js";
 import { threadKeys } from "./thread-queries.js";
 import { ThreadSessionRegistryContext } from "./thread-session-context.js";

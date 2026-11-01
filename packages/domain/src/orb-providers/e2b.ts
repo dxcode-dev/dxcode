@@ -59,6 +59,15 @@ export const e2bOrbProvider = defineOrbProvider({
   profile: E2BRunnerProfileConfiguration,
   isolation: "sandbox",
   requiredCapabilities: ORB_RUNNER_CAPABILITIES,
+  // Running sandboxes are billed per second for provisioned CPU and memory;
+  // storage is free.
+  pricing: {
+    usdPerVcpuHour: 0.000014 * 3600,
+    usdPerGibMemoryHour: 0.0000045 * 3600,
+    usdPerGbDiskHour: 0,
+    source: "https://e2b.dev/pricing",
+    checkedOn: "2026-10-30",
+  },
   // A connection's Threads create from the template built into the team, so
   // the template here is never created from on a connection.
   sizes: E2B_ORB_PROFILES.map((profile) => ({

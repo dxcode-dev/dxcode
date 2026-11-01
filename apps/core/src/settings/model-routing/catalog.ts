@@ -79,19 +79,38 @@ export const catalogModelExists = (canonical: string): boolean => {
   );
 };
 
+/**
+ * dx's display names for catalog entries whose upstream name is cased or
+ * punctuated unlike the rest of the catalog, keyed by canonical id. Every
+ * settings page reads a model's name from this catalog, so fix a name here.
+ */
+const MODEL_DISPLAY_NAMES: Readonly<Record<string, string>> = {
+  "cloudflare/@cf/zai-org/glm-4.7-flash": "GLM 4.7 Flash",
+  "cloudflare/@cf/zai-org/glm-5.2": "GLM 5.2",
+  "cloudflare/@cf/zai-org/glm-5.3": "GLM 5.3",
+  "cloudflare/@cf/zai-org/glm-5.3-flash": "GLM 5.3 Flash",
+};
+
+const withDisplayName = (providerId: string, model: Model<Api>): Model<Api> => {
+  const name = MODEL_DISPLAY_NAMES[`${providerId}/${model.id}`];
+  return name === undefined || name === model.name ? model : { ...model, name };
+};
+
 export const catalogProviderModels = (providerId: string) => {
   if (providerId === CLAUDE_CODE_PROVIDER_ID) return [...claudeCodeModels];
   const models = getBuiltinModels(
     piCatalogProviderId(providerId) as BuiltinProviderId,
   );
-  return providerId === "cloudflare"
-    ? [
-        ...models,
-        ...currentWorkersAiModels.filter(
-          ({ id }) => !models.some((model) => model.id === id),
-        ),
-      ]
-    : models;
+  return (
+    providerId === "cloudflare"
+      ? [
+          ...models,
+          ...currentWorkersAiModels.filter(
+            ({ id }) => !models.some((model) => model.id === id),
+          ),
+        ]
+      : models
+  ).map((model) => withDisplayName(providerId, model));
 };
 
 export const catalogProviderIds = (): ReadonlyArray<string> =>

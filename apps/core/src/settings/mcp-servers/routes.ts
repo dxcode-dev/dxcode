@@ -54,7 +54,10 @@ import {
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
-import { createAuth } from "../../auth/better-auth.js";
+import {
+  authoritativeBrowserSession,
+  requestAuth,
+} from "../../auth/request-auth.js";
 import { loadAuthenticationRequirements } from "../../auth/requirements.js";
 import {
   decodeJsonBody,
@@ -509,13 +512,9 @@ const browserSession = Effect.fn("mcpBrowserSession")(function* (
     return yield* new BrowserSessionRequired();
   }
   const requirements = yield* loadAuthenticationRequirements(context.env);
-  const auth = createAuth(context.env, requirements);
+  const auth = requestAuth(context, requirements);
   const session = yield* Effect.tryPromise({
-    try: () =>
-      auth.api.getSession({
-        headers: context.req.raw.headers,
-        query: { disableCookieCache: true },
-      }),
+    try: () => authoritativeBrowserSession(context, auth),
     catch: () => new BrowserSessionMissing(),
   });
   if (session === null || session.user.id !== principal.userId) {

@@ -21,6 +21,8 @@ import { formatRelativeTime } from "../../../shared/utils.js";
 import { SettingsCard, SettingsHeading } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
 import {
+  type InviteLinkFieldErrors,
+  inviteLinkFieldErrors,
   memberMutationOptions,
   workspaceInviteLinksQueryOptions,
   workspaceMembersQueryOptions,
@@ -278,11 +280,15 @@ function InviteLinkDialog({
   const [expiresAt, setExpiresAt] = React.useState("");
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<string>();
+  const [fieldErrors, setFieldErrors] = React.useState<InviteLinkFieldErrors>(
+    {},
+  );
   const [created, setCreated] = React.useState<WorkspaceInviteLinkData>();
   const formId = React.useId();
   const submit = async () => {
     setPending(true);
     setError(undefined);
+    setFieldErrors({});
     const outcome = await settle(() =>
       onCreate({
         title,
@@ -294,7 +300,9 @@ function InviteLinkDialog({
     if (outcome.ok) {
       setCreated(outcome.value);
     } else {
-      setError(message(outcome.error));
+      const fields = inviteLinkFieldErrors(outcome.error);
+      if (fields === undefined) setError(message(outcome.error));
+      else setFieldErrors(fields);
     }
     setPending(false);
   };
@@ -327,8 +335,24 @@ function InviteLinkDialog({
                 className="members-input"
                 value={title}
                 maxLength={80}
-                onChange={(event) => setTitle(event.target.value)}
+                aria-invalid={
+                  fieldErrors.title === undefined ? undefined : true
+                }
+                aria-describedby={
+                  fieldErrors.title === undefined
+                    ? undefined
+                    : `${formId}-title-error`
+                }
+                onChange={(event) => {
+                  setTitle(event.target.value);
+                  setFieldErrors({ ...fieldErrors, title: undefined });
+                }}
               />
+              {fieldErrors.title === undefined ? null : (
+                <span id={`${formId}-title-error`} className="members-error">
+                  {fieldErrors.title}
+                </span>
+              )}
             </div>
             <div className="members-link-field">
               <label htmlFor={`${formId}-expires`}>Expires</label>
@@ -337,9 +361,26 @@ function InviteLinkDialog({
                 className="members-input"
                 type="datetime-local"
                 value={expiresAt}
-                onChange={(event) => setExpiresAt(event.target.value)}
+                aria-invalid={
+                  fieldErrors.expiresAt === undefined ? undefined : true
+                }
+                aria-describedby={
+                  fieldErrors.expiresAt === undefined
+                    ? undefined
+                    : `${formId}-expires-error`
+                }
+                onChange={(event) => {
+                  setExpiresAt(event.target.value);
+                  setFieldErrors({ ...fieldErrors, expiresAt: undefined });
+                }}
               />
-              <span>Leave empty to never expire.</span>
+              {fieldErrors.expiresAt === undefined ? (
+                <span>Leave empty to never expire.</span>
+              ) : (
+                <span id={`${formId}-expires-error`} className="members-error">
+                  {fieldErrors.expiresAt}
+                </span>
+              )}
             </div>
             {error === undefined ? null : (
               <p className="members-error" role="alert">

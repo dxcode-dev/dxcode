@@ -652,5 +652,39 @@ export const createGitHubProvider = (
         throw new GitHubProviderError({ category: "invalid-response" });
       return { repository: resolvedRepository, commitSha };
     },
+    /**
+     * The paths that name a file (or symlink) at `ref`; a path the commit
+     * lacks is absent rather than an error.
+     */
+    presentPaths: async (
+      installationToken: string,
+      repositoryId: string,
+      ref: string,
+      paths: ReadonlyArray<string>,
+    ): Promise<ReadonlyArray<string>> => {
+      const valid = stableId(repositoryId);
+      if (valid === undefined || !/^[a-f0-9]{40}$/.test(ref))
+        throw new GitHubProviderError({ category: "invalid-response" });
+      const found = await Promise.all(
+        paths.map(async (path) => {
+          try {
+            const { value } = await json(
+              `${API_ORIGIN}/repositories/${valid}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${ref}`,
+              { headers: apiHeaders(installationToken) },
+            );
+            const type = (value as Record<string, unknown>)?.type;
+            return type === "file" || type === "symlink";
+          } catch (cause) {
+            if (
+              cause instanceof GitHubProviderError &&
+              cause.category === "not-found"
+            )
+              return false;
+            throw cause;
+          }
+        }),
+      );
+      return paths.filter((_, index) => found[index]);
+    },
   };
 };

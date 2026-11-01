@@ -9,6 +9,27 @@ import type {
 } from "../settings/runner-profile-fields.js";
 
 /**
+ * A provider's public list prices in US dollars, with the page they come
+ * from and the day they were read: usage rates that price any size from its
+ * CPU, memory, and disk, or a fixed hourly price per size ID. Only a
+ * person's or workspace's own connection pays these; a deployment's account
+ * shows its own `costLabel` instead.
+ */
+export type OrbProviderPricing = {
+  /** CPU is billed only while in use, so a size's price is a maximum. */
+  readonly cpuBilledWhenActive?: true;
+  readonly source: string;
+  readonly checkedOn: string;
+} & (
+  | {
+      readonly usdPerVcpuHour: number;
+      readonly usdPerGibMemoryHour: number;
+      readonly usdPerGbDiskHour: number;
+    }
+  | { readonly usdPerSizeHour: Readonly<Record<string, number>> }
+);
+
+/**
  * What every layer knows about one Orb provider, from one file
  * (`orb-providers/<provider>.ts`) listed once in `orb-providers/index.ts`.
  * Core and the API derive the provider ID set, the plugin registry entry,
@@ -52,6 +73,8 @@ export interface OrbProviderDescriptor<
   readonly isolation: RunnerIsolation;
   readonly requiredCapabilities: ReadonlyArray<RunnerCapability>;
   readonly forbiddenCapabilities?: ReadonlyArray<RunnerCapability>;
+  /** List prices; absent when dx does not know what the provider charges. */
+  readonly pricing?: OrbProviderPricing;
   /** The provider's own sizes, which the catalog always lists. */
   readonly sizes: ReadonlyArray<ProfileSchema["Type"]>;
   /**

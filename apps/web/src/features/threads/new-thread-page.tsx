@@ -25,7 +25,6 @@ import {
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Option, Schema } from "effect";
 import * as React from "react";
-import { toast } from "sonner";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { CommandProvider } from "../../shared/commands/command-provider.js";
 import {
@@ -42,7 +41,6 @@ import {
   NewThreadSurfaceContext,
   type NewThreadSurfaceValue,
 } from "../../shared/new-thread-surface.js";
-import { Button } from "../../shared/ui/button.js";
 import {
   ModalSurface,
   ModalSurfaceClose,
@@ -65,17 +63,12 @@ import { projectDefaultsQueryOptions } from "../settings/project-defaults/projec
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { claudePlanPick } from "./claude-code-mode-options.js";
 import { useDictation } from "./dictation/use-dictation.js";
-import {
-  addScreenshot,
-  attachmentsUploading,
-  type PendingAttachment,
-} from "./image-attachments.js";
+import { attachmentsUploading } from "./image-attachments.js";
 import { NewThreadComposer } from "./new-thread-composer.js";
-import {
-  getBrowserNewThreadDraftStore,
-  type NewThreadDraftSnapshot,
-} from "./new-thread-draft-store.js";
+import { useDraftImages } from "./new-thread-draft-images.js";
+import { getBrowserNewThreadDraftStore } from "./new-thread-draft-store.js";
 import { submitNewThread } from "./new-thread-submission.js";
+import { NewThreadToasts } from "./new-thread-toasts.js";
 import { createThreadMutationOptions } from "./thread-mutations.js";
 import { ThreadSessionRegistryContext } from "./thread-session-context.js";
 
@@ -89,7 +82,12 @@ export function NewThreadProvider({
   useQuery(projectDefaultsQueryOptions(identity.id, { scope: "personal" }));
   useQuery(composerDefaultsQueryOptions(identity.id));
   const [invocation, setInvocation] = React.useState<
-    { readonly key: number; readonly projectId?: ProjectId } | undefined
+    | {
+        readonly key: number;
+        readonly projectId?: ProjectId;
+        readonly prompt?: string;
+      }
+    | undefined
   >();
   const returnFocus = React.useRef<{
     readonly element: HTMLElement | null;
@@ -103,7 +101,7 @@ export function NewThreadProvider({
       : null;
   };
   const value: NewThreadSurfaceValue = {
-    openNewThread: (projectId) => {
+    openNewThread: (projectId, prompt) => {
       const element =
         document.activeElement instanceof HTMLElement
           ? document.activeElement
@@ -112,7 +110,7 @@ export function NewThreadProvider({
         element: element === document.body ? null : element,
         mobileDrawer: element?.closest(".mobile-sidebar-drawer") !== null,
       };
-      setInvocation({ key: Date.now(), projectId });
+      setInvocation({ key: Date.now(), projectId, prompt });
     },
     pendingCreations: registry?.pendingCreations,
     subscribePendingCreations: registry?.subscribeCreations,
@@ -127,6 +125,7 @@ export function NewThreadProvider({
         <NewThreadModal
           key={invocation.key}
           initialProjectId={invocation.projectId}
+          initialPrompt={invocation.prompt}
           finalFocus={finalFocus}
           onClose={() => setInvocation(undefined)}
           onAccepted={() => setInvocation(undefined)}
@@ -150,11 +149,14 @@ export function NewThreadPage() {
 
 function NewThreadModal({
   initialProjectId,
+  initialPrompt,
   finalFocus,
   onClose,
   onAccepted,
 }: {
   readonly initialProjectId?: ProjectId;
+  /** Text the composer opens with, after any draft the person already has. */
+  readonly initialPrompt?: string;
   readonly finalFocus?: React.ComponentProps<typeof Dialog.Popup>["finalFocus"];
   readonly onClose: () => void;
   readonly onAccepted: () => void;
@@ -167,11 +169,20 @@ function NewThreadModal({
   // The starting Project is chosen once when the composer opens, so wait for
   // the first project page; a failed list still opens the composer.
   const projectsQuery = useInfiniteQuery(projectsQueryOptions(identity.id));
+  // Wait only for this open's first result. A refetch of a failed list puts
+  // the query back to pending; waiting on that again would close the
+  // composer on every Retry or window focus.
+  const [projectFailuresAtOpen] = React.useState(
+    () => projectsQuery.errorUpdateCount,
+  );
+  const projectsLoading =
+    projectsQuery.isPending &&
+    projectsQuery.errorUpdateCount === projectFailuresAtOpen;
   // A remembered Project beyond the first page is fetched by ID. It falls back
   // to the first listed Project only if that fetch fails (deleted or no
   // longer accessible).
   const rememberedProjectId =
-    composerDefaultsQuery.data === undefined || projectsQuery.isPending
+    composerDefaultsQuery.data === undefined || projectsLoading
       ? undefined
       : rememberedProjectToResolve({
           explicit: initialProjectId,
@@ -189,7 +200,7 @@ function NewThreadModal({
   if (
     settingsQuery.isPending ||
     composerDefaultsQuery.isPending ||
-    projectsQuery.isPending ||
+    projectsLoading ||
     (rememberedProjectId !== undefined && rememberedProjectQuery.isPending)
   )
     return (
@@ -221,6 +232,7 @@ function NewThreadModal({
   return (
     <ScopedNewThreadModal
       initialProjectId={initialProjectId}
+      initialPrompt={initialPrompt}
       finalFocus={finalFocus}
       onClose={onClose}
       onAccepted={onAccepted}
@@ -273,88 +285,6 @@ function NewThreadModalHeader() {
   );
 }
 
-function NewThreadDraftWarning({
-  warning,
-}: {
-  readonly warning: NewThreadDraftSnapshot["warning"];
-}) {
-  if (warning === undefined) return null;
-  return (
-    <div className="notice" role="status">
-      {warning === "too-large"
-        ? "This prompt is over the 64 KiB draft limit. It remains open but is not saved."
-        : "This draft could not be saved in this browser. It remains available while this composer stays open."}
-    </div>
-  );
-}
-
-function NewThreadStillCreating({ onRetry }: { readonly onRetry: () => void }) {
-  return (
-    <div className="notice" role="status">
-      Still creating…
-      <Button type="button" variant="secondary" onClick={onRetry}>
-        Retry
-      </Button>
-    </div>
-  );
-}
-
-/**
- * A composer error as a toast, raised when it mounts and dismissed when the
- * error clears; key it by the error so a new one raises a new toast.
- */
-function NewThreadErrorToast({
-  message,
-  acceptedThreadId,
-  onAccepted,
-}: {
-  readonly message: string;
-  readonly acceptedThreadId?: ThreadId;
-  readonly onAccepted: () => void;
-}) {
-  const navigate = useNavigate();
-  useMountEffect(() => {
-    const id = toast.error(message, {
-      duration: Number.POSITIVE_INFINITY,
-      ...(acceptedThreadId === undefined
-        ? {}
-        : {
-            action: {
-              label: "Open created thread",
-              onClick: () => {
-                void navigate({
-                  to: "/threads/$threadId",
-                  params: { threadId: acceptedThreadId },
-                }).then(onAccepted, () => {
-                  toast.error(
-                    "Thread was created, but still could not be opened.",
-                  );
-                });
-              },
-            },
-          }),
-    });
-    return () => {
-      toast.dismiss(id);
-    };
-  });
-  return null;
-}
-
-const updatePendingImages = async (
-  load: () => Promise<ReadonlyArray<PendingAttachment>>,
-  fallbackError: string,
-  setImages: (images: ReadonlyArray<PendingAttachment>) => void,
-  setError: (error?: string) => void,
-) => {
-  setError(undefined);
-  try {
-    setImages(await load());
-  } catch (cause) {
-    setError(cause instanceof Error ? cause.message : fallbackError);
-  }
-};
-
 /** The first failure's message, in the order the composer reports them. */
 const firstErrorMessage = (errors: ReadonlyArray<unknown>) =>
   errors.find((cause): cause is Error => cause instanceof Error)?.message;
@@ -368,7 +298,12 @@ function useComposerProjects(
   initialProjectId: ProjectId | undefined,
   rememberedProject: ProjectData | undefined,
 ) {
-  const projectsQuery = useInfiniteQuery(projectsQueryOptions(userId));
+  // The modal already fetched the list as it opened; a failure stays failed
+  // until Retry instead of refetching as this composer mounts.
+  const projectsQuery = useInfiniteQuery({
+    ...projectsQueryOptions(userId),
+    retryOnMount: false,
+  });
   const listedProjects: ReadonlyArray<ProjectData> =
     projectsQuery.data?.pages.flatMap((page) => page.items) ?? [];
   const listedSelectedProject = listedProjects.find(
@@ -548,6 +483,7 @@ function useComposerOrb({
 
 function ScopedNewThreadModal({
   initialProjectId,
+  initialPrompt,
   finalFocus,
   onClose,
   onAccepted,
@@ -558,6 +494,8 @@ function ScopedNewThreadModal({
   rememberedProject,
 }: {
   readonly initialProjectId?: ProjectId;
+  /** Text the composer opens with, after any draft the person already has. */
+  readonly initialPrompt?: string;
   readonly finalFocus?: React.ComponentProps<typeof Dialog.Popup>["finalFocus"];
   readonly onClose: () => void;
   readonly onAccepted: () => void;
@@ -616,20 +554,19 @@ function ScopedNewThreadModal({
     creation,
   } = useNewThreadDraft(identity.id, workspaceId);
   const prompt = draft.text;
-  // The draft store keeps the files when the composer closes, as it keeps
-  // the prompt.
-  const imageCollection = draftStore.images;
-  const images = React.useSyncExternalStore(
-    draftStore.subscribe,
-    draftStore.getImages,
-    draftStore.getImages,
-  );
-  const setImages = draftStore.setImages;
   const [runnerProfileOverride, setRunnerProfileOverride] = React.useState<
     RunnerProfileId | undefined
   >();
   // A send outlives this composer when the user leaves the page mid-create.
   const composerOpen = React.useRef(true);
+  useMountEffect(() => {
+    // The opener's prompt joins the saved draft rather than replacing it.
+    const draftText = draftStore.getSnapshot().text.trimEnd();
+    if (initialPrompt !== undefined && !draftText.includes(initialPrompt))
+      draftStore.setText(
+        draftText === "" ? initialPrompt : `${draftText}\n\n${initialPrompt}`,
+      );
+  });
   useMountEffect(() => {
     composerOpen.current = true;
     return () => {
@@ -637,6 +574,8 @@ function ScopedNewThreadModal({
     };
   });
   const [error, setError] = React.useState<string>();
+  const { imageCollection, images, setImages, addFiles, takeScreenshot } =
+    useDraftImages(draftStore, setError);
   const [acceptedNavigationTarget, setAcceptedNavigationTarget] =
     React.useState<ThreadId>();
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -660,7 +599,8 @@ function ScopedNewThreadModal({
   const visibleError =
     error ??
     firstErrorMessage([
-      projectsQuery.error,
+      // A failed first page has its own toast, with Retry.
+      projectsQuery.data === undefined ? null : projectsQuery.error,
       selectedProjectQuery.error,
       defaultsQuery.error,
     ]);
@@ -713,20 +653,6 @@ function ScopedNewThreadModal({
     onSend: (text) => void submit(text),
     textareaRef,
   });
-
-  const addFiles = (files: ReadonlyArray<File>) =>
-    updatePendingImages(
-      () => imageCollection.addFiles(files),
-      "Files could not be attached.",
-      setImages,
-      setError,
-    );
-
-  // Never sets the composer's error notice: an uncaptured screenshot is not
-  // an error. See addScreenshot.
-  const takeScreenshot = async () => {
-    setImages(await addScreenshot(imageCollection));
-  };
 
   // A send in flight carries on after the composer closes: Core finishes
   // it, and the sidebar keeps showing the Thread as being created.
@@ -806,22 +732,21 @@ function ScopedNewThreadModal({
           dictationControls={dictation.controls}
           dictationActive={dictation.active}
           dictationHideSubmit={dictation.hideSubmit}
-          footer={
-            <>
-              <NewThreadDraftWarning warning={draft.warning} />
-              {creation.stalled && creation.retry !== undefined ? (
-                <NewThreadStillCreating onRetry={creation.retry} />
-              ) : null}
-              {visibleError === undefined ? null : (
-                <NewThreadErrorToast
-                  key={`${visibleError}:${acceptedNavigationTarget ?? ""}`}
-                  message={visibleError}
-                  acceptedThreadId={acceptedNavigationTarget}
-                  onAccepted={onAccepted}
-                />
-              )}
-            </>
+        />
+        <NewThreadToasts
+          warning={draft.warning}
+          onRetryStalled={creation.stalled ? creation.retry : undefined}
+          projectsFailure={
+            projectsQuery.isError && projectsQuery.data === undefined
+              ? {
+                  count: projectsQuery.errorUpdateCount,
+                  retry: () => void projectsQuery.refetch(),
+                }
+              : undefined
           }
+          error={visibleError}
+          acceptedThreadId={acceptedNavigationTarget}
+          onAccepted={onAccepted}
         />
       </ModalSurface>
     </Dialog.Root>

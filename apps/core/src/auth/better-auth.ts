@@ -424,7 +424,15 @@ export const createAuth = (
       cookiePrefix: localCookiePrefix(requirements),
       ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] },
       useSecureCookies: new URL(requirements.authUrl).protocol === "https:",
-      database: { generateId: () => crypto.randomUUID() },
+      database: {
+        generateId: () => crypto.randomUUID(),
+        // Better Auth otherwise introspects every D1 table (sqlite_master,
+        // then table_info and index_list batches) once per instance, and dx
+        // builds one per request. dx's D1 migrations are the schema; the
+        // worker test "matches Better Auth's expected schema" runs the same
+        // check against them instead.
+        validateSchema: false,
+      },
     },
     plugins: [...providerPlugins, workspaceOrganization(bindings), dxApiKey()],
   });

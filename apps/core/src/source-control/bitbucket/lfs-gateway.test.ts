@@ -3,6 +3,17 @@ import type { Bindings } from "../../http/types.js";
 import type { BitbucketGitLease } from "./git-gateway.js";
 import { handleBitbucketLfs } from "./lfs-gateway.js";
 
+/** The parts of a Git LFS batch response these tests read. */
+type LfsBatchResponse = {
+  readonly objects: readonly [
+    {
+      readonly actions: Readonly<
+        Record<"upload" | "verify" | "download", { readonly href: string }>
+      >;
+    },
+  ];
+};
+
 const oid = "a".repeat(64);
 const token = "oauth-secret";
 const leaseToken = "guest-lease";
@@ -192,7 +203,8 @@ describe("Bitbucket LFS gateway", () => {
         objects: [{ oid, size: 3 }],
       }),
     });
-    const actions = ((await batch.json()) as any).objects[0].actions;
+    const actions = ((await batch.json()) as LfsBatchResponse).objects[0]
+      .actions;
     await invoke({
       db,
       fetcher,
@@ -247,8 +259,8 @@ describe("Bitbucket LFS gateway", () => {
         objects: [{ oid, size: 3 }],
       }),
     });
-    const href = ((await response.json()) as any).objects[0].actions.download
-      .href;
+    const href = ((await response.json()) as LfsBatchResponse).objects[0]
+      .actions.download.href;
     await expect(
       invoke({
         db,

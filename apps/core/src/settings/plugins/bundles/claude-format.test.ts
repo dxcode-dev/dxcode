@@ -5,6 +5,9 @@ import { PluginBundleRejected } from "./errors.js";
 import { readZipArchive } from "./zip.js";
 import { buildZip, type FixtureEntry } from "./zip-fixture.js";
 
+/** A `${NAME}` placeholder, which a Claude plugin's MCP config expands. */
+const variable = (name: string) => `\${${name}}`;
+
 // Ways a Claude Code bundle can be malformed or hostile, each covered below:
 // - no plugin at the root, or a marketplace instead of a plugin;
 // - a plugin.json that is not JSON or names the plugin badly;
@@ -108,16 +111,19 @@ const examplePlugin: ReadonlyArray<FixtureEntry> = [
         github: {
           type: "http",
           url: "https://api.githubcopilot.com/mcp/",
-          headers: { Authorization: "Bearer ${GITHUB_TOKEN}" },
+          headers: { Authorization: `Bearer ${variable("GITHUB_TOKEN")}` },
         },
         local: { command: "npx", args: ["some-server"] },
         streaming: { type: "sse", url: "https://sse.example.com/sse" },
         insecure: { type: "http", url: "http://mcp.example.com/mcp" },
-        templated: { type: "http", url: "https://${HOST}/mcp" },
+        templated: { type: "http", url: `https://${variable("HOST")}/mcp` },
         tokened: {
           type: "http",
           url: "https://tokened.example.com/mcp",
-          headers: { "X-Api-Key": "${API_KEY}", Host: "evil.example.com" },
+          headers: {
+            "X-Api-Key": variable("API_KEY"),
+            Host: "evil.example.com",
+          },
         },
       },
     }),

@@ -41,6 +41,7 @@ export function MainAgentRole({
   effective,
   autoLabel,
   servedModels,
+  nameOf,
   choicesPending,
   choicesError,
   busy,
@@ -52,6 +53,8 @@ export function MainAgentRole({
   readonly effective: ModeSlot | undefined;
   readonly autoLabel: string;
   readonly servedModels: ReadonlyArray<ServedModelChoiceData>;
+  /** A model's catalog display name. */
+  readonly nameOf: (model: string) => string;
   readonly choicesPending: boolean;
   readonly choicesError: string | undefined;
   readonly busy: boolean;
@@ -89,7 +92,7 @@ export function MainAgentRole({
         {choice !== AUTO &&
         !servedModels.some((m) => m.canonical === choice.model) ? (
           <option value={choice.model} disabled>
-            {choice.model} · Not served
+            {nameOf(choice.model)} · Not served
           </option>
         ) : null}
         {servedModels.map((model) => (

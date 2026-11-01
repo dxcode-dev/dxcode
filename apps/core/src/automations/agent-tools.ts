@@ -790,7 +790,7 @@ export const createAutomationTools = (
     defineTool({
       name: "link_github_issue",
       description: description([
-        "Record that this Thread works on a GitHub issue or pull request. The Thread header then lists it with its title and state, and find_thread finds this Thread with issue:owner/repo#N. Use it when you take on an issue or PR, such as when you add an Owner thread: line for this Thread to an issue's body.",
+        "Record that this Thread works on a GitHub issue or pull request. The Thread header then lists it with its title and state, and find_thread finds this Thread with issue:owner/repo#N. Use it when you take on an issue or PR, such as when you note this Thread in an issue's body.",
         "A comment subscription (pr-comments or issue-comments) on an issue or PR links it already, and a PR this Thread opens is linked when it opens. The link stays after the subscription ends. dx reads the item once as this Thread's gh does; the dx GitHub App's webhooks keep its title and state current.",
       ]),
       input: v.object({

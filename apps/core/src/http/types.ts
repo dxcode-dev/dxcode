@@ -1,4 +1,6 @@
 import type { Principal, ThreadLifecycleState } from "@dx/domain";
+import type { DxAuth } from "../auth/better-auth.js";
+import type { BrowserSessionLookup } from "../auth/request-auth.js";
 import type { BrowserSessionBinding } from "../auth/session-sockets.js";
 import type { OrbContainerObject } from "../execution/cloudflare/orb-container-object.js";
 
@@ -65,15 +67,9 @@ export interface Bindings {
   readonly DX_SIGNUP_ENABLED?: string;
   readonly DX_INTEGRATION_GITHUB_APP?: string;
   /**
-   * `owner/name`: the GitHub repository bug reports are filed in, through
-   * the GitHub App above. Absent keeps reports in this deployment only.
-   */
-  readonly DX_BUG_REPORT_REPOSITORY?: string;
-  /** Comma-separated labels for a filed issue; absent means `intake`. */
-  readonly DX_BUG_REPORT_LABELS?: string;
-  /**
-   * Comma-separated emails of people who may open any report's images and
-   * diagnostics, besides its reporter: those who triage filed issues.
+   * Comma-separated emails of the deployment's report readers: people who
+   * may list and open every bug report, in the app and through their
+   * agents' bug report tools, besides each report's reporter.
    */
   readonly DX_BUG_REPORT_READERS?: string;
   /**
@@ -137,6 +133,10 @@ export interface Variables {
    * holder so the socket closes when the session ends (auth/session-sockets.ts).
    */
   readonly browserSession?: BrowserSessionBinding;
+  /** Better Auth for this request (auth/request-auth.ts). */
+  readonly auth?: DxAuth;
+  /** This request's one D1 session read (auth/request-auth.ts). */
+  readonly authoritativeSession?: Promise<BrowserSessionLookup>;
   readonly threadAccess: "owner" | "contribute" | "view";
   readonly threadOwnerUserId: string;
   readonly threadLifecycleState: ThreadLifecycleState;

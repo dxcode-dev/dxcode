@@ -17,11 +17,11 @@ import {
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Schema } from "effect";
 import { type Context, Hono } from "hono";
-import { createAuth } from "../../auth/better-auth.js";
 import {
   BrowserSessionRequired,
   requireBrowserSession,
 } from "../../auth/browser-session.js";
+import { requestAuth } from "../../auth/request-auth.js";
 import { loadAuthenticationRequirements } from "../../auth/requirements.js";
 import { deliverGitHubWebhook } from "../../automations/deliver.js";
 import type { AppEnv } from "../../http/types.js";
@@ -179,7 +179,7 @@ const browser = async (context: Context<AppEnv>) => {
   const requirements = await Effect.runPromise(
     loadAuthenticationRequirements(context.env),
   );
-  const auth = createAuth(context.env, requirements);
+  const auth = requestAuth(context, requirements);
   return Effect.runPromise(requireBrowserSession(context, auth));
 };
 

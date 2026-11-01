@@ -11,11 +11,11 @@ import { SourceControlAccessDenied, WorkspacePolicyDenied } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Schema } from "effect";
 import { type Context, Hono } from "hono";
-import { createAuth } from "../../auth/better-auth.js";
 import {
   BrowserSessionRequired,
   requireBrowserSession,
 } from "../../auth/browser-session.js";
+import { requestAuth } from "../../auth/request-auth.js";
 import { loadAuthenticationRequirements } from "../../auth/requirements.js";
 import type { AppEnv } from "../../http/types.js";
 import { sourceControlLogger } from "../../logging.js";
@@ -41,7 +41,7 @@ const browser = async (context: Context<AppEnv>) => {
   if (!context.get("principal").credentialScopes?.includes("personal"))
     throw new BrowserSessionRequired();
   return Effect.runPromise(
-    requireBrowserSession(context, createAuth(context.env, requirements)),
+    requireBrowserSession(context, requestAuth(context, requirements)),
   );
 };
 const allowPersonal = async (context: Context<AppEnv>, db: D1Database) => {

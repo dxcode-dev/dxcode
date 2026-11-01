@@ -650,7 +650,6 @@ export const ModelRoutingSettings = ({
       ) : graph.data ? (
         <ModelRoutingGraph
           graph={graph.data}
-          catalog={catalog.data}
           choices={personal ? choices.data : undefined}
           connections={rows}
           dictation={

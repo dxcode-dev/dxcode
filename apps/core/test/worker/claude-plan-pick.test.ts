@@ -1,5 +1,13 @@
 import { env } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  assert,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import app from "../../src/app.js";
 import type { Bindings } from "../../src/http/types.js";
 import {
@@ -208,9 +216,9 @@ const tokenOf = async (threadId: string, submissionId: string) => {
 describe("Claude plan pick", () => {
   it("lists each plan's last-known limits for the composer and list_agent_modes", async () => {
     const { cookie } = await signup("claude-plan-pick-limits@example.com", 181);
-    const first = await connect(cookie, "Claude Pro/Max", TOKENS[0]!);
-    const second = await connect(cookie, "Claude Pro/Max 2", TOKENS[1]!);
-    const third = await connect(cookie, "Claude Pro/Max 3", TOKENS[2]!);
+    const first = await connect(cookie, "Claude Pro/Max", TOKENS[0]);
+    const second = await connect(cookie, "Claude Pro/Max 2", TOKENS[1]);
+    const third = await connect(cookie, "Claude Pro/Max 3", TOKENS[2]);
     const reset = now() + 2 * hour;
     const weekly = now() + 50 * hour;
     const firstUsage = await reported(
@@ -266,8 +274,8 @@ describe("Claude plan pick", () => {
       "claude-plan-pick-create@example.com",
       182,
     );
-    const first = await connect(cookie, "Claude Pro/Max", TOKENS[0]!);
-    const second = await connect(cookie, "Claude Pro/Max 2", TOKENS[1]!);
+    const first = await connect(cookie, "Claude Pro/Max", TOKENS[0]);
+    const second = await connect(cookie, "Claude Pro/Max 2", TOKENS[1]);
     const projectId = "prj_00000000-0000-4000-8000-0000000c1a01";
     await seedProject(userId, projectId);
 
@@ -284,7 +292,8 @@ describe("Claude plan pick", () => {
       claudeConnectionId: second,
     });
     expect(picked.status).toBe(201);
-    const threadId = picked.body.data.id!;
+    const threadId = picked.body.data.id;
+    assert.exists(threadId);
     expect(await boundTo(threadId)).toMatchObject({
       claude_connection_id: second,
       claude_connection_bound_at: expect.any(String),
@@ -334,7 +343,7 @@ describe("Claude plan pick", () => {
     expect(off.status).toBe(400);
     expect(off.body.data.code).toBe("CLAUDE_PLAN_UNAVAILABLE");
     const other = await signup("claude-plan-pick-other@example.com", 183);
-    const foreign = await connect(other.cookie, "Claude Pro/Max", TOKENS[2]!);
+    const foreign = await connect(other.cookie, "Claude Pro/Max", TOKENS[2]);
     const notMine = await create(cookie, projectId, {
       selection,
       claudeConnectionId: foreign,

@@ -1,9 +1,9 @@
+import { Menu } from "@base-ui/react/menu";
 import type { ThreadSandboxFilePath } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { File } from "@pierre/diffs/react";
 import { useQuery } from "@tanstack/react-query";
 import { AudioLines, Copy, Download, EllipsisVertical } from "lucide-react";
-import { Menu } from "@base-ui/react/menu";
 import * as React from "react";
 import { downloadFromUrl } from "../../../shared/download-from-url.js";
 import { useTheme } from "../../../shared/theme/theme-provider.js";
@@ -11,16 +11,16 @@ import {
   type FileMediaKind,
   fileMediaKind,
 } from "../../../shared/ui/media-kind.js";
-import type { CenterFileTab } from "./file-tab.js";
+import { PaneToolbar } from "../panes/pane-toolbar-slot.js";
 import {
   absolutePathFor,
   type FileReveal,
   resolveReveal,
   sandboxFileUrl,
 } from "../transcript-file-link.js";
-import { PaneToolbar } from "../panes/pane-toolbar-slot.js";
 import { FilePreview } from "./file-preview.js";
 import { filePreviewKind } from "./file-preview-model.js";
+import type { CenterFileTab } from "./file-tab.js";
 import { ThreadFilePane } from "./files-panel.js";
 import { RevealLine } from "./reveal-line.js";
 import {

@@ -500,6 +500,10 @@
   outline: 2px solid var(--ring);
   outline-offset: -2px;
 }
+/* The shown tab's own controls sit in the tab, between label and close. */
+.stacked-tab-accessory {
+  display: contents;
+}
 .stacked-row-actions {
   padding-right: 4px;
 }

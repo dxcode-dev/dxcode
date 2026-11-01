@@ -126,6 +126,36 @@ export const normalizePersonalAccountUsername = (value: string): string =>
   value.trim().toLowerCase().replace(/^@/, "");
 
 /**
+ * Why a typed display name would be refused, or undefined when the server
+ * accepts it. Settings forms and the account route share these messages.
+ */
+export const personalAccountDisplayNameProblem = (
+  value: string,
+): string | undefined =>
+  Schema.is(PersonalAccountDisplayName)(
+    normalizePersonalAccountDisplayName(value),
+  )
+    ? undefined
+    : "Enter a display name between 1 and 128 characters.";
+
+/**
+ * Why a typed username would be refused, or undefined when the server accepts
+ * it after normalizing (trim, lowercase, leading `@` removed).
+ */
+export const personalAccountUsernameProblem = (
+  value: string,
+): string | undefined => {
+  const username = normalizePersonalAccountUsername(value);
+  if (Schema.is(PersonalAccountUsername)(username)) return undefined;
+  if (username === "") return "Enter a username.";
+  if (!/^[a-z0-9-]*$/.test(username))
+    return "Use only letters, numbers, and hyphens.";
+  if (username.length < 3) return "Use at least 3 characters.";
+  if (username.length > 32) return "Use at most 32 characters.";
+  return "Start and end with a letter or number.";
+};
+
+/**
  * Whether a username is the `user-<24 hex>` placeholder dx assigns at sign-up
  * when the email address gives no usable name (the `personal_account` insert
  * trigger), or assigned to everyone before migration 0097. People see such a

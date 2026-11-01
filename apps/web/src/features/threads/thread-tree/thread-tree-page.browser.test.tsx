@@ -74,17 +74,17 @@ const item = (
 const family = {
   rootThreadId: root,
   items: [
-    item(root, "Chief of staff", 0),
-    item(lead, "Engineering lead", 1, {
+    item(root, "Release planning", 0),
+    item(lead, "Build coordinator", 1, {
       startedByThreadId: root,
       unread: true,
     }),
-    item(worker, "Issue owner #1100", 2, {
+    item(worker, "Fix #1100", 2, {
       startedByThreadId: lead,
       activityStatus: "working",
     }),
     item(legacy, "Started before starters", 3),
-    item(second, "Issue owner #1141", 4, {
+    item(second, "Fix #1141", 4, {
       startedByThreadId: lead,
       lifecycleState: "archived",
       turnFailed: true,
@@ -163,10 +163,10 @@ describe("Thread tree page", () => {
     try {
       expect(page.fetch.mock.calls[0]?.[0]).toBe(`/v1/threads/${worker}/tree`);
       expect(outline(page.container)).toEqual([
-        "Chief of staff",
-        "  Engineering lead",
-        "    Issue owner #1100",
-        "    Issue owner #1141",
+        "Release planning",
+        "  Build coordinator",
+        "    Fix #1100",
+        "    Fix #1141",
         "  Started before starters",
       ]);
       // The page opened from the worker marks it current.
@@ -217,8 +217,8 @@ describe("Thread tree page", () => {
       await React.act(async () => toggle?.click());
       expect(toggle?.getAttribute("aria-expanded")).toBe("false");
       expect(outline(page.container)).toEqual([
-        "Chief of staff",
-        "  Engineering lead",
+        "Release planning",
+        "  Build coordinator",
         "  Started before starters",
       ]);
       expect(
@@ -239,8 +239,8 @@ describe("Thread tree page", () => {
         rootThreadId: root,
         // A member who may not read the root; two Threads name each other.
         items: [
-          item(lead, "Engineering lead", 1, { startedByThreadId: root }),
-          item(worker, "Issue owner #1100", 2, { startedByThreadId: lead }),
+          item(lead, "Build coordinator", 1, { startedByThreadId: root }),
+          item(worker, "Fix #1100", 2, { startedByThreadId: lead }),
           item(legacy, "Loop A", 3, { startedByThreadId: second }),
           item(second, "Loop B", 4, { startedByThreadId: legacy }),
         ],
@@ -249,10 +249,7 @@ describe("Thread tree page", () => {
     });
     try {
       const rows = outline(page.container);
-      expect(rows.slice(0, 2)).toEqual([
-        "Engineering lead",
-        "  Issue owner #1100",
-      ]);
+      expect(rows.slice(0, 2)).toEqual(["Build coordinator", "  Fix #1100"]);
       expect(rows).toHaveLength(4);
       expect(rows.filter((line) => /Loop/.test(line))).toHaveLength(2);
       expect(page.container.textContent).toMatch(/newest .*not shown/i);

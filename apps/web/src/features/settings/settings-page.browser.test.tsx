@@ -6,6 +6,12 @@ import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthContext } from "../../shared/auth/auth-context.js";
+import { createCommandKeydownHandler } from "../../shared/commands/command-dispatcher.js";
+import {
+  type CommandRuntime,
+  createCommandRegistry,
+} from "../../shared/commands/command-registry.js";
+import { KeyboardShortcutsSettings } from "./keyboard-shortcuts/keyboard-shortcuts-settings.js";
 import { settingsKeys } from "./settings-context-queries.js";
 import { SettingsPage } from "./settings-page.js";
 import type {
@@ -342,6 +348,54 @@ describe("SettingsPage workspace lifetime", () => {
       replace: true,
     });
     editor.remove();
+  });
+
+  it("cancels a proposed shortcut on Escape and keeps settings open", async () => {
+    const registry = createCommandRegistry({ platform: "linux" });
+    const handler = createCommandKeydownHandler({
+      registry,
+      runtime: new Proxy({} as CommandRuntime, { get: () => vi.fn() }),
+      getContext: () => "keyboard-shortcuts",
+      document,
+    });
+    window.addEventListener("keydown", handler, true);
+    const shortcuts: SettingsSectionRegistration = {
+      ...registration,
+      id: "keyboard-shortcuts-test",
+      component: () => (
+        <KeyboardShortcutsSettings
+          registry={registry}
+          onShowAll={vi.fn()}
+          showAllKeycaps={[]}
+        />
+      ),
+    };
+    await act(() => root.render(page(workspaceA, shortcuts)));
+    const press = (init: KeyboardEventInit) =>
+      act(() => {
+        (document.activeElement ?? document.body).dispatchEvent(
+          new KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            ...init,
+          }),
+        );
+      });
+    const edit = document.querySelector<HTMLButtonElement>(
+      "button[aria-label='Edit Open projects']",
+    );
+    edit?.focus();
+    await act(() => edit?.click());
+    await press({ key: "o", ctrlKey: true, shiftKey: true });
+    expect(document.body.textContent).toContain("Proposed shortcut");
+
+    await press({ key: "Escape" });
+
+    window.removeEventListener("keydown", handler, true);
+    expect(navigation).not.toHaveBeenCalled();
+    expect(document.querySelector(".shortcut-editor")).toBeNull();
+    expect(registry.getBinding("navigation.projects")).toBeNull();
+    expect(document.activeElement).toBe(edit);
   });
 
   it("leaves Escape to an actively recording shortcut", async () => {

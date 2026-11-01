@@ -21,7 +21,11 @@ import {
   workspaceDiskFullFailure,
   workspaceDiskGuard,
 } from "../orb-disk/guard.js";
-import { markRunFailure } from "../runtime/run-failure.js";
+import {
+  isReadOnlyText,
+  workspaceReadOnlyFailure,
+} from "../orb-disk/read-only.js";
+import { classifyRunFailure, markRunFailure } from "../runtime/run-failure.js";
 import {
   SourceRuntimeBroker,
   type SourceRuntimeBrokerShape,
@@ -102,16 +106,32 @@ const stderrTail = (value: string) =>
     .trim()
     .slice(-STDERR_TAIL_CHARS);
 
+/**
+ * The Orb's filesystem turned read-only: no retry on the same disk helps,
+ * so activation restarts the Orb (see `orb-disk/read-only.ts`).
+ */
+const readOnly = (stderr: string) =>
+  new SourceWorkspaceInitializationFailed({
+    stderrTail: stderrTail(stderr),
+    message: workspaceReadOnlyFailure(),
+  });
+
+/**
+ * A command failed; one that failed writing to a read-only disk, as the
+ * setup program reports it (`read-only:Read-only file system`), is that.
+ */
 const commandFailed = (result: {
   readonly exitCode?: number;
   readonly stderr?: string;
 }) =>
-  new SourceWorkspaceInitializationFailed({
-    ...(result.exitCode === undefined ? {} : { exitCode: result.exitCode }),
-    ...(result.stderr === undefined || result.stderr === ""
-      ? {}
-      : { stderrTail: stderrTail(result.stderr) }),
-  });
+  result.stderr !== undefined && isReadOnlyText(result.stderr)
+    ? readOnly(result.stderr)
+    : new SourceWorkspaceInitializationFailed({
+        ...(result.exitCode === undefined ? {} : { exitCode: result.exitCode }),
+        ...(result.stderr === undefined || result.stderr === ""
+          ? {}
+          : { stderrTail: stderrTail(result.stderr) }),
+      });
 
 /**
  * A hooks run that failed in dx's own machinery (the source lock, a guest
@@ -120,7 +140,8 @@ const commandFailed = (result: {
  * An invalid input is dx's bug, and a retry repeats it.
  */
 const asInfrastructureFailure = (error: SourceWorkspaceInitializationFailed) =>
-  /^invalid-input\b/.test(error.stderrTail ?? "")
+  /^invalid-input\b/.test(error.stderrTail ?? "") ||
+  isReadOnlyText(error.stderrTail ?? "")
     ? error
     : new SourceWorkspaceInitializationFailed({
         ...(error.exitCode === undefined ? {} : { exitCode: error.exitCode }),
@@ -322,7 +343,9 @@ export const verifySourceWorkspaceAssets = Effect.fn(
     verdictResult.exitCode !== ASSET_STALE_EXIT &&
     verdictResult.exitCode !== 43
   )
-    return yield* new SourceWorkspaceInitializationFailed();
+    return yield* isReadOnlyText(verdictResult.stderr)
+      ? readOnly(verdictResult.stderr)
+      : commandFailed(verdictResult);
   const verdict = yield* Effect.try({
     try: () =>
       Schema.decodeUnknownSync(AssetVerdict)(
@@ -373,6 +396,8 @@ const bounded = (value: unknown) =>
  */
 const guestExecLost = (cause: unknown) => {
   const message = cause instanceof Error ? cause.message : String(cause);
+  // A file write the provider reports as failed, on a read-only disk.
+  if (isReadOnlyText(message)) return readOnly(message);
   const failed = commandFailed({ stderr: message });
   return new SourceWorkspaceInitializationFailed({
     ...(failed.stderrTail === undefined
@@ -497,6 +522,8 @@ const requireSuccess = (
     return Effect.fail(new SourceWorkspaceHistoryUnavailable());
   if (result.exitCode === 60 || isDiskFullText(result.stderr))
     return Effect.fail(diskFull());
+  if (isReadOnlyText(result.stderr))
+    return Effect.fail(readOnly(result.stderr));
   return Effect.fail(commandFailed(result));
 };
 
@@ -1015,24 +1042,29 @@ const makeSourceWorkspaceService = (
       let prefetchedHooks: typeof HooksState.Type | undefined;
       let prefetchedHooksStderr = "";
       let checkout: typeof CheckoutState.Type;
+      // The program reports a failed checkout on stdout and its failure kind
+      // on stderr; the error keeps both so the log names the kind.
+      let checkoutOutput: CommandResult;
       const verifiedOperation = assetVerification.operation;
       if (verifiedOperation === undefined) {
-        const checkoutResult = yield* run(preparation, "snapshot", base);
-        yield* requireSuccess(checkoutResult);
-        checkout = yield* decodeCheckoutState(checkoutResult);
+        checkoutOutput = yield* run(preparation, "snapshot", base);
+        yield* requireSuccess(checkoutOutput);
+        checkout = yield* decodeCheckoutState(checkoutOutput);
       } else if (runThreadHooks) {
+        checkoutOutput = verifiedOperation;
         yield* requireSuccess(verifiedOperation);
         const activation = yield* Effect.try({
           try: () =>
             Schema.decodeUnknownSync(ActivationState)(
               JSON.parse(verifiedOperation.stdout || "{}") as unknown,
             ),
-          catch: () => new SourceWorkspaceInitializationFailed(),
+          catch: () => commandFailed(verifiedOperation),
         });
         checkout = activation.checkout;
         prefetchedHooks = activation.hooks;
         prefetchedHooksStderr = verifiedOperation.stderr;
       } else {
+        checkoutOutput = verifiedOperation;
         yield* requireSuccess(verifiedOperation);
         checkout = yield* decodeCheckoutState(verifiedOperation);
       }
@@ -1042,7 +1074,7 @@ const makeSourceWorkspaceService = (
         stage = "pre-clone";
         yield* runPreClone(preparation, source, base);
         stage = "initialize-checkout";
-        const checkoutResult =
+        checkoutOutput =
           source.authority === undefined
             ? yield* run(preparation, "initialize-exact-anonymous", base)
             : yield* broker.withCommandEnvironment(
@@ -1052,14 +1084,16 @@ const makeSourceWorkspaceService = (
                 (credential) =>
                   run(preparation, "initialize", { ...base, ...credential }),
               );
-        yield* requireSuccess(checkoutResult);
-        checkout = yield* decodeCheckoutState(checkoutResult);
+        yield* requireSuccess(checkoutOutput);
+        checkout = yield* decodeCheckoutState(checkoutOutput);
       }
       if (checkout.status === "conflict")
         return yield* new SourceWorkspaceConflict();
       if (checkout.status === "disk-full") return yield* diskFull();
       if (checkout.status !== "ready")
-        return yield* new SourceWorkspaceInitializationFailed();
+        return yield* isReadOnlyText(checkoutOutput.stderr)
+          ? readOnly(checkoutOutput.stderr)
+          : commandFailed(checkoutOutput);
       // dx initializes only the private submodules the Project selected, and
       // only on GitHub. Every other submodule stays the user's to manage.
       for (const module of provider === "github" ? checkout.modules : []) {
@@ -1177,6 +1211,7 @@ const makeSourceWorkspaceService = (
                     ? {}
                     : { stderrTail: error.stderrTail }),
                   retryable: error.message.includes("(dx_failure:platform:"),
+                  code: classifyRunFailure({ message: error.message }).code,
                 }
               : {}),
           }),

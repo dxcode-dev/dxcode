@@ -26,6 +26,7 @@ const pluginHost = vi.hoisted(() => ({
     throw new Error("Host context is read only when a tool runs.");
   }),
   resolveAgentPluginTools: vi.fn(),
+  resolveAgentBugReportReader: vi.fn(async () => false),
 }));
 
 const mcp = vi.hoisted(() => ({
@@ -49,6 +50,9 @@ const automationTools = vi.hoisted(() => ({
 }));
 const storageTools = vi.hoisted(() => ({
   createThreadStorageTools: vi.fn((): unknown[] => []),
+}));
+const bugReportTools = vi.hoisted(() => ({
+  createBugReportTools: vi.fn((): unknown[] => []),
 }));
 const needsYouTools = vi.hoisted(() => ({
   createNeedsYouTools: vi.fn((): unknown[] => []),
@@ -83,6 +87,7 @@ vi.mock("../threads/agent-tools.js", () => threadTools);
 vi.mock("../automations/agent-tools.js", () => automationTools);
 vi.mock("../thread-storage/agent-tools.js", () => storageTools);
 vi.mock("../needs-you/agent-tools.js", () => needsYouTools);
+vi.mock("../bug-reports/agent-tools.js", () => bugReportTools);
 vi.mock("../portals/prompt.js", () => ({ threadPortalPrompt: () => "" }));
 vi.mock("../plugins/code/providers/wasm.js", () => ({ getCodeWasm: vi.fn() }));
 vi.mock("../settings/plugins/flue.js", () => ({
@@ -241,6 +246,8 @@ describe("DxAgent", () => {
       "set_schedule",
       "request_attention",
     ]);
+    // Only a report reader's submission gets the bug report tools.
+    expect(bugReportTools.createBugReportTools).not.toHaveBeenCalled();
     expect(needsYouTools.createNeedsYouTools).toHaveBeenCalledWith(
       "thr_existing",
       pluginHost.agentThreadToolsContext,
@@ -254,6 +261,27 @@ describe("DxAgent", () => {
     DxAgent({ id: "thr_model_preview" });
     expect(threadTools.createThreadTools).not.toHaveBeenCalled();
     expect(hooks.useTool).not.toHaveBeenCalled();
+  });
+
+  it("mounts the bug report tools only for a report reader's submission", () => {
+    bugReportTools.createBugReportTools.mockReturnValueOnce([
+      { name: "list_bug_reports", run: vi.fn() },
+      { name: "read_bug_report", run: vi.fn() },
+    ]);
+    hooks.usePromptData.mockReturnValueOnce({
+      plugins: { submissionId: "sub_1", tools: [] },
+      bugReportReader: true,
+    } as never);
+    DxAgent({ id: "thr_reader" });
+    const names = hooks.useTool.mock.calls.map(
+      ([tool]) => (tool as { name: string }).name,
+    );
+    expect(names).toContain("list_bug_reports");
+    expect(names).toContain("read_bug_report");
+    expect(bugReportTools.createBugReportTools).toHaveBeenCalledWith(
+      "thr_reader",
+      pluginHost.agentThreadToolsContext,
+    );
   });
 
   it("never mounts plugin tools in the model-only preview", () => {

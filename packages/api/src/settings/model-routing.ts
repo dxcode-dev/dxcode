@@ -91,7 +91,8 @@ export const ListConnectionsResponseSchema = successResponse(
 );
 
 export const CreateConnectionRequestSchema = Schema.Struct({
-  name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(80)),
+  /** Validated by the service, which names the field when it is invalid. */
+  name: Schema.String,
   kind: ConnectionKindSchema,
   providerId: Schema.String,
   baseUrl: Schema.optional(Schema.String),
@@ -108,9 +109,8 @@ export const CreateConnectionRequestSchema = Schema.Struct({
 export const ConnectionResponseSchema = successResponse(ConnectionDataSchema);
 
 export const UpdateConnectionRequestSchema = Schema.Struct({
-  name: Schema.optional(
-    Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(80)),
-  ),
+  /** Validated by the service, which names the field when it is invalid. */
+  name: Schema.optional(Schema.String),
   /** Set to null to restore a catalog provider's default endpoint; omit to keep. */
   baseUrl: Schema.optional(Schema.NullOr(Schema.String)),
   format: Schema.optional(CustomApiFormat),
@@ -201,6 +201,8 @@ export const ModeGraphNodeDataSchema = Schema.Struct({
     model: CanonicalModelIdSchema,
     thinking: ThinkingLevel,
   }),
+  /** The model catalog's display name for `config.model`. */
+  modelName: Schema.String,
   source: Schema.Literals(["default", "override", "workspace"]),
   served: Schema.Boolean,
 });
@@ -237,6 +239,8 @@ export const ModeChoiceDataSchema = Schema.Struct({
     model: CanonicalModelIdSchema,
     thinking: ThinkingLevel,
   }),
+  /** The model catalog's display name for `config.model`. */
+  modelName: Schema.String,
   source: Schema.Literals(["default", "override", "workspace"]),
   served: Schema.Boolean,
   servingConnectionName: Schema.NullOr(Schema.String),
@@ -244,6 +248,7 @@ export const ModeChoiceDataSchema = Schema.Struct({
 
 export const ServedModelChoiceDataSchema = Schema.Struct({
   canonical: CanonicalModelIdSchema,
+  /** The model catalog's display name. */
   name: Schema.String,
   connectionId: ModelConnectionId,
   connectionName: Schema.String,

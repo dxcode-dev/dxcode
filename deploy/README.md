@@ -29,7 +29,7 @@ OAuth client with the redirect URI `https://<domain>/api/auth/callback/google`;
 its client ID goes in the `signIn` block and its secret is
 `DX_GOOGLE_CLIENT_SECRET`. `pnpm dx:deploy -- --sign-in` changes sign-in on
 an existing deployment. See [sign-in and
-authentication](../apps/docs/src/content/docs/deployment/authentication.md).
+authentication](https://dxcode.dev/docs/deployment/authentication/).
 
 Alchemy browser OAuth is the default Cloudflare login. Alchemy and Wrangler
 have separate OAuth clients and token stores. dx does not read Wrangler tokens.

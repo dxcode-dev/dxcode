@@ -37,11 +37,12 @@ import { D1Client } from "@effect/sql-d1";
 import { APIError } from "better-auth/api";
 import { Effect, Layer, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
-import { createAuth, type DxAuth } from "../../auth/better-auth.js";
+import type { DxAuth } from "../../auth/better-auth.js";
 import {
   BrowserSessionRequired,
   requireBrowserSession,
 } from "../../auth/browser-session.js";
+import { requestAuth } from "../../auth/request-auth.js";
 import { loadAuthenticationRequirements } from "../../auth/requirements.js";
 import {
   decodeJsonBody,
@@ -212,7 +213,7 @@ const dependencies = Effect.fn("personalSecurityRouteDependencies")(function* (
 ) {
   const db = yield* decodeD1Binding(context.env.DB);
   const requirements = yield* loadAuthenticationRequirements(context.env);
-  const auth = createAuth(context.env, requirements);
+  const auth = requestAuth(context, requirements);
   const current = yield* requireBrowserSession(context, auth);
   return { db, auth, current };
 });

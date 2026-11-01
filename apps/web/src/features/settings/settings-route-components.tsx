@@ -1,4 +1,5 @@
 import { useLoaderData } from "@tanstack/react-router";
+import { DocumentTitle } from "../../shared/ui/document-title.js";
 import { SettingsPage } from "./settings-page.js";
 
 // A loader resolves no registration only when a deploy removed the settings
@@ -7,31 +8,49 @@ import { SettingsPage } from "./settings-page.js";
 export function PersonalSettingsRoot() {
   const registration = useLoaderData({ from: "/settings" });
   if (registration === undefined) return null;
-  return <SettingsPage scope="personal" registration={registration} />;
+  return (
+    <>
+      <DocumentTitle name="Settings" />
+      <SettingsPage scope="personal" registration={registration} />
+    </>
+  );
 }
 
 export function PersonalSettingsSection() {
   const registration = useLoaderData({ from: "/settings/$section" });
   if (registration === undefined) return null;
-  return <SettingsPage scope="personal" registration={registration} />;
+  return (
+    <>
+      <DocumentTitle name="Settings" />
+      <SettingsPage scope="personal" registration={registration} />
+    </>
+  );
 }
 
 export function WorkspaceSettingsRoot() {
   const loaded = useLoaderData({ from: "/workspaces/$workspaceSlug" });
   if (loaded.registration === undefined) return null;
   return (
-    <SettingsPage
-      scope="workspace"
-      workspaceSlug={loaded.workspaceSlug}
-      registration={loaded.registration}
-    />
+    <>
+      <DocumentTitle name="Settings" />
+      <SettingsPage
+        scope="workspace"
+        workspaceSlug={loaded.workspaceSlug}
+        registration={loaded.registration}
+      />
+    </>
   );
 }
 
 export function WorkspaceSettingsEmptyRoot() {
   const registration = useLoaderData({ from: "/workspaces" });
   if (registration === undefined) return null;
-  return <SettingsPage scope="workspace" registration={registration} />;
+  return (
+    <>
+      <DocumentTitle name="Settings" />
+      <SettingsPage scope="workspace" registration={registration} />
+    </>
+  );
 }
 
 export function WorkspaceSettingsSection() {
@@ -40,10 +59,13 @@ export function WorkspaceSettingsSection() {
   });
   if (loaded.registration === undefined) return null;
   return (
-    <SettingsPage
-      scope="workspace"
-      workspaceSlug={loaded.workspaceSlug}
-      registration={loaded.registration}
-    />
+    <>
+      <DocumentTitle name="Settings" />
+      <SettingsPage
+        scope="workspace"
+        workspaceSlug={loaded.workspaceSlug}
+        registration={loaded.registration}
+      />
+    </>
   );
 }

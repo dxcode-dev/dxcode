@@ -548,7 +548,7 @@ describe("generated Flue Worker lifecycle", () => {
   // Byte budget for opening a long, tool-heavy Thread (src/heavy-history.ts):
   // 40 turns, two 50 KB tool outputs each, and eight outputs of 240 KB to
   // 2 MB. Measures raw JSON bodies only: not compressed size, not browser
-  // memory or parse time (test/history-first-paint-proof.mjs in apps/web).
+  // memory or parse time, which a browser measurement covers separately.
   it("keeps the first history page of a tool-heavy Thread within its byte budget", async () => {
     const projectResponse = await fixtureRequest("/v1/projects", {
       method: "POST",
@@ -652,8 +652,8 @@ describe("generated Flue Worker lifecycle", () => {
       expect(
         page.byteLength <= HISTORY_PAGE_BYTES || prompts(page).length === 1,
       ).toBe(true);
-    const first = unbounded[0]!.byteLength;
-    const firstBounded = bounded[0]!.byteLength;
+    const first = unbounded[0].byteLength;
+    const firstBounded = bounded[0].byteLength;
     const artifacts = process.env.DX_HISTORY_BUDGET_ARTIFACTS;
     if (artifacts !== undefined)
       for (const [name, pages] of [
@@ -672,7 +672,7 @@ describe("generated Flue Worker lifecycle", () => {
     );
     // The newest two turns exceed the budget, so the page holds the newest
     // turn alone and whole, with its 900 KB tool output.
-    expect(prompts(bounded[0]!)).toEqual(["Heavy turn 39"]);
+    expect(prompts(bounded[0])).toEqual(["Heavy turn 39"]);
     // Ceiling: the newest turn of this Thread, 1.0 MiB today.
     expect(firstBounded).toBeLessThanOrEqual(1.1 * 1024 * 1024);
     // Ratio against the unbounded page (0.38 today).

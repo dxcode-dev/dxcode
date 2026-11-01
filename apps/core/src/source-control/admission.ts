@@ -47,6 +47,8 @@ export interface AuthorizedSource {
   readonly authorizationEpoch: number;
   readonly installationEpoch: number;
   readonly policyRevision: number;
+  /** Of the requested `readPaths`, those the commit has as files. */
+  readonly presentPaths?: ReadonlyArray<string>;
 }
 
 const deny = (
@@ -118,6 +120,8 @@ export const authorizeSource = async (input: {
   readonly repositoryId: string;
   readonly provider?: "github" | "bitbucket";
   readonly workspaceId?: string;
+  /** Repository paths to look up at the resolved commit, with the same lease. */
+  readonly readPaths?: ReadonlyArray<string>;
   readonly fetcher?: typeof fetch;
   readonly waitUntil?: (promise: Promise<unknown>) => void;
 }): Promise<AuthorizedSource> => {
@@ -175,11 +179,19 @@ export const authorizeSource = async (input: {
     if (leaseOutcome.status === "rejected") throw leaseOutcome.reason;
     const lease = leaseOutcome.value;
     let resolved: GitHubResolvedSource;
+    let presentPaths: ReadonlyArray<string> | undefined;
     try {
       resolved = await provider.resolveRepositorySource(
         lease.token,
         input.repositoryId,
       );
+      if (input.readPaths !== undefined)
+        presentPaths = await provider.presentPaths(
+          lease.token,
+          input.repositoryId,
+          resolved.commitSha,
+          input.readPaths,
+        );
     } finally {
       // The token expires on its own; revoking it need not delay the answer.
       const revocation = provider.revokeInstallationToken(lease.token).then(
@@ -218,6 +230,7 @@ export const authorizeSource = async (input: {
       authorizationEpoch: before.grant_epoch,
       installationEpoch: before.installation_epoch,
       policyRevision: before.policy_revision,
+      ...(presentPaths === undefined ? {} : { presentPaths }),
     };
   } catch (cause) {
     throw providerFailure(cause);
@@ -230,6 +243,7 @@ const checkProjectSource = async (input: {
   readonly projectId: string;
   readonly ownerUserId: string;
   readonly preferredGrantId?: string;
+  readonly readPaths?: ReadonlyArray<string>;
   readonly fetcher?: typeof fetch;
   readonly waitUntil?: (promise: Promise<unknown>) => void;
 }) => {
@@ -320,6 +334,7 @@ const checkProjectSource = async (input: {
     ...(binding.provider_workspace_id === null
       ? {}
       : { workspaceId: String(binding.provider_workspace_id) }),
+    ...(input.readPaths === undefined ? {} : { readPaths: input.readPaths }),
     fetcher: input.fetcher,
     waitUntil: input.waitUntil,
   });

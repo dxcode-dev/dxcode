@@ -25,7 +25,6 @@ import {
   Share2,
   Sparkles,
   Trash2,
-  X,
 } from "lucide-react";
 import * as React from "react";
 import {
@@ -35,6 +34,7 @@ import {
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
 import { useNowMinute } from "../../shared/hooks/use-clock.js";
 import { useOptionalThreadArchive } from "../../shared/thread-archive.js";
+import { copyThreadId, copyThreadUrl } from "../../shared/thread-copy.js";
 import {
   type ThreadEditingController,
   useOptionalThreadEditing,
@@ -43,7 +43,6 @@ import {
   type ThreadSnoozeController,
   useOptionalThreadSnooze,
 } from "../../shared/thread-snooze.js";
-import { absoluteThreadUrl } from "../../shared/thread-url.js";
 import { Button } from "../../shared/ui/button.js";
 import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
 import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
@@ -134,14 +133,6 @@ export function ThreadMenu({
     readonly dictation?: DictationRecord;
   }>();
   const copyUrlKeycaps = useCommandKeycaps("navigation.copy-url");
-  const copy = async (text: string, label: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setAnnouncement(`${label} copied.`);
-    } catch {
-      setAnnouncement(`Could not copy the ${label}.`);
-    }
-  };
   const download = (format: "markdown" | "json") => {
     const markdown = format === "markdown";
     const model = transcript();
@@ -232,12 +223,7 @@ export function ThreadMenu({
               <Menu.Separator className="thread-menu-separator" />
               <Menu.Item
                 className="thread-menu-item"
-                onClick={() =>
-                  void copy(
-                    absoluteThreadUrl(thread.id, window.location.href),
-                    "Thread URL",
-                  )
-                }
+                onClick={() => void copyThreadUrl(thread.id)}
               >
                 <Link2 />
                 <span>Copy Thread URL</span>
@@ -245,7 +231,7 @@ export function ThreadMenu({
               </Menu.Item>
               <Menu.Item
                 className="thread-menu-item"
-                onClick={() => void copy(thread.id, "Thread ID")}
+                onClick={() => void copyThreadId(thread.id)}
               >
                 <Hash />
                 <span>Copy Thread ID</span>
@@ -371,11 +357,7 @@ export function ThreadMenu({
       )}
       <span className="sr-only" aria-live="polite">
         {announcement}
-        {announcement.startsWith("Could") ? (
-          <X />
-        ) : announcement ? (
-          <Check />
-        ) : null}
+        {announcement ? <Check /> : null}
       </span>
     </>
   );

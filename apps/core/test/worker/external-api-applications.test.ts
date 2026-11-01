@@ -538,10 +538,13 @@ describe("workspace external API applications in workerd with real D1", () => {
         path,
         init,
       );
-      return { status: response.status, body: (await response.json()) as any };
+      return {
+        status: response.status,
+        body: (await response.json()) as ListBody,
+      };
     };
-    const ids = (body: { data: { items: ReadonlyArray<{ id: string }> } }) =>
-      body.data.items.map(({ id }) => id);
+    type ListBody = { data: { items: ReadonlyArray<{ id: string }> } };
+    const ids = (body: ListBody) => body.data.items.map(({ id }) => id);
 
     const projects = await read("/v1/projects");
     expect(projects.status).toBe(200);

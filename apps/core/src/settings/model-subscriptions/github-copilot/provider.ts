@@ -105,6 +105,29 @@ const normalizeOrigin = (value: string): string => {
 const ERROR_BODY_LIMIT = 2_000;
 const ERROR_BODY_READ_MS = 5_000;
 
+/** Image block types in Anthropic, Chat Completions, and Responses requests. */
+const IMAGE_BLOCK_TYPES = new Set(["image", "image_url", "input_image"]);
+
+/**
+ * Whether a model request carries an image anywhere in its messages, tool
+ * results included, as pi's own Copilot transport checks.
+ */
+export const hasImageInput = (payload: unknown): boolean => {
+  const visit = (value: unknown, depth: number): boolean => {
+    if (depth > 8 || typeof value !== "object" || value === null) return false;
+    if (Array.isArray(value))
+      return value.some((item) => visit(item, depth + 1));
+    const block = value as Record<string, unknown>;
+    if (typeof block.type === "string" && IMAGE_BLOCK_TYPES.has(block.type))
+      return true;
+    return Object.entries(block).some(
+      ([key, item]) => key !== "tools" && visit(item, depth + 1),
+    );
+  };
+  const request = record(payload);
+  return visit(request.messages, 0) || visit(request.input, 0);
+};
+
 /**
  * A bounded prefix of an error body, read for at most a few seconds, with the
  * access token redacted in both plain and JSON-escaped spellings.
@@ -526,6 +549,10 @@ export const createGitHubCopilotProvider = (options: ProviderOptions) => {
                 "anthropic-dangerous-direct-browser-access": "true",
                 "anthropic-version": "2023-06-01",
               }
+            : {}),
+          // Copilot refuses a request with an image unless it says so.
+          ...(hasImageInput(input.payload)
+            ? { "copilot-vision-request": "true" }
             : {}),
         },
         body,

@@ -384,7 +384,9 @@ describe("settings routes in workerd with real D1", () => {
       status: "error",
       data: {
         code: "INVALID_ACCOUNT_PROFILE",
-        fieldErrors: [{ field: "username" }],
+        fieldErrors: [
+          { field: "username", message: "Use at least 3 characters." },
+        ],
       },
     });
 

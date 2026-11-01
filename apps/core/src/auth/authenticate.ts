@@ -17,7 +17,12 @@ import {
   authenticateExternalApiApplication,
   decodeExternalApplicationBasicCredentials,
 } from "./authenticate-application.js";
-import { createAuth, sessionPrincipal } from "./better-auth.js";
+import { sessionPrincipal } from "./better-auth.js";
+import {
+  authoritativeBrowserSession,
+  carriesSessionCache,
+  requestAuth,
+} from "./request-auth.js";
 import { loadAuthenticationRequirements } from "./requirements.js";
 import type { BrowserSessionBinding } from "./session-sockets.js";
 
@@ -121,7 +126,7 @@ export const authenticate: MiddlewareHandler<AppEnv> = async (
     const requirements = await Effect.runPromise(
       loadAuthenticationRequirements(context.env),
     );
-    const auth = createAuth(context.env, requirements);
+    const auth = requestAuth(context, requirements);
     if (authorization !== undefined) {
       const key = bearer(authorization);
       if (key === undefined) return unauthorized(context);
@@ -151,9 +156,11 @@ export const authenticate: MiddlewareHandler<AppEnv> = async (
       };
       outcome = "api_key";
     } else {
-      const session = await auth.api.getSession({
-        headers: context.req.raw.headers,
-      });
+      // Without the signed cache cookie this is the D1 read anyway, so it
+      // becomes the request's authoritative read for later checks to share.
+      const session = carriesSessionCache(context)
+        ? await auth.api.getSession({ headers: context.req.raw.headers })
+        : await authoritativeBrowserSession(context, auth);
       if (session === null) return unauthorized(context);
       const unsafe = !["GET", "HEAD", "OPTIONS"].includes(context.req.method);
       if (

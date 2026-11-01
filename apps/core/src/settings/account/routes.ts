@@ -23,6 +23,8 @@ import {
   PersonalAppearance,
   PersonalPalette,
   PersonalTerminalTheme,
+  personalAccountDisplayNameProblem,
+  personalAccountUsernameProblem,
   type UpdatePersonalAccountInput,
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
@@ -126,18 +128,15 @@ const validateUpdate = (
     normalizePersonalAccountUsername(input.username),
   );
   const fieldErrors: Array<SettingsFieldError> = [];
-  if (Option.isNone(displayName)) {
-    fieldErrors.push({
-      field: "displayName",
-      message: "Enter a display name between 1 and 128 characters.",
-    });
+  const displayNameProblem = personalAccountDisplayNameProblem(
+    input.displayName,
+  );
+  if (displayNameProblem !== undefined) {
+    fieldErrors.push({ field: "displayName", message: displayNameProblem });
   }
-  if (Option.isNone(username)) {
-    fieldErrors.push({
-      field: "username",
-      message:
-        "Use 3–32 lowercase letters, numbers, or hyphens, starting and ending with a letter or number.",
-    });
+  const usernameProblem = personalAccountUsernameProblem(input.username);
+  if (usernameProblem !== undefined) {
+    fieldErrors.push({ field: "username", message: usernameProblem });
   }
   return Option.isSome(displayName) && Option.isSome(username)
     ? Effect.succeed({

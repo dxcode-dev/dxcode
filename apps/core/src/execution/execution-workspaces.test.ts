@@ -1,8 +1,14 @@
 import { ThreadId } from "@dx/domain";
-import type { Sandbox, SandboxFactory } from "@flue/runtime";
+import { FlueError, type Sandbox, type SandboxFactory } from "@flue/runtime";
 import { Effect, Redacted, Schema } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { executionWorkspaceLogger } from "../logging.js";
+import { takeWorkspaceRecovery } from "../orb-disk/read-only.js";
+import type {
+  ExecutionContext,
+  ExecutionWorkspaceHandle,
+  ExecutionWorkspaceProvider,
+} from "../plugins/execution/provider.js";
 import {
   GITHUB_CLI_WRAPPER_INSTALL_COMMAND,
   githubCliWrapper,
@@ -481,6 +487,209 @@ describe("sandbox command lifecycle admission", () => {
     expect(sandbox.writeFile).not.toHaveBeenCalled();
     expect(sandbox.mkdir).not.toHaveBeenCalled();
     expect(sandbox.rm).not.toHaveBeenCalled();
+  });
+});
+
+describe("read-only Orb recovery", () => {
+  const context: ExecutionContext = {
+    account: { scope: "deployment" },
+    credentials: undefined,
+    profile: mocks.profile as unknown as ExecutionContext["profile"],
+  };
+  // The guard and `git init` of a scratch activation; a broken Orb's write
+  // fails as thr_cf588b7a's did.
+  // `rescue` answers dx's copy of the unsaved work: an archive of "hello",
+  // 2 changed paths and 1 unpushed commit, which a read-only disk still
+  // lets it read; without it every command fails as a write would.
+  const guest = (readOnly: boolean, rescue = false) => ({
+    commands: {
+      run: vi.fn(async (command: string) => {
+        if (rescue && command.includes("/dev/shm/dx-rescue.XXXXXX"))
+          return {
+            stdout: "archive /dev/shm/dx-rescue.Ab12Cd 5 2 1\n",
+            stderr: "",
+            exitCode: 0,
+          };
+        if (rescue && command.startsWith("dd if="))
+          return { stdout: "aGVsbG8=", stderr: "", exitCode: 0 };
+        if (rescue && command.startsWith("rm -rf"))
+          return { stdout: "", stderr: "", exitCode: 0 };
+        return readOnly
+          ? {
+              stdout: "",
+              stderr:
+                "mkdir: cannot create directory '/home/user/workspace/repo': Read-only file system",
+              exitCode: 1,
+            }
+          : { stdout: "", stderr: "", exitCode: 0 };
+      }),
+    },
+    files: { write: vi.fn(async () => undefined) },
+  });
+  const handle = (
+    readOnly: boolean,
+    rescue = false,
+  ): ExecutionWorkspaceHandle & { guest: ReturnType<typeof guest> } => ({
+    guest: guest(readOnly, rescue),
+    sandbox: async (cwd) =>
+      ({
+        cwd,
+        exec: vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 })),
+      }) as unknown as Sandbox,
+    setIdleDeadline: async () => undefined,
+    commandTimeoutMs: 60_000,
+  });
+  const provider = (
+    handles: ReadonlyArray<ExecutionWorkspaceHandle>,
+    recover?: ExecutionWorkspaceProvider["recover"],
+  ) => {
+    const queue = [...handles];
+    const create = vi.fn(async () => {
+      const next = queue.shift();
+      if (next === undefined) throw new Error("no handle left");
+      return next;
+    });
+    return {
+      create,
+      workspace: {
+        create,
+        connect: create,
+        release: async () => undefined,
+        ...(recover === undefined ? {} : { recover }),
+      },
+    };
+  };
+
+  it("restarts an Orb whose disk turned read-only and runs the turn on the restarted Orb", async () => {
+    const threadId = thread("thr_00000000-0000-4000-8000-000000001313");
+    const recover = vi.fn(async () => ({ files: "kept" as const }));
+    const fake = provider([handle(true), handle(false)], recover);
+
+    await expect(
+      makeExecutionActivation()({ workspace: fake.workspace }).activate(
+        context,
+        { id: threadId },
+      ),
+    ).resolves.toBeDefined();
+
+    expect(recover).toHaveBeenCalledOnce();
+    // Nothing could be copied out, so the provider may not drop any files.
+    expect(recover).toHaveBeenCalledWith(
+      context,
+      { threadId },
+      { discardUnsaved: false },
+    );
+    expect(fake.create).toHaveBeenCalledTimes(2);
+    // The turn this activation starts tells the agent what happened.
+    expect(takeWorkspaceRecovery(threadId)).toEqual({ files: "kept" });
+    expect(takeWorkspaceRecovery(threadId)).toBeUndefined();
+  });
+
+  it("copies the unsaved work out before a restart that drops the Orb's files, and puts it in the new Orb", async () => {
+    const threadId = thread("thr_00000000-0000-4000-8000-000000001317");
+    const recover = vi.fn(async () => ({ files: "lost" as const }));
+    const restarted = handle(false);
+    const fake = provider([handle(true, true), restarted], recover);
+
+    await expect(
+      makeExecutionActivation()({ workspace: fake.workspace }).activate(
+        context,
+        { id: threadId },
+      ),
+    ).resolves.toBeDefined();
+
+    expect(recover).toHaveBeenCalledWith(
+      context,
+      { threadId },
+      { discardUnsaved: true },
+    );
+    const [path, content] = restarted.guest.files.write.mock
+      .calls[0] as unknown as [string, ArrayBuffer];
+    expect(path).toMatch(
+      /^\/home\/user\/dx-recovered\/dx-recovered-.+\.tar\.gz$/,
+    );
+    expect(new TextDecoder().decode(content)).toBe("hello");
+    expect(takeWorkspaceRecovery(threadId)).toMatchObject({
+      files: "lost",
+      restored: { orbPath: path, changes: 2, commits: 1 },
+    });
+  });
+
+  it("does not restart an Orb whose files can't be saved when its unsaved work can't be copied", async () => {
+    const threadId = thread("thr_00000000-0000-4000-8000-000000001318");
+    const recover = vi.fn(async () => ({ files: "unsaved" as const }));
+    const fake = provider([handle(true)], recover);
+
+    const cause = await makeExecutionActivation()({ workspace: fake.workspace })
+      .activate(context, { id: threadId })
+      .catch((error: unknown) => error);
+
+    expect(recover).toHaveBeenCalledWith(
+      context,
+      { threadId },
+      { discardUnsaved: false },
+    );
+    expect(fake.create).toHaveBeenCalledOnce();
+    expect(cause).toMatchObject({
+      type: "workspace_read_only",
+      details: expect.stringMatching(
+        /^dx didn't restart the Orb: .*a restart would lose that work\./,
+      ),
+    });
+  });
+
+  it("settles as workspace_read_only, saying dx restarted the Orb, when its disk stays read-only", async () => {
+    const threadId = thread("thr_00000000-0000-4000-8000-000000001314");
+    const recover = vi.fn(async () => ({
+      files: "earlier" as const,
+      savedAt: Date.parse("2026-10-30T16:40:00.000Z"),
+    }));
+    const fake = provider([handle(true), handle(true)], recover);
+
+    const cause = await makeExecutionActivation()({ workspace: fake.workspace })
+      .activate(context, { id: threadId })
+      .catch((error: unknown) => error);
+
+    expect(recover).toHaveBeenCalledOnce();
+    expect(cause).toBeInstanceOf(FlueError);
+    expect(cause).toMatchObject({
+      type: "workspace_read_only",
+      message: "The Orb's disk became read-only.",
+      details: expect.stringMatching(
+        /^dx restarted the Orb from its last save .*, but its disk is still read-only\./,
+      ),
+      meta: { code: "WORKSPACE_READ_ONLY" },
+    });
+  });
+
+  it("says why, without a restart, when the Orb's provider cannot restart it or the restart fails", async () => {
+    const unsupported = provider([handle(true)]);
+    const first = await makeExecutionActivation()({
+      workspace: unsupported.workspace,
+    })
+      .activate(context, {
+        id: thread("thr_00000000-0000-4000-8000-000000001315"),
+      })
+      .catch((error: unknown) => error);
+    expect(first).toMatchObject({
+      type: "workspace_read_only",
+      details: expect.stringMatching(/can't restart this Orb/),
+    });
+
+    const failing = provider([handle(true)], async () => {
+      throw new Error("container object reset");
+    });
+    const second = await makeExecutionActivation()({
+      workspace: failing.workspace,
+    })
+      .activate(context, {
+        id: thread("thr_00000000-0000-4000-8000-000000001316"),
+      })
+      .catch((error: unknown) => error);
+    expect(second).toMatchObject({
+      type: "workspace_read_only",
+      details: expect.stringMatching(/^dx tried to restart the Orb/),
+    });
   });
 });
 

@@ -73,7 +73,7 @@ function ShortcutEditor({
         <span>
           {recording
             ? "Press Escape to cancel or Backspace to clear."
-            : "Review the shortcut before saving."}
+            : "Review the shortcut before saving, or press Escape to cancel."}
         </span>
       </div>
       <div className="shortcut-editor-binding" aria-live="polite">
@@ -158,6 +158,7 @@ function ShortcutControl({
         size="icon-xs"
         variant="ghost"
         aria-label={`Edit ${command.label}`}
+        data-shortcut-edit={command.id}
         title="Change shortcut"
         onClick={onEdit}
       >
@@ -240,6 +241,16 @@ const editingReducer = (
     case "status":
       return { ...state, status: action.status };
   }
+};
+
+const escapeSnapshot = () => 0;
+
+/** Keeps keyboard focus on the row when its editor closes under it. */
+const returnFocusFromEditor = (id: CommandId) => {
+  if (document.activeElement?.closest(".shortcut-editor") == null) return;
+  document
+    .querySelector<HTMLButtonElement>(`button[data-shortcut-edit='${id}']`)
+    ?.focus();
 };
 
 /** The settings section: opens the app's keymap dialog for Show All. */
@@ -337,12 +348,35 @@ export function KeyboardShortcutsSettings({
     dispatchEditing({ type: "start", commandId: id });
   };
   const cancelEditing = () => {
+    if (editingState.editingId !== null)
+      returnFocusFromEditor(editingState.editingId);
     registry.cancelRecording();
     resetEditing("Shortcut recording cancelled.");
   };
+  // While a proposal waits for review, Escape cancels it here instead of
+  // reaching Settings, which closes on an unconsumed Escape. A recording
+  // session already consumes Escape in the command dispatcher.
+  const editing = editingState.editingId !== null;
+  const subscribeToEscape = (_onStoreChange: () => void) => {
+    if (!editing) return () => {};
+    const cancelOnEscape = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Escape" ||
+        event.defaultPrevented ||
+        document.querySelector("[role='dialog'], [role='menu']") !== null
+      )
+        return;
+      event.preventDefault();
+      cancelEditing();
+    };
+    document.addEventListener("keydown", cancelOnEscape);
+    return () => document.removeEventListener("keydown", cancelOnEscape);
+  };
+  React.useSyncExternalStore(subscribeToEscape, escapeSnapshot, escapeSnapshot);
   const saveEditing = () => {
     if (editingState.editingId === null) return;
     if (editingState.pendingBinding === null) {
+      returnFocusFromEditor(editingState.editingId);
       registry.clearBinding(editingState.editingId);
       resetEditing("Shortcut cleared on this device.");
       return;
@@ -359,6 +393,7 @@ export function KeyboardShortcutsSettings({
         });
         return;
       }
+      returnFocusFromEditor(editingState.editingId);
       resetEditing("Shortcut saved and active on this device.");
       return;
     }
@@ -374,6 +409,7 @@ export function KeyboardShortcutsSettings({
       });
       return;
     }
+    returnFocusFromEditor(editingState.editingId);
     resetEditing("Shortcut saved and active on this device.");
   };
   const clearBinding = (command: CommandView) => {

@@ -4,12 +4,14 @@ import { RunnerProfileCard } from "./runner-profile-card.js";
 /** Orb size cards as one radio group. */
 function OrbSizeGrid({
   label,
+  billing,
   profiles,
   selectedId,
   isDisabled,
   onSelect,
 }: {
   readonly label: string;
+  readonly billing: string | undefined;
   readonly profiles: ReadonlyArray<RunnerProfile>;
   readonly selectedId: RunnerProfileId | undefined;
   readonly isDisabled: (profile: RunnerProfile) => boolean;
@@ -21,6 +23,7 @@ function OrbSizeGrid({
         <RunnerProfileCard
           key={profile.id}
           profile={profile}
+          {...(billing === undefined ? {} : { billing })}
           selected={selectedId === profile.id}
           disabled={isDisabled(profile)}
           onSelect={() => onSelect(profile.id)}
@@ -37,6 +40,11 @@ type OrbSizeGroup = {
   /** A muted note after the name, such as why the group can't be chosen. */
   readonly hint?: string;
   readonly label: string;
+  /**
+   * Who bills these sizes when they run on a person's or workspace's own
+   * account; the cards then show the provider's list price above it.
+   */
+  readonly billing?: string;
   readonly profiles: ReadonlyArray<RunnerProfile>;
 };
 
@@ -62,6 +70,7 @@ export function OrbSizePicker({
       )}
       <OrbSizeGrid
         label={group.label}
+        billing={group.billing}
         profiles={group.profiles}
         selectedId={selectedId}
         isDisabled={isDisabled}

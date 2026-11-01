@@ -51,6 +51,6 @@ describe("parseCustomModels", () => {
   it("rejects malformed ids", () => {
     const { errors } = parseCustomModels("not-a-canonical");
     expect(errors).toHaveLength(1);
-    expect(errors[0]!.line).toBe(1);
+    expect(errors[0].line).toBe(1);
   });
 });

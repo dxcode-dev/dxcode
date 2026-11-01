@@ -8,11 +8,11 @@ import {
 import { SpeechProviderError, type SpeechSession } from "@dx/domain";
 import { Effect } from "effect";
 import { type Context, Hono } from "hono";
-import { createAuth } from "../auth/better-auth.js";
 import {
   BrowserSessionRequired,
   requireBrowserSession,
 } from "../auth/browser-session.js";
+import { requestAuth } from "../auth/request-auth.js";
 import { loadAuthenticationRequirements } from "../auth/requirements.js";
 import {
   checkBrowserSessions,
@@ -104,7 +104,7 @@ async function authorize(c: Context<AppEnv>) {
     loadAuthenticationRequirements(c.env),
   );
   await Effect.runPromise(
-    requireBrowserSession(c, createAuth(c.env, requirements)),
+    requireBrowserSession(c, requestAuth(c, requirements)),
   );
   const owner = c.get("principal").userId as string;
   const db = c.env.DB;

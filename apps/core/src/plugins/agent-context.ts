@@ -1,5 +1,6 @@
 import { env, waitUntil } from "cloudflare:workers";
 import { Effect } from "effect";
+import { mayUseBugReportTools } from "../bug-reports/agent-tools.js";
 import type { Bindings } from "../http/types.js";
 import { resolveMcpAgentConnections } from "../settings/mcp-servers/execution.js";
 import type { PluginHostContext } from "./host.js";
@@ -38,4 +39,16 @@ export const resolveAgentPluginTools = async (
     Effect.runPromise(resolveMcpAgentConnections(context.db, threadId)),
   ]);
   return { submissionId, tools, mcpConnections };
+};
+
+/**
+ * Whether this submission's Thread gets the bug report tools: its owner is
+ * one of the deployment's report readers. A failed read mounts none.
+ */
+export const resolveAgentBugReportReader = async (threadId: string) => {
+  try {
+    return await mayUseBugReportTools(agentPluginHostContext(), threadId);
+  } catch {
+    return false;
+  }
 };

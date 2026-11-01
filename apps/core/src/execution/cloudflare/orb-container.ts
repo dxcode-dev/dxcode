@@ -111,9 +111,21 @@ export interface OrbWorkspaceState {
     readonly size: number;
     /** When it was taken or last restored: Cloudflare's 30-day TTL clock. */
     readonly refreshedAt: number;
+    /** When its files were saved; a refresh keeps it. Unset before 2026-11. */
+    readonly takenAt?: number;
   };
   /** Pause after this time unless Core renews it. */
   readonly idleDeadline: number;
+  /**
+   * Idle-pause snapshots that failed in a row, and when the next may run.
+   * A snapshot of a broken filesystem fails every time, so they back off
+   * instead of running on every heartbeat; the container keeps running so
+   * its files are never dropped. Cleared by any snapshot that works.
+   */
+  readonly snapshotFailures?: {
+    readonly count: number;
+    readonly retryAt: number;
+  };
   /**
    * When the running container last started (a create, a wake, or a
    * restart); every process in it, Terminal shells included, is younger.
@@ -166,6 +178,10 @@ export const ORB_STOP_NOTICE_ADDRESS = "192.0.2.1:80";
 export const ORB_HEARTBEAT_MS = 10_000;
 /** Restore and re-snapshot a paused workspace this long after its TTL clock. */
 export const ORB_SNAPSHOT_REFRESH_MS = 25 * 24 * 60 * 60 * 1000;
+/** After the first failed idle-pause snapshot, wait this long to retry. */
+export const ORB_SNAPSHOT_RETRY_MS = 30_000;
+/** Failed idle-pause snapshots back off, doubling, up to this. */
+export const ORB_SNAPSHOT_RETRY_MAX_MS = 3_600_000;
 /** Cloudflare stops a container this long after its object goes quiet. */
 const MAX_CONTAINER_INACTIVITY_MS = 6 * 60 * 60 * 1000;
 const CONTAINER_INACTIVITY_MARGIN_MS = 15 * 60 * 1000;
@@ -989,13 +1005,15 @@ export class OrbContainerController {
     const snapshot = await this.#container.snapshotContainer({
       name: `dx-orb-${this.#sandboxId.slice(0, 16)}`,
     });
-    const current = (await this.#load()) ?? state;
+    const { snapshotFailures: _failures, ...current } =
+      (await this.#load()) ?? state;
     const next: OrbWorkspaceState = {
       ...current,
       snapshot: {
         id: snapshot.id,
         size: snapshot.size,
         refreshedAt: this.#now(),
+        takenAt: this.#now(),
       },
     };
     if (
@@ -1017,6 +1035,39 @@ export class OrbContainerController {
     return "paused" as const;
   }
 
+  /**
+   * The idle deadline's pause. A failed snapshot is recorded and retried
+   * later with backoff, never thrown: a throw makes Cloudflare retry the
+   * alarm at once, and the heartbeat tried again every few seconds.
+   */
+  async #idlePause(state: OrbWorkspaceState, now: number) {
+    const failures = state.snapshotFailures;
+    if (failures !== undefined && now < failures.retryAt) return "waiting";
+    try {
+      return await this.#pause(state, true);
+    } catch (cause) {
+      const count = (failures?.count ?? 0) + 1;
+      const delayMs = Math.min(
+        ORB_SNAPSHOT_RETRY_MS * 2 ** (count - 1),
+        ORB_SNAPSHOT_RETRY_MAX_MS,
+      );
+      const current = (await this.#load()) ?? state;
+      await this.#save({
+        ...current,
+        snapshotFailures: { count, retryAt: this.#now() + delayMs },
+      });
+      orbContainerLogger.error("Orb container idle snapshot failed.", {
+        event: "orb_container_snapshot_failed",
+        sandboxId: this.#sandboxId,
+        failures: count,
+        retryInMs: delayMs,
+        hadSnapshot: current.snapshot !== undefined,
+        error: cause instanceof Error ? cause.message : String(cause),
+      });
+      return "failed";
+    }
+  }
+
   /** Archive: snapshot and stop now, whatever the idle deadline says. */
   pause(): Promise<"paused" | "stopped"> {
     return this.#exclusive(async () => {
@@ -1029,6 +1080,91 @@ export class OrbContainerController {
       }
       await this.#pause(state, false);
       return "paused";
+    });
+  }
+
+  /**
+   * Core found the container's filesystem read-only (a btrfs root forced
+   * read-only stays so until it is mounted again). Saves what it can and
+   * stops the container; the next activation's open starts a new one, whose
+   * filesystem is mounted afresh:
+   *
+   * - `kept`: a snapshot of it now succeeded, and the new container starts
+   *   from it.
+   * - `earlier`: the broken filesystem could not be snapshotted, and the
+   *   new container starts from the last snapshot.
+   * - `lost`: there was none, so only activation may start it over from the
+   *   image (see `#refuseReset`).
+   *
+   * The last two drop work, so they happen only with `discardUnsaved`, once
+   * Core has copied that work out; otherwise nothing changes (`unsaved`).
+   */
+  recover(options: { readonly discardUnsaved?: boolean } = {}): Promise<{
+    readonly files: "kept" | "earlier" | "lost" | "unsaved";
+    readonly savedAt?: number;
+  }> {
+    return this.#exclusive(async () => {
+      const state = await this.#load();
+      if (state === undefined) throw failure("recover", "no workspace");
+      if (state.status === "destroyed")
+        throw failure("recover", "the workspace was destroyed");
+      const startedAt = this.#now();
+      let current = state;
+      let files: "kept" | "earlier" | "lost";
+      if (this.#container.running) {
+        try {
+          const snapshot = await this.#container.snapshotContainer({
+            name: `dx-orb-${this.#sandboxId.slice(0, 16)}`,
+          });
+          current = {
+            ...((await this.#load()) ?? state),
+            snapshot: {
+              id: snapshot.id,
+              size: snapshot.size,
+              refreshedAt: this.#now(),
+              takenAt: this.#now(),
+            },
+          };
+          files = "kept";
+        } catch (cause) {
+          orbContainerLogger.warn(
+            "Orb container snapshot failed before a recovery.",
+            {
+              event: "orb_container_recover_snapshot",
+              sandboxId: this.#sandboxId,
+              outcome: "error",
+              error: cause instanceof Error ? cause.message : String(cause),
+            },
+          );
+          current = (await this.#load()) ?? state;
+          // Core copies the unsaved work out first; without that copy, the
+          // container keeps running rather than losing it.
+          if (options.discardUnsaved !== true) {
+            orbContainerLogger.warn("Orb container left running unsaved.", {
+              event: "orb_container_recovered",
+              sandboxId: this.#sandboxId,
+              files: "unsaved",
+            });
+            return { files: "unsaved" as const };
+          }
+          files = current.snapshot === undefined ? "lost" : "earlier";
+        }
+        await this.#destroyContainer();
+      } else files = state.snapshot === undefined ? "lost" : "kept";
+      // The next container starts on a fresh filesystem.
+      const { snapshotFailures: _failures, ...restarted } = current;
+      await this.#save({ ...restarted, status: "paused" });
+      orbContainerLogger.info("Orb container stopped for a recovery.", {
+        event: "orb_container_recovered",
+        sandboxId: this.#sandboxId,
+        files,
+        durationMs: this.#now() - startedAt,
+      });
+      return current.snapshot === undefined
+        ? { files }
+        : current.snapshot.takenAt === undefined
+          ? { files }
+          : { files, savedAt: current.snapshot.takenAt };
     });
   }
 
@@ -1073,6 +1209,9 @@ export class OrbContainerController {
           id: refreshed.id,
           size: refreshed.size,
           refreshedAt: this.#now(),
+          ...(snapshot.takenAt === undefined
+            ? {}
+            : { takenAt: snapshot.takenAt }),
         },
       });
       orbContainerLogger.info("Orb snapshot refreshed.", {
@@ -1122,6 +1261,7 @@ export class OrbContainerController {
             id: snapshot.id,
             size: snapshot.size,
             refreshedAt: this.#now(),
+            takenAt: this.#now(),
           },
         });
         orbContainerLogger.info("Orb container snapshotted before a stop.", {
@@ -1158,7 +1298,7 @@ export class OrbContainerController {
           now >= state.idleDeadline &&
           this.#inflight === 0
         ) {
-          if ((await this.#pause(state, true)) === "paused") return;
+          if ((await this.#idlePause(state, now)) === "paused") return;
         }
         await this.#schedule(this.#now() + ORB_HEARTBEAT_MS);
         return;

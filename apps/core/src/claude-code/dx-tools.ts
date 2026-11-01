@@ -30,16 +30,43 @@ const resultText = (result: unknown) => {
   return typeof output === "string" ? output : JSON.stringify(output ?? null);
 };
 
+/**
+ * Images a dx tool shows Claude beside its text result, by tool call.
+ * MCP results carry image blocks; Flue's record of the call keeps only the
+ * text, so the image never enters the dx transcript as base64.
+ */
+const toolImages = new Map<
+  string,
+  { readonly data: string; readonly mimeType: string }
+>();
+
+export const showClaudeCodeToolImage = (
+  toolCallId: string,
+  image: { readonly data: string; readonly mimeType: string },
+) => {
+  toolImages.set(toolCallId, image);
+};
+
 const answer = async (
   sandbox: Sandbox,
   toolCallId: string,
   text: string,
   isError: boolean,
 ) => {
+  const image = toolImages.get(toolCallId);
+  toolImages.delete(toolCallId);
   // A sandbox write creates missing parent directories.
   await sandbox.writeFile(
     claudeCodeToolResultPath(toolCallId),
-    JSON.stringify({ content: [{ type: "text", text }], isError }),
+    JSON.stringify({
+      content: [
+        { type: "text", text },
+        ...(image === undefined || isError
+          ? []
+          : [{ type: "image", ...image }]),
+      ],
+      isError,
+    }),
   );
 };
 
@@ -121,6 +148,8 @@ const RERUNNABLE: ReadonlySet<string> = new Set([
   "find_thread",
   "list_orbs",
   "list_agent_modes",
+  "list_bug_reports",
+  "read_bug_report",
 ]);
 
 /**

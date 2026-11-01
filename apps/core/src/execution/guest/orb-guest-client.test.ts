@@ -55,7 +55,7 @@ describe("Orb guest sandbox driver", () => {
       timedOut: false,
     });
     const sandbox = orbGuestSandbox(orb, "/workspace");
-    const failed = await sandbox.snapshotWorkspaceContext!("/workspace").then(
+    const failed = await sandbox.snapshotWorkspaceContext?.("/workspace").then(
       () => undefined,
       (error: Error) => classifyRunFailure({ message: error.message }),
     );
@@ -74,7 +74,7 @@ describe("Orb guest sandbox driver", () => {
       timedOut: true,
     });
     await expect(
-      sandbox.snapshotWorkspaceContext!("/workspace").then(
+      sandbox.snapshotWorkspaceContext?.("/workspace").then(
         () => undefined,
         (error: Error) => classifyRunFailure({ message: error.message }),
       ),

@@ -108,6 +108,8 @@ export function ProjectsPage() {
           : {}),
       });
       setCreateDialogOpen(false);
+      // Clear the search so the project just made is listed.
+      setQuery("");
     } catch (cause) {
       if (!(cause instanceof Error))
         setActionError("Project could not be created.");

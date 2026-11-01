@@ -258,12 +258,12 @@ describe("sidebar child threads", () => {
     document.body.append(container);
     const root = createRoot(container);
     const lead = {
-      ...listedChild(childId, "Engineering lead"),
+      ...listedChild(childId, "Build coordinator"),
       startedCount: 12,
     };
     const issueOwner = listedChild(
       "thr_00000000-0000-4000-8000-000000000103",
-      "Issue owner #1100",
+      "Fix #1100",
     );
     try {
       // The root counts its whole family: two listed, twelve under the lead.

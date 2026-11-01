@@ -145,13 +145,19 @@ const useCommandRuntime = ({
         );
       const opening = toggle?.getAttribute("aria-label") === "Open sidebar";
       toggle?.click();
+      // The open Thread's row, else the row the arrow keys left, else the
+      // first. One selector list would take whichever comes first on the page.
       if (opening)
         requestAnimationFrame(() =>
-          document
-            .querySelector<HTMLElement>(
-              "[data-command-focused='true'], [data-command-sidebar-item].selected, [data-command-sidebar-item]",
-            )
-            ?.focus(),
+          (
+            document.querySelector<HTMLElement>(
+              "[data-command-sidebar-item][aria-current='page']",
+            ) ??
+            document.querySelector<HTMLElement>(
+              "[data-command-focused='true']",
+            ) ??
+            document.querySelector<HTMLElement>("[data-command-sidebar-item]")
+          )?.focus(),
         );
     },
     moveSidebarSelection: (direction) => {

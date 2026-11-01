@@ -280,6 +280,7 @@ const resilientOrb = (
     "rm",
     "pause",
     "destroy",
+    "recover",
   ];
   return Object.fromEntries(
     methods.map((method) => [method, call(method)]),
@@ -496,6 +497,19 @@ export const cloudflareExecutionProvider: ExecutionProvider<CloudflareWorkspaceH
         }
         await stub.destroy();
         await records.markLost(threadId);
+      },
+      async recover(context, { threadId }, options) {
+        cloudflareProfile(context.profile);
+        const bindings = env as Bindings;
+        const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
+        const record = await readRecord(
+          executionWorkspaceRecords(db, CLOUDFLARE),
+          threadId,
+        );
+        if (record.provider !== CLOUDFLARE) throw unavailable("other provider");
+        if (record.state !== "initialized") throw unavailable(record.state);
+        const { stub } = orbContainer(context, bindings, threadId);
+        return stub.recover(options);
       },
     },
     // The same guest installer as E2B: the standard Orb image's entrypoint

@@ -1108,6 +1108,43 @@ describe("thread composer ownership", () => {
     await React.act(() => panel.root.unmount());
   });
 
+  it("says the Orb's disk became read-only and what dx did, not a provider error", async () => {
+    const resume = vi.fn().mockResolvedValue(undefined);
+    const panel = await mountPanel({
+      resume,
+      settlements: [
+        {
+          submissionId: "read-only-orb",
+          outcome: "failed",
+          error: {
+            name: "FlueError",
+            type: "workspace_read_only",
+            message: "The Orb's disk became read-only.",
+            details:
+              "dx restarted the Orb, but its disk is still read-only. Retry to restart it again.",
+            meta: { code: "WORKSPACE_READ_ONLY" },
+          },
+        },
+      ],
+    });
+
+    const card = panel.container.querySelector(".thread-error-card");
+    expect(card?.textContent).toContain("The Orb's disk became read-only");
+    expect(card?.textContent).toContain(
+      "dx restarted the Orb, but its disk is still read-only.",
+    );
+    expect(card?.textContent).not.toContain("Provider error");
+    const retry = Array.from(card?.querySelectorAll("button") ?? []).find(
+      (button) => button.textContent?.includes("Retry"),
+    );
+    await React.act(async () => {
+      retry?.click();
+      await Promise.resolve();
+    });
+    expect(resume).toHaveBeenCalledOnce();
+    await React.act(() => panel.root.unmount());
+  });
+
   it("hides historical settlement failures while new work is active", async () => {
     const panel = await mountPanel({
       status: "streaming",

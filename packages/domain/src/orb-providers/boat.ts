@@ -101,6 +101,18 @@ export const boatOrbProvider = defineOrbProvider({
   profile: BoatRunnerProfileConfiguration,
   isolation: "sandbox",
   requiredCapabilities: ORB_RUNNER_CAPABILITIES,
+  // Billed per second while a sandbox runs; a plan's monthly price comes
+  // back as time at these rates.
+  pricing: {
+    usdPerSizeHour: {
+      "bt.small": 0.018,
+      "bt.medium": 0.036,
+      "bt.large": 0.072,
+      "bt.xlarge": 0.2,
+    },
+    source: "https://docs.boat.dev/pricing",
+    checkedOn: "2026-10-31",
+  },
   sizes: BOAT_ORB_SIZES.map((size) => ({
     id: size.id,
     label: size.label,

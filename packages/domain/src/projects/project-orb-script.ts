@@ -31,3 +31,23 @@ export const ProjectOrbScriptBody = Schema.String.check(
     },
   ),
 );
+
+/**
+ * Files a repository commits to prepare its own Orbs, which Project settings
+ * check on the default branch. `.agents/setup` runs once when an Orb is
+ * prepared, `.agents/resume` on every activation and wake, the Desktop session
+ * runs `.agents/desktop/resume` in place of the Project's desktop-resume
+ * script, and `.dx/services.yaml` declares the dev servers Portals start.
+ */
+export const PROJECT_REPOSITORY_ORB_FILES = [
+  ".agents/setup",
+  ".agents/resume",
+  ".agents/desktop/resume",
+  ".dx/services.yaml",
+] as const;
+
+export const ProjectRepositoryOrbFile = Schema.Literals(
+  PROJECT_REPOSITORY_ORB_FILES,
+);
+
+export type ProjectRepositoryOrbFile = typeof ProjectRepositoryOrbFile.Type;

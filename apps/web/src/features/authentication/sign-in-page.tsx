@@ -212,6 +212,8 @@ export function SignInPage({
                 <SignInEmailForm
                   method={method}
                   onMethodChange={(next) => {
+                    // A new method starts over, as a new submission does.
+                    onDismissRedirectError();
                     resetRequests();
                     setMethod(next);
                   }}

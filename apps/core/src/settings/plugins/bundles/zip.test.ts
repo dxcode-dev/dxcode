@@ -54,11 +54,11 @@ describe("readZipArchive", () => {
       "repo-main/b.md",
     ]);
     const [a, b] = archive.entries;
-    expect(await Effect.runPromise(archive.readText(a!, 100))).toEqual({
+    expect(await Effect.runPromise(archive.readText(a, 100))).toEqual({
       ok: true,
       text: "# A",
     });
-    expect(await Effect.runPromise(archive.readText(b!, 10_000))).toEqual({
+    expect(await Effect.runPromise(archive.readText(b, 10_000))).toEqual({
       ok: true,
       text: "b".repeat(5000),
     });
@@ -137,11 +137,11 @@ describe("readZipArchive", () => {
       ]),
     );
     const [declared, liar] = archive.entries;
-    expect(await Effect.runPromise(archive.readText(declared!, 1000))).toEqual({
+    expect(await Effect.runPromise(archive.readText(declared, 1000))).toEqual({
       ok: false,
       reason: "The file is larger than 1,000 bytes.",
     });
-    expect(await Effect.runPromise(archive.readText(liar!, 1000))).toEqual({
+    expect(await Effect.runPromise(archive.readText(liar, 1000))).toEqual({
       ok: false,
       reason: "The file is larger than its header says.",
     });
@@ -154,7 +154,7 @@ describe("readZipArchive", () => {
       ]),
     );
     expect(
-      await Effect.runPromise(archive.readText(archive.entries[0]!, 100)),
+      await Effect.runPromise(archive.readText(archive.entries[0], 100)),
     ).toEqual({ ok: false, reason: "The file is not UTF-8 text." });
   });
 
@@ -168,7 +168,7 @@ describe("readZipArchive", () => {
       return;
     }
     const outcome = await Effect.runPromise(
-      Effect.result(archive.success.readText(archive.success.entries[0]!, 100)),
+      Effect.result(archive.success.readText(archive.success.entries[0], 100)),
     );
     expect(outcome._tag).toBe("Failure");
   });

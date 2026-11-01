@@ -85,6 +85,14 @@ export const freestyleOrbProvider = defineOrbProvider({
   profile: FreestyleRunnerProfileConfiguration,
   isolation: "sandbox",
   requiredCapabilities: ORB_RUNNER_CAPABILITIES,
+  // Rates beyond the plan's monthly allowance.
+  pricing: {
+    usdPerVcpuHour: 0.04032,
+    usdPerGibMemoryHour: 0.0129,
+    usdPerGbDiskHour: 0.000086,
+    source: "https://www.freestyle.sh/pricing",
+    checkedOn: "2026-10-30",
+  },
   sizes: FREESTYLE_ORB_SIZES.map((size) => ({
     id: size.id,
     label: size.label,

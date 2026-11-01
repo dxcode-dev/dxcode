@@ -61,7 +61,6 @@ export function NewThreadComposer({
   dictationControls,
   dictationActive,
   dictationHideSubmit,
-  footer,
 }: {
   readonly prompt: string;
   readonly images: ReadonlyArray<PendingAttachment>;
@@ -100,7 +99,6 @@ export function NewThreadComposer({
   readonly dictationControls?: React.ReactNode;
   readonly dictationActive: boolean;
   readonly dictationHideSubmit: boolean;
-  readonly footer: React.ReactNode;
 }) {
   const uploading = useAttachmentsUploading(images);
   const enterKey = useComposerEnterKey();
@@ -186,7 +184,6 @@ export function NewThreadComposer({
         dictationActive={dictationActive}
         dictationHideSubmit={dictationHideSubmit}
       />
-      {footer}
     </form>
   );
 }

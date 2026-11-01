@@ -45,6 +45,7 @@ export function SidebarThreadNavigation({
   readonly expandedThreads: ReadonlySet<ThreadData["id"]>;
   readonly hasMore: boolean;
   readonly loadingMore: boolean;
+  /** A failed load, shown with Retry, which calls `onLoadMore`. */
   readonly loadMoreError?: string;
   readonly projectNames: ReadonlyMap<string, string>;
   readonly query: string;
@@ -116,6 +117,12 @@ export function SidebarThreadNavigation({
             <div className="sidebar-empty">No matching threads</div>
           )
         ) : null}
+        {/* The first page is still on its way, so nothing is listed yet. */}
+        {visibleThreadCount === 0 && loadingMore && !hasMore ? (
+          <div className="sidebar-empty" role="status">
+            Loading threads…
+          </div>
+        ) : null}
         {sections.map((section) => {
           const collapsed =
             section.label !== undefined && collapsedGroups.has(section.id);
@@ -123,6 +130,7 @@ export function SidebarThreadNavigation({
             <section
               className="thread-project-group"
               data-thread-section={section.id}
+              aria-busy={section.loading || undefined}
               key={section.id}
             >
               {section.label === undefined ? null : (
@@ -186,7 +194,18 @@ export function SidebarThreadNavigation({
           </Button>
         ) : null}
         {loadMoreError === undefined ? null : (
-          <div className="sidebar-empty">{loadMoreError}</div>
+          <div className="sidebar-empty" role="alert">
+            {loadMoreError}
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              disabled={loadingMore}
+              onClick={onLoadMore}
+            >
+              Retry
+            </Button>
+          </div>
         )}
       </SidebarThreadChildrenProvider>
     </nav>

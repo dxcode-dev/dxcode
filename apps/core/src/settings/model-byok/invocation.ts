@@ -402,7 +402,25 @@ interface CompleteEnvelope {
   readonly systemPrompt: string;
   readonly message: string;
   readonly maxTokens: number;
+  /**
+   * Images or PDFs the message is about, for `view_media`'s analysis. A
+   * completion with attachments never joins another one.
+   */
+  readonly attachments?: ReadonlyArray<CompleteAttachment>;
 }
+
+interface CompleteAttachment {
+  readonly data: string;
+  readonly mimeType: string;
+}
+
+const COMPLETE_ATTACHMENT_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+]);
 
 const isCompleteEnvelope = (value: unknown): value is CompleteEnvelope => {
   const envelope = value as Partial<CompleteEnvelope> | null;
@@ -416,8 +434,57 @@ const isCompleteEnvelope = (value: unknown): value is CompleteEnvelope => {
     typeof envelope.message === "string" &&
     envelope.message !== "" &&
     Number.isInteger(envelope.maxTokens) &&
-    (envelope.maxTokens ?? 0) > 0
+    (envelope.maxTokens ?? 0) > 0 &&
+    (envelope.attachments === undefined ||
+      (Array.isArray(envelope.attachments) &&
+        envelope.attachments.length <= 4 &&
+        envelope.attachments.every(
+          (attachment) =>
+            typeof attachment?.data === "string" &&
+            attachment.data !== "" &&
+            typeof attachment.mimeType === "string" &&
+            COMPLETE_ATTACHMENT_TYPES.has(attachment.mimeType),
+        )))
   );
+};
+
+/** Analysis of a large image or PDF takes longer than a title. */
+const COMPLETE_ATTACHMENTS_TIMEOUT_MS = 90_000;
+
+/**
+ * pi sends every attachment as an image block. Anthropic reads a PDF only
+ * as a document block, so rewrite the PDFs in a built request.
+ */
+const anthropicDocuments = (payload: unknown) => {
+  const messages = (payload as { messages?: unknown }).messages;
+  if (!Array.isArray(messages)) return undefined;
+  return {
+    ...(payload as Record<string, unknown>),
+    messages: messages.map((message: { content?: unknown }) =>
+      Array.isArray(message.content)
+        ? {
+            ...message,
+            content: message.content.map(
+              (block: {
+                type?: string;
+                source?: { media_type?: string; data?: string };
+              }) =>
+                block.type === "image" &&
+                block.source?.media_type === "application/pdf"
+                  ? {
+                      type: "document",
+                      source: {
+                        type: "base64",
+                        media_type: "application/pdf",
+                        data: block.source.data,
+                      },
+                    }
+                  : block,
+            ),
+          }
+        : message,
+    ),
+  };
 };
 
 const COMPLETE_TIMEOUT_MS = 25_000;
@@ -1209,6 +1276,15 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     envelope: CompleteEnvelope,
     requestSignal: AbortSignal,
   ) {
+    if (envelope.attachments !== undefined) {
+      const owner = await this.#db()
+        .prepare("SELECT owner_user_id FROM threads WHERE id = ?")
+        .bind(envelope.threadId)
+        .first<string>("owner_user_id");
+      if (owner !== envelope.ownerUserId)
+        return jsonResponse({ code: "THREAD_OWNER_MISMATCH" }, 403);
+      return this.#complete(envelope, requestSignal);
+    }
     const joined = await this.#joinCompletion(envelope);
     if (joined !== undefined) return joined;
     // The row may not exist yet; once it does, only its owner may title it.
@@ -1251,9 +1327,14 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
 
   async #complete(envelope: CompleteEnvelope, requestSignal: AbortSignal) {
     const started = performance.now();
+    const attachments = envelope.attachments ?? [];
+    const timeoutMs =
+      attachments.length === 0
+        ? COMPLETE_TIMEOUT_MS
+        : COMPLETE_ATTACHMENTS_TIMEOUT_MS;
     const signal = AbortSignal.any([
       requestSignal,
-      AbortSignal.timeout(COMPLETE_TIMEOUT_MS),
+      AbortSignal.timeout(timeoutMs),
     ]);
     const route = await resolveRouteSubmission(
       this.env,
@@ -1281,10 +1362,31 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     const reasoning = "low";
     // pi's API adapters read the prompt only from the transcript's leading
     // system message; a raw `systemPrompt` field is ignored.
+    const pdf = attachments.some(
+      ({ mimeType }) => mimeType === "application/pdf",
+    );
+    if (attachments.length > 0 && !route.model.input.includes("image"))
+      return jsonResponse({ code: "MODEL_CANNOT_READ_MEDIA" }, 422);
+    if (pdf && route.model.api !== "anthropic-messages")
+      return jsonResponse({ code: "MODEL_CANNOT_READ_PDF" }, 422);
     const context = normalizeContext({
       systemPrompt: envelope.systemPrompt,
       messages: [
-        { role: "user", content: envelope.message, timestamp: Date.now() },
+        {
+          role: "user",
+          content:
+            attachments.length === 0
+              ? envelope.message
+              : [
+                  ...attachments.map(({ data, mimeType }) => ({
+                    type: "image" as const,
+                    data,
+                    mimeType,
+                  })),
+                  { type: "text" as const, text: envelope.message },
+                ],
+          timestamp: Date.now(),
+        },
       ],
     });
     let final: AssistantMessageEvent | undefined;
@@ -1359,10 +1461,11 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
         maxTokens: envelope.maxTokens,
         reasoning,
         maxRetries: 0,
-        timeoutMs: COMPLETE_TIMEOUT_MS,
+        timeoutMs,
         apiKey: "dx-placeholder",
         signal,
         fetch: proxyFetch,
+        ...(pdf ? { onPayload: anthropicDocuments } : {}),
       })) {
         if (event.type === "done" || event.type === "error") final = event;
       }

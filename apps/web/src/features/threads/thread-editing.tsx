@@ -5,6 +5,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import { LoaderCircle, Trash2 } from "lucide-react";
 import * as React from "react";
+import { toast } from "sonner";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import {
   ThreadEditingContext,
@@ -37,7 +38,7 @@ export function ThreadEditingProvider({
   const { mutate } = useMutation(
     updateThreadMutationOptions(queryClient, identity.id),
   );
-  const { mutate: pin } = useMutation(
+  const pin = useMutation(
     setThreadPinnedMutationOptions(queryClient, identity.id),
   );
   const [renaming, setRenaming] = React.useState<RenameTarget>();
@@ -62,7 +63,19 @@ export function ThreadEditingProvider({
             (item) => item.id === threadId && item.pinnedAt !== undefined,
           ),
         ) === true,
-    setPinned: (threadId, pinned) => pin({ threadId, pinned }),
+    setPinned: (threadId, pinned) =>
+      pin.mutate(
+        { threadId, pinned },
+        {
+          onError: () =>
+            toast.error(
+              pinned
+                ? "The thread could not be pinned."
+                : "The thread could not be unpinned.",
+            ),
+        },
+      ),
+    pinningThreadId: pin.isPending ? pin.variables.threadId : undefined,
   };
 
   return (

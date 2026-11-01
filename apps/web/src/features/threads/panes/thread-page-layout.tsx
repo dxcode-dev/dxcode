@@ -1,12 +1,12 @@
 import type { ThreadId } from "@dx/domain";
 import * as React from "react";
 import { THREAD_OPEN_VIEW_EVENT } from "../../../shared/commands/command-provider.js";
-import { usePaneLayout } from "./pane-layout-queries.js";
 import {
   defaultPaneLayout,
   PANE_VIEW_KINDS,
   type PaneViewKind,
 } from "./pane-layout.js";
+import { usePaneLayout } from "./pane-layout-queries.js";
 import { ViewsMenuButton } from "./pane-menus.js";
 import { ThreadPaneTree } from "./pane-tree.js";
 import type { PaneContents } from "./pane-views.js";

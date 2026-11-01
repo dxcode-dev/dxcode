@@ -85,7 +85,7 @@ const agentState = async (
     AGENT_PROMPT_LIMIT,
   );
   if (history.kind !== "page") return { history: history.kind };
-  const { messages, settled, answeredBy, hasOlder } = history.page;
+  const { messages, settled, failures, answeredBy, hasOlder } = history.page;
   const submissions = [
     ...new Set(
       messages.flatMap(({ role, submissionId }) =>
@@ -100,6 +100,10 @@ const agentState = async (
     submissions: submissions.map((submissionId) => ({
       submissionId,
       outcome: settled.get(submissionId) ?? "unsettled",
+      // Why it failed, such as WORKSPACE_READ_ONLY with what dx did.
+      ...(failures.has(submissionId)
+        ? { error: failures.get(submissionId) }
+        : {}),
       ...(answeredBy.has(submissionId)
         ? { answeredBy: answeredBy.get(submissionId) }
         : {}),

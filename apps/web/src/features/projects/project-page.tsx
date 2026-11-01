@@ -77,7 +77,7 @@ export function ProjectPage() {
                 <Building2 />
               )}
             </span>
-            {ownerName}
+            <span className="project-detail-crumb-text">{ownerName}</span>
           </Link>
           {project === undefined ? null : (
             <>
@@ -90,7 +90,9 @@ export function ProjectPage() {
                     project.name.slice(0, 1).toUpperCase()
                   )}
                 </span>
-                {project.name}
+                <span className="project-detail-crumb-text">
+                  {project.name}
+                </span>
               </strong>
             </>
           )}
@@ -177,13 +179,13 @@ export function ProjectPage() {
                 <MessageSquare />
                 <strong>No threads yet</strong>
                 <span>Start the first thread in {project.name}.</span>
-                <Link
+                <button
+                  type="button"
                   className={buttonVariants({ size: "xs" })}
-                  to="/new"
-                  search={{ project: project.id }}
+                  onClick={() => openNewThread(project.id)}
                 >
                   <Plus /> New Thread
-                </Link>
+                </button>
               </div>
             ) : (
               projectThreads.slice(0, 5).map((thread) => (

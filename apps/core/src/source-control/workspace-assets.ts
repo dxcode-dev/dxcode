@@ -927,8 +927,19 @@ const diskFull = () => {
     return stats.bavail * stats.bsize < DISK_FULL_BYTES;
   } catch { return false; }
 };
+// A home that went read-only (EROFS) fails every write until the Orb
+// restarts, whatever step noticed it; Core restarts the Orb on this kind.
+const readOnly = () => {
+  try {
+    nodeFs.accessSync(HOME, nodeFs.constants.W_OK);
+    return false;
+  } catch (error) { return error?.code === "EROFS"; }
+};
+const READ_ONLY = () => new SourceWorkspaceFailure("read-only", "Read-only file system");
 const settledFailure = cause => {
+  if (cause?.code === "EROFS") return READ_ONLY();
   const failure = cause instanceof SourceWorkspaceFailure ? cause : new SourceWorkspaceFailure(cause?.code === "ENOSPC" || cause?.code === "EDQUOT" ? "disk-full" : "initialization");
+  if (failure.kind !== "absent" && failure.kind !== "disk-full" && readOnly()) return READ_ONLY();
   return failure.kind !== "disk-full" && failure.kind !== "absent" && diskFull() ? new SourceWorkspaceFailure("disk-full") : failure;
 };
 try {

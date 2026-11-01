@@ -32,6 +32,24 @@ const fieldError = (
   field: "displayName" | "shortName",
 ) => errors.find((error) => error.field === field)?.message;
 
+/**
+ * The form-level message after a failed save. When the server named only the
+ * name fields, their messages already show under them, so the generic
+ * "validation failed" adds nothing.
+ */
+const formError = (state: {
+  readonly status: string;
+  readonly message?: string;
+  readonly fieldErrors: ReadonlyArray<SettingsFieldError>;
+}) =>
+  state.status !== "error" ||
+  (state.fieldErrors.length > 0 &&
+    state.fieldErrors.every(
+      ({ field }) => field === "displayName" || field === "shortName",
+    ))
+    ? undefined
+    : state.message;
+
 function CreateWorkspaceCard({
   onDirtyChange,
   onCreated,
@@ -184,7 +202,7 @@ function CreateWorkspaceCard({
         dirty={state.dirty}
         saving={saving}
         message="No workspace membership yet."
-        error={state.status === "error" ? state.message : undefined}
+        error={formError(state)}
         form={formId}
         onSave={() => void save()}
         onReset={reset}
@@ -548,9 +566,7 @@ export function WorkspaceProfileForm({
                 onChange={change}
               />
               <footer className="workspace-profile-actions">
-                <span aria-live="polite">
-                  {state.status === "error" ? state.message : null}
-                </span>
+                <span aria-live="polite">{formError(state) ?? null}</span>
                 <Button
                   size="xs"
                   variant="outline"

@@ -3,9 +3,10 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { integrationCredentialReferenceFor } from "@dx/domain";
 import { Effect, Redacted } from "effect";
 import { Hono } from "hono";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import manifest from "../../../migration-manifest.json" with { type: "json" };
 import type { AppEnv } from "../../http/types.js";
+import { readProjectOrbFiles } from "../../projects/orb-files.js";
 import { loadConfigEncryptionKeyring } from "../../settings/config-encryption.js";
 import {
   IntegrationCredentialVault,
@@ -175,7 +176,9 @@ const fixture = async () => {
       await start(),
       "code",
     );
-    return (await readBitbucketConnection(db, userId))!;
+    const connection = await readBitbucketConnection(db, userId);
+    assert.exists(connection);
+    return connection;
   };
   return { db, sqlite, service, start, connect, fetcher, vault, keyring };
 };
@@ -811,6 +814,63 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
         .run(),
     ).toThrow("immutable");
   });
+  it.each([[[".agents/setup", ".dx/services.yaml"]], [[]]])(
+    "reads a private repository's Orb files %j through the connection's lease",
+    async (files) => {
+      const f = await fixture();
+      const connection = await f.connect();
+      seedThread(f.sqlite, connection.id);
+      const fake = f.fetcher.getMockImplementation();
+      assert.exists(fake);
+      const reads: Array<{ url: string; auth: string | null }> = [];
+      f.fetcher.mockImplementation(async (input, init) => {
+        const url = String(input);
+        const src = `/2.0/repositories/${encodeURIComponent(workspaceId)}/${encodeURIComponent(repositoryId)}/src/${"a".repeat(40)}/`;
+        const at = url.indexOf(src);
+        if (at === -1) return fake(input, init);
+        reads.push({
+          url,
+          auth: new Headers(init?.headers).get("authorization"),
+        });
+        const [path, query] = url.slice(at + src.length).split("?");
+        expect(query).toBe("format=meta");
+        return files.includes(decodeURIComponent(path ?? ""))
+          ? Response.json({ type: "commit_file", path })
+          : Response.json({ type: "error" }, { status: 404 });
+      });
+
+      const result = await readProjectOrbFiles({
+        db: f.db,
+        bindings: { ...bindings, DB: f.db } as never,
+        projectId,
+        userId,
+        fetcher: f.fetcher,
+      });
+
+      expect(result).toEqual({
+        state: "checked",
+        repository: { fullName: "space/repo", defaultBranch: "main" },
+        files: [
+          ".agents/setup",
+          ".agents/resume",
+          ".agents/desktop/resume",
+          ".dx/services.yaml",
+        ].map((path) =>
+          files.includes(path)
+            ? {
+                path,
+                present: true,
+                url: `https://bitbucket.org/space/repo/src/main/${path}`,
+              }
+            : { path, present: false },
+        ),
+      });
+      expect(reads).toHaveLength(4);
+      for (const read of reads)
+        expect(read.auth).toMatch(/^Bearer access-secret-/);
+    },
+  );
+
   it("returns 401 with a Basic challenge for malformed base64 credentials", async () => {
     const app = new Hono<AppEnv>();
     app.route("/api/source/bitbucket/git", bitbucketGitGatewayRoutes);
@@ -886,7 +946,8 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
     const f = await fixture();
     const row = await f.connect();
     seedThread(f.sqlite, row.id);
-    const original = f.fetcher.getMockImplementation()!;
+    const original = f.fetcher.getMockImplementation();
+    assert.exists(original);
     let allowed = true;
     const upstream: Array<{ url: string; body: string; headers: Headers }> = [];
     f.fetcher.mockImplementation(async (url, init) => {

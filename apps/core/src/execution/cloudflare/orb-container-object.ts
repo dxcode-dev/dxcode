@@ -128,6 +128,10 @@ export class OrbContainerObject extends DurableObject {
     return this.#controller.pause();
   }
 
+  recover(options?: { readonly discardUnsaved?: boolean }) {
+    return this.#controller.recover(options);
+  }
+
   /** Only `OrbStopNotice` calls this; Core never does. */
   stopping() {
     return this.#controller.stopping();

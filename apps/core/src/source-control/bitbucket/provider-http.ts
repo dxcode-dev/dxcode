@@ -540,5 +540,37 @@ export const createBitbucketProvider = (
         invalid();
       return { repository: resolved, commitSha };
     },
+    /**
+     * The paths that name a file at `commit`; a path the commit lacks is
+     * absent rather than an error.
+     */
+    presentPaths: async (
+      accessToken: string,
+      workspaceId: string,
+      repositoryId: string,
+      commit: string,
+      paths: ReadonlyArray<string>,
+    ): Promise<ReadonlyArray<string>> => {
+      if (!/^[0-9a-f]{40}$/i.test(commit)) invalid();
+      const found = await Promise.all(
+        paths.map(async (path) => {
+          try {
+            const value = (await json(
+              `${repoPath(workspaceId, repositoryId)}/src/${commit}/${path.split("/").map(pathPart).join("/")}?format=meta`,
+              { headers: headers(accessToken) },
+            )) as Record<string, unknown>;
+            return value?.type === "commit_file";
+          } catch (cause) {
+            if (
+              cause instanceof BitbucketProviderError &&
+              cause.category === "not-found"
+            )
+              return false;
+            throw cause;
+          }
+        }),
+      );
+      return paths.filter((_, index) => found[index]);
+    },
   };
 };

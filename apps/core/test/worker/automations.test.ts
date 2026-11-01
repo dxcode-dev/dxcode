@@ -70,8 +70,20 @@ vi.mock("../../src/agents/routes.js", async () => {
 
 vi.mock("../../src/threads/routes.js", async () => {
   const { Hono } = await import("hono");
+  const { Schema } = await import("effect");
+  const { CreateThreadRequestSchema } = await import("@dx/api");
   const threadRoutes = new Hono().post("/", async (context) => {
     const body = (await context.req.json()) as { threadId: string };
+    // The real route rejects what its schema does not accept.
+    if (!Schema.is(CreateThreadRequestSchema)(body))
+      return context.json(
+        {
+          status: "error",
+          code: "INVALID_REQUEST",
+          message: "Request validation failed.",
+        },
+        400,
+      );
     if (
       !delivered.created.some((created) => created.threadId === body.threadId)
     )
@@ -883,6 +895,36 @@ describe("GitHub subscriptions", () => {
       comment: { ...comment.comment, id: 8 },
     });
     expect(delivered.messages).toHaveLength(2);
+  });
+
+  it("starts a Thread for a newly opened issue whose title is long", async () => {
+    await call(main.id, "create_github_subscription", {
+      title: "Intake: one owner Thread per issue",
+      repository: REPO,
+      filter_kind: "issue-opened",
+      destination: "new-thread",
+      instructions: "Triage the issue.",
+    });
+    const title =
+      "Composer keeps the draft after a failed send and offers to retry it on every device";
+    await webhook("issues", {
+      action: "opened",
+      issue: {
+        number: 1093,
+        title,
+        html_url: `https://github.com/${REPO}/issues/1093`,
+        user: { login: "bob" },
+        labels: [],
+      },
+    });
+    expect(delivered.created).toHaveLength(1);
+    const created = delivered.created[0] as { title: string };
+    expect(created.title.length).toBeLessThanOrEqual(80);
+    expect(
+      created.title.startsWith(
+        "Intake: one owner Thread per issue: #1093 Composer",
+      ),
+    ).toBe(true);
   });
 
   it("returns the saved subscription for an equivalent one and keeps it paused", async () => {

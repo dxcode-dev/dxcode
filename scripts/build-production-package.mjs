@@ -11,6 +11,7 @@ import { resolve } from "node:path";
 import {
   assertProductionPackageOutput,
   createProductionPackage,
+  hasDocsSite,
   productionBuildEnvironment,
   validateProductionBindingConfiguration,
   validateProductionPackage,
@@ -31,11 +32,13 @@ const required = (name) => {
   if (!value) throw new Error(`--${name} is required.`);
   return value;
 };
+// The public release has no docs site; its packages redirect /docs instead.
+const docsSite = hasDocsSite();
 const outputRoot = assertProductionPackageOutput({
   repositoryRoot: workspaceRoot,
   outputRoot: resolve(workspaceRoot, required("output")),
 });
-for (const application of ["core", "docs", "web"]) {
+for (const application of ["core", ...(docsSite ? ["docs"] : []), "web"]) {
   for (const filename of [
     ".env",
     ".env.local",
@@ -89,11 +92,12 @@ try {
   writeFileSync(productionConfigPath, JSON.stringify(authoredConfig));
 
   run("@dx/web");
-  execFileSync("pnpm", ["--filter", "@dx/docs", "exec", "astro", "build"], {
-    cwd: workspaceRoot,
-    env: cleanEnvironment,
-    stdio: "inherit",
-  });
+  if (docsSite)
+    execFileSync("pnpm", ["--filter", "@dx/docs", "exec", "astro", "build"], {
+      cwd: workspaceRoot,
+      env: cleanEnvironment,
+      stdio: "inherit",
+    });
   run("@dx/core", {
     ...cleanEnvironment,
     CLOUDFLARE_VITE_WRANGLER_CONFIG_PATH: productionConfigPath,
@@ -121,7 +125,9 @@ try {
   rmSync(outputRoot, { recursive: true, force: true });
   const manifest = await createProductionPackage({
     coreBuildRoot: resolve(workspaceRoot, "apps/core/dist/dx_core"),
-    docsBuildRoot: resolve(workspaceRoot, "apps/docs/dist"),
+    docsBuildRoot: docsSite
+      ? resolve(workspaceRoot, "apps/docs/dist")
+      : undefined,
     deploymentLabel: required("deployment-label"),
     dxdBinary: values.get("dxd-binary"),
     dxdSha256: required("dxd-sha256"),

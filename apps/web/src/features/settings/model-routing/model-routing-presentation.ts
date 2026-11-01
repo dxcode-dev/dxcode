@@ -1,12 +1,10 @@
 import type {
-  CatalogData,
   ChoicesData,
   ConnectionData,
   DictationProviderData,
   GraphData,
 } from "@dx/api";
 import { isClaudeCodeModel } from "@dx/domain";
-import { modelDisplayName } from "../../../shared/model-display-name.js";
 
 export interface RoutingSource {
   readonly id: string;
@@ -47,32 +45,23 @@ const MODE_NAMES: Record<string, string> = {
   ultra: "Ultra",
 };
 
-/** A model's readable name when neither the catalog nor choices name it. */
-const readableModel = (id: string) =>
-  modelDisplayName(id).replace(
-    /(^|\s)([a-z])/g,
-    (_, space: string, letter: string) => space + letter.toUpperCase(),
-  );
-
+/**
+ * The routing graph's rows and destinations. Model names come from the
+ * server, which takes them from the model catalog, so this page and the Mode
+ * Dial name a model the same way.
+ */
 export function routingPresentation({
   graph,
-  catalog,
   choices,
   connections = [],
   dictation,
 }: {
   readonly graph: GraphData;
-  readonly catalog?: CatalogData;
   readonly choices?: ChoicesData;
   readonly connections?: ReadonlyArray<ConnectionData>;
   /** The Speech provider dictation resolves to; absent hides the row. */
   readonly dictation?: DictationProviderData;
 }) {
-  const catalogModels = catalog?.providers.flatMap((p) => p.models) ?? [];
-  const names = new Map(catalogModels.map((m) => [m.id, m.name]));
-  const displayName = (id: string) =>
-    names.get(id) ??
-    readableModel(choices?.models.find((m) => m.canonical === id)?.name ?? id);
   const edgeByMode = new Map(graph.edges.map((e) => [e.mode, e]));
   const groups: RoutingGroup[] = graph.modes.map((mode) => ({
     id: mode.mode,
@@ -82,7 +71,7 @@ export function routingPresentation({
         id: `${mode.mode}:agent`,
         label: "Main Agent",
         model: mode.config.model,
-        name: displayName(mode.config.model),
+        name: mode.modelName,
         destination: edgeByMode.get(mode.mode)?.connectionId ?? NOT_SERVED,
       },
     ],
@@ -99,7 +88,7 @@ export function routingPresentation({
     const rows: RoutingSource[] = Array.from(served.values(), (model) => ({
       id: `model:${model.canonical}`,
       model: model.canonical,
-      name: displayName(model.canonical),
+      name: model.name,
       destination: model.connectionId,
     }));
     if (rows.length) groups.push({ id: "other", rows });

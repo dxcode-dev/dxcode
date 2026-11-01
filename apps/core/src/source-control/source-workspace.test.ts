@@ -83,6 +83,7 @@ const makeSandbox = (
     readonly rejectedAssetVerification?: boolean;
     readonly shallow?: boolean;
     readonly fullHistoryNeeded?: boolean;
+    readonly operationStderr?: string;
     readonly hooksResult?: {
       readonly stdout: string;
       readonly stderr: string;
@@ -172,7 +173,7 @@ const makeSandbox = (
                     }
                   : state,
               ),
-              stderr: "",
+              stderr: input?.operationStderr ?? "",
               exitCode: 0,
             };
           }
@@ -872,6 +873,34 @@ describe("SourceWorkspaceService", () => {
     }
   });
 
+  it("logs the program's failure kind when it reports the checkout failed", async () => {
+    const logged = vi
+      .spyOn(sourceControlLogger, "error")
+      .mockImplementation(() => {});
+    try {
+      const fake = makeSandbox([40], {
+        operationStderr: "initialization:128",
+      });
+      await expect(
+        activate(fake.preparation, serviceLayer({ source: snapshot })),
+      ).rejects.toMatchObject({ _tag: "SourceWorkspaceInitializationFailed" });
+      const calls = logged.mock.calls as unknown as ReadonlyArray<
+        readonly [string, Record<string, unknown>]
+      >;
+      expect(
+        calls.find(
+          ([message]) => message === "Source workspace activation failed.",
+        )?.[1],
+      ).toMatchObject({
+        stage: "read-checkout-state",
+        exitCode: 0,
+        stderrTail: "initialization:128",
+      });
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
   it("uses separate exact-repository leases for a selected submodule and root LFS", async () => {
     const leases: string[] = [];
     const leaseTargets: Array<string | undefined> = [];
@@ -1068,6 +1097,53 @@ describe("SourceWorkspaceService", () => {
           full: true,
         },
       ]);
+    }
+  });
+
+  it("fails a read-only disk at install-programs as WORKSPACE_READ_ONLY, never as a lost command to retry", async () => {
+    // thr_cf588b7a's Orb: its btrfs root went read-only, so writing the
+    // credential helper failed on every activation.
+    const fake = makeSandbox([0], { assetState: "stale" });
+    fake.files.write.mockImplementation(async () => {
+      throw new Error(
+        "Orb container writeFile failed: sh: 1: cannot create /home/user/.local/libexec/dx-git-credential.440f85f1.tmp: Read-only file system",
+      );
+    });
+
+    const cause = await activate(
+      fake.preparation,
+      serviceLayer({ source: snapshot }),
+    ).catch((error: unknown) => error);
+
+    expect(
+      classifyRunFailure({ message: (cause as Error).message }),
+    ).toMatchObject({
+      code: "WORKSPACE_READ_ONLY",
+      retryable: false,
+      message: expect.stringMatching(/^The Orb's disk became read-only/),
+    });
+  });
+
+  it("fails a read-only disk reported by a source command's stderr as WORKSPACE_READ_ONLY", async () => {
+    const readOnly = workspacePreparationFor({
+      commands: {
+        run: async () => ({
+          stdout: "",
+          stderr:
+            "install: cannot create directory '/home/user/.local/state/dx': Read-only file system",
+          exitCode: 1,
+        }),
+      },
+      files: { write: async () => undefined },
+    });
+    for (const source of [snapshot, undefined]) {
+      const cause = await activate(
+        readOnly,
+        serviceLayer(source === undefined ? {} : { source }),
+      ).catch((error: unknown) => error);
+      expect(
+        classifyRunFailure({ message: (cause as Error).message }),
+      ).toMatchObject({ code: "WORKSPACE_READ_ONLY", retryable: false });
     }
   });
 

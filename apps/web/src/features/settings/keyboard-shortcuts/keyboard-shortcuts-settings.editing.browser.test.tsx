@@ -154,11 +154,53 @@ describe("KeyboardShortcutsSettings editing", () => {
     await React.act(() => press(registry, { key: "k", ctrlKey: true }));
     expect(
       document.querySelector(".shortcut-validation-error")?.textContent,
-    ).toContain("conflicts with “Open command palette”");
+    ).toContain("is already used by “Open command palette”");
     expect(buttonByText("Save shortcut").disabled).toBe(true);
     await React.act(() => buttonByText("Cancel").click());
     expect(registry.getActiveRecording()).toBeNull();
     expect(registry.getBinding("navigation.projects")).toBe("Mod+Shift+O");
+  });
+
+  it.each(["mac", "windows", "linux"] as const)(
+    "lists every default shortcut on %s for exactly one command",
+    async (platform) => {
+      registry = createCommandRegistry({ platform });
+      await mount();
+      const owners = new Map<string, Set<string>>();
+      for (const row of document.querySelectorAll(".settings-row")) {
+        const label = row.querySelector("strong")?.textContent ?? "";
+        for (const keycaps of row.querySelectorAll(
+          ".shortcut-binding .shortcut-keycaps",
+        )) {
+          const keys = keycapsOf(keycaps).join("+");
+          owners.set(keys, (owners.get(keys) ?? new Set()).add(label));
+        }
+      }
+      const shared = [...owners].filter(([, labels]) => labels.size > 1);
+      expect(shared).toEqual([]);
+    },
+  );
+
+  it("refuses a shortcut another screen's command already uses", async () => {
+    await mount();
+    // Open Files runs in a Thread and Focus shortcut search on this screen;
+    // a key still belongs to one command, so the editor names the owner.
+    await React.act(() => buttonByLabel("Edit Focus shortcut search").click());
+    await React.act(() =>
+      press(registry, { key: "f", ctrlKey: true, shiftKey: true }),
+    );
+    expect(
+      document.querySelector(".shortcut-validation-error")?.textContent,
+    ).toBe("Ctrl+Shift+F is already used by “Open Files”.");
+    expect(buttonByText("Save shortcut").disabled).toBe(true);
+    await React.act(() => buttonByText("Cancel").click());
+
+    await React.act(() => buttonByLabel("Edit Open Files").click());
+    await React.act(() => press(registry, { key: "/" }));
+    expect(
+      document.querySelector(".shortcut-validation-error")?.textContent,
+    ).toBe("/ is already used by “Focus shortcut search”.");
+    expect(buttonByText("Save shortcut").disabled).toBe(true);
   });
 
   it("ends the recording session when the screen unmounts", async () => {

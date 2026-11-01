@@ -1,6 +1,8 @@
 import { Schema } from "effect";
+import type { RunnerResources } from "../settings/runner-profile-fields.js";
 import { boatOrbProvider } from "./boat.js";
 import { cloudflareOrbProvider } from "./cloudflare.js";
+import type { OrbProviderPricing } from "./descriptor.js";
 import { dockerOrbProvider } from "./docker.js";
 import { e2bOrbProvider } from "./e2b.js";
 import { freestyleOrbProvider } from "./freestyle.js";
@@ -83,4 +85,32 @@ export const withPinnedOrbTarget = <
     | ((profile: Profile, target: string) => Profile)
     | undefined;
   return withTarget === undefined ? profile : withTarget(profile, target);
+};
+
+/**
+ * What an Orb size costs per running hour at its provider's public list
+ * price, or undefined when dx does not know it. `maximum` is true when the
+ * provider bills CPU only while it is in use.
+ */
+export const orbSizeHourlyPrice = (
+  providerId: string,
+  sizeId: string,
+  resources: RunnerResources,
+): { readonly usd: number; readonly maximum: boolean } | undefined => {
+  const provider: { readonly pricing?: OrbProviderPricing } | undefined =
+    findOrbProvider(providerId);
+  const pricing = provider?.pricing;
+  if (pricing === undefined) return undefined;
+  const maximum = pricing.cpuBilledWhenActive === true;
+  if ("usdPerSizeHour" in pricing) {
+    const usd = pricing.usdPerSizeHour[sizeId];
+    return usd === undefined ? undefined : { usd, maximum };
+  }
+  return {
+    usd:
+      resources.cpuCores * pricing.usdPerVcpuHour +
+      (resources.memoryMb / 1024) * pricing.usdPerGibMemoryHour +
+      resources.diskGb * pricing.usdPerGbDiskHour,
+    maximum,
+  };
 };

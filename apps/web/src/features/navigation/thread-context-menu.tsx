@@ -19,16 +19,12 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useNowMinute } from "../../shared/hooks/use-clock.js";
+import { copyThreadId, copyThreadUrl } from "../../shared/thread-copy.js";
 import { useOptionalThreadEditing } from "../../shared/thread-editing.js";
 import type { ThreadSnoozeController } from "../../shared/thread-snooze.js";
 import { snoozePresets } from "../../shared/thread-snooze-presets.js";
-import { absoluteThreadUrl } from "../../shared/thread-url.js";
 import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
 import { ThreadColorSubmenu } from "../../shared/ui/thread-color-submenu.js";
-
-const copy = (text: string) => {
-  void navigator.clipboard.writeText(text);
-};
 
 /** The Snooze submenu's wake times, read as it opens. */
 function SnoozeContextItems({
@@ -289,15 +285,28 @@ export function ThreadContextMenu({
                   </>
                 )}
                 <ContextMenu.Separator className="thread-context-separator" />
-                {thread.lifecycleState === "active" &&
-                subthreads !== undefined ? (
+                {subthreads !== undefined ? (
                   <FamilyContextSubmenu
-                    icon={<Archive />}
-                    label="Archive"
+                    icon={
+                      thread.lifecycleState === "active" ? (
+                        <Archive />
+                      ) : (
+                        <ArchiveRestore />
+                      )
+                    }
+                    label={
+                      thread.lifecycleState === "active"
+                        ? "Archive"
+                        : "Unarchive"
+                    }
                     count={subthreads.count}
                     disabled={archiving}
-                    onAll={() => onSetArchived(true, true)}
-                    onThis={() => onSetArchived(true)}
+                    onAll={() =>
+                      onSetArchived(thread.lifecycleState === "active", true)
+                    }
+                    onThis={() =>
+                      onSetArchived(thread.lifecycleState === "active")
+                    }
                   />
                 ) : (
                   <ContextMenu.Item
@@ -362,16 +371,14 @@ export function ThreadContextMenu({
                   <ContextMenu.Popup className="thread-context-menu">
                     <ContextMenu.Item
                       className="thread-context-item"
-                      onClick={() =>
-                        copy(absoluteThreadUrl(thread.id, window.location.href))
-                      }
+                      onClick={() => void copyThreadUrl(thread.id)}
                     >
                       <Link2 />
                       <span>Thread URL</span>
                     </ContextMenu.Item>
                     <ContextMenu.Item
                       className="thread-context-item"
-                      onClick={() => copy(thread.id)}
+                      onClick={() => void copyThreadId(thread.id)}
                     >
                       <Hash />
                       <span>Thread ID</span>

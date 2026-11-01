@@ -88,19 +88,27 @@ export const ModeDialSettings = ({
   const servingModel = servedModels.find(
     (model) => model.canonical === effective?.model,
   );
+  // The server names each model from the model catalog, as Model Routing
+  // does; a mode's model has a name even when no connection serves it.
+  const catalogNames = new Map<string, string>([
+    ...(choices.data?.modes ?? []).map(
+      (mode) => [mode.config.model, mode.modelName] as const,
+    ),
+    ...servedModels.map((model) => [model.canonical, model.name] as const),
+  ]);
+  const nameOf = (model: string) => catalogNames.get(model) ?? model;
   const modelName =
     effective === undefined
       ? choice === AUTO
         ? "Auto"
         : "Loading…"
-      : (servingModel?.name ?? effective.model);
+      : nameOf(effective.model);
   const autoLabel =
     saved === undefined || pinned
       ? "Auto"
-      : `${saved.source === "workspace" ? "Workspace" : "Auto"} · ${
-          servedModels.find((m) => m.canonical === saved.config.agent.model)
-            ?.name ?? saved.config.agent.model
-        }`;
+      : `${saved.source === "workspace" ? "Workspace" : "Auto"} · ${nameOf(
+          saved.config.agent.model,
+        )}`;
   const personallyPinned =
     target.scope === "workspace"
       ? MODES.filter(
@@ -236,6 +244,7 @@ export const ModeDialSettings = ({
                   effective={effective}
                   autoLabel={autoLabel}
                   servedModels={servedModels}
+                  nameOf={nameOf}
                   choicesPending={choices.isPending}
                   choicesError={
                     choices.isError ? message(choices.error) : undefined

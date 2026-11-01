@@ -75,6 +75,7 @@ import { ModelRoutingRepositoryD1 } from "./repository-d1.js";
 import {
   canonicalCapabilities,
   canonicalModelKnown,
+  canonicalModelName,
   findServingConnection,
 } from "./resolver.js";
 
@@ -211,6 +212,18 @@ const normalizedEndpoint = (
 ) => {
   const result = validateAllowedModelEndpoint(endpoint, allowlist);
   return "endpoint" in result ? result.endpoint : undefined;
+};
+
+const MAX_CONNECTION_NAME_LENGTH = 80;
+
+const validateName = (name: string, fieldErrors: SettingsFieldError[]) => {
+  if (name.trim() === "")
+    fieldErrors.push({ field: "name", message: "Name is required." });
+  else if (name.length > MAX_CONNECTION_NAME_LENGTH)
+    fieldErrors.push({
+      field: "name",
+      message: `Use at most ${MAX_CONNECTION_NAME_LENGTH} characters.`,
+    });
 };
 
 const validateHeaders = (
@@ -467,6 +480,7 @@ export class ModelRoutingService {
       });
       return fieldErrors;
     }
+    validateName(input.name, fieldErrors);
     if (input.baseUrl !== undefined) {
       endpointError(input.baseUrl, this.endpointAllowlist, fieldErrors);
     }
@@ -684,6 +698,7 @@ export class ModelRoutingService {
     }
     const fieldErrors: SettingsFieldError[] = [];
     const merged = { ...current, ...input };
+    if (input.name !== undefined) validateName(input.name, fieldErrors);
     if (typeof input.baseUrl === "string") {
       endpointError(input.baseUrl, this.endpointAllowlist, fieldErrors);
     }
@@ -1083,6 +1098,7 @@ export class ModelRoutingService {
             model: resolution.config.agent.model,
             thinking: resolution.config.agent.thinking,
           },
+          modelName: canonicalModelName(resolution.config.agent.model),
           source: resolution.source,
           served,
         };
@@ -1160,6 +1176,7 @@ export class ModelRoutingService {
             model: resolution.config.agent.model,
             thinking: resolution.config.agent.thinking,
           },
+          modelName: canonicalModelName(resolution.config.agent.model),
           source: resolution.source,
           served: match !== undefined,
           servingConnectionName: match?.connection.name ?? null,
@@ -1177,7 +1194,7 @@ export class ModelRoutingService {
         };
         return {
           canonical,
-          name: canonical.split("/").at(-1) ?? canonical,
+          name: canonicalModelName(canonical),
           connectionId: connection.id,
           connectionName: connection.name,
           contextWindow: capabilities.contextWindow,

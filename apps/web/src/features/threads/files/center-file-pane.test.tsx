@@ -49,8 +49,8 @@ vi.mock("./files-panel.js", () => ({
 }));
 
 import { THREAD_SANDBOX_FILE_MAX_PREVIEW_BYTES } from "@dx/api";
-import type { CenterFileTab } from "./file-tab.js";
 import { CenterFilePane } from "./center-file-pane.js";
+import type { CenterFileTab } from "./file-tab.js";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 

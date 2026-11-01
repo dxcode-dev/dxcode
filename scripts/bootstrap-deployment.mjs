@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { secondReviewerCredentials } from "./second-reviewer.mjs";
 
 // The username migration 0097's sign-up trigger derives from an email
 // address: its name before any +tag, with . and _ as -, then 2 or 3 digits
@@ -178,6 +179,35 @@ export const bootstrapDeployment = async ({
     now,
   });
   return { userId: user.id, projectId: credentials.projectId };
+};
+
+/**
+ * Bootstraps a hosted deployment's reviewer and, on a branch preview only, the
+ * second reviewer derived from it. The second reviewer's password always
+ * converges to the derived one, so rotating the first reviewer's password
+ * moves it too.
+ */
+export const bootstrapDeploymentReviewers = async ({
+  credentials,
+  database,
+  repository,
+  runnerProfileId,
+}) => {
+  const primary = await bootstrapDeployment({
+    credentials,
+    database,
+    repository,
+    runnerProfileId,
+  });
+  const second = secondReviewerCredentials(credentials);
+  if (second === undefined) return { primary };
+  const secondary = await bootstrapDeployment({
+    credentials: second,
+    database,
+    resetPassword: true,
+  });
+  await approveBootstrapEmail({ email: second.email, database });
+  return { primary, second: secondary };
 };
 
 export const approveBootstrapEmail = async ({ email, database }) => {
@@ -411,13 +441,17 @@ const main = async () => {
   });
   if (hostedAuthentication)
     await approveBootstrapEmail({ email: credentials.email, database });
-  else
+  else if (selfhostStage)
     await bootstrapDeployment({
       credentials,
-      repository: selfhostStage
-        ? undefined
-        : JSON.parse(required("DX_BOOTSTRAP_REPOSITORY")),
       resetPassword: process.env.DX_BOOTSTRAP_ADMIN_PASSWORD_RESET === "true",
+      runnerProfileId: required("DX_BOOTSTRAP_RUNNER_PROFILE_ID"),
+      database,
+    });
+  else
+    await bootstrapDeploymentReviewers({
+      credentials,
+      repository: JSON.parse(required("DX_BOOTSTRAP_REPOSITORY")),
       runnerProfileId: required("DX_BOOTSTRAP_RUNNER_PROFILE_ID"),
       database,
     });

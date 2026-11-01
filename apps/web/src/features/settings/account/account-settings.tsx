@@ -1,4 +1,8 @@
 import type { PersonalAccountData, SettingsFieldError } from "@dx/api";
+import {
+  personalAccountDisplayNameProblem,
+  personalAccountUsernameProblem,
+} from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle } from "lucide-react";
 import * as React from "react";
@@ -57,8 +61,19 @@ export function PersonalAccountForm({
   const displayNameInput = React.useRef<HTMLInputElement>(null);
   const usernameInput = React.useRef<HTMLInputElement>(null);
   const formId = React.useId();
-  const displayNameError = fieldError(state.fieldErrors, "displayName");
-  const usernameError = fieldError(state.fieldErrors, "username");
+  // The server's rules, checked as the person types; the server's own field
+  // errors (such as a taken username) show only when these pass.
+  const displayNameProblem = personalAccountDisplayNameProblem(displayName);
+  const usernameProblem = personalAccountUsernameProblem(username);
+  const displayNameError =
+    displayNameProblem ?? fieldError(state.fieldErrors, "displayName");
+  const usernameError =
+    usernameProblem ?? fieldError(state.fieldErrors, "username");
+  const canSave =
+    state.dirty &&
+    !saving &&
+    displayNameProblem === undefined &&
+    usernameProblem === undefined;
 
   const change = (nextDisplayName: string, nextUsername: string) => {
     setDisplayName(nextDisplayName);
@@ -107,7 +122,7 @@ export function PersonalAccountForm({
   };
 
   const save = async () => {
-    if (!state.dirty || saving) return;
+    if (!canSave) return;
     try {
       const account = await saveAccount({ displayName, username });
       setBaseline(account);
@@ -259,11 +274,7 @@ export function PersonalAccountForm({
                 >
                   Cancel
                 </Button>
-                <Button
-                  size="xs"
-                  type="submit"
-                  disabled={!state.dirty || saving}
-                >
+                <Button size="xs" type="submit" disabled={!canSave}>
                   {saving ? "Saving…" : "Save"}
                 </Button>
               </footer>

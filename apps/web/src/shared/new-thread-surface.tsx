@@ -2,7 +2,8 @@ import type { ProjectId, ThreadId, ThreadTitle } from "@dx/domain";
 import * as React from "react";
 
 export interface NewThreadSurfaceValue {
-  readonly openNewThread: (projectId?: ProjectId) => void;
+  /** Opens the composer, optionally in a Project with a prompt filled in. */
+  readonly openNewThread: (projectId?: ProjectId, prompt?: string) => void;
   /** A stable snapshot; it changes only when a creation starts or ends. */
   readonly pendingCreations?: () => ReadonlyArray<PendingThreadCreation>;
   readonly subscribePendingCreations?: (listener: () => void) => () => void;

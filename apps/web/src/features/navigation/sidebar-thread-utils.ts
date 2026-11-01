@@ -17,6 +17,8 @@ export interface ThreadSection {
   readonly id: string;
   readonly label?: string;
   readonly project?: boolean;
+  /** A Project section whose name is still loading. */
+  readonly loading?: boolean;
   readonly threads: ReadonlyArray<ThreadData>;
 }
 
@@ -136,6 +138,10 @@ export const nextSnoozeWake = (
  * Sidebar sections. Shared Threads the user follows sit with their own
  * Threads under the Thread's Project, named by the Project even when it is
  * another member's.
+ *
+ * Until `projectsComplete`, a Project without a loaded name may be any of
+ * the person's Projects, so its section shows as loading. Only Threads Core
+ * marks projectless are in No Project then.
  */
 export function buildThreadSections(
   projects: ReadonlyArray<ProjectData>,
@@ -143,6 +149,7 @@ export function buildThreadSections(
   now: number,
   archiveAvailable = false,
   sharedThreads: ReadonlyArray<ThreadData> = [],
+  projectsComplete = true,
 ): ReadonlyArray<ThreadSection> {
   const projectNames = new Map<string, string>(
     sharedThreads.flatMap((thread) =>
@@ -192,14 +199,30 @@ export function buildThreadSections(
 
   return [
     ...(pinned.length === 0 ? [] : [{ id: "pinned", threads: pinned }]),
-    ...Array.from(groups, ([id, groupedThreads]) => ({
-      id,
-      // Project lists leave out each person's No Project; a Project not
-      // loaded yet keeps its own section.
-      label: projectNames.get(id) ?? PROJECTLESS_PROJECT_NAME,
-      project: true,
-      threads: groupedThreads,
-    })),
+    ...Array.from(groups, ([id, groupedThreads]): ThreadSection => {
+      const name =
+        id === NO_PROJECT_SECTION_ID
+          ? PROJECTLESS_PROJECT_NAME
+          : projectNames.get(id);
+      if (name !== undefined)
+        return { id, label: name, project: true, threads: groupedThreads };
+      // Once every Project is loaded, an unnamed one is a hidden No Project
+      // whose Threads came without the marker.
+      return projectsComplete
+        ? {
+            id,
+            label: PROJECTLESS_PROJECT_NAME,
+            project: true,
+            threads: groupedThreads,
+          }
+        : {
+            id,
+            label: "Loading…",
+            project: true,
+            loading: true,
+            threads: groupedThreads,
+          };
+    }),
     ...(snoozed.length === 0
       ? []
       : [{ id: "snoozed", label: "Snoozed", threads: snoozed }]),

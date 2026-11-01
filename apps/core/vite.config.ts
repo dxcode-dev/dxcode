@@ -94,6 +94,10 @@ const prebundleWorkerRuntime = {
     if (name === "client") return;
     return {
       optimizeDeps: {
+        // Flue's Worker entry is virtual, so Vite's scanner cannot crawl it
+        // and would otherwise discover each dependency on first request,
+        // reloading workerd each time until a cold start runs out of heap.
+        entries: ["src/**/*.ts", "!src/**/*.test.ts", "!src/testing/**"],
         include: workerRuntimeDependencies,
       },
     };

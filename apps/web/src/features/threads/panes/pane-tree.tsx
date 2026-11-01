@@ -12,9 +12,9 @@ import { OrbIcon } from "../../../shared/ui/orb-icon.js";
 import { absolutePathFor, sandboxFileUrl } from "../transcript-file-link.js";
 import {
   currentPaneDrag,
+  type DropZone,
   dropIndexFor,
   dropPreviewBox,
-  type DropZone,
   dropZoneFor,
   endPaneDrag,
   PANE_DRAG_MIME,
@@ -24,8 +24,8 @@ import {
 import {
   PANE_MIN_SHARE,
   type PaneLayoutAction,
-  paneTabDomId,
   panelDomId,
+  paneTabDomId,
   tabId,
   tabLabel,
 } from "./pane-layout.js";

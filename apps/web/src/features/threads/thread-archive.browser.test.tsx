@@ -3,6 +3,7 @@ import type { ThreadId } from "@dx/domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
+import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -25,26 +26,87 @@ vi.mock("./thread-mutations.js", async (importOriginal) => ({
 }));
 
 import { useThreadArchive } from "../../shared/thread-archive.js";
+import { Toaster } from "../../shared/ui/sonner.js";
 import { ThreadArchiveProvider } from "./thread-archive.js";
 
 const threadId = "thr_00000000-0000-4000-8000-000000000071" as ThreadId;
+const childId = "thr_00000000-0000-4000-8000-000000000072" as ThreadId;
 
-function ArchiveControl() {
+function ArchiveControls() {
   const archive = useThreadArchive();
   return (
-    <button type="button" onClick={() => archive.setArchived(threadId, true)}>
-      Archive from touchpoint
-    </button>
+    <>
+      <button type="button" onClick={() => archive.setArchived(threadId, true)}>
+        Archive from touchpoint
+      </button>
+      <button
+        type="button"
+        onClick={() => archive.setArchived(threadId, true, true)}
+      >
+        Archive with children
+      </button>
+      <button
+        type="button"
+        onClick={() => archive.setArchived(threadId, false)}
+      >
+        Unarchive from touchpoint
+      </button>
+    </>
   );
 }
 
-afterEach(() => {
+/** The app's one Toaster: every notice is a toast in its live region. */
+const toasts = () => [
+  ...document.querySelectorAll<HTMLElement>(
+    '[aria-live="polite"] [data-sonner-toast]',
+  ),
+];
+const onlyToast = () => {
+  const all = toasts();
+  expect(all).toHaveLength(1);
+  return all[0] as HTMLElement;
+};
+const titleOf = (element: HTMLElement) =>
+  element.querySelector("[data-title]")?.textContent;
+const buttonIn = (element: ParentNode, name: string) =>
+  [...element.querySelectorAll("button")].find(
+    (button) =>
+      button.textContent?.trim() === name ||
+      button.getAttribute("aria-label") === name,
+  );
+const click = (element: Element | undefined | null) =>
+  React.act(() =>
+    element?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
+  );
+
+const render = async () => {
+  const queryClient = new QueryClient({
+    defaultOptions: { mutations: { retry: false } },
+  });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await React.act(() =>
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <ThreadArchiveProvider>
+          <ArchiveControls />
+        </ThreadArchiveProvider>
+        <Toaster position="bottom-right" closeButton />
+      </QueryClientProvider>,
+    ),
+  );
+  return { container, root };
+};
+
+afterEach(async () => {
   archiveMutation.execute.mockReset();
+  await React.act(() => toast.dismiss());
   document.body.replaceChildren();
 });
 
-describe("Thread archive journey feedback", () => {
-  it("shows progress, confirms archive, and supports Undo", async () => {
+describe("Thread archive notices", () => {
+  it("shows progress, confirms archive, and Undo unarchives in the same toast", async () => {
     let resolveArchive:
       | ((archived: { thread: ThreadData }) => void)
       | undefined;
@@ -58,35 +120,15 @@ describe("Thread archive journey feedback", () => {
       .mockResolvedValueOnce({
         thread: { id: threadId, lifecycleState: "active" } as ThreadData,
       });
-    const queryClient = new QueryClient({
-      defaultOptions: { mutations: { retry: false } },
-    });
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
-    await React.act(() =>
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <ThreadArchiveProvider>
-            <ArchiveControl />
-          </ThreadArchiveProvider>
-        </QueryClientProvider>,
-      ),
-    );
+    const { container, root } = await render();
 
-    await React.act(() =>
-      container
-        .querySelector("button")
-        ?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
+    await click(buttonIn(container, "Archive from touchpoint"));
+    await vi.waitFor(() =>
+      expect(titleOf(onlyToast())).toBe("Archiving thread…"),
     );
-    expect(container.querySelector('[role="status"]')?.textContent).toContain(
-      "Archiving thread…",
-    );
-    await React.act(() =>
-      container
-        .querySelector("button")
-        ?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
-    );
+    // Progress cannot be dismissed, and a second request waits for it.
+    expect(buttonIn(onlyToast(), "Dismiss notification")).toBeUndefined();
+    await click(buttonIn(container, "Archive from touchpoint"));
     expect(archiveMutation.execute).toHaveBeenCalledOnce();
 
     await React.act(async () => {
@@ -96,16 +138,11 @@ describe("Thread archive journey feedback", () => {
       await Promise.resolve();
     });
     await vi.waitFor(() =>
-      expect(container.querySelector('[role="status"]')?.textContent).toContain(
-        "Archived threadUndo",
-      ),
+      expect(titleOf(onlyToast())).toBe("Archived thread"),
     );
+    expect(buttonIn(onlyToast(), "Dismiss notification")).toBeDefined();
 
-    await React.act(() =>
-      Array.from(container.querySelectorAll("button"))
-        .find((button) => button.textContent === "Undo")
-        ?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
-    );
+    await click(buttonIn(onlyToast(), "Undo"));
     expect(archiveMutation.execute.mock.calls[0]?.[0]).toEqual({
       threadId,
       archived: true,
@@ -115,11 +152,60 @@ describe("Thread archive journey feedback", () => {
       archived: false,
     });
     await vi.waitFor(() =>
-      expect(container.querySelector('[role="status"]')?.textContent).toContain(
-        "Unarchived thread",
-      ),
+      expect(titleOf(onlyToast())).toBe("Unarchived thread"),
     );
+    expect(buttonIn(onlyToast(), "Undo")).toBeUndefined();
 
+    await React.act(() => root.unmount());
+  });
+
+  it("Undo restores the children the archive changed", async () => {
+    archiveMutation.execute
+      .mockResolvedValueOnce({
+        thread: { id: threadId, lifecycleState: "archived" } as ThreadData,
+        changedChildThreadIds: [childId],
+      })
+      .mockResolvedValueOnce({
+        thread: { id: threadId, lifecycleState: "active" } as ThreadData,
+      });
+    const { container, root } = await render();
+
+    await click(buttonIn(container, "Archive with children"));
+    await vi.waitFor(() =>
+      expect(titleOf(onlyToast())).toBe("Archived threads"),
+    );
+    await click(buttonIn(onlyToast(), "Undo"));
+    expect(archiveMutation.execute.mock.calls[0]?.[0]).toEqual({
+      threadId,
+      archived: true,
+      children: true,
+    });
+    expect(archiveMutation.execute.mock.calls[1]?.[0]).toEqual({
+      threadId,
+      archived: false,
+      children: [childId],
+    });
+    await vi.waitFor(() =>
+      expect(titleOf(onlyToast())).toBe("Unarchived thread"),
+    );
+    await React.act(() => root.unmount());
+  });
+
+  it("reports a failed request and dismisses on request", async () => {
+    archiveMutation.execute.mockRejectedValueOnce(
+      new Error("Thread is already archived."),
+    );
+    const { container, root } = await render();
+
+    await click(buttonIn(container, "Unarchive from touchpoint"));
+    await vi.waitFor(() =>
+      expect(titleOf(onlyToast())).toBe("Thread is already archived."),
+    );
+    expect(onlyToast().dataset.type).toBe("error");
+    expect(buttonIn(onlyToast(), "Undo")).toBeUndefined();
+
+    await click(buttonIn(onlyToast(), "Dismiss notification"));
+    await vi.waitFor(() => expect(toasts()).toHaveLength(0));
     await React.act(() => root.unmount());
   });
 });

@@ -11,11 +11,11 @@ import {
 } from "@dx/api";
 import { Effect, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
-import { createAuth } from "../../auth/better-auth.js";
 import {
   BrowserSessionRequired,
   requireBrowserSession,
 } from "../../auth/browser-session.js";
+import { requestAuth } from "../../auth/request-auth.js";
 import { loadAuthenticationRequirements } from "../../auth/requirements.js";
 import type { AppEnv } from "../../http/types.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
@@ -97,7 +97,7 @@ const dependencies = async (c: Context<AppEnv>, browser: boolean) => {
       loadAuthenticationRequirements(c.env),
     );
     const browserSession = await Effect.runPromise(
-      Effect.result(requireBrowserSession(c, createAuth(c.env, requirements))),
+      Effect.result(requireBrowserSession(c, requestAuth(c, requirements))),
     );
     if (Result.isFailure(browserSession)) throw browserSession.failure;
     session = browserSession.success.sessionId;

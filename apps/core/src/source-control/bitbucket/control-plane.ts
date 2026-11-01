@@ -150,8 +150,7 @@ export const createBitbucketControlPlane = (input: {
   const active = async (userId: string, id?: string) => {
     const row = await readBitbucketConnection(db, userId, id);
     if (
-      !row ||
-      row.status !== "active" ||
+      row?.status !== "active" ||
       !row.access_credential_id ||
       !row.refresh_credential_id
     )
@@ -487,6 +486,7 @@ export const authorizeBitbucketSource = async (input: {
   grantId: string;
   repositoryId: string;
   workspaceId?: string;
+  readPaths?: ReadonlyArray<string>;
   fetcher?: typeof fetch;
 }): Promise<AuthorizedSource> => {
   try {
@@ -525,6 +525,16 @@ export const authorizeBitbucketSource = async (input: {
         )
           throw sourceAccessDenied("stale-binding", "rebind");
         await service.cacheRepository(row, resolved.repository);
+        const presentPaths =
+          input.readPaths === undefined
+            ? undefined
+            : await provider.presentPaths(
+                token,
+                workspaceId,
+                input.repositoryId,
+                resolved.commitSha,
+                input.readPaths,
+              );
         return {
           provider: "bitbucket",
           owner: input.owner,
@@ -540,6 +550,7 @@ export const authorizeBitbucketSource = async (input: {
           authorizationEpoch: row.authorization_epoch,
           installationEpoch: 0,
           policyRevision: 0,
+          ...(presentPaths === undefined ? {} : { presentPaths }),
         };
       },
     );

@@ -11,6 +11,7 @@ import type { ThreadId } from "@dx/domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
+import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const highlighter = vi.hoisted(() => ({ shouldFail: false }));
@@ -71,6 +72,7 @@ vi.mock("@pierre/diffs/react", async (importOriginal) => ({
   },
 }));
 
+import { Toaster } from "../../../shared/ui/sonner.js";
 import type { ChangesTransport } from "./changes-api.js";
 import { ChangesPane, REVIEW_CHANGES_PROMPT } from "./changes-pane.js";
 
@@ -389,6 +391,73 @@ describe("Changes pane", () => {
       ) ?? null,
     );
     expect(onOpenFile).toHaveBeenCalledWith("primary", path);
+    await React.act(() => root.unmount());
+    client.clear();
+  });
+
+  it("confirms Copy Path, or its failure, with a toast", async () => {
+    const writeText = vi
+      .fn<(text: string) => Promise<void>>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("denied"));
+    vi.spyOn(navigator, "clipboard", "get").mockReturnValue({
+      writeText,
+    } as unknown as Clipboard);
+    const transport: ChangesTransport = {
+      getChanges: vi.fn(async (_id, range) => dataFor(range)),
+      getDiff: vi.fn(),
+      push: vi.fn(),
+    };
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const container = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(container);
+    await React.act(() =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ChangesPane
+            threadId={threadId}
+            transport={transport}
+            onReviewPrompt={() => undefined}
+          />
+          <Toaster position="bottom-right" closeButton />
+        </QueryClientProvider>,
+      ),
+    );
+    await settle();
+    const toastTitles = () =>
+      [
+        ...document.querySelectorAll<HTMLElement>(
+          '[aria-live="polite"] [data-sonner-toast]:not([data-removed="true"])',
+        ),
+      ].map((item) => [
+        item.dataset.type,
+        item.querySelector("[data-title]")?.textContent,
+      ]);
+    const copyPath = async () => {
+      await click(
+        container.querySelector('[aria-label="Actions for src/example.ts"]'),
+      );
+      await settle();
+      await click(
+        [...document.querySelectorAll('[role="menuitem"]')].find(
+          (item) => item.textContent?.trim() === "Copy Path",
+        ) ?? null,
+      );
+      await settle();
+    };
+
+    await copyPath();
+    expect(writeText).toHaveBeenCalledWith(path);
+    await vi.waitFor(() =>
+      expect(toastTitles()).toEqual([["success", "Path copied"]]),
+    );
+    await copyPath();
+    await vi.waitFor(() =>
+      expect(toastTitles()).toEqual([["error", "Could not copy path"]]),
+    );
+    await React.act(() => toast.dismiss());
     await React.act(() => root.unmount());
     client.clear();
   });

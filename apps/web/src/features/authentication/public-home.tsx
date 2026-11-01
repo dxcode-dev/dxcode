@@ -2,13 +2,8 @@ import type { SignInOptionsResponse } from "@dx/api";
 import { useQuery } from "@tanstack/react-query";
 import { Navigate } from "@tanstack/react-router";
 import * as React from "react";
+import { HostedLanding } from "./hosted-landing.js";
 import { signInOptionsQueryOptions } from "./sign-in-queries.js";
-
-const MarketingHome = React.lazy(() =>
-  import("../marketing/marketing-home.js").then((module) => ({
-    default: module.MarketingHome,
-  })),
-);
 
 /** The hosted landing page belongs to deployments that run the magic-link waitlist. */
 const hasPublicHome = (options: SignInOptionsResponse) =>
@@ -18,9 +13,9 @@ const hasPublicHome = (options: SignInOptionsResponse) =>
 export function PublicHome() {
   const { data: options } = useQuery(signInOptionsQueryOptions);
   if (options === undefined) return null;
-  return hasPublicHome(options) ? (
+  return HostedLanding !== undefined && hasPublicHome(options) ? (
     <React.Suspense fallback={null}>
-      <MarketingHome />
+      <HostedLanding />
     </React.Suspense>
   ) : (
     <Navigate to="/signin" replace />

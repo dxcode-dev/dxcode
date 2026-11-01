@@ -1,7 +1,7 @@
 {
   "name": "dx",
   "private": true,
-  "version": "0.2.56",
+  "version": "0.2.57",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "packageManager": "pnpm@12.14.0",
@@ -10,7 +10,7 @@
     "pnpm": ">=12.14.0 <13"
   },
   "scripts": {
-    "build": "pnpm --filter @dx/web build && pnpm --filter @dx/core build && pnpm --filter @dx/docs build",
+    "build": "pnpm --filter @dx/web build && pnpm --filter @dx/core build",
     "build:production": "node scripts/build-production-package.mjs",
     "build:dxd": "node scripts/build-dxd.mjs",
     "format": "biome format . --write",
@@ -31,9 +31,6 @@
     "dev:model-preview": "node scripts/dev-local.mjs --model-preview",
     "dev:reset": "node scripts/reset-local.mjs",
     "dev:web": "pnpm --filter @dx/web dev",
-    "docs:dev": "pnpm --filter @dx/docs dev",
-    "docs:check": "pnpm --filter @dx/docs check",
-    "docs:build": "pnpm --filter @dx/docs build",
     "deploy:selfhost": "node scripts/run-alchemy-deployment.mjs deploy selfhost",
     "dx:deploy": "node scripts/dx-deploy.mjs",
     "deploy:selfhost:destroy": "node scripts/run-alchemy-deployment.mjs destroy selfhost",

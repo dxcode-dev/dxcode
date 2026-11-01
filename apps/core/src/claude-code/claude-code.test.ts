@@ -28,11 +28,13 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { classifyRunFailure } from "../runtime/run-failure.js";
 import type { ExecutionEnvironmentSnapshot } from "../settings/environment-variables/execution.js";
 import { withExecutionEnvironment } from "../settings/environment-variables/sandbox.js";
+import { claudeCodeDxTools } from "./dx-tools.js";
 import * as claudeCodeProvider from "./provider.js";
 import { createClaudeCodeProvider } from "./provider.js";
 import { claudeCodeSandbox } from "./runs.js";
 import { ClaudeCodeStream } from "./stream.js";
 import { claudeCodeMirrorTools } from "./tools.js";
+import { createClaudeCodeViewMediaTool } from "./view-media.js";
 import { claudeCodeAnswer } from "./workspace-run.js";
 
 /**
@@ -595,6 +597,78 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
           Object.values(env).some((value) => value.includes(token)),
       ),
     ).toEqual([]);
+    expect(await guest.filesHolding(token)).toEqual([]);
+  });
+
+  it("serves view_media to Claude: the image as an MCP block, and an objective through a claude -p subagent", async () => {
+    const guest = await createGuest();
+    const pixels = new Uint8Array(2400 * 1200 * 3).fill(90);
+    const { encode } = await import("fast-png");
+    await guest.sandbox.writeFile(
+      `${GUEST_HOME}/workspace/repo/shot.png`,
+      encode({ width: 2400, height: 1200, channels: 3, data: pixels }),
+    );
+    const token = `plan-token-${crypto.randomUUID()}`;
+    const [tool] = claudeCodeDxTools("thr_view_media", [
+      createClaudeCodeViewMediaTool({
+        deps: { githubToken: async () => undefined },
+        token: async () => token,
+      }),
+    ]);
+    if (tool === undefined) throw new Error("no tool");
+    const run = (toolCallId: string, data: unknown) =>
+      tool.run({
+        toolCallId,
+        data,
+        signal: AbortSignal.timeout(20_000),
+        harness: { sandbox: guest.sandbox },
+        log: console,
+      } as never);
+
+    // Without an objective Claude sees the image; Flue records only text.
+    const shown = await run("toolu_see", { path: "shot.png" });
+    expect(shown).toBe(
+      `${GUEST_HOME}/workspace/repo/shot.png: PNG, 2000×1000, downsized from 2400×1200.`,
+    );
+    const mcpResult = JSON.parse(
+      guest.file(`${STATE}/mcp/results/toolu_see.json`) ?? "null",
+    );
+    expect(mcpResult).toMatchObject({
+      isError: false,
+      content: [
+        { type: "text", text: shown },
+        { type: "image", mimeType: "image/png", data: expect.any(String) },
+      ],
+    });
+
+    // With one, a claude -p subagent answers from the image.
+    await guest.script([init(), result("Gray, no text.")]);
+    const answered = await run("toolu_ask", {
+      path: "shot.png",
+      objective: "What color is it?",
+    });
+    expect(answered).toBe("Gray, no text.");
+    const args = guest.home("claude-args").split("\n");
+    expect(args).toEqual(
+      expect.arrayContaining([
+        "--input-format",
+        "stream-json",
+        "--append-system-prompt",
+        "--tools",
+      ]),
+    );
+    const stdin = JSON.parse(guest.home("claude-stdin.jsonl"));
+    expect(stdin.message.content).toEqual([
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: expect.any(String),
+        },
+      },
+      { type: "text", text: "What color is it?" },
+    ]);
     expect(await guest.filesHolding(token)).toEqual([]);
   });
 

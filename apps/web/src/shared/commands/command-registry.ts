@@ -367,7 +367,7 @@ const commandDefinitions = Object.freeze([
     description: "Move focus to search on the Keyboard Shortcuts screen.",
     category: "Keyboard shortcuts",
     scope: "keyboard-shortcuts",
-    defaults: everyPlatform("Mod+Shift+F"),
+    defaults: everyPlatform("/" as Hotkey),
     execute: (runtime) => runtime.focusKeyboardShortcutSearch(),
   },
   {
@@ -422,9 +422,6 @@ export const isCommandAvailable = (
   scope: CommandScope,
   context: CommandContext,
 ) => scope === "global" || scope === context;
-
-const scopesOverlap = (left: CommandScope, right: CommandScope) =>
-  left === "global" || right === "global" || left === right;
 
 export interface CommandStorage {
   readonly getItem: (key: string) => string | null;
@@ -619,6 +616,33 @@ const assertUniqueDefinitions = <Id extends string>(
   }
 };
 
+/** A key belongs to one command on every screen, defaults included. */
+const assertDistinctDefaults = <Id extends string>(
+  definitions: ReadonlyArray<CommandDefinition<Id>>,
+  platform: CommandPlatform,
+) => {
+  const owners = new Map<string, Id>();
+  for (const definition of definitions) {
+    const keys = new Set(
+      [
+        definition.defaults[platform],
+        ...(definition.alternativeDefaults?.[platform] ?? []),
+        ...(definition.sequence ?? []),
+      ]
+        .filter((key) => key !== null)
+        .map((key) => normalizeHotkey(key, platform)),
+    );
+    for (const key of keys) {
+      const owner = owners.get(key);
+      if (owner !== undefined)
+        throw new Error(
+          `Default shortcut ${key} is shared by ${owner} and ${definition.id} on ${platform}`,
+        );
+      owners.set(key, definition.id);
+    }
+  }
+};
+
 /**
  * A sequence step is one unmodified key press: the dispatcher only matches
  * sequences from plain keys, so modified chords can never fire as a step.
@@ -757,7 +781,6 @@ const readOverrides = <Id extends string>(
       const conflict = definitions.some(
         (candidate) =>
           candidate.id !== definition.id &&
-          scopesOverlap(definition.scope, candidate.scope) &&
           (effectiveBindings(candidate).some(
             (candidateBinding) =>
               normalizeHotkey(candidateBinding, platform) === override,
@@ -772,7 +795,6 @@ const readOverrides = <Id extends string>(
     const conflict = definitions.some(
       (candidate) =>
         candidate.id !== definition.id &&
-        scopesOverlap(definition.scope, candidate.scope) &&
         (effectiveSequence(candidate) !== undefined ||
           effectiveBindings(candidate).some((candidateBinding) =>
             override.sequence.some(
@@ -795,6 +817,7 @@ export const createCommandRegistry = <Id extends string = CommandId>(
 ): CommandRegistry<Id> => {
   assertUniqueDefinitions(definitions);
   const platform = environment.platform ?? detectPlatform();
+  assertDistinctDefaults(definitions, platform);
   const byId = new Map(
     definitions.map((definition) => [definition.id, definition]),
   );
@@ -978,7 +1001,7 @@ export const createCommandRegistry = <Id extends string = CommandId>(
   };
 
   const validateBinding = (id: Id, binding: string): BindingValidation<Id> => {
-    const definition = definitionFor(id);
+    definitionFor(id);
     const validation = validateHotkey(binding);
     if (!validation.valid) {
       return {
@@ -1010,7 +1033,6 @@ export const createCommandRegistry = <Id extends string = CommandId>(
     for (const candidate of definitions) {
       if (
         candidate.id !== id &&
-        scopesOverlap(definition.scope, candidate.scope) &&
         (() => {
           const candidateBinding = getBinding(candidate.id);
           const candidateSequence = sequenceFor(candidate.id);
@@ -1045,7 +1067,7 @@ export const createCommandRegistry = <Id extends string = CommandId>(
       return {
         ok: false,
         reason: "conflict",
-        message: `${formatForDisplay(normalized, { platform })} conflicts with ${conflicts.map((conflict) => `“${conflict.label}”`).join(", ")} in an overlapping context.`,
+        message: `${formatForDisplay(normalized, { platform })} is already used by ${conflicts.map((conflict) => `“${conflict.label}”`).join(", ")}.`,
         conflicts,
       };
     }
@@ -1111,11 +1133,7 @@ export const createCommandRegistry = <Id extends string = CommandId>(
     const recorded = Object.freeze(normalizedSteps);
     const conflicts: Array<CommandConflict<Id>> = [];
     for (const candidate of definitions) {
-      if (
-        candidate.id === id ||
-        !scopesOverlap(definition.scope, candidate.scope)
-      )
-        continue;
+      if (candidate.id === id) continue;
       if (sequenceFor(candidate.id) !== undefined) {
         conflicts.push({
           id: candidate.id,
@@ -1151,7 +1169,7 @@ export const createCommandRegistry = <Id extends string = CommandId>(
       return {
         ok: false,
         reason: "conflict",
-        message: `${recorded.map((step) => formatForDisplay(step, { platform })).join(" then ")} conflicts with ${conflicts.map((conflict) => `“${conflict.label}”`).join(", ")} in an overlapping context.`,
+        message: `${recorded.map((step) => formatForDisplay(step, { platform })).join(" then ")} is already used by ${conflicts.map((conflict) => `“${conflict.label}”`).join(", ")}.`,
         conflicts,
       };
     }

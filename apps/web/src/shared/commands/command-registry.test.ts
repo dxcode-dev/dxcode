@@ -176,7 +176,7 @@ describe("keyboard shortcut command registry", () => {
     });
   });
 
-  it("detects global and context conflicts without blocking disjoint contexts", () => {
+  it("detects conflicts with every command, whatever its context", () => {
     const registry = createCommandRegistry({ platform: "linux" });
 
     expect(
@@ -193,21 +193,19 @@ describe("keyboard shortcut command registry", () => {
         conflicts: [{ id: "navigation.settings" }],
       },
     );
+    // A key belongs to one command even when the commands run on different
+    // screens: Files runs in a Thread, shortcut search on this screen.
     expect(
-      registry.setBinding("shortcuts.restore-defaults", "Mod+Shift+F"),
-    ).toMatchObject({
-      ok: false,
-      reason: "conflict",
-      conflicts: [{ id: "shortcuts.focus-search" }],
-    });
-    // Files uses Mod+Shift+F in a Thread; the shortcut search's binding lives
-    // only on the Keyboard Shortcuts screen, so that scope stays free.
-    expect(
-      registry.setBinding("thread.focus-composer", "Mod+Shift+F"),
+      registry.setBinding("shortcuts.restore-defaults", "Control+Shift+F"),
     ).toMatchObject({
       ok: false,
       reason: "conflict",
       conflicts: [{ id: "thread.open-files" }],
+    });
+    expect(registry.setBinding("thread.focus-composer", "/")).toMatchObject({
+      ok: false,
+      reason: "conflict",
+      conflicts: [{ id: "shortcuts.focus-search" }],
     });
     expect(
       registry.setBinding("shortcuts.restore-defaults", "Mod+Shift+Y"),

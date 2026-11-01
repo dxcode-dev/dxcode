@@ -297,11 +297,17 @@ const preCloneFailurePresentation = (
 
 /**
  * Core refused the run at Orb start: its source grant changed, or the
- * deployment's Orb billing policy refused it with a reason.
+ * deployment's Orb billing policy refused it with a reason. Or the Orb's
+ * disk became read-only, and the details say what dx did about it.
  */
 const orbStartDenial = (error: unknown) => {
   if (typeof error !== "object" || error === null) return undefined;
   const { type, message, details } = error as Record<string, unknown>;
+  if (type === "workspace_read_only")
+    return {
+      title: "The Orb's disk became read-only",
+      message: typeof details === "string" ? details : "",
+    };
   if (type === "orb_start_refused")
     return {
       title: "Orb not started",

@@ -97,6 +97,17 @@ export const presentTool = (
       title: `${running ? "Creating" : "Created"} ${basename(path)}`,
       detail: path,
     };
+  if (name === "view_media")
+    return {
+      title: stringField(input, "objective")
+        ? running
+          ? "Analyzing media"
+          : "Analyzed media"
+        : running
+          ? "Viewing media"
+          : "Viewed media",
+      detail: path,
+    };
   if (name === "shell_command_status" || name === "shell_command_kill") {
     const pid = record(input)?.pid;
     return {

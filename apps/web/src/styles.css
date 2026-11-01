@@ -830,8 +830,12 @@ a {
 [data-thread-color-chosen] {
   --thread-title-color: var(--thread-color);
 }
+/* At least 232px, and as wide as its longest item with its keycaps, so no
+   label is cut; past 320px a long label elides. */
 .thread-menu-popup.thread-actions-menu {
-  width: min(232px, calc(100vw - 8px));
+  width: max-content;
+  min-width: min(232px, calc(100vw - 8px));
+  max-width: min(320px, calc(100vw - 8px));
   padding: 5px;
   border-radius: 10px;
 }
@@ -924,7 +928,7 @@ a {
 }
 /* A phone's menu also lists the model and Project, so it runs wider. */
 .thread-menu-popup.thread-actions-menu-details {
-  width: min(264px, calc(100vw - 8px));
+  min-width: min(264px, calc(100vw - 8px));
 }
 /* The model beside what the Thread runs on, as in "claude code  Opus 5.5";
    the model elides first. */
@@ -1018,47 +1022,6 @@ a {
 .thread-terminal-menu-popup .thread-menu-item {
   height: 26px;
   padding: 0 7px;
-}
-.thread-archive-toast {
-  position: fixed;
-  z-index: 500;
-  top: max(12px, calc(env(safe-area-inset-top) + 8px));
-  left: 50%;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  max-width: calc(100vw - 24px);
-  padding: 6px 8px 6px 10px;
-  color: var(--popover-foreground);
-  border: 1px solid var(--outline);
-  border-radius: 8px;
-  background: var(--popover);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32);
-  transform: translateX(-50%);
-  font-size: 11px;
-}
-.thread-archive-toast > svg {
-  width: 15px;
-  height: 15px;
-  flex: none;
-}
-.thread-archive-toast > strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 500;
-}
-.thread-archive-toast > button:not([aria-label]) {
-  padding: 2px 4px;
-  color: inherit;
-  border: 0;
-  background: transparent;
-  font: inherit;
-  font-weight: 700;
-}
-.thread-archive-toast > button:not([aria-label]):hover {
-  text-decoration: underline;
 }
 .workspace-pane {
   display: flex;
@@ -3561,15 +3524,22 @@ a {
   padding: 0;
   list-style: none;
 }
-.settings-rail-footer a {
+.settings-rail-footer a,
+.settings-rail-footer button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-height: 18px;
+  padding: 0;
   color: var(--muted-foreground);
+  background: none;
+  border: 0;
+  font: inherit;
   text-decoration: none;
+  cursor: pointer;
 }
-.settings-rail-footer a:hover {
+.settings-rail-footer a:hover,
+.settings-rail-footer button:hover {
   color: var(--foreground);
 }
 .settings-rail-footer svg {
@@ -7631,7 +7601,8 @@ a {
 }
 .reasoning-popup {
   width: min(544px, calc(100vw - 32px));
-  max-height: min(32rem, calc(100dvh - 24px));
+  /* Fits the room on its side of the trigger and scrolls the rest. */
+  max-height: min(32rem, var(--available-height, calc(100dvh - 24px)));
   padding: 0;
   overflow-x: hidden;
   overflow-y: auto;
@@ -8284,26 +8255,32 @@ div.claude-code-mode-main {
     min-height: 40px;
     padding-inline: 12px;
   }
+  /*
+   * Each chip keeps a compact label of what is selected. The Orb shortens
+   * fastest, then the project; a mode is one short word, but a pinned model
+   * name shortens too.
+   */
   .new-thread-orb-size,
+  .new-thread-project,
+  .new-thread-mode:has(.new-thread-mode-value) {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  .new-thread-orb-size {
+    flex-shrink: 2;
+  }
   .new-thread-mode {
-    flex: 0 0 32px;
-    width: 32px;
-    padding: 0;
-    justify-content: center;
+    flex: none;
   }
   .new-thread-orb-size > span,
-  .new-thread-mode > span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
+  .new-thread-mode-value {
+    min-width: 0;
+    max-width: none;
     overflow: hidden;
-    clip-path: inset(50%);
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .new-thread-project {
-    min-width: 0;
-    max-width: 120px;
-  }
+  .new-thread-orb-size > svg,
   .new-thread-project > svg {
     display: none;
   }
@@ -8316,11 +8293,28 @@ div.claude-code-mode-main {
   }
   .new-thread-project > span:last-child {
     min-width: 0;
-    max-width: 83px;
+    max-width: none;
     text-overflow: ellipsis;
   }
   .new-thread-dialog footer {
     gap: 6px;
+  }
+}
+/* On touch, each chip takes taps 44px tall and wide. */
+@media (pointer: coarse) {
+  .new-thread-orb-size,
+  .new-thread-project,
+  .new-thread-mode {
+    position: relative;
+    min-width: 44px;
+  }
+  .new-thread-orb-size::after,
+  .new-thread-project::after,
+  .new-thread-mode::after {
+    content: "";
+    position: absolute;
+    /* From the padding box: 6px past the 32px chip and its 1px border. */
+    inset: -7px -1px;
   }
 }
 
@@ -13153,16 +13147,27 @@ body:has(.dx-app-shell) {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+/* The project's name keeps its width; the owner crumb gives up space first. */
+.project-detail-title .projects-title-owner {
+  flex: 0 1000 auto;
+  min-width: 18px;
+}
 .project-detail-name {
   display: flex;
+  flex: 0 1 auto;
   min-width: 0;
   align-items: center;
   gap: 5px;
   overflow: hidden;
   color: var(--foreground);
-  text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 500;
+}
+.project-detail-crumb-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .project-detail-initial {
   display: grid;
@@ -13380,12 +13385,6 @@ body:has(.dx-app-shell) {
   }
   .project-detail-content {
     padding: 12px;
-  }
-  .project-detail-title .projects-title-owner {
-    max-width: 108px;
-  }
-  .project-detail-name {
-    max-width: 94px;
   }
   .projects-page-content .project-list-panel {
     width: 100%;
@@ -14052,6 +14051,72 @@ body:has(.dx-app-shell) {
   align-items: flex-end;
   justify-content: flex-end;
 }
+/* Repository Files: the Orb Scripts rows, read-only, with the file's status
+   where Save sits. */
+.project-orb-files-card {
+  gap: 0;
+}
+.project-orb-files {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.project-orb-file {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+.project-orb-file:last-child {
+  border-bottom: 1px solid var(--border);
+}
+.project-orb-file-body {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.project-orb-file-body > h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+.project-orb-file-body > h4 a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.project-orb-file-body > p,
+.project-orb-files-note {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 17.875px;
+}
+.project-orb-files-note[role="alert"] {
+  color: var(--destructive);
+}
+.project-orb-files-card > .project-orb-files-note,
+.project-orb-files-setup {
+  padding-top: 12px;
+}
+.project-orb-file-status {
+  flex: none;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 16px;
+}
+.project-orb-file-status[data-present="true"] {
+  color: var(--foreground);
+}
+.project-orb-files-setup {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
 .project-settings-content .settings-form-actions > button,
 .project-settings-content .project-icon-control > button {
   height: 26px;
@@ -14099,6 +14164,13 @@ body:has(.dx-app-shell) {
   color: var(--foreground);
   font-size: 11px;
   font-weight: 500;
+  line-height: 13.6px;
+}
+.orb-size-card-billing {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted-foreground);
+  font-size: 11px;
   line-height: 13.6px;
 }
 .orb-size-card-indicator {

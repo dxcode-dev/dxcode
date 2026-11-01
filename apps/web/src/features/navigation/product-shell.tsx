@@ -18,13 +18,13 @@ import {
   collapseResizablePanel,
   expandResizablePanel,
 } from "../../shared/layout/resizable-panel.js";
+import { useOptionalThreadEditing } from "../../shared/thread-editing.js";
 import { Button } from "../../shared/ui/button.js";
 import { useMobile } from "../../shared/use-mobile.js";
 import { projectsQueryOptions } from "../projects/project-queries.js";
 import { personalAccountQueryOptions } from "../settings/account/personal-account-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { unfollowThreadMutationOptions } from "../threads/sharing/sharing-mutations.js";
-import { setThreadPinnedMutationOptions } from "../threads/thread-mutations.js";
 import {
   sharedThreadsQueryOptions,
   threadsQueryOptions,
@@ -53,9 +53,7 @@ export function ProductShell({
   const navigate = useNavigate();
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
-  const pinMutation = useMutation(
-    setThreadPinnedMutationOptions(queryClient, identity.id),
-  );
+  const editing = useOptionalThreadEditing();
   const unfollowThread = useMutation(
     unfollowThreadMutationOptions(queryClient, identity.id),
   ).mutate;
@@ -180,12 +178,17 @@ export function ProductShell({
 
   // Stable: memoized sidebar rows receive these handlers.
   const closeMobileSidebar = () => setMobileSidebarOpen(false);
-  const pinThread = pinMutation.mutate;
+  const pinThread = editing?.setPinned;
   const setThreadPinned = (threadId: ThreadId, pinned: boolean) =>
-    pinThread({ threadId, pinned });
+    pinThread?.(threadId, pinned);
   const openThreadSearch = () => setThreadSearchOpen(true);
   const fetchNextThreads = threadsQuery.fetchNextPage;
-  const loadMoreThreads = () => void fetchNextThreads();
+  const refetchThreads = threadsQuery.refetch;
+  // After a failed first page, loading more is loading it again.
+  const firstPageFailed =
+    threadsQuery.isError && !threadsQuery.isFetchNextPageError;
+  const loadMoreThreads = () =>
+    void (firstPageFailed ? refetchThreads() : fetchNextThreads());
   const selectSearchedThread = (threadId: string) => {
     setMobileSidebarOpen(false);
     void navigate({ to: "/threads/$threadId", params: { threadId } });
@@ -213,16 +216,16 @@ export function ProductShell({
         threadsQuery.isFetchingNextPage ||
         (checkEmptyArchive && archiveQuery.isPending)
       }
-      hasMore={threadsQuery.hasNextPage}
+      hasMore={threadsQuery.hasNextPage && !threadsQuery.isFetchNextPageError}
       loadMoreError={
-        threadsQuery.error instanceof Error
-          ? threadsQuery.error.message
-          : undefined
+        threadsQuery.isFetchNextPageError
+          ? "Could not load more threads."
+          : threadsQuery.isError
+            ? "Could not load threads."
+            : undefined
       }
       onSetPinned={setThreadPinned}
-      pinningThreadId={
-        pinMutation.isPending ? pinMutation.variables.threadId : undefined
-      }
+      pinningThreadId={editing?.pinningThreadId}
       extensionRegion={sidebarExtensionRegion}
     />
   );

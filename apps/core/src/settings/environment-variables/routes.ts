@@ -59,11 +59,11 @@ import {
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
-import { createAuth } from "../../auth/better-auth.js";
 import {
   BrowserSessionRequired,
   requireBrowserSession,
 } from "../../auth/browser-session.js";
+import { requestAuth } from "../../auth/request-auth.js";
 import { loadAuthenticationRequirements } from "../../auth/requirements.js";
 import {
   decodeJsonBody,
@@ -575,10 +575,7 @@ const registerRoutes = (
         return yield* new SettingsScopeForbidden({ scope: "workspace" });
       }
       const requirements = yield* loadAuthenticationRequirements(context.env);
-      yield* requireBrowserSession(
-        context,
-        createAuth(context.env, requirements),
-      );
+      yield* requireBrowserSession(context, requestAuth(context, requirements));
       const stored = yield* withEnvironment(
         db,
         Effect.gen(function* () {
@@ -754,10 +751,7 @@ const registerRoutes = (
         return yield* new SettingsScopeForbidden({ scope: "workspace" });
       }
       const requirements = yield* loadAuthenticationRequirements(context.env);
-      yield* requireBrowserSession(
-        context,
-        createAuth(context.env, requirements),
-      );
+      yield* requireBrowserSession(context, requestAuth(context, requirements));
       const stored = yield* withEnvironment(
         db,
         Effect.gen(function* () {

@@ -7,7 +7,7 @@ import {
 } from "./run-failure.js";
 
 /**
- * Every message below is verbatim from dx.wheelocity.dev Workers Logs,
+ * Every message below is verbatim from a production deployment's Workers Logs,
  * 2026-10-18..23, except where a case names its source.
  */
 describe("classifyRunFailure", () => {

@@ -20,6 +20,8 @@ import {
   useTool,
 } from "@flue/runtime";
 import { createAutomationTools } from "../automations/agent-tools.js";
+import { githubToken } from "../automations/github.js";
+import { createBugReportTools } from "../bug-reports/agent-tools.js";
 import { claudeCodeDxTools } from "../claude-code/dx-tools.js";
 import {
   rememberClaudeCodePrompt,
@@ -27,6 +29,7 @@ import {
 } from "../claude-code/provider.js";
 import { rememberClaudeCodeSandbox } from "../claude-code/runs.js";
 import { claudeCodeMirrorTools } from "../claude-code/tools.js";
+import { createClaudeCodeViewMediaTool } from "../claude-code/view-media.js";
 import { withoutRepositorySkills } from "../execution/workspace-context.js";
 import { createNeedsYouTools } from "../needs-you/agent-tools.js";
 import { traceSpan } from "../observability/tracing.js";
@@ -36,10 +39,18 @@ import {
   workspaceDiskNote,
 } from "../orb-disk/note.js";
 import {
+  takeWorkspaceRecovery,
+  WORKSPACE_RECOVERY_SIGNAL,
+  workspaceRecoveryNote,
+} from "../orb-disk/read-only.js";
+import {
   agentPluginHostContext,
   agentThreadToolsContext,
+  resolveAgentBugReportReader,
   resolveAgentPluginTools,
 } from "../plugins/agent-context.js";
+import { analyzeOnThreadRoute } from "../plugins/execution/media/analysis.js";
+import { createViewMediaTool } from "../plugins/execution/media/view-media.js";
 import { firstPartyPluginTools } from "../plugins/tools.js";
 import { threadPortalPrompt } from "../portals/prompt.js";
 import {
@@ -52,6 +63,7 @@ import { invokePluginLive } from "../settings/plugins/execution.js";
 import { createPluginTool } from "../settings/plugins/flue.js";
 import { createThreadStorageTools } from "../thread-storage/agent-tools.js";
 import { createThreadTools } from "../threads/agent-tools.js";
+import { readCallingThread } from "../threads/calling-thread.js";
 import {
   builtInSkillDefinitions,
   installBuiltInSkills,
@@ -79,6 +91,8 @@ interface DxAgentPromptData {
     /** The Thread owner's MCP servers as of this submission. */
     readonly mcpConnections: ReadonlyArray<McpAgentConnectionData>;
   };
+  /** The owner is a report reader, so the bug report tools mount. */
+  readonly bugReportReader?: true;
 }
 
 const localModelPreviewPrompt = `You are dx, a coding assistant running in a local UI preview.
@@ -145,6 +159,11 @@ const dxTools = (
     promptData?.plugins?.submissionId,
   ))
     tools.push(withToolFailureMessage(tool));
+  // list_bug_reports and read_bug_report: only for the deployment's report
+  // readers, resolved per submission.
+  if (promptData?.bugReportReader === true)
+    for (const tool of createBugReportTools(threadId, agentThreadToolsContext))
+      tools.push(withToolFailureMessage(tool));
   // request_attention: the owner's Needs-you inbox.
   for (const tool of createNeedsYouTools(threadId, agentThreadToolsContext))
     tools.push(withToolFailureMessage(tool));
@@ -196,6 +215,109 @@ const startActivation = (threadId: string) => {
   started.catch(() => undefined);
   startedActivations.set(threadId, started);
   return started;
+};
+
+/** What `view_media` needs from this Thread, in both modes. */
+const viewMediaDeps = (threadId: string) => {
+  const calling = () => {
+    const context = agentThreadToolsContext();
+    return readCallingThread(context.db, threadId).then((thread) => ({
+      context,
+      thread,
+    }));
+  };
+  const origin = agentThreadToolsContext().bindings.DX_AUTH_URL;
+  return {
+    githubToken: async () => {
+      const { context, thread } = await calling();
+      return githubToken(
+        context.bindings,
+        context.db,
+        threadId,
+        thread.ownerUserId,
+      );
+    },
+    ...(origin === undefined || origin === ""
+      ? {}
+      : { dxOrigin: new URL(origin).origin }),
+    calling,
+  };
+};
+
+/**
+ * The workspace's tools plus `view_media`. It is a sandbox tool because
+ * only those return image blocks; Claude Code mode gets it from the dx MCP
+ * server instead.
+ */
+const withViewMedia = (
+  factory: SandboxFactory,
+  threadId: string,
+): SandboxFactory => ({
+  ...factory,
+  tools: (sandbox, options) => {
+    const { calling, ...deps } = viewMediaDeps(threadId);
+    const coordinator =
+      agentThreadToolsContext().bindings.BYOK_CREDENTIAL_COORDINATOR;
+    return [
+      ...(factory.tools?.(sandbox, options) ?? []),
+      createViewMediaTool(sandbox, {
+        ...deps,
+        analyze:
+          coordinator === undefined
+            ? async () => {
+                throw new Error("Media analysis needs model routing.");
+              }
+            : analyzeOnThreadRoute({
+                coordinator,
+                thread: async () => {
+                  const { thread } = await calling();
+                  return {
+                    threadId,
+                    ownerUserId: thread.ownerUserId,
+                    selection: thread.selection,
+                  };
+                },
+              }),
+      }),
+    ];
+  },
+});
+
+/** `view_media` for a Claude Code Thread, on the submission's plan route. */
+const claudeCodeViewMedia = (
+  threadId: string,
+  promptData: DxAgentPromptData | undefined,
+) => {
+  const { calling: _calling, ...deps } = viewMediaDeps(threadId);
+  return createClaudeCodeViewMediaTool({
+    deps,
+    token: async () => {
+      const coordinator =
+        agentThreadToolsContext().bindings.BYOK_CREDENTIAL_COORDINATOR;
+      const submissionId = promptData?.plugins?.submissionId;
+      const canonical = promptData?.route?.model;
+      if (
+        coordinator === undefined ||
+        submissionId === undefined ||
+        canonical === undefined
+      )
+        throw new Error("The Claude plan credential is unavailable.");
+      const response = await coordinator
+        .get(coordinator.idFromName(`byok-${threadId}`))
+        .fetch("https://dx-byok.invalid/claude-code-credential", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ threadId, submissionId, canonical }),
+        });
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error(
+          `The Claude plan credential is unavailable (${response.status}).`,
+        );
+      }
+      return (await response.json<{ token: string }>()).token;
+    },
+  });
 };
 
 const agentSandbox: SandboxFactory | undefined =
@@ -278,6 +400,13 @@ const usePluginLifecycle = (
         type: WORKSPACE_DISK_SIGNAL,
         body: note,
       });
+    const recovery = takeWorkspaceRecovery(threadId);
+    if (recovery !== undefined)
+      context.append({
+        kind: "signal",
+        type: WORKSPACE_RECOVERY_SIGNAL,
+        body: workspaceRecoveryNote(recovery),
+      });
     await hook("agent-start")(context);
   });
   if (plugins.some(({ lifecycle }) => lifecycle.includes("agent-finish")))
@@ -296,24 +425,26 @@ export function DxAgent(props: AgentProps) {
   const settingsSkillNames = new Set(skills.map(({ name }) => name));
   const plugins = initialData?.plugins ?? [];
   if (agentRuntimeComposition.capabilities === "workspace") {
+    const claudeCode =
+      promptData?.route !== undefined &&
+      isClaudeCodeModel(promptData.route.model);
     // A workspace composition always has an execution factory.
-    useSandbox(
-      withSettingsSkills(agentSandbox as SandboxFactory, settingsSkillNames),
+    const sandbox = withSettingsSkills(
+      agentSandbox as SandboxFactory,
+      settingsSkillNames,
     );
+    useSandbox(claudeCode ? sandbox : withViewMedia(sandbox, props.id));
     usePluginLifecycle(props.id, plugins, skills);
     // Claude Code mode: the CLI in the workspace runs the loop and its own
     // tools; Flue records each call through a mirror of the same name. dx's
     // own tools reach Claude through the dx MCP server, except web search
     // and page reading, which Claude Code has itself.
-    if (
-      promptData?.route !== undefined &&
-      isClaudeCodeModel(promptData.route.model)
-    ) {
+    if (claudeCode) {
       for (const tool of claudeCodeMirrorTools(props.id)) useTool(tool);
-      for (const tool of claudeCodeDxTools(
-        props.id,
-        dxTools(props.id, initialData, promptData, ["search"]),
-      ))
+      for (const tool of claudeCodeDxTools(props.id, [
+        ...dxTools(props.id, initialData, promptData, ["search"]),
+        claudeCodeViewMedia(props.id, promptData),
+      ]))
         useTool(tool);
       // Each delivered message starts on fresh Claude Code state: nothing a
       // failed submission cached may fail it.
@@ -370,7 +501,7 @@ DxAgent.resolvePromptData = async (
 ): Promise<DxAgentPromptData | undefined> => {
   const scope = context.scope;
   const activation = startActivation(context.instanceId);
-  const [route, plugins] = await traceSpan(
+  const [route, plugins, bugReportReader] = await traceSpan(
     "agent.resolvePromptData",
     "phase",
     {
@@ -385,16 +516,22 @@ DxAgent.resolvePromptData = async (
         scope?.kind === "prompt"
           ? resolveAgentPluginTools(context.instanceId, scope.submissionId)
           : Promise.resolve(undefined),
+        agentRuntimeComposition.capabilities === "workspace" &&
+        scope?.kind === "prompt"
+          ? resolveAgentBugReportReader(context.instanceId)
+          : Promise.resolve(false),
       ]),
   ).catch((error: unknown) => {
     if (startedActivations.get(context.instanceId) === activation)
       startedActivations.delete(context.instanceId);
     throw error;
   });
-  if (route === undefined && plugins === undefined) return undefined;
+  if (route === undefined && plugins === undefined && !bugReportReader)
+    return undefined;
   return {
     ...(route === undefined ? {} : { route }),
     ...(plugins === undefined ? {} : { plugins }),
+    ...(bugReportReader ? { bugReportReader: true as const } : {}),
   };
 };
 DxAgent.validateInput = (message: Readonly<DeliveredMessage>) => {

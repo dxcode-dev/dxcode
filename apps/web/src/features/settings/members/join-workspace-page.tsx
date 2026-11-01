@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { Navigate, useNavigate, useParams } from "@tanstack/react-router";
+import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import {
   inviteCheckFailedMessage,
   inviteUnavailableMessage,
 } from "../../../shared/invite-unavailable.js";
 import { AppFrame } from "../../../shared/layout/app-frame.js";
 import { Button } from "../../../shared/ui/button.js";
+import { settingsContextQueryOptions } from "../settings-context-queries.js";
 import {
   acceptInviteMutationOptions,
   workspaceInviteQueryOptions,
@@ -16,7 +18,10 @@ export function JoinWorkspacePage() {
   const { token } = useParams({ strict: false }) as { token: string };
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { identity } = useAuthenticatedIdentity();
   const invite = useQuery(workspaceInviteQueryOptions(token));
+  // The user's own workspace, to tell whether they are already in this one.
+  const settings = useQuery(settingsContextQueryOptions(identity.id));
   const join = useMutation({
     ...acceptInviteMutationOptions(token),
     onSuccess: async (result) => {
@@ -30,13 +35,28 @@ export function JoinWorkspacePage() {
     },
   });
   const workspace = invite.data?.workspace;
+  const ownWorkspace = settings.data?.workspace?.shortName;
+  // A member, the owner included, has nothing to join: open the workspace.
+  if (
+    invite.data?.status === "valid" &&
+    workspace !== undefined &&
+    ownWorkspace !== undefined &&
+    ownWorkspace.toLowerCase() === workspace.shortName.toLowerCase()
+  )
+    return (
+      <Navigate
+        to="/workspaces/$workspaceSlug"
+        params={{ workspaceSlug: ownWorkspace }}
+        replace
+      />
+    );
   const joinError =
     join.error instanceof Error ? join.error.message : undefined;
   return (
     <AppFrame>
       <main className="auth-gate-surface">
         <div className="auth-gate-card join-workspace-card">
-          {invite.isPending ? (
+          {invite.isPending || settings.isPending ? (
             <p role="status">Checking invite link…</p>
           ) : invite.isError ? (
             <p className="auth-local-error" role="alert">

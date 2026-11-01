@@ -26,8 +26,12 @@ export interface OrbBillingPolicy {
   readonly admitOrbStart: (
     request: OrbStartRequest,
   ) => Promise<OrbStartDecision>;
-  /** Receives a metered Orb's usage. Its failures are logged, never thrown. */
-  readonly recordUsage: (usage: OrbUsage) => Promise<void>;
+  /**
+   * Receives a metered Orb's usage before Core moves its idle deadline.
+   * `stop` keeps the deadline where it is, so the Orb stops there. A failure
+   * is logged and treated as `continue`.
+   */
+  readonly recordUsage: (usage: OrbUsage) => Promise<OrbUsageOutcome>;
 }
 
 export interface OrbStartRequest {
@@ -58,9 +62,11 @@ export type OrbUsage = {
   readonly until: number;
 } & Omit<OrbStartRequest, "operation">;
 
+export type OrbUsageOutcome = "continue" | "stop";
+
 export const noOrbBilling: OrbBillingPolicy = {
   admitOrbStart: async () => ({ outcome: "allow" }),
-  recordUsage: async () => undefined,
+  recordUsage: async () => "continue",
 };
 
 /**
@@ -76,16 +82,20 @@ export const orbStartRefused = (reason: string) =>
     meta: { code: "ORB_START_REFUSED" },
   });
 
-const meteredHandle = <Handle extends ExecutionWorkspaceHandle>(
+const meteredHandle = async <Handle extends ExecutionWorkspaceHandle>(
   handle: Handle,
-  report: (from: number, durationMs: number) => void,
-): Handle => {
-  report(Date.now(), handle.inactivityMs ?? DEFAULT_WORKSPACE_INACTIVITY_MS);
+  report: (from: number, durationMs: number) => Promise<OrbUsageOutcome>,
+): Promise<Handle> => {
+  // The start already set the provider's first deadline.
+  await report(
+    Date.now(),
+    handle.inactivityMs ?? DEFAULT_WORKSPACE_INACTIVITY_MS,
+  );
   return {
     ...handle,
     setIdleDeadline: async (durationMs: number) => {
+      if ((await report(Date.now(), durationMs)) === "stop") return;
       await handle.setIdleDeadline(durationMs);
-      report(Date.now(), durationMs);
     },
   };
 };
@@ -114,7 +124,7 @@ export const withOrbBilling = <Handle extends ExecutionWorkspaceHandle>(
     const handle = await open();
     if (decision.outcome === "allow") return handle;
     const { operation: _operation, ...usage } = request;
-    return meteredHandle(handle, (from, durationMs) => {
+    return meteredHandle(handle, (from, durationMs) =>
       policy
         .recordUsage({
           kind: "orb-time",
@@ -122,14 +132,15 @@ export const withOrbBilling = <Handle extends ExecutionWorkspaceHandle>(
           from,
           until: from + durationMs,
         })
-        .catch((error: unknown) => {
+        .catch((error: unknown): OrbUsageOutcome => {
           orbProvidersLogger.warn("Orb usage could not be recorded.", {
             event: "orb_usage_record_failed",
             threadId,
             error: error instanceof Error ? error.message : String(error),
           });
-        });
-    });
+          return "continue";
+        }),
+    );
   };
   return {
     ...provider,

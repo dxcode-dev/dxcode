@@ -14,6 +14,7 @@ const compiledWasmQuery = "?dx-compiled-wasm";
 const { transformSync: compileReact } = createRequire(
   new URL("./apps/web/package.json", import.meta.url),
 )("oxc-transform-react") as typeof import("oxc-transform-react");
+const productionPackageTest = "scripts/production-package.test.mjs";
 const compiledWebSource = /\/apps\/web\/src\/(?!.*\.test\.tsx?$).*\.tsx?$/;
 
 export default defineConfig({
@@ -60,6 +61,9 @@ export default defineConfig({
         extends: true,
         test: {
           name: "node-unit-contract",
+          // Worker threads start faster than forked processes: about a fifth
+          // less CPU for the same files.
+          pool: "threads",
           server: { deps: { inline: [/\.wasm\?dx-compiled-wasm$/] } },
           setupFiles: [
             fileURLToPath(
@@ -74,6 +78,21 @@ export default defineConfig({
             "**/*.browser.test.{ts,tsx}",
             "**/dist/**",
             "**/node_modules/**",
+            productionPackageTest,
+          ],
+        },
+      },
+      // Builds every app into its dist, so the verifier runs it beside the
+      // package builds instead of with the other node tests.
+      {
+        extends: true,
+        test: {
+          name: "production-package",
+          include: [productionPackageTest],
+          setupFiles: [
+            fileURLToPath(
+              new URL("./scripts/test-network-setup.ts", import.meta.url),
+            ),
           ],
         },
       },

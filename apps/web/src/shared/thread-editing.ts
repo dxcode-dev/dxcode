@@ -19,7 +19,10 @@ export interface ThreadEditingController {
   readonly childCount: (threadId: ThreadId) => number;
   /** Whether the sidebar lists the Thread as pinned, read when asked. */
   readonly pinned: (threadId: ThreadId) => boolean;
+  /** Moves the row at once; a refused pin moves it back with a toast. */
   readonly setPinned: (threadId: ThreadId, pinned: boolean) => void;
+  /** The Thread whose pin the server has not confirmed yet. */
+  readonly pinningThreadId?: ThreadId;
 }
 
 export const ThreadEditingContext = React.createContext<

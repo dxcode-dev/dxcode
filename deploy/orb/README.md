@@ -198,6 +198,21 @@ their own configuration, read only, and stores the registry login in that
 file instead of the OS keychain. The image is about 2.4 GB, so it does not fit the `lite`
 instance type; Orb sizes start at `standard-1`.
 
+Branch previews share their images instead (`sharedPreviewOrbImage`): the
+first preview with a new image recipe (this Dockerfile, its ignore file, and
+the files it copies) builds and pushes it once to the `dx-preview-orb-image`
+repository, tagged with the recipe's hash, and every preview stage pins
+that digest, so a new stage skips the build, the push, and Cloudflare's
+preparation (about 4 of a new stage's 8 minutes). If that fails, Wrangler
+builds the stage's own image as above. The recipe hash fails closed: an
+`ADD`, `ARG`, `ONBUILD`, second `FROM`, `COPY --from`, wildcard, or copied
+directory makes that preview build its own image. A stage's destroy leaves
+the shared repository alone; its Threads' snapshots there expire with
+Cloudflare's 30-day TTL, and Preview cleanup
+([`prune-preview-orb-images.mjs`](../../scripts/prune-preview-orb-images.mjs))
+deletes shared images older than 7 days that no Worker's active deployment
+pins.
+
 The entrypoint runs unchanged: a container restored from a snapshot runs
 `dx-orb-init` again, which restarts dxd from the binary and configuration
 the snapshot kept. Core runs commands with `ctx.container.exec()` as the

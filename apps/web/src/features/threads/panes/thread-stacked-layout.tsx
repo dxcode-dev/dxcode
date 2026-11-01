@@ -10,7 +10,12 @@ import {
   tabId,
   tabLabel,
 } from "./pane-layout.js";
-import { PaneToolbarSlotContext } from "./pane-toolbar-slot-context.js";
+import {
+  createPaneTabSlots,
+  PaneTabSlotContext,
+  type PaneTabSlots,
+  PaneToolbarSlotContext,
+} from "./pane-toolbar-slot-context.js";
 import {
   PANE_VIEWS,
   type PaneContents,
@@ -87,16 +92,33 @@ const rowEntries = (
   return entries;
 };
 
+/** Where an open tab's own controls render, between its label and close. */
+function AccessorySlot({
+  id,
+  slots,
+}: {
+  readonly id: string;
+  readonly slots: PaneTabSlots;
+}) {
+  // Stable, so React attaches it once and detaches it on unmount.
+  const [ref] = React.useState(
+    () => (node: HTMLSpanElement | null) => slots.set(id, node),
+  );
+  return <span className="stacked-tab-accessory" ref={ref} />;
+}
+
 function RowButton({
   entry,
   selected,
   dirty,
   dispatch,
+  slots,
 }: {
   readonly entry: RowEntry;
   readonly selected: boolean;
   readonly dirty: boolean;
   readonly dispatch: Dispatch;
+  readonly slots: PaneTabSlots;
 }) {
   if (entry.kind === "closed") {
     const { label, Icon } = PANE_VIEWS[entry.view];
@@ -157,6 +179,7 @@ function RowButton({
         <span className="stacked-tab-label">{label}</span>
         {dirty ? <span className="pane-tab-dirty" aria-hidden="true" /> : null}
       </button>
+      <AccessorySlot id={id} slots={slots} />
       {tab.kind === "agent" ? null : (
         <button
           type="button"
@@ -195,6 +218,7 @@ export function ThreadStackedLayout({
   const [toolbarSlot, setToolbarSlot] = React.useState<HTMLDivElement | null>(
     null,
   );
+  const [tabSlots] = React.useState(createPaneTabSlots);
   const shown = focusedTab(layout);
   const shownId = shown === undefined ? "agent" : tabId(shown);
   const entries = rowEntries(layout, contents);
@@ -216,6 +240,7 @@ export function ThreadStackedLayout({
                 selected={id === shownId}
                 dirty={id !== undefined && contents.dirtyTabs.has(id)}
                 dispatch={dispatch}
+                slots={tabSlots}
               />
             );
           })}
@@ -247,11 +272,15 @@ export function ThreadStackedLayout({
               inert={!active}
             >
               <PaneToolbarSlotContext value={active ? toolbarSlot : null}>
-                {tab.kind === "terminal" ? (
-                  <TerminalView>{content}</TerminalView>
-                ) : (
-                  content
-                )}
+                <PaneTabSlotContext
+                  value={active ? { slots: tabSlots, tabId: id } : null}
+                >
+                  {tab.kind === "terminal" ? (
+                    <TerminalView>{content}</TerminalView>
+                  ) : (
+                    content
+                  )}
+                </PaneTabSlotContext>
               </PaneToolbarSlotContext>
             </section>
           );

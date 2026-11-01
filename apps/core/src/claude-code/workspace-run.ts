@@ -449,12 +449,24 @@ export const claudeCodeAnswer = async (
     readonly model: string;
     readonly token: string;
     readonly input: string;
+    /**
+     * `stream-json`: `input` is one JSON line of Claude's user message, which
+     * can carry image and document blocks.
+     */
+    readonly inputFormat?: "stream-json";
+    readonly appendSystemPrompt?: string;
   },
 ) => {
   const args = [
     "-p",
     "--model",
     request.model,
+    ...(request.inputFormat === undefined
+      ? []
+      : ["--input-format", request.inputFormat]),
+    ...(request.appendSystemPrompt === undefined
+      ? []
+      : ["--append-system-prompt", request.appendSystemPrompt]),
     "--tools",
     "",
     "--no-session-persistence",
@@ -470,11 +482,18 @@ export const claudeCodeAnswer = async (
   ]
     .map(quote)
     .join(" ");
-  const input = (
-    encodeBase64(new TextEncoder().encode(request.input)).match(/.{1,76}/g) ??
-    []
-  ).join("\n");
   const dir = `${claudeCodeAnswersRoot}/${crypto.randomUUID()}`;
+  // A command line holds at most 128 KiB, so a larger input, such as an
+  // image, is written as a file first.
+  const inline = request.input.length <= 32_000;
+  if (!inline) await sandbox.writeFile(`${dir}/input`, request.input);
+  const input = inline
+    ? `base64 -d > "$A/input" <<'DX_FILE'
+${(
+  encodeBase64(new TextEncoder().encode(request.input)).match(/.{1,76}/g) ?? []
+).join("\n")}
+DX_FILE`
+    : "";
   const token = tokenFileContents(request.token);
   const script = `set -eu
 CLAUDE="$HOME/.local/bin/claude"
@@ -486,9 +505,7 @@ find "\${A%/*}" -mindepth 1 -maxdepth 1 -mmin +10 -exec rm -rf {} + 2> /dev/null
 mkdir -p "$A/cwd"
 chmod 700 "$A"
 (umask 077 && : > "$A/token")
-base64 -d > "$A/input" <<'DX_FILE'
 ${input}
-DX_FILE
 cd "$A/cwd"
 setsid nohup bash -c ${quote(ANSWER_RUNNER)} answer "$CLAUDE" "$A" ${args} > /dev/null 2>&1 < /dev/null &
 echo started`;

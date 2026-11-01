@@ -30,10 +30,10 @@ import {
   WrapText,
 } from "lucide-react";
 import * as React from "react";
+import { toast } from "sonner";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
 import { useTheme } from "../../../shared/theme/theme-provider.js";
-import { PaneToolbar } from "../panes/pane-toolbar-slot.js";
-import { useThreadLayoutMode } from "../panes/thread-layout-mode.js";
+import { PaneTabAccessory } from "../panes/pane-toolbar-slot.js";
 import {
   type ChangesTransport,
   defaultChangesTransport,
@@ -159,8 +159,6 @@ export function ChangesPane({
     changes.branch !== undefined &&
     changes.ahead > 0 &&
     !pushMutation.isPending;
-  // On a phone the range chooser also sits in the view row.
-  const { stacked } = useThreadLayoutMode();
 
   const selectRange = (next: ThreadChangesRange) => {
     setRange(next);
@@ -204,8 +202,9 @@ export function ChangesPane({
       data-sort={sortByName ? "name" : "path"}
       data-expanded={[...expanded].join("\n")}
     >
-      {stacked && showRangeNavigation ? (
-        <PaneToolbar>
+      {showRangeNavigation ? (
+        // On a phone the range chooser is part of the Changes tab.
+        <PaneTabAccessory>
           <button
             type="button"
             className="changes-range-trigger"
@@ -217,7 +216,7 @@ export function ChangesPane({
           >
             <ChevronDown aria-hidden="true" />
           </button>
-        </PaneToolbar>
+        </PaneTabAccessory>
       ) : null}
       <ChangesToolbar
         changes={changes}
@@ -775,38 +774,26 @@ function ChangedFile({
   overflow,
   onOpenFile,
 }: ChangedFileProps) {
-  const [copyStatus, setCopyStatus] = React.useState<string>();
-  const copyTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
-  );
-  const mounted = React.useRef(false);
-  const attach = (element: HTMLElement | null) => {
-    mounted.current = element !== null;
-    return () => {
-      mounted.current = false;
-      clearTimeout(copyTimer.current);
-    };
-  };
   const copyPath = async () => {
-    clearTimeout(copyTimer.current);
-    setCopyStatus(undefined);
-    let status: string;
     try {
       await navigator.clipboard.writeText(file.path);
-      status = "Path copied";
+      toast.success("Path copied", {
+        id: "changes-copy-path",
+        duration: 2_000,
+      });
     } catch {
-      status = "Could not copy path";
+      toast.error("Could not copy path", {
+        id: "changes-copy-path",
+        duration: 2_000,
+      });
     }
-    if (!mounted.current) return;
-    setCopyStatus(status);
-    copyTimer.current = setTimeout(() => setCopyStatus(undefined), 2000);
   };
   const parts = file.path.split("/");
   const name = parts.at(-1) ?? file.path;
   const directory = parts.slice(0, -1).join("/");
   const canOpenFile = onOpenFile !== undefined && file.status !== "deleted";
   return (
-    <article ref={attach} className="changes-file">
+    <article className="changes-file">
       <div className="changes-file-header">
         <button
           type="button"
@@ -870,11 +857,6 @@ function ChangedFile({
           </Menu.Portal>
         </Menu.Root>
       </div>
-      {copyStatus ? (
-        <div className="changes-copy-status" role="status">
-          {copyStatus}
-        </div>
-      ) : null}
       {expanded ? (
         <div className="changes-diff-region">
           {file.binary ? (

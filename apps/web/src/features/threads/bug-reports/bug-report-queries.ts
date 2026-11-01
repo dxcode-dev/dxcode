@@ -2,6 +2,7 @@ import {
   type BugReportData,
   BugReportDetailResponseSchema,
   BugReportErrorResponseSchema,
+  type CreateAppBugReportRequest,
   type CreateBugReportRequest,
   CreateBugReportResponseSchema,
   ListBugReportsResponseSchema,
@@ -47,13 +48,24 @@ export const listBugReports = async (signal?: AbortSignal) =>
     )
   ).data.items;
 
-export interface SendBugReportInput {
-  readonly threadId: ThreadId;
-  readonly report: CreateBugReportRequest;
-  readonly images: ReadonlyArray<File>;
-  /** The dictation's audio, with Dictation Diagnostics. */
-  readonly audio?: Blob;
-}
+/**
+ * A report about a Thread, or, from Settings, about no Thread and with App
+ * Diagnostics at most.
+ */
+export type SendBugReportInput =
+  | {
+      readonly threadId: ThreadId;
+      readonly report: CreateBugReportRequest;
+      readonly images: ReadonlyArray<File>;
+      /** The dictation's audio, with Dictation Diagnostics. */
+      readonly audio?: Blob;
+    }
+  | {
+      readonly threadId?: undefined;
+      readonly report: CreateAppBugReportRequest;
+      readonly images: ReadonlyArray<File>;
+      readonly audio?: undefined;
+    };
 
 export const sendBugReport = async ({
   threadId,
@@ -73,7 +85,9 @@ export const sendBugReport = async ({
   return (
     await readJson(
       await sameOriginFetch(
-        `/v1/threads/${encodeURIComponent(threadId)}/bug-reports`,
+        threadId === undefined
+          ? "/v1/bug-reports"
+          : `/v1/threads/${encodeURIComponent(threadId)}/bug-reports`,
         {
           method: "POST",
           body: form,
@@ -89,16 +103,11 @@ export const bugReportKeys = {
   mine: (userId: UserId) => ["bug-reports", userId] as const,
 };
 
-/** Polls while a report is still filing, so its issue link appears. */
 export const bugReportsQueryOptions = (userId: UserId) =>
   queryOptions({
     queryKey: bugReportKeys.mine(userId),
     queryFn: ({ signal }) => listBugReports(signal),
     staleTime: 30_000,
-    refetchInterval: (query) =>
-      query.state.data?.some((report) => report.status === "filing")
-        ? 5_000
-        : false,
   });
 
 export const sendBugReportMutationOptions = (

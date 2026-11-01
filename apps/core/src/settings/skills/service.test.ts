@@ -18,7 +18,7 @@ import {
   UserId,
 } from "@dx/domain";
 import { Effect, Layer, Schema } from "effect";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import { SettingsAudit } from "../audit.js";
 import { previewSkillImport } from "./import.js";
 import { SkillService } from "./service.js";
@@ -109,9 +109,11 @@ const harness = async (
       }),
     ],
   ]);
+  const initialVersion = versions.get(1);
+  assert.exists(initialVersion);
   const current = () => ({
     skill,
-    active: versions.get(skill.activeVersion) ?? versions.get(1)!,
+    active: versions.get(skill.activeVersion) ?? initialVersion,
     versions: [...versions.keys()]
       .sort((left, right) => right - left)
       .map((version) => Schema.decodeUnknownSync(SkillVersion)(version)),

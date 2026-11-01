@@ -10,7 +10,7 @@ declare const __DX_CORE_DEV_FIXTURES__: boolean;
 const common = {
   owner: {
     team: "dx/settings",
-    issue: "https://github.com/ravindrabarthwal/dx/issues/48",
+    issue: "https://github.com/octo-org/example/issues/48",
   },
   status: "experimental",
   defaultEnabled: false,

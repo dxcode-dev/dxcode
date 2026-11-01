@@ -1,0 +1,89 @@
+/* dx's toasts: one compact row in the app's UI font, with a text action and
+   an inline dismiss button. Scoped to the app's Toaster so sonner's own
+   rules stay underneath. */
+.dx-toaster[data-sonner-toaster] {
+  font-family: var(--font-ui);
+}
+.dx-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] {
+  gap: 8px;
+  min-height: 36px;
+  padding: 7px 8px 7px 10px;
+  font-size: 12px;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+.dx-toaster[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"]
+  [data-title] {
+  font-weight: 500;
+  line-height: 16px;
+}
+.dx-toaster[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"]
+  [data-description] {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 15px;
+}
+.dx-toaster[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"]
+  [data-icon] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+.dx-toaster[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"]
+  [data-icon]
+  svg {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+.dx-toaster[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"]
+  [data-button] {
+  height: 22px;
+  padding: 0 6px;
+  color: var(--popover-foreground);
+  border-radius: 5px;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+}
+.dx-toaster[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"]
+  [data-button]:hover {
+  background: var(--accent);
+}
+.dx-toaster[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"]
+  [data-close-button] {
+  position: static;
+  order: 1;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  transform: none;
+}
+.dx-toaster[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"]
+  [data-close-button]:hover,
+.dx-toaster[data-sonner-toaster][data-sonner-theme]
+  [data-sonner-toast]
+  [data-close-button]:hover {
+  color: var(--popover-foreground);
+  border: 0;
+  background: var(--accent);
+}
+.dx-toaster[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"]
+  [data-close-button]
+  svg {
+  width: 12px;
+  height: 12px;
+}

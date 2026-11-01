@@ -298,6 +298,9 @@ const retiredRandomResourceIds = new Set([
 ]);
 const retiredWorkerBindings = new Map([
   ["ACCOUNT_SHELL", "durable_object_namespace"],
+  // In-app bug reports are kept in dx and never filed on GitHub.
+  ["DX_BUG_REPORT_LABELS", "plain_text"],
+  ["DX_BUG_REPORT_REPOSITORY", "plain_text"],
   // Self-hosts that carried attachment bytes through Core; every stage now
   // signs direct R2 URLs.
   ["DX_ATTACHMENT_TRANSFER", "plain_text"],

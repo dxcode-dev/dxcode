@@ -3,6 +3,7 @@ import { Effect, Option, Schema } from "effect";
 import type { Context } from "hono";
 import type { AppEnv } from "../http/types.js";
 import type { DxAuth } from "./better-auth.js";
+import { authoritativeBrowserSession } from "./request-auth.js";
 
 export class BrowserSessionRequired extends Schema.TaggedError<BrowserSessionRequired>()(
   "BrowserSessionRequired",
@@ -15,11 +16,7 @@ export const requireBrowserSession = Effect.fn("requireBrowserSession")(
       return yield* new BrowserSessionRequired();
     }
     const session = yield* Effect.tryPromise({
-      try: () =>
-        auth.api.getSession({
-          headers: context.req.raw.headers,
-          query: { disableCookieCache: true },
-        }),
+      try: () => authoritativeBrowserSession(context, auth),
       catch: () => new BrowserSessionRequired(),
     });
     if (

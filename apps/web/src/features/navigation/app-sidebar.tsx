@@ -320,6 +320,7 @@ function AppSidebarContent({
     now,
     archiveAvailable,
     sharedThreads,
+    projectsComplete,
   );
 
   return (

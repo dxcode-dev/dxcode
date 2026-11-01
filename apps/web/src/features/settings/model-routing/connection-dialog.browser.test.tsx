@@ -39,6 +39,8 @@ const renderDialog = async (
   options: {
     existing?: ConnectionData;
     provider?: CatalogProviderData;
+    fieldErrors?: Readonly<Record<string, string>>;
+    submitError?: string;
   } = { existing },
 ) => {
   const container = document.createElement("div");
@@ -51,7 +53,8 @@ const renderDialog = async (
         existing={options.existing}
         provider={options.provider}
         busy={false}
-        fieldErrors={{}}
+        fieldErrors={options.fieldErrors ?? {}}
+        submitError={options.submitError}
         onClose={() => undefined}
         onSubmit={onSubmit}
       />,
@@ -182,6 +185,58 @@ describe("connection dialog endpoint preview", () => {
         )
         ?.click(),
     );
+
+  it("marks each field the server rejected with its message", async () => {
+    const { container, root } = await renderDialog(vi.fn(), {
+      fieldErrors: {
+        name: "Name is required.",
+        baseUrl: "Use a public HTTPS endpoint.",
+        apiKey: "API key is required.",
+        models: "Declare at least one model.",
+        format: "Pick the API format this endpoint speaks.",
+      },
+      submitError: "Model routing validation failed.",
+    });
+    try {
+      const errorOf = (id: string) => {
+        const input = document.querySelector(`#${id}`);
+        expect(input?.getAttribute("aria-invalid")).toBe("true");
+        const describedBy = input?.getAttribute("aria-describedby") ?? "";
+        return describedBy
+          .split(" ")
+          .map((ref) => document.getElementById(ref)?.textContent)
+          .join(" ");
+      };
+      expect(errorOf("mr-name")).toContain("Name is required.");
+      expect(errorOf("mr-base-url")).toContain("Use a public HTTPS endpoint.");
+      expect(errorOf("mr-key")).toContain("API key is required.");
+      expect(errorOf("mr-models")).toContain("Declare at least one model.");
+      expect(
+        document.querySelector(".routing-format-options")?.textContent,
+      ).toContain("Pick the API format this endpoint speaks.");
+      // Field errors replace the generic form message.
+      expect(document.body.textContent).not.toContain(
+        "Model routing validation failed.",
+      );
+    } finally {
+      await React.act(() => root.unmount());
+      container.remove();
+    }
+  });
+
+  it("shows no endpoint preview for a URL that is not HTTPS", async () => {
+    const { container, root } = await renderDialog(vi.fn(), {});
+    try {
+      const baseUrl = document.querySelector<HTMLInputElement>("#mr-base-url");
+      await React.act(() => {
+        if (baseUrl !== null) setValue(baseUrl, "ftp://bad");
+      });
+      expect(preview()).toBeNull();
+    } finally {
+      await React.act(() => root.unmount());
+      container.remove();
+    }
+  });
 
   it("shows the exact endpoint for each format as the user types", async () => {
     const { container, root } = await renderDialog(vi.fn(), {});

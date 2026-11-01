@@ -4,6 +4,7 @@
     "includes": [
       "**",
       "!**/dist",
+      "!**/target",
       "!**/coverage",
       "!**/node_modules",
       "!**/.alchemy",
@@ -12,6 +13,7 @@
       "!**/.astro",
       "!wiki/raw",
       "!**/*.generated.js",
+      "!internal/release/public-release/releases",
       "!packages/api/src/views/kit"
     ]
   },
@@ -27,7 +29,24 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "preset": "recommended"
+      "preset": "recommended",
+      "complexity": {
+        "useOptionalChain": "error"
+      },
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error"
+      },
+      "performance": {
+        "noAccumulatingSpread": "error"
+      },
+      "style": {
+        "noNonNullAssertion": "error"
+      },
+      "suspicious": {
+        "noExplicitAny": "error",
+        "noTemplateCurlyInString": "error"
+      }
     }
   },
   "overrides": [

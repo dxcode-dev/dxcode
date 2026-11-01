@@ -29,9 +29,13 @@ import {
   ProjectRouteNotFound,
 } from "./features/projects/project-route-states.js";
 import { isProjectSettingsSection } from "./features/projects/project-settings-sections.js";
-import { settingsContextQueryOptions } from "./features/settings/settings-context-queries.js";
+import {
+  isMissingWorkspaceError,
+  settingsContextQueryOptions,
+} from "./features/settings/settings-context-queries.js";
 import { resolveSettingsSection } from "./features/settings/settings-registration.js";
 import { SettingsRouteNotFound } from "./features/settings/settings-route-not-found.js";
+import { SettingsRoutePending } from "./features/settings/settings-route-pending.js";
 import {
   NewThreadPage,
   NewThreadProvider,
@@ -325,6 +329,32 @@ const workspaceSlug = (input: string) => {
   return result.value;
 };
 
+/**
+ * Loads the workspace a settings URL names. The server answers 403 or 404 for
+ * a workspace the user cannot open (missing, renamed away, or not theirs);
+ * that renders the route's not-found state. Other failures reach the settings
+ * page, which keeps its retry state for them.
+ */
+const ensureWorkspaceRouteData = async (
+  { queryClient, userId }: RouterContext,
+  slug: WorkspaceSlug,
+) => {
+  await queryClient
+    .ensureQueryData(
+      settingsContextQueryOptions(userId, {
+        scope: "workspace",
+        workspaceSlug: slug,
+      }),
+    )
+    .catch((error: unknown) => {
+      if (isMissingWorkspaceError(error))
+        throw notFound({
+          data: { code: "WORKSPACE_NOT_FOUND", workspaceSlug: slug },
+        });
+    });
+  return slug;
+};
+
 const personalSettingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
@@ -359,11 +389,18 @@ const workspaceSettingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/workspaces/$workspaceSlug",
   // An unknown section takes precedence over a malformed slug.
-  loader: async ({ params }) => {
+  loader: async ({ context, params }) => {
     const registration = await registeredSettingsSection("workspace");
-    return { registration, workspaceSlug: workspaceSlug(params.workspaceSlug) };
+    return {
+      registration,
+      workspaceSlug: await ensureWorkspaceRouteData(
+        context,
+        workspaceSlug(params.workspaceSlug),
+      ),
+    };
   },
   component: settingsPage("WorkspaceSettingsRoot"),
+  pendingComponent: SettingsRoutePending,
   notFoundComponent: SettingsRouteNotFound,
 });
 
@@ -378,14 +415,21 @@ const workspaceSettingsEmptyRoute = createRoute({
 const workspaceSettingsSectionRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/workspaces/$workspaceSlug/$section",
-  loader: async ({ params }) => {
+  loader: async ({ context, params }) => {
     const registration = await registeredSettingsSection(
       "workspace",
       params.section,
     );
-    return { registration, workspaceSlug: workspaceSlug(params.workspaceSlug) };
+    return {
+      registration,
+      workspaceSlug: await ensureWorkspaceRouteData(
+        context,
+        workspaceSlug(params.workspaceSlug),
+      ),
+    };
   },
   component: settingsPage("WorkspaceSettingsSection"),
+  pendingComponent: SettingsRoutePending,
   notFoundComponent: SettingsRouteNotFound,
 });
 

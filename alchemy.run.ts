@@ -362,14 +362,8 @@ export default Alchemy.Stack(
       githubCopilotClientId: Config.option(
         Config.NonEmptyString("DX_GITHUB_COPILOT_CLIENT_ID"),
       ),
-      // Where Core files in-app bug reports, with which labels, and who
-      // may open any report's files; see wiki/product-architecture.md.
-      bugReportRepository: Config.option(
-        Config.NonEmptyString("DX_BUG_REPORT_REPOSITORY"),
-      ),
-      bugReportLabels: Config.option(
-        Config.NonEmptyString("DX_BUG_REPORT_LABELS"),
-      ),
+      // Who may read every in-app bug report, in the app and through their
+      // agents; see wiki/product-architecture.md.
       bugReportReaders: Config.option(
         Config.NonEmptyString("DX_BUG_REPORT_READERS"),
       ),
@@ -875,14 +869,6 @@ export default Alchemy.Stack(
               DX_GITHUB_COPILOT_CLIENT_ID:
                 configuration.githubCopilotClientId.value,
             }
-          : {}),
-        ...(Option.isSome(configuration.bugReportRepository)
-          ? {
-              DX_BUG_REPORT_REPOSITORY: configuration.bugReportRepository.value,
-            }
-          : {}),
-        ...(Option.isSome(configuration.bugReportLabels)
-          ? { DX_BUG_REPORT_LABELS: configuration.bugReportLabels.value }
           : {}),
         ...(Option.isSome(configuration.bugReportReaders)
           ? { DX_BUG_REPORT_READERS: configuration.bugReportReaders.value }

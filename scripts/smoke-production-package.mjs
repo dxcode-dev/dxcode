@@ -9,6 +9,7 @@ import {
 } from "./migration-manifest.mjs";
 import {
   deriveDurableObjectBindings,
+  HOSTED_DOCS_ORIGIN,
   validateProductionPackage,
 } from "./production-package.mjs";
 
@@ -93,9 +94,7 @@ export const smokeProductionPackage = async (packageRoot) => {
       activeVersion: 1,
       keys: { 1: Buffer.alloc(32).toString("base64") },
     }),
-    DX_BUG_REPORT_LABELS: "",
     DX_BUG_REPORT_READERS: "",
-    DX_BUG_REPORT_REPOSITORY: "",
     DX_DEPLOYMENT_REVISION: manifest.identity.revision,
     DX_DEPLOYMENT_TARGET: "package-smoke",
     DX_DXD_PUBLIC_URL: "http://127.0.0.1/",
@@ -301,51 +300,79 @@ export const smokeProductionPackage = async (packageRoot) => {
       throw new Error(
         "Packaged Worker did not serve the packaged application.",
       );
-    const docsRedirect = await fetch(`${origin}/docs`, { redirect: "manual" });
-    if (
-      ![301, 302, 307, 308].includes(docsRedirect.status) ||
-      new URL(docsRedirect.headers.get("location") ?? "", origin).pathname !==
-        "/docs/"
-    )
-      throw new Error("Packaged Worker did not canonicalize /docs to /docs/.");
-    const docs = await fetch(`${origin}/docs/`);
-    const providerPages = await Promise.all(
-      ["github-source", "bitbucket-source", "github-copilot"].map((page) =>
-        fetch(`${origin}/docs/deployment/${page}/`),
-      ),
-    );
-    const docsCssPath = manifest.files.find(
-      ({ path }) =>
-        path.startsWith("assets/docs/_astro/") && path.endsWith(".css"),
-    )?.path;
-    const docsJsPath = manifest.files.find(
-      ({ path }) =>
-        path.startsWith("assets/docs/_astro/") && path.endsWith(".js"),
-    )?.path;
-    const searchAssetPath = manifest.files.find(
-      ({ path }) =>
-        path.startsWith("assets/docs/pagefind/") && path.endsWith(".js"),
-    )?.path;
-    if (
-      docs.status !== 200 ||
-      !(await docs.text()).includes("<html") ||
-      providerPages.some((response) => response.status !== 200) ||
-      !(
-        await Promise.all(providerPages.map((response) => response.text()))
-      ).every((html) => html.includes("<html")) ||
-      docsCssPath === undefined ||
-      (await fetch(`${origin}/${docsCssPath.replace(/^assets\//, "")}`))
-        .status !== 200 ||
-      docsJsPath === undefined ||
-      (await fetch(`${origin}/${docsJsPath.replace(/^assets\//, "")}`))
-        .status !== 200 ||
-      searchAssetPath === undefined ||
-      (await fetch(`${origin}/${searchAssetPath.replace(/^assets\//, "")}`))
-        .status !== 200
-    )
-      throw new Error(
-        "Packaged Worker did not serve docs, provider deep links, and docs assets.",
+    if (manifest.graph.docs.length === 0) {
+      // A package without the docs site sends every docs path to the hosted
+      // docs, keeping the rest of the path.
+      for (const [path, location] of [
+        ["/docs", `${HOSTED_DOCS_ORIGIN}/docs`],
+        ["/docs/", `${HOSTED_DOCS_ORIGIN}/docs/`],
+        [
+          "/docs/deployment/fork/",
+          `${HOSTED_DOCS_ORIGIN}/docs/deployment/fork/`,
+        ],
+      ]) {
+        const response = await fetch(`${origin}${path}`, {
+          redirect: "manual",
+        });
+        if (
+          response.status !== 302 ||
+          response.headers.get("location") !== location
+        )
+          throw new Error(
+            `Packaged Worker did not redirect ${path} to ${location}.`,
+          );
+      }
+    } else {
+      const docsRedirect = await fetch(`${origin}/docs`, {
+        redirect: "manual",
+      });
+      if (
+        ![301, 302, 307, 308].includes(docsRedirect.status) ||
+        new URL(docsRedirect.headers.get("location") ?? "", origin).pathname !==
+          "/docs/"
+      )
+        throw new Error(
+          "Packaged Worker did not canonicalize /docs to /docs/.",
+        );
+      const docs = await fetch(`${origin}/docs/`);
+      const providerPages = await Promise.all(
+        ["github-source", "bitbucket-source", "github-copilot"].map((page) =>
+          fetch(`${origin}/docs/deployment/${page}/`),
+        ),
       );
+      const docsCssPath = manifest.files.find(
+        ({ path }) =>
+          path.startsWith("assets/docs/_astro/") && path.endsWith(".css"),
+      )?.path;
+      const docsJsPath = manifest.files.find(
+        ({ path }) =>
+          path.startsWith("assets/docs/_astro/") && path.endsWith(".js"),
+      )?.path;
+      const searchAssetPath = manifest.files.find(
+        ({ path }) =>
+          path.startsWith("assets/docs/pagefind/") && path.endsWith(".js"),
+      )?.path;
+      if (
+        docs.status !== 200 ||
+        !(await docs.text()).includes("<html") ||
+        providerPages.some((response) => response.status !== 200) ||
+        !(
+          await Promise.all(providerPages.map((response) => response.text()))
+        ).every((html) => html.includes("<html")) ||
+        docsCssPath === undefined ||
+        (await fetch(`${origin}/${docsCssPath.replace(/^assets\//, "")}`))
+          .status !== 200 ||
+        docsJsPath === undefined ||
+        (await fetch(`${origin}/${docsJsPath.replace(/^assets\//, "")}`))
+          .status !== 200 ||
+        searchAssetPath === undefined ||
+        (await fetch(`${origin}/${searchAssetPath.replace(/^assets\//, "")}`))
+          .status !== 200
+      )
+        throw new Error(
+          "Packaged Worker did not serve docs, provider deep links, and docs assets.",
+        );
+    }
     const protectedRoute = await fetch(`${origin}/v1/projects`);
     if (protectedRoute.status !== 401)
       throw new Error("Packaged Worker did not route the protected API.");

@@ -11,6 +11,12 @@ import {
 } from "../observability/startup-runtime.js";
 import { observeCall, traceSpan } from "../observability/tracing.js";
 import { rememberWorkspaceDisk } from "../orb-disk/note.js";
+import {
+  isWorkspaceReadOnlyFailure,
+  rememberWorkspaceRecovery,
+  savedAtText,
+  WORKSPACE_READ_ONLY_CODE,
+} from "../orb-disk/read-only.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
 import type {
   DaemonInstallation,
@@ -18,9 +24,11 @@ import type {
   EnsureDaemonInput,
   ExecutionActivation,
   ExecutionContext,
+  ExecutionGuest,
   ExecutionProvider,
   ExecutionWorkspaceCreateOptions,
   ExecutionWorkspaceHandle,
+  ExecutionWorkspaceRecovery,
 } from "../plugins/execution/provider.js";
 import { executionWorkspaceTools } from "../plugins/execution/tools.js";
 import {
@@ -53,6 +61,11 @@ import {
   type OrbBillingPolicy,
   withOrbBilling,
 } from "./orb-billing.js";
+import {
+  rescueUnsavedWork,
+  restoreUnsavedWork,
+  type UnsavedWorkRescue,
+} from "./read-only-rescue.js";
 import {
   activateSourceWorkspace,
   cloneAdditionalRepositories,
@@ -359,6 +372,118 @@ const asSourceRunError = (cause: unknown): never => {
   });
 };
 
+/**
+ * The Orb's disk became read-only, as the run's error: the Thread names the
+ * cause and what dx did, instead of a generic internal error.
+ */
+const readOnlyRunError = (details: string) =>
+  new FlueError({
+    type: "workspace_read_only",
+    message: "The Orb's disk became read-only.",
+    details,
+    dev: "",
+    meta: { code: WORKSPACE_READ_ONLY_CODE },
+  });
+
+const stillReadOnly = (recovery: ExecutionWorkspaceRecovery) =>
+  `${
+    recovery.files === "kept"
+      ? "dx restarted the Orb, keeping its files"
+      : recovery.files === "earlier"
+        ? `dx restarted the Orb from its last save${savedAtText(recovery.savedAt)}`
+        : "dx started the Orb over from a fresh image"
+  }, but its disk is still read-only. Retry to restart it again.`;
+
+/**
+ * Restarts a read-only Orb through its provider, or fails the run saying
+ * why it could not. Only a run's own activation restarts one: a reconnect
+ * (a Terminal, a run reading its output) never does. The checkout's unsaved
+ * work is copied out first, and the provider may drop the Orb's current
+ * files only when that copy worked.
+ */
+const recoverReadOnlyWorkspace = async (
+  provider: ExecutionProvider,
+  context: ExecutionContext,
+  threadId: ThreadId,
+  guest: ExecutionGuest,
+  existingOnly: boolean,
+): Promise<{
+  readonly recovery: ExecutionWorkspaceRecovery;
+  readonly rescue: UnsavedWorkRescue;
+}> => {
+  const recover = provider.workspace.recover;
+  if (existingOnly || recover === undefined) {
+    executionWorkspaceLogger.error("The Orb's disk became read-only.", {
+      event: "workspace_read_only",
+      threadId,
+      outcome: existingOnly ? "reconnect" : "unsupported",
+      provider: context.profile.adapter,
+    });
+    throw readOnlyRunError(
+      existingOnly
+        ? "dx restarts it when the Thread's next turn starts."
+        : "dx can't restart this Orb automatically, so its turns fail until it restarts. Copy out what you need from the Terminal, then start a new Thread.",
+    );
+  }
+  const rescue = await rescueUnsavedWork(guest);
+  executionWorkspaceLogger.warn(
+    "The Orb's disk became read-only; restarting it.",
+    {
+      event: "workspace_read_only",
+      threadId,
+      outcome: "recovering",
+      provider: context.profile.adapter,
+      rescue: rescue.kind,
+      ...(rescue.kind === "archive"
+        ? {
+            rescueBytes: rescue.bytes.byteLength,
+            changes: rescue.changes,
+            commits: rescue.commits,
+          }
+        : {}),
+      ...(rescue.kind === "failed" ? { rescueError: rescue.reason } : {}),
+    },
+  );
+  let recovery: ExecutionWorkspaceRecovery;
+  try {
+    recovery = await recover.call(
+      provider.workspace,
+      context,
+      { threadId },
+      { discardUnsaved: rescue.kind !== "failed" },
+    );
+  } catch (cause) {
+    executionWorkspaceLogger.error("The read-only Orb's restart failed.", {
+      event: "workspace_read_only",
+      threadId,
+      outcome: "recovery_failed",
+      error: cause instanceof Error ? cause.message.slice(0, 500) : "failed",
+    });
+    throw readOnlyRunError(
+      "dx tried to restart the Orb, but the restart failed. Retry to try again.",
+    );
+  }
+  if (recovery.files === "unsaved") {
+    executionWorkspaceLogger.error(
+      "The read-only Orb was not restarted: its unsaved work would be lost.",
+      {
+        event: "workspace_read_only",
+        threadId,
+        outcome: "unsaved",
+        ...(rescue.kind === "failed" ? { rescueError: rescue.reason } : {}),
+      },
+    );
+    throw readOnlyRunError(
+      `dx didn't restart the Orb: it can't save the Orb's files, and ${
+        rescue.kind === "failed"
+          ? rescue.reason
+          : "it couldn't copy out the unsaved work"
+      }, so a restart would lose that work. The Orb's files can still be read: copy out what you need from the Terminal, then start a new Thread.`,
+    );
+  }
+  return { recovery, rescue };
+};
+
 export interface ExecutionActivationHooks {
   /**
    * Between source preparation and the workspace's first use, for 4e's warm
@@ -434,105 +559,193 @@ export const makeExecutionActivation =
       if (needsFirstReadiness) reportPreparation("Preparing workspace…");
       let wakeStatusPublished = false;
       try {
-        const handle = existingOnly
-          ? await observeCall(
-              "execution.activation.workspace",
-              "phase",
-              { "dx.operation": "connect" },
-              () =>
-                provider.workspace.connect(
-                  context,
-                  { threadId },
-                  { authorize },
-                ),
-            )
-          : await observeCall(
-              "execution.activation.workspace",
-              "phase",
-              { "dx.operation": "create" },
-              () => {
-                const options: ExecutionWorkspaceCreateOptions &
-                  CloudflareOpenPhaseReporter = {
-                  authorize,
-                  // A provider that waits on a container start says so;
-                  // only a first preparation has a status line to show it.
-                  ...(needsFirstReadiness
-                    ? {
-                        onPreparationPhase: (phase: CloudflareOpenPhase) =>
-                          reportPreparation(openPreparationStatus[phase]),
+        const openWorkspace = () =>
+          existingOnly
+            ? observeCall(
+                "execution.activation.workspace",
+                "phase",
+                { "dx.operation": "connect" },
+                () =>
+                  provider.workspace.connect(
+                    context,
+                    { threadId },
+                    { authorize },
+                  ),
+              )
+            : observeCall(
+                "execution.activation.workspace",
+                "phase",
+                { "dx.operation": "create" },
+                () => {
+                  const options: ExecutionWorkspaceCreateOptions &
+                    CloudflareOpenPhaseReporter = {
+                    authorize,
+                    // A provider that waits on a container start says so;
+                    // only a first preparation has a status line to show it.
+                    ...(needsFirstReadiness
+                      ? {
+                          onPreparationPhase: (phase: CloudflareOpenPhase) =>
+                            reportPreparation(openPreparationStatus[phase]),
+                        }
+                      : {}),
+                    observeResidency: (observed) => {
+                      if (
+                        observed === "paused" &&
+                        !needsFirstReadiness &&
+                        !wakeStatusPublished
+                      ) {
+                        wakeStatusPublished = true;
+                        publish(() =>
+                          publishRealtimeWorkspaceStatus(
+                            bindings,
+                            threadId,
+                            "waking",
+                          ),
+                        );
                       }
-                    : {}),
-                  observeResidency: (observed) => {
-                    if (observed === "paused" && !needsFirstReadiness) {
-                      wakeStatusPublished = true;
-                      publish(() =>
-                        publishRealtimeWorkspaceStatus(
-                          bindings,
-                          threadId,
-                          "waking",
-                        ),
-                      );
-                    }
+                    },
+                  };
+                  return provider.workspace.create(
+                    context,
+                    { threadId },
+                    options,
+                  );
+                },
+              );
+        const prepareSource = async (handle: ExecutionWorkspaceHandle) => {
+          const source = await handle.development?.source();
+          // Source preparation runs on the raw guest, outside the agent's
+          // command leases, and its setup and resume hooks can outlast the
+          // provider deadline that create/connect just set. Hold the Thread's
+          // activity lease so the idle deadline keeps renewing until it ends.
+          const preparation = handleActivity(threadId, handle).retain();
+          try {
+            const sourceCwd = await observeCall(
+              "execution.activation.source",
+              "phase",
+              {},
+              () =>
+                activateSourceWorkspace(
+                  bindings,
+                  db,
+                  id,
+                  handle.guest,
+                  true,
+                  source,
+                  // Only a first preparation has a status to show; a ready
+                  // workspace's row no longer takes one.
+                  needsFirstReadiness
+                    ? (phase) =>
+                        Effect.sync(() =>
+                          reportPreparation(sourcePreparationStatus[phase]),
+                        )
+                    : undefined,
+                  {
+                    reserve: context.profile.adapter !== "local",
+                    // The turn this activation starts tells its agent.
+                    onReading: (reading) =>
+                      rememberWorkspaceDisk(threadId, reading),
                   },
-                };
-                return provider.workspace.create(
-                  context,
-                  { threadId },
-                  options,
-                );
-              },
-            );
+                ),
+            ).catch(asSourceRunError);
+            if (source === undefined) {
+              await ensureGithubCliWrapper(db, id, handle.guest);
+              await cloneAdditionalRepositories(bindings, db, id, handle.guest);
+            }
+            await hooks.prepared?.({
+              context,
+              threadId,
+              handle,
+              firstPreparation: needsFirstReadiness,
+            });
+            return { source, sourceCwd };
+          } finally {
+            preparation.release();
+          }
+        };
+        let handle = await openWorkspace();
         void recordActiveSubmissionPhase(bindings, id, "workspace_resolved");
         if (needsFirstReadiness) reportPreparation("Preparing source…");
-        const source = await handle.development?.source();
-        // Source preparation runs on the raw guest, outside the agent's
-        // command leases, and its setup and resume hooks can outlast the
-        // provider deadline that create/connect just set. Hold the Thread's
-        // activity lease so the idle deadline keeps renewing until it ends.
-        const preparation = handleActivity(threadId, handle).retain();
-        let sourceCwd: string;
+        let prepared: Awaited<ReturnType<typeof prepareSource>>;
         try {
-          sourceCwd = await observeCall(
-            "execution.activation.source",
-            "phase",
-            {},
-            () =>
-              activateSourceWorkspace(
-                bindings,
-                db,
-                id,
-                handle.guest,
-                true,
-                source,
-                // Only a first preparation has a status to show; a ready
-                // workspace's row no longer takes one.
-                needsFirstReadiness
-                  ? (phase) =>
-                      Effect.sync(() =>
-                        reportPreparation(sourcePreparationStatus[phase]),
-                      )
-                  : undefined,
-                {
-                  reserve: context.profile.adapter !== "local",
-                  // The turn this activation starts tells its agent.
-                  onReading: (reading) =>
-                    rememberWorkspaceDisk(threadId, reading),
-                },
-              ),
-          ).catch(asSourceRunError);
-          if (source === undefined) {
-            await ensureGithubCliWrapper(db, id, handle.guest);
-            await cloneAdditionalRepositories(bindings, db, id, handle.guest);
-          }
-          await hooks.prepared?.({
+          prepared = await prepareSource(handle);
+        } catch (cause) {
+          if (!isWorkspaceReadOnlyFailure(cause)) throw cause;
+          // Every write fails until the Orb restarts: restart it once and
+          // prepare it again, so this turn runs.
+          const { recovery, rescue } = await recoverReadOnlyWorkspace(
+            provider,
             context,
             threadId,
-            handle,
-            firstPreparation: needsFirstReadiness,
-          });
-        } finally {
-          preparation.release();
+            handle.guest,
+            existingOnly,
+          );
+          if (needsFirstReadiness) reportPreparation("Restarting machine…");
+          else if (!wakeStatusPublished) {
+            wakeStatusPublished = true;
+            publish(() =>
+              publishRealtimeWorkspaceStatus(bindings, threadId, "waking"),
+            );
+          }
+          handle = await openWorkspace();
+          try {
+            prepared = await prepareSource(handle);
+          } catch (again) {
+            if (!isWorkspaceReadOnlyFailure(again)) throw again;
+            executionWorkspaceLogger.error(
+              "The Orb's disk is still read-only after a restart.",
+              {
+                event: "workspace_read_only",
+                threadId,
+                outcome: "still_read_only",
+                files: recovery.files,
+              },
+            );
+            // Its files are gone either way: keep the copy in Thread storage.
+            const kept =
+              recovery.files !== "kept" && rescue.kind === "archive"
+                ? await restoreUnsavedWork(
+                    bindings,
+                    threadId,
+                    handle.guest,
+                    rescue,
+                  )
+                : undefined;
+            throw readOnlyRunError(
+              `${stillReadOnly(recovery)}${
+                kept?.storageFileId === undefined
+                  ? ""
+                  : ` A copy of its unsaved work is in the Thread's storage as ${kept.name}.`
+              }`,
+            );
+          }
+          // The restart dropped work dx copied out: put the copy back in
+          // reach, in the new Orb and in Thread storage.
+          const restored =
+            recovery.files !== "kept" && rescue.kind === "archive"
+              ? await restoreUnsavedWork(
+                  bindings,
+                  threadId,
+                  handle.guest,
+                  rescue,
+                )
+              : undefined;
+          executionWorkspaceLogger.info(
+            "The Orb was restarted after its disk became read-only.",
+            {
+              event: "workspace_read_only",
+              threadId,
+              outcome: "recovered",
+              files: recovery.files,
+              restored: restored !== undefined,
+            },
+          );
+          rememberWorkspaceRecovery(
+            threadId,
+            restored === undefined ? recovery : { ...recovery, restored },
+          );
         }
+        const { source, sourceCwd } = prepared;
         void recordActiveSubmissionPhase(bindings, id, "source_activated");
         if (wakeStatusPublished)
           publish(() =>

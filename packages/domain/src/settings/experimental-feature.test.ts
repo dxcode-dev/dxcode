@@ -21,7 +21,7 @@ const registration = (
   description: `Fixture description for ${id}.`,
   owner: {
     team: "dx/settings",
-    issue: "https://github.com/ravindrabarthwal/dx/issues/48",
+    issue: "https://github.com/octo-org/example/issues/48",
   },
   status: "experimental",
   defaultEnabled: input.defaultEnabled ?? false,

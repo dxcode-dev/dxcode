@@ -1,23 +1,20 @@
 import type { ThreadId } from "@dx/domain";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Archive, ArchiveRestore, LoaderCircle, X } from "lucide-react";
+import { Archive, ArchiveRestore } from "lucide-react";
 import * as React from "react";
+import { toast } from "sonner";
 import type { ArchivedThread } from "../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import {
   ThreadArchiveContext,
   type ThreadArchiveController,
 } from "../../shared/thread-archive.js";
-import { Button } from "../../shared/ui/button.js";
 import { setThreadArchivedMutationOptions } from "./thread-mutations.js";
 
-interface ArchiveNotice {
-  readonly kind: "progress" | "success" | "error";
-  readonly message: string;
-  readonly undoThreadId?: ThreadId;
-  /** The children the archive changed, which Undo restores with it. */
-  readonly undoChildThreadIds?: ReadonlyArray<ThreadId>;
-}
+/** One toast at a time: each notice replaces the one before it. */
+const ARCHIVE_TOAST_ID = "thread-archive";
+/** How long a result stays before it goes away. */
+const ARCHIVE_TOAST_DURATION = 6_000;
 
 export function ThreadArchiveProvider({
   children,
@@ -30,35 +27,7 @@ export function ThreadArchiveProvider({
     setThreadArchivedMutationOptions(queryClient, identity.id),
   );
   const { isPending, mutate, variables } = mutation;
-  const [notice, setNotice] = React.useState<ArchiveNotice>();
-  const dismissTimer = React.useRef<number | undefined>(undefined);
   const mutationPending = React.useRef(false);
-
-  const dismiss = () => {
-    if (dismissTimer.current !== undefined)
-      window.clearTimeout(dismissTimer.current);
-    dismissTimer.current = undefined;
-    setNotice(undefined);
-  };
-
-  const showTemporary = (next: ArchiveNotice) => {
-    if (dismissTimer.current !== undefined)
-      window.clearTimeout(dismissTimer.current);
-    setNotice(next);
-    dismissTimer.current = window.setTimeout(() => {
-      dismissTimer.current = undefined;
-      setNotice(undefined);
-    }, 6_000);
-  };
-
-  const noticeLifetimeRef = (node: HTMLDivElement | null) => {
-    if (node === null) return;
-    return () => {
-      if (dismissTimer.current !== undefined)
-        window.clearTimeout(dismissTimer.current);
-      dismissTimer.current = undefined;
-    };
-  };
 
   /**
    * `children`: true for every child in the parent's former state, or the
@@ -72,50 +41,65 @@ export function ThreadArchiveProvider({
     const includeChildren = children !== undefined;
     if (mutationPending.current) return;
     mutationPending.current = true;
-    if (dismissTimer.current !== undefined)
-      window.clearTimeout(dismissTimer.current);
-    dismissTimer.current = undefined;
-    setNotice({
-      kind: "progress",
-      message: archived
+    // Every call names each option, because a toast updated in place
+    // keeps any option the new one leaves out.
+    toast.loading(
+      archived
         ? includeChildren
           ? "Archiving threads…"
           : "Archiving thread…"
         : "Unarchiving thread…",
-    });
+      { id: ARCHIVE_TOAST_ID, icon: undefined, action: undefined },
+    );
     mutate(
       children === undefined
         ? { threadId, archived }
         : { threadId, archived, children },
       {
         onSuccess: ({ thread, changedChildThreadIds }: ArchivedThread) =>
-          showTemporary({
-            kind: "success",
-            message: archived
+          toast(
+            archived
               ? includeChildren
                 ? "Archived threads"
                 : "Archived thread"
               : "Unarchived thread",
-            ...(archived
-              ? {
-                  undoThreadId: thread.id,
-                  ...(changedChildThreadIds === undefined ||
-                  changedChildThreadIds.length === 0
-                    ? {}
-                    : { undoChildThreadIds: changedChildThreadIds }),
-                }
-              : {}),
-          }),
+            {
+              id: ARCHIVE_TOAST_ID,
+              duration: ARCHIVE_TOAST_DURATION,
+              icon: archived ? <Archive /> : <ArchiveRestore />,
+              action: archived
+                ? {
+                    label: "Undo",
+                    onClick: (event) => {
+                      // Undo's progress and result replace this toast.
+                      event.preventDefault();
+                      changeArchived(
+                        thread.id,
+                        false,
+                        changedChildThreadIds === undefined ||
+                          changedChildThreadIds.length === 0
+                          ? undefined
+                          : changedChildThreadIds,
+                      );
+                    },
+                  }
+                : undefined,
+            },
+          ),
         onError: (cause) =>
-          showTemporary({
-            kind: "error",
-            message:
-              cause instanceof Error
-                ? cause.message
-                : archived
-                  ? "Thread could not be archived."
-                  : "Thread could not be unarchived.",
-          }),
+          toast.error(
+            cause instanceof Error
+              ? cause.message
+              : archived
+                ? "Thread could not be archived."
+                : "Thread could not be unarchived.",
+            {
+              id: ARCHIVE_TOAST_ID,
+              duration: ARCHIVE_TOAST_DURATION,
+              icon: undefined,
+              action: undefined,
+            },
+          ),
         onSettled: () => {
           mutationPending.current = false;
         },
@@ -138,49 +122,6 @@ export function ThreadArchiveProvider({
   return (
     <ThreadArchiveContext.Provider value={controller}>
       {children}
-      {notice === undefined ? null : (
-        <div
-          className="thread-archive-toast"
-          role={notice.kind === "error" ? "alert" : "status"}
-          aria-live="polite"
-          ref={noticeLifetimeRef}
-        >
-          {notice.kind === "progress" ? (
-            <LoaderCircle className="spin" aria-hidden="true" />
-          ) : notice.undoThreadId === undefined ? (
-            <ArchiveRestore aria-hidden="true" />
-          ) : (
-            <Archive aria-hidden="true" />
-          )}
-          <strong>{notice.message}</strong>
-          {notice.undoThreadId === undefined ? null : (
-            <button
-              type="button"
-              onClick={() => {
-                if (notice.undoThreadId !== undefined)
-                  changeArchived(
-                    notice.undoThreadId,
-                    false,
-                    notice.undoChildThreadIds,
-                  );
-              }}
-            >
-              Undo
-            </button>
-          )}
-          {notice.kind === "progress" ? null : (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Dismiss notification"
-              onClick={dismiss}
-            >
-              <X />
-            </Button>
-          )}
-        </div>
-      )}
     </ThreadArchiveContext.Provider>
   );
 }

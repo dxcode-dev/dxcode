@@ -1,4 +1,5 @@
 import {
+  GetProjectOrbFilesResponseSchema,
   GetProjectOrbScriptsResponseSchema,
   ProjectOrbScriptsForbiddenResponseSchema,
   ProjectOrbScriptsInvalidRequestResponseSchema,
@@ -27,6 +28,7 @@ import type { AppEnv } from "../http/types.js";
 import { projectPersistenceLogger } from "../logging.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
 import { activeMemberSql } from "../settings/members/membership-sql.js";
+import { readProjectOrbFiles } from "./orb-files.js";
 import { ProjectRepositoryD1 } from "./repository-d1.js";
 import { ProjectService } from "./service.js";
 
@@ -329,6 +331,39 @@ projectOrbScriptRoutes.put("/:projectId/orb-scripts/:kind", (context) =>
         status: "success",
         data: yield* readScripts(db, params.projectId),
       });
+    }),
+  ),
+);
+
+/**
+ * The repository's own Orb files on its default branch, read without an Orb
+ * (`orb-files.ts`). It answers 200 whenever the Project is reachable: a
+ * repository dx cannot read now is a state of the answer, not an error.
+ */
+projectOrbScriptRoutes.get("/:projectId/orb-files", (context) =>
+  respond(
+    context,
+    Effect.gen(function* () {
+      const params = yield* decodeRequestInput(
+        ProjectOrbScriptsParamsSchema,
+        { projectId: context.req.param("projectId") },
+        () => new InvalidOrbScriptRequest(),
+      );
+      const db = yield* decodeD1Binding(context.env.DB);
+      const principal = context.get("principal");
+      yield* reachableProject(db, principal, params.projectId);
+      const data = yield* Effect.promise(() =>
+        readProjectOrbFiles({
+          db,
+          bindings: context.env,
+          projectId: params.projectId,
+          userId: principal.userId,
+          waitUntil: (promise) => context.executionCtx.waitUntil(promise),
+        }),
+      );
+      return yield* Schema.encodeUnknownEffect(
+        GetProjectOrbFilesResponseSchema,
+      )({ status: "success", data });
     }),
   ),
 );

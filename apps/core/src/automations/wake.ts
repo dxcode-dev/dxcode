@@ -1,5 +1,6 @@
 import {
   isClaudeCodeModel,
+  THREAD_TITLE_MAX_LENGTH,
   type ThreadModelSelection,
   type UserId,
 } from "@dx/domain";
@@ -141,7 +142,8 @@ export const startThread = async (
       threadId,
       parentThreadId: input.parentThreadId,
       ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
-      title: input.title.slice(0, 256),
+      // A title longer than the Thread title limit fails validation.
+      title: input.title.slice(0, THREAD_TITLE_MAX_LENGTH).trimEnd(),
       generateTitle: false,
       ...(input.selection === undefined ? {} : { selection: input.selection }),
       ...(claudeConnectionId === undefined ? {} : { claudeConnectionId }),

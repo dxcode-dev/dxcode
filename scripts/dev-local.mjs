@@ -338,9 +338,36 @@ const authRequest = (path) =>
     }),
   });
 
+// Core's Vite listens only after it has optimized the Worker's dependencies,
+// which takes minutes on a cold, small machine. Wait for its health route for
+// as long as the dev servers run, rather than a fixed window.
+const waitForCore = async () => {
+  const started = Date.now();
+  let reported = started;
+  for (;;) {
+    if (childFailure !== undefined) throw childFailure;
+    if (shuttingDown)
+      throw new Error("Local dx stopped before Core was ready.");
+    try {
+      const health = await fetch(`${coreOrigin}/healthz`);
+      if (health.ok) return;
+    } catch {
+      // Core is not listening yet.
+    }
+    if (Date.now() - reported >= 30_000) {
+      reported = Date.now();
+      console.log(
+        `Waiting for Core at ${coreOrigin} (${Math.round((reported - started) / 1000)}s)...`,
+      );
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
+  }
+};
+
 const ensureLocalAccount = async () => {
+  await waitForCore();
   let lastFailure;
-  for (let attempt = 0; attempt < 480; attempt += 1) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     if (childFailure !== undefined) throw childFailure;
     try {
       const signUp = await authRequest("sign-up/email");

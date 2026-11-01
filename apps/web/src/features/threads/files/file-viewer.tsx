@@ -1,9 +1,9 @@
+import { Menu } from "@base-ui/react/menu";
 import type {
   ThreadFileData,
   ThreadFilesPath,
   ThreadFileVersion,
 } from "@dx/api";
-import { Menu } from "@base-ui/react/menu";
 import type { ThreadId } from "@dx/domain";
 import {
   Check,

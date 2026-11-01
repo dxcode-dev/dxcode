@@ -31,6 +31,7 @@ export {
   ORB_PROVIDERS,
   OrbProviderId,
   OrbRunnerProfileConfiguration,
+  orbSizeHourlyPrice,
   withPinnedOrbTarget,
 } from "./orb-providers/index.js";
 export {
@@ -125,8 +126,10 @@ export { ProjectId } from "./projects/project-id.js";
 export {
   MAX_PROJECT_ORB_SCRIPT_BYTES,
   PROJECT_ORB_SCRIPT_KINDS,
+  PROJECT_REPOSITORY_ORB_FILES,
   ProjectOrbScriptBody,
   ProjectOrbScriptKind,
+  ProjectRepositoryOrbFile,
 } from "./projects/project-orb-script.js";
 export {
   type ProjectReader,
@@ -431,6 +434,8 @@ export {
   PersonalComposerDefaults,
   PersonalPalette,
   PersonalTerminalTheme,
+  personalAccountDisplayNameProblem,
+  personalAccountUsernameProblem,
   UpdatePersonalAccountInput,
   UpdatePersonalAppearanceInput,
   UpdatePersonalComposerDefaultsInput,

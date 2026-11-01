@@ -4,8 +4,10 @@ import type {
   SettingsContextData,
 } from "@dx/api";
 import type {
+  PluginScope,
   ProjectId,
   ProviderRepositoryId,
+  RunnerProfile,
   RunnerProfileCatalog,
   RunnerProfileId,
   UserId,
@@ -50,6 +52,7 @@ import {
   updateProjectMutationOptions,
   uploadProjectIconMutationOptions,
 } from "./project-mutations.js";
+import { ProjectOrbFilesCard } from "./project-orb-files-card.js";
 import { ProjectOrbScriptsCard } from "./project-orb-scripts-card.js";
 import { projectQueryOptions } from "./project-queries.js";
 import { ProjectRepositoryIcon } from "./project-repository-icon.js";
@@ -438,6 +441,7 @@ function GeneralProjectSettings({
           value={rebindTo === undefined ? "" : draft.repositoryKey}
           hint={repositories.hint}
           disabled={saving}
+          connect={repositories.connect}
           retrying={repositories.fetching}
           onRetry={repositories.retry}
           onValueChange={(repositoryKey) => edit({ repositoryKey })}
@@ -551,6 +555,7 @@ function GitRepositoryRow({
   choices,
   value,
   hint,
+  connect,
   disabled,
   retrying,
   onRetry,
@@ -560,6 +565,8 @@ function GitRepositoryRow({
   readonly choices: ReadonlyArray<AuthorizedRepository>;
   readonly value: string;
   readonly hint?: string;
+  /** No connection reaches a repository: link to the integrations that add one. */
+  readonly connect: boolean;
   readonly disabled: boolean;
   readonly retrying: boolean;
   readonly onRetry?: () => void;
@@ -598,6 +605,7 @@ function GitRepositoryRow({
               <ProjectRepositoryIcon provider={bound.provider} />
             </a>
           )}
+          {connect ? <ConnectRepositoryLink /> : null}
           {onRetry === undefined ? null : (
             <Button
               size="xs"
@@ -611,6 +619,21 @@ function GitRepositoryRow({
         </div>
       }
     />
+  );
+}
+
+/** Opens the GitHub and Bitbucket connections in Integrations & MCP. */
+function ConnectRepositoryLink() {
+  const returnTo = useLocation({ select: (location) => location.href });
+  return (
+    <Link
+      className={buttonVariants({ size: "xs", variant: "outline" })}
+      to="/settings/$section"
+      params={{ section: "integrations" }}
+      state={settingsNavigationState(returnTo)}
+    >
+      Connect
+    </Link>
   );
 }
 
@@ -756,12 +779,13 @@ function useAuthorizedRepositories(userId: UserId) {
         : authorized.length === 0
           ? "Connect GitHub or Bitbucket to choose a repository."
           : undefined,
+    connect: !loading && !failed && authorized.length === 0,
     fetching:
       grantsQuery.isFetching ||
       bitbucketConnectionQuery.isFetching ||
       bitbucketRepositoriesQuery.isFetching,
     retry:
-      loading || (!failed && authorized.length > 0)
+      loading || !failed
         ? undefined
         : () => {
             void Promise.all([
@@ -774,6 +798,27 @@ function useAuthorizedRepositories(userId: UserId) {
           },
   };
 }
+
+/**
+ * Who bills an Orb on the account a Thread in this project starts on: the
+ * provider, for a person's or workspace's own connection. The deployment's
+ * account has no note; its sizes show the deployment's own cost label.
+ */
+const orbBillingNote = (scope: PluginScope, providerName: string) =>
+  scope === "deployment"
+    ? undefined
+    : `Billed by ${providerName} to ${
+        scope === "workspace" ? "the workspace's" : "your"
+      } account, paused when inactive`;
+
+type OrbSizeGroupDraft = {
+  readonly key: RunnerProfile["adapter"];
+  readonly name: string;
+  readonly hint?: string;
+  readonly billing?: string;
+  readonly available: boolean;
+  readonly profiles: ReadonlyArray<RunnerProfile>;
+};
 
 /**
  * The Orb sizes this person can choose for the project, grouped by provider in
@@ -789,15 +834,30 @@ const orbSizeGroups = (
 ) => {
   const groups = [
     ...new Set(catalog.profiles.map(({ adapter }) => adapter)),
-  ].flatMap((adapter) => {
-    const name =
-      catalog.providers?.find((provider) => provider.adapter === adapter)
-        ?.displayName ?? adapter;
+  ].flatMap((adapter): ReadonlyArray<OrbSizeGroupDraft> => {
+    const provider = catalog.providers?.find(
+      (provider) => provider.adapter === adapter,
+    );
+    const name = provider?.displayName ?? adapter;
     const profiles = catalog.profiles.filter(
       (profile) => profile.adapter === adapter,
     );
-    if (resolved.some(({ providerId }) => providerId === adapter))
-      return [{ key: adapter, name, available: true, profiles }];
+    const account = resolved.find(({ providerId }) => providerId === adapter);
+    if (account !== undefined) {
+      const billing = orbBillingNote(
+        account.scope,
+        provider?.shortName ?? name,
+      );
+      return [
+        {
+          key: adapter,
+          name,
+          ...(billing === undefined ? {} : { billing }),
+          available: true,
+          profiles,
+        },
+      ];
+    }
     const saved = profiles.filter(({ id }) => id === savedProfileId);
     return saved.length === 0
       ? []
@@ -982,6 +1042,7 @@ function ResolvedOrbProjectSettings({
         }
       />
       <ProjectOrbScriptsCard projectId={project.id} userId={userId} />
+      <ProjectOrbFilesCard projectId={project.id} userId={userId} />
     </div>
   );
 }

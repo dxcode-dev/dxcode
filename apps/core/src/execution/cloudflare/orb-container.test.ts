@@ -226,6 +226,48 @@ describe("Orb container object", () => {
     });
   });
 
+  it("backs off idle-pause snapshots that keep failing instead of retrying every heartbeat", async () => {
+    // thr_cf588b7a's Orb: 430+ failed snapshots in 16 hours, one per alarm.
+    const orb = setup();
+    await orb.controller.open(create);
+    await orb.controller.setIdleDeadline(60_000);
+    const attemptsAt: number[] = [];
+    orb.container.snapshotContainer.mockImplementation(async () => {
+      attemptsAt.push(orb.now());
+      throw new Error(
+        "The container snapshot could not be completed due to an internal error; try again (reference ID: 5656a1e5)",
+      );
+    });
+    const startedAt = orb.now();
+    // Sixteen hours of heartbeats: a failed snapshot never fails the alarm.
+    while (orb.now() < startedAt + 16 * 3_600_000) {
+      orb.advance(ORB_HEARTBEAT_MS);
+      await expect(orb.controller.alarm()).resolves.toBeUndefined();
+    }
+    const gaps = attemptsAt
+      .slice(1)
+      .map((at, index) => at - (attemptsAt[index] ?? 0));
+    expect(gaps.slice(0, 4)).toEqual([30_000, 60_000, 120_000, 240_000]);
+    expect(Math.max(...gaps)).toBe(3_600_000);
+    expect(attemptsAt.length).toBeLessThan(30);
+    // The container keeps running: its files are never dropped.
+    expect(orb.container.running).toBe(true);
+    expect(orb.container.destroy).not.toHaveBeenCalled();
+
+    // A snapshot that works again pauses it and clears the failures.
+    orb.container.snapshotContainer.mockImplementation(async () => ({
+      id: "snapshot-late",
+      size: 1,
+    }));
+    orb.advance(3_600_000);
+    await orb.controller.alarm();
+    expect(orb.container.running).toBe(false);
+    await expect(orb.controller.status()).resolves.toEqual({
+      running: false,
+      status: "paused",
+    });
+  });
+
   it("keeps a container running when Core used it while the snapshot ran", async () => {
     const orb = setup();
     await orb.controller.open(create);
@@ -488,6 +530,83 @@ describe("Orb container object", () => {
     await expect(orb.controller.exec("true")).resolves.toMatchObject({
       exitCode: 0,
     });
+  });
+
+  it("recovers a read-only workspace by snapshot and restart, keeping its files", async () => {
+    const orb = setup();
+    await orb.controller.open(create);
+    orb.advance(60_000);
+    await expect(orb.controller.recover()).resolves.toEqual({
+      files: "kept",
+      savedAt: orb.now(),
+    });
+    expect(orb.container.running).toBe(false);
+    // The next activation starts a new container from that snapshot, whose
+    // filesystem Cloudflare mounts afresh.
+    await expect(
+      orb.controller.open({ ...create, create: false, allowReset: true }),
+    ).resolves.toMatchObject({ kind: "ready", residency: "paused" });
+    expect(orb.starts[1]).toMatchObject({
+      containerSnapshot: { id: "snapshot-1" },
+    });
+  });
+
+  it("recovers from the last good snapshot when a broken filesystem cannot be snapshotted", async () => {
+    const orb = setup();
+    await orb.controller.open(create);
+    await orb.controller.pause();
+    const savedAt = orb.now();
+    await orb.controller.open({ ...create, create: false });
+    orb.advance(3_600_000);
+    // thr_cf588b7a's Orb: every snapshot of its read-only disk failed.
+    orb.container.snapshotContainer.mockRejectedValueOnce(
+      new Error(
+        "The container snapshot could not be completed due to an internal error; try again (reference ID: 5656a1e5)",
+      ),
+    );
+    await expect(
+      orb.controller.recover({ discardUnsaved: true }),
+    ).resolves.toEqual({
+      files: "earlier",
+      savedAt,
+    });
+    expect(orb.container.running).toBe(false);
+    await orb.controller.open({ ...create, create: false, allowReset: true });
+    expect(orb.starts.at(-1)).toMatchObject({
+      containerSnapshot: { id: "snapshot-1" },
+    });
+  });
+
+  it("starts a read-only workspace that was never saved over from the image, only for activation", async () => {
+    const orb = setup();
+    await orb.controller.open(create);
+    orb.container.snapshotContainer.mockRejectedValueOnce(
+      new Error(
+        "The container snapshot could not be completed due to an internal error; try again (reference ID: 8b81f4c1)",
+      ),
+    );
+    // Without Core's copy of the unsaved work, nothing is dropped.
+    await expect(orb.controller.recover()).resolves.toEqual({
+      files: "unsaved",
+    });
+    expect(orb.container.running).toBe(true);
+    orb.container.snapshotContainer.mockRejectedValueOnce(
+      new Error(
+        "The container snapshot could not be completed due to an internal error; try again (reference ID: 8b81f4c1)",
+      ),
+    );
+    await expect(
+      orb.controller.recover({ discardUnsaved: true }),
+    ).resolves.toEqual({ files: "lost" });
+    expect(orb.container.running).toBe(false);
+    // A Terminal or a reconnect never gets the empty container.
+    await expect(
+      orb.controller.open({ ...create, create: false, allowReset: false }),
+    ).rejects.toThrow(ORB_WORKSPACE_RESET_DETAIL);
+    await expect(
+      orb.controller.open({ ...create, create: false, allowReset: true }),
+    ).resolves.toMatchObject({ kind: "ready", residency: "created" });
+    expect(orb.starts.at(-1)).toMatchObject({ image: expect.any(String) });
   });
 
   it("marks a container Cloudflare stopped without a pause as paused", async () => {

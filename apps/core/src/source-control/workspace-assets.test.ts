@@ -1109,6 +1109,53 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     );
   });
 
+  it("reports a home that turned read-only as read-only, whatever step hit it", async (context) => {
+    // thr_cf588b7a's Orb: its root went read-only, and the program reported
+    // only "initialization". An unprivileged mount namespace stands in for
+    // the forced read-only filesystem: every write fails with EROFS.
+    const probe = spawnSync("unshare", [
+      "-rm",
+      "sh",
+      "-c",
+      "mount --bind /tmp /tmp",
+    ]);
+    if (probe.status !== 0) context.skip();
+    const fixture = await makeHarness();
+    initialize(fixture);
+    // The Orb's whole home: the checkout, dx's state, and the person's files.
+    const home = dirname(fixture.paths.home);
+    for (const action of ["snapshot", "activate"]) {
+      const result = spawnSync(
+        "unshare",
+        [
+          "-rm",
+          "sh",
+          "-c",
+          'mount --bind "$DX_RO_HOME" "$DX_RO_HOME" && mount -o remount,bind,ro "$DX_RO_HOME" && exec "$@"',
+          "sh",
+          process.execPath,
+          fixture.program,
+          action,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...fixture.environment,
+            DX_INVOCATION_ID: crypto.randomUUID(),
+            DX_RO_HOME: home,
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toBe("read-only:Read-only file system");
+      const state = JSON.parse(result.stdout) as {
+        readonly status?: string;
+        readonly checkout?: { readonly status: string };
+      };
+      expect(state.checkout?.status ?? state.status).toBe("failed");
+    }
+  });
+
   it("runs setup once and retries failure", async () => {
     const fixture = await makeHarness();
     initialize(fixture);

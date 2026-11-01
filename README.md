@@ -19,7 +19,7 @@ The wizard first asks whether dx should send sign-in email from your domain.
 Without email it uses Alchemy browser login; Wrangler login is separate and is
 not read. Sending email needs a custom domain, Cloudflare Email Sending on the
 sender domain, and a scoped Cloudflare API token, because Alchemy OAuth cannot
-manage Turnstile or inspect Email Sending. See the [deployment configuration](apps/docs/src/content/docs/deployment/configuration.md#cloudflare-authentication)
+manage Turnstile or inspect Email Sending. See the [deployment configuration](https://dxcode.dev/docs/deployment/configuration/#cloudflare-authentication)
 for the exact account and zone permissions.
 
 The wizard then asks which sign-in methods the deployment offers (magic link,
@@ -27,7 +27,7 @@ email and password, Google) and who can create an account: anyone (`open`),
 people you approve from a waitlist (`waitlist`), or only people with a
 workspace invite link (`invite`, the default). Public password sign-up needs
 sign-in email because every new address must be verified. You can also limit
-accounts to a list of email domains. See [sign-in and authentication](apps/docs/src/content/docs/deployment/authentication.md).
+accounts to a list of email domains. See [sign-in and authentication](https://dxcode.dev/docs/deployment/authentication/).
 
 The wizard asks for the first administrator's email. When the deployment offers
 email and password, it reads the administrator password twice without echoing
@@ -44,7 +44,7 @@ or changing the administrator password. To replace it explicitly, run:
 pnpm dx:deploy -- --reset-admin
 ```
 
-See the [deployment guide](apps/docs/src/content/docs/get-started/install.md) and
+See the [deployment guide](https://dxcode.dev/docs/get-started/install/) and
 [`deploy/README.md`](deploy/README.md) for configuration, local `dxd` fallback,
 upgrades, and recovery.
 

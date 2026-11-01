@@ -47,9 +47,6 @@ a.bug-report-status {
   width: 12px;
   height: 12px;
 }
-.bug-report-status[data-status="failed"] {
-  color: var(--destructive);
-}
 .bug-report-message {
   border: 1px solid var(--input);
   border-radius: 8px;
@@ -165,6 +162,12 @@ a.bug-report-status {
   line-height: 20px;
 }
 .bug-report-option-detail {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.bug-report-dialog p.bug-report-destination {
+  margin: -6px 0 0;
   color: var(--muted-foreground);
   font-size: 12px;
   line-height: 1.45;

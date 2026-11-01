@@ -6,7 +6,8 @@
     "0002_release_v0.1.2.sql",
     "0003_release_v0.2.0.sql",
     "0005_release_v0.2.8.sql",
-    "0022_release_v0.2.47.sql"
+    "0022_release_v0.2.47.sql",
+    "0029_release_v0.2.57.sql"
   ],
   "d1": [
     {
@@ -153,6 +154,11 @@
       "filename": "0028_release_v0.2.55.sql",
       "sha256": "d45cd1320779ae6cdfb1f9c2a2ba2453641519d945452ff3c643e4067ba1d215",
       "classification": "non-destructive"
+    },
+    {
+      "filename": "0029_release_v0.2.57.sql",
+      "sha256": "ab302fa93eb52d73ce25cd976cb30509e1dfbd268195915c8e36d35f7c80c090",
+      "classification": "destructive"
     }
   ],
   "durableObjects": [

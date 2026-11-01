@@ -13,12 +13,14 @@ const graphFixture: GraphData = {
     {
       mode: "low",
       config: { model: "openai/gpt-5.6-terra", thinking: "max" },
+      modelName: "GPT-5.6 Terra",
       source: "default",
       served: true,
     },
     {
       mode: "high",
       config: { model: "openai/gpt-6-astra", thinking: "medium" },
+      modelName: "GPT-6 Astra",
       source: "override",
       served: false,
     },
@@ -53,6 +55,7 @@ describe("model routing settings", () => {
         {
           mode: "medium",
           config: { model: "openai/gpt-5.6-terra", thinking: "high" },
+          modelName: "GPT-5.6 Terra",
           source: "default",
           served: true,
         },
@@ -99,6 +102,63 @@ describe("model routing settings", () => {
       },
       { line: 6, message: "Duplicate of line 3." },
       { line: 7, message: "Expected at most one `->` separator." },
+    ]);
+  });
+});
+
+describe("routing presentation names models as the server does", () => {
+  it("shows the catalog name the Mode Dial shows, never a re-cased id", () => {
+    const graph: GraphData = {
+      ...graphFixture,
+      modes: [
+        {
+          mode: "low",
+          config: {
+            model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+            thinking: "high",
+          },
+          modelName: "GLM 5.3 Flash",
+          source: "default",
+          served: true,
+        },
+      ],
+      edges: [
+        {
+          mode: "low",
+          model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+          connectionId: "mcon_1" as GraphData["edges"][number]["connectionId"],
+        },
+      ],
+    };
+    const choices = {
+      modes: [],
+      models: [
+        {
+          canonical: "cloudflare/@cf/openai/gpt-oss-120b",
+          name: "GPT OSS 120B",
+          connectionId: "mcon_1",
+          connectionName: "OpenAI",
+          contextWindow: 131_072,
+          reasoning: true,
+          vision: false,
+        },
+        {
+          canonical: "cloudflare/@cf/zai-org/glm-5.2",
+          name: "GLM 5.2",
+          connectionId: "mcon_1",
+          connectionName: "OpenAI",
+          contextWindow: 131_072,
+          reasoning: true,
+          vision: false,
+        },
+      ],
+      claudePlans: [],
+    } as unknown as ChoicesData;
+    const { groups } = routingPresentation({ graph, choices });
+    expect(groups.flatMap((g) => g.rows.map((r) => r.name))).toEqual([
+      "GLM 5.3 Flash",
+      "GPT OSS 120B",
+      "GLM 5.2",
     ]);
   });
 });
