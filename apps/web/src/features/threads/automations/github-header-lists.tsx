@@ -5,9 +5,14 @@ import type {
 } from "@dx/api";
 import { GitCommitHorizontal } from "lucide-react";
 import type * as React from "react";
+import {
+  ciIcon,
+  ciWords,
+  issueIcon,
+  pullIcon,
+} from "../../../shared/ui/github-status.js";
 import { TimeText } from "../../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../../shared/utils.js";
-import { ciIcon, ciWords, issueIcon, pullIcon } from "./github-status.js";
 import "./automations.css";
 
 const ago = (iso: string, now: number) =>

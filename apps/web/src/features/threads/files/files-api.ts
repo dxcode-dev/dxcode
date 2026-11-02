@@ -86,6 +86,8 @@ export interface ThreadFilesApi {
     cursor: ThreadFilesCursor | undefined,
     worktree: ThreadFilesWorktreeId | undefined,
     signal?: AbortSignal,
+    /** The root may come from the Orb's last listing while it wakes. */
+    allowSnapshot?: boolean,
   ) => Promise<ThreadFileTreeData>;
   readonly read: (
     threadId: ThreadId,
@@ -110,11 +112,12 @@ export interface ThreadFilesApi {
 export const createThreadFilesApi = (
   fetcher: Fetcher = sameOriginFetch,
 ): ThreadFilesApi => ({
-  list: async (threadId, path, cursor, worktree, signal) => {
+  list: async (threadId, path, cursor, worktree, signal, allowSnapshot) => {
     const query = new URLSearchParams();
     if (worktree !== undefined) query.set("worktree", worktree);
     if (path !== undefined) query.set("path", path);
     if (cursor !== undefined) query.set("cursor", cursor);
+    if (allowSnapshot === true) query.set("snapshot", "allow");
     const response = await request(
       fetcher,
       `${baseUrl(threadId)}${query.size === 0 ? "" : `?${query}`}`,

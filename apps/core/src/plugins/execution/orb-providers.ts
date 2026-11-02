@@ -11,6 +11,11 @@ import {
   type OrbConnectionRow,
 } from "./connections-d1.js";
 import type { OrbProviderConnectors } from "./connector.js";
+import {
+  deploymentPrepared,
+  deploymentTargets,
+  scheduleDeploymentPreparation,
+} from "./deployment-preparation.js";
 import { connectionStatus, servedVersion } from "./preparation.js";
 import {
   type ExecutionProviderId,
@@ -375,7 +380,32 @@ export const resolveThreadExecutionPin = async (input: {
     throw new OrbUnavailable({
       reason: member.status === "failed" ? "failed" : "preparing",
     });
-  if (member.scope === "deployment") return deploymentPin;
+  if (member.scope === "deployment") {
+    const connector = connectors[profile.adapter as ExecutionProviderId];
+    if (!deploymentPrepared(profile.adapter) || connector === undefined)
+      return deploymentPin;
+    // The deployment's own account, prepared once for every person.
+    const served = await deploymentTargets(
+      input.db,
+      profile.adapter,
+      connector,
+    );
+    if (served.status !== "ready") {
+      await scheduleDeploymentPreparation(
+        input.bindings,
+        profile.adapter as ExecutionProviderId,
+      );
+      throw new OrbUnavailable({ reason: served.status });
+    }
+    const target = served.targets[profile.id];
+    if (target === undefined)
+      throw new OrbUnavailable({
+        reason: served.unavailable.has(profile.id)
+          ? "size-unavailable"
+          : "preparing",
+      });
+    return { ...deploymentPin, providerTemplate: target };
+  }
   const target = member.targets?.get(profile.id);
   // The account cannot run this size (its plan refused it).
   if (target === undefined && member.targets !== undefined)

@@ -28,6 +28,7 @@ const earlierDaemonReservedNames = new Set([
   "BASH_VERSION",
   "BASH_VERSINFO",
   "BETTER_AUTH_SECRET",
+  "BOAT_API_KEY",
   "CI",
   "COLUMNS",
   "DX_ACCESS_AUDIENCE",

@@ -8,8 +8,7 @@ import type {
   ThreadChangesWorktreeId,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
-import { parsePatchFiles } from "@pierre/diffs";
-import { FileDiff, WorkerPoolContextProvider } from "@pierre/diffs/react";
+import { WorkerPoolContextProvider } from "@pierre/diffs/react";
 import highlightWorkerUrl from "@pierre/diffs/worker/worker-portable.js?url&no-inline";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -38,6 +37,8 @@ import {
   type ChangesTransport,
   defaultChangesTransport,
 } from "./changes-api.js";
+import { parsePatchInChunks, shownPatch } from "./changes-diff-chunks.js";
+import { ChangesDiffScroller, ChangesFileDiffs } from "./changes-diff-view.js";
 import {
   changesDiffQueryOptions,
   changesHighlightQueryOptions,
@@ -257,11 +258,7 @@ export function ChangesPane({
         </div>
       ) : null}
 
-      <div
-        className="changes-scroll"
-        data-empty={!hasFiles || undefined}
-        aria-live="polite"
-      >
+      <ChangesDiffScroller empty={!hasFiles}>
         {changesQuery.isPending ? (
           <ChangesState icon={<LoaderCircle className="changes-spin" />}>
             Loading changes…
@@ -310,7 +307,7 @@ export function ChangesPane({
             )}
           </>
         ) : null}
-      </div>
+      </ChangesDiffScroller>
 
       {showRangeNavigation ? (
         <footer className="changes-footer">
@@ -915,7 +912,7 @@ function ChangedFileDiff({
   const highlight = useQuery(
     changesHighlightQueryOptions(path, resolvedAppearance),
   );
-  const patch = query.data?.patch;
+  const patch = query.data && shownPatch(query.data.patch, query.data.file);
   // Keyed by content, not capture: a capture that leaves this file unchanged
   // keeps the same parsed diff, so it neither remounts nor re-highlights.
   const parsed = useParsedPatch(
@@ -967,15 +964,13 @@ function ChangedFileDiff({
     );
   return (
     <WorkerPoolContextProvider {...highlightWorkers}>
-      <div className="changes-diff-view" data-display-only="true">
-        {parsed.map((fileDiff) => (
-          <FileDiff
-            key={fileDiff.name}
-            fileDiff={fileDiff}
-            className="changes-pierre-diff"
-            options={diffOptions}
-          />
-        ))}
+      <div
+        className="changes-diff-view"
+        data-display-only="true"
+        // The pane announces its states; rows a scroll brings in are not news.
+        aria-live="off"
+      >
+        <ChangesFileDiffs files={parsed} options={diffOptions} />
         {data.file.truncated ? (
           <div className="changes-diff-truncated">
             Diff truncated at the capture limit.
@@ -1032,11 +1027,10 @@ const parseDiff = (
       ? patch
       : `--- a/${path}\n+++ b/${path}\n${patch}`;
   try {
-    return parsePatchFiles(
+    return parsePatchInChunks(
       normalized,
       `changes-${encodeURIComponent(path)}-${stableVersion(captureKey)}`,
-      true,
-    ).flatMap((parsed) => parsed.files);
+    );
   } catch {
     return undefined;
   }

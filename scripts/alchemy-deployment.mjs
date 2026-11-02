@@ -1119,6 +1119,8 @@ const validateWorkerProps = (
     "name",
     "version",
     "workersDev",
+    // A stage that measured placement (#1386) recorded it; Core sets none.
+    ...(!current && props.placement !== undefined ? ["placement"] : []),
   ];
   const currentWorkerFirst = ["/api/*", "/v1", "/v1/*", "/healthz", "/readyz"];
   const legacyWorkerFirst = [
@@ -1388,6 +1390,17 @@ const validateWorkerProps = (
       current && representation === "desired" && selection.target === "selfhost"
         ? !dependsOnlyOn(props.name, "Bootstrap")
         : props.name !== selection.workerName,
+    ],
+    [
+      "placement",
+      props.placement !== undefined &&
+        (current ||
+          !(
+            JSON.stringify(props.placement) ===
+              JSON.stringify({ mode: "smart" }) ||
+            (exactKeys(props.placement, ["region"]) &&
+              /^(?:aws|gcp|azure):[a-z0-9-]+$/.test(props.placement.region))
+          )),
     ],
     ["external", props.isExternal !== true],
     ["main", props.main !== `${selection.packageDirectory}/worker/index.js`],
@@ -2137,7 +2150,7 @@ const assertExactStorageIdentity = (node, selection, kind, operation) => {
       (kind === "Storage" &&
         !isExactStorageProps(props, selection, persisted)) ||
       (kind === "Database" &&
-        (!exactKeys(props, ["migrations", "name"]) ||
+        (!isExactDatabaseProps(props) ||
           props.migrations !== `apps/core/${migrationDirectory}`))
     )
       throw new Error(`${kind} plan identity is outside the exact allowlist.`);
@@ -2275,6 +2288,13 @@ const assertExactTurnstileIdentity = (node, selection) => {
       "Persisted AccessTurnstile identity is outside the exact allowlist.",
     );
 };
+
+// Read replication (#1386) is an in-place setting; state from before has none.
+const isExactDatabaseProps = (props) =>
+  exactKeys(props, ["migrations", "name"]) ||
+  (exactKeys(props, ["migrations", "name", "readReplication"]) &&
+    exactKeys(props.readReplication, ["mode"]) &&
+    ["auto", "disabled"].includes(props.readReplication.mode));
 
 const exactKeys = (value, keys) =>
   value !== null &&
@@ -2910,6 +2930,7 @@ export const isolatedAlchemyEnvironment = (inherited, deployment) => ({
           "HOME",
           "SARVAM_API_KEY",
           "EXA_API_KEY",
+          "BOAT_API_KEY",
           "USERPROFILE",
           "XDG_CONFIG_HOME",
         ]).has(name),

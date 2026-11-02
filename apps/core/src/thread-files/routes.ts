@@ -15,6 +15,7 @@ import { ThreadId } from "@dx/domain";
 import { Effect, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import { decodeJsonBody } from "../http/request-decoding.js";
+import { requestServerTiming } from "../http/server-timing.js";
 import type { AppEnv } from "../http/types.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
 import { selectWorkspaceRuntime } from "../runtime/workspace-composition.js";
@@ -186,8 +187,11 @@ const makeThreadFilesRoutes = () => {
     try {
       const query = rejectUnknownQuery(
         context,
-        new Set(["path", "cursor", "worktree"]),
+        new Set(["path", "cursor", "worktree", "snapshot"]),
       );
+      const snapshot = query.get("snapshot");
+      if (snapshot !== null && snapshot !== "allow")
+        throw new ThreadFilesInvalid();
       const pathValue = query.get("path") ?? undefined;
       const path = pathValue === undefined ? undefined : decodePath(pathValue);
       const cursor = decodeCursor(query.get("cursor") ?? undefined);
@@ -197,12 +201,29 @@ const makeThreadFilesRoutes = () => {
         local: localResident,
         deployed: configuredResident,
       });
+      const timing = requestServerTiming(context);
+      let workspaceTiming: string | undefined;
       const data = await selected.list(
         context.env,
         threadId,
         path,
         cursor,
         worktree,
+        {
+          // Only the first page of the root has a snapshot.
+          allowSnapshot:
+            snapshot === "allow" && path === undefined && cursor === undefined,
+          observe: (headers) => {
+            workspaceTiming = headers.get("server-timing") ?? undefined;
+          },
+        },
+      );
+      timing.mark("workspace");
+      context.header(
+        "Server-Timing",
+        [timing.header(), ...(workspaceTiming ? [workspaceTiming] : [])].join(
+          ", ",
+        ),
       );
       return context.json(
         Schema.encodeUnknownSync(GetThreadFileTreeResponseSchema)({

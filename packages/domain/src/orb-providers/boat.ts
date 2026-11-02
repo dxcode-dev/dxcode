@@ -98,6 +98,8 @@ export const boatOrbProvider = defineOrbProvider({
   // enabled systemd services (the Orb's dx-orb-init) start again on resume.
   pauseResumePreserves: "filesystem",
   remote: true,
+  // Optional: a deployment with BOAT_API_KEY runs Boat on its own account.
+  deployment: { secret: "BOAT_API_KEY", prepared: true },
   profile: BoatRunnerProfileConfiguration,
   isolation: "sandbox",
   requiredCapabilities: ORB_RUNNER_CAPABILITIES,

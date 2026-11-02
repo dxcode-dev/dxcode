@@ -163,17 +163,23 @@ const listData = Effect.fn("skillsListData")(function* (
   principal: Principal,
 ) {
   const repository = yield* SkillRepository;
-  const items = yield* repository.list(access.target);
-  const allowPersonalSkills =
-    access.workspaceId === undefined
-      ? undefined
-      : yield* repository.getWorkspacePolicy(access.workspaceId as never);
-  // Label with the rule a new Thread of this viewer uses. MCP dependencies
-  // depend on the Thread's project, so the labels leave them out.
-  const personalBlocked = yield* repository.personalSkillsBlocked(
-    principal.userId,
-  );
-  const candidates = yield* repository.listThreadCandidates(principal.userId);
+  // Independent reads, so they share one round trip of wait.
+  const { items, allowPersonalSkills, personalBlocked, candidates } =
+    yield* Effect.all(
+      {
+        items: repository.list(access.target),
+        allowPersonalSkills:
+          access.workspaceId === undefined
+            ? Effect.succeed(undefined)
+            : repository.getWorkspacePolicy(access.workspaceId as never),
+        // Label with the rule a new Thread of this viewer uses. MCP
+        // dependencies depend on the Thread's project, so the labels leave
+        // them out.
+        personalBlocked: repository.personalSkillsBlocked(principal.userId),
+        candidates: repository.listThreadCandidates(principal.userId),
+      },
+      { concurrency: "unbounded" },
+    );
   const loaded = threadSkills(candidates, () => true);
   return {
     items: items.map((item) => {

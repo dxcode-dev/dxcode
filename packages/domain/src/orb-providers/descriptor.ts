@@ -66,6 +66,12 @@ export interface OrbProviderDescriptor<
    */
   readonly deployment?:
     | { readonly secret: "E2B_API_KEY" }
+    /**
+     * `prepared`: the deployment's account is prepared at runtime like a
+     * connection (its connector saves the Orb image there), once for every
+     * person's Threads.
+     */
+    | { readonly secret: "BOAT_API_KEY"; readonly prepared: true }
     | { readonly binding: "ORB_CONTAINER" };
   /** The runner-profile configuration for this adapter. */
   readonly profile: ProfileSchema;

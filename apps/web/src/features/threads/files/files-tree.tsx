@@ -451,6 +451,24 @@ const DirectoryQuery = ({
   ) : null;
 };
 
+/**
+ * When the root listing on screen is the Orb's last one, served while it
+ * wakes: the time it was read. Reads the cache without observing the query.
+ */
+const useRootSnapshotTime = (
+  threadId: ThreadId,
+  worktree: ThreadFilesWorktreeId,
+) => {
+  const queryClient = useQueryClient();
+  const subscribe = (notify: () => void) =>
+    queryClient.getQueryCache().subscribe(notifyManager.batchCalls(notify));
+  const snapshot = () =>
+    queryClient.getQueryData<InfiniteData<ThreadFileTreeData>>(
+      threadFilesKeys.tree(threadId, worktree),
+    )?.pages[0]?.snapshotAt;
+  return React.useSyncExternalStore(subscribe, snapshot, snapshot);
+};
+
 type DirectoryData = InfiniteData<ThreadFileTreeData> | undefined;
 
 /**
@@ -532,8 +550,17 @@ export const ThreadFilesTree = ({
   const loadingPaths = useLoadingPaths(threadId, worktree, expanded);
   const directories = useExpandedDirectoryData(threadId, worktree, expanded);
   const merged = mergeDirectoryEntries(entries, directories);
+  const snapshotAt = useRootSnapshotTime(threadId, worktree);
   return (
     <>
+      {snapshotAt === undefined ? null : (
+        <div className="thread-files-recovery" role="status">
+          {`Files as of ${new Date(snapshotAt).toLocaleString([], {
+            dateStyle: "short",
+            timeStyle: "short",
+          })} · updating…`}
+        </div>
+      )}
       <TreeView
         entries={merged}
         expanded={expanded}

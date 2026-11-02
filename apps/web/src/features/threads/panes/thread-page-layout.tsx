@@ -1,6 +1,9 @@
 import type { ThreadId } from "@dx/domain";
+import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
+import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { THREAD_OPEN_VIEW_EVENT } from "../../../shared/commands/command-provider.js";
+import { threadQueryOptions } from "../thread-queries.js";
 import {
   defaultPaneLayout,
   PANE_VIEW_KINDS,
@@ -10,6 +13,7 @@ import { usePaneLayout } from "./pane-layout-queries.js";
 import { ViewsMenuButton } from "./pane-menus.js";
 import { ThreadPaneTree } from "./pane-tree.js";
 import type { PaneContents } from "./pane-views.js";
+import { TerminalWarmContext } from "./terminal-warm-context.js";
 import { useThreadLayoutMode } from "./thread-layout-mode.js";
 import { ThreadStackedLayout } from "./thread-stacked-layout.js";
 
@@ -53,6 +57,18 @@ export function ThreadPageLayout({
   const { layout: loaded, dispatch } = usePaneLayout(threadId);
   const layout = loaded ?? defaultPaneLayout();
   const mode = useThreadLayoutMode();
+  // Pointing at Terminal may wake the Orb only for people who may open it.
+  const { identity } = useAuthenticatedIdentity();
+  const mayOpenTerminal = useQuery({
+    ...threadQueryOptions(identity.id, threadId),
+    // The Thread page already observes this query; only read its cache.
+    enabled: false,
+    select: (thread) =>
+      thread.lifecycleState === "active" &&
+      (thread.access === undefined ||
+        thread.access === "owner" ||
+        thread.access === "contribute"),
+  }).data;
   const openView = (view: PaneViewKind) => {
     if (contents.views[view] === undefined) return;
     React.startTransition(() => dispatch({ type: "open-view", view }));
@@ -70,23 +86,25 @@ export function ThreadPageLayout({
       </div>
     );
   return (
-    <div className="thread-region thread-page">
-      {renderTitleBar({
-        views: (
-          <ViewsMenuButton
-            layout={layout}
-            contents={contents}
-            onOpen={openView}
-          />
-        ),
-        stacked: false,
-      })}
-      <ThreadPaneTree
-        layout={layout}
-        contents={contents}
-        threadId={threadId}
-        dispatch={dispatch}
-      />
-    </div>
+    <TerminalWarmContext value={mayOpenTerminal ? threadId : undefined}>
+      <div className="thread-region thread-page">
+        {renderTitleBar({
+          views: (
+            <ViewsMenuButton
+              layout={layout}
+              contents={contents}
+              onOpen={openView}
+            />
+          ),
+          stacked: false,
+        })}
+        <ThreadPaneTree
+          layout={layout}
+          contents={contents}
+          threadId={threadId}
+          dispatch={dispatch}
+        />
+      </div>
+    </TerminalWarmContext>
   );
 }

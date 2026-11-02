@@ -261,7 +261,11 @@ export class SkillService extends Context.Service<
               versionNumber,
             );
           }
-          return yield* repository.find(target, id);
+          return {
+            skill,
+            active: version,
+            versions: [versionNumber],
+          } satisfies SkillWithVersion;
         },
       );
 
@@ -301,7 +305,19 @@ export class SkillService extends Context.Service<
             id,
             versionNumber,
           );
-          return yield* repository.find(target, id);
+          // The write succeeded, so the result follows from what was read
+          // before it without another round trip.
+          return {
+            skill: activate
+              ? {
+                  ...current.skill,
+                  activeVersion: versionNumber,
+                  updatedAt: version.createdAt,
+                }
+              : current.skill,
+            active: activate ? version : current.active,
+            versions: [versionNumber, ...current.versions],
+          } satisfies SkillWithVersion;
         },
       );
 
@@ -355,9 +371,12 @@ export class SkillService extends Context.Service<
             ) {
               return yield* new SkillIntegrityConflict();
             }
+            const active =
+              activeVersion === current.skill.activeVersion
+                ? current.active
+                : yield* repository.findVersion(id, activeVersion);
             if (input.enabled === true || input.activeVersion !== undefined) {
-              const version = yield* repository.findVersion(id, activeVersion);
-              yield* requireReviewedMcp(target, version);
+              yield* requireReviewedMcp(target, active);
             }
             const updatedAt = yield* DateTime.now;
             yield* repository.updateState(target, id, input, updatedAt);
@@ -374,7 +393,17 @@ export class SkillService extends Context.Service<
               id,
               activeVersion,
             );
-            return yield* repository.find(target, id);
+            return {
+              ...current,
+              skill: {
+                ...current.skill,
+                enabled: input.enabled ?? current.skill.enabled,
+                activeVersion,
+                pinned: input.pinned ?? current.skill.pinned,
+                updatedAt,
+              },
+              active,
+            } satisfies SkillWithVersion;
           },
         ),
         remove: Effect.fn("SkillService.remove")(

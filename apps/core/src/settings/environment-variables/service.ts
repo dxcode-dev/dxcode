@@ -277,9 +277,7 @@ export class EnvironmentVariableService extends Context.Service<
             if (existing.length >= MAX_ENVIRONMENT_VARIABLES_PER_SCOPE) {
               return yield* new EnvironmentVariableLimitExceeded();
             }
-            if (
-              Option.isSome(yield* repository.findByName(target, input.name))
-            ) {
+            if (existing.some(({ name }) => name === input.name)) {
               return yield* new EnvironmentVariableConflict();
             }
             const stored = yield* createStored(keyring, target, input);

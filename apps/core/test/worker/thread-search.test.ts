@@ -23,6 +23,11 @@
  *  9. Billable rows read grow with every indexed message instead of with the
  *     query's matches.
  * 10. The route accepts an invalid filter value or omits the cursor.
+ * 11. Matching the indexes of last search's sharers before D1 says who
+ *     shares now returns, or excerpts, a Thread the searcher may not see
+ *     (a remembered sharer who unshared or left; another searcher's
+ *     memory), or misses a Thread shared since.
+ * 12. A page past the Threads the match excerpted shows no snippet.
  */
 import { env } from "cloudflare:test";
 import {
@@ -327,6 +332,186 @@ describe("Thread search with real D1 and per-owner FTS5 indexes", () => {
     // Leaving the workspace hides its Projects' Threads and shared Threads.
     await env.DB.prepare("DELETE FROM member WHERE id = 'q-owner'").run();
     expect(await found("kestrel")).toEqual([mine.id]);
+  });
+
+  it("never returns a non-member's Thread or its text, even when the text matches", async () => {
+    const mine = await seed(owner, ids.ownerPersonal, "Mine", [
+      "osprey sighting log",
+    ]);
+    const shared = await seed(member, ids.memberPersonal, "Shared", [
+      "osprey shared notes",
+    ]);
+    // The outsider shares with their own workspace, which the owner is not in.
+    const outsideShared = await seed(
+      outsider,
+      ids.outsiderPersonal,
+      "Osprey outside",
+      ["osprey outsidersecret notes"],
+      { workspace_access: "view", shared_workspace_id: otherWorkspaceId },
+    );
+    const outsidePrivate = await seed(
+      outsider,
+      ids.outsiderPersonal,
+      "Osprey private",
+      ["osprey outsidersecret private"],
+    );
+    // A member's own private Thread, never shared.
+    const memberPrivate = await seed(member, ids.memberPersonal, "Ben only", [
+      "osprey outsidersecret ben",
+    ]);
+    // Before the member shares, then right after: a sharer new since the
+    // last search is found in the same search.
+    expect(await found("osprey")).toEqual([mine.id]);
+    await env.DB.prepare(
+      "UPDATE threads SET workspace_access = 'view', shared_workspace_id = ? WHERE id = ?",
+    )
+      .bind(workspaceId, shared.id)
+      .run();
+    expect(new Set(await found("osprey"))).toEqual(
+      new Set([mine.id, shared.id]),
+    );
+    const hidden = [outsideShared.id, outsidePrivate.id, memberPrivate.id];
+
+    const app = new Hono<AppEnv>();
+    app.use("*", requestId);
+    app.use("*", async (context, next) => {
+      context.set("principal", {
+        userId: owner,
+        credentialScopes: ["personal", "workspace"],
+      } as never);
+      await next();
+    });
+    app.route("/v1/thread-search", threadSearchRoutes);
+    app.onError(errorHandler);
+
+    for (const query of [
+      "osprey",
+      "outsidersecret",
+      "osprey outsidersecret",
+      "osprey visibility:workspace",
+      "osprey author:search-outsider@example.com",
+      "osprey author:search-member@example.com",
+      `osprey id:${outsideShared.id}`,
+      `outsidersecret id:${memberPrivate.id}`,
+    ]) {
+      const result = await search(query);
+      for (const item of result.items) {
+        expect(hidden, query).not.toContain(item.id);
+        expect(item.matchedSearchText ?? "", query).not.toContain(
+          "outsidersecret",
+        );
+      }
+      const response = await app.request(
+        `/v1/thread-search?q=${encodeURIComponent(query)}&limit=50`,
+        {},
+        bindings,
+      );
+      expect(response.status, query).toBe(200);
+      const body = JSON.stringify(await response.json());
+      for (const id of hidden) expect(body, query).not.toContain(id);
+      expect(body, query).not.toContain("outsidersecret");
+    }
+    expect(new Set(await found("osprey"))).toEqual(
+      new Set([mine.id, shared.id]),
+    );
+    expect(await found("outsidersecret")).toEqual([]);
+
+    // Once the member leaves, their shared Thread is gone from search too.
+    await env.DB.prepare("DELETE FROM member WHERE id = 'q-member'").run();
+    expect(await found("osprey")).toEqual([mine.id]);
+  });
+
+  it("drops a remembered sharer's Threads once they unshare or leave", async () => {
+    const mine = await seed(owner, ids.ownerPersonal, "Mine", ["grebe log"]);
+    const shared = await seed(member, ids.memberPersonal, "Shared", [
+      "grebe sharedtext notes",
+    ]);
+    const memberPrivate = await seed(member, ids.memberPersonal, "Ben only", [
+      "grebe sharedtext private",
+    ]);
+    const share = (on: boolean) =>
+      env.DB.prepare(
+        "UPDATE threads SET workspace_access = ?, shared_workspace_id = ? WHERE id = ?",
+      )
+        .bind(on ? "view" : "none", on ? workspaceId : null, shared.id)
+        .run();
+    const expectOnly = async (
+      expected: ReadonlyArray<string>,
+      scope: ThreadSearchScope = { userId: owner },
+    ) => {
+      for (const query of [
+        "grebe",
+        "sharedtext",
+        "grebe visibility:workspace",
+      ]) {
+        const result = await search(query, scope);
+        for (const item of result.items) {
+          expect(expected, query).toContain(item.id);
+          if (item.id !== shared.id || expected.includes(shared.id)) continue;
+          expect(item.matchedSearchText ?? "", query).not.toContain(
+            "sharedtext",
+          );
+        }
+      }
+      expect(new Set(await found("grebe", scope))).toEqual(new Set(expected));
+    };
+
+    // This search remembers the member as someone who shares with the owner.
+    await share(true);
+    await expectOnly([mine.id, shared.id]);
+    // The member unshares: the remembered guess still matches their index,
+    // and D1 keeps their Thread out.
+    await share(false);
+    await expectOnly([mine.id]);
+    // Shared again, remembered again, then the member leaves the workspace.
+    await share(true);
+    await expectOnly([mine.id, shared.id]);
+    await env.DB.prepare("DELETE FROM member WHERE id = 'q-member'").run();
+    await expectOnly([mine.id]);
+    // The memory is per searcher: the outsider gets none of it.
+    await share(true);
+    await expectOnly([], { userId: outsider });
+    expect(await found("grebe", { userId: member })).not.toContain(mine.id);
+    expect(new Set(await found("grebe", { userId: member }))).toEqual(
+      new Set([shared.id, memberPrivate.id]),
+    );
+  });
+
+  it("shows a snippet on every page, past the Threads the match excerpted", async () => {
+    const seeded: Seeded[] = [];
+    for (let index = 0; index < 5; index++)
+      seeded.push(
+        await seed(owner, ids.ownerPersonal, `Plan ${index}`, [
+          `filler words ${index}`,
+          `the plover nests near pier ${index}`,
+        ]),
+      );
+    // The oldest Thread is the most recently indexed: the match excerpts it
+    // first, though it sorts last by activity.
+    await ownerSearchIndex(bindings, owner)?.indexMessages(
+      seeded[0]?.id ?? "",
+      "Plan 0",
+      [{ messageId: "late", role: "user", text: "plover again" }],
+    );
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 5; page++) {
+      const result = await searchThreads({
+        db: env.DB,
+        bindings,
+        scope: { userId: owner },
+        query: "plover",
+        limit: 2,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      for (const item of result.items) {
+        seen.push(item.id);
+        expect(item.matchedSearchText, item.title).toContain("plover");
+      }
+      cursor = result.nextCursor;
+      if (cursor === undefined) break;
+    }
+    expect(seen).toEqual(seeded.map(({ id }) => id).reverse());
   });
 
   it("finds Threads kept from a deleted project or workspace for their owner alone, marked", async () => {

@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { ProjectRepository, ThreadRepository, type UserId } from "@dx/domain";
 import { Effect } from "effect";
 import { Hono } from "hono";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentAdmission } from "../../src/agents/admission.js";
 import app from "../../src/app.js";
 import { authenticate } from "../../src/auth/authenticate.js";
@@ -296,6 +296,10 @@ describe("D1 round trips per authenticated request", () => {
 });
 
 describe("Sharing the request's session lookup", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   const sessionToken = (jar: string) =>
     decodeURIComponent(
       /session_token=([^;.]+)/.exec(jar)?.[1] ?? "missing-session-token",
@@ -329,6 +333,11 @@ describe("Sharing the request's session lookup", () => {
   it.each([dictation, security])(
     "refuses a revoked session at once on $name, though the cookie cache still admits it",
     async (route) => {
+      // The isolate trusts its view of ended sessions for
+      // sessionRevocationWindowMs (5 s) of Date.now(). On the real clock a
+      // loaded run could outlast it mid-test, so the cache layer, not the
+      // browser-session check, refused the session (401, not 403).
+      vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
       const before = await send(route, jars.cached);
       expect(before.status).toBe(route.status);
       await endSessionElsewhere(jars.cached);

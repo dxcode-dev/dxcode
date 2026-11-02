@@ -52,9 +52,23 @@ export const threadFileTreeOptions = (
   infiniteQueryOptions({
     queryKey: threadFilesKeys.tree(threadId, worktree, path),
     initialPageParam: undefined as Parameters<ThreadFilesApi["list"]>[2],
-    queryFn: ({ pageParam, signal }) =>
-      api.list(threadId, path, pageParam, worktree, signal),
+    // With nothing on screen yet, the root accepts the Orb's last listing
+    // (`snapshotAt`), which shows at once while a paused Orb wakes; the live
+    // read follows straight away and replaces it.
+    queryFn: ({ pageParam, signal, client, queryKey }) =>
+      api.list(
+        threadId,
+        path,
+        pageParam,
+        worktree,
+        signal,
+        path === undefined &&
+          pageParam === undefined &&
+          client.getQueryData(queryKey) === undefined,
+      ),
     getNextPageParam: (page) => page.nextCursor,
+    refetchInterval: (query) =>
+      query.state.data?.pages[0]?.snapshotAt === undefined ? false : 100,
     enabled: active,
     staleTime: 5_000,
     retry: 2,

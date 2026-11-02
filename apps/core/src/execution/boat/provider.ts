@@ -91,14 +91,17 @@ const boatProfile = (
   return profile;
 };
 
-/** Boat runs only on a person's or workspace's own account. */
+/**
+ * Boat runs on a person's or workspace's own account, or on the
+ * deployment's (BOAT_API_KEY), whose key composition passes in the context
+ * and which stays in the Worker: every sandbox is `noEnv`.
+ */
 const apiFor = (context: ExecutionContext, send?: typeof fetch) => {
   const apiKey =
     context.credentials === undefined
       ? undefined
       : Redacted.value(context.credentials).apiKey;
-  if (context.account.scope === "deployment" || apiKey === undefined)
-    throw unavailable("no Boat connection");
+  if (apiKey === undefined) throw unavailable("no Boat connection");
   return boatApi(apiKey, send);
 };
 
@@ -286,8 +289,8 @@ const reconnect = async (
 
 /**
  * Boat sandboxes (https://boat.dev), one per Thread, in a person's or
- * workspace's own Boat account. Every size starts from the dx Orb saved
- * snapshot its connection prepared (connector.ts). Boat has no pause, so
+ * workspace's own Boat account or the deployment's. Every size starts from
+ * the dx Orb saved snapshot that account's preparation made (connector.ts). Boat has no pause, so
  * it claims `execution.pause-resume` with `preserves: "filesystem"`:
  * archiving and the idle deadline stop the sandbox (Boat keeps its disk for
  * 14 days), and the next activation resumes it on a new machine, where

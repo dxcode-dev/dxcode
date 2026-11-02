@@ -129,6 +129,14 @@ export const ThreadFileTreeDataSchema = Schema.Struct({
     Schema.isMaxLength(THREAD_FILES_MAX_TREE_PAGE_SIZE),
   ),
   nextCursor: Schema.optional(ThreadFilesCursor),
+  /**
+   * Present when this is the last root listing the Thread's Orb returned,
+   * served at once while the Orb wakes (`snapshot=allow`): when it was read.
+   * A live listing replaces it.
+   */
+  snapshotAt: Schema.optional(
+    Schema.String.check(Schema.isMinLength(20), Schema.isMaxLength(40)),
+  ),
 });
 export type ThreadFileTreeData = typeof ThreadFileTreeDataSchema.Type;
 

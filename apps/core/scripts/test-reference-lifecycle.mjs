@@ -146,7 +146,21 @@ const worker = spawn(
   // without passing it on, which would leave wrangler and workerd listening.
   { stdio: "inherit", detached: true },
 );
+// A fixture that dies mid-run fails the next request with "fetch failed";
+// say how it died, so the failure points at its cause.
+let stopping = false;
+let tests;
+worker.once("exit", (code, signal) => {
+  if (stopping) return;
+  // Without its fixture a test waits forever on its next request, so end the
+  // run now and say how the fixture died.
+  console.error(
+    `[lifecycle] The fixture's wrangler dev exited during the run (code ${code}, signal ${signal}).`,
+  );
+  tests?.kill("SIGTERM");
+});
 const stopWorker = (signal) => {
+  stopping = true;
   try {
     process.kill(-worker.pid, signal);
   } catch {}
@@ -175,7 +189,8 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
-  const result = spawnSync(
+  // Asynchronous, so the fixture's exit above is seen while the tests run.
+  tests = spawn(
     "pnpm",
     ["exec", "vitest", "run", "--config", "vitest.lifecycle.config.ts"],
     {
@@ -183,7 +198,11 @@ try {
       env: { ...process.env, DX_LIFECYCLE_FIXTURE_URL: fixtureUrl },
     },
   );
-  if (result.status !== 0) process.exitCode = result.status ?? 1;
+  const status = await new Promise((resolve) =>
+    tests.once("exit", (code) => resolve(code)),
+  );
+  if (status !== 0 || worker.exitCode !== null || worker.signalCode !== null)
+    process.exitCode = status || 1;
 } finally {
   if (worker.exitCode === null) {
     const exited = new Promise((resolve) => worker.once("exit", resolve));

@@ -963,7 +963,7 @@ const DxdFailureResult = Schema.Struct({
   kind: Schema.Literals(["invalid", "missing", "conflict", "unavailable"]),
 });
 
-const DxdTreeResult = Schema.Struct({
+export const DxdTreeResult = Schema.Struct({
   kind: Schema.Literal("tree"),
   version: ThreadFileVersion,
   entries: Schema.Array(DxdTreeEntry).check(

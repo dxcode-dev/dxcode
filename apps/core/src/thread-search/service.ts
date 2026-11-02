@@ -116,6 +116,37 @@ const decodeCursor = (value: string): Cursor => {
 
 const ACTIVITY = "COALESCE(thread.last_activity_at, thread.created_at)";
 
+/**
+ * `sharedThreadVisibleSql`, anchored to the searcher's own workspace: the
+ * same rows (it already requires that membership), but SQLite seeks
+ * `threads_shared_workspace_idx` by equality instead of scanning every
+ * shared Thread, or every Thread, in the database.
+ */
+const sharedVisible = (user: string) => `(
+  thread.shared_workspace_id IN (
+    SELECT organizationId FROM member WHERE userId = ${user})
+  AND ${sharedThreadVisibleSql("thread", "project", user)})`;
+
+/**
+ * Per searcher, the owners who shared Threads with them at their last
+ * search in this isolate. A search matches these owners' indexes beside the
+ * searcher's own, before D1 says who shares now, which saves a round trip
+ * on every keystroke after the first. Only a guess: D1 still decides which
+ * Threads are visible.
+ */
+const recentSharers = new Map<string, ReadonlyArray<string>>();
+const RECENT_SHARERS_MAX = 1_000;
+
+const rememberSharers = (userId: string, sharers: ReadonlyArray<string>) => {
+  recentSharers.delete(userId);
+  recentSharers.set(userId, sharers);
+  if (recentSharers.size > RECENT_SHARERS_MAX)
+    for (const oldest of recentSharers.keys()) {
+      recentSharers.delete(oldest);
+      break;
+    }
+};
+
 const accessClause = (scope: ThreadSearchScope, parameters: Parameters) => {
   const user = parameters.add(scope.userId);
   const family =
@@ -130,7 +161,7 @@ const accessClause = (scope: ThreadSearchScope, parameters: Parameters) => {
   return `((thread.owner_user_id = ${user}
       AND (project.deleted_at IS NOT NULL
         OR ${threadProjectReachableSql("project", user)})${family})
-    OR ${sharedThreadVisibleSql("thread", "project", user)})`;
+    OR ${sharedVisible(user)})`;
 };
 
 const filterClauses = (
@@ -268,27 +299,80 @@ export const searchThreads = async (
     ];
     return { parameters, where: clauses.join("\n AND ") };
   };
+  const statement = (query: string, parameters: Parameters) =>
+    db.prepare(query).bind(...parameters.values);
   const all = async <T>(query: string, parameters: Parameters) => {
-    const result = await db
-      .prepare(query)
-      .bind(...parameters.values)
-      .all<T>();
+    const result = await statement(query, parameters).all<T>();
+    d1RowsRead += result.meta.rows_read ?? 0;
+    return result.results;
+  };
+  /** The page among `matchedIds` (all visible Threads when undefined). */
+  const pageStatement = (matchedIds?: ReadonlyArray<string>) => {
+    const { parameters, where } = scoped((parameters) => [
+      ...(matchedIds === undefined
+        ? []
+        : [
+            `thread.id IN (SELECT value FROM json_each(${parameters.add(JSON.stringify(matchedIds))}))`,
+          ]),
+      ...(cursor === undefined
+        ? []
+        : [
+            `(${ACTIVITY}, thread.id) < (${parameters.add(cursor.activityAt)}, ${parameters.add(cursor.id)})`,
+          ]),
+    ]);
+    return statement(
+      `SELECT ${SELECTED} FROM threads AS thread
+         JOIN projects AS project ON project.id = thread.project_id
+         LEFT JOIN personal_account AS account ON account.user_id = thread.owner_user_id
+         LEFT JOIN "user" AS owner ON owner.id = thread.owner_user_id
+        WHERE ${where}
+        ORDER BY activity_at DESC, thread.id DESC
+        LIMIT ${limit + 1}`,
+      parameters,
+    );
+  };
+  const pageRows = async (matchedIds?: ReadonlyArray<string>) => {
+    const result = await pageStatement(matchedIds).all<ThreadSearchRow>();
     d1RowsRead += result.meta.rows_read ?? 0;
     return result.results;
   };
 
-  let matchedIds: ReadonlyArray<string> | undefined;
+  const term = snippetTerm(terms);
+  let rows: ReadonlyArray<ThreadSearchRow>;
   /** Per matched Thread, the index chunk its snippet comes from. */
   const snippetChunkByThread = new Map<string, number>();
-  if (terms.length > 0) {
-    const byOwner = new Map<string, string[] | undefined>([
-      [scope.userId, undefined],
-    ]);
+  /** Excerpts the match already made; "" when its chunk yields none. */
+  const excerpted = new Map<string, string>();
+  if (terms.length === 0) rows = await pageRows();
+  else {
+    const matchedIds: string[] = [];
+    const match = async (
+      ownerUserId: string,
+      candidates?: ReadonlyArray<string>,
+    ) => {
+      const index = ownerSearchIndex(bindings, ownerUserId);
+      if (index === undefined)
+        throw new ThreadSearchUnavailable(
+          "Thread search is not deployed: THREAD_SEARCH_INDEX is missing.",
+        );
+      indexesQueried += 1;
+      const found = await index.matchThreads(
+        terms,
+        candidates,
+        term === undefined ? undefined : { term, limit },
+      );
+      indexRowsRead += found.rowsRead - found.snippetRowsRead;
+      snippetRowsRead += found.snippetRowsRead;
+      for (const [threadId, chunk] of Object.entries(found.snippetChunks))
+        snippetChunkByThread.set(threadId, chunk);
+      for (const [threadId, excerpt] of Object.entries(found.snippets))
+        excerpted.set(threadId, excerpt);
+      matchedIds.push(...found.threadIds);
+    };
     if (
       parsed.filters.id !== undefined ||
       parsed.filters.parent !== undefined
     ) {
-      byOwner.clear();
       const { parameters, where } = scoped();
       const candidates = await all<{ id: string; owner_user_id: string }>(
         `SELECT thread.id, thread.owner_user_id FROM threads AS thread
@@ -296,65 +380,70 @@ export const searchThreads = async (
           WHERE ${where} LIMIT ${CANDIDATE_MAX}`,
         parameters,
       );
+      const byOwner = new Map<string, string[]>();
       for (const { id, owner_user_id } of candidates)
         byOwner.set(owner_user_id, [...(byOwner.get(owner_user_id) ?? []), id]);
-    } else if (
-      parsed.filters.author !== "me" &&
-      parsed.filters.visibility !== "private"
-    ) {
+      await Promise.all(
+        [...byOwner].map(([ownerUserId, ids]) => match(ownerUserId, ids)),
+      );
+      if (matchedIds.length === 0) return { items: [], cost: cost() };
+      rows = await pageRows(matchedIds);
+    } else {
+      const withSharers =
+        parsed.filters.author !== "me" &&
+        parsed.filters.visibility !== "private";
+      // Round 1: the searcher's index, and the indexes of the people who
+      // shared with them last time, matched at once.
+      const guessed = withSharers
+        ? (recentSharers.get(scope.userId) ?? [])
+        : [];
+      await Promise.all([scope.userId, ...guessed].map((id) => match(id)));
+      // Round 2: one D1 batch learns who shares with the searcher now and
+      // reads the page. D1 decides access here, so a stale guess only
+      // costs reads, never shows a Thread the searcher may not see.
       const parameters = new Parameters();
       const user = parameters.add(scope.userId);
-      const sharers = await all<{ owner_user_id: string }>(
+      const sharersStatement = statement(
         `SELECT DISTINCT thread.owner_user_id FROM threads AS thread
            JOIN projects AS project ON project.id = thread.project_id
           WHERE thread.lifecycle_state != 'deleted'
-            AND ${sharedThreadVisibleSql("thread", "project", user)}`,
+            AND ${sharedVisible(user)}`,
         parameters,
       );
-      for (const { owner_user_id } of sharers)
-        byOwner.set(owner_user_id, undefined);
+      const statements = [
+        ...(withSharers ? [sharersStatement] : []),
+        ...(matchedIds.length === 0 ? [] : [pageStatement(matchedIds)]),
+      ];
+      const batch =
+        statements.length === 0
+          ? []
+          : await db.batch<{ owner_user_id: string } | ThreadSearchRow>(
+              statements,
+            );
+      for (const result of batch) d1RowsRead += result.meta.rows_read ?? 0;
+      const sharers = withSharers
+        ? (
+            (batch[0]?.results ?? []) as ReadonlyArray<{
+              owner_user_id: string;
+            }>
+          ).map(({ owner_user_id }) => owner_user_id)
+        : [];
+      if (withSharers) rememberSharers(scope.userId, sharers);
+      rows =
+        matchedIds.length === 0
+          ? []
+          : ((batch.at(-1)?.results ?? []) as ReadonlyArray<ThreadSearchRow>);
+      // A sharer the guess missed: match their index and read the page again.
+      const missed = sharers.filter((id) => !guessed.includes(id));
+      if (missed.length > 0) {
+        const before = matchedIds.length;
+        await Promise.all(missed.map((id) => match(id)));
+        if (matchedIds.length > before) rows = await pageRows(matchedIds);
+      }
+      if (matchedIds.length === 0) return { items: [], cost: cost() };
     }
-    const matches = await Promise.all(
-      [...byOwner].map(async ([ownerUserId, candidates]) => {
-        const index = ownerSearchIndex(bindings, ownerUserId);
-        if (index === undefined)
-          throw new ThreadSearchUnavailable(
-            "Thread search is not deployed: THREAD_SEARCH_INDEX is missing.",
-          );
-        indexesQueried += 1;
-        return index.matchThreads(terms, candidates);
-      }),
-    );
-    indexRowsRead += matches.reduce((sum, { rowsRead }) => sum + rowsRead, 0);
-    matchedIds = matches.flatMap(({ threadIds }) => [...threadIds]);
-    for (const { snippetChunks } of matches)
-      for (const [threadId, chunk] of Object.entries(snippetChunks))
-        snippetChunkByThread.set(threadId, chunk);
-    if (matchedIds.length === 0) return { items: [], cost: cost() };
   }
 
-  const { parameters, where } = scoped((parameters) => [
-    ...(matchedIds === undefined
-      ? []
-      : [
-          `thread.id IN (SELECT value FROM json_each(${parameters.add(JSON.stringify(matchedIds))}))`,
-        ]),
-    ...(cursor === undefined
-      ? []
-      : [
-          `(${ACTIVITY}, thread.id) < (${parameters.add(cursor.activityAt)}, ${parameters.add(cursor.id)})`,
-        ]),
-  ]);
-  const rows = await all<ThreadSearchRow>(
-    `SELECT ${SELECTED} FROM threads AS thread
-       JOIN projects AS project ON project.id = thread.project_id
-       LEFT JOIN personal_account AS account ON account.user_id = thread.owner_user_id
-       LEFT JOIN "user" AS owner ON owner.id = thread.owner_user_id
-      WHERE ${where}
-      ORDER BY activity_at DESC, thread.id DESC
-      LIMIT ${limit + 1}`,
-    parameters,
-  );
   // A snooze is the owner's; members never see it.
   const page = rows
     .slice(0, limit)
@@ -370,10 +459,16 @@ export const searchThreads = async (
       : undefined;
 
   const snippets = new Map<string, string>();
-  const term = snippetTerm(terms);
   if (term !== undefined) {
+    // Page rows the match did not excerpt (older Threads among many
+    // matches) take one more hop to their owner's index.
     const pageByOwner = new Map<string, Record<string, number>>();
     for (const row of page) {
+      const excerpt = excerpted.get(row.id);
+      if (excerpt !== undefined) {
+        if (excerpt !== "") snippets.set(row.id, excerpt);
+        continue;
+      }
       const chunk = snippetChunkByThread.get(row.id);
       if (chunk === undefined) continue;
       pageByOwner.set(row.owner_user_id, {

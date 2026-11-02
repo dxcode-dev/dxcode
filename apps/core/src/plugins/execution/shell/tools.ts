@@ -1,6 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
-import { getLogger } from "@logtape/logtape";
 import type { Sandbox, SandboxToolFactory } from "@flue/runtime";
+import { getLogger } from "@logtape/logtape";
 import { shellDefinitions } from "./definitions.js";
 
 type AgentTool = ReturnType<SandboxToolFactory>[number];

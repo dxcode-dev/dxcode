@@ -20,6 +20,7 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { setBrowserSessionHeaders } from "../auth/session-sockets.js";
 import { ExecutionWorkspaces } from "../execution/execution-workspaces.js";
+import { requestServerTiming } from "../http/server-timing.js";
 import type { AppEnv } from "../http/types.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
 import { SourceMutationRejected } from "../source-control/operations.js";
@@ -146,13 +147,17 @@ const sameRange = (left: ThreadChangesRange, right: ThreadChangesRange) =>
   (left.kind !== "commit" ||
     (right.kind === "commit" && left.sha === right.sha));
 
-const readCapture = async (context: Context<AppEnv>) => {
+const readCapture = async (
+  context: Context<AppEnv>,
+  timing?: ReturnType<typeof requestServerTiming>,
+) => {
   const threadId = Schema.decodeUnknownSync(ThreadId)(
     context.req.param("threadId"),
   );
   const db = await Effect.runPromise(decodeD1Binding(context.env.DB));
   const repository = makeThreadChangesRepository(db);
   let state = await repository.read(threadId);
+  timing?.mark("state");
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (state?.latestCaptureId === undefined)
       return { threadId, state } as const;
@@ -164,6 +169,7 @@ const readCapture = async (context: Context<AppEnv>) => {
         threadId,
         state.latestCaptureId,
       );
+      timing?.mark("manifest");
       if (
         manifest.generation !== state.latestCaptureGeneration ||
         manifest.fingerprint !== state.latestFingerprint ||
@@ -229,7 +235,9 @@ threadChangesRoutes.get("/:threadId/changes", async (context) => {
   try {
     const params = requestParams(context, new Set(["range"]));
     const range = rangeFrom(params.get("range"));
-    const capture = await readCapture(context);
+    const timing = requestServerTiming(context);
+    const capture = await readCapture(context, timing);
+    context.header("Server-Timing", timing.header());
     if (capture.state?.latestCaptureId === undefined)
       return success(context, GetThreadChangesResponseSchema, {
         kind: "missing",

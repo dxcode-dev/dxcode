@@ -27,10 +27,12 @@ import { auxTerms, excerptAround, ftsTerm, snippetTerm } from "./terms.js";
  *   names its Thread without reading anything else. Seq 0 is the title.
  * - Each term is matched with one scan; the newest matching chunk per Thread
  *   is remembered, and a snippet reads only that one chunk's text.
+ * - A match excerpts the most recently indexed matching Threads, up to the
+ *   page size, in the same call, so a search usually needs no second hop.
  */
 
 const SEQ_SPAN = 2 ** 21;
-const SCHEMA_VERSION = "2";
+const SCHEMA_VERSION = "3";
 /** Chunks grow to about this size before a new one starts. */
 const CHUNK_MAX_CHARS = 16_000;
 /** A settled turn is indexed shortly after; bursts share one pass. */
@@ -43,7 +45,14 @@ export interface ThreadMatch {
   readonly threadIds: ReadonlyArray<string>;
   /** Per matched Thread, the newest chunk holding the snippet term. */
   readonly snippetChunks: Readonly<Record<string, number>>;
+  /**
+   * Excerpts of the most recently indexed matched Threads, at most
+   * `excerpt.limit`; an empty string when the chunk yields none.
+   */
+  readonly snippets: Readonly<Record<string, string>>;
   readonly rowsRead: number;
+  /** Rows read for `snippets`, included in `rowsRead`. */
+  readonly snippetRowsRead: number;
 }
 
 export interface IndexResult {
@@ -74,6 +83,14 @@ export class ThreadSearchIndexObject extends DurableObject<Bindings> {
       .exec<{ value: string }>("SELECT value FROM meta WHERE key = 'schema'")
       .toArray()[0]?.value;
     if (version === SCHEMA_VERSION) return;
+    // Version 3 orders excerpts by when a Thread was last indexed. An older
+    // index without `indexed_thread` gets the column from CREATE below.
+    if (version !== undefined)
+      try {
+        sql.exec("ALTER TABLE indexed_thread ADD COLUMN touched_at INTEGER");
+      } catch {
+        // No such table, or the column already exists.
+      }
     sql.exec(`
       CREATE TABLE IF NOT EXISTS indexed_thread (
         ord INTEGER PRIMARY KEY,
@@ -81,7 +98,8 @@ export class ThreadSearchIndexObject extends DurableObject<Bindings> {
         next_seq INTEGER NOT NULL DEFAULT 1,
         open_seq INTEGER,
         last_message_id TEXT,
-        title TEXT
+        title TEXT,
+        touched_at INTEGER
       );
       CREATE TABLE IF NOT EXISTS indexed_message (
         ord INTEGER NOT NULL,
@@ -343,11 +361,13 @@ export class ThreadSearchIndexObject extends DurableObject<Bindings> {
       this.#run(
         counter,
         `UPDATE indexed_thread SET next_seq = ?, open_seq = ?, title = ?,
-           last_message_id = COALESCE(?, last_message_id) WHERE ord = ?`,
+           last_message_id = COALESCE(?, last_message_id), touched_at = ?
+         WHERE ord = ?`,
         nextSeq,
         openSeq,
         title,
         messages.at(-1)?.messageId ?? null,
+        Date.now(),
         thread.ord,
       );
     });
@@ -356,11 +376,15 @@ export class ThreadSearchIndexObject extends DurableObject<Bindings> {
 
   /**
    * The Threads holding every term somewhere in their messages or title,
-   * optionally only among `candidates`. One scan per term.
+   * optionally only among `candidates`. One scan per term. With `excerpt`,
+   * also excerpts around `excerpt.term` the `excerpt.limit` matched Threads
+   * indexed most recently (one row read each), so the caller needs no
+   * `snippets` call for a page of recently active Threads.
    */
   matchThreads(
     terms: ReadonlyArray<string>,
     candidates?: ReadonlyArray<string>,
+    excerpt?: { readonly term: string; readonly limit: number },
   ): ThreadMatch {
     const counter: Counter = { rowsRead: 0, rowsWritten: 0 };
     const snippetSource = snippetTerm(terms);
@@ -384,23 +408,79 @@ export class ThreadSearchIndexObject extends DurableObject<Bindings> {
       if (ords.size === 0) break;
     }
     if (ords === undefined || ords.size === 0)
-      return { threadIds: [], snippetChunks: {}, rowsRead: counter.rowsRead };
-    const rows = this.#run<{ ord: number; thread_id: string }>(
+      return {
+        threadIds: [],
+        snippetChunks: {},
+        snippets: {},
+        rowsRead: counter.rowsRead,
+        snippetRowsRead: 0,
+      };
+    const rows = this.#run<{
+      ord: number;
+      thread_id: string;
+      touched_at: number | null;
+    }>(
       counter,
-      `SELECT ord, thread_id FROM indexed_thread
+      `SELECT ord, thread_id, touched_at FROM indexed_thread
         WHERE ord IN (SELECT value FROM json_each(?))`,
       JSON.stringify([...ords.keys()]),
     );
     const allowed = candidates === undefined ? undefined : new Set(candidates);
     const snippetChunks: Record<string, number> = {};
     const threadIds: string[] = [];
-    for (const { ord, thread_id } of rows) {
-      if (allowed !== undefined && !allowed.has(thread_id)) continue;
-      threadIds.push(thread_id);
-      const chunk = ords.get(ord);
-      if (chunk !== undefined) snippetChunks[thread_id] = chunk;
+    const matched: typeof rows = [];
+    for (const row of rows) {
+      if (allowed !== undefined && !allowed.has(row.thread_id)) continue;
+      matched.push(row);
+      threadIds.push(row.thread_id);
+      const chunk = ords.get(row.ord);
+      if (chunk !== undefined) snippetChunks[row.thread_id] = chunk;
     }
-    return { threadIds, snippetChunks, rowsRead: counter.rowsRead };
+    const matchRowsRead = counter.rowsRead;
+    const snippets =
+      excerpt === undefined || excerpt.limit <= 0
+        ? {}
+        : this.#excerpts(
+            counter,
+            Object.fromEntries(
+              matched
+                .sort(
+                  (a, b) =>
+                    (b.touched_at ?? 0) - (a.touched_at ?? 0) || b.ord - a.ord,
+                )
+                .slice(0, excerpt.limit)
+                .flatMap(({ thread_id }) => {
+                  const chunk = snippetChunks[thread_id];
+                  return chunk === undefined ? [] : [[thread_id, chunk]];
+                }),
+            ),
+            excerpt.term,
+          );
+    return {
+      threadIds,
+      snippetChunks,
+      snippets,
+      rowsRead: counter.rowsRead,
+      snippetRowsRead: counter.rowsRead - matchRowsRead,
+    };
+  }
+
+  /** Excerpts around `term`; an empty string when a chunk yields none. */
+  #excerpts(
+    counter: Counter,
+    chunks: Readonly<Record<string, number>>,
+    term: string,
+  ): Record<string, string> {
+    const excerpts: Record<string, string> = {};
+    for (const [threadId, rowid] of Object.entries(chunks)) {
+      const text = this.#run<{ text: string }>(
+        counter,
+        "SELECT text FROM search_fts WHERE rowid = ?",
+        rowid,
+      )[0]?.text;
+      excerpts[threadId] = text === undefined ? "" : excerptAround(text, term);
+    }
+    return excerpts;
   }
 
   /** An excerpt around `term` from each named chunk: one row read each. */
@@ -409,16 +489,11 @@ export class ThreadSearchIndexObject extends DurableObject<Bindings> {
     term: string,
   ): { readonly snippets: Record<string, string>; readonly rowsRead: number } {
     const counter: Counter = { rowsRead: 0, rowsWritten: 0 };
-    const snippets: Record<string, string> = {};
-    for (const [threadId, rowid] of Object.entries(chunks)) {
-      const text = this.#run<{ text: string }>(
-        counter,
-        "SELECT text FROM search_fts WHERE rowid = ?",
-        rowid,
-      )[0]?.text;
-      const excerpt = text === undefined ? "" : excerptAround(text, term);
-      if (excerpt !== "") snippets[threadId] = excerpt;
-    }
+    const snippets = Object.fromEntries(
+      Object.entries(this.#excerpts(counter, chunks, term)).filter(
+        ([, excerpt]) => excerpt !== "",
+      ),
+    );
     return { snippets, rowsRead: counter.rowsRead };
   }
 

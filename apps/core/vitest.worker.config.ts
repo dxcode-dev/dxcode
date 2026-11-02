@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { builtinModules } from "node:module";
+import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
@@ -49,6 +50,110 @@ const prebundledPackageImports = () => {
     .sort();
 };
 
+type D1Migration = { readonly name: string; readonly queries: string[] };
+type SnapshotStatement = {
+  readonly sql: string;
+  readonly params: ReadonlyArray<string | number | null>;
+};
+
+// Applying every migration took each test file about 1.2 s, a third of its
+// setup. The config applies them once, with SQLite in Node, exactly as
+// applyD1Migrations would (one transaction per migration, then its
+// d1_migrations row), and hands each file the resulting schema and rows as
+// one batch. schema-snapshot.test.ts proves the batch matches migrating D1.
+const schemaSnapshot = (
+  migrations: ReadonlyArray<D1Migration>,
+): ReadonlyArray<SnapshotStatement> => {
+  const db = new DatabaseSync(":memory:");
+  db.exec(`CREATE TABLE IF NOT EXISTS "d1_migrations" (
+\t\tid         INTEGER PRIMARY KEY AUTOINCREMENT,
+\t\tname       TEXT UNIQUE,
+\t\tapplied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+\t);`);
+  const record = db.prepare('INSERT INTO "d1_migrations" (name) VALUES (?);');
+  for (const migration of migrations) {
+    db.exec("BEGIN");
+    for (const query of migration.queries) db.exec(query);
+    record.run(migration.name);
+    db.exec("COMMIT");
+  }
+  const objects = db
+    .prepare(
+      `SELECT type, name, sql FROM sqlite_master
+       WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+       ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1
+                WHEN 'view' THEN 2 ELSE 3 END, rowid`,
+    )
+    .all() as Array<{ type: string; name: string; sql: string }>;
+  const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
+  const rows = objects
+    .filter(({ type }) => type === "table")
+    .flatMap(({ name }) =>
+      (
+        db.prepare(`SELECT * FROM ${quote(name)}`).all() as Array<
+          Record<string, unknown>
+        >
+      ).map((row) => {
+        const params = Object.values(row).map((value) => {
+          if (
+            value === null ||
+            typeof value === "string" ||
+            typeof value === "number"
+          )
+            return value;
+          throw new Error(
+            `Migrated table ${name} holds a ${typeof value} the snapshot cannot carry.`,
+          );
+        });
+        return {
+          sql: `INSERT INTO ${quote(name)} (${Object.keys(row).map(quote).join(", ")}) VALUES (${params.map(() => "?").join(", ")})`,
+          params,
+        };
+      }),
+    );
+  // AUTOINCREMENT counters, including the ones a rebuilt table left at 0.
+  const sequences = (
+    db.prepare("SELECT name, seq FROM sqlite_sequence").all() as Array<{
+      name: string;
+      seq: number;
+    }>
+  ).map(({ name, seq }) => ({
+    sql: "INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)",
+    params: [name, seq],
+  }));
+  db.close();
+  // Triggers come last, after the rows, so seeding fires none of them.
+  return [
+    ...objects
+      .filter(({ type }) => type !== "trigger")
+      .map(({ sql }) => ({ sql, params: [] })),
+    ...rows,
+    // Seeding rows already counted some; replace the counters wholesale.
+    { sql: "DELETE FROM sqlite_sequence", params: [] },
+    ...sequences,
+    ...objects
+      .filter(({ type }) => type === "trigger")
+      .map(({ sql }) => ({ sql, params: [] })),
+  ];
+};
+
+const testMigrations = await (async () => {
+  const manifest = await loadMigrationManifest();
+  const migrations = await readD1Migrations(
+    path.join(import.meta.dirname, "migrations"),
+  );
+  const migrationsByName = new Map(
+    migrations.map((migration) => [migration.name, migration]),
+  );
+  return manifest.d1.map(({ filename }) => {
+    const migration = migrationsByName.get(filename);
+    if (migration === undefined) {
+      throw new Error(`Canonical D1 migration was not loaded: ${filename}`);
+    }
+    return migration;
+  });
+})();
+
 export default defineConfig({
   define: {
     __DX_CORE_DEV_FIXTURES__: "true",
@@ -69,24 +174,8 @@ export default defineConfig({
       wrangler: { configPath: "./test/wrangler.test.jsonc" },
       miniflare: {
         bindings: {
-          TEST_MIGRATIONS: await (async () => {
-            const manifest = await loadMigrationManifest();
-            const migrations = await readD1Migrations(
-              path.join(import.meta.dirname, "migrations"),
-            );
-            const migrationsByName = new Map(
-              migrations.map((migration) => [migration.name, migration]),
-            );
-            return manifest.d1.map(({ filename }) => {
-              const migration = migrationsByName.get(filename);
-              if (migration === undefined) {
-                throw new Error(
-                  `Canonical D1 migration was not loaded: ${filename}`,
-                );
-              }
-              return migration;
-            });
-          })(),
+          TEST_MIGRATIONS: testMigrations,
+          TEST_SCHEMA_SNAPSHOT: schemaSnapshot(testMigrations),
         },
       },
     })),

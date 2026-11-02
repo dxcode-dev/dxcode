@@ -50,6 +50,7 @@ const instructionsError = (instructions: string) =>
 /** New Skill, or Edit with the name fixed: saving publishes right away. */
 export function SkillFormDialog({
   skill,
+  retry,
   busy,
   finalFocus,
   onDirtyChange,
@@ -57,6 +58,11 @@ export function SkillFormDialog({
   onClose,
 }: {
   readonly skill?: SkillData;
+  /** A draft whose save failed, opened again with the failure. */
+  readonly retry?: {
+    readonly draft: SkillDraft;
+    readonly failure: SkillSaveFailure;
+  };
   readonly busy: boolean;
   /** Where focus returns when the dialog closes; the opener by default. */
   readonly finalFocus?: React.RefObject<HTMLElement | null>;
@@ -71,8 +77,10 @@ export function SkillFormDialog({
     description: skill?.active.manifest.description ?? "",
     instructions: skill?.active.instructions ?? "",
   };
-  const [draft, setDraft] = React.useState<SkillDraft>(initial);
-  const [error, setError] = React.useState<SkillSaveFailure>();
+  const [draft, setDraft] = React.useState<SkillDraft>(retry?.draft ?? initial);
+  const [error, setError] = React.useState<SkillSaveFailure | undefined>(
+    retry?.failure,
+  );
   const errors = {
     name:
       nameError(draft.name) ??

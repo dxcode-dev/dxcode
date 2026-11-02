@@ -457,6 +457,45 @@ const withEnvironment = <A, E, R>(
   >,
 ) => effect.pipe(Effect.provide(environmentLayers(db)));
 
+/**
+ * Authorizes a write that also needs a browser session. Both checks read D1
+ * and neither depends on the other, so they wait together; their failures
+ * keep the order of checking authorization first.
+ */
+const authorizeWithBrowserSession = Effect.fn(
+  "authorizeEnvironmentVariableWrite",
+)(function* <E>(
+  context: Context<AppEnv>,
+  authorize: Effect.Effect<
+    {
+      readonly target: EnvironmentVariableTarget;
+      readonly canMutate: boolean;
+    },
+    E
+  >,
+) {
+  const [authorized, browser] = yield* Effect.all(
+    [
+      authorize,
+      Effect.gen(function* () {
+        const requirements = yield* loadAuthenticationRequirements(context.env);
+        return yield* requireBrowserSession(
+          context,
+          requestAuth(context, requirements),
+        );
+      }),
+    ],
+    { concurrency: "unbounded", mode: "result" },
+  );
+  if (Result.isFailure(authorized))
+    return yield* Effect.fail(authorized.failure);
+  if (!authorized.success.canMutate) {
+    return yield* new SettingsScopeForbidden({ scope: "workspace" });
+  }
+  if (Result.isFailure(browser)) return yield* Effect.fail(browser.failure);
+  return authorized.success;
+});
+
 const parseIdentifier = (context: Context<AppEnv>) =>
   decodeRequestInput(
     EnvironmentVariableParamsSchema,
@@ -567,15 +606,13 @@ const registerRoutes = (
       const value = yield* validateValue(body.value, kind);
       const { db, keyring } = yield* dependencies(context);
       const route = routeFor(context);
-      const access = yield* withEnvironment(
-        db,
-        authorizeTarget(route, body, context.get("principal")),
+      const access = yield* authorizeWithBrowserSession(
+        context,
+        withEnvironment(
+          db,
+          authorizeTarget(route, body, context.get("principal")),
+        ),
       );
-      if (!access.canMutate) {
-        return yield* new SettingsScopeForbidden({ scope: "workspace" });
-      }
-      const requirements = yield* loadAuthenticationRequirements(context.env);
-      yield* requireBrowserSession(context, requestAuth(context, requirements));
       const stored = yield* withEnvironment(
         db,
         Effect.gen(function* () {
@@ -743,15 +780,13 @@ const registerRoutes = (
       if (lineErrors.length > 0) return yield* invalid(...lineErrors);
       const { db, keyring } = yield* dependencies(context);
       const route = routeFor(context);
-      const access = yield* withEnvironment(
-        db,
-        authorizeTarget(route, body, context.get("principal")),
+      const access = yield* authorizeWithBrowserSession(
+        context,
+        withEnvironment(
+          db,
+          authorizeTarget(route, body, context.get("principal")),
+        ),
       );
-      if (!access.canMutate) {
-        return yield* new SettingsScopeForbidden({ scope: "workspace" });
-      }
-      const requirements = yield* loadAuthenticationRequirements(context.env);
-      yield* requireBrowserSession(context, requestAuth(context, requirements));
       const stored = yield* withEnvironment(
         db,
         Effect.gen(function* () {

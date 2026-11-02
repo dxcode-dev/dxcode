@@ -14,6 +14,7 @@ import { APIError, getOAuthState } from "better-auth/api";
 import { organization } from "better-auth/plugins";
 import { Effect, Option, Schema } from "effect";
 import type { Bindings } from "../http/types.js";
+import { primaryDatabase } from "../persistence/d1-session.js";
 import {
   admitNewIdentity,
   signInRejectionMessages,
@@ -303,10 +304,16 @@ const accountIssuer = (account: {
     : `local:${encodeURIComponent(account.providerId)}`;
 
 export const createAuth = (
-  bindings: Bindings,
+  requestBindings: Bindings,
   requirements: AuthenticationRequirements,
   authenticationPlugin?: BetterAuthPlugin | readonly BetterAuthPlugin[],
 ) => {
+  // Sessions, their revocations, and API keys are read at the primary, so a
+  // revocation stops every client's next request (persistence/d1-session.ts).
+  const bindings = {
+    ...requestBindings,
+    DB: primaryDatabase(requestBindings.DB),
+  };
   const configuration = Effect.runSync(
     loadSignInConfiguration(bindings, requirements),
   );
@@ -419,6 +426,10 @@ export const createAuth = (
       storage: "database",
       window: 60,
       max: 100,
+      // Counters live in D1: limiting the session read every page load
+      // starts with cost two sequential round trips (#1386). It guards no
+      // credential; sign-in and the other auth endpoints stay limited.
+      customRules: { "/get-session": false },
     },
     advanced: {
       cookiePrefix: localCookiePrefix(requirements),

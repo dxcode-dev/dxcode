@@ -9165,6 +9165,18 @@ div.claude-code-mode-main {
   /* Horizontal drags belong to the drawer; its list still scrolls. */
   touch-action: pan-y;
 }
+/* Closed, the kept drawer stays laid out off-screen instead of unrendered,
+   so opening it slides it in without rebuilding its rows' style and layout
+   (#1462). `content-visibility: hidden` keeps its contents unpainted,
+   unfocusable, and unannounced. No inherited property changes here, so
+   opening does not restyle every row. */
+.mobile-sidebar-drawer[hidden] {
+  display: block;
+  content-visibility: hidden;
+  opacity: 0;
+  transform: translateX(calc(-100% - 8px));
+  transition: none;
+}
 /* While a finger drags the drawer, it and its scrim follow the finger
    (sidebar-drawer-drag.ts sets their transform and opacity inline). */
 :root[data-sidebar-drag] .mobile-sidebar-drawer {

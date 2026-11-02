@@ -2,6 +2,12 @@ import type { ThreadAutomationsData } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { Radio } from "lucide-react";
 import type * as React from "react";
+import {
+  ciIcon,
+  ciWords,
+  issueIcon,
+  pullIcon,
+} from "../../../shared/ui/github-status.js";
 import { TitleBarItemSlot } from "../title-bar-item.js";
 import type { TitleBarItem, TitleBarItemRef } from "../title-bar-overflow.js";
 import { AutomationsPanel } from "./automations-panel.js";
@@ -16,7 +22,6 @@ import {
   IssueList,
   PullRequestList,
 } from "./github-header-lists.js";
-import { ciIcon, ciWords, issueIcon, pullIcon } from "./github-status.js";
 
 /** The open PR wins the icon; else merged when all merged, else closed. */
 const pullState = (pulls: ThreadAutomationsData["pullRequests"]) =>

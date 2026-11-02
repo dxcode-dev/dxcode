@@ -20,6 +20,10 @@ import { getBrowserCommandRegistry } from "../../../shared/commands/command-regi
 import { ShortcutKeycaps } from "../../../shared/commands/shortcut-keycaps.js";
 import { downloadFromUrl } from "../../../shared/download-from-url.js";
 import {
+  warmTerminal,
+  warmTerminalAfterDwell,
+} from "../../terminal/terminal-warm-mutations.js";
+import {
   findViewTab,
   PANE_VIEW_KINDS,
   type PaneLayoutAction,
@@ -29,6 +33,7 @@ import {
   tabLabel,
 } from "./pane-layout.js";
 import { PANE_VIEWS, type PaneContents } from "./pane-views.js";
+import { TerminalWarmContext } from "./terminal-warm-context.js";
 
 /** The keycaps bound to a Thread command, as the keymap shows them. */
 const useCommandKeycaps = () => {
@@ -61,6 +66,7 @@ function ViewMenuItems({
   readonly onOpen: (view: PaneViewKind) => void;
 }) {
   const keycaps = useCommandKeycaps();
+  const warm = useTerminalWarmIntent();
   return (
     <>
       {availableViews(contents).map((view) => {
@@ -72,6 +78,7 @@ function ViewMenuItems({
             className="thread-menu-item pane-view-menu-item"
             data-view={view}
             onClick={() => onOpen(view)}
+            {...(view === "terminal" ? warm : {})}
           >
             <Icon aria-hidden="true" />
             <span>{open && view === "terminal" ? "New Terminal" : label}</span>
@@ -85,6 +92,41 @@ function ViewMenuItems({
       })}
     </>
   );
+}
+
+/**
+ * Pointing at Terminal starts the Orb's wake before the click attaches: after
+ * a short dwell (or at once on press), never on a passing hover, and only for
+ * people who may open the Terminal. Viewers of a shared Thread never warm it.
+ */
+function useTerminalWarmIntent() {
+  const threadId = React.useContext(TerminalWarmContext);
+  const cancel = React.useRef<() => void>(undefined);
+  const stop = () => {
+    cancel.current?.();
+    cancel.current = undefined;
+  };
+  // An item that closes mid-dwell warms nothing; the React Compiler keeps
+  // this callback stable, so a re-render never cancels a dwell.
+  const ref = () => stop;
+  if (threadId === undefined) return {};
+  return {
+    onPointerEnter: () => {
+      stop();
+      cancel.current = warmTerminalAfterDwell(threadId);
+    },
+    onFocus: () => {
+      stop();
+      cancel.current = warmTerminalAfterDwell(threadId);
+    },
+    onPointerLeave: stop,
+    onBlur: stop,
+    onPointerDown: () => {
+      stop();
+      warmTerminal(threadId);
+    },
+    ref,
+  };
 }
 
 /** The title bar's Views button: opens a view in the pane tree. */

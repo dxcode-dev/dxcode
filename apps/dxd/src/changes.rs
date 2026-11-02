@@ -532,23 +532,72 @@ fn path_metadata(path: &Path) -> Vec<u8> {
     .into_bytes()
 }
 
+/// A patch within `MAX_PATCH_BYTES` and `MAX_PATCH_LINES`, and whether it was
+/// cut. A cut keeps whole lines and rewrites the last hunk's header to count
+/// only the lines kept, so the cut patch still parses and shows what fits.
 fn limited_patch(value: &str) -> (String, bool) {
-    let mut truncated = value.len() > MAX_PATCH_BYTES;
-    let mut text = if truncated {
-        let mut end = MAX_PATCH_BYTES;
-        while !value.is_char_boundary(end) {
-            end -= 1;
-        }
-        value[..end].to_owned()
-    } else {
-        value.to_owned()
-    };
-    let line_count = text.split_inclusive('\n').count();
-    if line_count > MAX_PATCH_LINES {
-        text = text.split_inclusive('\n').take(MAX_PATCH_LINES).collect();
-        truncated = true;
+    if value.len() <= MAX_PATCH_BYTES && value.split_inclusive('\n').count() <= MAX_PATCH_LINES {
+        return (value.to_owned(), false);
     }
-    (text, truncated)
+    let mut kept = Vec::new();
+    let mut bytes = 0;
+    for line in value.split_inclusive('\n') {
+        if kept.len() == MAX_PATCH_LINES
+            || bytes + line.len() > MAX_PATCH_BYTES
+            || !line.ends_with('\n')
+        {
+            break;
+        }
+        bytes += line.len();
+        kept.push(line);
+    }
+    let Some(header) = kept.iter().rposition(|line| line.starts_with("@@ -")) else {
+        return (String::new(), true);
+    };
+    let (mut old, mut new) = (0, 0);
+    for line in &kept[header + 1..] {
+        match line.as_bytes()[0] {
+            b' ' => (old, new) = (old + 1, new + 1),
+            b'-' => old += 1,
+            b'+' => new += 1,
+            _ => {}
+        }
+    }
+    let rewritten = if old + new == 0 {
+        kept.truncate(header);
+        None
+    } else {
+        hunk_header_with_counts(kept[header], old, new)
+    };
+    if !kept.iter().any(|line| line.starts_with("@@ -")) {
+        return (String::new(), true);
+    }
+    let mut text = String::with_capacity(bytes + 32);
+    for (index, line) in kept.iter().enumerate() {
+        match &rewritten {
+            Some(rewritten) if index == header => text.push_str(rewritten),
+            _ => text.push_str(line),
+        }
+    }
+    (text, true)
+}
+
+/// `@@ -a,b +c,d @@ section` with its counts replaced by `old` and `new`.
+fn hunk_header_with_counts(header: &str, old: usize, new: usize) -> Option<String> {
+    let ranges = header.strip_prefix("@@ -")?;
+    let (ranges, section) = ranges.split_once(" @@")?;
+    let (old_range, new_range) = ranges.split_once(" +")?;
+    let start = |range: &str| {
+        range
+            .split_once(',')
+            .map_or(range, |(start, _)| start)
+            .to_owned()
+    };
+    Some(format!(
+        "@@ -{},{old} +{},{new} @@{section}",
+        start(old_range),
+        start(new_range)
+    ))
 }
 
 struct UntrackedFile {
@@ -1613,17 +1662,134 @@ mod tests {
         );
     }
 
+    /// Each hunk header's line counts against the lines that follow it, and
+    /// whether every line is whole. A patch that fails this does not parse.
+    fn assert_hunks_consistent(patch: &str) {
+        assert!(patch.is_empty() || patch.ends_with('\n'), "cut mid-line");
+        let mut expected: Option<(usize, usize)> = None;
+        let mut seen = (0, 0);
+        let mut check = |expected: Option<(usize, usize)>, seen: (usize, usize)| {
+            if let Some(expected) = expected {
+                assert_eq!(seen, expected, "hunk counts disagree with its body");
+                assert!(seen != (0, 0), "a hunk header without lines");
+            }
+        };
+        for line in patch.lines() {
+            if let Some(header) = line.strip_prefix("@@ -") {
+                check(expected, seen);
+                let count = |range: &str| {
+                    range
+                        .split_once(',')
+                        .map_or(1, |(_, count)| count.parse::<usize>().unwrap())
+                };
+                let (old, rest) = header.split_once(" +").unwrap();
+                let new = rest.split_once(" @@").unwrap().0;
+                expected = Some((count(old), count(new)));
+                seen = (0, 0);
+            } else if expected.is_some() {
+                match line.as_bytes().first() {
+                    Some(b' ') => seen = (seen.0 + 1, seen.1 + 1),
+                    Some(b'-') => seen.0 += 1,
+                    Some(b'+') => seen.1 += 1,
+                    Some(b'\\') => {}
+                    _ => panic!("unexpected hunk line {line:?}"),
+                }
+            }
+        }
+        check(expected, seen);
+    }
+
+    // A cut patch must still parse, or the browser shows "The captured diff
+    // could not be rendered" instead of the lines that fit. Ways a cut breaks
+    // it: a partial last line (or a split UTF-8 character); a hunk header that
+    // still counts lines past the cut; a header with no lines after it; a cut
+    // inside the file headers, before any hunk; a "\ No newline" marker
+    // counted as a line; the line limit cutting mid-hunk the same way; and a
+    // single line longer than the whole limit. A patch within both limits
+    // must come back unchanged.
     #[test]
-    fn limits_patches_by_bytes_and_lines() {
-        let long = "x".repeat(MAX_PATCH_BYTES + 10);
+    fn limits_patches_by_bytes_and_lines_on_whole_hunk_lines() {
+        let header = "--- a/big.txt\n+++ b/big.txt\n";
+        // Byte limit, mid-hunk, with a multi-byte character at the cut.
+        let row = "+é a line of patch text, long enough to hit bytes first\n";
+        let body = row.repeat(MAX_PATCH_BYTES / row.len() + 100);
+        let lines = body.lines().count();
+        let long = format!("{header}@@ -0,0 +1,{lines} @@ fn section()\n{body}");
         let (patch, truncated) = limited_patch(&long);
         assert!(truncated);
-        assert_eq!(patch.len(), MAX_PATCH_BYTES);
-        let many = "l\n".repeat(MAX_PATCH_LINES + 5);
+        assert!(patch.len() <= MAX_PATCH_BYTES);
+        assert!(patch.len() > MAX_PATCH_BYTES - 64, "keeps all that fits");
+        assert!(
+            patch.contains(" @@ fn section()\n"),
+            "keeps the section text"
+        );
+        assert_hunks_consistent(&patch);
+        // Line limit, mid-hunk, across several hunks with context lines.
+        let hunk = |start: usize| format!("@@ -{start},4 +{start},4 @@\n a\n-b\n+c\n d\n e\n");
+        let many = format!(
+            "{header}{}",
+            (0..MAX_PATCH_LINES / 6 + 10)
+                .map(|index| hunk(index * 10 + 1))
+                .collect::<String>()
+        );
         let (patch, truncated) = limited_patch(&many);
         assert!(truncated);
-        assert_eq!(patch.lines().count(), MAX_PATCH_LINES);
+        assert!(patch.lines().count() <= MAX_PATCH_LINES);
+        assert_hunks_consistent(&patch);
+        // The cut lands just after a hunk header: the header goes too.
+        let first = "+x\n".repeat(10);
+        let filler = "+y".repeat((MAX_PATCH_BYTES - header.len() - first.len()) / 2);
+        let exact = format!("{header}@@ -0,0 +1,10 @@\n{first}@@ -0,0 +11,2 @@\n{filler}\n+z\n");
+        let (patch, truncated) = limited_patch(&exact);
+        assert!(truncated);
+        assert_eq!(patch, format!("{header}@@ -0,0 +1,10 @@\n{first}"));
+        // A "\ No newline" marker is not a line of either side.
+        let marker = format!(
+            "{header}@@ -1,2 +1,2 @@\n-old\n\\ No newline at end of file\n+new\n{}",
+            "+more\n".repeat(MAX_PATCH_BYTES / 6)
+        );
+        let (patch, truncated) = limited_patch(&marker);
+        assert!(truncated);
+        assert!(patch.starts_with(&format!("{header}@@ -1,1 +1,")));
+        assert_hunks_consistent(&patch);
+        // Cut inside the file headers, or one line past the limit: no hunk fits.
+        let huge = format!("{header}@@ -1 +1 @@\n+{}\n", "x".repeat(MAX_PATCH_BYTES));
+        assert_eq!(limited_patch(&huge), (String::new(), true));
+        // Within both limits: unchanged, even without a final newline.
         assert_eq!(limited_patch("small"), ("small".to_owned(), false));
+        let fits = format!("{header}@@ -1 +1 @@\n-a\n+b");
+        assert_eq!(limited_patch(&fits), (fits.clone(), false));
+    }
+
+    #[test]
+    fn a_capture_over_the_patch_limit_keeps_whole_hunks() {
+        let (_directory, root, baseline) = repository();
+        let numbered = |prefix: &str| {
+            (0..12_000)
+                .map(|index| format!("{prefix} line {index:05} of a large source file\n"))
+                .collect::<String>()
+        };
+        fs::write(root.join("tracked.txt"), numbered("old")).unwrap();
+        git_ok(&root, &["add", "tracked.txt"]);
+        git_ok(&root, &["commit", "-q", "-m", "add tracked"]);
+        fs::write(root.join("tracked.txt"), numbered("new")).unwrap();
+        fs::write(root.join("untracked.txt"), numbered("untracked")).unwrap();
+        let CandidateOutcome::Complete { capture } =
+            capture(&root, &request(&baseline, None), &CaptureCache::default())
+        else {
+            panic!("expected a complete capture")
+        };
+        for name in ["tracked.txt", "untracked.txt"] {
+            let file = capture.ranges[0]
+                .files
+                .iter()
+                .find(|file| file.path == name)
+                .unwrap();
+            assert!(file.truncated, "{name} is over the limit");
+            assert!(file.patch.len() <= MAX_PATCH_BYTES);
+            assert!(file.patch.contains("\n@@ -"), "{name} keeps a hunk");
+            assert_hunks_consistent(&file.patch);
+        }
     }
 
     #[test]

@@ -14,6 +14,22 @@ export const NeedsYouKindSchema = Schema.Literals([
 
 export type NeedsYouKind = typeof NeedsYouKindSchema.Type;
 
+/**
+ * A GitHub issue or pull request the Thread works on, from its
+ * `link_github_issue` links and comment subscriptions, as webhooks last
+ * described it.
+ */
+export const NeedsYouLinkSchema = Schema.Struct({
+  kind: Schema.Literals(["issue", "pull"]),
+  repository: Schema.String.check(Schema.isMaxLength(200)),
+  number: Schema.Int,
+  url: Schema.String.check(Schema.isMaxLength(2_048)),
+  state: Schema.Literals(["open", "closed", "merged"]),
+  title: Schema.optional(Schema.String.check(Schema.isMaxLength(300))),
+});
+
+export type NeedsYouLink = typeof NeedsYouLinkSchema.Type;
+
 export const NeedsYouItemSchema = Schema.Struct({
   threadId: ThreadId,
   threadTitle: Schema.String.check(Schema.isMaxLength(256)),
@@ -24,6 +40,8 @@ export const NeedsYouItemSchema = Schema.Struct({
   /** A link the ask points at, such as a pull request. */
   url: Schema.optional(Schema.String.check(Schema.isMaxLength(2_048))),
   requestedAt: Schema.String,
+  /** The Thread's linked issues and pull requests, newest first. */
+  links: Schema.optional(Schema.Array(NeedsYouLinkSchema)),
 });
 
 export type NeedsYouItem = typeof NeedsYouItemSchema.Type;

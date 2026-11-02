@@ -6,9 +6,48 @@ import { setBrowserSessionHeaders } from "../auth/session-sockets.js";
 import type { AppEnv } from "../http/types.js";
 import { selectWorkspaceRuntime } from "../runtime/workspace-composition.js";
 
-export const threadTerminalRoutes = new Hono<AppEnv>().get(
-  "/:threadId/terminal",
-  async (context) => {
+export const threadTerminalRoutes = new Hono<AppEnv>()
+  /**
+   * The person is about to open the Terminal (they kept pointing at it):
+   * start the Orb's wake now, on the same single-flight activation the
+   * attach joins, without waiting for it. Authorized like the attach, so a
+   * viewer cannot wake the Orb; the execution object limits how often.
+   */
+  .post("/:threadId/terminal/warm", async (context) => {
+    const request = context.req.raw;
+    if (request.headers.get("origin") !== new URL(request.url).origin)
+      return context.notFound();
+    try {
+      selectWorkspaceRuntime(context.env, {
+        local: "resident",
+        deployed: "resident",
+      });
+    } catch {
+      return context.notFound();
+    }
+    const threadId = Schema.decodeUnknownOption(ThreadId)(
+      context.req.param("threadId"),
+    );
+    if (Option.isNone(threadId)) return context.notFound();
+    const namespace = context.env.THREAD_EXECUTION;
+    if (namespace === undefined) return context.notFound();
+    // The object answers at once and keeps the wake running itself.
+    const response = await namespace
+      .get(namespace.idFromName(threadId.value))
+      .fetch("https://thread.internal/daemon/activate", {
+        method: "POST",
+        headers: {
+          "x-dx-daemon-activate": "1",
+          "x-dx-daemon-activate-mode": "background",
+          "x-dx-terminal-warm": "1",
+          "x-dx-thread-id": threadId.value,
+        },
+      })
+      .catch(() => undefined);
+    await response?.body?.cancel();
+    return context.body(null, 202);
+  })
+  .get("/:threadId/terminal", async (context) => {
     const routeReachedAt = Date.now();
     const startedAt = context.get("requestStartedAt") ?? routeReachedAt;
     const request = context.req.raw;
@@ -71,5 +110,4 @@ export const threadTerminalRoutes = new Hono<AppEnv>().get(
     }
     setBrowserSessionHeaders(headers, context.get("browserSession"));
     return stub.fetch(new Request(request, { headers }));
-  },
-);
+  });

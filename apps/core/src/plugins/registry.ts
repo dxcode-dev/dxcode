@@ -26,7 +26,11 @@ export interface ProviderDefinition {
    */
   readonly credentialLabel: string | null;
   /** Optional deployment-scope secret binding. */
-  readonly deploymentSecret?: "EXA_API_KEY" | "SARVAM_API_KEY" | "E2B_API_KEY";
+  readonly deploymentSecret?:
+    | "EXA_API_KEY"
+    | "SARVAM_API_KEY"
+    | "E2B_API_KEY"
+    | "BOAT_API_KEY";
   /**
    * A keyless provider the deployment installs explicitly: it resolves when
    * this binding is present. Cloudflare Containers runs in the deployer's own

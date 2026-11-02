@@ -3,14 +3,7 @@ import type { NeedsYouItem } from "@dx/api";
 import type { UserId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import {
-  CircleAlert,
-  CircleCheck,
-  ExternalLink,
-  Hand,
-  MessageCircleQuestion,
-  X,
-} from "lucide-react";
+import { ExternalLink, Hand, X } from "lucide-react";
 import * as React from "react";
 import { Button } from "../../shared/ui/button.js";
 import { TimeText } from "../../shared/ui/time-text.js";
@@ -19,14 +12,9 @@ import {
   needsYouQueryOptions,
 } from "../notifications/needs-you-queries.js";
 import { age, exactTime } from "./inbox-time.js";
+import { NEEDS_YOU_KIND } from "./needs-you-kind.js";
 import "./notification-inbox.css";
 import "./needs-you-inbox.css";
-
-const KIND = {
-  question: { icon: MessageCircleQuestion, label: "Question" },
-  approval: { icon: CircleCheck, label: "Approval" },
-  failed: { icon: CircleAlert, label: "Failed" },
-} as const;
 
 function NeedsYouRow({
   item,
@@ -37,7 +25,7 @@ function NeedsYouRow({
   readonly onOpen: () => void;
   readonly onDismiss: (item: NeedsYouItem) => void;
 }) {
-  const kind = KIND[item.kind];
+  const kind = NEEDS_YOU_KIND[item.kind];
   const Icon = kind.icon;
   const ask = item.summary ?? "The last turn failed.";
   return (
@@ -151,6 +139,16 @@ export function NeedsYouInbox({
                 Needs you
               </Popover.Title>
               <span className="notification-count">{count}</span>
+              <Link
+                to="/needs-you"
+                className="needs-you-see-all"
+                onClick={() => {
+                  setOpen(false);
+                  onNavigate();
+                }}
+              >
+                See all
+              </Link>
             </header>
             {list.isPending ? (
               <p className="notification-empty">Loading…</p>

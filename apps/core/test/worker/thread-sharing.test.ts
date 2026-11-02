@@ -15,6 +15,7 @@ import { authorizeThread } from "../../src/auth/authorize-thread.js";
 import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
+import { d1Session } from "../../src/persistence/d1-session.js";
 import { TEST_RUNNER_PROFILE_CATALOG } from "../../src/testing/bindings.js";
 import { tombstoneThreads } from "../../src/thread-deletion/tombstone.js";
 import {
@@ -81,6 +82,11 @@ const application = {
 const createApp = (userId: UserId, viaApplication = false) => {
   const app = new Hono<AppEnv>();
   app.use("*", requestId);
+  // As in app.ts: every request reads through a D1 session. These browser
+  // requests carry a cookie but no bookmark, so an unshare or a member
+  // leaving is checked from any replica, up to the replica lag late in
+  // production (#1386).
+  app.use("*", d1Session);
   app.use("*", async (context, next) => {
     context.set(
       "principal",
@@ -132,7 +138,8 @@ const send = (userId: UserId, path: string, method = "GET", body?: unknown) =>
     path,
     {
       method,
-      headers: { "content-type": "application/json" },
+      // A browser's cookie, without a D1 bookmark; the principal is set above.
+      headers: { "content-type": "application/json", cookie: "dx-test=1" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     },
     bindings,

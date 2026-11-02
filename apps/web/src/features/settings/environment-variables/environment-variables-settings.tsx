@@ -34,6 +34,7 @@ import {
   EnvironmentVariableValues,
 } from "./environment-variable-controls.js";
 import {
+  createEnvironmentVariableMutationKey,
   createEnvironmentVariableMutationOptions,
   type EnvironmentVariablesMutationAction,
   environmentVariablesMutationOptions,
@@ -131,6 +132,19 @@ function useEnvironmentVariableController({
     select: (pending) =>
       pending.state.variables as EnvironmentVariablesMutationAction,
   });
+  // The rows new values show while they save.
+  const creatingIds = useMutationState({
+    filters: {
+      mutationKey: createEnvironmentVariableMutationKey(identity.id, target),
+      status: "pending",
+    },
+    select: (pending) =>
+      (
+        pending.state.context as
+          | { readonly pending: EnvironmentVariableData }
+          | undefined
+      )?.pending.reference.id,
+  }).filter((id) => id !== undefined);
   const [editor, setEditor] = React.useState(initialEditorState);
   const updateEditor = (patch: Partial<EditorState>) =>
     setEditor((current) => ({ ...current, ...patch }));
@@ -155,22 +169,36 @@ function useEnvironmentVariableController({
       (addAsSecret && editor.value.length === 0)
     )
       return;
-    updateEditor({ addErrors: noAddErrors });
+    // The new row shows at once, so the form closes and clears now, ready
+    // for the next value, and opens again with what was typed if the save
+    // fails.
+    const typed = {
+      name: editor.name,
+      value: editor.value,
+      secret: editor.secret,
+    };
+    updateEditor({
+      mode: undefined,
+      name: "",
+      value: "",
+      secret: undefined,
+      addErrors: noAddErrors,
+      rowError: undefined,
+    });
+    onDirtyChange(false);
     const outcome = await settle(() =>
       createMutation.mutateAsync({
-        name: normalizeEnvironmentVariableName(editor.name),
-        value: editor.value,
+        name: normalizeEnvironmentVariableName(typed.name),
+        value: typed.value,
         kind: addAsSecret ? "secret" : "variable",
       }),
     );
     createMutation.reset();
-    if (outcome.ok) {
-      updateEditor({ mode: undefined, name: "", value: "" });
-      onDirtyChange(false);
-      return;
-    }
+    if (outcome.ok) return;
     const errors = failureMessages(outcome.error);
     updateEditor({
+      mode: "add",
+      ...typed,
       addErrors: {
         name: errors.find(({ field }) => field === "name")?.message,
         value: errors.find(({ field }) => field === "value")?.message,
@@ -179,6 +207,7 @@ function useEnvironmentVariableController({
         ),
       },
     });
+    onDirtyChange(true);
   };
   const applyBulk = async () => {
     updateEditor({ bulkErrors: [] });
@@ -218,14 +247,20 @@ function useEnvironmentVariableController({
     );
   };
   const confirmRemove = async () => {
-    if (editor.remove === undefined) return;
-    updateEditor({ removeError: undefined });
-    const outcome = await execute({ type: "delete", item: editor.remove });
-    updateEditor(
-      outcome.ok
-        ? { remove: undefined }
-        : { removeError: message(outcome.error) },
-    );
+    const item = editor.remove;
+    if (item === undefined) return;
+    // The row leaves at once, so the dialog closes now; a failed delete puts
+    // the row back and says why.
+    updateEditor({
+      remove: undefined,
+      removeError: undefined,
+      rowError: undefined,
+    });
+    const outcome = await execute({ type: "delete", item });
+    if (!outcome.ok)
+      updateEditor({
+        rowError: `Could not delete ${item.name}: ${message(outcome.error)}`,
+      });
   };
   const toggle = async (item: EnvironmentVariableData) => {
     updateEditor({ rowError: undefined });
@@ -261,6 +296,7 @@ function useEnvironmentVariableController({
     fieldId,
     canMutate,
     pendingActions,
+    creatingIds,
     createPending: createMutation.isPending,
     addAsSecret,
     create,
@@ -373,11 +409,12 @@ function EnvironmentVariablesContent({
   }
   const historyItems = [...historyItemsById.values()];
   const items = controller.list.data?.items ?? [];
-  const pendingIds = new Set(
-    controller.pendingActions.flatMap((action) =>
+  const pendingIds = new Set([
+    ...controller.pendingActions.flatMap((action) =>
       action.type === "applyBulk" ? [] : [action.item.reference.id],
     ),
-  );
+    ...controller.creatingIds,
+  ]);
   const pendingFor = (type: EnvironmentVariablesMutationAction["type"]) =>
     controller.pendingActions.some((action) => action.type === type);
   const nameError =

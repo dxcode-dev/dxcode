@@ -69,6 +69,7 @@ import {
   DxdDesktopEnsureResult,
   type DxdDiskUsage,
   DxdEnvironmentActivateResult,
+  DxdFilesListResult,
   DxdFilesOperation,
   DxdFilesReadResult,
   type DxdOperation,
@@ -78,6 +79,7 @@ import {
   DxdServicesEnsureResult,
   DxdStorageOperation,
   type DxdTerminalHeartbeat,
+  DxdTreeResult,
   DxdUpdateMessage,
   type DxdWorkloadIdentityRequest,
   DxdWorkloadIdentityRequestMessage,
@@ -148,6 +150,7 @@ import {
   type DaemonActivationMilestones,
   DaemonReadiness,
   daemonFailureResponse,
+  FILES_ROOT_SNAPSHOT_HEADER,
   residentThreadDaemonEndpoint,
 } from "./daemon-client.js";
 import {
@@ -167,6 +170,8 @@ import {
 const ACTIVATION_TIMEOUT_MS = 30_000;
 const TRANSIENT_ACTIVATION_RETRY_MS = 250;
 export const DAEMON_ACTIVATION_DEADLINE_MS = 90_000;
+/** A Terminal warm-up starts at most once per this interval per Thread. */
+export const TERMINAL_WARM_INTERVAL_MS = 30_000;
 export const DAEMON_ACTIVATION_GRACE_MS = 90_000;
 const DAEMON_REQUEST_TIMEOUT_MS = 5_000;
 /**
@@ -260,6 +265,12 @@ const ACTIVATION_ATTEMPT_STORAGE_KEY = "daemon-activation-attempt";
 const ENVIRONMENT_GENERATION_STORAGE_KEY = "environment-next-generation";
 const APPLIED_ENVIRONMENT_STORAGE_KEY = "environment-applied";
 const RESIDENT_READY_STORAGE_KEY = "terminal-resident-ready";
+/** The last root listing per worktree, served while a paused Orb wakes. */
+const FILES_ROOT_SNAPSHOT_STORAGE_PREFIX = "files-root-snapshot:";
+const FilesRootSnapshot = Schema.Struct({
+  savedAt: Schema.Number,
+  result: DxdTreeResult,
+});
 
 /** When Core first saw a Terminal resident generation ready. */
 const ResidentReadyMarker = Schema.Struct({
@@ -417,6 +428,22 @@ interface SandboxChunkAssembly {
 
 type ReadinessProbeResult = "ready" | "changed" | "timeout" | "drained";
 
+/** What an environment activation reads from D1 before it reaches dxd. */
+interface EnvironmentReads {
+  readonly snapshot: Effect.Success<
+    ReturnType<typeof resolveExecutionEnvironment>
+  >;
+  readonly signing: Effect.Success<
+    ReturnType<typeof resolveExecutionSigningPlan>
+  >;
+  readonly bitbucketConnection: { connected: number } | null;
+  readonly times: {
+    readonly environmentMs: number;
+    readonly signingMs: number;
+    readonly bitbucketMs: number;
+  };
+}
+
 const randomBase64Url = (byteLength: number) =>
   encodeBase64Url(crypto.getRandomValues(new Uint8Array(byteLength)));
 
@@ -527,6 +554,18 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   #nextEnvironmentGeneration = 1;
   #environmentActivation?: Promise<void>;
   #environmentDirty = false;
+  /** When a person pointing at the Terminal last started a warm-up. */
+  #terminalWarmedAt?: number;
+  /**
+   * The repair's D1 reads, started when a wake starts so they run beside the
+   * Orb's restore instead of after its daemon registers. Used at most once;
+   * an environment refresh drops them.
+   */
+  #environmentReads?: {
+    readonly threadId: ThreadId;
+    readonly startedAt: number;
+    readonly reads: Promise<EnvironmentReads>;
+  };
   #appliedEnvironment?: AppliedEnvironmentMarker;
   #terminalHeartbeat?: DxdTerminalHeartbeat;
   #lastPersistedHeartbeatAt?: number;
@@ -554,6 +593,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   readonly #readinessWaiters = new Set<() => void>();
   readonly #terminalWaiters = new Set<(state: DxdTerminalHeartbeat) => void>();
   readonly #pendingRequests = new Map<string, PendingDaemonRequest>();
+  readonly #filesRootSnapshotVersions = new Map<string, string>();
   readonly #pendingWorkloadIdentityRequests = new Set<string>();
   #observingChanges?: Promise<void>;
   #changesObserved = false;
@@ -1646,6 +1686,25 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     if (Option.isNone(threadId)) return new Response(null, { status: 404 });
     const submissionId = request.headers.get("x-dx-submission-id") ?? "";
     const requestedAt = Date.now();
+    if (request.headers.get("x-dx-terminal-warm") === "1") {
+      // Pointing at the Terminal wakes a billed Orb: at most once per
+      // interval for this Thread, whichever browser or tab asks.
+      const throttled =
+        this.#terminalWarmedAt !== undefined &&
+        requestedAt - this.#terminalWarmedAt < TERMINAL_WARM_INTERVAL_MS;
+      const outcome = throttled
+        ? "throttled"
+        : this.#isReady()
+          ? "ready"
+          : "waking";
+      threadDaemonLogger.info("Thread Terminal warm-up.", {
+        event: "thread_terminal_warm",
+        threadId: threadId.value,
+        outcome,
+      });
+      if (throttled) return new Response(null, { status: 202 });
+      this.#terminalWarmedAt = requestedAt;
+    }
     const activation = this.#activationForThread(threadId.value);
     if (request.headers.get("x-dx-daemon-activate-mode") === "background") {
       this.#retainDaemonActivation(activation);
@@ -2115,10 +2174,13 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     if (endpoint === undefined) return new Response(null, { status: 503 });
     let stage: "credential" | "install" | "registration" | "environment" =
       "credential";
+    const wakeStartedAt = Date.now();
+    this.#prefetchEnvironmentReads(threadId);
     try {
       // The provider the Thread was created on, never a deployment default.
       const runtimeProvider =
         await ExecutionWorkspaces.pinnedProvider(threadId);
+      const providerResolvedAt = Date.now();
       const existing = this.#authority;
       let credential:
         | { id: string; key: Redacted.Redacted<string> }
@@ -2172,6 +2234,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       if (signal.aborted || epoch !== this.#drainEpoch)
         throw new Error("activation deadline exceeded");
       stage = "install";
+      const installStartedAt = Date.now();
       const installation = await ExecutionWorkspaces.ensureDaemon({
         threadId,
         endpoint,
@@ -2198,6 +2261,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       if (epoch !== this.#drainEpoch)
         throw new Error("activation cancelled by drain");
       this.#processesStartedAt = installation.processesStartedAt;
+      const installedAt = Date.now();
       stage = "registration";
       if (!this.#isTransportReady()) {
         await new Promise<void>((resolve, reject) => {
@@ -2225,6 +2289,16 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       if (epoch !== this.#drainEpoch)
         throw new Error("activation cancelled by drain");
       if (!this.#isReady()) throw new Error("not ready");
+      threadDaemonLogger.info("Thread daemon wake timing.", {
+        event: "thread_daemon_wake_timing",
+        threadId,
+        providerMs: providerResolvedAt - wakeStartedAt,
+        credentialMs: installStartedAt - providerResolvedAt,
+        installMs: installedAt - installStartedAt,
+        registrationMs: connectedAt - installedAt,
+        repairMs: Date.now() - connectedAt,
+        totalMs: Date.now() - wakeStartedAt,
+      });
       const activationMilestones =
         installation.releaseLoadedAt === undefined ||
         installation.installedAt === undefined
@@ -2546,10 +2620,43 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       operation.operation === "files.list" ||
       operation.operation === "files.read" ||
       operation.operation === "files.readSandbox";
+    const rootListing =
+      operation.operation === "files.list" &&
+      operation.path === null &&
+      operation.cursor === undefined
+        ? (operation.worktree ?? "primary")
+        : undefined;
+    if (
+      rootListing !== undefined &&
+      request.headers.get("x-dx-files-snapshot") === "allow" &&
+      !(
+        this.#authority?.threadId === threadId.value &&
+        this.#activation === undefined &&
+        this.#isReady() &&
+        this.#isHeartbeatFresh()
+      )
+    ) {
+      const snapshot = await this.#filesRootSnapshot(rootListing);
+      if (snapshot !== undefined) {
+        // The Orb wakes behind the snapshot; the caller's live read follows.
+        this.ctx.waitUntil(
+          this.#activateForFilesRead(threadId.value).catch(() => false),
+        );
+        return Response.json(snapshot.result, {
+          headers: {
+            [FILES_ROOT_SNAPSHOT_HEADER]: new Date(
+              snapshot.savedAt,
+            ).toISOString(),
+          },
+        });
+      }
+    }
+    const startedAt = Date.now();
     const available = readOnly
       ? await this.#activateForFilesRead(threadId.value)
       : (await this.#activateWithRetry(threadId.value)).ok;
     if (!available) return daemonFailureResponse("known");
+    const activatedAt = Date.now();
     const authority = this.#authority;
     if (
       authority === undefined ||
@@ -2557,12 +2664,63 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       this.#pendingRequests.size >= MAX_PENDING_DAEMON_REQUESTS
     )
       return daemonFailureResponse("known");
-    return this.#dispatchDaemonOperation(
+    const response = await this.#dispatchDaemonOperation(
       authority,
       operation,
       DXD_MAX_REQUEST_FRAME_BYTES,
       DAEMON_REQUEST_TIMEOUT_MS,
     );
+    if (!response.ok) return response;
+    if (rootListing !== undefined)
+      await this.#saveFilesRootSnapshot(rootListing, response.clone());
+    const timed = new Response(response.body, response);
+    timed.headers.set(
+      "server-timing",
+      `dx_activate;dur=${activatedAt - startedAt}, dx_daemon;dur=${Date.now() - activatedAt}`,
+    );
+    return timed;
+  }
+
+  /** The last root listing per worktree, for `#requestDaemon` to serve. */
+  async #filesRootSnapshot(worktree: string) {
+    try {
+      const stored = Schema.decodeUnknownSync(FilesRootSnapshot)(
+        await this.ctx.storage.get(
+          `${FILES_ROOT_SNAPSHOT_STORAGE_PREFIX}${worktree}`,
+        ),
+      );
+      this.#filesRootSnapshotVersions.set(worktree, stored.result.version);
+      return stored;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Stores a live root listing when its version changed. Never throws. */
+  async #saveFilesRootSnapshot(worktree: string, response: Response) {
+    try {
+      const result = Schema.decodeUnknownSync(DxdFilesListResult)(
+        await response.json(),
+      );
+      if (
+        result.kind !== "tree" ||
+        this.#filesRootSnapshotVersions.get(worktree) === result.version
+      )
+        return;
+      // Only the first page: a snapshot offers no cursor into a listing
+      // that may have changed.
+      const { nextIndex: _nextIndex, ...firstPage } = result;
+      await this.ctx.storage.put(
+        `${FILES_ROOT_SNAPSHOT_STORAGE_PREFIX}${worktree}`,
+        Schema.encodeSync(FilesRootSnapshot)({
+          savedAt: Date.now(),
+          result: firstPage,
+        }),
+      );
+      this.#filesRootSnapshotVersions.set(worktree, result.version);
+    } catch {
+      // A snapshot only lets the next cold Files open show sooner.
+    }
   }
 
   #dispatchDaemonOperation(
@@ -2734,6 +2892,55 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     }
   }
 
+  #readEnvironment(threadId: ThreadId): Promise<EnvironmentReads> {
+    const startedAt = Date.now();
+    const times = { environmentMs: 0, signingMs: 0, bitbucketMs: 0 };
+    const timed = <A>(name: keyof typeof times, read: Promise<A>) =>
+      read.finally(() => {
+        times[name] = Date.now() - startedAt;
+      });
+    // Independent D1 reads: a wake waits for the slowest, not their sum.
+    return Effect.runPromise(decodeD1Binding(this.env.DB)).then((db) =>
+      Promise.all([
+        timed(
+          "environmentMs",
+          Effect.runPromise(resolveExecutionEnvironment(this.env, threadId)),
+        ),
+        timed(
+          "signingMs",
+          Effect.runPromise(resolveExecutionSigningPlan(this.env, threadId)),
+        ),
+        // While the Thread owner has an active Bitbucket connection, SSH
+        // bitbucket.org remotes use HTTPS so the native credential helper
+        // applies.
+        timed(
+          "bitbucketMs",
+          db
+            .prepare(
+              `SELECT 1 AS connected FROM threads t
+                 JOIN bitbucket_connection c ON c.user_id = t.owner_user_id
+                WHERE t.id = ? AND c.status = 'active' LIMIT 1`,
+            )
+            .bind(threadId)
+            .first<{ connected: number }>(),
+        ),
+      ]).then(([snapshot, signing, bitbucketConnection]) => ({
+        snapshot,
+        signing,
+        bitbucketConnection,
+        times,
+      })),
+    );
+  }
+
+  /** Start the repair's reads now, while the Orb wakes. */
+  #prefetchEnvironmentReads(threadId: ThreadId) {
+    if (this.#environmentReads?.threadId === threadId) return;
+    const reads = this.#readEnvironment(threadId);
+    reads.catch(() => undefined);
+    this.#environmentReads = { threadId, startedAt: Date.now(), reads };
+  }
+
   async #activateEnvironmentOnce(threadId: ThreadId) {
     const authority = this.#authority;
     if (
@@ -2753,22 +2960,21 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       ENVIRONMENT_GENERATION_STORAGE_KEY,
       nextGeneration,
     );
-    // Independent D1 reads: a wake waits for the slowest, not their sum.
-    const db = await Effect.runPromise(decodeD1Binding(this.env.DB));
-    // While the Thread owner has an active Bitbucket connection, SSH
-    // bitbucket.org remotes use HTTPS so the native credential helper applies.
-    const [snapshot, signing, bitbucketConnection] = await Promise.all([
-      Effect.runPromise(resolveExecutionEnvironment(this.env, threadId)),
-      Effect.runPromise(resolveExecutionSigningPlan(this.env, threadId)),
-      db
-        .prepare(
-          `SELECT 1 AS connected FROM threads t
-             JOIN bitbucket_connection c ON c.user_id = t.owner_user_id
-            WHERE t.id = ? AND c.status = 'active' LIMIT 1`,
-        )
-        .bind(threadId)
-        .first<{ connected: number }>(),
-    ]);
+    const readsStartedAt = Date.now();
+    // Reads a wake started are used once, and only by that wake; a failed
+    // one is read again here.
+    const prefetched =
+      this.#environmentReads?.threadId === threadId &&
+      readsStartedAt - this.#environmentReads.startedAt <
+        DAEMON_ACTIVATION_DEADLINE_MS
+        ? this.#environmentReads
+        : undefined;
+    this.#environmentReads = undefined;
+    const { snapshot, signing, bitbucketConnection, times } =
+      prefetched === undefined
+        ? await this.#readEnvironment(threadId)
+        : await prefetched.reads.catch(() => this.#readEnvironment(threadId));
+    const readsFinishedAt = Date.now();
     const gatewayOrigin = new URL(this.env.DX_AUTH_URL as string).origin;
     const bitbucketGateway =
       bitbucketConnection !== null && gatewayOrigin.startsWith("https://")
@@ -2803,6 +3009,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     // Digest first: a daemon that already holds this exact environment
     // answers a 4 KiB control frame instead of receiving up to 14 MiB again.
     const digest = await environmentActivationDigest(operation);
+    const checkStartedAt = Date.now();
     const checked = await this.#dispatchDaemonOperation(
       authority,
       { operation: "environment.check", generation, digest },
@@ -2814,6 +3021,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       await checked.json(),
       { onExcessProperty: "error" },
     );
+    const checkFinishedAt = Date.now();
+    const checkKind = result.kind;
     if (result.generation !== generation || result.kind === "superseded")
       throw new Error("environment unavailable");
     if (result.kind !== "unchanged") {
@@ -2836,6 +3045,22 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       result.kind === "missing"
     )
       throw new Error("environment unavailable");
+    threadDaemonLogger.info("Thread environment activation timing.", {
+      event: "thread_environment_activation_timing",
+      threadId,
+      ...times,
+      prefetched: prefetched !== undefined,
+      prefetchAgeMs:
+        prefetched === undefined
+          ? undefined
+          : readsStartedAt - prefetched.startedAt,
+      readsMs: readsFinishedAt - readsStartedAt,
+      prepareMs: checkStartedAt - readsFinishedAt,
+      checkMs: checkFinishedAt - checkStartedAt,
+      checkKind,
+      activateMs: Date.now() - checkFinishedAt,
+      kind: result.kind,
+    });
     if (result.kind === "resume-timeout")
       threadDaemonLogger.warn("Thread resume hook exceeded its time bound.", {
         event: "thread_resume_timeout",
@@ -2873,6 +3098,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       request.headers.get("x-dx-thread-id"),
     );
     if (Option.isNone(threadId)) return new Response(null, { status: 404 });
+    // Reads a wake started may predate this change.
+    this.#environmentReads = undefined;
     const authority = this.#authority;
     if (authority === undefined || authority.threadId !== threadId.value)
       return new Response(null, { status: 404 });

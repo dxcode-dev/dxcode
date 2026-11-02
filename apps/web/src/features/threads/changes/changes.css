@@ -152,9 +152,16 @@
   overflow: auto;
 }
 
-.changes-scroll[data-empty] {
+.changes-scroll[data-empty],
+.changes-scroll[data-empty] > .changes-scroll-content {
   display: flex;
   flex-direction: column;
+}
+
+/* The virtualizer watches this box's size to learn when rows above a large
+   diff grow or shrink. */
+.changes-scroll[data-empty] > .changes-scroll-content {
+  flex: 1;
 }
 
 .changes-empty {

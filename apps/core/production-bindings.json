@@ -12,6 +12,12 @@
       "provenance": "authored-wrangler"
     },
     {
+      "name": "BOAT_API_KEY",
+      "type": "secret",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
       "name": "BYOK_CREDENTIAL_COORDINATOR",
       "type": "durable-object",
       "provenance": "authored-wrangler"

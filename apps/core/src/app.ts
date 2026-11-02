@@ -28,6 +28,7 @@ import { installFlueObservation } from "./observability/flue.js";
 import { installRuntimeTracing } from "./observability/platform-tracing.js";
 import { threadOrbDiskRoutes } from "./orb-disk/routes.js";
 import { threadOrbMemoryRoutes } from "./orb-memory/routes.js";
+import { d1Session } from "./persistence/d1-session.js";
 import { portalAuthRoutes } from "./portals/auth-routes.js";
 import { portalHostRouting } from "./portals/host-routing.js";
 import { threadPortalRoutes } from "./portals/routes.js";
@@ -40,6 +41,7 @@ import {
 } from "./settings/members/routes.js";
 import { settingsRoutes } from "./settings/routes.js";
 import { pluginTriggerIngressRoutes } from "./settings/triggers/routes.js";
+import { shellRoutes } from "./shell/routes.js";
 import { sidebarLayoutRoutes } from "./sidebar-layout/routes.js";
 import { bitbucketGitGatewayRoutes } from "./source-control/bitbucket/git-gateway.js";
 import { bitbucketControlPlaneRoutes } from "./source-control/bitbucket/routes.js";
@@ -74,6 +76,7 @@ const app = new Hono<AppEnv>();
 app.use("*", portalHostRouting);
 app.use("*", requestId);
 app.use("*", requestLogging);
+app.use("*", d1Session);
 
 app.get("/healthz", healthHandler);
 app.get("/readyz", readinessHandler);
@@ -105,6 +108,7 @@ app.route("/v1/projects", projectRoutes);
 app.route("/v1/realtime", realtimeRoutes);
 app.route("/v1/settings", settingsRoutes);
 app.route("/v1/shared-threads", sharedThreadRoutes);
+app.route("/v1/shell", shellRoutes);
 app.route("/v1/sidebar-layout", sidebarLayoutRoutes);
 app.route("/v1/thread-search", threadSearchRoutes);
 app.use("/v1/threads/:threadId", shareThreadReads);
@@ -117,12 +121,11 @@ app.use("/v1/threads/:threadId/follow", authorizeThread);
 app.route("/v1/threads", threadMemberRoutes);
 app.use("/v1/threads/:threadId/bug-reports", authorizeThread);
 app.route("/v1/threads", threadBugReportRoutes);
-app.use("/v1/threads/:threadId/changes", authorizeThread);
+// `/changes/*` also matches `/changes`, and `/files/*` `/files`; registering
+// both would authorize twice, one more D1 round trip per request.
 app.use("/v1/threads/:threadId/changes/*", authorizeThread);
 app.route("/v1/threads", threadChangesRoutes);
-app.use("/v1/threads/:threadId/files", authorizeThread);
 app.use("/v1/threads/:threadId/files/*", authorizeThread);
-app.use("/v1/threads/:threadId/files", enforceThreadActive);
 app.use("/v1/threads/:threadId/files/*", enforceThreadActive);
 app.route("/v1/threads", threadFilesRoutes);
 app.use("/v1/threads/:threadId/files-sandbox", authorizeThread);
@@ -132,8 +135,9 @@ app.route("/v1/threads", threadSandboxFileRoutes);
 // while the Thread is archived. `/storage/*` also matches `/storage`.
 app.use("/v1/threads/:threadId/storage/*", authorizeThread);
 app.route("/v1/threads", threadStorageRoutes);
-app.use("/v1/threads/:threadId/terminal", authorizeThread);
-app.use("/v1/threads/:threadId/terminal", enforceThreadActive);
+// `/terminal/*` also matches `/terminal`: the attach and its warm-up.
+app.use("/v1/threads/:threadId/terminal/*", authorizeThread);
+app.use("/v1/threads/:threadId/terminal/*", enforceThreadActive);
 app.route("/v1/threads", threadTerminalRoutes);
 // `/portals/*` also matches `/portals`; authorizing twice would see the
 // owner a contributor is impersonating.

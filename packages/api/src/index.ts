@@ -37,6 +37,7 @@ export {
   NotFoundResponseSchema,
 } from "./http/not-found-response.js";
 export * from "./navigation/needs-you.js";
+export * from "./navigation/shell.js";
 export * from "./navigation/sidebar-layout.js";
 export * from "./notifications/notifications.js";
 export * from "./projects/create-project.js";

@@ -198,6 +198,9 @@ const exaApiKey =
   target !== "selfhost" || selfhostConfig.integrations.includes("exa")
     ? operatorEnvironment.EXA_API_KEY?.trim()
     : undefined;
+// Boat on the deployment's own account: hosted targets only, when set.
+const boatApiKey =
+  target !== "selfhost" ? operatorEnvironment.BOAT_API_KEY?.trim() : undefined;
 // Attachment bytes move straight between browsers, dxd, and R2 when the
 // deployment can mint the bucket-scoped token Core signs URLs with. Alchemy
 // OAuth cannot create tokens, so those self-hosts carry the bytes through
@@ -662,6 +665,7 @@ const environment = {
     : { DX_INTEGRATION_BITBUCKET_OAUTH: bitbucketOAuth }),
   ...(sarvamApiKey ? { SARVAM_API_KEY: sarvamApiKey } : {}),
   ...(exaApiKey ? { EXA_API_KEY: exaApiKey } : {}),
+  ...(boatApiKey ? { BOAT_API_KEY: boatApiKey } : {}),
   ...(attachmentR2Credentials === undefined
     ? {}
     : { DX_ATTACHMENT_R2_CREDENTIALS: attachmentR2Credentials }),

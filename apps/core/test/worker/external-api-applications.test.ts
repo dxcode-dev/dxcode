@@ -11,7 +11,7 @@ import {
 } from "@dx/domain";
 import { Effect, Schema } from "effect";
 import { Hono } from "hono";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticate } from "../../src/auth/authenticate.js";
 import { authorizeApiTokenScope } from "../../src/auth/authorize-api-token-scope.js";
 import { errorHandler } from "../../src/http/http-errors.js";
@@ -138,6 +138,10 @@ const insertUser = (userId: UserId, index: number) =>
     1,
     1,
   );
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 beforeEach(async () => {
   await env.DB.batch([
@@ -735,6 +739,14 @@ describe("workspace external API applications in workerd with real D1", () => {
   });
 
   it("enforces an atomic per-app rate limit and records last-used and immutable request attribution", async () => {
+    // The limit counts requests per calendar minute of Date.now(). On the real
+    // clock the eleven requests could straddle a minute boundary (likelier
+    // under load), and the eleventh then landed in a fresh window. Hold the
+    // clock 5 s into one window instead.
+    vi.useFakeTimers({
+      now: Math.floor(Date.now() / 60_000) * 60_000 + 65_000,
+      toFake: ["Date"],
+    });
     const { application, clientSecret } = (
       await createApplication(owner, {
         name: "Rate-limited app",

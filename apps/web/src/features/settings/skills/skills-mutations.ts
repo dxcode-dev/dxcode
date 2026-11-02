@@ -4,6 +4,7 @@ import {
   ApiError,
   exportSkill,
   importSkill,
+  type listSkills,
   previewSkill,
   publishSkillVersion,
   removeSkill,
@@ -15,6 +16,90 @@ import {
   type SkillsTarget,
   skillKeys,
 } from "./skills-queries.js";
+
+type SkillList = Awaited<ReturnType<typeof listSkills>>;
+
+/** Replaces one skill in the cached list, leaving the rest as they are. */
+const replaceSkill = (
+  queryClient: QueryClient,
+  userId: UserId,
+  target: SkillsTarget,
+  skill: SkillData,
+) =>
+  queryClient.setQueryData<SkillList>(skillKeys.list(userId, target), (list) =>
+    list === undefined
+      ? list
+      : {
+          ...list,
+          items: list.items.map((item) =>
+            item.id === skill.id ? skill : item,
+          ),
+        },
+  );
+
+/**
+ * Rereads the list once the last of these writes settles, so the labels
+ * other skills derive from this one (such as a workspace skill replaced by a
+ * personal one of the same name) catch up.
+ */
+const rereadAfterLast = async (
+  queryClient: QueryClient,
+  userId: UserId,
+  target: SkillsTarget,
+  mutationKey: ReadonlyArray<unknown>,
+) => {
+  if (queryClient.isMutating({ mutationKey, exact: true }) === 1)
+    await queryClient.invalidateQueries({
+      queryKey: skillKeys.list(userId, target),
+      exact: true,
+    });
+};
+
+export interface SkillToggle {
+  readonly skill: SkillData;
+  readonly enabled: boolean;
+}
+
+export const skillToggleMutationKey = (userId: UserId, target: SkillsTarget) =>
+  [...skillKeys.list(userId, target), "toggle"] as const;
+
+/**
+ * Switches a skill on or off. The switch moves at once; a failed save puts
+ * that skill back as it was, and callers show the error.
+ */
+export const skillToggleMutationOptions = (
+  queryClient: QueryClient,
+  userId: UserId,
+  target: SkillsTarget,
+) =>
+  mutationOptions({
+    mutationKey: skillToggleMutationKey(userId, target),
+    gcTime: 0,
+    mutationFn: ({ skill, enabled }: SkillToggle) =>
+      updateSkillState(target, skill.id, { enabled }),
+    onMutate: async ({ skill, enabled }) => {
+      // A read that started before the save must not land after it.
+      await queryClient.cancelQueries({
+        queryKey: skillKeys.list(userId, target),
+        exact: true,
+      });
+      replaceSkill(queryClient, userId, target, {
+        ...skill,
+        enabled,
+        effectiveState: enabled ? "effective" : "disabled",
+      });
+    },
+    onSuccess: (saved) => replaceSkill(queryClient, userId, target, saved),
+    onError: (_error, { skill }) =>
+      replaceSkill(queryClient, userId, target, skill),
+    onSettled: () =>
+      rereadAfterLast(
+        queryClient,
+        userId,
+        target,
+        skillToggleMutationKey(userId, target),
+      ),
+  });
 
 export type SkillsMutationAction =
   | {
@@ -223,8 +308,50 @@ export const skillAuthorMutationOptions = (
       readonly draft: SkillDraft;
       readonly skill?: SkillData;
     }) => authorSkill(target, draft, skill),
+    // An edit shows its new version at once; a failed save puts the skill
+    // back as it was.
+    onMutate: async ({ draft, skill }) => {
+      if (skill === undefined) return;
+      await queryClient.cancelQueries({
+        queryKey: skillKeys.list(userId, target),
+        exact: true,
+      });
+      replaceSkill(queryClient, userId, target, editedSkill(skill, draft));
+    },
+    onSuccess: (saved) => replaceSkill(queryClient, userId, target, saved),
+    onError: (_error, { skill }) => {
+      if (skill !== undefined) replaceSkill(queryClient, userId, target, skill);
+    },
     onSettled: () =>
       queryClient.invalidateQueries({
         queryKey: skillKeys.list(userId, target),
       }),
   });
+
+/**
+ * The skill as the server will hold it once an edit saves: the next version,
+ * active unless the skill is pinned.
+ */
+const editedSkill = (skill: SkillData, draft: SkillDraft): SkillData => {
+  const version = (Math.max(...skill.versions) +
+    1) as SkillData["activeVersion"];
+  return {
+    ...skill,
+    versions: [version, ...skill.versions],
+    ...(skill.pinned
+      ? {}
+      : {
+          activeVersion: version,
+          active: {
+            ...skill.active,
+            version,
+            manifest: {
+              ...skill.active.manifest,
+              description:
+                draft.description.trim() as SkillData["active"]["manifest"]["description"],
+            },
+            instructions: `${draft.instructions.trim()}\n`,
+          },
+        }),
+  };
+};

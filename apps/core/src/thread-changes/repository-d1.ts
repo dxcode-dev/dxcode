@@ -136,12 +136,19 @@ const decodeSource = (raw: unknown): ThreadChangesSource | undefined => {
 };
 
 export const makeThreadChangesRepository = (db: D1Database) => {
+  // Every reader counts only unexpired leases, so collecting expired ones is
+  // for the writers' batches (capture, mark dirty); a plain read stays a read
+  // and can be served by a D1 replica.
   const stateStatements = (threadId: ThreadId, now: number) => [
     db
       .prepare(
         "DELETE FROM thread_changes_mutation_lease WHERE thread_id = ? AND expires_at <= ?",
       )
       .bind(threadId, now),
+    stateStatement(threadId, now),
+  ];
+
+  const stateStatement = (threadId: ThreadId, now: number) =>
     db
       .prepare(
         `SELECT state.*,
@@ -152,8 +159,7 @@ export const makeThreadChangesRepository = (db: D1Database) => {
           WHERE state.thread_id = ?
           LIMIT 1`,
       )
-      .bind(now, threadId),
-  ];
+      .bind(now, threadId);
 
   const sourceStatement = (threadId: ThreadId) =>
     db
@@ -180,10 +186,7 @@ export const makeThreadChangesRepository = (db: D1Database) => {
     threadId: ThreadId,
   ): Promise<ThreadChangesState | undefined> => {
     try {
-      const [, selected] = await db.batch(
-        stateStatements(threadId, Date.now()),
-      );
-      return decodeState(selected?.results[0]);
+      return decodeState(await stateStatement(threadId, Date.now()).first());
     } catch (cause) {
       throw unavailable("thread-changes.state.read", cause);
     }

@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { secondReviewerCredentials } from "./second-reviewer.mjs";
 
 // The username migration 0097's sign-up trigger derives from an email
 // address: its name before any +tag, with . and _ as -, then 2 or 3 digits
@@ -182,16 +181,17 @@ export const bootstrapDeployment = async ({
 };
 
 /**
- * Bootstraps a hosted deployment's reviewer and, on a branch preview only, the
- * second reviewer derived from it. The second reviewer's password always
- * converges to the derived one, so rotating the first reviewer's password
- * moves it too.
+ * Bootstraps a hosted deployment's reviewer, then each further reviewer
+ * `additionalReviewers(credentials)` returns. A further reviewer's password
+ * always converges to the one it is given, so credentials derived from the
+ * first reviewer's follow a rotation of it.
  */
 export const bootstrapDeploymentReviewers = async ({
   credentials,
   database,
   repository,
   runnerProfileId,
+  additionalReviewers = () => [],
 }) => {
   const primary = await bootstrapDeployment({
     credentials,
@@ -199,15 +199,46 @@ export const bootstrapDeploymentReviewers = async ({
     repository,
     runnerProfileId,
   });
-  const second = secondReviewerCredentials(credentials);
-  if (second === undefined) return { primary };
-  const secondary = await bootstrapDeployment({
-    credentials: second,
-    database,
-    resetPassword: true,
-  });
-  await approveBootstrapEmail({ email: second.email, database });
-  return { primary, second: secondary };
+  const additional = [];
+  for (const reviewer of additionalReviewers(credentials)) {
+    additional.push(
+      await bootstrapDeployment({
+        credentials: reviewer,
+        database,
+        resetPassword: true,
+      }),
+    );
+    await approveBootstrapEmail({ email: reviewer.email, database });
+  }
+  return { primary, additional };
+};
+
+/**
+ * The further reviewers a hosted deployment bootstraps, from the module its
+ * private deployment policy names in `bootstrapReviewersModule`: a
+ * repository-relative `.mjs` path whose `additionalReviewers(primary)` returns
+ * their credentials. With no policy or no module there are none, as on a
+ * self-host, so this file never depends on a file a release may not ship.
+ */
+export const hostedAdditionalReviewers = async (policyJson) => {
+  const path = policyJson?.trim()
+    ? JSON.parse(policyJson).bootstrapReviewersModule
+    : undefined;
+  if (path === undefined) return () => [];
+  if (
+    typeof path !== "string" ||
+    !/^[\w-]+(?:\/[\w.-]+)*\.mjs$/.test(path) ||
+    path.split("/").some((segment) => segment.startsWith("."))
+  )
+    throw new Error(
+      "The deployment policy's bootstrapReviewersModule must be a repository-relative .mjs path.",
+    );
+  const { additionalReviewers } = await import(
+    new URL(`../${path}`, import.meta.url).href
+  );
+  if (typeof additionalReviewers !== "function")
+    throw new Error(`${path} does not export an additionalReviewers function.`);
+  return additionalReviewers;
 };
 
 export const approveBootstrapEmail = async ({ email, database }) => {
@@ -454,6 +485,10 @@ const main = async () => {
       repository: JSON.parse(required("DX_BOOTSTRAP_REPOSITORY")),
       runnerProfileId: required("DX_BOOTSTRAP_RUNNER_PROFILE_ID"),
       database,
+      // Hosted deploys inherit the private policy the deploy runner requires.
+      additionalReviewers: await hostedAdditionalReviewers(
+        process.env.DX_PRIVATE_DEPLOYMENT_POLICY,
+      ),
     });
   console.log("Deployment bootstrap is ready.");
 };

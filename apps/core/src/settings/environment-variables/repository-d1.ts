@@ -287,7 +287,8 @@ export const EnvironmentVariableRepositoryD1 = (db: D1Database) =>
         ),
         remove: Effect.fn("EnvironmentVariableRepository.remove")(
           function* (target, id, audit) {
-            yield* find(target, id);
+            // The audit row is written only when the delete removed one, so
+            // a missing value fails the batch and is found below.
             const result = yield* Effect.result(
               Effect.tryPromise({
                 try: () =>

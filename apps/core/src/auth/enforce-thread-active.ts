@@ -14,6 +14,7 @@ export const enforceThreadActive: MiddlewareHandler<AppEnv> = async (
   // (its status check and sockets) also starts the desktop session.
   const executionCapable =
     context.req.path === `${threadPath}/terminal` ||
+    context.req.path.startsWith(`${threadPath}/terminal/`) ||
     context.req.path.startsWith(`${threadPath}/files`) ||
     context.req.path === `${threadPath}/desktop` ||
     context.req.path.startsWith(`${threadPath}/desktop/`) ||

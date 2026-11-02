@@ -215,15 +215,37 @@ def fingerprint(untracked_cache=None):
 
 
 def limited_patch(value):
-    encoded = value.encode("utf-8")
-    truncated = len(encoded) > MAX_PATCH_BYTES
-    if truncated:
-        value = encoded[:MAX_PATCH_BYTES].decode("utf-8", "ignore")
-    lines = value.splitlines(keepends=True)
-    if len(lines) > MAX_PATCH_LINES:
-        value = "".join(lines[:MAX_PATCH_LINES])
-        truncated = True
-    return value, truncated
+    # Since #1461: an over-limit patch keeps whole lines within both limits,
+    # and its last hunk header counts only the lines kept (a header left with
+    # none goes), so the cut patch still parses.
+    lines = value.split("\n")
+    lines = [line + "\n" for line in lines[:-1]] + ([lines[-1]] if lines[-1] else [])
+    if len(value.encode("utf-8")) <= MAX_PATCH_BYTES and len(lines) <= MAX_PATCH_LINES:
+        return value, False
+    kept = []
+    size = 0
+    for line in lines:
+        length = len(line.encode("utf-8"))
+        if len(kept) == MAX_PATCH_LINES or size + length > MAX_PATCH_BYTES or not line.endswith("\n"):
+            break
+        size += length
+        kept.append(line)
+    headers = [index for index, line in enumerate(kept) if line.startswith("@@ -")]
+    if not headers:
+        return "", True
+    header = headers[-1]
+    old = sum(1 for line in kept[header + 1:] if line[:1] in (" ", "-"))
+    new = sum(1 for line in kept[header + 1:] if line[:1] in (" ", "+"))
+    if old + new == 0:
+        kept = kept[:header]
+        if not any(line.startswith("@@ -") for line in kept):
+            return "", True
+    else:
+        ranges, section = kept[header][len("@@ -"):].split(" @@", 1)
+        old_range, new_range = ranges.split(" +", 1)
+        kept[header] = "@@ -%s,%d +%s,%d @@%s" % (
+            old_range.split(",")[0], old, new_range.split(",")[0], new, section)
+    return "".join(kept), True
 
 
 def untracked_file(root, path):

@@ -83,6 +83,10 @@ const page = {
     () => import("./features/threads/bug-reports/bug-report-page.js"),
     "BugReportRoute",
   ),
+  needsYou: lazyRouteComponent(
+    () => import("./features/navigation/needs-you-page.js"),
+    "NeedsYouPage",
+  ),
   joinWorkspace: lazyRouteComponent(
     () => import("./features/settings/members/join-workspace-page.js"),
     "JoinWorkspacePage",
@@ -210,6 +214,12 @@ const bugReportRoute = createRoute({
   getParentRoute: () => productRoute,
   path: "/bug-reports/$reportId",
   component: page.bugReport,
+});
+
+const needsYouRoute = createRoute({
+  getParentRoute: () => productRoute,
+  path: "/needs-you",
+  component: page.needsYou,
 });
 
 const projectSettingsRoute = createRoute({
@@ -480,6 +490,7 @@ const routeTree = rootRoute.addChildren([
     threadTreeRoute,
     bugReportsRoute,
     bugReportRoute,
+    needsYouRoute,
   ]),
   personalSettingsRoute,
   personalAdvancedSettingsRedirectRoute,

@@ -369,6 +369,65 @@ const decodeIndex = (
   return index;
 };
 
+/**
+ * A packed capture's index, kept in this colo's cache by Thread and capture.
+ * A capture ID names one immutable object (`chg_` and a random UUID), so an
+ * entry never goes stale; callers read the ID from D1 after authorizing the
+ * Thread. Saves the R2 round trip on every Changes read after the first.
+ */
+const INDEX_CACHE_NAME = "dx-thread-changes-index";
+const indexCacheUrl = (threadId: ThreadIdType, captureId: string) =>
+  `https://thread-changes.cache.invalid/${encodeURIComponent(threadId)}/${encodeURIComponent(captureId)}`;
+const indexCache = async () =>
+  typeof caches === "undefined"
+    ? undefined
+    : await caches.open(INDEX_CACHE_NAME).catch(() => undefined);
+
+const cachedCaptureIndex = async (
+  threadId: ThreadIdType,
+  captureId: ThreadChangesCaptureId,
+) => {
+  try {
+    const cached = await (await indexCache())?.match(
+      indexCacheUrl(threadId, captureId),
+    );
+    if (cached === undefined) return undefined;
+    const indexLength = Number(cached.headers.get("x-dx-index-length"));
+    const objectSize = Number(cached.headers.get("x-dx-object-size"));
+    return {
+      kind: "packed" as const,
+      index: decodeIndex(await cached.arrayBuffer(), objectSize, indexLength),
+      indexLength,
+      objectSize,
+    };
+  } catch {
+    return undefined;
+  }
+};
+
+const cacheCaptureIndex = async (
+  threadId: ThreadIdType,
+  captureId: ThreadChangesCaptureId,
+  bytes: ArrayBuffer,
+  indexLength: number,
+  objectSize: number,
+) => {
+  try {
+    await (await indexCache())?.put(
+      indexCacheUrl(threadId, captureId),
+      new Response(bytes, {
+        headers: {
+          "cache-control": "public, max-age=86400",
+          "x-dx-index-length": String(indexLength),
+          "x-dx-object-size": String(objectSize),
+        },
+      }),
+    );
+  } catch {
+    // The cache only saves a round trip; R2 stays authoritative.
+  }
+};
+
 const readCaptureIndex = async (
   bucket: R2Bucket,
   threadId: ThreadIdType,
@@ -378,6 +437,8 @@ const readCaptureIndex = async (
   const checkedCaptureId = Schema.decodeUnknownSync(ThreadChangesCaptureId)(
     captureId,
   );
+  const cached = await cachedCaptureIndex(checkedThreadId, checkedCaptureId);
+  if (cached !== undefined) return cached;
   const key = captureKey(checkedThreadId, checkedCaptureId);
   const first = await bucket.get(key, {
     range: { offset: 0, length: INDEX_INITIAL_READ_BYTES },
@@ -418,9 +479,17 @@ const readCaptureIndex = async (
           if (object === null) throw new Error("capture disappeared");
           return object.arrayBuffer();
         })();
+  const index = decodeIndex(bytes, first.size, indexLength);
+  await cacheCaptureIndex(
+    checkedThreadId,
+    checkedCaptureId,
+    bytes,
+    indexLength,
+    first.size,
+  );
   return {
     kind: "packed" as const,
-    index: decodeIndex(bytes, first.size, indexLength),
+    index,
     indexLength,
     objectSize: first.size,
   };

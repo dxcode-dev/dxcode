@@ -13,6 +13,7 @@ import type { MiddlewareHandler } from "hono";
 import type { AppEnv } from "../http/types.js";
 import { authenticationLogger } from "../logging.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
+import { primaryDatabase } from "../persistence/d1-session.js";
 import {
   authenticateExternalApiApplication,
   decodeExternalApplicationBasicCredentials,
@@ -84,7 +85,10 @@ export const authenticate: MiddlewareHandler<AppEnv> = async (
     if (credentials === undefined) {
       return unauthorized(context, 'Basic realm="dx external API"');
     }
-    const db = await Effect.runPromise(decodeD1Binding(context.env.DB));
+    // Application credentials are read at the primary, like sessions.
+    const db = await Effect.runPromise(
+      decodeD1Binding(primaryDatabase(context.env.DB)),
+    );
     const authentication = await Effect.runPromise(
       Effect.result(
         authenticateExternalApiApplication(db, {

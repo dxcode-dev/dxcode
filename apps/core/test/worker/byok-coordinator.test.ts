@@ -504,6 +504,9 @@ describe("ByokCredentialCoordinatorObject", () => {
       },
       credentialRevision: 1,
     });
+    // Read the body here too: a response a test never reads keeps its
+    // request to the Durable Object open until it is garbage collected, and a
+    // later eviction waits for it.
     const response = await runInDurableObject(
       stub(),
       async (_instance, state) => {
@@ -535,7 +538,7 @@ describe("ByokCredentialCoordinatorObject", () => {
           ),
         );
       },
-    );
+    ).then(drained);
     return { response, find, refresh };
   };
 

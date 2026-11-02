@@ -246,17 +246,7 @@ const instrumentD1 = (db: unknown) => {
     return;
   Object.defineProperty(databasePrototype, instrumented, { value: true });
 
-  patch(
-    databasePrototype,
-    "prepare",
-    (original) =>
-      function prepare(this: unknown, ...args: Array<unknown>) {
-        const statement = original.apply(this, args);
-        if (typeof args[0] === "string" && typeof statement === "object")
-          statementSql.set(statement as object, args[0]);
-        return statement;
-      },
-  );
+  patchPrepare(databasePrototype);
   patch(
     statementPrototype,
     "bind",
@@ -284,11 +274,65 @@ const instrumentD1 = (db: unknown) => {
         },
     );
   }
+  patchBatch(databasePrototype);
   patch(
     databasePrototype,
+    "exec",
+    (original) =>
+      function exec(this: unknown, ...args: Array<unknown>) {
+        return observeCall(
+          "d1.exec",
+          "d1",
+          { "db.operation.name": "exec" },
+          () => original.apply(this, args),
+        );
+      },
+  );
+  // Requests query through a session (persistence/d1-session.ts); its
+  // statements share the statement class patched above.
+  const sessionPrototype =
+    typeof (db as D1Database).withSession === "function"
+      ? (Object.getPrototypeOf((db as D1Database).withSession()) as
+          | object
+          | null)
+      : null;
+  if (
+    sessionPrototype !== null &&
+    !Object.hasOwn(sessionPrototype, instrumented) &&
+    ownMethods(sessionPrototype, ["prepare", "batch"])
+  ) {
+    Object.defineProperty(sessionPrototype, instrumented, { value: true });
+    patchPrepare(sessionPrototype);
+    patchBatch(sessionPrototype);
+  }
+};
+
+/**
+ * The binding's own `batch` calls its primary session's `batch` before its
+ * first await; that inner call is part of the outer span.
+ */
+let batching = false;
+
+const patchPrepare = (prototype: object) =>
+  patch(
+    prototype,
+    "prepare",
+    (original) =>
+      function prepare(this: unknown, ...args: Array<unknown>) {
+        const statement = original.apply(this, args);
+        if (typeof args[0] === "string" && typeof statement === "object")
+          statementSql.set(statement as object, args[0]);
+        return statement;
+      },
+  );
+
+const patchBatch = (prototype: object) =>
+  patch(
+    prototype,
     "batch",
     (original) =>
       function batch(this: unknown, ...args: Array<unknown>) {
+        if (batching) return original.apply(this, args);
         const statements = Array.isArray(args[0]) ? args[0] : [];
         const tables = [
           ...new Set(
@@ -308,24 +352,17 @@ const instrumentD1 = (db: unknown) => {
             "dx.d1.statements": statements.length,
             "dx.d1.table": tables.slice(0, 4).join(","),
           },
-          () => original.apply(this, args),
+          () => {
+            batching = true;
+            try {
+              return original.apply(this, args);
+            } finally {
+              batching = false;
+            }
+          },
         );
       },
   );
-  patch(
-    databasePrototype,
-    "exec",
-    (original) =>
-      function exec(this: unknown, ...args: Array<unknown>) {
-        return observeCall(
-          "d1.exec",
-          "d1",
-          { "db.operation.name": "exec" },
-          () => original.apply(this, args),
-        );
-      },
-  );
-};
 
 // ─── Durable Objects ────────────────────────────────────────────────────────
 

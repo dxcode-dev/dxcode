@@ -68,6 +68,19 @@ export class DaemonUnavailable extends Data.TaggedError("DaemonUnavailable")<{
   readonly outcome: DaemonFailureOutcome;
 }> {}
 
+/**
+ * On a Files root listing the Thread object served from its snapshot while
+ * the Orb wakes: when that listing was read (ISO time).
+ */
+export const FILES_ROOT_SNAPSHOT_HEADER = "x-dx-files-snapshot-at";
+
+export interface ThreadDaemonRequestOptions {
+  /** Receives the response headers: `Server-Timing`, the snapshot time. */
+  readonly observe?: (headers: Headers) => void;
+  /** A root listing may come from the last snapshot while the Orb wakes. */
+  readonly allowSnapshot?: boolean;
+}
+
 export const daemonFailureResponse = (outcome: DaemonFailureOutcome) =>
   Response.json({ error: "daemon-unavailable", outcome }, { status: 503 });
 
@@ -211,21 +224,25 @@ export function requestThreadDaemon(
   bindings: Pick<Bindings, "THREAD_EXECUTION">,
   threadId: ThreadId,
   operation: DxdFilesListOperation,
+  options?: ThreadDaemonRequestOptions,
 ): Promise<typeof DxdFilesListResult.Type>;
 export function requestThreadDaemon(
   bindings: Pick<Bindings, "THREAD_EXECUTION">,
   threadId: ThreadId,
   operation: DxdFilesReadOperation,
+  options?: ThreadDaemonRequestOptions,
 ): Promise<typeof DxdFilesReadResult.Type>;
 export function requestThreadDaemon(
   bindings: Pick<Bindings, "THREAD_EXECUTION">,
   threadId: ThreadId,
   operation: DxdFilesSaveOperation,
+  options?: ThreadDaemonRequestOptions,
 ): Promise<typeof DxdFilesSaveResult.Type>;
 export function requestThreadDaemon(
   bindings: Pick<Bindings, "THREAD_EXECUTION">,
   threadId: ThreadId,
   operation: DxdFilesReadSandboxOperation,
+  options?: ThreadDaemonRequestOptions,
 ): Promise<DxdFilesReadSandboxResult>;
 export async function requestThreadDaemon(
   bindings: Pick<Bindings, "THREAD_EXECUTION">,
@@ -235,6 +252,7 @@ export async function requestThreadDaemon(
     | DxdFilesReadOperation
     | DxdFilesSaveOperation
     | DxdFilesReadSandboxOperation,
+  options?: ThreadDaemonRequestOptions,
 ) {
   let body: string;
   try {
@@ -255,9 +273,11 @@ export async function requestThreadDaemon(
           "content-type": "application/json",
           "x-dx-daemon-request": "1",
           "x-dx-thread-id": threadId,
+          ...(options?.allowSnapshot ? { "x-dx-files-snapshot": "allow" } : {}),
         },
         body,
       });
+    options?.observe?.(response.headers);
     if (!response.ok) {
       const failure = Schema.decodeUnknownOption(DaemonFailureResponse)(
         await response.json().catch(() => undefined),

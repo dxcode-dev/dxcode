@@ -742,6 +742,7 @@ describe("Thread Files lazy reads", () => {
       undefined,
       primaryWorktree,
       expect.anything(),
+      true,
     );
     expect(transport.read).not.toHaveBeenCalled();
 
@@ -759,6 +760,7 @@ describe("Thread Files lazy reads", () => {
       undefined,
       primaryWorktree,
       expect.anything(),
+      false,
     );
     expect(transport.read).not.toHaveBeenCalled();
 
@@ -860,6 +862,7 @@ describe("Thread Files lazy reads", () => {
       aCursor,
       primaryWorktree,
       expect.anything(),
+      false,
     );
     expect(transport.list).toHaveBeenCalledWith(
       threadId,
@@ -867,6 +870,7 @@ describe("Thread Files lazy reads", () => {
       bCursor,
       primaryWorktree,
       expect.anything(),
+      false,
     );
     await React.act(() => root.unmount());
   });

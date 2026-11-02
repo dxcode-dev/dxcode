@@ -286,10 +286,11 @@ export const resolveExecutionTarget = Effect.fn("resolveExecutionTarget")(
                 }) as const,
             ),
           );
-    // A person's or workspace's connection runs the Thread on the target
-    // its preparation made for the size, which the pin recorded.
+    // A connection, or the deployment's account of a provider prepared at
+    // runtime, runs the Thread on the target its preparation made for the
+    // size, which the pin recorded.
     const profile =
-      credential.scope !== "deployment" && row.provider_template !== null
+      row.provider_template !== null
         ? withPinnedOrbTarget(selected, row.provider_template)
         : selected;
     if (!options.admission) return { profile, credential };

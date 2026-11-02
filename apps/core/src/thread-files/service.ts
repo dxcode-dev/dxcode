@@ -15,7 +15,9 @@ import type { DxdChangesRefresh } from "../execution/dxd/protocol.js";
 import type { Bindings } from "../http/types.js";
 import {
   DaemonUnavailable,
+  FILES_ROOT_SNAPSHOT_HEADER,
   requestThreadDaemon,
+  type ThreadDaemonRequestOptions,
 } from "../threads/daemon-client.js";
 
 const textEncoder = new TextEncoder();
@@ -133,6 +135,7 @@ export const listThreadFilesThroughDaemon = async (
   path: ThreadFilesPathType | undefined,
   cursor?: ThreadFilesCursor,
   worktree?: ThreadFilesWorktreeId,
+  options?: ThreadDaemonRequestOptions,
 ): Promise<ThreadFileTreeData> => {
   const payload = cursorPayload(cursor);
   if (
@@ -149,16 +152,26 @@ export const listThreadFilesThroughDaemon = async (
       ? {}
       : { cursor: { version: payload.version, index: payload.index } }),
   } as const;
-  const result = await requestThreadDaemon(bindings, threadId, operation).catch(
-    async (cause: unknown) => {
-      if (!(cause instanceof DaemonUnavailable) || cause.outcome !== "known")
-        throw new ThreadFilesUnavailable();
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      return requestThreadDaemon(bindings, threadId, operation).catch(() => {
-        throw new ThreadFilesUnavailable();
-      });
+  let snapshotAt: string | undefined;
+  const observed: ThreadDaemonRequestOptions = {
+    ...options,
+    observe: (headers) => {
+      snapshotAt = headers.get(FILES_ROOT_SNAPSHOT_HEADER) ?? undefined;
+      options?.observe?.(headers);
     },
-  );
+  };
+  const request = () =>
+    options === undefined
+      ? requestThreadDaemon(bindings, threadId, operation)
+      : requestThreadDaemon(bindings, threadId, operation, observed);
+  const result = await request().catch(async (cause: unknown) => {
+    if (!(cause instanceof DaemonUnavailable) || cause.outcome !== "known")
+      throw new ThreadFilesUnavailable();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return request().catch(() => {
+      throw new ThreadFilesUnavailable();
+    });
+  });
   if (result.kind !== "tree") return throwDxdFailure(result);
   return {
     kind: "tree",
@@ -180,6 +193,7 @@ export const listThreadFilesThroughDaemon = async (
             index: result.nextIndex,
           }),
         }),
+    ...(snapshotAt === undefined ? {} : { snapshotAt }),
   };
 };
 

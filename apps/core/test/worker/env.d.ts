@@ -21,5 +21,12 @@ declare module "cloudflare:test" {
     >;
     readonly DX_STORAGE: R2Bucket;
     readonly TEST_MIGRATIONS: D1Migration[];
+    readonly TEST_SCHEMA_SNAPSHOT: ReadonlyArray<{
+      readonly sql: string;
+      readonly params: ReadonlyArray<string | number | null>;
+    }>;
+    /** Untouched by setup: schema-snapshot.test.ts migrates and compares. */
+    readonly MIGRATED_CHECK_DB: D1Database;
+    readonly SNAPSHOT_CHECK_DB: D1Database;
   }
 }

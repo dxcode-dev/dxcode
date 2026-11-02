@@ -4,6 +4,7 @@ import type { FlueObservation } from "@flue/runtime";
 import { Hono } from "hono";
 import * as v from "valibot";
 import { describe, expect, it } from "vitest";
+import { linkThread, saveLinkSubject } from "../../src/automations/links.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv } from "../../src/http/types.js";
 import { createNeedsYouTools } from "../../src/needs-you/agent-tools.js";
@@ -265,5 +266,64 @@ describe("Needs you", () => {
     await expect(steps.join("\n")).toMatchFileSnapshot(
       "../../../../artifacts/needs-you/inbox.txt",
     );
+  });
+
+  it("lists each ask's linked issues and pull requests to its owner only", async () => {
+    const project = await createProjectViaApi("needs-you-links");
+    const thread = (await createThreadViaApi(project.data.id)).data.id;
+    await start(thread, "links-1");
+    await requestAttention(thread, {
+      kind: "approval",
+      summary: "Approve merging PR #41",
+      url: "https://github.com/acme/app/pull/41",
+    });
+    await settle(thread, "links-1", "completed", new Date().toISOString());
+    await linkThread(
+      env.DB,
+      { threadId: thread, repository: "acme/app", number: 40, kind: "issue" },
+      new Date(Date.UTC(2026, 0, 1)),
+    );
+    await linkThread(
+      env.DB,
+      {
+        threadId: thread,
+        repository: "acme/app",
+        number: 41,
+        kind: "pull",
+        subject: { title: "Fix the cache", summary: "", state: "open" },
+      },
+      new Date(Date.UTC(2026, 0, 2)),
+    );
+    // A webhook later reports the PR merged.
+    await saveLinkSubject(env.DB, "Acme/App", 41, "pull", {
+      title: "Fix the cache",
+      summary: "",
+      state: "merged",
+    });
+
+    const [item] = (await list()).filter(({ threadId }) => threadId === thread);
+    expect(item?.links).toEqual([
+      {
+        kind: "pull",
+        repository: "acme/app",
+        number: 41,
+        url: "https://github.com/acme/app/pull/41",
+        state: "merged",
+        title: "Fix the cache",
+      },
+      {
+        kind: "issue",
+        repository: "acme/app",
+        number: 40,
+        url: "https://github.com/acme/app/issues/40",
+        state: "open",
+      },
+    ]);
+    // Another person sees neither the ask nor its links.
+    expect(
+      (await list(otherPrincipal)).filter(
+        ({ threadId }) => threadId === thread,
+      ),
+    ).toEqual([]);
   });
 });

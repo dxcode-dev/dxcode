@@ -12,6 +12,7 @@ import * as React from "react";
 import { Group, Panel, usePanelRef } from "react-resizable-panels";
 import { AppUpdateDot } from "../../shared/app-update/app-update-row.js";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
+import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
 import { AppFrame } from "../../shared/layout/app-frame.js";
 import { ResizableDivider } from "../../shared/layout/resizable-divider.js";
 import {
@@ -40,6 +41,16 @@ import { ThreadSearchDialog } from "./thread-search-dialog.js";
 const PRODUCT_SIDEBAR_MIN_SIZE = SIDEBAR_WIDTH_MIN_PX;
 const PRODUCT_SIDEBAR_MAX_SIZE = SIDEBAR_WIDTH_MAX_PX;
 const sidebarExtensionRegion = <SidebarExtensionRegion />;
+
+/** Runs `run` once the browser is idle; returns its cancellation. */
+const whenIdle = (run: () => void) => {
+  if (typeof window.requestIdleCallback === "function") {
+    const id = window.requestIdleCallback(run, { timeout: 4_000 });
+    return () => window.cancelIdleCallback(id);
+  }
+  const timer = window.setTimeout(run, 1_500);
+  return () => window.clearTimeout(timer);
+};
 
 /**
  * The signed-in layout. `notices` are full-width bars above the panels, such
@@ -96,6 +107,12 @@ export function ProductShell({
   // The drawer's sidebar mounts on first open and then stays mounted, so
   // later opens slide it in without rebuilding every row.
   const [mobileSidebarKept, setMobileSidebarKept] = React.useState(false);
+  // On a phone the drawer's rows mount once the page is idle, in a
+  // transition React can pause, so the first tap only slides the drawer in
+  // instead of building every row inside the tap (#1462).
+  useMountEffect(() =>
+    whenIdle(() => React.startTransition(() => setMobileSidebarKept(true))),
+  );
   const setMobileSidebar = (open: boolean) => {
     setMobileSidebarOpen(open);
     if (open) setMobileSidebarKept(true);

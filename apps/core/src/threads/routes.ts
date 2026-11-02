@@ -153,10 +153,7 @@ import { PersonalAgentInstructionsRepositoryD1 } from "../settings/agent-instruc
 import { SettingsAudit } from "../settings/audit.js";
 import { EnvironmentVariableRepositoryD1 } from "../settings/environment-variables/repository-d1.js";
 import { signingBackendCapabilities } from "../settings/keys/backend.js";
-import {
-  resolveMcpAgentConnections,
-  resolveMcpAgentConnectionsFor,
-} from "../settings/mcp-servers/execution.js";
+import { resolveMcpAgentConnectionsFor } from "../settings/mcp-servers/execution.js";
 import { McpServerRepositoryD1 } from "../settings/mcp-servers/repository-d1.js";
 import { resolveSelectionForUser } from "../settings/model-routing/submission.js";
 import { resolvePluginAgentData } from "../settings/plugins/execution.js";
@@ -380,13 +377,12 @@ export const threadDetailData = Effect.fn("threadDetailData")(function* (
     inboundMessages,
   ] = yield* Effect.all(
     [
-      (unpersisted
-        ? resolveMcpAgentConnectionsFor(
-            binding,
-            thread.ownerUserId,
-            thread.projectId,
-          )
-        : resolveMcpAgentConnections(binding, thread.id)
+      // The Thread in hand names its owner and Project, so the policy does
+      // not read the Thread's row again (#1156).
+      resolveMcpAgentConnectionsFor(
+        binding,
+        thread.ownerUserId,
+        thread.projectId,
       ).pipe(
         Effect.mapError(
           () => new PersistenceUnavailable({ operation: "resolve MCP policy" }),
@@ -438,7 +434,8 @@ export const threadDetailData = Effect.fn("threadDetailData")(function* (
               }),
           }),
     ],
-    { concurrency: 4 },
+    // Six reads, each at most one D1 round trip: one round, not two.
+    { concurrency: "unbounded" },
   );
   return {
     ...threadData(thread),
@@ -2771,19 +2768,29 @@ export const createThreadRoutes = (
           ),
         ),
       );
-      const detail = yield* threadDetailData(context.env.DB, db, thread);
-      const sharing = yield* Effect.tryPromise({
-        try: () =>
-          threadSharingDetail(
-            db,
-            thread.id,
-            thread.ownerUserId,
-            context.get("threadAccess") ?? "owner",
-            (context.get("actor") ?? context.get("principal")).userId as UserId,
-          ),
-        catch: (cause) =>
-          PersistenceUnavailable.new({ operation: "thread.sharing" }, cause),
-      });
+      // Independent reads: the page waits on both, so they run at once.
+      const [detail, sharing] = yield* Effect.all(
+        [
+          threadDetailData(context.env.DB, db, thread),
+          Effect.tryPromise({
+            try: () =>
+              threadSharingDetail(
+                db,
+                thread.id,
+                thread.ownerUserId,
+                context.get("threadAccess") ?? "owner",
+                (context.get("actor") ?? context.get("principal"))
+                  .userId as UserId,
+              ),
+            catch: (cause) =>
+              PersistenceUnavailable.new(
+                { operation: "thread.sharing" },
+                cause,
+              ),
+          }),
+        ],
+        { concurrency: "unbounded" },
+      );
       return yield* Schema.encodeUnknownEffect(GetThreadResponseSchema)({
         status: "success",
         data: {

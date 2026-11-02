@@ -1,4 +1,5 @@
 import { decode as decodePng, encode as encodePng } from "fast-png";
+import { Unzlib } from "fflate";
 import jpeg from "jpeg-js";
 import { GifReader } from "omggif";
 
@@ -19,8 +20,7 @@ export const IMAGE_MAX_SOURCE_BYTES = 20 * 1024 * 1024;
 const PASS_THROUGH_BYTES = 1024 * 1024;
 /**
  * Most pixels decoded in the Durable Object's isolate, which every Thread on
- * it shares. A PNG or GIF decode peaks near eight bytes a pixel, so a
- * 3024×1964 Retina screenshot fits; jpeg-js holds about ten.
+ * it shares. WebP is never decoded here.
  */
 const MAX_DECODE_PIXELS: Record<ImageFormat, number> = {
   png: 6_300_000,
@@ -28,6 +28,16 @@ const MAX_DECODE_PIXELS: Record<ImageFormat, number> = {
   jpeg: 4_200_000,
   webp: 0,
 };
+/**
+ * Most bytes one decode may hold in that isolate, whose limit is 128 MB. An
+ * 8-bit RGBA 3024×1964 Retina screenshot needs about 50 MB.
+ */
+const MAX_DECODE_BYTES = 64 * 1024 * 1024;
+/**
+ * Compressed bytes inflated before the output is counted. Deflate expands
+ * at most 1032:1, so a slice yields about 4 MB at most.
+ */
+const INFLATE_SLICE_BYTES = 4096;
 /** Largest image sent unchanged when it cannot be decoded here. */
 const MAX_UNDECODED_BYTES = 3.75 * 1024 * 1024;
 /** Largest edge model providers accept. */
@@ -74,7 +84,8 @@ const readU32BE = (bytes: Uint8Array, at: number) =>
 const ascii = (bytes: Uint8Array, at: number, length: number) =>
   String.fromCharCode(...bytes.subarray(at, at + length));
 
-const jpegSize = (bytes: Uint8Array) => {
+/** The first frame header (SOF) of a JPEG, or undefined. */
+const jpegFrame = (bytes: Uint8Array) => {
   let at = 2;
   while (at + 9 < bytes.length) {
     if (bytes[at] !== 0xff) return undefined;
@@ -98,6 +109,11 @@ const jpegSize = (bytes: Uint8Array) => {
       return {
         height: readU16BE(bytes, at + 5),
         width: readU16BE(bytes, at + 7),
+        // Horizontal and vertical sampling factor of each component.
+        sampling: Array.from({ length: bytes[at + 9] ?? 0 }, (_, index) => {
+          const factors = bytes[at + 11 + index * 3] ?? 0;
+          return [Math.max(1, factors >> 4), Math.max(1, factors & 15)];
+        }),
       };
     if (length < 2) return undefined;
     at += 2 + length;
@@ -133,8 +149,10 @@ export const imageInfo = (
       height: readU16LE(bytes, 8),
     };
   if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
-    const size = jpegSize(bytes);
-    return size === undefined ? undefined : { format: "jpeg", ...size };
+    const frame = jpegFrame(bytes);
+    return frame === undefined
+      ? undefined
+      : { format: "jpeg", width: frame.width, height: frame.height };
   }
   if (
     bytes.length >= 30 &&
@@ -211,8 +229,7 @@ interface Decoded {
 const onWhite = (value: number, alpha: number) =>
   (value * alpha + 255 * (255 - alpha) + 127) / 255;
 
-const decodePngRows = (bytes: Uint8Array): Decoded => {
-  const image = decodePng(bytes);
+const pngRows = (image: ReturnType<typeof decodePng>): Decoded => {
   const { width, height, depth, channels, data, palette } = image;
   const rowSamples = width * channels;
   const packedRowBytes = Math.ceil((rowSamples * depth) / 8);
@@ -275,21 +292,234 @@ const rgbaRows = (
   },
 });
 
-const decodeRows = (format: ImageFormat, bytes: Uint8Array): Decoded => {
-  if (format === "png") return decodePngRows(bytes);
-  if (format === "jpeg") {
-    const image = jpeg.decode(bytes, {
-      useTArray: true,
-      formatAsRGBA: true,
-      maxResolutionInMP: MAX_DECODE_PIXELS.jpeg / 1_000_000 + 1,
-      maxMemoryUsageInMB: 96,
-    });
-    return rgbaRows(image.width, image.height, image.data);
+/**
+ * A decode that has not run yet, and the most bytes it will hold, estimated
+ * from the headers. `decode` throws `ImageRefused` when the data turns out
+ * larger than the headers declare.
+ */
+interface DecodePlan {
+  readonly bytes: number;
+  readonly decode: () => Decoded;
+}
+
+const notDecoded: DecodePlan = {
+  bytes: Number.POSITIVE_INFINITY,
+  decode: () => {
+    throw new ImageRefused("This image format is not decoded here.");
+  },
+};
+
+const PNG_CHANNELS: Readonly<Record<number, number>> = {
+  0: 1,
+  2: 3,
+  3: 1,
+  4: 2,
+  6: 4,
+};
+/** Each Adam7 pass's first column and row, and its column and row step. */
+const ADAM7 = [
+  [0, 0, 8, 8],
+  [4, 0, 8, 8],
+  [0, 4, 4, 8],
+  [2, 0, 4, 4],
+  [0, 2, 2, 4],
+  [1, 0, 2, 2],
+  [0, 1, 1, 2],
+] as const;
+
+/**
+ * Plans a PNG decode from its IHDR: the image data must inflate to exactly
+ * the filtered rows the header declares. Only the chunks fast-png needs for
+ * the pixels are kept, so it never inflates an ICC profile and never reads a
+ * second IHDR.
+ */
+const planPng = (bytes: Uint8Array, width: number, height: number) => {
+  const kept: Uint8Array[] = [bytes.subarray(0, 8)];
+  const imageData: Uint8Array[] = [];
+  let header: Uint8Array | undefined;
+  let keptBytes = 8;
+  let compressed = 0;
+  for (let at = 8; ; ) {
+    const length = readU32BE(bytes, at);
+    const type = ascii(bytes, at + 4, 4);
+    const end = at + 12 + length;
+    if (end > bytes.length)
+      throw new ImageRefused(
+        "The PNG ends in the middle of a chunk; the file is truncated.",
+      );
+    const chunk = bytes.subarray(at, end);
+    if (type === "IHDR") {
+      if (at !== 8 || length !== 13)
+        throw new ImageRefused("The PNG has a damaged or repeated header.");
+      header = chunk.subarray(8, 21);
+    } else if (type === "IDAT") {
+      imageData.push(chunk.subarray(8, 8 + length));
+      compressed += length;
+    }
+    if (["IHDR", "PLTE", "tRNS", "IDAT", "IEND"].includes(type)) {
+      kept.push(chunk);
+      keptBytes += chunk.length;
+    }
+    if (type === "IEND") break;
+    at = end;
   }
-  const reader = new GifReader(bytes);
-  const data = new Uint8Array(reader.width * reader.height * 4);
-  reader.decodeAndBlitFrameRGBA(0, data);
-  return rgbaRows(reader.width, reader.height, data);
+  const depth = header?.[8] ?? 0;
+  const channels = PNG_CHANNELS[header?.[9] ?? -1];
+  if (channels === undefined || ![1, 2, 4, 8, 16].includes(depth))
+    throw new ImageRefused(
+      "The PNG header declares an unknown color type or bit depth.",
+    );
+  const bitsPerPixel = channels * depth;
+  const interlaced = header?.[12] === 1;
+  const rowsBytes = (columns: number, rows: number) =>
+    columns > 0 && rows > 0
+      ? rows * (1 + Math.ceil((columns * bitsPerPixel) / 8))
+      : 0;
+  const inflated = interlaced
+    ? ADAM7.reduce(
+        (sum, [x, y, dx, dy]) =>
+          sum +
+          rowsBytes(Math.ceil((width - x) / dx), Math.ceil((height - y) / dy)),
+        0,
+      )
+    : rowsBytes(width, height);
+  // fast-png unfilters interlaced images to a byte or two per sample.
+  const pixels = interlaced
+    ? width * height * channels * Math.ceil(depth / 8)
+    : height * Math.ceil((width * bitsPerPixel) / 8);
+  const tooLarge = () =>
+    new ImageRefused(
+      `The PNG's image data is larger than its ${width}×${height} header allows, so it was not decoded. The file is damaged or built to exhaust memory.`,
+    );
+  return {
+    // The copy below, then fast-png's inflated chunks with their
+    // concatenation, or that concatenation with the unfiltered pixels.
+    bytes: keptBytes + Math.max(2 * inflated, inflated + pixels),
+    decode: () => {
+      // No sensible encoder grows data by more than an eighth (fixed-code
+      // literals), so longer image data is not believed.
+      if (compressed > inflated + Math.ceil(inflated / 8) + 1024)
+        throw tooLarge();
+      let total = 0;
+      const inflater = new Unzlib((chunk) => {
+        total += chunk.length;
+      });
+      for (const data of imageData)
+        for (let at = 0; at < data.length; at += INFLATE_SLICE_BYTES) {
+          inflater.push(data.subarray(at, at + INFLATE_SLICE_BYTES));
+          if (total > inflated) throw tooLarge();
+        }
+      inflater.push(new Uint8Array(0), true);
+      if (total > inflated) throw tooLarge();
+      const copy = new Uint8Array(keptBytes);
+      let offset = 0;
+      for (const chunk of kept) {
+        copy.set(chunk, offset);
+        offset += chunk.length;
+      }
+      return pngRows(decodePng(copy));
+    },
+  };
+};
+
+/**
+ * Plans a GIF decode from its first frame, which must lie inside the
+ * logical screen. Parsing stops after that frame: omggif keeps an object for
+ * every frame in a file.
+ */
+const planGif = (bytes: Uint8Array, width: number, height: number) => {
+  const truncated = () =>
+    new ImageRefused("The GIF ends before its first frame does.");
+  const flags = bytes[10] ?? 0;
+  let at = 13 + (flags & 0x80 ? 3 << ((flags & 7) + 1) : 0);
+  const skipSubBlocks = () => {
+    for (;;) {
+      if (at >= bytes.length) throw truncated();
+      const size = bytes[at++] ?? 0;
+      if (size === 0) return;
+      at += size;
+    }
+  };
+  for (;;) {
+    if (at >= bytes.length) throw truncated();
+    const block = bytes[at++];
+    if (block === 0x21) {
+      at++;
+      skipSubBlocks();
+      continue;
+    }
+    if (block !== 0x2c) throw new ImageRefused("The GIF has no image.");
+    const x = readU16LE(bytes, at);
+    const y = readU16LE(bytes, at + 2);
+    const frameWidth = readU16LE(bytes, at + 4);
+    const frameHeight = readU16LE(bytes, at + 6);
+    const local = bytes[at + 8] ?? 0;
+    at += 9 + (local & 0x80 ? 3 << ((local & 7) + 1) : 0) + 1;
+    skipSubBlocks();
+    if (x + frameWidth > width || y + frameHeight > height)
+      throw new ImageRefused(
+        `The GIF's first frame (${frameWidth}×${frameHeight} at ${x},${y}) extends past its ${width}×${height} screen.`,
+      );
+    const end = at;
+    return {
+      // RGBA for the screen, and one palette index for each frame pixel.
+      bytes: width * height * 4 + frameWidth * frameHeight,
+      decode: () => {
+        const reader = new GifReader(bytes.subarray(0, end));
+        const data = new Uint8Array(width * height * 4);
+        reader.decodeAndBlitFrameRGBA(0, data);
+        return rgbaRows(width, height, data);
+      },
+    };
+  }
+};
+
+/**
+ * Plans a JPEG decode from its first frame header. jpeg-js counts what it
+ * allocates and gets exactly the allowance that frame needs, so a second
+ * frame or anything else undeclared fails before it is allocated.
+ */
+const planJpeg = (bytes: Uint8Array) => {
+  const frame = jpegFrame(bytes);
+  if (frame === undefined) return notDecoded;
+  const { width, height, sampling } = frame;
+  const maxH = Math.max(1, ...sampling.map(([h]) => h ?? 1));
+  const maxV = Math.max(1, ...sampling.map(([, v]) => v ?? 1));
+  const blocks = sampling.reduce(
+    (sum, [h = 1, v = 1]) =>
+      sum + Math.ceil(width / 8 / maxH) * h * Math.ceil(height / 8 / maxV) * v,
+    0,
+  );
+  // jpeg-js counts each 8×8 block as its 256-byte Int32Array and 64
+  // samples, then a byte a pixel for each component and four for RGBA.
+  const counted =
+    blocks * 320 + width * height * (sampling.length + 4) + 64 * 1024;
+  return {
+    // A block's Int32Array holds about 450 bytes with its objects, and
+    // jpeg-js copies the file.
+    bytes: counted + blocks * 256 + bytes.length,
+    decode: () => {
+      const image = jpeg.decode(bytes, {
+        useTArray: true,
+        formatAsRGBA: true,
+        maxResolutionInMP: MAX_DECODE_PIXELS.jpeg / 1_000_000 + 1,
+        maxMemoryUsageInMB: Math.ceil(counted / 1024 / 1024) + 1,
+      });
+      return rgbaRows(image.width, image.height, image.data);
+    },
+  };
+};
+
+const planDecode = (
+  format: ImageFormat,
+  bytes: Uint8Array,
+  width: number,
+  height: number,
+): DecodePlan => {
+  if (format === "png") return planPng(bytes, width, height);
+  if (format === "gif") return planGif(bytes, width, height);
+  if (format === "jpeg") return planJpeg(bytes);
+  return notDecoded;
 };
 
 /** Source spans and weights for each output index along one axis. */
@@ -402,7 +632,11 @@ export const prepareImage = async (
   }
   if (longest <= IMAGE_MAX_EDGE && bytes.length <= PASS_THROUGH_BYTES)
     return unchanged();
-  if (width * height > MAX_DECODE_PIXELS[format]) {
+  const plan =
+    width * height > MAX_DECODE_PIXELS[format]
+      ? notDecoded
+      : planDecode(format, bytes, width, height);
+  if (plan.bytes > MAX_DECODE_BYTES) {
     // Not decoded here; model providers downsize these themselves.
     if (longest <= MAX_UNDECODED_EDGE && bytes.length <= MAX_UNDECODED_BYTES)
       return unchanged();
@@ -410,19 +644,29 @@ export const prepareImage = async (
       `The image is ${width}×${height} (${megabytes(bytes.length)}), too large to view. Save a copy at most ${IMAGE_MAX_EDGE} pixels on its longest side, for example with ffmpeg -i <in> -vf "scale='min(${IMAGE_MAX_EDGE},iw)':-2" <out>.png, or crop it, and view that.`,
     );
   }
-  let decoded: Decoded;
-  try {
-    decoded = decodeRows(format, bytes);
-  } catch (cause) {
-    throw new ImageRefused(
-      `The ${format} file could not be decoded: ${cause instanceof Error ? cause.message : String(cause)}.`,
-      { cause },
-    );
-  }
   const scale = Math.min(1, IMAGE_MAX_EDGE / longest);
-  const targetWidth = Math.max(1, Math.round(decoded.width * scale));
-  const targetHeight = Math.max(1, Math.round(decoded.height * scale));
-  const rgb = resize(decoded, targetWidth, targetHeight);
+  const targetWidth = Math.max(1, Math.round(width * scale));
+  const targetHeight = Math.max(1, Math.round(height * scale));
+  // The decoded pixels are unreachable once this returns, so encoding does
+  // not hold them too.
+  const downsized = () => {
+    let decoded: Decoded;
+    try {
+      decoded = plan.decode();
+    } catch (cause) {
+      if (cause instanceof ImageRefused) throw cause;
+      throw new ImageRefused(
+        `The ${format} file could not be decoded: ${cause instanceof Error ? cause.message : String(cause)}.`,
+        { cause },
+      );
+    }
+    if (decoded.width !== width || decoded.height !== height)
+      throw new ImageRefused(
+        `The ${format} file decodes to ${decoded.width}×${decoded.height}, not the ${width}×${height} its header declares.`,
+      );
+    return resize(decoded, targetWidth, targetHeight);
+  };
+  const rgb = downsized();
   if (format !== "jpeg") {
     const encoded = encodePng({
       width: targetWidth,

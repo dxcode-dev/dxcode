@@ -37,7 +37,7 @@ vi.mock("@pierre/diffs", async (importOriginal) => ({
   preloadHighlighter: async () => {
     if (highlighter.shouldFail) throw new Error("highlighter unavailable");
   },
-  parsePatchFiles: () => [{ files: [{ marker: "parsed-diff" }] }],
+  parsePatchFiles: () => [{ files: [{ marker: "parsed-diff", hunks: [] }] }],
 }));
 vi.mock(
   "@pierre/diffs/worker/worker-portable.js?url&no-inline",

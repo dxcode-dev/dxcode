@@ -324,6 +324,8 @@ export default Alchemy.Stack(
         Config.NonEmptyString("CLOUDFLARE_ACCOUNT_ID"),
       ),
       exaApiKey: Config.option(Config.Redacted("EXA_API_KEY")),
+      // Optional: Boat on the deployment's own account (hosted targets).
+      boatApiKey: Config.option(Config.Redacted("BOAT_API_KEY")),
       // Self-host sign-in providers and admission, validated by the runner.
       signIn: Config.option(Config.NonEmptyString("DX_DEPLOYMENT_SIGN_IN")),
       googleClientSecret: Config.option(
@@ -627,9 +629,12 @@ export default Alchemy.Stack(
       configuration.workersDevSubdomain,
       (subdomain) => `https://${daemonIngressName}.${subdomain}.workers.dev/`,
     );
+    // Replicas serve each request's D1 session near the person (#1386,
+    // persistence/d1-session.ts); writes still go to the primary.
     const database = yield* Cloudflare.D1.Database("Database", {
       name: configuration.databaseName,
       migrations: `apps/core/${migrationManifest.d1Directory}`,
+      readReplication: { mode: "auto" },
     });
     // Browsers upload attachment parts and read attachments straight from
     // R2 through presigned URLs, so the bucket admits this origin.
@@ -919,6 +924,9 @@ export default Alchemy.Stack(
         ...(e2bApiKey === undefined ? {} : { E2B_API_KEY: e2bApiKey }),
         ...(sarvamApiKey !== undefined ? { SARVAM_API_KEY: sarvamApiKey } : {}),
         ...(exaApiKey !== undefined ? { EXA_API_KEY: exaApiKey } : {}),
+        ...(!selfhost && Option.isSome(configuration.boatApiKey)
+          ? { BOAT_API_KEY: configuration.boatApiKey.value }
+          : {}),
         ...(googleClientSecret !== undefined
           ? { DX_GOOGLE_CLIENT_SECRET: googleClientSecret }
           : {}),

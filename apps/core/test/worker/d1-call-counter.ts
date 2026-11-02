@@ -4,7 +4,8 @@
  * Wrap the binding, hand the wrapped one to the app as `DB`, and read
  * `calls` after the response. Each `first`, `all`, `run`, `raw`, `batch`, or
  * `exec` is one round trip; a batch also counts its statements. Statements
- * passed to `batch` are unwrapped, since D1 accepts only its own.
+ * passed to `batch` are unwrapped, since D1 accepts only its own. Sessions
+ * opened from the wrapped binding count into the same calls.
  */
 
 export interface D1Call {
@@ -70,29 +71,31 @@ export const countD1Calls = (database: D1Database): D1CallCounter => {
     return wrapped;
   };
 
-  const db = new Proxy(database, {
-    get(target, property) {
-      const value = Reflect.get(target, property, target);
-      if (property === "prepare")
-        return (sql: string) => statement(target.prepare(sql), compact(sql));
-      if (property === "batch")
-        return (statements: D1PreparedStatement[]) =>
-          record(
-            "batch",
-            statements.map((item) => sqlOf.get(item) ?? "<unwrapped>"),
-            () =>
-              target.batch(statements.map((item) => realOf.get(item) ?? item)),
-          );
-      if (property === "exec")
-        return (sql: string) =>
-          record("exec", [compact(sql)], () => target.exec(sql));
-      if (property === "withSession")
-        return () => {
-          throw new Error("countD1Calls does not wrap D1 sessions yet.");
-        };
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
+  // A database and each of its sessions count the same way.
+  const counted = <T extends D1Database | D1DatabaseSession>(target: T): T =>
+    new Proxy(target, {
+      get(inner, property) {
+        const value = Reflect.get(inner, property, inner);
+        if (property === "prepare")
+          return (sql: string) => statement(inner.prepare(sql), compact(sql));
+        if (property === "batch")
+          return (statements: D1PreparedStatement[]) =>
+            record(
+              "batch",
+              statements.map((item) => sqlOf.get(item) ?? "<unwrapped>"),
+              () =>
+                inner.batch(statements.map((item) => realOf.get(item) ?? item)),
+            );
+        if (property === "exec" && "exec" in inner)
+          return (sql: string) =>
+            record("exec", [compact(sql)], () => inner.exec(sql));
+        if (property === "withSession" && "withSession" in inner)
+          return (constraint?: string) =>
+            counted(inner.withSession(constraint));
+        return typeof value === "function" ? value.bind(inner) : value;
+      },
+    });
+  const db = counted(database);
 
   return {
     db,

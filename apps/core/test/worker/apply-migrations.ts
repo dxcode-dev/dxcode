@@ -1,7 +1,12 @@
-import { applyD1Migrations, env } from "cloudflare:test";
+import { env } from "cloudflare:test";
 import { beforeEach } from "vitest";
 
-await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
+// The migrated schema and rows, built once by vitest.worker.config.ts.
+await env.DB.batch(
+  env.TEST_SCHEMA_SNAPSHOT.map(({ sql, params }) =>
+    env.DB.prepare(sql).bind(...params),
+  ),
+);
 
 beforeEach(async () => {
   await env.DB.exec(`

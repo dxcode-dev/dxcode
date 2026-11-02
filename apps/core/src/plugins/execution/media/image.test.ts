@@ -88,13 +88,13 @@ describe("prepareImage", () => {
 
   it("resizes a large JPEG and returns a JPEG", async () => {
     const source = jpeg.encode(
-      { width: 1600, height: 2400, data: halves(1600, 2400, 4) },
+      { width: 800, height: 2400, data: halves(800, 2400, 4) },
       90,
     ).data;
     const prepared = await prepareImage(new Uint8Array(source));
     expect(prepared.mimeType).toBe("image/jpeg");
     expect(prepared.height).toBe(IMAGE_MAX_EDGE);
-    expect(prepared.width).toBe(1333);
+    expect(prepared.width).toBe(667);
     expect(near(rgbAt(prepared, 0.1, 0.5), [255, 0, 0])).toBe(true);
     expect(near(rgbAt(prepared, 0.9, 0.5), [0, 0, 255])).toBe(true);
   });

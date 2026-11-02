@@ -5,19 +5,37 @@ import type { Bindings } from "../../http/types.js";
 import { orbProvidersLogger } from "../../logging.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
 import type { OrbConnectionKey } from "./connections-d1.js";
+import { advanceDeploymentPreparation } from "./deployment-preparation.js";
 import {
   advanceConnection,
   type PreparationStepOutcome,
   TRANSIENT_RETRY_MS,
 } from "./preparation.js";
+import type { ExecutionProviderId } from "./provider.js";
+
+/** A connection, or the deployment's own account of a provider. */
+type PreparationKey =
+  | OrbConnectionKey
+  | { readonly scope: "deployment"; readonly providerId: ExecutionProviderId };
 
 /**
- * One connection's preparation: its alarm runs the next step until the
- * connection is ready or failed. Preparation outlives the save request,
- * because it takes minutes and some steps (copying an image) are long.
+ * One connection's preparation, or the deployment's own account's: its
+ * alarm runs the next step until it is ready or failed. Preparation
+ * outlives the request that started it, because it takes minutes and some
+ * steps (copying an image) are long.
  */
 export class OrbProviderPreparationObject extends DurableObject<Bindings> {
   async prepare(key: OrbConnectionKey) {
+    await this.start(key);
+  }
+
+  async prepareDeployment(providerId: ExecutionProviderId) {
+    // Already stepping: a Thread asking again does not restart it.
+    if ((await this.ctx.storage.getAlarm()) !== null) return;
+    await this.start({ scope: "deployment", providerId });
+  }
+
+  private async start(key: PreparationKey) {
     await this.ctx.storage.put({ key, transientFailures: 0 });
     const alarm = await this.ctx.storage.getAlarm();
     if (alarm === null || alarm > Date.now() + 1_000)
@@ -25,17 +43,20 @@ export class OrbProviderPreparationObject extends DurableObject<Bindings> {
   }
 
   override async alarm() {
-    const key = await this.ctx.storage.get<OrbConnectionKey>("key");
+    const key = await this.ctx.storage.get<PreparationKey>("key");
     if (key === undefined) return;
     const failures =
       (await this.ctx.storage.get<number>("transientFailures")) ?? 0;
     const db = await Effect.runPromise(decodeD1Binding(this.env.DB));
-    const outcome = await advanceConnection(
-      this.env,
-      db,
-      key,
-      orbProviderConnectors,
-      failures,
+    const outcome = await (key.scope === "deployment"
+      ? advanceDeploymentPreparation(
+          this.env,
+          db,
+          key.providerId,
+          orbProviderConnectors,
+          failures,
+        )
+      : advanceConnection(this.env, db, key, orbProviderConnectors, failures)
     ).catch((cause: unknown): PreparationStepOutcome => {
       orbProvidersLogger.error("Orb provider preparation failed to run.", {
         event: "orb_preparation_failed",

@@ -94,6 +94,8 @@ export interface Bindings {
   readonly DX_PUSH_VAPID_PUBLIC_KEY?: string;
   readonly DX_PUSH_VAPID_PRIVATE_KEY?: string;
   readonly E2B_API_KEY?: string;
+  /** The deployment's own Boat account; Boat is installed only with it. */
+  readonly BOAT_API_KEY?: string;
   readonly FLUE_DX_AGENT_AGENT?: DurableObjectNamespace;
   readonly PLUGIN_TRIGGER_DELIVERY?: DurableObjectNamespace;
   readonly THREAD_EXECUTION?: DurableObjectNamespace;

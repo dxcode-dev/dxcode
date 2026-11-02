@@ -1,5 +1,10 @@
 import type { SkillImportBundle, WorkspaceSlug } from "@dx/domain";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useMutationState,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Plus, Settings } from "lucide-react";
 import * as React from "react";
@@ -30,11 +35,14 @@ import {
   type SkillPreview,
   type SkillSaveFailure,
   type SkillsMutationAction,
+  type SkillToggle,
   skillAuthorMutationOptions,
   skillErrorField,
   skillExportMutationOptions,
   skillPreviewMutationOptions,
   skillsMutationOptions,
+  skillToggleMutationKey,
+  skillToggleMutationOptions,
 } from "./skills-mutations.js";
 import {
   type SkillData,
@@ -102,14 +110,21 @@ const download = (exported: unknown, filename: string) => {
 };
 
 /** Pending keys, so only the control that is saving shows it. */
-const enabledKey = (skill: SkillData) => `enabled:${skill.id}`;
 const POLICY_KEY = "policy";
 
 type OpenDialog =
   | { readonly kind: "new" }
   | { readonly kind: "import" }
   | { readonly kind: "details"; readonly skillId: SkillData["id"] }
-  | { readonly kind: "edit"; readonly skillId: SkillData["id"] }
+  | {
+      readonly kind: "edit";
+      readonly skillId: SkillData["id"];
+      /** A draft whose save failed, with why, shown again to fix. */
+      readonly retry?: {
+        readonly draft: SkillDraft;
+        readonly failure: SkillSaveFailure;
+      };
+    }
   | {
       readonly kind: "review";
       readonly preview: SkillPreview;
@@ -260,15 +275,15 @@ function SkillsHeading({
 function SkillList({
   skills,
   canMutate,
-  pending,
+  toggling,
   scopeLabel,
   onToggle,
   onOpenSettings,
 }: {
   readonly skills: ReadonlyArray<SkillData>;
   readonly canMutate: boolean;
-  /** The key of the action that is saving, if any. */
-  readonly pending?: string;
+  /** Skills whose switch is saving. */
+  readonly toggling: ReadonlySet<SkillData["id"]>;
   readonly scopeLabel: SkillsTarget["scope"];
   readonly onToggle: (skill: SkillData, enabled: boolean) => void;
   readonly onOpenSettings: (
@@ -290,7 +305,7 @@ function SkillList({
             key={skill.id}
             skill={skill}
             canMutate={canMutate}
-            pending={pending === enabledKey(skill)}
+            pending={toggling.has(skill.id)}
             onToggle={(enabled) => onToggle(skill, enabled)}
             onOpenSettings={(trigger) => onOpenSettings(skill, trigger)}
           />
@@ -328,6 +343,43 @@ function PersonalSkillsPolicy({
       />
     </SettingsCard>
   );
+}
+
+/**
+ * Skill switches. Each saves on its own, so several can be in flight at
+ * once, and each reports its outcome through `report`.
+ */
+function useSkillToggles(
+  target: SkillsTarget,
+  report: (message: string | undefined) => void,
+) {
+  const { identity } = useAuthenticatedIdentity();
+  const queryClient = useQueryClient();
+  const mutation = useMutation(
+    skillToggleMutationOptions(queryClient, identity.id, target),
+  );
+  const toggling = new Set(
+    useMutationState({
+      filters: {
+        mutationKey: skillToggleMutationKey(identity.id, target),
+        status: "pending",
+      },
+      select: (pending) => (pending.state.variables as SkillToggle).skill.id,
+    }),
+  );
+  const toggle = async (skill: SkillData, enabled: boolean) => {
+    report(undefined);
+    const outcome = await settle(() =>
+      mutation.mutateAsync({ skill, enabled }),
+    );
+    const turned = `${skill.name} ${enabled ? "on" : "off"}`;
+    report(
+      outcome.ok
+        ? `${skill.name} turned ${enabled ? "on" : "off"}.`
+        : `Could not turn ${turned}: ${errorMessage(outcome.error)}`,
+    );
+  };
+  return { toggling, toggle };
 }
 
 export function SkillsSettings({
@@ -380,6 +432,7 @@ export function SkillsSettings({
     mutation.reset();
     return outcome.ok;
   };
+  const { toggling, toggle } = useSkillToggles(target, setMessage);
   const closeDialog = () => {
     setDialog(undefined);
     onDirtyChange(false);
@@ -390,16 +443,24 @@ export function SkillsSettings({
   ): Promise<SkillSaveFailure | undefined> => {
     setPending("save");
     setMessage(undefined);
+    // An edit shows its new version at once, so its dialog closes now and
+    // opens again with the draft if the save fails.
+    if (skill !== undefined) closeDialog();
     const outcome = await settle(() =>
       authorMutation.mutateAsync({ draft, skill }),
     );
     setPending(undefined);
     authorMutation.reset();
     if (!outcome.ok) {
-      return {
+      const failure = {
         message: errorMessage(outcome.error),
         field: skillErrorField(outcome.error),
       };
+      if (skill === undefined) return failure;
+      setMessage(`Could not save ${skill.name}: ${failure.message}`);
+      setDialog({ kind: "edit", skillId: skill.id, retry: { draft, failure } });
+      onDirtyChange(true);
+      return undefined;
     }
     setMessage(
       skill === undefined
@@ -497,15 +558,9 @@ export function SkillsSettings({
         <SkillList
           skills={skills}
           canMutate={canMutate}
-          pending={pending}
+          toggling={toggling}
           scopeLabel={target.scope}
-          onToggle={(skill, enabled) =>
-            void run(
-              { type: "updateState", skillId: skill.id, input: { enabled } },
-              `${skill.name} turned ${enabled ? "on" : "off"}.`,
-              enabledKey(skill),
-            )
-          }
+          onToggle={(skill, enabled) => void toggle(skill, enabled)}
           onOpenSettings={(skill, trigger) => {
             finalFocus.current = trigger;
             setDialog({ kind: "details", skillId: skill.id });
@@ -569,6 +624,7 @@ export function SkillsSettings({
       {dialog?.kind === "edit" && selected !== undefined ? (
         <SkillFormDialog
           skill={selected}
+          retry={dialog.retry}
           busy={busy}
           finalFocus={finalFocus}
           onDirtyChange={onDirtyChange}

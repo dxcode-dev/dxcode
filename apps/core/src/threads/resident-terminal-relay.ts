@@ -349,8 +349,11 @@ export class ResidentTerminalRelay {
         closeSafely(session.socket, 1000);
       } else if (control?.type === "recover") {
         // The present browser's intent to wake a waiting attachment; an
-        // attachment already on its way to ready needs nothing more.
+        // attachment already on its way to ready needs nothing more. Either
+        // way answer at once: this socket is live, so a repair longer than
+        // the browser's recovery timeout must not make it reconnect.
         if (session.phase === "waiting") void this.#start(session);
+        this.#sendControl(session, { v: 1, type: "heartbeat" });
       } else if (control !== undefined) this.#invalid(session);
       return;
     }
