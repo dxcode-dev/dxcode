@@ -380,11 +380,11 @@ describe("Thread Changes sandbox activation", () => {
     await wrapped.exec("git status");
     await wrapped.mkdir("output", { recursive: true });
     await wrapped.rm("output", { recursive: true });
-    expect(runMutation).toHaveBeenCalledTimes(4);
+    // Directories alone never show in Changes, so mkdir takes no lease.
+    expect(runMutation).toHaveBeenCalledTimes(3);
     expect(runMutation.mock.calls.map((call) => call[1])).toEqual([
       undefined,
       { detectUnchanged: true },
-      undefined,
       undefined,
     ]);
     expect(sandbox.exec).toHaveBeenCalledWith("git status", undefined);
@@ -424,7 +424,7 @@ describe("Thread Changes sandbox activation", () => {
     expect(wrapped).toBeDefined();
     expect(onInitialSyncSettled).not.toHaveBeenCalled();
 
-    const mutation = wrapped.mkdir("after-failure");
+    const mutation = wrapped.rm("after-failure");
     await Promise.resolve();
     expect(runMutation).not.toHaveBeenCalled();
     rejectCapture?.(new Error("R2 unavailable"));

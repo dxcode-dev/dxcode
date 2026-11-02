@@ -68,9 +68,11 @@ function FeatureMetadata({
       <div className="experimental-feature-semantics">
         <span>{activationLabel(feature.activation)}</span>
         {relationship === undefined ? null : <span>{relationship}</span>}
-        <a href={feature.owner.issue} target="_blank" rel="noreferrer">
-          Lifecycle issue
-        </a>
+        {feature.owner.issue === undefined ? null : (
+          <a href={feature.owner.issue} target="_blank" rel="noreferrer">
+            Lifecycle issue
+          </a>
+        )}
       </div>
       {denialLabel(flag) === undefined ? null : (
         <div className="experimental-feature-denial" role="status">

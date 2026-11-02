@@ -166,6 +166,7 @@ const installScript = (
   directory: string,
   files: ReadonlyArray<SkillFile>,
   version: string,
+  uncoordinated: boolean,
 ) => {
   const writes = files
     .map(({ path, content }) => {
@@ -177,8 +178,19 @@ const installScript = (
       return `mkdir -p "$stage/${directory}"\nbase64 -d > "$stage/${path}" <<'DX_FILE'\n${encoded}\nDX_FILE\nchmod ${mode} "$stage/${path}"`;
     })
     .join("\n");
+  // An uncoordinated install may write only where Changes never looks: it
+  // refuses when ~/.local/share/dx resolves anywhere else, such as through a
+  // symbolic link into the repository, before writing anything.
+  const guard = uncoordinated
+    ? `share="$HOME/.local/share/dx"
+if [ "$(realpath -m -- "$share")" != "$share" ]; then
+  echo "~/.local/share/dx resolves elsewhere." >&2
+  exit ${SHARE_REDIRECTED_EXIT}
+fi
+`
+    : "";
   return `set -eu
-root="$HOME/.local/share/dx/${directory}"
+${guard}root="$HOME/.local/share/dx/${directory}"
 stage="$root.stage.$$"
 old="$root.old.$$"
 rm -rf "$stage"
@@ -191,6 +203,19 @@ rm -rf "$old"
 `;
 };
 
+/** The install script's exit when ~/.local/share/dx resolves elsewhere. */
+const SHARE_REDIRECTED_EXIT = 3;
+
+/**
+ * Where skills install. `outside` skips Changes coordination, so it is used
+ * only while ~/.local/share/dx resolves to itself; otherwise the install runs
+ * through `coordinated`, the agent's own sandbox.
+ */
+export interface SkillInstallTarget {
+  readonly coordinated: Sandbox;
+  readonly outside?: Sandbox;
+}
+
 /**
  * Replaces `~/.local/share/dx/<directory>` with the loaded files unless the
  * copy there is already `version`; `load` runs only when it is not. An
@@ -198,7 +223,7 @@ rm -rf "$old"
  * tries again.
  */
 export const installSkillFiles = async (
-  sandbox: Sandbox,
+  target: SkillInstallTarget,
   directory: string,
   version: string,
   load: () => Promise<{
@@ -207,20 +232,27 @@ export const installSkillFiles = async (
   }>,
 ) => {
   const root = `${DX_SHARE}/${directory}`;
-  const installed = await sandbox
+  const installed = await (target.outside ?? target.coordinated)
     .readFile(`${root}/${DIGEST_FILE}`)
     .catch(() => undefined);
   if (installed === version) return;
   const script = `${root}.install.sh`;
   const { files, complete } = await load();
-  await sandbox.writeFile(
-    script,
-    installScript(directory, files, complete ? version : `${version}.partial`),
-  );
-  const result = await sandbox.exec(
-    `bash ${script}; status=$?; rm -f ${script}; exit $status`,
-    { timeoutMs: 60_000 },
-  );
+  const installedVersion = complete ? version : `${version}.partial`;
+  const run = async (sandbox: Sandbox, uncoordinated: boolean) => {
+    await sandbox.writeFile(
+      script,
+      installScript(directory, files, installedVersion, uncoordinated),
+    );
+    return sandbox.exec(
+      `bash ${script}; status=$?; rm -f ${script}; exit $status`,
+      { timeoutMs: 60_000 },
+    );
+  };
+  let result =
+    target.outside === undefined ? undefined : await run(target.outside, true);
+  if (result === undefined || result.exitCode === SHARE_REDIRECTED_EXIT)
+    result = await run(target.coordinated, false);
   if (result.exitCode !== 0)
     throw new Error(result.stderr.trim() || "install script failed");
 };
@@ -230,10 +262,10 @@ export const installSkillFiles = async (
  * already this version. A failure is logged, not thrown: the instructions
  * still load, only their supporting files and scripts are missing.
  */
-export const installBuiltInSkills = async (sandbox: Sandbox) => {
+export const installBuiltInSkills = async (target: SkillInstallTarget) => {
   try {
     await installSkillFiles(
-      sandbox,
+      target,
       "skills",
       await contentDigest(),
       async () => ({ files, complete: true }),

@@ -56,6 +56,7 @@ import type {
   CloudflareOpenPhase,
   CloudflareOpenPhaseReporter,
 } from "./cloudflare/provider.js";
+import { rememberDxFilesSandbox } from "./dx-files-sandbox.js";
 import {
   noOrbBilling,
   type OrbBillingPolicy,
@@ -70,6 +71,8 @@ import {
   activateSourceWorkspace,
   cloneAdditionalRepositories,
   ensureGithubCliWrapper,
+  githubCliConnected,
+  readAdditionalRepositories,
   withSourceRuntimeAdmission,
 } from "./source-preparation.js";
 import { withoutRepositorySkills } from "./workspace-context.js";
@@ -281,7 +284,9 @@ export const withThreadChanges = (
         }),
       writeFile: (path, content) =>
         runMutation(() => sandbox.writeFile(path, content)),
-      mkdir: (path, options) => runMutation(() => sandbox.mkdir(path, options)),
+      // Directories alone never show in Changes (Git tracks files), and
+      // mkdir changes no file, so it needs no Changes coordination.
+      mkdir: (path, options) => sandbox.mkdir(path, options),
       rm: (path, options) => runMutation(() => sandbox.rm(path, options)),
     };
   },
@@ -547,6 +552,11 @@ export const makeExecutionActivation =
         publish(() =>
           reportWorkspacePreparation(bindings, db, threadId, status),
         );
+      // The reads of the preparation after source activation start now, so
+      // their round trips overlap the checks and the workspace open.
+      const githubConnected = githubCliConnected(db, id);
+      githubConnected.catch(() => undefined);
+      const additionalRepositories = readAdditionalRepositories(db, id);
       const [, needsFirstReadiness] = await Promise.all([
         // Only a run's own activation checks its source before the Orb starts.
         existingOnly ? authorize() : admitRunStart(db, id),
@@ -648,10 +658,20 @@ export const makeExecutionActivation =
                   },
                 ),
             ).catch(asSourceRunError);
-            if (source === undefined) {
-              await ensureGithubCliWrapper(db, id, handle.guest);
-              await cloneAdditionalRepositories(bindings, db, id, handle.guest);
-            }
+            // Independent: the `gh` wrapper and the clones write different
+            // paths, and neither throws.
+            if (source === undefined)
+              await Promise.all([
+                ensureGithubCliWrapper(db, id, handle.guest, githubConnected),
+                cloneAdditionalRepositories(
+                  bindings,
+                  db,
+                  id,
+                  handle.guest,
+                  undefined,
+                  additionalRepositories,
+                ),
+              ]);
             await hooks.prepared?.({
               context,
               threadId,
@@ -768,6 +788,15 @@ export const makeExecutionActivation =
           createSandbox: () => handle.sandbox(sourceCwd),
           tools: executionWorkspaceTools,
         };
+        rememberDxFilesSandbox(
+          threadId,
+          await withCommandActivity(
+            factory,
+            () => handleActivity(threadId, handle),
+            handle.commandTimeoutMs,
+            authorize,
+          ).createSandbox({ id }),
+        );
         const environmentFactory = context.profile.capabilities.includes(
           "environment-variables",
         )

@@ -4,9 +4,9 @@ import {
   ProjectId,
   ThreadId,
   UserId,
+  WorkspaceMembership,
 } from "@dx/domain";
-import { D1Client } from "@effect/sql-d1";
-import { Effect, Layer, Redacted, Schema } from "effect";
+import { Effect, Redacted, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
 import { settingsPersistenceLogger } from "../../logging.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
@@ -15,13 +15,14 @@ import {
   portalConfiguration,
   portalHostSuffix,
 } from "../../portals/host.js";
-import { SettingsAudit } from "../audit.js";
-import { WorkspaceRepositoryD1 } from "../workspace/repository-d1.js";
 import { loadConfigEncryptionKeyring } from "./encryption.js";
-import { EnvironmentVariableRepositoryD1 } from "./repository-d1.js";
 import {
-  EnvironmentVariableService,
+  decodeEnvironmentVariableRows,
+  ENVIRONMENT_VARIABLE_COLUMNS,
+} from "./repository-d1.js";
+import {
   type ResolvedEnvironmentVariable,
+  selectForExecution,
 } from "./service.js";
 
 const ExecutionThreadRow = Schema.Struct({
@@ -65,18 +66,28 @@ export interface ExecutionEnvironmentSnapshot {
   readonly revision: ExecutionEnvironmentRevision;
 }
 
-const revisionsFor = async (
-  db: D1Database,
-  thread: typeof ExecutionThreadRow.Type,
-) => {
-  const result = await db
+/** The Thread's owner and Project, as one statement's leading clause. */
+const THREAD_CTE =
+  "WITH thread AS (SELECT owner_user_id, project_id FROM threads WHERE id = ?1)";
+
+const threadStatement = (db: D1Database, threadId: ThreadId) =>
+  db
     .prepare(
-      `WITH participating_scope(scope, target_id) AS (
-         SELECT 'personal', ?
-         UNION ALL SELECT 'project', ?
+      "SELECT project_id, owner_user_id FROM threads WHERE id = ? LIMIT 1",
+    )
+    .bind(threadId);
+
+/** The revision of each scope an execution of this Thread reads. */
+const revisionStatement = (db: D1Database, threadId: ThreadId) =>
+  db
+    .prepare(
+      `${THREAD_CTE},
+       participating_scope(scope, target_id) AS (
+         SELECT 'personal', (SELECT owner_user_id FROM thread)
+         UNION ALL SELECT 'project', (SELECT project_id FROM thread)
          UNION ALL SELECT 'workspace', COALESCE((
            SELECT organizationId FROM member
-           WHERE userId = ?
+           WHERE userId = (SELECT owner_user_id FROM thread)
            ORDER BY organizationId
            LIMIT 1
          ), '')
@@ -90,11 +101,10 @@ const revisionsFor = async (
         AND environment_variable_scope_revision.target_id = participating_scope.target_id
        ORDER BY participating_scope.scope, participating_scope.target_id`,
     )
-    .bind(thread.owner_user_id, thread.project_id, thread.owner_user_id)
-    .all();
-  const revisions = Schema.decodeUnknownSync(Schema.Array(RevisionRow))(
-    result.results,
-  );
+    .bind(threadId);
+
+const revisionsFrom = (rows: unknown) => {
+  const revisions = Schema.decodeUnknownSync(Schema.Array(RevisionRow))(rows);
   const personal = revisions.find(({ scope }) => scope === "personal");
   const project = revisions.find(({ scope }) => scope === "project");
   const workspace = revisions.find(({ scope }) => scope === "workspace");
@@ -117,6 +127,62 @@ const revisionsFor = async (
     },
   } satisfies ExecutionEnvironmentRevision;
 };
+
+/** As `WorkspaceRepository.findByUser`: the owner's one workspace, if any. */
+const MEMBERSHIP_FROM = `FROM member
+  INNER JOIN organization ON organization.id = member.organizationId
+  WHERE member.userId = (SELECT owner_user_id FROM thread)
+  ORDER BY organization.id`;
+
+const MembershipRow = Schema.Struct({
+  workspace_id: Schema.String,
+  display_name: Schema.String,
+  short_name: Schema.String,
+  lifecycle_state: Schema.String,
+  profile_revision: Schema.Number,
+  avatar_key: Schema.NullOr(Schema.String),
+  user_id: Schema.String,
+  role: Schema.String,
+});
+
+const membershipStatement = (db: D1Database, threadId: ThreadId) =>
+  db
+    .prepare(
+      `${THREAD_CTE}
+       SELECT organization.id AS workspace_id,
+              organization.name AS display_name,
+              organization.slug AS short_name,
+              organization.lifecycleState AS lifecycle_state,
+              organization.profileRevision AS profile_revision,
+              organization.avatar_key,
+              member.userId AS user_id,
+              member.role
+       ${MEMBERSHIP_FROM}
+       LIMIT 2`,
+    )
+    .bind(threadId);
+
+/** One scope's variables, as `EnvironmentVariableRepository.list` reads them. */
+const variablesStatement = (
+  db: D1Database,
+  threadId: ThreadId,
+  scope: "personal" | "project" | "workspace",
+) =>
+  db
+    .prepare(
+      `${THREAD_CTE}
+       SELECT ${ENVIRONMENT_VARIABLE_COLUMNS}
+       FROM environment_variable
+       WHERE scope = ?2 AND target_id = (${
+         scope === "personal"
+           ? "SELECT owner_user_id FROM thread"
+           : scope === "project"
+             ? "SELECT project_id FROM thread"
+             : `SELECT organization.id ${MEMBERSHIP_FROM} LIMIT 1`
+})
+       ORDER BY name ASC, id ASC`,
+    )
+    .bind(threadId, scope);
 
 export const executionEnvironmentRevisionsEqual = (
   left: ExecutionEnvironmentRevision,
@@ -158,39 +224,52 @@ export const resolveRevisionConsistentSnapshot = async <Snapshot>(
     )
   ).snapshot;
 
-const executionThreadFor = async (db: D1Database, threadId: ThreadId) => {
-  const row = await db
-    .prepare(
-      "SELECT project_id, owner_user_id FROM threads WHERE id = ? LIMIT 1",
-    )
-    .bind(threadId)
-    .first();
-  if (row === null) throw new ExecutionEnvironmentUnavailable();
-  return Schema.decodeUnknownSync(ExecutionThreadRow)(row);
+const threadFrom = (rows: ReadonlyArray<unknown>) => {
+  if (rows[0] === undefined) throw new ExecutionEnvironmentUnavailable();
+  return Schema.decodeUnknownSync(ExecutionThreadRow)(rows[0]);
 };
 
 export const resolveExecutionEnvironmentRevision = Effect.fn(
   "resolveExecutionEnvironmentRevision",
 )(function* (bindings: Bindings, rawThreadId: string) {
+  const startedAt = Date.now();
   const threadId = yield* Schema.decodeUnknownEffect(ThreadId)(
     rawThreadId,
   ).pipe(Effect.mapError(() => new ExecutionEnvironmentUnavailable()));
   const db = yield* decodeD1Binding(bindings.DB).pipe(
     Effect.mapError(() => new ExecutionEnvironmentUnavailable()),
   );
-  const thread = yield* Effect.tryPromise({
-    try: () => executionThreadFor(db, threadId),
+  // One round trip: a batch is one transaction.
+  const revision = yield* Effect.tryPromise({
+    try: async () => {
+      const [thread, revisions] = await db.batch([
+        threadStatement(db, threadId),
+        revisionStatement(db, threadId),
+      ]);
+      threadFrom(thread?.results ?? []);
+      return revisionsFrom(revisions?.results);
+    },
     catch: () => new ExecutionEnvironmentUnavailable(),
   });
-  return yield* Effect.tryPromise({
-    try: () => revisionsFor(db, thread),
-    catch: () => new ExecutionEnvironmentUnavailable(),
+  settingsPersistenceLogger.info("Execution environment revision read.", {
+    event: "execution_environment_read_timing",
+    read: "revision",
+    threadId,
+    durationMs: Date.now() - startedAt,
   });
+  return revision;
 });
 
+/**
+ * Everything an execution of this Thread receives, read in one round trip.
+ * The batch is one D1 transaction, so the values and the revisions they
+ * carry are always the same snapshot: the revision check that used to bracket
+ * the separate reads holds by construction.
+ */
 export const resolveExecutionEnvironment = Effect.fn(
   "resolveExecutionEnvironment",
 )(function* (bindings: Bindings, rawThreadId: string) {
+  const startedAt = Date.now();
   const threadId = yield* Schema.decodeUnknownEffect(ThreadId)(
     rawThreadId,
   ).pipe(Effect.mapError(() => new ExecutionEnvironmentUnavailable()));
@@ -200,42 +279,68 @@ export const resolveExecutionEnvironment = Effect.fn(
   const keyring = yield* loadConfigEncryptionKeyring(bindings).pipe(
     Effect.mapError(() => new ExecutionEnvironmentUnavailable()),
   );
-  const thread = yield* Effect.tryPromise({
-    try: () => executionThreadFor(db, threadId),
+  const batch = yield* Effect.tryPromise({
+    try: () =>
+      db.batch([
+        threadStatement(db, threadId),
+        revisionStatement(db, threadId),
+        variablesStatement(db, threadId, "personal"),
+        variablesStatement(db, threadId, "project"),
+        membershipStatement(db, threadId),
+        variablesStatement(db, threadId, "workspace"),
+      ]),
     catch: () => new ExecutionEnvironmentUnavailable(),
   });
-  const d1 = D1Client.layer({ db });
-  const workspace = WorkspaceRepositoryD1(db).pipe(Layer.provide(d1));
-  const serviceLayer = EnvironmentVariableService.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        EnvironmentVariableRepositoryD1(db),
-        workspace,
-        SettingsAudit.layer,
-      ),
-    ),
-  );
-  const resolved = yield* Effect.tryPromise({
-    try: () =>
-      resolveRevisionConsistentSnapshotWithRevision(
-        () => revisionsFor(db, thread),
-        executionEnvironmentRevisionsEqual,
-        () =>
-          Effect.runPromise(
-            Effect.gen(function* () {
-              const service = yield* EnvironmentVariableService;
-              return yield* service.resolveForExecution(
-                keyring,
-                thread.owner_user_id,
-                thread.project_id,
-              );
-            }).pipe(
-              Effect.provide(serviceLayer),
-              Effect.mapError(() => new ExecutionEnvironmentUnavailable()),
-            ),
-          ),
-      ),
+  const [thread, revisions, personal, project, membership, workspace] = batch;
+  const { owner, revision } = yield* Effect.try({
+    try: () => ({
+      owner: threadFrom(thread?.results ?? []).owner_user_id,
+      revision: revisionsFrom(revisions?.results),
+    }),
     catch: () => new ExecutionEnvironmentUnavailable(),
+  });
+  // As `WorkspaceRepository.findByUser`: more than one membership is an
+  // invariant violation, and the one membership must decode.
+  const memberships = membership?.results ?? [];
+  if (memberships.length > 1) {
+    settingsPersistenceLogger.error(
+      "Workspace membership invariant was violated.",
+      { event: "workspace_membership_invariant_failed", userId: owner },
+    );
+    return yield* new ExecutionEnvironmentUnavailable();
+  }
+  if (memberships[0] !== undefined)
+    yield* Schema.decodeUnknownEffect(MembershipRow)(memberships[0]).pipe(
+      Effect.flatMap((row) =>
+        Schema.decodeUnknownEffect(WorkspaceMembership)({
+          workspace: {
+            id: row.workspace_id,
+            displayName: row.display_name,
+            shortName: row.short_name,
+            lifecycleState: row.lifecycle_state,
+            revision: row.profile_revision,
+            ...(row.avatar_key === null ? {} : { avatarKey: row.avatar_key }),
+          },
+          userId: row.user_id,
+          role: row.role,
+        }),
+      ),
+      Effect.mapError(() => new ExecutionEnvironmentUnavailable()),
+    );
+  const snapshot = yield* Effect.all({
+    personal: decodeEnvironmentVariableRows(personal?.results),
+    project: decodeEnvironmentVariableRows(project?.results),
+    workspace: decodeEnvironmentVariableRows(workspace?.results),
+  }).pipe(
+    Effect.flatMap((scopes) => selectForExecution(keyring, scopes)),
+    Effect.mapError(() => new ExecutionEnvironmentUnavailable()),
+  );
+  const resolved = { snapshot, revision };
+  settingsPersistenceLogger.info("Execution environment read.", {
+    event: "execution_environment_read_timing",
+    read: "environment",
+    threadId,
+    durationMs: Date.now() - startedAt,
   });
   if (
     resolved.snapshot.some(({ name }) =>

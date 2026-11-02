@@ -1,5 +1,9 @@
 import { env } from "cloudflare:test";
-import { Principal, type UserId } from "@dx/domain";
+import {
+  Principal,
+  productionExperimentalFeatureRegistry,
+  type UserId,
+} from "@dx/domain";
 import { Schema } from "effect";
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -223,8 +227,17 @@ describe("experimental feature routes in workerd with real D1", () => {
       { ...bindings, DX_ENV: "production" },
     );
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      data: { flags: [] },
-    });
+    // Exactly the production registry: no fixture feature is listed.
+    const { data } = await response.json<{
+      data: { flags: Array<{ registration: { id: string } }> };
+    }>();
+    expect(data.flags.map(({ registration }) => registration.id)).toEqual(
+      productionExperimentalFeatureRegistry.features.map(({ id }) => id),
+    );
+    expect(
+      data.flags.some(({ registration }) =>
+        registration.id.startsWith("fixture-"),
+      ),
+    ).toBe(false);
   });
 });

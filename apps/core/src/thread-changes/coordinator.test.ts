@@ -31,7 +31,27 @@ vi.mock("./repository-d1.js", () => ({
     },
     read: mocks.read,
     source: mocks.source,
-    beginMutation: mocks.beginMutation,
+    beginMutation: async (threadId: unknown, durationMs: unknown) => {
+      // The real lease reads state and source in the transactions that take
+      // and release it.
+      const lease = await mocks.beginMutation(threadId, durationMs);
+      const [state, source] = await Promise.all([
+        mocks.read(threadId),
+        mocks.source(threadId),
+      ]);
+      return {
+        ...lease,
+        began: { state, source },
+        releaseAndRead: async () => {
+          await lease.release();
+          const [after, afterSource] = await Promise.all([
+            mocks.read(threadId),
+            mocks.source(threadId),
+          ]);
+          return { state: after, source: afterSource };
+        },
+      };
+    },
     markDirty: mocks.markDirty,
     publish: mocks.publish,
     confirmUnchanged: mocks.confirmUnchanged,

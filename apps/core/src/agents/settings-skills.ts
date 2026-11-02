@@ -1,9 +1,10 @@
-import { defineSkill, type Sandbox } from "@flue/runtime";
+import { defineSkill } from "@flue/runtime";
 import { builtInSkillsLogger } from "../logging.js";
 import { readThreadSkillResource } from "../settings/skills/execution.js";
 import {
   installSkillFiles,
   type SkillFile,
+  type SkillInstallTarget,
   sha256,
 } from "./built-in-skills.js";
 
@@ -101,14 +102,14 @@ const skillFiles = async (
  * files are missing.
  */
 export const installSettingsSkills = async (
-  sandbox: Sandbox,
+  target: SkillInstallTarget,
   threadId: string,
   skills: ReadonlyArray<SettingsSkill>,
 ) => {
   const included = installable(skills);
   try {
     await installSkillFiles(
-      sandbox,
+      target,
       "settings-skills",
       await sha256(
         JSON.stringify(

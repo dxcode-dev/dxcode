@@ -35,13 +35,14 @@ const EnvironmentVariableRow = Schema.Struct({
   rotated_at: Schema.String,
 });
 
-const columns = `
+/** The columns `decodeEnvironmentVariableRows` reads, in any statement. */
+export const ENVIRONMENT_VARIABLE_COLUMNS = `
   id, scope, target_id, name, kind, enabled,
   envelope_version, key_version, value_nonce, ciphertext,
   wrapped_key_nonce, wrapped_key, created_at, updated_at, rotated_at
 `;
 
-const decodeRows = (input: unknown) =>
+export const decodeEnvironmentVariableRows = (input: unknown) =>
   Schema.decodeUnknownEffect(Schema.Array(EnvironmentVariableRow))(input).pipe(
     Effect.flatMap((rows) =>
       Effect.all(
@@ -179,7 +180,7 @@ export const EnvironmentVariableRepositoryD1 = (db: D1Database) =>
           try: () =>
             db
               .prepare(
-                `SELECT ${columns}
+                `SELECT ${ENVIRONMENT_VARIABLE_COLUMNS}
                    FROM environment_variable
                    WHERE scope = ? AND target_id = ? ${suffix}`,
               )
@@ -187,7 +188,7 @@ export const EnvironmentVariableRepositoryD1 = (db: D1Database) =>
               .all(),
           catch: unavailable(operation),
         });
-        return yield* decodeRows(result.results);
+        return yield* decodeEnvironmentVariableRows(result.results);
       });
 
       const find = Effect.fn("EnvironmentVariableRepository.find")(function* (

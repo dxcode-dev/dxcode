@@ -4,6 +4,10 @@ import { Schema } from "effect";
 import { lazy, Suspense } from "react";
 import { AuthGate } from "./features/authentication/auth-gate.js";
 import { sessionQueryOptions } from "./features/authentication/sign-in-queries.js";
+import {
+  forgetShellPrefetch,
+  startShellPrefetch,
+} from "./features/navigation/shell-queries.js";
 import { AccountThemeProvider } from "./features/settings/account/account-theme-provider.js";
 import { onSessionEnded } from "./shared/auth/session-ended.js";
 import { installClientDiagnostics } from "./shared/diagnostics/client-diagnostics.js";
@@ -13,13 +17,18 @@ import "./styles.css";
 // Before anything renders, so a bug report holds the earliest failures.
 installClientDiagnostics();
 
+// The shell's data and the signed-in app's code load beside the session
+// check instead of after it (#1379).
+startShellPrefetch();
+const authenticatedApplicationModule = import("./authenticated-application.js");
 const AuthenticatedApplication = lazy(() =>
-  import("./authenticated-application.js").then((module) => ({
+  authenticatedApplicationModule.then((module) => ({
     default: module.AuthenticatedApplication,
   })),
 );
 
 const clearDraftsBeforeSignOut = (userId: UserId) => {
+  forgetShellPrefetch();
   queryClient.clear();
   void import("./features/threads/new-thread-draft-store.js").then((drafts) => {
     drafts.clearNewThreadDraftsForUser(userId);
@@ -34,6 +43,7 @@ onSessionEnded(() => {
   const userId = queryClient.getQueryData(sessionQueryOptions.queryKey)?.user
     .id;
   if (userId === undefined) return;
+  forgetShellPrefetch();
   queryClient.setQueryData(sessionQueryOptions.queryKey, null);
   queryClient.removeQueries({
     predicate: (query) => query.queryKey[0] !== "auth",

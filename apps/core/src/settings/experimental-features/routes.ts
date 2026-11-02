@@ -7,6 +7,7 @@ import {
   UpdatePersonalExperimentalFeatureRequestSchema,
   UpdatePersonalExperimentalFeatureResponseSchema,
 } from "@dx/api";
+import type { ExperimentalFeatureId, Principal } from "@dx/domain";
 import {
   ExperimentalFeaturePreferenceInvalid,
   ExperimentalFeaturePreferencesConflict,
@@ -134,6 +135,33 @@ const failureResponse = (context: Context<AppEnv>, failure: unknown) => {
     );
   }
   throw failure;
+};
+
+/**
+ * Whether a personal experimental feature is on for the person, after its
+ * prerequisites and incompatibilities. A feature the registry does not
+ * list is off; a failed read rejects, so callers fail closed.
+ */
+export const experimentalFeatureEnabled = async (
+  bindings: AppEnv["Bindings"],
+  principal: Principal,
+  featureId: ExperimentalFeatureId,
+): Promise<boolean> => {
+  const operation = Effect.gen(function* () {
+    const db = yield* decodeD1Binding(bindings.DB);
+    return yield* Effect.gen(function* () {
+      const service = yield* ExperimentalFeaturesService;
+      const view = yield* service.getPersonal(
+        principal,
+        experimentalFeatureRegistryFor(bindings),
+      );
+      return view.flags.some(
+        ({ registration, effectiveEnabled }) =>
+          registration.id === featureId && effectiveEnabled,
+      );
+    }).pipe(Effect.provide(servicesFor(db)));
+  });
+  return Effect.runPromise(operation);
 };
 
 export const personalExperimentalFeaturesRoutes = new Hono<AppEnv>();

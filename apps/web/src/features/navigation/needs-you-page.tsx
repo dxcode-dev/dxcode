@@ -1,16 +1,28 @@
-import type { NeedsYouItem } from "@dx/api";
+import type {
+  NeedsYouItem,
+  NeedsYouLink,
+  NeedsYouRankedItem,
+  NeedsYouRankingData,
+} from "@dx/api";
+import type { UserId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { ExternalLink, X } from "lucide-react";
+import { ExternalLink, ListOrdered, X } from "lucide-react";
+import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { DxLoading } from "../../shared/brand/dx-loading.js";
 import { PageShell } from "../../shared/layout/page-shell.js";
+import { Button } from "../../shared/ui/button.js";
 import { issueIcon, pullIcon } from "../../shared/ui/github-status.js";
+import { SettingsSelect } from "../../shared/ui/settings.js";
 import { TimeText } from "../../shared/ui/time-text.js";
 import {
   dismissNeedsYouMutationOptions,
   needsYouQueryOptions,
+  needsYouRankingQueryOptions,
+  rankNeedsYouMutationOptions,
 } from "../notifications/needs-you-queries.js";
+import { personalExperimentalFeaturesQueryOptions } from "../settings/experimental-features/experimental-features-queries.js";
 // The page list and empty state are Your Reports' (bug-reports-*).
 import "../threads/bug-reports/bug-reports.css";
 import { age, exactTime } from "./inbox-time.js";
@@ -42,6 +54,204 @@ const sameGitHubItem = (
     Number(path?.[2]) === link.number
   );
 };
+
+/** A linked issue or pull request, with its state icon. */
+function GitHubLink({ link }: { readonly link: NeedsYouLink }) {
+  return (
+    <a
+      className="needs-you-page-link"
+      href={link.url}
+      target="_blank"
+      rel="noreferrer"
+      title={
+        link.title === undefined
+          ? `${link.repository}#${link.number} (${link.state})`
+          : `${link.title} (${link.state})`
+      }
+    >
+      {link.kind === "pull"
+        ? pullIcon(link.state)
+        : issueIcon(link.state === "open" ? "open" : "closed")}
+      {link.repository}#{link.number}
+    </a>
+  );
+}
+
+/** One ranked ask: its place, the Thread, why it matters, and its links. */
+function RankedRow({
+  item,
+  rank,
+  waiting,
+  related,
+}: {
+  readonly item: NeedsYouRankedItem;
+  readonly rank: number;
+  readonly waiting: boolean;
+  /** Other ranked asks that share its group's issue or pull request. */
+  readonly related: number;
+}) {
+  return (
+    <li
+      className="needs-you-page-row"
+      data-kind={item.kind}
+      data-settled={waiting ? undefined : ""}
+    >
+      <span className="needs-you-kind needs-you-rank" aria-hidden>
+        {rank}
+      </span>
+      <div className="needs-you-page-body">
+        <div className="needs-you-page-heading">
+          <Link
+            to="/threads/$threadId"
+            params={{ threadId: item.threadId }}
+            className="needs-you-page-title"
+          >
+            {item.threadTitle}
+          </Link>
+        </div>
+        {item.why === undefined ? null : (
+          <p className="needs-you-page-ask">{item.why}</p>
+        )}
+        <div className="needs-you-page-meta">
+          <span>{NEEDS_YOU_KIND[item.kind].label}</span>
+          {item.projectName === "" ? null : <span>{item.projectName}</span>}
+          {waiting ? null : <span>No longer waiting</span>}
+          {item.links.map((link) => (
+            <GitHubLink key={`${link.repository}#${link.number}`} link={link} />
+          ))}
+          {related === 0 ? null : (
+            <span title={item.group}>
+              Related to {related} other {related === 1 ? "ask" : "asks"}
+            </span>
+          )}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+/**
+ * Prioritize's result: the last saved ranking with when and what ranked it,
+ * the model picker, and any failure in words.
+ */
+function PrioritySection({
+  data,
+  waiting,
+  model,
+  onModelChange,
+  pending,
+  error,
+}: {
+  readonly data: NeedsYouRankingData | undefined;
+  readonly waiting: ReadonlySet<string>;
+  readonly model: string | undefined;
+  readonly onModelChange: (model: string) => void;
+  readonly pending: boolean;
+  readonly error: string | undefined;
+}) {
+  const ranking = data?.ranking;
+  const models = data?.models ?? [];
+  return (
+    <section className="needs-you-page-section" aria-label="Priority">
+      <header className="needs-you-page-section-header">
+        <h2>Priority</h2>
+        <span className="needs-you-page-section-meta">
+          {pending ? (
+            "Ranking…"
+          ) : ranking === undefined ? (
+            "Prioritize ranks what to unblock first."
+          ) : (
+            <>
+              Ranked{" "}
+              <time
+                dateTime={ranking.rankedAt}
+                title={exactTime.format(new Date(ranking.rankedAt))}
+              >
+                <TimeText text={(now) => age(ranking.rankedAt, now)} />
+              </time>{" "}
+              with {ranking.modelName}
+            </>
+          )}
+        </span>
+        {models.length > 1 && model !== undefined ? (
+          <SettingsSelect
+            label="Model to rank with"
+            value={model}
+            disabled={pending}
+            onValueChange={onModelChange}
+            options={models.map(({ model: value, name, connectionName }) => [
+              value,
+              `${name} · ${connectionName}`,
+            ])}
+          />
+        ) : null}
+      </header>
+      {error === undefined ? null : (
+        <p className="needs-you-page-error" role="alert">
+          {error}
+        </p>
+      )}
+      {ranking === undefined ? null : (
+        <ol className="bug-reports-list" aria-label="Ranked asks">
+          {ranking.items.map((item, index) => (
+            <RankedRow
+              key={item.threadId}
+              item={item}
+              rank={index + 1}
+              waiting={waiting.has(item.threadId)}
+              related={
+                item.group === undefined
+                  ? 0
+                  : ranking.items.filter(({ group }) => group === item.group)
+                      .length - 1
+              }
+            />
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+const prioritizeEnabled = (
+  flags: ReadonlyArray<{
+    readonly registration: { readonly id: string };
+    readonly effectiveEnabled: boolean;
+  }>,
+) =>
+  flags.some(
+    ({ registration, effectiveEnabled }) =>
+      registration.id === "needs-you-prioritize" && effectiveEnabled,
+  );
+
+/** Prioritize's state: the flag, the saved ranking, and Re-rank. */
+function usePrioritize(userId: UserId) {
+  const queryClient = useQueryClient();
+  const features = useQuery(personalExperimentalFeaturesQueryOptions(userId));
+  const enabled =
+    features.data !== undefined && prioritizeEnabled(features.data.flags);
+  const ranking = useQuery(needsYouRankingQueryOptions(userId, enabled));
+  const rank = useMutation(rankNeedsYouMutationOptions(queryClient, userId));
+  const [picked, setPicked] = React.useState<string | undefined>(undefined);
+  const models = ranking.data?.models ?? [];
+  const model = models.some(({ model: value }) => value === picked)
+    ? picked
+    : ranking.data?.defaultModel;
+  return {
+    enabled,
+    data: ranking.data,
+    model,
+    setModel: setPicked,
+    pending: rank.isPending,
+    error:
+      rank.error instanceof Error
+        ? rank.error.message
+        : ranking.error instanceof Error
+          ? ranking.error.message
+          : undefined,
+    run: () => rank.mutate(model),
+  };
+}
 
 /** One waiting ask: the Thread, its ask, and what it links to. */
 function NeedsYouPageRow({
@@ -88,23 +298,7 @@ function NeedsYouPageRow({
           <span>{kind.label}</span>
           {item.projectName === "" ? null : <span>{item.projectName}</span>}
           {links.map((link) => (
-            <a
-              key={`${link.repository}#${link.number}`}
-              className="needs-you-page-link"
-              href={link.url}
-              target="_blank"
-              rel="noreferrer"
-              title={
-                link.title === undefined
-                  ? `${link.repository}#${link.number} (${link.state})`
-                  : `${link.title} (${link.state})`
-              }
-            >
-              {link.kind === "pull"
-                ? pullIcon(link.state)
-                : issueIcon(link.state === "open" ? "open" : "closed")}
-              {link.repository}#{link.number}
-            </a>
+            <GitHubLink key={`${link.repository}#${link.number}`} link={link} />
           ))}
           {askLink === undefined ? null : (
             <a
@@ -146,8 +340,27 @@ export function NeedsYouPage() {
     dismissNeedsYouMutationOptions(queryClient, identity.id),
   );
   const items = list.data?.items ?? [];
+  const prioritize = usePrioritize(identity.id);
+  const ranked = prioritize.data?.ranking !== undefined;
   return (
     <PageShell
+      actions={
+        prioritize.enabled ? (
+          <Button
+            type="button"
+            size="xs"
+            disabled={prioritize.pending || items.length === 0}
+            onClick={prioritize.run}
+          >
+            <ListOrdered aria-hidden />
+            {prioritize.pending
+              ? "Ranking…"
+              : ranked
+                ? "Re-rank"
+                : "Prioritize"}
+          </Button>
+        ) : undefined
+      }
       title={
         <strong className="needs-you-page-heading-title">
           Needs you
@@ -173,15 +386,30 @@ export function NeedsYouPage() {
           </span>
         </div>
       ) : (
-        <ul className="bug-reports-list" aria-label="Needs you">
-          {items.map((item) => (
-            <NeedsYouPageRow
-              key={item.threadId}
-              item={item}
-              onDismiss={(dismissed) => dismiss.mutate(dismissed.threadId)}
+        <>
+          {prioritize.enabled ? (
+            <PrioritySection
+              data={prioritize.data}
+              waiting={new Set(items.map(({ threadId }) => threadId))}
+              model={prioritize.model}
+              onModelChange={prioritize.setModel}
+              pending={prioritize.pending}
+              error={prioritize.error}
             />
-          ))}
-        </ul>
+          ) : null}
+          {prioritize.enabled ? (
+            <h2 className="needs-you-page-all">All asks</h2>
+          ) : null}
+          <ul className="bug-reports-list" aria-label="Needs you">
+            {items.map((item) => (
+              <NeedsYouPageRow
+                key={item.threadId}
+                item={item}
+                onDismiss={(dismissed) => dismiss.mutate(dismissed.threadId)}
+              />
+            ))}
+          </ul>
+        </>
       )}
     </PageShell>
   );

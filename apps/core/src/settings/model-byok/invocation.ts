@@ -34,6 +34,7 @@ import { createDxCloudflareModelProvider } from "../../runtime/cloudflare-model-
 import { workersAiDeploymentEnabled } from "../../runtime/model-routing-dev-defaults.js";
 import {
   classifyRunFailure,
+  markRunFailure,
   type RunFailure,
   type RunFailureClass,
 } from "../../runtime/run-failure.js";
@@ -774,20 +775,32 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     return this.#runtime;
   }
 
-  /** Never select here. Every call must use the prepared submission route. */
+  /**
+   * Never select here. Every call must use the prepared submission route.
+   *
+   * The Thread and its connection must still be live before a request goes
+   * upstream. The check runs at a D1 replica near this object (~10–30 ms
+   * instead of a ~250 ms trip to the primary from far regions) and at the
+   * primary at the same time. A request is sent only after the replica says
+   * live; if the primary then says gone, the request is aborted at once and
+   * nothing of it is handed back (`live`). A replica that says not live, or
+   * fails, defers to the primary before anything is sent. So a removal can
+   * still let one request leave within the replica lag (about 1 s at most).
+   */
   async #resolve(
     threadId: string,
     submissionId: string | undefined,
     canonical: string,
-  ): Promise<PinnedSubmission> {
+  ): Promise<{ readonly pin: PinnedSubmission; readonly live: Promise<void> }> {
     if (!submissionId) throw new Error("SUBMISSION_ROUTE_UNAVAILABLE");
     const pin = await this.#readPin(submissionId);
     if (pin?.threadId !== threadId || pin.submissionId !== submissionId)
       throw new Error("SUBMISSION_ROUTE_UNAVAILABLE");
     if (`${pin.model.provider}/${pin.model.id}` !== canonical)
       throw new Error("SUBMISSION_MODEL_MISMATCH");
-    const live = await this.#db()
-      .prepare(`
+    const liveness = (db: Pick<D1Database, "prepare">) =>
+      db
+        .prepare(`
       SELECT t.id FROM threads t
       WHERE t.id = ? AND t.owner_user_id = ? AND t.lifecycle_state = 'active'
         AND (? = 'deployment' OR EXISTS (
@@ -797,16 +810,20 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
               OR (c.scope = 'workspace' AND EXISTS (SELECT 1 FROM member m WHERE m.userId = t.owner_user_id AND m.organizationId = c.target_id)))
         ))
     `)
-      .bind(
-        threadId,
-        pin.ownerUserId,
-        pin.connection.kind,
-        pin.connection.id,
-        pin.connection.target.scope,
-        pin.connection.target.id,
-      )
-      .first();
-    if (!live) {
+        .bind(
+          threadId,
+          pin.ownerUserId,
+          pin.connection.kind,
+          pin.connection.id,
+          pin.connection.target.scope,
+          pin.connection.target.id,
+        )
+        .first();
+    const primary = this.#db();
+    const atPrimary = liveness(primary);
+    atPrimary.catch(() => undefined);
+    const confirmed = async () => {
+      if (await atPrimary) return;
       await this.ctx.blockConcurrencyWhile(async () => {
         const current = await this.#readPin(submissionId);
         if (
@@ -818,10 +835,100 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
         }
       });
       throw new Error("CONNECTION_REMOVED");
-    }
+    };
+    const nearby =
+      typeof primary.withSession === "function"
+        ? await liveness(primary.withSession("first-unconstrained")).catch(
+            () => null,
+          )
+        : null;
+    // Only the primary can say a Thread or connection is gone.
+    if (!nearby) await confirmed();
     this.#validateEndpoint(pin.connection);
     await this.#renewPin(submissionId, pin.expiresAt);
-    return pin;
+    const live = nearby ? confirmed() : Promise.resolve();
+    live.catch(() => undefined);
+    return { pin, live };
+  }
+
+  /**
+   * Runs one upstream call under the primary's liveness check. The call is
+   * aborted the moment the primary says the Thread or connection is gone, so
+   * a request that left on a just-removed key stops at once. The response's
+   * status and headers come back as soon as the provider sends them, and its
+   * body only once the primary says live: no model output reaches the agent
+   * before then.
+   */
+  async #underLiveness(
+    live: Promise<void>,
+    signal: AbortSignal,
+    call: (signal: AbortSignal) => Promise<Response>,
+  ) {
+    const removed = new AbortController();
+    let checked: "live" | "gone" | undefined;
+    live.then(
+      () => {
+        checked = "live";
+      },
+      () => {
+        checked = "gone";
+        removed.abort(new Error("CONNECTION_REMOVED"));
+      },
+    );
+    let response: Response;
+    try {
+      response = await call(AbortSignal.any([signal, removed.signal]));
+    } catch (error) {
+      await live;
+      throw error;
+    }
+    if (checked === "live") return response;
+    const body = response.body;
+    if (checked === "gone" || body === null) {
+      try {
+        await live;
+      } catch (error) {
+        await body?.cancel().catch(() => undefined);
+        throw error;
+      }
+      return response;
+    }
+    const reader = body.getReader();
+    let confirmed = false;
+    const gated = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (!confirmed) {
+          try {
+            await live;
+            confirmed = true;
+          } catch {
+            await reader.cancel().catch(() => undefined);
+            // An account failure: Flue settles the turn instead of retrying.
+            controller.error(
+              new Error(
+                markRunFailure({
+                  class: "account",
+                  code: "CONNECTION_REMOVED",
+                  message:
+                    "The model connection was deleted or is no longer accessible.",
+                  retryable: false,
+                }),
+              ),
+            );
+            return;
+          }
+        }
+        const { done, value } = await reader.read();
+        if (done) controller.close();
+        else controller.enqueue(value);
+      },
+      cancel: (reason) => reader.cancel(reason),
+    });
+    return new Response(gated, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
   }
 
   async #handleProxy(
@@ -830,12 +937,14 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     signal: AbortSignal,
   ) {
     const routingStarted = performance.now();
-    const pin = await this.#resolve(
+    const { pin, live } = await this.#resolve(
       envelope.threadId,
       envelope.submissionId,
       envelope.canonical,
     );
-    return this.#proxyWithPin(pin, envelope, request, signal, routingStarted);
+    return this.#underLiveness(live, signal, (upstream) =>
+      this.#proxyWithPin(pin, envelope, request, upstream, routingStarted),
+    );
   }
 
   /**
@@ -1126,12 +1235,14 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
   }
 
   async #handleStream(envelope: StreamEnvelope, signal: AbortSignal) {
-    const pin = await this.#resolve(
+    const { pin, live } = await this.#resolve(
       envelope.threadId,
       envelope.submissionId,
       envelope.canonical,
     );
-    return this.#streamWithPin(pin, envelope, signal);
+    return this.#underLiveness(live, signal, (upstream) =>
+      this.#streamWithPin(pin, envelope, upstream),
+    );
   }
 
   async #streamWithPin(
@@ -1526,11 +1637,13 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
    * itself; it is returned only for the pinned Claude Code route.
    */
   async #handleClaudeCodeCredential(envelope: ModelEnvelope) {
-    const pin = await this.#resolve(
+    const { pin, live } = await this.#resolve(
       envelope.threadId,
       envelope.submissionId,
       envelope.canonical,
     );
+    // A plan token leaves this object only for a live Thread.
+    await live;
     const token = await this.#claudeCodeToken(pin);
     const plan = claudePlanAccess(
       await loadClaudePlan(this.#db(), pin.connection.id),
@@ -1560,11 +1673,12 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       observedAt < 0
     )
       return jsonResponse({ code: "INVALID_REQUEST" }, 400);
-    const pin = await this.#resolve(
+    const { pin, live } = await this.#resolve(
       envelope.threadId,
       envelope.submissionId,
       envelope.canonical,
     );
+    await live;
     if (pin.connection.providerId !== CLAUDE_CODE_PROVIDER_ID)
       throw new Error("SUBMISSION_MODEL_MISMATCH");
     const state = await recordClaudePlanReading(

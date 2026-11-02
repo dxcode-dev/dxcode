@@ -7,16 +7,22 @@ const decodeToolSet = Schema.decodeUnknownSync(
   Schema.fromJsonString(PluginToolSet),
 );
 
-const read = async (db: D1Database, threadId: string, submissionId: string) => {
-  const row = await db
+const recordedStatement = (
+  db: D1Database,
+  threadId: string,
+  submissionId: string,
+) =>
+  db
     .prepare(
       `SELECT tool_set_json FROM submission_plugin_tools
        WHERE thread_id = ? AND submission_id = ? LIMIT 1`,
     )
-    .bind(threadId, submissionId)
-    .first<{ tool_set_json: string }>();
-  return row === null ? undefined : decodeToolSet(row.tool_set_json);
-};
+    .bind(threadId, submissionId);
+
+const decodeRecorded = (row: { tool_set_json: string } | null | undefined) =>
+  row === null || row === undefined
+    ? undefined
+    : decodeToolSet(row.tool_set_json);
 
 /**
  * The plugin tool set for one submission, resolved at the submission boundary
@@ -31,38 +37,47 @@ export const resolveSubmissionPluginTools = async (
   submissionId: string,
   now = new Date(),
 ): Promise<PluginToolSet> => {
-  const recorded = await read(context.db, threadId, submissionId);
+  // Each read is a D1 round trip before the turn's first model request, so
+  // the independent ones run together.
+  const [recorded, thread] = await Promise.all([
+    recordedStatement(context.db, threadId, submissionId)
+      .first<{ tool_set_json: string }>()
+      .then(decodeRecorded),
+    context.db
+      .prepare("SELECT owner_user_id FROM threads WHERE id = ? LIMIT 1")
+      .bind(threadId)
+      .first<{ owner_user_id: string }>(),
+  ]);
   if (recorded !== undefined) return recorded;
-  const thread = await context.db
-    .prepare("SELECT owner_user_id FROM threads WHERE id = ? LIMIT 1")
-    .bind(threadId)
-    .first<{ owner_user_id: string }>();
   if (thread === null) throw new Error("PLUGIN_TOOLS_THREAD_NOT_FOUND");
   const toolSet = pluginToolSet(
     await resolveCapabilities({ userId: thread.owner_user_id }, context),
   );
   const resolvedAt = now.toISOString();
-  await context.db
-    .prepare(
-      `INSERT OR IGNORE INTO submission_plugin_tools (
-         thread_id, submission_id, owner_user_id, tool_set_json, resolved_at,
-         expires_at
-       ) VALUES (?, ?, ?, ?, ?,
-         strftime('%Y-%m-%dT%H:%M:%fZ', ?, '+${USAGE_EVENT_RETENTION_DAYS} days'))`,
-    )
-    .bind(
-      threadId,
-      submissionId,
-      thread.owner_user_id,
-      JSON.stringify(toolSet),
-      resolvedAt,
-      resolvedAt,
-    )
-    .run();
-  // Read back: a concurrent resolution of the same submission may have won.
-  const stored = await read(context.db, threadId, submissionId);
-  if (stored === undefined) throw new Error("PLUGIN_TOOLS_UNRECORDED");
-  return stored;
+  // Read back in the same batch: a concurrent resolution of the same
+  // submission may have won.
+  const [, stored] = await context.db.batch<{ tool_set_json: string }>([
+    context.db
+      .prepare(
+        `INSERT OR IGNORE INTO submission_plugin_tools (
+           thread_id, submission_id, owner_user_id, tool_set_json, resolved_at,
+           expires_at
+         ) VALUES (?, ?, ?, ?, ?,
+           strftime('%Y-%m-%dT%H:%M:%fZ', ?, '+${USAGE_EVENT_RETENTION_DAYS} days'))`,
+      )
+      .bind(
+        threadId,
+        submissionId,
+        thread.owner_user_id,
+        JSON.stringify(toolSet),
+        resolvedAt,
+        resolvedAt,
+      ),
+    recordedStatement(context.db, threadId, submissionId),
+  ]);
+  const toolSetStored = decodeRecorded(stored?.results[0]);
+  if (toolSetStored === undefined) throw new Error("PLUGIN_TOOLS_UNRECORDED");
+  return toolSetStored;
 };
 
 export const purgeExpiredSubmissionPluginTools = (

@@ -48,42 +48,53 @@ const depthBand = (a: Point, b: Point) =>
     Math.max(0, Math.min(1, (a[2] + b[2]) / 4 + 0.5)) * (SHADING_BANDS - 1),
   );
 
+/** Receives the Orb's sixteen polylines: rim bands 0–7, then core bands 0–7. */
+export interface OrbPen {
+  move(path: number, x: number, y: number): void;
+  line(path: number, x: number, y: number): void;
+}
+export const ORB_PATH_COUNT = SHADING_BANDS * 2;
+
 /**
- * Appends segments to per-band paths. Consecutive segments of one ring that
- * stay in a band continue the same polyline, so each vertex is formatted once
- * and the path the browser parses each frame is about 40% shorter. With round
+ * Appends segments to per-band polylines. Consecutive segments of one ring
+ * that stay in a band continue the same polyline, so each vertex is emitted
+ * once and the SVG path the browser parses is about 40% shorter. With round
  * caps and joins the stroke is visually equivalent to separate segments; only
  * antialiasing at shared vertices differs.
  */
-const bandPaths = () => {
-  const d = Array.from({ length: SHADING_BANDS }, () => "");
+const bandPen = (pen: OrbPen, offset: number) => {
   const tail: Array<Point | undefined> = Array(SHADING_BANDS).fill(undefined);
-  return {
-    d,
-    add(a: Point, b: Point) {
-      const band = depthBand(a, b);
-      d[band] +=
-        tail[band] === a
-          ? `L${coordinate(b)}`
-          : `M${coordinate(a)}L${coordinate(b)}`;
-      tail[band] = b;
-    },
+  return (a: Point, b: Point) => {
+    const band = depthBand(a, b);
+    if (tail[band] !== a) pen.move(offset + band, a[0], a[1]);
+    pen.line(offset + band, b[0], b[1]);
+    tail[band] = b;
   };
 };
 
-// Batch equal-depth segments into a bounded set of compound paths. Eight
-// shading bands preserve the small-icon depth cue without 288 DOM nodes.
-const artwork = (innerAngle: number, outerAngle: number, mix: number) => {
-  const rim = Array.from({ length: SHADING_BANDS }, (_, i) => ({
-    id: `rim-depth-${i}`,
-    d: "",
-    opacity: 0.82 * (1 - mix) + mix * (0.45 + (0.55 * i) / (SHADING_BANDS - 1)),
-  }));
-  const core = Array.from({ length: SHADING_BANDS }, (_, i) => ({
-    id: `core-depth-${i}`,
-    d: "",
-    opacity: 0.22 + (0.78 * i) / (SHADING_BANDS - 1),
-  }));
+/** Band opacities: rim bands fade from flat to depth-shaded as `mix` rises. */
+export const orbPathOpacities = (mix: number) => [
+  ...Array.from(
+    { length: SHADING_BANDS },
+    (_, i) =>
+      0.82 * (1 - mix) + mix * (0.45 + (0.55 * i) / (SHADING_BANDS - 1)),
+  ),
+  ...Array.from(
+    { length: SHADING_BANDS },
+    (_, i) => 0.22 + (0.78 * i) / (SHADING_BANDS - 1),
+  ),
+];
+
+/**
+ * Traces one pose in viewBox units. Batching equal-depth segments into a
+ * bounded set of compound paths keeps the small-icon depth cue without 288
+ * DOM nodes.
+ */
+export const traceOrb = (
+  innerAngle: number,
+  outerAngle: number,
+  pen: OrbPen,
+) => {
   // Angles are constant within a frame: compute their trigonometry once.
   const innerCos = Math.cos(innerAngle);
   const innerSin = Math.sin(innerAngle);
@@ -94,83 +105,77 @@ const artwork = (innerAngle: number, outerAngle: number, mix: number) => {
     12 + RADIUS * y,
     -x * outerSin + z * outerCos,
   ];
-  const rimPaths = bandPaths();
+  const rim = bandPen(pen, 0);
   const boundary = rimPoints.map(([x, y, z]) => project(x, y, z));
-  for (let i = 0; i < RIM_SEGMENTS; i++)
-    rimPaths.add(boundary[i], boundary[i + 1]);
-  const corePaths = bandPaths();
+  for (let i = 0; i < RIM_SEGMENTS; i++) rim(boundary[i], boundary[i + 1]);
+  const core = bandPen(pen, SHADING_BANDS);
   for (const ring of gyro) {
     const vertices = ring.map(([x, y, z]) =>
       // Rotate about Y by the inner angle, swap axes, then project.
       project(x * innerCos + z * innerSin, -(-x * innerSin + z * innerCos), y),
     );
-    for (let i = 0; i < RING_SEGMENTS; i++)
-      corePaths.add(vertices[i], vertices[i + 1]);
+    for (let i = 0; i < RING_SEGMENTS; i++) core(vertices[i], vertices[i + 1]);
   }
-  for (let i = 0; i < SHADING_BANDS; i++) {
-    rim[i].d = rimPaths.d[i];
-    core[i].d = corePaths.d[i];
-  }
-  return [...rim, ...core];
 };
+
+const artwork = (innerAngle: number, outerAngle: number, mix: number) => {
+  const d = Array.from({ length: ORB_PATH_COUNT }, () => "");
+  traceOrb(innerAngle, outerAngle, {
+    move(path, x, y) {
+      d[path] += `M${coordinate([x, y, 0])}`;
+    },
+    line(path, x, y) {
+      d[path] += `L${coordinate([x, y, 0])}`;
+    },
+  });
+  const opacity = orbPathOpacities(mix);
+  return d.map((path, i) => ({
+    id:
+      i < SHADING_BANDS ? `rim-depth-${i}` : `core-depth-${i - SHADING_BANDS}`,
+    d: path,
+    opacity: opacity[i],
+  }));
+};
+
+/**
+ * The unread dot sits over the Orb's upper right, past the viewBox's
+ * corner. The artwork is cut away around it, so the gap shows whatever
+ * is behind the Orb: a hovered or selected row as much as a plain one.
+ */
+export const ORB_UNREAD_DOT = { cx: 21.1, cy: 4.8, r: 4.6, gap: 1.7 } as const;
 
 // Calculated once per module, shared by every idle icon and server rendering.
 export const ORB_IDLE_ARTWORK = artwork(0, 0, 0);
 export const ORB_IDLE_TRANSFORM =
   "translate(12 12) scale(1.000000) translate(-12 -12)";
 
-/** Animates fixed React-owned paths; owns only browser subscriptions and RAF. */
-export const mountOrbMotion = (group: SVGGElement) => {
-  const document = group.ownerDocument;
-  const view = document.defaultView;
-  if (!view) return undefined;
-  const window = view;
-  const paths = Array.from(group.querySelectorAll("path"));
-  const media = window.matchMedia("(prefers-reduced-motion: reduce)");
-  let options: OrbMotionOptions = {
-    activityStatus: "idle",
-    reducedMotion: false,
-  };
+export interface OrbPose {
+  readonly inner: number;
+  readonly outer: number;
+  readonly mix: number;
+  /** Breathing scale about the center and group opacity. */
+  readonly scale: number;
+  readonly opacity: number;
+}
+
+/**
+ * The working Orb's motion: a fade between idle and working shading, two
+ * rotations that keep their angular velocity across status changes and settle
+ * to the nearest full turn, and a 1.8 s breath. Pure, so the main-thread SVG
+ * renderer and the canvas worker run the same motion.
+ */
+export const createOrbPhysics = () => {
   let target = 0;
   let mix = 0;
   let velocity = 0;
   let pulsePhase = 0;
-  let last: number | undefined;
-  let frame: number | undefined;
-  let disposed = false;
   const inner: Rotation = { angle: 0, speed: 0, rest: 0 };
   const outer: Rotation = { angle: 0, speed: 0, rest: 0 };
-  const reduced = () => options.reducedMotion || media.matches;
   const unsettled = () =>
     Math.abs(mix - target) > 0.0001 ||
     Math.abs(velocity) > 0.001 ||
     moving(inner) ||
     moving(outer);
-  let painted = false;
-  const paint = (
-    frameArtwork: typeof ORB_IDLE_ARTWORK,
-    transform: string,
-    opacity: string,
-  ) => {
-    group.setAttribute("transform", transform);
-    group.setAttribute("opacity", opacity);
-    for (let i = 0; i < paths.length; i++) {
-      paths[i].setAttribute("d", frameArtwork[i].d);
-      // Band opacity changes only while working fades in or out.
-      const opacity = String(frameArtwork[i].opacity);
-      if (paths[i].getAttribute("opacity") !== opacity)
-        paths[i].setAttribute("opacity", opacity);
-    }
-  };
-  const draw = () => {
-    const breath = reduced() ? 0 : mix * (0.5 - 0.5 * Math.cos(pulsePhase));
-    paint(
-      artwork(inner.angle, outer.angle, mix),
-      `translate(12 12) scale(${(1 - 0.1 * breath).toFixed(6)}) translate(-12 -12)`,
-      (1 - 0.35 * breath).toFixed(6),
-    );
-    painted = true;
-  };
   const advance = (rotation: Rotation, speed: number, dt: number) => {
     if (target === 1) {
       rotation.speed += (speed - rotation.speed) * (1 - Math.exp(-7 * dt));
@@ -189,22 +194,22 @@ export const mountOrbMotion = (group: SVGGElement) => {
       }
     }
   };
-  function schedule() {
-    if (
-      !disposed &&
-      frame === undefined &&
-      !document.hidden &&
-      !reduced() &&
-      (target === 1 || unsettled())
-    )
-      frame = window.requestAnimationFrame(tick);
-  }
-  function tick(now: number) {
-    frame = undefined;
-    if (disposed) return;
-    const dt = last === undefined ? 0 : Math.min((now - last) / 1000, 0.05);
-    last = now;
-    if (dt) {
+  return {
+    get target() {
+      return target;
+    },
+    unsettled,
+    /** Whether frames are still needed: working, or settling toward idle. */
+    animating: () => target === 1 || unsettled(),
+    setWorking(working: boolean) {
+      const oldTarget = target;
+      target = working ? 1 : 0;
+      if (target === 0 && oldTarget === 1) {
+        for (const rotation of [inner, outer])
+          rotation.rest = Math.round(rotation.angle / TAU) * TAU;
+      }
+    },
+    step(dt: number) {
       const w = 12;
       const y = mix - target;
       const c = velocity + w * y;
@@ -224,22 +229,98 @@ export const mountOrbMotion = (group: SVGGElement) => {
         }
       }
       pulsePhase = (pulsePhase + (dt * TAU) / 1.8) % TAU;
+    },
+    /** Jumps to the target's rest pose, as reduced motion shows it. */
+    settle() {
+      mix = target;
+      velocity = 0;
+      pulsePhase = 0;
+      for (const rotation of [inner, outer]) {
+        rotation.angle = 0;
+        rotation.speed = 0;
+        rotation.rest = 0;
+      }
+    },
+    pose(reduced: boolean): OrbPose {
+      const breath = reduced ? 0 : mix * (0.5 - 0.5 * Math.cos(pulsePhase));
+      return {
+        inner: inner.angle,
+        outer: outer.angle,
+        mix,
+        scale: 1 - 0.1 * breath,
+        opacity: 1 - 0.35 * breath,
+      };
+    },
+  };
+};
+
+/**
+ * Animates fixed React-owned paths on the main thread; owns only browser
+ * subscriptions and RAF. `mountOrbRenderer` uses it for static poses, and as
+ * the whole renderer where a worker cannot draw.
+ */
+export const mountOrbMotion = (group: SVGGElement) => {
+  const document = group.ownerDocument;
+  const view = document.defaultView;
+  if (!view) return undefined;
+  const window = view;
+  const paths = Array.from(group.querySelectorAll("path"));
+  const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+  let options: OrbMotionOptions = {
+    activityStatus: "idle",
+    reducedMotion: false,
+  };
+  const physics = createOrbPhysics();
+  let last: number | undefined;
+  let frame: number | undefined;
+  let disposed = false;
+  const reduced = () => options.reducedMotion || media.matches;
+  let painted = false;
+  const paint = (
+    frameArtwork: typeof ORB_IDLE_ARTWORK,
+    transform: string,
+    opacity: string,
+  ) => {
+    group.setAttribute("transform", transform);
+    group.setAttribute("opacity", opacity);
+    for (let i = 0; i < paths.length; i++) {
+      paths[i].setAttribute("d", frameArtwork[i].d);
+      // Band opacity changes only while working fades in or out.
+      const opacity = String(frameArtwork[i].opacity);
+      if (paths[i].getAttribute("opacity") !== opacity)
+        paths[i].setAttribute("opacity", opacity);
     }
+  };
+  const draw = () => {
+    const pose = physics.pose(reduced());
+    paint(
+      artwork(pose.inner, pose.outer, pose.mix),
+      `translate(12 12) scale(${pose.scale.toFixed(6)}) translate(-12 -12)`,
+      pose.opacity.toFixed(6),
+    );
+    painted = true;
+  };
+  function schedule() {
+    if (
+      !disposed &&
+      frame === undefined &&
+      !document.hidden &&
+      !reduced() &&
+      physics.animating()
+    )
+      frame = window.requestAnimationFrame(tick);
+  }
+  function tick(now: number) {
+    frame = undefined;
+    if (disposed) return;
+    const dt = last === undefined ? 0 : Math.min((now - last) / 1000, 0.05);
+    last = now;
+    if (dt) physics.step(dt);
     draw();
     schedule();
     if (frame === undefined) last = undefined;
     syncSubscriptions();
   }
-  const settleImmediately = () => {
-    mix = target;
-    velocity = 0;
-    pulsePhase = 0;
-    for (const rotation of [inner, outer]) {
-      rotation.angle = 0;
-      rotation.speed = 0;
-      rotation.rest = 0;
-    }
-  };
   const cancel = () => {
     if (frame !== undefined) window.cancelAnimationFrame(frame);
     frame = undefined;
@@ -247,15 +328,14 @@ export const mountOrbMotion = (group: SVGGElement) => {
   };
   const sync = () => {
     cancel();
-    if (reduced()) settleImmediately();
+    if (reduced()) physics.settle();
     draw();
     syncSubscriptions();
     schedule();
   };
   let subscribed = false;
   function syncSubscriptions() {
-    const needed =
-      !disposed && !options.reducedMotion && (target === 1 || unsettled());
+    const needed = !disposed && !options.reducedMotion && physics.animating();
     if (needed === subscribed) return;
     subscribed = needed;
     if (needed) {
@@ -275,13 +355,8 @@ export const mountOrbMotion = (group: SVGGElement) => {
           next.reducedMotion === options.reducedMotion)
       )
         return;
-      const oldTarget = target;
       options = next;
-      target = options.activityStatus === "working" ? 1 : 0;
-      if (target === 0 && oldTarget === 1) {
-        for (const rotation of [inner, outer])
-          rotation.rest = Math.round(rotation.angle / TAU) * TAU;
-      }
+      physics.setWorking(options.activityStatus === "working");
       if (reduced()) {
         sync();
         return;

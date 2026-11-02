@@ -216,6 +216,10 @@ export const StartupPhaseRepositoryD1 = (db: D1Database) =>
         Effect.gen(function* () {
           const result = yield* run(
             "startup-phase.submission-correlation",
+            // `+accepted.journey` keeps journey out of index choice: with it,
+            // SQLite took startup_phase_slo_idx (journey, phase) and read
+            // every accepted submission in the deployment; without it, it
+            // seeks this one by (thread_id, submission_id).
             () =>
               db
                 .prepare(
@@ -227,7 +231,7 @@ export const StartupPhaseRepositoryD1 = (db: D1Database) =>
                     AND opening.thread_id = accepted.thread_id
                     AND opening.submission_id = accepted.submission_id
                     AND opening.phase = 'request_admitted'
-                  WHERE accepted.journey = 'submission'
+                  WHERE +accepted.journey = 'submission'
                     AND accepted.thread_id = ?
                     AND accepted.submission_id = ?
                     AND accepted.phase = 'submission_accepted'

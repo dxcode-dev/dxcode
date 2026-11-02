@@ -63,3 +63,81 @@ export const NeedsYouErrorResponseSchema = Schema.Union([
     "Persistence is temporarily unavailable.",
   ),
 ]);
+
+/**
+ * One ask in a saved Prioritize ranking, as it was when ranked. `why` is
+ * one of dx's reasons that Clef chose, and `group` is a linked issue or pull
+ * request the ask shares with other asks. Every field is dx's own data.
+ */
+export const NeedsYouRankedItemSchema = Schema.Struct({
+  threadId: ThreadId,
+  threadTitle: Schema.String.check(Schema.isMaxLength(256)),
+  projectName: Schema.String.check(Schema.isMaxLength(256)),
+  kind: NeedsYouKindSchema,
+  why: Schema.optional(Schema.String.check(Schema.isMaxLength(300))),
+  group: Schema.optional(Schema.String.check(Schema.isMaxLength(60))),
+  links: Schema.Array(NeedsYouLinkSchema),
+});
+
+export type NeedsYouRankedItem = typeof NeedsYouRankedItemSchema.Type;
+
+export const NeedsYouRankingSchema = Schema.Struct({
+  rankedAt: Schema.String,
+  /** The Workers AI model that ranked, such as `@cf/cloudflare/clef-flash`. */
+  model: Schema.String.check(Schema.isMaxLength(200)),
+  modelName: Schema.String.check(Schema.isMaxLength(200)),
+  /** What to unblock first, in order. */
+  items: Schema.Array(NeedsYouRankedItemSchema),
+});
+
+export type NeedsYouRanking = typeof NeedsYouRankingSchema.Type;
+
+/** A model Prioritize can run on: one of Workers AI's Clef models. */
+export const NeedsYouRankingModelSchema = Schema.Struct({
+  model: Schema.String.check(Schema.isMaxLength(200)),
+  name: Schema.String.check(Schema.isMaxLength(200)),
+  connectionName: Schema.String.check(Schema.isMaxLength(200)),
+});
+
+/**
+ * `GET` and `POST /v1/needs-you/ranking`: the signed-in person's last
+ * ranking, if any, and the models they can rank with. Never a Claude plan.
+ */
+export const NeedsYouRankingResponseSchema = successResponse(
+  Schema.Struct({
+    ranking: Schema.optional(NeedsYouRankingSchema),
+    models: Schema.Array(NeedsYouRankingModelSchema),
+    defaultModel: Schema.optional(Schema.String.check(Schema.isMaxLength(200))),
+  }),
+);
+
+export type NeedsYouRankingData =
+  (typeof NeedsYouRankingResponseSchema.Type)["data"];
+
+export const NeedsYouRankRequestSchema = Schema.Struct({
+  model: Schema.optional(Schema.String.check(Schema.isMaxLength(200))),
+});
+
+export const NeedsYouRankingErrorResponseSchema = Schema.Union([
+  errorResponse("INVALID_REQUEST", "Request validation failed."),
+  errorResponse(
+    "PERSISTENCE_UNAVAILABLE",
+    "Persistence is temporarily unavailable.",
+  ),
+  errorResponse(
+    "RANKING_DISABLED",
+    "Prioritize is off. Turn it on in Settings, Experimental Features.",
+  ),
+  errorResponse(
+    "NOTHING_TO_RANK",
+    "Nothing waits on you, so there is nothing to rank.",
+  ),
+  errorResponse(
+    "RANKING_MODEL_UNAVAILABLE",
+    "Prioritize needs Workers AI's Clef models, which this deployment does not provide.",
+  ),
+  errorResponse(
+    "RANKING_FAILED",
+    "Clef did not return a usable ranking. Try again.",
+  ),
+]);

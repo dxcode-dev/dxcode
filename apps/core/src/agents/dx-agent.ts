@@ -30,6 +30,7 @@ import {
 import { rememberClaudeCodeSandbox } from "../claude-code/runs.js";
 import { claudeCodeMirrorTools } from "../claude-code/tools.js";
 import { createClaudeCodeViewMediaTool } from "../claude-code/view-media.js";
+import { takeDxFilesSandbox } from "../execution/dx-files-sandbox.js";
 import { withoutRepositorySkills } from "../execution/workspace-context.js";
 import { createNeedsYouTools } from "../needs-you/agent-tools.js";
 import { traceSpan } from "../observability/tracing.js";
@@ -390,8 +391,18 @@ const usePluginLifecycle = (
     };
   useAgentStart(async (context) => {
     // Opening the sandbox runs this turn's activation and its disk guard.
-    await installBuiltInSkills(context.harness.sandbox);
-    await installSettingsSkills(context.harness.sandbox, threadId, skills);
+    // Skills live outside the repository, so their writes skip Changes
+    // coordination while that stays true; the two sets are separate
+    // directories.
+    const outside = takeDxFilesSandbox(threadId);
+    const target = {
+      coordinated: context.harness.sandbox,
+      ...(outside === undefined ? {} : { outside }),
+    };
+    await Promise.all([
+      installBuiltInSkills(target),
+      installSettingsSkills(target, threadId, skills),
+    ]);
     const disk = takeWorkspaceDisk(threadId);
     const note = disk === undefined ? undefined : workspaceDiskNote(disk);
     if (note !== undefined)

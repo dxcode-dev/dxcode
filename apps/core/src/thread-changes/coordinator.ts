@@ -14,6 +14,7 @@ import {
   type ThreadChangesMutationLease,
   ThreadChangesPersistenceUnavailable,
   type ThreadChangesSource,
+  type ThreadChangesState,
 } from "./repository-d1.js";
 
 const MUTATION_LEASE_MS = 2 * 60_000;
@@ -31,8 +32,6 @@ export interface ThreadChangesCoordinator {
     options?: { readonly detectUnchanged?: boolean },
   ) => Promise<A>;
 }
-
-type ThreadChangesRepository = ReturnType<typeof makeThreadChangesRepository>;
 
 const logFailure = (threadId: ThreadId, stage: string, cause: unknown) => {
   threadChangesLogger.warn("Thread Changes capture failed.", {
@@ -72,15 +71,12 @@ const maintainMutationLease = (
   };
 };
 
-const refreshFor = async (
-  repository: ThreadChangesRepository,
-  threadId: ThreadId,
+/** The refresh for a lease's mutation, from state and source already read. */
+const refreshFrom = (
   lease: ThreadChangesMutationLease,
-): Promise<DxdChangesRefresh> => {
-  const [state, source] = await Promise.all([
-    repository.read(threadId),
-    repository.source(threadId),
-  ]);
+  state: ThreadChangesState | undefined,
+  source: ThreadChangesSource | undefined,
+): DxdChangesRefresh => {
   if (source === undefined)
     throw new ThreadChangesPersistenceUnavailable({
       operation: "thread-changes.source.missing",
@@ -173,19 +169,20 @@ export const runResidentThreadChangesMutation = async <A>(input: {
   );
   const stopMaintainingLease = maintainMutationLease(input.threadId, lease);
   try {
-    const refresh = await refreshFor(repository, input.threadId, lease);
+    const refresh = refreshFrom(lease, lease.began.state, lease.began.source);
     return await input.operation(refresh);
   } finally {
     await stopMaintainingLease();
-    await lease
-      .release()
-      .catch((cause) => logFailure(input.threadId, "mutation-release", cause));
     // A candidate produced during the save is only a preview. Confirm again
-    // after release so even the last save can clear dirty_since without a timer.
-    if (input.residentRefresh !== undefined) {
+    // after release so even the last save can clear dirty_since without a
+    // timer; the release and the refresh's reads share one round trip.
+    const released = await lease
+      .releaseAndRead()
+      .catch((cause) => logFailure(input.threadId, "mutation-release", cause));
+    if (input.residentRefresh !== undefined && released !== undefined) {
       try {
         await input.residentRefresh(
-          await refreshFor(repository, input.threadId, lease),
+          refreshFrom(lease, released.state, released.source),
         );
       } catch (cause) {
         logFailure(input.threadId, "resident-refresh", cause);
@@ -325,10 +322,16 @@ export const makeThreadChangesCoordinator = (input: {
     }
   };
 
-  const queueResidentRefresh = async (lease: ThreadChangesMutationLease) => {
+  const queueResidentRefresh = async (
+    lease: ThreadChangesMutationLease,
+    released: {
+      readonly state?: ThreadChangesState;
+      readonly source?: ThreadChangesSource;
+    },
+  ) => {
     if (input.residentRefresh === undefined) return false;
     try {
-      const refresh = await refreshFor(repository, input.threadId, lease);
+      const refresh = refreshFrom(lease, released.state, released.source);
       return await input.residentRefresh(refresh);
     } catch (cause) {
       logFailure(input.threadId, "resident-refresh", cause);
@@ -354,12 +357,17 @@ export const makeThreadChangesCoordinator = (input: {
       operationFailure = cause;
     }
     await stopMaintainingLease();
+    // The release and the refresh's reads share one round trip.
+    let released: Awaited<ReturnType<typeof lease.releaseAndRead>> | undefined;
     try {
-      await lease.release();
+      released = await lease.releaseAndRead();
     } catch (cause) {
       logFailure(input.threadId, "mutation-release", cause);
     }
-    const dispatched = !repair && (await queueResidentRefresh(lease));
+    const dispatched =
+      !repair &&
+      released !== undefined &&
+      (await queueResidentRefresh(lease, released));
     if (!dispatched) await flushBestEffort(options);
     if (operationResult !== undefined) return operationResult.value;
     throw operationFailure;

@@ -45,8 +45,14 @@ export const ExperimentalFeatureRegistration = Schema.Struct({
   ),
   owner: Schema.Struct({
     team: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(100)),
-    issue: Schema.String.check(
-      Schema.isPattern(/^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/),
+    /**
+     * The public lifecycle issue, when there is one. A feature tracked only
+     * in a private repository omits it: its name must not ship.
+     */
+    issue: Schema.optional(
+      Schema.String.check(
+        Schema.isPattern(/^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/),
+      ),
     ),
   }),
   status: ExperimentalFeatureLifecycleStatus,
@@ -247,7 +253,33 @@ export const createExperimentalFeatureRegistry = (
 export const productionExperimentalFeatureRegistry =
   createExperimentalFeatureRegistry({
     version: 1,
-    features: [],
+    features: [
+      {
+        id: "needs-you-prioritize",
+        title: "Needs-you Prioritize",
+        description:
+          "Adds Prioritize to the Needs-you page: Cloudflare's Clef model on Workers AI ranks what waits on you.",
+        // Tracked in the private repository, so no public issue yet.
+        owner: { team: "dx/navigation" },
+        status: "experimental",
+        defaultEnabled: false,
+        allowedScope: "personal",
+        kind: "capability",
+        risk: "low",
+        prerequisites: [],
+        incompatibilities: [],
+        activation: "immediate",
+        reviewDate: "2027-01-15",
+        lifecyclePlan: {
+          migration:
+            "Saved rankings stay in needs_you_ranking; turning the flag off hides them.",
+          graduation:
+            "Drop the flag check from the ranking routes and the Needs-you page.",
+          removal:
+            "Delete the ranking routes, the page's Prioritize panel, and the needs_you_ranking table.",
+        },
+      },
+    ],
     migrations: [],
   });
 

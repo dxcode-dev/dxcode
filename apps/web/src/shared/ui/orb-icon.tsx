@@ -1,10 +1,11 @@
 import { type ComponentProps, useId, useLayoutEffect, useRef } from "react";
+import { mountOrbRenderer } from "./orb-canvas.js";
 import {
-  mountOrbMotion,
   ORB_IDLE_ARTWORK,
   ORB_IDLE_TRANSFORM,
   ORB_PATH_STROKE_WIDTH,
   ORB_PATH_TRANSFORM,
+  ORB_UNREAD_DOT,
 } from "./orb-motion.js";
 
 export interface OrbIconProps extends ComponentProps<"svg"> {
@@ -13,13 +14,6 @@ export interface OrbIconProps extends ComponentProps<"svg"> {
   /** A dot at the upper right: the agent finished a turn not yet seen. */
   readonly unread?: boolean;
 }
-
-/**
- * The unread dot sits over the Orb's upper right, past the viewBox's
- * corner. The artwork is cut away around it, so the gap shows whatever
- * is behind the Orb: a hovered or selected row as much as a plain one.
- */
-const UNREAD_DOT = { cx: 21.1, cy: 4.8, r: 4.6, gap: 1.7 } as const;
 
 export const OrbIcon = ({
   activityStatus = "idle",
@@ -30,10 +24,10 @@ export const OrbIcon = ({
   ...props
 }: OrbIconProps) => {
   const unreadMask = useId();
-  const renderer = useRef<ReturnType<typeof mountOrbMotion>>(undefined);
+  const renderer = useRef<ReturnType<typeof mountOrbRenderer>>(undefined);
   const attach = (node: SVGGElement | null) => {
     if (!node) return;
-    const motion = mountOrbMotion(node);
+    const motion = mountOrbRenderer(node);
     renderer.current = motion;
     return () => {
       motion?.dispose();
@@ -43,8 +37,8 @@ export const OrbIcon = ({
   // Synchronize the persistent imperative SVG renderer before paint. Keeping
   // its DOM node across status changes preserves angular position and velocity.
   useLayoutEffect(() => {
-    renderer.current?.update({ activityStatus, reducedMotion });
-  }, [activityStatus, reducedMotion]);
+    renderer.current?.update({ activityStatus, reducedMotion, unread });
+  }, [activityStatus, reducedMotion, unread]);
   const hidden = ariaHidden !== false && ariaHidden !== "false";
   return (
     <svg
@@ -69,9 +63,9 @@ export const OrbIcon = ({
         <mask id={unreadMask} maskUnits="userSpaceOnUse">
           <rect x="-2" y="-2" width="28" height="28" fill="#fff" />
           <circle
-            cx={UNREAD_DOT.cx}
-            cy={UNREAD_DOT.cy}
-            r={UNREAD_DOT.r + UNREAD_DOT.gap}
+            cx={ORB_UNREAD_DOT.cx}
+            cy={ORB_UNREAD_DOT.cy}
+            r={ORB_UNREAD_DOT.r + ORB_UNREAD_DOT.gap}
             fill="#000"
           />
         </mask>
@@ -99,9 +93,9 @@ export const OrbIcon = ({
       {unread ? (
         <circle
           className="orb-unread-dot"
-          cx={UNREAD_DOT.cx}
-          cy={UNREAD_DOT.cy}
-          r={UNREAD_DOT.r}
+          cx={ORB_UNREAD_DOT.cx}
+          cy={ORB_UNREAD_DOT.cy}
+          r={ORB_UNREAD_DOT.r}
           fill="var(--unread)"
           stroke="none"
         />

@@ -1338,6 +1338,233 @@ describe("ByokCredentialCoordinatorObject", () => {
     expect(pin).not.toHaveProperty("credential");
   });
 
+  /*
+   * Liveness is read at a nearby D1 replica before the request goes upstream
+   * and at the primary beside it. Local D1 has no replicas, so these tests
+   * give the coordinator a replica that disagrees with the primary:
+   * - a stale replica says live after the connection was deleted: the
+   *   response must not be handed back, and the credential is dropped;
+   * - a lagging replica says not live for a live Thread: the call goes on;
+   * - the replica read fails: the primary decides.
+   */
+  const withReplica = async <T>(
+    answer: (statement: D1PreparedStatement) => Promise<unknown>,
+    run: () => Promise<T>,
+    primary?: (statement: D1PreparedStatement) => Promise<unknown>,
+  ) => {
+    const original = await runInDurableObject(stub(), (instance) => {
+      const target = instance as unknown as { env: Record<string, unknown> };
+      const env = target.env;
+      const db = env.DB as D1Database;
+      target.env = {
+        ...env,
+        DB: new Proxy(db, {
+          get: (object, key) =>
+            key === "prepare" && primary !== undefined
+              ? (query: string) => {
+                  const statement = db.prepare(query);
+                  if (!query.includes("SELECT t.id FROM threads t"))
+                    return statement;
+                  return {
+                    bind: (...values: unknown[]) => {
+                      const bound = statement.bind(...values);
+                      return { first: () => primary(bound) };
+                    },
+                  };
+                }
+              : key === "withSession"
+                ? () => ({
+                    prepare: (query: string) => {
+                      const statement = db.prepare(query);
+                      return {
+                        bind: (...values: unknown[]) => {
+                          const bound = statement.bind(...values);
+                          return { first: () => answer(bound) };
+                        },
+                      };
+                    },
+                  })
+                : Reflect.get(object, key, object),
+        }),
+      };
+      return env;
+    });
+    try {
+      return await run();
+    } finally {
+      await runInDurableObject(stub(), (instance) => {
+        (instance as unknown as { env: Record<string, unknown> }).env =
+          original;
+      });
+    }
+  };
+
+  it("hands back nothing a stale replica let through once the primary says the connection is gone", async () => {
+    await seed();
+    let cancelled = false;
+    const upstream = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start: (controller) =>
+              controller.enqueue(new TextEncoder().encode("data: secret\n\n")),
+            cancel: () => {
+              cancelled = true;
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+    );
+    stubFetch(upstream);
+    await env.DB.prepare("DELETE FROM model_connection WHERE id = ?")
+      .bind(CONNECTION)
+      .run();
+    // Refused before the provider answered (a 400), or after (the body
+    // fails); either way no model output is handed back.
+    const outcome = await withReplica(
+      async () => ({ id: THREAD }),
+      () =>
+        callProxy(proxyEnvelope()).then(
+          async (response) => `${response.status} ${await response.text()}`,
+          (error: unknown) => `failed ${String(error)}`,
+        ),
+    );
+    expect(outcome).toContain("CONNECTION_REMOVED");
+    expect(outcome).not.toContain("secret");
+    expect(cancelled).toBe(true);
+    const pin = await runInDurableObject(stub(), (_instance, state) =>
+      state.storage.get("submission-route:sub-1"),
+    );
+    expect(pin).not.toHaveProperty("credential");
+  });
+
+  it("aborts a request a stale replica let out as soon as the primary says the connection is gone", async () => {
+    await seed();
+    let aborted = false;
+    // The provider never answers on its own: only an abort ends the call.
+    const upstream = vi.fn(
+      (request: Request) =>
+        new Promise<Response>((_resolve, reject) => {
+          request.signal.addEventListener("abort", () => {
+            aborted = true;
+            reject(request.signal.reason);
+          });
+        }),
+    );
+    stubFetch(upstream);
+    await env.DB.prepare("DELETE FROM model_connection WHERE id = ?")
+      .bind(CONNECTION)
+      .run();
+    const response = await withReplica(
+      async () => ({ id: THREAD }),
+      () => callProxy(proxyEnvelope()),
+    );
+    expect(upstream).toHaveBeenCalledOnce();
+    expect(aborted).toBe(true);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "CONNECTION_REMOVED" });
+  });
+
+  it("hands back headers at once and the body once a slow primary says live", async () => {
+    await seed();
+    stubFetch(async () => Response.json({ ok: true }));
+    let primaryAnswered = false;
+    const outcome = await withReplica(
+      async () => ({ id: THREAD }),
+      async () => {
+        const response = await stub().fetch(
+          "https://coordinator/proxy",
+          proxyInit(proxyEnvelope()),
+        );
+        const headersBeforePrimary = !primaryAnswered;
+        return {
+          headersBeforePrimary,
+          status: response.status,
+          body: await response.json(),
+        };
+      },
+      async (statement) => {
+        await new Promise((settle) => setTimeout(settle, 300));
+        primaryAnswered = true;
+        return statement.first();
+      },
+    );
+    expect(outcome).toEqual({
+      headersBeforePrimary: true,
+      status: 200,
+      body: { ok: true },
+    });
+  });
+
+  it("fails the body without output when a slow primary says the connection is gone", async () => {
+    await seed();
+    stubFetch(async () => Response.json({ secret: "model output" }));
+    const outcome = await withReplica(
+      async () => ({ id: THREAD }),
+      async () => {
+        const response = await stub().fetch(
+          "https://coordinator/proxy",
+          proxyInit(proxyEnvelope()),
+        );
+        return response.text().then(
+          (text) => `read ${response.status} ${text}`,
+          (error: unknown) => `failed ${response.status} ${String(error)}`,
+        );
+      },
+      async () => {
+        await new Promise((settle) => setTimeout(settle, 300));
+        return null;
+      },
+    );
+    expect(outcome).toMatch(/^failed 200 .*CONNECTION_REMOVED/);
+    expect(outcome).not.toContain("model output");
+    const pin = await runInDurableObject(stub(), (_instance, state) =>
+      state.storage.get("submission-route:sub-1"),
+    );
+    expect(pin).not.toHaveProperty("credential");
+  });
+
+  it("defers to the primary when a lagging replica does not see a live Thread", async () => {
+    await seed();
+    const upstream = vi.fn(async () => Response.json({ ok: true }));
+    stubFetch(upstream);
+    const response = await withReplica(
+      async () => null,
+      () => callProxy(proxyEnvelope()),
+    );
+    expect(response.status).toBe(200);
+    expect(upstream).toHaveBeenCalledOnce();
+  });
+
+  it("defers to the primary when the replica read fails", async () => {
+    await seed();
+    const upstream = vi.fn(async () => Response.json({ ok: true }));
+    stubFetch(upstream);
+    expect(
+      (
+        await withReplica(
+          async () => {
+            throw new Error("replica unavailable");
+          },
+          () => callProxy(proxyEnvelope()),
+        )
+      ).status,
+    ).toBe(200);
+    await env.DB.prepare(
+      "UPDATE threads SET lifecycle_state = 'archived' WHERE id = ?",
+    )
+      .bind(THREAD)
+      .run();
+    const refused = await withReplica(
+      async () => {
+        throw new Error("replica unavailable");
+      },
+      () => callProxy(proxyEnvelope()),
+    );
+    expect(refused.status).toBe(400);
+    expect(upstream).toHaveBeenCalledOnce();
+  });
+
   it("persists the exact model and connection before dispatch and keeps recovery stable", async () => {
     await seed();
     const saved = await runInDurableObject(stub(), async (_instance, state) =>

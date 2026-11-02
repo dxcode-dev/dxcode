@@ -1,11 +1,36 @@
 import { resolve } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig, loadEnv } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
 import { localAllowedHosts, localTranscriptCapture } from "./vite-local.js";
 
 // The browser test project compiles components with these same plugins.
 export const appPlugins = () => [tailwindcss(), react({ compiler: true })];
+
+/**
+ * Vite bundles each `new Worker(new URL(...))` module as an asset but leaves
+ * it out of the manifest. The production package accepts only files the
+ * manifest reaches, so list each worker among the assets of the chunk that
+ * loads it, as Vite already does for other modules loaded by URL.
+ */
+const workersInManifest: Plugin = {
+  name: "dx:workers-in-manifest",
+  apply: "build",
+  enforce: "post",
+  generateBundle(_, bundle) {
+    const workers = Object.values(bundle).filter(
+      (output) =>
+        output.type === "asset" &&
+        output.fileName.endsWith(".js") &&
+        output.originalFileNames.length === 0,
+    );
+    for (const chunk of Object.values(bundle))
+      if (chunk.type === "chunk")
+        for (const worker of workers)
+          if (chunk.code.includes(worker.fileName))
+            chunk.viteMetadata?.importedAssets.add(worker.fileName);
+  },
+};
 
 export default defineConfig(({ mode }) => {
   const productionPackage = mode === "dx-production";
@@ -30,7 +55,7 @@ export default defineConfig(({ mode }) => {
     define: {
       "import.meta.env.DX_ENV": JSON.stringify(dxEnvironment),
     },
-    plugins: [...appPlugins(), localTranscriptCapture],
+    plugins: [...appPlugins(), localTranscriptCapture, workersInManifest],
     build: {
       manifest: true,
       // Shiki grammars (cpp, emacs-lisp) and the terminal emulator are large

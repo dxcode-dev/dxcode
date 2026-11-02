@@ -138,6 +138,7 @@ import {
   type McpServerData,
   McpServersErrorResponseSchema,
   ModelRoutingErrorResponseSchema,
+  NeedsYouRankingErrorResponseSchema,
   NeedsYouResponseSchema,
   NotificationPreferencesResponseSchema,
   OrbProviderErrorResponseSchema,
@@ -216,6 +217,9 @@ import {
   type SetFirstPartyPluginConfigurationRequest,
   type SettingsContextData,
   type SettingsFieldError,
+  SHELL_PARTS,
+  type ShellPart,
+  ShellResponseSchema,
   type SidebarLayoutEntry,
   SidebarLayoutResponseSchema,
   type SigningKeySetupGuidance,
@@ -349,6 +353,115 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The signed-in app's first-load reads, started at boot beside the session
+ * check and the app's code (#1379): `GET /v1/shell` for the shell's parts,
+ * and the reads every page waits on, the account and the sidebar layout,
+ * each on its own because alone each answers sooner than the shell.
+ *
+ * `request` hands each answer to the first read of the same path, so the
+ * features' own queries stay the owners of their data and only their first
+ * read skips the network. A failed answer, a path read a second time, and
+ * anything asked after `BOOT_READ_LIFETIME_MS` go to the network.
+ */
+
+/** How long after an answer arrives it may serve a first read. */
+const BOOT_READ_LIFETIME_MS = 15_000;
+
+/** Read alone at boot: each page renders only once these answer. */
+const GATING_BOOT_READS = [
+  "/v1/settings/personal/account",
+  "/v1/sidebar-layout",
+] as const;
+
+interface BootAnswer {
+  readonly arrivedAt: number;
+  readonly status: number;
+  readonly body: unknown;
+}
+
+let bootReads: Map<string, Promise<BootAnswer | undefined>> | undefined;
+
+const bootFetch = (path: string) =>
+  fetch(path, {
+    credentials: "same-origin",
+    headers: { accept: "application/json" },
+  });
+
+const readAlone = async (path: string): Promise<BootAnswer | undefined> => {
+  try {
+    const response = await bootFetch(path);
+    return {
+      arrivedAt: Date.now(),
+      status: response.status,
+      body: await response.json(),
+    };
+  } catch {
+    return undefined;
+  }
+};
+
+const readShell = async (): Promise<Map<string, ShellPart> | undefined> => {
+  try {
+    const response = await bootFetch("/v1/shell");
+    // Signed out, or a Core without the route: every read goes out itself.
+    if (!response.ok) return undefined;
+    const shell = await Schema.decodeUnknownPromise(ShellResponseSchema)(
+      await response.json(),
+    );
+    return new Map(
+      Object.entries(SHELL_PARTS).map(([name, path]) => [
+        path,
+        shell.data[name as keyof typeof SHELL_PARTS],
+      ]),
+    );
+  } catch {
+    return undefined;
+  }
+};
+
+/** Starts the boot reads; later calls reuse them until they are cleared. */
+export const prefetchShell = () => {
+  if (bootReads !== undefined) return;
+  const shell = readShell().then((parts) =>
+    parts === undefined ? undefined : { arrivedAt: Date.now(), parts },
+  );
+  bootReads = new Map([
+    ...GATING_BOOT_READS.map((path) => [path, readAlone(path)] as const),
+    ...Object.values(SHELL_PARTS).map(
+      (path) =>
+        [
+          path,
+          shell.then((answer) => {
+            const part = answer?.parts.get(path);
+            return answer === undefined || part === undefined
+              ? undefined
+              : { arrivedAt: answer.arrivedAt, ...part };
+          }),
+        ] as const,
+    ),
+  ]);
+};
+
+/** Signing out drops answers read for the previous person. */
+export const clearShellPrefetch = () => {
+  bootReads = undefined;
+};
+
+/**
+ * The boot answer's body for the first `GET` of `path`, once it arrives, or
+ * undefined when the read should go to the network.
+ */
+const takeBootRead = async (path: string): Promise<unknown | undefined> => {
+  const pending = bootReads?.get(path);
+  if (pending === undefined) return undefined;
+  bootReads?.delete(path);
+  const answer = await pending;
+  if (answer === undefined || answer.status !== 200) return undefined;
+  if (Date.now() - answer.arrivedAt > BOOT_READ_LIFETIME_MS) return undefined;
+  return answer.body;
+};
+
 export const request = async <
   SchemaType extends Schema.ConstraintDecoder<unknown>,
 >(
@@ -356,6 +469,20 @@ export const request = async <
   schema: SchemaType,
   init?: RequestInit,
 ): Promise<SchemaType["Type"]> => {
+  // The first read of a boot path takes the answer read at boot; one that
+  // does not decode is read again.
+  if ((init?.method ?? "GET") === "GET") {
+    const prefetched = await takeBootRead(path);
+    if (prefetched !== undefined) {
+      const decoded = await Schema.decodeUnknownPromise(schema)(
+        prefetched,
+      ).then(
+        (value) => ({ value }),
+        () => undefined,
+      );
+      if (decoded !== undefined) return decoded.value;
+    }
+  }
   const response = await observeRequest(path, init?.method, () =>
     fetch(path, {
       ...init,
@@ -445,6 +572,7 @@ export const request = async <
         ThreadOrbProcessErrorResponseSchema,
         SearchThreadsInvalidRequestResponseSchema,
         SearchThreadsUnavailableResponseSchema,
+        NeedsYouRankingErrorResponseSchema,
       ]),
     )(body).catch(() => undefined);
     if (settingsError !== undefined) {

@@ -60,6 +60,19 @@ export interface ThreadChangesMutationLease {
   readonly refreshToken: string;
   readonly renew: (durationMs: number) => Promise<void>;
   readonly release: () => Promise<void>;
+  /**
+   * Releases the lease and reads the state and source after the release, in
+   * one transaction: what a refresh for the finished mutation needs.
+   */
+  readonly releaseAndRead: () => Promise<{
+    readonly state?: ThreadChangesState;
+    readonly source?: ThreadChangesSource;
+  }>;
+  /** The state and source read in the transaction that took the lease. */
+  readonly began: {
+    readonly state?: ThreadChangesState;
+    readonly source?: ThreadChangesSource;
+  };
 }
 
 export interface ThreadChangesCaptureLease {
@@ -134,6 +147,9 @@ const decodeSource = (raw: unknown): ThreadChangesSource | undefined => {
     repositoryName: row.repository_full_name,
   };
 };
+
+const optional = <K extends string, V>(key: K, value: V | undefined) =>
+  (value === undefined ? {} : { [key]: value }) as { [P in K]?: V };
 
 export const makeThreadChangesRepository = (db: D1Database) => {
   // Every reader counts only unexpired leases, so collecting expired ones is
@@ -303,28 +319,38 @@ export const makeThreadChangesRepository = (db: D1Database) => {
              )
              SELECT thread_id, ?, mutation_generation, ?, ?
                FROM thread_changes_state
-              WHERE thread_id = ?`,
+              WHERE thread_id = ?
+          RETURNING generation`,
           )
           .bind(leaseToken, expiresAt, now, threadId),
+        ...stateStatements(threadId, Date.now()),
+        sourceStatement(threadId),
       ]);
-      if (result[1]?.meta.changes !== 1 || result[2]?.meta.changes !== 1)
+      // One round trip: the batch is one transaction, the insert returns the
+      // generation it took, and the reads see the lease.
+      const rawLease = result[2]?.results[0];
+      if (
+        result[1]?.meta.changes !== 1 ||
+        result[2]?.meta.changes !== 1 ||
+        rawLease === undefined
+      )
         throw unavailable("thread-changes.mutation.begin");
-      const rawLease = await db
-        .prepare(
-          `SELECT generation
-             FROM thread_changes_mutation_lease
-            WHERE thread_id = ? AND lease_token = ?
-            LIMIT 1`,
-        )
-        .bind(threadId, leaseToken)
-        .first();
-      if (rawLease === null) throw unavailable("thread-changes.mutation.begin");
       const leaseRow = Schema.decodeUnknownSync(MutationLeaseRowSchema)(
         rawLease,
       );
       let released = false;
+      const releaseStatement = db
+        .prepare(
+          `DELETE FROM thread_changes_mutation_lease
+            WHERE thread_id = ? AND lease_token = ?`,
+        )
+        .bind(threadId, leaseToken);
       return {
         generation: leaseRow.generation,
+        began: {
+          ...optional("state", decodeState(result[4]?.results[0])),
+          ...optional("source", decodeSource(result[5]?.results[0])),
+        },
         refreshToken,
         renew: async (nextDurationMs) => {
           if (released) return;
@@ -352,14 +378,26 @@ export const makeThreadChangesRepository = (db: D1Database) => {
         release: async () => {
           if (released) return;
           try {
-            await db
-              .prepare(
-                `DELETE FROM thread_changes_mutation_lease
-                  WHERE thread_id = ? AND lease_token = ?`,
-              )
-              .bind(threadId, leaseToken)
-              .run();
+            await releaseStatement.run();
             released = true;
+          } catch (cause) {
+            throw unavailable("thread-changes.mutation.release", cause);
+          }
+        },
+        releaseAndRead: async () => {
+          try {
+            const [, , state, source] = await db.batch([
+              // Released already: the reads still run, and deleting no row
+              // changes nothing.
+              releaseStatement,
+              ...stateStatements(threadId, Date.now()),
+              sourceStatement(threadId),
+            ]);
+            released = true;
+            return {
+              ...optional("state", decodeState(state?.results[0])),
+              ...optional("source", decodeSource(source?.results[0])),
+            };
           } catch (cause) {
             throw unavailable("thread-changes.mutation.release", cause);
           }

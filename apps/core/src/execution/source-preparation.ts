@@ -222,6 +222,20 @@ export const activateSourceWorkspace = (
     ),
   );
 
+/** Whether the Thread owner has connected GitHub, so `gh` gets dx's wrapper. */
+export const githubCliConnected = async (db: D1Database, threadId: string) =>
+  (await db
+    .prepare(
+      `SELECT 1 AS connected
+         FROM threads t
+         JOIN github_user_authorization a ON a.user_id = t.owner_user_id
+        WHERE t.id = ? AND a.status = 'active'
+          AND a.access_token_reference_id IS NOT NULL
+        LIMIT 1`,
+    )
+    .bind(threadId)
+    .first<{ connected: number }>()) !== null;
+
 /**
  * Installs the dx `gh` wrapper when the Thread owner has connected GitHub,
  * whatever the Thread's source. It runs on every agent activation and on a
@@ -243,21 +257,12 @@ export const ensureGithubCliWrapper = async (
       ) => Promise<{ readonly exitCode?: number; readonly stderr?: string }>;
     };
   },
+  // Activation reads it beside the workspace open.
+  connected: Promise<boolean> = githubCliConnected(db, threadId),
 ) => {
   let failure: { readonly exitCode: number; readonly stderrTail: string };
   try {
-    const connected = await db
-      .prepare(
-        `SELECT 1 AS connected
-           FROM threads t
-           JOIN github_user_authorization a ON a.user_id = t.owner_user_id
-          WHERE t.id = ? AND a.status = 'active'
-            AND a.access_token_reference_id IS NOT NULL
-          LIMIT 1`,
-      )
-      .bind(threadId)
-      .first<{ connected: number }>();
-    if (connected === null) return;
+    if (!(await connected)) return;
     const result = await sandbox.commands.run(
       GITHUB_CLI_WRAPPER_INSTALL_COMMAND,
       {
@@ -341,6 +346,38 @@ else
 fi`;
 
 /**
+ * The Project's additional repositories for the Thread, or undefined when
+ * they could not be read (logged; activation goes on without them).
+ */
+export const readAdditionalRepositories = async (
+  db: D1Database,
+  threadId: string,
+): Promise<ReadonlyArray<AdditionalRepositoryRow> | undefined> => {
+  try {
+    return (
+      await db
+        .prepare(
+          `SELECT additional.provider, additional.full_name,
+                  additional.clone_url, thread.owner_user_id
+             FROM threads AS thread
+             JOIN project_additional_repository AS additional
+               ON additional.project_id = thread.project_id
+            WHERE thread.id = ?
+            ORDER BY additional.position`,
+        )
+        .bind(threadId)
+        .all<AdditionalRepositoryRow>()
+    ).results;
+  } catch {
+    executionWorkspaceLogger.warn(
+      "Additional repositories could not be read.",
+      { event: "additional_repository_clone", threadId, outcome: "error" },
+    );
+    return undefined;
+  }
+};
+
+/**
  * Clones the Project's additional repositories beside the primary checkout,
  * on behalf of the Thread owner: a GitHub or Bitbucket repository uses the
  * owner's own token when they have connected that provider, and anything else
@@ -372,31 +409,13 @@ export const cloneAdditionalRepositories = async (
       : bitbucketControlPlaneFor(db, bindings).then((control) =>
           control.withConnection(userId, undefined, async (token) => token),
         ),
+  // Activation reads them beside the workspace open.
+  repositories: Promise<
+    ReadonlyArray<AdditionalRepositoryRow> | undefined
+  > = readAdditionalRepositories(db, threadId),
 ) => {
-  let rows: ReadonlyArray<AdditionalRepositoryRow>;
-  try {
-    rows = (
-      await db
-        .prepare(
-          `SELECT additional.provider, additional.full_name,
-                  additional.clone_url, thread.owner_user_id
-             FROM threads AS thread
-             JOIN project_additional_repository AS additional
-               ON additional.project_id = thread.project_id
-            WHERE thread.id = ?
-            ORDER BY additional.position`,
-        )
-        .bind(threadId)
-        .all<AdditionalRepositoryRow>()
-    ).results;
-  } catch {
-    executionWorkspaceLogger.warn(
-      "Additional repositories could not be read.",
-      { event: "additional_repository_clone", threadId, outcome: "error" },
-    );
-    return;
-  }
-  if (rows.length === 0) return;
+  const rows = await repositories;
+  if (rows === undefined || rows.length === 0) return;
   const directories = additionalRepositoryDirectories(
     rows.map(({ full_name }) => full_name),
   );

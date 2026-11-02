@@ -137,6 +137,64 @@ const encryptionContext = (stored: StoredEnvironmentVariable) => ({
 
 const targetAuditScope = (target: EnvironmentVariableTarget) => target.scope;
 
+/**
+ * The values an execution receives from the three scopes' stored variables:
+ * each name's enabled value from the highest-precedence scope (personal,
+ * then project, then workspace), decrypted, in name order.
+ */
+export const selectForExecution = Effect.fn(
+  "EnvironmentVariableService.selectForExecution",
+)(function* (
+  keyring: ConfigEncryptionKeyring,
+  scopes: {
+    readonly personal: ReadonlyArray<StoredEnvironmentVariable>;
+    readonly project: ReadonlyArray<StoredEnvironmentVariable>;
+    readonly workspace: ReadonlyArray<StoredEnvironmentVariable>;
+  },
+) {
+  const { personal, project, workspace } = scopes;
+  const candidates = [
+    ...personal
+      .filter((value) => value.enabled)
+      .map((value) => ({ value, source: "personal" as const })),
+    ...project
+      .filter((value) => value.enabled)
+      .map((value) => ({ value, source: "project" as const })),
+    ...workspace
+      .filter((value) => value.enabled)
+      .map((value) => ({ value, source: "workspace" as const })),
+  ];
+  const selected = new Map<
+    EnvironmentVariableName,
+    (typeof candidates)[number]
+  >();
+  for (const candidate of candidates) {
+    if (!selected.has(candidate.value.name)) {
+      selected.set(candidate.value.name, candidate);
+    }
+  }
+  return yield* Effect.all(
+    [...selected.values()]
+      .sort((left, right) => left.value.name.localeCompare(right.value.name))
+      .map(({ value, source }) =>
+        decryptEnvironmentVariable(
+          keyring,
+          encryptionContext(value),
+          value.envelope,
+        ).pipe(
+          Effect.map((plaintext) => ({
+            reference: configReferenceFor(value.id),
+            name: value.name,
+            kind: value.kind,
+            value: Redacted.make(plaintext),
+            source,
+          })),
+        ),
+      ),
+    { concurrency: 4 },
+  );
+});
+
 export class EnvironmentVariableService extends Context.Service<
   EnvironmentVariableService,
   EnvironmentVariableServiceShape
@@ -473,44 +531,11 @@ export class EnvironmentVariableService extends Context.Service<
                 id: membership.value.workspace.id,
               })
             : [];
-          const candidates = [
-            ...personal
-              .filter((value) => value.enabled)
-              .map((value) => ({ value, source: "personal" as const })),
-            ...project
-              .filter((value) => value.enabled)
-              .map((value) => ({ value, source: "project" as const })),
-            ...workspace
-              .filter((value) => value.enabled)
-              .map((value) => ({ value, source: "workspace" as const })),
-          ];
-          const selected = new Map<
-            EnvironmentVariableName,
-            (typeof candidates)[number]
-          >();
-          for (const candidate of candidates) {
-            if (!selected.has(candidate.value.name)) {
-              selected.set(candidate.value.name, candidate);
-            }
-          }
-          return yield* Effect.all(
-            [...selected.values()]
-              .sort((left, right) =>
-                left.value.name.localeCompare(right.value.name),
-              )
-              .map(({ value, source }) =>
-                decrypt(keyring)(value).pipe(
-                  Effect.map((plaintext) => ({
-                    reference: configReferenceFor(value.id),
-                    name: value.name,
-                    kind: value.kind,
-                    value: Redacted.make(plaintext),
-                    source,
-                  })),
-                ),
-              ),
-            { concurrency: 4 },
-          );
+          return yield* selectForExecution(keyring, {
+            personal,
+            project,
+            workspace,
+          });
         }),
         listAudit: (target, request) => repository.listAudit(target, request),
       });

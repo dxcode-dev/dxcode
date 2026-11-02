@@ -112,3 +112,51 @@
     height: 36px;
   }
 }
+
+/* Prioritize (experimental): the saved ranking above every ask. */
+.needs-you-page-section {
+  max-width: 860px;
+  margin: 0 auto 20px;
+}
+.needs-you-page-section-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-height: 32px;
+  margin-bottom: 8px;
+}
+.needs-you-page-section-header h2,
+.needs-you-page-all {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.needs-you-page-all {
+  max-width: 860px;
+  margin: 0 auto 8px;
+}
+.needs-you-page-section-meta {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.needs-you-page-section-header .settings-select {
+  max-width: min(320px, 100%);
+}
+.needs-you-page-error {
+  margin: 0 0 8px;
+  color: var(--destructive);
+  font-size: 12.5px;
+  line-height: 18px;
+}
+.needs-you-rank {
+  color: var(--foreground);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.needs-you-page-row[data-settled] {
+  opacity: 0.6;
+}
