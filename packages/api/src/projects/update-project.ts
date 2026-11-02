@@ -34,6 +34,15 @@ export const UpdateProjectNotFoundResponseSchema = errorResponse(
   "PROJECT_NOT_FOUND",
   "Project not found.",
 );
+/** The icon's bytes are not a PNG, JPEG, or WebP image, whatever its name. */
+export const ProjectIconNotImageResponseSchema = errorResponse(
+  "PROJECT_ICON_NOT_IMAGE",
+  "Choose a PNG, JPEG, or WebP image.",
+);
+export const ProjectIconTooLargeResponseSchema = errorResponse(
+  "PROJECT_ICON_TOO_LARGE",
+  "Choose an image of 512 KB or less.",
+);
 export const UpdateProjectPersistenceUnavailableResponseSchema = errorResponse(
   "PERSISTENCE_UNAVAILABLE",
   "Persistence is temporarily unavailable.",

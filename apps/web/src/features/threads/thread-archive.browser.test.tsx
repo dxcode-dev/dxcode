@@ -106,7 +106,7 @@ afterEach(async () => {
 });
 
 describe("Thread archive notices", () => {
-  it("shows progress, confirms archive, and Undo unarchives in the same toast", async () => {
+  it("confirms an archive at once, and Undo before it returns unarchives in the same toast", async () => {
     let resolveArchive:
       | ((archived: { thread: ThreadData }) => void)
       | undefined;
@@ -123,13 +123,16 @@ describe("Thread archive notices", () => {
     const { container, root } = await render();
 
     await click(buttonIn(container, "Archive from touchpoint"));
+    // The confirmation and its Undo show while the request is in flight.
     await vi.waitFor(() =>
-      expect(titleOf(onlyToast())).toBe("Archiving thread…"),
+      expect(titleOf(onlyToast())).toBe("Archived thread"),
     );
-    // Progress cannot be dismissed, and a second request waits for it.
-    expect(buttonIn(onlyToast(), "Dismiss notification")).toBeUndefined();
-    await click(buttonIn(container, "Archive from touchpoint"));
-    expect(archiveMutation.execute).toHaveBeenCalledOnce();
+    expect(buttonIn(onlyToast(), "Dismiss notification")).toBeDefined();
+    await click(buttonIn(onlyToast(), "Undo"));
+    await vi.waitFor(() =>
+      expect(titleOf(onlyToast())).toBe("Unarchived thread"),
+    );
+    expect(buttonIn(onlyToast(), "Undo")).toBeUndefined();
 
     await React.act(async () => {
       resolveArchive?.({
@@ -138,11 +141,8 @@ describe("Thread archive notices", () => {
       await Promise.resolve();
     });
     await vi.waitFor(() =>
-      expect(titleOf(onlyToast())).toBe("Archived thread"),
+      expect(archiveMutation.execute).toHaveBeenCalledTimes(2),
     );
-    expect(buttonIn(onlyToast(), "Dismiss notification")).toBeDefined();
-
-    await click(buttonIn(onlyToast(), "Undo"));
     expect(archiveMutation.execute.mock.calls[0]?.[0]).toEqual({
       threadId,
       archived: true,
@@ -151,10 +151,8 @@ describe("Thread archive notices", () => {
       threadId,
       archived: false,
     });
-    await vi.waitFor(() =>
-      expect(titleOf(onlyToast())).toBe("Unarchived thread"),
-    );
-    expect(buttonIn(onlyToast(), "Undo")).toBeUndefined();
+    // The archive's answer does not bring back its own toast.
+    expect(titleOf(onlyToast())).toBe("Unarchived thread");
 
     await React.act(() => root.unmount());
   });
@@ -180,11 +178,13 @@ describe("Thread archive notices", () => {
       archived: true,
       children: true,
     });
-    expect(archiveMutation.execute.mock.calls[1]?.[0]).toEqual({
-      threadId,
-      archived: false,
-      children: [childId],
-    });
+    await vi.waitFor(() =>
+      expect(archiveMutation.execute).toHaveBeenCalledTimes(2),
+    );
+    const undo = archiveMutation.execute.mock.calls[1]?.[0];
+    expect(undo).toMatchObject({ threadId, archived: false });
+    // The Undo restores the children the archive's answer named.
+    await expect(Promise.resolve(undo?.children)).resolves.toEqual([childId]);
     await vi.waitFor(() =>
       expect(titleOf(onlyToast())).toBe("Unarchived thread"),
     );

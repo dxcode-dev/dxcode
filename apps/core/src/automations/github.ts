@@ -3,6 +3,7 @@ import { Effect, Redacted, Result } from "effect";
 import type { Bindings } from "../http/types.js";
 import { resolveExecutionEnvironment } from "../settings/environment-variables/execution.js";
 import { readGitHubUserAccessToken } from "../source-control/github/control-plane.js";
+import { threadToken } from "../source-control/github/thread-token-cache.js";
 
 /**
  * GitHub event subscriptions are driven by the dx GitHub App's webhooks:
@@ -113,23 +114,34 @@ export const readPullSubject = async (
 
 /**
  * Reads an issue or a pull request by number: GitHub numbers both in one
- * sequence, and its issues API answers for both.
+ * sequence, and its issues API answers for both. For a pull request it also
+ * says when it merged (`pull_request.merged_at`), so one request is enough;
+ * only an answer without that field reads the pull request too.
  */
 export const readItemSubject = async (
   token: string,
   repository: string,
   number: number,
 ) => {
-  const item = await get<{ pull_request?: unknown }>(
+  const item = await get<{ pull_request?: { merged_at?: unknown } }>(
     token,
     `/repos/${repository}/issues/${number}`,
   );
-  return item.pull_request === undefined
-    ? { kind: "issue" as const, subject: pullSubject(item) }
-    : {
-        kind: "pull" as const,
-        subject: await readPullSubject(token, repository, number),
-      };
+  if (item.pull_request === undefined)
+    return { kind: "issue" as const, subject: pullSubject(item) };
+  if (
+    typeof item.pull_request === "object" &&
+    item.pull_request !== null &&
+    "merged_at" in item.pull_request
+  )
+    return {
+      kind: "pull" as const,
+      subject: pullSubject({ ...item, merged_at: item.pull_request.merged_at }),
+    };
+  return {
+    kind: "pull" as const,
+    subject: await readPullSubject(token, repository, number),
+  };
 };
 
 export class GitHubUnavailable extends Error {
@@ -138,16 +150,23 @@ export class GitHubUnavailable extends Error {
 
 const API = "https://api.github.com";
 
-/** The token the Thread's `gh` would use, or undefined. */
-export const githubToken = async (
+/**
+ * Resolves the token the Thread's `gh` would use from D1: the owner's
+ * GITHUB_TOKEN for the Thread, else their dx GitHub connection. Both reads
+ * start together.
+ */
+const resolveGitHubToken = async (
   bindings: Bindings,
   db: D1Database,
   threadId: string,
   ownerUserId: string,
 ): Promise<string | undefined> => {
-  const environment = await Effect.runPromise(
-    Effect.result(resolveExecutionEnvironment(bindings, threadId)),
-  );
+  const [environment, connection] = await Promise.all([
+    Effect.runPromise(
+      Effect.result(resolveExecutionEnvironment(bindings, threadId)),
+    ),
+    readGitHubUserAccessToken(bindings, db, ownerUserId).catch(() => undefined),
+  ]);
   if (Result.isSuccess(environment)) {
     // GH_TOKEN is reserved for dx's gh wrapper; GITHUB_TOKEN is the owner's.
     const value = environment.success.values.find(
@@ -156,11 +175,43 @@ export const githubToken = async (
     const token = value === undefined ? "" : Redacted.value(value.value).trim();
     if (token !== "") return token;
   }
+  return connection;
+};
+
+/**
+ * The token the Thread's `gh` would use and the owner it belongs to, or
+ * undefined when the Thread is gone or D1 cannot be read. A token resolved
+ * moments ago is reused while nothing it depends on changed; see
+ * `thread-token-cache.ts`. Never rejects.
+ */
+export const githubTokenForThread = async (
+  bindings: Bindings,
+  db: D1Database,
+  threadId: string,
+) => {
   try {
-    return await readGitHubUserAccessToken(bindings, db, ownerUserId);
+    const found = await threadToken(db, threadId, "gh", (ownerUserId) =>
+      resolveGitHubToken(bindings, db, threadId, ownerUserId),
+    );
+    return found === undefined
+      ? undefined
+      : { ownerUserId: found.ownerUserId, token: found.token };
   } catch {
     return undefined;
   }
+};
+
+/** The token the Thread's `gh` would use, or undefined. */
+export const githubToken = async (
+  bindings: Bindings,
+  db: D1Database,
+  threadId: string,
+  ownerUserId: string,
+): Promise<string | undefined> => {
+  const found = await githubTokenForThread(bindings, db, threadId);
+  return found?.ownerUserId === ownerUserId
+    ? found.token
+    : resolveGitHubToken(bindings, db, threadId, ownerUserId);
 };
 
 const request = async <T>(

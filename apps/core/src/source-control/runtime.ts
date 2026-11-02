@@ -9,6 +9,7 @@ import {
 } from "@dx/domain";
 import { Context, Effect, Layer, Schema } from "effect";
 import { sourceControlLogger } from "../logging.js";
+import { stepTiming } from "../observability/step-timing.js";
 import { SourceAudit } from "./audit.js";
 import { sourceAccessDenied } from "./authority.js";
 import { GitHubRuntimeAdapter } from "./github/runtime-adapter.js";
@@ -120,6 +121,11 @@ export const SourceRuntimeBrokerLive = (input?: {
           Effect.suspend(() => {
             const operationId = `sco_${crypto.randomUUID()}`;
             const startedAt = clock();
+            const timing = stepTiming(
+              sourceControlLogger,
+              "source_credential_timing",
+              { threadId, operation: unsafeRequest.operation },
+            );
             let authority: RuntimeSourceAuthority | undefined;
             let decision: SourcePolicyDecision | undefined;
             let credentialIssued = false;
@@ -135,53 +141,70 @@ export const SourceRuntimeBrokerLive = (input?: {
               const request = yield* Schema.decodeUnknownEffect(
                 SourceOperationRequest,
               )(unsafeRequest);
-              authority = yield* authorities.resolve(
-                threadId,
-                actorUserId,
-                request,
-                targetProviderRepositoryId,
+              authority = yield* timing.stepEffect(
+                "authority",
+                authorities.resolve(
+                  threadId,
+                  actorUserId,
+                  request,
+                  targetProviderRepositoryId,
+                ),
               );
-              decision = yield* policy.authorize(authority, request);
+              decision = yield* timing.stepEffect(
+                "policy",
+                policy.authorize(authority, request),
+              );
               const initialAuthority = authority;
               return yield* Effect.acquireUseRelease(
-                github.acquire(authority, decision.requestedCapabilities, {
-                  issued: () => {
-                    credentialIssued = true;
-                  },
-                  revokeFailed: () => {
-                    revokeFailed = true;
-                  },
-                }),
+                timing.stepEffect(
+                  "acquire",
+                  github.acquire(authority, decision.requestedCapabilities, {
+                    issued: () => {
+                      credentialIssued = true;
+                    },
+                    revokeFailed: () => {
+                      revokeFailed = true;
+                    },
+                  }),
+                ),
                 (credential) =>
                   Effect.gen(function* () {
-                    const after = yield* authorities.resolve(
-                      threadId,
-                      actorUserId,
-                      request,
-                      targetProviderRepositoryId,
+                    const after = yield* timing.stepEffect(
+                      "reauthority",
+                      authorities.resolve(
+                        threadId,
+                        actorUserId,
+                        request,
+                        targetProviderRepositoryId,
+                      ),
                     );
                     if (after.fingerprint !== initialAuthority.fingerprint)
                       return yield* new SourceControlLeaseFailure({
                         reason: "provider-authority-changed",
                         retryable: true,
                       });
-                    yield* policy.authorize(after, request);
-                    return yield* callback(credential.environment).pipe(
-                      Effect.tap(() =>
-                        Effect.sync(() => {
-                          outcome = "success";
-                        }),
-                      ),
-                      Effect.tapError(() =>
-                        Effect.sync(() => {
-                          outcome = "callback-failed";
-                          reason = "callback-failed";
-                        }),
-                      ),
+                    yield* timing.stepEffect(
+                      "repolicy",
+                      policy.authorize(after, request),
                     );
+                    return yield* timing
+                      .stepEffect("callback", callback(credential.environment))
+                      .pipe(
+                        Effect.tap(() =>
+                          Effect.sync(() => {
+                            outcome = "success";
+                          }),
+                        ),
+                        Effect.tapError(() =>
+                          Effect.sync(() => {
+                            outcome = "callback-failed";
+                            reason = "callback-failed";
+                          }),
+                        ),
+                      );
                   }),
                 (credential) =>
-                  credential.revoke.pipe(
+                  timing.stepEffect("revoke", credential.revoke).pipe(
                     Effect.catch(() =>
                       Effect.sync(() => {
                         revokeFailed = true;
@@ -264,7 +287,11 @@ export const SourceRuntimeBrokerLive = (input?: {
                   reason,
                   durationMs: record.durationMs,
                 });
-                return audit.record(record);
+                return timing
+                  .stepEffect("audit", audit.record(record))
+                  .pipe(
+                    Effect.ensuring(Effect.sync(() => timing.log(outcome))),
+                  );
               }),
             );
           }),

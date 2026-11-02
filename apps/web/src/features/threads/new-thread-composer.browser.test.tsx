@@ -1,4 +1,5 @@
 import type { ModeId } from "@dx/domain";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +13,7 @@ vi.mock("./new-thread-configuration-strip.js", async (importOriginal) => ({
   NewThreadConfigurationStrip: () => null,
 }));
 
+import { AuthContext } from "../../shared/auth/auth-context.js";
 import { NewThreadComposer } from "./new-thread-composer.js";
 
 const drag = (target: Element, type: string, files: ReadonlyArray<File>) => {
@@ -28,30 +30,48 @@ const mount = async (submitting: boolean) => {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
+  // The composer reads the signed-in person's Orb provider list; these tests
+  // never fetch it.
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { enabled: false } },
+  });
   await React.act(() =>
     root.render(
-      <NewThreadComposer
-        prompt=""
-        images={[]}
-        textareaRef={React.createRef()}
-        submitting={submitting}
-        onPromptChange={vi.fn()}
-        onSubmit={vi.fn()}
-        onRemoveImage={vi.fn()}
-        onFiles={onFiles}
-        onScreenshot={vi.fn()}
-        projects={[]}
-        projectId=""
-        onProjectChange={vi.fn()}
-        onLoadMoreProjects={vi.fn()}
-        runnerProfileLoading={false}
-        onRunnerProfileChange={vi.fn()}
-        profile={"medium" as ModeId}
-        onProfileChange={vi.fn()}
-        onModelChange={vi.fn()}
-        dictationActive={false}
-        dictationHideSubmit={false}
-      />,
+      <QueryClientProvider client={queryClient}>
+        <AuthContext.Provider
+          value={{
+            identity: {
+              id: "user-1" as never,
+              name: "Test User",
+              email: "test@example.com",
+            },
+            logout: () => undefined,
+          }}
+        >
+          <NewThreadComposer
+            prompt=""
+            images={[]}
+            textareaRef={React.createRef()}
+            submitting={submitting}
+            onPromptChange={vi.fn()}
+            onSubmit={vi.fn()}
+            onRemoveImage={vi.fn()}
+            onFiles={onFiles}
+            onScreenshot={vi.fn()}
+            projects={[]}
+            projectId=""
+            onProjectChange={vi.fn()}
+            onLoadMoreProjects={vi.fn()}
+            runnerProfileLoading={false}
+            onRunnerProfileChange={vi.fn()}
+            profile={"medium" as ModeId}
+            onProfileChange={vi.fn()}
+            onModelChange={vi.fn()}
+            dictationActive={false}
+            dictationHideSubmit={false}
+          />
+        </AuthContext.Provider>
+      </QueryClientProvider>,
     ),
   );
   const form = container.querySelector("form");

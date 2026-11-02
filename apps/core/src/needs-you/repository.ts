@@ -28,8 +28,9 @@ export const requestAttention = (
   db
     .prepare(
       `INSERT INTO thread_attention_request (
-         thread_id, kind, summary, url, requested_at
-       ) VALUES (?1, ?2, ?3, ?4, ?5)
+         thread_id, owner_user_id, kind, summary, url, requested_at
+       )
+       SELECT id, owner_user_id, ?2, ?3, ?4, ?5 FROM threads WHERE id = ?1
        ON CONFLICT (thread_id) DO UPDATE SET
          kind = excluded.kind, summary = excluded.summary,
          url = excluded.url, requested_at = excluded.requested_at`,
@@ -57,9 +58,12 @@ export const listNeedsYou = async (
       `SELECT request.thread_id, thread.title, project.name AS project_name,
               request.kind, request.summary, request.url, request.requested_at
          FROM thread_attention_request AS request
-         JOIN threads AS thread ON thread.id = request.thread_id
+         -- The person's asks, newest first from their index; CROSS JOIN
+         -- keeps the planner from walking every Thread they own instead.
+         CROSS JOIN threads AS thread ON thread.id = request.thread_id
          JOIN projects AS project ON project.id = thread.project_id
-        WHERE thread.owner_user_id = ?1
+        WHERE request.owner_user_id = ?1
+          AND thread.owner_user_id = ?1
           AND thread.lifecycle_state = 'active'
           AND (thread.snoozed_until IS NULL OR thread.snoozed_until <= ?2)
           AND ${threadProjectReachableSql("project", "?1")}
@@ -167,9 +171,7 @@ export const dismissNeedsYou = async (
   const result = await db
     .prepare(
       `DELETE FROM thread_attention_request
-        WHERE thread_id = ?1
-          AND EXISTS (SELECT 1 FROM threads
-                       WHERE id = ?1 AND owner_user_id = ?2)`,
+        WHERE thread_id = ?1 AND owner_user_id = ?2`,
     )
     .bind(threadId, userId)
     .run();

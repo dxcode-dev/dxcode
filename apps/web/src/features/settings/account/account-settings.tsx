@@ -19,6 +19,7 @@ import type { SettingsSectionProps } from "../settings-registration.js";
 import {
   personalAccountMutationError,
   personalAccountQueryOptions,
+  personalAccountThreadCountQueryOptions,
   setPersonalAvatarMutationOptions,
   updatePersonalAccountMutationOptions,
 } from "./personal-account-queries.js";
@@ -35,8 +36,11 @@ export function PersonalAccountForm({
   saving = false,
   changeAvatar,
   avatarSaving = false,
+  threadCount,
 }: SettingsSectionProps & {
   readonly initialAccount: PersonalAccountData;
+  /** How many Threads the person owns; absent until it loads. */
+  readonly threadCount?: number;
   readonly saveAccount: (input: {
     readonly displayName: string;
     readonly username: string;
@@ -296,10 +300,12 @@ export function PersonalAccountForm({
                 <dt>Username</dt>
                 <dd>@{baseline.username}</dd>
               </div>
-              <div>
-                <dt>Threads</dt>
-                <dd className="account-thread-count">{baseline.threadCount}</dd>
-              </div>
+              {threadCount === undefined ? null : (
+                <div>
+                  <dt>Threads</dt>
+                  <dd className="account-thread-count">{threadCount}</dd>
+                </div>
+              )}
             </dl>
           </div>
         )}
@@ -314,6 +320,9 @@ export function PersonalAccountSettings({
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
   const account = useQuery(personalAccountQueryOptions(identity.id));
+  const threadCount = useQuery(
+    personalAccountThreadCountQueryOptions(identity.id),
+  );
   const updateAccount = useMutation(
     updatePersonalAccountMutationOptions(queryClient, identity.id),
   );
@@ -363,6 +372,7 @@ export function PersonalAccountSettings({
         saving={updateAccount.isPending}
         changeAvatar={setAvatar.mutateAsync}
         avatarSaving={setAvatar.isPending}
+        threadCount={threadCount.data?.threadCount}
       />
     </>
   );

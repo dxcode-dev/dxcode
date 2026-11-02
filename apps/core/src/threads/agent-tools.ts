@@ -8,7 +8,6 @@ import {
   claudePlanWindowName,
   isClaudeCodeModel,
   ModeId,
-  PROJECTLESS_PROJECT_NAME,
   type RunnerProfileCatalog,
   THREAD_COLORS,
   type ThreadId,
@@ -118,6 +117,29 @@ const threadState = (row: ThreadRow) => ({
 });
 
 const isMode = Schema.is(ModeId);
+
+/** How long a started child counts as working before its activity shows. */
+const STARTED_CHILD_MS = 10_000;
+
+/**
+ * Children each calling Thread started whose Thread activity may not show the
+ * first submission yet. create_thread returns as soon as the route admits the
+ * child's message; until activity records it, a status read reports the child
+ * working, so a check right after create_thread never sees it idle.
+ */
+const startedChildren = new Map<
+  string,
+  Map<string, { readonly submissionId: string; readonly until: number }>
+>();
+
+const startedChild = (callingThreadId: string, childId: string) => {
+  const children = startedChildren.get(callingThreadId);
+  const child = children?.get(childId);
+  if (child === undefined) return undefined;
+  if (child.until > Date.now()) return child;
+  children?.delete(childId);
+  return undefined;
+};
 
 /** The agent modes create_thread accepts, in the order they are listed. */
 const AGENT_MODES = [
@@ -244,7 +266,7 @@ export const createThreadTools = (
     owner: CallingThread,
     threadIds: ReadonlyArray<string>,
   ) => {
-    const rows = await context.db
+    const threads = context.db
       .prepare(
         `SELECT id, title, title_pending_until, project_id, parent_thread_id, color,
            lifecycle_state, activity_status, last_activity_at, created_at,
@@ -263,9 +285,41 @@ export const createThreadTools = (
         ...(owner.sharedFamilyRoot === undefined
           ? []
           : [owner.sharedFamilyRoot, owner.sharedFamilyRoot]),
-      )
-      .all<ThreadRow>();
-    return new Map(rows.results.map((row) => [row.id, row]));
+      );
+    const started = threadIds.flatMap((id) => {
+      const child = startedChild(callingThreadId, id);
+      return child === undefined ? [] : [{ id, ...child }];
+    });
+    if (started.length === 0) {
+      const rows = await threads.all<ThreadRow>();
+      return new Map(rows.results.map((row) => [row.id, row]));
+    }
+    // In the same round trip: which started children's activity shows.
+    const [rows, recorded] = await context.db.batch([
+      threads,
+      context.db
+        .prepare(
+          `SELECT thread_id FROM thread_activity_submission
+            WHERE ${started.map(() => "(thread_id = ? AND submission_id = ?)").join(" OR ")}`,
+        )
+        .bind(...started.flatMap(({ id, submissionId }) => [id, submissionId])),
+    ]);
+    const shown = new Set(
+      (recorded?.results ?? []).map(
+        (row) => (row as { readonly thread_id: string }).thread_id,
+      ),
+    );
+    for (const id of shown) startedChildren.get(callingThreadId)?.delete(id);
+    return new Map(
+      ((rows?.results ?? []) as ThreadRow[]).map((row) => [
+        row.id,
+        shown.has(row.id) ||
+        !started.some(({ id }) => id === row.id) ||
+        row.lifecycle_state !== "active"
+          ? row
+          : { ...row, activity_status: "working" as const },
+      ]),
+    );
   };
 
   const readThread = async (
@@ -385,23 +439,13 @@ export const createThreadTools = (
     return text === "" ? null : text;
   };
 
-  /** The project a child joins when the call names none: the caller's. */
-  const defaultProjectId = async (
-    context: ThreadToolsContext,
-    owner: CallingThread,
-  ) => {
-    const project = await context.db
-      .prepare("SELECT name, owner_user_id FROM projects WHERE id = ?")
-      .bind(owner.projectId)
-      .first<{ name: string; owner_user_id: string }>();
-    // A projectless Thread's child is projectless too; the route resolves
-    // the owner's projectless defaults when no project is named.
-    return project !== null &&
-      project.name === PROJECTLESS_PROJECT_NAME &&
-      project.owner_user_id === owner.ownerUserId
-      ? undefined
-      : owner.projectId;
-  };
+  /**
+   * The project a child joins when the call names none: the caller's. A
+   * projectless Thread's child is projectless too; the route resolves the
+   * owner's projectless defaults when no project is named.
+   */
+  const defaultProjectId = (owner: CallingThread) =>
+    owner.projectless ? undefined : owner.projectId;
 
   const withContext = async <T>(
     use: (context: ThreadToolsContext, owner: CallingThread) => Promise<T>,
@@ -514,8 +558,7 @@ export const createThreadTools = (
                   data.orb_provider,
                   data.orb_size,
                 );
-          const projectId =
-            data.project_id ?? (await defaultProjectId(context, owner));
+          const projectId = data.project_id ?? defaultProjectId(owner);
           // A retried tool call reuses its Thread.
           const threadId = await idempotentThreadId(callSeed(toolCallId));
           signal?.throwIfAborted();
@@ -548,13 +591,16 @@ export const createThreadTools = (
             | undefined;
           if (!response.ok || created?.id === undefined)
             throw routeFailure("create_thread", response.status, payload);
-          if (submission?.submissionId !== undefined)
-            await awaitActivity(
-              context,
-              created.id,
-              submission.submissionId,
-              signal,
-            );
+          // The child counts as working until its activity shows, so the
+          // call returns without waiting for that record.
+          if (submission?.submissionId !== undefined) {
+            const children = startedChildren.get(callingThreadId) ?? new Map();
+            children.set(created.id, {
+              submissionId: submission.submissionId,
+              until: Date.now() + STARTED_CHILD_MS,
+            });
+            startedChildren.set(callingThreadId, children);
+          }
           return {
             output: {
               threadId: created.id,
@@ -764,8 +810,7 @@ export const createThreadTools = (
       }),
       run: async ({ data }) =>
         withContext(async (context, owner) => {
-          const projectId =
-            data.project_id ?? (await defaultProjectId(context, owner));
+          const projectId = data.project_id ?? defaultProjectId(owner);
           const query =
             projectId === undefined
               ? ""

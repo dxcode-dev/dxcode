@@ -13,11 +13,17 @@ import type {
   UserId,
 } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useLocation, useParams } from "@tanstack/react-router";
+import {
+  Link,
+  useLocation,
+  useNavigate,
+  useParams,
+} from "@tanstack/react-router";
 import { FolderCog, KeyRound, Upload, X } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
+import { useCloseSettingsOnEscape } from "../../shared/navigation/close-settings-on-escape.js";
 import { settingsNavigationState } from "../../shared/navigation/settings-return.js";
 import { settle } from "../../shared/settle.js";
 import { Button } from "../../shared/ui/button.js";
@@ -96,6 +102,15 @@ export function ProjectSettingsPage({
   const { identity } = useAuthenticatedIdentity();
   const projectQuery = useQuery(
     projectQueryOptions(identity.id, params.projectId),
+  );
+  const navigate = useNavigate();
+  // Escape closes like the Close link; a dirty form's guard asks first.
+  useCloseSettingsOnEscape(
+    () =>
+      void navigate({
+        to: "/projects/$projectId",
+        params: { projectId: params.projectId },
+      }),
   );
   const settingsQuery = useQuery(settingsContextQueryOptions(identity.id));
   const project = projectQuery.data;
@@ -449,6 +464,7 @@ function GeneralProjectSettings({
         <AdditionalRepositoriesSection
           value={additional}
           options={additionalOptions}
+          primaryWebUrl={baseline.repository?.webUrl}
           loading={repositories.loading}
           disabled={saving}
           onValueChange={(next) => edit({ additional: next })}
@@ -641,12 +657,14 @@ function ConnectRepositoryLink() {
 function AdditionalRepositoriesSection({
   value,
   options,
+  primaryWebUrl,
   loading,
   disabled,
   onValueChange,
 }: {
   readonly value: ReadonlyArray<RepositoryOption>;
   readonly options: ReadonlyArray<RepositoryOption>;
+  readonly primaryWebUrl: string | undefined;
   readonly loading: boolean;
   readonly disabled: boolean;
   readonly onValueChange: (value: ReadonlyArray<RepositoryOption>) => void;
@@ -691,6 +709,7 @@ function AdditionalRepositoriesSection({
       <AdditionalRepositoriesPicker
         addTrigger
         options={options}
+        primaryWebUrl={primaryWebUrl}
         value={value}
         loading={loading ? "Loading repositories…" : undefined}
         disabled={disabled}

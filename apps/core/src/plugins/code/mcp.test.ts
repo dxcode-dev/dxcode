@@ -3,12 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { codeModules } from "./catalog.js";
 
 const authorization = vi.hoisted(() => ({
-  createAuthorizedMcpFetch: vi.fn(),
-  resolveMcpCredential: vi.fn(),
+  authorizeMcpCall: vi.fn(),
+  McpInvocationForbidden: class extends Error {},
 }));
 vi.mock("../../settings/mcp-servers/execution.js", () => authorization);
 
-import { codeMcpCall } from "./mcp.js";
+import type { Bindings } from "../../http/types.js";
+import { codeMcpCall as hostCall } from "./mcp.js";
+
+const bindings = {} as Bindings;
+const codeMcpCall = (threadId: string) => hostCall(threadId, bindings);
 
 const connection = {
   id: "mcp_a",
@@ -71,14 +75,11 @@ describe("Code MCP host calls", () => {
     requests.length = 0;
     transport.mockClear();
     result = { structuredContent: { ok: true }, content: [] };
-    authorization.createAuthorizedMcpFetch
+    authorization.authorizeMcpCall
       .mockReset()
-      .mockReturnValue(transport);
-    authorization.resolveMcpCredential
-      .mockReset()
-      .mockResolvedValue("fixture-key");
+      .mockResolvedValue({ credential: "fixture-key", fetch: transport });
   });
-  it("uses the same credential and admission fetch path as direct MCP mounting", async () => {
+  it("authorizes once per call and sends that credential on every request", async () => {
     expect(
       await codeMcpCall("thr_test")(
         module,
@@ -88,11 +89,9 @@ describe("Code MCP host calls", () => {
         new AbortController().signal,
       ),
     ).toEqual({ ok: true });
-    expect(authorization.resolveMcpCredential).toHaveBeenCalledWith(
-      "thr_test",
-      "mcp_a",
-    );
-    expect(authorization.createAuthorizedMcpFetch).toHaveBeenCalledWith(
+    expect(authorization.authorizeMcpCall).toHaveBeenCalledOnce();
+    expect(authorization.authorizeMcpCall).toHaveBeenCalledWith(
+      bindings,
       "thr_test",
       "mcp_a",
       connection.endpoint,
@@ -133,15 +132,18 @@ describe("Code MCP host calls", () => {
     await expect(
       call(module, "unreviewed", {}, true, new AbortController().signal),
     ).rejects.toThrow("not reviewed");
-    expect(authorization.resolveMcpCredential).not.toHaveBeenCalled();
-    authorization.resolveMcpCredential.mockRejectedValueOnce(
+    expect(authorization.authorizeMcpCall).not.toHaveBeenCalled();
+    authorization.authorizeMcpCall.mockRejectedValueOnce(
       new Error("credential revoked"),
     );
     await expect(
       call(module, "execute", {}, true, new AbortController().signal),
     ).rejects.toThrow("credential revoked");
-    authorization.createAuthorizedMcpFetch.mockReturnValueOnce(async () => {
-      throw new Error("transport denied");
+    authorization.authorizeMcpCall.mockResolvedValueOnce({
+      credential: "fixture-key",
+      fetch: async () => {
+        throw new Error("transport denied");
+      },
     });
     await expect(
       call(module, "execute", {}, true, new AbortController().signal),

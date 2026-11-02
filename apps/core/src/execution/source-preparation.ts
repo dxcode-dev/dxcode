@@ -193,6 +193,32 @@ export const sourceWorkspaceLayer = (
   };
 };
 
+/** dx's source programs on a new Orb, ahead of its first run. */
+export const installSourceWorkspaceAssets = (
+  bindings: Bindings,
+  db: D1Database,
+  threadId: string,
+  sandbox: Parameters<typeof workspacePreparationFor>[0],
+) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const service = yield* SourceWorkspaceService;
+      yield* service.installAssets(threadId, workspacePreparationFor(sandbox));
+    }).pipe(Effect.provide(sourceWorkspaceLayer(bindings, db).activation)),
+  );
+
+/**
+ * Reads the Thread's source, so an activation can read it while the Orb
+ * opens. Settles with its outcome; never rejects.
+ */
+export const readSourceWorkspace = (db: D1Database, threadId: string) =>
+  Effect.runPromiseExit(
+    Effect.gen(function* () {
+      const id = yield* Schema.decodeUnknownEffect(ThreadId)(threadId);
+      return yield* (yield* SourceWorkspaceRepository).findByThreadId(id);
+    }).pipe(Effect.provide(SourceWorkspaceRepositoryD1(db))),
+  );
+
 export const activateSourceWorkspace = (
   bindings: Bindings,
   db: D1Database,
@@ -204,18 +230,17 @@ export const activateSourceWorkspace = (
     phase: SourceWorkspacePreparationPhase,
   ) => Effect.Effect<void>,
   disk?: SourceWorkspaceDiskOptions,
+  source?: ReturnType<typeof readSourceWorkspace>,
 ) =>
   Effect.runPromise(
     Effect.gen(function* () {
       const service = yield* SourceWorkspaceService;
       const preparation = workspacePreparationFor(sandbox);
       return yield* runThreadHooks
-        ? service.activate(
-            threadId,
-            preparation,
-            onPreparationPhase,
-            disk === undefined ? {} : { disk },
-          )
+        ? service.activate(threadId, preparation, onPreparationPhase, {
+            ...(disk === undefined ? {} : { disk }),
+            ...(source === undefined ? {} : { source }),
+          })
         : service.prepare(threadId, preparation, disk);
     }).pipe(
       Effect.provide(sourceWorkspaceLayer(bindings, db, options).activation),

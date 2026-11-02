@@ -447,7 +447,6 @@ function SnoozeMenuItem({
     return (
       <Menu.Item
         className="thread-menu-item"
-        disabled={snooze.pendingThreadId === thread.id}
         onClick={() => snooze.wake(thread.id)}
       >
         <AlarmClockOff />

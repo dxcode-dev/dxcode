@@ -12,7 +12,10 @@ import type {
   RunnerProfileId,
   RunnerProviderPresentation,
 } from "@dx/domain";
+import { useQuery } from "@tanstack/react-query";
 import type * as React from "react";
+import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
+import { newThreadOrbProvidersQueryOptions } from "../settings/orb-providers/orb-providers-queries.js";
 import { useComposerEnterKey } from "./composer-enter-key.js";
 import { type PendingAttachment, pastedFiles } from "./image-attachments.js";
 import {
@@ -101,6 +104,18 @@ export function NewThreadComposer({
   readonly dictationHideSubmit: boolean;
 }) {
   const uploading = useAttachmentsUploading(images);
+  // The provider list the page reads runnerOrbs from (the same query), for
+  // whether it failed and to retry it.
+  const { identity } = useAuthenticatedIdentity();
+  const orbProvidersQuery = useQuery(
+    newThreadOrbProvidersQueryOptions(identity.id, projectId),
+  );
+  const runnerOrbsFailed =
+    orbProvidersQuery.isError && !orbProvidersQuery.isFetching;
+  // A send waits for the provider list. Until it loads, the starting size
+  // (say, a remembered one) may be on a provider the person cannot use; the
+  // list moves it to one they can. A failed list lets the send through.
+  const runnerOrbsPending = runnerOrbs === undefined && !runnerOrbsFailed;
   const enterKey = useComposerEnterKey();
   const dropTarget = useImageDropTarget({
     disabled: submitting || uploading,
@@ -111,7 +126,7 @@ export function NewThreadComposer({
       className="new-thread-composer"
       onSubmit={(event) => {
         event.preventDefault();
-        onSubmit();
+        if (!runnerOrbsPending) onSubmit();
       }}
       {...dropTarget}
     >
@@ -163,12 +178,18 @@ export function NewThreadComposer({
         routingGraph={routingGraph}
         locked={submitting}
         submitting={submitting}
-        ready={!uploading && Boolean(prompt.trim() || images.length > 0)}
+        ready={
+          !uploading &&
+          !runnerOrbsPending &&
+          Boolean(prompt.trim() || images.length > 0)
+        }
         retrying={false}
         onProjectChange={onProjectChange}
         runnerProfiles={runnerProfiles}
         runnerProviders={runnerProviders}
         runnerOrbs={runnerOrbs}
+        runnerOrbsFailed={runnerOrbsFailed}
+        onRunnerOrbsRetry={() => void orbProvidersQuery.refetch()}
         runnerProfileId={runnerProfileId}
         runnerProfileLoading={runnerProfileLoading}
         allowedRunnerProfileIds={allowedRunnerProfileIds}

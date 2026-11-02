@@ -82,6 +82,15 @@ async function mountPhoneStrip(
         onProjectChange={() => undefined}
         runnerProfiles={runnerProfiles}
         runnerProviders={providers}
+        runnerOrbs={[
+          {
+            providerId: "cloudflare",
+            scope: "deployment",
+            account: null,
+            status: "ready",
+            unavailableSizes: [],
+          },
+        ]}
         runnerProfileId={"cf.standard-2" as RunnerProfileId}
         onRunnerProfileChange={() => undefined}
         onModelChange={() => undefined}

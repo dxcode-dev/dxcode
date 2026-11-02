@@ -61,7 +61,7 @@ export const createCodeTools = (
             wasm,
             modules,
             data.code,
-            codeMcpCall(submission.threadId),
+            codeMcpCall(submission.threadId, context.bindings),
             signal,
           );
         },

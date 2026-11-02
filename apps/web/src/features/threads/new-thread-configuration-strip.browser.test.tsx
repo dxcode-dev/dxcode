@@ -193,6 +193,15 @@ describe("new thread configuration strip accessibility", () => {
           pauseResume: "filesystem",
         },
       ],
+      runnerOrbs: [
+        {
+          providerId: "cloudflare",
+          scope: "deployment",
+          account: null,
+          status: "ready",
+          unavailableSizes: [],
+        },
+      ],
     });
     expect(markup).toContain(
       'aria-label="Orb: Cloudflare Containers standard-2"',
@@ -757,7 +766,15 @@ describe("new thread Orb picker", () => {
   };
 
   it("shows the provider's short name and the size on a compact trigger", async () => {
-    const picker = await mountPicker(undefined);
+    const picker = await mountPicker([
+      {
+        providerId: "cloudflare",
+        scope: "deployment",
+        account: null,
+        status: "ready",
+        unavailableSizes: [],
+      },
+    ]);
     try {
       expect(picker.trigger?.textContent).toBe("Cloudflare · standard-1");
       expect(picker.trigger?.getAttribute("aria-haspopup")).toBe("menu");
@@ -823,7 +840,15 @@ describe("new thread Orb picker", () => {
   });
 
   it("marks the selected size with a dot and selects another from the submenu", async () => {
-    const picker = await mountPicker(undefined);
+    const picker = await mountPicker([
+      {
+        providerId: "cloudflare",
+        scope: "deployment",
+        account: null,
+        status: "ready",
+        unavailableSizes: [],
+      },
+    ]);
     try {
       await React.act(() => picker.trigger?.click());
       await React.act(() => picker.providerRow("Cloudflare")?.click());

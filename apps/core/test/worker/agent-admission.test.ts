@@ -161,17 +161,26 @@ const orbActivation = () => {
 
 /**
  * The run's Orb start through Core's real activation pipeline, over a
- * provider whose create stands for the Orb waking.
+ * provider that, like every provider, runs Core's admission first; its
+ * `create` call stands for the Orb waking.
  */
 const orbStart = () => {
   const create = vi.fn(async () => {
     throw new Error("Orb started.");
   });
+  const provider = async (
+    _context: unknown,
+    _owner: unknown,
+    options: { readonly authorize: () => Promise<void> },
+  ) => {
+    await options.authorize();
+    return create();
+  };
   const workspaces = composeExecutionWorkspaces(
     bindings,
     {
       e2b: {
-        workspace: { create, connect: vi.fn(), release: vi.fn() },
+        workspace: { create: provider, connect: vi.fn(), release: vi.fn() },
       },
     },
     makeExecutionActivation(),

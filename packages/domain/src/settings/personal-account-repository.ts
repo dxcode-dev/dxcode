@@ -37,6 +37,13 @@ export interface PersonalAccountRepositoryShape {
     PersonalAccount,
     Schema.SchemaError | PersistenceUnavailable | PersonalAccountNotFound
   >;
+  /**
+   * How many Threads the user owns. It reads every one, so only Account
+   * settings asks for it, never the account read every page waits on.
+   */
+  readonly countThreadsOwnedByUser: (
+    userId: UserId,
+  ) => Effect.Effect<number, PersistenceUnavailable>;
   readonly findComposerDefaultsOwnedByUser: (
     userId: UserId,
   ) => Effect.Effect<

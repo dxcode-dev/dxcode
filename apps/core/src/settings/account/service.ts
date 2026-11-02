@@ -36,6 +36,10 @@ interface PersonalAccountServiceShape {
     input: UpdatePersonalAppearanceInput,
     requestId: string,
   ) => Effect.Effect<PersonalAccount, PersonalAccountReadError>;
+  /** Account settings only: it reads every Thread the person owns. */
+  readonly threadCount: (
+    principal: Principal,
+  ) => Effect.Effect<number, PersistenceUnavailable>;
   readonly getComposerDefaults: (
     principal: Principal,
   ) => Effect.Effect<PersonalComposerDefaults, PersonalAccountReadError>;
@@ -59,6 +63,9 @@ export class PersonalAccountService extends Context.Service<
       return PersonalAccountService.of({
         get: Effect.fn("PersonalAccountService.get")((principal) =>
           accounts.findOwnedByUser(principal.userId),
+        ),
+        threadCount: Effect.fn("PersonalAccountService.threadCount")(
+          (principal) => accounts.countThreadsOwnedByUser(principal.userId),
         ),
         getComposerDefaults: Effect.fn(
           "PersonalAccountService.getComposerDefaults",

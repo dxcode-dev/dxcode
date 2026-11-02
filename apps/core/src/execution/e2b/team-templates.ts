@@ -14,6 +14,7 @@ import orbHostname from "../../../../../deploy/orb/dx-orb-hostname.sh?raw";
 import orbInit from "../../../../../deploy/orb/dx-orb-init?raw";
 import orbTmuxConfig from "../../../../../deploy/orb/tmux.conf?raw";
 import terminalStub from "../../../../dxd/assets/dx-terminal-stub.sh?raw";
+import { sourceAssetsTemplateCommands } from "../../source-control/workspace-assets.js";
 
 /**
  * The standard Orb template built into a person's or workspace's own E2B
@@ -76,20 +77,26 @@ export const inlineOrbDockerfile = (
     .join("\n");
 
 /**
- * The recipe version: the inlined Dockerfile, start command, and the size
- * catalog. Template names carry it, so a recipe change builds new templates
- * next to the old ones and pinned Threads keep theirs.
+ * The recipe version: the inlined Dockerfile, the baked source assets, the
+ * start command, and the size catalog. Template names carry it, so a recipe
+ * change builds new templates next to the old ones and pinned Threads keep
+ * theirs.
  */
 export const orbTemplateRecipe = async (
   dockerfile: string = inlineOrbDockerfile(),
   profiles: ReadonlyArray<E2BOrbProfile> = E2B_ORB_PROFILES,
+  sourceAssets: ReadonlyArray<string> = sourceAssetsTemplateCommands(),
 ) => {
   const digest = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(
-      [dockerfile, START_COMMAND, READY_FILE, JSON.stringify(profiles)].join(
-        "\0",
-      ),
+      [
+        dockerfile,
+        ...sourceAssets,
+        START_COMMAND,
+        READY_FILE,
+        JSON.stringify(profiles),
+      ].join("\0"),
     ),
   );
   return [...new Uint8Array(digest)]
@@ -196,8 +203,15 @@ export const liveE2BTeamApi: E2BTeamApi = {
     }));
   },
   buildBase: async (apiKey, name) => {
-    const template = Template({ fileContextPath: "." })
-      .fromDockerfile(inlineOrbDockerfile())
+    // The image has no source assets: bake the current ones, so a new Orb's
+    // asset check installs nothing.
+    const template = sourceAssetsTemplateCommands()
+      .reduce(
+        (built, command) => built.runCmd(command, { user: "user" }),
+        Template({ fileContextPath: "." }).fromDockerfile(
+          inlineOrbDockerfile(),
+        ),
+      )
       .setStartCmd(START_COMMAND, waitForFile(READY_FILE));
     const build = await Template.buildInBackground(template, name, {
       apiKey,

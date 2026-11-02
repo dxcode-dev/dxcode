@@ -3,8 +3,18 @@ import { describe, expect, it } from "vitest";
 import {
   bindings,
   createProductApp,
+  createProjectViaApi,
   jsonHeaders,
 } from "./product-route-fixture.js";
+
+const nameConflict = {
+  status: "error",
+  data: {
+    code: "PROJECT_NAME_CONFLICT",
+    message: "A project with this name already exists.",
+    requestId: expect.any(String),
+  },
+};
 
 describe("Product route errors in workerd with real D1", () => {
   it("rejects malformed bodies, media, IDs, and query values", async () => {
@@ -65,6 +75,57 @@ describe("Product route errors in workerd with real D1", () => {
         data: { code: "INVALID_REQUEST" },
       });
     }
+  });
+
+  it("answers 409 when a create reuses a project name", async () => {
+    await createProjectViaApi("Taken");
+    const response = await createProductApp().request(
+      "/projects",
+      {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ name: "Taken" }),
+      },
+      bindings,
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual(nameConflict);
+  });
+
+  it("answers 409 when a rename takes another project's name", async () => {
+    await createProjectViaApi("Taken");
+    const other = await createProjectViaApi("Other");
+    const response = await createProductApp().request(
+      `/projects/${other.data.id}`,
+      {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ revision: other.data.revision, name: "Taken" }),
+      },
+      bindings,
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual(nameConflict);
+  });
+
+  it("answers 503 when a create's write fails for another reason", async () => {
+    await env.DB.exec(
+      "CREATE TRIGGER fail_project_insert BEFORE INSERT ON projects BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END",
+    );
+    const response = await createProductApp().request(
+      "/projects",
+      {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ name: "Unwritable" }),
+      },
+      bindings,
+    );
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      status: "error",
+      data: { code: "PERSISTENCE_UNAVAILABLE" },
+    });
   });
 
   it("maps D1 persistence failure to detail-free 503", async () => {

@@ -56,7 +56,7 @@ const orbUp = new Error("Orb started.");
 
 /**
  * Flue's sandbox factory for the Thread's run, over a provider whose
- * create stands for the Orb starting.
+ * `create` call (after Core's admission) stands for the Orb starting.
  */
 const orbStart = (policy: OrbBillingPolicy) => {
   const handle = {
@@ -68,12 +68,24 @@ const orbStart = (policy: OrbBillingPolicy) => {
       },
     },
   } as unknown as ExecutionWorkspaceHandle;
-  const create = vi.fn(async () => handle);
+  // Like every provider, it runs Core's admission before the Orb starts.
+  const create = vi.fn<(...input: unknown[]) => Promise<void>>();
+  const provider = vi.fn(
+    async (
+      _context: unknown,
+      _owner: unknown,
+      options: { readonly authorize: () => Promise<void> },
+    ) => {
+      await options.authorize();
+      await create();
+      return handle;
+    },
+  );
   const workspaces = composeExecutionWorkspaces(
     bindings,
     {
       e2b: {
-        workspace: { create, connect: vi.fn(), release: vi.fn() },
+        workspace: { create: provider, connect: vi.fn(), release: vi.fn() },
       },
     },
     makeExecutionActivation({ orbBilling: policy }),
@@ -81,6 +93,7 @@ const orbStart = (policy: OrbBillingPolicy) => {
   );
   return {
     create,
+    provider,
     run: () => workspaces.sandboxFactory.createSandbox({ id: billedThread.id }),
   };
 };
@@ -158,6 +171,24 @@ describe("Orb billing policy, in workerd with real D1", () => {
       },
     ]);
     expect(refusing.usage).toEqual([]);
+  });
+
+  it("a Thread whose authorization fails starts and bills no Orb, while the checks run in parallel", async () => {
+    // Ways this could fail: the billing decision or the provider's reads run
+    // beside the checks and the start does not wait for them; a refused
+    // check surfaces as a provider error instead of the run's own reason.
+    await env.DB.prepare(
+      "UPDATE threads SET lifecycle_state = 'archived' WHERE id = ?",
+    )
+      .bind(billedThread.id)
+      .run();
+    const metering = recordingPolicy({ outcome: "meter" });
+    const start = orbStart(metering.policy);
+    await expect(start.run()).rejects.not.toBe(orbUp);
+    // The provider was reached, and its start waited for the refusal.
+    expect(start.provider).toHaveBeenCalledOnce();
+    expect(start.create).not.toHaveBeenCalled();
+    expect(metering.usage).toEqual([]);
   });
 
   it("an allowed start reports no usage; a metered start reports its Orb time", async () => {

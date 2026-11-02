@@ -30,8 +30,7 @@ const pluginHost = vi.hoisted(() => ({
 }));
 
 const mcp = vi.hoisted(() => ({
-  createAuthorizedMcpFetch: vi.fn(() => vi.fn()),
-  resolveMcpCredential: vi.fn(),
+  authorizeMcpCall: vi.fn(),
 }));
 const skills = vi.hoisted(() => ({
   readThreadSkillResource: vi.fn(
@@ -514,7 +513,7 @@ describe("DxAgent", () => {
     DxAgent({ id: "thr_00000000-0000-4000-8000-000000000036" });
 
     expect(hooks.useMcpConnection).not.toHaveBeenCalled();
-    expect(mcp.createAuthorizedMcpFetch).not.toHaveBeenCalled();
+    expect(mcp.authorizeMcpCall).not.toHaveBeenCalled();
   });
 
   it("offers settings skills as skill directories like dx's own, written into the workspace at agent start", async () => {

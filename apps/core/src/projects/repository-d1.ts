@@ -16,6 +16,7 @@ import { D1Client } from "@effect/sql-d1";
 import { DateTime, Effect, Layer, Match, Schema } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 import { projectPersistenceLogger } from "../logging.js";
+import { violatesUniqueConstraint } from "../persistence/unique-constraint.js";
 
 const ProjectRow = Schema.Struct({
   id: Schema.String,
@@ -167,7 +168,7 @@ export const ProjectRepositoryD1 = Layer.effect(
     const unavailable = (operation: string) => (cause: unknown) =>
       PersistenceUnavailable.new({ operation }, cause);
     const nameConflictOrUnavailable = (operation: string) => (cause: unknown) =>
-      String(cause).includes("UNIQUE constraint failed: projects.")
+      violatesUniqueConstraint(cause, "projects.name")
         ? new ProjectNameConflict()
         : unavailable(operation)(cause);
     // The user's active workspace, if any.

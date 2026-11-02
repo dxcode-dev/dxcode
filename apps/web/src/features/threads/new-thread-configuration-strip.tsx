@@ -16,7 +16,14 @@ import {
   type RunnerProfileId,
   type RunnerProviderPresentation,
 } from "@dx/domain";
-import { ArrowRight, Check, ChevronRight, Folder } from "lucide-react";
+import {
+  ArrowRight,
+  Check,
+  ChevronRight,
+  Folder,
+  LoaderCircle,
+  RotateCw,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import * as React from "react";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
@@ -736,18 +743,20 @@ const pauseResumeNote = (
       : "No pause and resume";
 
 /**
- * Orb sizes grouped by provider, in catalog order. With the resolved set
- * (bring-your-own keys), only its providers are offered, each with the key
- * it runs on, and only the sizes that key's account can run.
+ * Orb sizes grouped by provider, in catalog order: only the providers in the
+ * resolved set (the ones a new Thread can start on), each with the key it
+ * runs on, and only the sizes that key's account can run. The catalog alone
+ * lists providers the person may not have connected, so nothing is offered
+ * before the resolved set loads.
  */
 const runnerProfileGroups = (
   profiles: ReadonlyArray<RunnerProfile>,
   providers: ReadonlyArray<RunnerProviderPresentation>,
-  orbs: ReadonlyArray<OrbResolvedProvider> | undefined,
+  orbs: ReadonlyArray<OrbResolvedProvider>,
 ) =>
   [...new Set(profiles.map(({ adapter }) => adapter))].flatMap((adapter) => {
-    const orb = orbs?.find(({ providerId }) => providerId === adapter);
-    if (orbs !== undefined && orb === undefined) return [];
+    const orb = orbs.find(({ providerId }) => providerId === adapter);
+    if (orb === undefined) return [];
     return [
       {
         adapter,
@@ -756,7 +765,7 @@ const runnerProfileGroups = (
         profiles: profiles.filter(
           (profile) =>
             profile.adapter === adapter &&
-            !orb?.unavailableSizes.some(({ id }) => id === profile.id),
+            !orb.unavailableSizes.some(({ id }) => id === profile.id),
         ),
       },
     ];
@@ -774,14 +783,12 @@ const orbKeyOwner = (scope: OrbResolvedProvider["scope"]) =>
  * The quiet hint after a provider's name: why it cannot start yet, else whose
  * account it runs on. Absent for a ready deployment provider.
  */
-const orbProviderHint = (orb: OrbResolvedProvider | undefined) =>
-  orb?.status === "preparing"
+const orbProviderHint = (orb: OrbResolvedProvider) =>
+  orb.status === "preparing"
     ? "Preparing…"
-    : orb?.status === "failed"
+    : orb.status === "failed"
       ? "Setup failed"
-      : orb === undefined
-        ? undefined
-        : orbKeyOwner(orb.scope);
+      : orbKeyOwner(orb.scope);
 
 /** The picker's compact provider name ("Cloudflare"); settings keep the long one. */
 const orbProviderName = (provider: RunnerProviderPresentation) =>
@@ -792,7 +799,9 @@ const formatOrbResources = ({ resources }: RunnerProfile) =>
 
 /**
  * The new-Thread Orb picker: one row per provider in the resolved set, each
- * opening a submenu of its sizes. A dot marks the selected size.
+ * opening a submenu of its sizes. A dot marks the selected size. Until the
+ * resolved set loads (groups undefined) the trigger says so, with a spinner,
+ * and does not open.
  */
 function OrbPicker({
   groups,
@@ -803,7 +812,7 @@ function OrbPicker({
   isProfileAllowed,
   onSelect,
 }: {
-  readonly groups: ReturnType<typeof runnerProfileGroups>;
+  readonly groups: ReturnType<typeof runnerProfileGroups> | undefined;
   readonly selectedProfile: RunnerProfile;
   readonly selectedProvider: RunnerProviderPresentation | undefined;
   readonly selectedName: string;
@@ -812,17 +821,28 @@ function OrbPicker({
   readonly onSelect: (runnerProfileId: RunnerProfileId) => void;
 }) {
   return (
-    <Menu.Root disabled={disabled}>
+    <Menu.Root disabled={disabled || groups === undefined}>
       <Menu.Trigger
         className="new-thread-config-pill new-thread-orb-size"
-        aria-label={selectedName}
-        title={selectedName}
+        aria-label={
+          groups === undefined ? "Loading your Orb providers" : selectedName
+        }
+        aria-busy={groups === undefined || undefined}
+        title={
+          groups === undefined ? "Loading your Orb providers…" : selectedName
+        }
       >
-        <OrbIcon aria-hidden="true" />
+        {groups === undefined ? (
+          <LoaderCircle className="spin" aria-hidden="true" />
+        ) : (
+          <OrbIcon aria-hidden="true" />
+        )}
         <span>
-          {selectedProvider === undefined
-            ? selectedProfile.label
-            : `${orbProviderName(selectedProvider)} · ${selectedProfile.label}`}
+          {groups === undefined
+            ? "Loading Orbs…"
+            : selectedProvider === undefined
+              ? selectedProfile.label
+              : `${orbProviderName(selectedProvider)} · ${selectedProfile.label}`}
         </span>
       </Menu.Trigger>
       <Menu.Portal>
@@ -834,7 +854,7 @@ function OrbPicker({
           collisionPadding={12}
         >
           <Menu.Popup className="thread-menu-popup orb-picker-popup">
-            {groups.map((group) => {
+            {groups?.map((group) => {
               const hint = orbProviderHint(group.orb);
               return (
                 <Menu.SubmenuRoot key={group.adapter}>
@@ -875,8 +895,7 @@ function OrbPicker({
                               className="thread-menu-item orb-picker-size"
                               disabled={
                                 runnerProfile.availability !== "available" ||
-                                (group.orb !== undefined &&
-                                  group.orb.status !== "ready") ||
+                                group.orb.status !== "ready" ||
                                 !isProfileAllowed(runnerProfile)
                               }
                             >
@@ -921,6 +940,8 @@ export function NewThreadConfigurationStrip({
   runnerProfiles = [],
   runnerProviders = [],
   runnerOrbs,
+  runnerOrbsFailed = false,
+  onRunnerOrbsRetry,
   runnerProfileId,
   runnerProfileLoading = false,
   allowedRunnerProfileIds,
@@ -955,6 +976,9 @@ export function NewThreadConfigurationStrip({
   readonly runnerProviders?: ReadonlyArray<RunnerProviderPresentation>;
   /** The providers a new Thread can start on, with whose key pays. */
   readonly runnerOrbs?: ReadonlyArray<OrbResolvedProvider>;
+  /** The provider list failed or timed out and is not being fetched again. */
+  readonly runnerOrbsFailed?: boolean;
+  readonly onRunnerOrbsRetry?: () => void;
   readonly runnerProfileId?: RunnerProfileId;
   readonly runnerProfileLoading?: boolean;
   readonly allowedRunnerProfileIds?: ReadonlyArray<RunnerProfileId> | null;
@@ -1009,11 +1033,10 @@ export function NewThreadConfigurationStrip({
   const selectedRunnerProvider = runnerProviders.find(
     ({ adapter }) => adapter === selectedRunnerProfile?.adapter,
   );
-  const runnerGroups = runnerProfileGroups(
-    runnerProfiles,
-    runnerProviders,
-    runnerOrbs,
-  );
+  const runnerGroups =
+    runnerOrbs === undefined
+      ? undefined
+      : runnerProfileGroups(runnerProfiles, runnerProviders, runnerOrbs);
   const selectedOrbOwner = (() => {
     const scope = runnerOrbs?.find(
       ({ providerId }) => providerId === selectedRunnerProfile?.adapter,
@@ -1067,6 +1090,20 @@ export function NewThreadConfigurationStrip({
         >
           <OrbIcon aria-hidden="true" />
           <span>Orb</span>
+        </button>
+      ) : runnerOrbs === undefined && runnerOrbsFailed ? (
+        // Without the provider list no size can be offered; the rest of the
+        // composer stays usable and a send starts on the starting size.
+        <button
+          type="button"
+          className="new-thread-config-pill new-thread-orb-size"
+          aria-label="Orb providers didn't load. Retry"
+          title="Orb providers didn't load. Retry"
+          disabled={locked || onRunnerOrbsRetry === undefined}
+          onClick={onRunnerOrbsRetry}
+        >
+          <RotateCw aria-hidden="true" />
+          <span>Retry Orbs</span>
         </button>
       ) : (
         <OrbPicker

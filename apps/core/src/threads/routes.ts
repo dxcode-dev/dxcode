@@ -517,6 +517,26 @@ type InitialThreadAgentWarmer = (threadId: ThreadId) => Promise<unknown>;
 const warmInitialThreadAgent: InitialThreadAgentWarmer = (threadId) =>
   getAgentInstance(DxAgent, threadId);
 
+/**
+ * A new Thread's own Orb, started while its first message is dispatched so
+ * the run finds it starting or up. `start` runs the run's own checks before
+ * the Orb starts and resolves true when one started; `stop` destroys it.
+ */
+interface InitialThreadOrb {
+  readonly start: (threadId: ThreadId) => Promise<boolean>;
+  readonly stop: (threadId: ThreadId) => Promise<void>;
+}
+
+const noInitialThreadOrb: InitialThreadOrb = {
+  start: async () => false,
+  stop: async () => undefined,
+};
+
+const initialThreadOrb: InitialThreadOrb = {
+  start: (threadId) => ExecutionWorkspaces.prestart(threadId),
+  stop: (threadId) => ExecutionWorkspaces.destroy(threadId),
+};
+
 const resolveCreationResponseDetail = <
   Detail,
   DetailError,
@@ -609,6 +629,8 @@ const discardUnadmittedThread = (
   db: D1Database,
   thread: Thread,
   lookup: InitialThreadAgentWarmer,
+  /** Stops what the Thread started; a failure keeps the Thread. */
+  beforeDelete: () => Promise<void> = async () => undefined,
 ) =>
   Effect.promise(async () => {
     const kept = (event: string, error: unknown) => {
@@ -626,6 +648,13 @@ const discardUnadmittedThread = (
       return kept("thread_creation_instance_lookup_failed", error);
     }
     if (instance !== null) return true;
+    try {
+      // No run will use the Orb started beside the dispatch: stop it while
+      // the row still names it.
+      await beforeDelete();
+    } catch (error) {
+      return kept("thread_creation_orb_stop_failed", error);
+    }
     try {
       // Files are linked only after admission, so none point at this row.
       await db
@@ -652,6 +681,7 @@ export const createThreadRoutes = (
   dispatchInitialMessage: InitialThreadDispatcher = dispatchInitialThreadMessage,
   titleAgent: DxTitleAgentRunner = runDxTitleAgent,
   warmInitialAgent: InitialThreadAgentWarmer = warmInitialThreadAgent,
+  initialOrb: InitialThreadOrb = noInitialThreadOrb,
 ) => {
   const threadRoutes = new Hono<AppEnv>();
 
@@ -1102,6 +1132,22 @@ export const createThreadRoutes = (
         },
         () => undefined,
       );
+      // A new Thread's Orb starts beside the dispatch, behind the same checks
+      // as its run; the run's activation finds it starting or up.
+      const orbStarted = insertedThread
+        ? initialOrb.start(thread.id).catch((cause: unknown) => {
+            threadPersistenceLogger.warn(
+              "The new Thread's Orb did not start early.",
+              {
+                event: "thread_creation_orb_prestart_failed",
+                threadId: thread.id,
+                code: cause instanceof Error ? cause.name : "UNKNOWN",
+              },
+            );
+            return false;
+          })
+        : Promise.resolve(false);
+      execution?.waitUntil(orbStarted);
       const messageSourceThreadId = context.get("messageSourceThreadId");
       const receipt = yield* Effect.tryPromise({
         try: () =>
@@ -1145,7 +1191,14 @@ export const createThreadRoutes = (
         createPhase("dispatch"),
         Effect.tapError(() =>
           insertedThread
-            ? discardUnadmittedThread(db, thread, warmInitialAgent).pipe(
+            ? discardUnadmittedThread(
+                db,
+                thread,
+                warmInitialAgent,
+                async () => {
+                  if (await orbStarted) await initialOrb.stop(thread.id);
+                },
+              ).pipe(
                 Effect.tap((kept) =>
                   Effect.sync(() => settleTitlePersisted?.(kept)),
                 ),
@@ -2874,4 +2927,9 @@ export const createThreadRoutes = (
   return threadRoutes;
 };
 
-export const threadRoutes = createThreadRoutes();
+export const threadRoutes = createThreadRoutes(
+  dispatchInitialThreadMessage,
+  runDxTitleAgent,
+  warmInitialThreadAgent,
+  initialThreadOrb,
+);

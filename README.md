@@ -11,9 +11,25 @@ provider are required: an E2B API key, or Cloudflare Containers (Workers Paid
 plan and Docker on the deploying machine).
 
 ```sh
+corepack enable          # runs the pnpm version package.json names
+node deploy/selfhost/toolchain.mjs
 pnpm install --frozen-lockfile
 pnpm dx:deploy
 ```
+
+`deploy/selfhost/toolchain.mjs` names, in one line, a Node.js or pnpm version
+this release does not support. Never regenerate `pnpm-lock.yaml` to get past a
+failing `pnpm install --frozen-lockfile`: every release's lockfile installs
+as published, and a regenerated one conflicts with each later release. If the
+install fails, put back the release's own files and retry:
+
+```sh
+git checkout vX.Y.Z -- package.json pnpm-lock.yaml pnpm-workspace.yaml 'apps/*/package.json' 'packages/*/package.json'
+```
+
+using the release tag you deploy. The other cause is a `PNPM_CONFIG_*`
+environment variable that changes a setting the lockfile records; the check
+above names it, and unsetting it fixes the install.
 
 The wizard first asks whether dx should send sign-in email from your domain.
 Without email it uses Alchemy browser login; Wrangler login is separate and is

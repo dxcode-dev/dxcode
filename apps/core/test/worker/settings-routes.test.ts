@@ -118,7 +118,6 @@ describe("settings routes in workerd with real D1", () => {
         email: "settings-1@example.com",
         emailVerified: true,
         identityAuthority: "cloudflare-access",
-        threadCount: 1,
         appearance: "dark",
         palette: "daydream",
         terminalTheme: "github",
@@ -136,13 +135,30 @@ describe("settings routes in workerd with real D1", () => {
         username: "settings-outsider",
         email: "settings-2@example.com",
         identityAuthority: "local-password",
-        threadCount: 0,
         appearance: "dark",
         palette: "daydream",
         terminalTheme: "github",
       },
     });
     expect(JSON.stringify(ownerBody)).not.toContain("settings-outsider");
+
+    // The Thread count is its own read, for Account settings only, and each
+    // person counts only their own Threads.
+    const counts = await Promise.all(
+      [owner, outsider].map(async (who) => {
+        const response = await createSettingsApp(who).request(
+          "/settings/personal/account/thread-count",
+          {},
+          { DB: env.DB },
+        );
+        expect(response.status).toBe(200);
+        return response.json();
+      }),
+    );
+    expect(counts).toEqual([
+      { status: "success", data: { threadCount: 1 } },
+      { status: "success", data: { threadCount: 0 } },
+    ]);
   });
 
   it("normalizes and persists current-user profile updates", async () => {

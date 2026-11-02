@@ -129,6 +129,7 @@ import {
   bitbucketRuntimeBroker,
 } from "../source-control/bitbucket/runtime.js";
 import { readGitHubUserAccessToken } from "../source-control/github/control-plane.js";
+import { threadToken } from "../source-control/github/thread-token-cache.js";
 import { repairCandidatePatches } from "../thread-changes/candidate.js";
 import {
   markResidentThreadChangesDirty,
@@ -3376,6 +3377,26 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     >,
   ) {
     const db = await Effect.runPromise(decodeD1Binding(this.env.DB));
+    const host = request.host.toLowerCase();
+    if (host === "github.com") {
+      // One D1 round trip while the token resolved moments ago still stands.
+      const issued = await threadToken(
+        db,
+        threadId,
+        "connection",
+        (ownerUserId) => readGitHubUserAccessToken(this.env, db, ownerUserId),
+        { activeOnly: true },
+      );
+      if (issued?.token === undefined) return undefined;
+      threadDaemonLogger.info("Native GitHub credential issued.", {
+        event: "native_git_credential",
+        threadId,
+        actorUserId: issued.ownerUserId,
+        provider: "github",
+        cached: issued.cached,
+      });
+      return { username: "x-access-token", password: issued.token };
+    }
     const thread = await db
       .prepare(
         "SELECT owner_user_id FROM threads WHERE id = ? AND lifecycle_state = 'active' LIMIT 1",
@@ -3383,21 +3404,6 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       .bind(threadId)
       .first<{ owner_user_id: string }>();
     if (thread === null) return undefined;
-    const host = request.host.toLowerCase();
-    if (host === "github.com") {
-      const password = await readGitHubUserAccessToken(
-        this.env,
-        db,
-        thread.owner_user_id,
-      );
-      threadDaemonLogger.info("Native GitHub credential issued.", {
-        event: "native_git_credential",
-        threadId,
-        actorUserId: thread.owner_user_id,
-        provider: "github",
-      });
-      return { username: "x-access-token", password };
-    }
     if (host === "bitbucket.org") {
       const control = await bitbucketControlPlaneFor(db, this.env);
       const password = await control.withConnection(

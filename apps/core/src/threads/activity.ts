@@ -77,8 +77,7 @@ const record = (bindings: Bindings, activity: ThreadActivityInput) =>
     // way, asks unless it already asks something; only the observation that
     // recorded the settlement does, so a replay cannot list a Thread the
     // owner dismissed. Each returns the owner when it changed the list.
-    const returningOwner = `RETURNING (SELECT owner_user_id FROM threads
-        WHERE threads.id = thread_attention_request.thread_id) AS owner_user_id`;
+    const returningOwner = "RETURNING owner_user_id";
     const needsYou =
       activity.state === "working"
         ? db
@@ -92,9 +91,9 @@ const record = (bindings: Bindings, activity: ThreadActivityInput) =>
           ? db
               .prepare(
                 `INSERT INTO thread_attention_request (
-                   thread_id, kind, requested_at
+                   thread_id, owner_user_id, kind, requested_at
                  )
-                 SELECT id, 'failed', ?3 FROM threads
+                 SELECT id, owner_user_id, 'failed', ?3 FROM threads
                   WHERE id = ?1 AND parent_thread_id IS NULL
                     AND EXISTS (
                       SELECT 1 FROM thread_activity

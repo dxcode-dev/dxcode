@@ -1,4 +1,8 @@
-import type { ThreadModelSelection, UserId } from "@dx/domain";
+import {
+  PROJECTLESS_PROJECT_NAME,
+  type ThreadModelSelection,
+  type UserId,
+} from "@dx/domain";
 
 /** The Thread whose agent calls a Thread tool, and whom the call acts as. */
 export interface CallingThread {
@@ -12,6 +16,11 @@ export interface CallingThread {
    * owner's other private Threads.
    */
   readonly sharedFamilyRoot?: string;
+  /**
+   * The Thread's Project is the owner's repository-less one (No Project),
+   * so a child it starts is projectless too.
+   */
+  readonly projectless: boolean;
 }
 
 /** Reads the calling Thread; every Thread tool acts as its owner. */
@@ -21,17 +30,20 @@ export const readCallingThread = async (
 ): Promise<CallingThread> => {
   const row = await db
     .prepare(
-      `SELECT owner_user_id, project_id, model_selection, parent_thread_id,
-         workspace_access
-       FROM threads WHERE id = ? LIMIT 1`,
+      `SELECT t.owner_user_id, t.project_id, t.model_selection,
+         t.parent_thread_id, t.workspace_access,
+         p.name = ? AND p.owner_user_id = t.owner_user_id AS projectless
+       FROM threads t LEFT JOIN projects p ON p.id = t.project_id
+       WHERE t.id = ? LIMIT 1`,
     )
-    .bind(threadId)
+    .bind(PROJECTLESS_PROJECT_NAME, threadId)
     .first<{
       owner_user_id: string;
       project_id: string;
       model_selection: string;
       parent_thread_id: string | null;
       workspace_access: string | null;
+      projectless: number | null;
     }>();
   if (row === null) throw new Error("This Thread is unavailable.");
   let selection: ThreadModelSelection | undefined;
@@ -48,5 +60,6 @@ export const readCallingThread = async (
     projectId: row.project_id,
     selection,
     ...(shared ? { sharedFamilyRoot: row.parent_thread_id ?? threadId } : {}),
+    projectless: row.projectless === 1,
   };
 };

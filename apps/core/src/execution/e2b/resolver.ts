@@ -221,6 +221,11 @@ export interface ResolveExecutionWorkspaceOptions {
       | "workspace_state_resolved"
       | "provider_connected",
   ) => void;
+  /**
+   * A sandbox this resolution just created, before its state is recorded.
+   * Passive: it cannot fail or delay the resolution.
+   */
+  readonly observeCreated?: (sandbox: E2BSandbox) => void;
 }
 
 export type ExecutionWorkspaceResidency = "running" | "paused" | "unknown";
@@ -561,6 +566,7 @@ export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
       observeOpening,
       observeResidency,
       observePhase,
+      observeCreated,
     }: ResolveExecutionWorkspaceOptions,
     threadId: ThreadId,
   ) {
@@ -859,6 +865,11 @@ export const makeResolveExecutionWorkspace = (api: E2BResolverApi) => {
             ),
           );
           if (reconciledAfterCreate) return created;
+          try {
+            observeCreated?.(created);
+          } catch {
+            // Passive, as the other observers.
+          }
           const initialized: ExecutionWorkspaceRecord = {
             state: "initialized",
             providerSandboxId: created.sandboxId,

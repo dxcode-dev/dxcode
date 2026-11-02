@@ -385,9 +385,24 @@ const withSnooze = <
 export const setThreadSnoozedMutationOptions = (
   queryClient: QueryClient,
   userId: UserId,
-) =>
-  mutationOptions({
-    mutationKey: [...threadKeys.all(userId), "snooze"] as const,
+) => {
+  const mutationKey = [...threadKeys.all(userId), "snooze"] as const;
+  /**
+   * True while a later snooze or wake for the Thread waits its turn: its
+   * optimistic state is newer than this request's result or rollback.
+   */
+  const superseded = (threadId: ThreadId) =>
+    queryClient.isMutating({
+      mutationKey,
+      predicate: (mutation) =>
+        (mutation.state.variables as { threadId?: ThreadId } | undefined)
+          ?.threadId === threadId,
+    }) > 1;
+  return mutationOptions({
+    mutationKey,
+    // Snoozes and wakes reach the server in the order they were chosen, so
+    // Undo or Wake works while the snooze is still in flight.
+    scope: { id: "thread-snooze" },
     mutationFn: ({
       threadId,
       snoozedUntil,
@@ -434,6 +449,7 @@ export const setThreadSnoozedMutationOptions = (
       return { previousDetail, previousLists };
     },
     onSuccess: (thread: ThreadData) => {
+      if (superseded(thread.id)) return;
       queryClient.setQueryData<ThreadDetailData>(
         threadKeys.detail(userId, thread.id),
         (detail) => withThreadRow(detail, thread),
@@ -443,6 +459,7 @@ export const setThreadSnoozedMutationOptions = (
       });
     },
     onError: (_error, { threadId }, rollback) => {
+      if (superseded(threadId)) return;
       if (rollback !== undefined)
         queryClient.setQueryData(
           threadKeys.detail(userId, threadId),
@@ -450,28 +467,56 @@ export const setThreadSnoozedMutationOptions = (
         );
       for (const [queryKey, data] of rollback?.previousLists ?? [])
         queryClient.setQueryData(queryKey, data);
-      return queryClient.invalidateQueries({
-        queryKey: threadKeys.lists(userId),
-      });
+      // The rollback can hold an earlier request's optimistic state.
+      return Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: threadKeys.detail(userId, threadId),
+          exact: true,
+        }),
+        queryClient.invalidateQueries({ queryKey: threadKeys.lists(userId) }),
+      ]);
     },
   });
+};
 
 export const setThreadArchivedMutationOptions = (
   queryClient: QueryClient,
   userId: UserId,
-) =>
-  mutationOptions({
-    mutationKey: [...threadKeys.all(userId), "archive"] as const,
-    mutationFn: ({
+) => {
+  const mutationKey = [...threadKeys.all(userId), "archive"] as const;
+  /**
+   * True while a later archive or unarchive of the Thread waits its turn:
+   * its optimistic state is newer than this request's result or rollback.
+   */
+  const superseded = (threadId: ThreadId) =>
+    queryClient.isMutating({
+      mutationKey,
+      predicate: (mutation) =>
+        (mutation.state.variables as { threadId?: ThreadId } | undefined)
+          ?.threadId === threadId,
+    }) > 1;
+  return mutationOptions({
+    mutationKey,
+    // Archives and unarchives reach the server in the order they were
+    // chosen, so Undo works while the archive is still in flight.
+    scope: { id: "thread-archive" },
+    mutationFn: async ({
       threadId,
       archived,
       children,
     }: {
       threadId: ThreadId;
       archived: boolean;
-      /** True for every child, or the exact children to change. */
-      children?: true | ReadonlyArray<ThreadId>;
-    }) => setThreadArchived(threadId, archived, children),
+      /**
+       * True for every child, or the exact children to change. An Undo
+       * chosen before its archive returned passes the archive's answer,
+       * which has settled by the time this request runs.
+       */
+      children?:
+        | true
+        | ReadonlyArray<ThreadId>
+        | Promise<ReadonlyArray<ThreadId> | undefined>;
+    }) => setThreadArchived(threadId, archived, await children),
     onMutate: async ({ threadId, archived }) => {
       await Promise.all([
         queryClient.cancelQueries({
@@ -532,6 +577,7 @@ export const setThreadArchivedMutationOptions = (
       return { previousDetail, previousLists };
     },
     onSuccess: ({ thread }: ArchivedThread) => {
+      if (superseded(thread.id)) return;
       queryClient.setQueryData<ThreadDetailData>(
         threadKeys.detail(userId, thread.id),
         (detail) => (detail === undefined ? detail : { ...detail, ...thread }),
@@ -541,6 +587,7 @@ export const setThreadArchivedMutationOptions = (
       });
     },
     onError: (_error, { threadId }, rollback) => {
+      if (superseded(threadId)) return;
       if (rollback !== undefined) {
         queryClient.setQueryData(
           threadKeys.detail(userId, threadId),
@@ -561,6 +608,7 @@ export const setThreadArchivedMutationOptions = (
       ]);
     },
   });
+};
 
 /**
  * Deletes a Thread, and with `includeChildren` the children listed under

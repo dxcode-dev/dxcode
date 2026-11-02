@@ -18,7 +18,6 @@ const PersonalAccountRow = Schema.Struct({
   email: Schema.String,
   email_verified: Schema.Literals([0, 1]),
   identity_authority: Schema.String,
-  thread_count: Schema.Finite,
   appearance: Schema.String,
   palette: Schema.String,
   terminal_theme: Schema.String,
@@ -66,12 +65,7 @@ export const PersonalAccountRepositoryD1 = Layer.effect(
                   AND account.providerId = 'credential'
               ) THEN 'local-password'
               ELSE 'external'
-            END AS identity_authority,
-            (
-              SELECT count(*)
-              FROM threads
-              WHERE threads.owner_user_id = profile.user_id
-            ) AS thread_count
+            END AS identity_authority
           FROM personal_account AS profile
           INNER JOIN "user" AS identity ON identity.id = profile.user_id
           WHERE profile.user_id = ${userId}
@@ -94,7 +88,6 @@ export const PersonalAccountRepositoryD1 = Layer.effect(
           email: row.email,
           emailVerified: row.email_verified === 1,
           identityAuthority: row.identity_authority,
-          threadCount: row.thread_count,
           appearance: row.appearance,
           palette: row.palette,
           terminalTheme: row.terminal_theme,
@@ -121,6 +114,24 @@ export const PersonalAccountRepositoryD1 = Layer.effect(
 
     return PersonalAccountRepository.of({
       findOwnedByUser: find,
+      countThreadsOwnedByUser: Effect.fn(
+        "PersonalAccountRepository.countThreadsOwnedByUser",
+      )(function* (userId) {
+        const rows = yield* sql<{ readonly thread_count: number }>`
+          SELECT count(*) AS thread_count
+          FROM threads
+          WHERE owner_user_id = ${userId}
+        `.pipe(
+          Effect.catchTag("SqlError", (cause) =>
+            Effect.fail(
+              unavailable("settings.personalAccount.countThreadsOwnedByUser")(
+                cause,
+              ),
+            ),
+          ),
+        );
+        return rows[0]?.thread_count ?? 0;
+      }),
       findComposerDefaultsOwnedByUser: Effect.fn(
         "PersonalAccountRepository.findComposerDefaultsOwnedByUser",
       )(function* (userId) {

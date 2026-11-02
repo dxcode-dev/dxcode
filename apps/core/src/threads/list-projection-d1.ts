@@ -492,10 +492,17 @@ export const readThreadFamily = async (
                 project.name AS project_name,
                 thread.turn_failed, ${threadUnreadSql("thread", "?2")} AS unread
            FROM target
+           -- The root and its children by key: an OR here rules out both the
+           -- primary key and threads_parent_idx, and the owner's index then
+           -- walks every Thread they own (#1490).
            JOIN threads AS thread
-             ON thread.id = target.root_id OR thread.parent_thread_id = target.root_id
+             ON thread.id IN (
+               SELECT target.root_id
+               UNION ALL
+               SELECT child.id FROM threads AS child
+                WHERE child.parent_thread_id = target.root_id)
            JOIN projects AS project ON project.id = thread.project_id
-          WHERE thread.owner_user_id = target.owner_user_id
+          WHERE +thread.owner_user_id = target.owner_user_id
             AND (thread.lifecycle_state = 'active'
               OR (thread.lifecycle_state = 'archived'
                 AND (thread.id = target.root_id OR thread.id = ?1)))

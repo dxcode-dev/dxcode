@@ -49,38 +49,31 @@ export function ThreadSnoozeProvider({
 }) {
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
-  const { isPending, mutate, variables } = useMutation(
+  const { mutate } = useMutation(
     setThreadSnoozedMutationOptions(queryClient, identity.id),
   );
   const [customThreadId, setCustomThreadId] = React.useState<ThreadId>();
 
+  // The Thread shows as snoozed at once, so the notice does too; requests
+  // run in order, so Undo or Wake works before the snooze is saved.
   const controller: ThreadSnoozeController = {
-    pendingThreadId: isPending ? variables.threadId : undefined,
     snooze: (threadId, wakeAt) => {
-      if (isPending) return;
+      toast(`Snoozed until ${snoozeWakeText(wakeAt.getTime(), Date.now())}`, {
+        id: SNOOZE_TOAST_ID,
+        duration: SNOOZE_TOAST_DURATION,
+        icon: <AlarmClock />,
+        action: {
+          label: "Undo",
+          onClick: () => controller.wake(threadId),
+        },
+      });
       mutate(
         { threadId, snoozedUntil: wakeAt },
-        {
-          onSuccess: () =>
-            toast(
-              `Snoozed until ${snoozeWakeText(wakeAt.getTime(), Date.now())}`,
-              {
-                id: SNOOZE_TOAST_ID,
-                duration: SNOOZE_TOAST_DURATION,
-                icon: <AlarmClock />,
-                action: {
-                  label: "Undo",
-                  onClick: () => controller.wake(threadId),
-                },
-              },
-            ),
-          onError: (cause) => failed(cause, "Thread could not be snoozed."),
-        },
+        { onError: (cause) => failed(cause, "Thread could not be snoozed.") },
       );
     },
     snoozeCustom: setCustomThreadId,
     wake: (threadId) => {
-      if (isPending) return;
       toast.dismiss(SNOOZE_TOAST_ID);
       mutate(
         { threadId, snoozedUntil: null },

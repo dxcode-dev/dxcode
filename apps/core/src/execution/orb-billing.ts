@@ -110,7 +110,8 @@ export const withOrbBilling = <Handle extends ExecutionWorkspaceHandle>(
     operation: OrbStartRequest["operation"],
     context: ExecutionContext,
     threadId: ThreadId,
-    open: () => Promise<Handle>,
+    authorize: () => Promise<void>,
+    open: (authorize: () => Promise<void>) => Promise<Handle>,
   ) => {
     const request: OrbStartRequest = {
       threadId,
@@ -119,10 +120,22 @@ export const withOrbBilling = <Handle extends ExecutionWorkspaceHandle>(
       providerId: context.profile.adapter as ExecutionProviderId,
       runnerProfileId: context.profile.id,
     };
-    const decision = await policy.admitOrbStart(request);
-    if (decision.outcome === "refuse") throw orbStartRefused(decision.reason);
-    const handle = await open();
-    if (decision.outcome === "allow") return handle;
+    // The decision is read beside the provider's own reads. Every provider
+    // runs `authorize` before it starts or resumes an Orb, so the decision
+    // still gates the start; it is awaited again after, for any that did not.
+    const decision = policy.admitOrbStart(request).then((decided) => {
+      if (decided.outcome === "refuse") throw orbStartRefused(decided.reason);
+      return decided;
+    });
+    decision.catch(() => undefined);
+    const handle = await open(async () => {
+      await Promise.all([authorize(), decision]);
+    }).catch(async (cause: unknown) => {
+      // A refusal reports itself, however the provider wrapped it.
+      await decision;
+      throw cause;
+    });
+    if ((await decision).outcome === "allow") return handle;
     const { operation: _operation, ...usage } = request;
     return meteredHandle(handle, (from, durationMs) =>
       policy
@@ -147,12 +160,28 @@ export const withOrbBilling = <Handle extends ExecutionWorkspaceHandle>(
     workspace: {
       ...provider.workspace,
       create: (context, owner, options) =>
-        start("create", context, owner.threadId, () =>
-          provider.workspace.create(context, owner, options),
+        start(
+          "create",
+          context,
+          owner.threadId,
+          options.authorize,
+          (authorize) =>
+            provider.workspace.create(context, owner, {
+              ...options,
+              authorize,
+            }),
         ),
       connect: (context, owner, options) =>
-        start("connect", context, owner.threadId, () =>
-          provider.workspace.connect(context, owner, options),
+        start(
+          "connect",
+          context,
+          owner.threadId,
+          options.authorize,
+          (authorize) =>
+            provider.workspace.connect(context, owner, {
+              ...options,
+              authorize,
+            }),
         ),
       release: (context, owner, mode) =>
         provider.workspace.release(context, owner, mode),

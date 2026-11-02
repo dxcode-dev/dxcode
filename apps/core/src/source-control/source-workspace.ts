@@ -6,13 +6,14 @@ import {
   type ThreadSourceIntent,
   type ThreadSourceSnapshot,
 } from "@dx/domain";
-import { Context, DateTime, Effect, Layer, Schema } from "effect";
+import { Context, DateTime, Effect, type Exit, Layer, Schema } from "effect";
 import {
   SOURCE_TOOL_VERSION_CONTRACT,
   SourceRuntimeToolUnavailable,
 } from "../execution/guest/source-tool-requirements.js";
 import type { WorkspacePreparation } from "../execution/workspace-preparation.js";
 import { sourceControlLogger } from "../logging.js";
+import { stepTiming } from "../observability/step-timing.js";
 import {
   isDiskFullText,
   parseWorkspaceDiskReading,
@@ -194,6 +195,8 @@ export interface SourceWorkspaceDiskOptions {
 
 export interface SourceWorkspaceActivationOptions {
   readonly disk?: SourceWorkspaceDiskOptions;
+  /** The Thread's source, read while its Orb opened. */
+  readonly source?: Promise<Exit.Exit<SourceWorkspaceRecord, unknown>>;
 }
 
 export interface SourceWorkspaceServiceShape {
@@ -226,6 +229,15 @@ export interface SourceWorkspaceServiceShape {
     threadId: string,
     preparation: WorkspacePreparation,
   ) => Effect.Effect<string, SourceWorkspaceHistoryUnavailable | unknown>;
+  /**
+   * Verifies, and installs when stale, dx's source programs on a new Orb,
+   * so its first run's activation finds them in place. Touches no checkout
+   * and uses no credential.
+   */
+  readonly installAssets: (
+    threadId: string,
+    preparation: WorkspacePreparation,
+  ) => Effect.Effect<void, unknown>;
 }
 
 export class SourceWorkspaceService extends Context.Service<
@@ -895,10 +907,23 @@ const makeSourceWorkspaceService = (
     options?: SourceWorkspaceActivationOptions,
   ): Effect.Effect<string, unknown> => {
     let stage = "load-source";
+    const timing = stepTiming(sourceControlLogger, "source_activation_timing", {
+      threadId: unsafeThreadId,
+      hooks: runThreadHooks,
+    });
     return Effect.gen(function* () {
       const threadId =
         yield* Schema.decodeUnknownEffect(ThreadId)(unsafeThreadId);
-      const source = yield* repository.findByThreadId(threadId);
+      const loaded = options?.source;
+      const source = yield* timing.stepEffect(
+        "loadSource",
+        loaded === undefined
+          ? repository.findByThreadId(threadId)
+          : Effect.flatMap(
+              Effect.promise(() => loaded),
+              (exit) => exit,
+            ),
+      );
       if (source.snapshot === undefined && source.intent === undefined) {
         stage = "prepare-empty-workspace";
         const disk = options?.disk;
@@ -957,21 +982,26 @@ const makeSourceWorkspaceService = (
         yield* onPreparationPhase("running-setup");
         setupPhasePublished = true;
       }
-      const assetVerification = yield* verifyAssets(
-        preparation,
-        program,
-        requiredToolsFor(provider),
-        prefetchedBase === undefined
-          ? undefined
-          : {
-              action: runThreadHooks ? "activate" : "snapshot",
-              environment: {
-                ...prefetchedBase,
-                ...(runThreadHooks ? preSetupEnvironment(source) : {}),
+      const assetVerification = yield* timing.stepEffect(
+        "verifyAssets",
+        verifyAssets(
+          preparation,
+          program,
+          requiredToolsFor(provider),
+          prefetchedBase === undefined
+            ? undefined
+            : {
+                action: runThreadHooks ? "activate" : "snapshot",
+                environment: {
+                  ...prefetchedBase,
+                  ...(runThreadHooks ? preSetupEnvironment(source) : {}),
+                },
+                timeoutMs: runThreadHooks
+                  ? HOOKS_TIMEOUT_MS
+                  : COMMAND_TIMEOUT_MS,
               },
-              timeoutMs: runThreadHooks ? HOOKS_TIMEOUT_MS : COMMAND_TIMEOUT_MS,
-            },
-        options?.disk,
+          options?.disk,
+        ),
       );
       if (assetVerification.assets === "stale") {
         stage = "install-programs";
@@ -982,7 +1012,10 @@ const makeSourceWorkspaceService = (
             outcome: "stale",
           },
         );
-        yield* installPrograms(preparation, invocationId, program);
+        yield* timing.stepEffect(
+          "installPrograms",
+          installPrograms(preparation, invocationId, program),
+        );
       } else {
         sourceControlLogger.info(
           "Source workspace template assets are fresh.",
@@ -1010,12 +1043,15 @@ const makeSourceWorkspaceService = (
           ...desktopResumeEnvironment(source),
         };
         stage = "pre-clone";
-        yield* runPreClone(preparation, source, anonymousBase);
+        yield* timing.stepEffect(
+          "preClone",
+          runPreClone(preparation, source, anonymousBase),
+        );
         stage = "initialize-anonymous-checkout";
-        const initialized = yield* run(
-          preparation,
-          "initialize-anonymous",
-          anonymousBase,
+        timing.set("checkout", "anonymous");
+        const initialized = yield* timing.stepEffect(
+          "clone",
+          run(preparation, "initialize-anonymous", anonymousBase),
         );
         yield* requireSuccess(initialized);
         const discovered = yield* Effect.try({
@@ -1023,10 +1059,13 @@ const makeSourceWorkspaceService = (
           catch: () => new SourceWorkspaceInitializationFailed(),
         }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(AnonymousDiscovery)));
         stage = "finalize-anonymous-source";
-        snapshot = yield* repository.finalizeAnonymous(intent, {
-          ...discovered,
-          capturedAt: yield* DateTime.now,
-        });
+        snapshot = yield* timing.stepEffect(
+          "finalizeAnonymous",
+          repository.finalizeAnonymous(intent, {
+            ...discovered,
+            capturedAt: yield* DateTime.now,
+          }),
+        );
       }
       const base = {
         ...baseEnvironment(
@@ -1047,7 +1086,10 @@ const makeSourceWorkspaceService = (
       let checkoutOutput: CommandResult;
       const verifiedOperation = assetVerification.operation;
       if (verifiedOperation === undefined) {
-        checkoutOutput = yield* run(preparation, "snapshot", base);
+        checkoutOutput = yield* timing.stepEffect(
+          "readCheckout",
+          run(preparation, "snapshot", base),
+        );
         yield* requireSuccess(checkoutOutput);
         checkout = yield* decodeCheckoutState(checkoutOutput);
       } else if (runThreadHooks) {
@@ -1072,17 +1114,33 @@ const makeSourceWorkspaceService = (
         if (onPreparationPhase !== undefined)
           yield* onPreparationPhase("cloning-repository");
         stage = "pre-clone";
-        yield* runPreClone(preparation, source, base);
+        yield* timing.stepEffect(
+          "preClone",
+          runPreClone(preparation, source, base),
+        );
         stage = "initialize-checkout";
+        timing.set("checkout", "absent");
         checkoutOutput =
           source.authority === undefined
-            ? yield* run(preparation, "initialize-exact-anonymous", base)
-            : yield* broker.withCommandEnvironment(
-                threadId,
-                source.actorUserId,
-                { operation: "checkout", invocationSource: "checkout" },
-                (credential) =>
-                  run(preparation, "initialize", { ...base, ...credential }),
+            ? yield* timing.stepEffect(
+                "clone",
+                run(preparation, "initialize-exact-anonymous", base),
+              )
+            : yield* timing.stepEffect(
+                "checkoutBroker",
+                broker.withCommandEnvironment(
+                  threadId,
+                  source.actorUserId,
+                  { operation: "checkout", invocationSource: "checkout" },
+                  (credential) =>
+                    timing.stepEffect(
+                      "clone",
+                      run(preparation, "initialize", {
+                        ...base,
+                        ...credential,
+                      }),
+                    ),
+                ),
               );
         yield* requireSuccess(checkoutOutput);
         checkout = yield* decodeCheckoutState(checkoutOutput);
@@ -1169,13 +1227,16 @@ const makeSourceWorkspaceService = (
                 stderr: prefetchedHooksStderr,
                 exitCode: 0,
               });
-        yield* hooksSettled.pipe(
-          Effect.mapError((error) =>
-            error instanceof SourceWorkspaceInitializationFailed
-              ? asInfrastructureFailure(error)
-              : error,
-          ),
-        );
+        timing.set("hooksPrefetched", prefetchedHooks !== undefined);
+        yield* timing
+          .stepEffect("hooks", hooksSettled)
+          .pipe(
+            Effect.mapError((error) =>
+              error instanceof SourceWorkspaceInitializationFailed
+                ? asInfrastructureFailure(error)
+                : error,
+            ),
+          );
         sourceControlLogger.info("Source workspace activated.", {
           event: "source_workspace_activation",
           threadId,
@@ -1189,11 +1250,16 @@ const makeSourceWorkspaceService = (
         // the hooks that need it.
         stage = "mark-provisioned";
         yield* requireSuccess(
-          yield* run(preparation, "mark-provisioned", base),
+          yield* timing.stepEffect(
+            "markProvisioned",
+            run(preparation, "mark-provisioned", base),
+          ),
         );
       }
       return SOURCE_WORKSPACE_CWD;
     }).pipe(
+      Effect.tap(() => Effect.sync(() => timing.log("ready"))),
+      Effect.tapError(() => Effect.sync(() => timing.log(stage))),
       Effect.tapError((error) =>
         Effect.sync(() =>
           sourceControlLogger.error("Source workspace activation failed.", {
@@ -1231,6 +1297,21 @@ const makeSourceWorkspaceService = (
         disk === undefined ? undefined : { disk },
       ),
     unshallow,
+    installAssets: (unsafeThreadId, preparation) =>
+      Effect.gen(function* () {
+        const threadId =
+          yield* Schema.decodeUnknownEffect(ThreadId)(unsafeThreadId);
+        const source = yield* repository.findByThreadId(threadId);
+        const provider = (source.snapshot ?? source.intent)?.provider;
+        if (provider === undefined) return;
+        const assets = yield* verifyAssets(
+          preparation,
+          program,
+          requiredToolsFor(provider),
+        );
+        if (assets.assets === "stale")
+          yield* installPrograms(preparation, crypto.randomUUID(), program);
+      }),
   });
 };
 

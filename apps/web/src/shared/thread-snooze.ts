@@ -3,7 +3,6 @@ import * as React from "react";
 
 /** Snoozes and wakes Threads the requester owns. */
 export interface ThreadSnoozeController {
-  readonly pendingThreadId?: ThreadId;
   /** Snoozes the Thread until `wakeAt` and offers Undo. */
   readonly snooze: (threadId: ThreadId, wakeAt: Date) => void;
   /** Opens the dialog for a wake time the menu does not list. */

@@ -23,6 +23,8 @@ import {
   ListProjectsPersistenceUnavailableResponseSchema,
   ListProjectsQuerySchema,
   ListProjectsResponseSchema,
+  ProjectIconNotImageResponseSchema,
+  ProjectIconTooLargeResponseSchema,
   type ProjectViewerAccess,
   RebindProjectSourceForbiddenResponseSchema,
   RebindProjectSourceInvalidRequestResponseSchema,
@@ -59,6 +61,7 @@ import {
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Match, Option, Result, Schema } from "effect";
 import { Hono } from "hono";
+import { sniffAttachmentType } from "../attachments/store.js";
 import { ExecutionWorkspaces } from "../execution/execution-workspaces.js";
 import {
   loadRunnerProfileCatalog,
@@ -96,6 +99,16 @@ import { ProjectService } from "./service.js";
 
 class InvalidProjectRequest extends Schema.TaggedError<InvalidProjectRequest>()(
   "InvalidProjectRequest",
+  {},
+) {}
+
+class ProjectIconNotImage extends Schema.TaggedError<ProjectIconNotImage>()(
+  "ProjectIconNotImage",
+  {},
+) {}
+
+class ProjectIconTooLarge extends Schema.TaggedError<ProjectIconTooLarge>()(
+  "ProjectIconTooLarge",
   {},
 ) {}
 
@@ -177,6 +190,8 @@ const workspacePolicyLayerFor = (db: D1Database) => {
   );
 };
 
+const bodyTooLarge = new Error("Request body exceeds the size limit.");
+
 const readLimitedRequestBody = Effect.fn("readLimitedRequestBody")(function* (
   request: Request,
   maxBytes: number,
@@ -185,10 +200,10 @@ const readLimitedRequestBody = Effect.fn("readLimitedRequestBody")(function* (
     try: async () => {
       const declaredLength = Number(request.headers.get("content-length"));
       if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-        throw new Error("Request body exceeds the size limit.");
+        throw bodyTooLarge;
       }
       const reader = request.body?.getReader();
-      if (reader === undefined) return new ArrayBuffer(0);
+      if (reader === undefined) return new Uint8Array();
       const chunks: Array<Uint8Array> = [];
       let length = 0;
       while (true) {
@@ -197,7 +212,7 @@ const readLimitedRequestBody = Effect.fn("readLimitedRequestBody")(function* (
         length += result.value.byteLength;
         if (length > maxBytes) {
           await reader.cancel();
-          throw new Error("Request body exceeds the size limit.");
+          throw bodyTooLarge;
         }
         chunks.push(result.value);
       }
@@ -207,9 +222,12 @@ const readLimitedRequestBody = Effect.fn("readLimitedRequestBody")(function* (
         bytes.set(chunk, offset);
         offset += chunk.byteLength;
       }
-      return bytes.buffer;
+      return bytes;
     },
-    catch: () => new InvalidProjectRequest(),
+    catch: (cause) =>
+      cause === bodyTooLarge
+        ? new ProjectIconTooLarge()
+        : new InvalidProjectRequest(),
   });
 });
 
@@ -1135,6 +1153,7 @@ projectRoutes.get("/:projectId/icon", async (context) => {
     return new Response(result.success.body, {
       headers: {
         "content-type": result.success.httpMetadata?.contentType ?? "image/png",
+        "x-content-type-options": "nosniff",
         "cache-control": "private, max-age=31536000, immutable",
         etag: result.success.httpEtag,
       },
@@ -1206,6 +1225,12 @@ projectRoutes.get("/:projectId/icon", async (context) => {
   );
 });
 
+const iconExtensions = new Map([
+  ["image/png", "png"],
+  ["image/jpeg", "jpg"],
+  ["image/webp", "webp"],
+]);
+
 projectRoutes.put("/:projectId/icon", async (context) => {
   const requestId = context.get("requestId");
   const operation = Effect.gen(function* () {
@@ -1214,18 +1239,14 @@ projectRoutes.put("/:projectId/icon", async (context) => {
       { projectId: context.req.param("projectId") },
       () => new InvalidProjectRequest(),
     );
-    const contentType = context.req.header("content-type") ?? "";
     const revision = Number(context.req.header("x-project-revision"));
-    if (
-      !new Set(["image/png", "image/jpeg", "image/webp"]).has(contentType) ||
-      !Number.isInteger(revision)
-    ) {
-      return yield* new InvalidProjectRequest();
-    }
+    if (!Number.isInteger(revision)) return yield* new InvalidProjectRequest();
     const bytes = yield* readLimitedRequestBody(context.req.raw, 512 * 1024);
-    if (bytes.byteLength === 0 || bytes.byteLength > 512 * 1024) {
-      return yield* new InvalidProjectRequest();
-    }
+    // The browser names the type from the file extension; only the bytes
+    // prove an image.
+    const contentType = sniffAttachmentType(bytes) ?? "";
+    const extension = iconExtensions.get(contentType);
+    if (extension === undefined) return yield* new ProjectIconNotImage();
     const storage = context.env.DX_STORAGE;
     if (storage === undefined) {
       return yield* PersistenceUnavailable.new(
@@ -1237,12 +1258,6 @@ projectRoutes.put("/:projectId/icon", async (context) => {
     const repositoryLayer = ProjectRepositoryD1.pipe(
       Layer.provide(D1Client.layer({ db })),
     );
-    const extension =
-      contentType === "image/png"
-        ? "png"
-        : contentType === "image/jpeg"
-          ? "jpg"
-          : "webp";
     const iconKey = `projects/${projectId}/${crypto.randomUUID()}.${extension}`;
     const project = yield* Effect.gen(function* () {
       const service = yield* ProjectService;
@@ -1294,6 +1309,30 @@ projectRoutes.put("/:projectId/icon", async (context) => {
             },
           }),
           400,
+        ),
+      ProjectIconNotImage: () =>
+        context.json(
+          Schema.encodeUnknownSync(ProjectIconNotImageResponseSchema)({
+            status: "error",
+            data: {
+              code: "PROJECT_ICON_NOT_IMAGE",
+              message: "Choose a PNG, JPEG, or WebP image.",
+              requestId,
+            },
+          }),
+          415,
+        ),
+      ProjectIconTooLarge: () =>
+        context.json(
+          Schema.encodeUnknownSync(ProjectIconTooLargeResponseSchema)({
+            status: "error",
+            data: {
+              code: "PROJECT_ICON_TOO_LARGE",
+              message: "Choose an image of 512 KB or less.",
+              requestId,
+            },
+          }),
+          413,
         ),
       ProjectNotFound: () =>
         context.json(

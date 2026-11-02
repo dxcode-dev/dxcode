@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Template, waitForFile } from "e2b";
+import { sourceAssetsTemplateCommands } from "../../apps/core/src/source-control/workspace-assets.ts";
 
 // The dx workspace template is the standard Orb image
 // (deploy/orb/Dockerfile), built by E2B from the same Dockerfile, so E2B and
@@ -15,12 +16,21 @@ const dockerfile = readFileSync(
   "utf8",
 );
 
-export const dxWorkspaceTemplate = Template({ fileContextPath: repositoryRoot })
-  .fromDockerfile(dockerfile)
-  .setStartCmd(
-    "/usr/local/bin/dx-orb-init",
-    waitForFile("/home/user/.local/state/dxd/supervisor.pid"),
+// The image has no source assets; the template bakes the current ones, so a
+// new Orb's asset check finds them fresh and installs nothing on the turn's
+// path. They are part of the recipe hash: a change rebuilds the template.
+const withSourceAssets = (template) =>
+  sourceAssetsTemplateCommands().reduce(
+    (built, command) => built.runCmd(command, { user: "user" }),
+    template,
   );
+
+export const dxWorkspaceTemplate = withSourceAssets(
+  Template({ fileContextPath: repositoryRoot }).fromDockerfile(dockerfile),
+).setStartCmd(
+  "/usr/local/bin/dx-orb-init",
+  waitForFile("/home/user/.local/state/dxd/supervisor.pid"),
+);
 
 // Runner-size aliases retain the exact prepared dx template. Resource limits
 // are selected only when each alias is built by the deployment wrapper.

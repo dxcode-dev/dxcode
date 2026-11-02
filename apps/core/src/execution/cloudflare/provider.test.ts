@@ -189,6 +189,70 @@ describe("Cloudflare Containers Orb provider", () => {
     );
   });
 
+  it("starts, claims, and wakes nothing until the Thread's admission passes", async () => {
+    // Ways this could fail: the claim or the container start runs beside a
+    // refused admission; a wake starts the container before admission ends;
+    // a late admission is not awaited before the start.
+    const refused = new Error("archived");
+    for (const row of [
+      uninitialized(),
+      {
+        provider: "cloudflare",
+        state: "provisioning",
+        provider_sandbox_id: null,
+        initialization_attempt_id: "attempt",
+      },
+      {
+        provider: "cloudflare",
+        state: "initialized",
+        provider_sandbox_id: "orb-object-id",
+        initialization_attempt_id: null,
+      },
+    ]) {
+      const before = { ...row };
+      const { stub } = bind(row);
+      await expect(
+        cloudflareExecutionProvider.workspace.create(
+          context,
+          { threadId },
+          {
+            authorize: async () => {
+              await new Promise((resolve) => setTimeout(resolve, 5));
+              throw refused;
+            },
+            observeResidency: () => undefined,
+          },
+        ),
+      ).rejects.toBe(refused);
+      expect(stub.open).not.toHaveBeenCalled();
+      expect(row).toEqual(before);
+    }
+
+    const row = uninitialized();
+    const { stub } = bind(row);
+    let admitted = false;
+    stub.open.mockImplementationOnce(async () => {
+      expect(admitted).toBe(true);
+      return {
+        kind: "ready",
+        sandboxId: "orb-object-id",
+        residency: "created",
+      };
+    });
+    await cloudflareExecutionProvider.workspace.create(
+      context,
+      { threadId },
+      {
+        authorize: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          admitted = true;
+        },
+      },
+    );
+    expect(stub.open).toHaveBeenCalledOnce();
+    expect(row.state).toBe("initialized");
+  });
+
   it("fails a workspace that lost its files as WORKSPACE_RESET, and lets only activation restart it", async () => {
     const row: Row = {
       provider: "cloudflare",

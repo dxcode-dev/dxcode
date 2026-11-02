@@ -87,3 +87,36 @@
   width: 12px;
   height: 12px;
 }
+
+/* Where toasts rest: below the title bar (36px on desktop, 44px for touch
+   and in the phone layout), and on a Thread page below its view row too
+   (the 32px pane strip, or the phone layout's 44px view row). */
+.dx-toaster[data-sonner-toaster] {
+  --dx-toast-top: calc(36px + 8px);
+  --dx-toast-top-thread: calc(36px + var(--pane-strip-height, 32px) + 8px);
+}
+@media (pointer: coarse) {
+  .dx-toaster[data-sonner-toaster] {
+    --dx-toast-top: calc(44px + 8px);
+    --dx-toast-top-thread: calc(44px + var(--pane-strip-height, 32px) + 8px);
+  }
+}
+@media (max-width: 767px) {
+  .dx-toaster[data-sonner-toaster] {
+    --dx-toast-top: calc(env(safe-area-inset-top) + 44px + 8px);
+    --dx-toast-top-thread: calc(
+      env(safe-area-inset-top) +
+      44px +
+      var(--pane-row-height, 44px) +
+      8px
+    );
+  }
+}
+/* A top toast enters and leaves with an 8px slide, not its full height, so
+   it never crosses the bars above where it rests. */
+.dx-toaster[data-sonner-toaster]
+[data-sonner-toast][data-y-position="top"]:not([data-mounted="true"]),
+.dx-toaster[data-sonner-toaster]
+  [data-sonner-toast][data-y-position="top"][data-removed="true"][data-front="true"][data-swipe-out="false"] {
+  --y: translateY(-8px);
+}

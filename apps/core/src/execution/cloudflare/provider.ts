@@ -6,6 +6,10 @@ import {
 import { Config, ConfigProvider, Effect, Redacted, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
 import { orbContainerLogger } from "../../logging.js";
+import {
+  type StepTiming,
+  stepTiming,
+} from "../../observability/step-timing.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
 import type {
   ExecutionContext,
@@ -324,9 +328,37 @@ const openCloudflareWorkspace = async (
     ) => void | Promise<void>;
   } & CloudflareOpenPhaseReporter,
 ): Promise<CloudflareWorkspaceHandle> => {
-  const bindings = env as Bindings;
   const profile = cloudflareProfile(context.profile);
-  const idleMs = await inactivityMs(bindings);
+  const timing = stepTiming(orbContainerLogger, "orb_open_timing", {
+    threadId,
+    instance: profile.instance,
+    existingOnly: options.existingOnly,
+  });
+  try {
+    const handle = await openCloudflareWorkspaceTimed(
+      context,
+      threadId,
+      options,
+      profile,
+      timing,
+    );
+    timing.log("ready");
+    return handle;
+  } catch (cause) {
+    timing.log("error");
+    throw cause;
+  }
+};
+
+const openCloudflareWorkspaceTimed = async (
+  context: ExecutionContext,
+  threadId: string,
+  options: Parameters<typeof openCloudflareWorkspace>[2],
+  profile: ReturnType<typeof cloudflareProfile>,
+  timing: StepTiming,
+): Promise<CloudflareWorkspaceHandle> => {
+  const bindings = env as Bindings;
+  const idleMs = await timing.step("inactivity", () => inactivityMs(bindings));
   const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
   const records = executionWorkspaceRecords(db, CLOUDFLARE);
   const id = Schema.decodeUnknownSync(ThreadId)(threadId);
@@ -374,20 +406,23 @@ const openCloudflareWorkspace = async (
       });
     }, OPEN_PROGRESS_MS);
     try {
-      const result = await bounded(
-        stub.open({
-          create,
-          instance: profile.instance,
-          idleMs,
-          allowReset: !options.existingOnly,
-        }),
-        CLOUDFLARE_OPEN_TIMEOUT_MS,
-        () =>
-          platformFailure(
-            "WORKSPACE_OPEN_TIMED_OUT",
-            `The workspace open timed out after ${CLOUDFLARE_OPEN_TIMEOUT_MS / 1000} s.`,
-          ),
+      const result = await timing.step("open", () =>
+        bounded(
+          stub.open({
+            create,
+            instance: profile.instance,
+            idleMs,
+            allowReset: !options.existingOnly,
+          }),
+          CLOUDFLARE_OPEN_TIMEOUT_MS,
+          () =>
+            platformFailure(
+              "WORKSPACE_OPEN_TIMED_OUT",
+              `The workspace open timed out after ${CLOUDFLARE_OPEN_TIMEOUT_MS / 1000} s.`,
+            ),
+        ),
       );
+      if (result.kind === "ready") timing.set("residency", result.residency);
       orbContainerLogger.info("Orb container open returned.", {
         ...details,
         outcome: result.kind,
@@ -407,22 +442,48 @@ const openCloudflareWorkspace = async (
       clearInterval(progress);
     }
   };
+  const provision = async (record: ExecutionWorkspaceRecord) => {
+    const handle = ready(await open(true));
+    return (await timing.step("initialize", () =>
+      records.initialize(id, record, sandboxId),
+    ))
+      ? handle
+      : undefined;
+  };
   for (let attempt = 0; attempt < STATE_RETRIES; attempt += 1) {
-    const record = await readRecord(records, id);
+    // One round of reads: the record, the Thread's admission (which gates
+    // every start below), and, for a wake, whether the container runs.
+    const status =
+      options.observeResidency === undefined
+        ? undefined
+        : timing.step("status", () =>
+            bounded(stub.status(), STATUS_TIMEOUT_MS, () =>
+              platformFailure(
+                "WORKSPACE_STATUS_TIMED_OUT",
+                `The workspace status did not answer within ${STATUS_TIMEOUT_MS / 1000} s.`,
+              ),
+            ),
+          );
+    status?.catch(() => undefined);
+    const [record] = await Promise.all([
+      timing.step("record", () => readRecord(records, id)),
+      timing.step("authorize", () => options.authorize()),
+    ]);
+    timing.set(`state${attempt}`, record.state);
     if (record.state === "uninitialized") {
       if (options.existingOnly) throw unavailable("not created");
-      await options.authorize();
-      await records.claim(id);
-      continue;
+      const claimed = await timing.step("claim", () => records.claim(id));
+      if (claimed === null) continue;
+      const handle = await provision(claimed);
+      if (handle === undefined) continue;
+      return handle;
     }
     // Pinned to another provider: never reached through this one.
     if (record.provider !== CLOUDFLARE) throw unavailable("other provider");
     if (record.state === "provisioning") {
       if (options.existingOnly) throw unavailable("not created");
-      await options.authorize();
-      const result = await open(true);
-      const handle = ready(result);
-      if (!(await records.initialize(id, record, sandboxId))) continue;
+      const handle = await provision(record);
+      if (handle === undefined) continue;
       return handle;
     }
     if (
@@ -430,16 +491,10 @@ const openCloudflareWorkspace = async (
       record.providerSandboxId !== sandboxId
     )
       throw unavailable(record.state);
-    if (options.observeResidency !== undefined) {
-      const status = await bounded(stub.status(), STATUS_TIMEOUT_MS, () =>
-        platformFailure(
-          "WORKSPACE_STATUS_TIMED_OUT",
-          `The workspace status did not answer within ${STATUS_TIMEOUT_MS / 1000} s.`,
-        ),
-      );
-      await options.observeResidency(status.running ? "running" : "paused");
+    if (status !== undefined && options.observeResidency !== undefined) {
+      const observed = await status;
+      await options.observeResidency(observed.running ? "running" : "paused");
     }
-    await options.authorize();
     const result = await open(false);
     if (result.kind !== "ready") {
       await records.markLost(id);

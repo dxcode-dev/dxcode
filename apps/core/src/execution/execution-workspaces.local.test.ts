@@ -45,6 +45,14 @@ const mocks = vi.hoisted(() => {
         run: vi.fn(async () => ({ meta: { changes: 1 } })),
       })),
     })),
+    // A command's preflight reads the lifecycle in a batch.
+    batch: vi.fn(async (statements: ReadonlyArray<unknown>) =>
+      Promise.all(
+        statements.map(async (_, index) => ({
+          results: index === 0 ? [await firstLifecycle()] : [],
+        })),
+      ),
+    ),
   } as unknown as D1Database;
   const primitiveExec = vi.fn(
     async (command: string, options?: { cwd?: string }) => ({
@@ -153,6 +161,10 @@ vi.mock("./runner-profiles/execution.js", () => {
 });
 vi.mock("../settings/environment-variables/execution.js", () => ({
   resolveExecutionEnvironment: mocks.resolveEnvironment,
+  environmentRevisionStatements: () => [],
+  environmentRevisionFrom: () => {
+    throw new Error("No revision in this test.");
+  },
 }));
 vi.mock("../threads/daemon-client.js", () => ({
   activateThreadDaemon: mocks.activateDaemon,

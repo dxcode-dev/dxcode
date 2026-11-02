@@ -220,6 +220,12 @@ const row = (id: string, values: Partial<Row> = {}): Row => ({
 /** Statements the tools wrote through `batch`, as SQL and bindings. */
 const written: Array<{ sql: string; args: unknown[] }> = [];
 
+/**
+ * The Threads whose submission Thread activity has recorded; undefined
+ * means every one asked about (activity is never behind).
+ */
+const activity: { recorded?: Set<string>; polls: number } = { polls: 0 };
+
 /** A D1 stand-in that answers the statements the tools issue. */
 const fakeDb = (
   threads: Map<string, Row>,
@@ -230,11 +236,21 @@ const fakeDb = (
 ) =>
   ({
     batch: async (
-      statements: ReadonlyArray<{ sql: string; args: unknown[] }>,
-    ) => {
-      written.push(...statements);
-      return [];
-    },
+      statements: ReadonlyArray<{
+        sql: string;
+        args: unknown[];
+        all: () => Promise<{ results: unknown[] }>;
+      }>,
+    ) =>
+      Promise.all(
+        statements.map(async (statement) => {
+          // Reads answer as they would alone; writes are recorded.
+          if (statement.sql.trimStart().startsWith("SELECT"))
+            return statement.all();
+          written.push({ sql: statement.sql, args: statement.args });
+          return { meta: { changes: 1 } };
+        }),
+      ),
     prepare: (sql: string) => ({
       bind: (...args: unknown[]) => ({
         sql,
@@ -244,8 +260,26 @@ const fakeDb = (
           return { meta: { changes: 1 } };
         },
         first: async (column?: string) => {
-          if (sql.includes("FROM thread_activity_submission"))
+          if (sql.includes("FROM thread_activity_submission")) {
+            activity.polls += 1;
             return { seen: 1 };
+          }
+          // The calling Thread, with whether its Project is the owner's
+          // repository-less one.
+          if (sql.includes("LEFT JOIN projects")) {
+            const thread = threads.get(args[1] as string);
+            if (thread === undefined) return null;
+            const project = projects[thread.project_id as string];
+            return {
+              ...thread,
+              projectless:
+                project !== undefined &&
+                project.name === args[0] &&
+                project.owner_user_id === thread.owner_user_id
+                  ? 1
+                  : 0,
+            };
+          }
           if (sql.includes("FROM projects")) {
             const project = projects[args[0] as string];
             if (project === undefined) return null;
@@ -256,6 +290,17 @@ const fakeDb = (
           return threads.get(args[0] as string) ?? null;
         },
         all: async () => {
+          // The submissions Thread activity has recorded.
+          if (sql.includes("FROM thread_activity_submission"))
+            return {
+              results: args.flatMap((id, index) =>
+                index % 2 === 0 &&
+                (activity.recorded === undefined ||
+                  activity.recorded.has(id as string))
+                  ? [{ thread_id: id }]
+                  : [],
+              ),
+            };
           // Owner, the IN list, then a shared caller's family root twice.
           const listed =
             (/IN \(([^)]*)\)/.exec(sql)?.[1] ?? "").split("?").length - 1;
@@ -409,6 +454,92 @@ describe("Thread tools", () => {
         initialMessage: { body: "Add tests for the parser.", attachments: [] },
       },
     });
+  });
+
+  /*
+   * create_thread returns once the route admits the child's first message,
+   * without waiting for Thread activity to record it. Ways that could break
+   * "a status check right after reports the child working":
+   * - the child reads idle until activity records its submission;
+   * - it keeps reading working after activity recorded it and it settled;
+   * - activity never records it, and it reads working forever;
+   * - an archived child reads working.
+   */
+  it("reports a just-started child working until its activity shows, without waiting in create_thread", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      activity.recorded = new Set();
+      activity.polls = 0;
+      const threads = new Map([[CALLER, row(CALLER)]]);
+      const db = fakeDb(threads);
+      const tools = toolsFor(db);
+      const created = await tools.create_thread?.run({
+        data: { prompt: "Index the docs." },
+        toolCallId: "call_started",
+      });
+      const child = created?.output.threadId as string;
+      threads.set(child, row(child, { parent_thread_id: CALLER }));
+      // create_thread polled no activity: it did not wait for it.
+      expect(activity.polls).toBe(0);
+      const status = async () =>
+        (
+          await tools.get_thread_status?.run({
+            data: { thread: child },
+            toolCallId: "call_status",
+          })
+        )?.output.state;
+
+      // Activity has not recorded the submission: working, not idle.
+      expect(await status()).toBe("working");
+      // Recorded and settled: D1's state, from then on.
+      activity.recorded.add(child);
+      expect(await status()).toBe("idle");
+      activity.recorded.delete(child);
+      expect(await status()).toBe("idle");
+
+      // Activity that never records stops counting after 10 s.
+      const late = await tools.create_thread?.run({
+        data: { prompt: "Check links." },
+        toolCallId: "call_late",
+      });
+      const lateChild = late?.output.threadId as string;
+      threads.set(lateChild, row(lateChild, { parent_thread_id: CALLER }));
+      const lateStatus = async () =>
+        (
+          await tools.get_thread_status?.run({
+            data: { thread: lateChild },
+            toolCallId: "call_late_status",
+          })
+        )?.output.state;
+      expect(await lateStatus()).toBe("working");
+      vi.setSystemTime(Date.now() + 10_001);
+      expect(await lateStatus()).toBe("idle");
+
+      // An archived child is never reported working.
+      const archived = await tools.create_thread?.run({
+        data: { prompt: "Archive me." },
+        toolCallId: "call_archived",
+      });
+      const archivedChild = archived?.output.threadId as string;
+      threads.set(
+        archivedChild,
+        row(archivedChild, {
+          parent_thread_id: CALLER,
+          lifecycle_state: "archived",
+        }),
+      );
+      expect(
+        (
+          await tools.get_thread_status?.run({
+            data: { thread: archivedChild },
+            toolCallId: "call_archived_status",
+          })
+        )?.output,
+      ).toMatchObject({ state: "idle", archived: true });
+    } finally {
+      activity.recorded = undefined;
+      vi.useRealTimers();
+    }
   });
 
   it("leaves a projectless caller's child projectless and applies a named mode", async () => {

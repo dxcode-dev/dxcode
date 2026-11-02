@@ -29,6 +29,7 @@ import {
   verifyDxdBytes,
 } from "../deploy/selfhost/dxd-release.mjs";
 import { preflightPortalZone } from "../deploy/selfhost/portals.mjs";
+import { assertToolchain } from "../deploy/selfhost/toolchain.mjs";
 import {
   assertCleanRevision,
   assertDeploymentAccount,
@@ -83,6 +84,9 @@ if (!new Set(["deploy", "destroy"]).has(operation))
   );
 if (!new Set(["branch", "staging", "selfhost"]).has(target))
   throw new Error("Deployment target must be branch, staging, or selfhost.");
+// A self-host deploys with whatever Node.js and pnpm its machine has; name a
+// mismatch in one line before anything installs or builds.
+if (target === "selfhost") assertToolchain();
 if (
   target === "selfhost" &&
   operation === "deploy" &&

@@ -16,7 +16,6 @@ const account = {
   email: "test@example.com",
   emailVerified: true,
   identityAuthority: "local-password",
-  threadCount: 2,
   appearance: "dark",
   palette: "daydream",
   terminalTheme: "github",

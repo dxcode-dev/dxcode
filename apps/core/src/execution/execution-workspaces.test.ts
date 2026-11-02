@@ -83,7 +83,17 @@ const mocks = vi.hoisted(() => {
             }
           : { bind: bindThreadLifecycle },
   );
-  const db = { prepare: prepareThreadLifecycle } as unknown as D1Database;
+  const db = {
+    prepare: prepareThreadLifecycle,
+    // Authorization reads the lifecycle first in a batch (#1493).
+    batch: vi.fn(async (statements: ReadonlyArray<unknown>) =>
+      Promise.all(
+        statements.map(async (_, index) => ({
+          results: index === 0 ? [await firstThreadLifecycle()] : [],
+        })),
+      ),
+    ),
+  } as unknown as D1Database;
   const workerEnv = {
     DB: db,
     DX_RUNTIME_MODE: "deployed",

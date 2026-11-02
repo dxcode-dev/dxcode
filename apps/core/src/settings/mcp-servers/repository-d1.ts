@@ -165,6 +165,107 @@ const decodeTools = (input: unknown) =>
     ),
   );
 
+/**
+ * The servers a user's Thread in a Project may call: enabled, from a trusted
+ * plugin if any, granted to the user (a personal server unless the workspace
+ * blocks personal servers, a workspace server for the member's role), granted
+ * to the Project, and signed in to for OAuth. `owner` and `project` are SQL
+ * expressions, such as parameters or a Thread subquery.
+ */
+const executionFilter = (owner: string, project: string) => `enabled = 1
+  AND (
+    plugin_id IS NULL OR EXISTS (
+      SELECT 1 FROM trusted_plugin
+       WHERE trusted_plugin.id = mcp_server.plugin_id
+         AND trusted_plugin.enabled = 1
+         AND trusted_plugin.removed_at IS NULL
+    )
+  )
+  AND (
+    (
+      scope = 'personal' AND target_id = ${owner}
+      AND NOT EXISTS (
+        SELECT 1
+          FROM member
+          JOIN mcp_workspace_policy policy
+            ON policy.workspace_id = member.organizationId
+         WHERE member.userId = ${owner}
+           AND policy.allow_personal_servers = 0
+      )
+    )
+    OR (
+      scope = 'workspace'
+      AND EXISTS (
+        SELECT 1 FROM member
+         WHERE member.userId = ${owner}
+           AND member.organizationId = mcp_server.target_id
+           AND member.role IN (
+             SELECT value FROM json_each(mcp_server.roles_json)
+           )
+      )
+    )
+  )
+  AND (
+    json_array_length(project_ids_json) = 0
+    OR ${project} IN (SELECT value FROM json_each(project_ids_json))
+  )
+  AND (
+    auth_type != 'oauth'
+    OR EXISTS (
+      SELECT 1 FROM mcp_oauth_grant grant_row
+       WHERE grant_row.server_id = mcp_server.id
+         AND grant_row.user_id = ${owner}
+         AND grant_row.endpoint = mcp_server.endpoint
+    )
+  )`;
+
+/** A tool runs only with the contract someone allowed. */
+const approved = (tool: StoredMcpTool) =>
+  tool.approvedSchemaHash !== undefined &&
+  tool.approvedSchemaHash === tool.schemaHash;
+
+const threadOwner = "(SELECT owner_user_id FROM threads WHERE id = ?1)";
+const threadProject = "(SELECT project_id FROM threads WHERE id = ?1)";
+
+/**
+ * Statements for a caller's D1 batch that read one server a Thread may call,
+ * as `listForExecution` would list it for the Thread's owner and Project,
+ * with its tools. Decode their results with `decodeThreadExecutionServer`.
+ */
+export const threadExecutionServerStatements = (
+  db: D1Database,
+  threadId: string,
+  serverId: string,
+): readonly [D1PreparedStatement, D1PreparedStatement] => {
+  const filter = `${executionFilter(threadOwner, threadProject)} AND id = ?2`;
+  return [
+    db
+      .prepare(`SELECT ${columns} FROM mcp_server WHERE ${filter}`)
+      .bind(threadId, serverId),
+    db
+      .prepare(
+        `SELECT server_id, name, description, input_schema_json,
+                schema_hash, approved_schema_hash, discovered_at, reviewed_at
+           FROM mcp_tool
+          WHERE server_id IN (SELECT id FROM mcp_server WHERE ${filter})
+          ORDER BY name`,
+      )
+      .bind(threadId, serverId),
+  ];
+};
+
+/** The server and its allowed tools, or undefined when it may not run. */
+export const decodeThreadExecutionServer = (
+  servers: D1Result,
+  tools: D1Result,
+) =>
+  Effect.gen(function* () {
+    const [server] = yield* decodeServers(servers.results);
+    if (server === undefined) return undefined;
+    const decoded = yield* decodeTools(tools.results);
+    return { server, tools: decoded.filter(approved) };
+  });
+
 const encodedTimestamp = (value: Timestamp) =>
   Schema.encodeSync(Timestamp)(value);
 
@@ -549,64 +650,14 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
         listForExecution: Effect.fn("McpServerRepository.listForExecution")(
           function* (ownerUserId, projectId) {
             const servers = yield* queryServers(
-              `WHERE enabled = 1
-                 AND (
-                   plugin_id IS NULL OR EXISTS (
-                     SELECT 1 FROM trusted_plugin
-                      WHERE trusted_plugin.id = mcp_server.plugin_id
-                        AND trusted_plugin.enabled = 1
-                        AND trusted_plugin.removed_at IS NULL
-                   )
-                 )
-                 AND (
-                   (
-                     scope = 'personal' AND target_id = ?
-                     AND NOT EXISTS (
-                       SELECT 1
-                         FROM member
-                         JOIN mcp_workspace_policy policy
-                           ON policy.workspace_id = member.organizationId
-                        WHERE member.userId = ?
-                          AND policy.allow_personal_servers = 0
-                     )
-                   )
-                   OR (
-                     scope = 'workspace'
-                     AND EXISTS (
-                       SELECT 1 FROM member
-                        WHERE member.userId = ?
-                          AND member.organizationId = mcp_server.target_id
-                          AND member.role IN (
-                            SELECT value FROM json_each(mcp_server.roles_json)
-                          )
-                     )
-                   )
-                 )
-                 AND (
-                   json_array_length(project_ids_json) = 0
-                   OR ? IN (SELECT value FROM json_each(project_ids_json))
-                 )
-                 AND (
-                   auth_type != 'oauth'
-                   OR EXISTS (
-                     SELECT 1 FROM mcp_oauth_grant grant_row
-                      WHERE grant_row.server_id = mcp_server.id
-                        AND grant_row.user_id = ?
-                        AND grant_row.endpoint = mcp_server.endpoint
-                   )
-                 )
-               ORDER BY scope, name, id`,
-              [ownerUserId, ownerUserId, ownerUserId, projectId, ownerUserId],
+              `WHERE ${executionFilter("?1", "?2")} ORDER BY scope, name, id`,
+              [ownerUserId, projectId],
               "settings.mcpServers.listForExecution",
             );
             const hydrated = yield* hydrate(servers);
             return hydrated.map(({ server, tools }) => ({
               server,
-              tools: tools.filter(
-                (tool) =>
-                  tool.approvedSchemaHash !== undefined &&
-                  tool.approvedSchemaHash === tool.schemaHash,
-              ),
+              tools: tools.filter(approved),
             }));
           },
         ),

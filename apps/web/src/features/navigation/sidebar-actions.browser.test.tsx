@@ -443,10 +443,11 @@ it("#1140: moves a pinned row at once, and puts it back with a toast when the pi
   const gamma = row("Gamma").closest<HTMLElement>(".thread-row-shell");
   if (gamma === null) throw new Error("Expected Gamma's row.");
   await hover(gamma);
-  await userEvent.click(
-    gamma.querySelector<HTMLElement>(
-      '[aria-label="Pin thread"]',
-    ) as HTMLElement,
+  // Click it directly, as below: Playwright waits for the hover-revealed
+  // button to become visible, and on one 4-core Orb it never did, so the
+  // release gate timed out after 15 s while the test passed elsewhere.
+  await React.act(() =>
+    gamma.querySelector<HTMLElement>('[aria-label="Pin thread"]')?.click(),
   );
   await settle();
   expect(rowTitles()).toEqual(["Gamma", "Alpha", "Beta"]);

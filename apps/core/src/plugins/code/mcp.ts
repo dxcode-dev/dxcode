@@ -3,9 +3,10 @@ import {
   Client,
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
+import type { Bindings } from "../../http/types.js";
 import {
-  createAuthorizedMcpFetch,
-  resolveMcpCredential,
+  authorizeMcpCall,
+  McpInvocationForbidden,
 } from "../../settings/mcp-servers/execution.js";
 import { McpNetworkRejected } from "../../settings/mcp-servers/transport.js";
 import type { CodeHostCall } from "./providers/quickjs.js";
@@ -61,26 +62,30 @@ const watchedBody = (
 };
 
 /**
- * Fresh connections keep credentials and review admission current on every
- * call. Core's authorized fetch adds the configured headers.
+ * Each call resolves its connection from current settings once, and its
+ * initialize, listing, and tool call share it; the next call resolves again.
+ * Core's authorized fetch adds the configured headers.
  */
 export const codeMcpCall =
-  (threadId: string): CodeHostCall =>
+  (threadId: string, bindings: Bindings): CodeHostCall =>
   async (module, name, input, raw, signal) => {
     const connection = module.connection;
     if (!connection.tools.includes(name))
       throw new Error("MCP tool is not reviewed for this Thread.");
     signal.throwIfAborted();
-    const credential = connection.authenticated
-      ? await resolveMcpCredential(threadId, connection.id)
-      : undefined;
-    const authorizedFetch = createAuthorizedMcpFetch(
+    const authorized = await authorizeMcpCall(
+      bindings,
       threadId,
       connection.id,
       connection.endpoint,
       connection.timeoutMs,
       name,
     );
+    const credential = connection.authenticated
+      ? authorized.credential
+      : undefined;
+    if (connection.authenticated && credential === undefined)
+      throw new McpInvocationForbidden();
     let rejectStream!: (rejection: McpNetworkRejected) => void;
     const streamRejected = new Promise<never>((_, reject) => {
       rejectStream = reject;
@@ -97,7 +102,7 @@ export const codeMcpCall =
       {
         fetch: async (input, init) =>
           watchedBody(
-            await authorizedFetch(input, {
+            await authorized.fetch(input, {
               ...init,
               signal: AbortSignal.any([
                 signal,

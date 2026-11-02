@@ -20,8 +20,13 @@ export interface ExecutionWorkspaceRecord {
 export interface ExecutionWorkspaceRecords {
   /** Null when the Thread has no row (it was deleted). */
   readonly read: (threadId: string) => Promise<ExecutionWorkspaceRecord | null>;
-  /** Claims an `uninitialized` row for this provider; false when raced. */
-  readonly claim: (threadId: string) => Promise<boolean>;
+  /**
+   * Claims an `uninitialized` row for this provider: the `provisioning`
+   * record it wrote, or null when raced.
+   */
+  readonly claim: (
+    threadId: string,
+  ) => Promise<ExecutionWorkspaceRecord | null>;
   /** Records the sandbox of the claim `record` holds; false when raced. */
   readonly initialize: (
     threadId: string,
@@ -60,6 +65,7 @@ export const executionWorkspaceRecords = (
     };
   },
   async claim(threadId) {
+    const initializationAttemptId = crypto.randomUUID();
     const result = await db
       .prepare(
         `UPDATE execution_workspace
@@ -69,9 +75,21 @@ export const executionWorkspaceRecords = (
                 updated_at = ?
           WHERE thread_id = ? AND state = 'uninitialized'`,
       )
-      .bind(providerId, crypto.randomUUID(), new Date().toISOString(), threadId)
+      .bind(
+        providerId,
+        initializationAttemptId,
+        new Date().toISOString(),
+        threadId,
+      )
       .run();
-    return result.meta.changes === 1;
+    return result.meta.changes === 1
+      ? {
+          provider: providerId,
+          state: "provisioning",
+          providerSandboxId: null,
+          initializationAttemptId,
+        }
+      : null;
   },
   async initialize(threadId, record, sandboxId) {
     const result = await db

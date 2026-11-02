@@ -1,5 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
-import { RouterProvider } from "@tanstack/react-router";
+import { RouterProvider, useRouterState } from "@tanstack/react-router";
 import { lazy, Suspense } from "react";
 import { attachInAppNavigation } from "./features/install-app/in-app-navigation.js";
 import { recordBrowserTimeZone } from "./features/threads/automations/automations-queries.js";
@@ -52,13 +52,29 @@ function RecordTimeZone() {
 }
 
 /**
- * The app's one Toaster: bottom right on desktop, top center in the phone
- * layout, where the bottom holds the composer.
+ * Toasts rest below the title bar, and on a Thread page below its view row
+ * too, where they cover no control: the composer and its Send sit at the
+ * bottom, and the bars above hold the controls a notice refers to, such as
+ * Wake. `sonner.css` sets both offsets for each layout.
  */
-function AppToaster() {
+const belowTitleBar = { top: "var(--dx-toast-top)", right: "16px" };
+const belowViewRow = { top: "var(--dx-toast-top-thread)", right: "16px" };
+
+/** The app's one Toaster: top right on desktop, top center on phones. */
+function AppToaster({ router }: { readonly router: AppRouter }) {
   const mobile = useMobile();
+  const threadPage = useRouterState({
+    router,
+    select: ({ location }) => /^\/threads\/[^/]+\/?$/u.test(location.pathname),
+  });
+  const offset = threadPage ? belowViewRow : belowTitleBar;
   return (
-    <Toaster position={mobile ? "top-center" : "bottom-right"} closeButton />
+    <Toaster
+      position={mobile ? "top-center" : "top-right"}
+      offset={offset}
+      mobileOffset={offset}
+      closeButton
+    />
   );
 }
 
@@ -89,7 +105,7 @@ export function AuthenticatedApplication({
         </ReportBugSlot.Provider>
         <InAppNavigation key={auth.identity.id} router={router} />
         <RecordTimeZone key={auth.identity.id} />
-        <AppToaster />
+        <AppToaster router={router} />
         {ReactQueryDevtools === undefined ? null : (
           <Suspense fallback={null}>
             <ReactQueryDevtools />

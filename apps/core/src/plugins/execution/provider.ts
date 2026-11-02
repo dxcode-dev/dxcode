@@ -21,6 +21,7 @@ import {
 import type { SourceWorkspaceRuntimeOptions } from "../../execution/source-preparation.js";
 import type { Bindings } from "../../http/types.js";
 import { orbProvidersLogger } from "../../logging.js";
+import { stepTiming } from "../../observability/step-timing.js";
 import { drainThreadDaemon } from "../../threads/daemon-client.js";
 import {
   deploymentProviders,
@@ -310,14 +311,28 @@ export interface ExecutionProvider<
  * gates the daemon operations by capability before calling them.
  */
 export interface ExecutionActivation {
+  /**
+   * `admission` is the run's own checks, started before the Thread's
+   * target resolved (`ExecutionActivationFactory.admit`); without it the
+   * activation starts them itself.
+   */
   readonly activate: (
     context: ExecutionContext,
     request: SandboxRequest,
+    admission?: ExecutionRunAdmission,
   ) => Promise<FlueSandbox>;
   readonly reconnect: (
     context: ExecutionContext,
     request: SandboxRequest,
   ) => Promise<FlueSandbox>;
+  /**
+   * Starts the Thread's own Orb before its first run reaches it, behind the
+   * same checks as a run. Prepares no source; the run's activation does.
+   */
+  readonly prestart?: (
+    context: ExecutionContext,
+    threadId: ThreadId,
+  ) => Promise<void>;
   readonly ensureDaemon: (
     context: ExecutionContext,
     input: EnsureDaemonInput,
@@ -346,9 +361,22 @@ export interface ResidentActivityOptions {
   readonly wake?: boolean;
 }
 
-export type ExecutionActivationFactory = (
+/**
+ * A run's provider-neutral checks in flight: its source admission and
+ * whether its workspace still needs a first preparation. The activation
+ * awaits them before the Orb starts.
+ */
+export interface ExecutionRunAdmission {
+  readonly admitted: Promise<void>;
+  readonly firstPreparation: Promise<boolean>;
+}
+
+export type ExecutionActivationFactory = ((
   provider: ExecutionProvider,
-) => ExecutionActivation;
+) => ExecutionActivation) & {
+  /** Starts a run's checks beside its target resolution. */
+  readonly admit?: (threadId: string) => ExecutionRunAdmission;
+};
 
 export class ExecutionProviderUnavailable extends Schema.TaggedError<ExecutionProviderUnavailable>()(
   "ExecutionProviderUnavailable",
@@ -451,6 +479,11 @@ export interface ExecutionWorkspaces {
   readonly archive: (threadId: ThreadId) => Promise<void>;
   /** Thread deleted: drain dxd, then destroy the workspace. */
   readonly destroy: (threadId: ThreadId) => Promise<void>;
+  /**
+   * A new Thread's first message is being dispatched: start its Orb now, so
+   * the run finds it starting or up. True when an Orb was started.
+   */
+  readonly prestart: (threadId: ThreadId) => Promise<boolean>;
   readonly ensureDaemon: (
     input: EnsureDaemonInput,
   ) => Promise<DaemonInstallation>;
@@ -470,6 +503,8 @@ export interface ExecutionWorkspaces {
 export interface ExecutionTarget {
   readonly profile: ExecutionProfile;
   readonly credential: ExecutionTargetCredential;
+  /** The workspace policy check, in flight when the caller deferred it. */
+  readonly policy?: Promise<void>;
 }
 
 /**
@@ -479,14 +514,24 @@ export interface ExecutionTarget {
 export type ExecutionTargetResolver = (
   bindings: Bindings,
   threadId: string,
-  options: { readonly admission: boolean },
+  options: { readonly admission: boolean; readonly deferPolicy?: boolean },
 ) => Promise<ExecutionTarget>;
 
-const executionTarget: ExecutionTargetResolver = (
+const executionTarget: ExecutionTargetResolver = async (
   bindings,
   threadId,
   options,
-) => Effect.runPromise(resolveExecutionTarget(bindings, threadId, options));
+) => {
+  const target = await Effect.runPromise(
+    resolveExecutionTarget(bindings, threadId, options),
+  );
+  const deferred = "policy" in target ? target.policy : undefined;
+  if (deferred === undefined)
+    return { profile: target.profile, credential: target.credential };
+  const policy = Effect.runPromise(deferred);
+  policy.catch(() => undefined);
+  return { profile: target.profile, credential: target.credential, policy };
+};
 
 const skippedRelease = (
   threadId: string,
@@ -648,6 +693,7 @@ export const composeExecutionWorkspaces = (
       },
       archive: unavailable,
       destroy: unavailable,
+      prestart: async () => false,
       ensureDaemon: unavailable,
       pinnedProvider: unavailable,
       recordResidentTerminalInput: unavailable,
@@ -658,8 +704,16 @@ export const composeExecutionWorkspaces = (
   // A Thread's provider never changes, so the provider a context named is
   // remembered for terminal input, which must not load a context per batch.
   const threadProviders = new Map<string, Entry>();
-  const resolve = async (threadId: string, admission: boolean) => {
-    const target = await resolveTarget(bindings, threadId, { admission });
+  const resolve = async (
+    threadId: string,
+    admission: boolean,
+    deferPolicy = false,
+  ) => {
+    const target = await resolveTarget(
+      bindings,
+      threadId,
+      deferPolicy ? { admission, deferPolicy } : { admission },
+    );
     const entry = entries.get(target.profile.adapter as ExecutionProviderId);
     if (entry === undefined) throw new ExecutionProviderUnavailable();
     threadProviders.set(threadId, entry);
@@ -748,11 +802,35 @@ export const composeExecutionWorkspaces = (
     providers: [...entries.values()].map(({ provider }) => provider),
     sandboxFactory: {
       createSandbox: async (request) => {
-        const { context: resolvedContext, entry } = await context(
-          request.id,
-          true,
+        const timing = stepTiming(
+          orbProvidersLogger,
+          "execution_target_timing",
+          { threadId: request.id },
         );
-        return entry.pipeline.activate(resolvedContext, request);
+        // The run's own checks need no target: they read beside it, and the
+        // workspace policy check reads beside the provider's own reads. All
+        // of them gate the Orb start.
+        const early = activation.admit?.(request.id);
+        const { entry, target } = await timing.step("target", () =>
+          resolve(request.id, true, true),
+        );
+        timing.log("resolved");
+        const resolvedContext = contextFor(entry, target);
+        if (early === undefined) {
+          await target.policy;
+          return entry.pipeline.activate(resolvedContext, request);
+        }
+        const policy = target.policy;
+        if (policy === undefined)
+          return entry.pipeline.activate(resolvedContext, request, early);
+        const admitted = Promise.all([early.admitted, policy]).then(
+          () => undefined,
+        );
+        admitted.catch(() => undefined);
+        return entry.pipeline.activate(resolvedContext, request, {
+          ...early,
+          admitted,
+        });
       },
       tools: executionWorkspaceTools,
     },
@@ -768,6 +846,12 @@ export const composeExecutionWorkspaces = (
     },
     archive: (threadId) => release(threadId, "archive"),
     destroy: (threadId) => release(threadId, "destroy"),
+    prestart: async (threadId) => {
+      const { context: resolvedContext, entry } = await context(threadId, true);
+      if (entry.pipeline.prestart === undefined) return false;
+      await entry.pipeline.prestart(resolvedContext, threadId);
+      return true;
+    },
     ensureDaemon:
       residentEntries.length === 0
         ? daemonUnavailable

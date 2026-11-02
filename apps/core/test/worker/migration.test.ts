@@ -1045,7 +1045,11 @@ describe("D1 migration", () => {
       Effect.gen(function* () {
         const repository = yield* ProjectRepository;
         yield* repository.insert(entity);
-        return yield* Effect.flip(repository.insert(entity));
+        // The same ID under another name breaks the primary key, not a name
+        // index, so the failure is not a name conflict.
+        return yield* Effect.flip(
+          repository.insert(project(entity.id, owner, "Duplicate ID")),
+        );
       }),
     );
 

@@ -39,6 +39,21 @@ LTS, OpenJDK 21, Python 3, build tools, git, git-lfs, GitHub CLI, ripgrep,
 jq, tmux, and passwordless `sudo` for `user`. E2B parses the Dockerfile into
 template steps and provisions its own init (systemd) and `envd` on top.
 
+On top of the image, the template bakes Core's source assets: the Git
+credential helper and the source program in `~/.local/libexec`, and the
+source lock's directory `~/.local/state/dx`
+([`workspace-assets.ts`](../../apps/core/src/source-control/workspace-assets.ts)).
+They are part of the recipe hash, so a deploy that changes either program
+builds new templates, and a new Orb's asset check finds them current and
+installs nothing before its agent starts. Templates built before them still
+work: the check finds the assets stale and installs them.
+
+A new sandbox loads its disk lazily, so the first run of each large binary
+waits on many small loads. Right after it creates a sandbox, Core reads the
+binaries the source activation runs first (Node, git, gh, git-lfs) with
+parallel readers ([`guest-prefetch.ts`](../../apps/core/src/execution/e2b/guest-prefetch.ts)),
+beside the rest of the open.
+
 dxd does not run as a systemd unit. The image entrypoint script
 [`dx-orb-init`](../orb/dx-orb-init) supervises it; E2B runs that script as
 the template's start command, so the snapshot every sandbox starts from

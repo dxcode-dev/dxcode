@@ -8,6 +8,7 @@ import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { DxLoading } from "../../shared/brand/dx-loading.js";
 import { ReportBugSlot } from "../../shared/bug-reports/report-bug-slot.js";
 import { AppFrame } from "../../shared/layout/app-frame.js";
+import { useCloseSettingsOnEscape } from "../../shared/navigation/close-settings-on-escape.js";
 import {
   isValidSettingsReturnTo,
   settingsNavigationState,
@@ -360,31 +361,6 @@ type SettingsPageProps =
       readonly workspaceSlug?: WorkspaceSlug;
       readonly registration: SettingsSectionRegistration;
     };
-
-const settingsEscapeSnapshot = () => 0;
-
-const useCloseSettingsOnEscape = (closeSettings: () => void) => {
-  const subscribe = (_onStoreChange: () => void) => {
-    const close = (event: KeyboardEvent) => {
-      if (
-        event.key !== "Escape" ||
-        event.defaultPrevented ||
-        document.querySelector(
-          "[role='dialog'], [role='menu'], .shortcut-recording",
-        ) !== null
-      )
-        return;
-      closeSettings();
-    };
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  };
-  React.useSyncExternalStore(
-    subscribe,
-    settingsEscapeSnapshot,
-    settingsEscapeSnapshot,
-  );
-};
 
 /** Where closing settings returns: the opener's link, or GitHub's install callback. */
 const settingsReturnToFor = (location: {

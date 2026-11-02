@@ -232,7 +232,6 @@ export function ThreadContextMenu({
                 {snooze === undefined ? null : snooze.snoozed ? (
                   <ContextMenu.Item
                     className="thread-context-item"
-                    disabled={snooze.controller.pendingThreadId === thread.id}
                     onClick={() => snooze.controller.wake(thread.id)}
                   >
                     <AlarmClockOff />
@@ -240,10 +239,7 @@ export function ThreadContextMenu({
                   </ContextMenu.Item>
                 ) : (
                   <ContextMenu.SubmenuRoot>
-                    <ContextMenu.SubmenuTrigger
-                      className="thread-context-item"
-                      disabled={snooze.controller.pendingThreadId === thread.id}
-                    >
+                    <ContextMenu.SubmenuTrigger className="thread-context-item">
                       <AlarmClock />
                       <span>Snooze</span>
                       <ChevronRight />

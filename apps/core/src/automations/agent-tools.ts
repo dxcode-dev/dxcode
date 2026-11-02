@@ -15,6 +15,7 @@ import {
   FILTER_KINDS,
   type FilterKind,
   githubToken,
+  githubTokenForThread,
   isRepository,
   readItemSubject,
   readPullSubject,
@@ -23,9 +24,8 @@ import {
 } from "./github.js";
 import {
   linkOfSubscription,
-  linkThread,
+  linkThreadAndList,
   saveLinkSubject,
-  threadLinks,
 } from "./links.js";
 import { RecurrenceInvalid } from "./recurrence.js";
 import {
@@ -83,6 +83,38 @@ export const createAutomationTools = (
   ) => {
     const context = getContext();
     return use(context, await readCallingThread(context.db, callingThreadId));
+  };
+
+  /**
+   * Like `withOwner`, and resolves the calling Thread's GitHub token at the
+   * same time: one round trip instead of two in a row. `token(threadId)`
+   * gives that token for the calling Thread and resolves any other Thread's.
+   */
+  const withOwnerAndToken = async <T>(
+    use: (
+      context: ThreadToolsContext,
+      owner: CallingThread,
+      token: (threadId: string) => Promise<string | undefined>,
+    ) => Promise<T>,
+  ) => {
+    const context = getContext();
+    const own = githubTokenForThread(
+      context.bindings,
+      context.db,
+      callingThreadId,
+    );
+    const owner = await readCallingThread(context.db, callingThreadId);
+    return use(context, owner, async (threadId) => {
+      const found = threadId === callingThreadId ? await own : undefined;
+      return found?.ownerUserId === owner.ownerUserId
+        ? found.token
+        : githubToken(
+            context.bindings,
+            context.db,
+            threadId,
+            owner.ownerUserId,
+          );
+    });
   };
 
   /** A Thread the caller may manage: the owner's own, still there. */
@@ -278,15 +310,10 @@ export const createAutomationTools = (
   const saveSubjectOnce = async (
     context: ThreadToolsContext,
     row: SubscriptionRow,
+    token: string,
   ) => {
     const link = linkOfSubscription(row.filter_kind, filterOf(row));
-    const token = await githubToken(
-      context.bindings,
-      context.db,
-      row.thread_id,
-      row.owner_user_id,
-    );
-    if (link === undefined || token === undefined) return;
+    if (link === undefined) return;
     if (link.kind === "pull") {
       const subject = await readPullSubject(
         token,
@@ -312,12 +339,16 @@ export const createAutomationTools = (
       );
   };
 
-  /** Validates the arguments and reads GitHub as the Thread's gh would. */
+  /**
+   * Validates the arguments and reads GitHub as the Thread's gh would. The
+   * repository check, the App check, and the commit lookup run together.
+   */
   const subscriptionInput = async (
     context: ThreadToolsContext,
     owner: CallingThread,
     args: SubscriptionArgs,
-  ): Promise<SubscriptionInput> => {
+    tokenFor: (threadId: string) => Promise<string | undefined>,
+  ): Promise<{ readonly input: SubscriptionInput; readonly token: string }> => {
     const kind = args.filter_kind as FilterKind;
     const destination = args.destination ?? "this-thread";
     if (args.repository === undefined || !isRepository(args.repository))
@@ -346,44 +377,47 @@ export const createAutomationTools = (
       throw new Error("automatic is for CI and PR comment follow-ups.");
     checkAgentMode(owner, args.agent_mode);
     const threadId = await targetThread(context, owner, args.thread);
-    const token = await githubToken(
-      context.bindings,
-      context.db,
-      threadId,
-      owner.ownerUserId,
-    );
+    const token = await tokenFor(threadId);
     if (token === undefined)
       throw new Error(
         "No GitHub credentials: the owner has not connected GitHub in dx Settings → Integrations and set no GITHUB_TOKEN environment variable.",
       );
-    await checkRepository(token, args.repository);
-    if (!(await appHearsRepository(context.db, args.repository)))
+    if (kind === "ci") {
+      if (args.commit_sha === undefined)
+        throw new Error("ci needs commit_sha.");
+      if (args.workflow_file !== undefined && args.workflow !== undefined)
+        throw new Error("Use workflow_file or workflow, not both.");
+      if (args.ci_event === "check_run" && args.check_name === undefined)
+        throw new Error("ci_event check_run needs check_name.");
+      if (args.ci_event === "status" && args.status_context === undefined)
+        throw new Error("ci_event status needs status_context.");
+      if (
+        args.ci_event !== undefined &&
+        args.ci_event !== "workflow_run" &&
+        (args.workflow_file !== undefined || args.workflow !== undefined)
+      )
+        throw new Error("A workflow filter goes with ci_event workflow_run.");
+    }
+    const [reachable, hears, commit] = await Promise.allSettled([
+      checkRepository(token, args.repository),
+      appHearsRepository(context.db, args.repository),
+      kind === "ci" && args.commit_sha !== undefined
+        ? resolveCommit(token, args.repository, args.commit_sha)
+        : Promise.resolve(undefined),
+    ]);
+    // Reported in the order they were checked one at a time.
+    if (reachable.status === "rejected") throw reachable.reason;
+    if (hears.status === "rejected") throw hears.reason;
+    if (!hears.value)
       throw new Error(
         `The dx GitHub App is not installed on ${args.repository}, so dx receives no events from it. Ask the owner to install it from dx Settings → Integrations → GitHub.`,
       );
+    if (commit.status === "rejected") throw commit.reason;
     let filter: SubscriptionFilter;
     switch (kind) {
       case "ci": {
-        if (args.commit_sha === undefined)
-          throw new Error("ci needs commit_sha.");
-        if (args.workflow_file !== undefined && args.workflow !== undefined)
-          throw new Error("Use workflow_file or workflow, not both.");
-        if (args.ci_event === "check_run" && args.check_name === undefined)
-          throw new Error("ci_event check_run needs check_name.");
-        if (args.ci_event === "status" && args.status_context === undefined)
-          throw new Error("ci_event status needs status_context.");
-        if (
-          args.ci_event !== undefined &&
-          args.ci_event !== "workflow_run" &&
-          (args.workflow_file !== undefined || args.workflow !== undefined)
-        )
-          throw new Error("A workflow filter goes with ci_event workflow_run.");
         filter = {
-          commitSha: await resolveCommit(
-            token,
-            args.repository,
-            args.commit_sha,
-          ),
+          commitSha: commit.value as string,
           ...(args.branch === undefined ? {} : { branch: args.branch }),
           ...(args.ci_event === undefined ? {} : { ciEvent: args.ci_event }),
           ...(args.workflow_file === undefined
@@ -426,21 +460,24 @@ export const createAutomationTools = (
     if (expiresAt !== null && expiresAt <= new Date().toISOString())
       throw new Error("expires_at is in the past.");
     return {
-      title: args.title as string,
-      repository: args.repository,
-      kind,
-      filter,
-      destination,
-      threadId,
-      projectId: null,
-      agentMode:
-        destination === "new-thread" ? (args.agent_mode ?? null) : null,
-      instructions:
-        destination === "new-thread" && args.instructions
-          ? args.instructions
-          : null,
-      automatic: args.automatic === true,
-      expiresAt,
+      input: {
+        title: args.title as string,
+        repository: args.repository,
+        kind,
+        filter,
+        destination,
+        threadId,
+        projectId: null,
+        agentMode:
+          destination === "new-thread" ? (args.agent_mode ?? null) : null,
+        instructions:
+          destination === "new-thread" && args.instructions
+            ? args.instructions
+            : null,
+        automatic: args.automatic === true,
+        expiresAt,
+      },
+      token,
     };
   };
 
@@ -620,20 +657,28 @@ export const createAutomationTools = (
         repository: text(200, "GitHub repository as owner/name."),
       }),
       run: async ({ data }) =>
-        withOwner(async (context, owner) => {
-          const input = await subscriptionInput(context, owner, data);
+        withOwnerAndToken(async (context, owner, tokenFor) => {
+          const { input, token } = await subscriptionInput(
+            context,
+            owner,
+            data,
+            tokenFor,
+          );
           const { row, existed } = await createSubscription(
             context.db,
             owner.ownerUserId,
             input,
           );
-          await catchUpCi(context.bindings, row);
           if (
             !existed &&
             (row.filter_kind === "pr-comments" ||
               row.filter_kind === "issue-comments")
           )
-            await saveSubjectOnce(context, row);
+            await saveSubjectOnce(context, row, token);
+          if (row.filter_kind !== "ci")
+            return { output: { ...subscriptionView(row), existed } };
+          // Catching up may already finish it.
+          await catchUpCi(context.bindings, row);
           const current = (await readSubscription(context.db, row.id)) ?? row;
           return { output: { ...subscriptionView(current), existed } };
         }),
@@ -713,7 +758,7 @@ export const createAutomationTools = (
         { subscription_id: string; enabled?: boolean } & SubscriptionArgs
       >,
       run: async ({ data }) =>
-        withOwner(async (context, owner) => {
+        withOwnerAndToken(async (context, owner, tokenFor) => {
           const current = await ownSubscription(
             context,
             owner,
@@ -746,17 +791,23 @@ export const createAutomationTools = (
                   );
             return { output: subscriptionView(row as SubscriptionRow) };
           }
-          const input = await subscriptionInput(context, owner, {
-            ...data,
-            title: data.title ?? current.title,
-            automatic: data.automatic ?? current.automatic === 1,
-            ...(data.agent_mode === undefined && current.agent_mode !== null
-              ? { agent_mode: current.agent_mode }
-              : {}),
-            ...(data.instructions === undefined && current.instructions !== null
-              ? { instructions: current.instructions }
-              : {}),
-          });
+          const { input } = await subscriptionInput(
+            context,
+            owner,
+            {
+              ...data,
+              title: data.title ?? current.title,
+              automatic: data.automatic ?? current.automatic === 1,
+              ...(data.agent_mode === undefined && current.agent_mode !== null
+                ? { agent_mode: current.agent_mode }
+                : {}),
+              ...(data.instructions === undefined &&
+              current.instructions !== null
+                ? { instructions: current.instructions }
+                : {}),
+            },
+            tokenFor,
+          );
           const row = await replaceSubscription(
             context.db,
             current,
@@ -802,25 +853,20 @@ export const createAutomationTools = (
           v.description("The issue or pull request number."),
         ),
       }),
-      run: async ({ data }) =>
-        withOwner(async (context, owner) => {
-          if (!isRepository(data.repository))
-            throw new Error(
-              "repository must be a GitHub repository as owner/name.",
-            );
-          const token = await githubToken(
-            context.bindings,
-            context.db,
-            callingThreadId,
-            owner.ownerUserId,
+      run: async ({ data }) => {
+        if (!isRepository(data.repository))
+          throw new Error(
+            "repository must be a GitHub repository as owner/name.",
           );
+        return withOwnerAndToken(async (context, _owner, tokenFor) => {
+          const token = await tokenFor(callingThreadId);
           // Without credentials the link is still useful: find_thread
           // finds it, and webhooks fill in its title and state.
           const item =
             token === undefined
               ? undefined
               : await readItemSubject(token, data.repository, data.number);
-          await linkThread(context.db, {
+          const links = await linkThreadAndList(context.db, {
             threadId: callingThreadId,
             repository: data.repository,
             number: data.number,
@@ -837,7 +883,7 @@ export const createAutomationTools = (
                   ? {}
                   : { title: item.subject.title, state: item.subject.state }),
               },
-              links: (await threadLinks(context.db, callingThreadId)).map(
+              links: links.map(
                 ({ repository, number, kind }) =>
                   `${repository}#${number} (${kind === "pull" ? "PR" : "issue"})`,
               ),
@@ -848,7 +894,8 @@ export const createAutomationTools = (
                 : {}),
             },
           };
-        }),
+        });
+      },
     }),
 
     // --- Notifications -------------------------------------------------

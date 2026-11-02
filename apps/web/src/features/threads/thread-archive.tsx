@@ -1,9 +1,8 @@
 import type { ThreadId } from "@dx/domain";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Archive, ArchiveRestore } from "lucide-react";
-import * as React from "react";
+import type * as React from "react";
 import { toast } from "sonner";
-import type { ArchivedThread } from "../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import {
   ThreadArchiveContext,
@@ -26,85 +25,80 @@ export function ThreadArchiveProvider({
   const mutation = useMutation(
     setThreadArchivedMutationOptions(queryClient, identity.id),
   );
-  const { isPending, mutate, variables } = mutation;
-  const mutationPending = React.useRef(false);
+  const { isPending, mutateAsync, variables } = mutation;
 
   /**
+   * The Thread changes on the page at once, so the notice shows at once too;
+   * requests run in order, so Undo works before the archive is saved.
    * `children`: true for every child in the parent's former state, or the
-   * exact children an Undo restores.
+   * children an Undo restores, once its archive answers.
    */
   const changeArchived = (
     threadId: ThreadId,
     archived: boolean,
-    children?: true | ReadonlyArray<ThreadId>,
+    children?: true | Promise<ReadonlyArray<ThreadId> | undefined>,
   ) => {
     const includeChildren = children !== undefined;
-    if (mutationPending.current) return;
-    mutationPending.current = true;
-    // Every call names each option, because a toast updated in place
-    // keeps any option the new one leaves out.
-    toast.loading(
-      archived
-        ? includeChildren
-          ? "Archiving threads…"
-          : "Archiving thread…"
-        : "Unarchiving thread…",
-      { id: ARCHIVE_TOAST_ID, icon: undefined, action: undefined },
-    );
-    mutate(
+    let undone = false;
+    const request = mutateAsync(
       children === undefined
         ? { threadId, archived }
         : { threadId, archived, children },
+    );
+    // Every call names each option, because a toast updated in place
+    // keeps any option the new one leaves out.
+    toast(
+      archived
+        ? includeChildren
+          ? "Archived threads"
+          : "Archived thread"
+        : "Unarchived thread",
       {
-        onSuccess: ({ thread, changedChildThreadIds }: ArchivedThread) =>
-          toast(
-            archived
-              ? includeChildren
-                ? "Archived threads"
-                : "Archived thread"
-              : "Unarchived thread",
-            {
-              id: ARCHIVE_TOAST_ID,
-              duration: ARCHIVE_TOAST_DURATION,
-              icon: archived ? <Archive /> : <ArchiveRestore />,
-              action: archived
-                ? {
-                    label: "Undo",
-                    onClick: (event) => {
-                      // Undo's progress and result replace this toast.
-                      event.preventDefault();
-                      changeArchived(
-                        thread.id,
-                        false,
-                        changedChildThreadIds === undefined ||
-                          changedChildThreadIds.length === 0
-                          ? undefined
-                          : changedChildThreadIds,
-                      );
-                    },
-                  }
-                : undefined,
-            },
-          ),
-        onError: (cause) =>
-          toast.error(
-            cause instanceof Error
-              ? cause.message
-              : archived
-                ? "Thread could not be archived."
-                : "Thread could not be unarchived.",
-            {
-              id: ARCHIVE_TOAST_ID,
-              duration: ARCHIVE_TOAST_DURATION,
-              icon: undefined,
-              action: undefined,
-            },
-          ),
-        onSettled: () => {
-          mutationPending.current = false;
-        },
+        id: ARCHIVE_TOAST_ID,
+        duration: ARCHIVE_TOAST_DURATION,
+        icon: archived ? <Archive /> : <ArchiveRestore />,
+        action: archived
+          ? {
+              label: "Undo",
+              onClick: (event) => {
+                // Undo's result replaces this toast.
+                event.preventDefault();
+                undone = true;
+                changeArchived(
+                  threadId,
+                  false,
+                  includeChildren
+                    ? request.then(
+                        ({ changedChildThreadIds }) =>
+                          changedChildThreadIds?.length
+                            ? changedChildThreadIds
+                            : undefined,
+                        () => undefined,
+                      )
+                    : undefined,
+                );
+              },
+            }
+          : undefined,
       },
     );
+    request.catch((cause: unknown) => {
+      // An Undo already put the Thread back; its own result reports.
+      if (undone) return;
+      toast.error(
+        cause instanceof Error && cause.message
+          ? cause.message
+          : archived
+            ? "Thread could not be archived."
+            : "Thread could not be unarchived.",
+        {
+          id: ARCHIVE_TOAST_ID,
+          duration: ARCHIVE_TOAST_DURATION,
+          icon: undefined,
+          action: undefined,
+        },
+      );
+    });
   };
 
   const setArchived = (

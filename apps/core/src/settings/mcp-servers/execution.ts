@@ -1,4 +1,3 @@
-import { env } from "cloudflare:workers";
 import {
   EnvironmentVariableRepository,
   flueMcpServerName,
@@ -24,11 +23,22 @@ import {
 import { EnvironmentVariableRepositoryD1 } from "../environment-variables/repository-d1.js";
 import { SettingsService } from "../service.js";
 import { WorkspaceRepositoryD1 } from "../workspace/repository-d1.js";
-import { WorkspacePolicyRepositoryD1 } from "../workspace-policy/repository-d1.js";
-import { WorkspacePolicyService } from "../workspace-policy/service.js";
+import {
+  decodeOwnerPolicy,
+  ownerPolicyStatements,
+  WorkspacePolicyRepositoryD1,
+} from "../workspace-policy/repository-d1.js";
+import {
+  WorkspacePolicyService,
+  workspacePolicyDenial,
+} from "../workspace-policy/service.js";
 import { readMcpServerCredential } from "./credential.js";
 import { mcpOAuthAccessToken } from "./oauth.js";
-import { McpServerRepositoryD1 } from "./repository-d1.js";
+import {
+  decodeThreadExecutionServer,
+  McpServerRepositoryD1,
+  threadExecutionServerStatements,
+} from "./repository-d1.js";
 import { mcpHeaderSecretName, readMcpServerSecrets } from "./secrets.js";
 import {
   effectiveMcpModuleId,
@@ -234,24 +244,87 @@ export const resolveMcpHeaders = async (
   );
 };
 
+/**
+ * The server a Thread may call, read in one D1 round trip: the Thread, the
+ * server with its allowed tools under the same grants as
+ * `listForExecution`, and the owner's workspace policy for personal servers.
+ */
+const readExecutionServer = Effect.fn("mcpReadExecutionServer")(function* (
+  db: D1Database,
+  threadId: ThreadId,
+  serverId: McpServerId,
+) {
+  const [thread, servers, tools, membership, policy] = yield* Effect.tryPromise(
+    {
+      try: () =>
+        db.batch([
+          db
+            .prepare(
+              "SELECT project_id, owner_user_id FROM threads WHERE id = ?1 LIMIT 1",
+            )
+            .bind(threadId),
+          ...threadExecutionServerStatements(db, threadId, serverId),
+          ...ownerPolicyStatements(
+            db,
+            "(SELECT owner_user_id FROM threads WHERE id = ?1)",
+            [threadId],
+          ),
+        ]),
+      catch: () => new McpExecutionUnavailable(),
+    },
+  );
+  if (
+    thread === undefined ||
+    servers === undefined ||
+    tools === undefined ||
+    membership === undefined ||
+    policy === undefined
+  )
+    return yield* new McpExecutionUnavailable();
+  const threadRow = thread.results[0];
+  if (threadRow === undefined) return yield* new McpInvocationForbidden();
+  const owner = yield* Schema.decodeUnknownEffect(ExecutionThreadRow)(
+    threadRow,
+  ).pipe(Effect.mapError(() => new McpExecutionUnavailable()));
+  const connection = yield* decodeThreadExecutionServer(servers, tools).pipe(
+    Effect.mapError(() => new McpExecutionUnavailable()),
+  );
+  if (connection === undefined || connection.tools.length === 0)
+    return yield* new McpInvocationForbidden();
+  if (connection.server.target.scope === "personal") {
+    // As filterMcpExecutionConnections: a workspace may keep its members to
+    // workspace servers.
+    const workspace = yield* Effect.tryPromise({
+      try: () => decodeOwnerPolicy(membership, policy, { requirePolicy: true }),
+      catch: () => new McpExecutionUnavailable(),
+    });
+    if (
+      workspace.policy !== undefined &&
+      workspacePolicyDenial(workspace.policy, {
+        kind: "mcp.use-personal-override",
+      }) !== undefined
+    )
+      return yield* new McpInvocationForbidden();
+  }
+  return { ownerUserId: owner.owner_user_id as UserId, ...connection };
+});
+
 const resolveAuthorizedConnection = Effect.fn("resolveAuthorizedMcpConnection")(
   function* (bindings: Bindings, rawThreadId: string, rawServerId: string) {
     const db = yield* decodeD1Binding(bindings.DB).pipe(
       Effect.mapError(() => new McpExecutionUnavailable()),
     );
-    const thread = yield* readThread(db, rawThreadId);
+    const threadId = yield* Schema.decodeEffect(ThreadId)(rawThreadId).pipe(
+      Effect.mapError(() => new McpInvocationForbidden()),
+    );
     const serverId = yield* Schema.decodeEffect(McpServerId)(rawServerId).pipe(
       Effect.mapError(() => new McpInvocationForbidden()),
     );
-    const connections = yield* approvedConnections(
+    const { ownerUserId, ...connection } = yield* readExecutionServer(
       db,
-      thread.ownerUserId,
-      thread.projectId,
+      threadId,
+      serverId,
     );
-    const connection = connections.find(({ server }) => server.id === serverId);
-    if (connection === undefined || connection.tools.length === 0) {
-      return yield* new McpInvocationForbidden();
-    }
     const server = connection.server;
     const keyring =
       server.authType === "none" && !server.headers.some(({ secret }) => secret)
@@ -270,7 +343,7 @@ const resolveAuthorizedConnection = Effect.fn("resolveAuthorizedMcpConnection")(
       db,
       keyring,
       server,
-      thread.ownerUserId,
+      ownerUserId,
     );
     return {
       db,
@@ -332,19 +405,6 @@ const resolveExecutionCredential = Effect.fn("resolveMcpExecutionCredential")(
     ).pipe(Effect.mapError(() => new McpExecutionUnavailable()));
   },
 );
-
-export const resolveMcpCredential = async (
-  rawThreadId: string,
-  rawServerId: string,
-): Promise<string> => {
-  const connection = await Effect.runPromise(
-    resolveAuthorizedConnection(env as Bindings, rawThreadId, rawServerId),
-  );
-  if (connection.credential === undefined) {
-    throw new McpInvocationForbidden();
-  }
-  return connection.credential;
-};
 
 interface JsonRpcMessage {
   readonly method?: unknown;
@@ -489,52 +549,66 @@ const validateToolListing = async (
   }
 };
 
+/** One Code MCP call's connection, resolved once for all its requests. */
+export interface AuthorizedMcpCall {
+  /** The bearer token or OAuth access token, when the server uses one. */
+  readonly credential: string | undefined;
+  /** The fetch the call's MCP client sends every request through. */
+  readonly fetch: typeof fetch;
+}
+
 /**
- * The fetch Code's MCP client uses to call `toolName`. Every request
- * rechecks the server, credential, and allowed tools against current
- * settings, and a tool listing must show `toolName` with its allowed contract.
+ * Authorizes one Code call of `toolName` against current settings: the
+ * Thread's owner may use the server in its Project, the tool is allowed, and
+ * the server still has `expectedEndpoint`. The connection (credential and
+ * configured headers) is resolved once, in one D1 round trip, and serves
+ * every request of this call; the next call resolves it again, so removing
+ * the server, revoking a review or sign-in, or changing a key stops it.
+ * Every request still carries only this connection's credential, sends
+ * `tools/call` only for allowed tools, and goes only to `expectedEndpoint`,
+ * and a tool listing must show `toolName` with its allowed contract.
  */
-export const createAuthorizedMcpFetch =
-  (
-    rawThreadId: string,
-    rawServerId: string,
-    expectedEndpoint: string,
-    timeoutMs: number,
-    toolName: string,
-  ): typeof fetch =>
-  async (input, init) => {
-    const request = new Request(input, init);
-    const connection = await Effect.runPromise(
-      resolveAuthorizedConnection(env as Bindings, rawThreadId, rawServerId),
-    );
-    if (connection.server.endpoint !== expectedEndpoint) {
-      throw new McpInvocationForbidden();
-    }
-    const authorization = request.headers.get("authorization");
-    if (
-      connection.credential === undefined
-        ? authorization !== null
-        : authorization !== `Bearer ${connection.credential}`
-    ) {
-      throw new McpInvocationForbidden();
-    }
-    // Core adds the configured headers itself; the caller never sees secret
-    // header values and cannot replace them.
-    const outbound = new Headers(request.headers);
-    for (const [name, value] of Object.entries(connection.headers))
-      outbound.set(name, value);
-    const callNames = await toolCallNames(request);
-    if (
-      callNames.some(
-        (callName) => !connection.tools.some(({ name }) => name === callName),
-      )
-    ) {
-      throw new McpInvocationForbidden();
-    }
-    return createMcpNetworkFetch(
-      expectedEndpoint,
-      Math.min(timeoutMs, connection.server.timeoutMs),
-      {
+export const authorizeMcpCall = async (
+  bindings: Bindings,
+  rawThreadId: string,
+  rawServerId: string,
+  expectedEndpoint: string,
+  timeoutMs: number,
+  toolName: string,
+): Promise<AuthorizedMcpCall> => {
+  const connection = await Effect.runPromise(
+    resolveAuthorizedConnection(bindings, rawThreadId, rawServerId),
+  );
+  if (connection.server.endpoint !== expectedEndpoint) {
+    throw new McpInvocationForbidden();
+  }
+  const requestTimeoutMs = Math.min(timeoutMs, connection.server.timeoutMs);
+  return {
+    credential: connection.credential,
+    fetch: async (input, init) => {
+      const request = new Request(input, init);
+      const authorization = request.headers.get("authorization");
+      if (
+        connection.credential === undefined
+          ? authorization !== null
+          : authorization !== `Bearer ${connection.credential}`
+      ) {
+        throw new McpInvocationForbidden();
+      }
+      // Core adds the configured headers itself; the caller never sees
+      // secret header values and cannot replace them.
+      const outbound = new Headers(request.headers);
+      for (const [name, value] of Object.entries(connection.headers))
+        outbound.set(name, value);
+      const callNames = await toolCallNames(request);
+      if (
+        callNames.some(
+          (callName) => !connection.tools.some(({ name }) => name === callName),
+        )
+      ) {
+        throw new McpInvocationForbidden();
+      }
+      return createMcpNetworkFetch(expectedEndpoint, requestTimeoutMs, {
         validateResponse: async (_outbound, response, body, kind) => {
           if (callNames.length === 0) {
             await validateToolListing(
@@ -549,6 +623,7 @@ export const createAuthorizedMcpFetch =
             );
           }
         },
-      },
-    )(new Request(request, { headers: outbound }));
+      })(new Request(request, { headers: outbound }));
+    },
   };
+};

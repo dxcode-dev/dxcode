@@ -13,10 +13,9 @@ import { codeMcpCall } from "../../src/plugins/code/mcp.js";
 import { loadConfigEncryptionKeyring } from "../../src/settings/config-encryption.js";
 import { putMcpServerCredential } from "../../src/settings/mcp-servers/credential.js";
 import {
-  createAuthorizedMcpFetch,
+  authorizeMcpCall,
   McpInvocationForbidden,
   resolveMcpAgentConnections,
-  resolveMcpCredential,
 } from "../../src/settings/mcp-servers/execution.js";
 import { McpServerRepositoryD1 } from "../../src/settings/mcp-servers/repository-d1.js";
 import { mcpToolContractHash } from "../../src/settings/mcp-servers/transport.js";
@@ -91,14 +90,14 @@ const authorizeStoredContract = async () => {
     .run();
 };
 
-const authorizedRequest = (body: unknown) =>
-  createAuthorizedMcpFetch(
-    threadId,
-    serverId,
-    endpoint,
-    10_000,
-    "read_status",
-  )(endpoint, {
+const bindings = env as unknown as Bindings;
+
+/** One Code call's authorization of read_status, as codeMcpCall makes it. */
+const authorize = (tool = "read_status") =>
+  authorizeMcpCall(bindings, threadId, serverId, endpoint, 10_000, tool);
+
+const authorizedRequest = async (body: unknown) =>
+  (await authorize()).fetch(endpoint, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -213,14 +212,8 @@ describe("MCP current execution policy in D1", () => {
     expect(await list()).toEqual([]);
   });
 
-  it("rechecks disable and exact approved tool names before every Flue MCP request", async () => {
-    const authorizedFetch = createAuthorizedMcpFetch(
-      threadId,
-      serverId,
-      "https://93.184.216.34/mcp",
-      10_000,
-      "read_status",
-    );
+  it("checks exact approved tool names on every request and disable before every call", async () => {
+    const authorizedFetch = (await authorize()).fetch;
     const call = (body: unknown) =>
       authorizedFetch("https://93.184.216.34/mcp", {
         method: "POST",
@@ -248,14 +241,7 @@ describe("MCP current execution policy in D1", () => {
     await env.DB.prepare("UPDATE mcp_server SET enabled = 0 WHERE id = ?")
       .bind(serverId)
       .run();
-    await expect(
-      call({
-        jsonrpc: "2.0",
-        id: 4,
-        method: "tools/call",
-        params: { name: "read_status", arguments: {} },
-      }),
-    ).rejects.toBeInstanceOf(McpInvocationForbidden);
+    await expect(authorize()).rejects.toBeInstanceOf(McpInvocationForbidden);
   });
 
   it("sends a server's stored token, and only that token, on Code's MCP requests", async () => {
@@ -277,9 +263,9 @@ describe("MCP current execution policy in D1", () => {
       await Effect.runPromise(resolveMcpAgentConnections(env.DB, threadId))
     ).filter(({ id }) => id === serverId);
     expect(connection?.authenticated).toBe(true);
-    await expect(resolveMcpCredential(threadId, serverId)).resolves.toBe(
-      "stored-token",
-    );
+    await expect(authorize()).resolves.toMatchObject({
+      credential: "stored-token",
+    });
     vi.stubGlobal(
       "fetch",
       vi
@@ -288,14 +274,8 @@ describe("MCP current execution policy in D1", () => {
           Response.json({ jsonrpc: "2.0", id: 2, result: {} }),
         ),
     );
-    const call = (authorization?: string) =>
-      createAuthorizedMcpFetch(
-        threadId,
-        serverId,
-        endpoint,
-        10_000,
-        "read_status",
-      )(endpoint, {
+    const call = async (authorization?: string) =>
+      (await authorize()).fetch(endpoint, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -491,7 +471,7 @@ describe("Code calls after a server changes a tool contract", () => {
     )[0];
     if (module === undefined) throw new Error("The server must be offered");
     const startedAt = Date.now();
-    const outcome = await codeMcpCall(threadId)(
+    const outcome = await codeMcpCall(threadId, bindings)(
       module,
       name,
       {},

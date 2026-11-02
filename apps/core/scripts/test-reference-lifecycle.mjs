@@ -126,25 +126,31 @@ run([
   `INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES ('${fixtureUserId}', 'Fixture', 'fixture@dx.local', 1, 0, 0); INSERT INTO apikey (id, configId, name, start, referenceId, prefix, key, enabled, rateLimitEnabled, requestCount, remaining, createdAt, updatedAt, permissions) VALUES ('fixture-api-key', 'user-keys', 'Fixture', 'dxu_fixture', '${fixtureUserId}', 'dxu_', '${keyHash}', 1, 0, 0, NULL, 0, 0, '{"dx":["projects:read","projects:write","threads:read","threads:write","agents:access","settings:read","settings:write"]}');`,
 ]);
 
+// `vite preview` serves the built Worker straight from Miniflare. `wrangler
+// dev` put its ProxyWorker in front and exited (code 1, "Error inside
+// ProxyWorker: Network connection lost") when a slow request under load lost
+// that extra hop, failing the run mid-test.
 const worker = spawn(
   "pnpm",
   [
     "exec",
-    "wrangler",
-    "dev",
-    "--local",
-    "--ip",
+    "vite",
+    "preview",
+    "--config",
+    "test/lifecycle-fixture/vite.config.ts",
+    "--host",
     "127.0.0.1",
     "--port",
     String(port),
-    "--persist-to",
-    persistencePath,
-    "--config",
-    fixtureConfig,
+    "--strictPort",
   ],
   // Its own process group: `pnpm` may be a launcher that exits on SIGTERM
-  // without passing it on, which would leave wrangler and workerd listening.
-  { stdio: "inherit", detached: true },
+  // without passing it on, which would leave Vite and workerd listening.
+  {
+    stdio: "inherit",
+    detached: true,
+    env: { ...process.env, DX_LIFECYCLE_PERSIST_TO: persistencePath },
+  },
 );
 // A fixture that dies mid-run fails the next request with "fetch failed";
 // say how it died, so the failure points at its cause.
@@ -155,9 +161,13 @@ worker.once("exit", (code, signal) => {
   // Without its fixture a test waits forever on its next request, so end the
   // run now and say how the fixture died.
   console.error(
-    `[lifecycle] The fixture's wrangler dev exited during the run (code ${code}, signal ${signal}).`,
+    `[lifecycle] The fixture's server exited during the run (code ${code}, signal ${signal}).`,
   );
-  tests?.kill("SIGTERM");
+  // pnpm does not pass SIGTERM on, so signal the tests' whole group: a
+  // surviving Vitest kept the step's output open and hung verify:changed.
+  try {
+    if (tests !== undefined) process.kill(-tests.pid, "SIGTERM");
+  } catch {}
 });
 const stopWorker = (signal) => {
   stopping = true;
@@ -168,6 +178,9 @@ const stopWorker = (signal) => {
 for (const signal of ["SIGINT", "SIGTERM"])
   process.once(signal, () => {
     stopWorker(signal);
+    try {
+      if (tests !== undefined) process.kill(-tests.pid, signal);
+    } catch {}
     process.exit(1);
   });
 
@@ -196,6 +209,7 @@ try {
     {
       stdio: "inherit",
       env: { ...process.env, DX_LIFECYCLE_FIXTURE_URL: fixtureUrl },
+      detached: true,
     },
   );
   const status = await new Promise((resolve) =>

@@ -32,7 +32,7 @@ export const linkOfSubscription = (
  * Links the Thread to an issue or PR. Linking it again keeps the saved
  * title; a known kind or subject replaces the saved one.
  */
-export const linkThread = (
+export const linkThreadStatement = (
   db: D1Database,
   link: {
     readonly threadId: string;
@@ -61,11 +61,30 @@ export const linkThread = (
       link.kind,
       link.subject === undefined ? null : JSON.stringify(link.subject),
       now.toISOString(),
-    )
-    .run();
+    );
+
+/** Links the Thread to an issue or PR; see `linkThreadStatement`. */
+export const linkThread = (
+  db: D1Database,
+  link: Parameters<typeof linkThreadStatement>[1],
+  now = new Date(),
+) => linkThreadStatement(db, link, now).run();
+
+/** Links the Thread and returns its links, in one round trip. */
+export const linkThreadAndList = async (
+  db: D1Database,
+  link: Parameters<typeof linkThreadStatement>[1],
+  now = new Date(),
+) => {
+  const [, links] = await db.batch([
+    linkThreadStatement(db, link, now),
+    threadLinksStatement(db, link.threadId),
+  ]);
+  return (links?.results ?? []) as LinkRow[];
+};
 
 /** A webhook's title and state for every Thread linked to the item. */
-export const saveLinkSubject = (
+export const saveLinkSubjectStatement = (
   db: D1Database,
   repository: string,
   number: number,
@@ -77,19 +96,27 @@ export const saveLinkSubject = (
       `UPDATE thread_github_link SET kind = ?3, subject_json = ?4
         WHERE repository_key = lower(?1) AND number = ?2`,
     )
-    .bind(repository, number, kind, JSON.stringify(subject))
-    .run();
+    .bind(repository, number, kind, JSON.stringify(subject));
+
+/** See `saveLinkSubjectStatement`. */
+export const saveLinkSubject = (
+  db: D1Database,
+  repository: string,
+  number: number,
+  kind: LinkKind,
+  subject: PullSubject,
+) => saveLinkSubjectStatement(db, repository, number, kind, subject).run();
+
+const threadLinksStatement = (db: D1Database, threadId: string) =>
+  db
+    .prepare(
+      `SELECT repository, number, kind, subject_json, created_at
+         FROM thread_github_link WHERE thread_id = ?1
+        ORDER BY created_at DESC, repository_key, number
+        LIMIT 50`,
+    )
+    .bind(threadId);
 
 /** The Thread's links, newest first. */
 export const threadLinks = async (db: D1Database, threadId: string) =>
-  (
-    await db
-      .prepare(
-        `SELECT repository, number, kind, subject_json, created_at
-           FROM thread_github_link WHERE thread_id = ?1
-          ORDER BY created_at DESC, repository_key, number
-          LIMIT 50`,
-      )
-      .bind(threadId)
-      .all<LinkRow>()
-  ).results;
+  (await threadLinksStatement(db, threadId).all<LinkRow>()).results;

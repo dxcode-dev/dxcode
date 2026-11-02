@@ -859,7 +859,6 @@ queryClient.setQueryData(personalAccountQueryOptions(userId).queryKey, {
   email: "perf@dx.test",
   emailVerified: true,
   identityAuthority: "local-password",
-  threadCount: 100,
   appearance: "dark",
   palette: "daydream",
   terminalTheme: "github",

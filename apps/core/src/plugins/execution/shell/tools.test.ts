@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Sandbox } from "@flue/runtime";
@@ -74,8 +74,11 @@ it("formats a quick exit and preserves merged output and safe quoting", async ()
   ).toBe("<output>a'\nb\n</output>\n<exitCode>7</exitCode>");
 });
 it("follows a real group leader across factory instances and reads only new output", async () => {
+  // "second" waits for a file the test writes after reading "first". A fixed
+  // sleep raced the read: under a loaded release gate, "second" came first.
+  const proceed = join(home, "proceed");
   const first = await call(0, {
-    command: "echo first; sleep 0.5; echo second",
+    command: `echo first; until [ -e '${proceed}' ]; do sleep 0.05; done; echo second`,
     timeout_ms: 100,
   });
   expect(first.details.running).toBe(true);
@@ -84,6 +87,7 @@ it("follows a real group leader across factory instances and reads only new outp
   expect((await sandbox.exec(`ps -o pgid= -p ${pid}`)).stdout.trim()).toBe(
     String(pid),
   );
+  await writeFile(proceed, "");
   const final = await call(1, { pid, timeout_ms: 2000 });
   expect(final.text).toBe(
     `<output>second\n</output>\n<exitCode>0</exitCode>\n<running>false</running>\n<pid>${pid}</pid>`,

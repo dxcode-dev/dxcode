@@ -228,3 +228,68 @@ export const WorkspacePolicyRepositoryD1 = (db: D1Database) => {
     }),
   );
 };
+
+/** The user's workspace as `findByUser` finds it; `owner` is an SQL expression. */
+const ownerWorkspace = (owner: string) => `SELECT member.organizationId
+  FROM member
+  INNER JOIN organization ON organization.id = member.organizationId
+  WHERE member.userId = ${owner}
+  ORDER BY organization.id`;
+
+/**
+ * SQL for the ID of the workspace a user belongs to, or NULL, for callers
+ * that read it in the same batch. `owner` is an SQL expression for the user.
+ */
+export const ownerWorkspaceIdSql = (owner: string) =>
+  `(${ownerWorkspace(owner)} LIMIT 1)`;
+
+/**
+ * A user's membership and its workspace policy as two statements for a
+ * caller's D1 batch, so call-time admission reads them in the same round trip
+ * as everything else. `owner` is an SQL expression for the user ID, such as
+ * `?1` or a Thread owner subquery, and `bindings` are its parameters.
+ */
+export const ownerPolicyStatements = (
+  db: D1Database,
+  owner: string,
+  bindings: ReadonlyArray<unknown>,
+): readonly [D1PreparedStatement, D1PreparedStatement] => [
+  db
+    .prepare(
+      `SELECT organizationId AS workspace_id FROM (${ownerWorkspace(owner)} LIMIT 2)`,
+    )
+    .bind(...bindings),
+  db
+    .prepare(
+      `${selectPolicy} WHERE workspace_id = ${ownerWorkspaceIdSql(owner)} LIMIT 1`,
+    )
+    .bind(...bindings),
+];
+
+export interface OwnerPolicy {
+  /** Undefined when the user belongs to no workspace. */
+  readonly workspaceId: WorkspaceId | undefined;
+  /** Present exactly when `workspaceId` is. */
+  readonly policy: WorkspacePolicy | undefined;
+}
+
+/**
+ * Decodes the results of `ownerPolicyStatements`. It fails as the
+ * repositories do: two memberships break the one-workspace invariant, and a
+ * member's workspace without a policy row is a persistence failure.
+ */
+export const decodeOwnerPolicy = async (
+  membership: D1Result,
+  policy: D1Result,
+  options: { readonly requirePolicy: boolean },
+): Promise<OwnerPolicy> => {
+  const rows = membership.results as ReadonlyArray<{ workspace_id: string }>;
+  if (rows.length > 1)
+    throw new Error("Workspace membership invariant was violated.");
+  const workspaceId = rows[0]?.workspace_id as WorkspaceId | undefined;
+  if (workspaceId === undefined || !options.requirePolicy)
+    return { workspaceId, policy: undefined };
+  const row = policy.results[0];
+  if (row === undefined) throw new Error("Workspace policy row is missing.");
+  return { workspaceId, policy: await Effect.runPromise(decodePolicy(row)) };
+};

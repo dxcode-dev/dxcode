@@ -4,9 +4,14 @@ dx uses Cloudflare for the application and E2B for agent workspaces. Install
 dependencies, then run:
 
 ```bash
-pnpm install
+corepack enable
+node deploy/selfhost/toolchain.mjs
+pnpm install --frozen-lockfile
 pnpm dx:deploy
 ```
+
+Do not regenerate `pnpm-lock.yaml`; see the repository README for what to do
+when the frozen install fails.
 
 The wizard asks whether to send sign-in email from your domain and whether to
 enable [Portals](#portals), signs in to Cloudflare, collects the first

@@ -39,6 +39,7 @@ import {
   type RepositoryOption,
   sameRepository,
   sourceFor,
+  urlOption,
 } from "./repository-options.js";
 
 export type { ProjectSource, RepositoryOption } from "./repository-options.js";
@@ -134,6 +135,7 @@ export function AdditionalRepositoriesPicker({
   loading,
   disabled,
   addTrigger = false,
+  primaryWebUrl,
   onValueChange,
 }: {
   readonly options: ReadonlyArray<RepositoryOption>;
@@ -142,6 +144,8 @@ export function AdditionalRepositoriesPicker({
   readonly disabled?: boolean;
   /** Opens from an "Add Repository" button where the choices are listed. */
   readonly addTrigger?: boolean;
+  /** The project's own repository, never offered, even when pasted. */
+  readonly primaryWebUrl?: string;
   readonly onValueChange: (value: ReadonlyArray<RepositoryOption>) => void;
 }) {
   const [query, setQuery] = React.useState("");
@@ -151,7 +155,13 @@ export function AdditionalRepositoriesPicker({
       (option) => !value.some((selected) => sameRepository(selected, option)),
     ),
   ];
-  const items = optionsWithTypedUrl(listed, query);
+  const isPrimary = (option: RepositoryOption) =>
+    option.webUrl.toLowerCase() === primaryWebUrl?.toLowerCase();
+  const items = optionsWithTypedUrl(listed, query).filter(
+    (option) => !isPrimary(option),
+  );
+  const pasted = urlOption(query);
+  const pastedPrimary = pasted !== undefined && isPrimary(pasted);
   const full = value.length >= MAX_PROJECT_ADDITIONAL_REPOSITORIES;
   return (
     <Combobox.Root
@@ -171,6 +181,8 @@ export function AdditionalRepositoriesPicker({
       {addTrigger ? (
         <Combobox.Trigger
           id="project-additional-repositories"
+          // A combobox takes no name from its text.
+          aria-label="Add Repository"
           className={buttonVariants({ size: "xs", variant: "ghost" })}
         >
           <Plus aria-hidden="true" />
@@ -208,7 +220,10 @@ export function AdditionalRepositoriesPicker({
               aria-busy={loading !== undefined}
             />
             <Combobox.Empty className="repository-combobox-empty">
-              {loading ?? "No other repositories available."}
+              {loading ??
+                (pastedPrimary
+                  ? "This is the project's primary repository."
+                  : "No other repositories available.")}
             </Combobox.Empty>
             <Combobox.List className="repository-combobox-list">
               {(option: RepositoryOption) => {

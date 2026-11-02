@@ -1216,8 +1216,10 @@ export const ThreadRepositoryD1 = Layer.effect(
                   FROM threads AS thread
                   WHERE ${sql.in("thread.parent_thread_id", parents)}
                     AND ${sql.literal(listedUnderRootSql)}
-                    AND thread.owner_user_id = ${reader.userId}
-                    AND thread.pinned_at IS NULL
+                    -- Unary + keeps the planner on threads_parent_idx: the
+                    -- owner's index would walk every Thread they own (#1490).
+                    AND +thread.owner_user_id = ${reader.userId}
+                    AND +thread.pinned_at IS NULL
                     AND thread.lifecycle_state = ${lifecycleState}
                     AND ${inReachableScope("thread", reader)}
                 )

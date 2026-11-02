@@ -1,8 +1,10 @@
-import { env } from "cloudflare:workers";
+import { env, waitUntil } from "cloudflare:workers";
 import type { E2BRunnerProfileConfiguration } from "@dx/domain";
 import type { Sandbox as E2BSandbox } from "e2b";
 import { Effect, Redacted } from "effect";
 import type { Bindings } from "../../http/types.js";
+import { executionWorkspaceLogger } from "../../logging.js";
+import { stepTiming } from "../../observability/step-timing.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
 import type {
   ExecutionContext,
@@ -27,6 +29,7 @@ import {
   loadDaemonReleaseMetadata,
 } from "../guest/daemon-release.js";
 import { e2b } from "./adapter.js";
+import { prefetchGuestBinaries } from "./guest-prefetch.js";
 import { loadE2BWorkspaceSettings } from "./requirements.js";
 import {
   connectExistingExecutionWorkspace,
@@ -135,32 +138,113 @@ const openE2BWorkspace = async (
   },
 ): Promise<E2BWorkspaceHandle> => {
   const bindings = env as Bindings;
-  const { profile, requirements } = await e2bRequirements(bindings, context);
+  const timing = stepTiming(executionWorkspaceLogger, "e2b_open_timing", {
+    threadId,
+    existingOnly: options.existingOnly,
+  });
+  const startedAt = Date.now();
+  const { profile, requirements } = await timing.step("requirements", () =>
+    e2bRequirements(bindings, context),
+  );
   const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
   const resolve = options.existingOnly
     ? resolvers.connectExisting
     : resolvers.resolve;
+  const stateStore = makeD1ExecutionWorkspaceStateStore(db);
+  const coordination = makeD1ExecutionWorkspaceCoordinator(db);
+  const observeResolution = observeE2BResolution(
+    bindings,
+    threadId,
+    profile,
+    requirements,
+    context.account.scope,
+  );
   const resolution = {
     id: threadId,
     requirements,
-    stateStore: makeD1ExecutionWorkspaceStateStore(db),
-    coordination: makeD1ExecutionWorkspaceCoordinator(db),
-    observeResolution: observeE2BResolution(
-      bindings,
-      threadId,
-      profile,
-      requirements,
-      context.account.scope,
-    ),
+    stateStore,
+    coordination,
+    observeResolution,
   };
   const sandbox = await Effect.runPromise(
     resolve({
       ...resolution,
-      authorizeResolution: options.authorize,
+      stateStore: {
+        ...stateStore,
+        read: (id) => timing.step("stateRead", () => stateStore.read(id)),
+        transition: (...input) =>
+          timing.step("stateTransition", () => stateStore.transition(...input)),
+      },
+      coordination: {
+        acquire: async (key) => {
+          const lease = await timing.step("lease", () =>
+            coordination.acquire(key),
+          );
+          return {
+            // The lease covers the resolution, which has ended: the Thread's
+            // turn does not wait for the release to land. A release that
+            // fails expires with the lease.
+            release: async () => {
+              const released = lease.release().catch(() =>
+                executionWorkspaceLogger.warn(
+                  "E2B resolution lease release could not be recorded.",
+                  {
+                    event: "execution_workspace_resolution_lock_release_failed",
+                    threadId,
+                    outcome: "error",
+                  },
+                ),
+              );
+              // A request's isolate may end once it answers: keep this alive.
+              waitUntil(released);
+            },
+          };
+        },
+      },
+      // The usage row is bookkeeping, recorded beside the turn; a failure
+      // is logged as the resolver logs it.
+      observeResolution: (observation) => {
+        timing.set("decision", observation.decision);
+        const recorded = Promise.resolve(observeResolution(observation)).catch(
+          () =>
+            executionWorkspaceLogger.warn(
+              "E2B usage observation could not be recorded.",
+              {
+                event: "usage_record_failed",
+                source: "e2b",
+                threadId,
+                decision: observation.decision,
+                outcome: observation.outcome,
+              },
+            ),
+        );
+        waitUntil(recorded);
+      },
+      observePhase: (phase) => timing.set(`${phase}At`, Date.now() - startedAt),
+      // A new sandbox loads its disk lazily: read the first commands'
+      // binaries while the rest of the open runs.
+      observeCreated: (created) =>
+        waitUntil(prefetchGuestBinaries(created, threadId)),
+      authorizeResolution: () =>
+        timing.step("authorize", () => options.authorize()),
       ...(options.observeResidency === undefined
         ? {}
-        : { observeResidency: options.observeResidency }),
+        : {
+            observeResidency: (residency) => {
+              timing.set("residency", residency);
+              return options.observeResidency?.(residency);
+            },
+          }),
     }),
+  ).then(
+    (resolved) => {
+      timing.log("ready");
+      return resolved;
+    },
+    (cause: unknown) => {
+      timing.log("error");
+      throw cause;
+    },
   );
   // A sandbox paused under a running Thread (E2B's session limit, or a
   // filesystem-only snapshot that cannot auto-resume) is woken again by

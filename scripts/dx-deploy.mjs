@@ -40,6 +40,7 @@ import {
   PORTAL_OAUTH_SCOPES,
   preflightPortalZone,
 } from "../deploy/selfhost/portals.mjs";
+import { assertToolchain } from "../deploy/selfhost/toolchain.mjs";
 import {
   resourceName,
   selfhostDeploymentShape,
@@ -1018,5 +1019,8 @@ export const runDxDeploy = async ({
 if (
   process.argv[1] &&
   import.meta.url === new URL(process.argv[1], "file:").href
-)
+) {
+  // Before any prompt: a wrong Node.js or pnpm fails in one line.
+  assertToolchain();
   await runDxDeploy();
+}

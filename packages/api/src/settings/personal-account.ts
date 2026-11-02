@@ -19,7 +19,6 @@ export const PersonalAccountDataSchema = Schema.Struct({
   email: PersonalAccountEmail,
   emailVerified: Schema.Boolean,
   identityAuthority: PersonalAccountIdentityAuthority,
-  threadCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   appearance: PersonalAppearance,
   palette: PersonalPalette,
   terminalTheme: PersonalTerminalTheme,
@@ -30,6 +29,20 @@ export const PersonalAccountDataSchema = Schema.Struct({
 export const GetPersonalAccountResponseSchema = successResponse(
   PersonalAccountDataSchema,
 );
+
+/**
+ * `GET /v1/settings/personal/account/thread-count`: how many Threads the
+ * person owns, for Account settings. The account read leaves it out: counting
+ * reads every Thread, and every page waits on the account.
+ */
+export const GetPersonalAccountThreadCountResponseSchema = successResponse(
+  Schema.Struct({
+    threadCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  }),
+);
+
+export type PersonalAccountThreadCountData =
+  (typeof GetPersonalAccountThreadCountResponseSchema.Type)["data"];
 
 export const UpdatePersonalAccountRequestSchema = Schema.Struct({
   displayName: Schema.String,

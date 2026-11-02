@@ -1,4 +1,7 @@
-import type { PersonalAccountData } from "@dx/api";
+import {
+  GetPersonalAccountThreadCountResponseSchema,
+  type PersonalAccountData,
+} from "@dx/api";
 import type { UserId } from "@dx/domain";
 import {
   mutationOptions,
@@ -8,6 +11,7 @@ import {
 import {
   ApiError,
   getPersonalAccount,
+  request,
   setPersonalAvatar,
   updatePersonalAccount,
   updatePersonalAppearance,
@@ -23,6 +27,8 @@ export const personalAccountMutationError = (
 
 export const personalAccountKeys = {
   detail: (userId: UserId) => ["personal-account", userId] as const,
+  threadCount: (userId: UserId) =>
+    ["personal-account-thread-count", userId] as const,
 };
 
 const appearanceMutationKey = (userId: UserId) =>
@@ -46,6 +52,25 @@ export const personalAccountQueryOptions = (userId: UserId) =>
     staleTime: 30_000,
     gcTime: 5 * 60_000,
     refetchOnWindowFocus: true,
+  });
+
+/**
+ * How many Threads the person owns, for Account settings only: counting reads
+ * every Thread, so the account read every page waits on leaves it out.
+ */
+export const personalAccountThreadCountQueryOptions = (userId: UserId) =>
+  queryOptions({
+    queryKey: personalAccountKeys.threadCount(userId),
+    queryFn: async ({ signal }) =>
+      (
+        await request(
+          "/v1/settings/personal/account/thread-count",
+          GetPersonalAccountThreadCountResponseSchema,
+          { signal },
+        )
+      ).data,
+    staleTime: 30_000,
+    gcTime: 5 * 60_000,
   });
 
 export const updatePersonalAccountMutationOptions = (

@@ -62,7 +62,6 @@ export const PersonalAccount = Schema.Struct({
   email: PersonalAccountEmail,
   emailVerified: Schema.Boolean,
   identityAuthority: PersonalAccountIdentityAuthority,
-  threadCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   appearance: PersonalAppearance,
   palette: PersonalPalette,
   terminalTheme: PersonalTerminalTheme,

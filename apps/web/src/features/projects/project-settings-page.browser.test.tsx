@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const route = vi.hoisted(() => ({ section: "orb" }));
+const navigate = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
@@ -30,6 +31,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
     </a>
   ),
   useBlocker: () => ({ status: "idle" }),
+  useNavigate: () => navigate,
   useParams: () => ({ projectId: "project-1", section: route.section }),
   useLocation: ({
     select,
@@ -726,6 +728,113 @@ describe("project settings workspace state", () => {
       // The saved local size: no known price, and no account pays for it.
       "local2 CPU4GB memory20GB disk",
     ]);
+    await React.act(() => root.unmount());
+  });
+});
+
+describe("project settings keyboard and repositories", () => {
+  const pressEscape = () =>
+    React.act(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+  it("closes to the project page on Escape, like the Close button", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => undefined)),
+    );
+    navigate.mockClear();
+    const { root } = await renderSettings("general", project());
+    await pressEscape();
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "/projects/$projectId",
+        params: { projectId },
+      }),
+    );
+    await React.act(() => root.unmount());
+  });
+
+  it("leaves Escape to an open dialog or menu", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => undefined)),
+    );
+    navigate.mockClear();
+    const { root } = await renderSettings("general", project());
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    document.body.append(dialog);
+    await pressEscape();
+    dialog.remove();
+    expect(navigate).not.toHaveBeenCalled();
+    await React.act(() => root.unmount());
+  });
+
+  it("does not offer the primary repository as an additional one", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => undefined)),
+    );
+    const { container, root } = await renderSettings(
+      "general",
+      project(1, {
+        repository: {
+          provider: "git",
+          bindingRevision: 1,
+          fullName: "octocat/Hello-World",
+          webUrl: "https://github.com/octocat/Hello-World",
+        },
+      }),
+      {},
+      (queryClient) => {
+        queryClient.setQueryData(sourceGrantKeys.personal(userId), []);
+        queryClient.setQueryData(bitbucketKeys.connection(userId), {
+          configured: false,
+        });
+      },
+    );
+    const trigger = container.querySelector<HTMLElement>(
+      "#project-additional-repositories",
+    );
+    // A combobox takes no name from its text; screen readers need a label.
+    expect(trigger?.getAttribute("aria-label")).toBe("Add Repository");
+    await React.act(() => trigger?.click());
+    const search = document.querySelector<HTMLInputElement>(
+      ".additional-repositories-search",
+    );
+    await React.act(() => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set?.call(search, "https://github.com/octocat/hello-world");
+      search?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(document.querySelectorAll('[role="option"]')).toHaveLength(0);
+    expect(document.body.textContent).toContain(
+      "This is the project's primary repository.",
+    );
+
+    // Another pasted repository is still offered.
+    await React.act(() => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set?.call(search, "https://github.com/octocat/Spoon-Knife");
+      search?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(
+      [...document.querySelectorAll('[role="option"]')].map(
+        (option) => option.textContent,
+      ),
+    ).toEqual(["https://github.com/octocat/Spoon-Knife"]);
     await React.act(() => root.unmount());
   });
 });

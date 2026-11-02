@@ -1047,3 +1047,35 @@ export const createProductionSourceWorkspaceProgram = () =>
   });
 
 export const sourceWorkspaceProgram = createProductionSourceWorkspaceProgram();
+
+/** The source lock's directory, which the asset check requires. */
+const SOURCE_STATE_DIRECTORY = "/home/user/.local/state/dx";
+
+const base64 = (value: string) => {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+};
+
+/**
+ * The template build steps that bake the current credential helper and
+ * source program where the asset check looks for them, with the modes the
+ * install fallback gives them, so a new Orb's check finds them fresh and
+ * installs nothing. One step per file keeps each command under Linux's
+ * 128 KiB argument limit. Run as `user`. Orb templates add them to their
+ * recipe, so a change to either program builds new templates at the next
+ * deploy.
+ */
+export const sourceAssetsTemplateCommands = (
+  program: string = sourceWorkspaceProgram,
+): ReadonlyArray<string> =>
+  (
+    [
+      [GIT_CREDENTIAL_HELPER_PATH, gitCredentialHelperProgram],
+      [SOURCE_WORKSPACE_PROGRAM_PATH, program],
+    ] as const
+  ).map(
+    ([path, content]) =>
+      `mkdir -p -m 0700 ${path.slice(0, path.lastIndexOf("/"))} ${SOURCE_STATE_DIRECTORY} && echo ${base64(content)} | base64 -d >${path}.tmp && chmod 0555 ${path}.tmp && mv -f ${path}.tmp ${path}`,
+  );

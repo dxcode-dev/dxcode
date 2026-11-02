@@ -229,6 +229,23 @@ const threadFrom = (rows: ReadonlyArray<unknown>) => {
   return Schema.decodeUnknownSync(ExecutionThreadRow)(rows[0]);
 };
 
+/**
+ * The statements of a revision read, for a caller that adds its own to the
+ * same batch (one round trip); `environmentRevisionFrom` reads their results.
+ */
+export const environmentRevisionStatements = (
+  db: D1Database,
+  threadId: ThreadId,
+) => [threadStatement(db, threadId), revisionStatement(db, threadId)] as const;
+
+/** The revision from `environmentRevisionStatements`' results, in order. */
+export const environmentRevisionFrom = (
+  results: ReadonlyArray<D1Result | undefined>,
+) => {
+  threadFrom(results[0]?.results ?? []);
+  return revisionsFrom(results[1]?.results);
+};
+
 export const resolveExecutionEnvironmentRevision = Effect.fn(
   "resolveExecutionEnvironmentRevision",
 )(function* (bindings: Bindings, rawThreadId: string) {
@@ -242,12 +259,9 @@ export const resolveExecutionEnvironmentRevision = Effect.fn(
   // One round trip: a batch is one transaction.
   const revision = yield* Effect.tryPromise({
     try: async () => {
-      const [thread, revisions] = await db.batch([
-        threadStatement(db, threadId),
-        revisionStatement(db, threadId),
-      ]);
-      threadFrom(thread?.results ?? []);
-      return revisionsFrom(revisions?.results);
+      return environmentRevisionFrom(
+        await db.batch([...environmentRevisionStatements(db, threadId)]),
+      );
     },
     catch: () => new ExecutionEnvironmentUnavailable(),
   });

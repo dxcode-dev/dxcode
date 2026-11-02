@@ -224,7 +224,14 @@ export const resolveExecutionTarget = Effect.fn("resolveExecutionTarget")(
   function* (
     bindings: Bindings,
     rawThreadId: string,
-    options: { readonly admission: boolean } = { admission: true },
+    options: {
+      readonly admission: boolean;
+      /**
+       * Return the workspace policy check instead of running it, for a caller
+       * that runs it beside its own reads and before the Orb starts.
+       */
+      readonly deferPolicy?: boolean;
+    } = { admission: true },
   ) {
     const threadId = yield* Schema.decodeUnknownEffect(ThreadId)(
       rawThreadId,
@@ -297,7 +304,7 @@ export const resolveExecutionTarget = Effect.fn("resolveExecutionTarget")(
     const d1 = D1Client.layer({ db });
     const workspace = WorkspaceRepositoryD1(db).pipe(Layer.provide(d1));
     const settings = SettingsService.layer.pipe(Layer.provide(workspace));
-    yield* Effect.gen(function* () {
+    const policy = Effect.gen(function* () {
       const policy = yield* WorkspacePolicyService;
       yield* policy.evaluateForUser(row.owner_user_id, {
         kind: "execution.admit",
@@ -318,6 +325,8 @@ export const resolveExecutionTarget = Effect.fn("resolveExecutionTarget")(
         ),
       ),
     );
+    if (options.deferPolicy === true) return { profile, credential, policy };
+    yield* policy;
     return { profile, credential };
   },
 );

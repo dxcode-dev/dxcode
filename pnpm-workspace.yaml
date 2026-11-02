@@ -20,6 +20,10 @@ patchedDependencies:
 # Dependency install scripts. pnpm fails the install when a package with a
 # script is missing here. esbuild and workerd link their platform binaries; the
 # rest are optional downloads, messages, or no-ops dx does not need.
+# Refuse an install on a Node.js older than the root package's engines.node,
+# instead of failing later in a build or deploy.
+engineStrict: true
+
 allowBuilds:
   esbuild: true
   workerd: true

@@ -9,6 +9,7 @@ import {
   activeSubmissionId,
   recordActiveSubmissionPhase,
 } from "../observability/startup-runtime.js";
+import { stepTiming } from "../observability/step-timing.js";
 import { observeCall, traceSpan } from "../observability/tracing.js";
 import { rememberWorkspaceDisk } from "../orb-disk/note.js";
 import {
@@ -23,9 +24,11 @@ import type {
   DaemonInstallOutcome,
   EnsureDaemonInput,
   ExecutionActivation,
+  ExecutionActivationFactory,
   ExecutionContext,
   ExecutionGuest,
   ExecutionProvider,
+  ExecutionRunAdmission,
   ExecutionWorkspaceCreateOptions,
   ExecutionWorkspaceHandle,
   ExecutionWorkspaceRecovery,
@@ -35,10 +38,7 @@ import {
   publishRealtimeInvalidation,
   publishRealtimeWorkspaceStatus,
 } from "../realtime/publication.js";
-import {
-  resolveExecutionEnvironment,
-  resolveExecutionEnvironmentRevision,
-} from "../settings/environment-variables/execution.js";
+import { resolveExecutionEnvironment } from "../settings/environment-variables/execution.js";
 import { withExecutionEnvironment } from "../settings/environment-variables/sandbox.js";
 import { authorizeRunStart } from "../source-control/admission.js";
 import {
@@ -56,6 +56,10 @@ import type {
   CloudflareOpenPhase,
   CloudflareOpenPhaseReporter,
 } from "./cloudflare/provider.js";
+import {
+  authorizeActiveThread,
+  commandEnvironmentRevision,
+} from "./command-preflight.js";
 import { rememberDxFilesSandbox } from "./dx-files-sandbox.js";
 import {
   noOrbBilling,
@@ -72,7 +76,9 @@ import {
   cloneAdditionalRepositories,
   ensureGithubCliWrapper,
   githubCliConnected,
+  installSourceWorkspaceAssets,
   readAdditionalRepositories,
+  readSourceWorkspace,
   withSourceRuntimeAdmission,
 } from "./source-preparation.js";
 import { withoutRepositorySkills } from "./workspace-context.js";
@@ -323,8 +329,9 @@ export const assertThreadLifecycleState = async (
     throw new Error(`Thread is not ${lifecycleState}.`);
 };
 
+/** Also reads the environment revision in the same round trip (#1493). */
 export const assertThreadActive = (db: D1Database, threadId: string) =>
-  assertThreadLifecycleState(db, threadId, "active");
+  authorizeActiveThread(db, threadId);
 
 /**
  * A run's Orb start: `authorizeRunStart`, with a source refusal as the run's
@@ -350,6 +357,33 @@ const admitRunStart = async (db: D1Database, threadId: string) => {
     });
   }
 };
+
+/**
+ * Starts a run's own checks: its source admission and whether its workspace
+ * still needs a first preparation. Each settles on its own; the activation
+ * awaits them, so an early start leaves no unhandled rejection.
+ */
+const startRunAdmission = (
+  db: D1Database,
+  threadId: string,
+): ExecutionRunAdmission => {
+  const admitted = admitRunStart(db, threadId);
+  admitted.catch(() => undefined);
+  const firstPreparation = readExecutionWorkspaceReadiness(
+    db,
+    Schema.decodeUnknownSync(ThreadId)(threadId),
+  )
+    .then((readiness) => !readiness.ready)
+    .catch(() => true);
+  return { admitted, firstPreparation };
+};
+
+/** Starts a run's checks from the deployment's D1. */
+export const admitExecutionRun = (threadId: string): ExecutionRunAdmission =>
+  startRunAdmission(
+    Effect.runSync(decodeD1Binding((env as Bindings).DB)),
+    threadId,
+  );
 
 /**
  * A source preparation that failed in a way the person fixes, as the run's
@@ -531,8 +565,13 @@ export const atDaemonInstallationStage = async <Value>(
 };
 
 /** Core's activation pipeline over one provider's raw handles. */
-export const makeExecutionActivation =
-  (hooks: ExecutionActivationHooks = {}) =>
+export const makeExecutionActivation = (
+  hooks: ExecutionActivationHooks = {},
+): ExecutionActivationFactory =>
+  Object.assign(activationFor(hooks), { admit: admitExecutionRun });
+
+const activationFor =
+  (hooks: ExecutionActivationHooks) =>
   (unbilledProvider: ExecutionProvider): ExecutionActivation => {
     const provider = withOrbBilling(
       unbilledProvider,
@@ -542,11 +581,20 @@ export const makeExecutionActivation =
       context: ExecutionContext,
       { id }: SandboxRequest,
       existingOnly: boolean,
+      started?: ExecutionRunAdmission,
     ): Promise<FlueSandbox> => {
       const bindings = env as Bindings;
       const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
       const threadId = Schema.decodeUnknownSync(ThreadId)(id);
-      const authorize = () => assertThreadActive(db, id);
+      // A run's source admission reads beside the provider's own reads and
+      // gates the Orb start through `authorize`, which every provider runs
+      // before it starts or resumes an Orb.
+      const admission = existingOnly
+        ? undefined
+        : (started ?? startRunAdmission(db, id));
+      const authorize = async () => {
+        await Promise.all([assertThreadActive(db, id), admission?.admitted]);
+      };
       const publish = statusPublications();
       const reportPreparation = (status: string | null) =>
         publish(() =>
@@ -557,15 +605,22 @@ export const makeExecutionActivation =
       const githubConnected = githubCliConnected(db, id);
       githubConnected.catch(() => undefined);
       const additionalRepositories = readAdditionalRepositories(db, id);
-      const [, needsFirstReadiness] = await Promise.all([
-        // Only a run's own activation checks its source before the Orb starts.
-        existingOnly ? authorize() : admitRunStart(db, id),
-        existingOnly
+      const timing = stepTiming(
+        executionWorkspaceLogger,
+        "execution_activation_timing",
+        {
+          threadId,
+          provider: context.profile.adapter,
+          operation: existingOnly ? "connect" : "create",
+        },
+      );
+      // A reconnect only checks the Thread; a run also its source.
+      if (existingOnly) await timing.step("admission", authorize);
+      const needsFirstReadiness =
+        admission === undefined
           ? false
-          : readExecutionWorkspaceReadiness(db, threadId)
-              .then((readiness) => !readiness.ready)
-              .catch(() => true),
-      ]);
+          : await timing.step("readiness", () => admission.firstPreparation);
+      timing.set("firstPreparation", needsFirstReadiness);
       if (needsFirstReadiness) reportPreparation("Preparing workspace…");
       let wakeStatusPublished = false;
       try {
@@ -622,13 +677,20 @@ export const makeExecutionActivation =
                   );
                 },
               );
+        // The Thread's source is read while the Orb opens; a second
+        // preparation after a restart reads it again.
+        let sourceRecord: ReturnType<typeof readSourceWorkspace> | undefined =
+          readSourceWorkspace(db, id);
         const prepareSource = async (handle: ExecutionWorkspaceHandle) => {
           const source = await handle.development?.source();
+          const loadedSource = sourceRecord;
+          sourceRecord = undefined;
           // Source preparation runs on the raw guest, outside the agent's
           // command leases, and its setup and resume hooks can outlast the
           // provider deadline that create/connect just set. Hold the Thread's
           // activity lease so the idle deadline keeps renewing until it ends.
           const preparation = handleActivity(threadId, handle).retain();
+          const sourceStartedAt = Date.now();
           try {
             const sourceCwd = await observeCall(
               "execution.activation.source",
@@ -656,8 +718,10 @@ export const makeExecutionActivation =
                     onReading: (reading) =>
                       rememberWorkspaceDisk(threadId, reading),
                   },
+                  loadedSource,
                 ),
             ).catch(asSourceRunError);
+            timing.set("sourceMs", Date.now() - sourceStartedAt);
             // Independent: the `gh` wrapper and the clones write different
             // paths, and neither throws.
             if (source === undefined)
@@ -683,12 +747,19 @@ export const makeExecutionActivation =
             preparation.release();
           }
         };
-        let handle = await openWorkspace();
+        let handle = await timing.step("workspace", () =>
+          openWorkspace().catch(async (cause: unknown) => {
+            // A refused admission reports itself, however the provider
+            // wrapped the refusal.
+            await admission?.admitted;
+            throw cause;
+          }),
+        );
         void recordActiveSubmissionPhase(bindings, id, "workspace_resolved");
         if (needsFirstReadiness) reportPreparation("Preparing source…");
         let prepared: Awaited<ReturnType<typeof prepareSource>>;
         try {
-          prepared = await prepareSource(handle);
+          prepared = await timing.step("prepare", () => prepareSource(handle));
         } catch (cause) {
           if (!isWorkspaceReadOnlyFailure(cause)) throw cause;
           // Every write fails until the Orb restarts: restart it once and
@@ -771,18 +842,31 @@ export const makeExecutionActivation =
           publish(() =>
             publishRealtimeWorkspaceStatus(bindings, threadId, "ready"),
           );
-        if (needsFirstReadiness) {
-          // A status still queued after this matches no row: readiness
-          // clears the status and only an unready row takes one.
-          await markExecutionWorkspaceReady(db, threadId);
+        if (needsFirstReadiness)
+          // Off the agent's path. A status still queued after this matches no
+          // row: readiness clears the status and only an unready row takes
+          // one. A failed write leaves the next run to prepare it again.
           publish(() =>
-            publishRealtimeInvalidation(
-              bindings,
-              threadId,
-              "readiness.invalidated",
+            markExecutionWorkspaceReady(db, threadId).then(
+              () =>
+                publishRealtimeInvalidation(
+                  bindings,
+                  threadId,
+                  "readiness.invalidated",
+                ),
+              (cause: unknown) => {
+                executionWorkspaceLogger.warn(
+                  "The workspace's readiness could not be recorded.",
+                  {
+                    event: "workspace_readiness_record_failed",
+                    threadId,
+                    error:
+                      cause instanceof Error ? cause.message : String(cause),
+                  },
+                );
+              },
             ),
           );
-        }
         kickDaemonActivation(bindings, threadId, activeSubmissionId(id));
         const factory: SandboxFactory = {
           createSandbox: () => handle.sandbox(sourceCwd),
@@ -807,8 +891,9 @@ export const makeExecutionActivation =
                   resolveExecutionEnvironment(bindings, activeThreadId),
                 ),
               (activeThreadId) =>
-                Effect.runPromise(
-                  resolveExecutionEnvironmentRevision(bindings, activeThreadId),
+                commandEnvironmentRevision(
+                  bindings,
+                  Schema.decodeUnknownSync(ThreadId)(activeThreadId),
                 ),
             )
           : factory;
@@ -834,12 +919,15 @@ export const makeExecutionActivation =
                   ...changesInput,
                   bucket: bindings.DX_STORAGE,
                 });
-        const flueSandbox = await withCommandActivity(
-          withSourceRuntimeAdmission(changesFactory, bindings, db, source),
-          () => handleActivity(threadId, handle),
-          handle.commandTimeoutMs,
-          authorize,
-        ).createSandbox({ id });
+        const flueSandbox = await timing.step("sandbox", () =>
+          withCommandActivity(
+            withSourceRuntimeAdmission(changesFactory, bindings, db, source),
+            () => handleActivity(threadId, handle),
+            handle.commandTimeoutMs,
+            authorize,
+          ).createSandbox({ id }),
+        );
+        timing.log("ready");
         const snapshotWorkspaceContext = flueSandbox.snapshotWorkspaceContext;
         // No repository skill may shadow a skill dx mounts itself.
         if (snapshotWorkspaceContext === undefined)
@@ -862,6 +950,7 @@ export const makeExecutionActivation =
           RESERVED_SKILL_NAMES,
         );
       } catch (cause) {
+        timing.log("error");
         if (needsFirstReadiness) reportPreparation(null);
         // Queued after waking, ready clears it in the browser.
         else if (wakeStatusPublished)
@@ -1049,12 +1138,12 @@ export const makeExecutionActivation =
     };
 
     return {
-      activate: (context, request) =>
+      activate: (context, request, admission) =>
         traceSpan(
           "execution.activation.open",
           "phase",
           { "dx.thread_id": request.id, "dx.operation": "activate" },
-          () => open(context, request, false),
+          () => open(context, request, false, admission),
         ),
       reconnect: (context, request) =>
         traceSpan(
@@ -1063,6 +1152,58 @@ export const makeExecutionActivation =
           { "dx.thread_id": request.id, "dx.operation": "reconnect" },
           () => open(context, request, true),
         ),
+      prestart: async (context, threadId) => {
+        const db = await Effect.runPromise(
+          decodeD1Binding((env as Bindings).DB),
+        );
+        const admission = startRunAdmission(db, threadId);
+        const timing = stepTiming(
+          executionWorkspaceLogger,
+          "execution_prestart_timing",
+          { threadId, provider: context.profile.adapter },
+        );
+        try {
+          const handle = await timing.step("workspace", () =>
+            provider.workspace
+              .create(
+                context,
+                { threadId },
+                {
+                  // The run's own checks gate this start too.
+                  authorize: async () => {
+                    await Promise.all([
+                      assertThreadActive(db, threadId),
+                      admission.admitted,
+                    ]);
+                  },
+                },
+              )
+              .catch(async (cause: unknown) => {
+                await admission.admitted;
+                throw cause;
+              }),
+          );
+          // A new Orb's first guest command is slow (E2B) and its programs
+          // may need installing: do that now. The run's activation checks
+          // them again under the same guest lock; a failure here is its to
+          // report.
+          if (handle.development === undefined)
+            await timing
+              .step("assets", () =>
+                installSourceWorkspaceAssets(
+                  env as Bindings,
+                  db,
+                  threadId,
+                  handle.guest,
+                ),
+              )
+              .catch(() => timing.set("assetsFailed", true));
+          timing.log("ready");
+        } catch (cause) {
+          timing.log("error");
+          throw cause;
+        }
+      },
       ensureDaemon,
       recordResidentTerminalInput,
       recordResidentTerminalHeartbeat,

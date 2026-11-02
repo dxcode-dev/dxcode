@@ -6,7 +6,11 @@ import {
   type PullSubject,
   type SubscriptionFilter,
 } from "./github.js";
-import { linkOfSubscription, linkThread, saveLinkSubject } from "./links.js";
+import {
+  linkOfSubscription,
+  linkThreadStatement,
+  saveLinkSubjectStatement,
+} from "./links.js";
 
 /** A GitHub event subscription (D1 `github_subscription`). */
 export interface SubscriptionRow {
@@ -164,24 +168,27 @@ export const subscriptionView = (row: SubscriptionRow) => ({
 });
 
 /** A this-thread comment subscription links its Thread to its issue or PR. */
-const linkFollowed = async (
+const linkFollowed = (
   db: D1Database,
   input: SubscriptionInput,
   now: Date,
-) => {
+): D1PreparedStatement[] => {
   const link = linkOfSubscription(input.kind, input.filter);
-  if (link === undefined || input.destination !== "this-thread") return;
-  await linkThread(
-    db,
-    { threadId: input.threadId, repository: input.repository, ...link },
-    now,
-  );
+  if (link === undefined || input.destination !== "this-thread") return [];
+  return [
+    linkThreadStatement(
+      db,
+      { threadId: input.threadId, repository: input.repository, ...link },
+      now,
+    ),
+  ];
 };
 
 /**
  * Saves a subscription, or returns the equivalent one already saved with
  * its paused state and instructions kept. An automatic CI follow-up on the
- * same branch moves to the new commit and starts watching again.
+ * same branch moves to the new commit and starts watching again. Two round
+ * trips: the lookup, then the write, the link, and the read back together.
  */
 export const createSubscription = async (
   db: D1Database,
@@ -198,55 +205,72 @@ export const createSubscription = async (
     )
     .bind(ownerUserId, key)
     .first<SubscriptionRow>();
+  const read = (id: string) =>
+    db
+      .prepare(`SELECT ${COLUMNS} FROM github_subscription WHERE id = ?`)
+      .bind(id);
+  const saved = async (statements: D1PreparedStatement[]) =>
+    ((await db.batch(statements)).at(-1)?.results[0] ??
+      null) as SubscriptionRow;
   if (existing !== null) {
     const moved =
       input.automatic &&
       input.kind === "ci" &&
       filterOf(existing).commitSha !== input.filter.commitSha;
-    if (moved || existing.state !== "active")
-      await db
-        .prepare(
-          `UPDATE github_subscription
-              SET filter_json = ?2, state = 'active', state_detail = NULL,
-                  created_at = ?3, updated_at = ?3, expires_at = ?4
-            WHERE id = ?1`,
-        )
-        .bind(existing.id, JSON.stringify(input.filter), at, input.expiresAt)
-        .run();
-    await linkFollowed(db, input, now);
     return {
-      row: (await readSubscription(db, existing.id)) as SubscriptionRow,
+      row: await saved([
+        ...(moved || existing.state !== "active"
+          ? [
+              db
+                .prepare(
+                  `UPDATE github_subscription
+                      SET filter_json = ?2, state = 'active', state_detail = NULL,
+                          created_at = ?3, updated_at = ?3, expires_at = ?4
+                    WHERE id = ?1`,
+                )
+                .bind(
+                  existing.id,
+                  JSON.stringify(input.filter),
+                  at,
+                  input.expiresAt,
+                ),
+            ]
+          : []),
+        ...linkFollowed(db, input, now),
+        read(existing.id),
+      ]),
       existed: true,
     };
   }
   const id = `ghs_${crypto.randomUUID().replaceAll("-", "")}`;
-  await db
-    .prepare(
-      `INSERT INTO github_subscription (${COLUMNS})
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, 'active',
-               NULL, ?13, ?14, ?15, ?15)`,
-    )
-    .bind(
-      id,
-      ownerUserId,
-      input.threadId,
-      input.title,
-      input.repository,
-      input.kind,
-      JSON.stringify(input.filter),
-      input.destination,
-      input.projectId,
-      input.agentMode,
-      input.instructions,
-      input.automatic ? 1 : 0,
-      input.expiresAt,
-      key,
-      at,
-    )
-    .run();
-  await linkFollowed(db, input, now);
   return {
-    row: (await readSubscription(db, id)) as SubscriptionRow,
+    row: await saved([
+      db
+        .prepare(
+          `INSERT INTO github_subscription (${COLUMNS})
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, 'active',
+                   NULL, ?13, ?14, ?15, ?15)`,
+        )
+        .bind(
+          id,
+          ownerUserId,
+          input.threadId,
+          input.title,
+          input.repository,
+          input.kind,
+          JSON.stringify(input.filter),
+          input.destination,
+          input.projectId,
+          input.agentMode,
+          input.instructions,
+          input.automatic ? 1 : 0,
+          input.expiresAt,
+          key,
+          at,
+        ),
+      ...linkFollowed(db, input, now),
+      read(id),
+    ]),
     existed: false,
   };
 };
@@ -260,9 +284,11 @@ export const replaceSubscription = async (
   now = new Date(),
 ) => {
   const at = now.toISOString();
-  await db
-    .prepare(
-      `UPDATE github_subscription
+  const key = await equivalenceKey(current.owner_user_id, input);
+  const [, ...rest] = await db.batch([
+    db
+      .prepare(
+        `UPDATE github_subscription
           SET thread_id = ?2, title = ?3, repository = ?4, filter_kind = ?5,
               filter_json = ?6, destination = ?7, project_id = ?8,
               agent_mode = ?9, instructions = ?10, automatic = ?11,
@@ -270,27 +296,30 @@ export const replaceSubscription = async (
               expires_at = ?13, equivalence_key = ?14, created_at = ?15,
               updated_at = ?15
         WHERE id = ?1`,
-    )
-    .bind(
-      current.id,
-      input.threadId,
-      input.title,
-      input.repository,
-      input.kind,
-      JSON.stringify(input.filter),
-      input.destination,
-      input.projectId,
-      input.agentMode,
-      input.instructions,
-      input.automatic ? 1 : 0,
-      enabled ? 1 : 0,
-      input.expiresAt,
-      await equivalenceKey(current.owner_user_id, input),
-      at,
-    )
-    .run();
-  await linkFollowed(db, input, now);
-  return readSubscription(db, current.id);
+      )
+      .bind(
+        current.id,
+        input.threadId,
+        input.title,
+        input.repository,
+        input.kind,
+        JSON.stringify(input.filter),
+        input.destination,
+        input.projectId,
+        input.agentMode,
+        input.instructions,
+        input.automatic ? 1 : 0,
+        enabled ? 1 : 0,
+        input.expiresAt,
+        key,
+        at,
+      ),
+    ...linkFollowed(db, input, now),
+    db
+      .prepare(`SELECT ${COLUMNS} FROM github_subscription WHERE id = ?`)
+      .bind(current.id),
+  ]);
+  return (rest.at(-1)?.results[0] ?? null) as SubscriptionRow | null;
 };
 
 /**
@@ -383,15 +412,16 @@ export const savePullSubject = async (
   number: number,
   subject: PullSubject,
 ) => {
-  await db
-    .prepare(
-      `UPDATE github_subscription SET subject_json = ?3
-        WHERE repository = ?1 COLLATE NOCASE AND filter_kind = 'pr-comments'
-          AND json_extract(filter_json, '$.prNumber') = ?2`,
-    )
-    .bind(repository, number, JSON.stringify(subject))
-    .run();
-  await saveLinkSubject(db, repository, number, "pull", subject);
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE github_subscription SET subject_json = ?3
+          WHERE repository = ?1 COLLATE NOCASE AND filter_kind = 'pr-comments'
+            AND json_extract(filter_json, '$.prNumber') = ?2`,
+      )
+      .bind(repository, number, JSON.stringify(subject)),
+    saveLinkSubjectStatement(db, repository, number, "pull", subject),
+  ]);
 };
 
 /** The Thread's delivered CI results with their checks, newest first. */

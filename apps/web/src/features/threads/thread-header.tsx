@@ -66,11 +66,7 @@ function ThreadSnoozeBadge({
         <span className="thread-snoozed-prefix">Snoozed until </span>
         {until}
       </span>
-      <button
-        type="button"
-        disabled={snooze.pendingThreadId === threadId}
-        onClick={() => snooze.wake(threadId)}
-      >
+      <button type="button" onClick={() => snooze.wake(threadId)}>
         Wake
       </button>
     </span>

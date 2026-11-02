@@ -77,7 +77,6 @@ function SnoozeRowButton({
   // Most rows' Snooze is never opened: a plain button stands in until the
   // first press, so the sidebar does not mount a menu per row (#1462).
   const [armed, setArmed] = React.useState(false);
-  const pending = snooze.pendingThreadId === threadId;
   if (!armed)
     return (
       <button
@@ -85,7 +84,6 @@ function SnoozeRowButton({
         aria-label="Snooze thread"
         aria-haspopup="menu"
         title="Snooze thread"
-        disabled={pending}
         onClick={() => setArmed(true)}
       >
         <AlarmClock />
@@ -93,11 +91,7 @@ function SnoozeRowButton({
     );
   return (
     <Menu.Root defaultOpen>
-      <Menu.Trigger
-        aria-label="Snooze thread"
-        title="Snooze thread"
-        disabled={snooze.pendingThreadId === threadId}
-      >
+      <Menu.Trigger aria-label="Snooze thread" title="Snooze thread">
         <AlarmClock />
       </Menu.Trigger>
       <Menu.Portal>
@@ -480,7 +474,6 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
                 type="button"
                 aria-label="Wake thread"
                 title="Wake thread"
-                disabled={snooze.pendingThreadId === thread.id}
                 onClick={() => snooze.wake(thread.id)}
               >
                 <AlarmClockOff />

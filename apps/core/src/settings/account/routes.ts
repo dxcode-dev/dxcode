@@ -1,5 +1,6 @@
 import {
   GetPersonalAccountResponseSchema,
+  GetPersonalAccountThreadCountResponseSchema,
   GetPersonalComposerDefaultsResponseSchema,
   PersonalAccountForbiddenResponseSchema,
   PersonalAccountInvalidRequestResponseSchema,
@@ -98,7 +99,6 @@ const responseData = (account: {
     | "local-password"
     | "cloudflare-access"
     | "external";
-  readonly threadCount: number;
   readonly appearance: "system" | "light" | "dark";
   readonly palette: "daydream" | "deadpan";
   readonly terminalTheme: PersonalTerminalTheme;
@@ -109,7 +109,6 @@ const responseData = (account: {
   email: account.email,
   emailVerified: account.emailVerified,
   identityAuthority: account.identityAuthority,
-  threadCount: account.threadCount,
   appearance: account.appearance,
   palette: account.palette,
   terminalTheme: account.terminalTheme,
@@ -274,6 +273,43 @@ personalAccountRoutes.get("/", async (context) => {
     Match.tags({
       SettingsScopeForbidden: () => forbidden(context),
       PersonalAccountNotFound: () => notFound(context),
+      PersistenceUnavailable: () => unavailable(context),
+      SettingsMembershipInvariantViolation: (error) => {
+        throw error;
+      },
+      D1BindingUnavailable: (error) => {
+        throw error;
+      },
+      ConfigError: (error) => {
+        throw error;
+      },
+      SchemaError: (error) => {
+        throw error;
+      },
+    }),
+    Match.exhaustive,
+  );
+});
+
+personalAccountRoutes.get("/thread-count", async (context) => {
+  const operation = Effect.gen(function* () {
+    const db = yield* decodeD1Binding(context.env.DB);
+    return yield* Effect.gen(function* () {
+      const settings = yield* SettingsService;
+      yield* settings.personal(context.get("principal"));
+      const accounts = yield* PersonalAccountService;
+      const threadCount = yield* accounts.threadCount(context.get("principal"));
+      return yield* Schema.encodeUnknownEffect(
+        GetPersonalAccountThreadCountResponseSchema,
+      )({ status: "success", data: { threadCount } });
+    }).pipe(Effect.provide(servicesFor(db)));
+  });
+
+  const result = await Effect.runPromise(Effect.result(operation));
+  if (Result.isSuccess(result)) return context.json(result.success, 200);
+  return Match.value(result.failure).pipe(
+    Match.tags({
+      SettingsScopeForbidden: () => forbidden(context),
       PersistenceUnavailable: () => unavailable(context),
       SettingsMembershipInvariantViolation: (error) => {
         throw error;

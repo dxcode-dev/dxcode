@@ -37,6 +37,7 @@ import {
 
 type Dispatch = NonNullable<Parameters<typeof createThreadRoutes>[0]>;
 type InstanceLookup = NonNullable<Parameters<typeof createThreadRoutes>[2]>;
+type InitialOrb = NonNullable<Parameters<typeof createThreadRoutes>[3]>;
 
 /** Flue validates `initialData` against the agent's schema at admission. */
 const flueValidatedDispatch =
@@ -60,6 +61,7 @@ const harness = (
   dispatch: Dispatch,
   lookup: InstanceLookup = async () => null,
   routeBindings = bindings,
+  initialOrb?: InitialOrb,
 ) => {
   const persisted: Array<Promise<boolean>> = [];
   const titleAgent = vi.fn(
@@ -73,7 +75,10 @@ const harness = (
     context.set("principal", principal);
     await next();
   });
-  app.route("/threads", createThreadRoutes(dispatch, titleAgent, lookup));
+  app.route(
+    "/threads",
+    createThreadRoutes(dispatch, titleAgent, lookup, initialOrb),
+  );
   app.onError(errorHandler);
   const pending: Array<Promise<unknown>> = [];
   const create = async (body: Record<string, unknown>) => {
@@ -302,6 +307,96 @@ describe("Thread creation admission in workerd with real D1", () => {
       expect(retried.status).toBe(201);
       await expect(threadRow(threadId)).resolves.toEqual({ id: threadId });
     }
+  });
+
+  it("stops the Orb it started beside a refused dispatch before it removes the Thread", async () => {
+    // Ways this could fail: the Orb keeps running after its Thread is gone;
+    // it is stopped after the row is deleted, so nothing can name it; an Orb
+    // that never started is stopped; a Thread whose agent holds a run loses
+    // its Orb; a failed stop deletes the only row that names the Orb.
+    const project = await createProjectViaApi("orb-beside-dispatch");
+    const refused = async () => {
+      throw new FlueError({
+        type: "invalid_request",
+        message: "Request is malformed.",
+        details: "rejected",
+        dev: "",
+      });
+    };
+    const orb = (started: boolean, stop?: () => Promise<void>) => {
+      const rowsAtStop: Array<{ id: string } | null> = [];
+      const initialOrb = {
+        start: vi.fn(async () => started),
+        stop: vi.fn(async (threadId: string) => {
+          rowsAtStop.push(await threadRow(threadId));
+          await stop?.();
+        }),
+      };
+      return { initialOrb, rowsAtStop };
+    };
+
+    const startedThenRefused = orb(true);
+    const first = newThreadId();
+    const refusedResponse = await harness(
+      refused,
+      async () => null,
+      bindings,
+      startedThenRefused.initialOrb,
+    ).create({ projectId: project.data.id, threadId: first });
+    expect(refusedResponse.status).toBe(422);
+    expect(startedThenRefused.initialOrb.start).toHaveBeenCalledWith(first);
+    expect(startedThenRefused.initialOrb.stop).toHaveBeenCalledWith(first);
+    expect(startedThenRefused.rowsAtStop).toEqual([{ id: first }]);
+    await expect(threadRow(first)).resolves.toBeNull();
+
+    const neverStarted = orb(false);
+    const second = newThreadId();
+    await harness(
+      refused,
+      async () => null,
+      bindings,
+      neverStarted.initialOrb,
+    ).create({ projectId: project.data.id, threadId: second });
+    expect(neverStarted.initialOrb.stop).not.toHaveBeenCalled();
+    await expect(threadRow(second)).resolves.toBeNull();
+
+    const held = orb(true);
+    const third = newThreadId();
+    await harness(
+      async () => {
+        throw new SubmissionConflictError({ submissionId: "existing" });
+      },
+      async () => ({ id: third, uid: "uid-1" }),
+      bindings,
+      held.initialOrb,
+    ).create({ projectId: project.data.id, threadId: third });
+    expect(held.initialOrb.stop).not.toHaveBeenCalled();
+    await expect(threadRow(third)).resolves.toEqual({ id: third });
+
+    const stopFails = orb(true, async () => {
+      throw new Error("provider unavailable");
+    });
+    const fourth = newThreadId();
+    await harness(
+      refused,
+      async () => null,
+      bindings,
+      stopFails.initialOrb,
+    ).create({ projectId: project.data.id, threadId: fourth });
+    await expect(threadRow(fourth)).resolves.toEqual({ id: fourth });
+
+    const accepted = orb(true);
+    const fifth = newThreadId();
+    const acceptedResponse = await harness(
+      async () =>
+        ({ submissionId: "accepted" }) as Awaited<ReturnType<Dispatch>>,
+      async () => null,
+      bindings,
+      accepted.initialOrb,
+    ).create({ projectId: project.data.id, threadId: fifth });
+    expect(acceptedResponse.status).toBe(201);
+    expect(accepted.initialOrb.start).toHaveBeenCalledOnce();
+    expect(accepted.initialOrb.stop).not.toHaveBeenCalled();
   });
 
   it("keeps a Thread whose agent already holds a submission and names the conflict", async () => {
