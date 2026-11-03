@@ -90,6 +90,8 @@ interface ThreadRow {
   readonly last_activity_at: string | null;
   readonly created_at: string;
   readonly snoozed_until: string | null;
+  /** Its Claude plan's reset, epoch seconds, while a wake waits for it. */
+  readonly plan_resets_at: number | null;
 }
 
 /** What the tools report for one Thread. */
@@ -112,6 +114,11 @@ const threadState = (row: ThreadRow) => ({
   Date.parse(row.snoozed_until) > Date.now()
     ? { snoozedUntil: row.snoozed_until }
     : {}),
+  ...(typeof row.plan_resets_at !== "number" || row.lifecycle_state !== "active"
+    ? {}
+    : {
+        waitingForPlanReset: new Date(row.plan_resets_at * 1000).toISOString(),
+      }),
   lastActivityAt: row.last_activity_at ?? row.created_at,
   createdAt: row.created_at,
 });
@@ -270,7 +277,9 @@ export const createThreadTools = (
       .prepare(
         `SELECT id, title, title_pending_until, project_id, parent_thread_id, color,
            lifecycle_state, activity_status, last_activity_at, created_at,
-           snoozed_until
+           snoozed_until,
+           (SELECT resets_at FROM thread_plan_wait
+             WHERE thread_id = threads.id) AS plan_resets_at
          FROM threads
          WHERE owner_user_id = ? AND lifecycle_state != 'deleted'
            AND id IN (${threadIds.map(() => "?").join(", ")})${
@@ -612,7 +621,7 @@ export const createThreadTools = (
     defineTool({
       name: "send_thread_message",
       description: description([
-        "Send a message to another of this Thread owner's Threads, such as a child you started. It shows there as a message from this Thread. Returns as soon as the Thread accepts it. A child you started replies with a message to this Thread; ask any other Thread for a reply in the message if you want one.",
+        "Send a message to another of this Thread owner's Threads, such as a child you started. It shows there as a message from this Thread. Returns as soon as the Thread accepts it; waitingForPlanReset means its Claude plan is used up and it answers once the plan resets then. A child you started replies with a message to this Thread; ask any other Thread for a reply in the message if you want one.",
         "Only the owner's own Threads can receive it, not Threads other people shared with them. If the Thread is working, the message steers its current turn. A message carries text only: files and commits do not transfer. Copy files with upload_thread_file, or have the recipient copy them with download_thread_file or download_thread_changes, and name the repository and branch of any commits.",
       ]),
       input: v.object({
@@ -674,8 +683,21 @@ export const createThreadTools = (
               "thread.invalidated",
             ).catch(() => undefined);
           }
+          // A Thread whose plan is used up keeps the message and answers it
+          // once the plan resets.
           return {
-            output: { threadId: data.thread, submissionId, steered: working },
+            output: {
+              threadId: data.thread,
+              submissionId,
+              steered: working,
+              ...(typeof thread.plan_resets_at !== "number"
+                ? {}
+                : {
+                    waitingForPlanReset: new Date(
+                      thread.plan_resets_at * 1000,
+                    ).toISOString(),
+                  }),
+            },
           };
         }),
     }),
@@ -683,7 +705,7 @@ export const createThreadTools = (
       name: "get_thread_status",
       description: description([
         "Check one of this Thread owner's Threads: whether its agent is working or idle, its title, its last activity, and the text of its latest agent message.",
-        "Idle means the Thread finished its turn and is waiting for a message, not that it failed. A child you started messages this Thread when it finishes, so do not call this repeatedly.",
+        "Idle means the Thread finished its turn and is waiting for a message, not that it failed. waitingForPlanReset means its Claude plan is used up: the messages it got are kept and it answers them by itself at that time. A child you started messages this Thread when it finishes, so do not call this repeatedly.",
       ]),
       input: v.object({ thread: threadIdInput("The thread ID.") }),
       run: async ({ data }) =>

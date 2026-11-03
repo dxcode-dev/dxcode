@@ -25,6 +25,7 @@ import { attachmentTransfer } from "../attachments/transfer.js";
 import {
   confirmThreadDaemonApiKey,
   mintThreadDaemonApiKey,
+  revokeEarlierThreadDaemonApiKeys,
   revokeThreadDaemonApiKey,
   threadDaemonApiKeyHash,
   threadDaemonBearer,
@@ -174,6 +175,9 @@ import { ResidentTerminals } from "./resident-terminals.js";
 const ACTIVATION_TIMEOUT_MS = 30_000;
 const TRANSIENT_ACTIVATION_RETRY_MS = 250;
 export const DAEMON_ACTIVATION_DEADLINE_MS = 90_000;
+/** The shortest time between two daemon re-keys of a Thread (#1584). */
+export const DAEMON_REKEY_INTERVAL_MS = 60_000;
+const REKEYED_AT_STORAGE_KEY = "daemon-rekeyed-at";
 /** A Terminal warm-up starts at most once per this interval per Thread. */
 export const TERMINAL_WARM_INTERVAL_MS = 30_000;
 export const DAEMON_ACTIVATION_GRACE_MS = 90_000;
@@ -549,6 +553,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   #activation?: DaemonActivation;
   #activationId?: string;
   #drainEpoch = 0;
+  /** The next activation delivers a new daemon key instead of a nudge. */
+  #rekey = false;
   #readinessProbe?: {
     readonly socket: WebSocket;
     readonly generation: DaemonGeneration;
@@ -2245,8 +2251,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         | undefined;
       let authority: DaemonAuthority;
       if (existing?.threadId === threadId) {
-        // One key and one generation per Thread for its whole life. Only
-        // Core's own expected versions are refreshed here.
+        // One generation per Thread for its whole life. Only Core's own
+        // expected versions are refreshed here.
         authority = {
           ...existing,
           release: DXD_RELEASE,
@@ -2255,10 +2261,36 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           workloadIdentityVersion: DXD_WORKLOAD_IDENTITY_VERSION,
           runtimeProvider,
         };
+        // The Orb may not hold this authority's key (#1584): an install
+        // failed after its key was minted, or the Orb's dxd presented
+        // another key. A nudge would only replay the stale one, so this
+        // activation delivers a new key.
+        if (this.#rekey && (await this.#rekeyAllowed(threadId))) {
+          credential = await mintThreadDaemonApiKey(this.env, threadId);
+          if (signal.aborted || epoch !== this.#drainEpoch) {
+            await revokeThreadDaemonApiKey(this.env, credential.id);
+            throw new Error("activation deadline exceeded");
+          }
+          authority = {
+            ...authority,
+            apiKeyId: credential.id,
+            apiKeyHash: threadDaemonApiKeyHash(Redacted.value(credential.key)),
+          };
+          threadDaemonLogger.warn("Thread daemon key replaced.", {
+            event: "thread_daemon_rekey",
+            threadId,
+          });
+        }
         if (authority !== existing) {
           this.#authority = authority;
           await this.ctx.storage.put(AUTHORITY_STORAGE_KEY, authority);
         }
+        if (credential !== undefined)
+          await revokeEarlierThreadDaemonApiKeys(
+            this.env,
+            threadId,
+            credential.id,
+          );
       } else {
         credential = await mintThreadDaemonApiKey(this.env, threadId);
         if (signal.aborted || epoch !== this.#drainEpoch) {
@@ -2286,13 +2318,19 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         // so its proxy streams end here.
         this.#proxyRelay.daemonUnavailable();
         this.#fenceDaemonSockets();
-        if (existing !== undefined)
-          await revokeThreadDaemonApiKey(this.env, existing.apiKeyId);
+        // Only the newest key is ever valid.
+        await revokeEarlierThreadDaemonApiKeys(
+          this.env,
+          threadId,
+          credential.id,
+        );
       }
       if (signal.aborted || epoch !== this.#drainEpoch)
         throw new Error("activation deadline exceeded");
       stage = "install";
       const installStartedAt = Date.now();
+      // Until an install with this key succeeds, the Orb may not hold it.
+      if (credential !== undefined) this.#rekey = true;
       const installation = await ExecutionWorkspaces.ensureDaemon({
         threadId,
         endpoint,
@@ -2307,7 +2345,11 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
             this.#authority = { ...current, apiKeyId: minted.id, apiKeyHash };
             await this.ctx.storage.put(AUTHORITY_STORAGE_KEY, this.#authority);
             if (previousKeyId !== minted.id)
-              await revokeThreadDaemonApiKey(this.env, previousKeyId);
+              await revokeEarlierThreadDaemonApiKeys(
+                this.env,
+                threadId,
+                minted.id,
+              );
           }
           return minted;
         },
@@ -2316,6 +2358,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         // guest command touches the installation.
         awaitRegistration: (timeoutMs) => this.#awaitTransport(timeoutMs),
       });
+      if (credential !== undefined) this.#rekey = false;
       if (epoch !== this.#drainEpoch)
         throw new Error("activation cancelled by drain");
       this.#processesStartedAt = installation.processesStartedAt;
@@ -3411,6 +3454,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       this.ctx.storage.delete(APPLIED_ENVIRONMENT_STORAGE_KEY),
     ]);
     await revokeThreadDaemonApiKey(this.env, authority?.apiKeyId);
+    // And every other key of the Thread: none may outlive the drain.
+    await revokeEarlierThreadDaemonApiKeys(this.env, threadId.value, "");
     // A deleted Thread never comes back, so nothing it stored is kept.
     if (reason === "thread-deleted") {
       await this.ctx.storage.deleteAlarm();
@@ -3980,10 +4025,10 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         request.headers.get("authorization"),
       );
       if (verified?.keyId !== authority.apiKeyId)
-        return new Response(null, { status: 401 });
+        return this.#rejectDaemonKey(threadId.value);
       learned = true;
     } else if (hash !== authority.apiKeyHash)
-      return new Response(null, { status: 401 });
+      return this.#rejectDaemonKey(threadId.value);
     // The authority may have been replaced while this request waited.
     const current = this.#authority;
     if (
@@ -4015,6 +4060,43 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       this.ctx.waitUntil(confirmation);
     }
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /**
+   * The Orb's dxd presented a key this authority does not hold: a stale
+   * config, such as one restored from a snapshot taken before the key was
+   * replaced (#1584). Without a connected daemon, the next activation
+   * delivers a new key; a connected one keeps its key.
+   */
+  /**
+   * At most one re-key per DAEMON_REKEY_INTERVAL_MS, across object restarts,
+   * so a daemon that keeps presenting a wrong key can't mint keys without
+   * bound; until then activations only nudge.
+   */
+  async #rekeyAllowed(threadId: ThreadId) {
+    const now = Date.now();
+    const last = await this.ctx.storage.get<number>(REKEYED_AT_STORAGE_KEY);
+    if (last !== undefined && now - last < DAEMON_REKEY_INTERVAL_MS) {
+      threadDaemonLogger.warn("Thread daemon re-key deferred.", {
+        event: "thread_daemon_rekey_deferred",
+        threadId,
+        retryInMs: DAEMON_REKEY_INTERVAL_MS - (now - last),
+      });
+      return false;
+    }
+    await this.ctx.storage.put(REKEYED_AT_STORAGE_KEY, now);
+    return true;
+  }
+
+  #rejectDaemonKey(threadId: ThreadId) {
+    if (!this.#isTransportReady() && !this.#rekey) {
+      this.#rekey = true;
+      threadDaemonLogger.warn("Thread daemon presented a stale key.", {
+        event: "thread_daemon_key_rejected",
+        threadId,
+      });
+    }
+    return new Response(null, { status: 401 });
   }
 
   async #confirmDaemonKey(

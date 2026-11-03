@@ -18,7 +18,7 @@ export const createNeedsYouTools = (
   defineTool({
     name: "request_attention",
     description: [
-      "List this Thread in its owner's Needs-you inbox, which shows every Thread waiting on them across their projects. Call it when you end your turn waiting on the owner: a question only they can answer, or an approval they must give. Then end your turn.",
+      "List this Thread in its owner's Needs-you inbox, which shows every Thread waiting on them across their projects. Call it when you will end your turn waiting on the owner: a question only they can answer, or an approval they must give. Call it before you write your final reply, then write that reply, with your summary and the ask, as your last message. The reply after the last tool call is the one the owner sees in full.",
       "The listing clears when this Thread's next turn starts, such as when the owner replies, or when the owner dismisses it. A later call replaces the earlier ask. If another Thread's agent started this Thread, send your question to that Thread with send_thread_message instead.",
     ].join("\n\n"),
     input: v.object({
@@ -67,7 +67,7 @@ export const createNeedsYouTools = (
       return {
         output: {
           listed: true,
-          note: "This Thread is in the owner's Needs-you inbox until its next turn starts or the owner dismisses it. End your turn now.",
+          note: "This Thread is in the owner's Needs-you inbox until its next turn starts or the owner dismisses it. Now write your final reply, with your summary and the ask, and end your turn.",
         },
       };
     },

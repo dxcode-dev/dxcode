@@ -70,6 +70,11 @@ const smartHttp =
   (
     directories: Record<string, string>,
     override?: (url: string) => Response | undefined,
+    /** Off is a server without partial clones, as git.kernel.org runs. */
+    server: {
+      readonly filter?: boolean;
+      readonly serviceNewline?: boolean;
+    } = {},
   ): typeof fetch =>
   async (input, init) => {
     const url = String(input);
@@ -82,6 +87,8 @@ const smartHttp =
     const [, directory] = entry;
     if (url.endsWith("/info/refs?service=git-upload-pack")) {
       const refs = execFileSync("git", [
+        "-c",
+        `uploadpack.allowFilter=${server.filter ?? true}`,
         "upload-pack",
         "--stateless-rpc",
         "--advertise-refs",
@@ -89,7 +96,12 @@ const smartHttp =
       ]);
       return new Response(
         Buffer.concat([
-          Buffer.from("001e# service=git-upload-pack\n0000"),
+          Buffer.from(
+            // Bitbucket sends the service line without its newline.
+            server.serviceNewline === false
+              ? "001d# service=git-upload-pack0000"
+              : "001e# service=git-upload-pack\n0000",
+          ),
           refs,
         ]),
       );
@@ -99,7 +111,7 @@ const smartHttp =
         "git",
         [
           "-c",
-          "uploadpack.allowFilter=true",
+          `uploadpack.allowFilter=${server.filter ?? true}`,
           "upload-pack",
           "--stateless-rpc",
           directory,
@@ -186,6 +198,7 @@ describe("public Git repository over smart HTTP", () => {
     expect(await readPublicGitTip(URL_BASE, fetcher)).toEqual({
       head: git(repository, "rev-parse", "HEAD"),
       defaultBranch: "trunk",
+      filter: true,
     });
     expect((await readPublicGitTip(EMPTY_URL, fetcher)).head).toBeUndefined();
     await expect(
@@ -320,6 +333,51 @@ describe("public Git repository over smart HTTP", () => {
         expect(Buffer.from(object?.data ?? []).equals(expected)).toBe(true);
       }
     }
+  });
+
+  it("reads a server without partial clones with one shallow fetch", async () => {
+    const requests: string[] = [];
+    const server = smartHttp({ [URL_BASE]: repository }, undefined, {
+      filter: false,
+    });
+    const fetcher: typeof fetch = (input, init) => {
+      if (init?.method === "POST") requests.push(String(init.body));
+      return server(input, init);
+    };
+    const tip = await readPublicGitTip(URL_BASE, fetcher);
+    expect(tip.filter).toBe(false);
+    const reader = await readerFor(fetcher);
+    const [commits, listing] = await Promise.all([
+      reader.commits(5),
+      reader.directory("src/lib"),
+    ]);
+    expect(commits.map(({ subject }) => subject)).toEqual([
+      "Link the readme",
+      "Merge side",
+      "Write the changelog",
+      "Add part 4",
+      "Add part 3",
+    ]);
+    expect(listing?.entries.map(({ name }) => name)).toEqual([
+      "part-1.ts",
+      "part-2.ts",
+      "part-3.ts",
+      "part-4.ts",
+    ]);
+    // One fetch, and it asks for no filter the server would refuse.
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).not.toContain("filter");
+  });
+
+  it("reads Bitbucket's advertisement, which has no newline after the service line", async () => {
+    const fetcher = smartHttp({ [URL_BASE]: repository }, undefined, {
+      serviceNewline: false,
+    });
+    expect(await readPublicGitTip(URL_BASE, fetcher)).toEqual({
+      head: git(repository, "rev-parse", "HEAD"),
+      defaultBranch: "trunk",
+      filter: true,
+    });
   });
 
   it("fails, rather than listing nothing, when the server refuses or errs", async () => {

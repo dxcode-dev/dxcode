@@ -88,6 +88,7 @@ import {
   readSourceWorkspace,
   withSourceRuntimeAdmission,
 } from "./source-preparation.js";
+import { prepareWhileOrbAnswers } from "./unresponsive-orb.js";
 import { withoutRepositorySkills } from "./workspace-context.js";
 import {
   markExecutionWorkspaceReady,
@@ -825,7 +826,33 @@ const activationFor =
         if (needsFirstReadiness) reportPreparation("Preparing source…");
         let prepared: Awaited<ReturnType<typeof prepareSource>>;
         try {
-          prepared = await timing.step("prepare", () => prepareSource(handle));
+          // A wedged Orb hangs preparation for good (#1584): restart it.
+          prepared = await timing.step("prepare", () =>
+            prepareWhileOrbAnswers({
+              provider,
+              context,
+              threadId,
+              existingOnly,
+              handle,
+              prepare: prepareSource,
+              reopen: async () => {
+                if (needsFirstReadiness)
+                  reportPreparation("Restarting machine…");
+                else if (!wakeStatusPublished) {
+                  wakeStatusPublished = true;
+                  publish(() =>
+                    publishRealtimeWorkspaceStatus(
+                      bindings,
+                      threadId,
+                      "waking",
+                    ),
+                  );
+                }
+                handle = await openWorkspace();
+                return handle;
+              },
+            }),
+          );
         } catch (cause) {
           if (!isWorkspaceReadOnlyFailure(cause)) throw cause;
           // Every write fails until the Orb restarts: restart it once and

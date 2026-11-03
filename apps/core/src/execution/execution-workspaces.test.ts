@@ -1,7 +1,7 @@
 import { ThreadId } from "@dx/domain";
 import { FlueError, type Sandbox, type SandboxFactory } from "@flue/runtime";
 import { Effect, Redacted, Schema } from "effect";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executionWorkspaceLogger } from "../logging.js";
 import { takeWorkspaceRecovery } from "../orb-disk/read-only.js";
 import type {
@@ -702,6 +702,222 @@ describe("read-only Orb recovery", () => {
     expect(second).toMatchObject({
       type: "workspace_read_only",
       details: expect.stringMatching(/^dx tried to restart the Orb/),
+    });
+  });
+});
+
+describe("unresponsive Orb recovery (#1584)", () => {
+  const context: ExecutionContext = {
+    account: { scope: "deployment" },
+    credentials: undefined,
+    profile: mocks.profile as unknown as ExecutionContext["profile"],
+  };
+  // thr_6352fb61: two full jest runs wedged the Orb. Its container still
+  // reported running, but every guest command hung, so each new message's
+  // activation waited in source preparation (566 s and more) and the Thread
+  // stayed "working". `answersAfterMs` is how long each command takes; a
+  // wedged Orb never answers.
+  const handle = (
+    answersAfterMs: number | "never" | "times-out",
+  ): ExecutionWorkspaceHandle => ({
+    guest: {
+      commands: {
+        run: () =>
+          answersAfterMs === "never"
+            ? new Promise<never>(() => undefined)
+            : answersAfterMs === "times-out"
+              ? // The guest's `timeout` fires, but the Orb never runs it.
+                new Promise<never>((_resolve, reject) =>
+                  setTimeout(
+                    () =>
+                      reject(new Error("Command timed out after 10000 ms.")),
+                    10_000,
+                  ),
+                )
+              : new Promise<{
+                  stdout: string;
+                  stderr: string;
+                  exitCode: number;
+                }>((resolve) =>
+                  setTimeout(
+                    () => resolve({ stdout: "", stderr: "", exitCode: 0 }),
+                    answersAfterMs,
+                  ),
+                ),
+      },
+      files: { write: async () => undefined },
+    },
+    sandbox: async (cwd) =>
+      ({
+        cwd,
+        exec: vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 })),
+      }) as unknown as Sandbox,
+    setIdleDeadline: async () => undefined,
+    commandTimeoutMs: 60_000,
+  });
+  const provider = (
+    handles: ReadonlyArray<ExecutionWorkspaceHandle>,
+    recover?: ExecutionWorkspaceProvider["recover"],
+  ) => {
+    const queue = [...handles];
+    const create = vi.fn(async () => {
+      const next = queue.shift();
+      if (next === undefined) throw new Error("no handle left");
+      return next;
+    });
+    return {
+      create,
+      workspace: {
+        create,
+        connect: create,
+        release: async () => undefined,
+        ...(recover === undefined ? {} : { recover }),
+      },
+    };
+  };
+  /** Runs one activation for up to `minutes` of fake time. */
+  const activateWithin = async (
+    fake: ReturnType<typeof provider>,
+    threadId: ThreadId,
+    minutes: number,
+  ) => {
+    let outcome:
+      | { readonly settled: false }
+      | {
+          readonly settled: true;
+          readonly value?: unknown;
+          readonly error?: unknown;
+        } = {
+      settled: false,
+    };
+    void makeExecutionActivation()({ workspace: fake.workspace })
+      .activate(context, { id: threadId })
+      .then(
+        (value) => {
+          outcome = { settled: true, value };
+        },
+        (error: unknown) => {
+          outcome = { settled: true, error };
+        },
+      );
+    await vi.advanceTimersByTimeAsync(minutes * 60_000);
+    return outcome;
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("restarts an Orb that stopped answering, keeping its files, and runs the turn on the restarted Orb", async () => {
+    const threadId = thread("thr_00000000-0000-4000-8000-000000001584");
+    const recover = vi.fn(async () => ({ files: "kept" as const }));
+    const fake = provider([handle("never"), handle(10)], recover);
+
+    const outcome = await activateWithin(fake, threadId, 5);
+
+    expect(outcome).toMatchObject({ settled: true, value: expect.anything() });
+    // Never drops the Orb's files: without a save it would not restart.
+    expect(recover).toHaveBeenCalledExactlyOnceWith(
+      context,
+      { threadId },
+      { discardUnsaved: false },
+    );
+    expect(fake.create).toHaveBeenCalledTimes(2);
+    expect(takeWorkspaceRecovery(threadId)).toMatchObject({ files: "kept" });
+  });
+
+  it("restarts a wedged Orb whose setup commands time out instead of hanging", async () => {
+    // On staging (main), this Orb's setup commands timed out after 10 s, and
+    // the message failed ten retries later, with the Orb still wedged.
+    const threadId = thread("thr_00000000-0000-4000-8000-000000001589");
+    const recover = vi.fn(async () => ({ files: "kept" as const }));
+    const fake = provider([handle("times-out"), handle(10)], recover);
+
+    const outcome = await activateWithin(fake, threadId, 5);
+
+    expect(outcome).toMatchObject({ settled: true, value: expect.anything() });
+    expect(recover).toHaveBeenCalledOnce();
+    expect(takeWorkspaceRecovery(threadId)).toMatchObject({
+      files: "kept",
+      cause: "unresponsive",
+    });
+  });
+
+  it("restarts a Thread's Orb at most once in ten minutes, so a broken Orb can't loop", async () => {
+    const threadId = thread("thr_00000000-0000-4000-8000-000000001588");
+    const recover = vi.fn(async () => ({ files: "kept" as const }));
+    const fake = provider(
+      [handle("never"), handle(10), handle("never")],
+      recover,
+    );
+
+    expect(await activateWithin(fake, threadId, 5)).toMatchObject({
+      settled: true,
+      value: expect.anything(),
+    });
+    takeWorkspaceRecovery(threadId);
+    const again = await activateWithin(fake, threadId, 5);
+
+    expect(again).toMatchObject({
+      settled: true,
+      error: {
+        type: "workspace_unresponsive",
+        details: expect.stringMatching(
+          /^dx already restarted it at .*archive the Thread and restore it\.$/,
+        ),
+      },
+    });
+    expect(recover).toHaveBeenCalledOnce();
+  });
+
+  it("leaves a slow Orb that still answers alone", async () => {
+    const threadId = thread("thr_00000000-0000-4000-8000-000000001585");
+    const recover = vi.fn(async () => ({ files: "kept" as const }));
+    // Every command takes 40 s, as some did on thr_6352fb61 before it
+    // wedged: a busy Orb, not a stopped one.
+    const fake = provider([handle(40_000)], recover);
+
+    const outcome = await activateWithin(fake, threadId, 20);
+
+    expect(outcome).toMatchObject({ settled: true, value: expect.anything() });
+    expect(recover).not.toHaveBeenCalled();
+    expect(fake.create).toHaveBeenCalledOnce();
+  });
+
+  it("fails the run, saying why, when the Orb can't be restarted without losing files or at all", async () => {
+    const unsaved = provider(
+      [handle("never")],
+      vi.fn(async () => ({ files: "unsaved" as const })),
+    );
+    const first = await activateWithin(
+      unsaved,
+      thread("thr_00000000-0000-4000-8000-000000001586"),
+      5,
+    );
+    expect(first).toMatchObject({
+      settled: true,
+      error: {
+        type: "workspace_unresponsive",
+        details: expect.stringMatching(/couldn't save its files/),
+      },
+    });
+    expect(unsaved.create).toHaveBeenCalledOnce();
+
+    const unsupported = provider([handle("never")]);
+    const second = await activateWithin(
+      unsupported,
+      thread("thr_00000000-0000-4000-8000-000000001587"),
+      5,
+    );
+    expect(second).toMatchObject({
+      settled: true,
+      error: {
+        type: "workspace_unresponsive",
+        details: expect.stringMatching(/can't restart this Orb/),
+      },
     });
   });
 });

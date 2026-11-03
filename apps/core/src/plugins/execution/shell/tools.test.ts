@@ -261,3 +261,48 @@ it("a Stop that reaches the Orb before the start never runs the command", async 
   await expect(readFile(marker)).rejects.toThrow();
   expect(await startedPid()).toBeUndefined();
 });
+it("returns running with a pid within its budget when an overloaded Orb is slow to start every process (#1584)", async () => {
+  // thr_6352fb61: two full jest runs overloaded the Orb, and a
+  // `timeout_ms: 60000` start failed with "Command timed out after 65000 ms"
+  // instead of returning the pid. Here every guest process waits
+  // `spawnDelayMs` before it runs, and that wait counts toward the exec's
+  // timeout, as it does on a loaded Orb.
+  const spawnDelayMs = 6_000;
+  const real = sandbox;
+  const loaded = {
+    exec: async (command, options) => {
+      await new Promise((resolve) => setTimeout(resolve, spawnDelayMs));
+      const remaining =
+        options?.timeoutMs === undefined
+          ? undefined
+          : options.timeoutMs - spawnDelayMs;
+      if (remaining !== undefined && remaining <= 0)
+        throw new Error(`Command timed out after ${options?.timeoutMs} ms.`);
+      return real.exec(command, {
+        ...options,
+        ...(remaining === undefined ? {} : { timeoutMs: remaining }),
+      });
+    },
+  } as Sandbox;
+  const startedAt = Date.now();
+  const result = await createShellTools(loaded, {
+    defaultWorkdir: home,
+  })[0].execute("loaded", {
+    command: "echo started; sleep 30",
+    timeout_ms: 1000,
+  });
+  const details = result.details as { pid: number; running: boolean };
+  // The start and one wait, each slowed by the Orb, and nothing more.
+  expect(Date.now() - startedAt).toBeLessThan(30_000);
+  expect(details.running).toBe(true);
+  expect(details.pid).toBeGreaterThan(0);
+  // The command really runs under that pid, and the agent can follow it.
+  const followed = await call(1, { pid: details.pid, timeout_ms: 0 });
+  expect(followed.details.running).toBe(true);
+  expect(followed.text).toContain("started");
+}, 60_000);
+it("tells the agent when it clamps an out-of-range timeout_ms", async () => {
+  const result = await call(0, { command: "echo done", timeout_ms: 180_000 });
+  expect(result.text).toContain("<output>done\n</output>");
+  expect(result.text).toMatch(/timeout_ms 180000 is above the 60000 maximum/);
+});

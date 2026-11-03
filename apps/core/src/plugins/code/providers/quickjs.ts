@@ -92,14 +92,24 @@ export const executeCode = async (
   runtime.setMemoryLimit(limits.memoryBytes);
   runtime.setMaxStackSize(256 * 1024);
   let interruptChecks = 0;
+  // Why the interrupt handler stopped the guest. QuickJS reports every stop
+  // as "interrupted", so the run reports this instead: the same limit then
+  // reads the same whether it struck in the guest or between jobs (#1652).
+  let stopped: Error | undefined;
   // A deterministic CPU budget also works when workerd freezes its clock during JS.
-  runtime.setInterruptHandler(
-    () =>
-      ++interruptChecks >
-        (limits.interruptChecks ?? CODE_LIMITS.interruptChecks) ||
-      controller.signal.aborted ||
-      Date.now() >= deadline,
-  );
+  runtime.setInterruptHandler(() => {
+    stopped ??= controller.signal.aborted
+      ? controller.signal.reason instanceof Error
+        ? controller.signal.reason
+        : new Error("Code execution aborted.")
+      : Date.now() >= deadline
+        ? new Error("Code execution deadline exceeded.")
+        : ++interruptChecks >
+            (limits.interruptChecks ?? CODE_LIMITS.interruptChecks)
+          ? new Error("Code execution CPU limit exceeded.")
+          : undefined;
+    return stopped !== undefined;
+  });
   const vm = runtime.newContext();
   const deferreds: QuickJSDeferredPromise[] = [];
   const pending = new Set<Promise<void>>();
@@ -238,6 +248,8 @@ export const executeCode = async (
     }
     check();
     return outputs.join("\n");
+  } catch (error) {
+    throw stopped ?? error;
   } finally {
     disposed = true;
     controller.abort();

@@ -35,6 +35,7 @@ import {
   nextSnoozeWake,
   withPendingThreads,
 } from "./sidebar-thread-utils.js";
+import { SharedThreadContextMenu } from "./thread-context-menu.js";
 import {
   ThreadHoverPreview,
   type ThreadPreviewAnchor,
@@ -384,50 +385,55 @@ function AppSidebarContent({
         </button>
       </div>
 
-      <SidebarThreadNavigation
-        archiveContent={
-          userId === undefined ? undefined : (
-            <SidebarArchive
-              userId={userId}
-              activeThreadId={activeThreadId}
-              projectNames={projectNames}
-              onThreadNavigate={onThreadNavigate}
-              onThreadPointerEnter={openPreview}
-              onThreadPointerLeave={leaveThreadRow}
-              onThreadMenuOpen={dismissPreviewForNavigation}
-              onSetArchived={archive.setArchived}
-              onSetPinned={onSetPinned}
-              archivingThreadId={archive.pendingThreadId}
-              pinningThreadId={pinningThreadId}
-            />
-          )
-        }
-        activeThreadId={activeThreadId}
-        childThreads={childThreads}
-        collapsedGroups={layout.collapsedSections}
-        expandedThreads={layout.expandedThreads}
-        hasMore={hasMore}
-        loadingMore={loadingMore}
-        loadMoreError={loadMoreError}
-        projectNames={projectNames}
-        query=""
-        sections={sections}
-        visibleThreadCount={listedThreads.length + (sharedThreads?.length ?? 0)}
-        onLoadMore={onLoadMore}
-        onNavigate={onNavigate}
-        onThreadNavigate={onThreadNavigate}
-        onThreadPointerEnter={openPreview}
-        onThreadPointerLeave={leaveThreadRow}
-        onThreadMenuOpen={dismissPreviewForNavigation}
-        onToggleGroup={layout.toggleSection}
-        onToggleThread={layout.toggleThread}
-        onUnfollow={onUnfollow}
-        onSetArchived={archive.setArchived}
-        onSetPinned={onSetPinned}
-        onArchiveInactive={archive.archiveMany}
-        archivingThreadId={archive.pendingThreadId}
-        pinningThreadId={pinningThreadId}
-      />
+      {/* The rows share one context menu instead of one each (#1462). */}
+      <SharedThreadContextMenu>
+        <SidebarThreadNavigation
+          archiveContent={
+            userId === undefined ? undefined : (
+              <SidebarArchive
+                userId={userId}
+                activeThreadId={activeThreadId}
+                projectNames={projectNames}
+                onThreadNavigate={onThreadNavigate}
+                onThreadPointerEnter={openPreview}
+                onThreadPointerLeave={leaveThreadRow}
+                onThreadMenuOpen={dismissPreviewForNavigation}
+                onSetArchived={archive.setArchived}
+                onSetPinned={onSetPinned}
+                archivingThreadId={archive.pendingThreadId}
+                pinningThreadId={pinningThreadId}
+              />
+            )
+          }
+          activeThreadId={activeThreadId}
+          childThreads={childThreads}
+          collapsedGroups={layout.collapsedSections}
+          expandedThreads={layout.expandedThreads}
+          hasMore={hasMore}
+          loadingMore={loadingMore}
+          loadMoreError={loadMoreError}
+          projectNames={projectNames}
+          query=""
+          sections={sections}
+          visibleThreadCount={
+            listedThreads.length + (sharedThreads?.length ?? 0)
+          }
+          onLoadMore={onLoadMore}
+          onNavigate={onNavigate}
+          onThreadNavigate={onThreadNavigate}
+          onThreadPointerEnter={openPreview}
+          onThreadPointerLeave={leaveThreadRow}
+          onThreadMenuOpen={dismissPreviewForNavigation}
+          onToggleGroup={layout.toggleSection}
+          onToggleThread={layout.toggleThread}
+          onUnfollow={onUnfollow}
+          onSetArchived={archive.setArchived}
+          onSetPinned={onSetPinned}
+          onArchiveInactive={archive.archiveMany}
+          archivingThreadId={archive.pendingThreadId}
+          pinningThreadId={pinningThreadId}
+        />
+      </SharedThreadContextMenu>
 
       {extensionRegion}
 

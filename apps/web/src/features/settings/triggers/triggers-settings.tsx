@@ -1,388 +1,97 @@
-import type { PluginTriggerDeliveryId } from "@dx/domain";
+import type { PluginTriggerId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { DateTime } from "effect";
-import { Pause, Play, Plus, RefreshCw, RotateCw, Trash2 } from "lucide-react";
+import { Settings, Webhook } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { settle } from "../../../shared/settle.js";
-import { Badge } from "../../../shared/ui/badge.js";
 import { Button } from "../../../shared/ui/button.js";
-import {
-  DialogContent,
-  DialogDescription,
-  DialogRoot,
-  DialogTitle,
-} from "../../../shared/ui/dialog.js";
+import { DialogContent, DialogRoot } from "../../../shared/ui/dialog.js";
 import { environmentVariablesQueryOptions } from "../environment-variables/environment-variables-queries.js";
 import {
   SettingsCard,
   SettingsHeading,
-  SettingsSelect,
+  SettingsToggle,
 } from "../settings-primitives.js";
+import {
+  CreateTriggerForm,
+  TriggerDetails,
+  type TriggerRun,
+  TriggerUrl,
+} from "./trigger-dialogs.js";
 import {
   type OneTimeTriggerCapability,
   type TriggerCapabilityAction,
-  type TriggersMutationAction,
   triggerCapabilityMutationOptions,
   triggersMutationOptions,
 } from "./triggers-mutations.js";
 import {
-  type EnvironmentVariableData,
   type PluginTriggerData,
-  type TriggerPluginCapabilityData,
   triggersQueryOptions,
 } from "./triggers-queries.js";
 
 const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : "Request failed.";
 
-type OneTimeCapability = OneTimeTriggerCapability;
-
-function CapabilityDialog({
-  capability,
-  onClose,
-}: {
-  readonly capability: OneTimeCapability;
-  readonly onClose: () => void;
-}) {
-  return (
-    <DialogRoot
-      open
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
-    >
-      <DialogContent className="trigger-dialog">
-        <DialogTitle>Copy this capability now</DialogTitle>
-        <DialogDescription>
-          The URL and token will never be displayed again. Store the URL as a
-          secret and do not put it in logs or source control.
-        </DialogDescription>
-        <label>
-          Capability URL
-          <textarea readOnly rows={4} value={capability.capabilityUrl} />
-        </label>
-        <label>
-          Token
-          <input readOnly value={capability.token} />
-        </label>
-        <footer className="trigger-dialog-actions">
-          <Button onClick={onClose}>I have stored it</Button>
-        </footer>
-      </DialogContent>
-    </DialogRoot>
-  );
-}
-
-function ConfirmDialog({
-  title,
-  description,
-  confirmLabel,
-  busy,
-  onClose,
-  onConfirm,
-}: {
-  readonly title: string;
-  readonly description: string;
-  readonly confirmLabel: string;
-  readonly busy: boolean;
-  readonly onClose: () => void;
-  readonly onConfirm: () => void;
-}) {
-  return (
-    <DialogRoot open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="trigger-dialog">
-        <DialogTitle>{title}</DialogTitle>
-        <DialogDescription>{description}</DialogDescription>
-        <footer className="trigger-dialog-actions">
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button disabled={busy} onClick={onConfirm}>
-            {busy ? "Working…" : confirmLabel}
-          </Button>
-        </footer>
-      </DialogContent>
-    </DialogRoot>
-  );
-}
-
-function CreateDialog({
-  capabilities,
-  secrets,
-  busy,
-  onClose,
-  onCreate,
-}: {
-  readonly capabilities: ReadonlyArray<TriggerPluginCapabilityData>;
-  readonly secrets: ReadonlyArray<EnvironmentVariableData>;
-  readonly busy: boolean;
-  readonly onClose: () => void;
-  readonly onCreate: (
-    capability: TriggerPluginCapabilityData,
-    secret?: EnvironmentVariableData,
-  ) => void;
-}) {
-  const [capabilityKey, setCapabilityKey] = React.useState(
-    capabilities[0] === undefined
-      ? ""
-      : `${capabilities[0].pluginId}:${capabilities[0].version}:${capabilities[0].capabilityName}`,
-  );
-  const [secretId, setSecretId] = React.useState("");
-  const selected = capabilities.find(
-    (capability) =>
-      `${capability.pluginId}:${capability.version}:${capability.capabilityName}` ===
-      capabilityKey,
-  );
-  const selectedSecret = secrets.find(
-    (secret) => secret.reference.id === secretId,
-  );
-  return (
-    <DialogRoot open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="trigger-dialog">
-        <DialogTitle>Create a plugin trigger</DialogTitle>
-        <DialogDescription>
-          Only trigger capabilities from a currently trusted, enabled plugin
-          version are available. Creating a capability requires recent
-          authentication.
-        </DialogDescription>
-        <label htmlFor="plugin-trigger-capability">
-          Plugin capability
-          <SettingsSelect
-            id="plugin-trigger-capability"
-            value={capabilityKey}
-            label="Plugin trigger capability"
-            options={capabilities.map((capability) => [
-              `${capability.pluginId}:${capability.version}:${capability.capabilityName}`,
-              `${capability.pluginDisplayName} · ${capability.capabilityName}`,
-            ])}
-            onValueChange={setCapabilityKey}
-          />
-        </label>
-        {selected === undefined ? null : (
-          <dl className="trigger-contract">
-            <div>
-              <dt>Version</dt>
-              <dd>{selected.version}</dd>
-            </div>
-            <div>
-              <dt>Source</dt>
-              <dd>{selected.sourceLabel}</dd>
-            </div>
-            <div>
-              <dt>Event</dt>
-              <dd>{selected.event}</dd>
-            </div>
-            <div>
-              <dt>Action</dt>
-              <dd>{selected.action}</dd>
-            </div>
-            <div>
-              <dt>Permission</dt>
-              <dd>{selected.permission}</dd>
-            </div>
-          </dl>
-        )}
-        <label htmlFor="plugin-trigger-hmac-secret">
-          HMAC secret (optional encrypted reference)
-          <SettingsSelect
-            id="plugin-trigger-hmac-secret"
-            value={secretId}
-            label="Optional HMAC secret"
-            options={[
-              ["", "No HMAC signature"],
-              ...secrets.map(
-                (secret) =>
-                  [
-                    secret.reference.id,
-                    `${secret.name} · ${secret.source}`,
-                  ] as const,
-              ),
-            ]}
-            onValueChange={setSecretId}
-          />
-        </label>
-        <footer className="trigger-dialog-actions">
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            disabled={busy || selected === undefined}
-            onClick={() => selected && onCreate(selected, selectedSecret)}
-          >
-            {busy ? "Creating…" : "Create capability"}
-          </Button>
-        </footer>
-      </DialogContent>
-    </DialogRoot>
-  );
-}
-
-type Confirmation =
-  | { readonly type: "pause"; readonly trigger: PluginTriggerData }
-  | { readonly type: "revoke"; readonly trigger: PluginTriggerData }
+type Dialog =
+  | { readonly kind: "create" }
+  | { readonly kind: "details"; readonly triggerId: PluginTriggerId }
   | {
-      readonly type: "retry";
-      readonly trigger: PluginTriggerData;
-      readonly deliveryId: PluginTriggerDeliveryId;
+      readonly kind: "url";
+      readonly capability: OneTimeTriggerCapability;
+      readonly signed: boolean;
     };
 
-function TriggerCard({
+/** Why a trigger can't run as shown, in a few words; absent when it can. */
+const triggerHint = (trigger: PluginTriggerData) =>
+  trigger.deliverySummary.deadLetter > 0
+    ? `${trigger.deliverySummary.deadLetter} failed`
+    : undefined;
+
+function TriggerRow({
   trigger,
   busy,
-  onPause,
-  onResume,
-  onRotate,
-  onRevoke,
-  onRetry,
+  run,
+  onOpen,
 }: {
   readonly trigger: PluginTriggerData;
   readonly busy: boolean;
-  readonly onPause: () => void;
-  readonly onResume: () => void;
-  readonly onRotate: () => void;
-  readonly onRevoke: () => void;
-  readonly onRetry: (deliveryId: PluginTriggerDeliveryId) => void;
+  readonly run: TriggerRun;
+  readonly onOpen: (opener: HTMLButtonElement) => void;
 }) {
+  const hint = triggerHint(trigger);
+  const on = trigger.status === "active";
+  const name = `${trigger.pluginDisplayName} ${trigger.capabilityName}`;
   return (
-    <article className="trigger-card">
-      <header>
-        <div>
-          <h2>{trigger.pluginDisplayName}</h2>
-          <p>
-            <code>{trigger.pluginName}</code> · version {trigger.pluginVersion}
-          </p>
-        </div>
-        <Badge>{trigger.status}</Badge>
-      </header>
-      <div className="trigger-badges">
-        <Badge>{trigger.source}</Badge>
-        <Badge>{trigger.event}</Badge>
-        <Badge>Action: {trigger.action}</Badge>
-        <Badge>Permission: {trigger.permission}</Badge>
-        <Badge>{trigger.idempotent ? "Idempotent" : "Single attempt"}</Badge>
-        <Badge>{trigger.hmacConfigured ? "HMAC" : "Capability token"}</Badge>
-      </div>
-      <dl className="trigger-contract">
-        <div>
-          <dt>Source</dt>
-          <dd>{trigger.sourceLabel}</dd>
-        </div>
-        <div>
-          <dt>Capability</dt>
-          <dd>{trigger.capabilityName}</dd>
-        </div>
-        <div>
-          <dt>Pending / in flight</dt>
-          <dd>
-            {trigger.deliverySummary.pending} /{" "}
-            {trigger.deliverySummary.inFlight}
-          </dd>
-        </div>
-        <div>
-          <dt>Succeeded / dead letter</dt>
-          <dd>
-            {trigger.deliverySummary.succeeded} /{" "}
-            {trigger.deliverySummary.deadLetter}
-          </dd>
-        </div>
-      </dl>
-      <div className="trigger-actions">
-        {trigger.status === "active" ? (
-          <Button size="xs" variant="ghost" disabled={busy} onClick={onPause}>
-            <Pause /> Pause
-          </Button>
-        ) : trigger.status === "paused" ? (
-          <Button size="xs" variant="ghost" disabled={busy} onClick={onResume}>
-            <Play /> Resume
-          </Button>
-        ) : null}
-        {trigger.status !== "revoked" ? (
-          <>
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={busy}
-              onClick={onRotate}
-            >
-              <RotateCw /> Rotate
-            </Button>
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={busy}
-              onClick={onRevoke}
-            >
-              <Trash2 /> Revoke
-            </Button>
-          </>
-        ) : null}
-      </div>
-      <details
-        className="trigger-history"
-        open={trigger.deliverySummary.deadLetter > 0}
+    <div className="first-party-plugin-row" data-plugin-trigger={trigger.id}>
+      <span className="first-party-plugin-creator" aria-hidden="true">
+        <Webhook />
+      </span>
+      <strong>{trigger.pluginDisplayName}</strong>
+      <span>{hint ?? trigger.capabilityName}</span>
+      <SettingsToggle
+        checked={on}
+        disabled={busy}
+        label={`${name} ${on ? "on" : "off"}`}
+        onCheckedChange={(checked) =>
+          void run(
+            {
+              type: "updateState",
+              triggerId: trigger.id,
+              status: checked ? "active" : "paused",
+            },
+            `${trigger.pluginDisplayName} trigger ${checked ? "on" : "paused"}.`,
+          )
+        }
+      />
+      <Button
+        size="icon-xs"
+        variant="ghost"
+        aria-label={`${name} settings`}
+        onClick={(event) => onOpen(event.currentTarget)}
       >
-        <summary>Delivery history ({trigger.deliveries.length})</summary>
-        {trigger.deliveries.length === 0 ? (
-          <p>No webhook deliveries yet.</p>
-        ) : (
-          <div className="trigger-history-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Event</th>
-                  <th>Status</th>
-                  <th>Attempts</th>
-                  <th>Failure</th>
-                  <th>Next attempt</th>
-                  <th>Updated</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {trigger.deliveries.map((delivery) => (
-                  <tr key={delivery.id}>
-                    <td>
-                      <code>{delivery.eventId}</code>
-                    </td>
-                    <td>{delivery.status}</td>
-                    <td>{delivery.attempts}</td>
-                    <td>{delivery.failureCode ?? "—"}</td>
-                    <td>
-                      {delivery.nextAttemptAt === undefined
-                        ? "—"
-                        : new Date(
-                            DateTime.formatIso(delivery.nextAttemptAt),
-                          ).toLocaleString()}
-                    </td>
-                    <td>
-                      {new Date(
-                        DateTime.formatIso(delivery.updatedAt),
-                      ).toLocaleString()}
-                    </td>
-                    <td>
-                      {delivery.status === "dead-letter" &&
-                      delivery.idempotent ? (
-                        <Button
-                          size="xs"
-                          variant="ghost"
-                          disabled={busy || trigger.status !== "active"}
-                          onClick={() => onRetry(delivery.id)}
-                        >
-                          <RefreshCw /> Retry
-                        </Button>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </details>
-    </article>
+        <Settings />
+      </Button>
+    </div>
   );
 }
 
@@ -399,211 +108,178 @@ export function PluginTriggersSettings() {
   const capabilityMutation = useMutation(
     triggerCapabilityMutationOptions(queryClient, identity.id),
   );
-  const [createOpen, setCreateOpen] = React.useState(false);
-  const [capability, setCapability] = React.useState<OneTimeCapability>();
-  const [confirmation, setConfirmation] = React.useState<Confirmation>();
+  const [dialog, setDialog] = React.useState<Dialog>();
   const [busy, setBusy] = React.useState(false);
   const [message, setMessage] = React.useState<string>();
-  const secrets = (environment.data?.items ?? []).filter(
-    (variable) => variable.kind === "secret" && variable.enabled,
-  );
-  const run = async (action: TriggersMutationAction, success: string) => {
+  const [dialogError, setDialogError] = React.useState<string>();
+  const finalFocus = React.useRef<HTMLElement | null>(null);
+  const fail = (error: unknown) => {
+    if (dialog === undefined) setMessage(errorMessage(error));
+    else setDialogError(errorMessage(error));
+  };
+  const run: TriggerRun = async (action, success) => {
     setBusy(true);
     setMessage(undefined);
-    const outcome = await settle(async () => {
-      const result = await mutation.mutateAsync(action);
-      setMessage(success);
-      return result;
-    });
-    if (!outcome.ok) setMessage(errorMessage(outcome.error));
+    setDialogError(undefined);
+    const outcome = await settle(() => mutation.mutateAsync(action));
+    if (outcome.ok) setMessage(success);
+    else fail(outcome.error);
     setBusy(false);
-    return outcome.ok ? outcome.value : undefined;
+    mutation.reset();
+    return outcome.ok;
   };
   const runCapability = async (
     action: TriggerCapabilityAction,
+    signed: boolean,
     success: string,
   ) => {
     setBusy(true);
     setMessage(undefined);
-    const outcome = await settle(async () => {
-      const result = await capabilityMutation.mutateAsync(action);
-      setCapability(result.capability);
+    setDialogError(undefined);
+    const outcome = await settle(() => capabilityMutation.mutateAsync(action));
+    if (outcome.ok) {
       setMessage(success);
-    });
-    if (!outcome.ok) setMessage(errorMessage(outcome.error));
+      setDialog({ kind: "url", capability: outcome.value.capability, signed });
+    } else fail(outcome.error);
     setBusy(false);
     capabilityMutation.reset();
-    return outcome.ok;
   };
-  const confirm = () => {
-    if (confirmation === undefined) return;
-    if (confirmation.type === "pause") {
-      void run(
-        {
-          type: "updateState",
-          triggerId: confirmation.trigger.id,
-          status: "paused",
-        },
-        "Trigger paused. In-flight delivery state remains visible.",
-      ).then(() => setConfirmation(undefined));
-    } else if (confirmation.type === "revoke") {
-      void run(
-        { type: "revoke", triggerId: confirmation.trigger.id },
-        "Trigger capability revoked.",
-      ).then(() => setConfirmation(undefined));
-    } else {
-      void run(
-        {
-          type: "retryDelivery",
-          triggerId: confirmation.trigger.id,
-          deliveryId: confirmation.deliveryId,
-        },
-        "Dead-letter delivery queued for retry.",
-      ).then(() => setConfirmation(undefined));
-    }
+  const close = () => {
+    setDialog(undefined);
+    setDialogError(undefined);
   };
-  const confirmationCopy =
-    confirmation?.type === "pause"
-      ? {
-          title: "Pause this trigger?",
-          description:
-            "No new delivery will start. A delivery already in flight is not relabelled or interrupted.",
-          label: "Pause trigger",
-        }
-      : confirmation?.type === "revoke"
-        ? {
-            title: "Revoke this capability?",
-            description:
-              "The current URL stops accepting events immediately. It cannot be restored and no token is retained.",
-            label: "Revoke capability",
-          }
-        : {
-            title: "Retry this dead letter?",
-            description:
-              "Only this terminal delivery is retried. The plugin declared this action idempotent.",
-            label: "Retry delivery",
-          };
+  const data = resource.data;
+  const capabilities = data?.availableCapabilities ?? [];
+  // A revoked trigger can't be restored, so it leaves the list.
+  const triggers = (data?.items ?? []).filter(
+    ({ status }) => status !== "revoked",
+  );
+  const secrets = (environment.data?.items ?? []).filter(
+    (variable) => variable.kind === "secret" && variable.enabled,
+  );
+  const open = dialog?.kind === "details" ? dialog : undefined;
+  const opened = triggers.find(({ id }) => id === open?.triggerId);
   return (
     <div className="plugin-triggers-settings">
       <SettingsHeading
-        title="Plugin Triggers"
-        description="Authenticated personal webhooks with durable, at-least-once delivery to trusted plugin actions."
+        title="Triggers"
+        description="Webhooks that run an action in a plugin you trust. Pausing stops new deliveries; one already running may still finish."
+        actions={
+          <span className="first-party-plugins-heading-actions">
+            <span aria-live="polite">
+              {resource.isPending
+                ? "Loading triggers…"
+                : resource.error !== null
+                  ? errorMessage(resource.error)
+                  : message}
+            </span>
+            {capabilities.length > 0 ? (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={busy}
+                onClick={(event) => {
+                  finalFocus.current = event.currentTarget;
+                  setDialog({ kind: "create" });
+                }}
+              >
+                Create trigger
+              </Button>
+            ) : null}
+          </span>
+        }
       />
-      <SettingsCard title="Webhook contract">
-        <div className="trigger-toolbar">
-          <p>
-            Send JSON with timestamp, event, and idempotency headers. Optional
-            HMAC uses an encrypted personal secret reference. Payloads are
-            bounded to{" "}
-            {resource.data?.webhookContract.maxPayloadBytes.toLocaleString() ??
-              "65,536"}{" "}
-            bytes.
-          </p>
-          <Button
-            disabled={
-              busy || (resource.data?.availableCapabilities.length ?? 0) === 0
-            }
-            onClick={() => setCreateOpen(true)}
+      {data === undefined ? null : (
+        <SettingsCard>
+          {triggers.length === 0 ? (
+            <div className="settings-card-empty trigger-empty">
+              <strong>No triggers yet</strong>
+              <span>
+                {capabilities.length === 0
+                  ? "Triggers come from plugins that declare them. Trust a plugin with a webhook trigger, then create the trigger here to get its URL."
+                  : "Create a trigger to get a webhook URL for a plugin you trust."}
+              </span>
+            </div>
+          ) : (
+            triggers.map((trigger) => (
+              <TriggerRow
+                key={trigger.id}
+                trigger={trigger}
+                busy={busy}
+                run={run}
+                onOpen={(opener) => {
+                  finalFocus.current = opener;
+                  setDialog({ kind: "details", triggerId: trigger.id });
+                  // Deliveries arrive from outside; show the latest.
+                  void resource.refetch();
+                }}
+              />
+            ))
+          )}
+        </SettingsCard>
+      )}
+      <DialogRoot
+        open={dialog !== undefined}
+        onOpenChange={(next) => {
+          if (!next) close();
+        }}
+      >
+        {dialog === undefined ? null : (
+          <DialogContent
+            finalFocus={finalFocus}
+            className="plugin-bundle-dialog"
           >
-            <Plus /> Create trigger
-          </Button>
-        </div>
-        <div aria-live="polite" className="trigger-message">
-          {resource.isPending || environment.isPending
-            ? "Loading plugin triggers…"
-            : ((resource.error === null
-                ? undefined
-                : errorMessage(resource.error)) ??
-              (environment.error === null
-                ? undefined
-                : errorMessage(environment.error)) ??
-              message)}
-        </div>
-        {resource.data?.availableCapabilities.length === 0 &&
-        !resource.isPending ? (
-          <p>
-            No trusted, enabled plugin version currently grants a trigger
-            capability.
-          </p>
-        ) : null}
-      </SettingsCard>
-      <SettingsCard title="Personal triggers">
-        <div className="trigger-grid">
-          {resource.data?.items.length === 0 && !resource.isPending ? (
-            <p>No personal plugin triggers configured.</p>
-          ) : null}
-          {resource.data?.items.map((trigger) => (
-            <TriggerCard
-              key={trigger.id}
-              trigger={trigger}
-              busy={busy}
-              onPause={() => setConfirmation({ type: "pause", trigger })}
-              onResume={() =>
-                void run(
-                  {
-                    type: "updateState",
-                    triggerId: trigger.id,
-                    status: "active",
-                  },
-                  "Trigger resumed and pending work scheduled.",
-                )
-              }
-              onRotate={() =>
-                void runCapability(
-                  { type: "rotate", triggerId: trigger.id },
-                  "Trigger capability rotated.",
-                )
-              }
-              onRevoke={() => setConfirmation({ type: "revoke", trigger })}
-              onRetry={(deliveryId) =>
-                setConfirmation({ type: "retry", trigger, deliveryId })
-              }
-            />
-          ))}
-        </div>
-      </SettingsCard>
-      {createOpen && resource.data ? (
-        <CreateDialog
-          capabilities={resource.data.availableCapabilities}
-          secrets={secrets}
-          busy={busy}
-          onClose={() => setCreateOpen(false)}
-          onCreate={(selected, secret) =>
-            void runCapability(
-              {
-                type: "create",
-                input: {
-                  pluginId: selected.pluginId,
-                  pluginVersion: selected.version,
-                  capabilityName: selected.capabilityName,
-                  ...(secret === undefined
-                    ? {}
-                    : { hmacSecretReference: secret.reference }),
-                },
-              },
-              "Plugin trigger created.",
-            ).then((created) => {
-              if (created) setCreateOpen(false);
-            })
-          }
-        />
-      ) : null}
-      {capability ? (
-        <CapabilityDialog
-          capability={capability}
-          onClose={() => setCapability(undefined)}
-        />
-      ) : null}
-      {confirmation ? (
-        <ConfirmDialog
-          title={confirmationCopy.title}
-          description={confirmationCopy.description}
-          confirmLabel={confirmationCopy.label}
-          busy={busy}
-          onClose={() => setConfirmation(undefined)}
-          onConfirm={confirm}
-        />
-      ) : null}
+            {dialog.kind === "create" ? (
+              <CreateTriggerForm
+                capabilities={capabilities}
+                secrets={secrets}
+                busy={busy}
+                {...(dialogError === undefined ? {} : { error: dialogError })}
+                onCancel={close}
+                onCreate={(capability, secret) =>
+                  void runCapability(
+                    {
+                      type: "create",
+                      input: {
+                        pluginId: capability.pluginId,
+                        pluginVersion: capability.version,
+                        capabilityName: capability.capabilityName,
+                        ...(secret === undefined
+                          ? {}
+                          : { hmacSecretReference: secret.reference }),
+                      },
+                    },
+                    secret !== undefined,
+                    `${capability.pluginDisplayName} trigger created.`,
+                  )
+                }
+              />
+            ) : dialog.kind === "url" ? (
+              <TriggerUrl
+                capability={dialog.capability}
+                signed={dialog.signed}
+                onDone={close}
+              />
+            ) : opened === undefined ? null : (
+              <TriggerDetails
+                key={opened.id}
+                trigger={opened}
+                busy={busy}
+                {...(dialogError === undefined ? {} : { error: dialogError })}
+                run={run}
+                onRotate={() =>
+                  void runCapability(
+                    { type: "rotate", triggerId: opened.id },
+                    opened.hmacConfigured,
+                    `${opened.pluginDisplayName} trigger has a new URL.`,
+                  )
+                }
+                onDone={close}
+              />
+            )}
+          </DialogContent>
+        )}
+      </DialogRoot>
     </div>
   );
 }

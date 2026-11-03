@@ -1,6 +1,10 @@
 import { ThreadId, Timestamp, type UserId } from "@dx/domain";
 import type { FlueEventContext, FlueObservation } from "@flue/runtime";
 import { Data, DateTime, Effect, Option, Schema } from "effect";
+import {
+  claudePlanResetOf,
+  claudePlanWaitStatement,
+} from "../claude-code/plan-wait.js";
 import type { Bindings } from "../http/types.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
 import {
@@ -17,6 +21,10 @@ const ThreadActivityInput = Schema.Struct({
   state: Schema.Literals(["working", "settled"]),
   /** How a settled submission ended. */
   outcome: Schema.optional(Schema.Literals(["completed", "failed", "aborted"])),
+  /** The submission started running, which ends a plan-reset wait. */
+  running: Schema.optional(Schema.Literal(true)),
+  /** A failure on the Claude plan's limit: when the plan resets. */
+  planResetAt: Schema.optional(Schema.Number),
   occurredAt: Timestamp,
 });
 
@@ -39,10 +47,15 @@ export const threadActivityFromFlue = (
           submissionId: event.submissionId,
           kind: "submitted",
           state: "working",
+          ...(event.type === "submission_running" ? { running: true } : {}),
           occurredAt: event.timestamp,
         }),
       );
-    case "submission_settled":
+    case "submission_settled": {
+      const planResetAt =
+        event.outcome === "failed"
+          ? claudePlanResetOf(event.error?.message)
+          : undefined;
       return Option.getOrUndefined(
         Schema.decodeOption(ThreadActivityInput)({
           threadId: event.instanceId,
@@ -50,9 +63,11 @@ export const threadActivityFromFlue = (
           kind: "settled",
           state: "settled",
           outcome: event.outcome,
+          ...(planResetAt === undefined ? {} : { planResetAt }),
           occurredAt: event.timestamp,
         }),
       );
+    }
     default:
       return undefined;
   }
@@ -107,7 +122,18 @@ const record = (bindings: Bindings, activity: ThreadActivityInput) =>
               )
               .bind(activity.threadId, eventKey, occurredAt, recordedAt)
           : undefined;
-    const [, recorded, projected, listChanged] = yield* Effect.tryPromise({
+    // A Thread whose turn failed on its Claude plan's limit runs again once
+    // the plan resets (claude-code/plan-wait.ts).
+    const planWait = claudePlanWaitStatement(db, {
+      threadId: activity.threadId,
+      submissionId: activity.submissionId,
+      running: activity.running === true,
+      ...(activity.planResetAt === undefined
+        ? {}
+        : { planResetAt: activity.planResetAt }),
+      recordedAt,
+    });
+    const [, recorded, projected, ...after] = yield* Effect.tryPromise({
       try: () =>
         db.batch([
           db
@@ -222,9 +248,11 @@ const record = (bindings: Bindings, activity: ThreadActivityInput) =>
               occurredAt,
             ),
           ...(needsYou === undefined ? [] : [needsYou]),
+          ...(planWait === undefined ? [] : [planWait]),
         ]),
       catch: (cause) => new ThreadActivityPersistenceError({ cause }),
     });
+    const listChanged = needsYou === undefined ? undefined : after[0];
     const owner = (
       listChanged?.results[0] as { owner_user_id?: UserId } | undefined
     )?.owner_user_id;

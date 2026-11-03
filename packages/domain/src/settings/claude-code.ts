@@ -302,25 +302,29 @@ const LIMIT_REASONS: Record<ClaudePlanLimitCause, string> = {
 
 /**
  * The turn failure for a plan limit. The web app reads it back with
- * `parseClaudePlanLimit` to show the limit card above the composer.
+ * `parseClaudePlanLimit` to show the limit card above the composer, and Core
+ * to run the Thread again once the plan resets, so the reset keeps its
+ * seconds.
  */
 export const claudePlanLimitText = (limit: ClaudePlanLimit) =>
   `Claude plan limit reached (${
     limit.window === undefined ? "Usage limit" : WINDOW_NAMES[limit.window]
-  }, resets ${new Date(limit.resetsAt * 1000).toISOString().slice(0, 16)}Z). ${
+  }, resets ${new Date(limit.resetsAt * 1000).toISOString().slice(0, 19)}Z). ${
     LIMIT_REASONS[limit.cause]
   }`;
 
+// Texts from before the reset kept its seconds end at the minute.
 const LIMIT_TEXT =
-  /Claude plan limit reached \(([^,]+), resets (\d{4}-\d\d-\d\dT\d\d:\d\d)Z\)\. (.+)/;
+  /Claude plan limit reached \(([^,]+), resets (\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?)Z\)\. (.+)/;
 
 export const parseClaudePlanLimit = (
   text: string,
 ): ClaudePlanLimit | undefined => {
   const match = LIMIT_TEXT.exec(text);
   if (match === null) return undefined;
-  const [, name, time, reason] = match;
-  const resetsAt = Date.parse(`${time}:00Z`) / 1000;
+  const [, name, time = "", reason] = match;
+  const resetsAt =
+    Date.parse(`${time.length === 16 ? `${time}:00` : time}Z`) / 1000;
   const cause = (Object.keys(LIMIT_REASONS) as ClaudePlanLimitCause[]).find(
     (key) => reason?.startsWith(LIMIT_REASONS[key]),
   );

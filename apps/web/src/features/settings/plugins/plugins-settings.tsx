@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
 import { Input } from "../../../shared/ui/input.js";
+import { MemberPolicyToggle } from "../member-policy-toggle.js";
 import {
   SettingsCard,
   SettingsHeading,
@@ -401,14 +402,16 @@ export function PluginsSettings({
             <SettingsRow
               title="Members can use their own keys"
               control={
-                <SettingsToggle
+                <MemberPolicyToggle
                   checked={plugins.every(
                     ({ personalOverridesAllowed }) => personalOverridesAllowed,
                   )}
                   disabled={!canUpdate || busy}
                   label="Members can use their own keys"
-                  onCheckedChange={(value) =>
-                    void run(
+                  subject="members' own keys"
+                  description="Members' next plugin calls follow the new policy."
+                  onConfirm={(value) =>
+                    run(
                       { type: "policy", allowPersonalOverrides: value },
                       "Workspace plugin policy updated.",
                     )

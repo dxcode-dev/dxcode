@@ -182,7 +182,7 @@ const refAdvertisement = (head: string | undefined) => {
   return `${line("# service=git-upload-pack\n")}0000${line(
     head === undefined
       ? `${"0".repeat(40)} capabilities^{}\0multi_ack\n`
-      : `${head} HEAD\0multi_ack symref=HEAD:refs/heads/trunk\n`,
+      : `${head} HEAD\0multi_ack filter symref=HEAD:refs/heads/trunk\n`,
   )}0000`;
 };
 

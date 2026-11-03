@@ -14,10 +14,4 @@ export const formatDuration = (value: number | null) =>
       ? `${Math.round(value)} ms`
       : `${(value / 1_000).toFixed(1)} s`;
 
-export const formatCost = (micros: number) =>
-  new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: micros < 10_000 ? 4 : 2,
-    maximumFractionDigits: micros < 10_000 ? 4 : 2,
-  }).format(micros / 1_000_000);
+export { formatCost } from "../../../shared/usage-cost.js";

@@ -24,7 +24,8 @@ import {
  * reads it, with no API and no credential: the ref advertisement names the
  * default branch and its tip, and two protocol-v2 fetches run together, one
  * for the newest commits without trees (`filter tree:0`), one for the tip's
- * trees without file contents (`filter blob:none`). GitHub, GitLab, Bitbucket,
+ * trees without file contents (`filter blob:none`); a server without partial
+ * clones gets one shallow fetch of the newest commits instead. GitHub, GitLab, Bitbucket,
  * and Forgejo all serve it, and no REST rate limit counts it.
  */
 
@@ -33,6 +34,8 @@ const USER_AGENT = "git/2.47.0 (dx)";
 const MAX_RESPONSE_BYTES = 12 * 1024 * 1024;
 const TIMEOUT_MS = 10_000;
 const ZERO_SHA = "0".repeat(40);
+/** How many commits the fallback fetch for a server without filters takes. */
+const UNFILTERED_DEPTH = 5;
 
 export class PublicGitUnreachable extends Error {
   constructor(readonly reason: "unreachable" | "too-large" | "malformed") {
@@ -72,6 +75,11 @@ export interface PublicGitTip {
   /** `undefined` for a repository without commits. */
   readonly head: string | undefined;
   readonly defaultBranch: string;
+  /**
+   * The server serves partial clones (`filter` in its capabilities). GitHub,
+   * GitLab, Bitbucket, and Codeberg do; git.kernel.org and sr.ht do not.
+   */
+  readonly filter: boolean;
 }
 
 /**
@@ -107,21 +115,28 @@ export const readPublicGitTip = async (
       const part = await reader.read();
       if (part.done) break;
       value += decoder.decode(part.value, { stream: true });
+      // The service line, a flush, then the first ref line or a flush.
+      // Bitbucket ends the service line without the usual newline.
       if (
-        /^[0-9a-f]{4}# service=git-upload-pack\n0000(?:0000|[0-9a-f]{4}[^\n]*\n)/.test(
+        /^[0-9a-f]{4}# service=git-upload-pack\n?0000(?:0000|[0-9a-f]{4}[^\n]*\n)/.test(
           value,
         )
       ) {
         const line = value.match(
-          /^[0-9a-f]{4}# service=git-upload-pack\n0000(?:[0-9a-f]{4}([0-9a-f]{40}) ([^\0\n]+)\0?([^\n]*))?/,
+          /^[0-9a-f]{4}# service=git-upload-pack\n?0000(?:[0-9a-f]{4}([0-9a-f]{40}) ([^\0\n]+)\0?([^\n]*))?/,
         );
         const sha = line?.[1];
+        const capabilities = (line?.[3] ?? "").split(" ");
         const branch =
-          line?.[3]?.match(/(?:^| )symref=HEAD:refs\/heads\/(\S+)/)?.[1] ??
-          "HEAD";
+          capabilities
+            .find((capability) =>
+              capability.startsWith("symref=HEAD:refs/heads/"),
+            )
+            ?.slice("symref=HEAD:refs/heads/".length) || "HEAD";
+        const filter = capabilities.includes("filter");
         return sha === undefined || sha === ZERO_SHA
-          ? { head: undefined, defaultBranch: branch }
-          : { head: sha, defaultBranch: branch };
+          ? { head: undefined, defaultBranch: branch, filter }
+          : { head: sha, defaultBranch: branch, filter };
       }
     }
   } finally {
@@ -248,6 +263,14 @@ export const createPublicGitRepositoryReader = (input: {
     }
   };
   let trees: Promise<ReadonlyMap<string, GitObject>> | undefined;
+  // A server without partial clones gets one shallow fetch of the newest
+  // commits with their contents, shared by commits and files; the unpack
+  // budget refuses a repository too large for it.
+  let whole: Promise<ReadonlyMap<string, GitObject>> | undefined;
+  const wholeFetch = () => {
+    whole ??= fetchObjects("fetch-shallow", [`deepen ${UNFILTERED_DEPTH}`]);
+    return whole;
+  };
   return {
     provider: "git",
     repository: async () => ({
@@ -257,10 +280,12 @@ export const createPublicGitRepositoryReader = (input: {
     }),
     commitsUrl: (host) => links.commits(host.defaultBranch),
     commits: async (limit) => {
-      const objects = await fetchObjects("fetch-commits", [
-        `deepen ${limit}`,
-        "filter tree:0",
-      ]);
+      const objects = input.tip.filter
+        ? await fetchObjects("fetch-commits", [
+            `deepen ${limit}`,
+            "filter tree:0",
+          ])
+        : await wholeFetch();
       const commits: RepositoryCommit[] = [];
       // The first-parent line from the tip, as far as the shallow fetch goes.
       let id: string | undefined = input.tip.head;
@@ -281,7 +306,9 @@ export const createPublicGitRepositoryReader = (input: {
       return commits;
     },
     directory: async (path) => {
-      trees ??= fetchObjects("fetch-trees", ["deepen 1", "filter blob:none"]);
+      trees ??= input.tip.filter
+        ? fetchObjects("fetch-trees", ["deepen 1", "filter blob:none"])
+        : wholeFetch();
       const objects = await trees;
       const head = objects.get(input.tip.head);
       if (head?.type !== "commit") throw new PublicGitUnreachable("malformed");

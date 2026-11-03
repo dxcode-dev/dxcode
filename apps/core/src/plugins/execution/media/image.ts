@@ -39,7 +39,7 @@ const MAX_DECODE_BYTES = 64 * 1024 * 1024;
  */
 const INFLATE_SLICE_BYTES = 4096;
 /** Largest image sent unchanged when it cannot be decoded here. */
-const MAX_UNDECODED_BYTES = 3.75 * 1024 * 1024;
+export const MAX_UNDECODED_BYTES = 3.75 * 1024 * 1024;
 /** Largest edge model providers accept. */
 const MAX_UNDECODED_EDGE = 8000;
 /** A re-encoded PNG above this size is sent as JPEG instead. */
@@ -69,6 +69,21 @@ export interface PreparedImage {
 /** The image cannot be shown; the message says why and what to do. */
 export class ImageRefused extends Error {
   override readonly name = "ImageRefused";
+}
+
+/**
+ * Too large to decode in the isolate or to send unchanged. The message is
+ * the refusal; a downscale outside the isolate can still show the image.
+ */
+export class ImageTooLarge extends ImageRefused {
+  readonly image: PreparedImage["source"];
+
+  constructor(image: PreparedImage["source"]) {
+    super(
+      `The image is ${image.width}×${image.height} (${megabytes(image.bytes)}), too large to view. Save a copy at most ${IMAGE_MAX_EDGE} pixels on its longest side, for example with ffmpeg -i <in> -vf "scale='min(${IMAGE_MAX_EDGE},iw)':-2" <out>.png, or crop it, and view that.`,
+    );
+    this.image = image;
+  }
 }
 
 const megabytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -640,9 +655,7 @@ export const prepareImage = async (
     // Not decoded here; model providers downsize these themselves.
     if (longest <= MAX_UNDECODED_EDGE && bytes.length <= MAX_UNDECODED_BYTES)
       return unchanged();
-    throw new ImageRefused(
-      `The image is ${width}×${height} (${megabytes(bytes.length)}), too large to view. Save a copy at most ${IMAGE_MAX_EDGE} pixels on its longest side, for example with ffmpeg -i <in> -vf "scale='min(${IMAGE_MAX_EDGE},iw)':-2" <out>.png, or crop it, and view that.`,
-    );
+    throw new ImageTooLarge(source);
   }
   const scale = Math.min(1, IMAGE_MAX_EDGE / longest);
   const targetWidth = Math.max(1, Math.round(width * scale));

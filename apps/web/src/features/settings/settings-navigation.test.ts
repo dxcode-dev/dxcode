@@ -14,7 +14,7 @@ const menu = (scope: SettingsScope, workspaceRole?: WorkspaceRole) =>
 describe("settings navigation", () => {
   it("shows only the settings features currently exposed in each menu", () => {
     expect(menu("personal")).toEqual([
-      [null, ["Account", "Integrations & MCP"]],
+      [null, ["Account", "Integrations & MCP", "Experimental Features"]],
       ["Agent", ["Instructions", "Mode Dial", "Model Routing"]],
       ["Library", ["Secrets & Env Vars", "Skills", "Plugins"]],
       ["Projects & Orbs", ["Project Defaults", "Orb Providers"]],

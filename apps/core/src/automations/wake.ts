@@ -76,6 +76,34 @@ export const deliverMessage = async (
 };
 
 /**
+ * Runs an existing Thread's failed turn again, as its owner's Retry does:
+ * the history it has, with nothing added. The key names what is retried, so
+ * a repeated sweep admits one submission. Returns its submission.
+ */
+export const resumeThread = async (
+  target: Omit<WakeTarget, "automation">,
+  threadId: string,
+  key: string,
+) => {
+  const { response, payload } = await ownerRequest(
+    {
+      bindings: target.bindings,
+      ownerUserId: target.ownerUserId as UserId,
+      ...(target.waitUntil === undefined
+        ? {}
+        : { waitUntil: target.waitUntil }),
+    },
+    "POST",
+    `/v1/agents/dx/${encodeURIComponent(threadId)}`,
+    { kind: "resume", idempotencyKey: await sha256Hex(key) },
+  );
+  const submissionId = payload?.submissionId;
+  if (response.status !== 202 || typeof submissionId !== "string")
+    throw failure("Resuming the Thread", response.status, payload);
+  return submissionId;
+};
+
+/**
  * The selection a new Thread runs: the agent mode the automation saved, or
  * the selection of the Thread it belongs to.
  */

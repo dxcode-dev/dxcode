@@ -476,6 +476,7 @@ export const inspectWebArchitecture = ({
     }
     const persistenceOwner =
       displayPath.endsWith("/shared/theme/theme-store.ts") ||
+      displayPath.endsWith("/shared/audio-input/audio-input-store.ts") ||
       displayPath.endsWith("/shared/commands/command-registry.ts") ||
       displayPath.endsWith("/features/threads/new-thread-draft-store.ts") ||
       displayPath.endsWith(

@@ -121,6 +121,9 @@ export const tombstoneStatements = (
       .prepare(`DELETE FROM thread_schedule WHERE ${tombstoneOf("thread_id")}`)
       .bind(ids, ownerUserId),
     db
+      .prepare(`DELETE FROM thread_plan_wait WHERE ${tombstoneOf("thread_id")}`)
+      .bind(ids, ownerUserId),
+    db
       .prepare(
         `DELETE FROM github_subscription WHERE ${tombstoneOf("thread_id")}`,
       )

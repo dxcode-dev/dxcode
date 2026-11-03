@@ -1,3 +1,4 @@
+import { sweepClaudePlanWaits } from "../claude-code/plan-wait.js";
 import type { Bindings } from "../http/types.js";
 import { automationLogger } from "../logging.js";
 import {
@@ -9,6 +10,7 @@ import {
 import { expireSubscriptions } from "./subscriptions.js";
 import {
   deliverMessage,
+  resumeThread,
   selectionFor,
   startThread,
   type WakeTarget,
@@ -105,18 +107,39 @@ const fireSchedule = async (
   }
 };
 
-/** Runs one automation pass. Returns how many it fired and expired. */
+/**
+ * Runs one automation pass. Returns how many schedules it fired,
+ * subscriptions it expired, and Threads it resumed after their Claude plan
+ * reset (claude-code/plan-wait.ts).
+ */
 export const sweepAutomations = async (
   bindings: Bindings,
   now = new Date(),
   waitUntil?: (promise: Promise<unknown>) => void,
 ) => {
   const db = bindings.DB;
-  if (db === undefined) return { schedules: 0, expired: 0 };
+  if (db === undefined) return { schedules: 0, expired: 0, resumed: 0 };
   try {
-    const [schedules, expired] = await Promise.all([
+    const [schedules, expired, resumed] = await Promise.all([
       dueSchedules(db, now),
       expireSubscriptions(db, now),
+      sweepClaudePlanWaits(db, now, (wait) =>
+        resumeThread(
+          {
+            bindings,
+            ownerUserId: wait.ownerUserId,
+            ...(waitUntil === undefined ? {} : { waitUntil }),
+          },
+          wait.threadId,
+          wait.key,
+        ).then(() =>
+          automationLogger.info("Thread resumed after its plan reset.", {
+            event: "claude_plan_wait_resumed",
+            threadId: wait.threadId,
+            submissionId: wait.submissionId,
+          }),
+        ),
+      ),
     ]);
     await Promise.all(
       schedules.map((row) =>
@@ -129,12 +152,12 @@ export const sweepAutomations = async (
         ),
       ),
     );
-    return { schedules: schedules.length, expired };
+    return { schedules: schedules.length, expired, resumed };
   } catch (cause) {
     automationLogger.warn("Automations were not swept.", {
       event: "automation_sweep_failed",
       cause,
     });
-    return { schedules: 0, expired: 0 };
+    return { schedules: 0, expired: 0, resumed: 0 };
   }
 };

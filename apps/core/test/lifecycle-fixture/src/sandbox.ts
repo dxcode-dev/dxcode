@@ -23,6 +23,7 @@ interface InstanceState {
 
 const instances = new Map<string, InstanceState>();
 const failingActivations = new Set<string>();
+const hangingActivations = new Set<string>();
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -99,6 +100,11 @@ class FixtureSandboxDriver implements SandboxDriver {
     options?: { readonly signal?: AbortSignal },
   ): Promise<ShellResult> {
     if (command === "hold-turn") return this.holdUntilStopped(options?.signal);
+    // A command that ignores Stop and never ends, as a wedged Orb's did.
+    if (command === "deaf-hold") {
+      this.state.holding = true;
+      return new Promise<never>(() => undefined);
+    }
     const output = /^fixture-output (\d+) (\d+)$/.exec(command);
     if (output !== null)
       return {
@@ -143,6 +149,9 @@ export const fixtureSandboxFactory: SandboxFactory = {
   async createSandbox({ id }): Promise<Sandbox> {
     if (failingActivations.delete(id))
       throw new Error("Fixture workspace activation failed.");
+    // Signal-deaf, as activation against a wedged Orb was (#1584).
+    if (hangingActivations.delete(id))
+      return new Promise<never>(() => undefined);
     const state = stateFor(id);
     if (state.sandbox !== undefined) return state.sandbox;
     state.initializationCount += 1;
@@ -171,6 +180,11 @@ export const isHoldingTurn = (id: string) => stateFor(id).holding;
 /** Fails the instance's next workspace activation, before any model call. */
 export const failNextActivation = (id: string) => {
   failingActivations.add(id);
+};
+
+/** Hangs the instance's next workspace activation, ignoring Stop. */
+export const hangNextActivation = (id: string) => {
+  hangingActivations.add(id);
 };
 
 export { ORPHAN_RESULT };

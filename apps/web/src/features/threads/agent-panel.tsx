@@ -261,12 +261,14 @@ const claudePlanLimitPresentation = (
   limit: ClaudePlanLimit,
 ): ThreadErrorPresentation => ({
   id,
-  title: "Claude subscription limit reached",
+  // Core runs the Thread again once the plan resets, with every message it
+  // got in the meantime.
+  title: `Waiting for plan reset at ${claudePlanReset(limit.resetsAt)}`,
   message: `You've hit your Claude ${
     limit.window === undefined
       ? "subscription limit"
       : claudePlanWindowName(limit.window)
-  } · resets ${claudePlanReset(limit.resetsAt)}.${
+  }. This Thread answers by itself once it resets; new messages wait too.${
     limit.cause === "exhausted"
       ? ""
       : " dx kept Claude Code off paid extra usage."

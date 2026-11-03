@@ -35,6 +35,7 @@ import {
   composerDefaultsQueryOptions,
   updateComposerDefaultsMutationOptions,
 } from "./composer-defaults-queries.js";
+import { DictationSettingsCard } from "./dictation-settings.js";
 import { DictationVocabularyCard } from "./dictation-vocabulary.js";
 
 const NO_PROJECT = "";
@@ -56,7 +57,7 @@ export function ComposerSettings({ onDirtyChange }: SettingsSectionProps) {
     <div className="composer-settings">
       <SettingsHeading
         title="Composer"
-        description="What a New Thread starts with and which words dictation recognizes."
+        description="What a New Thread starts with and how dictation works."
       />
       {defaults.isError ? (
         <SettingsBackgroundError onRetry={() => void defaults.refetch()}>
@@ -86,6 +87,7 @@ export function ComposerSettings({ onDirtyChange }: SettingsSectionProps) {
           />
         </SettingsCard>
       )}
+      <DictationSettingsCard />
       <DictationVocabularyCard
         target={{ scope: "personal" }}
         description="Names, technical terms, and other words that dictation should recognize. Enter one term per line, or separate terms with commas. Your workspace's terms are used after yours."

@@ -528,7 +528,7 @@ describe("Claude Pro/Max plan usage", () => {
     expect(refused.status).toBe(400);
     const limit = {
       window: "five_hour",
-      resetsAt: Math.floor(reset / 60) * 60,
+      resetsAt: reset,
       cause: "not-started",
     };
     expect(
@@ -637,7 +637,6 @@ describe("Claude Pro/Max plan usage", () => {
           })
         ).status,
       ).toBe(200);
-    const minute = (seconds: number) => Math.floor(seconds / 60) * 60;
     // A later reading with the window reset: the plan is open again.
     const reopen = async (route: {
       threadId: string;
@@ -689,7 +688,7 @@ describe("Claude Pro/Max plan usage", () => {
     await reorder([first, second]);
     const firstReset = now() + 2 * hour;
     await useUp(onFirst.route, firstReset);
-    expect(await limitOf(one)).toBe(minute(firstReset));
+    expect(await limitOf(one)).toBe(firstReset);
     expect(await boundTo(one)).toBe(first);
     expect((await tokenOf(three)).token).toBe(NEW_TOKEN);
     expect(await boundTo(three)).toBe(second);
@@ -698,7 +697,7 @@ describe("Claude Pro/Max plan usage", () => {
     // resets first, not the first in order, and stays on no plan.
     const secondReset = now() + hour;
     await useUp(onSecond.route, secondReset);
-    expect(await limitOf(four)).toBe(minute(secondReset));
+    expect(await limitOf(four)).toBe(secondReset);
     expect(await boundTo(four)).toBeNull();
 
     // Disabling the second plan holds its Threads: Thread two is refused
@@ -1016,7 +1015,7 @@ describe("Claude Pro/Max plan usage", () => {
       parseClaudePlanLimit((refused.body as { message: string }).message),
     ).toEqual({
       window: "five_hour",
-      resetsAt: Math.floor(reset / 60) * 60,
+      resetsAt: reset,
       cause: "exhausted",
     });
   });

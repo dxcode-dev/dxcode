@@ -6,18 +6,32 @@ import { shellDefinitions } from "./definitions.js";
 type AgentTool = ReturnType<SandboxToolFactory>[number];
 const logger = getLogger(["dx", "execution", "shell"]);
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+const MAX_WAIT_MS = 60_000;
 const shellWaitMs = (value?: number) =>
   value === undefined || !Number.isFinite(value)
     ? 10_000
-    : Math.min(60_000, Math.max(0, Math.floor(value)));
+    : Math.min(MAX_WAIT_MS, Math.max(0, Math.floor(value)));
+/**
+ * The start only launches the command and records its pid, so it has its own
+ * budget: on an overloaded Orb (#1584) even a login shell takes seconds to
+ * spawn, and a start that shared the wait's budget lost the pid.
+ */
+const START_BUDGET_MS = 30_000;
+/** Beyond the wait itself, what the guest gets to spawn and read. */
+const WAIT_SLACK_MS = 5_000;
 
 // Each read keeps at most the last 51,200 bytes and 2,000 lines. The cursor
 // advances past discarded bytes too. Guest log files themselves are retained.
 const readScript = (wait: number) => `
 deadline=$(( $(date +%s%3N) + ${wait} ))
 while [[ ! -f "$state/exit" && $(date +%s%3N) -lt $deadline ]]; do sleep 0.1; done
-# Serialize readers so concurrent calls cannot return the same bytes.
-while ! mkdir "$state/read-lock" 2>/dev/null; do sleep 0.1; done
+# Serialize readers so concurrent calls cannot return the same bytes. A
+# reader killed without its EXIT trap (SIGKILL after a deadline) leaves the
+# lock behind; one older than a minute is stale.
+while ! mkdir "$state/read-lock" 2>/dev/null; do
+  if [[ -n $(find "$state/read-lock" -maxdepth 0 -mmin +1 2>/dev/null) ]]; then rmdir "$state/read-lock" 2>/dev/null; fi
+  sleep 0.1
+done
 trap 'rmdir "$state/read-lock"' EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
@@ -109,39 +123,17 @@ export const createShellTools = (
       };
       signal?.throwIfAborted();
       const wait = index === 2 ? 2000 : shellWaitMs(params.timeout_ms);
+      // An out-of-range wait is clamped, and the agent hears so.
+      const note =
+        index !== 2 &&
+        typeof params.timeout_ms === "number" &&
+        Number.isFinite(params.timeout_ms) &&
+        params.timeout_ms > MAX_WAIT_MS
+          ? `timeout_ms ${params.timeout_ms} is above the ${MAX_WAIT_MS} maximum, so dx waited ${MAX_WAIT_MS} ms. The command keeps running after the wait; follow it with shell_command_status.`
+          : undefined;
       const prefix = `umask 077\nroot="$HOME/.local/state/dx-shell"\n`;
-      let script: string;
       // Core names the start directory so Stop can find it before the pid.
       const startState = `start.${crypto.randomUUID()}`;
-      if (index === 0) {
-        const cwd = params.workdir ?? options?.defaultWorkdir ?? sandbox.cwd;
-        script = `${prefix}
-[[ -d ${quote(cwd)} ]] || { echo 'Working directory does not exist:' ${quote(cwd)} >&2; exit 1; }
-cd -- ${quote(cwd)} || exit 1
-mkdir -p "$root"
-state="$root/${startState}"
-mkdir "$state" 2>/dev/null || { echo 'Stopped before the command started.' >&2; exit 1; }
-printf '%s' ${quote(params.command)} > "$state/command"
-printf '%s' ${quote(runner)} > "$state/runner"
-: > "$state/output"; echo 0 > "$state/cursor"
-nohup setsid bash "$state/runner" "$state" </dev/null >/dev/null 2>&1 &
-while [[ ! -f "$state/pid" ]]; do sleep 0.01; done
-pid=$(cat "$state/pid")
-# The runner keeps its initial path; the public pid path is a durable alias.
-ln -s "$state" "$root/$pid" || exit 1
-${readScript(wait)}`;
-      } else {
-        if (!Number.isSafeInteger(params.pid) || params.pid <= 0) {
-          throw new Error("Unknown shell process pid");
-        }
-        script = `${prefix}
-pid=${params.pid}
-state="$root/$pid"
-[[ -d "$state" ]] || { echo "Unknown shell process pid: $pid" >&2; exit 1; }
-${index === 2 ? killGroup : ""}
-${readScript(index === 2 ? 1000 : wait)}`;
-      }
-      let result: Awaited<ReturnType<Sandbox["exec"]>>;
       // Listening before Flue does (execute runs before Flue's abort race
       // subscribes) settles this call with the error below, not Flue's
       // "may still be running".
@@ -151,20 +143,15 @@ ${readScript(index === 2 ? 1000 : wait)}`;
       });
       aborted.catch(() => undefined);
       signal?.addEventListener("abort", onAbort, { once: true });
-      try {
-        result = await Promise.race([
-          sandbox.exec(`bash -c ${quote(script)}`, {
-            timeoutMs: wait + 5000,
-            signal,
-          }),
+      const guestExec = (script: string, timeoutMs: number) =>
+        Promise.race([
+          sandbox.exec(`bash -c ${quote(script)}`, { timeoutMs, signal }),
           aborted,
         ]);
-        signal?.throwIfAborted();
-      } catch (error) {
-        // Stop ends a command the agent is still waiting on. One it already
-        // left running, and now follows with shell_command_status, keeps
-        // running. Flue abandons this call on abort, so the stop runs on.
-        if (index !== 0 || signal?.aborted !== true) throw error;
+      // Stop ends a command the agent is still waiting on. One it already
+      // left running, and now follows with shell_command_status, keeps
+      // running. Flue abandons this call on abort, so the stop runs on.
+      const stopStarted = () => {
         void sandbox
           .exec(`bash -c ${quote(stopScript(startState))}`, {
             timeoutMs: 15_000,
@@ -182,17 +169,102 @@ ${readScript(index === 2 ? 1000 : wait)}`;
                 error: String(cause),
               }),
           );
+      };
+      let pid: number;
+      let result: Awaited<ReturnType<Sandbox["exec"]>> | undefined;
+      try {
+        if (index === 0) {
+          const cwd = params.workdir ?? options?.defaultWorkdir ?? sandbox.cwd;
+          // The start only launches the command and returns its pid.
+          const started = await guestExec(
+            `${prefix}
+[[ -d ${quote(cwd)} ]] || { echo 'Working directory does not exist:' ${quote(cwd)} >&2; exit 1; }
+cd -- ${quote(cwd)} || exit 1
+mkdir -p "$root"
+state="$root/${startState}"
+mkdir "$state" 2>/dev/null || { echo 'Stopped before the command started.' >&2; exit 1; }
+printf '%s' ${quote(params.command)} > "$state/command"
+printf '%s' ${quote(runner)} > "$state/runner"
+: > "$state/output"; echo 0 > "$state/cursor"
+nohup setsid bash "$state/runner" "$state" </dev/null >/dev/null 2>&1 &
+while [[ ! -f "$state/pid" ]]; do sleep 0.01; done
+pid=$(cat "$state/pid")
+# The runner keeps its initial path; the public pid path is a durable alias.
+ln -s "$state" "$root/$pid" || exit 1
+printf '%s' "$pid"`,
+            START_BUDGET_MS,
+          ).catch((cause: unknown) => {
+            if (signal?.aborted === true) throw cause;
+            // It may still start once the Orb catches up; never leave a
+            // command running that the agent was told failed.
+            stopStarted();
+            throw new Error(
+              `The Orb took more than ${START_BUDGET_MS / 1000} s to start the command, so dx stopped it. The Orb is likely overloaded: check heavy background processes before retrying. (${cause instanceof Error ? cause.message : String(cause)})`,
+            );
+          });
+          signal?.throwIfAborted();
+          if (started.exitCode !== 0)
+            throw new Error(
+              started.stderr ||
+                started.stdout ||
+                "Shell process operation failed",
+            );
+          // The pid is the start's last line; a login profile may print first.
+          pid = Number(started.stdout.trim().split("\n").at(-1));
+          if (!Number.isSafeInteger(pid) || pid <= 0)
+            throw new Error(
+              `The command started, but dx couldn't read its pid: ${started.stdout.slice(-200)}`,
+            );
+        } else {
+          if (!Number.isSafeInteger(params.pid) || params.pid <= 0) {
+            throw new Error("Unknown shell process pid");
+          }
+          pid = params.pid;
+        }
+        // The wait has its own budget; when even that runs out on a slow
+        // Orb, the command is still running under its pid.
+        result = await guestExec(
+          `${prefix}
+pid=${pid}
+state="$root/$pid"
+[[ -d "$state" ]] || { echo "Unknown shell process pid: $pid" >&2; exit 1; }
+${index === 2 ? killGroup : ""}
+${readScript(index === 2 ? 1000 : wait)}`,
+          wait + WAIT_SLACK_MS,
+        ).catch((cause: unknown) => {
+          if (index === 2 || signal?.aborted === true) throw cause;
+          logger.warn("Reading a shell command's output failed", {
+            pid,
+            error: String(cause),
+          });
+          return undefined;
+        });
+        signal?.throwIfAborted();
+      } catch (error) {
+        if (index !== 0 || signal?.aborted !== true) throw error;
+        stopStarted();
         throw stoppedError(signal);
       } finally {
         signal?.removeEventListener("abort", onAbort);
+      }
+      if (result === undefined) {
+        const lines = [
+          `<note>The Orb was too slow to read the command's output within the wait. The command keeps running; follow it with shell_command_status.</note>`,
+          ...(note === undefined ? [] : [`<note>${note}</note>`]),
+          "<running>true</running>",
+          `<pid>${pid}</pid>`,
+        ];
+        return {
+          content: [{ type: "text", text: lines.join("\n") }],
+          details: { pid, running: true, exitCode: undefined },
+        };
       }
       if (result.exitCode !== 0)
         throw new Error(
           result.stderr || result.stdout || "Shell process operation failed",
         );
-      const [pidText, runningText, codeText, truncated, ...outputLines] =
+      const [, runningText, codeText, truncated, ...outputLines] =
         result.stdout.split("\n");
-      const pid = Number(pidText);
       const running = runningText === "true";
       const exitCode = running ? undefined : Number(codeText);
       // Keep output plaintext so the sandbox's secret-redaction wrapper can
@@ -204,6 +276,7 @@ ${readScript(index === 2 ? 1000 : wait)}`;
       const lines: string[] = [];
       if (output || !running) lines.push(`<output>${output}</output>`);
       if (!running) lines.push(`<exitCode>${exitCode}</exitCode>`);
+      if (note !== undefined) lines.push(`<note>${note}</note>`);
       if (running || index !== 0)
         lines.push(`<running>${running}</running>`, `<pid>${pid}</pid>`);
       return {

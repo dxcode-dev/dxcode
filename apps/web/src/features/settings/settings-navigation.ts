@@ -13,7 +13,6 @@ const hiddenNavigationIds: Readonly<
     "personal-plugin-usage",
     "personal-custom-plugins",
     "personal-triggers",
-    "personal-experimental-features",
     "personal-signing-keys",
   ]),
   workspace: new Set([

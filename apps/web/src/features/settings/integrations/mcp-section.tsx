@@ -7,12 +7,12 @@ import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
   DialogContent,
-  DialogDescription,
   DialogRoot,
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
 import { Input } from "../../../shared/ui/input.js";
-import { SettingsHeading, SettingsToggle } from "../settings-primitives.js";
+import { MemberPolicyToggle } from "../member-policy-toggle.js";
+import { SettingsHeading } from "../settings-primitives.js";
 import {
   IntegrationCard,
   IntegrationGroup,
@@ -165,62 +165,28 @@ function PolicyCard({
   readonly disabled: boolean;
   readonly run: McpRun;
 }) {
-  const [confirming, setConfirming] = React.useState<boolean>();
   return (
-    <>
-      <IntegrationCard
-        label="Personal MCP servers"
-        icon={<McpLogo />}
-        title="Personal MCP Servers"
-        action={
-          <SettingsToggle
-            checked={allowed}
-            disabled={disabled}
-            label="Allow personal MCP servers"
-            onCheckedChange={setConfirming}
-          />
-        }
-        description="Allow personal MCP servers: members' Threads also use the servers they add in personal settings."
-      />
-      <DialogRoot
-        open={confirming !== undefined}
-        onOpenChange={(open) => {
-          if (!open) setConfirming(undefined);
-        }}
-      >
-        {confirming === undefined ? null : (
-          <DialogContent>
-            <DialogTitle>
-              {confirming ? "Allow" : "Block"} personal MCP servers?
-            </DialogTitle>
-            <DialogDescription>
-              Members' next calls follow the new policy.
-            </DialogDescription>
-            <footer className="mcp-dialog-actions">
-              <Button
-                size="xs"
-                variant="ghost"
-                onClick={() => setConfirming(undefined)}
-              >
-                Cancel
-              </Button>
-              <Button
-                size="xs"
-                onClick={async () => {
-                  const done = await run(
-                    { type: "updatePolicy", allowPersonalServers: confirming },
-                    "Workspace MCP policy updated.",
-                  );
-                  if (done) setConfirming(undefined);
-                }}
-              >
-                Confirm
-              </Button>
-            </footer>
-          </DialogContent>
-        )}
-      </DialogRoot>
-    </>
+    <IntegrationCard
+      label="Personal MCP servers"
+      icon={<McpLogo />}
+      title="Personal MCP Servers"
+      action={
+        <MemberPolicyToggle
+          checked={allowed}
+          disabled={disabled}
+          label="Allow personal MCP servers"
+          subject="personal MCP servers"
+          description="Members' next calls follow the new policy."
+          onConfirm={(value) =>
+            run(
+              { type: "updatePolicy", allowPersonalServers: value },
+              "Workspace MCP policy updated.",
+            )
+          }
+        />
+      }
+      description="Allow personal MCP servers: members' Threads also use the servers they add in personal settings."
+    />
   );
 }
 

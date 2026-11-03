@@ -8,7 +8,7 @@ export const personalPluginTriggersSettingsSection = {
   group: "projects-orbs",
   scope: "personal",
   label: "Triggers",
-  title: "Plugin Triggers",
+  title: "Triggers",
   description: "Manage authenticated webhooks and durable plugin deliveries.",
   icon: Webhook,
   component: PluginTriggersSettings,

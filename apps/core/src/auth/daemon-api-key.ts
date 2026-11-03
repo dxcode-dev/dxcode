@@ -145,3 +145,23 @@ export const revokeThreadDaemonApiKey = async (
     .bind(keyId, DAEMON_KEY_CONFIG)
     .run();
 };
+
+/**
+ * Deletes every daemon key of the Thread but `keepKeyId`, so only the newest
+ * key is ever valid: an Orb restored from an older snapshot, or a key minted
+ * by an activation that never reached the Orb, can't come back (#1584).
+ */
+export const revokeEarlierThreadDaemonApiKeys = async (
+  bindings: Bindings,
+  threadId: ThreadId,
+  keepKeyId: string,
+) => {
+  await database(bindings)
+    .prepare(
+      `DELETE FROM apikey
+        WHERE configId = ? AND id <> ?
+          AND json_extract(metadata, '$.threadId') = ?`,
+    )
+    .bind(DAEMON_KEY_CONFIG, keepKeyId, threadId)
+    .run();
+};

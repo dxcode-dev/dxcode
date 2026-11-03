@@ -12,7 +12,8 @@ export const personalComposerSettingsSection: SettingsSectionRegistration = {
   slug: "composer",
   label: "Composer",
   title: "Composer",
-  description: "What a New Thread starts with and dictation vocabulary.",
+  description:
+    "What a New Thread starts with, Dictation, Audio Input, and dictation vocabulary.",
   icon: TextCursorInput,
   component: ComposerSettings,
 };

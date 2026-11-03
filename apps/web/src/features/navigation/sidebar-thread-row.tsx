@@ -465,6 +465,7 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
           ) : null}
           <span className="thread-executor-icon">
             <OrbIcon
+              staticWhenIdle
               activityStatus={activityStatus}
               unread={unread}
               aria-hidden="false"

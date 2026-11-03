@@ -3,7 +3,7 @@ import type {
   PersonalExperimentalFeaturesData,
 } from "@dx/api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, FlaskConical, ShieldX } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { settle } from "../../../shared/settle.js";
@@ -25,91 +25,37 @@ const activationLabel = (
 ) => {
   switch (activation) {
     case "immediate":
-      return "Applies immediately";
+      return undefined;
     case "restart":
-      return "Requires an app restart";
+      return "Applies after an app restart.";
     case "new-thread":
-      return "Applies only to new Threads";
+      return "Applies to new Threads.";
   }
 };
 
-const denialLabel = (flag: ExperimentalFeaturePreferenceData) => {
+/**
+ * Why the switch has no effect yet, or when a change takes effect; absent
+ * when it applies at once.
+ */
+const featureHint = (flag: ExperimentalFeaturePreferenceData) => {
   switch (flag.denialReason) {
     case "prerequisite-disabled":
-      return `Requires ${flag.blockedBy.join(", ")}`;
+      return `Needs ${flag.blockedBy.join(", ")} on.`;
     case "incompatible-feature":
-      return `Incompatible with ${flag.blockedBy.join(", ")}`;
+      return `Can't run with ${flag.blockedBy.join(", ")}.`;
     case undefined:
-      return undefined;
+      return activationLabel(flag.registration.activation);
   }
 };
-
-function FeatureMetadata({
-  flag,
-}: {
-  readonly flag: ExperimentalFeaturePreferenceData;
-}) {
-  const feature = flag.registration;
-  const relationship =
-    feature.prerequisites.length > 0
-      ? `Requires ${feature.prerequisites.join(", ")}`
-      : feature.incompatibilities.length > 0
-        ? `Incompatible with ${feature.incompatibilities.join(", ")}`
-        : undefined;
-  return (
-    <div className="experimental-feature-description">
-      <p>{feature.description}</p>
-      <div className="experimental-feature-metadata">
-        <span>{feature.owner.team}</span>
-        <span>{feature.risk} risk</span>
-        <span>Personal scope</span>
-        <span>Review {feature.reviewDate}</span>
-      </div>
-      <div className="experimental-feature-semantics">
-        <span>{activationLabel(feature.activation)}</span>
-        {relationship === undefined ? null : <span>{relationship}</span>}
-        {feature.owner.issue === undefined ? null : (
-          <a href={feature.owner.issue} target="_blank" rel="noreferrer">
-            Lifecycle issue
-          </a>
-        )}
-      </div>
-      {denialLabel(flag) === undefined ? null : (
-        <div className="experimental-feature-denial" role="status">
-          <ShieldX aria-hidden="true" /> {denialLabel(flag)}
-        </div>
-      )}
-      <details className="experimental-feature-lifecycle">
-        <summary>Migration, graduation, and removal plan</summary>
-        <dl>
-          <div>
-            <dt>Migration</dt>
-            <dd>{feature.lifecyclePlan.migration}</dd>
-          </div>
-          <div>
-            <dt>Graduation</dt>
-            <dd>{feature.lifecyclePlan.graduation}</dd>
-          </div>
-          <div>
-            <dt>Removal</dt>
-            <dd>{feature.lifecyclePlan.removal}</dd>
-          </div>
-        </dl>
-      </details>
-    </div>
-  );
-}
 
 function ExperimentalFeaturesPanel({
   data,
   savingFeatureId,
-  message,
   error,
   onToggle,
 }: {
   readonly data: PersonalExperimentalFeaturesData;
   readonly savingFeatureId?: string;
-  readonly message?: string;
   readonly error?: string;
   readonly onToggle: (flag: ExperimentalFeaturePreferenceData) => void;
 }) {
@@ -117,52 +63,48 @@ function ExperimentalFeaturesPanel({
     <div className="experimental-features-settings">
       <SettingsHeading
         title="Experimental Features"
-        description="Opt into lifecycle-managed previews supported by this dx build. Experiments may change or disappear."
-      />
-
-      {data.flags.length === 0 ? (
-        <SettingsCard>
-          <div className="experimental-features-empty" role="status">
-            <FlaskConical aria-hidden="true" />
-            <strong>
-              No experimental features are available in this build.
-            </strong>
-            <span>
-              This is expected: dx registers a switch only for a real capability
-              with an owner and lifecycle plan.
+        actions={
+          error === undefined ? null : (
+            <span
+              className="first-party-plugins-heading-actions"
+              role="alert"
+              data-error
+            >
+              {error}
             </span>
-          </div>
-        </SettingsCard>
-      ) : (
-        <SettingsCard title="Available in this build">
-          {data.flags.map((flag) => (
-            <SettingsRow
-              key={flag.registration.id}
-              title={flag.registration.title}
-              badge={flag.registration.status}
-              description={<FeatureMetadata flag={flag} />}
-              control={
-                <SettingsToggle
-                  checked={flag.personalEnabled}
-                  disabled={savingFeatureId !== undefined}
-                  label={`${flag.personalEnabled ? "Disable" : "Enable"} ${flag.registration.title}`}
-                  onCheckedChange={() => onToggle(flag)}
-                />
-              }
-            />
-          ))}
-        </SettingsCard>
-      )}
-
-      {message === undefined && error === undefined ? null : (
-        <div
-          className="experimental-features-message"
-          role={error === undefined ? "status" : "alert"}
-          data-error={error === undefined ? undefined : true}
-        >
-          {error ?? message}
-        </div>
-      )}
+          )
+        }
+      />
+      <SettingsCard>
+        {data.flags.length === 0 ? (
+          <p className="settings-card-empty">
+            No experimental features in this build.
+          </p>
+        ) : (
+          data.flags.map((flag) => {
+            const hint = featureHint(flag);
+            return (
+              <SettingsRow
+                key={flag.registration.id}
+                title={flag.registration.title}
+                description={
+                  hint === undefined
+                    ? flag.registration.description
+                    : `${flag.registration.description} ${hint}`
+                }
+                control={
+                  <SettingsToggle
+                    checked={flag.personalEnabled}
+                    disabled={savingFeatureId !== undefined}
+                    label={`${flag.personalEnabled ? "Disable" : "Enable"} ${flag.registration.title}`}
+                    onCheckedChange={() => onToggle(flag)}
+                  />
+                }
+              />
+            );
+          })
+        )}
+      </SettingsCard>
     </div>
   );
 }
@@ -195,7 +137,6 @@ export function ExperimentalFeaturesSettings() {
   const updateFeature = useMutation(
     updatePersonalExperimentalFeatureMutationOptions(queryClient, identity.id),
   );
-  const [message, setMessage] = React.useState<string>();
   const [error, setError] = React.useState<string>();
 
   if (features.isPending && features.data === undefined) {
@@ -222,23 +163,15 @@ export function ExperimentalFeaturesSettings() {
 
   const toggle = async (flag: ExperimentalFeaturePreferenceData) => {
     if (updateFeature.isPending) return;
-    setMessage(undefined);
     setError(undefined);
-    const outcome = await settle(async () => {
-      const saved = await updateFeature.mutateAsync([
+    // The switch shows the saved state, so only a failure needs words.
+    const outcome = await settle(() =>
+      updateFeature.mutateAsync([
         flag.registration.id,
         !flag.personalEnabled,
         data.revision,
-      ]);
-      const updated = saved.flags.find(
-        ({ registration }) => registration.id === flag.registration.id,
-      );
-      setMessage(
-        updated?.effectiveEnabled === true
-          ? `${flag.registration.title} enabled. ${activationLabel(flag.registration.activation)}.`
-          : `${flag.registration.title} disabled.`,
-      );
-    });
+      ]),
+    );
     if (!outcome.ok) {
       setError(
         outcome.error instanceof Error
@@ -262,7 +195,6 @@ export function ExperimentalFeaturesSettings() {
         savingFeatureId={
           updateFeature.isPending ? updateFeature.variables?.[0] : undefined
         }
-        message={message}
         error={error}
         onToggle={(flag) => void toggle(flag)}
       />

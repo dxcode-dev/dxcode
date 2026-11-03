@@ -1,4 +1,5 @@
 import { DICTATION_MAX_SAMPLES, DICTATION_SAMPLE_RATE } from "@dx/api";
+import { audioInputStore } from "../../../shared/audio-input/audio-input-store.js";
 import pcmCaptureWorkletUrl from "./pcm-capture-worklet.mjs?url&no-inline";
 
 export type CaptureSnapshot =
@@ -42,7 +43,40 @@ const wav = (chunks: ReadonlyArray<Int16Array>, samples: number) => {
   return new Blob([buffer], { type: "audio/wav" });
 };
 
+const microphoneGone = (cause: unknown) =>
+  cause instanceof DOMException &&
+  (cause.name === "OverconstrainedError" || cause.name === "NotFoundError");
+
+const DICTATION_AUDIO = {
+  channelCount: 1,
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+} satisfies MediaTrackConstraints;
+
+/**
+ * Opens the chosen microphone, or the system default when none is chosen or
+ * the chosen one is no longer connected.
+ */
+const openMicrophone = async (deviceId: string | undefined) => {
+  if (deviceId !== undefined)
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        audio: { ...DICTATION_AUDIO, deviceId: { exact: deviceId } },
+      });
+    } catch (cause) {
+      if (!microphoneGone(cause)) throw cause;
+    }
+  return navigator.mediaDevices.getUserMedia({ audio: DICTATION_AUDIO });
+};
+
 export class DictationCapture {
+  /** `audioInput` reads the Audio Input choice when recording starts. */
+  constructor(
+    private readonly audioInput: () =>
+      | string
+      | undefined = audioInputStore.getSnapshot,
+  ) {}
   private snapshot: CaptureSnapshot = {
     state: "idle",
     waveform: emptyWaveform(),
@@ -79,14 +113,7 @@ export class DictationCapture {
     const generation = ++this.generation;
     this.publish({ state: "permission", waveform: emptyWaveform() });
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
+      const stream = await openMicrophone(this.audioInput());
       if (generation !== this.generation) {
         stream.getTracks().forEach((track) => {
           track.stop();

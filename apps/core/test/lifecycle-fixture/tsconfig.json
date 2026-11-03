@@ -9,6 +9,7 @@
     "../../src/raw-assets.d.ts",
     "src/**/*.ts",
     "lifecycle.test.ts",
+    "plan-reset.test.ts",
     "flue.config.ts",
     "vite.config.ts"
   ]

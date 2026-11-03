@@ -6,9 +6,18 @@ import { type AnalyzeMedia, DEFAULT_MEDIA_OBJECTIVE } from "./analysis.js";
 import {
   IMAGE_MAX_SOURCE_BYTES,
   ImageRefused,
+  ImageTooLarge,
+  imageInfo,
+  type PreparedImage,
   prepareImage,
   sniffMedia,
 } from "./image.js";
+import {
+  downscaleInOrb,
+  ORB_IMAGE_MAX_SOURCE_BYTES,
+  readOrbFileHead,
+  readOrbFileSize,
+} from "./orb-image.js";
 import { fetchRemoteMedia } from "./remote.js";
 
 type AgentTool = ReturnType<SandboxToolFactory>[number];
@@ -76,11 +85,33 @@ export interface ViewMediaResult {
 
 /** Largest PDF sent to the analysis subagent. */
 const MAX_PDF_BYTES = 10 * 1024 * 1024;
+/** Largest file a Cloudflare container Orb's file API returns. */
+const ORB_FILE_READ_BYTES = 16 * 1024 * 1024;
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const megabytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
-const readWorkspaceFile = async (sandbox: Sandbox, raw: string) => {
+/**
+ * The file `view_media` reads. A workspace image too large for the isolate
+ * has no `bytes`, only its first bytes in `head`. `orbPath` is the same file
+ * in the Orb, when it is there.
+ */
+interface MediaSource {
+  readonly label: string;
+  bytes?: Uint8Array;
+  readonly head?: Uint8Array;
+  /** The file's size, with `head`. */
+  readonly size?: number;
+  /** Today's refusal of a file too large to read, with `head`. */
+  readonly refusal?: ImageRefused;
+  readonly orbPath?: string;
+}
+
+const readWorkspaceFile = async (
+  sandbox: Sandbox,
+  raw: string,
+  label?: string,
+): Promise<MediaSource> => {
   const path = posix.resolve(sandbox.cwd, raw);
   let size: number | undefined;
   try {
@@ -93,11 +124,39 @@ const readWorkspaceFile = async (sandbox: Sandbox, raw: string) => {
       cause: error,
     });
   }
+  size ??= await readOrbFileSize(sandbox, path);
+  // A large image is downsized in the Orb without reading it here: past
+  // 16 MB a Cloudflare container Orb does not hand files to the isolate.
+  if (size !== undefined && size > ORB_FILE_READ_BYTES) {
+    const head =
+      size > ORB_IMAGE_MAX_SOURCE_BYTES
+        ? undefined
+        : await readOrbFileHead(sandbox, path);
+    const info = head === undefined ? undefined : imageInfo(head);
+    if (head !== undefined && info !== undefined)
+      return {
+        label: label ?? path,
+        head,
+        size,
+        // What the isolate answered before the Orb could downsize.
+        refusal:
+          size > IMAGE_MAX_SOURCE_BYTES
+            ? new ImageRefused(
+                `${path} is ${megabytes(size)}; files over ${megabytes(IMAGE_MAX_SOURCE_BYTES)} are not read.`,
+              )
+            : new ImageTooLarge({ ...info, bytes: size }),
+        orbPath: path,
+      };
+  }
   if (size !== undefined && size > IMAGE_MAX_SOURCE_BYTES)
     throw new ImageRefused(
       `${path} is ${megabytes(size)}; files over ${megabytes(IMAGE_MAX_SOURCE_BYTES)} are not read.`,
     );
-  return { label: path, bytes: await sandbox.readFileBuffer(path) };
+  return {
+    label: label ?? path,
+    bytes: await sandbox.readFileBuffer(path),
+    orbPath: path,
+  };
 };
 
 /**
@@ -110,23 +169,70 @@ const isDxFileUrl = (url: URL, dxOrigin: string | undefined) =>
   (/^\/v1\/attachments\/[^/]+/.test(url.pathname) ||
     /^\/v1\/threads\/[^/]+\/storage\/[^/]+/.test(url.pathname));
 
-const readDxFile = async (sandbox: Sandbox, url: URL) => {
-  const target = `/tmp/dx-view-media-${crypto.randomUUID()}`;
-  try {
-    const result = await sandbox.exec(
-      `dxd files get ${quote(url.toString())} -o ${quote(target)}`,
-      { timeoutMs: 120_000 },
+const downloadDxFile = async (sandbox: Sandbox, url: URL, target: string) => {
+  const result = await sandbox.exec(
+    `dxd files get ${quote(url.toString())} -o ${quote(target)}`,
+    { timeoutMs: 120_000 },
+  );
+  if (result.exitCode !== 0)
+    throw new ImageRefused(
+      `dx could not download ${url.toString()}: ${(result.stderr || result.stdout).trim().slice(0, 500)}`,
     );
-    if (result.exitCode !== 0)
-      throw new ImageRefused(
-        `dx could not download ${url.toString()}: ${(result.stderr || result.stdout).trim().slice(0, 500)}`,
-      );
-    const { bytes } = await readWorkspaceFile(sandbox, target);
-    return { label: url.toString(), bytes };
-  } finally {
-    await sandbox.exec(`rm -f ${quote(target)}`).catch(() => undefined);
-  }
+  return readWorkspaceFile(sandbox, target, url.toString());
 };
+
+/**
+ * The image as the model gets it. One the isolate refuses as too large is
+ * downsized in the Orb; with no Orb or no ffmpeg there, the refusal stands.
+ */
+const imageFor = async (
+  sandbox: Sandbox,
+  source: MediaSource,
+  resolution: "high" | "original",
+  signal: AbortSignal | undefined,
+): Promise<{ readonly image: PreparedImage; readonly inOrb: boolean }> => {
+  let refusal: ImageRefused;
+  let original: PreparedImage["source"];
+  if (source.bytes !== undefined) {
+    try {
+      return {
+        image: await prepareImage(source.bytes, resolution),
+        inOrb: false,
+      };
+    } catch (error) {
+      if (!(error instanceof ImageTooLarge)) throw error;
+      refusal = error;
+      original = error.image;
+    }
+  } else {
+    const info = source.head === undefined ? undefined : imageInfo(source.head);
+    refusal =
+      source.refusal ?? new ImageRefused(`${source.label} is not an image.`);
+    if (
+      info === undefined ||
+      source.orbPath === undefined ||
+      resolution === "original"
+    )
+      throw refusal;
+    original = { ...info, bytes: source.size ?? 0 };
+  }
+  const input =
+    source.orbPath === undefined
+      ? { bytes: source.bytes ?? new Uint8Array(0) }
+      : { path: source.orbPath };
+  // The isolate holds only the downsized image from here on.
+  source.bytes = undefined;
+  const image = await downscaleInOrb(
+    sandbox,
+    { input, image: original },
+    signal,
+  );
+  if (image === undefined) throw refusal;
+  return { image, inOrb: true };
+};
+
+const size = (bytes: number) =>
+  bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} KB` : megabytes(bytes);
 
 /**
  * `view_media` for either mode: reads the file, then returns the image
@@ -145,72 +251,92 @@ export const viewMedia = async (
   if (/^https?:\/\//i.test(path)) url = new URL(path);
   if (url === undefined && input.found_on !== undefined)
     throw new Error("found_on is only for a GitHub attachment URL.");
-  const { label, bytes } =
-    url === undefined
-      ? await readWorkspaceFile(sandbox, path)
-      : isDxFileUrl(url, deps.dxOrigin)
-        ? await readDxFile(sandbox, url)
-        : {
-            label: path,
-            bytes: await fetchRemoteMedia(path, {
-              githubToken: deps.githubToken,
-              ...(input.found_on === undefined
-                ? {}
-                : { foundOn: input.found_on }),
-              ...(signal === undefined ? {} : { signal }),
-            }),
-          };
-  signal?.throwIfAborted();
-  const kind = sniffMedia(bytes);
-  if (kind === undefined)
-    throw new ImageRefused(
-      `${label} is not an image, PDF, audio file, or video that view_media can read.`,
-    );
-  if (kind.kind === "audio" || kind.kind === "video")
-    throw new ImageRefused(
-      `${label} is ${kind.kind} (${kind.format}). view_media reads images and PDFs; dx cannot analyze audio or video yet.`,
-    );
-  if (kind.kind === "pdf") {
-    if (bytes.length > MAX_PDF_BYTES)
+  const downloaded =
+    url !== undefined && isDxFileUrl(url, deps.dxOrigin)
+      ? `/tmp/dx-view-media-${crypto.randomUUID()}`
+      : undefined;
+  try {
+    const source: MediaSource =
+      url === undefined
+        ? await readWorkspaceFile(sandbox, path)
+        : downloaded !== undefined
+          ? await downloadDxFile(sandbox, url, downloaded)
+          : {
+              label: path,
+              bytes: await fetchRemoteMedia(path, {
+                githubToken: deps.githubToken,
+                ...(input.found_on === undefined
+                  ? {}
+                  : { foundOn: input.found_on }),
+                ...(signal === undefined ? {} : { signal }),
+              }),
+            };
+    signal?.throwIfAborted();
+    const { label } = source;
+    const kind = sniffMedia(source.bytes ?? source.head ?? new Uint8Array(0));
+    if (kind === undefined)
       throw new ImageRefused(
-        `${label} is a ${megabytes(bytes.length)} PDF; view_media reads PDFs up to ${megabytes(MAX_PDF_BYTES)}. Extract the pages you need first, for example with qpdf or pdftoppm.`,
+        `${label} is not an image, PDF, audio file, or video that view_media can read.`,
       );
-    const answer = await deps.analyze(objective ?? DEFAULT_MEDIA_OBJECTIVE, {
-      data: encodeBase64(bytes),
-      mimeType: "application/pdf",
-    });
-    return {
-      text: answer,
-      details: { source: label, kind: "pdf", sourceBytes: bytes.length },
+    if (kind.kind === "audio" || kind.kind === "video")
+      throw new ImageRefused(
+        `${label} is ${kind.kind} (${kind.format}). view_media reads images and PDFs; dx cannot analyze audio or video yet.`,
+      );
+    if (kind.kind === "pdf") {
+      const bytes = source.bytes ?? new Uint8Array(0);
+      if (bytes.length > MAX_PDF_BYTES)
+        throw new ImageRefused(
+          `${label} is a ${megabytes(bytes.length)} PDF; view_media reads PDFs up to ${megabytes(MAX_PDF_BYTES)}. Extract the pages you need first, for example with qpdf or pdftoppm.`,
+        );
+      const answer = await deps.analyze(objective ?? DEFAULT_MEDIA_OBJECTIVE, {
+        data: encodeBase64(bytes),
+        mimeType: "application/pdf",
+      });
+      return {
+        text: answer,
+        details: { source: label, kind: "pdf", sourceBytes: bytes.length },
+      };
+    }
+    const { image, inOrb } = await imageFor(
+      sandbox,
+      source,
+      input.resolution ?? "high",
+      signal,
+    );
+    const { source: original } = image;
+    const details = {
+      source: label,
+      kind: "image",
+      format: original.format,
+      width: image.width,
+      height: image.height,
+      sourceWidth: original.width,
+      sourceHeight: original.height,
+      sourceBytes: original.bytes,
+      ...(inOrb ? { bytes: image.data.length, resizedIn: "workspace" } : {}),
     };
-  }
-  const image = await prepareImage(bytes, input.resolution ?? "high");
-  const { source } = image;
-  const details = {
-    source: label,
-    kind: "image",
-    format: source.format,
-    width: image.width,
-    height: image.height,
-    sourceWidth: source.width,
-    sourceHeight: source.height,
-    sourceBytes: source.bytes,
-  };
-  const data = encodeBase64(image.data);
-  if (objective !== undefined)
+    const data = encodeBase64(image.data);
+    if (objective !== undefined)
+      return {
+        text: await deps.analyze(objective, { data, mimeType: image.mimeType }),
+        details,
+      };
+    const resized = inOrb
+      ? `, resized in the workspace from ${original.width}×${original.height} (${size(original.bytes)}) to ${image.width}×${image.height} (${size(image.data.length)} JPEG)`
+      : image.width !== original.width || image.height !== original.height
+        ? `, downsized from ${original.width}×${original.height}`
+        : "";
     return {
-      text: await deps.analyze(objective, { data, mimeType: image.mimeType }),
+      text: `${label}: ${original.format.toUpperCase()}, ${image.width}×${image.height}${resized}.`,
+      image: { data, mimeType: image.mimeType },
       details,
     };
-  const resized =
-    image.width !== source.width || image.height !== source.height
-      ? `, downsized from ${source.width}×${source.height}`
-      : "";
-  return {
-    text: `${label}: ${source.format.toUpperCase()}, ${image.width}×${image.height}${resized}.`,
-    image: { data, mimeType: image.mimeType },
-    details,
-  };
+  } finally {
+    if (downloaded !== undefined)
+      await sandbox
+        .exec(`rm -f -- ${quote(downloaded)}`)
+        .catch(() => undefined);
+  }
 };
 
 /**

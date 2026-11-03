@@ -4482,96 +4482,8 @@ a {
 .settings-failure-shell {
   justify-content: center;
 }
-.experimental-features-empty {
-  display: flex;
-  align-items: center;
-  flex-direction: column;
-  gap: 7px;
-  min-height: 190px;
-  padding: 28px;
-  color: var(--muted-foreground);
-  text-align: center;
-}
-.experimental-features-empty > svg {
-  width: 22px;
-  height: 22px;
-}
-.experimental-features-empty > strong {
-  color: var(--foreground);
-  font-size: 12px;
-}
-.experimental-features-empty > span {
-  max-width: 430px;
-  font-size: 10px;
-}
-.experimental-feature-description > p {
-  margin: 0;
-}
-.experimental-feature-metadata,
-.experimental-feature-semantics {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  margin-top: 7px;
-  color: var(--muted-foreground);
-  font-size: 9px;
-}
-.experimental-feature-metadata > span:not(:last-child)::after,
-.experimental-feature-semantics > span:not(:last-child)::after {
-  margin-left: 10px;
-  content: "·";
-}
-.experimental-feature-semantics a {
-  color: var(--primary);
-}
-.experimental-feature-denial {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-top: 8px;
-  color: var(--warning);
-  font-size: 9px;
-}
-.experimental-feature-denial > svg {
-  width: 12px;
-  height: 12px;
-}
-.experimental-feature-lifecycle {
-  margin-top: 8px;
-  color: var(--muted-foreground);
-  font-size: 9px;
-}
-.experimental-feature-lifecycle summary {
-  width: fit-content;
-  cursor: pointer;
-}
-.experimental-feature-lifecycle dl {
-  display: grid;
-  gap: 5px;
-  margin: 7px 0 0;
-  padding-left: 9px;
-  border-left: 1px solid var(--divider);
-}
-.experimental-feature-lifecycle dl > div {
-  display: grid;
-  grid-template-columns: 58px minmax(0, 1fr);
-  gap: 7px;
-}
-.experimental-feature-lifecycle dt {
-  color: var(--foreground);
-  font-weight: 600;
-}
-.experimental-feature-lifecycle dd {
-  margin: 0;
-}
-.experimental-features-message {
-  width: 100%;
-  max-width: 760px;
-  margin: 12px auto 0;
-  color: var(--muted-foreground);
-  font-size: 10px;
-}
-.experimental-features-message[data-error] {
+/* Experimental Features: a save error in the heading's status slot. */
+.experimental-features-settings [data-error] {
   color: var(--destructive);
 }
 .environment-variables-settings {
@@ -9149,6 +9061,11 @@ div.claude-code-mode-main {
   background: var(--divider);
 }
 
+/* The sidebar's one shared Thread menu listens here; it adds no box. */
+.thread-context-scope {
+  display: contents;
+}
+
 .mobile-sidebar-scrim {
   position: fixed;
   inset: 0;
@@ -9204,19 +9121,19 @@ div.claude-code-mode-main {
 }
 /* While a finger drags the drawer, it and its scrim follow the finger
    (sidebar-drawer-drag.ts sets their transform and opacity inline). */
-:root[data-sidebar-drag] .mobile-sidebar-drawer {
+.mobile-sidebar-drawer[data-sidebar-drag] {
   opacity: 1;
   transition: none;
 }
-:root[data-sidebar-drag] .mobile-sidebar-scrim {
+.mobile-sidebar-scrim[data-sidebar-drag] {
   transition: none;
 }
 /* Let go short of halfway: it slides back from where the finger left it. */
-:root[data-sidebar-settle="closed"] .mobile-sidebar-drawer {
+.mobile-sidebar-drawer[data-sidebar-settle="closed"] {
   opacity: 1;
   transform: translateX(calc(-100% - 8px));
 }
-:root[data-sidebar-settle="closed"] .mobile-sidebar-scrim {
+.mobile-sidebar-scrim[data-sidebar-settle="closed"] {
   opacity: 0;
 }
 .mobile-thread-region {
@@ -11160,76 +11077,6 @@ div.claude-code-mode-main {
   }
 }
 
-.plugin-triggers-settings .settings-card + .settings-card {
-  margin-top: 16px;
-}
-.trigger-toolbar,
-.trigger-card > header,
-.trigger-actions,
-.trigger-dialog-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.trigger-toolbar p,
-.trigger-card p,
-.trigger-history p {
-  margin: 4px 0;
-  color: var(--muted-foreground);
-}
-.trigger-message {
-  min-height: 20px;
-  color: var(--muted-foreground);
-  font-size: 13px;
-}
-.trigger-grid {
-  display: grid;
-  gap: 12px;
-  margin-top: 12px;
-}
-.trigger-card {
-  min-width: 0;
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--background);
-}
-.trigger-card h2 {
-  margin: 0;
-  font-size: 16px;
-}
-.trigger-badges,
-.trigger-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 12px 0;
-}
-.trigger-actions {
-  justify-content: flex-end;
-}
-.trigger-actions svg {
-  width: 14px;
-}
-.trigger-contract {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 8px;
-  margin: 12px 0;
-}
-.trigger-contract > div {
-  min-width: 0;
-  padding: 9px;
-  border-radius: 8px;
-  background: var(--muted);
-}
-.trigger-contract dt {
-  color: var(--muted-foreground);
-  font-size: 11px;
-  text-transform: uppercase;
-}
-
 .integration-impact dd {
   margin: 3px 0 0;
   font-size: 20px;
@@ -11249,73 +11096,31 @@ div.claude-code-mode-main {
   height: 16px;
 }
 
-.trigger-contract dd {
-  margin: 3px 0 0;
-  overflow-wrap: anywhere;
-  font-size: 13px;
-}
-.trigger-history {
-  margin-top: 12px;
-}
-.trigger-history summary {
-  cursor: pointer;
-  font-weight: 600;
-  font-size: 13px;
-}
-.trigger-history-scroll {
-  overflow-x: auto;
-  margin-top: 8px;
-}
-.trigger-history table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-.trigger-history th,
-.trigger-history td {
-  padding: 8px;
-  border-bottom: 1px solid var(--divider);
-  text-align: left;
-  white-space: nowrap;
-}
-.trigger-dialog {
-  width: min(620px, calc(100vw - 32px));
-  max-height: calc(100dvh - 32px);
-  overflow-y: auto;
-}
-.trigger-dialog > label {
+/* Triggers: Plugins rows and dialogs, plus the empty card and the URL field. */
+.settings-card > .trigger-empty {
   display: grid;
   gap: 6px;
-  margin-top: 14px;
-  font-size: 13px;
-  font-weight: 600;
+  justify-items: center;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 17.875px;
 }
-.trigger-dialog input,
-.trigger-dialog textarea,
-.trigger-dialog .settings-select {
-  width: 100%;
+.trigger-empty strong {
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 500;
 }
-.trigger-dialog textarea {
-  resize: vertical;
+.trigger-empty span {
+  max-width: 420px;
 }
-.trigger-dialog-actions {
-  justify-content: flex-end;
-  margin-top: 18px;
+.trigger-url {
+  display: flex;
+  gap: 6px;
 }
-
-@media (max-width: 640px) {
-  .trigger-toolbar,
-  .trigger-card > header {
-    align-items: stretch;
-    flex-direction: column;
-  }
-  .trigger-toolbar button,
-  .trigger-actions > button {
-    width: 100%;
-  }
-  .trigger-contract {
-    grid-template-columns: 1fr;
-  }
+.trigger-url input {
+  min-width: 0;
+  flex: 1;
+  font-family: var(--font-mono-family);
 }
 
 @media (prefers-contrast: more) {

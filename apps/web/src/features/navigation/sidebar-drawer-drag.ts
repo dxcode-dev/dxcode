@@ -12,11 +12,23 @@ const SPEED_WINDOW = 100;
 /** iOS starts its own back swipe from this strip along the left edge. */
 const EDGE_STRIP = 24;
 
-const root = () => document.documentElement;
 const drawerElement = () =>
   document.querySelector<HTMLElement>(".mobile-sidebar-drawer");
 const scrimElement = () =>
   document.querySelector<HTMLElement>(".mobile-sidebar-scrim");
+/**
+ * Marks the drawer and its scrim, not the root: an attribute on the root
+ * would restyle the whole page each time it changes (#1462).
+ */
+const mark = (name: string, value: string | null) => {
+  for (const element of [drawerElement(), scrimElement()]) {
+    if (element === null) continue;
+    if (value === null) element.removeAttribute(name);
+    else if (element.getAttribute(name) !== value)
+      element.setAttribute(name, value);
+  }
+};
+
 export const drawerIsOpen = () =>
   document.querySelector(".mobile-sidebar-drawer[data-open]") !== null;
 
@@ -38,8 +50,7 @@ const travelDistance = () => {
  * the whole page on every frame.
  */
 const showProgress = (progress: number, travel: number) => {
-  if (!root().hasAttribute("data-sidebar-drag"))
-    root().setAttribute("data-sidebar-drag", "");
+  mark("data-sidebar-drag", "");
   const drawer = drawerElement();
   if (drawer !== null)
     drawer.style.transform = `translateX(${(progress - 1) * travel}px)`;
@@ -58,17 +69,14 @@ let settling: ReturnType<typeof setTimeout> | undefined;
  */
 const release = (settleOpen: boolean) => {
   clearTimeout(settling);
-  if (settleOpen) root().removeAttribute("data-sidebar-settle");
+  if (settleOpen) mark("data-sidebar-settle", null);
   else {
-    root().setAttribute("data-sidebar-settle", "closed");
-    settling = setTimeout(
-      () => root().removeAttribute("data-sidebar-settle"),
-      SETTLE_MS,
-    );
+    mark("data-sidebar-settle", "closed");
+    settling = setTimeout(() => mark("data-sidebar-settle", null), SETTLE_MS);
   }
   drawerElement()?.style.removeProperty("transform");
   scrimElement()?.style.removeProperty("opacity");
-  root().removeAttribute("data-sidebar-drag");
+  mark("data-sidebar-drag", null);
 };
 
 /**

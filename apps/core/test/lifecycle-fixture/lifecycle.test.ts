@@ -756,6 +756,91 @@ describe("generated Flue Worker lifecycle", () => {
     });
   });
 
+  // #1584: thr_6352fb61 looked stuck after a Stop that a running turn did not
+  // honor. Flue settles such a Stop after its grace period; this keeps it so
+  // for a tool that ignores Stop and for an activation that hangs, as one did
+  // against a wedged Orb, which Flue terminates as `abort_unhonored`.
+  it("settles a Stop that a hung tool or a hung activation never honors, so the next message runs", async () => {
+    const first = "Run the command that ignores Stop.";
+    const threadId = await startScenarioThread("stop-deaf", first);
+    await waitUntil(
+      async () =>
+        (
+          await (
+            await fixtureRequest(`/__fixture/holding/${threadId}`)
+          ).json<{ holding: boolean }>()
+        ).holding,
+      "the command that ignores Stop to start",
+      30_000,
+    );
+    const client = threadClient(threadId);
+    const within = <A>(promise: Promise<A>, what: string) =>
+      Promise.race([
+        promise,
+        new Promise<never>((_resolve, reject) =>
+          setTimeout(
+            () => reject(new Error(`${what} took over 150 s.`)),
+            150_000,
+          ),
+        ),
+      ]);
+
+    const firstStoppedAt = Date.now();
+    await client.abort();
+    await within(
+      waitUntil(
+        async () => (await client.history()).settlements.length > 0,
+        "the stopped turn to settle",
+        150_000,
+      ),
+      "Settling the hung tool's turn",
+    );
+    const toolStopSettledMs = Date.now() - firstStoppedAt;
+
+    expect(
+      (
+        await fixtureRequest(`/__fixture/hang-next-activation/${threadId}`, {
+          method: "POST",
+        })
+      ).status,
+    ).toBe(204);
+    const hung = await client.send({
+      message: { kind: "user", body: "Hang in activation." },
+      idempotencyKey: "stop-deaf-hung",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    const secondStoppedAt = Date.now();
+    await client.abort();
+    await within(
+      expect(client.wait(hung)).rejects.toThrow(/abort/i),
+      "Settling the hung activation",
+    );
+    const activationStopSettledMs = Date.now() - secondStoppedAt;
+
+    const after = await client.send({
+      message: { kind: "user", body: "Continue after the unhonored Stop." },
+      idempotencyKey: "stop-deaf-after",
+    });
+    await within(client.wait(after), "The next message");
+    const history = await threadClient(threadId).history();
+    expect(textsOf(history, "user")).toEqual([
+      first,
+      "Hang in activation.",
+      "Continue after the unhonored Stop.",
+    ]);
+    expect(textsOf(history, "assistant")).toEqual(["after-deaf-stop-complete"]);
+    const outcomes = history.settlements.map(({ outcome }) => outcome);
+    expect(outcomes.slice(0, 2)).toEqual(["aborted", "aborted"]);
+    writeProof("stop-unhonored", {
+      threadId,
+      toolStopSettledMs,
+      activationStopSettledMs,
+      settlements: history.settlements,
+      userMessages: textsOf(history, "user"),
+      assistantMessages: textsOf(history, "assistant"),
+    });
+  }, 480_000);
+
   // Waits out the real two-minute unready deadline; nothing is faked but
   // the storage failure.
   it("fails a message that never becomes ready within minutes, so the next message runs", async () => {

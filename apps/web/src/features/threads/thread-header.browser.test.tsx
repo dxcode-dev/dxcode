@@ -1,6 +1,7 @@
 import type { ThreadDetailData } from "@dx/api";
 import { defaultThreadModelSelection } from "@dx/domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { DateTime } from "effect";
 import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -54,12 +55,14 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const thread = {
   id: "thr_00000000-0000-4000-8000-000000000096",
+  createdAt: DateTime.makeUnsafe("2026-10-31T00:00:00.000Z"),
   title:
     "A long authoritative title that remains available without replacing it with display text",
   visibility: "private",
   lifecycleState: "active",
   activityStatus: "idle",
   agentInitialization: { selection: defaultThreadModelSelection() },
+  executionWorkspace: { ready: true, preparationStatus: null },
 } as ThreadDetailData;
 
 // The app's query client; this Thread has no schedule or GitHub listeners.

@@ -23,6 +23,10 @@
     {
       "tag": "v1-flue-fixture-lifecycle-agent",
       "new_sqlite_classes": ["FlueFixtureLifecycleAgentAgent"]
+    },
+    {
+      "tag": "v2-flue-fixture-plan-agent",
+      "new_sqlite_classes": ["FlueFixturePlanAgentAgent"]
     }
   ]
 }

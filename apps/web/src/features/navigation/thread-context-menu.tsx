@@ -18,6 +18,7 @@ import {
   Trash2,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import * as React from "react";
 import { useNowMinute } from "../../shared/hooks/use-clock.js";
 import { copyThreadId, copyThreadUrl } from "../../shared/thread-copy.js";
 import { useOptionalThreadEditing } from "../../shared/thread-editing.js";
@@ -107,19 +108,8 @@ function FamilyContextSubmenu({
   );
 }
 
-export function ThreadContextMenu({
-  thread,
-  onSetArchived,
-  onSetPinned,
-  archiving,
-  pinning,
-  creating = false,
-  subthreads,
-  sourceThread,
-  snooze,
-  onOpenChange,
-  children,
-}: {
+/** What a Thread's context menu offers, and for which Thread. */
+export interface ThreadContextMenuProps {
   readonly thread: {
     readonly id: ThreadData["id"];
     readonly title?: ThreadData["title"];
@@ -158,204 +148,85 @@ export function ThreadContextMenu({
     readonly snoozed: boolean;
   };
   readonly onOpenChange?: (open: boolean) => void;
-  readonly children: ReactNode;
-}) {
+}
+
+/** The menu's items for one Thread. */
+function ThreadContextMenuItems({
+  thread,
+  onSetArchived,
+  onSetPinned,
+  archiving,
+  pinning,
+  creating = false,
+  subthreads,
+  sourceThread,
+  snooze,
+}: ThreadContextMenuProps) {
   const editing = useOptionalThreadEditing();
   const own = thread.access === undefined || thread.access === "owner";
   const title = thread.title;
 
   return (
-    <ContextMenu.Root onOpenChange={onOpenChange}>
-      <ContextMenu.Trigger render={<div className="thread-context-trigger" />}>
-        {children}
-      </ContextMenu.Trigger>
-      <ContextMenu.Portal>
-        <ContextMenu.Positioner className="thread-context-positioner">
-          <ContextMenu.Popup
-            className="thread-context-menu"
-            // Only a keyboard close returns focus to the row; after a click
-            // the row would keep a focus highlight beside the new selection.
-            finalFocus={(closeType) => closeType === "keyboard"}
+    <>
+      {subthreads === undefined ? null : (
+        <>
+          <ContextMenu.Item
+            className="thread-context-item"
+            onClick={subthreads.onToggle}
           >
-            {subthreads === undefined ? null : (
-              <>
-                <ContextMenu.Item
-                  className="thread-context-item"
-                  onClick={subthreads.onToggle}
-                >
-                  {subthreads.expanded ? (
-                    <ChevronsDownUp />
-                  ) : (
-                    <ChevronsUpDown />
-                  )}
-                  <span>
-                    {subthreads.expanded
-                      ? "Collapse Subthreads"
-                      : "Expand Subthreads"}
-                  </span>
-                </ContextMenu.Item>
-                <ContextMenu.Separator className="thread-context-separator" />
-              </>
-            )}
-            {sourceThread === undefined ? null : (
-              <>
-                <ContextMenu.Item
-                  className="thread-context-item"
-                  render={
-                    <Link
-                      to="/threads/$threadId"
-                      params={{ threadId: sourceThread.id }}
-                    />
-                  }
-                  onClick={sourceThread.onOpen}
-                >
-                  <SubthreadIcon strokeWidth={2} />
-                  <span>Open Source Thread</span>
-                </ContextMenu.Item>
-                <ContextMenu.Separator className="thread-context-separator" />
-              </>
-            )}
-            {own ? (
-              <>
-                {thread.lifecycleState === "active" ? (
-                  <ContextMenu.Item
-                    className="thread-context-item"
-                    disabled={pinning}
-                    onClick={() => onSetPinned(thread.pinnedAt === undefined)}
-                  >
-                    {thread.pinnedAt === undefined ? <Pin /> : <PinOff />}
-                    <span>
-                      {thread.pinnedAt === undefined ? "Pin" : "Unpin"}
-                    </span>
-                  </ContextMenu.Item>
-                ) : null}
-                {snooze === undefined ? null : snooze.snoozed ? (
-                  <ContextMenu.Item
-                    className="thread-context-item"
-                    onClick={() => snooze.controller.wake(thread.id)}
-                  >
-                    <AlarmClockOff />
-                    <span>Wake</span>
-                  </ContextMenu.Item>
-                ) : (
-                  <ContextMenu.SubmenuRoot>
-                    <ContextMenu.SubmenuTrigger className="thread-context-item">
-                      <AlarmClock />
-                      <span>Snooze</span>
-                      <ChevronRight />
-                    </ContextMenu.SubmenuTrigger>
-                    <ContextMenu.Portal>
-                      <ContextMenu.Positioner
-                        className="thread-context-positioner"
-                        sideOffset={4}
-                        alignOffset={-4}
-                      >
-                        <ContextMenu.Popup className="thread-context-menu">
-                          <SnoozeContextItems
-                            threadId={thread.id}
-                            snooze={snooze.controller}
-                          />
-                        </ContextMenu.Popup>
-                      </ContextMenu.Positioner>
-                    </ContextMenu.Portal>
-                  </ContextMenu.SubmenuRoot>
-                )}
-                {editing === undefined ||
-                title === undefined ||
-                creating ? null : (
-                  <>
-                    <ContextMenu.Item
-                      className="thread-context-item"
-                      onClick={() =>
-                        editing.openRename({ id: thread.id, title })
-                      }
-                    >
-                      <Pencil />
-                      <span>Rename</span>
-                    </ContextMenu.Item>
-                    <ThreadColorSubmenu
-                      thread={thread}
-                      itemClassName="thread-context-item"
-                      onSelect={(color) => editing.setColor(thread.id, color)}
-                    />
-                  </>
-                )}
-                <ContextMenu.Separator className="thread-context-separator" />
-                {subthreads !== undefined ? (
-                  <FamilyContextSubmenu
-                    icon={
-                      thread.lifecycleState === "active" ? (
-                        <Archive />
-                      ) : (
-                        <ArchiveRestore />
-                      )
-                    }
-                    label={
-                      thread.lifecycleState === "active"
-                        ? "Archive"
-                        : "Unarchive"
-                    }
-                    count={subthreads.count}
-                    disabled={archiving}
-                    onAll={() =>
-                      onSetArchived(thread.lifecycleState === "active", true)
-                    }
-                    onThis={() =>
-                      onSetArchived(thread.lifecycleState === "active")
-                    }
-                  />
-                ) : (
-                  <ContextMenu.Item
-                    className="thread-context-item"
-                    disabled={archiving}
-                    onClick={() =>
-                      onSetArchived(thread.lifecycleState === "active")
-                    }
-                  >
-                    {thread.lifecycleState === "active" ? (
-                      <Archive />
-                    ) : (
-                      <ArchiveRestore />
-                    )}
-                    <span>
-                      {thread.lifecycleState === "active"
-                        ? "Archive"
-                        : "Unarchive"}
-                    </span>
-                  </ContextMenu.Item>
-                )}
-                {editing === undefined ||
-                title === undefined ||
-                creating ? null : subthreads === undefined ? (
-                  <ContextMenu.Item
-                    className="thread-context-item thread-menu-item-danger"
-                    onClick={() => editing.openDelete({ id: thread.id, title })}
-                  >
-                    <Trash2 />
-                    <span>Delete</span>
-                  </ContextMenu.Item>
-                ) : (
-                  <FamilyContextSubmenu
-                    icon={<Trash2 />}
-                    label="Delete"
-                    count={subthreads.count}
-                    danger
-                    onAll={() =>
-                      editing.openDelete(
-                        { id: thread.id, title },
-                        subthreads.count,
-                      )
-                    }
-                    onThis={() => editing.openDelete({ id: thread.id, title })}
-                  />
-                )}
-                <ContextMenu.Separator className="thread-context-separator" />
-              </>
-            ) : null}
+            {subthreads.expanded ? <ChevronsDownUp /> : <ChevronsUpDown />}
+            <span>
+              {subthreads.expanded
+                ? "Collapse Subthreads"
+                : "Expand Subthreads"}
+            </span>
+          </ContextMenu.Item>
+          <ContextMenu.Separator className="thread-context-separator" />
+        </>
+      )}
+      {sourceThread === undefined ? null : (
+        <>
+          <ContextMenu.Item
+            className="thread-context-item"
+            render={
+              <Link
+                to="/threads/$threadId"
+                params={{ threadId: sourceThread.id }}
+              />
+            }
+            onClick={sourceThread.onOpen}
+          >
+            <SubthreadIcon strokeWidth={2} />
+            <span>Open Source Thread</span>
+          </ContextMenu.Item>
+          <ContextMenu.Separator className="thread-context-separator" />
+        </>
+      )}
+      {own ? (
+        <>
+          {thread.lifecycleState === "active" ? (
+            <ContextMenu.Item
+              className="thread-context-item"
+              disabled={pinning}
+              onClick={() => onSetPinned(thread.pinnedAt === undefined)}
+            >
+              {thread.pinnedAt === undefined ? <Pin /> : <PinOff />}
+              <span>{thread.pinnedAt === undefined ? "Pin" : "Unpin"}</span>
+            </ContextMenu.Item>
+          ) : null}
+          {snooze === undefined ? null : snooze.snoozed ? (
+            <ContextMenu.Item
+              className="thread-context-item"
+              onClick={() => snooze.controller.wake(thread.id)}
+            >
+              <AlarmClockOff />
+              <span>Wake</span>
+            </ContextMenu.Item>
+          ) : (
             <ContextMenu.SubmenuRoot>
               <ContextMenu.SubmenuTrigger className="thread-context-item">
-                <Copy />
-                <span>Copy</span>
+                <AlarmClock />
+                <span>Snooze</span>
                 <ChevronRight />
               </ContextMenu.SubmenuTrigger>
               <ContextMenu.Portal>
@@ -365,27 +236,221 @@ export function ThreadContextMenu({
                   alignOffset={-4}
                 >
                   <ContextMenu.Popup className="thread-context-menu">
-                    <ContextMenu.Item
-                      className="thread-context-item"
-                      onClick={() => void copyThreadUrl(thread.id)}
-                    >
-                      <Link2 />
-                      <span>Thread URL</span>
-                    </ContextMenu.Item>
-                    <ContextMenu.Item
-                      className="thread-context-item"
-                      onClick={() => void copyThreadId(thread.id)}
-                    >
-                      <Hash />
-                      <span>Thread ID</span>
-                    </ContextMenu.Item>
+                    <SnoozeContextItems
+                      threadId={thread.id}
+                      snooze={snooze.controller}
+                    />
                   </ContextMenu.Popup>
                 </ContextMenu.Positioner>
               </ContextMenu.Portal>
             </ContextMenu.SubmenuRoot>
-          </ContextMenu.Popup>
-        </ContextMenu.Positioner>
-      </ContextMenu.Portal>
+          )}
+          {editing === undefined || title === undefined || creating ? null : (
+            <>
+              <ContextMenu.Item
+                className="thread-context-item"
+                onClick={() => editing.openRename({ id: thread.id, title })}
+              >
+                <Pencil />
+                <span>Rename</span>
+              </ContextMenu.Item>
+              <ThreadColorSubmenu
+                thread={thread}
+                itemClassName="thread-context-item"
+                onSelect={(color) => editing.setColor(thread.id, color)}
+              />
+            </>
+          )}
+          <ContextMenu.Separator className="thread-context-separator" />
+          {subthreads !== undefined ? (
+            <FamilyContextSubmenu
+              icon={
+                thread.lifecycleState === "active" ? (
+                  <Archive />
+                ) : (
+                  <ArchiveRestore />
+                )
+              }
+              label={
+                thread.lifecycleState === "active" ? "Archive" : "Unarchive"
+              }
+              count={subthreads.count}
+              disabled={archiving}
+              onAll={() =>
+                onSetArchived(thread.lifecycleState === "active", true)
+              }
+              onThis={() => onSetArchived(thread.lifecycleState === "active")}
+            />
+          ) : (
+            <ContextMenu.Item
+              className="thread-context-item"
+              disabled={archiving}
+              onClick={() => onSetArchived(thread.lifecycleState === "active")}
+            >
+              {thread.lifecycleState === "active" ? (
+                <Archive />
+              ) : (
+                <ArchiveRestore />
+              )}
+              <span>
+                {thread.lifecycleState === "active" ? "Archive" : "Unarchive"}
+              </span>
+            </ContextMenu.Item>
+          )}
+          {editing === undefined ||
+          title === undefined ||
+          creating ? null : subthreads === undefined ? (
+            <ContextMenu.Item
+              className="thread-context-item thread-menu-item-danger"
+              onClick={() => editing.openDelete({ id: thread.id, title })}
+            >
+              <Trash2 />
+              <span>Delete</span>
+            </ContextMenu.Item>
+          ) : (
+            <FamilyContextSubmenu
+              icon={<Trash2 />}
+              label="Delete"
+              count={subthreads.count}
+              danger
+              onAll={() =>
+                editing.openDelete({ id: thread.id, title }, subthreads.count)
+              }
+              onThis={() => editing.openDelete({ id: thread.id, title })}
+            />
+          )}
+          <ContextMenu.Separator className="thread-context-separator" />
+        </>
+      ) : null}
+      <ContextMenu.SubmenuRoot>
+        <ContextMenu.SubmenuTrigger className="thread-context-item">
+          <Copy />
+          <span>Copy</span>
+          <ChevronRight />
+        </ContextMenu.SubmenuTrigger>
+        <ContextMenu.Portal>
+          <ContextMenu.Positioner
+            className="thread-context-positioner"
+            sideOffset={4}
+            alignOffset={-4}
+          >
+            <ContextMenu.Popup className="thread-context-menu">
+              <ContextMenu.Item
+                className="thread-context-item"
+                onClick={() => void copyThreadUrl(thread.id)}
+              >
+                <Link2 />
+                <span>Thread URL</span>
+              </ContextMenu.Item>
+              <ContextMenu.Item
+                className="thread-context-item"
+                onClick={() => void copyThreadId(thread.id)}
+              >
+                <Hash />
+                <span>Thread ID</span>
+              </ContextMenu.Item>
+            </ContextMenu.Popup>
+          </ContextMenu.Positioner>
+        </ContextMenu.Portal>
+      </ContextMenu.SubmenuRoot>
+    </>
+  );
+}
+
+const menuPopup = (items: ReactNode) => (
+  <ContextMenu.Portal>
+    <ContextMenu.Positioner className="thread-context-positioner">
+      <ContextMenu.Popup
+        className="thread-context-menu"
+        // Only a keyboard close returns focus to the row; after a click
+        // the row would keep a focus highlight beside the new selection.
+        finalFocus={(closeType) => closeType === "keyboard"}
+      >
+        {items}
+      </ContextMenu.Popup>
+    </ContextMenu.Positioner>
+  </ContextMenu.Portal>
+);
+
+/** Each row's menu, by the row's trigger element, for the list's one menu. */
+const SharedMenuRows = React.createContext<
+  Map<Element, ThreadContextMenuProps> | undefined
+>(undefined);
+
+/**
+ * One context menu for every Thread row inside it (#1462). A row registers
+ * what its menu offers; right-click or long-press opens the menu for the
+ * row under the pointer, so a list of rows mounts one menu, not one each.
+ */
+export function SharedThreadContextMenu({
+  children,
+}: {
+  readonly children: ReactNode;
+}) {
+  const [rows] = React.useState(
+    () => new Map<Element, ThreadContextMenuProps>(),
+  );
+  const [active, setActive] = React.useState<ThreadContextMenuProps>();
+  return (
+    <SharedMenuRows.Provider value={rows}>
+      <ContextMenu.Root
+        onOpenChange={(open, details) => {
+          if (!open) return;
+          const target = details.event.target;
+          const row =
+            target instanceof Element
+              ? target.closest(".thread-context-trigger")
+              : null;
+          const menu = row === null ? undefined : rows.get(row);
+          // Outside any row there is nothing to offer.
+          if (menu === undefined) {
+            details.cancel();
+            return;
+          }
+          setActive(menu);
+          menu.onOpenChange?.(true);
+        }}
+      >
+        <ContextMenu.Trigger render={<div className="thread-context-scope" />}>
+          {children}
+        </ContextMenu.Trigger>
+        {menuPopup(
+          active === undefined ? null : (
+            <ThreadContextMenuItems key={active.thread.id} {...active} />
+          ),
+        )}
+      </ContextMenu.Root>
+    </SharedMenuRows.Provider>
+  );
+}
+
+export function ThreadContextMenu({
+  children,
+  ...menu
+}: ThreadContextMenuProps & { readonly children: ReactNode }) {
+  const rows = React.useContext(SharedMenuRows);
+  // Inside a shared menu the row only says what its menu offers.
+  if (rows !== undefined)
+    return (
+      <div
+        className="thread-context-trigger"
+        ref={(node) => {
+          if (node === null) return;
+          rows.set(node, menu);
+          return () => {
+            rows.delete(node);
+          };
+        }}
+      >
+        {children}
+      </div>
+    );
+  return (
+    <ContextMenu.Root onOpenChange={menu.onOpenChange}>
+      <ContextMenu.Trigger render={<div className="thread-context-trigger" />}>
+        {children}
+      </ContextMenu.Trigger>
+      {menuPopup(<ThreadContextMenuItems {...menu} />)}
     </ContextMenu.Root>
   );
 }

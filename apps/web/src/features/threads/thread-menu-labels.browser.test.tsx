@@ -1,5 +1,7 @@
 import type { ThreadDetailData } from "@dx/api";
-import { defaultThreadModelSelection } from "@dx/domain";
+import { defaultThreadModelSelection, type UserId } from "@dx/domain";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { DateTime } from "effect";
 import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -16,16 +18,21 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ),
 }));
 
+import { AuthContext } from "../../shared/auth/auth-context.js";
 import { ThreadArchiveContext } from "../../shared/thread-archive.js";
 import { ThreadEditingContext } from "../../shared/thread-editing.js";
 import { ThreadSnoozeContext } from "../../shared/thread-snooze.js";
+import { orbMemoryKeys } from "./orb-memory/orb-memory-queries.js";
+import { threadCostQueryOptions } from "./thread-cost-queries.js";
 import { ThreadMenu } from "./thread-menu.js";
 // The menu's widths live in the app stylesheet.
 import "../../styles.css";
 
 // A Thread the requester owns, so the menu lists Share, Pin, Snooze, Archive,
-// Rename, Color, and Delete; its child also lists Open Source Thread.
+// Rename, Color, Delete, its Orb, and its cost; its child also lists Open
+// Source Thread.
 const thread = {
+  createdAt: DateTime.makeUnsafe("2026-10-31T00:00:00.000Z"),
   id: "thr_00000000-0000-4000-8000-000000001148",
   projectId: "prj_00000000000000000000000000001148",
   title: "More Actions labels",
@@ -33,11 +40,21 @@ const thread = {
   lifecycleState: "active",
   activityStatus: "idle",
   agentInitialization: { selection: defaultThreadModelSelection() },
+  executionWorkspace: { ready: true, preparationStatus: null },
 } as ThreadDetailData;
 const child = {
   ...thread,
   id: "thr_00000000-0000-4000-8000-000000001149",
   parentThreadId: thread.id,
+} as ThreadDetailData;
+
+// Claude Code runs on the person's own plan, so its cost is not tracked.
+const claudeCode = {
+  ...thread,
+  id: "thr_00000000-0000-4000-8000-000000001155",
+  agentInitialization: {
+    selection: { kind: "model", model: "claude-code/claude-opus-5-5" },
+  },
 } as ThreadDetailData;
 
 const model = {
@@ -65,6 +82,42 @@ const snooze = {
   wake: () => undefined,
 };
 const archive = { setArchived: () => undefined };
+
+const auth = {
+  identity: {
+    id: "usr_00000000000000000000000000001155" as UserId,
+    name: "Owner",
+    email: "owner@example.com",
+  },
+  logout: () => undefined,
+};
+
+// The Orb is paused and the cost is known.
+const queryClient = new QueryClient();
+for (const shown of [thread, child, claudeCode]) {
+  queryClient.setQueryData(orbMemoryKeys.thread(shown.id), {
+    workspace: "paused",
+    processes: [],
+  });
+  queryClient.setQueryData(
+    threadCostQueryOptions(
+      auth.identity.id,
+      shown.id,
+      DateTime.toEpochMillis(shown.createdAt),
+    ).queryKey,
+    {
+      amountMicros: 6_390_000,
+      currency: "USD",
+      estimated: true,
+      knownEvents: 12,
+      unknownEvents: 0,
+      since: undefined,
+    },
+  );
+}
+queryClient.setDefaultOptions({
+  queries: { staleTime: Number.POSITIVE_INFINITY },
+});
 
 const roots: Root[] = [];
 
@@ -100,8 +153,15 @@ describe("More Actions", () => {
     [1440, 900, false, thread],
     [1440, 900, false, child],
     [390, 844, true, thread],
+    [1440, 900, false, claudeCode],
+    [390, 844, true, claudeCode],
   ] as const) {
-    const kind = shown === child ? "a child Thread" : "a Thread";
+    const kind =
+      shown === child
+        ? "a child Thread"
+        : shown === claudeCode
+          ? "a Claude Code Thread"
+          : "a Thread";
     it(`shows every label in full for ${kind} at ${width}x${height}`, async () => {
       await page.viewport(width, height);
       const container = document.createElement("div");
@@ -110,19 +170,23 @@ describe("More Actions", () => {
       roots.push(root);
       await React.act(() =>
         root.render(
-          <ThreadArchiveContext value={archive}>
-            <ThreadEditingContext value={editing}>
-              <ThreadSnoozeContext value={snooze}>
-                <ThreadMenu
-                  thread={shown}
-                  project={{ name: "dx" }}
-                  transcript={() => model}
-                  onOpenShare={() => undefined}
-                  showDetails={showDetails}
-                />
-              </ThreadSnoozeContext>
-            </ThreadEditingContext>
-          </ThreadArchiveContext>,
+          <QueryClientProvider client={queryClient}>
+            <AuthContext value={auth}>
+              <ThreadArchiveContext value={archive}>
+                <ThreadEditingContext value={editing}>
+                  <ThreadSnoozeContext value={snooze}>
+                    <ThreadMenu
+                      thread={shown}
+                      project={{ name: "dx" }}
+                      transcript={() => model}
+                      onOpenShare={() => undefined}
+                      showDetails={showDetails}
+                    />
+                  </ThreadSnoozeContext>
+                </ThreadEditingContext>
+              </ThreadArchiveContext>
+            </AuthContext>
+          </QueryClientProvider>,
         ),
       );
       await React.act(() =>
@@ -142,6 +206,9 @@ describe("More Actions", () => {
           expect.stringMatching(/^Copy Thread URL.*C$/),
           "Copy Thread ID",
           "Export",
+          "OrbPaused",
+          "$6.39",
+          ...(shown === claudeCode ? ["Claude Code Costs Not Tracked"] : []),
           "Share…",
           "Pin",
           "Archive",

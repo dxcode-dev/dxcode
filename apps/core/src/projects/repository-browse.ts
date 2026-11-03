@@ -200,7 +200,11 @@ const cachedTip = async (
     (!("head" in cached) ||
       (typeof cached.head === "string" && /^[0-9a-f]{40}$/.test(cached.head)))
   )
-    return cached as PublicGitTip;
+    return {
+      ...(cached as Omit<PublicGitTip, "filter">),
+      // A tip cached before servers were told apart had used filters.
+      filter: !("filter" in cached) || cached.filter === true,
+    };
   const tip = await readPublicGitTip(cloneUrl, fetcher).catch(() => undefined);
   if (tip !== undefined && cache !== undefined) {
     const stored = cache

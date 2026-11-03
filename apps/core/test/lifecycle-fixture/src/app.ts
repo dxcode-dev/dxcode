@@ -21,10 +21,13 @@ import { projectRoutes } from "../../../src/projects/routes.js";
 import { settingsRoutes } from "../../../src/settings/routes.js";
 import { createThreadRoutes } from "../../../src/threads/routes.js";
 import { FixtureLifecycleAgent } from "./agents/fixture-lifecycle-agent.js";
+import { FixturePlanAgent } from "./agents/fixture-plan-agent.js";
 import { armAttachmentPoison } from "./attachment-poison.js";
 import { heavyTurnResponses } from "./heavy-history.js";
+import { planLimitRoutes } from "./plan-limit.js";
 import {
   failNextActivation,
+  hangNextActivation,
   isHoldingTurn,
   settleDelayedCommand,
 } from "./sandbox.js";
@@ -79,6 +82,12 @@ const scenarioResponses = {
       stopReason: "toolUse",
     }),
     fauxAssistantMessage("after-stop-complete"),
+  ],
+  "stop-deaf": () => [
+    fauxAssistantMessage([fauxToolCall("bash", { command: "deaf-hold" })], {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage("after-deaf-stop-complete"),
   ],
   unready: () => [
     fauxAssistantMessage("unready-first-complete"),
@@ -278,6 +287,10 @@ app.post("/__fixture/reject-next-initial-admission", (context) => {
   rejectNextInitialDispatch = true;
   return context.body(null, 204);
 });
+app.post("/__fixture/hang-next-activation/:threadId", (context) => {
+  hangNextActivation(context.req.param("threadId"));
+  return context.body(null, 204);
+});
 app.post("/__fixture/fail-next-activation/:threadId", (context) => {
   failNextActivation(context.req.param("threadId"));
   return context.body(null, 204);
@@ -301,6 +314,7 @@ app.post("/__fixture/seed-cross-owner", async (context) => {
     .run();
   return context.json({ threadId });
 });
+app.route("/__fixture/plan", planLimitRoutes);
 app.use("/v1/*", authenticate);
 app.route("/v1/projects", projectRoutes);
 app.route("/v1/settings", settingsRoutes);
@@ -308,6 +322,9 @@ app.route("/v1/threads", threadRoutes);
 app.use("/v1/agents/dx/:threadId", authorizeThread);
 app.use("/v1/agents/dx/:threadId/:subpath{.+}", authorizeThread);
 app.route("/v1/agents/dx", createAgentRouter(FixtureLifecycleAgent));
+app.use("/v1/agents/plan/:threadId", authorizeThread);
+app.use("/v1/agents/plan/:threadId/:subpath{.+}", authorizeThread);
+app.route("/v1/agents/plan", createAgentRouter(FixturePlanAgent));
 app.notFound(notFoundHandler);
 app.onError(errorHandler);
 

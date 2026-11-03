@@ -13,6 +13,7 @@ import { settingsNavigationState } from "../../../shared/navigation/settings-ret
 import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
 import { buttonVariants } from "../../../shared/ui/button-variants.js";
+import { MemberPolicyToggle } from "../member-policy-toggle.js";
 import {
   SettingsCard,
   SettingsHeading,
@@ -324,7 +325,7 @@ function PersonalSkillsPolicy({
   readonly allowed: boolean;
   readonly disabled: boolean;
   readonly pending: boolean;
-  readonly onChange: (allowed: boolean) => void;
+  readonly onChange: (allowed: boolean) => Promise<boolean>;
 }) {
   return (
     <SettingsCard>
@@ -332,12 +333,14 @@ function PersonalSkillsPolicy({
         title="Members can use personal skills"
         description="When off, only workspace skills load in members' Threads."
         control={
-          <SettingsToggle
+          <MemberPolicyToggle
             checked={allowed}
             disabled={disabled}
             pending={pending}
             label="Members can use personal skills"
-            onCheckedChange={onChange}
+            subject="personal skills"
+            description="Members' next Threads follow the new policy."
+            onConfirm={onChange}
           />
         }
       />
@@ -574,7 +577,7 @@ export function SkillsSettings({
           disabled={!canMutate}
           pending={pending === POLICY_KEY}
           onChange={(value) =>
-            void run(
+            run(
               { type: "updatePolicy", allowPersonalSkills: value },
               value
                 ? "Members' personal skills load again."

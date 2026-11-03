@@ -13,11 +13,11 @@ import {
 } from "../../../shared/ui/dialog.js";
 import { Input } from "../../../shared/ui/input.js";
 import { OrbIcon } from "../../../shared/ui/orb-icon.js";
+import { MemberPolicyToggle } from "../member-policy-toggle.js";
 import {
   SettingsCard,
   SettingsHeading,
   SettingsRow,
-  SettingsToggle,
 } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
 import {
@@ -346,14 +346,16 @@ export function OrbProvidersSettings({
                 : "Off while the workspace policy turns off members' own plugin settings."
             }
             control={
-              <SettingsToggle
+              <MemberPolicyToggle
                 checked={policy.allowed}
                 disabled={
                   !data.canUpdate || busy || !policy.pluginOverridesAllowed
                 }
                 label="Members' own accounts on workspace projects"
-                onCheckedChange={(value) =>
-                  void run(
+                subject="members' own accounts"
+                description="Members' next Orbs on workspace projects follow the new policy."
+                onConfirm={async (value) =>
+                  (await run(
                     {
                       type: "policy",
                       allowPersonalKeysOnWorkspaceProjects: value,
@@ -361,7 +363,7 @@ export function OrbProvidersSettings({
                     value
                       ? "Members' own accounts allowed."
                       : "Members' own accounts turned off.",
-                  )
+                  )) === undefined
                 }
               />
             }
