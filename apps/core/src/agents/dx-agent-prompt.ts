@@ -43,7 +43,7 @@ const attachmentsPrompt = (shell: string) =>
  * `/opt/dx/bin/tmux`.
  */
 const terminalPrompt = (shell: string) =>
-  `When /opt/dx/bin/tmux exists, the user's Terminal tab is tmux session main on socket dx, and you share it. Read it with \`/opt/dx/bin/tmux -L dx capture-pane -p -J -S -200 -t main\`; type into it with \`/opt/dx/bin/tmux -L dx send-keys -t main -l '<text>'\`, then \`/opt/dx/bin/tmux -L dx send-keys -t main Enter\`. The user sees everything typed there, so use it when they ask you to run something in their terminal or to look at what they ran, and keep your own work in ${shell}. No session means they have not opened the Terminal yet.`;
+  `When /opt/dx/bin/tmux exists, the user's Terminal tab is tmux session main on socket dx, and you share it. Read it with \`/opt/dx/bin/tmux -L dx capture-pane -p -J -S -200 -t main\`; type into it with \`/opt/dx/bin/tmux -L dx send-keys -t main -l '<text>'\`, then \`/opt/dx/bin/tmux -L dx send-keys -t main Enter\`. The user sees everything typed there, so use it when they ask you to run something in their terminal or to look at what they ran, and keep your own work in ${shell}. No session means they have not opened the Terminal yet. Their other Terminal tabs are sessions main-2, main-3, and so on, named after the tab's number (Terminal 2 is main-2).`;
 
 /**
  * What a reply can show besides text: media stored in the Thread's storage

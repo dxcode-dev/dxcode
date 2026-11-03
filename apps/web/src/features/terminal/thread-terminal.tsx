@@ -1,6 +1,7 @@
 import {
   THREAD_TERMINAL_SUBPROTOCOL,
   type ThreadTerminalErrorCode,
+  type ThreadTerminalId,
   type ThreadTerminalServerControl,
   ThreadTerminalServerControlSchema,
 } from "@dx/api";
@@ -13,14 +14,19 @@ import {
   reportSessionEnded,
 } from "../../shared/auth/session-ended.js";
 import { wakingExecutionEnvironmentMessage } from "../../shared/execution-environment-copy.js";
+import {
+  TerminalSessionContext,
+  terminalEnvironmentFormId,
+} from "../../shared/terminal-session.js";
 import { useTheme } from "../../shared/theme/theme-provider.js";
 import { useMobile } from "../../shared/use-mobile.js";
 import { TerminalKeys } from "./terminal-keys.js";
 import { terminalThemeFor } from "./terminal-themes.js";
 
-const terminalUrl = (threadId: ThreadId) => {
+const terminalUrl = (threadId: ThreadId, session: ThreadTerminalId) => {
   const url = new URL(`/v1/threads/${threadId}/terminal`, window.location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  if (session !== "default") url.searchParams.set("terminal", session);
   return url.href;
 };
 
@@ -79,6 +85,10 @@ const errorMessage = (code: ThreadTerminalErrorCode) => {
       return "Terminal output exceeded capacity.";
     case "session-ended":
       return "Your session ended. Sign in again.";
+    case "terminal-limit":
+      return "This Thread already runs eight Terminals. Close one to open another.";
+    case "terminal-closed":
+      return "This Terminal was closed.";
   }
 };
 
@@ -195,10 +205,12 @@ interface ThreadTerminalProps {
 
 interface ThreadTerminalSessionProps extends ThreadTerminalProps {
   readonly terminalTheme: ReturnType<typeof terminalThemeFor>;
+  readonly session: ThreadTerminalId;
 }
 
 const useTerminalConnection = ({
   threadId,
+  session,
   loadEmulator = loadBrowserTerminal,
   onWorkspaceStatusChange,
   terminalTheme,
@@ -230,7 +242,7 @@ const useTerminalConnection = ({
       async ({ mountBrowserTerminal }) => {
         if (abort.signal.aborted) return;
         const socket = new WebSocket(
-          terminalUrl(threadId),
+          terminalUrl(threadId, session),
           THREAD_TERMINAL_SUBPROTOCOL,
         );
         socket.binaryType = "arraybuffer";
@@ -258,6 +270,9 @@ const useTerminalConnection = ({
         let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
         let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
         let socketUnanswered = false;
+        // This socket was given up for lost; a reconnect may still be held
+        // back (offline, or out of attempts) while it stays open.
+        let givenUp = false;
         const browserPresent = () =>
           activeRef.current &&
           document.visibilityState === "visible" &&
@@ -290,6 +305,7 @@ const useTerminalConnection = ({
         const startReconnect = () => {
           if (unavailableObserved) return;
           unavailableObserved = true;
+          givenUp = true;
           ready = false;
           clearHeartbeat();
           clearRecovery();
@@ -368,7 +384,7 @@ const useTerminalConnection = ({
             JSON.stringify({
               v: 1,
               type: "attach",
-              terminal: "default",
+              terminal: session,
               dimensions: {
                 columns: terminalDimension(emulator.terminal.cols),
                 rows: terminalDimension(emulator.terminal.rows),
@@ -433,6 +449,14 @@ const useTerminalConnection = ({
             // Any control answers a pending recovery request.
             clearRecovery();
             socketUnanswered = false;
+            if (givenUp) {
+              // A socket given up for lost answers after all (the network
+              // came back with TCP intact). What Core holds for it is
+              // unknown here: reattach with a replay rather than show a
+              // ready Terminal that drops what is typed.
+              if (browserPresent()) reconnect();
+              return;
+            }
             if (control.type === "heartbeat") {
               if (ready) expectHeartbeat();
               return;
@@ -628,7 +652,7 @@ function ThreadTerminalSession(props: ThreadTerminalSessionProps) {
   const failed = status.type === "error" && status.retry !== "on-focus";
   return (
     <form
-      id="thread-terminal-environment"
+      id={terminalEnvironmentFormId(props.session)}
       className="thread-terminal-shell"
       onSubmit={(event) => {
         event.preventDefault();
@@ -636,8 +660,8 @@ function ThreadTerminalSession(props: ThreadTerminalSessionProps) {
         if (
           window.confirm(
             restartRequired
-              ? "Refresh and restart Terminal? Restarting ends the shared shell and any running command or process in every open Terminal view."
-              : "Refresh Terminal environment? If values changed, dx restarts the shared shell and ends any running command or process in every open Terminal view.",
+              ? "Refresh and restart Terminal? Restarting ends this Terminal's shell and any running command or process in it, in every open view of it."
+              : "Refresh Terminal environment? If values changed, dx restarts this Terminal's shell and ends any running command or process in it, in every open view of it.",
           )
         )
           refreshEnvironment.current();
@@ -675,10 +699,12 @@ function ThreadTerminalSession(props: ThreadTerminalSessionProps) {
 
 export function ThreadTerminal(props: ThreadTerminalProps) {
   const { resolvedAppearance, terminalTheme } = useTheme();
+  const session = React.use(TerminalSessionContext);
   return (
     <ThreadTerminalSession
-      key={`${terminalTheme}:${resolvedAppearance}`}
+      key={`${terminalTheme}:${resolvedAppearance}:${session}`}
       {...props}
+      session={session}
       terminalTheme={terminalThemeFor(terminalTheme, resolvedAppearance)}
     />
   );

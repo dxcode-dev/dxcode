@@ -1,14 +1,16 @@
 import type { ThreadPaneLayout, ThreadPaneTab } from "@dx/api";
-import { X } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import * as React from "react";
 import { OrbIcon } from "../../../shared/ui/orb-icon.js";
 import {
+  canOpenTerminal,
   flattenPaneTabs,
   focusedTab,
   type PaneLayoutAction,
   type PaneViewKind,
   tabId,
   tabLabel,
+  terminalSession,
 } from "./pane-layout.js";
 import {
   createPaneTabSlots,
@@ -64,9 +66,13 @@ type RowEntry =
       readonly tab: ThreadPaneTab;
       readonly pane: string;
     }
-  | { readonly kind: "closed"; readonly view: PaneViewKind };
+  | { readonly kind: "closed"; readonly view: PaneViewKind }
+  | { readonly kind: "new-terminal" };
 
-/** Agent, then each view (open or not) in phone order, then open files. */
+/**
+ * Agent, then each view (open or not) in phone order, then open files.
+ * Every open Terminal has its entry, and New Terminal follows them.
+ */
 const rowEntries = (
   layout: ThreadPaneLayout,
   contents: PaneContents,
@@ -79,6 +85,14 @@ const rowEntries = (
     entries.push({ kind: "open", tab: agent.tab, pane: agent.pane });
   for (const view of STACKED_VIEW_ORDER) {
     if (contents.views[view] === undefined) continue;
+    if (view === "terminal") {
+      const terminals = open.filter((entry) => entry.tab.kind === "terminal");
+      for (const entry of terminals)
+        entries.push({ kind: "open", tab: entry.tab, pane: entry.pane });
+      if (terminals.length === 0) entries.push({ kind: "closed", view });
+      else if (canOpenTerminal(layout)) entries.push({ kind: "new-terminal" });
+      continue;
+    }
     const located = byKind.get(view);
     entries.push(
       located === undefined
@@ -120,6 +134,24 @@ function RowButton({
   readonly dispatch: Dispatch;
   readonly slots: PaneTabSlots;
 }) {
+  if (entry.kind === "new-terminal")
+    return (
+      <div className="stacked-tab" role="presentation" data-kind="terminal">
+        <button
+          type="button"
+          role="tab"
+          className="stacked-tab-trigger"
+          aria-selected={false}
+          aria-label="New Terminal"
+          onClick={() =>
+            React.startTransition(() => dispatch({ type: "new-terminal" }))
+          }
+        >
+          <Plus aria-hidden="true" />
+          <span className="stacked-tab-label">New Terminal</span>
+        </button>
+      </div>
+    );
   if (entry.kind === "closed") {
     const { label, Icon } = PANE_VIEWS[entry.view];
     return (
@@ -229,10 +261,12 @@ export function ThreadStackedLayout({
         <div className="stacked-tabs" role="tablist" aria-label="Thread views">
           {entries.map((entry) => {
             const key =
-              entry.kind === "closed"
-                ? `closed:${entry.view}`
-                : tabId(entry.tab);
-            const id = entry.kind === "closed" ? undefined : tabId(entry.tab);
+              entry.kind === "new-terminal"
+                ? "new-terminal"
+                : entry.kind === "closed"
+                  ? `closed:${entry.view}`
+                  : tabId(entry.tab);
+            const id = entry.kind === "open" ? tabId(entry.tab) : undefined;
             return (
               <RowButton
                 key={key}
@@ -258,7 +292,10 @@ export function ThreadStackedLayout({
               ? renderPaneContent(contents.agent, active)
               : tab.kind === "file"
                 ? contents.file(tab.target, active)
-                : renderPaneContent(contents.views[tab.kind], active);
+                : renderPaneContent(
+                    contents.views[tab.kind] ?? contents.unavailableView,
+                    active,
+                  );
           return (
             <section
               key={id}
@@ -276,7 +313,9 @@ export function ThreadStackedLayout({
                   value={active ? { slots: tabSlots, tabId: id } : null}
                 >
                   {tab.kind === "terminal" ? (
-                    <TerminalView>{content}</TerminalView>
+                    <TerminalView session={terminalSession(tab)}>
+                      {content}
+                    </TerminalView>
                   ) : (
                     content
                   )}

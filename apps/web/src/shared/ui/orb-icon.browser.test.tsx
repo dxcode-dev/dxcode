@@ -216,6 +216,55 @@ describe("OrbIcon working off the main thread", () => {
     expect(frames.size).toBe(0);
   });
 
+  it("covers exactly the icon's box with the canvas at every size, and keeps the SVG renderer for a box it cannot cover", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    const ref = createRef<SVGSVGElement>();
+    const render = (width: number, height: number) =>
+      act(() =>
+        root?.render(
+          <OrbIcon
+            ref={ref}
+            activityStatus="working"
+            style={{ width, height, display: "block", margin: 7 }}
+          />,
+        ),
+      );
+    const box = (element: Element | null | undefined) => {
+      const rect = element?.getBoundingClientRect();
+      return rect && [rect.x, rect.y, rect.width, rect.height];
+    };
+    const sameBox = (svg: SVGSVGElement | null) => {
+      const canvas = canvasOf(svg)?.querySelector("canvas");
+      const actual = box(canvas);
+      const expected = box(svg);
+      expect(actual).toHaveLength(4);
+      for (const [i, value] of (expected ?? []).entries())
+        expect(actual?.[i]).toBeCloseTo(value, 2);
+    };
+    for (const side of [14, 13.5, 20, 48, 96]) {
+      render(side, side);
+      await waitFor(() => expect(canvasShown(ref.current)).toBe(true));
+      await waitFor(() => sameBox(ref.current));
+      expect(frames.size).toBe(0);
+    }
+    // A box that is not square centers the artwork, which composited canvas
+    // content in WebKit does not follow, so this Orb moves to the SVG renderer.
+    const svg = ref.current;
+    render(40, 20);
+    await waitFor(() => expect(canvasOf(svg)).toBeNull());
+    expect(artworkOf(svg)?.style.visibility).toBe("");
+    expect(frames.size).toBe(1);
+    act(() => root?.unmount());
+    root = undefined;
+    // An Orb that starts in a box it cannot cover never shows a canvas.
+    root = createRoot(container);
+    render(40, 20);
+    await waitFor(() => expect(frames.size).toBe(1));
+    expect(canvasOf(ref.current)).toBeNull();
+  });
+
   it("draws the Orb on the canvas in the SVG's color, with the unread dot cut away", async () => {
     const container = document.createElement("div");
     container.style.color = "rgb(0, 200, 0)";

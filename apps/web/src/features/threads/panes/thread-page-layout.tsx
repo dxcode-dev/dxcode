@@ -94,6 +94,9 @@ export function ThreadPageLayout({
               layout={layout}
               contents={contents}
               onOpen={openView}
+              onNewTerminal={() =>
+                React.startTransition(() => dispatch({ type: "new-terminal" }))
+              }
             />
           ),
           stacked: false,

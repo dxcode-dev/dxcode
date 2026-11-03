@@ -155,6 +155,14 @@ pub struct StorageCapability {
     pub version: u8,
 }
 
+/// Version 1: Core may name Terminals besides `default` (up to eight run at
+/// once) and send `terminal.close`; heartbeats list them as `terminals`. See
+/// [`crate::terminals`].
+#[derive(Serialize)]
+pub struct TerminalSessionsCapability {
+    pub version: u8,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capabilities {
@@ -165,6 +173,7 @@ pub struct Capabilities {
     pub memory: MemoryCapability,
     pub disk: DiskCapability,
     pub storage: StorageCapability,
+    pub terminal_sessions: TerminalSessionsCapability,
 }
 
 impl Capabilities {
@@ -179,6 +188,7 @@ impl Capabilities {
             memory: MemoryCapability { version: 1 },
             disk: DiskCapability { version: 1 },
             storage: StorageCapability { version: 1 },
+            terminal_sessions: TerminalSessionsCapability { version: 1 },
         }
     }
 }
@@ -319,12 +329,12 @@ pub enum TerminalHeartbeat {
     Absent {
         #[serde(rename = "terminalVersion")]
         terminal_version: u8,
-        terminal: &'static str,
+        terminal: String,
     },
     Starting {
         #[serde(rename = "terminalVersion")]
         terminal_version: u8,
-        terminal: &'static str,
+        terminal: String,
         #[serde(rename = "residentGeneration")]
         resident_generation: TerminalGeneration,
         #[serde(rename = "foregroundCommand")]
@@ -335,7 +345,7 @@ pub enum TerminalHeartbeat {
     Ready {
         #[serde(rename = "terminalVersion")]
         terminal_version: u8,
-        terminal: &'static str,
+        terminal: String,
         #[serde(rename = "residentGeneration")]
         resident_generation: TerminalGeneration,
         #[serde(rename = "foregroundCommand")]
@@ -346,7 +356,7 @@ pub enum TerminalHeartbeat {
     Exited {
         #[serde(rename = "terminalVersion")]
         terminal_version: u8,
-        terminal: &'static str,
+        terminal: String,
         #[serde(rename = "residentGeneration")]
         resident_generation: TerminalGeneration,
         #[serde(rename = "foregroundCommand")]
@@ -357,7 +367,7 @@ pub enum TerminalHeartbeat {
     Failed {
         #[serde(rename = "terminalVersion")]
         terminal_version: u8,
-        terminal: &'static str,
+        terminal: String,
         #[serde(rename = "residentGeneration")]
         resident_generation: TerminalGeneration,
         #[serde(rename = "foregroundCommand")]
@@ -385,6 +395,9 @@ pub enum ClientMessage<'a> {
     Heartbeat {
         generation: &'a str,
         terminal: TerminalHeartbeat,
+        /// Every Terminal besides `default`, by number.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        terminals: Vec<TerminalHeartbeat>,
         #[serde(skip_serializing_if = "Option::is_none")]
         memory: Option<crate::memory::MemoryUsage>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -661,6 +674,14 @@ pub enum ServerMessage {
         resize_ordinal: U64String,
         dimensions: Dimensions,
     },
+    /// End a Terminal besides `default`: its client, its tmux session and
+    /// every shell in it. Closing one that does not exist changes nothing.
+    #[serde(rename = "terminal.close")]
+    TerminalClose {
+        #[serde(rename = "terminalVersion")]
+        terminal_version: u8,
+        terminal: String,
+    },
     #[serde(rename = "terminal.detach")]
     TerminalDetach {
         #[serde(rename = "terminalVersion")]
@@ -726,7 +747,7 @@ pub enum TerminalClientMessage {
     ResidentState {
         #[serde(rename = "terminalVersion")]
         terminal_version: u8,
-        terminal: &'static str,
+        terminal: String,
         #[serde(rename = "residentGeneration")]
         resident_generation: TerminalGeneration,
         state: &'static str,
@@ -788,6 +809,14 @@ pub enum TerminalClientMessage {
         resident_generation: TerminalGeneration,
         #[serde(rename = "attachmentGeneration")]
         attachment_generation: TerminalGeneration,
+    },
+    /// A new Terminal was not opened: `session-limit` when eight already run.
+    #[serde(rename = "terminal.refused")]
+    Refused {
+        #[serde(rename = "terminalVersion")]
+        terminal_version: u8,
+        terminal: String,
+        code: &'static str,
     },
     #[serde(rename = "terminal.error")]
     Error {

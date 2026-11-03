@@ -41,6 +41,7 @@ import {
   NewThreadSurfaceContext,
   type NewThreadSurfaceValue,
 } from "../../shared/new-thread-surface.js";
+import { DocumentTitle } from "../../shared/ui/document-title.js";
 import {
   ModalSurface,
   ModalSurfaceClose,
@@ -139,11 +140,14 @@ export function NewThreadPage() {
   const search = useSearch({ from: "/_product/new" });
   const navigate = useNavigate();
   return (
-    <NewThreadModal
-      initialProjectId={search.project}
-      onClose={() => void navigate({ to: "/" })}
-      onAccepted={() => {}}
-    />
+    <>
+      <DocumentTitle name="New Thread" />
+      <NewThreadModal
+        initialProjectId={search.project}
+        onClose={() => void navigate({ to: "/" })}
+        onAccepted={() => {}}
+      />
+    </>
   );
 }
 

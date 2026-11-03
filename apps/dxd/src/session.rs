@@ -25,7 +25,8 @@ use crate::protocol::{
 use crate::proxy::{self, DesktopStart, Outbound, Proxy};
 use crate::services::{ServicePaths, Services};
 use crate::storage::{Transfer, TransferResult};
-use crate::terminal::{TerminalOutbound, TerminalRuntime};
+use crate::terminal::TerminalOutbound;
+use crate::terminals::Terminals;
 use crate::update::{self, UpdateRequest, Updater};
 use crate::workload_identity::{LocalRequest, Relay};
 use crate::{Config, PROTOCOL_MAJOR, RELEASE};
@@ -134,7 +135,7 @@ pub struct Daemon {
     last_address: Option<std::net::SocketAddr>,
     resumed_at: Option<Instant>,
     updater: Updater,
-    terminal: TerminalRuntime,
+    terminal: Terminals,
     environment: EnvironmentRuntime,
     files: FilesWorkers,
     files_results: Receiver<FilesDone>,
@@ -165,7 +166,7 @@ impl Daemon {
         config: Config,
         config_path: PathBuf,
         current_exe: PathBuf,
-        terminal: TerminalRuntime,
+        terminal: Terminals,
         environment: EnvironmentRuntime,
         files: FilesContext,
         observer: Observer,
@@ -463,6 +464,7 @@ impl Daemon {
             &ClientMessage::Heartbeat {
                 generation: &generation,
                 terminal: self.terminal.heartbeat(),
+                terminals: self.terminal.other_heartbeats(),
                 memory: memory::usage(),
                 disk: self.disk.usage(),
             },
@@ -598,6 +600,7 @@ impl Daemon {
                         &ClientMessage::Heartbeat {
                             generation: &generation,
                             terminal: self.terminal.heartbeat(),
+                terminals: self.terminal.other_heartbeats(),
                             memory: memory::usage(),
                             disk: self.disk.usage(),
                         },
@@ -789,12 +792,7 @@ impl Daemon {
     }
 
     fn reexec_after_update(&mut self) -> ! {
-        let mut handoff: Vec<(&str, String)> = self
-            .terminal
-            .prepare_handoff()
-            .map(|encoded| (crate::terminal::HANDOFF_VARIABLE, encoded))
-            .into_iter()
-            .collect();
+        let mut handoff: Vec<(&str, String)> = self.terminal.prepare_handoff();
         // Services stay this process's children across exec; the new image
         // reaps them.
         handoff.push((crate::services::HANDOFF_VARIABLE, self.services.handoff()));
@@ -1192,6 +1190,16 @@ impl Daemon {
                         attachment_generation,
                         &reason,
                     )
+                    .map_err(SessionExit::Terminal)?;
+                send_terminal_output(control, output).await?;
+            }
+            ServerMessage::TerminalClose {
+                terminal_version,
+                terminal: terminal_name,
+            } => {
+                let output = self
+                    .terminal
+                    .close(terminal_version, &terminal_name)
                     .map_err(SessionExit::Terminal)?;
                 send_terminal_output(control, output).await?;
             }

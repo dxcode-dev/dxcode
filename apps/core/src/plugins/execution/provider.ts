@@ -22,6 +22,7 @@ import type { SourceWorkspaceRuntimeOptions } from "../../execution/source-prepa
 import type { Bindings } from "../../http/types.js";
 import { orbProvidersLogger } from "../../logging.js";
 import { stepTiming } from "../../observability/step-timing.js";
+import { prefetchExecutionEnvironment } from "../../settings/environment-variables/execution.js";
 import { drainThreadDaemon } from "../../threads/daemon-client.js";
 import {
   deploymentProviders,
@@ -816,6 +817,12 @@ export const composeExecutionWorkspaces = (
         );
         timing.log("resolved");
         const resolvedContext = contextFor(entry, target);
+        // Context discovery needs the environment once the Orb opens; its
+        // read runs beside the Orb's checks instead of after them.
+        if (
+          resolvedContext.profile.capabilities.includes("environment-variables")
+        )
+          prefetchExecutionEnvironment(bindings, request.id);
         if (early === undefined) {
           await target.policy;
           return entry.pipeline.activate(resolvedContext, request);

@@ -41,7 +41,8 @@ interface Host {
   shown(): void;
   settled(): void;
   failed(): void;
-  resize(width: number, height: number): void;
+  /** The icon's square box: its CSS side, and the canvas side in pixels. */
+  resize(cssSide: number, pixelSide: number): void;
   setVisible(visible: boolean): void;
 }
 
@@ -124,11 +125,17 @@ const sharedPool = (window: Window & typeof globalThis) => {
     }),
     resize: new window.ResizeObserver((entries) => {
       for (const entry of entries) {
-        // The 24-unit viewBox fits the smaller side, as the SVG draws it.
+        const host = bySvg.get(entry.target);
+        if (!host) continue;
         const css = entry.contentBoxSize[0];
-        const scaled = Math.round(
-          Math.min(css.inlineSize, css.blockSize) * window.devicePixelRatio,
-        );
+        // A box that is not square centers the 24-unit viewBox in it, and
+        // WebKit drops that offset for the canvas, so this Orb keeps the SVG.
+        if (Math.abs(css.inlineSize - css.blockSize) > 0.5) {
+          host.failed();
+          continue;
+        }
+        const cssSide = Math.min(css.inlineSize, css.blockSize);
+        const scaled = Math.round(cssSide * window.devicePixelRatio);
         const device = devicePixels
           ? entry.devicePixelContentBoxSize[0]
           : undefined;
@@ -138,7 +145,7 @@ const sharedPool = (window: Window & typeof globalThis) => {
         // CSS size times the ratio matches what the SVG renders.
         const side =
           exact !== undefined && Math.abs(exact - scaled) <= 1 ? exact : scaled;
-        bySvg.get(entry.target)?.resize(side, side);
+        host.resize(cssSide, side);
       }
     }),
   };
@@ -160,6 +167,10 @@ const startCanvas = (
   const current = sharedPool(window);
   const document = window.document;
   const id = ++nextId;
+  // WebKit paints a composited canvas in a foreignObject without the SVG's
+  // viewBox scale (#1532). The frame is sized in CSS pixels and scaled back to
+  // the 24-unit grid, so the scales cancel: the canvas covers the icon's box
+  // whether or not an engine applies them.
   const frame = document.createElementNS(SVG, "foreignObject");
   frame.setAttribute("x", "0");
   frame.setAttribute("y", "0");
@@ -204,7 +215,14 @@ const startCanvas = (
       dispose();
       events.failed();
     },
-    resize: (width, height) => post({ type: "update", id, width, height }),
+    resize: (cssSide, pixelSide) => {
+      if (cssSide > 0) {
+        frame.setAttribute("width", String(cssSide));
+        frame.setAttribute("height", String(cssSide));
+        frame.setAttribute("transform", `scale(${24 / cssSide})`);
+      }
+      post({ type: "update", id, width: pixelSide, height: pixelSide });
+    },
     setVisible: (visible) => post({ type: "update", id, visible }),
   };
   current.hosts.set(id, host);

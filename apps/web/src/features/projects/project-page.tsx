@@ -14,6 +14,7 @@ import { DxLoading } from "../../shared/brand/dx-loading.js";
 import { PageShell } from "../../shared/layout/page-shell.js";
 import { useNewThreadSurface } from "../../shared/new-thread-surface.js";
 import { buttonVariants } from "../../shared/ui/button-variants.js";
+import { DocumentTitle } from "../../shared/ui/document-title.js";
 import { ThreadTitleText } from "../../shared/ui/thread-title.js";
 import { TimeText } from "../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../shared/utils.js";
@@ -141,6 +142,7 @@ export function ProjectPage() {
       }
       contentClassName="project-detail-content"
     >
+      {project === undefined ? null : <DocumentTitle name={project.name} />}
       {projectQuery.isPending && project === undefined ? (
         <DxLoading label="Loading project…" />
       ) : null}

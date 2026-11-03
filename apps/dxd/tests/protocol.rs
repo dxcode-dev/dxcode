@@ -306,6 +306,7 @@ async fn register(socket: &mut Socket) -> String {
     assert_eq!(register["release"], env!("CARGO_PKG_VERSION"));
     assert_eq!(register["capabilities"]["terminal"]["version"], 1);
     assert_eq!(register["capabilities"]["files"]["version"], 1);
+    assert_eq!(register["capabilities"]["terminalSessions"]["version"], 1);
     assert!(register["capabilities"].get("environment").is_none());
     let generation = format!("gen-{}", rand::random::<u32>());
     socket
@@ -1032,6 +1033,18 @@ async fn updates_itself_in_place_and_keeps_the_shell(tmux: Option<&TmuxFixture>)
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
+    // A second Terminal is carried across too.
+    let second = open_named(&mut socket, "2").await;
+    let second_attachment = attach_named(&mut socket, "2", &second).await;
+    type_and_expect(
+        &mut socket,
+        &second,
+        &second_attachment,
+        1,
+        "SECOND_MARK=kept; echo second-$((2*2))\n",
+        "second-4",
+    )
+    .await;
 
     let (release_task, url) = {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1123,6 +1136,10 @@ async fn updates_itself_in_place_and_keeps_the_shell(tmux: Option<&TmuxFixture>)
     let heartbeat = wait_for(&mut socket, |value| value["type"] == "heartbeat").await;
     assert_eq!(heartbeat["terminal"]["state"], "ready");
     assert_eq!(heartbeat["terminal"]["residentGeneration"], resident);
+    assert_eq!(
+        reported_terminals(&heartbeat)[1..],
+        [("2".to_owned(), "ready".to_owned(), second.clone())]
+    );
     let attachment = random_generation();
     send(
         &mut socket,
@@ -1188,6 +1205,16 @@ async fn updates_itself_in_place_and_keeps_the_shell(tmux: Option<&TmuxFixture>)
             }
         }
     }
+    let second_attachment = attach_named(&mut socket, "2", &second).await;
+    type_and_expect(
+        &mut socket,
+        &second,
+        &second_attachment,
+        1,
+        "echo second=$SECOND_MARK\n",
+        "second=kept",
+    )
+    .await;
     // The adopted shell's exit is still observed, even with its background
     // job holding the PTY open.
     let exit_started = Instant::now();
@@ -2881,4 +2908,364 @@ async fn real_daemon_moves_files_between_the_guest_and_thread_storage() {
     .await;
     assert_eq!(refused, json!({"kind": "unavailable", "reason": "invalid"}));
     assert!(!repo.join("z.txt").exists());
+}
+
+/// Open terminal `name` and return its ready resident generation.
+async fn open_named(socket: &mut Socket, name: &str) -> String {
+    send(
+        socket,
+        json!({
+            "type": "terminal.open", "terminalVersion": 1, "terminal": name,
+            "mode": "open-if-absent", "dimensions": {"columns": 80, "rows": 24},
+        }),
+    )
+    .await;
+    let ready = wait_for(socket, |value| {
+        value["type"] == "terminal.resident-state"
+            && value["terminal"] == name
+            && value["state"] == "ready"
+    })
+    .await;
+    ready["residentGeneration"].as_str().unwrap().to_owned()
+}
+
+/// Attach to terminal `name` as Core does after a new connection; returns
+/// the attachment.
+async fn attach_named(socket: &mut Socket, name: &str, resident: &str) -> String {
+    send(
+        socket,
+        json!({
+            "type": "terminal.reset-attachments", "terminalVersion": 1,
+            "terminal": name, "residentGeneration": resident,
+        }),
+    )
+    .await;
+    let attachment = random_generation();
+    send(
+        socket,
+        json!({
+            "type": "terminal.attach", "terminalVersion": 1, "terminal": name,
+            "residentGeneration": resident, "attachmentGeneration": attachment,
+            "resizeOrdinal": "1", "dimensions": {"columns": 80, "rows": 24},
+        }),
+    )
+    .await;
+    wait_for(socket, |value| {
+        assert_ne!(value["type"], "terminal.error", "attach {name}: {value}");
+        value["type"] == "terminal.attachment-ready" && value["attachmentGeneration"] == attachment
+    })
+    .await;
+    attachment
+}
+
+/// Live output of each resident, keyed by its generation.
+async fn live_by_resident(
+    socket: &mut Socket,
+    expected: &[(&str, &str)],
+) -> std::collections::HashMap<String, String> {
+    use base64::Engine;
+    let mut seen = std::collections::HashMap::<String, Vec<u8>>::new();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let text = |seen: &std::collections::HashMap<String, Vec<u8>>, resident: &str| {
+            String::from_utf8_lossy(seen.get(resident).map_or(&[][..], Vec::as_slice)).into_owned()
+        };
+        if expected
+            .iter()
+            .all(|(resident, expected)| text(&seen, resident).contains(expected))
+        {
+            return seen
+                .keys()
+                .map(|resident| (resident.clone(), text(&seen, resident)))
+                .collect();
+        }
+        assert!(Instant::now() < deadline, "expected {expected:?}");
+        if let Message::Binary(bytes) = next_frame(socket).await
+            && bytes.starts_with(b"DXT1")
+            && bytes[4] == 3
+        {
+            let resident = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes[6..22]);
+            seen.entry(resident)
+                .or_default()
+                .extend_from_slice(&bytes[50..]);
+        }
+    }
+}
+
+fn reported_terminals(heartbeat: &Value) -> Vec<(String, String, String)> {
+    let mut reported = vec![(
+        "default".to_owned(),
+        heartbeat["terminal"]["state"].as_str().unwrap().to_owned(),
+        heartbeat["terminal"]["residentGeneration"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned(),
+    )];
+    for terminal in heartbeat["terminals"].as_array().into_iter().flatten() {
+        reported.push((
+            terminal["terminal"].as_str().unwrap().to_owned(),
+            terminal["state"].as_str().unwrap().to_owned(),
+            terminal["residentGeneration"]
+                .as_str()
+                .unwrap_or("")
+                .to_owned(),
+        ));
+    }
+    reported
+}
+
+/// Several Terminals in one Orb: each is its own resident (its own PTY and
+/// tmux session, `main` for the first and `main-<n>` for the others), so
+/// input and output never cross. Every session outlives a daemon crash
+/// under its own identity, closing one ends only its session and its
+/// shells, and a daemon refuses a ninth session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_daemon_runs_several_terminal_sessions() {
+    let tmux = TmuxFixture::new();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fixture = fixture(port);
+    let mut daemon = DaemonGuard(spawn_daemon_with(&fixture, Path::new(DXD), Some(&tmux)));
+    let mut socket = accept(&listener).await;
+    let generation = register(&mut socket).await;
+    let applied = request(&mut socket, &generation, "env-1", environment_operation(1)).await;
+    assert_eq!(applied["kind"], "applied");
+
+    let first = open_named(&mut socket, "default").await;
+    let second = open_named(&mut socket, "2").await;
+    let third = open_named(&mut socket, "3").await;
+    assert!(first != second && second != third && first != third);
+    poll_tmux(
+        &tmux,
+        &["list-sessions", "-F", "#{session_name}"],
+        |names| {
+            let mut names = names.lines().collect::<Vec<_>>();
+            names.sort_unstable();
+            names == ["main", "main-2", "main-3"]
+        },
+    );
+    let heartbeat = wait_for(&mut socket, |value| value["type"] == "heartbeat").await;
+    assert_eq!(
+        reported_terminals(&heartbeat),
+        [
+            ("default".into(), "ready".into(), first.clone()),
+            ("2".into(), "ready".into(), second.clone()),
+            ("3".into(), "ready".into(), third.clone()),
+        ]
+    );
+
+    // Each Terminal runs its own shell: distinct commands, distinct output.
+    let residents = [&first, &second, &third];
+    let mut attachments = Vec::new();
+    for (name, resident) in ["default", "2", "3"].into_iter().zip(residents) {
+        attachments.push(attach_named(&mut socket, name, resident).await);
+    }
+    for (index, (resident, attachment)) in residents.iter().zip(&attachments).enumerate() {
+        socket
+            .send(Message::Binary(
+                terminal_frame(
+                    1,
+                    resident,
+                    Some(attachment),
+                    1,
+                    format!("echo shell-{index}=$$ out-$(({index}*100+7))\n").as_bytes(),
+                )
+                .into(),
+            ))
+            .await
+            .unwrap();
+    }
+    let live = live_by_resident(
+        &mut socket,
+        &[(&first, "out-7"), (&second, "out-107"), (&third, "out-207")],
+    )
+    .await;
+    assert!(!live[&first].contains("out-107") && !live[&first].contains("out-207"));
+    assert!(!live[&second].contains("out-7\r") && !live[&second].contains("out-207"));
+    let shells = [
+        printed_number(&live[&first], "shell-0"),
+        printed_number(&live[&second], "shell-1"),
+        printed_number(&live[&third], "shell-2"),
+    ];
+    assert!(shells[0] != shells[1] && shells[1] != shells[2]);
+
+    // A crash: the next daemon rejoins every session under its identity.
+    let _ = Command::new("kill")
+        .args(["-KILL", &daemon.0.id().to_string()])
+        .status()
+        .unwrap();
+    let _ = daemon.0.wait();
+    daemon = DaemonGuard(spawn_daemon_with(&fixture, Path::new(DXD), Some(&tmux)));
+    let mut socket = accept(&listener).await;
+    let generation = register(&mut socket).await;
+    let applied = request(&mut socket, &generation, "env-2", environment_operation(1)).await;
+    assert!(matches!(
+        applied["kind"].as_str(),
+        Some("applied" | "unchanged")
+    ));
+    let heartbeat = wait_for(&mut socket, |value| {
+        value["type"] == "heartbeat"
+            && reported_terminals(value)
+                .iter()
+                .all(|(_, state, _)| state == "ready")
+    })
+    .await;
+    assert_eq!(
+        reported_terminals(&heartbeat)
+            .into_iter()
+            .map(|(name, _, resident)| (name, resident))
+            .collect::<Vec<_>>(),
+        [
+            ("default".to_owned(), first.clone()),
+            ("2".to_owned(), second.clone()),
+            ("3".to_owned(), third.clone()),
+        ]
+    );
+    for pid in shells {
+        assert!(process_alive(pid), "shell {pid} survived the crash");
+    }
+
+    // Closing Terminal 2 ends its session and its shell, and nothing else.
+    let attachment = attach_named(&mut socket, "2", &second).await;
+    send(
+        &mut socket,
+        json!({"type": "terminal.close", "terminalVersion": 1, "terminal": "2"}),
+    )
+    .await;
+    let detached = wait_for(&mut socket, |value| {
+        value["type"] == "terminal.error" || value["type"] == "terminal.detached"
+    })
+    .await;
+    assert_eq!(detached["attachmentGeneration"], attachment);
+    poll_tmux(
+        &tmux,
+        &["list-sessions", "-F", "#{session_name}"],
+        |names| {
+            let mut names = names.lines().collect::<Vec<_>>();
+            names.sort_unstable();
+            names == ["main", "main-3"]
+        },
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while process_alive(shells[1]) {
+        assert!(Instant::now() < deadline, "Terminal 2's shell ended");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(process_alive(shells[0]) && process_alive(shells[2]));
+    let heartbeat = wait_for(&mut socket, |value| value["type"] == "heartbeat").await;
+    assert_eq!(
+        reported_terminals(&heartbeat)
+            .into_iter()
+            .map(|(name, _, _)| name)
+            .collect::<Vec<_>>(),
+        ["default", "3"]
+    );
+    // Closing it again, or one that never existed, changes nothing.
+    for name in ["2", "41"] {
+        send(
+            &mut socket,
+            json!({"type": "terminal.close", "terminalVersion": 1, "terminal": name}),
+        )
+        .await;
+    }
+
+    // At most eight sessions: the ninth is refused, not opened.
+    for name in ["4", "5", "6", "7", "8", "9"] {
+        open_named(&mut socket, name).await;
+    }
+    send(
+        &mut socket,
+        json!({
+            "type": "terminal.open", "terminalVersion": 1, "terminal": "10",
+            "mode": "open-if-absent", "dimensions": {"columns": 80, "rows": 24},
+        }),
+    )
+    .await;
+    let refused = wait_for(&mut socket, |value| {
+        value["type"] == "terminal.refused"
+            || (value["type"] == "terminal.resident-state" && value["terminal"] == "10")
+    })
+    .await;
+    assert_eq!(
+        refused,
+        json!({"type": "terminal.refused", "terminalVersion": 1, "terminal": "10", "code": "session-limit"})
+    );
+    assert!(
+        !tmux
+            .stdout(&["list-sessions", "-F", "#{session_name}"])
+            .lines()
+            .any(|name| name == "main-10")
+    );
+
+    // The closed session stays closed after a restart.
+    let _ = Command::new("kill")
+        .args(["-TERM", &daemon.0.id().to_string()])
+        .status()
+        .unwrap();
+    let _ = daemon.0.wait();
+    let _daemon = DaemonGuard(spawn_daemon_with(&fixture, Path::new(DXD), Some(&tmux)));
+    let mut socket = accept(&listener).await;
+    register(&mut socket).await;
+    let heartbeat = wait_for(&mut socket, |value| value["type"] == "heartbeat").await;
+    let names = reported_terminals(&heartbeat)
+        .into_iter()
+        .map(|(name, _, _)| name)
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["default", "3", "4", "5", "6", "7", "8", "9"]);
+    let _ = generation;
+}
+
+/// Without tmux each Terminal is its own login Bash: closing one hangs up
+/// its shell and leaves the other running.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_daemon_runs_several_login_shells() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fixture = fixture(port);
+    let _daemon = DaemonGuard(spawn_daemon(&fixture));
+    let mut socket = accept(&listener).await;
+    let generation = register(&mut socket).await;
+    let applied = request(&mut socket, &generation, "env-1", environment_operation(1)).await;
+    assert_eq!(applied["kind"], "applied");
+    let first = open_named(&mut socket, "default").await;
+    let second = open_named(&mut socket, "2").await;
+    let first_attachment = attach_named(&mut socket, "default", &first).await;
+    let second_attachment = attach_named(&mut socket, "2", &second).await;
+    for (resident, attachment, index) in [
+        (&first, &first_attachment, 0),
+        (&second, &second_attachment, 1),
+    ] {
+        socket
+            .send(Message::Binary(
+                terminal_frame(
+                    1,
+                    resident,
+                    Some(attachment),
+                    1,
+                    format!("echo shell-{index}=$$ out-$(({index}*100+7))\n").as_bytes(),
+                )
+                .into(),
+            ))
+            .await
+            .unwrap();
+    }
+    let live = live_by_resident(&mut socket, &[(&first, "out-7"), (&second, "out-107")]).await;
+    assert!(!live[&first].contains("out-107"));
+    let shells = [
+        printed_number(&live[&first], "shell-0"),
+        printed_number(&live[&second], "shell-1"),
+    ];
+    send(
+        &mut socket,
+        json!({"type": "terminal.close", "terminalVersion": 1, "terminal": "2"}),
+    )
+    .await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while process_alive(shells[1]) {
+        assert!(Instant::now() < deadline, "Terminal 2's shell ended");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(process_alive(shells[0]));
+    let heartbeat = wait_for(&mut socket, |value| value["type"] == "heartbeat").await;
+    assert!(heartbeat.get("terminals").is_none(), "{heartbeat}");
 }

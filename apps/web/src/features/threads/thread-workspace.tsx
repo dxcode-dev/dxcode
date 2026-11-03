@@ -941,6 +941,13 @@ function orbComposerNotice(
 
 const NO_VIEWS: PaneContents["views"] = {};
 
+/** An archived Thread's Orb is stopped: its views and files wait for unarchive. */
+const archivedPaneNotice = (
+  <div className="archived-pane-notice" role="note">
+    Archived. This Thread's Orb is stopped. Unarchive to resume it.
+  </div>
+);
+
 function ThreadSessionContent({
   thread,
   project,
@@ -1072,7 +1079,14 @@ function ThreadSessionContent({
   const contents: PaneContents = {
     agent,
     views: toolsAvailable ? views : NO_VIEWS,
-    file: renderFile,
+    // A file with unsaved edits stays open so its text can still be copied.
+    file: archived
+      ? (target, active) =>
+          dirtyTabs.has(`file:${fileTargetKey(target)}`)
+            ? renderFile(target, active)
+            : archivedPaneNotice
+      : renderFile,
+    ...(archived ? { unavailableView: archivedPaneNotice } : {}),
     dirtyTabs,
   };
   const page = (

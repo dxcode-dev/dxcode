@@ -152,6 +152,8 @@ pub struct ShellProfile {
 }
 
 pub struct TerminalRuntime {
+    /// `default`, or the decimal number of another Terminal.
+    name: String,
     pub(crate) root: PathBuf,
     state: ResidentState,
     generation: Option<TerminalGeneration>,
@@ -193,6 +195,7 @@ pub struct TerminalRuntime {
 impl TerminalRuntime {
     pub fn new(root: PathBuf, profile: ShellProfile) -> Self {
         Self {
+            name: "default".to_owned(),
             root,
             state: ResidentState::Absent,
             generation: None,
@@ -255,9 +258,81 @@ impl TerminalRuntime {
         .with_tmux(Tmux::detect())
     }
 
-    fn with_tmux(mut self, tmux: Option<Tmux>) -> Self {
+    pub(crate) fn with_tmux(mut self, tmux: Option<Tmux>) -> Self {
         self.tmux = tmux;
         self
+    }
+
+    /// Another Terminal, `name`, beside `default`: its own resident record
+    /// and tmux session, and the environment `default` last applied, so it
+    /// can open at once.
+    pub(crate) fn sibling(&self, name: &str, state_root: Option<&Path>) -> Self {
+        let mut sibling = Self::new(self.root.clone(), self.profile.clone()).with_tmux(
+            self.tmux
+                .as_ref()
+                .map(|tmux| tmux.for_session(format!("{}-{name}", crate::tmux::SESSION))),
+        );
+        sibling.name = name.to_owned();
+        sibling.environment_values = self.environment_values.clone();
+        sibling.applied_environment_generation = self.applied_environment_generation;
+        if let Some(state_root) = state_root {
+            sibling = sibling.recorded_at(state_root.join(format!("{RESIDENT_RECORD}-{name}")));
+        }
+        sibling
+    }
+
+    pub(crate) fn record_path(&self) -> Option<&Path> {
+        self.record.as_deref()
+    }
+
+    /// End this Terminal for good: its attachments are told, its client or
+    /// shell hangs up, its tmux session and every shell in it end, and its
+    /// record is removed so no later daemon rejoins it.
+    pub(crate) fn close(mut self) -> Vec<TerminalOutbound> {
+        let outbound = match self.generation {
+            Some(resident_generation) => self
+                .attachments
+                .iter()
+                .map(|attachment_generation| {
+                    TerminalOutbound::Control(TerminalClientMessage::Detached {
+                        terminal_version: TERMINAL_VERSION,
+                        resident_generation,
+                        attachment_generation: *attachment_generation,
+                    })
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        self.stop_process();
+        if let Some(tmux) = &self.tmux {
+            tmux.end_session();
+        }
+        if let Some(path) = self.record.take() {
+            let _ = std::fs::remove_file(path);
+        }
+        outbound
+    }
+
+    /// Whether this Terminal holds a resident (running, exited, or failed).
+    pub(crate) fn present(&self) -> bool {
+        self.state != ResidentState::Absent
+    }
+
+    pub(crate) fn generation(&self) -> Option<TerminalGeneration> {
+        self.generation
+    }
+
+    pub(crate) fn poll_output(
+        &mut self,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<ReaderEvent>> {
+        match self.process.as_mut() {
+            Some(process) => process
+                .output
+                .poll_recv(context)
+                .map(|event| event.or(Some(ReaderEvent::Closed))),
+            None => std::task::Poll::Pending,
+        }
     }
 
     /// Recover the resident a previous daemon process recorded. A login
@@ -266,8 +341,11 @@ impl TerminalRuntime {
     /// instead of Core silently opening a new shell that looks like the old
     /// one. A successful self-update handoff replaces this with the live
     /// shell, and `reattach_session` with a tmux session that survived.
-    fn recorded_in(mut self, state_root: &Path) -> Self {
-        let path = state_root.join(RESIDENT_RECORD);
+    fn recorded_in(self, state_root: &Path) -> Self {
+        self.recorded_at(state_root.join(RESIDENT_RECORD))
+    }
+
+    fn recorded_at(mut self, path: PathBuf) -> Self {
         if let Some(generation) = std::fs::read(&path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<TerminalGeneration>(&bytes).ok())
@@ -372,13 +450,13 @@ impl TerminalRuntime {
         let Some(generation) = self.generation else {
             return TerminalHeartbeat::Absent {
                 terminal_version: TERMINAL_VERSION,
-                terminal: "default",
+                terminal: self.name.clone(),
             };
         };
         let foreground_command = self.foreground_command();
         let common = (
             TERMINAL_VERSION,
-            "default",
+            self.name.clone(),
             generation,
             foreground_command,
             self.restart_required,
@@ -386,7 +464,7 @@ impl TerminalRuntime {
         match self.state {
             ResidentState::Absent => TerminalHeartbeat::Absent {
                 terminal_version: TERMINAL_VERSION,
-                terminal: "default",
+                terminal: common.1,
             },
             ResidentState::Starting => TerminalHeartbeat::Starting {
                 terminal_version: common.0,
@@ -430,7 +508,7 @@ impl TerminalRuntime {
         };
         Some(TerminalClientMessage::ResidentState {
             terminal_version: TERMINAL_VERSION,
-            terminal: "default",
+            terminal: self.name.clone(),
             resident_generation: generation,
             state,
             dimensions: self.dimensions,
@@ -459,8 +537,13 @@ impl TerminalRuntime {
                         .collect());
                 }
                 // A session the agent (or an earlier resident) left is the
-                // Terminal's: join it.
-                Join::AttachOrCreate
+                // first Terminal's: join it. Another Terminal is new, and a
+                // session left under its name is not its own.
+                if self.name == "default" {
+                    Join::AttachOrCreate
+                } else {
+                    Join::Fresh
+                }
             }
             "restart-exited" => {
                 let Some(expected) = expected_resident_generation else {
@@ -755,7 +838,7 @@ impl TerminalRuntime {
         reason: &str,
     ) -> io::Result<Vec<TerminalOutbound>> {
         if terminal_version != TERMINAL_VERSION
-            || terminal != "default"
+            || terminal != self.name
             || !matches!(
                 reason,
                 "browser-detached" | "slow-consumer" | "rebind" | "lifecycle"
@@ -784,7 +867,7 @@ impl TerminalRuntime {
         terminal: &str,
         resident_generation: TerminalGeneration,
     ) -> io::Result<Vec<TerminalOutbound>> {
-        if terminal_version != TERMINAL_VERSION || terminal != "default" {
+        if terminal_version != TERMINAL_VERSION || terminal != self.name {
             return Err(invalid_control());
         }
         if self.generation == Some(resident_generation) {
@@ -868,15 +951,6 @@ impl TerminalRuntime {
     #[cfg(test)]
     pub fn has_queued_input(&self) -> bool {
         !self.input_queue.is_empty()
-    }
-
-    /// Resolve when the PTY reader produced an event. Pending forever without
-    /// a process so it can sit in a `select!`.
-    pub async fn wait_output(&mut self) -> Option<ReaderEvent> {
-        match self.process.as_mut() {
-            Some(process) => process.output.recv().await.or(Some(ReaderEvent::Closed)),
-            None => std::future::pending().await,
-        }
     }
 
     /// Wake when the first-output deadline of a starting shell passes.
@@ -1123,7 +1197,7 @@ impl TerminalRuntime {
         terminal: &str,
         dimensions: Dimensions,
     ) -> io::Result<()> {
-        if terminal_version != TERMINAL_VERSION || terminal != "default" || !dimensions.valid() {
+        if terminal_version != TERMINAL_VERSION || terminal != self.name || !dimensions.valid() {
             return Err(invalid_control());
         }
         Ok(())

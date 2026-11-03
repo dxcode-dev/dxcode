@@ -1,11 +1,5 @@
 import { spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -22,9 +16,19 @@ afterEach(() => {
     rmSync(directory, { recursive: true, force: true });
 });
 
+// Unit test files share one process across worker threads. A file written
+// here stays open for writing in any child another thread forks before that
+// child execs, and running the file then fails with ETXTBSY (status null, as
+// if a signal killed it). A shell writes the file instead, so this process
+// never holds it open.
 const executable = (path: string, content: string) => {
-  writeFileSync(path, content);
-  chmodSync(path, 0o755);
+  const result = spawnSync(
+    "sh",
+    ["-c", 'cat > "$1" && chmod 755 "$1"', "sh", path],
+    { input: content },
+  );
+  if (result.status !== 0)
+    throw new Error(`Could not write ${path}: ${result.stderr}`);
 };
 
 /** Real wrapper, fake `git` credential helper result, and fake real `gh`. */

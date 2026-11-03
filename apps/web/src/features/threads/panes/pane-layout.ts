@@ -1,13 +1,18 @@
-import type {
-  ThreadPane,
-  ThreadPaneFileTarget,
-  ThreadPaneLayout,
-  ThreadPaneNode,
-  ThreadPaneSplit,
-  ThreadPaneTab,
+import {
+  THREAD_TERMINAL_SESSION_LIMIT,
+  type ThreadPane,
+  type ThreadPaneFileTarget,
+  type ThreadPaneLayout,
+  type ThreadPaneNode,
+  type ThreadPaneSplit,
+  type ThreadPaneTab,
+  type ThreadTerminalId,
 } from "@dx/api";
 
-/** The workspace views a Thread page can open; each is one tab per Thread. */
+/**
+ * The workspace views a Thread page can open; each is one tab per Thread,
+ * except Terminal, which New Terminal opens again with a session of its own.
+ */
 export type PaneViewKind =
   | "files"
   | "changes"
@@ -30,6 +35,11 @@ export type PaneLayoutAction =
       readonly view: PaneViewKind;
       readonly pane?: string;
     }
+  /**
+   * A Terminal tab with a new shell session; the first Terminal's shared
+   * session when its tab is not open.
+   */
+  | { readonly type: "new-terminal"; readonly pane?: string }
   | {
       readonly type: "open-file";
       readonly target: ThreadPaneFileTarget;
@@ -152,6 +162,66 @@ export const locateTab = (layout: ThreadPaneLayout, id: string) => {
   }
   return undefined;
 };
+
+type TerminalTab = Extract<ThreadPaneTab, { readonly kind: "terminal" }>;
+
+/** Which shell session a Terminal tab shows. */
+export const terminalSession = (tab: TerminalTab): ThreadTerminalId =>
+  tab.session ?? "default";
+
+const terminalTabs = (layout: ThreadPaneLayout) =>
+  listPanes(layout).flatMap((pane) =>
+    pane.tabs.filter((tab): tab is TerminalTab => tab.kind === "terminal"),
+  );
+
+/** The highest Terminal ordinal, and so session number, a layout holds. */
+const TERMINAL_ORDINAL_LIMIT = 1_000;
+
+/** Whether New Terminal can open another: the Thread runs at most eight. */
+export const canOpenTerminal = (layout: ThreadPaneLayout) => {
+  const terminals = terminalTabs(layout);
+  return (
+    !terminals.some((tab) => tab.session === undefined) ||
+    (terminals.length < THREAD_TERMINAL_SESSION_LIMIT &&
+      layout.nextTerminal <= TERMINAL_ORDINAL_LIMIT)
+  );
+};
+
+/**
+ * The sessions whose tabs `before` had and `after` does not: closing a tab
+ * ends its session. The first Terminal's session is never listed.
+ */
+export const closedTerminalSessions = (
+  before: ThreadPaneLayout,
+  after: ThreadPaneLayout,
+): ReadonlyArray<ThreadTerminalId> => {
+  const kept = new Set(terminalTabs(after).map(terminalSession));
+  return terminalTabs(before).flatMap((tab) =>
+    tab.session === undefined || kept.has(tab.session) ? [] : [tab.session],
+  );
+};
+
+/** The first Terminal's tab, numbered 1 when that is free. */
+const sharedTerminalTab = (layout: ThreadPaneLayout): TerminalTab => ({
+  kind: "terminal",
+  ordinal: terminalTabs(layout).some((tab) => tab.ordinal === 1)
+    ? layout.nextTerminal
+    : 1,
+});
+
+const placeTerminal = (
+  layout: ThreadPaneLayout,
+  tab: TerminalTab,
+  pane: string | undefined,
+) =>
+  placeTab(
+    {
+      ...layout,
+      nextTerminal: Math.max(layout.nextTerminal, tab.ordinal + 1),
+    },
+    tab,
+    pane,
+  );
 
 export const findViewTab = (layout: ThreadPaneLayout, view: PaneViewKind) =>
   listPanes(layout)
@@ -659,15 +729,24 @@ export const reducePaneLayout = (
           ? layout
           : activateTab(layout, located.pane, located.index);
       }
-      const tab: ThreadPaneTab =
-        action.view === "terminal"
-          ? { kind: "terminal", ordinal: layout.nextTerminal }
-          : { kind: action.view };
-      const next =
-        action.view === "terminal"
-          ? { ...layout, nextTerminal: layout.nextTerminal + 1 }
-          : layout;
-      return placeTab(next, tab, action.pane);
+      if (action.view === "terminal")
+        return placeTerminal(layout, sharedTerminalTab(layout), action.pane);
+      return placeTab(layout, { kind: action.view }, action.pane);
+    }
+    case "new-terminal": {
+      const terminals = terminalTabs(layout);
+      if (!terminals.some((tab) => tab.session === undefined))
+        return placeTerminal(layout, sharedTerminalTab(layout), action.pane);
+      if (!canOpenTerminal(layout)) return layout;
+      return placeTerminal(
+        layout,
+        {
+          kind: "terminal",
+          ordinal: layout.nextTerminal,
+          session: String(layout.nextTerminal) as ThreadTerminalId,
+        },
+        action.pane,
+      );
     }
     case "open-file": {
       const tab: ThreadPaneTab = { kind: "file", target: action.target };

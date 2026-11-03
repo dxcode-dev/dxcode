@@ -1,19 +1,25 @@
-import {
-  type PluginEnablement,
-  type PluginProviderId,
-  type PluginResolution,
-  type PluginToolSet,
-  type UserId,
-  WorkspaceRepository,
+import type {
+  PluginEnablement,
+  PluginProviderId,
+  PluginResolution,
+  PluginToolSet,
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
-import { Effect, Layer, Option } from "effect";
+import { Layer } from "effect";
 import type { Bindings } from "../http/types.js";
 import { SettingsAudit } from "../settings/audit.js";
 import { SettingsService } from "../settings/service.js";
 import { WorkspaceRepositoryD1 } from "../settings/workspace/repository-d1.js";
-import { WorkspacePolicyRepositoryD1 } from "../settings/workspace-policy/repository-d1.js";
-import { WorkspacePolicyService } from "../settings/workspace-policy/service.js";
+import {
+  decodeOwnerPolicy,
+  ownerPolicyStatements,
+  ownerWorkspaceIdSql,
+  WorkspacePolicyRepositoryD1,
+} from "../settings/workspace-policy/repository-d1.js";
+import {
+  WorkspacePolicyService,
+  workspacePolicyDenial,
+} from "../settings/workspace-policy/service.js";
 import {
   type ConfigurableProviderId,
   deploymentProvider,
@@ -22,7 +28,8 @@ import {
   providerCapabilities,
 } from "./registry.js";
 import {
-  listPluginSettings,
+  pluginSettingsFrom,
+  pluginSettingsStatement,
   type StoredPluginSetting,
 } from "./settings-store-d1.js";
 
@@ -127,52 +134,76 @@ export const workspacePolicyLayer = (db: D1Database) => {
   );
 };
 
-/** Membership plus the typed policy decision for each plugin. */
-const loadWorkspaceContext = (
+/** Whether resolving `plugin` asks the workspace policy anything. */
+const needsPolicy = (plugin: PluginDefinition) =>
+  // No person can configure a provider without a credential label, so
+  // policy has nothing to decide (Code). Execution resolves per Thread and
+  // per project (plugins/execution/orb-providers.ts), never here, so a
+  // submission pays no policy read for it.
+  plugin.resolvedPerThread !== true &&
+  plugin.providers.some((provider) => provider.credentialLabel !== null);
+
+/** Whose capabilities resolve: a user, or the owner of a Thread. */
+export type ResolutionSubject =
+  | { readonly userId: string }
+  | { readonly threadId: string };
+
+/**
+ * Everything resolution reads, in one D1 round trip: the Thread (for a
+ * Thread subject), the owner's membership and workspace policy, and the
+ * personal and workspace plugin settings.
+ */
+const readResolutionInputs = async (
   db: D1Database,
-  userId: UserId,
+  subject: ResolutionSubject,
   plugins: ReadonlyArray<PluginDefinition>,
-) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const membership = yield* (yield* WorkspaceRepository).findByUser(userId);
-      const policy = yield* WorkspacePolicyService;
-      const allowed = new Map<string, boolean>();
-      for (const plugin of plugins) {
-        // No person can configure a provider without a credential label, so
-        // policy has nothing to decide (Code). Execution resolves per Thread
-        // and per project (plugins/execution/orb-providers.ts), never here,
-        // so a submission pays no policy read for it.
-        if (
-          plugin.resolvedPerThread === true ||
-          plugin.providers.every(
-            (provider) => provider.credentialLabel === null,
+) => {
+  const owner =
+    "threadId" in subject
+      ? "(SELECT owner_user_id FROM threads WHERE id = ?1)"
+      : "?1";
+  const key = "threadId" in subject ? subject.threadId : subject.userId;
+  const [thread, membership, policy, settings] = await db.batch([
+    "threadId" in subject
+      ? db
+          .prepare(
+            "SELECT owner_user_id, lifecycle_state FROM threads WHERE id = ?1 LIMIT 1",
           )
-        )
-          continue;
-        allowed.set(
-          plugin.id,
-          yield* policy
-            .evaluateForUser(userId, {
-              kind: "plugin.use-personal-override",
-              pluginId: plugin.id,
-            })
-            .pipe(
-              Effect.as(true),
-              Effect.catchTag("WorkspacePolicyDenied", () =>
-                Effect.succeed(false),
-              ),
-            ),
-        );
-      }
-      return {
-        workspaceId: Option.getOrUndefined(membership)?.workspace.id as
-          | string
-          | undefined,
-        allowed,
-      };
-    }).pipe(Effect.provide(workspacePolicyLayer(db))),
-  );
+          .bind(key)
+      : db.prepare("SELECT ?1 AS owner_user_id").bind(key),
+    ...ownerPolicyStatements(db, owner, [key]),
+    pluginSettingsStatement(db, owner, ownerWorkspaceIdSql(owner)).bind(key),
+  ]);
+  if (
+    thread === undefined ||
+    membership === undefined ||
+    policy === undefined ||
+    settings === undefined
+  )
+    throw new Error("Plugin resolution read an incomplete batch.");
+  const threadRow = thread.results[0] as
+    | { readonly owner_user_id: string; readonly lifecycle_state?: string }
+    | undefined;
+  const workspace = await decodeOwnerPolicy(membership, policy, {
+    requirePolicy: plugins.some(needsPolicy),
+  });
+  const allowed = new Map<string, boolean>();
+  if (workspace.policy !== undefined)
+    for (const plugin of plugins.filter(needsPolicy))
+      allowed.set(
+        plugin.id,
+        workspacePolicyDenial(workspace.policy, {
+          kind: "plugin.use-personal-override",
+          pluginId: plugin.id,
+        }) === undefined,
+      );
+  return {
+    thread: threadRow,
+    workspaceId: workspace.workspaceId as string | undefined,
+    allowed,
+    settings: pluginSettingsFrom(settings),
+  };
+};
 
 const scopeView = (setting: StoredPluginSetting | undefined) => ({
   enablement: setting?.enablement ?? null,
@@ -186,22 +217,64 @@ const scopeView = (setting: StoredPluginSetting | undefined) => ({
 export const resolveCapabilities = async (
   user: { readonly userId: string },
   context: PluginResolutionContext,
-): Promise<ResolvedCapabilities> => {
-  // Always load membership, even with nothing installed, so workspace
+): Promise<ResolvedCapabilities> =>
+  resolvedFrom(
+    user.userId,
+    context,
+    await readResolutionInputs(
+      context.db,
+      user,
+      installedPlugins(context.bindings),
+    ),
+  );
+
+/**
+ * The same resolution for a Thread's owner, read in the same round trip as
+ * the Thread itself. Undefined when the Thread is missing or not active.
+ */
+export const resolveThreadCapabilities = async (
+  threadId: string,
+  context: PluginResolutionContext,
+): Promise<ResolvedCapabilities | undefined> => {
+  const inputs = await readResolutionInputs(
+    context.db,
+    { threadId },
+    installedPlugins(context.bindings),
+  );
+  if (inputs.thread === undefined || inputs.thread.lifecycle_state !== "active")
+    return undefined;
+  return resolvedFrom(inputs.thread.owner_user_id, context, inputs);
+};
+
+/**
+ * The same resolution for a Thread's owner, whatever the Thread's lifecycle,
+ * read in the same round trip as the Thread. Undefined when the Thread is
+ * missing.
+ */
+export const resolveThreadOwnerCapabilities = async (
+  threadId: string,
+  context: PluginResolutionContext,
+): Promise<ResolvedCapabilities | undefined> => {
+  const inputs = await readResolutionInputs(
+    context.db,
+    { threadId },
+    installedPlugins(context.bindings),
+  );
+  if (inputs.thread === undefined) return undefined;
+  return resolvedFrom(inputs.thread.owner_user_id, context, inputs);
+};
+
+const resolvedFrom = (
+  userId: string,
+  context: PluginResolutionContext,
+  workspace: Awaited<ReturnType<typeof readResolutionInputs>>,
+): ResolvedCapabilities => {
+  // Membership is always read, even with nothing installed, so workspace
   // settings keep their authorization context.
   const plugins = installedPlugins(context.bindings);
-  const workspace = await loadWorkspaceContext(
-    context.db,
-    user.userId as UserId,
-    plugins,
-  );
-  const settings = await listPluginSettings(
-    context.db,
-    user.userId,
-    workspace.workspaceId,
-  );
+  const settings = workspace.settings;
   return {
-    userId: user.userId,
+    userId,
     workspaceId: workspace.workspaceId,
     plugins: plugins.map((plugin) => {
       const personalSetting = settings.find(

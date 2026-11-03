@@ -4,6 +4,34 @@ export const THREAD_TERMINAL_SUBPROTOCOL = "dx-terminal.v1";
 export const THREAD_TERMINAL_CONTROL_MAX_BYTES = 4_096;
 export const THREAD_TERMINAL_BINARY_MAX_BYTES = 65_486;
 export const THREAD_TERMINAL_ATTACHMENT_LIMIT = 8;
+/** Terminals, the first included, that one Thread may run at once. */
+export const THREAD_TERMINAL_SESSION_LIMIT = 8;
+
+/**
+ * Which Terminal of a Thread: `default` (tmux session `main`, the one the
+ * agent shares) or another one's number, 1 to 1000. Each is its own shell
+ * session in the same Orb.
+ */
+export const ThreadTerminalIdSchema = Schema.Union([
+  Schema.Literal("default"),
+  Schema.String.check(
+    Schema.isPattern(/^[1-9][0-9]{0,3}$/),
+    Schema.makeFilter((value) => Number(value) <= 1_000),
+  ),
+]);
+export type ThreadTerminalId = typeof ThreadTerminalIdSchema.Type;
+
+/**
+ * `POST /v1/threads/:threadId/terminal/close`: end a Terminal other than
+ * the first, with every shell in it. Closing its tab sends this.
+ */
+export const CloseThreadTerminalRequestSchema = Schema.Struct({
+  terminal: ThreadTerminalIdSchema.check(
+    Schema.makeFilter((value) => value !== "default"),
+  ),
+});
+export type CloseThreadTerminalRequest =
+  typeof CloseThreadTerminalRequestSchema.Type;
 
 const TerminalDimension = Schema.Int.check(
   Schema.isBetween({ minimum: 1, maximum: 1_000 }),
@@ -61,7 +89,7 @@ export const ThreadTerminalBrowserControlSchema = Schema.Union([
   Schema.Struct({
     v: Schema.Literal(1),
     type: Schema.Literal("attach"),
-    terminal: Schema.Literal("default"),
+    terminal: ThreadTerminalIdSchema,
     dimensions: ThreadTerminalDimensionsSchema,
     /** Explicit recovery for an exited/failed resident, not environment restart. */
     restartResident: Schema.optional(Schema.Literal(true)),
@@ -99,6 +127,10 @@ export const ThreadTerminalErrorCodeSchema = Schema.Literals([
   "terminal-exited",
   "terminal-overflow",
   "session-ended",
+  /** The Thread already runs its most Terminals; close one first. */
+  "terminal-limit",
+  /** This Terminal was closed, from this tab or another. */
+  "terminal-closed",
 ]);
 export type ThreadTerminalErrorCode = typeof ThreadTerminalErrorCodeSchema.Type;
 
@@ -126,7 +158,7 @@ export const ThreadTerminalServerControlSchema = Schema.Union([
   Schema.Struct({
     v: Schema.Literal(1),
     type: Schema.Literal("ready"),
-    terminal: Schema.Literal("default"),
+    terminal: ThreadTerminalIdSchema,
     dimensions: ThreadTerminalDimensionsSchema,
     replayBytes: Schema.Int.check(
       Schema.isBetween({ minimum: 1, maximum: 65_536 }),

@@ -6,6 +6,7 @@ import {
   ThreadFilesWorktreeId,
   ThreadSandboxFilePath,
 } from "./files.js";
+import { ThreadTerminalIdSchema } from "./terminal.js";
 
 /** Tabs a Thread page can hold; at most this many across every pane. */
 export const THREAD_PANE_LAYOUT_TAB_LIMIT = 64;
@@ -45,6 +46,15 @@ export const ThreadPaneTabSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("terminal"),
     ordinal: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1_000 })),
+    /**
+     * The Terminal's own shell session; absent for the first Terminal's
+     * (tmux `main`, shared with the agent), which closing its tab keeps.
+     */
+    session: Schema.optional(
+      ThreadTerminalIdSchema.check(
+        Schema.makeFilter((value) => value !== "default"),
+      ),
+    ),
   }),
   Schema.Struct({
     kind: Schema.Literal("file"),

@@ -28,6 +28,7 @@ import {
   paneTabDomId,
   tabId,
   tabLabel,
+  terminalSession,
 } from "./pane-layout.js";
 import { OpenTabMenuButton, PaneTabContextMenu } from "./pane-menus.js";
 import { PaneToolbarSlotContext } from "./pane-toolbar-slot-context.js";
@@ -360,6 +361,9 @@ function PaneTabStrip({
           onOpen={(view) =>
             dispatch({ type: "open-view", view, pane: pane.id })
           }
+          onNewTerminal={() =>
+            dispatch({ type: "new-terminal", pane: pane.id })
+          }
         />
       </div>
       <div className="pane-strip-actions" ref={onToolbarSlot} />
@@ -384,7 +388,10 @@ function PaneTabPanel({
       ? renderPaneContent(contents.agent, active)
       : tab.kind === "file"
         ? contents.file(tab.target, active)
-        : renderPaneContent(contents.views[tab.kind], active);
+        : renderPaneContent(
+            contents.views[tab.kind] ?? contents.unavailableView,
+            active,
+          );
   return (
     <div
       id={panelDomId(id)}
@@ -398,7 +405,7 @@ function PaneTabPanel({
     >
       <PaneToolbarSlotContext value={active ? toolbarSlot : null}>
         {tab.kind === "terminal" ? (
-          <TerminalView>{content}</TerminalView>
+          <TerminalView session={terminalSession(tab)}>{content}</TerminalView>
         ) : (
           content
         )}

@@ -5,6 +5,7 @@ import {
   ThreadTerminalBrowserControlSchema,
   type ThreadTerminalDimensions,
   type ThreadTerminalErrorCode,
+  type ThreadTerminalId,
   type ThreadTerminalServerPhase,
 } from "@dx/api";
 import { Option, Schema } from "effect";
@@ -109,6 +110,16 @@ export interface ResidentTerminalTransport {
    * moves every attachment to `waiting`.
    */
   readonly checkLiveness?: () => Promise<boolean>;
+  /**
+   * Whether opening this Terminal would exceed the Thread's Terminals; asked
+   * before a new one opens.
+   */
+  readonly terminalLimitReached?: () => boolean;
+  /**
+   * Whether the connected daemon runs Terminals besides `default`; one that
+   * does not (an older image before it updates) never hears another name.
+   */
+  readonly terminalSessions?: () => boolean;
   readonly sendControl: (control: DxdCoreTerminalControl) => void;
   readonly sendBinary: (frame: Uint8Array) => void;
   readonly canSendBinary?: (frameBytes: number) => boolean;
@@ -268,13 +279,23 @@ const closeSafely = (socket: ResidentTerminalSocket, code: number) => {
   }
 };
 
+/** The browser attachments of one Terminal of a Thread. */
 export class ResidentTerminalRelay {
+  readonly #terminal: ThreadTerminalId;
   readonly #sessions = new Map<ResidentTerminalSocket, ResidentSession>();
   #nextInputSequence = 1n;
   #nextResizeOrdinal = 1n;
   #residentGeneration?: TerminalGenerationType;
   #browserOperations = Promise.resolve();
   #residentOpenDispatched = false;
+
+  constructor(terminal: ThreadTerminalId = "default") {
+    this.#terminal = terminal;
+  }
+
+  has(socket: ResidentTerminalSocket) {
+    return this.#sessions.has(socket);
+  }
 
   attach(
     socket: ResidentTerminalSocket,
@@ -321,7 +342,7 @@ export class ResidentTerminalRelay {
         return;
       }
       const control = this.#decodeControl(session, data);
-      if (control?.type !== "attach") {
+      if (control?.type !== "attach" || control.terminal !== this.#terminal) {
         if (control !== undefined) this.#invalid(session);
         return;
       }
@@ -587,6 +608,13 @@ export class ResidentTerminalRelay {
   }
 
   receiveControl(control: DxdClientTerminalControl) {
+    if (control.type === "terminal.refused") {
+      this.#residentOpenDispatched = false;
+      for (const session of [...this.#sessions.values()])
+        if (session.phase === "opening")
+          this.#fail(session, "terminal-limit", "manual", 1000, false);
+      return;
+    }
     if (control.type === "terminal.resident-state") {
       if (control.state !== "starting") this.#residentOpenDispatched = false;
       if (control.state === "ready")
@@ -734,15 +762,29 @@ export class ResidentTerminalRelay {
     }
     try {
       if (!this.#current(session)) return;
+      if (
+        this.#terminal !== "default" &&
+        session.transport.terminalSessions?.() === false
+      ) {
+        this.#fail(session, "resident-unavailable", "manual", 1012, false);
+        return;
+      }
       session.transport.record("daemon_ready");
       if (state.state === "absent") {
+        if (
+          this.#terminal !== "default" &&
+          session.transport.terminalLimitReached?.() === true
+        ) {
+          this.#fail(session, "terminal-limit", "manual", 1000, false);
+          return;
+        }
         session.phase = "opening";
         if (!this.#residentOpenDispatched) {
           this.#residentOpenDispatched = true;
           this.#dispatch(session, {
             terminalVersion: 1,
             type: "terminal.open",
-            terminal: "default",
+            terminal: this.#terminal,
             mode: "open-if-absent",
             dimensions: session.dimensions,
           });
@@ -768,7 +810,7 @@ export class ResidentTerminalRelay {
           this.#dispatch(session, {
             terminalVersion: 1,
             type: "terminal.open",
-            terminal: "default",
+            terminal: this.#terminal,
             mode: "restart-exited",
             expectedResidentGeneration: state.residentGeneration,
             dimensions: session.dimensions,
@@ -824,7 +866,7 @@ export class ResidentTerminalRelay {
     this.#dispatch(session, {
       terminalVersion: 1,
       type: "terminal.attach",
-      terminal: "default",
+      terminal: this.#terminal,
       residentGeneration,
       attachmentGeneration,
       resizeOrdinal: dxdU64(resizeOrdinal),
@@ -888,7 +930,7 @@ export class ResidentTerminalRelay {
         !this.#sendControl(session, {
           v: 1,
           type: "ready",
-          terminal: "default",
+          terminal: this.#terminal,
           dimensions: control.dimensions,
           replayBytes: session.replayBytes,
           replayTruncated: session.replayTruncated ?? false,
@@ -1026,7 +1068,7 @@ export class ResidentTerminalRelay {
     this.#dispatch(session, {
       terminalVersion: 1,
       type: "terminal.resize",
-      terminal: "default",
+      terminal: this.#terminal,
       residentGeneration,
       attachmentGeneration,
       resizeOrdinal: dxdU64(resizeOrdinal),
@@ -1092,7 +1134,7 @@ export class ResidentTerminalRelay {
     this.#dispatch(session, {
       terminalVersion: 1,
       type: "terminal.restart",
-      terminal: "default",
+      terminal: this.#terminal,
       expectedResidentGeneration,
       dimensions: session.dimensions,
     });
@@ -1242,7 +1284,7 @@ export class ResidentTerminalRelay {
         this.#dispatch(session, {
           terminalVersion: 1,
           type: "terminal.detach",
-          terminal: "default",
+          terminal: this.#terminal,
           residentGeneration: session.residentGeneration,
           attachmentGeneration: session.attachmentGeneration,
           reason:

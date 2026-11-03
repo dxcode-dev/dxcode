@@ -5,8 +5,7 @@ import {
   UserId,
   withPinnedOrbTarget,
 } from "@dx/domain";
-import { D1Client } from "@effect/sql-d1";
-import { Effect, Layer, Redacted, Schema } from "effect";
+import { Effect, Redacted, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
 import {
@@ -15,13 +14,13 @@ import {
   storedCredentialsFromRow,
 } from "../../plugins/execution/connections-d1.js";
 import { isLocalRuntime } from "../../plugins/registry.js";
-import { SettingsAudit } from "../../settings/audit.js";
 import { loadConfigEncryptionKeyring } from "../../settings/config-encryption.js";
 import { activeMemberSql } from "../../settings/members/membership-sql.js";
-import { SettingsService } from "../../settings/service.js";
-import { WorkspaceRepositoryD1 } from "../../settings/workspace/repository-d1.js";
-import { WorkspacePolicyRepositoryD1 } from "../../settings/workspace-policy/repository-d1.js";
-import { WorkspacePolicyService } from "../../settings/workspace-policy/service.js";
+import {
+  ownerPolicyFrom,
+  ownerPolicyStatements,
+} from "../../settings/workspace-policy/repository-d1.js";
+import { workspacePolicyDenial } from "../../settings/workspace-policy/service.js";
 import { loadRunnerProfileCatalog, selectRunnerProfile } from "./catalog.js";
 
 const NullableString = Schema.NullOr(Schema.String);
@@ -242,10 +241,28 @@ export const resolveExecutionTarget = Effect.fn("resolveExecutionTarget")(
     const catalog = yield* loadRunnerProfileCatalog(bindings).pipe(
       Effect.mapError(() => new ExecutionRunnerProfileUnavailable()),
     );
-    const row = yield* Effect.tryPromise({
-      try: () => db.prepare(targetQuery).bind(threadId).first(),
+    // Admission also reads the owner's membership and its workspace policy
+    // in the same batch, so the policy check costs no round trip of its own
+    // (#1589). Releasing reads the target alone.
+    const [target, ...ownerPolicy] = yield* Effect.tryPromise({
+      try: () =>
+        options.admission
+          ? db.batch([
+              db.prepare(targetQuery).bind(threadId),
+              ...ownerPolicyStatements(
+                db,
+                "(SELECT owner_user_id FROM threads WHERE id = ?1)",
+                [threadId],
+              ),
+            ])
+          : db
+              .prepare(targetQuery)
+              .bind(threadId)
+              .all()
+              .then((result) => [result]),
       catch: () => new ExecutionRunnerProfileUnavailable(),
-    }).pipe(
+    });
+    const row = yield* Effect.succeed(target?.results[0] ?? null).pipe(
       Effect.flatMap((value) =>
         value === null
           ? Effect.fail(new ExecutionRunnerProfileUnavailable())
@@ -301,30 +318,21 @@ export const resolveExecutionTarget = Effect.fn("resolveExecutionTarget")(
         ? withPinnedOrbTarget(selected, row.provider_template)
         : selected;
     if (!options.admission) return { profile, credential };
-    const d1 = D1Client.layer({ db });
-    const workspace = WorkspaceRepositoryD1(db).pipe(Layer.provide(d1));
-    const settings = SettingsService.layer.pipe(Layer.provide(workspace));
+    const [membership, policyRow] = ownerPolicy;
+    // As `WorkspacePolicyService.evaluateForUser`: no workspace admits, two
+    // memberships or a member's workspace without a policy row refuse.
     const policy = Effect.gen(function* () {
-      const policy = yield* WorkspacePolicyService;
-      yield* policy.evaluateForUser(row.owner_user_id, {
+      if (membership === undefined || policyRow === undefined)
+        return yield* new ExecutionRunnerProfileUnavailable();
+      const ownerPolicy = yield* ownerPolicyFrom(membership, policyRow);
+      if (ownerPolicy === undefined) return;
+      const denial = workspacePolicyDenial(ownerPolicy, {
         kind: "execution.admit",
         runnerProfileId: profile.id,
         runnerAdapter: profile.adapter,
       });
-    }).pipe(
-      Effect.provide(
-        WorkspacePolicyService.layer.pipe(
-          Layer.provide(
-            Layer.mergeAll(
-              workspace,
-              settings,
-              WorkspacePolicyRepositoryD1(db),
-              SettingsAudit.layer,
-            ),
-          ),
-        ),
-      ),
-    );
+      if (denial !== undefined) return yield* denial;
+    });
     if (options.deferPolicy === true) return { profile, credential, policy };
     yield* policy;
     return { profile, credential };

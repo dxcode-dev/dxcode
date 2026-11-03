@@ -540,3 +540,14 @@
   min-width: 0;
   min-height: 0;
 }
+
+/* An archived Thread's open views and files, in place of their content. */
+.archived-pane-notice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-align: center;
+}

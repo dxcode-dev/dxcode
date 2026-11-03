@@ -239,7 +239,7 @@ const environmentFor = (
     | undefined;
   /** The check other operations share, so a burst of reads makes one. */
   let checking: Promise<Admitted> | undefined;
-  const check = async (): Promise<Admitted> => {
+  const check = async (command: boolean): Promise<Admitted> => {
     const current = kept;
     if (current !== undefined) {
       const latest = await revision?.();
@@ -251,20 +251,28 @@ const environmentFor = (
         return current.admitted;
       }
     }
-    const snapshot = await resolve();
+    let snapshot = await resolve();
+    // A first command also checks what it resolved, which may have been read
+    // before the command was authorized (an activation's early read), and
+    // reads again when anything changed since.
+    if (command && current === undefined && revision !== undefined) {
+      const latest = await revision();
+      if (!executionEnvironmentRevisionsEqual(latest, snapshot.revision))
+        snapshot = await resolve();
+    }
     const admitted = admittedValues(snapshot);
     kept = { admitted, revision: snapshot.revision, checkedAt: Date.now() };
     return admitted;
   };
   return (operation: "command" | "other"): Promise<Admitted> => {
     if (revision === undefined) return resolve().then(admittedValues);
-    if (operation === "command") return check();
+    if (operation === "command") return check(true);
     if (
       kept !== undefined &&
       Date.now() - kept.checkedAt < ENVIRONMENT_REVALIDATE_MS
     )
       return Promise.resolve(kept.admitted);
-    checking ??= check().finally(() => {
+    checking ??= check(false).finally(() => {
       checking = undefined;
     });
     return checking;

@@ -163,7 +163,7 @@ pub enum EnvironmentOutcome {
     ResumeTimeout,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum EnvironmentShell {
     NoShell,

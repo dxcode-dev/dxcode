@@ -1,6 +1,7 @@
 import {
   PersistenceUnavailable,
   RunnerProfileId,
+  SettingsMembershipInvariantViolation,
   type WorkspaceId,
   WorkspacePolicy,
   type WorkspacePolicyAuditRecord,
@@ -8,6 +9,7 @@ import {
   WorkspacePolicyRepository,
 } from "@dx/domain";
 import { Effect, Layer, Schema } from "effect";
+import { settingsPersistenceLogger } from "../../logging.js";
 
 const WorkspacePolicyRow = Schema.Struct({
   workspace_id: Schema.String,
@@ -293,3 +295,33 @@ export const decodeOwnerPolicy = async (
   if (row === undefined) throw new Error("Workspace policy row is missing.");
   return { workspaceId, policy: await Effect.runPromise(decodePolicy(row)) };
 };
+
+/**
+ * The owner's workspace policy from `ownerPolicyStatements`' results, failing
+ * as `WorkspacePolicyService.evaluateForUser`'s two reads do: two
+ * memberships break the one-workspace invariant, and a member's workspace
+ * without a policy row is a persistence failure. `undefined` when the owner
+ * belongs to no workspace.
+ */
+export const ownerPolicyFrom = Effect.fn(
+  "WorkspacePolicyRepositoryD1.ownerPolicyFrom",
+)(function* (membership: D1Result, policy: D1Result) {
+  const rows = membership.results as ReadonlyArray<{ workspace_id: string }>;
+  if (rows.length > 1) {
+    settingsPersistenceLogger.error(
+      "Workspace membership invariant was violated.",
+      { event: "workspace_membership_invariant_failed" },
+    );
+    return yield* new SettingsMembershipInvariantViolation();
+  }
+  if (rows[0] === undefined) return undefined;
+  const row = policy.results[0];
+  if (row === undefined)
+    return yield* Effect.fail(
+      PersistenceUnavailable.new(
+        { operation: "workspacePolicy.get" },
+        new Error("Workspace policy row is missing."),
+      ),
+    );
+  return yield* decodePolicy(row);
+});

@@ -542,7 +542,7 @@ describe("ThreadTerminal browser protocol v1", () => {
 
     await React.act(() => form.requestSubmit());
     expect(confirm).toHaveBeenCalledWith(
-      "Refresh and restart Terminal? Restarting ends the shared shell and any running command or process in every open Terminal view.",
+      "Refresh and restart Terminal? Restarting ends this Terminal's shell and any running command or process in it, in every open view of it.",
     );
     expect(socket.sent).not.toContain(
       JSON.stringify({ v: 1, type: "restart" }),
@@ -729,6 +729,37 @@ describe("ThreadTerminal browser protocol v1", () => {
     await React.act(() => vi.advanceTimersByTimeAsync(2_499));
     expect(FakeSocket.instances).toHaveLength(1);
     await React.act(() => vi.advanceTimersByTimeAsync(1));
+    expect(FakeSocket.instances).toHaveLength(2);
+    expect(container.textContent).toContain("Waking terminal…");
+    await React.act(() => root.unmount());
+  });
+
+  it("reattaches when a socket given up for lost answers after the network returns", async () => {
+    vi.useFakeTimers();
+    let online = true;
+    vi.spyOn(navigator, "onLine", "get").mockImplementation(() => online);
+    const { container, root, socket } = await render();
+    socket.emit("open");
+    await React.act(() => socket.emit("message", ready));
+
+    // A Wi-Fi blip: the late heartbeat's recovery goes unanswered while the
+    // network is away, so the browser gives the socket up, but TCP survives.
+    await React.act(() => vi.advanceTimersByTimeAsync(2_500));
+    expect(socket.sent.at(-1)).toBe(recover);
+    online = false;
+    await React.act(() => vi.advanceTimersByTimeAsync(2_500));
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(container.textContent).toContain("Terminal disconnected.");
+
+    // The network returns: the old socket delivers what it held, and the
+    // online intent asks it to recover, which it answers.
+    online = true;
+    await React.act(() => socket.emit("message", heartbeat));
+    await React.act(() => window.dispatchEvent(new Event("online")));
+    await React.act(() => socket.emit("message", heartbeat));
+
+    // Its attachment is unknown after the give-up: reattach with a replay
+    // rather than show a ready Terminal that drops what is typed.
     expect(FakeSocket.instances).toHaveLength(2);
     expect(container.textContent).toContain("Waking terminal…");
     await React.act(() => root.unmount());

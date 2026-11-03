@@ -377,12 +377,23 @@ describe("ThreadSession panes", () => {
     expect(terminalPanel?.hasAttribute("inert")).toBe(true);
 
     // Opening an open view brings it forward instead of adding a tab.
-    await openView(container, "Terminal");
+    await openView(container, "Changes");
     expect(container.querySelectorAll('[role="tab"]')).toHaveLength(3);
-    expect(terminalTab?.getAttribute("aria-selected")).toBe("true");
-    expect(container.querySelector(".thread-terminal")).toBe(mountedTerminal);
+    expect(changesTab?.getAttribute("aria-selected")).toBe("true");
+
+    // Once a Terminal is open, its entry is New Terminal: another tab with
+    // its own session, and the first stays mounted behind it.
+    await openView(container, "New Terminal");
+    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(4);
+    expect(
+      tabNamed(container, "Terminal 2")?.getAttribute("aria-selected"),
+    ).toBe("true");
+    const terminals = container.querySelectorAll(".thread-terminal");
+    expect(terminals).toHaveLength(2);
+    expect(terminals[0]).toBe(mountedTerminal);
 
     // Closing the last view tab removes its pane.
+    await click(container.querySelector('[aria-label="Close Terminal 2"]'));
     await click(container.querySelector('[aria-label="Close Terminal"]'));
     await click(container.querySelector('[aria-label="Close Changes"]'));
     expect(container.querySelectorAll(".thread-pane")).toHaveLength(1);
@@ -727,6 +738,48 @@ describe("ThreadSession panes", () => {
     expect(renderTerminal).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Archived thread");
     expect(container.textContent).not.toContain("Undo");
+    await React.act(() => root.unmount());
+  });
+
+  it("tells open view and file tabs that an archived Thread's Orb is stopped", async () => {
+    viewport.mobile = false;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    // The archived Orb answers no file reads.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("Orb stopped", { status: 503 })),
+    );
+    const Terminal = vi.fn(() => <div className="thread-terminal" />);
+    const { container, root, render } = await renderSession(thread, Terminal);
+    await openView(container, "Terminal");
+    await click(
+      [...container.querySelectorAll("button")].find(
+        (candidate) => candidate.textContent === "Link src/linked.ts:4",
+      ) ?? null,
+    );
+    expect(container.querySelector(".thread-terminal")).not.toBeNull();
+
+    await React.act(() =>
+      root.render(render({ ...thread, lifecycleState: "archived" }, project)),
+    );
+    await React.act(async () => {});
+
+    const panel = (label: string) =>
+      container.querySelector(`[role="tabpanel"][aria-label="${label}"]`);
+    for (const label of ["Terminal", "linked.ts"]) {
+      expect(panel(label)?.textContent).toBe(
+        "Archived. This Thread's Orb is stopped. Unarchive to resume it.",
+      );
+    }
+    expect(container.textContent).not.toContain("reconnect automatically");
+    expect(container.querySelector(".thread-terminal")).toBeNull();
     await React.act(() => root.unmount());
   });
 

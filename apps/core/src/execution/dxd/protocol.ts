@@ -9,6 +9,7 @@ import {
   THREAD_FILES_MAX_EDITABLE_BYTES,
   THREAD_FILES_MAX_TREE_PAGE_SIZE,
   THREAD_SANDBOX_FILE_MAX_CHUNK_BYTES,
+  THREAD_TERMINAL_SESSION_LIMIT,
   ThreadFilesPath,
   ThreadFilesWorktreeId,
   ThreadFileVersion,
@@ -16,6 +17,8 @@ import {
   ThreadStorageFileIdSchema,
   type ThreadTerminalDimensions,
   ThreadTerminalDimensionsSchema,
+  type ThreadTerminalId,
+  ThreadTerminalIdSchema,
 } from "@dx/api";
 import {
   EnvironmentVariableName,
@@ -119,17 +122,25 @@ export const DxdTerminalCapability = Schema.Struct({
    * operations, which move files between the guest and Thread storage.
    */
   storage: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
+  /**
+   * Version 1: Core may name Terminals besides `default` and send
+   * `terminal.close`; heartbeats list them as `terminals`. Without it a
+   * daemon knows only `default` and drops its connection on another name.
+   */
+  terminalSessions: Schema.optional(
+    Schema.Struct({ version: Schema.Literal(1) }),
+  ),
 });
 
 export const DxdTerminalHeartbeat = Schema.Union([
   Schema.Struct({
     terminalVersion: Schema.Literal(DXD_TERMINAL_VERSION),
-    terminal: Schema.Literal("default"),
+    terminal: ThreadTerminalIdSchema,
     state: Schema.Literal("absent"),
   }),
   Schema.Struct({
     terminalVersion: Schema.Literal(DXD_TERMINAL_VERSION),
-    terminal: Schema.Literal("default"),
+    terminal: ThreadTerminalIdSchema,
     state: Schema.Literals(["starting", "ready", "exited", "failed"]),
     residentGeneration: TerminalGeneration,
     foregroundCommand: Schema.Boolean,
@@ -299,13 +310,19 @@ export const DxdHeartbeatMessage = Schema.Struct({
   type: Schema.Literal("heartbeat"),
   generation: DaemonGeneration,
   terminal: DxdTerminalHeartbeat,
+  /** Every Terminal besides `default`; absent when there is none. */
+  terminals: Schema.optional(
+    Schema.Array(DxdTerminalHeartbeat).check(
+      Schema.isMaxLength(THREAD_TERMINAL_SESSION_LIMIT),
+    ),
+  ),
   memory: Schema.optional(DxdMemoryUsage),
   disk: Schema.optional(DxdDiskUsage),
 });
 
 const TerminalControlBase = {
   terminalVersion: Schema.Literal(DXD_TERMINAL_VERSION),
-  terminal: Schema.Literal("default"),
+  terminal: ThreadTerminalIdSchema,
 } as const;
 
 export const DxdCoreTerminalControl = Schema.Union([
@@ -348,6 +365,11 @@ export const DxdCoreTerminalControl = Schema.Union([
     attachmentGeneration: TerminalGeneration,
     resizeOrdinal: DxdU64,
     dimensions: ThreadTerminalDimensionsSchema,
+  }),
+  /** End a Terminal besides `default`, with its tmux session and shells. */
+  Schema.Struct({
+    ...TerminalControlBase,
+    type: Schema.Literal("terminal.close"),
   }),
   Schema.Struct({
     ...TerminalControlBase,
@@ -429,7 +451,15 @@ const DxdTerminalError = Schema.Struct({
   ]),
 });
 
+/** dxd did not open a new Terminal: the Thread already runs eight. */
+const DxdRefused = Schema.Struct({
+  ...TerminalControlBase,
+  type: Schema.Literal("terminal.refused"),
+  code: Schema.Literal("session-limit"),
+});
+
 export const DxdClientTerminalControl = Schema.Union([
+  DxdRefused,
   DxdResidentState,
   DxdReplayStart,
   DxdAttachmentReady,
@@ -440,8 +470,14 @@ export const DxdClientTerminalControl = Schema.Union([
 export type DxdClientTerminalControl =
   | {
       readonly terminalVersion: 1;
+      readonly type: "terminal.refused";
+      readonly terminal: ThreadTerminalId;
+      readonly code: "session-limit";
+    }
+  | {
+      readonly terminalVersion: 1;
       readonly type: "terminal.resident-state";
-      readonly terminal: "default";
+      readonly terminal: ThreadTerminalId;
       readonly residentGeneration: TerminalGeneration;
       readonly state: "starting" | "ready" | "exited" | "failed";
       readonly dimensions: ThreadTerminalDimensions;

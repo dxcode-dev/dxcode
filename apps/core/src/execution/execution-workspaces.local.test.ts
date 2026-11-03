@@ -161,6 +161,8 @@ vi.mock("./runner-profiles/execution.js", () => {
 });
 vi.mock("../settings/environment-variables/execution.js", () => ({
   resolveExecutionEnvironment: mocks.resolveEnvironment,
+  // Resolution above is the mock's; an early read has nothing to start.
+  prefetchExecutionEnvironment: () => undefined,
   environmentRevisionStatements: () => [],
   environmentRevisionFrom: () => {
     throw new Error("No revision in this test.");

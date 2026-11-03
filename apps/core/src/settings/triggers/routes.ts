@@ -29,6 +29,7 @@ import {
   PluginTriggerCapability,
   PluginTriggerCapabilityForbidden,
   PluginTriggerConflict,
+  PluginTriggerDelivery,
   PluginTriggerDeliverySummary,
   PluginTriggerId,
   PluginTriggerLimitExceeded,
@@ -180,47 +181,14 @@ const durableStatus = Effect.fn("pluginTriggerDurableStatus")(function* (
 ) {
   const { response, body } = yield* durableFetch(context, triggerId, "/status");
   if (!response.ok) return yield* new TriggerDeliveryUnavailable();
+  // The object sends ISO strings; decoding them to the API's types lets the
+  // response encode them back.
   return yield* Schema.decodeUnknownEffect(
     Schema.Struct({
       deliverySummary: PluginTriggerDeliverySummary,
-      deliveries: Schema.Array(
-        Schema.Struct({
-          id: Schema.String,
-          eventId: Schema.String,
-          status: Schema.String,
-          attempts: Schema.Int,
-          idempotent: Schema.Boolean,
-          createdAt: Schema.String,
-          updatedAt: Schema.String,
-          nextAttemptAt: Schema.optional(Schema.String),
-          failureCode: Schema.optional(Schema.String),
-        }),
-      ),
+      deliveries: Schema.Array(PluginTriggerDelivery),
     }),
-  )(body).pipe(
-    Effect.flatMap((value) =>
-      Schema.decodeUnknownEffect(
-        Schema.Struct({
-          deliverySummary: PluginTriggerDeliverySummary,
-          deliveries: Schema.Array(
-            Schema.Struct({
-              id: Schema.String,
-              eventId: Schema.String,
-              status: Schema.String,
-              attempts: Schema.Int,
-              idempotent: Schema.Boolean,
-              createdAt: Schema.String,
-              updatedAt: Schema.String,
-              nextAttemptAt: Schema.optional(Schema.String),
-              failureCode: Schema.optional(Schema.String),
-            }),
-          ),
-        }),
-      )(value),
-    ),
-    Effect.map((value) => value as unknown as DurableStatus),
-    Effect.mapError(() => new TriggerDeliveryUnavailable()),
-  );
+  )(body).pipe(Effect.mapError(() => new TriggerDeliveryUnavailable()));
 });
 
 const triggerData = (

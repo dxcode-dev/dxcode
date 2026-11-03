@@ -2,6 +2,8 @@ import type { ThreadPaneFileTarget, ThreadPaneLayout } from "@dx/api";
 import { describe, expect, it } from "vitest";
 import { paneLayoutWith } from "../../../testing/pane-layouts.js";
 import {
+  canOpenTerminal,
+  closedTerminalSessions,
   defaultPaneLayout,
   flattenPaneTabs,
   listPanes,
@@ -10,6 +12,7 @@ import {
   repairPaneLayout,
   tabId,
   tabLabel,
+  terminalSession,
 } from "./pane-layout.js";
 
 const file = (path: string): ThreadPaneFileTarget =>
@@ -569,5 +572,121 @@ describe("pane layout reducer", () => {
       "p0",
     );
     expect(reducePaneLayout(base, { type: "focus", pane: "p9" })).toBe(base);
+  });
+});
+
+describe("several Terminals", () => {
+  const sessions = (layout: ThreadPaneLayout) =>
+    flattenPaneTabs(layout).flatMap(({ tab }) =>
+      tab.kind === "terminal"
+        ? [`${tabLabel(tab)}=${terminalSession(tab)}`]
+        : [],
+    );
+
+  it("opens the first Terminal on the shared session and each New Terminal on its own", () => {
+    const layout = run(
+      defaultPaneLayout(),
+      { type: "new-terminal" },
+      { type: "new-terminal" },
+      { type: "new-terminal" },
+    );
+    expect(sketch(layout)).toBe(
+      "p0[agent] p1[terminal:1,terminal:2,terminal:3]",
+    );
+    expect(sessions(layout)).toEqual([
+      "Terminal=default",
+      "Terminal 2=2",
+      "Terminal 3=3",
+    ]);
+    expect(activeTabOf(layout, "p1")).toBe("terminal:3");
+  });
+
+  it("brings an open Terminal forward when asked for the Terminal view", () => {
+    const layout = run(
+      defaultPaneLayout(),
+      { type: "new-terminal" },
+      { type: "new-terminal" },
+      { type: "open-view", view: "files" },
+      { type: "open-view", view: "terminal" },
+    );
+    expect(sketch(layout)).toBe("p0[agent] p1[terminal:1,terminal:2,files]");
+    expect(activeTabOf(layout, "p1")).toBe("terminal:1");
+  });
+
+  it("never reuses a closed Terminal's session, and reopens the shared one first", () => {
+    const layout = run(
+      defaultPaneLayout(),
+      { type: "new-terminal" },
+      { type: "new-terminal" },
+      { type: "close", tab: "terminal:2" },
+      { type: "close", tab: "terminal:1" },
+      { type: "new-terminal" },
+      { type: "new-terminal" },
+    );
+    expect(sessions(layout)).toEqual(["Terminal=default", "Terminal 3=3"]);
+  });
+
+  it("keeps a saved single Terminal on the shared session", () => {
+    // Saved before Terminals had sessions: ordinal 4 is still the shared one.
+    const saved = repairPaneLayout({
+      ...defaultPaneLayout(),
+      root: {
+        kind: "split",
+        id: "s1",
+        direction: "row",
+        children: [
+          { kind: "pane", id: "p0", tabs: [{ kind: "agent" }], active: 0 },
+          {
+            kind: "pane",
+            id: "p1",
+            tabs: [{ kind: "terminal", ordinal: 4 }],
+            active: 0,
+          },
+        ],
+        sizes: [0.5, 0.5],
+      },
+    });
+    expect(sessions(saved)).toEqual(["Terminal 4=default"]);
+    expect(sessions(run(saved, { type: "new-terminal" }))).toEqual([
+      "Terminal 4=default",
+      "Terminal 5=5",
+    ]);
+  });
+
+  it("opens at most the Thread's limit of Terminals", () => {
+    const actions = Array.from({ length: 10 }, () => ({
+      type: "new-terminal" as const,
+    }));
+    const layout = run(defaultPaneLayout(), ...actions);
+    expect(sessions(layout)).toHaveLength(8);
+    expect(canOpenTerminal(layout)).toBe(false);
+    expect(
+      canOpenTerminal(run(layout, { type: "close", tab: "terminal:4" })),
+    ).toBe(true);
+  });
+
+  it("lists the sessions a change closed", () => {
+    const before = run(
+      defaultPaneLayout(),
+      { type: "new-terminal" },
+      { type: "new-terminal" },
+      { type: "new-terminal" },
+    );
+    const after = run(before, {
+      type: "close-others",
+      pane: "p1",
+      tab: "terminal:2",
+    });
+    expect(closedTerminalSessions(before, after)).toEqual(["3"]);
+    expect(
+      closedTerminalSessions(
+        before,
+        run(before, {
+          type: "move",
+          tab: "terminal:2",
+          to: { pane: "p0", side: "left" },
+        }),
+      ),
+    ).toEqual([]);
   });
 });

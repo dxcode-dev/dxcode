@@ -280,8 +280,8 @@ export const resolveExecutionEnvironmentRevision = Effect.fn(
  * carry are always the same snapshot: the revision check that used to bracket
  * the separate reads holds by construction.
  */
-export const resolveExecutionEnvironment = Effect.fn(
-  "resolveExecutionEnvironment",
+const readExecutionEnvironmentSnapshot = Effect.fn(
+  "readExecutionEnvironmentSnapshot",
 )(function* (bindings: Bindings, rawThreadId: string) {
   const startedAt = Date.now();
   const threadId = yield* Schema.decodeUnknownEffect(ThreadId)(
@@ -388,4 +388,69 @@ export const resolveExecutionEnvironment = Effect.fn(
           ],
     revision: resolved.revision,
   } satisfies ExecutionEnvironmentSnapshot;
+});
+
+/** How long a prefetched environment stands in for an activation's own read. */
+const PREFETCHED_ENVIRONMENT_MS = 5_000;
+
+/**
+ * Environments an activation started reading before it knew it would need
+ * them, by Thread, in this isolate. Each is taken at most once and only while
+ * fresh. Its revision travels with it, so a command after a change still sees
+ * the change through the usual revision check.
+ */
+const prefetchedEnvironments = new Map<
+  string,
+  {
+    readonly at: number;
+    readonly environment: Promise<ExecutionEnvironmentSnapshot>;
+  }
+>();
+
+/**
+ * Starts reading the Thread's execution environment now, beside the
+ * activation's checks, so context discovery doesn't wait for a primary round
+ * trip of its own after the Orb opens (#1589). A failed read is never used:
+ * the next resolution reads again.
+ */
+export const prefetchExecutionEnvironment = (
+  bindings: Bindings,
+  threadId: string,
+) => {
+  const now = Date.now();
+  for (const [id, entry] of prefetchedEnvironments)
+    if (now - entry.at >= PREFETCHED_ENVIRONMENT_MS)
+      prefetchedEnvironments.delete(id);
+  const environment = Effect.runPromise(
+    readExecutionEnvironmentSnapshot(bindings, threadId),
+  );
+  environment.catch(() => undefined);
+  prefetchedEnvironments.set(threadId, { at: now, environment });
+};
+
+const takePrefetchedEnvironment = (threadId: string) => {
+  const entry = prefetchedEnvironments.get(threadId);
+  prefetchedEnvironments.delete(threadId);
+  if (entry === undefined || Date.now() - entry.at >= PREFETCHED_ENVIRONMENT_MS)
+    return undefined;
+  return entry.environment.then(
+    (environment) => environment,
+    () => undefined,
+  );
+};
+
+/**
+ * Everything an execution of this Thread receives: a prefetch that is still
+ * fresh, else one read (see `readExecutionEnvironmentSnapshot`).
+ */
+export const resolveExecutionEnvironment = Effect.fn(
+  "resolveExecutionEnvironment",
+)(function* (bindings: Bindings, rawThreadId: string) {
+  const prefetched = takePrefetchedEnvironment(rawThreadId);
+  const environment =
+    prefetched === undefined
+      ? undefined
+      : yield* Effect.promise(() => prefetched);
+  if (environment !== undefined) return environment;
+  return yield* readExecutionEnvironmentSnapshot(bindings, rawThreadId);
 });

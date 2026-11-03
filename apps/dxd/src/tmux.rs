@@ -20,12 +20,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 pub const SOCKET: &str = "dx";
+/// The first Terminal's session; Terminal `n` is session `main-n`.
 pub const SESSION: &str = "main";
-/// `=` asks for exactly `main`, never a prefix match such as `main2`.
-const TARGET: &str = "=main";
-/// The same session for commands that take a pane target (`set-option`,
-/// `display-message`): without the colon tmux looks for a window `main`.
-const PANE_TARGET: &str = "=main:";
 /// Session user option naming the resident whose client created or joined
 /// the session. Only that resident may rejoin it after a daemon dies.
 const RESIDENT_OPTION: &str = "@dx_resident";
@@ -57,6 +53,8 @@ pub enum Join {
 
 #[derive(Clone)]
 pub struct Tmux {
+    /// The session this resident's client joins.
+    session: String,
     binary: PathBuf,
     config: PathBuf,
     /// `TMUX_TMPDIR` as dxd received it; tests give each daemon its own.
@@ -98,6 +96,7 @@ impl Tmux {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG));
         Some(Self {
+            session: SESSION.to_owned(),
             binary,
             // Without dx's configuration tmux would read ~/.tmux.conf.
             config: if config.is_file() {
@@ -109,6 +108,40 @@ impl Tmux {
             server: Arc::new(Mutex::new(Server::default())),
             pushed: Arc::new(Mutex::new(Pushed::default())),
         })
+    }
+
+    /// The same tmux server for another Terminal's session: its client and
+    /// foreground tracking are its own, the pushed environment is shared.
+    pub fn for_session(&self, session: String) -> Self {
+        Self {
+            session,
+            server: Arc::new(Mutex::new(Server::default())),
+            ..self.clone()
+        }
+    }
+
+    /// `=` asks for exactly this session, never a prefix match such as
+    /// `main2`.
+    fn target(&self) -> String {
+        format!("={}", self.session)
+    }
+
+    /// The same session for commands that take a pane target (`set-option`,
+    /// `display-message`): without the colon tmux looks for a window.
+    fn pane_target(&self) -> String {
+        format!("={}:", self.session)
+    }
+
+    /// End this session and every shell in it (a hangup for each pane), on
+    /// a worker thread. No session is not a failure.
+    pub fn end_session(&self) {
+        let mut command = self.command();
+        command.args(["kill-session", "-t", &self.target()]);
+        let _ = thread::Builder::new()
+            .name("dxd-tmux".into())
+            .spawn(move || {
+                let _ = run_bounded(command, QUERY_TIMEOUT);
+            });
     }
 
     /// The client the resident PTY runs. `environment` becomes the server's
@@ -132,7 +165,8 @@ impl Tmux {
         ];
         match join {
             Join::Existing => {
-                arguments.extend(["attach-session", "-t", TARGET].map(OsString::from));
+                arguments.extend(["attach-session", "-t"].map(OsString::from));
+                arguments.push(self.target().into());
             }
             Join::AttachOrCreate | Join::Fresh => {
                 if join == Join::Fresh {
@@ -143,29 +177,28 @@ impl Tmux {
                     // the client connecting to a server that is exiting.
                     // `if-shell -F` because a failed `kill-session` (no
                     // session) would skip the rest of the list.
-                    arguments.extend(
-                        [
-                            "if-shell",
-                            "-F",
-                            "#{S:#{?#{==:#{session_name},main},1,}}",
-                            "kill-session -t =main",
-                            ";",
-                        ]
-                        .map(OsString::from),
+                    arguments.extend(["if-shell", "-F"].map(OsString::from));
+                    arguments.push(
+                        format!("#{{S:#{{?#{{==:#{{session_name}},{}}},1,}}}}", self.session)
+                            .into(),
                     );
+                    arguments.push(format!("kill-session -t {}", self.target()).into());
+                    arguments.push(";".into());
                 }
                 if let Some(command) = default_command {
                     arguments.extend(["set-option", "-g", "default-command"].map(OsString::from));
                     arguments.push(escape_argument(&command).into());
                     arguments.push(";".into());
                 }
-                arguments.extend(["new-session", "-A", "-s", SESSION, "-c"].map(OsString::from));
+                arguments.extend(["new-session", "-A", "-s"].map(OsString::from));
+                arguments.push(self.session.clone().into());
+                arguments.push("-c".into());
                 arguments.push(root.into());
                 // Runs once this client is attached, so the mark never names
                 // a resident whose client did not reach the session.
-                arguments.extend(
-                    [";", "set-option", "-t", PANE_TARGET, RESIDENT_OPTION].map(OsString::from),
-                );
+                arguments.extend([";", "set-option", "-t"].map(OsString::from));
+                arguments.push(self.pane_target().into());
+                arguments.push(RESIDENT_OPTION.into());
                 arguments.push(resident_mark(resident).into());
             }
         }
@@ -206,7 +239,7 @@ impl Tmux {
             "display-message",
             "-p",
             "-t",
-            PANE_TARGET,
+            &self.pane_target(),
             &format!("#{{window_width}} #{{window_height}} #{{{RESIDENT_OPTION}}}"),
         ]);
         let output = run_bounded(command, QUERY_TIMEOUT)?;

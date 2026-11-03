@@ -10,7 +10,11 @@ import type { Bindings } from "../http/types.js";
 import { loadConfigEncryptionKeyring } from "../settings/config-encryption.js";
 import { recordMeteredCallSafely } from "./metering.js";
 import { findProvider, isLocalRuntime } from "./registry.js";
-import { resolveCapabilities } from "./resolution.js";
+import {
+  type ResolvedCapabilities,
+  resolveCapabilities,
+  resolveThreadCapabilities,
+} from "./resolution.js";
 import { decryptPluginCredential } from "./settings-store-d1.js";
 
 export type ThreadPlugin = PluginToolSet[number];
@@ -62,17 +66,13 @@ export const admitPluginCall = async (
   threadPlugin: ThreadPlugin,
   capability: PluginCapabilityId,
 ): Promise<PluginCallAdmission> => {
-  const thread = await context.db
-    .prepare(
-      "SELECT owner_user_id, lifecycle_state FROM threads WHERE id = ? LIMIT 1",
-    )
-    .bind(threadId)
-    .first<{ owner_user_id: string; lifecycle_state: string }>();
-  if (thread === null || thread.lifecycle_state !== "active")
+  // The Thread and everything its owner's resolution reads, in one round trip.
+  const resolved = await resolveThreadCapabilities(threadId, context);
+  if (resolved === undefined)
     return { admitted: false, reason: "thread-unavailable" };
-  const admission = await admitUserPluginCall(
+  const admission = await admitResolved(
     context,
-    thread.owner_user_id,
+    resolved,
     threadPlugin.pluginId,
     capability,
   );
@@ -90,8 +90,20 @@ export const admitUserPluginCall = async (
   userId: string,
   pluginId: FirstPartyPluginId,
   capability: PluginCapabilityId,
+): Promise<PluginCallAdmission> =>
+  admitResolved(
+    context,
+    await resolveCapabilities({ userId }, context),
+    pluginId,
+    capability,
+  );
+
+const admitResolved = async (
+  context: PluginHostContext,
+  resolved: ResolvedCapabilities,
+  pluginId: FirstPartyPluginId,
+  capability: PluginCapabilityId,
 ): Promise<PluginCallAdmission> => {
-  const resolved = await resolveCapabilities({ userId }, context);
   const state = resolved.plugins.find(({ plugin }) => plugin.id === pluginId);
   if (state === undefined) return { admitted: false, reason: "not-installed" };
   const resolution = state.resolution;

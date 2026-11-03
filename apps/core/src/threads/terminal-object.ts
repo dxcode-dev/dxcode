@@ -2,8 +2,11 @@ import { DurableObject } from "cloudflare:workers";
 import {
   isOrbDiskPressure,
   THREAD_CHANGES_SUBPROTOCOL,
+  THREAD_TERMINAL_SESSION_LIMIT,
   THREAD_TERMINAL_SUBPROTOCOL,
   ThreadFilesPath,
+  type ThreadTerminalId,
+  ThreadTerminalIdSchema,
   type ThreadTerminalServerPhase,
 } from "@dx/api";
 import {
@@ -162,11 +165,11 @@ import {
   proxyFailureReason,
   ResidentProxyRelay,
 } from "./resident-proxy-relay.js";
-import {
-  type ResidentTerminalMetadata,
-  ResidentTerminalRelay,
-  type ResidentTerminalTransport,
+import type {
+  ResidentTerminalMetadata,
+  ResidentTerminalTransport,
 } from "./resident-terminal-relay.js";
+import { ResidentTerminals } from "./resident-terminals.js";
 
 const ACTIVATION_TIMEOUT_MS = 30_000;
 const TRANSIENT_ACTIVATION_RETRY_MS = 250;
@@ -266,6 +269,10 @@ const ACTIVATION_ATTEMPT_STORAGE_KEY = "daemon-activation-attempt";
 const ENVIRONMENT_GENERATION_STORAGE_KEY = "environment-next-generation";
 const APPLIED_ENVIRONMENT_STORAGE_KEY = "environment-applied";
 const RESIDENT_READY_STORAGE_KEY = "terminal-resident-ready";
+/** The other Terminals' ready markers, by Terminal. */
+const OTHER_RESIDENT_READY_STORAGE_KEY = "terminal-resident-ready-others";
+/** Terminals closed while no daemon was connected; ended on registration. */
+const PENDING_TERMINAL_CLOSES_STORAGE_KEY = "terminal-pending-closes";
 /** The last root listing per worktree, served while a paused Orb wakes. */
 const FILES_ROOT_SNAPSHOT_STORAGE_PREFIX = "files-root-snapshot:";
 const FilesRootSnapshot = Schema.Struct({
@@ -373,6 +380,8 @@ interface DaemonAuthority {
   readonly disk?: boolean;
   /** The connected daemon serves `storage.export` and `storage.import`. */
   readonly storage?: boolean;
+  /** The connected daemon runs Terminals besides `default`. */
+  readonly terminalSessions?: boolean;
 }
 
 interface DaemonAttachment {
@@ -382,6 +391,8 @@ interface DaemonAttachment {
   readonly generation?: DaemonGeneration;
   readonly nonce?: string;
   readonly terminal?: DxdTerminalHeartbeat;
+  /** Every Terminal besides `default`, as the last heartbeat listed them. */
+  readonly terminals?: ReadonlyArray<DxdTerminalHeartbeat>;
 }
 
 interface ResidentBrowserAttachment {
@@ -389,6 +400,8 @@ interface ResidentBrowserAttachment {
   readonly threadId: ThreadId;
   readonly daemonGeneration?: DaemonGeneration;
   readonly nonce?: string;
+  /** Which Terminal; absent for `default`. */
+  readonly terminalId?: ThreadTerminalId;
   readonly terminal: ResidentTerminalMetadata;
   /** The browser session that opened the socket; it closes when that ends. */
   readonly session?: BrowserSessionBinding;
@@ -465,7 +478,7 @@ const isTerminalControl = (
 ): control is DxdClientTerminalControl => control.type.startsWith("terminal.");
 
 export class ThreadExecutionObject extends DurableObject<Bindings> {
-  readonly #residentRelay = new ResidentTerminalRelay();
+  readonly #terminals = new ResidentTerminals();
   readonly #proxyRelay = new ResidentProxyRelay({
     daemon: () => {
       const socket = this.#currentDaemonSocket();
@@ -569,6 +582,10 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   };
   #appliedEnvironment?: AppliedEnvironmentMarker;
   #terminalHeartbeat?: DxdTerminalHeartbeat;
+  /** Every Terminal besides `default`, from the same heartbeat. */
+  #otherTerminalHeartbeats: ReadonlyArray<DxdTerminalHeartbeat> = [];
+  /** Terminals closed while no daemon was connected. */
+  #pendingTerminalCloses: ReadonlyArray<ThreadTerminalId> = [];
   #lastPersistedHeartbeatAt?: number;
   /**
    * When this instance last heard the daemon itself. Unlike `lastSeen`, it is
@@ -614,7 +631,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   /** Candidates publish one at a time, so they never contend for the lease. */
   #publishingChanges: Promise<void> = Promise.resolve();
   /** The resident Core last saw become ready, and when. */
-  #residentReady?: ResidentReadyMarker;
+  readonly #residentReady = new Map<ThreadTerminalId, ResidentReadyMarker>();
   /**
    * When the workspace's processes last started, from the latest daemon
    * activation; only providers whose pause restarts processes report it.
@@ -645,9 +662,26 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       const storedResidentReady = Schema.decodeUnknownOption(
         ResidentReadyMarker,
       )(await ctx.storage.get(RESIDENT_READY_STORAGE_KEY));
-      this.#residentReady = Option.isSome(storedResidentReady)
-        ? storedResidentReady.value
-        : undefined;
+      if (Option.isSome(storedResidentReady))
+        this.#residentReady.set("default", storedResidentReady.value);
+      // Keys are checked one by one: a Record keyed by the Terminal id
+      // schema never decodes.
+      const storedOthers = Schema.decodeUnknownOption(
+        Schema.Record(Schema.String, ResidentReadyMarker),
+      )(await ctx.storage.get(OTHER_RESIDENT_READY_STORAGE_KEY));
+      if (Option.isSome(storedOthers))
+        for (const [key, marker] of Object.entries(storedOthers.value)) {
+          const terminal = Schema.decodeUnknownOption(ThreadTerminalIdSchema)(
+            key,
+          );
+          if (Option.isSome(terminal) && terminal.value !== "default")
+            this.#residentReady.set(terminal.value, marker);
+        }
+      const pendingCloses = Schema.decodeUnknownOption(
+        Schema.Array(ThreadTerminalIdSchema),
+      )(await ctx.storage.get(PENDING_TERMINAL_CLOSES_STORAGE_KEY));
+      if (Option.isSome(pendingCloses))
+        this.#pendingTerminalCloses = pendingCloses.value;
       let authority = this.#authority;
       const expectedAuthority = authority;
       const daemonSocket =
@@ -696,6 +730,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           ) {
             this.#environmentReady = true;
             this.#terminalHeartbeat = daemonAttachment.terminal;
+            this.#otherTerminalHeartbeats = daemonAttachment.terminals ?? [];
           }
         } catch {
           // A wake without a current revision proof must reactivate normally.
@@ -715,8 +750,10 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           | SocketAttachment
           | undefined;
         if (attachment?.kind !== "resident-browser") continue;
+        const terminalId = attachment.terminalId ?? "default";
         const transport = this.#residentTransport(
           attachment.threadId,
+          terminalId,
           () => {},
           socket,
           attachment.session,
@@ -725,7 +762,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           // Paused or gone: an immediate reconnect would make a retained,
           // hidden Terminal wake the workspace. Wait for the daemon instead.
           if (
-            this.#residentRelay.restore(
+            this.#terminals.restore(
+              terminalId,
               socket,
               attachment.terminal,
               transport,
@@ -755,13 +793,18 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
             daemonConnected);
         if (
           !fenced ||
-          !this.#residentRelay.restore(socket, attachment.terminal, transport)
+          !this.#terminals.restore(
+            terminalId,
+            socket,
+            attachment.terminal,
+            transport,
+          )
         )
           this.#closeResidentBrowserForReconnect(socket);
       }
       // A lost connection is known: tell the restored attachments now.
       if (restoredWhilePaused && authority?.attachmentNonce === undefined)
-        this.#residentRelay.workspacePaused();
+        this.#terminals.workspacePaused();
     });
   }
 
@@ -795,6 +838,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     if (path === "/orb/disk" || path === "/orb/disk/delete")
       return this.#serveOrbDisk(request, path);
     if (path === "/storage/transfer") return this.#transferStorage(request);
+    if (path === "/terminal/close") return this.#closeTerminal(request);
     if (path === "/diagnostics") return this.#diagnostics(request);
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
       return new Response(null, { status: 404 });
@@ -827,6 +871,10 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       return new Response(null, { status: 404 });
     if (request.headers.get("x-dx-terminal-route") !== "resident")
       return new Response(null, { status: 404 });
+    const terminalId = Schema.decodeUnknownOption(ThreadTerminalIdSchema)(
+      request.headers.get("x-dx-terminal-id") ?? "default",
+    );
+    if (Option.isNone(terminalId)) return new Response(null, { status: 404 });
     const correlation = Schema.decodeUnknownSync(StartupTraceCorrelation)({
       journey: "terminal",
       requestId: requestId.value,
@@ -881,9 +929,16 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     const client = pair[0];
     const server = pair[1];
     this.ctx.acceptWebSocket(server);
-    this.#residentRelay.attach(
+    this.#terminals.attach(
+      terminalId.value,
       server,
-      this.#residentTransport(threadId.value, record, server, session),
+      this.#residentTransport(
+        threadId.value,
+        terminalId.value,
+        record,
+        server,
+        session,
+      ),
       false,
     );
     if (session !== undefined) await this.#watchSessions();
@@ -973,7 +1028,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
             | SocketAttachment
             | undefined;
           if (attachment?.kind === "resident-browser")
-            this.#residentRelay.endSession(socket, SESSION_ENDED_CLOSE_CODE);
+            this.#terminals.endSession(socket, SESSION_ENDED_CLOSE_CODE);
           else if (attachment?.kind === "proxy-browser")
             this.#proxyRelay.endSession(socket, attachment);
           else closeForEndedSession(socket);
@@ -1174,6 +1229,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         applied: this.#appliedEnvironment !== undefined,
       },
       terminal: this.#terminalHeartbeat ?? null,
+      terminals: this.#otherTerminalHeartbeats,
+      pendingTerminalCloses: this.#pendingTerminalCloses,
       terminalResetRequired: this.#terminalResetRequired,
       disk: this.#orbDiskUsage ?? null,
       processesStartedAgoMs: ago(this.#processesStartedAt),
@@ -2086,7 +2143,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         : new Response(null, { status: 503 });
     }
     if (this.#isReady()) return this.#readyResponse();
-    this.#residentRelay.workspaceWaking();
+    this.#terminals.workspaceWaking();
     return this.#runActivationBeforeDeadline(threadId, epoch, signal);
   }
 
@@ -2349,15 +2406,38 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     });
   }
 
-  #awaitTerminalHeartbeat(): Promise<DxdTerminalHeartbeat> {
-    if (this.#terminalHeartbeat !== undefined)
-      return Promise.resolve(this.#terminalHeartbeat);
+  /**
+   * The state of `terminal` from the connected daemon's latest heartbeat: a
+   * Terminal the daemon does not list is absent. `undefined` until the
+   * connected daemon's first heartbeat.
+   */
+  #terminalState(terminal: ThreadTerminalId): DxdTerminalHeartbeat | undefined {
+    if (this.#terminalHeartbeat === undefined || terminal === "default")
+      return this.#terminalHeartbeat;
+    return (
+      this.#otherTerminalHeartbeats.find(
+        (candidate) => candidate.terminal === terminal,
+      ) ?? {
+        terminalVersion: DXD_TERMINAL_VERSION,
+        terminal,
+        state: "absent",
+      }
+    );
+  }
+
+  #awaitTerminalHeartbeat(
+    terminal: ThreadTerminalId,
+  ): Promise<DxdTerminalHeartbeat> {
+    const known = this.#terminalState(terminal);
+    if (known !== undefined) return Promise.resolve(known);
     return new Promise((resolve, reject) => {
       let timeout: ReturnType<typeof setTimeout>;
-      const ready = (state: DxdTerminalHeartbeat) => {
+      const ready = () => {
         clearTimeout(timeout);
         this.#terminalWaiters.delete(ready);
-        resolve(state);
+        const state = this.#terminalState(terminal);
+        if (state === undefined) reject(new Error("terminal heartbeat lost"));
+        else resolve(state);
       };
       this.#terminalWaiters.add(ready);
       timeout = setTimeout(() => {
@@ -2367,22 +2447,163 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     });
   }
 
-  #publishTerminalHeartbeat(state: DxdTerminalHeartbeat) {
-    this.#terminalHeartbeat = state;
-    if (
-      state.state === "ready" &&
-      this.#residentReady?.residentGeneration !== state.residentGeneration
-    ) {
-      this.#residentReady = {
-        residentGeneration: state.residentGeneration,
+  /** Whether the Thread already runs its most Terminals besides `terminal`. */
+  #terminalLimitReached(terminal: ThreadTerminalId) {
+    const running = [
+      this.#terminalHeartbeat,
+      ...this.#otherTerminalHeartbeats,
+    ].filter(
+      (state) =>
+        state !== undefined &&
+        state.state !== "absent" &&
+        state.terminal !== terminal,
+    ).length;
+    return running >= THREAD_TERMINAL_SESSION_LIMIT;
+  }
+
+  #clearTerminalHeartbeats() {
+    this.#terminalHeartbeat = undefined;
+    this.#otherTerminalHeartbeats = [];
+  }
+
+  /** Whether any Terminal's shell runs a command in its foreground. */
+  #terminalForegroundCommand() {
+    return [this.#terminalHeartbeat, ...this.#otherTerminalHeartbeats].some(
+      (state) =>
+        state !== undefined &&
+        state.state !== "absent" &&
+        state.foregroundCommand,
+    );
+  }
+
+  /**
+   * Record one Terminal's state. A heartbeat passes every other Terminal as
+   * `others`, which replaces what Core knew of them.
+   */
+  #publishTerminalHeartbeat(
+    state: DxdTerminalHeartbeat,
+    others?: ReadonlyArray<DxdTerminalHeartbeat>,
+  ) {
+    if (others !== undefined) this.#otherTerminalHeartbeats = others;
+    if (state.terminal === "default") this.#terminalHeartbeat = state;
+    else
+      this.#otherTerminalHeartbeats = [
+        ...this.#otherTerminalHeartbeats.filter(
+          (candidate) => candidate.terminal !== state.terminal,
+        ),
+        state,
+      ];
+    for (const current of [
+      this.#terminalHeartbeat,
+      ...this.#otherTerminalHeartbeats,
+    ]) {
+      if (
+        current?.state !== "ready" ||
+        this.#residentReady.get(current.terminal)?.residentGeneration ===
+          current.residentGeneration
+      )
+        continue;
+      const marker = {
+        residentGeneration: current.residentGeneration,
         at: Date.now(),
       };
-      void this.ctx.storage
-        .put(RESIDENT_READY_STORAGE_KEY, this.#residentReady)
-        .catch(() => undefined);
+      this.#residentReady.set(current.terminal, marker);
+      if (current.terminal === "default")
+        void this.ctx.storage
+          .put(RESIDENT_READY_STORAGE_KEY, marker)
+          .catch(() => undefined);
+      else this.#persistOtherResidentReady();
     }
     for (const resolve of this.#terminalWaiters) resolve(state);
     this.#terminalWaiters.clear();
+  }
+
+  /**
+   * End Terminal `terminal` (never `default`): its browsers are told it
+   * closed, and the daemon ends its tmux session and shells now, or on its
+   * next registration when none is connected. Never wakes the workspace.
+   */
+  async #closeTerminal(request: Request) {
+    if (
+      request.method !== "POST" ||
+      request.headers.get("x-dx-terminal-close") !== "1"
+    )
+      return new Response(null, { status: 404 });
+    const threadId = Schema.decodeUnknownOption(ThreadId)(
+      request.headers.get("x-dx-thread-id"),
+    );
+    const terminal = Schema.decodeUnknownOption(ThreadTerminalIdSchema)(
+      request.headers.get("x-dx-terminal-id"),
+    );
+    if (
+      Option.isNone(threadId) ||
+      Option.isNone(terminal) ||
+      terminal.value === "default"
+    )
+      return new Response(null, { status: 404 });
+    const authority = this.#authority;
+    if (authority !== undefined && authority.threadId !== threadId.value)
+      return new Response(null, { status: 404 });
+    this.#terminals.terminalClosed(terminal.value);
+    this.#otherTerminalHeartbeats = this.#otherTerminalHeartbeats.filter(
+      (candidate) => candidate.terminal !== terminal.value,
+    );
+    if (this.#residentReady.delete(terminal.value))
+      this.#persistOtherResidentReady();
+    let sent = false;
+    if (
+      this.#currentDaemonSocket() !== undefined &&
+      this.#authority?.terminalSessions === true
+    )
+      try {
+        this.#sendTerminalControl({
+          terminalVersion: DXD_TERMINAL_VERSION,
+          type: "terminal.close",
+          terminal: terminal.value,
+        });
+        sent = true;
+      } catch {
+        // Ended on the next registration instead.
+      }
+    if (!sent && !this.#pendingTerminalCloses.includes(terminal.value)) {
+      this.#pendingTerminalCloses = [
+        ...this.#pendingTerminalCloses,
+        terminal.value,
+      ].slice(-64);
+      await this.ctx.storage.put(
+        PENDING_TERMINAL_CLOSES_STORAGE_KEY,
+        this.#pendingTerminalCloses,
+      );
+    }
+    return new Response(null, { status: 204 });
+  }
+
+  #persistOtherResidentReady() {
+    const others = Object.fromEntries(
+      [...this.#residentReady].filter(([terminal]) => terminal !== "default"),
+    );
+    void this.ctx.storage
+      .put(OTHER_RESIDENT_READY_STORAGE_KEY, others)
+      .catch(() => undefined);
+  }
+
+  /** Ends the Terminals closed while no daemon was connected. */
+  #sendPendingTerminalCloses() {
+    if (
+      this.#pendingTerminalCloses.length === 0 ||
+      this.#authority?.terminalSessions !== true
+    )
+      return;
+    for (const terminal of this.#pendingTerminalCloses)
+      this.#sendTerminalControl({
+        terminalVersion: DXD_TERMINAL_VERSION,
+        type: "terminal.close",
+        terminal,
+      });
+    this.#pendingTerminalCloses = [];
+    void this.ctx.storage
+      .delete(PENDING_TERMINAL_CLOSES_STORAGE_KEY)
+      .catch(() => undefined);
   }
 
   #sendTerminalControl(control: DxdCoreTerminalControl) {
@@ -2442,6 +2663,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
 
   #residentTransport(
     threadId: ThreadId,
+    terminalId: ThreadTerminalId,
     record: (phase: ThreadTerminalServerPhase) => void,
     socket: WebSocket,
     session: BrowserSessionBinding | undefined,
@@ -2450,14 +2672,14 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       activate: async () => {
         const response = await this.#activateWithRetry(threadId);
         if (!response.ok) throw new Error("resident daemon unavailable");
-        return this.#awaitTerminalHeartbeat();
+        return this.#awaitTerminalHeartbeat(terminalId);
       },
       exitedTerminal: async (stop) => {
         while (!stop()) {
           const state =
             this.#currentDaemonSocket() === undefined
               ? undefined
-              : this.#terminalHeartbeat;
+              : this.#terminalState(terminalId);
           if (state?.state === "exited") return state;
           await new Promise<void>((resolve) =>
             this.#terminalWaiters.add(() => resolve()),
@@ -2467,16 +2689,20 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       },
       refreshEnvironment: async () => {
         await this.#activateEnvironment(threadId);
-        return this.#awaitTerminalHeartbeat();
+        return this.#awaitTerminalHeartbeat(terminalId);
       },
       // The resident's shell was ready before the workspace's processes last
       // started, so it died with a provider wake that restarts processes
       // (Containers), not on its own: open a new one, as the user would.
       restartedWithWorkspace: (residentGeneration) =>
         this.#processesStartedAt !== undefined &&
-        this.#residentReady?.residentGeneration === residentGeneration &&
-        this.#residentReady.at < this.#processesStartedAt,
+        this.#residentReady.get(terminalId)?.residentGeneration ===
+          residentGeneration &&
+        (this.#residentReady.get(terminalId)?.at ?? Infinity) <
+          this.#processesStartedAt,
       checkLiveness: () => this.#checkTerminalLiveness(threadId),
+      terminalLimitReached: () => this.#terminalLimitReached(terminalId),
+      terminalSessions: () => this.#authority?.terminalSessions === true,
       sendControl: (control) => this.#sendTerminalControl(control),
       sendBinary: (frame) => this.#sendTerminalBinary(frame),
       canSendBinary: (frameBytes) => this.#canSendTerminalBinary(frameBytes),
@@ -2502,6 +2728,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           kind: "resident-browser",
           threadId,
           ...daemonIdentity,
+          ...(terminalId === "default" ? {} : { terminalId }),
           terminal,
           ...(bound === undefined ? {} : { session: bound }),
         } satisfies ResidentBrowserAttachment);
@@ -3071,6 +3298,12 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       const heartbeat = this.#terminalHeartbeat;
       if (heartbeat !== undefined && heartbeat.state !== "absent")
         this.#terminalHeartbeat = { ...heartbeat, restartRequired: true };
+      this.#otherTerminalHeartbeats = this.#otherTerminalHeartbeats.map(
+        (other) =>
+          other.state === "absent"
+            ? other
+            : { ...other, restartRequired: true },
+      );
       const socket = this.#currentDaemonSocket();
       const currentAuthority = this.#authority;
       if (
@@ -3083,8 +3316,9 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           generation: currentAuthority.generation,
           nonce: currentAuthority.attachmentNonce,
           terminal: this.#terminalHeartbeat,
+          terminals: this.#otherTerminalHeartbeats,
         } satisfies DaemonAttachment);
-      this.#residentRelay.environmentRestartRequired();
+      this.#terminals.environmentRestartRequired();
     }
     return { generation, revision: snapshot.revision };
   }
@@ -3149,7 +3383,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         : reason === "workspace-paused"
           ? "on-focus"
           : "never";
-    this.#residentRelay.closeForLifecycle(
+    this.#terminals.closeForLifecycle(
       reason as
         | "thread-archived"
         | "workspace-paused"
@@ -3165,7 +3399,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     this.#fenceDaemonSockets();
     for (const resolve of this.#readinessWaiters) resolve();
     this.#readinessWaiters.clear();
-    this.#terminalHeartbeat = undefined;
+    this.#clearTerminalHeartbeats();
     this.#environmentReady = false;
     this.#appliedEnvironment = undefined;
     ExecutionWorkspaces.recordResidentTerminalHeartbeat(
@@ -3309,7 +3543,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         this.#lastHeartbeatAt === undefined
           ? undefined
           : now - this.#lastHeartbeatAt,
-      browserSessions: this.#residentRelay.sessionCount,
+      browserSessions: this.#terminals.sessionCount,
     });
     return socket;
   }
@@ -3886,7 +4120,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       return;
     }
     if (attachment?.kind === "resident-browser") {
-      await this.#residentRelay.receiveBrowser(socket, frame);
+      await this.#terminals.receiveBrowser(socket, frame);
       return;
     }
     if (attachment?.kind === "proxy-browser") {
@@ -3932,7 +4166,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         return;
       }
       try {
-        this.#residentRelay.receiveBinary(frame);
+        this.#terminals.receiveBinary(frame);
       } catch {
         socket.close(1008, "");
       }
@@ -4071,6 +4305,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         memory: control.value.capabilities.memory !== undefined,
         disk: control.value.capabilities.disk !== undefined,
         storage: control.value.capabilities.storage !== undefined,
+        terminalSessions:
+          control.value.capabilities.terminalSessions !== undefined,
       };
       this.#orbMemory.reset();
       this.#orbDisk.reset();
@@ -4079,11 +4315,11 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       this.#lastPersistedHeartbeatAt = next.lastSeen;
       this.#lastHeartbeatAt = next.lastSeen;
       this.#armDaemonLease();
-      this.#terminalHeartbeat = undefined;
+      this.#clearTerminalHeartbeats();
       this.#environmentReady = false;
       this.#appliedEnvironment = undefined;
       this.#terminalResetRequired = true;
-      this.#residentRelay.daemonConnectionReset(this.#inPlannedHandoff());
+      this.#terminals.daemonConnectionReset(this.#inPlannedHandoff());
       this.#proxyRelay.daemonUnavailable(nonce);
       this.#plannedHandoffUntil = undefined;
       this.#fenceDaemonSockets(socket);
@@ -4212,7 +4448,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       if (control.value.type === "terminal.resident-state") {
         this.#publishTerminalHeartbeat({
           terminalVersion: DXD_TERMINAL_VERSION,
-          terminal: "default",
+          terminal: control.value.terminal,
           state: control.value.state,
           residentGeneration: control.value.residentGeneration,
           foregroundCommand: control.value.foregroundCommand,
@@ -4220,16 +4456,17 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         });
         ExecutionWorkspaces.recordResidentTerminalHeartbeat(
           Schema.decodeUnknownSync(ThreadId)(authority.threadId),
-          control.value.foregroundCommand,
+          this.#terminalForegroundCommand(),
         );
         socket.serializeAttachment({
           kind: "daemon",
           generation: authority.generation,
           nonce: authority.attachmentNonce,
           terminal: this.#terminalHeartbeat,
+          terminals: this.#otherTerminalHeartbeats,
         } satisfies DaemonAttachment);
       }
-      this.#residentRelay.receiveControl(control.value);
+      this.#terminals.receiveControl(control.value);
       return;
     }
     if (
@@ -4237,24 +4474,36 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       control.value.generation !== authority.generation
     )
       return;
+    let closing: ReadonlyArray<ThreadTerminalId> = [];
     if (this.#terminalResetRequired) {
-      if (control.value.terminal.state !== "absent")
-        this.#sendTerminalControl({
-          terminalVersion: DXD_TERMINAL_VERSION,
-          type: "terminal.reset-attachments",
-          terminal: "default",
-          residentGeneration: control.value.terminal.residentGeneration,
-        });
+      // Closed while no daemon listened: end those first, so a closed
+      // Terminal is never reattached.
+      closing = this.#pendingTerminalCloses;
+      this.#sendPendingTerminalCloses();
+      for (const terminal of [
+        control.value.terminal,
+        ...(control.value.terminals ?? []),
+      ])
+        if (terminal.state !== "absent" && !closing.includes(terminal.terminal))
+          this.#sendTerminalControl({
+            terminalVersion: DXD_TERMINAL_VERSION,
+            type: "terminal.reset-attachments",
+            terminal: terminal.terminal,
+            residentGeneration: terminal.residentGeneration,
+          });
       this.#terminalResetRequired = false;
-      this.#residentRelay.attachmentsReset();
+      this.#terminals.attachmentsReset();
     }
-    this.#publishTerminalHeartbeat(control.value.terminal);
-    this.#residentRelay.daemonHeartbeat();
+    this.#publishTerminalHeartbeat(
+      control.value.terminal,
+      (control.value.terminals ?? []).filter(
+        (terminal) => !closing.includes(terminal.terminal),
+      ),
+    );
+    this.#terminals.daemonHeartbeat();
     ExecutionWorkspaces.recordResidentTerminalHeartbeat(
       Schema.decodeUnknownSync(ThreadId)(authority.threadId),
-      control.value.terminal.state === "absent"
-        ? false
-        : control.value.terminal.foregroundCommand,
+      this.#terminalForegroundCommand(),
     );
     const now = Date.now();
     const next = { ...authority, lastSeen: now };
@@ -4277,6 +4526,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       generation: authority.generation,
       nonce: authority.attachmentNonce,
       terminal: control.value.terminal,
+      terminals: this.#otherTerminalHeartbeats,
     } satisfies DaemonAttachment);
     if (
       this.#lastPersistedHeartbeatAt === undefined ||
@@ -4320,7 +4570,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       | SocketAttachment
       | undefined;
     if (attachment?.kind === "resident-browser") {
-      this.#residentRelay.disconnect(socket);
+      this.#terminals.disconnect(socket);
       return;
     }
     if (attachment?.kind === "daemon")
@@ -4373,12 +4623,12 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     this.#orbMemory.reset();
     this.#orbDisk.reset();
     this.#orbDiskUsage = undefined;
-    this.#terminalHeartbeat = undefined;
+    this.#clearTerminalHeartbeats();
     this.#environmentReady = false;
     this.#appliedEnvironment = undefined;
     this.#disconnectPendingForSocket(socket, true);
     this.#proxyRelay.daemonUnavailable();
-    const notifiedBrowsers = this.#residentRelay.daemonUnavailable(
+    const notifiedBrowsers = this.#terminals.daemonUnavailable(
       this.#inPlannedHandoff(),
     );
     threadDaemonLogger.info("Thread daemon connection lost.", {
@@ -4422,7 +4672,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       },
     )
       .then(async (reason) => {
-        if (reason === "timeout") this.#residentRelay.workspacePaused();
+        if (reason === "timeout") this.#terminals.workspacePaused();
       })
       .finally(() => {
         if (this.#connectionRecovery === recovery)
@@ -4576,7 +4826,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       })
       .catch((cause) => {
         this.#environmentReady = false;
-        this.#residentRelay.close("environment-unavailable", "manual", 1012);
+        this.#terminals.close("environment-unavailable", "manual", 1012);
         throw cause;
       })
       .finally(() => {

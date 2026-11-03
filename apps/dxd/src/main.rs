@@ -16,6 +16,7 @@ mod services;
 mod session;
 mod storage;
 mod terminal;
+mod terminals;
 mod tmux;
 mod update;
 mod workload_identity;
@@ -31,6 +32,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use terminal::TerminalRuntime;
+use terminals::Terminals;
 
 pub const RELEASE: &str = env!("CARGO_PKG_VERSION");
 pub const PROTOCOL_MAJOR: u8 = 2;
@@ -149,7 +151,7 @@ fn start() -> Result<(), StartExit> {
         return Err(StartExit::Workspace(io::ErrorKind::NotADirectory.into()));
     }
     let connected = Arc::new(AtomicBool::new(false));
-    let (state_directory, mut terminal, environment, sandbox) = match &config.local_runtime {
+    let (state_directory, terminal, environment, sandbox) = match &config.local_runtime {
         Some(local) => {
             let state = PathBuf::from(&local.state_directory);
             fs::create_dir_all(&state).map_err(StartExit::StateDirectory)?;
@@ -174,18 +176,22 @@ fn start() -> Result<(), StartExit> {
             )
         }
     };
-    if let Ok(encoded) = std::env::var(terminal::HANDOFF_VARIABLE) {
+    let mut terminal = Terminals::recorded(terminal, &state_directory);
+    let handoff = [
+        terminal::HANDOFF_VARIABLE,
+        terminals::SESSIONS_HANDOFF_VARIABLE,
+    ]
+    .map(|name| {
+        let value = std::env::var(name).ok();
         // SAFETY: single-threaded at this point; nothing reads the variable concurrently.
         unsafe {
-            std::env::remove_var(terminal::HANDOFF_VARIABLE);
+            std::env::remove_var(name);
         }
-        match terminal.adopt(&encoded) {
-            Ok(()) => eprintln!("dxd adopted the running shell after update"),
-            Err(error) => eprintln!("dxd could not adopt the shell after update: {error}"),
-        }
-    }
-    // Without a handoff, rejoin a tmux session the previous process left.
-    terminal.reattach_session();
+        value
+    });
+    let [default_handoff, other_handoffs] = handoff;
+    // Without a handoff, rejoin each tmux session the previous process left.
+    terminal.adopt_and_reattach(default_handoff, other_handoffs);
     let services = match std::env::var(services::HANDOFF_VARIABLE) {
         Ok(encoded) => {
             // SAFETY: single-threaded at this point; nothing reads the variable concurrently.
@@ -398,7 +404,7 @@ mod tests {
             })
             .unwrap(),
             format!(
-                r#"{{"type":"register","protocolMajor":2,"release":"{RELEASE}","capabilities":{{"terminal":{{"version":1}},"workloadIdentity":{{"version":1}},"files":{{"version":1}},"proxy":{{"version":1}},"memory":{{"version":1}},"disk":{{"version":1}},"storage":{{"version":1}}}}}}"#
+                r#"{{"type":"register","protocolMajor":2,"release":"{RELEASE}","capabilities":{{"terminal":{{"version":1}},"workloadIdentity":{{"version":1}},"files":{{"version":1}},"proxy":{{"version":1}},"memory":{{"version":1}},"disk":{{"version":1}},"storage":{{"version":1}},"terminalSessions":{{"version":1}}}}}}"#
             )
         );
         assert_eq!(
@@ -409,6 +415,7 @@ mod tests {
                     Path::new("/nonexistent")
                 )
                 .heartbeat(),
+                terminals: Vec::new(),
                 memory: None,
                 disk: None,
             })
@@ -423,6 +430,7 @@ mod tests {
                     Path::new("/nonexistent")
                 )
                 .heartbeat(),
+                terminals: Vec::new(),
                 memory: Some(crate::memory::MemoryUsage {
                     used_bytes: 6_000,
                     total_bytes: 8_000,

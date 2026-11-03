@@ -11,7 +11,9 @@ import {
   putThreadPaneLayout,
 } from "../../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { closeTerminalSession } from "../../terminal/terminal-session-mutations.js";
 import {
+  closedTerminalSessions,
   defaultPaneLayout,
   type PaneLayoutAction,
   reducePaneLayout,
@@ -91,6 +93,7 @@ const scheduleSave = (threadId: ThreadId, layout: ThreadPaneLayout) => {
 
 /**
  * Applies one layout action to the cached layout and schedules the save.
+ * A Terminal whose tab it closed ends its shell session.
  * Before the layout has loaded the action applies to the default layout and
  * the fetch is cancelled, so what the person did is never undone by it.
  */
@@ -108,6 +111,8 @@ export const dispatchPaneLayoutAction = (
   if (next === base && current !== undefined) return next;
   client.setQueryData(key, next);
   scheduleSave(threadId, next);
+  for (const session of closedTerminalSessions(base, next))
+    closeTerminalSession(threadId, session);
   return next;
 };
 

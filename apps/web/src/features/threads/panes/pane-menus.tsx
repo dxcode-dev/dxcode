@@ -19,11 +19,13 @@ import type { CommandId } from "../../../shared/commands/command-registry.js";
 import { getBrowserCommandRegistry } from "../../../shared/commands/command-registry.js";
 import { ShortcutKeycaps } from "../../../shared/commands/shortcut-keycaps.js";
 import { downloadFromUrl } from "../../../shared/download-from-url.js";
+import { terminalEnvironmentFormId } from "../../../shared/terminal-session.js";
 import {
   warmTerminal,
   warmTerminalAfterDwell,
 } from "../../terminal/terminal-warm-mutations.js";
 import {
+  canOpenTerminal,
   findViewTab,
   PANE_VIEW_KINDS,
   type PaneLayoutAction,
@@ -31,6 +33,7 @@ import {
   type PaneViewKind,
   tabId,
   tabLabel,
+  terminalSession,
 } from "./pane-layout.js";
 import { PANE_VIEWS, type PaneContents } from "./pane-views.js";
 import { TerminalWarmContext } from "./terminal-warm-context.js";
@@ -53,17 +56,20 @@ const availableViews = (contents: PaneContents) =>
 
 /**
  * The Views and Open Tab items: every available view with its shortcut, and
- * "Open" beside one already open. Terminal says "New Terminal" once one
- * exists; dx keeps one Terminal, so that entry brings it forward.
+ * "Open" beside one already open. Once a Terminal is open, Terminal becomes
+ * "New Terminal", which opens another with its own shell session, up to the
+ * Thread's limit.
  */
 function ViewMenuItems({
   layout,
   contents,
   onOpen,
+  onNewTerminal,
 }: {
   readonly layout: ThreadPaneLayout;
   readonly contents: PaneContents;
   readonly onOpen: (view: PaneViewKind) => void;
+  readonly onNewTerminal?: () => void;
 }) {
   const keycaps = useCommandKeycaps();
   const warm = useTerminalWarmIntent();
@@ -72,17 +78,20 @@ function ViewMenuItems({
       {availableViews(contents).map((view) => {
         const { label, Icon, command } = PANE_VIEWS[view];
         const open = findViewTab(layout, view) !== undefined;
+        const another =
+          open && view === "terminal" && onNewTerminal !== undefined;
         return (
           <Menu.Item
             key={view}
             className="thread-menu-item pane-view-menu-item"
             data-view={view}
-            onClick={() => onOpen(view)}
+            disabled={another && !canOpenTerminal(layout)}
+            onClick={() => (another ? onNewTerminal() : onOpen(view))}
             {...(view === "terminal" ? warm : {})}
           >
             <Icon aria-hidden="true" />
-            <span>{open && view === "terminal" ? "New Terminal" : label}</span>
-            {open ? (
+            <span>{another ? "New Terminal" : label}</span>
+            {another ? null : open ? (
               <small className="pane-view-menu-open">Open</small>
             ) : (
               <ShortcutKeycaps keycaps={keycaps(command)} emptyLabel="" />
@@ -134,11 +143,13 @@ export function ViewsMenuButton({
   layout,
   contents,
   onOpen,
+  onNewTerminal,
   className,
 }: {
   readonly layout: ThreadPaneLayout;
   readonly contents: PaneContents;
   readonly onOpen: (view: PaneViewKind) => void;
+  readonly onNewTerminal?: () => void;
   readonly className?: string;
 }) {
   if (availableViews(contents).length === 0) return null;
@@ -162,6 +173,7 @@ export function ViewsMenuButton({
               layout={layout}
               contents={contents}
               onOpen={onOpen}
+              onNewTerminal={onNewTerminal}
             />
           </Menu.Popup>
         </Menu.Positioner>
@@ -175,10 +187,12 @@ export function OpenTabMenuButton({
   layout,
   contents,
   onOpen,
+  onNewTerminal,
 }: {
   readonly layout: ThreadPaneLayout;
   readonly contents: PaneContents;
   readonly onOpen: (view: PaneViewKind) => void;
+  readonly onNewTerminal?: () => void;
 }) {
   if (availableViews(contents).length === 0) return null;
   return (
@@ -201,6 +215,7 @@ export function OpenTabMenuButton({
               layout={layout}
               contents={contents}
               onOpen={onOpen}
+              onNewTerminal={onNewTerminal}
             />
           </Menu.Popup>
         </Menu.Positioner>
@@ -327,7 +342,10 @@ export function PaneTabContextMenu({
                   className="thread-context-item"
                   nativeButton
                   render={
-                    <button type="submit" form="thread-terminal-environment" />
+                    <button
+                      type="submit"
+                      form={terminalEnvironmentFormId(terminalSession(tab))}
+                    />
                   }
                 >
                   <RefreshCw />

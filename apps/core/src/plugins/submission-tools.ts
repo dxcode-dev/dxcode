@@ -1,7 +1,7 @@
 import { PluginToolSet, USAGE_EVENT_RETENTION_DAYS } from "@dx/domain";
 import { Schema } from "effect";
 import type { PluginHostContext } from "./host.js";
-import { pluginToolSet, resolveCapabilities } from "./resolution.js";
+import { pluginToolSet, resolveThreadOwnerCapabilities } from "./resolution.js";
 
 const decodeToolSet = Schema.decodeUnknownSync(
   Schema.fromJsonString(PluginToolSet),
@@ -38,21 +38,17 @@ export const resolveSubmissionPluginTools = async (
   now = new Date(),
 ): Promise<PluginToolSet> => {
   // Each read is a D1 round trip before the turn's first model request, so
-  // the independent ones run together.
-  const [recorded, thread] = await Promise.all([
+  // the recorded set and the owner's resolution (which reads the Thread in
+  // its own batch) run together (#1589).
+  const [recorded, resolved] = await Promise.all([
     recordedStatement(context.db, threadId, submissionId)
       .first<{ tool_set_json: string }>()
       .then(decodeRecorded),
-    context.db
-      .prepare("SELECT owner_user_id FROM threads WHERE id = ? LIMIT 1")
-      .bind(threadId)
-      .first<{ owner_user_id: string }>(),
+    resolveThreadOwnerCapabilities(threadId, context),
   ]);
   if (recorded !== undefined) return recorded;
-  if (thread === null) throw new Error("PLUGIN_TOOLS_THREAD_NOT_FOUND");
-  const toolSet = pluginToolSet(
-    await resolveCapabilities({ userId: thread.owner_user_id }, context),
-  );
+  if (resolved === undefined) throw new Error("PLUGIN_TOOLS_THREAD_NOT_FOUND");
+  const toolSet = pluginToolSet(resolved);
   const resolvedAt = now.toISOString();
   // Read back in the same batch: a concurrent resolution of the same
   // submission may have won.
@@ -68,7 +64,7 @@ export const resolveSubmissionPluginTools = async (
       .bind(
         threadId,
         submissionId,
-        thread.owner_user_id,
+        resolved.userId,
         JSON.stringify(toolSet),
         resolvedAt,
         resolvedAt,

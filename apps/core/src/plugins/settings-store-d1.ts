@@ -86,22 +86,25 @@ export const findPluginSetting = async (
   return row === null ? undefined : fromRow(row);
 };
 
-/** Personal settings for the user plus their workspace's settings, if any. */
-export const listPluginSettings = async (
+/**
+ * Personal settings of a user plus their workspace's settings, as a statement
+ * for a caller's batch; `user` and `workspace` are SQL expressions.
+ */
+export const pluginSettingsStatement = (
   db: D1Database,
-  userId: string,
-  workspaceId: string | undefined,
-): Promise<ReadonlyArray<StoredPluginSetting>> => {
-  const result = await db
-    .prepare(
-      `SELECT * FROM plugin_setting
-       WHERE (scope = 'personal' AND target_id = ?)
-          OR (scope = 'workspace' AND target_id = ?)`,
-    )
-    .bind(userId, workspaceId ?? "")
-    .all<Row>();
-  return result.results.map(fromRow);
-};
+  user: string,
+  workspace: string,
+) =>
+  db.prepare(
+    `SELECT * FROM plugin_setting
+     WHERE (scope = 'personal' AND target_id = ${user})
+        OR (scope = 'workspace' AND target_id = ${workspace})`,
+  );
+
+export const pluginSettingsFrom = (
+  result: D1Result,
+): ReadonlyArray<StoredPluginSetting> =>
+  (result.results as ReadonlyArray<Row>).map(fromRow);
 
 export const putPluginEnablement = (
   db: D1Database,

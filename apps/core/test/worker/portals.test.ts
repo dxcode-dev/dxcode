@@ -199,6 +199,10 @@ const signInToPortal = async (
 };
 
 describe("Portal host routing in workerd", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("answers malformed Portal hosts with 404 and never reaches the Thread", async () => {
     const execution = fakeExecution();
     const bindings = { ...baseBindings, THREAD_EXECUTION: execution.namespace };
@@ -676,6 +680,8 @@ describe("Portal host routing in workerd", () => {
       if (id === null) throw new Error("Expected a dx session.");
       return id;
     };
+    // Freeze the clock so the handler re-stamps at the same second as `now`.
+    vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
     const now = Math.floor(Date.now() / 1_000);
     // A Portal cookie whose access was last checked ten minutes ago.
     const staleCookie = async (name: string, sessionId: string) =>
@@ -702,9 +708,10 @@ describe("Portal host routing in workerd", () => {
     const restamped = setCookies(rechecked);
     expect(restamped).toHaveLength(1);
     expect(restamped[0]).toMatch(
-      /^__Host-dx_portal_embed=v1\..+; Max-Age=36\d\d; Path=\/; HttpOnly; Secure; SameSite=None; Partitioned$/,
+      /^__Host-dx_portal_embed=v1\..+; Max-Age=3600; Path=\/; HttpOnly; Secure; SameSite=None; Partitioned$/,
     );
     expect(execution.calls).toHaveLength(1);
+    vi.useRealTimers();
 
     // Signed out of dx: the session the handshake ran under is gone.
     const signedOut = await visit(
