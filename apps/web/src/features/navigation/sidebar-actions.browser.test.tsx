@@ -87,10 +87,11 @@ interface ServerThread {
   parentThreadId?: ThreadId;
 }
 
+// Ages count back from when the test runs: the sidebar moves a Thread idle
+// for 72 hours to Inactive, so a fixed date would age these rows out.
+const startedAt = Date.now();
 const at = (minutesAgo: number) =>
-  new Date(
-    Date.parse("2026-10-31T12:00:00.000Z") - minutesAgo * 60_000,
-  ).toISOString();
+  new Date(startedAt - minutesAgo * 60_000).toISOString();
 
 const encode = (thread: ServerThread, threads: ReadonlyArray<ServerThread>) => {
   const children = threads.filter(
@@ -208,7 +209,7 @@ const fakeServer = (threads: ServerThread[]) => {
         const { pinned } = JSON.parse(String(init?.body)) as {
           pinned: boolean;
         };
-        if (pinned) thread.pinnedAt = "2026-10-31T12:30:00.000Z";
+        if (pinned) thread.pinnedAt = at(-30);
         else delete thread.pinnedAt;
         return Response.json({
           status: "success",

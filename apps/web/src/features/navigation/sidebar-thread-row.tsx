@@ -1,5 +1,6 @@
 import { Menu } from "@base-ui/react/menu";
 import type { ThreadData } from "@dx/api";
+import { threadReturnedAt } from "@dx/domain";
 import { Link } from "@tanstack/react-router";
 import { DateTime } from "effect";
 import {
@@ -34,6 +35,7 @@ import {
   ThreadTitleText,
 } from "../../shared/ui/thread-title.js";
 import { isOptimisticThread } from "../threads/thread-mutations.js";
+import { compactAge, exactTime } from "./inbox-time.js";
 import {
   clearSidebarContextPress,
   focusSidebarCommandItem,
@@ -64,6 +66,72 @@ function SnoozeCountdown({ wakeAt }: { readonly wakeAt: number }) {
       {remaining}
     </span>
   );
+}
+
+/** How long ago an Inactive row was last active, at its end while not hovered. */
+function ThreadRowAge({ thread }: { readonly thread: ThreadData }) {
+  const age = useTimeText((now) =>
+    compactAge(threadReturnedAt(thread, now), now),
+  );
+  const at = useTimeText((now) =>
+    exactTime.format(threadReturnedAt(thread, now)),
+  );
+  return (
+    <span
+      className="thread-snooze-status thread-row-age"
+      title={`Last active ${at}`}
+    >
+      {age}
+    </span>
+  );
+}
+
+/**
+ * The mark at a row's end that gives way to its hover actions: a snoozed
+ * row's countdown, Woke, Error, or an Inactive row's age, in that order.
+ */
+function ThreadRowStatus({
+  thread,
+  snoozed,
+  woke,
+  failed,
+  inactive,
+  onDismissWoke,
+}: {
+  readonly thread: ThreadData;
+  readonly snoozed: boolean;
+  readonly woke: boolean;
+  readonly failed: boolean;
+  readonly inactive: boolean;
+  readonly onDismissWoke: () => void;
+}) {
+  if (snoozed && thread.snoozedUntil !== undefined)
+    return (
+      <SnoozeCountdown wakeAt={DateTime.toEpochMillis(thread.snoozedUntil)} />
+    );
+  if (woke)
+    return (
+      <button
+        type="button"
+        className="thread-snooze-status thread-woke"
+        aria-label="Dismiss Woke"
+        title="Woke from snooze. Dismiss"
+        onClick={onDismissWoke}
+      >
+        <AlarmClock aria-hidden="true" />
+        <span role="status">Woke</span>
+      </button>
+    );
+  if (failed)
+    return (
+      <span
+        className="thread-error-status"
+        title="The latest turn ended in an error"
+      >
+        Error
+      </span>
+    );
+  return inactive ? <ThreadRowAge thread={thread} /> : null;
 }
 
 /** The row's Snooze action: a menu of wake times. */
@@ -222,6 +290,8 @@ export interface SidebarThreadRowProps
   readonly child?: boolean;
   /** Listed in the Snoozed section: asleep until `snoozedUntil`. */
   readonly snoozed?: boolean;
+  /** Listed in Inactive: shows how long ago it was last active. */
+  readonly inactive?: boolean;
 }
 
 /**
@@ -241,6 +311,7 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
   onToggleChildren,
   child = false,
   snoozed = false,
+  inactive = false,
   onThreadNavigate,
   onThreadPointerEnter,
   onThreadPointerLeave,
@@ -357,6 +428,7 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
         data-child={child ? "" : undefined}
         data-snooze={snoozed ? "snoozed" : woke ? "woke" : undefined}
         data-error={failed && !snoozed && !woke ? "" : undefined}
+        data-age={inactive && !failed && !snoozed && !woke ? "" : undefined}
         onPointerEnter={(event) => {
           // A tap is not a hover: touch opens the Thread, not its preview.
           if (event.pointerType === "touch") return;
@@ -420,29 +492,14 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
             </span>
           </strong>
         </Link>
-        {snoozed && thread.snoozedUntil !== undefined ? (
-          <SnoozeCountdown
-            wakeAt={DateTime.toEpochMillis(thread.snoozedUntil)}
-          />
-        ) : woke ? (
-          <button
-            type="button"
-            className="thread-snooze-status thread-woke"
-            aria-label="Dismiss Woke"
-            title="Woke from snooze. Dismiss"
-            onClick={() => snooze?.wake(thread.id)}
-          >
-            <AlarmClock aria-hidden="true" />
-            <span role="status">Woke</span>
-          </button>
-        ) : failed ? (
-          <span
-            className="thread-error-status"
-            title="The latest turn ended in an error"
-          >
-            Error
-          </span>
-        ) : null}
+        <ThreadRowStatus
+          thread={thread}
+          snoozed={snoozed}
+          woke={woke}
+          failed={failed}
+          inactive={inactive}
+          onDismissWoke={() => snooze?.wake(thread.id)}
+        />
         {avatars}
         {hasChildren && childStatus !== undefined ? (
           <SubthreadsToggle

@@ -2,6 +2,9 @@ import type { ThreadId, UserId } from "@dx/domain";
 import type { Bindings } from "../http/types.js";
 import { notificationLogger } from "../logging.js";
 import { threadPresentUsers } from "../realtime/publication.js";
+import { classifyRunFailure, runFailureText } from "../runtime/run-failure.js";
+import { sha256Hex } from "../threads/agent-tools.js";
+import { ownerRequest } from "../threads/owner-request.js";
 import { settledTurn } from "./latest-reply.js";
 import { publishNotification } from "./publish.js";
 
@@ -13,16 +16,62 @@ export interface TurnCompletion {
   readonly threadId: ThreadId;
   readonly submissionId: string;
   readonly outcome: "completed" | "failed" | "aborted";
+  /** Why a failed turn failed, as Flue settled it. */
+  readonly error?: { readonly message: string; readonly type?: string };
 }
 
 const FINISHED_WITHOUT_REPLY =
   "The agent finished its turn and is waiting for you.";
 const STOPPED = "The agent stopped before finishing its turn.";
+/** A failed child tells its parent at most once in this window. */
+const PARENT_NOTICE_WINDOW_MS = 30 * 60_000;
+const EXCERPT_FAILURE_CHARS = 240;
+
+/** What a failed turn tells people, without dx's failure stamp. */
+const failureText = (error: TurnCompletion["error"]) => {
+  if (error === undefined || error.message.trim() === "") return undefined;
+  const code = classifyRunFailure({ message: error.message }).code;
+  if (code === "WORKSPACE_DISK_FULL")
+    return "Orb disk full: the turn failed before the agent could start. Send a message to retry: dx clears package caches and temporary files first, and if the disk is still full, starts the agent in recovery mode to free space.";
+  return `The turn failed: ${runFailureText(error.message).slice(0, EXCERPT_FAILURE_CHARS)}`;
+};
+
+/**
+ * A child Thread's failed turn, told to the parent that started it: its
+ * agent never replied, so without this the parent waits forever (#1614).
+ * Sent as a message from the child, so it starts the parent's turn; at most
+ * once per child in PARENT_NOTICE_WINDOW_MS, so a child that keeps failing
+ * cannot loop with its parent. Answers whether the parent took it.
+ */
+const tellParent = async (
+  bindings: Bindings,
+  ownerUserId: UserId,
+  child: { readonly id: ThreadId; readonly title: string | null },
+  parentThreadId: string,
+  text: string,
+) => {
+  const window = Math.floor(Date.now() / PARENT_NOTICE_WINDOW_MS);
+  const { response } = await ownerRequest(
+    { bindings, ownerUserId, sourceThreadId: child.id },
+    "POST",
+    `/v1/agents/dx/${encodeURIComponent(parentThreadId)}`,
+    {
+      kind: "user",
+      body: `Child Thread ${child.title === null ? "" : `"${child.title}" `}(${child.id}) failed its turn and could not reply. ${text}`,
+      idempotencyKey: await sha256Hex(
+        `turn-failed:${child.id}:${String(window)}`,
+      ),
+    },
+  );
+  return response.status === 202;
+};
 
 /**
  * Notifies a Thread's owner that its agent finished, with what the agent
- * said. Only root Threads notify: a child Thread is the agent's own errand,
- * and its parent is already waiting on it. A cancelled turn notifies nobody
+ * said, or why the turn failed. Only root Threads notify the owner: a child
+ * Thread is the agent's own errand, and its parent is already waiting on it,
+ * so a child's failed turn is told to its parent instead (or to the owner
+ * when the parent can no longer take it). A cancelled turn notifies nobody
  * — the person who stopped it is looking at it. Neither does a turn whose
  * owner has that Thread open: they are watching the reply arrive, and a
  * notification about what is already on their screen is noise.
@@ -39,13 +88,39 @@ export const notifyTurnCompleted = async (
   try {
     const thread = await db
       .prepare(
-        `SELECT owner_user_id, parent_thread_id
-           FROM threads
-          WHERE id = ?1 AND lifecycle_state != 'deleted'`,
+        `SELECT t.owner_user_id, t.parent_thread_id, t.title,
+                p.lifecycle_state AS parent_lifecycle_state
+           FROM threads t
+           LEFT JOIN threads p ON p.id = t.parent_thread_id
+          WHERE t.id = ?1 AND t.lifecycle_state != 'deleted'`,
       )
       .bind(completion.threadId)
-      .first<{ owner_user_id: string; parent_thread_id: string | null }>();
-    if (thread === null || thread.parent_thread_id !== null) return;
+      .first<{
+        owner_user_id: string;
+        parent_thread_id: string | null;
+        title: string | null;
+        parent_lifecycle_state: string | null;
+      }>();
+    if (thread === null) return;
+    const failure =
+      completion.outcome === "failed"
+        ? failureText(completion.error)
+        : undefined;
+    // A child's turn is its parent's errand: only a failure is news there.
+    // A parent that is gone or archived cannot take it; the owner can.
+    if (thread.parent_thread_id !== null) {
+      if (failure === undefined) return;
+      const told =
+        thread.parent_lifecycle_state === "active" &&
+        (await tellParent(
+          bindings,
+          thread.owner_user_id as UserId,
+          { id: completion.threadId, title: thread.title },
+          thread.parent_thread_id,
+          failure,
+        ).catch(() => false));
+      if (told) return;
+    }
     const ownerUserId = thread.owner_user_id as UserId;
     const watching = await threadPresentUsers(bindings, completion.threadId);
     if (watching.has(ownerUserId)) return;
@@ -72,7 +147,7 @@ export const notifyTurnCompleted = async (
       excerpt:
         completion.outcome === "completed"
           ? (turn.reply ?? FINISHED_WITHOUT_REPLY)
-          : STOPPED,
+          : (failure ?? STOPPED),
     });
   } catch (cause) {
     notificationLogger.warn("Turn completion was not notified.", {

@@ -1,6 +1,7 @@
 import {
   type IntegrationOwner,
   integrationCredentialReferenceFor,
+  signGitHubAppRelayState,
 } from "@dx/domain";
 import { Effect, Redacted, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
@@ -500,6 +501,19 @@ export const createGitHubControlPlane = (input: {
   readonly fetcher?: typeof fetch;
 }) => {
   const { db, config, keyring, vault } = input;
+  /** A relayed preview's state names its host for the relay to route. */
+  const ceremonyProof = async (expiresAt: string) => {
+    const proof = await createOAuthProof();
+    if (config.relay === undefined) return proof;
+    return {
+      ...proof,
+      state: await signGitHubAppRelayState({
+        webhookSecret: Redacted.value(config.webhookSecret),
+        host: config.relay.host,
+        expiresAt: new Date(expiresAt),
+      }),
+    };
+  };
   const putTokenPair = async (
     owner: IntegrationOwner,
     accessToken: string,
@@ -641,13 +655,13 @@ export const createGitHubControlPlane = (input: {
     const validatedReturnTo = validateReturnTo(returnTo);
     await removeExpiredTransactions();
     await removeOrphanedInstallations(userId);
-    const proof = await createOAuthProof();
+    const expiresAt = expiry();
+    const proof = await ceremonyProof(expiresAt);
     const stateHash = await hashOAuthState(proof.state);
     const owner = personalOwner(userId);
     const verifier = await Effect.runPromise(
       vault.put(keyring, owner, "pkce-verifier", proof.codeVerifier),
     );
-    const expiresAt = expiry();
     try {
       await db
         .prepare(`
@@ -891,7 +905,8 @@ export const createGitHubControlPlane = (input: {
         expiresAt: authorization.expiresAt,
       };
     }
-    const proof = await createOAuthProof();
+    const expiresAt = expiry();
+    const proof = await ceremonyProof(expiresAt);
     const stateHash = await hashOAuthState(proof.state);
     const verifier = await Effect.runPromise(
       vault.put(
@@ -901,7 +916,6 @@ export const createGitHubControlPlane = (input: {
         proof.codeVerifier,
       ),
     );
-    const expiresAt = expiry();
     try {
       await db
         .prepare(`

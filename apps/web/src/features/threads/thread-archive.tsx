@@ -8,7 +8,10 @@ import {
   ThreadArchiveContext,
   type ThreadArchiveController,
 } from "../../shared/thread-archive.js";
-import { setThreadArchivedMutationOptions } from "./thread-mutations.js";
+import {
+  setThreadArchivedMutationOptions,
+  setThreadsArchivedMutationOptions,
+} from "./thread-mutations.js";
 
 /** One toast at a time: each notice replaces the one before it. */
 const ARCHIVE_TOAST_ID = "thread-archive";
@@ -26,6 +29,10 @@ export function ThreadArchiveProvider({
     setThreadArchivedMutationOptions(queryClient, identity.id),
   );
   const { isPending, mutateAsync, variables } = mutation;
+  const bulk = useMutation(
+    setThreadsArchivedMutationOptions(queryClient, identity.id),
+  );
+  const archiveManyAsync = bulk.mutateAsync;
 
   /**
    * The Thread changes on the page at once, so the notice shows at once too;
@@ -107,8 +114,60 @@ export function ThreadArchiveProvider({
     includeChildren = false,
   ) => changeArchived(threadId, archived, includeChildren ? true : undefined);
 
+  /** Archives many at once, or with `archived` false restores them. */
+  const changeManyArchived = (
+    threadIds: ReadonlyArray<ThreadId>,
+    archived: boolean,
+  ) => {
+    if (threadIds.length === 0) return;
+    let undone = false;
+    const request = archiveManyAsync({ threadIds, archived });
+    const count = (n: number) => `${n} ${n === 1 ? "thread" : "threads"}`;
+    toast(
+      archived
+        ? `Archived ${count(threadIds.length)}`
+        : `Unarchived ${count(threadIds.length)}`,
+      {
+        id: ARCHIVE_TOAST_ID,
+        duration: ARCHIVE_TOAST_DURATION,
+        icon: archived ? <Archive /> : <ArchiveRestore />,
+        action: archived
+          ? {
+              label: "Undo",
+              onClick: (event) => {
+                event.preventDefault();
+                undone = true;
+                // Undo restores the ones this archive changed, once it ends;
+                // until then they all show as restored.
+                void request.then(
+                  ({ changed }) => changeManyArchived(changed, false),
+                  () => changeManyArchived(threadIds, false),
+                );
+              },
+            }
+          : undefined,
+      },
+    );
+    void request.then(
+      ({ failed }) => {
+        if (undone || failed.length === 0) return;
+        toast.error(
+          `${count(failed.length)} could not be ${archived ? "archived" : "unarchived"}.`,
+          {
+            id: ARCHIVE_TOAST_ID,
+            duration: ARCHIVE_TOAST_DURATION,
+            icon: undefined,
+            action: undefined,
+          },
+        );
+      },
+      () => undefined,
+    );
+  };
+
   const controller: ThreadArchiveController = {
     setArchived,
+    archiveMany: (threadIds) => changeManyArchived(threadIds, true),
     pendingThreadId: isPending ? variables.threadId : undefined,
     pendingArchived: isPending ? variables.archived : undefined,
   };

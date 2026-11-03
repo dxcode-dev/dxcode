@@ -1,5 +1,5 @@
 import { UserId } from "@dx/domain";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { hashKey, QueryClientProvider } from "@tanstack/react-query";
 import { Schema } from "effect";
 import { lazy, Suspense } from "react";
 import { AuthGate } from "./features/authentication/auth-gate.js";
@@ -17,9 +17,19 @@ import "./styles.css";
 // Before anything renders, so a bug report holds the earliest failures.
 installClientDiagnostics();
 
-// The shell's data and the signed-in app's code load beside the session
-// check instead of after it (#1379).
-startShellPrefetch();
+// The session query starts at boot, taking the check bootstrap sent, and
+// AuthGate's query joins it. The shell's data starts the moment that query
+// first finds someone signed in (#1379), so a signed-out visitor sends no
+// authenticated read (#1599). The signed-in app's code loads beside both.
+void queryClient.prefetchQuery(sessionQueryOptions);
+const sessionQueryHash = hashKey(sessionQueryOptions.queryKey);
+const stopWaitingForSession = queryClient
+  .getQueryCache()
+  .subscribe(({ query }) => {
+    if (query.queryHash !== sessionQueryHash || !query.state.data) return;
+    stopWaitingForSession();
+    startShellPrefetch();
+  });
 const authenticatedApplicationModule = import("./authenticated-application.js");
 const AuthenticatedApplication = lazy(() =>
   authenticatedApplicationModule.then((module) => ({

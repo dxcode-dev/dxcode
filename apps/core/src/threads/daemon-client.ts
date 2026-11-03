@@ -15,6 +15,8 @@ import {
   type DxdFilesReadSandboxResult,
   type DxdFilesSaveOperation,
   DxdFilesSaveResult,
+  type DxdFilesWriteOperation,
+  DxdFilesWriteResult,
   DxdSandboxChunkHeader,
   type DxdStorageExportOperation,
   DxdStorageExportResult,
@@ -241,6 +243,12 @@ export function requestThreadDaemon(
 export function requestThreadDaemon(
   bindings: Pick<Bindings, "THREAD_EXECUTION">,
   threadId: ThreadId,
+  operation: DxdFilesWriteOperation,
+  options?: ThreadDaemonRequestOptions,
+): Promise<DxdFilesWriteResult>;
+export function requestThreadDaemon(
+  bindings: Pick<Bindings, "THREAD_EXECUTION">,
+  threadId: ThreadId,
   operation: DxdFilesReadSandboxOperation,
   options?: ThreadDaemonRequestOptions,
 ): Promise<DxdFilesReadSandboxResult>;
@@ -251,6 +259,7 @@ export async function requestThreadDaemon(
     | DxdFilesListOperation
     | DxdFilesReadOperation
     | DxdFilesSaveOperation
+    | DxdFilesWriteOperation
     | DxdFilesReadSandboxOperation,
   options?: ThreadDaemonRequestOptions,
 ) {
@@ -296,6 +305,8 @@ export async function requestThreadDaemon(
         return Schema.decodeUnknownSync(DxdFilesReadResult)(result);
       case "files.save":
         return Schema.decodeUnknownSync(DxdFilesSaveResult)(result);
+      default:
+        return Schema.decodeUnknownSync(DxdFilesWriteResult)(result);
     }
   } catch (cause) {
     if (cause instanceof DaemonUnavailable) throw cause;

@@ -202,6 +202,36 @@ it("lets Mod+B focus a sidebar row on the frame after it opens the sidebar", asy
   expect(document.activeElement?.textContent).toBe("First Thread");
 });
 
+// Under load a frame can land on the opening animation's first moment, where
+// the sidebar measures 0%. That frame used to collapse it again while it held
+// focus, and focus fell to the page (#1638). Holding the animation at its
+// start makes every frame that one.
+it("keeps focus in the sidebar when a frame measures the opening sidebar at 0%", async () => {
+  await mountShell();
+  await userEvent.click(button("Collapse sidebar"));
+  await settle();
+
+  button("Open sidebar").focus();
+  await userEvent.keyboard("{Enter}");
+  const opening = document
+    .querySelector<HTMLElement>(".product-panel-group > :first-child")
+    ?.getAnimations()
+    .at(-1);
+  expect(opening?.playState).toBe("running");
+  if (opening !== undefined) {
+    opening.currentTime = 0;
+    opening.playbackRate = 1e-6;
+  }
+  await settle();
+  if (opening !== undefined) opening.playbackRate = 1;
+  await settle();
+
+  expect(document.querySelector('button[aria-label="Open sidebar"]')).toBe(
+    null,
+  );
+  expect(document.activeElement).toBe(button("Collapse sidebar"));
+});
+
 it("moves focus into the sidebar when the keyboard expands it", async () => {
   await mountShell();
   await userEvent.click(button("Collapse sidebar"));

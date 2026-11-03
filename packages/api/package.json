@@ -1,9 +1,12 @@
 {
   "name": "@dx/api",
   "private": true,
-  "version": "0.2.61",
+  "version": "0.2.62",
   "license": "FSL-1.1-ALv2",
   "type": "module",
+  "sideEffects": [
+    "./src/views/kit/kit.js"
+  ],
   "exports": {
     ".": "./src/index.ts",
     "./views/*": "./src/views/*"

@@ -2,7 +2,13 @@ import type { SettingsWorkspaceData } from "@dx/api";
 import type { SettingsScope, WorkspaceRole, WorkspaceSlug } from "@dx/domain";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
-import { AlertTriangle, ArrowLeft, Bug, UserRound } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  BookOpen,
+  Bug,
+  UserRound,
+} from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { DxLoading } from "../../shared/brand/dx-loading.js";
@@ -36,6 +42,7 @@ import { settingsSheetDrag } from "./settings-sheet-drag.js";
 
 /** Public links in the rail's footer card. */
 const railLinks = [
+  { label: "Docs", href: "/docs", Icon: BookOpen },
   {
     label: "GitHub",
     href: "https://github.com/dxcode-dev/dxcode",

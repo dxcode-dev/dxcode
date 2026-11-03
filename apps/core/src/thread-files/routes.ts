@@ -3,6 +3,7 @@ import {
   GetThreadFileTreeResponseSchema,
   SaveThreadFileRequestSchema,
   SaveThreadFileResponseSchema,
+  THREAD_FILES_MAX_UPLOAD_BYTES,
   ThreadFilesConflictResponseSchema,
   ThreadFilesCursor,
   ThreadFilesEntryNotFoundResponseSchema,
@@ -10,10 +11,13 @@ import {
   ThreadFilesPath,
   ThreadFilesUnavailableResponseSchema,
   ThreadFilesWorktreeId,
+  WriteThreadFilesRequestSchema,
+  WriteThreadFilesResponseSchema,
 } from "@dx/api";
 import { ThreadId } from "@dx/domain";
 import { Effect, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import type { DxdChangesRefresh } from "../execution/dxd/protocol.js";
 import { decodeJsonBody } from "../http/request-decoding.js";
 import { requestServerTiming } from "../http/server-timing.js";
 import type { AppEnv } from "../http/types.js";
@@ -28,11 +32,27 @@ import {
   ThreadFilesConflict,
   ThreadFilesInvalid,
   ThreadFilesMissing,
+  type ThreadFilesWrite,
+  uploadThreadFileThroughDaemon,
+  writeThreadFilesThroughDaemon,
 } from "./service.js";
 
 interface ResidentFiles {
   readonly list: typeof listThreadFilesThroughDaemon;
   readonly read: typeof readThreadFileThroughDaemon;
+  readonly write: (
+    bindings: AppEnv["Bindings"],
+    threadId: ThreadId,
+    write: ThreadFilesWrite,
+    worktree?: ThreadFilesWorktreeId,
+  ) => Promise<{ readonly kind: "changed" }>;
+  readonly upload: (
+    bindings: AppEnv["Bindings"],
+    threadId: ThreadId,
+    path: ThreadFilesPath,
+    bytes: Uint8Array,
+    worktree?: ThreadFilesWorktreeId,
+  ) => Promise<{ readonly kind: "changed" }>;
   readonly save: (
     bindings: AppEnv["Bindings"],
     threadId: ThreadId,
@@ -43,38 +63,75 @@ interface ResidentFiles {
   ) => ReturnType<typeof saveThreadFileThroughDaemon>;
 }
 
-const residentSave =
-  (allowMissingSource: boolean): ResidentFiles["save"] =>
-  async (bindings, threadId, path, expectedVersion, content, worktree) => {
-    const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
-    return runResidentThreadChangesMutation({
-      db,
-      threadId,
-      allowMissingSource,
-      residentRefresh: (refresh) =>
-        queueThreadChangesRefresh(bindings, threadId, refresh),
-      operation: (refresh) =>
-        saveThreadFileThroughDaemon(
-          bindings,
-          threadId,
-          path,
-          expectedVersion,
-          content,
-          refresh,
-          worktree,
-        ),
-    });
-  };
+/**
+ * Every Files write runs under the Thread's Changes mutation lease, as the
+ * agent's writes do, and hands dxd the lease's refresh so Changes captures
+ * the result.
+ */
+const underChangesLease = async <A>(
+  bindings: AppEnv["Bindings"],
+  threadId: ThreadId,
+  allowMissingSource: boolean,
+  operation: (refresh?: DxdChangesRefresh) => Promise<A>,
+) => {
+  const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
+  return runResidentThreadChangesMutation({
+    db,
+    threadId,
+    allowMissingSource,
+    residentRefresh: (refresh) =>
+      queueThreadChangesRefresh(bindings, threadId, refresh),
+    operation,
+  });
+};
+
+const residentWrites = (
+  allowMissingSource: boolean,
+): Pick<ResidentFiles, "save" | "write" | "upload"> => ({
+  save: (bindings, threadId, path, expectedVersion, content, worktree) =>
+    underChangesLease(bindings, threadId, allowMissingSource, (refresh) =>
+      saveThreadFileThroughDaemon(
+        bindings,
+        threadId,
+        path,
+        expectedVersion,
+        content,
+        refresh,
+        worktree,
+      ),
+    ),
+  write: (bindings, threadId, write, worktree) =>
+    underChangesLease(bindings, threadId, allowMissingSource, (refresh) =>
+      writeThreadFilesThroughDaemon(
+        bindings,
+        threadId,
+        write,
+        refresh,
+        worktree,
+      ),
+    ),
+  upload: (bindings, threadId, path, bytes, worktree) =>
+    underChangesLease(bindings, threadId, allowMissingSource, (refresh) =>
+      uploadThreadFileThroughDaemon(
+        bindings,
+        threadId,
+        path,
+        bytes,
+        refresh,
+        worktree,
+      ),
+    ),
+});
 
 const residentFiles: ResidentFiles = {
   list: listThreadFilesThroughDaemon,
   read: readThreadFileThroughDaemon,
-  save: residentSave(false),
+  ...residentWrites(false),
 };
 
 const localResidentFiles: ResidentFiles = {
   ...residentFiles,
-  save: residentSave(true),
+  ...residentWrites(true),
 };
 
 const decode = <S extends Schema.Constraint>(schema: S, value: unknown) =>
@@ -288,6 +345,73 @@ const makeThreadFilesRoutes = () => {
           status: "success",
           data,
         }),
+      );
+    } catch (cause) {
+      return errorResponse(context, cause);
+    }
+  });
+
+  routes.post("/:threadId/files", async (context) => {
+    try {
+      const query = rejectUnknownQuery(context, new Set(["worktree"]));
+      const body = await Effect.runPromise(
+        decodeJsonBody(
+          context.req,
+          WriteThreadFilesRequestSchema,
+          () => new ThreadFilesInvalid(),
+        ),
+      );
+      const threadId = decodeThreadId(context.req.param("threadId"));
+      const worktree = decodeWorktree(query.get("worktree") ?? undefined);
+      const selected = selectWorkspaceRuntime(context.env, {
+        local: localResident,
+        deployed: configuredResident,
+      });
+      const data = await selected.write(context.env, threadId, body, worktree);
+      return context.json(
+        Schema.encodeUnknownSync(WriteThreadFilesResponseSchema)({
+          status: "success",
+          data,
+        }),
+      );
+    } catch (cause) {
+      return errorResponse(context, cause);
+    }
+  });
+
+  // Upload: the request body is the new file's bytes.
+  routes.put("/:threadId/files/:path{.+}", async (context) => {
+    try {
+      const query = rejectUnknownQuery(context, new Set(["worktree"]));
+      const threadId = decodeThreadId(context.req.param("threadId"));
+      const path = decodePath(context.req.param("path"));
+      const worktree = decodeWorktree(query.get("worktree") ?? undefined);
+      const declared = Number(context.req.header("content-length") ?? "NaN");
+      if (
+        !Number.isSafeInteger(declared) ||
+        declared < 0 ||
+        declared > THREAD_FILES_MAX_UPLOAD_BYTES
+      )
+        throw new ThreadFilesInvalid();
+      const bytes = new Uint8Array(await context.req.arrayBuffer());
+      if (bytes.byteLength !== declared) throw new ThreadFilesInvalid();
+      const selected = selectWorkspaceRuntime(context.env, {
+        local: localResident,
+        deployed: configuredResident,
+      });
+      const data = await selected.upload(
+        context.env,
+        threadId,
+        path,
+        bytes,
+        worktree,
+      );
+      return context.json(
+        Schema.encodeUnknownSync(WriteThreadFilesResponseSchema)({
+          status: "success",
+          data,
+        }),
+        201,
       );
     } catch (cause) {
       return errorResponse(context, cause);

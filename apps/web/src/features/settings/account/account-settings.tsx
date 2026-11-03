@@ -16,6 +16,7 @@ import {
 } from "../settings-form-state.js";
 import { SettingsBackgroundError } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
+import { AccountUsageSummary } from "./account-usage-summary.js";
 import {
   personalAccountMutationError,
   personalAccountQueryOptions,
@@ -374,6 +375,7 @@ export function PersonalAccountSettings({
         avatarSaving={setAvatar.isPending}
         threadCount={threadCount.data?.threadCount}
       />
+      <AccountUsageSummary userId={identity.id} />
     </>
   );
 }

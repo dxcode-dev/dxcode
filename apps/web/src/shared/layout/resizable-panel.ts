@@ -7,6 +7,8 @@ const cancelPanelAnimations = (panel: HTMLElement) => {
   });
 };
 
+const EXPAND_ANIMATION_ID = "dx-panel-expand";
+
 export const expandResizablePanel = (
   panel: HTMLElement | null,
   to: string,
@@ -16,10 +18,25 @@ export const expandResizablePanel = (
   if (panel === null || prefersReducedMotion()) return;
   cancelPanelAnimations(panel);
   panel.animate([{ flexGrow: "0" }, { flexGrow: to }], {
+    id: EXPAND_ANIMATION_ID,
     duration: 200,
     easing: "linear",
   });
 };
+
+/**
+ * Whether the panel is opening through {@link expandResizablePanel}. The
+ * animation starts at width 0, so a frame that lands on its first moment
+ * measures the opening panel as collapsed (#1638).
+ */
+export const isExpandingResizablePanel = (panel: HTMLElement | null) =>
+  panel
+    ?.getAnimations()
+    .some(
+      (animation) =>
+        animation.id === EXPAND_ANIMATION_ID &&
+        animation.playState === "running",
+    ) === true;
 
 export const collapseResizablePanel = (
   panel: HTMLElement | null,

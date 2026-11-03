@@ -221,6 +221,47 @@ describe("readiness requirements", () => {
     ).resolves.toMatchObject({ _tag: "ReadinessError", category });
   });
 
+  it("accepts a GitHub App relay origin only on a branch preview", async () => {
+    const input = JSON.parse(
+      createTestBindings().DX_INTEGRATION_GITHUB_APP ?? "{}",
+    );
+    for (const [field, path] of [
+      ["callbackUrl", "oauth/callback"],
+      ["setupUrl", "setup"],
+      ["webhookUrl", "webhooks"],
+    ])
+      input[field] = `https://relay.test/v1/integrations/github/${path}`;
+    const relayed = {
+      DX_INTEGRATION_GITHUB_APP: JSON.stringify(input),
+      // Deployed environments need a sign-in policy without a sender.
+      DX_SIGN_IN_PROVIDERS: "email-password",
+      DX_SIGN_IN_ADMISSION: "invite",
+    };
+    for (const [DX_ENV, DX_DEPLOYMENT_TARGET] of [
+      ["test", undefined],
+      ["staging", "staging"],
+      ["selfhost", "selfhost"],
+      ["preview", "staging"],
+      ["preview", undefined],
+    ])
+      await expect(
+        failure(
+          createTestBindings({ ...relayed, DX_ENV, DX_DEPLOYMENT_TARGET }),
+        ),
+      ).resolves.toMatchObject({ category: "github_app_origin_drift" });
+    await expect(
+      Effect.runPromise(
+        loadReadinessRequirements(
+          createTestBindings({
+            ...relayed,
+            DX_ENV: "preview",
+            DX_DEPLOYMENT_TARGET: "branch",
+          }),
+        ),
+      ),
+    ).resolves.toBeDefined();
+  });
+
   it("is ready with no deployment Orb provider, but not with sizes no one can run", async () => {
     // People and workspaces connect their own E2B team.
     for (const E2B_API_KEY of [undefined, "  "])

@@ -14,6 +14,11 @@ import {
   findProvider,
   isLocalRuntime,
 } from "../../plugins/registry.js";
+import {
+  type DeploymentOrbs,
+  deploymentOrbSettings,
+} from "../deployment-orbs.js";
+import { registeredDeploymentOrbs } from "../deployment-orbs-registration.js";
 
 const unavailableAdapterStates = [
   { kind: "container", state: "unavailable" },
@@ -144,7 +149,10 @@ const catalogFrom = (
  * configured catalog.
  */
 export const loadRunnerProfileCatalog = Effect.fn("loadRunnerProfileCatalog")(
-  function* (bindings: Bindings) {
+  function* (
+    bindings: Bindings,
+    deploymentOrbs: DeploymentOrbs = registeredDeploymentOrbs,
+  ) {
     const input = bindings.DX_RUNNER_PROFILE_CATALOG;
     const configured =
       input === undefined || input.length === 0
@@ -155,9 +163,42 @@ export const loadRunnerProfileCatalog = Effect.fn("loadRunnerProfileCatalog")(
         return yield* new RunnerProfileConfigurationUnavailable();
       return catalogFrom(configured);
     }
-    return catalogFrom(withProviderProfiles(configured));
+    return withDeploymentNames(
+      catalogFrom(withProviderProfiles(configured)),
+      bindings,
+      deploymentOrbs,
+    );
   },
 );
+
+/**
+ * The deployment's name for its own account of a provider, which the Orb
+ * picker groups that provider's sizes under.
+ */
+const withDeploymentNames = (
+  catalog: LoadedRunnerProfileCatalog,
+  bindings: Bindings,
+  deploymentOrbs: DeploymentOrbs,
+): LoadedRunnerProfileCatalog => ({
+  ...catalog,
+  publicCatalog: {
+    ...catalog.publicCatalog,
+    ...(catalog.publicCatalog.providers === undefined
+      ? {}
+      : {
+          providers: catalog.publicCatalog.providers.map((provider) => {
+            const displayName = deploymentOrbSettings(
+              bindings,
+              provider.adapter,
+              deploymentOrbs,
+            )?.displayName;
+            return displayName === undefined
+              ? provider
+              : { ...provider, displayName, shortName: displayName };
+          }),
+        }),
+  },
+});
 
 export const selectRunnerProfile = Effect.fn("selectRunnerProfile")(function* (
   catalog: LoadedRunnerProfileCatalog,

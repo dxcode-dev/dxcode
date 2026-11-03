@@ -20,6 +20,18 @@ export interface ThreadSection {
   /** A Project section whose name is still loading. */
   readonly loading?: boolean;
   readonly threads: ReadonlyArray<ThreadData>;
+  /**
+   * Inactive's Threads under a subheader per Project, newest first; their
+   * concatenation is `threads`.
+   */
+  readonly groups?: ReadonlyArray<ThreadSectionGroup>;
+}
+
+/** A Project's Threads inside a status section. */
+export interface ThreadSectionGroup {
+  readonly id: string;
+  readonly label: string;
+  readonly threads: ReadonlyArray<ThreadData>;
 }
 
 /** Groups a pending No Project Thread until the server names its Project. */
@@ -142,6 +154,9 @@ export const nextSnoozeWake = (
  * Until `projectsComplete`, a Project without a loaded name may be any of
  * the person's Projects, so its section shows as loading. Only Threads Core
  * marks projectless are in No Project then.
+ *
+ * `archiveAvailable`, true for a signed-in person, keeps Snoozed and
+ * Archived listed while empty.
  */
 export function buildThreadSections(
   projects: ReadonlyArray<ProjectData>,
@@ -196,14 +211,33 @@ export function buildThreadSections(
   }
   pinned.sort(byPin);
   snoozed.sort(byWake);
+  const nameOf = (id: string) =>
+    id === NO_PROJECT_SECTION_ID
+      ? PROJECTLESS_PROJECT_NAME
+      : projectNames.get(id);
+  // Inactive groups by Project, the most recently active Project first.
+  const inactiveByProject = new Map<string, Array<ThreadData>>();
+  for (const thread of inactive) {
+    const key = thread.projectless ? NO_PROJECT_SECTION_ID : thread.projectId;
+    const group = inactiveByProject.get(key) ?? [];
+    group.push(thread);
+    inactiveByProject.set(key, group);
+  }
+  const inactiveGroups = Array.from(
+    inactiveByProject,
+    ([id, groupThreads]): ThreadSectionGroup => ({
+      id,
+      label:
+        nameOf(id) ??
+        (projectsComplete ? PROJECTLESS_PROJECT_NAME : "Loading…"),
+      threads: groupThreads,
+    }),
+  );
 
   return [
     ...(pinned.length === 0 ? [] : [{ id: "pinned", threads: pinned }]),
     ...Array.from(groups, ([id, groupedThreads]): ThreadSection => {
-      const name =
-        id === NO_PROJECT_SECTION_ID
-          ? PROJECTLESS_PROJECT_NAME
-          : projectNames.get(id);
+      const name = nameOf(id);
       if (name !== undefined)
         return { id, label: name, project: true, threads: groupedThreads };
       // Once every Project is loaded, an unnamed one is a hidden No Project
@@ -223,12 +257,20 @@ export function buildThreadSections(
             threads: groupedThreads,
           };
     }),
-    ...(snoozed.length === 0
-      ? []
-      : [{ id: "snoozed", label: "Snoozed", threads: snoozed }]),
     ...(inactive.length === 0
       ? []
-      : [{ id: "inactive", label: "Inactive Last 72h", threads: inactive }]),
+      : [
+          {
+            id: "inactive",
+            label: "Inactive Last 72h",
+            threads: inactiveGroups.flatMap(({ threads }) => threads),
+            groups: inactiveGroups,
+          },
+        ]),
+    // Snoozed stays listed, at 0, wherever a Thread can be snoozed.
+    ...(snoozed.length === 0 && !archiveAvailable
+      ? []
+      : [{ id: "snoozed", label: "Snoozed", threads: snoozed }]),
     ...(archived.length === 0 && !archiveAvailable
       ? []
       : [{ id: "archived", label: "Archived", threads: archived }]),

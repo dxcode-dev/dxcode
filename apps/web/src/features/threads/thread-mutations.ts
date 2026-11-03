@@ -25,6 +25,7 @@ import {
   type ArchivedThread,
   deleteThread,
   request,
+  retryInitialDispatch,
   setThreadArchived,
   setThreadPinned,
   setThreadSnoozed,
@@ -32,7 +33,7 @@ import {
   updateThread,
 } from "../../shared/api/client.js";
 import { seedProjectDetail } from "../projects/project-mutations.js";
-import { threadKeys } from "./thread-queries.js";
+import { invalidateThreadQueries, threadKeys } from "./thread-queries.js";
 
 type ThreadListData = InfiniteData<ThreadPage, unknown>;
 const optimisticCreation = "__dxOptimisticCreation" as const;
@@ -479,6 +480,139 @@ export const setThreadSnoozedMutationOptions = (
   });
 };
 
+/**
+ * Shows Threads archived or restored in the detail and list caches at once,
+ * before the server answers, and returns what they held before.
+ */
+const showArchived = async (
+  queryClient: QueryClient,
+  userId: UserId,
+  threadIds: ReadonlyArray<ThreadId>,
+  archived: boolean,
+) => {
+  await Promise.all([
+    ...threadIds.map((threadId) =>
+      queryClient.cancelQueries({
+        queryKey: threadKeys.detail(userId, threadId),
+        exact: true,
+      }),
+    ),
+    queryClient.cancelQueries({ queryKey: threadKeys.lists(userId) }),
+  ]);
+  const previousDetails = threadIds.map((threadId) =>
+    queryClient.getQueryData<ThreadDetailData>(
+      threadKeys.detail(userId, threadId),
+    ),
+  );
+  const previousLists = queryClient.getQueriesData<ThreadListData>({
+    queryKey: threadKeys.lists(userId),
+  });
+  const lifecycleState = archived ? "archived" : "active";
+  for (const threadId of threadIds)
+    queryClient.setQueryData<ThreadDetailData>(
+      threadKeys.detail(userId, threadId),
+      (detail) =>
+        detail === undefined
+          ? detail
+          : {
+              ...detail,
+              lifecycleState,
+              ...(archived ? { pinnedAt: undefined } : {}),
+            },
+    );
+  const changing = new Set<ThreadId>(threadIds);
+  for (const query of queryClient.getQueryCache().findAll({
+    queryKey: threadKeys.lists(userId),
+  })) {
+    queryClient.setQueryData<ThreadListData>(query.queryKey, (current) =>
+      current === undefined
+        ? current
+        : {
+            ...current,
+            pages: current.pages.map((page) =>
+              flatMapListedThreads(page, (thread) => {
+                if (!changing.has(thread.id)) return [thread];
+                const scope = query.queryKey[3] as
+                  | { readonly lifecycleState?: string | null }
+                  | undefined;
+                if (
+                  scope?.lifecycleState != null &&
+                  scope.lifecycleState !== lifecycleState
+                )
+                  return [];
+                return [
+                  {
+                    ...thread,
+                    lifecycleState,
+                    ...(archived ? { pinnedAt: undefined } : {}),
+                  },
+                ];
+              }),
+            ),
+          },
+    );
+  }
+  return { previousDetails, previousLists };
+};
+
+/** How many archive requests a bulk archive keeps in flight. */
+const BULK_ARCHIVE_CONCURRENCY = 4;
+
+/** A bulk archive's or restore's outcome, Thread by Thread. */
+export interface ArchivedThreads {
+  readonly changed: ReadonlyArray<ThreadId>;
+  readonly failed: ReadonlyArray<ThreadId>;
+}
+
+/**
+ * Archives or restores many Threads, such as every Inactive one. They
+ * change on the page at once; the requests then run a few at a time, in
+ * order with single archives, and the lists refetch once at the end, so a
+ * Thread the server refused comes back.
+ */
+export const setThreadsArchivedMutationOptions = (
+  queryClient: QueryClient,
+  userId: UserId,
+) =>
+  mutationOptions({
+    mutationKey: [...threadKeys.all(userId), "archive-many"] as const,
+    scope: { id: "thread-archive" },
+    mutationFn: async ({
+      threadIds,
+      archived,
+    }: {
+      threadIds: ReadonlyArray<ThreadId>;
+      archived: boolean;
+    }): Promise<ArchivedThreads> => {
+      const changed: Array<ThreadId> = [];
+      const failed: Array<ThreadId> = [];
+      for (let at = 0; at < threadIds.length; at += BULK_ARCHIVE_CONCURRENCY) {
+        const batch = threadIds.slice(at, at + BULK_ARCHIVE_CONCURRENCY);
+        const results = await Promise.allSettled(
+          batch.map((threadId) => setThreadArchived(threadId, archived)),
+        );
+        results.forEach((result, index) => {
+          const threadId = batch[index];
+          if (threadId === undefined) return;
+          (result.status === "fulfilled" ? changed : failed).push(threadId);
+        });
+      }
+      return { changed, failed };
+    },
+    onMutate: ({ threadIds, archived }) =>
+      showArchived(queryClient, userId, threadIds, archived),
+    onSettled: (_result, _error, { threadIds }) =>
+      Promise.all([
+        ...threadIds.map((threadId) =>
+          queryClient.invalidateQueries({
+            queryKey: threadKeys.detail(userId, threadId),
+            exact: true,
+          }),
+        ),
+        queryClient.invalidateQueries({ queryKey: threadKeys.lists(userId) }),
+      ]),
+  });
+
 export const setThreadArchivedMutationOptions = (
   queryClient: QueryClient,
   userId: UserId,
@@ -518,63 +652,13 @@ export const setThreadArchivedMutationOptions = (
         | Promise<ReadonlyArray<ThreadId> | undefined>;
     }) => setThreadArchived(threadId, archived, await children),
     onMutate: async ({ threadId, archived }) => {
-      await Promise.all([
-        queryClient.cancelQueries({
-          queryKey: threadKeys.detail(userId, threadId),
-          exact: true,
-        }),
-        queryClient.cancelQueries({ queryKey: threadKeys.lists(userId) }),
-      ]);
-      const previousDetail = queryClient.getQueryData<ThreadDetailData>(
-        threadKeys.detail(userId, threadId),
+      const { previousDetails, previousLists } = await showArchived(
+        queryClient,
+        userId,
+        [threadId],
+        archived,
       );
-      const previousLists = queryClient.getQueriesData<ThreadListData>({
-        queryKey: threadKeys.lists(userId),
-      });
-      const lifecycleState = archived ? "archived" : "active";
-      queryClient.setQueryData<ThreadDetailData>(
-        threadKeys.detail(userId, threadId),
-        (detail) =>
-          detail === undefined
-            ? detail
-            : {
-                ...detail,
-                lifecycleState,
-                ...(archived ? { pinnedAt: undefined } : {}),
-              },
-      );
-      for (const query of queryClient.getQueryCache().findAll({
-        queryKey: threadKeys.lists(userId),
-      })) {
-        queryClient.setQueryData<ThreadListData>(query.queryKey, (current) =>
-          current === undefined
-            ? current
-            : {
-                ...current,
-                pages: current.pages.map((page) =>
-                  flatMapListedThreads(page, (thread) => {
-                    if (thread.id !== threadId) return [thread];
-                    const scope = query.queryKey[3] as
-                      | { readonly lifecycleState?: string | null }
-                      | undefined;
-                    if (
-                      scope?.lifecycleState != null &&
-                      scope.lifecycleState !== lifecycleState
-                    )
-                      return [];
-                    return [
-                      {
-                        ...thread,
-                        lifecycleState,
-                        ...(archived ? { pinnedAt: undefined } : {}),
-                      },
-                    ];
-                  }),
-                ),
-              },
-        );
-      }
-      return { previousDetail, previousLists };
+      return { previousDetail: previousDetails[0], previousLists };
     },
     onSuccess: ({ thread }: ArchivedThread) => {
       if (superseded(thread.id)) return;
@@ -761,3 +845,17 @@ export const updateThreadMutationOptions = (
       ]);
     },
   });
+
+/**
+ * Retry on a new Thread whose first message failed to start: the agent gets
+ * the same stored message, and the Thread's detail is read again so its
+ * page follows the message.
+ */
+export const retryInitialThreadDispatch = async (
+  queryClient: QueryClient,
+  userId: UserId,
+  threadId: ThreadId,
+) => {
+  await retryInitialDispatch(threadId);
+  await invalidateThreadQueries(queryClient, userId, threadId);
+};

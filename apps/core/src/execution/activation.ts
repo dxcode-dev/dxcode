@@ -1,4 +1,4 @@
-import { env } from "cloudflare:workers";
+import { env, waitUntil } from "cloudflare:workers";
 import { SourceControlAccessDenied, ThreadId } from "@dx/domain";
 import { FlueError, type SandboxFactory } from "@flue/runtime";
 import { Effect, Schema } from "effect";
@@ -45,8 +45,14 @@ import {
   SOURCE_WORKSPACE_CWD,
   type SourceWorkspacePreparationPhase,
 } from "../source-control/source-workspace.js";
-import { makeThreadChangesCoordinator } from "../thread-changes/coordinator.js";
-import { makeThreadChangesRepository } from "../thread-changes/repository-d1.js";
+import {
+  MUTATION_LEASE_MS,
+  makeThreadChangesCoordinator,
+} from "../thread-changes/coordinator.js";
+import {
+  makeThreadChangesRepository,
+  type ThreadChangesMutationLease,
+} from "../thread-changes/repository-d1.js";
 import {
   queueThreadChangesRefresh,
   startThreadDaemonActivation,
@@ -56,6 +62,7 @@ import type {
   CloudflareOpenPhase,
   CloudflareOpenPhaseReporter,
 } from "./cloudflare/provider.js";
+import { runWithCommandLease, takeCommandLease } from "./command-lease.js";
 import {
   authorizeActiveThread,
   commandEnvironmentRevision,
@@ -210,41 +217,91 @@ const kickDaemonActivation = (
   void startThreadDaemonActivation(bindings, threadId, submissionId);
 };
 
+/**
+ * Command authorization for a Thread whose commands Changes coordinates: a
+ * command that can write files also takes its mutation lease in the same D1
+ * batch, written only while the Thread is active (one round trip instead of
+ * two). mkdir takes no lease, since directories never show in Changes.
+ */
+export const authorizeCommandWithChangesLease =
+  (
+    db: D1Database,
+    threadId: ThreadId,
+    /** The run's own admission, which every command also waits for. */
+    admitted?: Promise<unknown>,
+  ) =>
+  async (kind: SandboxCommandKind) => {
+    if (kind === "mkdir") {
+      await Promise.all([authorizeActiveThread(db, threadId), admitted]);
+      return undefined;
+    }
+    // A refused run takes no lease: its admission settles first (it started
+    // with the run, so it has usually settled already).
+    await admitted;
+    const begin = makeThreadChangesRepository(db).beginMutationStatements(
+      threadId,
+      MUTATION_LEASE_MS,
+      { whenActive: true },
+    );
+    return begin.lease(
+      await authorizeActiveThread(db, threadId, begin.statements),
+    );
+  };
+
+/** A sandbox command that authorization admits. */
+export type SandboxCommandKind = "exec" | "writeFile" | "mkdir" | "rm";
+
 export const withCommandActivity = (
   factory: SandboxFactory,
   activityForCommand: () => WorkspaceActivity,
   defaultTimeoutMs: number,
-  authorizeCommand: () => Promise<void>,
+  /**
+   * Refuses a command for an inactive Thread. It may also take the Changes
+   * mutation lease the command will need, in the same round trip; the
+   * command then runs with it (see `takeCommandLease`).
+   */
+  authorizeCommand: (
+    kind: SandboxCommandKind,
+  ) => Promise<ThreadChangesMutationLease | undefined | void>,
 ): SandboxFactory => ({
   async createSandbox(request) {
     const sandbox = await factory.createSandbox(request);
+    const admitted = async <A>(
+      kind: SandboxCommandKind,
+      run: () => Promise<A>,
+    ) => {
+      const lease = await authorizeCommand(kind);
+      return lease === undefined || lease === null
+        ? run()
+        : runWithCommandLease(lease, run);
+    };
     return {
       ...sandbox,
-      async exec(command, options) {
-        await authorizeCommand();
-        return activityForCommand().runCommand(
-          options?.timeoutMs ?? defaultTimeoutMs,
-          () => sandbox.exec(command, options),
-        );
-      },
-      async writeFile(path, content) {
-        await authorizeCommand();
-        return activityForCommand().runCommand(defaultTimeoutMs, () =>
-          sandbox.writeFile(path, content),
-        );
-      },
-      async mkdir(path, options) {
-        await authorizeCommand();
-        return activityForCommand().runCommand(defaultTimeoutMs, () =>
-          sandbox.mkdir(path, options),
-        );
-      },
-      async rm(path, options) {
-        await authorizeCommand();
-        return activityForCommand().runCommand(defaultTimeoutMs, () =>
-          sandbox.rm(path, options),
-        );
-      },
+      exec: (command, options) =>
+        admitted("exec", () =>
+          activityForCommand().runCommand(
+            options?.timeoutMs ?? defaultTimeoutMs,
+            () => sandbox.exec(command, options),
+          ),
+        ),
+      writeFile: (path, content) =>
+        admitted("writeFile", () =>
+          activityForCommand().runCommand(defaultTimeoutMs, () =>
+            sandbox.writeFile(path, content),
+          ),
+        ),
+      mkdir: (path, options) =>
+        admitted("mkdir", () =>
+          activityForCommand().runCommand(defaultTimeoutMs, () =>
+            sandbox.mkdir(path, options),
+          ),
+        ),
+      rm: (path, options) =>
+        admitted("rm", () =>
+          activityForCommand().runCommand(defaultTimeoutMs, () =>
+            sandbox.rm(path, options),
+          ),
+        ),
     };
   },
   ...(factory.tools === undefined ? {} : { tools: factory.tools }),
@@ -260,6 +317,9 @@ export const withThreadChanges = (
     readonly residentRefresh?: Parameters<
       typeof makeThreadChangesCoordinator
     >[0]["residentRefresh"];
+    readonly waitUntil?: Parameters<
+      typeof makeThreadChangesCoordinator
+    >[0]["waitUntil"];
   },
 ): SandboxFactory => ({
   async createSandbox(request) {
@@ -279,8 +339,13 @@ export const withThreadChanges = (
       operation: () => Promise<A>,
       options?: { readonly detectUnchanged?: boolean },
     ) => {
+      // The lease this command's authorization took, if it took one.
+      const lease = takeCommandLease();
       await initialSync;
-      return changes.runMutation(operation, options);
+      return changes.runMutation(
+        operation,
+        lease === undefined ? options : { ...options, lease },
+      );
     };
     return {
       ...sandbox,
@@ -330,8 +395,9 @@ export const assertThreadLifecycleState = async (
 };
 
 /** Also reads the environment revision in the same round trip (#1493). */
-export const assertThreadActive = (db: D1Database, threadId: string) =>
-  authorizeActiveThread(db, threadId);
+export const assertThreadActive = async (db: D1Database, threadId: string) => {
+  await authorizeActiveThread(db, threadId);
+};
 
 /**
  * A run's Orb start: `authorizeRunStart`, with a source refusal as the run's
@@ -901,6 +967,7 @@ const activationFor =
           db,
           threadId,
           residentRefresh: residentRefreshFor(bindings, threadId),
+          waitUntil,
           onInitialSyncSettled: () => {
             void recordActiveSubmissionPhase(bindings, id, "changes_synced");
           },
@@ -919,12 +986,23 @@ const activationFor =
                   ...changesInput,
                   bucket: bindings.DX_STORAGE,
                 });
+        // A command Changes coordinates takes its mutation lease in its
+        // authorization's batch, written only while the Thread is active:
+        // one round trip instead of two. mkdir takes no lease.
+        const authorizeCommand =
+          changesFactory === environmentFactory
+            ? authorize
+            : authorizeCommandWithChangesLease(
+                db,
+                threadId,
+                admission?.admitted,
+              );
         const flueSandbox = await timing.step("sandbox", () =>
           withCommandActivity(
             withSourceRuntimeAdmission(changesFactory, bindings, db, source),
             () => handleActivity(threadId, handle),
             handle.commandTimeoutMs,
-            authorize,
+            authorizeCommand,
           ).createSandbox({ id }),
         );
         timing.log("ready");

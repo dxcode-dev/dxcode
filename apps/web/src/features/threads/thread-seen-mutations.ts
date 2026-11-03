@@ -7,6 +7,7 @@ import {
 } from "../../shared/api/client.js";
 import { isOptimisticThread } from "./thread-mutations.js";
 import { invalidateThreadLists, threadKeys } from "./thread-queries.js";
+import { expectSeenEcho } from "./thread-row-queries.js";
 
 type Row = ThreadListClientItem;
 
@@ -94,6 +95,7 @@ export const openThreadSeen = (
     client.getQueryData(threadKeys.detail(userId, threadId)) !== undefined
   )
     return;
+  expectSeenEcho(threadId);
   void markThreadSeen(threadId).catch(() =>
     invalidateThreadLists(client, userId),
   );

@@ -165,6 +165,16 @@ export const observeFlueEvent = (
           threadId: event.instanceId as ThreadId,
           submissionId: event.submissionId,
           outcome: event.outcome,
+          ...(event.error === undefined
+            ? {}
+            : {
+                error: {
+                  message: event.error.message,
+                  ...(event.error.type === undefined
+                    ? {}
+                    : { type: event.error.type }),
+                },
+              }),
         })
       : Promise.resolve();
   const persistence = Promise.all([

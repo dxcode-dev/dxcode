@@ -2,15 +2,31 @@ import { settingsPersistenceLogger } from "../../logging.js";
 import { purgeStartupPhasesBefore } from "../../observability/startup-phase-retention.js";
 import { purgeExpiredPluginUsageEvents } from "../../plugins/metering.js";
 import { purgeExpiredSubmissionPluginTools } from "../../plugins/submission-tools.js";
+import { backfillUsageRollups } from "./rollup-d1.js";
 
-export const purgeExpiredUsageEvents = (
+// Chunks of 50,000 events: two million stored events a day at most.
+const ROLLUP_BACKFILL_CHUNKS = 40;
+
+// D1's `changes` also counts the rows the usage rollup triggers change, so
+// the events deleted are counted in the same batch, before the delete.
+export const purgeExpiredUsageEvents = async (
   db: D1Database,
   before: string,
-): Promise<D1Result<unknown>> =>
-  db
-    .prepare("DELETE FROM usage_event WHERE expires_at <= ?")
-    .bind(before)
-    .run();
+): Promise<D1Result<unknown>> => {
+  const [counted, deleted] = await db.batch([
+    db
+      .prepare(
+        "SELECT COUNT(*) AS events FROM usage_event WHERE expires_at <= ?",
+      )
+      .bind(before),
+    db.prepare("DELETE FROM usage_event WHERE expires_at <= ?").bind(before),
+  ]);
+  const events = (counted?.results[0] as { events: number } | undefined)
+    ?.events;
+  if (deleted === undefined || events === undefined)
+    throw new Error("Usage retention returned no result.");
+  return { ...deleted, meta: { ...deleted.meta, changes: events } };
+};
 
 export const purgeExpiredWorkspaceUsageAudit = (
   db: D1Database,
@@ -54,6 +70,7 @@ export const scheduleUsageRetention = (
       purgeStartupPhasesBefore(bindings.DB, before),
       purgeExpiredPluginUsageEvents(bindings.DB, before),
       purgeExpiredSubmissionPluginTools(bindings.DB, before),
+      backfillUsageRollups(bindings.DB, ROLLUP_BACKFILL_CHUNKS),
     ])
       .then(
         ([
@@ -62,6 +79,7 @@ export const scheduleUsageRetention = (
           startupResult,
           pluginResult,
           toolsResult,
+          rollupsBackfilled,
         ]) => {
           settingsPersistenceLogger.info("Usage retention completed.", {
             event: "usage_retention_completed",
@@ -70,6 +88,7 @@ export const scheduleUsageRetention = (
             deletedStartupPhases: startupResult.meta.changes,
             deletedPluginUsageEvents: pluginResult.meta.changes,
             deletedSubmissionPluginTools: toolsResult.meta.changes,
+            rollupsBackfilled,
           });
         },
       )

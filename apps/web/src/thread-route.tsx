@@ -1,12 +1,63 @@
 import type { ThreadId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
-import { useParams } from "@tanstack/react-router";
-import { DesktopViewer } from "./features/desktop/desktop-viewer.js";
-import { ThreadTerminal } from "./features/terminal/thread-terminal.js";
+import { lazyRouteComponent, useParams } from "@tanstack/react-router";
+import { Monitor, SquareTerminal } from "lucide-react";
+import * as React from "react";
 import { threadQueryOptions } from "./features/threads/thread-queries.js";
 import { ThreadWorkspace } from "./features/threads/thread-workspace.js";
 import { useAuthenticatedIdentity } from "./shared/auth/auth-context.js";
 import { DocumentTitle } from "./shared/ui/document-title.js";
+
+// The Terminal and Desktop load when their tab first shows, not with the
+// transcript. `lazyRouteComponent` reloads the page once if a deploy removed
+// the chunk.
+const LazyTerminal = lazyRouteComponent(
+  () => import("./features/terminal/thread-terminal.js"),
+  "ThreadTerminal",
+);
+const LazyDesktop = lazyRouteComponent(
+  () => import("./features/desktop/desktop-viewer.js"),
+  "DesktopViewer",
+);
+
+/** The Terminal; its own waking state shows while its code loads. */
+function ThreadTerminal(props: React.ComponentProps<typeof LazyTerminal>) {
+  return (
+    <React.Suspense
+      fallback={
+        <div className="thread-terminal-shell">
+          <div className="thread-terminal-loading" role="status">
+            <SquareTerminal
+              className="workspace-loading-glyph"
+              aria-hidden="true"
+            />
+            <span className="sr-only">Waking terminal…</span>
+          </div>
+        </div>
+      }
+    >
+      <LazyTerminal {...props} />
+    </React.Suspense>
+  );
+}
+
+/** The Desktop; its own starting state shows while its code loads. */
+function DesktopViewer(props: React.ComponentProps<typeof LazyDesktop>) {
+  return (
+    <React.Suspense
+      fallback={
+        <div className="thread-desktop-shell">
+          <div className="thread-desktop-loading" role="status">
+            <Monitor className="workspace-loading-glyph" aria-hidden="true" />
+            <span className="sr-only">Starting desktop…</span>
+          </div>
+        </div>
+      }
+    >
+      <LazyDesktop {...props} />
+    </React.Suspense>
+  );
+}
 
 /** The tab names the Thread once its title settles, and follows renames. */
 function ThreadDocumentTitle() {

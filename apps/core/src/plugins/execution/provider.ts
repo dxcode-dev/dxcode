@@ -13,6 +13,8 @@ import {
 } from "@dx/domain";
 import type { Sandbox, SandboxFactory } from "@flue/runtime";
 import { Effect, Redacted, Schema } from "effect";
+import type { DeploymentOrbs } from "../../execution/deployment-orbs.js";
+import { registeredDeploymentOrbs } from "../../execution/deployment-orbs-registration.js";
 import {
   type ExecutionCredentialUnavailableReason,
   type ExecutionTargetCredential,
@@ -82,6 +84,11 @@ export interface ExecutionContext {
   readonly credentials: Redacted.Redacted<OrbProviderCredentials> | undefined;
   /** The Thread's runner profile; its adapter is this provider. */
   readonly profile: ExecutionProfile;
+  /**
+   * How long an idle Orb waits to stop, when the deployment set it for its
+   * own account (`DeploymentOrbSettings`); else the provider's default.
+   */
+  readonly inactivityMs?: number;
 }
 
 export interface DaemonCredential {
@@ -630,6 +637,7 @@ export const composeExecutionWorkspaces = (
   connectable: (
     providerId: ExecutionProviderId,
   ) => boolean = connectableUnlessDevelopment,
+  deploymentOrbs: DeploymentOrbs = registeredDeploymentOrbs,
 ): ExecutionWorkspaces => {
   const plugin = findPlugin("execution");
   const deploymentIds = new Set(resolved.map(({ providerId }) => providerId));
@@ -733,10 +741,13 @@ export const composeExecutionWorkspaces = (
         entry.secret === undefined ? "" : (bindings[entry.secret] ?? "").trim();
       if (entry.secret !== undefined && key === "")
         throw new ExecutionProviderUnavailable();
+      const inactivityMs =
+        deploymentOrbs[entry.provider.providerId]?.inactivityMs;
       return {
         account: { scope: "deployment" },
         credentials: key === "" ? undefined : Redacted.make({ apiKey: key }),
         profile,
+        ...(inactivityMs === undefined ? {} : { inactivityMs }),
       };
     }
     // A person's or workspace's account runs only a provider they can

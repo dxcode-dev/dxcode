@@ -75,6 +75,10 @@ vi.mock("@pierre/diffs/react", async (importOriginal) => ({
 import { Toaster } from "../../../shared/ui/sonner.js";
 import type { ChangesTransport } from "./changes-api.js";
 import { ChangesPane, REVIEW_CHANGES_PROMPT } from "./changes-pane.js";
+import { preloadChangesPane } from "./changes-pane-loader.js";
+
+// The pane's code loads on demand; these tests start with it loaded.
+await preloadChangesPane();
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 

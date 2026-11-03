@@ -26,7 +26,6 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Option, Schema } from "effect";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
-import { CommandProvider } from "../../shared/commands/command-provider.js";
 import {
   canStartThreadsIn,
   rememberedProjectToResolve,
@@ -37,10 +36,6 @@ import {
   startingProjectId,
 } from "../../shared/composer-start.js";
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
-import {
-  NewThreadSurfaceContext,
-  type NewThreadSurfaceValue,
-} from "../../shared/new-thread-surface.js";
 import { DocumentTitle } from "../../shared/ui/document-title.js";
 import {
   ModalSurface,
@@ -73,69 +68,6 @@ import { NewThreadToasts } from "./new-thread-toasts.js";
 import { createThreadMutationOptions } from "./thread-mutations.js";
 import { ThreadSessionRegistryContext } from "./thread-session-context.js";
 
-export function NewThreadProvider({
-  children,
-}: {
-  readonly children: React.ReactNode;
-}) {
-  const { identity } = useAuthenticatedIdentity();
-  const registry = React.useContext(ThreadSessionRegistryContext);
-  useQuery(projectDefaultsQueryOptions(identity.id, { scope: "personal" }));
-  useQuery(composerDefaultsQueryOptions(identity.id));
-  const [invocation, setInvocation] = React.useState<
-    | {
-        readonly key: number;
-        readonly projectId?: ProjectId;
-        readonly prompt?: string;
-      }
-    | undefined
-  >();
-  const returnFocus = React.useRef<{
-    readonly element: HTMLElement | null;
-    readonly mobileDrawer: boolean;
-  }>({ element: null, mobileDrawer: false });
-  const finalFocus = () => {
-    if (returnFocus.current.element?.isConnected)
-      return returnFocus.current.element;
-    return returnFocus.current.mobileDrawer
-      ? document.querySelector<HTMLElement>('[aria-label="Open sidebar"]')
-      : null;
-  };
-  const value: NewThreadSurfaceValue = {
-    openNewThread: (projectId, prompt) => {
-      const element =
-        document.activeElement instanceof HTMLElement
-          ? document.activeElement
-          : null;
-      returnFocus.current = {
-        element: element === document.body ? null : element,
-        mobileDrawer: element?.closest(".mobile-sidebar-drawer") !== null,
-      };
-      setInvocation({ key: Date.now(), projectId, prompt });
-    },
-    pendingCreations: registry?.pendingCreations,
-    subscribePendingCreations: registry?.subscribeCreations,
-  };
-
-  return (
-    <NewThreadSurfaceContext.Provider value={value}>
-      <CommandProvider onOpenNewThread={value.openNewThread}>
-        {children}
-      </CommandProvider>
-      {invocation === undefined ? null : (
-        <NewThreadModal
-          key={invocation.key}
-          initialProjectId={invocation.projectId}
-          initialPrompt={invocation.prompt}
-          finalFocus={finalFocus}
-          onClose={() => setInvocation(undefined)}
-          onAccepted={() => setInvocation(undefined)}
-        />
-      )}
-    </NewThreadSurfaceContext.Provider>
-  );
-}
-
 export function NewThreadPage() {
   const search = useSearch({ from: "/_product/new" });
   const navigate = useNavigate();
@@ -151,7 +83,7 @@ export function NewThreadPage() {
   );
 }
 
-function NewThreadModal({
+export function NewThreadModal({
   initialProjectId,
   initialPrompt,
   finalFocus,

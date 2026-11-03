@@ -184,7 +184,10 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("cloudflare:workers", () => ({ env: mocks.workerEnv }));
+vi.mock("cloudflare:workers", () => ({
+  env: mocks.workerEnv,
+  waitUntil: (settlement: Promise<unknown>) => void settlement,
+}));
 vi.mock("./runner-profiles/execution.js", () => ({
   resolveExecutionRunnerProfile: mocks.resolveProfile,
   // Every Thread here runs on the deployment's key.

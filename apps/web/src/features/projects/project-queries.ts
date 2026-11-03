@@ -37,6 +37,21 @@ export const projectsQueryOptions = (userId: UserId) =>
     refetchOnWindowFocus: true,
   });
 
+/**
+ * The Project as the cached Project list holds it, shown while the Project's
+ * own read is in flight, so a page that names its Project does not wait on
+ * a second round trip (#1156).
+ */
+export const listedProject = (
+  client: QueryClient,
+  userId: UserId,
+  projectId: ProjectId,
+) =>
+  client
+    .getQueryData<InfiniteData<ProjectPage>>(projectKeys.lists(userId))
+    ?.pages.flatMap((page) => page.items)
+    .find((project) => project.id === projectId);
+
 export const projectQueryOptions = (userId: UserId, projectId: ProjectId) =>
   queryOptions({
     queryKey: projectKeys.detail(userId, projectId),

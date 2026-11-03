@@ -58,6 +58,7 @@ import {
   PinThreadPersistenceUnavailableResponseSchema,
   PinThreadRequestSchema,
   PinThreadResponseSchema,
+  RetryInitialDispatchResponseSchema,
   SnoozeThreadInvalidRequestResponseSchema,
   SnoozeThreadInvalidTimeResponseSchema,
   SnoozeThreadNotFoundResponseSchema,
@@ -100,7 +101,7 @@ import {
   type Thread,
   type ThreadColor,
   type ThreadExecutionPin,
-  type ThreadId,
+  ThreadId,
   ThreadNotFound,
   UNTITLED_THREAD_TITLE,
   type UserId,
@@ -148,7 +149,10 @@ import {
   resolveThreadExecutionPin,
 } from "../plugins/execution/orb-providers.js";
 import { ProjectRepositoryD1 } from "../projects/repository-d1.js";
-import { scheduleRealtimeInvalidation } from "../realtime/publication.js";
+import {
+  publishRealtimeInvalidation,
+  scheduleRealtimeInvalidation,
+} from "../realtime/publication.js";
 import { PersonalAgentInstructionsRepositoryD1 } from "../settings/agent-instructions/repository-d1.js";
 import { SettingsAudit } from "../settings/audit.js";
 import { EnvironmentVariableRepositoryD1 } from "../settings/environment-variables/repository-d1.js";
@@ -186,6 +190,14 @@ import {
   dxTitleAgentApplies,
   runDxTitleAgent,
 } from "./dx-title-agent.js";
+import {
+  deliverInitialDispatch,
+  INITIAL_IDEMPOTENCY_KEY,
+  type InitialDispatchRequest,
+  initialSubmissionId,
+  readInitialDispatchState,
+  retryInitialDispatch,
+} from "./initial-dispatch.js";
 import {
   readInboundMessages,
   readParentColors,
@@ -375,6 +387,7 @@ export const threadDetailData = Effect.fn("threadDetailData")(function* (
     executionWorkspace,
     parentColors,
     inboundMessages,
+    initialDispatch,
   ] = yield* Effect.all(
     [
       // The Thread in hand names its owner and Project, so the policy does
@@ -433,14 +446,36 @@ export const threadDetailData = Effect.fn("threadDetailData")(function* (
                 operation: "resolve inbound Thread messages",
               }),
           }),
+      unpersisted
+        ? Effect.succeed(null)
+        : Effect.tryPromise({
+            try: () => readInitialDispatchState(db, thread.id),
+            catch: () =>
+              new PersistenceUnavailable({
+                operation: "resolve the first message's admission",
+              }),
+          }),
     ],
-    // Six reads, each at most one D1 round trip: one round, not two.
+    // Seven reads, each at most one D1 round trip: one round, not two.
     { concurrency: "unbounded" },
   );
   return {
     ...threadData(thread),
     ...parentColorField(parentColors, thread),
     ...(inboundMessages.length === 0 ? {} : { inboundMessages }),
+    ...(initialDispatch === null
+      ? {}
+      : {
+          initialDispatch:
+            initialDispatch.state === "pending"
+              ? { state: "pending" as const }
+              : {
+                  state: "failed" as const,
+                  failureCode:
+                    initialDispatch.failureCode ??
+                    "INITIAL_ADMISSION_UNAVAILABLE",
+                },
+        }),
     agentInitialization: {
       personalInstructions: thread.agentInstructions.content,
       settingsRevision: thread.agentInstructions.revision,
@@ -506,6 +541,15 @@ type InitialThreadDispatcher = (
 
 const dispatchInitialThreadMessage: InitialThreadDispatcher = (request) =>
   dispatch(DxAgent, request);
+
+/**
+ * The longest first-message request written with its Thread; a longer one
+ * is admitted before the response instead. D1 holds rows up to 2 MB.
+ */
+const MAX_DEFERRED_INITIAL_REQUEST_LENGTH = 512 * 1024;
+
+/** Waits between the request's own attempts to admit a first message. */
+const INITIAL_DISPATCH_RETRY_DELAYS_MS = [250, 1_000];
 
 /**
  * Starts the Thread's agent Durable Object without changing it, so its cold
@@ -1059,6 +1103,80 @@ export const createThreadRoutes = (
               initialAttachments,
               context.req.url,
             );
+      const messageSourceThreadId = context.get("messageSourceThreadId");
+      /** Flue's request for the first message, delivered to `forThread`. */
+      const initialRequest = (
+        forThread: Thread,
+        agentInitialization: ThreadDetailData["agentInitialization"],
+      ): InitialDispatchRequest | undefined =>
+        initialMessage === undefined ||
+        admitted === undefined ||
+        author === undefined
+          ? undefined
+          : {
+              id: forThread.id,
+              uid: null,
+              // A Thread an agent started reports to that agent's Thread.
+              initialData:
+                messageSourceThreadId === undefined
+                  ? agentInitialization
+                  : {
+                      ...agentInitialization,
+                      startedByThreadId: messageSourceThreadId,
+                    },
+              message: {
+                kind: "user",
+                body: withMessageAuthor(
+                  {
+                    author: {
+                      role: "owner",
+                      userId: forThread.ownerUserId,
+                      ...author,
+                    },
+                    // Set only by the in-process Thread tools.
+                    ...(messageSourceThreadId === undefined
+                      ? {}
+                      : { sourceThreadId: messageSourceThreadId }),
+                    // Set only by the automation sweep.
+                    ...(context.get("messageAutomation") === undefined
+                      ? {}
+                      : { automation: context.get("messageAutomation") }),
+                  },
+                  admitted.body,
+                ),
+                attachments: [...initialMessage.attachments],
+              },
+              idempotencyKey: INITIAL_IDEMPOTENCY_KEY,
+            };
+      // A new Thread's first message is written with its row and admitted
+      // after the response, so the person does not wait for the agent's
+      // Durable Object to start (#1590). Inline images are too large for
+      // the row; such a message is admitted before the response, as before.
+      const deferred = (() => {
+        if (
+          target.insert === undefined ||
+          initialMessage === undefined ||
+          initialMessage.attachments.length > 0
+        )
+          return undefined;
+        const request = initialRequest(
+          target.thread,
+          detail.agentInitialization,
+        );
+        if (request === undefined) return undefined;
+        const requestJson = JSON.stringify(request);
+        if (requestJson.length > MAX_DEFERRED_INITIAL_REQUEST_LENGTH)
+          return undefined;
+        return {
+          request,
+          draft: {
+            requestJson,
+            attachmentIds:
+              initialAttachments?.rows.map(({ id }) => id) ?? ([] as string[]),
+            senderUserId: principal.userId,
+          },
+        };
+      })();
       let insertedThread = false;
       const insert = target.insert;
       const thread =
@@ -1072,6 +1190,7 @@ export const createThreadRoutes = (
                   insert.source,
                   insert.pin,
                   insert.claudeConnectionId,
+                  deferred?.draft,
                 )
                 .pipe(
                   Effect.tap(() =>
@@ -1124,6 +1243,88 @@ export const createThreadRoutes = (
         )({ status: "success", data: dispatchDetail });
         return { body, threadId: thread.id };
       }
+      // A new Thread's Orb starts beside the first message's admission,
+      // behind the same checks as its run; the run's activation finds it
+      // starting or up.
+      const startOrb = () =>
+        insertedThread
+          ? initialOrb.start(thread.id).catch((cause: unknown) => {
+              threadPersistenceLogger.warn(
+                "The new Thread's Orb did not start early.",
+                {
+                  event: "thread_creation_orb_prestart_failed",
+                  threadId: thread.id,
+                  code: cause instanceof Error ? cause.name : "UNKNOWN",
+                },
+              );
+              return false;
+            })
+          : Promise.resolve(false);
+      if (insertedThread && deferred !== undefined) {
+        // The Thread and its first message are stored: answer with the
+        // receipt Flue will give the message, and admit it after.
+        settleTitlePersisted?.(true);
+        const orbStarted = startOrb();
+        execution?.waitUntil(orbStarted);
+        const delivery = deliverInitialDispatch(
+          {
+            db,
+            dispatch: dispatchInitialMessage,
+            linkAttachments: (pending) =>
+              linkMessageAttachments(db, {
+                threadId: pending.threadId,
+                senderUserId: pending.senderUserId,
+                rows: pending.attachmentIds.map((id) => ({ id })),
+              }),
+            invalidate: (threadId) =>
+              publishRealtimeInvalidation(
+                context.env,
+                threadId,
+                "thread.invalidated",
+              ),
+            afterFailure: async () => {
+              if (await orbStarted) await initialOrb.stop(thread.id);
+            },
+            retryDelaysMs: INITIAL_DISPATCH_RETRY_DELAYS_MS,
+          },
+          {
+            threadId: thread.id,
+            request: deferred.request,
+            attachmentIds: deferred.draft.attachmentIds,
+            senderUserId: principal.userId,
+            attempts: 0,
+          },
+        ).then(async (outcome) => {
+          if (outcome.kind !== "admitted") return;
+          const observations = submissionStartupObservations(
+            requestId,
+            thread.id,
+            outcome.receipt,
+            startedAt,
+            outcome.acceptedAt,
+          );
+          if (observations !== undefined)
+            await recordStartupPhases(context.env.DB, observations);
+        });
+        // Without an execution context nothing outlives the response.
+        if (execution === undefined) yield* Effect.promise(() => delivery);
+        else execution.waitUntil(delivery);
+        const body = yield* Schema.encodeUnknownEffect(
+          CreateThreadResponseSchema,
+        )({
+          status: "success",
+          data: {
+            ...dispatchDetail,
+            initialDispatch: { state: "pending" },
+          },
+          initialSubmission: {
+            submissionId: yield* Effect.promise(() =>
+              initialSubmissionId(thread.id),
+            ),
+          },
+        });
+        return { body, threadId: thread.id };
+      }
       // The Thread now exists, so its agent is real: start it while the
       // dispatch is prepared.
       void warmInitialAgent(thread.id).then(
@@ -1132,60 +1333,17 @@ export const createThreadRoutes = (
         },
         () => undefined,
       );
-      // A new Thread's Orb starts beside the dispatch, behind the same checks
-      // as its run; the run's activation finds it starting or up.
-      const orbStarted = insertedThread
-        ? initialOrb.start(thread.id).catch((cause: unknown) => {
-            threadPersistenceLogger.warn(
-              "The new Thread's Orb did not start early.",
-              {
-                event: "thread_creation_orb_prestart_failed",
-                threadId: thread.id,
-                code: cause instanceof Error ? cause.name : "UNKNOWN",
-              },
-            );
-            return false;
-          })
-        : Promise.resolve(false);
+      const orbStarted = startOrb();
       execution?.waitUntil(orbStarted);
-      const messageSourceThreadId = context.get("messageSourceThreadId");
+      const request = initialRequest(
+        thread,
+        dispatchDetail.agentInitialization,
+      );
       const receipt = yield* Effect.tryPromise({
         try: () =>
-          dispatchInitialMessage({
-            id: thread.id,
-            uid: null,
-            // A Thread an agent started reports to that agent's Thread.
-            initialData:
-              messageSourceThreadId === undefined
-                ? dispatchDetail.agentInitialization
-                : {
-                    ...dispatchDetail.agentInitialization,
-                    startedByThreadId: messageSourceThreadId,
-                  },
-            message: {
-              kind: "user",
-              body: withMessageAuthor(
-                {
-                  author: {
-                    role: "owner",
-                    userId: thread.ownerUserId,
-                    ...author,
-                  },
-                  // Set only by the in-process Thread tools.
-                  ...(messageSourceThreadId === undefined
-                    ? {}
-                    : { sourceThreadId: messageSourceThreadId }),
-                  // Set only by the automation sweep.
-                  ...(context.get("messageAutomation") === undefined
-                    ? {}
-                    : { automation: context.get("messageAutomation") }),
-                },
-                admitted.body,
-              ),
-              attachments: [...initialMessage.attachments],
-            },
-            idempotencyKey: "initial",
-          }),
+          request === undefined
+            ? Promise.reject(new Error("The first message is incomplete."))
+            : dispatchInitialMessage(request),
         catch: initialDispatchFailure,
       }).pipe(
         createPhase("dispatch"),
@@ -2593,6 +2751,64 @@ export const createThreadRoutes = (
 
   // The requester opened the Thread: what it finished is seen, and its row
   // stops showing it unread on every open client.
+  // Retry on a new Thread whose first message failed to start (#1590).
+  threadRoutes.post("/:threadId/initial-dispatch/retry", async (context) => {
+    const requestId = context.get("requestId");
+    const threadId = Schema.decodeUnknownOption(ThreadId)(
+      context.req.param("threadId"),
+    );
+    const notFound = () =>
+      context.json(
+        {
+          status: "error",
+          data: {
+            code: "THREAD_NOT_FOUND",
+            message: "Thread not found.",
+            requestId,
+          },
+        },
+        404,
+      );
+    if (Option.isNone(threadId)) return notFound();
+    const db = context.env.DB as D1Database;
+    const outcome = await retryInitialDispatch(
+      {
+        db,
+        dispatch: dispatchInitialMessage,
+        linkAttachments: (pending) =>
+          linkMessageAttachments(db, {
+            threadId: pending.threadId,
+            senderUserId: pending.senderUserId,
+            rows: pending.attachmentIds.map((id) => ({ id })),
+          }),
+        invalidate: (id) =>
+          publishRealtimeInvalidation(context.env, id, "thread.invalidated"),
+        retryDelaysMs: INITIAL_DISPATCH_RETRY_DELAYS_MS,
+      },
+      threadId.value,
+      context.get("principal").userId,
+    );
+    if (outcome === undefined) return notFound();
+    await scheduleRealtimeInvalidation(
+      () => context.executionCtx,
+      context.env,
+      threadId.value,
+      "thread.invalidated",
+    );
+    return context.json(
+      Schema.encodeUnknownSync(RetryInitialDispatchResponseSchema)({
+        status: "success",
+        data:
+          outcome.kind === "failed"
+            ? { state: "failed", failureCode: outcome.code }
+            : {
+                state: outcome.kind === "pending" ? "pending" : "admitted",
+              },
+      }),
+      200,
+    );
+  });
+
   threadRoutes.post("/:threadId/seen", async (context) => {
     const requestId = context.get("requestId");
     const operation = Effect.gen(function* () {

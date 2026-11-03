@@ -31,6 +31,11 @@ import {
   pluginUsageUsersStatement,
   workspacePluginUsageWhere,
 } from "./plugin-usage-d1.js";
+import {
+  backfillUsageRollups,
+  usageRollupServes,
+  usageRollupStatements,
+} from "./rollup-d1.js";
 
 type EncodedUsageEvent = typeof UsageEventInput.Encoded;
 type EncodedUsagePrice = typeof UsagePriceMetadata.Encoded;
@@ -652,7 +657,7 @@ export const UsageRepositoryD1 = (db: D1Database) =>
               query.cursor === undefined
                 ? undefined
                 : yield* decodeUsageThreadCursor(query.cursor);
-            const statements = [
+            const rawStatements = [
               db.prepare(summarySql(where)).bind(...values),
               db
                 .prepare(dailySql(where))
@@ -672,14 +677,28 @@ export const UsageRepositoryD1 = (db: D1Database) =>
                 ),
               db.prepare(runnerSql(where)).bind(...values),
               db.prepare(priceSourcesSql(where)).bind(...values),
-              pluginUsageStatement(
-                db,
-                personalPluginUsageWhere(ownerUserId, query),
-              ),
             ];
-            const results = yield* run("usage.dashboard", () =>
-              db.batch(statements),
+            const plugins = pluginUsageStatement(
+              db,
+              personalPluginUsageWhere(ownerUserId, query),
             );
+            // The rollups answer the same aggregates without reading every
+            // event, once the backfill of older events is done; until then
+            // each read moves the backfill on and reads raw events.
+            const results = yield* run("usage.dashboard", async () => {
+              if (!usageRollupServes(query))
+                return db.batch([...rawStatements, plugins]);
+              const rolled = await db.batch([
+                ...usageRollupStatements(db, ownerUserId, query, cursor),
+                plugins,
+              ]);
+              const ready = (
+                rolled[0]?.results[0] as { rollups_ready?: unknown } | undefined
+              )?.rollups_ready;
+              if (ready === 1) return rolled;
+              await backfillUsageRollups(db, 1);
+              return db.batch([...rawStatements, plugins]);
+            });
             const summaryRows = yield* decodeRows(
               SummaryRow,
               results[0]?.results ?? [],
@@ -700,7 +719,9 @@ export const UsageRepositoryD1 = (db: D1Database) =>
               PriceSourceRow,
               results[4]?.results ?? [],
             );
-            const plugins = yield* decodePluginUsage(results[5]?.results ?? []);
+            const pluginUsage = yield* decodePluginUsage(
+              results[5]?.results ?? [],
+            );
             const summary = summaryRows[0];
             if (summary === undefined) {
               return yield* unavailable(
@@ -779,7 +800,7 @@ export const UsageRepositoryD1 = (db: D1Database) =>
                 events: row.events,
                 unknownResourceEvents: row.unknown_resource_events,
               })),
-              plugins,
+              plugins: pluginUsage,
               priceSources: priceRows.map((row) => ({
                 source: row.source,
                 sourceVersion: row.source_version,

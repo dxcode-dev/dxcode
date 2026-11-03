@@ -5,6 +5,7 @@ import type { AppEnv } from "../http/types.js";
 import { tracedMiddleware } from "../observability/boundaries.js";
 import { submissionStartupObservation } from "../observability/submission-startup.js";
 import { attributeSubmission } from "../thread-sharing/middleware.js";
+import { deliverFirstMessageBeforeCreatingSend } from "../threads/initial-dispatch-delivery.js";
 
 const authorize = tracedMiddleware("agent.authorizeThread", authorizeThread);
 const active = tracedMiddleware(
@@ -14,6 +15,10 @@ const active = tracedMiddleware(
 const attribute = tracedMiddleware(
   "agent.attributeSubmission",
   attributeSubmission,
+);
+const firstMessage = tracedMiddleware(
+  "agent.deliverFirstMessage",
+  deliverFirstMessageBeforeCreatingSend,
 );
 const startup = tracedMiddleware(
   "agent.submissionStartup",
@@ -34,6 +39,7 @@ export const useAgentAdmission = (routes: Hono<AppEnv>) => {
   routes.use("/:threadId", active);
   routes.use("/:threadId/:subpath{.+}", active);
   routes.use("/:threadId", attribute);
+  routes.use("/:threadId", firstMessage);
   routes.use("/:threadId", startup);
   return routes;
 };

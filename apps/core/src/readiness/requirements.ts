@@ -1,4 +1,4 @@
-import { isGitHubAppEventList } from "@dx/domain";
+import { githubAppRequestOrigin, isGitHubAppEventList } from "@dx/domain";
 import { Config, ConfigProvider, Effect, Predicate, Schema } from "effect";
 import migrationManifest from "../../migration-manifest.json" with {
   type: "json",
@@ -324,7 +324,15 @@ const githubConfigurationCategory = (
   if (value.expiringUserTokens !== true)
     return "github_app_expiring_token_drift";
   try {
-    const origin = bindings.DX_AUTH_URL;
+    const origin =
+      bindings.DX_AUTH_URL === undefined
+        ? undefined
+        : githubAppRequestOrigin(
+            value.callbackUrl,
+            bindings.DX_AUTH_URL,
+            bindings.DX_ENV,
+            bindings.DX_DEPLOYMENT_TARGET,
+          );
     if (
       origin === undefined ||
       value.callbackUrl !==

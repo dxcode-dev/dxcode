@@ -291,43 +291,58 @@ export const makeThreadChangesRepository = (db: D1Database) => {
     }
   };
 
-  const beginMutation = async (
+  /**
+   * The statements that take a mutation lease, for a caller that adds them to
+   * its own batch (one round trip), and how to read the lease from their
+   * results. With `whenActive`, the generation bump and the lease are written
+   * only while the Thread is active, so a batch that also checks the Thread's
+   * lifecycle writes nothing for a Thread it refuses.
+   */
+  const beginMutationStatements = (
     threadId: ThreadId,
     durationMs: number,
-  ): Promise<ThreadChangesMutationLease> => {
+    options: { readonly whenActive?: boolean } = {},
+  ) => {
     const leaseToken = crypto.randomUUID();
     const refreshToken = crypto.randomUUID();
     const now = new Date().toISOString();
     const expiresAt = Date.now() + Math.max(1_000, durationMs);
-    try {
-      const result = await db.batch([
-        ensureStateStatement(db, threadId, now),
-        db
-          .prepare(
-            `UPDATE thread_changes_state
-                SET mutation_generation = mutation_generation + 1,
-                    dirty_since = COALESCE(dirty_since, ?),
-                    shadow_refresh_token = ?,
-                    updated_at = ?
-              WHERE thread_id = ?`,
-          )
-          .bind(now, refreshToken, now, threadId),
-        db
-          .prepare(
-            `INSERT INTO thread_changes_mutation_lease (
-               thread_id, lease_token, generation, expires_at, created_at
-             )
-             SELECT thread_id, ?, mutation_generation, ?, ?
-               FROM thread_changes_state
-              WHERE thread_id = ?
-          RETURNING generation`,
-          )
-          .bind(leaseToken, expiresAt, now, threadId),
-        ...stateStatements(threadId, Date.now()),
-        sourceStatement(threadId),
-      ]);
-      // One round trip: the batch is one transaction, the insert returns the
-      // generation it took, and the reads see the lease.
+    const active = options.whenActive
+      ? ` AND EXISTS (SELECT 1 FROM threads
+                       WHERE id = ? AND lifecycle_state = 'active')`
+      : "";
+    const activeBinding = options.whenActive ? [threadId] : [];
+    const statements = [
+      ensureStateStatement(db, threadId, now),
+      db
+        .prepare(
+          `UPDATE thread_changes_state
+              SET mutation_generation = mutation_generation + 1,
+                  dirty_since = COALESCE(dirty_since, ?),
+                  shadow_refresh_token = ?,
+                  updated_at = ?
+            WHERE thread_id = ?${active}`,
+        )
+        .bind(now, refreshToken, now, threadId, ...activeBinding),
+      db
+        .prepare(
+          `INSERT INTO thread_changes_mutation_lease (
+             thread_id, lease_token, generation, expires_at, created_at
+           )
+           SELECT thread_id, ?, mutation_generation, ?, ?
+             FROM thread_changes_state
+            WHERE thread_id = ?${active}
+        RETURNING generation`,
+        )
+        .bind(leaseToken, expiresAt, now, threadId, ...activeBinding),
+      ...stateStatements(threadId, Date.now()),
+      sourceStatement(threadId),
+    ];
+    const lease = (
+      result: ReadonlyArray<D1Result | undefined>,
+    ): ThreadChangesMutationLease => {
+      // The insert returns the generation it took, and the reads see the
+      // lease: they share the caller's transaction.
       const rawLease = result[2]?.results[0];
       if (
         result[1]?.meta.changes !== 1 ||
@@ -403,6 +418,17 @@ export const makeThreadChangesRepository = (db: D1Database) => {
           }
         },
       };
+    };
+    return { statements, lease };
+  };
+
+  const beginMutation = async (
+    threadId: ThreadId,
+    durationMs: number,
+  ): Promise<ThreadChangesMutationLease> => {
+    const begin = beginMutationStatements(threadId, durationMs);
+    try {
+      return begin.lease(await db.batch(begin.statements));
     } catch (cause) {
       if (cause instanceof ThreadChangesPersistenceUnavailable) throw cause;
       throw unavailable("thread-changes.mutation.begin", cause);
@@ -589,6 +615,7 @@ export const makeThreadChangesRepository = (db: D1Database) => {
     markDirty,
     beginMutation,
     acquireCapture,
+    beginMutationStatements,
     publish,
     confirmUnchanged,
   };

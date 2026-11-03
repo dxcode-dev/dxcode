@@ -18,21 +18,37 @@ import {
 } from "../../src/plugins/agent-context.js";
 import { firstPartyPluginTools } from "../../src/plugins/tools.js";
 import { TEST_RUNNER_PROFILE_CATALOG } from "../../src/testing/bindings.js";
+import {
+  INITIAL_DISPATCH_SWEEP_AFTER_MS,
+  initialSubmissionId,
+  MAX_INITIAL_DISPATCH_ATTEMPTS,
+  sweepInitialDispatches,
+} from "../../src/threads/initial-dispatch.js";
 import { createThreadRoutes } from "../../src/threads/routes.js";
 import {
   bindings,
   createProductApp,
   createProjectViaApi,
   jsonHeaders,
+  otherPrincipal,
   owner,
   principal,
 } from "./product-route-fixture.js";
 
 /**
  * POST /v1/threads with a first message, through the real gates and D1, with
- * Flue's dispatch and instance lookup replaced. Creation must refuse a
- * permanent failure before the Thread exists, and must never leave an empty
- * Thread behind once Flue holds nothing for it.
+ * Flue's dispatch and instance lookup replaced.
+ *
+ * A first message without inline images is written with the Thread, and
+ * the route answers before the agent admits it (#1590). Ways that could
+ * fail: the receipt names a submission Flue never makes; the message is
+ * lost when the request ends before the agent starts; a retry admits it
+ * twice; a refusal leaves a Thread that waits forever without saying why;
+ * the Orb started for a refused message keeps running.
+ *
+ * A first message with inline images is admitted before the response, as
+ * before: creation refuses a permanent failure before the Thread exists,
+ * and never leaves an empty Thread behind once Flue holds nothing for it.
  */
 
 type Dispatch = NonNullable<Parameters<typeof createThreadRoutes>[0]>;
@@ -52,16 +68,31 @@ const flueValidatedDispatch =
         details: "initialData does not match the agent's schema.",
         dev: "",
       });
-    return { submissionId: "initial-submission" } as Awaited<
-      ReturnType<Dispatch>
-    >;
+    return {
+      submissionId: await initialSubmissionId(request.id as never),
+    } as Awaited<ReturnType<Dispatch>>;
   };
+
+/** A first message with an inline image: too large to hold in D1. */
+const inlineImageMessage = {
+  body: "Fix the flaky login test",
+  attachments: [
+    {
+      type: "image",
+      mimeType: "image/png",
+      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+    },
+  ],
+};
 
 const harness = (
   dispatch: Dispatch,
   lookup: InstanceLookup = async () => null,
   routeBindings = bindings,
   initialOrb?: InitialOrb,
+  /** False answers without waiting for work the route left running. */
+  settle = true,
+  requestPrincipal = principal,
 ) => {
   const persisted: Array<Promise<boolean>> = [];
   const titleAgent = vi.fn(
@@ -72,7 +103,7 @@ const harness = (
   const app = new Hono<AppEnv>();
   app.use("*", async (context, next) => {
     context.set("requestId", "thread-creation-admission");
-    context.set("principal", principal);
+    context.set("principal", requestPrincipal);
     await next();
   });
   app.route(
@@ -81,6 +112,22 @@ const harness = (
   );
   app.onError(errorHandler);
   const pending: Array<Promise<unknown>> = [];
+  const routeEnv = {
+    ...routeBindings,
+    BYOK_CREDENTIAL_COORDINATOR: env.BYOK_CREDENTIAL_COORDINATOR,
+  };
+  const execution = {
+    waitUntil: (promise: Promise<unknown>) => {
+      pending.push(promise);
+    },
+    passThroughOnException: () => {},
+    props: {},
+  };
+  /** The Thread's detail, as the Thread page reads it. */
+  const read = async (threadId: string) =>
+    (await (
+      await app.request(`/threads/${threadId}`, {}, routeEnv, execution)
+    ).json()) as { data: { initialDispatch?: unknown } };
   const create = async (body: Record<string, unknown>) => {
     const response = await app.request(
       "/threads",
@@ -93,23 +140,46 @@ const harness = (
           ...body,
         }),
       },
-      {
-        ...routeBindings,
-        BYOK_CREDENTIAL_COORDINATOR: env.BYOK_CREDENTIAL_COORDINATOR,
-      },
-      {
-        waitUntil: (promise: Promise<unknown>) => {
-          pending.push(promise);
-        },
-        passThroughOnException: () => {},
-        props: {},
-      },
+      routeEnv,
+      execution,
+    );
+    if (settle) await Promise.allSettled(pending);
+    return response;
+  };
+  const settled = () => Promise.allSettled(pending);
+  /** The owner's Retry on a first message that failed to start. */
+  const retry = async (threadId: string) => {
+    const response = await app.request(
+      `/threads/${threadId}/initial-dispatch/retry`,
+      { method: "POST" },
+      routeEnv,
+      execution,
     );
     await Promise.allSettled(pending);
     return response;
   };
-  return { create, persisted, titleAgent };
+  return { create, read, retry, settled, persisted, titleAgent };
 };
+
+const initialDispatchRow = (threadId: string) =>
+  env.DB.prepare(
+    `SELECT state, failure_code AS failureCode, attempts
+       FROM thread_initial_dispatch WHERE thread_id = ?`,
+  )
+    .bind(threadId)
+    .first<{ state: string; failureCode: string | null; attempts: number }>();
+
+/** The cron's pass, as of a minute from now, with `dispatch` as Flue. */
+const sweep = (dispatch: Dispatch) =>
+  sweepInitialDispatches(
+    {
+      db: env.DB,
+      dispatch,
+      linkAttachments: async () => undefined,
+      invalidate: async () => undefined,
+    },
+    Date.now() + INITIAL_DISPATCH_SWEEP_AFTER_MS + 60_000,
+  );
 
 const threadRow = (threadId: string) =>
   env.DB.prepare("SELECT id FROM threads WHERE id = ?")
@@ -193,14 +263,14 @@ describe("Thread creation admission in workerd with real D1", () => {
     const dispatched: Array<Parameters<Dispatch>[0]> = [];
     const { create } = harness(flueValidatedDispatch(dispatched));
 
-    const response = await create({
-      projectId: project.data.id,
-      threadId: newThreadId(),
-    });
+    const threadId = newThreadId();
+    const response = await create({ projectId: project.data.id, threadId });
 
     expect(response.status).toBe(201);
     await expect(response.json()).resolves.toMatchObject({
-      initialSubmission: { submissionId: "initial-submission" },
+      initialSubmission: {
+        submissionId: await initialSubmissionId(threadId as never),
+      },
     });
     const initialData = dispatched[0]?.initialData as
       | { readonly mcpConnections: ReadonlyArray<unknown> }
@@ -263,7 +333,7 @@ describe("Thread creation admission in workerd with real D1", () => {
     );
   });
 
-  it("answers a permanent Flue rejection with its own code and removes the empty Thread", async () => {
+  it("answers a permanent Flue rejection of inline images with its own code and removes the empty Thread", async () => {
     const project = await createProjectViaApi("permanent-flue-rejection");
     const rejections = [
       {
@@ -291,8 +361,13 @@ describe("Thread creation admission in workerd with real D1", () => {
         >;
       });
       const threadId = newThreadId();
+      const request = {
+        projectId: project.data.id,
+        threadId,
+        initialMessage: inlineImageMessage,
+      };
 
-      const response = await create({ projectId: project.data.id, threadId });
+      const response = await create(request);
 
       expect(response.status).toBe(rejection.status);
       await expect(response.json()).resolves.toMatchObject({
@@ -303,13 +378,13 @@ describe("Thread creation admission in workerd with real D1", () => {
 
       // The same request, once accepted, creates the Thread.
       reject = false;
-      const retried = await create({ projectId: project.data.id, threadId });
+      const retried = await create(request);
       expect(retried.status).toBe(201);
       await expect(threadRow(threadId)).resolves.toEqual({ id: threadId });
     }
   });
 
-  it("stops the Orb it started beside a refused dispatch before it removes the Thread", async () => {
+  it("stops the Orb it started beside a refused inline-image dispatch before it removes the Thread", async () => {
     // Ways this could fail: the Orb keeps running after its Thread is gone;
     // it is stopped after the row is deleted, so nothing can name it; an Orb
     // that never started is stopped; a Thread whose agent holds a run loses
@@ -342,7 +417,11 @@ describe("Thread creation admission in workerd with real D1", () => {
       async () => null,
       bindings,
       startedThenRefused.initialOrb,
-    ).create({ projectId: project.data.id, threadId: first });
+    ).create({
+      projectId: project.data.id,
+      threadId: first,
+      initialMessage: inlineImageMessage,
+    });
     expect(refusedResponse.status).toBe(422);
     expect(startedThenRefused.initialOrb.start).toHaveBeenCalledWith(first);
     expect(startedThenRefused.initialOrb.stop).toHaveBeenCalledWith(first);
@@ -356,7 +435,11 @@ describe("Thread creation admission in workerd with real D1", () => {
       async () => null,
       bindings,
       neverStarted.initialOrb,
-    ).create({ projectId: project.data.id, threadId: second });
+    ).create({
+      projectId: project.data.id,
+      threadId: second,
+      initialMessage: inlineImageMessage,
+    });
     expect(neverStarted.initialOrb.stop).not.toHaveBeenCalled();
     await expect(threadRow(second)).resolves.toBeNull();
 
@@ -369,7 +452,11 @@ describe("Thread creation admission in workerd with real D1", () => {
       async () => ({ id: third, uid: "uid-1" }),
       bindings,
       held.initialOrb,
-    ).create({ projectId: project.data.id, threadId: third });
+    ).create({
+      projectId: project.data.id,
+      threadId: third,
+      initialMessage: inlineImageMessage,
+    });
     expect(held.initialOrb.stop).not.toHaveBeenCalled();
     await expect(threadRow(third)).resolves.toEqual({ id: third });
 
@@ -382,7 +469,11 @@ describe("Thread creation admission in workerd with real D1", () => {
       async () => null,
       bindings,
       stopFails.initialOrb,
-    ).create({ projectId: project.data.id, threadId: fourth });
+    ).create({
+      projectId: project.data.id,
+      threadId: fourth,
+      initialMessage: inlineImageMessage,
+    });
     await expect(threadRow(fourth)).resolves.toEqual({ id: fourth });
 
     const accepted = orb(true);
@@ -393,13 +484,17 @@ describe("Thread creation admission in workerd with real D1", () => {
       async () => null,
       bindings,
       accepted.initialOrb,
-    ).create({ projectId: project.data.id, threadId: fifth });
+    ).create({
+      projectId: project.data.id,
+      threadId: fifth,
+      initialMessage: inlineImageMessage,
+    });
     expect(acceptedResponse.status).toBe(201);
     expect(accepted.initialOrb.start).toHaveBeenCalledOnce();
     expect(accepted.initialOrb.stop).not.toHaveBeenCalled();
   });
 
-  it("keeps a Thread whose agent already holds a submission and names the conflict", async () => {
+  it("keeps a Thread whose agent already holds a submission and names the conflict for inline images", async () => {
     const project = await createProjectViaApi("flue-conflicts");
     const conflicts = [
       {
@@ -420,7 +515,11 @@ describe("Thread creation admission in workerd with real D1", () => {
         async () => ({ id: threadId, uid: "uid-1" }),
       );
 
-      const response = await create({ projectId: project.data.id, threadId });
+      const response = await create({
+        projectId: project.data.id,
+        threadId,
+        initialMessage: inlineImageMessage,
+      });
 
       expect(response.status).toBe(409);
       await expect(response.json()).resolves.toMatchObject({
@@ -430,7 +529,7 @@ describe("Thread creation admission in workerd with real D1", () => {
     }
   });
 
-  it("removes the Thread after a dispatch failure only when Flue holds nothing for it", async () => {
+  it("removes an inline-image Thread after a dispatch failure only when Flue holds nothing for it", async () => {
     const project = await createProjectViaApi("ambiguous-dispatch");
     let fail = true;
     let instance: { id: string } | null = null;
@@ -445,6 +544,7 @@ describe("Thread creation admission in workerd with real D1", () => {
     const failed = await empty.create({
       projectId: project.data.id,
       threadId: emptyId,
+      initialMessage: inlineImageMessage,
     });
     expect(failed.status).toBe(503);
     await expect(failed.json()).resolves.toMatchObject({
@@ -456,6 +556,7 @@ describe("Thread creation admission in workerd with real D1", () => {
     const recreated = await empty.create({
       projectId: project.data.id,
       threadId: emptyId,
+      initialMessage: inlineImageMessage,
     });
     expect(recreated.status).toBe(201);
     await expect(recreated.json()).resolves.toMatchObject({
@@ -487,6 +588,7 @@ describe("Thread creation admission in workerd with real D1", () => {
         await empty.create({
           projectId: sourcedProject.data.id,
           threadId: sourcedId,
+          initialMessage: inlineImageMessage,
         })
       ).status,
     ).toBe(503);
@@ -506,8 +608,13 @@ describe("Thread creation admission in workerd with real D1", () => {
     const heldId = newThreadId();
     instance = { id: heldId };
     expect(
-      (await held.create({ projectId: project.data.id, threadId: heldId }))
-        .status,
+      (
+        await held.create({
+          projectId: project.data.id,
+          threadId: heldId,
+          initialMessage: inlineImageMessage,
+        })
+      ).status,
     ).toBe(503);
     await expect(threadRow(heldId)).resolves.toEqual({ id: heldId });
     await expect(held.persisted[0]).resolves.toBe(true);
@@ -515,6 +622,7 @@ describe("Thread creation admission in workerd with real D1", () => {
     const reused = await held.create({
       projectId: project.data.id,
       threadId: heldId,
+      initialMessage: inlineImageMessage,
     });
     expect(reused.status).toBe(201);
     expect(held.titleAgent).toHaveBeenCalledOnce();
@@ -549,14 +657,11 @@ describe("Thread creation admission in workerd with real D1", () => {
         .all()
         .then(({ results }) => results);
 
-    // Flue refuses the message but holds the agent, so the Thread stays.
+    // Flue refuses the message: the Thread stays, says why, and holds no file.
     const refusedId = newThreadId();
-    const refused = harness(
-      async () => {
-        throw new SubmissionConflictError({ submissionId: "existing" });
-      },
-      async () => ({ id: refusedId, uid: "uid-1" }),
-    );
+    const refused = harness(async () => {
+      throw new SubmissionConflictError({ submissionId: "existing" });
+    });
     expect(
       (
         await refused.create({
@@ -565,8 +670,12 @@ describe("Thread creation admission in workerd with real D1", () => {
           initialMessage,
         })
       ).status,
-    ).toBe(409);
+    ).toBe(201);
     await expect(threadRow(refusedId)).resolves.toEqual({ id: refusedId });
+    await expect(initialDispatchRow(refusedId)).resolves.toMatchObject({
+      state: "failed",
+      failureCode: "INITIAL_SUBMISSION_CONFLICT",
+    });
     await expect(linked(refusedId)).resolves.toEqual([]);
 
     const dispatched: Array<Parameters<Dispatch>[0]> = [];
@@ -587,5 +696,293 @@ describe("Thread creation admission in workerd with real D1", () => {
     // The agent sees Core's record of the file, not the client's claim.
     expect(dispatched[0]?.message.body).toContain("trace.log");
     expect(dispatched[0]?.message.body).not.toContain("client-claimed.exe");
+  });
+
+  it("answers with the first message's receipt before the agent starts, then admits it", async () => {
+    const project = await createProjectViaApi("deferred-first-message");
+    const dispatched: Array<Parameters<Dispatch>[0]> = [];
+    let release: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { create, read, settled } = harness(
+      async (request) => {
+        // The agent's Durable Object is still starting.
+        await started;
+        return flueValidatedDispatch(dispatched)(request);
+      },
+      async () => null,
+      bindings,
+      undefined,
+      false,
+    );
+    const threadId = newThreadId();
+
+    const response = await create({ projectId: project.data.id, threadId });
+
+    // Answered while the agent has not admitted anything.
+    expect(dispatched).toEqual([]);
+    expect(response.status).toBe(201);
+    const body = (await response.json()) as {
+      data: { initialDispatch?: unknown };
+      initialSubmission?: { submissionId: string };
+    };
+    expect(body.data.initialDispatch).toEqual({ state: "pending" });
+    expect(body.initialSubmission?.submissionId).toBe(
+      await initialSubmissionId(threadId as never),
+    );
+    // The Thread and its first message are both stored.
+    await expect(threadRow(threadId)).resolves.toEqual({ id: threadId });
+    await expect(initialDispatchRow(threadId)).resolves.toMatchObject({
+      state: "pending",
+    });
+    await expect(read(threadId)).resolves.toMatchObject({
+      data: { initialDispatch: { state: "pending" } },
+    });
+
+    release();
+    await settled();
+    // Flue gave the receipt the response promised, for the stored message.
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]).toMatchObject({
+      id: threadId,
+      uid: null,
+      idempotencyKey: "initial",
+    });
+    expect(dispatched[0]?.message.body).toContain("Fix the flaky login test");
+    await expect(initialDispatchRow(threadId)).resolves.toBeNull();
+    const detail = await read(threadId);
+    expect(detail.data.initialDispatch).toBeUndefined();
+  });
+
+  it("delivers a first message the request left undelivered once, under one key", async () => {
+    const calls: Array<Parameters<Dispatch>[0]> = [];
+    let available = false;
+    let agentUid: string | undefined;
+    const flue: Dispatch = async (request) => {
+      calls.push(request);
+      if (!available) throw new Error("Durable Object reset.");
+      // Something else (a follow-up from the page) started the agent.
+      if (request.uid === null && agentUid !== undefined)
+        throw new AgentInstanceExistsError({ id: request.id, uid: agentUid });
+      return {
+        submissionId: await initialSubmissionId(request.id as never),
+      } as Awaited<ReturnType<Dispatch>>;
+    };
+    const project = await createProjectViaApi("undelivered-first-message");
+    const { create, read } = harness(flue);
+    const threadId = newThreadId();
+
+    // Every attempt the request makes fails: the message waits, stored.
+    const response = await create({ projectId: project.data.id, threadId });
+    expect(response.status).toBe(201);
+    expect(calls).toHaveLength(3);
+    await expect(initialDispatchRow(threadId)).resolves.toMatchObject({
+      state: "pending",
+      attempts: 3,
+    });
+    await expect(read(threadId)).resolves.toMatchObject({
+      data: { initialDispatch: { state: "pending" } },
+    });
+
+    // The sweep delivers it, to the agent that already exists, by its uid.
+    available = true;
+    agentUid = "uid-started-by-follow-up";
+    const outcomes = await sweep(flue);
+    expect(outcomes).toContainEqual(
+      expect.objectContaining({ kind: "admitted" }),
+    );
+    const last = calls.at(-1);
+    expect(last).toMatchObject({
+      id: threadId,
+      uid: agentUid,
+      idempotencyKey: "initial",
+    });
+    expect(last?.initialData).toBeUndefined();
+    await expect(initialDispatchRow(threadId)).resolves.toBeNull();
+
+    // Nothing delivers it again: not the sweep, not a resend of the request.
+    const callsAfterAdmission = calls.length;
+    await sweep(flue);
+    expect(calls).toHaveLength(callsAfterAdmission);
+    agentUid = undefined;
+    const resent = await create({ projectId: project.data.id, threadId });
+    expect(resent.status).toBe(201);
+    // The resend reaches Flue under the same key too. Every delivery
+    // carried the same message under one key, which Flue admits once.
+    expect(new Set(calls.map((call) => call.idempotencyKey))).toEqual(
+      new Set(["initial"]),
+    );
+    expect(
+      new Set(calls.map((call) => JSON.stringify(call.message))).size,
+    ).toBe(1);
+  });
+
+  it("retries a first message that failed to start when its owner asks, once", async () => {
+    // Ways this could fail: Retry admits nothing; a second press admits the
+    // message again; someone else's Thread can be retried; a refused retry
+    // leaves the Thread pending with no reason.
+    const project = await createProjectViaApi("retried-first-message");
+    const calls: Array<Parameters<Dispatch>[0]> = [];
+    let accept = false;
+    const flue: Dispatch = async (request) => {
+      calls.push(request);
+      if (!accept) throw new InputTooLargeError();
+      return {
+        submissionId: await initialSubmissionId(request.id as never),
+      } as Awaited<ReturnType<Dispatch>>;
+    };
+    const { create, read, retry } = harness(flue);
+    const threadId = newThreadId();
+    expect(
+      (await create({ projectId: project.data.id, threadId })).status,
+    ).toBe(201);
+    await expect(initialDispatchRow(threadId)).resolves.toMatchObject({
+      state: "failed",
+    });
+
+    // Refused again: the Thread says so again, with the reason.
+    const refused = await retry(threadId);
+    expect(refused.status).toBe(200);
+    await expect(refused.json()).resolves.toEqual({
+      status: "success",
+      data: { state: "failed", failureCode: "INITIAL_MESSAGE_TOO_LARGE" },
+    });
+
+    accept = true;
+    const admitted = await retry(threadId);
+    await expect(admitted.json()).resolves.toEqual({
+      status: "success",
+      data: { state: "admitted" },
+    });
+    await expect(initialDispatchRow(threadId)).resolves.toBeNull();
+    await expect(read(threadId)).resolves.not.toHaveProperty(
+      "data.initialDispatch",
+    );
+    // The same stored message every time, under the one key.
+    expect(calls).toHaveLength(3);
+    expect(new Set(calls.map((call) => call.idempotencyKey))).toEqual(
+      new Set(["initial"]),
+    );
+    expect(
+      new Set(calls.map((call) => JSON.stringify(call.message))).size,
+    ).toBe(1);
+
+    // Pressed again: nothing left to retry, nothing delivered.
+    const again = await retry(threadId);
+    await expect(again.json()).resolves.toEqual({
+      status: "success",
+      data: { state: "admitted" },
+    });
+    expect(calls).toHaveLength(3);
+
+    // Only the owner retries.
+    await env.DB.prepare(
+      `INSERT INTO thread_initial_dispatch
+         (thread_id, request_json, sender_user_id, state, failure_code, created_at)
+       VALUES (?, '{}', ?, 'failed', 'INITIAL_MESSAGE_REJECTED', ?)`,
+    )
+      .bind(threadId, owner, Date.now())
+      .run();
+    const stranger = await harness(
+      flue,
+      async () => null,
+      bindings,
+      undefined,
+      true,
+      otherPrincipal,
+    ).retry(threadId);
+    expect(stranger.status).toBe(404);
+    await expect(initialDispatchRow(threadId)).resolves.toMatchObject({
+      state: "failed",
+    });
+    expect(calls).toHaveLength(3);
+  });
+
+  it("keeps a Thread whose first message failed to start and says why, without retrying it", async () => {
+    // Ways this could fail: the Thread waits forever with no error; the
+    // error never reaches the detail the page reads; the sweep retries a
+    // refused message; the Orb started for it keeps running.
+    const project = await createProjectViaApi("failed-first-message");
+    const refusals = [
+      {
+        error: new FlueError({
+          type: "invalid_request",
+          message: "Request is malformed.",
+          details: "rejected",
+          dev: "",
+        }),
+        code: "INITIAL_MESSAGE_REJECTED",
+      },
+      { error: new InputTooLargeError(), code: "INITIAL_MESSAGE_TOO_LARGE" },
+      {
+        error: new SubmissionConflictError({ submissionId: "existing" }),
+        code: "INITIAL_SUBMISSION_CONFLICT",
+      },
+    ];
+    for (const refusal of refusals) {
+      const calls: string[] = [];
+      const refuse: Dispatch = async (request) => {
+        calls.push(request.id);
+        throw refusal.error;
+      };
+      const initialOrb = {
+        start: vi.fn(async () => true),
+        stop: vi.fn(async () => undefined),
+      };
+      const { create, read, persisted } = harness(
+        refuse,
+        async () => null,
+        bindings,
+        initialOrb,
+      );
+      const threadId = newThreadId();
+
+      const response = await create({ projectId: project.data.id, threadId });
+
+      expect(response.status).toBe(201);
+      expect(calls).toEqual([threadId]);
+      await expect(threadRow(threadId)).resolves.toEqual({ id: threadId });
+      await expect(persisted[0]).resolves.toBe(true);
+      await expect(read(threadId)).resolves.toMatchObject({
+        data: {
+          initialDispatch: { state: "failed", failureCode: refusal.code },
+        },
+      });
+      expect(initialOrb.stop).toHaveBeenCalledWith(threadId);
+      await sweep(refuse);
+      expect(calls).toEqual([threadId]);
+    }
+
+    // A Flue that stays unavailable fails the message once its attempts
+    // run out, rather than leaving it pending.
+    const unavailable: Dispatch = async () => {
+      throw new Error("Durable Object reset.");
+    };
+    const { create, read } = harness(unavailable);
+    const threadId = newThreadId();
+    expect(
+      (await create({ projectId: project.data.id, threadId })).status,
+    ).toBe(201);
+    for (
+      let attempt = 0;
+      attempt < MAX_INITIAL_DISPATCH_ATTEMPTS &&
+      (await initialDispatchRow(threadId))?.state === "pending";
+      attempt++
+    )
+      await sweep(unavailable);
+    await expect(initialDispatchRow(threadId)).resolves.toMatchObject({
+      state: "failed",
+      failureCode: "INITIAL_ADMISSION_UNAVAILABLE",
+      attempts: MAX_INITIAL_DISPATCH_ATTEMPTS,
+    });
+    await expect(read(threadId)).resolves.toMatchObject({
+      data: {
+        initialDispatch: {
+          state: "failed",
+          failureCode: "INITIAL_ADMISSION_UNAVAILABLE",
+        },
+      },
+    });
   });
 });

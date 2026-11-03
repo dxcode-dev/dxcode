@@ -102,9 +102,10 @@ describe("fixed sidebar sections", () => {
     expect(sections[0]?.label).toBe("No Project");
   });
 
-  it("omits empty categories but keeps a separately available archive reachable", () => {
+  it("omits empty categories but keeps Snoozed and a separately available archive reachable", () => {
     expect(buildThreadSections([], [], now)).toEqual([]);
     expect(buildThreadSections([], [], now, true)).toEqual([
+      { id: "snoozed", label: "Snoozed", threads: [] },
       { id: "archived", label: "Archived", threads: [] },
     ]);
   });

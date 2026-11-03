@@ -27,7 +27,6 @@ describe("D1 migration", () => {
         "projects_owner_created_idx",
         "threads",
         "threads_owner_created_idx",
-        "threads_owner_project_created_idx",
         "thread_pin_history",
         "thread_pin_history_snapshot_idx",
         "threads_pin_history_after_update",
@@ -176,9 +175,9 @@ describe("D1 migration", () => {
     expect(sqlByName.get("threads_owner_created_idx")).toContain(
       "(owner_user_id, created_at DESC, id DESC)",
     );
-    expect(sqlByName.get("threads_owner_project_created_idx")).toContain(
-      "(owner_user_id, project_id, created_at DESC, id DESC)",
-    );
+    // 0123 dropped threads_owner_project_created_idx: no query orders a
+    // Project's Threads by creation (#1491).
+    expect(sqlByName.has("threads_owner_project_created_idx")).toBe(false);
     expect(sqlByName.get("threads")).toContain(
       "FOREIGN KEY (project_id) REFERENCES projects(id)",
     );
@@ -997,8 +996,10 @@ describe("D1 migration", () => {
         LIMIT ?
       `).bind(owner, cursorId, cursorTime, cursorId, 21),
     );
+    // Without threads_owner_project_created_idx (dropped in 0123, #1491),
+    // the same cursor still seeks owner and (created_at, id).
     expect(projectThreadPlan).toContain(
-      "threads_owner_project_created_idx (owner_user_id=? AND project_id=? AND (created_at,id)<(?,?))",
+      "threads_owner_created_idx (owner_user_id=? AND (created_at,id)<(?,?))",
     );
   });
 

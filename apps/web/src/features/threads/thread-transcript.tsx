@@ -1088,11 +1088,32 @@ function TranscriptFocusRequest({
  * hidden it keeps the element it was hidden with: streamed updates do no work
  * until it is shown, then render once.
  */
+// Whether this page has mounted a transcript yet.
+let transcriptMounted = false;
+
 export function ThreadTranscript(
   props: React.ComponentProps<typeof TranscriptViewport>,
 ) {
   const active = props.active ?? true;
-  const viewport = <TranscriptViewport {...props} />;
+  // A page's first transcript renders in the background: the Thread page
+  // commits its header, panes, and composer first, then React renders the
+  // rows (Markdown parsing is most of it) in slices that yield to the
+  // browser, instead of one long task. Later transcripts, such as after a
+  // switch between Threads, render at once as before.
+  const [inBackground] = React.useState(() => {
+    const first = !transcriptMounted;
+    transcriptMounted = true;
+    return first;
+  });
+  const rowsReady = React.useDeferredValue(true, !inBackground);
+  const viewport = rowsReady ? (
+    <TranscriptViewport {...props} />
+  ) : (
+    <section
+      className="pane-scroll agent-scroll transcript-viewport"
+      aria-busy="true"
+    />
+  );
   const [hiddenViewport, setHiddenViewport] =
     React.useState<React.ReactElement>();
   if (active && hiddenViewport !== undefined) setHiddenViewport(undefined);

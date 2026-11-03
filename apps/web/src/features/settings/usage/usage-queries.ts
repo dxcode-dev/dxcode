@@ -11,6 +11,7 @@ import {
   infiniteQueryOptions,
   mutationOptions,
   type QueryClient,
+  queryOptions,
 } from "@tanstack/react-query";
 import {
   exportPersonalUsage,
@@ -99,6 +100,24 @@ export const personalUsageQueryOptions = (
       ),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor,
+    ...volatileUsageOptions,
+  });
+
+/** One calendar month in local time, for the Account usage summary. */
+export type PersonalUsageSummaryRange = {
+  readonly from: string;
+  readonly to: string;
+  readonly timezoneOffsetMinutes: number;
+};
+
+export const personalUsageSummaryQueryOptions = (
+  userId: UserId,
+  range: PersonalUsageSummaryRange,
+) =>
+  queryOptions({
+    queryKey: [...usageKeys.personal(userId, range), "summary"] as const,
+    queryFn: ({ signal }) => getPersonalUsage({ ...range, limit: 1 }, signal),
+    select: (data) => data.summary,
     ...volatileUsageOptions,
   });
 

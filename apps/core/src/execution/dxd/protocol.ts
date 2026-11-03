@@ -8,6 +8,8 @@ import {
   OrbProcessSchema,
   THREAD_FILES_MAX_EDITABLE_BYTES,
   THREAD_FILES_MAX_TREE_PAGE_SIZE,
+  THREAD_FILES_MAX_UPLOAD_BYTES,
+  THREAD_FILES_UPLOAD_CHUNK_BYTES,
   THREAD_SANDBOX_FILE_MAX_CHUNK_BYTES,
   THREAD_TERMINAL_SESSION_LIMIT,
   ThreadFilesPath,
@@ -658,6 +660,60 @@ export const DxdFilesSaveOperation = Schema.Struct({
 });
 export type DxdFilesSaveOperation = typeof DxdFilesSaveOperation.Type;
 
+export const DxdFilesCreateOperation = Schema.Struct({
+  operation: Schema.Literal("files.create"),
+  worktree: Schema.optional(ThreadFilesWorktreeId),
+  path: ThreadFilesPath,
+  kind: Schema.Literals(["file", "directory"]),
+  refresh: Schema.optional(DxdChangesRefreshMessage),
+});
+export type DxdFilesCreateOperation = typeof DxdFilesCreateOperation.Type;
+
+/** Standard base64 of at most one upload chunk. */
+const DxdUploadChunk = Schema.String.check(
+  Schema.isMaxLength(Math.ceil(THREAD_FILES_UPLOAD_CHUNK_BYTES / 3) * 4),
+  Schema.isPattern(/^[A-Za-z0-9+/]*={0,2}$/),
+);
+
+/** One chunk of an upload, in order; only the last carries the refresh. */
+export const DxdFilesUploadOperation = Schema.Struct({
+  operation: Schema.Literal("files.upload"),
+  worktree: Schema.optional(ThreadFilesWorktreeId),
+  path: ThreadFilesPath,
+  upload: Schema.String.check(Schema.isPattern(/^[0-9a-f]{32}$/)),
+  offset: Schema.Int.check(
+    Schema.isBetween({ minimum: 0, maximum: THREAD_FILES_MAX_UPLOAD_BYTES }),
+  ),
+  content: DxdUploadChunk,
+  last: Schema.Boolean,
+  refresh: Schema.optional(DxdChangesRefreshMessage),
+});
+export type DxdFilesUploadOperation = typeof DxdFilesUploadOperation.Type;
+
+export const DxdFilesMoveOperation = Schema.Struct({
+  operation: Schema.Literals(["files.move", "files.copy"]),
+  worktree: Schema.optional(ThreadFilesWorktreeId),
+  from: ThreadFilesPath,
+  to: ThreadFilesPath,
+  refresh: Schema.optional(DxdChangesRefreshMessage),
+});
+export type DxdFilesMoveOperation = typeof DxdFilesMoveOperation.Type;
+
+export const DxdFilesDeleteOperation = Schema.Struct({
+  operation: Schema.Literal("files.delete"),
+  worktree: Schema.optional(ThreadFilesWorktreeId),
+  path: ThreadFilesPath,
+  refresh: Schema.optional(DxdChangesRefreshMessage),
+});
+export type DxdFilesDeleteOperation = typeof DxdFilesDeleteOperation.Type;
+
+/** A Files tree write: create, upload chunk, move, copy, or delete. */
+export type DxdFilesWriteOperation =
+  | DxdFilesCreateOperation
+  | DxdFilesUploadOperation
+  | DxdFilesMoveOperation
+  | DxdFilesDeleteOperation;
+
 /** Read-only byte range of any regular file in the guest. */
 export const DxdFilesReadSandboxOperation = Schema.Struct({
   operation: Schema.Literal("files.readSandbox"),
@@ -680,6 +736,10 @@ export const DxdFilesOperation = Schema.Union([
   DxdFilesListOperation,
   DxdFilesReadOperation,
   DxdFilesSaveOperation,
+  DxdFilesCreateOperation,
+  DxdFilesUploadOperation,
+  DxdFilesMoveOperation,
+  DxdFilesDeleteOperation,
   DxdFilesReadSandboxOperation,
 ]);
 export type DxdFilesOperation = typeof DxdFilesOperation.Type;
@@ -1057,6 +1117,12 @@ export const DxdFilesSaveResult = Schema.Union([
   DxdFailureResult,
 ]);
 export type DxdFilesSaveResult = typeof DxdFilesSaveResult.Type;
+
+export const DxdFilesWriteResult = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("changed") }),
+  DxdFailureResult,
+]);
+export type DxdFilesWriteResult = typeof DxdFilesWriteResult.Type;
 
 const NonNegativeSafeInt = Schema.Int.check(
   Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),

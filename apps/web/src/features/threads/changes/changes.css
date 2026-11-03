@@ -630,3 +630,8 @@
   width: 16px;
   height: 16px;
 }
+
+/* Holds the toolbar's height while the pane's code loads. */
+.changes-toolbar[data-placeholder] {
+  min-height: 38px;
+}

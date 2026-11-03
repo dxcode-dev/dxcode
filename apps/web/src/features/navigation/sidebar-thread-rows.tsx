@@ -19,6 +19,8 @@ export interface SidebarThreadRowsProps extends SidebarThreadListProps {
   >;
   /** The Snoozed section's rows. */
   readonly snoozed?: boolean;
+  /** Inactive's rows, which show their age. */
+  readonly inactive?: boolean;
 }
 
 const noChildren: ReadonlyArray<ThreadListClientItem> = [];
@@ -27,6 +29,7 @@ export function SidebarThreadRows({
   threads,
   childThreads,
   snoozed = false,
+  inactive = false,
   activeThreadId,
   projectNames,
   onThreadNavigate,
@@ -73,6 +76,7 @@ export function SidebarThreadRows({
               childCount={childCount}
               expanded={expanded}
               snoozed={snoozed}
+              inactive={inactive}
               onToggleChildren={expansion?.toggle}
               onThreadNavigate={onThreadNavigate}
               onThreadPointerEnter={onThreadPointerEnter}

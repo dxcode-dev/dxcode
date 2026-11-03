@@ -59,6 +59,8 @@ const isFeatureDataModule = (path) =>
 const directFetchOwners = new Set([
   "apps/web/src/shared/api/client.ts",
   "apps/web/src/shared/auth/auth-client.ts",
+  // The boot's session check, sent before Better Auth's client loads.
+  "apps/web/src/shared/auth/boot-session.ts",
   "apps/web/src/shared/same-origin-fetch.ts",
 ]);
 const queryClientConsumers = new Set([

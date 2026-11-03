@@ -1,8 +1,8 @@
 import { Menu } from "@base-ui/react/menu";
 import type { ThreadSandboxFilePath } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
-import { File } from "@pierre/diffs/react";
 import { useQuery } from "@tanstack/react-query";
+import { lazyRouteComponent } from "@tanstack/react-router";
 import { AudioLines, Copy, Download, EllipsisVertical } from "lucide-react";
 import * as React from "react";
 import { downloadFromUrl } from "../../../shared/download-from-url.js";
@@ -18,7 +18,6 @@ import {
   resolveReveal,
   sandboxFileUrl,
 } from "../transcript-file-link.js";
-import { FilePreview } from "./file-preview.js";
 import { filePreviewKind } from "./file-preview-model.js";
 import type { CenterFileTab } from "./file-tab.js";
 import { ThreadFilePane } from "./files-panel.js";
@@ -32,6 +31,20 @@ import {
   sandboxPdfOptions,
   showBlobInFrame,
 } from "./sandbox-file-queries.js";
+
+// The code viewer and the Markdown preview (with their highlighters) load
+// when a sandbox file first shows, not with the Thread page.
+// `lazyRouteComponent` reloads the page once if a deploy removed the chunk.
+const File = lazyRouteComponent(() => import("@pierre/diffs/react"), "File");
+const FilePreview = lazyRouteComponent(
+  () => import("./file-preview.js"),
+  "FilePreview",
+);
+const loadingFile = (
+  <div className="thread-files-state" role="status">
+    Loading file…
+  </div>
+);
 
 const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : "The sandbox is unavailable.";
@@ -323,12 +336,7 @@ function SandboxTextView({
       ? "preview"
       : "source");
   let body: React.ReactNode;
-  if (preview.isPending)
-    body = (
-      <div className="thread-files-state" role="status">
-        Loading file…
-      </div>
-    );
+  if (preview.isPending) body = loadingFile;
   else if (preview.data === undefined)
     body = (
       <div className="thread-files-state" role="alert">
@@ -404,7 +412,7 @@ function SandboxTextView({
           </button>
         )}
       </Toolbar>
-      {body}
+      <React.Suspense fallback={loadingFile}>{body}</React.Suspense>
     </section>
   );
 }

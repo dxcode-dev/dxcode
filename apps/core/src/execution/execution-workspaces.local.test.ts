@@ -127,6 +127,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("cloudflare:workers", () => ({
+  waitUntil: (settlement: Promise<unknown>) => void settlement,
   env: {
     DB: mocks.db,
     DX_RUNTIME_MODE: "local",

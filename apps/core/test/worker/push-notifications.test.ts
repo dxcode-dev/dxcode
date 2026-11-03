@@ -65,18 +65,46 @@ const flue = vi.hoisted(() => ({
     | number
     | { messages: ReadonlyArray<unknown>; settlements: ReadonlyArray<unknown> },
   reads: [] as Array<string>,
+  /** Messages delivered to a Thread, deduplicated by idempotency key as Flue does. */
+  delivered: [] as Array<{
+    threadId: string;
+    body: string;
+    sourceThreadId: string | undefined;
+  }>,
+  keys: new Set<string>(),
 }));
 
 vi.mock("../../src/agents/routes.js", async () => {
   const { Hono } = await import("hono");
   return {
-    dxAgentRoutes: new Hono().get("/:threadId", (context) => {
-      flue.reads.push(new URL(context.req.url).search);
-      const { history } = flue;
-      if (history === undefined || typeof history === "number")
-        return new Response(null, { status: history ?? 404 });
-      return Response.json(history);
-    }),
+    dxAgentRoutes: new Hono<{
+      Variables: { messageSourceThreadId?: string };
+    }>()
+      .get("/:threadId", (context) => {
+        flue.reads.push(new URL(context.req.url).search);
+        const { history } = flue;
+        if (history === undefined || typeof history === "number")
+          return new Response(null, { status: history ?? 404 });
+        return Response.json(history);
+      })
+      .post("/:threadId", async (context) => {
+        const body = await context.req.json<{
+          body: string;
+          idempotencyKey: string;
+        }>();
+        if (!flue.keys.has(body.idempotencyKey)) {
+          flue.keys.add(body.idempotencyKey);
+          flue.delivered.push({
+            threadId: context.req.param("threadId"),
+            body: body.body,
+            sourceThreadId: context.get("messageSourceThreadId"),
+          });
+        }
+        return Response.json(
+          { submissionId: "sub-delivered" },
+          { status: 202 },
+        );
+      }),
   };
 });
 
@@ -524,6 +552,8 @@ const sha256Hex = async (value: string) =>
 beforeEach(async () => {
   flue.history = undefined;
   flue.reads = [];
+  flue.delivered = [];
+  flue.keys = new Set();
   pushes = [];
   pushStatus = 201;
   watching = [];
@@ -1022,6 +1052,71 @@ describe("Push notifications, in workerd with real D1 and WebCrypto", () => {
     });
 
     expect(pushes).toEqual([]);
+  });
+
+  it("tells the parent Thread when a child's turn fails before its agent replies (#1614)", async () => {
+    const device = await newDevice("https://push.test/owner-device");
+    await registerDevice(owner, device);
+    const diskFull = {
+      type: "workspace_disk_full",
+      message:
+        "Workspace disk is full (20 GB limit). Delete files you don't need, then retry. (dx_failure:internal:WORKSPACE_DISK_FULL)",
+    };
+
+    await notifyTurnCompleted(bindings, {
+      threadId: childThread.id as ThreadId,
+      submissionId: "sub-child-failed",
+      outcome: "failed",
+      error: diskFull,
+    });
+
+    // The parent hears it from the child, as a message that starts its turn.
+    expect(flue.delivered).toEqual([
+      {
+        threadId: sharedThread.id,
+        sourceThreadId: childThread.id,
+        body: expect.stringContaining(childThread.id),
+      },
+    ]);
+    const [notice] = flue.delivered as [{ body: string }];
+    expect(notice.body).toContain("Orb disk full");
+    expect(notice.body).not.toContain("dx_failure");
+    // The owner's devices stay quiet: the parent is the one waiting.
+    expect(pushes).toEqual([]);
+
+    // A child failing again and again does not flood its parent.
+    await notifyTurnCompleted(bindings, {
+      threadId: childThread.id as ThreadId,
+      submissionId: "sub-child-failed-again",
+      outcome: "failed",
+      error: diskFull,
+    });
+    expect(flue.delivered).toHaveLength(1);
+  });
+
+  it("tells the owner why a root Thread's turn failed (#1614)", async () => {
+    const device = await newDevice("https://push.test/owner-device");
+    await registerDevice(owner, device);
+    flue.history = 404;
+
+    await notifyTurnCompleted(bindings, {
+      threadId: sharedThread.id as ThreadId,
+      submissionId: "sub-root-failed",
+      outcome: "failed",
+      error: {
+        type: "workspace_disk_full",
+        message:
+          "Workspace disk is full (20 GB limit). Delete files you don't need, then retry. (dx_failure:internal:WORKSPACE_DISK_FULL)",
+      },
+    });
+
+    expect(await decryptPush(device, (pushes[0] as CapturedPush).body)).toEqual(
+      expect.objectContaining({
+        title: "Test thread",
+        body: expect.stringMatching(/^Orb disk full/),
+      }),
+    );
+    expect(flue.delivered).toEqual([]);
   });
 
   it("pushes a multi-line mention as one line under who said it", async () => {

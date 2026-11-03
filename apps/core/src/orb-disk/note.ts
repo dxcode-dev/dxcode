@@ -5,11 +5,7 @@
 // the disk was already full.
 
 import type { ThreadId } from "@dx/domain";
-import {
-  formatDiskBytes,
-  WORKSPACE_DISK_RESERVE_BYTES,
-  type WorkspaceDiskReading,
-} from "./guard.js";
+import { formatDiskBytes, type WorkspaceDiskReading } from "./guard.js";
 
 /** From this share in use, every turn starts with a note. */
 export const WORKSPACE_DISK_NOTE_PERCENT = 85;
@@ -23,12 +19,16 @@ const usedPercent = (reading: WorkspaceDiskReading) =>
 
 const HOW_TO_FREE = `Free regenerable space yourself; you do not need to ask first: build outputs and caches you can recreate, such as node_modules, target, dist, build, .next, .turbo, .cache, and package manager caches (npm, pnpm, yarn, pip, cargo). Find the largest folders with \`du -xh -d 2 ~ 2>/dev/null | sort -h | tail -n 20\`. Never delete source files, uncommitted work, or anything you cannot rebuild; ask the person if only those take the space.`;
 
+const FREED = `dx cleared its emergency reserve, package-manager caches (pnpm, npm, yarn, pip, and the like), and temporary files in /tmp so this turn could start`;
+
 /** The note for this reading, or undefined when the disk has room. */
 export const workspaceDiskNote = (reading: WorkspaceDiskReading) => {
   const percent = usedPercent(reading);
   const usage = `${String(percent)}% full: ${formatDiskBytes(reading.availableBytes)} free of ${formatDiskBytes(reading.totalBytes)}`;
+  if (reading.after === "recovery")
+    return `This Orb's disk is full, and ${FREED.replace(" so this turn could start", "")}, but it is still ${usage}. So this turn started in recovery mode: dx did not prepare the repository (no checkout check, no setup or resume scripts), and commands that write files may fail with "No space left on device". You have a shell. Before anything else, free space: ${HOW_TO_FREE} Then tell the person how much you freed, and continue with the request below.`;
   if (reading.full)
-    return `This Orb's disk filled up completely. dx freed its own ${formatDiskBytes(WORKSPACE_DISK_RESERVE_BYTES)} emergency reserve so this turn could start; the disk is now ${usage}. Before anything else, free space, or commands and file writes will fail with "No space left on device" again. ${HOW_TO_FREE} Then continue with the request below.`;
+    return `This Orb's disk filled up, so ${FREED}; the disk is now ${usage}. Before anything else, free space, or commands and file writes will fail with "No space left on device" again. ${HOW_TO_FREE} Then continue with the request below.`;
   if (percent < WORKSPACE_DISK_NOTE_PERCENT) return undefined;
   return `This Orb's disk is ${usage}, and it cannot grow. Before a large install, build, download, or test run, check that it fits; if it may not, free space first and then do the work. ${HOW_TO_FREE}`;
 };

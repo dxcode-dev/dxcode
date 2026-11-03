@@ -587,6 +587,7 @@ export default Alchemy.Stack(
         input,
         configuration.origin,
         configuration.environment,
+        configuration.deploymentTarget,
       ).pipe(Effect.orDie);
     }
 

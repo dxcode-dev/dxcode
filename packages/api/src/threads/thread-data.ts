@@ -215,6 +215,40 @@ export const ThreadExecutionWorkspaceDataSchema = Schema.Struct({
 export type ThreadExecutionWorkspaceData =
   typeof ThreadExecutionWorkspaceDataSchema.Type;
 
+/** Why a Thread's first message did not start. */
+export const ThreadInitialDispatchFailureCodeSchema = Schema.Literals([
+  "INITIAL_MESSAGE_REJECTED",
+  "INITIAL_MESSAGE_TOO_LARGE",
+  "INITIAL_SUBMISSION_CONFLICT",
+  "INITIAL_ADMISSION_UNAVAILABLE",
+]);
+
+export const ThreadInitialDispatchSchema = Schema.Union([
+  Schema.Struct({ state: Schema.Literal("pending") }),
+  Schema.Struct({
+    state: Schema.Literal("failed"),
+    failureCode: ThreadInitialDispatchFailureCodeSchema,
+  }),
+]);
+
+export type ThreadInitialDispatch = typeof ThreadInitialDispatchSchema.Type;
+
+/**
+ * `POST /v1/threads/:threadId/initial-dispatch/retry`: the owner hands a
+ * first message that failed to start to the agent again. `admitted` means
+ * the agent has it; `pending` that delivery continues in the background.
+ */
+export const RetryInitialDispatchResponseSchema = Schema.Struct({
+  status: Schema.Literal("success"),
+  data: Schema.Union([
+    Schema.Struct({ state: Schema.Literals(["admitted", "pending"]) }),
+    Schema.Struct({
+      state: Schema.Literal("failed"),
+      failureCode: ThreadInitialDispatchFailureCodeSchema,
+    }),
+  ]),
+});
+
 export const ThreadDetailDataSchema = Schema.Struct({
   id: ThreadIdSchema,
   title: ThreadTitle,
@@ -258,6 +292,12 @@ export const ThreadDetailDataSchema = Schema.Struct({
   following: Schema.optional(Schema.Boolean),
   /** Owner only: skip the Enable Multiplayer confirmation. */
   skipMultiplayerConfirmation: Schema.optional(Schema.Boolean),
+  /**
+   * The first message while the Thread's agent has not admitted it: still
+   * `pending` (creation answers before the agent starts), or `failed` with
+   * why it did not start. Absent once the agent has it.
+   */
+  initialDispatch: Schema.optional(ThreadInitialDispatchSchema),
   /**
    * Messages other Threads' agents sent while this Thread worked that Flue
    * has not joined yet. Only their source: the message stays in Flue, and

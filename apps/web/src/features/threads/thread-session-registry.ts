@@ -1,6 +1,7 @@
 import {
   type ProjectData,
   type ThreadAgentInitializationData,
+  type ThreadDetailData,
   threadAgentName,
   threadAgentUrl,
 } from "@dx/api";
@@ -32,7 +33,7 @@ import {
   type PendingAttachment,
 } from "./image-attachments.js";
 import { sendRefusal } from "./send-failure.js";
-import { threadQueryOptions } from "./thread-queries.js";
+import { threadKeys, threadQueryOptions } from "./thread-queries.js";
 
 /**
  * Each history page holds the newest prompts that fit in 1 MiB of encoded
@@ -45,6 +46,37 @@ export const THREAD_HISTORY_PAGE = { promptLimit: 2, maxBytes: 1_048_576 };
 const SEND_ATTEMPTS = 3;
 const ATTEMPT_TIMEOUT_MS = 15_000;
 const RETRY_BACKOFF_MS = 500;
+
+/**
+ * While a new Thread's first message is on its way to the agent, the
+ * agent's conversation does not exist yet and reads answer 404. Flue's
+ * client backs off for 1, 2, then 4 s; these reads try again sooner, so the
+ * conversation shows as soon as the agent has it (#1590).
+ */
+const AGENT_START_POLL_MS = 250;
+const AGENT_START_WAIT_MS = 15_000;
+
+/** `fetch` that re-reads a 404 from the agent while `awaitingAgent()`. */
+const agentStartFetch =
+  (awaitingAgent: () => boolean): typeof fetch =>
+  async (input, init) => {
+    const method =
+      init?.method ?? (input instanceof Request ? input.method : "GET");
+    const started = Date.now();
+    for (;;) {
+      const response = await sameOriginFetch(input, init);
+      if (
+        response.status !== 404 ||
+        method.toUpperCase() !== "GET" ||
+        init?.signal?.aborted === true ||
+        Date.now() - started >= AGENT_START_WAIT_MS ||
+        !awaitingAgent()
+      )
+        return response;
+      await response.body?.cancel().catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, AGENT_START_POLL_MS));
+    }
+  };
 
 const AdmissionLookupSchema = Schema.Struct({
   state: Schema.Literal("accepted"),
@@ -142,8 +174,13 @@ export const createThreadAgentClient = (
   agentUrl: string,
   initialData: () => ThreadAgentInitializationData | undefined,
   instanceObserved: () => boolean = () => false,
+  /** The Thread's first message has not reached its agent yet. */
+  awaitingAgent: () => boolean = () => false,
 ): FlueClient => {
-  const client = createFlueClient({ url: agentUrl, fetch: sameOriginFetch });
+  const client = createFlueClient({
+    url: agentUrl,
+    fetch: agentStartFetch(awaitingAgent),
+  });
   const send = client.send.bind(client);
   const observe = client.observe;
   let observation: AgentConversationObservation | undefined;
@@ -383,6 +420,10 @@ export class ThreadSessionRegistry {
       () => entry.agentInitialization,
       // History read the instance: every Thread made with a first message.
       () => entry.session.getSnapshot().incarnation !== undefined,
+      () =>
+        this.queryClient.getQueryData<ThreadDetailData>(
+          threadKeys.detail(this.userId, id),
+        )?.initialDispatch?.state === "pending",
     );
     const entry: RetainedThread = {
       id,

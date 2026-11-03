@@ -10,13 +10,13 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { useTheme } from "../theme/theme-provider.js";
 import {
+  type CodeHighlighter,
   codeLanguage,
   type HighlightedLines,
   type HighlightNode,
-  highlightClosedCode,
-  highlightCode,
-  highlightStreamingCode,
-} from "./code-highlight.js";
+  plainCode,
+  useCodeHighlighter,
+} from "./code-highlighter.js";
 import { FileContextMenu } from "./file-context-menu.js";
 import { codeFenceBlock, settledMarkdownBlocks } from "./markdown-blocks.js";
 import {
@@ -490,9 +490,12 @@ function MarkdownCode({
   children: content,
   ...props
 }: React.ComponentProps<"code"> & { readonly node?: unknown }) {
+  const language = codeLanguage(className);
+  const highlighter = useCodeHighlighter(
+    Boolean(language) && typeof content === "string",
+  );
   if (className?.split(" ").includes("math-inline"))
     return <MathFormula source={nodeText(content)} display={false} />;
-  const language = codeLanguage(className);
   if (!language)
     return (
       <code className={className} {...props}>
@@ -500,7 +503,9 @@ function MarkdownCode({
       </code>
     );
   const highlighted =
-    typeof content === "string" ? highlightCode(language, content) : undefined;
+    typeof content === "string"
+      ? highlighter?.highlightCode(language, content)
+      : undefined;
   return (
     <code className={`hljs ${className}`} {...props}>
       {highlighted === undefined || highlighted.length === 0
@@ -565,6 +570,20 @@ const HighlightedRun = React.memo(function HighlightedRun({
   return highlightNodes(lines.nodes, lines.start).elements;
 });
 
+/** A fence's highlighting, or its plain text until the highlighter loads. */
+const fenceHighlight = (
+  highlighter: CodeHighlighter | undefined,
+  closed: boolean,
+  previous: ReturnType<typeof plainCode> | undefined,
+  language: string | undefined,
+  source: string,
+) =>
+  highlighter === undefined
+    ? plainCode(language, source, closed)
+    : closed
+      ? highlighter.highlightClosedCode(previous, language, source)
+      : highlighter.highlightStreamingCode(previous, language, source);
+
 /**
  * A block that is one fenced code block while its reply streams, rendered as
  * react-markdown renders it without parsing it on every chunk. While open,
@@ -585,19 +604,28 @@ const StreamingCodeFence = React.memo(function StreamingCodeFence({
 }) {
   // remark-rehype ends non-empty code with a newline.
   const source = code === "" ? "" : `${code}\n`;
-  const next = closed ? highlightClosedCode : highlightStreamingCode;
-  const [highlight, setHighlight] = React.useState(() =>
-    next(undefined, language, source),
-  );
-  let current = highlight;
-  // Each chunk extends the previous highlight: adjust state during render.
+  const highlighter = useCodeHighlighter(language !== undefined);
+  const [highlight, setHighlight] = React.useState(() => ({
+    highlighter,
+    value: fenceHighlight(highlighter, closed, undefined, language, source),
+  }));
+  let current = highlight.value;
+  // Each chunk extends the previous highlight, and the highlighter's arrival
+  // replaces plain text: adjust state during render.
   if (
+    highlight.highlighter !== highlighter ||
     current.source !== source ||
     current.language !== language ||
     current.exact !== closed
   ) {
-    current = next(current, language, source);
-    setHighlight(current);
+    current = fenceHighlight(
+      highlighter,
+      closed,
+      highlight.highlighter === highlighter ? current : undefined,
+      language,
+      source,
+    );
+    setHighlight({ highlighter, value: current });
   }
   const runs = current.settled.map((lines) => (
     <HighlightedRun key={lines.start} lines={lines} />

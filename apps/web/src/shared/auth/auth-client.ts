@@ -6,6 +6,7 @@ import {
 import { magicLinkClient } from "better-auth/client/plugins";
 import { createAuthClient } from "better-auth/react";
 import { Schema } from "effect";
+import { takeBootSessionRead } from "./boot-session.js";
 
 // The session lives in TanStack Query (features/authentication), so the
 // Better Auth client never polls or refetches on focus by itself.
@@ -42,8 +43,30 @@ export interface BrowserSession {
   };
 }
 
+const BootSessionSchema = Schema.NullOr(
+  Schema.Struct({
+    user: Schema.Struct({
+      id: Schema.String,
+      name: Schema.String,
+      email: Schema.String,
+    }),
+  }),
+);
+
 /** Resolves to `null` when nobody is signed in. */
 export const getBrowserSession = async (): Promise<BrowserSession | null> => {
+  // The first check takes the read bootstrap sent, when it answered.
+  const boot = await takeBootSessionRead();
+  if (boot !== undefined) {
+    const decoded = await Schema.decodeUnknownPromise(BootSessionSchema)(
+      boot,
+    ).then(
+      (session) => ({ session }),
+      () => undefined,
+    );
+    if (decoded !== undefined)
+      return decoded.session === null ? null : { user: decoded.session.user };
+  }
   const result = await authClient.getSession();
   if (result.error !== null) {
     if (result.error.status === 401) return null;

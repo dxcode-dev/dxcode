@@ -1,9 +1,10 @@
 {
   "name": "@dx/domain",
   "private": true,
-  "version": "0.2.61",
+  "version": "0.2.62",
   "license": "FSL-1.1-ALv2",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts"
   },

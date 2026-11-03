@@ -19,6 +19,8 @@ import {
 } from "@dx/domain";
 import { Effect, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import type { DeploymentOrbs } from "../../execution/deployment-orbs.js";
+import { registeredDeploymentOrbs } from "../../execution/deployment-orbs-registration.js";
 import { orbProviderConnectors } from "../../execution/orb-providers.js";
 import { loadRunnerProfileCatalog } from "../../execution/runner-profiles/catalog.js";
 import type { AppEnv, Bindings } from "../../http/types.js";
@@ -205,6 +207,7 @@ const listData = async (
   target: ScopeTarget,
   scope: OrbScopeContext,
   connectors: OrbProviderConnectors,
+  deploymentOrbs: DeploymentOrbs,
 ): Promise<OrbProviderListData> => {
   const plugin = findPlugin("execution");
   const localRuntime = isLocalRuntime(bindings);
@@ -217,9 +220,11 @@ const listData = async (
   const providers: Array<OrbProviderData> = (plugin?.providers ?? []).flatMap(
     (provider) => {
       const id = provider.id as ExecutionProviderId;
-      const deployment = deploymentProviders.some(
-        ({ providerId }) => providerId === id,
-      );
+      // A deployment account the deployment presents under its own name
+      // is offered in the Orb picker, not listed under the provider here.
+      const deployment =
+        deploymentProviders.some(({ providerId }) => providerId === id) &&
+        deploymentOrbs[id]?.displayName === undefined;
       const connector = connectors[id];
       const sizeIds = profiles
         .filter(({ adapter }) => adapter === id)
@@ -301,18 +306,30 @@ const listData = async (
             executionOverridesAllowed:
               scope.policy?.allowPersonalExecutionOverrides ?? false,
           },
-    resolved: resolved.map((member) => ({
-      providerId: member.providerId,
-      scope: member.scope,
-      account: member.account,
-      status: member.status,
-      unavailableSizes: unavailableSizes(
-        member,
-        profiles
-          .filter(({ adapter }) => adapter === member.providerId)
-          .map(({ id }) => id),
-      ),
-    })),
+    resolved: resolved.map((member) => {
+      const presented =
+        member.scope === "deployment"
+          ? deploymentOrbs[member.providerId]
+          : undefined;
+      return {
+        providerId: member.providerId,
+        scope: member.scope,
+        account: member.account,
+        status: member.status,
+        ...(presented?.displayName === undefined
+          ? {}
+          : { displayName: presented.displayName }),
+        ...(presented?.description === undefined
+          ? {}
+          : { description: presented.description }),
+        unavailableSizes: unavailableSizes(
+          member,
+          profiles
+            .filter(({ adapter }) => adapter === member.providerId)
+            .map(({ id }) => id),
+        ),
+      };
+    }),
   };
 };
 
@@ -495,6 +512,8 @@ const unpreparedConnection: OrbPreparation = {
 
 export interface OrbProviderRouteOptions {
   readonly connectors?: OrbProviderConnectors;
+  /** How the deployment presents its own accounts; tests pass their own. */
+  readonly deploymentOrbs?: DeploymentOrbs;
 }
 
 const mount = (
@@ -503,6 +522,7 @@ const mount = (
   options: OrbProviderRouteOptions,
 ) => {
   const connectors = options.connectors ?? orbProviderConnectors;
+  const deploymentOrbs = options.deploymentOrbs ?? registeredDeploymentOrbs;
 
   router.get("/", (c) =>
     respond(c, async () => {
@@ -529,7 +549,7 @@ const mount = (
         await orbProviderRecipes(connectors),
         connectors,
       );
-      return listData(c.env, target, scope, connectors);
+      return listData(c.env, target, scope, connectors, deploymentOrbs);
     }),
   );
 
@@ -620,6 +640,7 @@ const mount = (
         target,
         await loadScope(db, userId, null, target),
         connectors,
+        deploymentOrbs,
       );
     }),
   );
@@ -658,6 +679,7 @@ const mount = (
         target,
         await loadScope(db, userId, null, target),
         connectors,
+        deploymentOrbs,
       );
     }),
   );
@@ -686,6 +708,7 @@ const mount = (
         target,
         await loadScope(db, userId, null, target),
         connectors,
+        deploymentOrbs,
       );
     }),
   );
@@ -704,6 +727,7 @@ export const makeWorkspaceOrbProviderRoutes = (
 ) => {
   const router = new Hono<AppEnv>();
   const connectors = options.connectors ?? orbProviderConnectors;
+  const deploymentOrbs = options.deploymentOrbs ?? registeredDeploymentOrbs;
   /**
    * The workspace's explicit opt-in for members' own Orb connections on
    * workspace projects, written through WorkspacePolicyService so revision,
@@ -748,6 +772,7 @@ export const makeWorkspaceOrbProviderRoutes = (
         target,
         await loadScope(db, principal.userId, null, target),
         connectors,
+        deploymentOrbs,
       );
     }),
   );

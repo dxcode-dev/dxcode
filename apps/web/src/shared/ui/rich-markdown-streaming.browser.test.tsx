@@ -35,6 +35,9 @@ HighlightJs.newInstance = () => {
   return instance;
 };
 const { RichMarkdown } = await import("./rich-markdown.js");
+// highlight.js loads on demand; measure with it loaded, as a page does after
+// its first code block.
+await (await import("./code-highlighter.js")).loadCodeHighlighter();
 
 const mounted: Array<() => void> = [];
 afterEach(() => {

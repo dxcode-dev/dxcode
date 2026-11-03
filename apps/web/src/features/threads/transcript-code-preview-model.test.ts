@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  parseTranscriptPatch,
-  transcriptEditSource,
-} from "./transcript-code-preview-model.js";
+import { transcriptEditSource } from "./transcript-code-preview-model.js";
+import { parseTranscriptPatch } from "./transcript-code-preview-patch.js";
 
 describe("transcriptEditSource", () => {
   it("supports the exact replacement and creation tools", () => {

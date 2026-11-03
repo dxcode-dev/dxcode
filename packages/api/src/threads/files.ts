@@ -7,6 +7,10 @@ export const THREAD_FILES_MAX_PATH_LENGTH = 1_024;
 // dxd serves a whole directory in one response; this is the entry ceiling.
 export const THREAD_FILES_MAX_TREE_PAGE_SIZE = 10_000;
 export const THREAD_FILES_MAX_EDITABLE_BYTES = 256 * 1_024;
+/** One uploaded file (dxd `MAX_UPLOAD_BYTES`). */
+export const THREAD_FILES_MAX_UPLOAD_BYTES = 25 * 1_024 * 1_024;
+/** Raw bytes per upload chunk to dxd (`MAX_UPLOAD_CHUNK_BYTES`). */
+export const THREAD_FILES_UPLOAD_CHUNK_BYTES = 1_024 * 1_024;
 
 const NonNegativeInt = Schema.Int.check(
   Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
@@ -193,6 +197,34 @@ export const SaveThreadFileRequestSchema = Schema.Struct({
     ),
   ),
 });
+
+/**
+ * A Files tree write. None replaces an existing entry: a create, move, or
+ * copy onto one answers `THREAD_FILES_CONFLICT`. Delete removes a folder
+ * with everything in it.
+ */
+export const WriteThreadFilesRequestSchema = Schema.Union([
+  Schema.Struct({
+    action: Schema.Literal("create"),
+    path: ThreadFilesPath,
+    kind: Schema.Literals(["file", "directory"]),
+  }),
+  Schema.Struct({
+    action: Schema.Literals(["move", "copy"]),
+    from: ThreadFilesPath,
+    to: ThreadFilesPath,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("delete"),
+    path: ThreadFilesPath,
+  }),
+]);
+export type WriteThreadFilesRequest = typeof WriteThreadFilesRequestSchema.Type;
+
+/** A write or upload completed. */
+export const WriteThreadFilesResponseSchema = successResponse(
+  Schema.Struct({ kind: Schema.Literal("changed") }),
+);
 
 export const GetThreadFileTreeResponseSchema = successResponse(
   ThreadFileTreeDataSchema,

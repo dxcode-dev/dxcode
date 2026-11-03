@@ -105,7 +105,7 @@ export const linkMessageAttachments = async (
   input: {
     readonly threadId: string;
     readonly senderUserId: string;
-    readonly rows: ReadonlyArray<AttachmentRow>;
+    readonly rows: ReadonlyArray<Pick<AttachmentRow, "id">>;
   },
 ) => {
   if (input.rows.length === 0) return;

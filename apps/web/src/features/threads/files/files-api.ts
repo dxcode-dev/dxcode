@@ -8,6 +8,8 @@ import {
   type ThreadFilesWorktreeId,
   type ThreadFileTreeData,
   type ThreadFileVersion,
+  type WriteThreadFilesRequest,
+  WriteThreadFilesResponseSchema,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { Schema } from "effect";
@@ -107,7 +109,26 @@ export interface ThreadFilesApi {
     readonly kind: "saved";
     readonly contentVersion: ThreadFileVersion;
   }>;
+  /**
+   * Create, move, copy, or delete; never replaces an existing entry. A
+   * transport without writes (a read-only demo) offers no write actions.
+   */
+  readonly write?: (
+    threadId: ThreadId,
+    request: WriteThreadFilesRequest,
+    worktree: ThreadFilesWorktreeId | undefined,
+  ) => Promise<{ readonly kind: "changed" }>;
+  /** A new file with these bytes; never replaces an existing one. */
+  readonly upload?: (
+    threadId: ThreadId,
+    path: ThreadFilesPath,
+    file: Blob,
+    worktree: ThreadFilesWorktreeId | undefined,
+  ) => Promise<{ readonly kind: "changed" }>;
 }
+
+const worktreeQuery = (worktree: ThreadFilesWorktreeId | undefined) =>
+  worktree === undefined ? "" : `?${new URLSearchParams({ worktree })}`;
 
 export const createThreadFilesApi = (
   fetcher: Fetcher = sameOriginFetch,
@@ -150,6 +171,28 @@ export const createThreadFilesApi = (
           content: input.content,
           expectedVersion: input.expectedVersion,
         }),
+      },
+    );
+    return response.data;
+  },
+  write: async (threadId, body, worktree) => {
+    const response = await request(
+      fetcher,
+      `${baseUrl(threadId)}${worktreeQuery(worktree)}`,
+      WriteThreadFilesResponseSchema,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+    return response.data;
+  },
+  upload: async (threadId, path, file, worktree) => {
+    const response = await request(
+      fetcher,
+      `${baseUrl(threadId)}/${encodeURIComponent(path)}${worktreeQuery(worktree)}`,
+      WriteThreadFilesResponseSchema,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/octet-stream" },
+        body: file,
       },
     );
     return response.data;

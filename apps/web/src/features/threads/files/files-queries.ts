@@ -3,6 +3,7 @@ import type {
   ThreadFilesPath,
   ThreadFilesWorktreeId,
   ThreadFileVersion,
+  WriteThreadFilesRequest,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import {
@@ -128,4 +129,69 @@ export const saveThreadFileOptions = (
         queryClient.invalidateQueries({ queryKey: changesKeys.all(threadId) }),
       ]);
     },
+  });
+
+/** The Files tree after a write: every listing of the worktree and Changes. */
+const refreshAfterWrite = (
+  queryClient: QueryClient,
+  threadId: ThreadId,
+  worktree: ThreadFilesWorktreeId,
+) =>
+  Promise.all([
+    queryClient.invalidateQueries({
+      queryKey: [...threadFilesKeys.all(threadId), "tree", worktree],
+    }),
+    queryClient.invalidateQueries({ queryKey: changesKeys.all(threadId) }),
+  ]);
+
+/** Create, move, copy, or delete in one worktree. */
+export const writeThreadFilesOptions = (
+  api: ThreadFilesApi,
+  threadId: ThreadId,
+  worktree: ThreadFilesWorktreeId,
+  queryClient: QueryClient,
+) =>
+  mutationOptions({
+    retry: false,
+    mutationFn: (request: WriteThreadFilesRequest) => {
+      if (api.write === undefined) throw new Error("Files are read-only.");
+      return api.write(threadId, request, worktree);
+    },
+    onSettled: () => refreshAfterWrite(queryClient, threadId, worktree),
+  });
+
+/** Upload files into one folder of a worktree, one after another. */
+export const uploadThreadFilesOptions = (
+  api: ThreadFilesApi,
+  threadId: ThreadId,
+  queryClient: QueryClient,
+) =>
+  mutationOptions({
+    retry: false,
+    mutationFn: async (input: {
+      readonly worktree: ThreadFilesWorktreeId;
+      readonly folder?: ThreadFilesPath;
+      readonly files: readonly File[];
+    }) => {
+      const send = api.upload;
+      if (send === undefined) throw new Error("Files are read-only.");
+      // One after another: each upload holds the Thread's Changes lease.
+      await input.files.reduce<Promise<unknown>>(
+        (previous, file) =>
+          previous.then(() =>
+            send(
+              threadId,
+              (input.folder === undefined
+                ? file.name
+                : `${input.folder}/${file.name}`) as ThreadFilesPath,
+              file,
+              input.worktree,
+            ),
+          ),
+        Promise.resolve(),
+      );
+      return { kind: "changed" as const };
+    },
+    onSettled: (_data, _error, input) =>
+      refreshAfterWrite(queryClient, threadId, input.worktree),
   });

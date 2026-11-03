@@ -14,6 +14,11 @@ export interface GitHubAppConfiguration
   readonly clientSecret: Redacted.Redacted<string>;
   readonly privateKeyPem: Redacted.Redacted<string>;
   readonly webhookSecret: Redacted.Redacted<string>;
+  /**
+   * A branch preview's App reaches it through a relay origin; OAuth and
+   * setup states then name `host`, this deployment's, for the relay.
+   */
+  readonly relay?: { readonly origin: string; readonly host: string };
 }
 
 const encodedConfiguration = Config.Redacted("DX_INTEGRATION_GITHUB_APP");
@@ -30,13 +35,18 @@ export const loadGitHubAppConfiguration = Effect.fn(
   });
   const origin = bindings.DX_AUTH_URL;
   if (origin === undefined) return yield* new GitHubAppConfigurationInvalid();
-  const decoded = yield* decodeGitHubAppDeploymentConfiguration(
-    input,
-    origin,
-    bindings.DX_ENV,
-  );
+  const { relayOrigin, ...decoded } =
+    yield* decodeGitHubAppDeploymentConfiguration(
+      input,
+      origin,
+      bindings.DX_ENV,
+      bindings.DX_DEPLOYMENT_TARGET,
+    );
   return {
     ...decoded,
+    ...(relayOrigin === undefined
+      ? {}
+      : { relay: { origin: relayOrigin, host: new URL(origin).host } }),
     clientSecret: Redacted.make(decoded.clientSecret),
     privateKeyPem: Redacted.make(decoded.privateKeyPem),
     webhookSecret: Redacted.make(decoded.webhookSecret),

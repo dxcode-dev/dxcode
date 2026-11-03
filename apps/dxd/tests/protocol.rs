@@ -565,6 +565,87 @@ async fn real_daemon_serves_every_feature_over_protocol_v2() {
     std::fs::write(fixture.repo.join("src/lib.rs"), "pub fn x() {}\n").unwrap();
     wait_for(&mut socket, |value| value["type"] == "changes-dirty").await;
 
+    // Files tree writes: create, a two-chunk upload, move, copy, delete. Each
+    // write carries the lease's refresh; an upload's earlier chunks do not.
+    let write_refresh = json!({
+        "type": "changes-refresh",
+        "token": "opaque-refresh-token-3",
+        "source": {"baseline": fixture.baseline, "defaultBranch": "main"},
+        "expectedFingerprint": null,
+    });
+    for (id, operation, expected) in [
+        (
+            "create-1",
+            json!({"operation": "files.create", "path": "docs", "kind": "directory", "refresh": write_refresh}),
+            "changed",
+        ),
+        (
+            "upload-1",
+            json!({"operation": "files.upload", "path": "docs/up.bin", "upload": "0123456789abcdef0123456789abcdef", "offset": 0, "content": "aGVs", "last": false}),
+            "changed",
+        ),
+        (
+            "upload-2",
+            json!({"operation": "files.upload", "path": "docs/up.bin", "upload": "0123456789abcdef0123456789abcdef", "offset": 3, "content": "bG8=", "last": true, "refresh": write_refresh}),
+            "changed",
+        ),
+        (
+            "move-1",
+            json!({"operation": "files.move", "from": "docs/up.bin", "to": "docs/moved.bin", "refresh": write_refresh}),
+            "changed",
+        ),
+        (
+            "move-2",
+            json!({"operation": "files.move", "from": "docs/moved.bin", "to": "README.md", "refresh": write_refresh}),
+            "conflict",
+        ),
+        (
+            "copy-1",
+            json!({"operation": "files.copy", "from": "docs", "to": "docs copy", "refresh": write_refresh}),
+            "changed",
+        ),
+        (
+            "escape-1",
+            json!({"operation": "files.create", "path": "../escaped", "kind": "file", "refresh": write_refresh}),
+            "invalid",
+        ),
+    ] {
+        let result = request(&mut socket, &generation, id, operation).await;
+        assert_eq!(result["kind"], expected, "{id}");
+    }
+    assert_eq!(
+        std::fs::read(fixture.repo.join("docs/moved.bin")).unwrap(),
+        b"hello"
+    );
+    assert!(fixture.repo.join("docs copy/moved.bin").exists());
+    assert!(!fixture.repo.join("../escaped").exists());
+    // The last write's refresh produces its Changes candidate; read both it
+    // and the response, in whichever order they arrive.
+    send(
+        &mut socket,
+        json!({"type": "request", "generation": generation, "requestId": "delete-1", "operation": {
+            "operation": "files.delete", "path": "docs copy", "refresh": {
+                "type": "changes-refresh", "token": "opaque-refresh-token-4",
+                "source": {"baseline": fixture.baseline, "defaultBranch": "main"},
+                "expectedFingerprint": null,
+            },
+        }}),
+    )
+    .await;
+    let (mut deleted, mut written) = (None, None);
+    while deleted.is_none() || written.is_none() {
+        let value = next_text(&mut socket).await;
+        if value["type"] == "response" && value["requestId"] == "delete-1" {
+            deleted = Some(value["result"]["kind"].clone());
+        } else if value["type"] == "changes-candidate" && value["token"] == "opaque-refresh-token-4"
+        {
+            written = Some(value["outcome"]["kind"].clone());
+        }
+    }
+    assert_eq!(deleted.unwrap(), "changed");
+    assert_eq!(written.unwrap(), "complete");
+    assert!(!fixture.repo.join("docs copy").exists());
+
     // Sandbox read: raw bytes in DXF1 frames, split at consecutive offsets.
     std::fs::write(fixture.home.join("notes.bin"), [0_u8, 1, 2, 255, 10]).unwrap();
     send(&mut socket, json!({"type": "request", "generation": generation, "requestId": "sandbox-1", "operation": {

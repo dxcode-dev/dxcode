@@ -46,6 +46,7 @@ export * from "./projects/get-project.js";
 export * from "./projects/list-projects.js";
 export * from "./projects/project-data.js";
 export * from "./projects/project-orb-scripts.js";
+export * from "./projects/project-repository-browse.js";
 export * from "./projects/rebind-project-source.js";
 export * from "./projects/update-project.js";
 export {

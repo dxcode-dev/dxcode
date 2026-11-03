@@ -518,6 +518,19 @@ export const createBitbucketProvider = (
       return output.filter((item) => item !== undefined);
     },
     getRepository,
+    /**
+     * A read-only GET below one repository's API path, such as
+     * `commits/main?pagelen=5`; `suffix` is already URL-encoded.
+     */
+    readRepository: (
+      accessToken: string,
+      workspaceId: string,
+      repositoryId: string,
+      suffix: string,
+    ) =>
+      json(`${repoPath(workspaceId, repositoryId)}/${suffix}`, {
+        headers: headers(accessToken),
+      }),
     resolveRepositorySource: async (
       accessToken: string,
       workspaceId: string,

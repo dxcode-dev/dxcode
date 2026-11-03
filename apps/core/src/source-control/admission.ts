@@ -15,6 +15,7 @@ import {
   readBitbucketThreadAuthority,
   recheckBitbucketThreadSource,
 } from "./bitbucket/control-plane.js";
+import { readBitbucketRepository } from "./bitbucket/repository-reader.js";
 import { createGitHubAppJwt } from "./github/app-auth.js";
 import { loadGitHubAppConfiguration } from "./github/configuration.js";
 import {
@@ -22,12 +23,15 @@ import {
   GitHubProviderError,
   type GitHubResolvedSource,
 } from "./github/provider-http.js";
+import { createGitHubRepositoryReader } from "./github/repository-reader.js";
 import {
   healProjectSourceAuthority,
   healThreadSourceAuthority,
   memberSourceGrant,
   withHealedSource,
 } from "./heal.js";
+
+import type { RepositoryReader } from "./repository-reader.js";
 
 export type { SourceOwner } from "./authority.js";
 
@@ -131,90 +135,22 @@ export const authorizeSource = async (input: {
     return authorizeBitbucketSource(input);
   }
   try {
-    const before = validateLiveGrantAuthority(
-      await readLiveGrantAuthority(
-        input.db,
-        input.owner,
-        input.grantId,
-        input.repositoryId,
-      ),
-    );
-    const config = await Effect.runPromise(
-      loadGitHubAppConfiguration(input.bindings),
-    );
-    const provider = createGitHubProvider(config, input.fetcher);
-    const appJwt = await createGitHubAppJwt({
-      appId: config.appId,
-      privateKeyPem: Redacted.value(config.privateKeyPem),
-    });
-    const installationResult = settlePromise(() =>
-      provider
-        .getInstallation(appJwt, before.installation_id)
-        .then((installation) => {
-          if (installation.suspendedAt !== undefined)
-            throw deny("installation-suspended", "reconfigure");
-          if (
-            installation.permissions.contents !== "write" ||
-            installation.permissions.metadata !== "read"
-          )
-            throw deny("installation-permissions-changed", "reconfigure");
-        }),
-    );
-    const leaseResult = settlePromise(() =>
-      provider.createInstallationToken(appJwt, before.installation_id, {
-        repositoryId: input.repositoryId,
-        permissions: { contents: "read", metadata: "read" },
-      }),
-    );
-    const installation = await installationResult;
-    if (installation.status === "rejected") {
-      await cleanupSettledLease(
-        leaseResult,
-        (value) => provider.revokeInstallationToken(value.token),
-        input.waitUntil,
-      );
-      throw installation.reason;
-    }
-    const leaseOutcome = await leaseResult;
-    if (leaseOutcome.status === "rejected") throw leaseOutcome.reason;
-    const lease = leaseOutcome.value;
-    let resolved: GitHubResolvedSource;
+    let resolved: GitHubResolvedSource | undefined;
     let presentPaths: ReadonlyArray<string> | undefined;
-    try {
+    const before = await withGitHubLease(input, async (provider, token) => {
       resolved = await provider.resolveRepositorySource(
-        lease.token,
+        token,
         input.repositoryId,
       );
       if (input.readPaths !== undefined)
         presentPaths = await provider.presentPaths(
-          lease.token,
+          token,
           input.repositoryId,
           resolved.commitSha,
           input.readPaths,
         );
-    } finally {
-      // The token expires on its own; revoking it need not delay the answer.
-      const revocation = provider.revokeInstallationToken(lease.token).then(
-        () => undefined,
-        () => undefined,
-      );
-      if (input.waitUntil === undefined) await revocation;
-      else input.waitUntil(revocation);
-    }
-    const after = validateLiveGrantAuthority(
-      await readLiveGrantAuthority(
-        input.db,
-        input.owner,
-        input.grantId,
-        input.repositoryId,
-      ),
-    );
-    if (
-      before.grant_epoch !== after.grant_epoch ||
-      before.installation_epoch !== after.installation_epoch ||
-      before.policy_revision !== after.policy_revision
-    )
-      throw deny("stale-authorization-epoch", "retry");
+    });
+    if (resolved === undefined) throw deny("stale-binding", "rebind");
     return {
       provider: "github",
       owner: input.owner,
@@ -237,16 +173,119 @@ export const authorizeSource = async (input: {
   }
 };
 
-const checkProjectSource = async (input: {
+/**
+ * Runs `use` with a one-repository, read-minimum GitHub installation token for
+ * a live, entitled grant, then revokes the token and fails closed when the
+ * grant's epochs moved meanwhile. It answers the grant as `use` saw it.
+ * Provider errors pass through unmapped.
+ */
+const withGitHubLease = async (
+  input: {
+    readonly db: D1Database;
+    readonly bindings: Bindings;
+    readonly owner: SourceOwner;
+    readonly grantId: string;
+    readonly repositoryId: string;
+    readonly fetcher?: typeof fetch;
+    readonly waitUntil?: (promise: Promise<unknown>) => void;
+  },
+  use: (
+    provider: ReturnType<typeof createGitHubProvider>,
+    token: string,
+  ) => Promise<void>,
+) => {
+  const before = validateLiveGrantAuthority(
+    await readLiveGrantAuthority(
+      input.db,
+      input.owner,
+      input.grantId,
+      input.repositoryId,
+    ),
+  );
+  const config = await Effect.runPromise(
+    loadGitHubAppConfiguration(input.bindings),
+  );
+  const provider = createGitHubProvider(config, input.fetcher);
+  const appJwt = await createGitHubAppJwt({
+    appId: config.appId,
+    privateKeyPem: Redacted.value(config.privateKeyPem),
+  });
+  const installationResult = settlePromise(() =>
+    provider
+      .getInstallation(appJwt, before.installation_id)
+      .then((installation) => {
+        if (installation.suspendedAt !== undefined)
+          throw deny("installation-suspended", "reconfigure");
+        if (
+          installation.permissions.contents !== "write" ||
+          installation.permissions.metadata !== "read"
+        )
+          throw deny("installation-permissions-changed", "reconfigure");
+      }),
+  );
+  const leaseResult = settlePromise(() =>
+    provider.createInstallationToken(appJwt, before.installation_id, {
+      repositoryId: input.repositoryId,
+      permissions: { contents: "read", metadata: "read" },
+    }),
+  );
+  const installation = await installationResult;
+  if (installation.status === "rejected") {
+    await cleanupSettledLease(
+      leaseResult,
+      (value) => provider.revokeInstallationToken(value.token),
+      input.waitUntil,
+    );
+    throw installation.reason;
+  }
+  const leaseOutcome = await leaseResult;
+  if (leaseOutcome.status === "rejected") throw leaseOutcome.reason;
+  const lease = leaseOutcome.value;
+  try {
+    await use(provider, lease.token);
+  } finally {
+    // The token expires on its own; revoking it need not delay the answer.
+    const revocation = provider.revokeInstallationToken(lease.token).then(
+      () => undefined,
+      () => undefined,
+    );
+    if (input.waitUntil === undefined) await revocation;
+    else input.waitUntil(revocation);
+  }
+  const after = validateLiveGrantAuthority(
+    await readLiveGrantAuthority(
+      input.db,
+      input.owner,
+      input.grantId,
+      input.repositoryId,
+    ),
+  );
+  if (
+    before.grant_epoch !== after.grant_epoch ||
+    before.installation_epoch !== after.installation_epoch ||
+    before.policy_revision !== after.policy_revision
+  )
+    throw deny("stale-authorization-epoch", "retry");
+  return before;
+};
+
+interface ProjectSourceInput {
   readonly db: D1Database;
   readonly bindings: Bindings;
   readonly projectId: string;
   readonly ownerUserId: string;
   readonly preferredGrantId?: string;
-  readonly readPaths?: ReadonlyArray<string>;
   readonly fetcher?: typeof fetch;
   readonly waitUntil?: (promise: Promise<unknown>) => void;
-}) => {
+}
+
+/**
+ * What a Project's repository is to `ownerUserId`, from D1 alone: absent
+ * (`undefined`, also when the Project is out of reach), an anonymous Git
+ * locator, or a connected repository with the connection that user reaches it
+ * through.
+ */
+const resolveProjectSourceTarget = async (input: ProjectSourceInput) => {
   const binding = await input.db
     .prepare(`
       SELECT repository.provider, repository.binding_revision,
@@ -315,25 +354,43 @@ const checkProjectSource = async (input: {
         })
       : undefined;
   if (memberGrant === null) throw deny("grant-missing", "reconnect");
-  const source = await authorizeSource({
-    db: input.db,
-    bindings: input.bindings,
+  return {
+    kind: "connected" as const,
+    bindingRevision: Number(binding.binding_revision),
+    provider: binding.provider as "github" | "bitbucket",
     owner:
       memberGrant === undefined
         ? {
             scope: binding.owner_scope as "personal" | "workspace",
             id: String(binding.owner_id),
           }
-        : { scope: "personal", id: input.ownerUserId },
+        : { scope: "personal" as const, id: input.ownerUserId },
     grantId:
       memberGrant === undefined
         ? String(binding.owner_grant_id)
         : memberGrant.id,
     repositoryId: String(binding.provider_repository_id),
-    provider: binding.provider as "github" | "bitbucket",
     ...(binding.provider_workspace_id === null
       ? {}
       : { workspaceId: String(binding.provider_workspace_id) }),
+  };
+};
+
+const checkProjectSource = async (
+  input: ProjectSourceInput & { readonly readPaths?: ReadonlyArray<string> },
+) => {
+  const target = await resolveProjectSourceTarget(input);
+  if (target === undefined || target.kind === "anonymous") return target;
+  const source = await authorizeSource({
+    db: input.db,
+    bindings: input.bindings,
+    owner: target.owner,
+    grantId: target.grantId,
+    repositoryId: target.repositoryId,
+    provider: target.provider,
+    ...(target.workspaceId === undefined
+      ? {}
+      : { workspaceId: target.workspaceId }),
     ...(input.readPaths === undefined ? {} : { readPaths: input.readPaths }),
     fetcher: input.fetcher,
     waitUntil: input.waitUntil,
@@ -341,7 +398,7 @@ const checkProjectSource = async (input: {
   return {
     kind: "authorized" as const,
     ...source,
-    bindingRevision: Number(binding.binding_revision),
+    bindingRevision: target.bindingRevision,
   };
 };
 
@@ -480,4 +537,80 @@ export const authorizeRunStart = (db: D1Database, threadId: string) =>
   withHealedSource(
     () => healThreadSourceAuthority(db, threadId),
     () => checkRunStart(db, threadId),
+  );
+
+/**
+ * What `read` answered for a Project's connected repository, read through the
+ * viewer's own connection: a restricted, revoked GitHub installation token or
+ * their Bitbucket connection, rechecked afterwards. A Project without a
+ * repository answers `undefined`, and one bound to an anonymous Git locator
+ * answers that locator for the caller to read publicly. Provider and access
+ * errors pass through unmapped, after one heal onto the viewer's live
+ * connection to the same repository.
+ */
+export const readProjectRepository = <A>(
+  input: ProjectSourceInput & {
+    readonly read: (reader: RepositoryReader) => Promise<A>;
+  },
+) =>
+  withHealedSource(
+    () =>
+      healProjectSourceAuthority(input.db, input.projectId, input.ownerUserId),
+    async () => {
+      const target = await resolveProjectSourceTarget(input);
+      if (target === undefined || target.kind === "anonymous") return target;
+      if (target.provider === "bitbucket") {
+        if (target.owner.scope !== "personal")
+          throw deny("personal-grant-not-allowed-for-workspace", "rebind");
+        return {
+          kind: "read" as const,
+          value: await readBitbucketRepository(
+            {
+              db: input.db,
+              bindings: input.bindings,
+              userId: target.owner.id,
+              grantId: target.grantId,
+              repositoryId: target.repositoryId,
+              ...(target.workspaceId === undefined
+                ? {}
+                : { workspaceId: target.workspaceId }),
+              ...(input.fetcher === undefined
+                ? {}
+                : { fetcher: input.fetcher }),
+            },
+            input.read,
+          ),
+        };
+      }
+      const values: A[] = [];
+      await withGitHubLease(
+        {
+          db: input.db,
+          bindings: input.bindings,
+          owner: target.owner,
+          grantId: target.grantId,
+          repositoryId: target.repositoryId,
+          ...(input.fetcher === undefined ? {} : { fetcher: input.fetcher }),
+          ...(input.waitUntil === undefined
+            ? {}
+            : { waitUntil: input.waitUntil }),
+        },
+        async (_provider, token) => {
+          values.push(
+            await input.read(
+              createGitHubRepositoryReader({
+                target: { repositoryId: target.repositoryId },
+                token,
+                ...(input.fetcher === undefined
+                  ? {}
+                  : { fetcher: input.fetcher }),
+              }),
+            ),
+          );
+        },
+      );
+      const [value] = values;
+      if (values.length !== 1) throw deny("stale-binding", "retry");
+      return { kind: "read" as const, value: value as A };
+    },
   );

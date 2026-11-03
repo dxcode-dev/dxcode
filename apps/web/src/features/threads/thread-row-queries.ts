@@ -154,6 +154,37 @@ const pagesInOrder = (data: ListData) =>
 const isDue = (fetchedAt: number) =>
   Date.now() - fetchedAt >= THREAD_FRESHNESS_SLO_MS;
 
+/** How long this browser's own `/seen` may explain a Thread's next hint. */
+const SEEN_ECHO_MS = 5_000;
+const seenEchoes = new Map<ThreadId, number>();
+
+/**
+ * This browser is marking the Thread seen: the `thread.invalidated` that
+ * Core publishes for it changes the row's unread state, not the Thread's
+ * detail, so the next hint need not read the detail again (#1438).
+ */
+export const expectSeenEcho = (threadId: ThreadId) => {
+  seenEchoes.set(threadId, Date.now());
+};
+
+const takeSeenEcho = (threadId: ThreadId) => {
+  const at = seenEchoes.get(threadId);
+  seenEchoes.delete(threadId);
+  return at !== undefined && Date.now() - at < SEEN_ECHO_MS;
+};
+
+const withoutSeen = ({
+  unread: _unread,
+  childActivity: _children,
+  ...row
+}: Row) => row;
+
+/** The row moved beyond being seen: something its detail may show, too. */
+const changedBeyondSeen = (cached: Row, row: Row) => {
+  const before = withoutSeen(cached);
+  return shareEqualData(before, withoutSeen(row)) !== before;
+};
+
 interface PendingRow {
   timer?: ReturnType<typeof setTimeout>;
   running: boolean;
@@ -263,11 +294,15 @@ export class ThreadListRows {
     const client = this.#client;
     const userId = this.#userId;
     const generation = this.#generation;
-    // Restart a detail read already in flight: it may predate the change.
-    if (hint.thread)
+    const refetchDetail = () =>
       void client.invalidateQueries({
         queryKey: threadKeys.detail(userId, threadId),
       });
+    // The echo of this browser's own `/seen` reads the row only; the detail
+    // is read again only if the row shows more than the Thread being seen.
+    const seenEcho = hint.thread && takeSeenEcho(threadId);
+    // Restart a detail read already in flight: it may predate the change.
+    if (hint.thread && !seenEcho) refetchDetail();
     const lists = client
       .getQueryCache()
       .findAll({ queryKey: threadKeys.lists(userId) })
@@ -304,6 +339,11 @@ export class ThreadListRows {
       return refetchLists();
     }
     if (generation !== this.#generation) return;
+    if (
+      seenEcho &&
+      cached.some((cachedRow) => changedBeyondSeen(cachedRow, row))
+    )
+      refetchDetail();
     if (cached.some((cachedRow) => isStructural(cachedRow, row)))
       return refetchLists();
     // A parent's row counts its working, unread, and failed children; the

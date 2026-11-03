@@ -17,7 +17,7 @@ import {
   type ThreadChangesState,
 } from "./repository-d1.js";
 
-const MUTATION_LEASE_MS = 2 * 60_000;
+export const MUTATION_LEASE_MS = 2 * 60_000;
 const MUTATION_HEARTBEAT_MS = 30_000;
 const CAPTURE_LEASE_MS = 90_000;
 const BEST_EFFORT_RACE_ATTEMPTS = 2;
@@ -29,7 +29,11 @@ export interface ThreadChangesCoordinator {
   }) => Promise<"captured" | "unchanged" | "busy" | "missing" | "raced">;
   readonly runMutation: <A>(
     operation: () => Promise<A>,
-    options?: { readonly detectUnchanged?: boolean },
+    options?: {
+      readonly detectUnchanged?: boolean;
+      /** A lease the caller already took (in its authorization's batch). */
+      readonly lease?: ThreadChangesMutationLease;
+    },
   ) => Promise<A>;
 }
 
@@ -197,6 +201,14 @@ export const makeThreadChangesCoordinator = (input: {
   readonly threadId: ThreadId;
   readonly sandbox: Sandbox;
   readonly residentRefresh?: (refresh: DxdChangesRefresh) => Promise<boolean>;
+  /**
+   * Keeps a mutation's settlement alive after its result returns. With it,
+   * an agent command's result no longer waits for the lease's release and
+   * the Changes refresh, a primary round trip each (#1589): they run right
+   * after, and the lease keeps renewing until it is released. Without it,
+   * the mutation settles before it returns.
+   */
+  readonly waitUntil?: (settlement: Promise<unknown>) => void;
 }): ThreadChangesCoordinator => {
   const repository = makeThreadChangesRepository(input.db);
 
@@ -341,13 +353,15 @@ export const makeThreadChangesCoordinator = (input: {
 
   const coordinateMutation = async <A>(
     operation: () => Promise<A>,
-    options?: { readonly detectUnchanged?: boolean },
+    options?: {
+      readonly detectUnchanged?: boolean;
+      readonly lease?: ThreadChangesMutationLease;
+    },
     repair = false,
   ) => {
-    const lease = await repository.beginMutation(
-      input.threadId,
-      MUTATION_LEASE_MS,
-    );
+    const lease =
+      options?.lease ??
+      (await repository.beginMutation(input.threadId, MUTATION_LEASE_MS));
     const stopMaintainingLease = maintainMutationLease(input.threadId, lease);
     let operationResult: { readonly value: A } | undefined;
     let operationFailure: unknown;
@@ -356,26 +370,44 @@ export const makeThreadChangesCoordinator = (input: {
     } catch (cause) {
       operationFailure = cause;
     }
-    await stopMaintainingLease();
-    // The release and the refresh's reads share one round trip.
-    let released: Awaited<ReturnType<typeof lease.releaseAndRead>> | undefined;
-    try {
-      released = await lease.releaseAndRead();
-    } catch (cause) {
-      logFailure(input.threadId, "mutation-release", cause);
+    const settle = async () => {
+      await stopMaintainingLease();
+      // The release and the refresh's reads share one round trip.
+      let released:
+        | Awaited<ReturnType<typeof lease.releaseAndRead>>
+        | undefined;
+      try {
+        released = await lease.releaseAndRead();
+      } catch (cause) {
+        logFailure(input.threadId, "mutation-release", cause);
+      }
+      const dispatched =
+        !repair &&
+        released !== undefined &&
+        (await queueResidentRefresh(lease, released));
+      if (!dispatched) await flushBestEffort(options);
+    };
+    // The initial sync settles before the run continues; a command's result
+    // returns while its lease settles. Its writes already happened, so the
+    // Changes they make stay stale ("preview") until then, as during the
+    // command itself.
+    if (repair || input.waitUntil === undefined) await settle();
+    else {
+      const settlement = settle().catch((cause: unknown) =>
+        logFailure(input.threadId, "mutation-settle", cause),
+      );
+      input.waitUntil(settlement);
     }
-    const dispatched =
-      !repair &&
-      released !== undefined &&
-      (await queueResidentRefresh(lease, released));
-    if (!dispatched) await flushBestEffort(options);
     if (operationResult !== undefined) return operationResult.value;
     throw operationFailure;
   };
 
   const runMutation = <A>(
     operation: () => Promise<A>,
-    options?: { readonly detectUnchanged?: boolean },
+    options?: {
+      readonly detectUnchanged?: boolean;
+      readonly lease?: ThreadChangesMutationLease;
+    },
   ) => coordinateMutation(operation, options);
 
   const sync = () =>

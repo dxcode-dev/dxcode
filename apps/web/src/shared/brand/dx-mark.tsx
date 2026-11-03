@@ -1,6 +1,4 @@
 import "@fontsource/dm-sans/700-italic.css";
-import { effect, frameLoop, init, sampler, surface } from "vgpu";
-import shaderSource from "./dx-mark.wgsl?raw";
 import "./brand.css";
 
 export type DxMarkState =
@@ -11,152 +9,56 @@ export type DxMarkState =
   | "complete"
   | "error";
 
-const stateValue: Record<DxMarkState, number> = {
-  idle: 0,
-  thinking: 1,
-  working: 2,
-  complete: 3,
-  error: 4,
-  loading: 5,
+// A loading mark usually shows while the app's own code downloads and runs;
+// its renderer would compete with that work. It animates only if the wait
+// outlasts this, and shows its static text until then.
+const LOADING_RENDERER_DELAY_MS = 3_000;
+
+/**
+ * Runs `callback` after `delay` and then once the browser is idle, so the
+ * WebGPU renderer (about 45 KB gzip) never competes with the page it
+ * decorates; the text fallback shows until then. Returns a cancel function.
+ */
+const afterDelayWhenIdle = (callback: () => void, delay: number) => {
+  let idle: number | undefined;
+  const timer = window.setTimeout(() => {
+    if (typeof window.requestIdleCallback === "function")
+      idle = window.requestIdleCallback(callback);
+    else callback();
+  }, delay);
+  return () => {
+    window.clearTimeout(timer);
+    if (idle !== undefined) window.cancelIdleCallback(idle);
+  };
 };
 
-/** Creates the offscreen canvas used to rasterize the canonical dx glyph. */
-const makeGlyphCanvas = (width: number, height: number) => {
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  return canvas;
-};
-
-/** Connects one mark canvas to WebGPU and returns its complete teardown routine. */
-function mountDxMark(
+/** Mounts the WebGPU mark on its canvas once its renderer has loaded. */
+function attachDxMark(
   canvas: HTMLCanvasElement,
   state: DxMarkState,
   interactive: boolean,
 ) {
+  let teardown: (() => void) | undefined;
   let disposed = false;
-  let teardown: () => void = () => undefined;
-  // The mark shows its text fallback until this canvas draws a frame.
-  const mark = canvas.parentElement;
-  const pointer = { x: 0.5, y: 0.5 };
-  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-  const handlePointerMove = (event: PointerEvent) => {
-    if (!interactive || state === "error" || state === "loading") return;
-    const bounds = canvas.getBoundingClientRect();
-    pointer.x = (event.clientX - bounds.left) / Math.max(bounds.width, 1);
-    pointer.y = (event.clientY - bounds.top) / Math.max(bounds.height, 1);
-  };
-  const handlePointerLeave = () => {
-    pointer.x = 0.5;
-    pointer.y = 0.5;
-  };
-  canvas.addEventListener("pointermove", handlePointerMove);
-  canvas.addEventListener("pointerleave", handlePointerLeave);
-
-  void (async () => {
-    try {
-      await document.fonts.ready;
-      const gpu = await init();
-      if (disposed) {
-        gpu.dispose();
-        return;
-      }
-      const target = surface(gpu, canvas, {
-        alphaMode: "premultiplied",
-        dpr: [1, 2],
-      });
-      const textureWidth = 1024;
-      const textureHeight = 660;
-      const glyphCanvas = makeGlyphCanvas(textureWidth, textureHeight);
-      const context = glyphCanvas.getContext("2d");
-      if (context === null) throw new Error("2D glyph canvas unavailable");
-      const fontSize = Math.min(textureWidth * 0.51, textureHeight * 0.53);
-      context.fillStyle = "white";
-      context.font = `italic 700 ${fontSize}px "DM Sans", system-ui, sans-serif`;
-      context.textAlign = "center";
-      context.textBaseline = "middle";
-      context.letterSpacing = `${fontSize * -0.145}px`;
-      context.fillText(
-        "dx",
-        textureWidth / 2,
-        textureHeight / 2 + fontSize * 0.03,
-      );
-      const pixels = context.getImageData(
-        0,
-        0,
-        textureWidth,
-        textureHeight,
-      ).data;
-      const sourceBytesPerRow = textureWidth * 4;
-      const bytesPerRow = Math.ceil(sourceBytesPerRow / 256) * 256;
-      const glyphTexture = gpu.device.createTexture({
-        size: [textureWidth, textureHeight],
-        format: "rgba8unorm",
-        usage: ["texture_binding", "copy_dst"],
-      });
-      gpu.gpu.queue.writeTexture(
-        { texture: glyphTexture.gpu },
-        pixels,
-        { bytesPerRow, rowsPerImage: textureHeight },
-        { width: textureWidth, height: textureHeight },
-      );
-      const shader = effect(gpu, shaderSource, {
-        blend: "premultiplied",
-        set: {
-          glyphTexture,
-          glyphSampler: sampler(gpu, {
-            magFilter: "linear",
-            minFilter: "linear",
-          }),
-          params: {
-            time: 0,
-            state: stateValue[state],
-            pointer: [pointer.x, pointer.y],
-          },
+  const cancelIdle = afterDelayWhenIdle(
+    () => {
+      void import("./dx-mark-renderer.js").then(
+        ({ mountDxMark }) => {
+          if (!disposed) teardown = mountDxMark(canvas, state, interactive);
         },
-      });
-      const startedAt = performance.now();
-      const loop = frameLoop(
-        gpu,
-        (frame) => {
-          const elapsed = reducedMotion.matches
-            ? state === "loading"
-              ? 10
-              : 0
-            : (performance.now() - startedAt) / 1000;
-          shader.set({
-            params: {
-              time: elapsed,
-              pointer: [pointer.x, pointer.y],
-            },
-          });
-          frame.pass({ target, clear: [0, 0, 0, 0] }, (pass) =>
-            pass.draw(shader),
-          );
-          canvas.dataset.ready = "true";
-          if (mark !== null) mark.dataset.ready = "true";
+        (error: unknown) => {
+          canvas.dataset.failed = "true";
+          canvas.dataset.error =
+            error instanceof Error ? error.message : "Renderer unavailable";
         },
-        { fps: reducedMotion.matches ? 1 : 30 },
       );
-      teardown = () => {
-        loop.stop();
-        glyphTexture.dispose();
-        target.dispose();
-        gpu.dispose();
-      };
-    } catch (error) {
-      canvas.dataset.failed = "true";
-      canvas.dataset.error =
-        error instanceof Error ? error.message : "Unknown WebGPU error";
-    }
-  })();
-
+    },
+    state === "loading" ? LOADING_RENDERER_DELAY_MS : 0,
+  );
   return () => {
     disposed = true;
-    if (mark !== null) delete mark.dataset.ready;
-    canvas.removeEventListener("pointermove", handlePointerMove);
-    canvas.removeEventListener("pointerleave", handlePointerLeave);
-    teardown();
+    cancelIdle();
+    teardown?.();
   };
 }
 
@@ -173,7 +75,7 @@ export function DxMark({
   readonly interactive?: boolean;
 }) {
   const ref = (canvas: HTMLCanvasElement | null) =>
-    canvas === null ? undefined : mountDxMark(canvas, state, interactive);
+    canvas === null ? undefined : attachDxMark(canvas, state, interactive);
   return (
     <span
       className={`dx-brand-mark ${className}`.trim()}

@@ -1,133 +1,45 @@
-import { parseDiffFromFile } from "@pierre/diffs";
-import { File, FileDiff } from "@pierre/diffs/react";
-import { useTheme } from "../../shared/theme/theme-provider.js";
-import {
-  parseTranscriptPatch,
-  stableTranscriptPreviewVersion,
-  stripToolLineNumbers,
-  type TranscriptEditSource,
-} from "./transcript-code-preview-model.js";
+import { lazyRouteComponent } from "@tanstack/react-router";
+import * as React from "react";
+import type { TranscriptEditSource } from "./transcript-code-preview-model.js";
 
-export function TranscriptCodePreview({
-  path,
-  contents,
-  kind,
-}: {
+// The code viewer and diff renderer load when a tool call's output is first
+// expanded, not with the transcript. `lazyRouteComponent` reloads the page
+// once if a deploy removed the chunk.
+const CodePreview = lazyRouteComponent(
+  () => import("./transcript-code-preview-content.js"),
+  "TranscriptCodePreview",
+);
+const EditDiff = lazyRouteComponent(
+  () => import("./transcript-code-preview-content.js"),
+  "TranscriptEditDiff",
+);
+
+/** A tool call's file or patch, highlighted; plain text while it loads. */
+export function TranscriptCodePreview(props: {
   readonly path: string;
   readonly contents: string;
   readonly kind: "file" | "patch";
 }) {
-  return <CodePreview path={path} contents={contents} kind={kind} />;
+  return (
+    <React.Suspense
+      fallback={<pre className="transcript-edit-output">{props.contents}</pre>}
+    >
+      <CodePreview {...props} />
+    </React.Suspense>
+  );
 }
 
-const diffOptions = {
-  diffStyle: "unified",
-  lineDiffType: "word-alt",
-  hunkSeparators: "line-info-basic",
-} as const;
-
-const parseEditDiff = (source: TranscriptEditSource) => {
-  const version = stableTranscriptPreviewVersion(
-    `${source.before}\u0000${source.after}`,
-  );
-  try {
-    return parseDiffFromFile(
-      {
-        name: source.path,
-        contents: source.before,
-        cacheKey: `transcript-edit:${source.path}:${version}:before`,
-      },
-      {
-        name: source.path,
-        contents: source.after,
-        cacheKey: `transcript-edit:${source.path}:${version}:after`,
-      },
-    );
-  } catch {
-    return undefined;
-  }
-};
-
-/** Render an edit tool call as a diff of the replaced region. */
-export function TranscriptEditDiff({
-  source,
-}: {
+/** An edit tool call as a diff of the replaced region. */
+export function TranscriptEditDiff(props: {
   readonly source: TranscriptEditSource;
 }) {
-  const { resolvedAppearance } = useTheme();
-  const fileDiff = parseEditDiff(source);
-  if (fileDiff === undefined)
-    return <pre className="transcript-edit-output">{source.after}</pre>;
   return (
-    <div className="transcript-code-preview" data-preview-kind="edit">
-      <FileDiff
-        fileDiff={fileDiff}
-        className="transcript-pierre-file"
-        disableWorkerPool
-        options={{
-          theme:
-            resolvedAppearance === "light" ? "pierre-light" : "pierre-dark",
-          themeType: resolvedAppearance,
-          overflow: "wrap",
-          disableFileHeader: true,
-          stickyHeader: false,
-          ...diffOptions,
-        }}
-      />
-    </div>
-  );
-}
-
-function CodePreview({
-  path,
-  contents,
-  kind,
-}: {
-  readonly path: string;
-  readonly contents: string;
-  readonly kind: "file" | "patch";
-}) {
-  const { resolvedAppearance } = useTheme();
-  const file = {
-    name: path,
-    contents: stripToolLineNumbers(contents),
-    cacheKey: `transcript:${path}:${stableTranscriptPreviewVersion(contents)}`,
-  };
-  const fileDiffs =
-    kind === "patch" ? parseTranscriptPatch(contents, path) : [];
-  const theme = resolvedAppearance === "light" ? "pierre-light" : "pierre-dark";
-  const codeOptions = {
-    theme,
-    themeType: resolvedAppearance,
-    overflow: "wrap" as const,
-    disableFileHeader: true,
-    stickyHeader: false,
-  };
-
-  if (kind === "patch" && fileDiffs.length === 0) {
-    return <pre className="transcript-edit-output">{contents}</pre>;
-  }
-
-  return (
-    <div className="transcript-code-preview" data-preview-kind={kind}>
-      {kind === "file" ? (
-        <File
-          file={file}
-          className="transcript-pierre-file"
-          disableWorkerPool
-          options={codeOptions}
-        />
-      ) : (
-        fileDiffs.map((fileDiff) => (
-          <FileDiff
-            key={fileDiff.name}
-            fileDiff={fileDiff}
-            className="transcript-pierre-file"
-            disableWorkerPool
-            options={{ ...codeOptions, ...diffOptions }}
-          />
-        ))
-      )}
-    </div>
+    <React.Suspense
+      fallback={
+        <pre className="transcript-edit-output">{props.source.after}</pre>
+      }
+    >
+      <EditDiff {...props} />
+    </React.Suspense>
   );
 }

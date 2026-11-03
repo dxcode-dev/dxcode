@@ -16,11 +16,17 @@ import {
   type ThreadListTree,
   type ThreadPage,
 } from "../../shared/api/client.js";
+import { prefetchThreadHistory } from "../../shared/same-origin-fetch.js";
 
 const staleTime = 30_000;
 const gcTime = 5 * 60_000;
 export const THREAD_FRESHNESS_SLO_MS = 60_000;
 export const READINESS_FALLBACK_INTERVAL_MS = 5_000;
+/**
+ * How often a Thread whose first message is still on its way to the agent
+ * re-reads its detail; it usually arrives within two seconds (#1590).
+ */
+const INITIAL_DISPATCH_POLL_INTERVAL_MS = 1_500;
 
 export const threadKeys = {
   isList: (queryKey: readonly unknown[]) =>
@@ -133,6 +139,27 @@ export const threadsQueryOptions = (
     refetchOnReconnect: "always",
   });
 
+/**
+ * A Project's active Threads as the sidebar's cached list already holds them,
+ * shown while the Project's own list loads (#1440). The sidebar lists root
+ * Threads only, so the Project's own read adds its child Threads.
+ */
+export const sidebarProjectThreads = (
+  client: QueryClient,
+  userId: UserId,
+  projectId: ProjectId,
+) => {
+  const sidebar = client.getQueryData<InfiniteData<ThreadPage>>(
+    threadKeys.list(userId, undefined, "active", "roots"),
+  );
+  const items = sidebar?.pages.flatMap((page) =>
+    page.items.filter((thread) => thread.projectId === projectId),
+  );
+  return items === undefined || items.length === 0
+    ? undefined
+    : { pages: [{ items }], pageParams: [undefined] };
+};
+
 type ThreadDetail = Awaited<ReturnType<typeof getThread>>;
 
 /**
@@ -227,13 +254,35 @@ export const threadQueryOptions = (userId: UserId, threadId: ThreadId) =>
     staleTime,
     gcTime,
     refetchInterval: (query) =>
-      query.state.data?.executionWorkspace.ready === false ||
-      query.state.data?.titlePending === true
-        ? READINESS_FALLBACK_INTERVAL_MS
-        : false,
+      // A first message the agent has not admitted yet may still fail.
+      query.state.data?.initialDispatch?.state === "pending"
+        ? INITIAL_DISPATCH_POLL_INTERVAL_MS
+        : query.state.data?.executionWorkspace.ready === false ||
+            query.state.data?.titlePending === true
+          ? READINESS_FALLBACK_INTERVAL_MS
+          : false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
   });
+
+/**
+ * Starts the reads a Thread's page waits on, the Thread and its first
+ * history page, when the person shows intent to open it: hovering or
+ * pressing its link preloads the route (#1438). Reads already cached and
+ * fresh are not repeated.
+ */
+export const prefetchThreadOpen = (
+  client: QueryClient,
+  userId: UserId,
+  threadId: ThreadId,
+) => {
+  // A Thread this tab created or already opened holds its detail, and its
+  // conversation is retained or told by the creation: no history to read.
+  const known =
+    client.getQueryData(threadKeys.detail(userId, threadId)) !== undefined;
+  void client.prefetchQuery(threadQueryOptions(userId, threadId));
+  if (!known) prefetchThreadHistory(threadId);
+};
 
 /**
  * Thread search pages for one query. Each keystroke is debounced by the

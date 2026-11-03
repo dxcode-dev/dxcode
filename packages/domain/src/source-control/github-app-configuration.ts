@@ -141,34 +141,73 @@ const exactUrl = (
   return url.toString();
 };
 
+/**
+ * The origin GitHub sends a deployment's App callback, setup redirect, and
+ * webhooks to: the deployment's own, except that a branch preview (`DX_ENV`
+ * `preview` and `DX_DEPLOYMENT_TARGET` `branch`, both) may name one HTTPS
+ * relay origin that forwards each to the preview its signed state names (see
+ * `signGitHubAppRelayState`).
+ */
+export const githubAppRequestOrigin = (
+  callbackUrl: string,
+  deploymentOrigin: string,
+  environment: string | undefined,
+  deploymentTarget: string | undefined,
+) => {
+  if (environment !== "preview" || deploymentTarget !== "branch")
+    return deploymentOrigin;
+  try {
+    const url = new URL(callbackUrl);
+    return url.protocol === "https:" &&
+      url.origin !== new URL(deploymentOrigin).origin
+      ? url.origin
+      : deploymentOrigin;
+  } catch {
+    return deploymentOrigin;
+  }
+};
+
 export const decodeGitHubAppDeploymentConfiguration = Effect.fn(
   "decodeGitHubAppDeploymentConfiguration",
-)(function* (input: unknown, expectedOrigin: string, environment?: string) {
+)(function* (
+  input: unknown,
+  expectedOrigin: string,
+  environment?: string,
+  deploymentTarget?: string,
+) {
   const decoded = yield* Schema.decodeUnknownEffect(DeploymentConfiguration, {
     onExcessProperty: "error",
   })(input).pipe(Effect.mapError(() => new GitHubAppConfigurationInvalid()));
+  const requestOrigin = githubAppRequestOrigin(
+    decoded.callbackUrl,
+    expectedOrigin,
+    environment,
+    deploymentTarget,
+  );
   return yield* Effect.try({
     try: () => ({
       ...decoded,
       privateKeyPem: normalizedPem(decoded.privateKeyPem),
       callbackUrl: exactUrl(
         decoded.callbackUrl,
-        expectedOrigin,
+        requestOrigin,
         "/v1/integrations/github/oauth/callback",
         environment,
       ),
       setupUrl: exactUrl(
         decoded.setupUrl,
-        expectedOrigin,
+        requestOrigin,
         "/v1/integrations/github/setup",
         environment,
       ),
       webhookUrl: exactUrl(
         decoded.webhookUrl,
-        expectedOrigin,
+        requestOrigin,
         "/v1/integrations/github/webhooks",
         environment,
       ),
+      /** Set when GitHub reaches this preview only through a relay. */
+      relayOrigin: requestOrigin === expectedOrigin ? undefined : requestOrigin,
     }),
     catch: () => new GitHubAppConfigurationInvalid(),
   });

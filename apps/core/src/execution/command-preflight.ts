@@ -31,14 +31,25 @@ const authorizedRevisions = new Map<
 export const authorizeActiveThread = async (
   db: D1Database,
   threadId: string,
-) => {
+  /**
+   * More statements for the same transaction, such as a conditional Changes
+   * lease that writes nothing unless the Thread is active.
+   */
+  also: ReadonlyArray<D1PreparedStatement> = [],
+): Promise<ReadonlyArray<D1Result | undefined>> => {
   authorizedRevisions.delete(threadId);
-  const [lifecycle, ...revision] = await db.batch([
+  const revisionStatements = environmentRevisionStatements(
+    db,
+    threadId as ThreadId,
+  );
+  const [lifecycle, ...rest] = await db.batch([
     db
       .prepare("SELECT lifecycle_state FROM threads WHERE id = ? LIMIT 1")
       .bind(threadId),
-    ...environmentRevisionStatements(db, threadId as ThreadId),
+    ...revisionStatements,
+    ...also,
   ]);
+  const revision = rest.slice(0, revisionStatements.length);
   const row = lifecycle?.results[0] as
     | { readonly lifecycle_state?: unknown }
     | undefined;
@@ -56,6 +67,7 @@ export const authorizeActiveThread = async (
   } catch {
     // The environment check reads the revision itself.
   }
+  return rest.slice(revisionStatements.length);
 };
 
 /**

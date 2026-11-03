@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { DateTime } from "effect";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -30,7 +31,9 @@ import { ProjectPage } from "./project-page.js";
 
 describe("project page thread state", () => {
   it("preserves server activity order and displays last activity time", () => {
+    // Queries past the project and settings reads (the repository's) are pending.
     queries.useQuery
+      .mockReturnValue({ data: undefined, error: null, isPending: true })
       .mockReturnValueOnce({
         data: { id: "project-1", name: "Test project" },
         error: null,
@@ -68,7 +71,11 @@ describe("project page thread state", () => {
       isPending: false,
     });
 
-    const markup = renderToStaticMarkup(<ProjectPage />);
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <ProjectPage />
+      </QueryClientProvider>,
+    );
 
     expect(markup.indexOf("First thread")).toBeLessThan(
       markup.indexOf("Second thread"),

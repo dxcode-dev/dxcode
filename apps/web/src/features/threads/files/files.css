@@ -11,11 +11,12 @@
   background: var(--surface);
 }
 
-/* The Files toolbar: 36px, icon buttons, Collapse All at the end. */
+/* The Files toolbar: 36px, icon buttons; New File, New Folder, and Upload
+   at the start, Collapse All at the end. */
 .thread-files-toolbar {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   flex: none;
   gap: 2px;
   height: 36px;
@@ -52,8 +53,19 @@
   height: 14px;
   flex: none;
 }
-.thread-file-save:disabled {
+.thread-file-save:disabled,
+.thread-files-panel .thread-files-tool:disabled {
   cursor: default;
+  opacity: 0.5;
+}
+.thread-files-toolbar-end {
+  display: inline-flex;
+  margin-left: auto;
+}
+/* A failed tree write: one dismissible row under the toolbar. */
+.thread-files-write-error {
+  justify-content: space-between;
+  color: var(--destructive);
 }
 /* The file's Preview or Source toggle: a 26px text button. */
 .thread-file-mode {

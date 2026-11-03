@@ -1,5 +1,3 @@
-import { parsePatchFiles } from "@pierre/diffs";
-
 const numberedLine = /^\s*\d+[:|]\s?/;
 
 export const stripToolLineNumbers = (contents: string) => {
@@ -19,23 +17,6 @@ export const stableTranscriptPreviewVersion = (value: string) => {
   for (const character of value)
     hash = (hash * 31 + character.charCodeAt(0)) | 0;
   return hash >>> 0;
-};
-
-export const parseTranscriptPatch = (patch: string, path: string) => {
-  patch = /```diff\r?\n([\s\S]*?)```/.exec(patch)?.[1] ?? patch;
-  const normalized =
-    patch.includes("--- ") || patch.includes("diff --git")
-      ? patch
-      : `--- a/${path}\n+++ b/${path}\n${patch}`;
-  try {
-    return parsePatchFiles(
-      normalized,
-      `transcript-${encodeURIComponent(path)}-${stableTranscriptPreviewVersion(patch)}`,
-      true,
-    ).flatMap((parsed) => parsed.files);
-  } catch {
-    return [];
-  }
 };
 
 export const isPatchOutput = (output: string) =>

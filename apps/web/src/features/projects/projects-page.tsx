@@ -1,9 +1,4 @@
-import {
-  useInfiniteQuery,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { Building2, FolderGit2, Search, UserRound, Users } from "lucide-react";
 import * as React from "react";
@@ -14,18 +9,9 @@ import { Button } from "../../shared/ui/button.js";
 import { Input } from "../../shared/ui/input.js";
 import { TimeText } from "../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../shared/utils.js";
-import {
-  bitbucketConnectionQueryOptions,
-  bitbucketRepositoriesQueryOptions,
-} from "../settings/integrations/bitbucket-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
-import {
-  NewProjectDialog,
-  type NewProjectInput,
-} from "./new-project-dialog.js";
-import { createProjectMutationOptions } from "./project-mutations.js";
+import { NewProject } from "./new-project.js";
 import { projectsQueryOptions } from "./project-queries.js";
-import { sourceGrantsQueryOptions } from "./source-grant-queries.js";
 
 const updatedText =
   (updatedAt: { readonly epochMilliseconds: number }) => (now: number) => {
@@ -35,32 +21,14 @@ const updatedText =
 
 export function ProjectsPage() {
   const { identity } = useAuthenticatedIdentity();
-  const queryClient = useQueryClient();
   const projectsQuery = useInfiniteQuery(projectsQueryOptions(identity.id));
   const settingsQuery = useQuery(settingsContextQueryOptions(identity.id));
-  const createProjectMutation = useMutation(
-    createProjectMutationOptions(queryClient, identity.id),
-  );
   const search = useSearch({ from: "/_product/projects" });
   const navigate = useNavigate();
   const workspace = settingsQuery.data?.workspace;
   const owner =
     search.owner ?? (workspace === undefined ? "personal" : "workspace");
-  const personalSourceGrantsQuery = useQuery(
-    sourceGrantsQueryOptions(identity.id),
-  );
-  const bitbucketConnectionQuery = useQuery(
-    bitbucketConnectionQueryOptions(identity.id),
-  );
-  const bitbucketConnection =
-    bitbucketConnectionQuery.data?.connection?.status === "active"
-      ? bitbucketConnectionQuery.data.connection
-      : undefined;
-  const bitbucketRepositoriesQuery = useQuery(
-    bitbucketRepositoriesQueryOptions(identity.id, bitbucketConnection?.id),
-  );
   const [query, setQuery] = React.useState("");
-  const [actionError, setActionError] = React.useState<string>();
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const projects =
     projectsQuery.data?.pages.flatMap((page) => page.items) ?? [];
@@ -81,41 +49,6 @@ export function ProjectsPage() {
     });
   };
 
-  const setCreateDialogOpen = (open: boolean) => {
-    if (open) {
-      setActionError(undefined);
-      createProjectMutation.reset();
-    }
-    setDialogOpen(open);
-  };
-
-  const submitProject = async (input: NewProjectInput) => {
-    if (input.owner === "workspace" && workspace === undefined) {
-      setActionError("Workspace settings are unavailable.");
-      return;
-    }
-    setActionError(undefined);
-    try {
-      await createProjectMutation.mutateAsync({
-        name: input.name,
-        description: input.description,
-        source: input.source,
-        ...(input.additionalRepositories === undefined
-          ? {}
-          : { additionalRepositories: input.additionalRepositories }),
-        ...(input.owner === "workspace" && workspace !== undefined
-          ? { workspaceSlug: workspace.shortName }
-          : {}),
-      });
-      setCreateDialogOpen(false);
-      // Clear the search so the project just made is listed.
-      setQuery("");
-    } catch (cause) {
-      if (!(cause instanceof Error))
-        setActionError("Project could not be created.");
-    }
-  };
-
   return (
     <PageShell
       title={
@@ -133,62 +66,12 @@ export function ProjectsPage() {
         </div>
       }
       actions={
-        <NewProjectDialog
-          actionError={
-            actionError ??
-            (createProjectMutation.error instanceof Error
-              ? createProjectMutation.error.message
-              : undefined)
-          }
-          creating={createProjectMutation.isPending}
+        <NewProject
           open={dialogOpen}
           initialOwner={owner}
-          key={`${owner}:${workspace?.id ?? "personal"}`}
-          grants={personalSourceGrantsQuery.data ?? []}
-          bitbucketConnectionId={bitbucketConnection?.id}
-          bitbucketRepositories={
-            bitbucketConnection !== undefined &&
-            bitbucketRepositoriesQuery.data?.connectionId ===
-              bitbucketConnection?.id
-              ? bitbucketRepositoriesQuery.data.repositories
-              : []
-          }
-          grantsError={
-            [
-              personalSourceGrantsQuery.isError
-                ? "GitHub repositories could not be loaded."
-                : undefined,
-              bitbucketConnectionQuery.isError ||
-              bitbucketRepositoriesQuery.isError
-                ? "Bitbucket repositories could not be loaded."
-                : undefined,
-            ]
-              .filter(Boolean)
-              .join(" ") || undefined
-          }
-          repositoriesLoading={
-            [
-              personalSourceGrantsQuery.isPending ? "GitHub" : undefined,
-              bitbucketConnectionQuery.isPending ||
-              (bitbucketConnection !== undefined &&
-                bitbucketRepositoriesQuery.isPending)
-                ? "Bitbucket"
-                : undefined,
-            ]
-              .filter(Boolean)
-              .map((provider) => `Loading ${provider} repositories…`)
-              .join(" ") || undefined
-          }
-          personalName={identity.name}
-          workspace={workspace}
-          onReloadIntegrations={() => {
-            void personalSourceGrantsQuery.refetch();
-            void bitbucketConnectionQuery.refetch();
-            if (bitbucketConnection !== undefined)
-              void bitbucketRepositoriesQuery.refetch();
-          }}
-          onOpenChange={setCreateDialogOpen}
-          onCreate={(input) => void submitProject(input)}
+          onOpenChange={setDialogOpen}
+          // Clear the search so the project just made is listed.
+          onCreated={() => setQuery("")}
         />
       }
       contentClassName="projects-page-content"

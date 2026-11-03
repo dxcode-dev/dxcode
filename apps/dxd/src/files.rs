@@ -5,6 +5,7 @@
 
 use crate::changes::{RefreshRequest, SourceContext};
 use crate::files_sandbox::{self, SandboxReadResult, SandboxRoots};
+use crate::files_write::{self, CreateKind};
 use crate::worktrees::{self, PRIMARY_WORKTREE};
 use cap_std::fs::{Dir, Metadata, OpenOptions};
 use rand::Rng;
@@ -65,6 +66,59 @@ pub enum FilesOperation {
         #[serde(default)]
         refresh: Option<SaveRefresh>,
     },
+    /// A new empty file or folder; never replaces an entry.
+    #[serde(rename = "files.create")]
+    Create {
+        #[serde(default)]
+        worktree: Option<String>,
+        path: String,
+        kind: CreateKind,
+        #[serde(default)]
+        refresh: Option<SaveRefresh>,
+    },
+    /// One base64 chunk of an uploaded file, in order; the last one renames
+    /// it into place.
+    #[serde(rename = "files.upload")]
+    Upload {
+        #[serde(default)]
+        worktree: Option<String>,
+        path: String,
+        upload: String,
+        offset: u64,
+        content: String,
+        last: bool,
+        #[serde(default)]
+        refresh: Option<SaveRefresh>,
+    },
+    /// Rename or move an entry; never replaces one.
+    #[serde(rename = "files.move")]
+    Move {
+        #[serde(default)]
+        worktree: Option<String>,
+        from: String,
+        to: String,
+        #[serde(default)]
+        refresh: Option<SaveRefresh>,
+    },
+    /// Copy an entry, a folder with everything in it; never replaces one.
+    #[serde(rename = "files.copy")]
+    Copy {
+        #[serde(default)]
+        worktree: Option<String>,
+        from: String,
+        to: String,
+        #[serde(default)]
+        refresh: Option<SaveRefresh>,
+    },
+    /// Remove a file, a link, or a folder with everything in it.
+    #[serde(rename = "files.delete")]
+    Delete {
+        #[serde(default)]
+        worktree: Option<String>,
+        path: String,
+        #[serde(default)]
+        refresh: Option<SaveRefresh>,
+    },
     /// Read-only byte range of any regular file in the guest, by absolute path.
     #[serde(rename = "files.readSandbox")]
     ReadSandbox {
@@ -101,12 +155,35 @@ pub struct SaveRefresh {
 }
 
 impl FilesOperation {
-    pub fn refresh(&self) -> Option<RefreshRequest> {
+    /// Whether this changes the checkout. Every change carries the Changes
+    /// refresh Core's lease issued, except an upload's chunks before the last.
+    pub fn writes(&self) -> bool {
         match self {
-            Self::Save {
-                refresh: Some(refresh),
-                ..
-            } => {
+            Self::Save { .. }
+            | Self::Create { .. }
+            | Self::Move { .. }
+            | Self::Copy { .. }
+            | Self::Delete { .. } => true,
+            Self::Upload { last, .. } => *last,
+            Self::List { .. } | Self::Read { .. } | Self::ReadSandbox { .. } => false,
+        }
+    }
+
+    fn refresh_message(&self) -> Option<&SaveRefresh> {
+        match self {
+            Self::Save { refresh, .. }
+            | Self::Create { refresh, .. }
+            | Self::Upload { refresh, .. }
+            | Self::Move { refresh, .. }
+            | Self::Copy { refresh, .. }
+            | Self::Delete { refresh, .. } => refresh.as_ref(),
+            Self::List { .. } | Self::Read { .. } | Self::ReadSandbox { .. } => None,
+        }
+    }
+
+    pub fn refresh(&self) -> Option<RefreshRequest> {
+        match self.refresh_message() {
+            Some(refresh) => {
                 let RefreshMessageType::ChangesRefresh = refresh.message_type;
                 Some(RefreshRequest {
                     token: refresh.token.clone(),
@@ -114,10 +191,7 @@ impl FilesOperation {
                     expected_fingerprint: refresh.expected_fingerprint.clone(),
                 })
             }
-            Self::List { .. }
-            | Self::Read { .. }
-            | Self::ReadSandbox { .. }
-            | Self::Save { refresh: None, .. } => None,
+            None => None,
         }
     }
 }
@@ -165,6 +239,8 @@ pub enum FilesResult {
     Saved {
         version: String,
     },
+    /// A create, upload chunk, move, copy, or delete completed.
+    Changed,
     Readonly {
         reason: ReadonlyReason,
         content: String,
@@ -179,7 +255,7 @@ pub enum FilesResult {
     Sandbox(SandboxReadResult),
 }
 
-enum FilesError {
+pub(crate) enum FilesError {
     Invalid,
     Missing,
     Conflict,
@@ -202,8 +278,9 @@ pub struct FilesContext {
     pub root: Dir,
     pub workspace_root: std::path::PathBuf,
     pub sandbox: SandboxRoots,
-    /// Saves run one at a time so compare-and-swap holds between concurrent
-    /// requests: two saves with the same expected version cannot both win.
+    /// Writes run one at a time so compare-and-swap holds between concurrent
+    /// requests (two saves with the same expected version cannot both win),
+    /// and a create or move sees every earlier write.
     save: Mutex<()>,
 }
 
@@ -232,7 +309,12 @@ impl FilesContext {
                 length,
                 expected_version.as_deref(),
             )),
-            operation @ FilesOperation::Save { .. } => {
+            operation @ (FilesOperation::Save { .. }
+            | FilesOperation::Create { .. }
+            | FilesOperation::Upload { .. }
+            | FilesOperation::Move { .. }
+            | FilesOperation::Copy { .. }
+            | FilesOperation::Delete { .. }) => {
                 let _serialized = self
                     .save
                     .lock()
@@ -332,6 +414,18 @@ pub fn execute(root: &Dir, operation: FilesOperation) -> FilesResult {
             content,
             ..
         } => save(root, &path, &expected_version, content.as_bytes()),
+        FilesOperation::Create { path, kind, .. } => files_write::create(root, &path, kind),
+        FilesOperation::Upload {
+            path,
+            upload,
+            offset,
+            content,
+            last,
+            ..
+        } => files_write::upload(root, &path, &upload, offset, &content, last),
+        FilesOperation::Move { from, to, .. } => files_write::rename(root, &from, &to),
+        FilesOperation::Copy { from, to, .. } => files_write::copy(root, &from, &to),
+        FilesOperation::Delete { path, .. } => files_write::delete(root, &path),
         FilesOperation::ReadSandbox { .. } => Err(FilesError::Invalid),
     };
     result.unwrap_or_else(FilesResult::from)
@@ -341,7 +435,12 @@ fn operation_worktree(operation: &FilesOperation) -> Option<&str> {
     match operation {
         FilesOperation::List { worktree, .. }
         | FilesOperation::Read { worktree, .. }
-        | FilesOperation::Save { worktree, .. } => worktree.as_deref(),
+        | FilesOperation::Save { worktree, .. }
+        | FilesOperation::Create { worktree, .. }
+        | FilesOperation::Upload { worktree, .. }
+        | FilesOperation::Move { worktree, .. }
+        | FilesOperation::Copy { worktree, .. }
+        | FilesOperation::Delete { worktree, .. } => worktree.as_deref(),
         FilesOperation::ReadSandbox { .. } => None,
     }
 }
@@ -405,7 +504,7 @@ fn valid_version(version: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn path_error(error: io::Error) -> FilesError {
+pub(crate) fn path_error(error: io::Error) -> FilesError {
     match error.kind() {
         io::ErrorKind::NotFound => FilesError::Missing,
         io::ErrorKind::PermissionDenied
@@ -425,7 +524,7 @@ fn open_child_dir(parent: &Dir, name: &str) -> Result<Dir, FilesError> {
     parent.open_dir(name).map_err(path_error)
 }
 
-fn open_parent(root: &Dir, path: &str) -> Result<(Dir, String), FilesError> {
+pub(crate) fn open_parent(root: &Dir, path: &str) -> Result<(Dir, String), FilesError> {
     if !valid_path(path) {
         return Err(FilesError::Invalid);
     }
@@ -603,7 +702,7 @@ fn read(root: &Dir, path: &str) -> Result<FilesResult, FilesError> {
     }
 }
 
-fn sync_directory(directory: &Dir) -> Result<(), FilesError> {
+pub(crate) fn sync_directory(directory: &Dir) -> Result<(), FilesError> {
     // The Dir handle itself is a path-only descriptor; fsync needs a readable one.
     let file = directory
         .open_with(".", OpenOptions::new().read(true))

@@ -95,15 +95,88 @@ function OptimisticInitialMessage({
   );
 }
 
+const INITIAL_DISPATCH_FAILURE_REASONS: Record<
+  NonNullable<ThreadDetailData["initialDispatch"]> extends infer Dispatch
+    ? Dispatch extends { readonly failureCode: infer Code extends string }
+      ? Code
+      : never
+    : never,
+  string
+> = {
+  INITIAL_MESSAGE_REJECTED: "The agent refused it.",
+  INITIAL_MESSAGE_TOO_LARGE: "It is too large for the agent.",
+  INITIAL_SUBMISSION_CONFLICT:
+    "The agent already holds a different first message.",
+  INITIAL_ADMISSION_UNAVAILABLE: "The agent could not be reached.",
+};
+
+/**
+ * A new Thread's first message never reached the agent. The card floats
+ * above the composer with Retry, which hands the same stored message to the
+ * agent again; the transcript stays blank. A message sent instead replaces
+ * it, so the card goes once the conversation holds one.
+ */
+function InitialDispatchFailureCard({
+  source,
+  initialDispatch,
+  onRetry,
+}: {
+  readonly source: AgentSource<PanelAgent>;
+  readonly initialDispatch?: ThreadDetailData["initialDispatch"];
+  readonly onRetry?: () => Promise<void>;
+}) {
+  const started = useAgentSelection(source, (agent) =>
+    agent.messages.some(({ role }) => role === "user"),
+  );
+  const [dismissed, setDismissed] = React.useState(false);
+  const [retrying, setRetrying] = React.useState(false);
+  const [retryFailed, setRetryFailed] = React.useState(false);
+  if (
+    started ||
+    dismissed ||
+    initialDispatch?.state !== "failed" ||
+    onRetry === undefined
+  )
+    return null;
+  const retry = async () => {
+    setRetrying(true);
+    setRetryFailed(false);
+    const retried = await settle(onRetry);
+    setRetryFailed(!retried.ok);
+    setRetrying(false);
+  };
+  return (
+    <div data-initial-dispatch-failure="">
+      <ThreadErrorCard
+        error={{
+          id: "initial-dispatch",
+          title: "Your message didn't start",
+          message: retryFailed
+            ? "Retry failed. Check your connection and try again."
+            : `${INITIAL_DISPATCH_FAILURE_REASONS[initialDispatch.failureCode]} Retry sends it again.`,
+          action: "none",
+        }}
+        retrying={retrying}
+        onDismiss={() => setDismissed(true)}
+        onRetry={() => void retry()}
+      />
+    </div>
+  );
+}
+
 function AgentTranscriptHeader({
   archived,
   historyReady,
   messageCount,
+  blank = false,
 }: {
   readonly archived: boolean;
   readonly historyReady: boolean;
   readonly messageCount: number;
+  /** Nothing to show: the first message failed; the composer's card says why. */
+  readonly blank?: boolean;
 }) {
+  if (blank) return null;
   return (
     <>
       {historyReady && messageCount === 0 ? (
@@ -270,7 +343,7 @@ const diskFullPresentation = (
     id,
     title,
     message:
-      "Free space, then retry: delete folders you can rebuild or files you don’t need, from the disk notice or the Terminal.",
+      "dx cleared package caches and temporary files and still couldn’t make room. Retry starts the agent in recovery mode so it can free space, or delete files you don’t need from the disk notice or the Terminal.",
     action: "resume",
   };
 };
@@ -1070,6 +1143,10 @@ export interface AgentPanelOptions {
   readonly transcriptEnd?: React.ReactNode;
   readonly optimisticCreation?: OptimisticThreadCreation;
   readonly onInitialSubmissionObserved?: (submissionId: string) => void;
+  /** The first message while the agent has not admitted it. */
+  readonly initialDispatch?: ThreadDetailData["initialDispatch"];
+  /** Retry on a first message that failed to start. */
+  readonly onRetryInitialDispatch?: () => Promise<void>;
   readonly onOpenModelRouting?: () => void;
   /** Messages other Threads sent while this one worked, not yet joined. */
   readonly inboundMessages?: ThreadDetailData["inboundMessages"];
@@ -1386,6 +1463,7 @@ function AgentConversation({
   footer,
   optimisticCreation,
   onInitialSubmissionObserved,
+  initialDispatch,
   focus,
   onFocusHandled,
   onFocusRequested,
@@ -1399,6 +1477,7 @@ function AgentConversation({
   readonly footer: React.ReactNode;
   readonly optimisticCreation?: OptimisticThreadCreation;
   readonly onInitialSubmissionObserved?: (submissionId: string) => void;
+  readonly initialDispatch?: ThreadDetailData["initialDispatch"];
   readonly focus?: TranscriptFocus;
   readonly onFocusHandled?: () => void;
   readonly onFocusRequested?: () => void;
@@ -1417,6 +1496,11 @@ function AgentConversation({
         message.submissionId === optimisticCreation.submissionId,
     );
   const initialSubmissionId = optimisticCreation?.submissionId;
+  // The first message failed to start: the transcript stays blank and the
+  // card above the composer says why, until a message is sent.
+  const blank =
+    initialDispatch?.state === "failed" &&
+    !agent.messages.some(({ role }) => role === "user");
   const reconcileInitialSubmission = (node: HTMLSpanElement | null) => {
     if (
       node === null ||
@@ -1443,6 +1527,7 @@ function AgentConversation({
         <AgentTranscriptHeader
           archived={archived}
           historyReady={agent.historyReady}
+          blank={blank}
           messageCount={
             agent.messages.length +
             (optimisticCreation !== undefined && !initialSubmissionObserved
@@ -1452,7 +1537,8 @@ function AgentConversation({
         />
       }
       pinnedContent={
-        optimisticCreation === undefined ? null : initialSubmissionObserved ? (
+        optimisticCreation === undefined ||
+        blank ? null : initialSubmissionObserved ? (
           <span hidden ref={reconcileInitialSubmission} />
         ) : (
           <OptimisticInitialMessage creation={optimisticCreation} />
@@ -1489,6 +1575,8 @@ export function AgentPanel({
   composerNotice,
   transcriptEnd,
   optimisticCreation,
+  initialDispatch,
+  onRetryInitialDispatch,
   onInitialSubmissionObserved,
   onOpenModelRouting,
   inboundMessages,
@@ -1601,6 +1689,11 @@ export function AgentPanel({
       {typeof composerNotice === "function"
         ? composerNotice((message) => void submit(message))
         : composerNotice}
+      <InitialDispatchFailureCard
+        source={source}
+        initialDispatch={initialDispatch}
+        onRetry={archived ? undefined : onRetryInitialDispatch}
+      />
       <AgentThreadErrorCard
         source={source}
         discardedSends={discardedSends}
@@ -1655,6 +1748,7 @@ export function AgentPanel({
           }
           optimisticCreation={optimisticCreation}
           onInitialSubmissionObserved={onInitialSubmissionObserved}
+          initialDispatch={initialDispatch}
           focus={focus}
           onFocusHandled={onFocusHandled}
           onFocusRequested={onFocusRequested}

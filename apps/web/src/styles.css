@@ -6120,6 +6120,31 @@ a {
 .account-thread-count {
   font-variant-numeric: tabular-nums;
 }
+.account-usage-card {
+  margin-top: 16px;
+}
+.account-usage-reset {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.account-usage-details {
+  padding: 12px 16px;
+}
+.account-usage-details dd {
+  font-variant-numeric: tabular-nums;
+}
+.account-usage-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 56px;
+  padding: 12px 16px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.account-usage-state button {
+  margin-left: auto;
+}
 .account-profile-editor {
   display: flex;
   align-items: flex-start;
@@ -11792,6 +11817,44 @@ body:has(.dx-app-shell) {
 .thread-project-group[data-thread-section="archived"] .thread-group-meta {
   opacity: 1;
 }
+/* Inactive's heading carries Archive inactive threads after its count. */
+.thread-group-heading-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.thread-group-heading-row .thread-group-heading {
+  flex: 1;
+  min-width: 0;
+}
+.thread-group-action {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-right: 4px;
+  padding: 0;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: var(--sidebar-radius-sm);
+  background: transparent;
+}
+.thread-group-action:hover,
+.thread-group-action:focus-visible {
+  color: var(--foreground);
+  background: var(--sidebar-interactive-background);
+}
+.thread-group-action svg {
+  width: 13px;
+  height: 13px;
+}
+/* A Project's name over its Threads inside Inactive: a label, not a
+   toggle. */
+.thread-subgroup-heading {
+  margin: 0;
+  cursor: default;
+}
 .thread-group-meta svg {
   width: 12px;
   height: 12px;
@@ -11827,6 +11890,15 @@ body:has(.dx-app-shell) {
 .thread-row-shell[data-snooze] {
   --thread-snooze-room: calc(var(--sidebar-text-sm) * 2.4 + 10px);
   --thread-row-end: calc(var(--thread-row-marks) + var(--thread-snooze-room));
+}
+/* An Inactive row's age, such as 15d or 11mo, in the snooze status's place. */
+.thread-row-shell[data-age] {
+  --thread-row-end: calc(
+    var(--thread-row-marks) +
+    var(--sidebar-text-sm) *
+    2.4 +
+    6px
+  );
 }
 .thread-row-shell[data-snooze="woke"] {
   --thread-snooze-room: calc(var(--sidebar-text-sm) * 3 + 24px);
@@ -12865,6 +12937,14 @@ body:has(.dx-app-shell) {
   padding: 72px 16px 16px;
   overflow-y: auto;
 }
+/* Opened from the New Thread composer's project picker: over its modal, which
+   stays dimmed behind it since a nested dialog renders no backdrop. Its
+   repository list rises with it, below. */
+.dialog-viewport:has(> .new-project-dialog[data-nested]) {
+  z-index: 113;
+  background: rgba(0, 0, 0, 0.52);
+  backdrop-filter: blur(2px);
+}
 .new-project-dialog .dialog-form {
   display: grid;
   gap: 20px;
@@ -13511,6 +13591,11 @@ body:has(.dx-app-shell) {
     height: 40px;
     min-height: 40px;
   }
+  .thread-group-action {
+    width: 40px;
+    height: 40px;
+    margin-right: 0;
+  }
   .product-sidebar .sidebar-topbar {
     flex-basis: 44px;
     height: 44px;
@@ -13663,6 +13748,10 @@ body:has(.dx-app-shell) {
 .repository-combobox-positioner {
   z-index: 100;
   outline: 0;
+}
+/* Over the nested New Project dialog the composer opens. */
+body:has(.new-project-dialog[data-nested]) .repository-combobox-positioner {
+  z-index: 114;
 }
 .repository-combobox-popup {
   width: var(--anchor-width);
@@ -14688,6 +14777,17 @@ body:has(.dx-app-shell) {
   padding: 12px 10px;
   color: var(--muted-foreground);
   font-size: 12px;
+}
+.project-picker-separator {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--border);
+}
+.project-picker-new > svg {
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  color: var(--muted-foreground);
 }
 .new-project-dialog .repository-combobox-control {
   grid-template-columns: minmax(0, 1fr) 28px;

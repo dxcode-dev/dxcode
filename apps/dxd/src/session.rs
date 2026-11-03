@@ -13,7 +13,7 @@ use crate::changes::{
 };
 use crate::disk::Disk;
 use crate::environment::{EnvironmentOutcome, EnvironmentResult, EnvironmentRuntime, Materialized};
-use crate::files::{FilesContext, FilesDone, FilesOperation, FilesResult, FilesWorkers};
+use crate::files::{FilesContext, FilesDone, FilesResult, FilesWorkers};
 use crate::files_sandbox::{self, SandboxReadResult};
 use crate::memory::{self, Memory};
 use crate::observer::Observer;
@@ -851,12 +851,12 @@ impl Daemon {
                     return Err(SessionExit::Protocol("invalid request id"));
                 }
                 let refresh = operation.refresh();
-                if matches!(
-                    &operation,
-                    RequestOperation::Files(FilesOperation::Save { refresh: None, .. })
-                ) && self.config.local_runtime.is_none()
+                if let RequestOperation::Files(files) = &operation
+                    && files.writes()
+                    && refresh.is_none()
+                    && self.config.local_runtime.is_none()
                 {
-                    return Err(SessionExit::Protocol("files save without refresh"));
+                    return Err(SessionExit::Protocol("files write without refresh"));
                 }
                 if refresh.as_ref().is_some_and(|value| !valid_refresh(value)) {
                     return Err(SessionExit::Protocol("invalid request refresh"));
@@ -1236,7 +1236,10 @@ impl Daemon {
             .pending_file_refreshes
             .remove(&completed.request_id)
             .flatten();
-        let saved = matches!(&completed.result, FilesResult::Saved { .. });
+        let saved = matches!(
+            &completed.result,
+            FilesResult::Saved { .. } | FilesResult::Changed
+        );
         match completed.result {
             // File bytes travel as binary frames, not base64 inside JSON.
             FilesResult::Sandbox(SandboxReadResult::SandboxChunk {

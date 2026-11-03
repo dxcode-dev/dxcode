@@ -31,7 +31,10 @@ import {
   MarkdownFileLinkContext,
   MarkdownImageSourceContext,
 } from "../../shared/ui/markdown-file-link-context.js";
-import { projectQueryOptions } from "../projects/project-queries.js";
+import {
+  listedProject,
+  projectQueryOptions,
+} from "../projects/project-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { AgentPanel, type AgentPanelOptions } from "./agent-panel.js";
 import { ThreadScheduleHint } from "./automations/thread-schedule-hint.js";
@@ -77,6 +80,7 @@ import {
   ThreadFileNavigationContext,
 } from "./thread-file-navigation.js";
 import { ThreadHeader } from "./thread-header.js";
+import { retryInitialThreadDispatch } from "./thread-mutations.js";
 import {
   invalidateThreadQueries,
   threadQueryOptions,
@@ -229,6 +233,7 @@ export function ThreadWorkspace({
       replace: true,
     });
   const { identity } = useAuthenticatedIdentity();
+  const queryClient = useQueryClient();
   const registry = React.useContext(ThreadSessionRegistryContext);
   const id = threadId as ThreadId;
   useThreadPresence(id);
@@ -249,6 +254,14 @@ export function ThreadWorkspace({
       threadQuery.data?.projectId as ProjectId,
     ),
     enabled: threadQuery.data !== undefined && !projectUnreadable,
+    placeholderData: () =>
+      threadQuery.data?.projectId === undefined
+        ? undefined
+        : listedProject(
+            queryClient,
+            identity.id,
+            threadQuery.data.projectId as ProjectId,
+          ),
   });
   // A Thread created in this browser knows its Project's name and scope, so
   // it opens without waiting for the Project (a hidden one for No Project).
@@ -780,11 +793,14 @@ function FilesView({
   threadId,
   projectName,
   onOpenFile,
+  canWrite,
 }: {
   readonly active: boolean;
   readonly threadId: ThreadId;
   readonly projectName: string;
   readonly onOpenFile: (location: ThreadFileLocation) => void;
+  /** View members read Files; they never get write actions. */
+  readonly canWrite: boolean;
 }) {
   const { layout } = usePaneLayout(threadId);
   // The shown file: the focused pane's, else the first pane showing one.
@@ -806,6 +822,7 @@ function FilesView({
       projectName={projectName}
       selectedFile={selectedFile}
       onOpenFile={onOpenFile}
+      canWrite={canWrite}
     />
   );
 }
@@ -883,6 +900,7 @@ function usePaneViewContents({
       threadId={thread.id}
       projectName={project.name}
       onOpenFile={openFile}
+      canWrite={thread.access !== "view"}
     />
   );
   return {
@@ -1073,6 +1091,10 @@ function ThreadSessionContent({
       composerNotice={composerNotice}
       optimisticCreation={optimisticCreation}
       onInitialSubmissionObserved={onInitialSubmissionObserved}
+      initialDispatch={thread.initialDispatch}
+      onRetryInitialDispatch={() =>
+        retryInitialThreadDispatch(queryClient, identity.id, thread.id)
+      }
       {...sharedPanelProps}
     />
   );

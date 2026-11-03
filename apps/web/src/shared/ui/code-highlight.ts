@@ -1,14 +1,14 @@
+// highlight.js and lowlight with the common grammars. Load it through
+// `useCodeHighlighter` (code-highlighter.ts), never statically from a page.
 import type { Emitter } from "highlight.js";
 import HighlightJs from "highlight.js/lib/core";
 import { common, createLowlight } from "lowlight";
-
-/** Highlighted code: text, or a span with highlight.js classes. */
-export type HighlightNode =
-  | string
-  | {
-      readonly className: string;
-      readonly children: ReadonlyArray<HighlightNode>;
-    };
+import {
+  type HighlightedLines,
+  type HighlightNode,
+  plainCode,
+  type StreamingCodeHighlight,
+} from "./code-highlighter.js";
 
 interface LowlightNode {
   readonly type: string;
@@ -32,24 +32,6 @@ const lowlight = createLowlight(common);
 const exact = new Map<string, ReadonlyArray<HighlightNode>>();
 let exactChars = 0;
 const EXACT_CACHE_CHARS = 2_000_000;
-
-/**
- * The language a code block's classes name, read as rehype-highlight reads
- * them: false when the block turns highlighting off.
- */
-export const codeLanguage = (
-  className: string | undefined,
-): string | false | undefined => {
-  let language: string | undefined;
-  for (const value of className?.split(" ") ?? []) {
-    if (value === "no-highlight" || value === "nohighlight") return false;
-    if (language === undefined && value.startsWith("lang-"))
-      language = value.slice(5);
-    if (language === undefined && value.startsWith("language-"))
-      language = value.slice(9);
-  }
-  return language || undefined;
-};
 
 /**
  * lowlight's highlighting of a code block, as rehype-highlight produces it,
@@ -78,26 +60,6 @@ export const highlightCode = (
   }
   return nodes;
 };
-
-/** Lines highlighted once; React skips them while later lines stream. */
-export interface HighlightedLines {
-  readonly nodes: ReadonlyArray<HighlightNode>;
-  /** The code offset where these lines start. */
-  readonly start: number;
-  /** Characters of code these lines hold. */
-  readonly length: number;
-}
-
-export interface StreamingCodeHighlight {
-  readonly language: string | undefined;
-  readonly source: string;
-  /** Highlighted as one pass over the whole code, as rehype-highlight does. */
-  readonly exact: boolean;
-  readonly settled: ReadonlyArray<HighlightedLines>;
-  /** Characters of `source` that `settled` covers. */
-  readonly settledLength: number;
-  readonly tail: ReadonlyArray<HighlightNode>;
-}
 
 interface Span {
   readonly className: string;
@@ -263,7 +225,7 @@ export const highlightStreamingCode = (
   source: string,
 ): StreamingCodeHighlight => {
   if (language === undefined || highlighter.getLanguage(language) === undefined)
-    return plain(language, source, false);
+    return plainCode(language, source, false);
   const reuse =
     previous !== undefined &&
     !previous.exact &&
@@ -312,21 +274,6 @@ export const highlightStreamingCode = (
   };
 };
 
-// Exact only once the code stops growing, so an open fence's highlight
-// matches its `closed` state and is not replaced on every render.
-const plain = (
-  language: string | undefined,
-  source: string,
-  exact: boolean,
-): StreamingCodeHighlight => ({
-  language,
-  source,
-  exact,
-  settled: [],
-  settledLength: 0,
-  tail: source === "" ? [] : [source],
-});
-
 /**
  * The exact highlighting of code that stopped growing, such as a fence that
  * just closed. It is cut where the streamed runs ended, wherever no span
@@ -341,7 +288,7 @@ export const highlightClosedCode = (
   const nodes =
     language === undefined ? undefined : highlightCode(language, source);
   if (nodes === undefined || nodes.length === 0)
-    return plain(language, source, true);
+    return plainCode(language, source, true);
   const settled: HighlightedLines[] = [];
   let offset = 0;
   let rest = nodes;

@@ -88,6 +88,13 @@ export const OrbResolvedProviderSchema = Schema.Struct({
   scope: PluginScope,
   account: Schema.NullOr(Schema.String),
   status: OrbProviderConnectionStatus,
+  /**
+   * The deployment's own name for its account of this provider, which the
+   * Orb picker shows instead of the provider's. Only on scope `deployment`.
+   */
+  displayName: Schema.optional(Schema.String),
+  /** One sentence about that account, such as its limits. */
+  description: Schema.optional(Schema.String),
   /** Sizes this account cannot run; the Orb picker leaves them out. */
   unavailableSizes: Schema.Array(OrbUnavailableSizeSchema),
 });

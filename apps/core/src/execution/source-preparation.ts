@@ -8,6 +8,7 @@ import type { SandboxFactory } from "@flue/runtime";
 import { Effect, Layer, Schema } from "effect";
 import type { Bindings } from "../http/types.js";
 import { executionWorkspaceLogger } from "../logging.js";
+import { prepareWithDiskRecovery } from "../orb-disk/recovery.js";
 import { SettingsAudit } from "../settings/audit.js";
 import { SettingsService } from "../settings/service.js";
 import { WorkspaceRepositoryD1 } from "../settings/workspace/repository-d1.js";
@@ -219,6 +220,11 @@ export const readSourceWorkspace = (db: D1Database, threadId: string) =>
     }).pipe(Effect.provide(SourceWorkspaceRepositoryD1(db))),
   );
 
+/**
+ * Prepares the Thread's source in its Orb and returns the turn's cwd. A full
+ * disk is cleaned up and retried once, then starts the turn in recovery mode
+ * (see orb-disk/recovery.ts).
+ */
 export const activateSourceWorkspace = (
   bindings: Bindings,
   db: D1Database,
@@ -231,21 +237,24 @@ export const activateSourceWorkspace = (
   ) => Effect.Effect<void>,
   disk?: SourceWorkspaceDiskOptions,
   source?: ReturnType<typeof readSourceWorkspace>,
-) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const service = yield* SourceWorkspaceService;
-      const preparation = workspacePreparationFor(sandbox);
-      return yield* runThreadHooks
-        ? service.activate(threadId, preparation, onPreparationPhase, {
-            ...(disk === undefined ? {} : { disk }),
-            ...(source === undefined ? {} : { source }),
-          })
-        : service.prepare(threadId, preparation, disk);
-    }).pipe(
-      Effect.provide(sourceWorkspaceLayer(bindings, db, options).activation),
+) => {
+  const preparation = workspacePreparationFor(sandbox);
+  return prepareWithDiskRecovery(threadId, preparation, disk, (attemptDisk) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* SourceWorkspaceService;
+        return yield* runThreadHooks
+          ? service.activate(threadId, preparation, onPreparationPhase, {
+              ...(attemptDisk === undefined ? {} : { disk: attemptDisk }),
+              ...(source === undefined ? {} : { source }),
+            })
+          : service.prepare(threadId, preparation, attemptDisk);
+      }).pipe(
+        Effect.provide(sourceWorkspaceLayer(bindings, db, options).activation),
+      ),
     ),
   );
+};
 
 /** Whether the Thread owner has connected GitHub, so `gh` gets dx's wrapper. */
 export const githubCliConnected = async (db: D1Database, threadId: string) =>

@@ -1,0 +1,195 @@
+/* The Project page's Commits and Files, built on the Recent Threads list. */
+.project-overview {
+  display: grid;
+  gap: 20px;
+}
+.project-overview-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+}
+@media (min-width: 1024px) {
+  .project-overview-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+}
+/* On a narrow screen Recent Threads comes first; Commits follows it. */
+@media (max-width: 1023px) {
+  .project-overview-row > .project-commits-section {
+    order: 1;
+  }
+}
+.project-section-link {
+  color: var(--muted-foreground);
+  font-size: 10px;
+  text-decoration: none;
+}
+.project-section-link:hover {
+  color: var(--foreground);
+}
+.project-branch-name,
+.project-commit-sha {
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.project-commit-avatar {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  color: var(--foreground);
+  background: var(--accent);
+  border: 1px solid var(--border);
+  font-size: 9px;
+  font-weight: 600;
+}
+.project-files-history {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.project-files-history > svg {
+  width: 12px;
+  height: 12px;
+}
+.project-files-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 16px;
+  min-height: 40px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--divider);
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  font-size: 11px;
+}
+.project-files-breadcrumbs {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+}
+.project-files-breadcrumbs > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.project-files-breadcrumbs svg {
+  width: 12px;
+  height: 12px;
+  color: var(--muted-foreground);
+}
+.project-files-breadcrumbs a {
+  color: var(--muted-foreground);
+  text-decoration: none;
+}
+.project-files-breadcrumbs a:hover {
+  color: var(--foreground);
+  text-decoration: underline;
+}
+.project-files-breadcrumbs strong {
+  font-weight: 500;
+}
+.project-files-head-commit {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 280px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  color: var(--muted-foreground);
+  text-decoration: none;
+}
+.project-files-head-commit strong {
+  color: var(--foreground);
+  font-weight: 500;
+}
+.project-files-head-commit time,
+.project-files-head-commit .project-commit-sha {
+  flex: none;
+  font-size: 10px;
+}
+.project-file-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 56px;
+  align-items: center;
+  gap: 12px;
+  min-height: 34px;
+  padding: 5px 12px;
+  color: var(--foreground);
+  border-bottom: 1px solid var(--divider);
+  font-size: 11px;
+  text-decoration: none;
+}
+.project-file-row:last-child {
+  border-bottom: 0;
+}
+.project-file-row:hover {
+  background: var(--accent);
+}
+.project-file-row:focus-visible,
+.project-files-breadcrumbs a:focus-visible,
+.project-files-head-commit:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.project-file-name {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+.project-file-name > span,
+.project-file-commit {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-file-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--muted-foreground);
+}
+.project-file-icon.directory {
+  fill: currentColor;
+}
+.project-file-commit {
+  min-width: 0;
+  color: var(--muted-foreground);
+}
+.project-files-head-commit:hover .project-file-commit {
+  color: var(--foreground);
+}
+.project-file-row time {
+  color: var(--muted-foreground);
+  font-size: 9px;
+  text-align: right;
+}
+.project-files-more {
+  display: block;
+  padding: 9px 12px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  text-align: center;
+  text-decoration: none;
+}
+.project-files-more:hover {
+  color: var(--foreground);
+}
+@media (max-width: 767px) {
+  .project-file-row {
+    grid-template-columns: minmax(0, 1fr) 48px;
+    min-height: 40px;
+  }
+  .project-file-row .project-file-commit {
+    display: none;
+  }
+  .project-files-head-commit {
+    justify-content: flex-start;
+    flex-basis: 100%;
+  }
+}

@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { builtinModules } from "node:module";
-import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
 import { loadMigrationManifest } from "../../scripts/migration-manifest.mjs";

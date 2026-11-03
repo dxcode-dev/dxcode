@@ -16,6 +16,7 @@ import {
   type Thread,
   type ThreadExecutionPin,
   type ThreadId,
+  type ThreadInitialDispatchDraft,
   type ThreadListRequest,
   type ThreadModelSelection,
   type ThreadNotFound,
@@ -86,6 +87,7 @@ interface ThreadServiceShape {
     source?: ThreadSourceDraft,
     executionPin?: ThreadExecutionPin,
     claudeConnectionId?: string,
+    initialDispatch?: ThreadInitialDispatchDraft,
   ) => Effect.Effect<Thread, Schema.SchemaError | PersistenceUnavailable>;
   readonly get: (
     principal: Principal,
@@ -256,7 +258,13 @@ export class ThreadService extends Context.Service<
           },
         ),
         insert: Effect.fn("ThreadService.insert")(
-          function* (thread, source, executionPin, claudeConnectionId) {
+          function* (
+            thread,
+            source,
+            executionPin,
+            claudeConnectionId,
+            initialDispatch,
+          ) {
             let admission: ThreadSourceAdmission | undefined;
             if (source?.kind === "pending") {
               admission = {
@@ -289,6 +297,7 @@ export class ThreadService extends Context.Service<
               admission,
               executionPin,
               claudeConnectionId,
+              initialDispatch,
             );
             return thread;
           },

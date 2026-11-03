@@ -211,17 +211,21 @@ const nextLink = (header: string | null): string | undefined => {
   return undefined;
 };
 
-export const createGitHubProvider = (
-  config: GitHubAppConfiguration,
+const checkInput = (value: string) => {
+  if (value.length < 1 || value.length > MAX_VALUE)
+    throw new GitHubProviderError({ category: "invalid-response" });
+  return value;
+};
+
+/**
+ * GitHub's REST transport: bounded, redirect-refusing, timed requests whose
+ * failures are typed `GitHubProviderError`s. A request without a token is
+ * anonymous.
+ */
+export const createGitHubRestClient = (
   fetcher: typeof fetch = runtimeFetch,
   clock: Clock = () => new Date(),
 ) => {
-  const secret = Redacted.value(config.clientSecret);
-  const checkInput = (value: string) => {
-    if (value.length < 1 || value.length > MAX_VALUE)
-      throw new GitHubProviderError({ category: "invalid-response" });
-    return value;
-  };
   const request = async (url: string, init: RequestInit = {}) => {
     if (url.length > 4_096)
       throw new GitHubProviderError({ category: "invalid-response" });
@@ -231,7 +235,7 @@ export const createGitHubProvider = (
         fetcher(url, {
           ...init,
           redirect: "manual",
-          signal: AbortSignal.timeout(10_000),
+          signal: init.signal ?? AbortSignal.timeout(10_000),
         }),
       );
       if (!response.ok) throw responseError(response, clock(), endpoint);
@@ -280,12 +284,24 @@ export const createGitHubProvider = (
       throw new GitHubProviderError({ category: "invalid-response" });
     }
   };
-  const apiHeaders = (token: string) => ({
+  const apiHeaders = (token?: string): Record<string, string> => ({
     accept: "application/vnd.github+json",
-    authorization: `Bearer ${checkInput(token)}`,
+    ...(token === undefined
+      ? {}
+      : { authorization: `Bearer ${checkInput(token)}` }),
     "user-agent": USER_AGENT,
     "x-github-api-version": API_VERSION,
   });
+  return { request, json, apiHeaders };
+};
+
+export const createGitHubProvider = (
+  config: GitHubAppConfiguration,
+  fetcher: typeof fetch = runtimeFetch,
+  clock: Clock = () => new Date(),
+) => {
+  const secret = Redacted.value(config.clientSecret);
+  const { request, json, apiHeaders } = createGitHubRestClient(fetcher, clock);
   const token = async (
     values: Record<string, string>,
   ): Promise<GitHubTokenSet> => {

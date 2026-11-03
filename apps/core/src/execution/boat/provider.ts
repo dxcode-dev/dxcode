@@ -217,7 +217,13 @@ const openBoatWorkspace = async (
   const bindings = env as Bindings;
   const profile = boatProfile(context.profile);
   const api = apiFor(context, send);
-  const idleMs = await inactivityMs(bindings);
+  const idleMs =
+    context.inactivityMs === undefined
+      ? await inactivityMs(bindings)
+      : Math.min(
+          MAX_INACTIVITY_MS,
+          Math.max(MIN_INACTIVITY_MS, context.inactivityMs),
+        );
   const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
   const records = executionWorkspaceRecords(db, BOAT);
   const id = Schema.decodeUnknownSync(ThreadId)(threadId);

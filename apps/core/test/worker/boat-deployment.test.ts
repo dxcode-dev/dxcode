@@ -5,6 +5,8 @@ import { Hono } from "hono";
 import { beforeEach, describe, expect, it } from "vitest";
 import { makeBoatConnector } from "../../src/execution/boat/connector.js";
 import { makeBoatExecutionProvider } from "../../src/execution/boat/provider.js";
+import type { DeploymentOrbs } from "../../src/execution/deployment-orbs.js";
+import { loadRunnerProfileCatalog } from "../../src/execution/runner-profiles/catalog.js";
 import { resolveExecutionTarget } from "../../src/execution/runner-profiles/execution.js";
 import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
@@ -14,6 +16,8 @@ import { advanceDeploymentPreparation } from "../../src/plugins/execution/deploy
 import { makePersonalOrbProviderRoutes } from "../../src/plugins/execution/orb-provider-routes.js";
 import { resolveThreadExecutionPin } from "../../src/plugins/execution/orb-providers.js";
 import {
+  composeExecutionWorkspaces,
+  type ExecutionActivation,
   type ExecutionContext,
   resolveExecutionProviders,
 } from "../../src/plugins/execution/provider.js";
@@ -54,7 +58,7 @@ const pin = (bindings: Bindings, runnerProfileId = "bt.medium") =>
   });
 
 /** The Orb Providers page's response for the owner. */
-const orbProvidersPage = async () => {
+const orbProvidersPage = async (deploymentOrbs?: DeploymentOrbs) => {
   const router = new Hono<AppEnv>();
   router.use("*", requestId);
   router.use("*", async (context, next) => {
@@ -69,7 +73,10 @@ const orbProvidersPage = async () => {
   });
   router.route(
     "/personal/orb-providers",
-    makePersonalOrbProviderRoutes({ connectors }),
+    makePersonalOrbProviderRoutes({
+      connectors,
+      ...(deploymentOrbs === undefined ? {} : { deploymentOrbs }),
+    }),
   );
   router.onError(errorHandler);
   const response = await router.request(
@@ -232,5 +239,112 @@ describe("Boat on the deployment's own account", () => {
       expect(
         JSON.stringify([...box.files.values(), ...box.execs]),
       ).not.toContain(deploymentKey);
+  });
+
+  it("presents the deployment's account under the deployment's name and idle time, and only it", async () => {
+    const hosted: DeploymentOrbs = {
+      boat: {
+        displayName: "Hosted Orb",
+        description: "Stops after an hour idle.",
+        inactivityMs: 3_600_000,
+      },
+    };
+    const providerNames = async (bindings: Bindings) =>
+      (
+        await Effect.runPromise(loadRunnerProfileCatalog(bindings, hosted))
+      ).publicCatalog.providers?.find(({ adapter }) => adapter === "boat");
+    // Without the key the deployment has no Boat account to present.
+    expect(await providerNames(withoutBoat)).toMatchObject({
+      displayName: "Boat",
+    });
+    expect(await providerNames(withBoat)).toMatchObject({
+      displayName: "Hosted Orb",
+      shortName: "Hosted Orb",
+    });
+
+    await prepare();
+    const page = JSON.parse((await orbProvidersPage(hosted)).text).data;
+    expect(
+      page.resolved.find(
+        ({ providerId }: { providerId: string }) => providerId === "boat",
+      ),
+    ).toMatchObject({
+      scope: "deployment",
+      displayName: "Hosted Orb",
+      description: "Stops after an hour idle.",
+    });
+    // The connection settings keep Boat for a person's own key, and do not
+    // list the deployment's account under it.
+    expect(
+      page.providers.find(({ id }: { id: string }) => id === "boat"),
+    ).toMatchObject({ displayName: "Boat", deployment: false });
+
+    // The deployment's account runs with its idle time.
+    const pinned = await pin(withBoat);
+    await env.DB.prepare(
+      "INSERT INTO threads (id, project_id, owner_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+    )
+      .bind(threadId, project, owner, timestamp, timestamp)
+      .run();
+    await env.DB.prepare(
+      `UPDATE execution_workspace
+          SET provider = ?, runner_profile_id = ?, account_scope = ?,
+              account_owner_id = ?, provider_account = ?, provider_template = ?
+        WHERE thread_id = ?`,
+    )
+      .bind(
+        pinned?.provider,
+        pinned?.runnerProfileId,
+        pinned?.credentialScope,
+        pinned?.credentialOwnerId,
+        pinned?.credentialAccount,
+        pinned?.providerTemplate,
+        threadId,
+      )
+      .run();
+    const contexts: Array<ExecutionContext> = [];
+    const workspaces = composeExecutionWorkspaces(
+      withBoat,
+      {
+        boat: makeBoatExecutionProvider({
+          fetch: fakeBoat(world) as typeof fetch,
+        }),
+      },
+      () =>
+        ({
+          activate: async (context: ExecutionContext) => {
+            contexts.push(context);
+            throw new Error("Orb started.");
+          },
+          reconnect: async () => {
+            throw new Error("unused");
+          },
+          ensureDaemon: async () => {
+            throw new Error("unused");
+          },
+          recordResidentTerminalInput: async () => undefined,
+          recordResidentTerminalHeartbeat: () => undefined,
+        }) as unknown as ExecutionActivation,
+      undefined,
+      undefined,
+      undefined,
+      hosted,
+    );
+    await expect(
+      workspaces.sandboxFactory.createSandbox({ id: threadId }),
+    ).rejects.toThrow("Orb started.");
+    expect(contexts[0]?.inactivityMs).toBe(3_600_000);
+    const handle = await makeBoatExecutionProvider({
+      fetch: fakeBoat(world) as typeof fetch,
+    }).workspace.create(
+      contexts[0] as ExecutionContext,
+      { threadId: threadId as never },
+      { authorize: async () => {} },
+    );
+    expect(handle.inactivityMs).toBe(3_600_000);
+    const sandbox = [...world.sandboxes.values()].find(
+      ({ idempotencyKey }) => idempotencyKey !== null,
+    );
+    expect(sandbox?.ttlSeconds).toBe(3_600);
   });
 });

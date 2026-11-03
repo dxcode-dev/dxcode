@@ -18,6 +18,7 @@ import { ResizableDivider } from "../../shared/layout/resizable-divider.js";
 import {
   collapseResizablePanel,
   expandResizablePanel,
+  isExpandingResizablePanel,
 } from "../../shared/layout/resizable-panel.js";
 import { useOptionalThreadEditing } from "../../shared/thread-editing.js";
 import { Button } from "../../shared/ui/button.js";
@@ -36,7 +37,7 @@ import { SidebarExtensionRegion } from "./sidebar-extensions.js";
 import { SidebarPanelIcon } from "./sidebar-panel-icon.js";
 import { childThreadsByParent } from "./sidebar-thread-utils.js";
 import { SIDEBAR_PANEL_ID, useSavedSidebarPanel } from "./sidebar-width.js";
-import { ThreadSearchDialog } from "./thread-search-dialog.js";
+import { ThreadSearchOnDemand } from "./thread-search-on-demand.js";
 
 const PRODUCT_SIDEBAR_MIN_SIZE = SIDEBAR_WIDTH_MIN_PX;
 const PRODUCT_SIDEBAR_MAX_SIZE = SIDEBAR_WIDTH_MAX_PX;
@@ -285,6 +286,18 @@ export function ProductShell({
             inert={sidebarCollapsed}
             onResize={(size) => {
               const collapsed = size.asPercentage === 0;
+              // The opening animation's first frame can measure 0%; treating
+              // that as collapsed made the sidebar inert while it held focus,
+              // and focus fell to the page (#1638).
+              if (
+                collapsed &&
+                isExpandingResizablePanel(
+                  document.querySelector<HTMLElement>(
+                    ".product-panel-group > :first-child",
+                  ),
+                )
+              )
+                return;
               setSidebarCollapsed(collapsed);
               sidebarPanel.onCollapsedChange(collapsed);
             }}
@@ -333,7 +346,7 @@ export function ProductShell({
           </Panel>
         </Group>
       </Dialog.Root>
-      <ThreadSearchDialog
+      <ThreadSearchOnDemand
         open={threadSearchOpen}
         userId={identity.id}
         finalFocus={mobile ? mobileSidebarTriggerRef : sidebarSearchTriggerRef}

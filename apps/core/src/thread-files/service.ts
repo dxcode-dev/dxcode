@@ -1,4 +1,6 @@
 import {
+  THREAD_FILES_MAX_UPLOAD_BYTES,
+  THREAD_FILES_UPLOAD_CHUNK_BYTES,
   type ThreadFileData,
   type ThreadFilesCursor,
   ThreadFilesPath,
@@ -257,4 +259,124 @@ export const saveThreadFileThroughDaemon = async (
   if (result.kind === "saved")
     return { kind: "saved" as const, contentVersion: result.version };
   return throwDxdFailure(result);
+};
+
+const writeResult = (result: { readonly kind: string }) => {
+  if (result.kind === "changed") return { kind: "changed" as const };
+  return throwDxdFailure(result as Parameters<typeof throwDxdFailure>[0]);
+};
+
+/** A Files tree write (not an upload) as one dxd request. */
+export type ThreadFilesWrite =
+  | {
+      readonly action: "create";
+      readonly path: ThreadFilesPathType;
+      readonly kind: "file" | "directory";
+    }
+  | {
+      readonly action: "move" | "copy";
+      readonly from: ThreadFilesPathType;
+      readonly to: ThreadFilesPathType;
+    }
+  | { readonly action: "delete"; readonly path: ThreadFilesPathType };
+
+const writeOperation = (
+  write: ThreadFilesWrite,
+  refresh: DxdChangesRefresh | undefined,
+  worktree: ThreadFilesWorktreeId | undefined,
+) => {
+  const common = {
+    ...(worktree === undefined ? {} : { worktree }),
+    ...(refresh === undefined ? {} : { refresh }),
+  };
+  switch (write.action) {
+    case "create":
+      return {
+        operation: "files.create" as const,
+        path: write.path,
+        kind: write.kind,
+        ...common,
+      };
+    case "move":
+    case "copy":
+      return {
+        operation: `files.${write.action}` as const,
+        from: write.from,
+        to: write.to,
+        ...common,
+      };
+    case "delete":
+      return {
+        operation: "files.delete" as const,
+        path: write.path,
+        ...common,
+      };
+  }
+};
+
+export const writeThreadFilesThroughDaemon = async (
+  bindings: Pick<Bindings, "THREAD_EXECUTION">,
+  threadId: ThreadId,
+  write: ThreadFilesWrite,
+  refresh?: DxdChangesRefresh,
+  worktree?: ThreadFilesWorktreeId,
+) => {
+  const result = await requestThreadDaemon(
+    bindings,
+    threadId,
+    writeOperation(write, refresh, worktree),
+  ).catch(() => {
+    throw new ThreadFilesUnavailable();
+  });
+  return writeResult(result);
+};
+
+const toBase64 = (bytes: Uint8Array) => {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 0x8000)
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  return btoa(binary);
+};
+
+/**
+ * Uploads a new file in order, one chunk per dxd request. The bytes collect
+ * in a hidden temporary beside the destination; only the last chunk renames
+ * it into place, and only it carries the Changes refresh.
+ */
+export const uploadThreadFileThroughDaemon = async (
+  bindings: Pick<Bindings, "THREAD_EXECUTION">,
+  threadId: ThreadId,
+  path: ThreadFilesPathType,
+  bytes: Uint8Array,
+  refresh?: DxdChangesRefresh,
+  worktree?: ThreadFilesWorktreeId,
+) => {
+  if (bytes.byteLength > THREAD_FILES_MAX_UPLOAD_BYTES)
+    throw new ThreadFilesInvalid();
+  const upload = [...crypto.getRandomValues(new Uint8Array(16))]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  let offset = 0;
+  do {
+    const chunk = bytes.subarray(
+      offset,
+      offset + THREAD_FILES_UPLOAD_CHUNK_BYTES,
+    );
+    const last = offset + chunk.byteLength >= bytes.byteLength;
+    const result = await requestThreadDaemon(bindings, threadId, {
+      operation: "files.upload",
+      ...(worktree === undefined ? {} : { worktree }),
+      path,
+      upload,
+      offset,
+      content: toBase64(chunk),
+      last,
+      ...(last && refresh !== undefined ? { refresh } : {}),
+    }).catch(() => {
+      throw new ThreadFilesUnavailable();
+    });
+    writeResult(result);
+    offset += chunk.byteLength;
+  } while (offset < bytes.byteLength);
+  return { kind: "changed" as const };
 };

@@ -858,6 +858,39 @@ const writePrivateCredentials = (credentialsFile, value) => {
   return value;
 };
 
+const appId = (value) => {
+  try {
+    return JSON.parse(value)?.appId;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Branch previews get only the preview App, whose URLs name one relay origin
+ * (Core accepts that only on previews), or none. A value that is, or points
+ * at, the staging App fails the deploy instead.
+ */
+const previewGitHubApp = (environment) => {
+  const value = environment.DX_GITHUB_PREVIEW_APP?.trim();
+  if (!value || value === "{}") return "{}";
+  let callbackHost;
+  try {
+    callbackHost = new URL(JSON.parse(value).callbackUrl).hostname;
+  } catch {
+    throw new Error("DX_GITHUB_PREVIEW_APP is not a GitHub App configuration.");
+  }
+  const staging = environment.DX_GITHUB_STAGING_APP?.trim();
+  if (
+    callbackHost === hostedPolicy().stagingDomain ||
+    (staging &&
+      (value === staging ||
+        (appId(staging) !== undefined && appId(value) === appId(staging))))
+  )
+    throw new Error("DX_GITHUB_PREVIEW_APP must not be the staging App.");
+  return value;
+};
+
 export const deploymentGitHubApp = ({ target, operation, environment }) => {
   // Self-host deployments may carry their own GitHub App configuration.
   if (target === "selfhost") {
@@ -866,7 +899,9 @@ export const deploymentGitHubApp = ({ target, operation, environment }) => {
     return value || undefined;
   }
   // Never forward the shared staging App to branch previews or destroy plans.
-  if (target !== "staging" || operation !== "deploy") return "{}";
+  if (operation !== "deploy") return "{}";
+  if (target === "branch") return previewGitHubApp(environment);
+  if (target !== "staging") return "{}";
   const value = environment.DX_GITHUB_STAGING_APP;
   if (!value?.trim() || value.trim() === "{}")
     throw new Error(

@@ -8,6 +8,7 @@ mod disk;
 mod environment;
 mod files;
 mod files_sandbox;
+mod files_write;
 mod memory;
 mod observer;
 mod protocol;

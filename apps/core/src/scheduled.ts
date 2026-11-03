@@ -6,6 +6,7 @@ import {
   attachmentLogger,
   notificationLogger,
   threadDeletionLogger,
+  threadPersistenceLogger,
   threadStorageLogger,
 } from "./logging.js";
 import { THREAD_SWEEP_CRON } from "./notifications/snooze-cron.js";
@@ -17,7 +18,7 @@ import { sweepThreadStorage } from "./thread-storage/store.js";
 
 /**
  * The Worker's cron handler. Every tick sweeps snoozed Threads, retries
- * unfinished Thread deletions, deletes expired Thread storage files, fires
+ * unfinished Thread deletions and undelivered first messages, deletes expired Thread storage files, fires
  * due schedules, and polls GitHub subscriptions; the daily tick also runs
  * usage and attachment retention.
  */
@@ -52,6 +53,30 @@ export const scheduled = (
         cause,
       }),
     ),
+  );
+  // A new Thread whose request ended before its agent admitted the first
+  // message must not sit silent, so its delivery retries on every tick.
+  context.waitUntil(
+    // Imported on use: it loads DxAgent, which the cron needs only here.
+    import("./threads/initial-dispatch-delivery.js")
+      .then(({ sweepPendingInitialDispatches }) =>
+        sweepPendingInitialDispatches(bindings, controller.scheduledTime),
+      )
+      .then((outcomes) => {
+        if (outcomes.length > 0)
+          threadPersistenceLogger.info("Pending first messages delivered.", {
+            event: "thread_initial_dispatch_sweep_completed",
+            admitted: outcomes.filter(({ kind }) => kind === "admitted").length,
+            failed: outcomes.filter(({ kind }) => kind === "failed").length,
+            pending: outcomes.filter(({ kind }) => kind === "pending").length,
+          });
+      })
+      .catch((cause) =>
+        threadPersistenceLogger.error("Pending first message sweep failed.", {
+          event: "thread_initial_dispatch_sweep_failed",
+          cause,
+        }),
+      ),
   );
   // A temporary Thread storage file lasts three hours, so its sweep cannot
   // wait for the daily tick either.

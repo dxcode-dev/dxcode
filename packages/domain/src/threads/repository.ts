@@ -46,6 +46,18 @@ export interface ThreadExecutionPin {
   readonly providerTemplate: string | null;
 }
 
+/**
+ * A new Thread's first message, written with its row and held until the
+ * Thread's agent admits it, so creation can answer before the agent starts.
+ */
+export interface ThreadInitialDispatchDraft {
+  /** The agent dispatch request, encoded as JSON. */
+  readonly requestJson: string;
+  /** The message's files, linked to the Thread once it is admitted. */
+  readonly attachmentIds: ReadonlyArray<string>;
+  readonly senderUserId: string;
+}
+
 export interface ThreadRepositoryShape {
   readonly insert: (
     thread: Thread,
@@ -53,6 +65,7 @@ export interface ThreadRepositoryShape {
     executionPin?: ThreadExecutionPin,
     /** The Claude plan a Claude Code Thread is bound to for its life. */
     claudeConnectionId?: string,
+    initialDispatch?: ThreadInitialDispatchDraft,
   ) => Effect.Effect<void, Schema.SchemaError | PersistenceUnavailable>;
   readonly findOwnedById: (
     threadId: ThreadId,

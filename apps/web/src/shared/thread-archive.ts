@@ -10,6 +10,8 @@ export interface ThreadArchiveController {
     archived: boolean,
     includeChildren?: boolean,
   ) => void;
+  /** Archives these Threads together, with one notice and one Undo. */
+  readonly archiveMany?: (threadIds: ReadonlyArray<ThreadId>) => void;
 }
 
 export const ThreadArchiveContext = React.createContext<

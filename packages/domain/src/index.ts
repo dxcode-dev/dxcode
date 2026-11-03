@@ -763,8 +763,13 @@ export {
   GITHUB_APP_REPOSITORY_PERMISSIONS,
   GitHubAppConfigurationInvalid,
   type GitHubAppDeploymentConfiguration,
+  githubAppRequestOrigin,
   isGitHubAppEventList,
 } from "./source-control/github-app-configuration.js";
+export {
+  signGitHubAppRelayState,
+  verifyGitHubAppRelayState,
+} from "./source-control/github-app-relay.js";
 export {
   type CanonicalGitHubRepositoryLocator,
   canonicalGitHubRepositoryLocator,
@@ -812,6 +817,7 @@ export {
 } from "./source-control/source-control.js";
 export {
   type ThreadExecutionPin,
+  type ThreadInitialDispatchDraft,
   type ThreadListRequest,
   ThreadRepository,
   type ThreadRepositoryShape,

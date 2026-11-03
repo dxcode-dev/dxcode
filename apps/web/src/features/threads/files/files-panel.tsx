@@ -13,7 +13,15 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { lazyRouteComponent } from "@tanstack/react-router";
-import { ChevronDown, ChevronsDownUp, Files } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronsDownUp,
+  FilePlus,
+  Files,
+  FolderPlus,
+  Upload,
+  X,
+} from "lucide-react";
 import * as React from "react";
 import {
   type ChangesTransport,
@@ -31,10 +39,22 @@ import {
   ThreadFilesApiError,
 } from "./files-api.js";
 import {
+  FilesDeleteDialog,
+  type FilesDeleteTarget,
+} from "./files-delete-dialog.js";
+import {
   saveThreadFileOptions,
   threadFileOptions,
   threadFileTreeOptions,
+  uploadThreadFilesOptions,
+  writeThreadFilesOptions,
 } from "./files-queries.js";
+import type {
+  FilesClipboard,
+  FilesTreeCommand,
+  FilesTreeWrites,
+} from "./files-tree.js";
+import { writeErrorMessage } from "./files-tree-names.js";
 import "./files.css";
 
 const api = createThreadFilesApi();
@@ -59,6 +79,23 @@ const loadingFiles = (
 const message = (error: unknown) =>
   error instanceof Error ? error.message : "Files are temporarily unavailable.";
 const PRIMARY_WORKTREE = "primary" as ThreadFilesWorktreeId;
+/** One uploaded file (`THREAD_FILES_MAX_UPLOAD_BYTES`). */
+const MAX_UPLOAD_BYTES = 25 * 1_024 * 1_024;
+
+/** The panel's part of each worktree's write actions. */
+interface PanelWrites {
+  readonly upload: (
+    worktree: ThreadFilesWorktreeId,
+    folder: ThreadFilesPath | undefined,
+  ) => void;
+  readonly requestDelete: (
+    worktree: ThreadFilesWorktreeId,
+    target: FilesDeleteTarget,
+  ) => void;
+  readonly clipboard: FilesClipboard | undefined;
+  readonly setClipboard: (clipboard: FilesClipboard | undefined) => void;
+  readonly onError: (message: string) => void;
+}
 const NO_GIT_STATUS: ReadonlyMap<string, ThreadChangedFile["status"]> =
   new Map();
 const subscribeToOnlineState = (listener: () => void) =>
@@ -104,6 +141,8 @@ function FilesWorktreeRoot({
   onOpenFile,
   transport,
   collapseSignal,
+  panelWrites,
+  command,
 }: {
   readonly active: boolean;
   readonly threadId: ThreadId;
@@ -115,8 +154,27 @@ function FilesWorktreeRoot({
   readonly onOpenFile: (location: ThreadFileLocation) => void;
   readonly transport: ThreadFilesApi;
   readonly collapseSignal: number;
+  /** Absent for View members: the tree offers no write action. */
+  readonly panelWrites?: PanelWrites;
+  readonly command?: FilesTreeCommand;
 }) {
   const [collapsed, setCollapsed] = React.useState(false);
+  const queryClient = useQueryClient();
+  const write = useMutation(
+    writeThreadFilesOptions(transport, threadId, worktree.id, queryClient),
+  );
+  const writes: FilesTreeWrites | undefined =
+    panelWrites === undefined
+      ? undefined
+      : {
+          write: (request) => write.mutateAsync(request),
+          upload: (folder) => panelWrites.upload(worktree.id, folder),
+          requestDelete: (target) =>
+            panelWrites.requestDelete(worktree.id, target),
+          clipboard: panelWrites.clipboard,
+          setClipboard: panelWrites.setClipboard,
+          onError: panelWrites.onError,
+        };
   const online = useOnline();
   const query = useInfiniteQuery(
     threadFileTreeOptions(transport, threadId, worktree.id, undefined, active),
@@ -173,13 +231,15 @@ function FilesWorktreeRoot({
             active={active}
             entries={entries}
             gitStatus={gitStatus}
-            key={worktree.id}
+            key={`${worktree.id}:${writes === undefined ? "view" : "write"}`}
             onOpenFile={openFile}
             downloadUrlFor={downloadUrlFor}
             selectedPath={selectedPath}
             threadId={threadId}
             worktree={worktree.id}
             collapseSignal={collapseSignal}
+            {...(writes === undefined ? {} : { writes })}
+            {...(command === undefined ? {} : { command })}
           />
         </React.Suspense>
         {query.hasNextPage ? (
@@ -218,6 +278,25 @@ function FilesWorktreeRoot({
   );
 }
 
+/** One icon button in the Files toolbar. */
+const tool = (
+  label: string,
+  icon: React.ReactNode,
+  onClick: () => void,
+  disabled = false,
+) => (
+  <button
+    type="button"
+    className="thread-files-tool"
+    aria-label={label}
+    title={label}
+    disabled={disabled}
+    onClick={onClick}
+  >
+    {icon}
+  </button>
+);
+
 export const ThreadFilesPanel = ({
   active = true,
   threadId,
@@ -226,6 +305,7 @@ export const ThreadFilesPanel = ({
   onOpenFile,
   transport = api,
   changesTransport = defaultChangesTransport,
+  canWrite = false,
 }: {
   readonly active?: boolean;
   readonly threadId: ThreadId;
@@ -234,7 +314,10 @@ export const ThreadFilesPanel = ({
   readonly onOpenFile: (location: ThreadFileLocation) => void;
   readonly transport?: ThreadFilesApi;
   readonly changesTransport?: ChangesTransport;
+  /** Create, upload, rename, move, copy, and delete; never for View members. */
+  readonly canWrite?: boolean;
 }) => {
+  const queryClient = useQueryClient();
   const changes = useQuery({
     ...changesQueryOptions(changesTransport, threadId, { kind: "uncommitted" }),
     enabled: active,
@@ -256,19 +339,147 @@ export const ThreadFilesPanel = ({
   const files = captured?.files;
   const gitStatusByWorktree = groupGitStatusByWorktree(files);
   const [collapseSignal, setCollapseSignal] = React.useState(0);
+  const [command, setCommand] = React.useState<
+    FilesTreeCommand & { readonly worktree: ThreadFilesWorktreeId }
+  >();
+  const [clipboard, setClipboard] = React.useState<FilesClipboard>();
+  const [error, setError] = React.useState<string>();
+  const [deleting, setDeleting] = React.useState<{
+    readonly worktree: ThreadFilesWorktreeId;
+    readonly target: FilesDeleteTarget;
+  }>();
+  // Found by id when used: a handler the tree receives may not read a ref.
+  const uploadInputId = React.useId();
+  const upload = useMutation(
+    uploadThreadFilesOptions(transport, threadId, queryClient),
+  );
+  const writable =
+    canWrite && transport.write !== undefined && transport.upload !== undefined;
+  const panelWrites: PanelWrites | undefined = writable
+    ? {
+        upload: (worktree, folder) => {
+          // The picker remembers where its files go until it answers.
+          const input = document.getElementById(uploadInputId);
+          if (!(input instanceof HTMLInputElement)) return;
+          input.dataset.worktree = worktree;
+          input.dataset.folder = folder ?? "";
+          input.click();
+        },
+        requestDelete: (worktree, target) => setDeleting({ worktree, target }),
+        clipboard,
+        setClipboard,
+        onError: setError,
+      }
+    : undefined;
+  // Toolbar actions go to the worktree of the shown file, else the first.
+  const targetWorktree = selectedFile?.worktree ?? worktrees[0]?.id;
+  const runCommand = (kind: FilesTreeCommand["kind"]) => {
+    if (targetWorktree === undefined) return;
+    setError(undefined);
+    setCommand((current) => ({
+      id: (current?.id ?? 0) + 1,
+      kind,
+      worktree: targetWorktree,
+    }));
+  };
+  const onUploadChosen = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const files = [...(input.files ?? [])];
+    input.value = "";
+    const worktree = input.dataset.worktree as
+      | ThreadFilesWorktreeId
+      | undefined;
+    const folder = (input.dataset.folder || undefined) as
+      | ThreadFilesPath
+      | undefined;
+    if (worktree === undefined || files.length === 0) return;
+    const tooLarge = files.find((file) => file.size > MAX_UPLOAD_BYTES);
+    if (tooLarge !== undefined) {
+      setError(`“${tooLarge.name}” is larger than 25 MB.`);
+      return;
+    }
+    setError(undefined);
+    upload.mutate(
+      { worktree, ...(folder === undefined ? {} : { folder }), files },
+      {
+        onError: (cause) =>
+          setError(
+            writeErrorMessage(
+              cause,
+              files.length === 1 ? files[0]?.name : undefined,
+            ),
+          ),
+      },
+    );
+  };
   return (
     <section className="thread-files-panel">
       <fieldset className="thread-files-toolbar" aria-label="Files actions">
-        <button
-          type="button"
-          className="thread-files-tool"
-          aria-label="Collapse all folders"
-          title="Collapse all folders"
-          onClick={() => setCollapseSignal((current) => current + 1)}
-        >
-          <ChevronsDownUp aria-hidden="true" />
-        </button>
+        {writable ? (
+          <>
+            {tool("New File", <FilePlus aria-hidden="true" />, () =>
+              runCommand("new-file"),
+            )}
+            {tool("New Folder", <FolderPlus aria-hidden="true" />, () =>
+              runCommand("new-folder"),
+            )}
+            {tool(
+              "Upload Files",
+              <Upload aria-hidden="true" />,
+              () => runCommand("upload"),
+              upload.isPending,
+            )}
+          </>
+        ) : null}
+        <span className="thread-files-toolbar-end">
+          {tool(
+            "Collapse All Folders",
+            <ChevronsDownUp aria-hidden="true" />,
+            () => setCollapseSignal((current) => current + 1),
+          )}
+        </span>
       </fieldset>
+      {writable ? (
+        <input
+          id={uploadInputId}
+          className="sr-only"
+          type="file"
+          multiple
+          tabIndex={-1}
+          aria-hidden="true"
+          onChange={onUploadChosen}
+        />
+      ) : null}
+      {upload.isPending ? (
+        <div className="thread-files-recovery" role="status">
+          {`Uploading ${upload.variables.files.length === 1 ? (upload.variables.files[0]?.name ?? "file") : `${upload.variables.files.length} files`}…`}
+        </div>
+      ) : null}
+      {error === undefined ? null : (
+        <div
+          className="thread-files-recovery thread-files-write-error"
+          role="alert"
+        >
+          <span>{error}</span>
+          <button
+            type="button"
+            className="thread-files-tool"
+            aria-label="Dismiss"
+            onClick={() => setError(undefined)}
+          >
+            <X aria-hidden="true" />
+          </button>
+        </div>
+      )}
+      {deleting === undefined ? null : (
+        <FilesDeleteDialog
+          api={transport}
+          threadId={threadId}
+          worktree={deleting.worktree}
+          target={deleting.target}
+          onClose={() => setDeleting(undefined)}
+        />
+      )}
       <div className="thread-files-worktrees">
         {worktrees.map((worktree) => (
           <FilesWorktreeRoot
@@ -289,6 +500,8 @@ export const ThreadFilesPanel = ({
             transport={transport}
             worktree={worktree}
             collapseSignal={collapseSignal}
+            {...(panelWrites === undefined ? {} : { panelWrites })}
+            {...(command?.worktree === worktree.id ? { command } : {})}
           />
         ))}
       </div>

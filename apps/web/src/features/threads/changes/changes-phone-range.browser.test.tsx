@@ -21,7 +21,11 @@ import { ThreadStackedLayout } from "../panes/thread-stacked-layout.js";
 import "../panes/panes.css";
 import type { ChangesTransport } from "./changes-api.js";
 import { ChangesPane } from "./changes-pane.js";
+import { preloadChangesPane } from "./changes-pane-loader.js";
 import "./changes.css";
+
+// The pane's code loads on demand; this test starts with it loaded.
+await preloadChangesPane();
 
 // #1152: on a phone, the Changes view put its commit range chevron at the end
 // of the view row, where it covered the next tabs: tapping Terminal's close

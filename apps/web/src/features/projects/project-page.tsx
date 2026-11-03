@@ -1,5 +1,9 @@
 import type { ProjectId } from "@dx/domain";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import {
   Building2,
@@ -19,9 +23,16 @@ import { ThreadTitleText } from "../../shared/ui/thread-title.js";
 import { TimeText } from "../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../shared/utils.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
-import { threadsQueryOptions } from "../threads/thread-queries.js";
+import {
+  sidebarProjectThreads,
+  threadsQueryOptions,
+} from "../threads/thread-queries.js";
 import { projectQueryOptions } from "./project-queries.js";
 import { ProjectRepositoryIcon } from "./project-repository-icon.js";
+import {
+  ProjectCommitsSection,
+  ProjectFilesSection,
+} from "./project-repository-sections.js";
 
 export function ProjectPage() {
   const { openNewThread } = useNewThreadSurface();
@@ -31,9 +42,14 @@ export function ProjectPage() {
   const projectId = projectIdParam as ProjectId;
   const { identity } = useAuthenticatedIdentity();
   const projectQuery = useQuery(projectQueryOptions(identity.id, projectId));
-  const threadsQuery = useInfiniteQuery(
-    threadsQueryOptions(identity.id, projectId),
-  );
+  const queryClient = useQueryClient();
+  // Active Threads only, as the page shows; the sidebar's cached rows show
+  // until the Project's own list arrives (#1440).
+  const threadsQuery = useInfiniteQuery({
+    ...threadsQueryOptions(identity.id, projectId, "active"),
+    placeholderData: () =>
+      sidebarProjectThreads(queryClient, identity.id, projectId),
+  });
   const settingsQuery = useQuery(settingsContextQueryOptions(identity.id));
   const project = projectQuery.data;
   const workspace = settingsQuery.data?.workspace;
@@ -156,76 +172,87 @@ export function ProjectPage() {
         </div>
       ) : null}
       {project === undefined ? null : (
-        <section className="project-recent-section">
-          <header>
-            <strong>Recent Threads</strong>
-            <span>Most recent</span>
-          </header>
-          <div className="project-recent-list">
-            {threadsState === "error" ? (
-              <div className="project-recent-empty" role="alert">
-                <MessageSquare />
-                <strong>Recent threads could not be loaded</strong>
-                <button
-                  type="button"
-                  className={buttonVariants({ size: "xs", variant: "outline" })}
-                  onClick={() => void threadsQuery.refetch()}
-                >
-                  Retry
-                </button>
+        <div className="project-overview">
+          <div className="project-overview-row">
+            <ProjectCommitsSection project={project} />
+            <section className="project-recent-section">
+              <header>
+                <strong>Recent Threads</strong>
+                <span>Most recent</span>
+              </header>
+              <div className="project-recent-list">
+                {threadsState === "error" ? (
+                  <div className="project-recent-empty" role="alert">
+                    <MessageSquare />
+                    <strong>Recent threads could not be loaded</strong>
+                    <button
+                      type="button"
+                      className={buttonVariants({
+                        size: "xs",
+                        variant: "outline",
+                      })}
+                      onClick={() => void threadsQuery.refetch()}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : threadsState === "loading" ? (
+                  <DxLoading label="Loading recent threads…" />
+                ) : threadsState === "empty" ? (
+                  <div className="project-recent-empty">
+                    <MessageSquare />
+                    <strong>No threads yet</strong>
+                    <span>Start the first thread in {project.name}.</span>
+                    <button
+                      type="button"
+                      className={buttonVariants({ size: "xs" })}
+                      onClick={() => openNewThread(project.id)}
+                    >
+                      <Plus /> New Thread
+                    </button>
+                  </div>
+                ) : (
+                  projectThreads.slice(0, 5).map((thread) => (
+                    <Link
+                      className="project-recent-row"
+                      to="/threads/$threadId"
+                      params={{ threadId: thread.id }}
+                      key={thread.id}
+                    >
+                      <span className="project-thread-avatar">
+                        {project.iconUrl ? (
+                          <img src={project.iconUrl} alt="" />
+                        ) : (
+                          ownerName.slice(0, 1).toUpperCase()
+                        )}
+                      </span>
+                      <span className="project-recent-copy">
+                        <strong>
+                          <ThreadTitleText thread={thread} />
+                        </strong>
+                        <small>{ownerName}</small>
+                      </span>
+                      <time
+                        dateTime={new Date(
+                          thread.lastActivityAt.epochMilliseconds,
+                        ).toISOString()}
+                      >
+                        <TimeText
+                          text={(now) =>
+                            formatRelativeTime(thread.lastActivityAt, now)
+                          }
+                        />
+                      </time>
+                    </Link>
+                  ))
+                )}
               </div>
-            ) : threadsState === "loading" ? (
-              <DxLoading label="Loading recent threads…" />
-            ) : threadsState === "empty" ? (
-              <div className="project-recent-empty">
-                <MessageSquare />
-                <strong>No threads yet</strong>
-                <span>Start the first thread in {project.name}.</span>
-                <button
-                  type="button"
-                  className={buttonVariants({ size: "xs" })}
-                  onClick={() => openNewThread(project.id)}
-                >
-                  <Plus /> New Thread
-                </button>
-              </div>
-            ) : (
-              projectThreads.slice(0, 5).map((thread) => (
-                <Link
-                  className="project-recent-row"
-                  to="/threads/$threadId"
-                  params={{ threadId: thread.id }}
-                  key={thread.id}
-                >
-                  <span className="project-thread-avatar">
-                    {project.iconUrl ? (
-                      <img src={project.iconUrl} alt="" />
-                    ) : (
-                      ownerName.slice(0, 1).toUpperCase()
-                    )}
-                  </span>
-                  <span className="project-recent-copy">
-                    <strong>
-                      <ThreadTitleText thread={thread} />
-                    </strong>
-                    <small>{ownerName}</small>
-                  </span>
-                  <time
-                    dateTime={new Date(
-                      thread.lastActivityAt.epochMilliseconds,
-                    ).toISOString()}
-                  >
-                    <TimeText
-                      text={(now) =>
-                        formatRelativeTime(thread.lastActivityAt, now)
-                      }
-                    />
-                  </time>
-                </Link>
-              ))
-            )}
+            </section>
           </div>
-        </section>
+          {project.repository === undefined ? null : (
+            <ProjectFilesSection project={project} />
+          )}
+        </div>
       )}
     </PageShell>
   );

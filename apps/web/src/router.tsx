@@ -19,11 +19,13 @@ import {
 import { InstallAppBanner } from "./features/install-app/install-app-banner.js";
 import { ProductShell } from "./features/navigation/product-shell.js";
 import { ensureProductShellData } from "./features/navigation/sidebar-width.js";
+import { NewProjectOnDemand } from "./features/projects/new-project-on-demand.js";
 import {
   isMissingProjectError,
   projectQueryOptions,
   seedProjectDetailFromList,
 } from "./features/projects/project-queries.js";
+import { projectRepositoryPathSearch } from "./features/projects/project-repository-queries.js";
 import {
   ProjectRouteError,
   ProjectRouteNotFound,
@@ -36,14 +38,16 @@ import {
 import { resolveSettingsSection } from "./features/settings/settings-registration.js";
 import { SettingsRouteNotFound } from "./features/settings/settings-route-not-found.js";
 import { SettingsRoutePending } from "./features/settings/settings-route-pending.js";
-import {
-  NewThreadPage,
-  NewThreadProvider,
-} from "./features/threads/new-thread-page.js";
+import { NewThreadProvider } from "./features/threads/new-thread-provider.js";
 import { ThreadArchiveProvider } from "./features/threads/thread-archive.js";
 import { ThreadEditingProvider } from "./features/threads/thread-editing.js";
+import {
+  prefetchThreadOpen,
+  threadsQueryOptions,
+} from "./features/threads/thread-queries.js";
 import { openThreadSeen } from "./features/threads/thread-seen-mutations.js";
 import { ThreadSnoozeProvider } from "./features/threads/thread-snooze.js";
+import { NewProjectSurfaceContext } from "./shared/new-project-surface.js";
 import { isStaleChunkError } from "./shared/stale-chunk.js";
 
 export interface RouterContext {
@@ -69,6 +73,10 @@ const page = {
   projectSettings: lazyRouteComponent(
     () => import("./project-settings-route.js"),
     "ProjectSettingsRoute",
+  ),
+  newThread: lazyRouteComponent(
+    () => import("./features/threads/new-thread-page.js"),
+    "NewThreadPage",
   ),
   thread: lazyRouteComponent(() => import("./thread-route.js"), "ThreadRoute"),
   threadTree: lazyRouteComponent(
@@ -110,9 +118,11 @@ const productNotices = <InstallAppBanner />;
 
 const rootRoute = createRootRouteWithContext<RouterContext>()({
   component: () => (
-    <NewThreadProvider>
-      <Outlet />
-    </NewThreadProvider>
+    <NewProjectSurfaceContext.Provider value={NewProjectOnDemand}>
+      <NewThreadProvider>
+        <Outlet />
+      </NewThreadProvider>
+    </NewProjectSurfaceContext.Provider>
   ),
 });
 
@@ -197,7 +207,22 @@ const projectRouteStates = {
 const projectRoute = createRoute({
   getParentRoute: () => productRoute,
   path: "/projects/$projectId",
-  loader: async ({ context, params }) => {
+  // `path` is the repository folder the Files section shows.
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { readonly path?: string } => {
+    const path = projectRepositoryPathSearch(search.path);
+    return path === undefined ? {} : { path };
+  },
+  loader: async ({ context, params, preload }) => {
+    // Hovering or pressing a Project's link preloads this route: its Thread
+    // list starts then, beside the Project's own read (#1440). A direct
+    // navigation reads it as the page mounts.
+    const id = Schema.decodeUnknownOption(ProjectId)(params.projectId);
+    if (preload && Option.isSome(id))
+      void context.queryClient.prefetchInfiniteQuery(
+        threadsQueryOptions(context.userId, id.value, "active"),
+      );
     await ensureProjectRouteData(context, params.projectId);
   },
   component: page.project,
@@ -263,7 +288,7 @@ const newThreadRoute = createRoute({
     context.queryClient.prefetchQuery(
       settingsContextQueryOptions(context.userId),
     ),
-  component: NewThreadPage,
+  component: page.newThread,
 });
 
 const seeOpenedThread = ({
@@ -294,6 +319,13 @@ const threadRoute = createRoute({
   // the route, and the click that follows reuses that match unloaded.
   onEnter: seeOpenedThread,
   onStay: seeOpenedThread,
+  // Hovering or pressing a Thread's link preloads this route, which starts
+  // the reads its page waits on; navigating does too, without waiting.
+  loader: ({ context, params }) => {
+    const threadId = Schema.decodeUnknownOption(ThreadId)(params.threadId);
+    if (Option.isSome(threadId))
+      prefetchThreadOpen(context.queryClient, context.userId, threadId.value);
+  },
   component: page.thread,
 });
 

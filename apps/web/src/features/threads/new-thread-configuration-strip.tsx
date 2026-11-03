@@ -22,12 +22,14 @@ import {
   ChevronRight,
   Folder,
   LoaderCircle,
+  Plus,
   RotateCw,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import * as React from "react";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
 import { modelDisplayName } from "../../shared/model-display-name.js";
+import { useNewProjectSurface } from "../../shared/new-project-surface.js";
 import { Button } from "../../shared/ui/button.js";
 import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
 import { MenuItemText } from "../../shared/ui/menu-item-text.js";
@@ -590,6 +592,9 @@ function ProjectOption({ project }: { readonly project: ProjectData }) {
   );
 }
 
+/** The picker entry that opens the New Project dialog instead of choosing. */
+const NEW_PROJECT = "new-project";
+
 function ProjectPicker({
   projects,
   projectId,
@@ -613,6 +618,18 @@ function ProjectPicker({
   const [recentProjectIds, setRecentProjectIds] = React.useState<
     ReadonlyArray<ProjectId>
   >([]);
+  const NewProject = useNewProjectSurface();
+  // Mounted on first use, so the composer loads repositories only then, and
+  // kept so the dialog's close animation runs.
+  const [newProjectMounted, setNewProjectMounted] = React.useState(false);
+  const [newProjectOpen, setNewProjectOpen] = React.useState(false);
+  const chooseProject = (id: ProjectId | "") => {
+    if (id !== "")
+      setRecentProjectIds((current) =>
+        [id, ...current.filter((recent) => recent !== id)].slice(0, 5),
+      );
+    onProjectChange(id);
+  };
   const projectName =
     projects.find(({ id }) => id === projectId)?.name ?? "No Project";
   const visibleProjects = projects.filter((project) =>
@@ -639,14 +656,12 @@ function ProjectPicker({
       }}
       onValueChange={(value) => {
         if (value === null) return;
-        if (value !== "no-project")
-          setRecentProjectIds((current) =>
-            [value as ProjectId, ...current.filter((id) => id !== value)].slice(
-              0,
-              5,
-            ),
-          );
-        onProjectChange(value === "no-project" ? "" : (value as ProjectId));
+        if (value === NEW_PROJECT) {
+          setNewProjectMounted(true);
+          setNewProjectOpen(true);
+          return;
+        }
+        chooseProject(value === "no-project" ? "" : (value as ProjectId));
       }}
     >
       <Select.Trigger
@@ -724,10 +739,43 @@ function ProjectPicker({
                   {loadingMoreProjects ? "Loading…" : "More projects"}
                 </button>
               ) : null}
+              {NewProject === undefined ? null : (
+                <>
+                  <Select.Separator className="project-picker-separator" />
+                  <Select.Item
+                    value={NEW_PROJECT}
+                    className="project-picker-option project-picker-new"
+                  >
+                    <Plus aria-hidden="true" />
+                    <Select.ItemText className="project-picker-name">
+                      New Project
+                    </Select.ItemText>
+                  </Select.Item>
+                </>
+              )}
             </Select.List>
           </Select.Popup>
         </Select.Positioner>
       </Select.Portal>
+      {newProjectMounted && NewProject !== undefined ? (
+        // The dialog renders its own New Project button, which /projects
+        // shows. Here the picker entry opens it, so `hidden` (display: none)
+        // keeps that button out of view, the Tab order, and the accessibility
+        // tree; the dialog itself portals to the body.
+        // TODO(#1138): once #1383 and #1348 merge, give NewProjectDialog a
+        // controlled open/onOpenChange without its trigger and drop this span.
+        <span hidden>
+          <NewProject
+            open={newProjectOpen}
+            onOpenChange={(open) => {
+              setNewProjectOpen(open);
+              if (!open)
+                requestAnimationFrame(() => projectTriggerRef.current?.focus());
+            }}
+            onCreated={(project) => chooseProject(project.id)}
+          />
+        </span>
+      ) : null}
     </Select.Root>
   );
 }
@@ -860,13 +908,17 @@ function OrbPicker({
                 <Menu.SubmenuRoot key={group.adapter}>
                   <Menu.SubmenuTrigger
                     className="thread-menu-item orb-picker-provider"
-                    title={pauseResumeNote(group.provider?.pauseResume ?? null)}
+                    title={
+                      group.orb?.description ??
+                      pauseResumeNote(group.provider?.pauseResume ?? null)
+                    }
                   >
                     <OrbIcon aria-hidden="true" />
                     <span className="orb-picker-provider-name">
-                      {group.provider === undefined
-                        ? group.adapter
-                        : orbProviderName(group.provider)}
+                      {group.orb?.displayName ??
+                        (group.provider === undefined
+                          ? group.adapter
+                          : orbProviderName(group.provider))}
                     </span>
                     {hint === undefined ? null : (
                       <small className="orb-picker-provider-hint">{hint}</small>

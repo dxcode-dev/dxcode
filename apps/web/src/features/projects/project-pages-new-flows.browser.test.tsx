@@ -103,10 +103,13 @@ const mount = async (initialPath: string) => {
     projectQueryOptions(userId, existing.id).queryKey,
     existing,
   );
-  queryClient.setQueryData(threadsQueryOptions(userId, existing.id).queryKey, {
-    pageParams: [undefined],
-    pages: [{ items: [] }],
-  } as never);
+  queryClient.setQueryData(
+    threadsQueryOptions(userId, existing.id, "active").queryKey,
+    {
+      pageParams: [undefined],
+      pages: [{ items: [] }],
+    } as never,
+  );
   queryClient.setQueryData(
     settingsContextQueryOptions(userId).queryKey,
     {} as never,

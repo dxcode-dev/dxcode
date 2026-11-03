@@ -424,6 +424,7 @@ function AppSidebarContent({
         onUnfollow={onUnfollow}
         onSetArchived={archive.setArchived}
         onSetPinned={onSetPinned}
+        onArchiveInactive={archive.archiveMany}
         archivingThreadId={archive.pendingThreadId}
         pinningThreadId={pinningThreadId}
       />

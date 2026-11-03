@@ -247,7 +247,13 @@ export const ThreadRepositoryD1 = Layer.effect(
     };
 
     return ThreadRepository.of({
-      insert: (thread, source, executionPin, claudeConnectionId) =>
+      insert: (
+        thread,
+        source,
+        executionPin,
+        claudeConnectionId,
+        initialDispatch,
+      ) =>
         observe(
           "thread.insert",
           { threadId: thread.id },
@@ -338,9 +344,27 @@ export const ThreadRepositoryD1 = Layer.effect(
                            AND claude_connection_bound_at IS NULL
                       `,
                     ];
+              // The first message lands with the row, so a Thread never
+              // exists without it; its agent admits it after the response.
+              const dispatch =
+                initialDispatch === undefined
+                  ? []
+                  : [
+                      sql`
+                        INSERT INTO thread_initial_dispatch (
+                          thread_id, request_json, attachment_ids_json,
+                          sender_user_id, created_at
+                        ) VALUES (
+                          ${encoded.id}, ${initialDispatch.requestJson},
+                          ${JSON.stringify(initialDispatch.attachmentIds)},
+                          ${initialDispatch.senderUserId},
+                          ${Date.now()}
+                        )
+                      `,
+                    ];
               if (source === undefined)
                 return d1
-                  .batch([insertThread, ...pin, ...plan])
+                  .batch([insertThread, ...pin, ...plan, ...dispatch])
                   .pipe(Effect.asVoid);
               if (source.kind === "pending")
                 return Schema.encodeEffect(ThreadSourceIntent)(
@@ -352,6 +376,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                         insertThread,
                         ...pin,
                         ...plan,
+                        ...dispatch,
                         sql`
                           INSERT INTO thread_source_intent (
                             thread_id, project_id, binding_revision, provider,
@@ -408,6 +433,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                           insertThread,
                           ...pin,
                           ...plan,
+                          ...dispatch,
                           snapshotInsert,
                           sql`
                         INSERT INTO thread_source_authority (
@@ -821,7 +847,7 @@ export const ThreadRepositoryD1 = Layer.effect(
             // sits with the other pinned Threads. Pages ordered by the pin
             // snapshot judge pinning by that snapshot too.
             const treeFilterFor = (
-              pinnedAt: "thread.pinned_at" | "pin.pinned_at",
+              pinnedAt: "thread.pinned_at" | "thread.snapshot_pinned_at",
             ) =>
               request.tree === undefined
                 ? sql`1 = 1`
@@ -881,280 +907,122 @@ export const ThreadRepositoryD1 = Layer.effect(
               cursor.pinnedAt !== undefined
                 ? 0
                 : 1;
+            // The listed Thread columns besides its activity and pin, which
+            // a page reads as of its snapshot.
+            const listedColumns = sql.literal(`
+              thread.id, thread.title, thread.project_id, thread.owner_user_id,
+              thread.agent_instructions, thread.agent_instructions_revision,
+              thread.agent_instructions_version, thread.model_selection,
+              thread.runner_profile_id, thread.title_pending_until, thread.color,
+              thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
+              thread.parent_thread_id, thread.started_by_thread_id,
+              thread.plugin_snapshot_json, thread.skill_snapshot_json,
+              thread.visibility, thread.created_at,
+              thread.updated_at, thread.activity_status, thread.lifecycle_state`);
+            const listedFilter = sql`thread.owner_user_id = ${reader.userId}
+                AND ${inReachableScope("thread", reader)}
+                AND ${projectId ? sql`thread.project_id = ${projectId}` : sql`1 = 1`}
+                AND thread.lifecycle_state != 'deleted'
+                AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})`;
             const rows = yield* (
-              projectId
-                ? cursor?.ordering === "activity"
-                  ? sql<ThreadRow>`
-                    WITH snapshot_activity AS (
-                      SELECT candidate.thread_id,
-                             MAX(candidate.occurred_at) AS last_activity_at
-                      FROM thread_activity AS candidate
-                      INNER JOIN threads AS scoped
-                        ON scoped.id = candidate.thread_id
-                      WHERE candidate.sequence <= ${snapshotSequence}
-                        AND scoped.owner_user_id = ${reader.userId}
-                        AND scoped.project_id = ${projectId}
-                      GROUP BY candidate.thread_id
-                    )
-                    SELECT
-                      thread.id, thread.title, thread.project_id, thread.owner_user_id,
-                      thread.agent_instructions, thread.agent_instructions_revision,
-                      thread.agent_instructions_version, thread.model_selection,
-                      thread.runner_profile_id, thread.title_pending_until, thread.color,
-                      thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
-                      thread.parent_thread_id, thread.started_by_thread_id,
-                      thread.plugin_snapshot_json, thread.skill_snapshot_json,
-                      thread.visibility, thread.created_at,
-                      thread.updated_at, activity.last_activity_at,
-                      thread.activity_status, thread.lifecycle_state,
-                      thread.pinned_at
+              cursor === undefined
+                ? // The first page's snapshot is now, so each Thread's
+                  // snapshot activity and pin are its own columns: the
+                  // activity writer keeps last_activity_at at its newest
+                  // thread_activity, and every pin change is an UPDATE the
+                  // pin history records. The order is an index's, so the
+                  // read stops at the limit instead of aggregating every
+                  // activity row the member has (#1487).
+                  sql<ThreadRow>`
+                    SELECT ${listedColumns},
+                      thread.last_activity_at, thread.pinned_at
                     FROM threads AS thread
-                    INNER JOIN snapshot_activity AS activity
-                      ON activity.thread_id = thread.id
-                    WHERE thread.owner_user_id = ${reader.userId}
-                      AND ${inReachableScope("thread", reader)}
-                      AND thread.project_id = ${projectId}
-                      AND thread.lifecycle_state != 'deleted'
+                    WHERE ${listedFilter}
                       AND ${treeFilterFor("thread.pinned_at")}
-                      AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
-                      AND (activity.last_activity_at, thread.id) < (${cursorTime}, ${cursor.id})
-                    ORDER BY activity.last_activity_at DESC, thread.id DESC
+                    ORDER BY thread.pinned_at DESC,
+                      thread.last_activity_at DESC, thread.id DESC
                     LIMIT ${limit + 1}
                   `
-                  : cursor
-                    ? sql<ThreadRow>`
-                    WITH snapshot_activity AS (
+                : // A later page reads each Thread as of the first page's
+                  // snapshot. Only Threads with activity or a pin change
+                  // since then differ from their columns, so only those are
+                  // recomputed from their history.
+                  sql<ThreadRow>`
+                    WITH moved AS (
+                      SELECT thread_id FROM thread_activity
+                      WHERE sequence > ${snapshotSequence}
+                      UNION
+                      SELECT thread_id FROM thread_pin_history
+                      WHERE sequence > ${snapshotPinSequence}
+                    ), moved_activity AS (
                       SELECT candidate.thread_id,
                              MAX(candidate.occurred_at) AS last_activity_at
                       FROM thread_activity AS candidate
-                      INNER JOIN threads AS scoped
-                        ON scoped.id = candidate.thread_id
-                      WHERE candidate.sequence <= ${snapshotSequence}
-                        AND scoped.owner_user_id = ${reader.userId}
-                        AND scoped.project_id = ${projectId}
+                      WHERE candidate.thread_id IN (SELECT thread_id FROM moved)
+                        AND candidate.sequence <= ${snapshotSequence}
                       GROUP BY candidate.thread_id
-                    ), pin_snapshot AS (
+                    ), moved_pin AS (
                       SELECT history.thread_id, history.pinned_at
                       FROM thread_pin_history AS history
-                      WHERE history.sequence = (
-                        SELECT MAX(candidate.sequence)
-                        FROM thread_pin_history AS candidate
-                        WHERE candidate.thread_id = history.thread_id
-                          AND candidate.sequence <= ${snapshotPinSequence}
-                      )
+                      WHERE history.thread_id IN (SELECT thread_id FROM moved)
+                        AND history.sequence = (
+                          SELECT MAX(candidate.sequence)
+                          FROM thread_pin_history AS candidate
+                          WHERE candidate.thread_id = history.thread_id
+                            AND candidate.sequence <= ${snapshotPinSequence}
+                        )
+                    ), listed AS (
+                      SELECT thread.*,
+                        CASE WHEN moved.thread_id IS NULL
+                          THEN thread.last_activity_at
+                          ELSE activity.last_activity_at
+                        END AS snapshot_activity_at,
+                        CASE WHEN moved.thread_id IS NULL
+                          THEN thread.pinned_at
+                          ELSE pin.pinned_at
+                        END AS snapshot_pinned_at
+                      FROM threads AS thread
+                      LEFT JOIN moved ON moved.thread_id = thread.id
+                      LEFT JOIN moved_activity AS activity
+                        ON activity.thread_id = thread.id
+                      LEFT JOIN moved_pin AS pin ON pin.thread_id = thread.id
+                      WHERE ${listedFilter}
                     )
-                    SELECT
-                      thread.id, thread.title, thread.project_id, thread.owner_user_id,
-                      thread.agent_instructions, thread.agent_instructions_revision,
-                      thread.agent_instructions_version, thread.model_selection,
-                      thread.runner_profile_id, thread.title_pending_until, thread.color,
-                      thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
-                      thread.parent_thread_id, thread.started_by_thread_id,
-                      thread.plugin_snapshot_json, thread.skill_snapshot_json,
-                      thread.visibility, thread.created_at,
-                      thread.updated_at, activity.last_activity_at,
-                      thread.activity_status, thread.lifecycle_state,
-                      pin.pinned_at AS pinned_at
-                    FROM threads AS thread
-                    INNER JOIN snapshot_activity AS activity
-                      ON activity.thread_id = thread.id
-                    LEFT JOIN pin_snapshot AS pin ON pin.thread_id = thread.id
-                    WHERE thread.owner_user_id = ${reader.userId}
-                      AND ${inReachableScope("thread", reader)}
-                      AND thread.project_id = ${projectId}
-                      AND thread.lifecycle_state != 'deleted'
-                      AND ${treeFilterFor("pin.pinned_at")}
-                      AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
-                      AND (
-                        CASE WHEN pin.pinned_at IS NULL THEN 1 ELSE 0 END > ${cursorPinRank}
-                        OR (CASE WHEN pin.pinned_at IS NULL THEN 1 ELSE 0 END = ${cursorPinRank}
-                          AND (COALESCE(pin.pinned_at, '') < ${cursorPinnedAt}
-                            OR (COALESCE(pin.pinned_at, '') = ${cursorPinnedAt}
-                              AND (activity.last_activity_at, thread.id) < (${cursorTime}, ${cursor.id}))))
-                      )
-                    ORDER BY CASE WHEN pin.pinned_at IS NULL THEN 1 ELSE 0 END,
-                      pin.pinned_at DESC, activity.last_activity_at DESC, thread.id DESC
-                    LIMIT ${limit + 1}
-                  `
-                    : sql<ThreadRow>`
-                    WITH snapshot_activity AS (
-                      SELECT candidate.thread_id,
-                             MAX(candidate.occurred_at) AS last_activity_at
-                      FROM thread_activity AS candidate
-                      INNER JOIN threads AS scoped
-                        ON scoped.id = candidate.thread_id
-                      WHERE candidate.sequence <= ${snapshotSequence}
-                        AND scoped.owner_user_id = ${reader.userId}
-                        AND scoped.project_id = ${projectId}
-                      GROUP BY candidate.thread_id
-                    ), pin_snapshot AS (
-                      SELECT history.thread_id, history.pinned_at
-                      FROM thread_pin_history AS history
-                      WHERE history.sequence = (
-                        SELECT MAX(candidate.sequence)
-                        FROM thread_pin_history AS candidate
-                        WHERE candidate.thread_id = history.thread_id
-                          AND candidate.sequence <= ${snapshotPinSequence}
-                      )
-                    )
-                    SELECT
-                      thread.id, thread.title, thread.project_id, thread.owner_user_id,
-                      thread.agent_instructions, thread.agent_instructions_revision,
-                      thread.agent_instructions_version, thread.model_selection,
-                      thread.runner_profile_id, thread.title_pending_until, thread.color,
-                      thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
-                      thread.parent_thread_id, thread.started_by_thread_id,
-                      thread.plugin_snapshot_json, thread.skill_snapshot_json,
-                      thread.visibility, thread.created_at,
-                      thread.updated_at, activity.last_activity_at,
-                      thread.activity_status, thread.lifecycle_state,
-                      pin.pinned_at AS pinned_at
-                    FROM threads AS thread
-                    INNER JOIN snapshot_activity AS activity
-                      ON activity.thread_id = thread.id
-                    LEFT JOIN pin_snapshot AS pin ON pin.thread_id = thread.id
-                    WHERE thread.owner_user_id = ${reader.userId}
-                      AND ${inReachableScope("thread", reader)}
-                      AND thread.project_id = ${projectId}
-                      AND thread.lifecycle_state != 'deleted'
-                      AND ${treeFilterFor("pin.pinned_at")}
-                      AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
-                    ORDER BY CASE WHEN pin.pinned_at IS NULL THEN 1 ELSE 0 END,
-                      pin.pinned_at DESC, activity.last_activity_at DESC, thread.id DESC
-                    LIMIT ${limit + 1}
-                  `
-                : cursor?.ordering === "activity"
-                  ? sql<ThreadRow>`
-                    WITH snapshot_activity AS (
-                      SELECT candidate.thread_id,
-                             MAX(candidate.occurred_at) AS last_activity_at
-                      FROM thread_activity AS candidate
-                      INNER JOIN threads AS scoped
-                        ON scoped.id = candidate.thread_id
-                      WHERE candidate.sequence <= ${snapshotSequence}
-                        AND scoped.owner_user_id = ${reader.userId}
-                      GROUP BY candidate.thread_id
-                    )
-                    SELECT
-                      thread.id, thread.title, thread.project_id, thread.owner_user_id,
-                      thread.agent_instructions, thread.agent_instructions_revision,
-                      thread.agent_instructions_version, thread.model_selection,
-                      thread.runner_profile_id, thread.title_pending_until, thread.color,
-                      thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
-                      thread.parent_thread_id, thread.started_by_thread_id,
-                      thread.plugin_snapshot_json, thread.skill_snapshot_json,
-                      thread.visibility, thread.created_at,
-                      thread.updated_at, activity.last_activity_at,
-                      thread.activity_status, thread.lifecycle_state,
-                      thread.pinned_at
-                    FROM threads AS thread
-                    INNER JOIN snapshot_activity AS activity
-                      ON activity.thread_id = thread.id
-                    WHERE thread.owner_user_id = ${reader.userId}
-                      AND ${inReachableScope("thread", reader)}
-                      AND thread.lifecycle_state != 'deleted'
-                      AND ${treeFilterFor("thread.pinned_at")}
-                      AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
-                      AND (activity.last_activity_at, thread.id) < (${cursorTime}, ${cursor.id})
-                    ORDER BY activity.last_activity_at DESC, thread.id DESC
-                    LIMIT ${limit + 1}
-                  `
-                  : cursor
-                    ? sql<ThreadRow>`
-                    WITH snapshot_activity AS (
-                      SELECT candidate.thread_id,
-                             MAX(candidate.occurred_at) AS last_activity_at
-                      FROM thread_activity AS candidate
-                      INNER JOIN threads AS scoped
-                        ON scoped.id = candidate.thread_id
-                      WHERE candidate.sequence <= ${snapshotSequence}
-                        AND scoped.owner_user_id = ${reader.userId}
-                      GROUP BY candidate.thread_id
-                    ), pin_snapshot AS (
-                      SELECT history.thread_id, history.pinned_at
-                      FROM thread_pin_history AS history
-                      WHERE history.sequence = (
-                        SELECT MAX(candidate.sequence)
-                        FROM thread_pin_history AS candidate
-                        WHERE candidate.thread_id = history.thread_id
-                          AND candidate.sequence <= ${snapshotPinSequence}
-                      )
-                    )
-                    SELECT
-                      thread.id, thread.title, thread.project_id, thread.owner_user_id,
-                      thread.agent_instructions, thread.agent_instructions_revision,
-                      thread.agent_instructions_version, thread.model_selection,
-                      thread.runner_profile_id, thread.title_pending_until, thread.color,
-                      thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
-                      thread.parent_thread_id, thread.started_by_thread_id,
-                      thread.plugin_snapshot_json, thread.skill_snapshot_json,
-                      thread.visibility, thread.created_at,
-                      thread.updated_at, activity.last_activity_at,
-                      thread.activity_status, thread.lifecycle_state,
-                      pin.pinned_at AS pinned_at
-                    FROM threads AS thread
-                    INNER JOIN snapshot_activity AS activity
-                      ON activity.thread_id = thread.id
-                    LEFT JOIN pin_snapshot AS pin ON pin.thread_id = thread.id
-                    WHERE thread.owner_user_id = ${reader.userId}
-                      AND ${inReachableScope("thread", reader)}
-                      AND thread.lifecycle_state != 'deleted'
-                      AND ${treeFilterFor("pin.pinned_at")}
-                      AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
-                      AND (
-                        CASE WHEN pin.pinned_at IS NULL THEN 1 ELSE 0 END > ${cursorPinRank}
-                        OR (CASE WHEN pin.pinned_at IS NULL THEN 1 ELSE 0 END = ${cursorPinRank}
-                          AND (COALESCE(pin.pinned_at, '') < ${cursorPinnedAt}
-                            OR (COALESCE(pin.pinned_at, '') = ${cursorPinnedAt}
-                              AND (activity.last_activity_at, thread.id) < (${cursorTime}, ${cursor.id}))))
-                      )
-                    ORDER BY CASE WHEN pin.pinned_at IS NULL THEN 1 ELSE 0 END,
-                      pin.pinned_at DESC, activity.last_activity_at DESC, thread.id DESC
-                    LIMIT ${limit + 1}
-                  `
-                    : sql<ThreadRow>`
-                    WITH snapshot_activity AS (
-                      SELECT candidate.thread_id,
-                             MAX(candidate.occurred_at) AS last_activity_at
-                      FROM thread_activity AS candidate
-                      INNER JOIN threads AS scoped
-                        ON scoped.id = candidate.thread_id
-                      WHERE candidate.sequence <= ${snapshotSequence}
-                        AND scoped.owner_user_id = ${reader.userId}
-                      GROUP BY candidate.thread_id
-                    ), pin_snapshot AS (
-                      SELECT history.thread_id, history.pinned_at
-                      FROM thread_pin_history AS history
-                      WHERE history.sequence = (
-                        SELECT MAX(candidate.sequence)
-                        FROM thread_pin_history AS candidate
-                        WHERE candidate.thread_id = history.thread_id
-                          AND candidate.sequence <= ${snapshotPinSequence}
-                      )
-                    )
-                    SELECT
-                      thread.id, thread.title, thread.project_id, thread.owner_user_id,
-                      thread.agent_instructions, thread.agent_instructions_revision,
-                      thread.agent_instructions_version, thread.model_selection,
-                      thread.runner_profile_id, thread.title_pending_until, thread.color,
-                      thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
-                      thread.parent_thread_id, thread.started_by_thread_id,
-                      thread.plugin_snapshot_json, thread.skill_snapshot_json,
-                      thread.visibility, thread.created_at,
-                      thread.updated_at, activity.last_activity_at,
-                      thread.activity_status, thread.lifecycle_state,
-                      pin.pinned_at AS pinned_at
-                    FROM threads AS thread
-                    INNER JOIN snapshot_activity AS activity
-                      ON activity.thread_id = thread.id
-                    LEFT JOIN pin_snapshot AS pin ON pin.thread_id = thread.id
-                    WHERE thread.owner_user_id = ${reader.userId}
-                      AND ${inReachableScope("thread", reader)}
-                      AND thread.lifecycle_state != 'deleted'
-                      AND ${treeFilterFor("pin.pinned_at")}
-                      AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
-                    ORDER BY CASE WHEN pin.pinned_at IS NULL THEN 1 ELSE 0 END,
-                      pin.pinned_at DESC, activity.last_activity_at DESC, thread.id DESC
+                    SELECT ${listedColumns},
+                      thread.snapshot_activity_at AS last_activity_at,
+                      ${
+                        cursor.ordering === "activity"
+                          ? sql.literal("thread.pinned_at")
+                          : sql.literal(
+                              "thread.snapshot_pinned_at AS pinned_at",
+                            )
+                      }
+                    FROM listed AS thread
+                    -- A Thread created after the snapshot has no activity
+                    -- as of it, and lists on no later page.
+                    WHERE thread.snapshot_activity_at IS NOT NULL
+                      AND ${
+                        cursor.ordering === "activity"
+                          ? sql`${treeFilterFor("thread.pinned_at")}
+                              AND (thread.snapshot_activity_at, thread.id) < (${cursorTime}, ${cursor.id})`
+                          : sql`${treeFilterFor("thread.snapshot_pinned_at")}
+                              AND (
+                                CASE WHEN thread.snapshot_pinned_at IS NULL THEN 1 ELSE 0 END > ${cursorPinRank}
+                                OR (CASE WHEN thread.snapshot_pinned_at IS NULL THEN 1 ELSE 0 END = ${cursorPinRank}
+                                  AND (COALESCE(thread.snapshot_pinned_at, '') < ${cursorPinnedAt}
+                                    OR (COALESCE(thread.snapshot_pinned_at, '') = ${cursorPinnedAt}
+                                      AND (thread.snapshot_activity_at, thread.id) < (${cursorTime}, ${cursor.id}))))
+                              )`
+                      }
+                    ORDER BY ${
+                      cursor.ordering === "activity"
+                        ? sql.literal(
+                            "thread.snapshot_activity_at DESC, thread.id DESC",
+                          )
+                        : sql.literal(
+                            "thread.snapshot_pinned_at DESC, thread.snapshot_activity_at DESC, thread.id DESC",
+                          )
+                    }
                     LIMIT ${limit + 1}
                   `
             ).pipe(
