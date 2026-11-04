@@ -5,6 +5,22 @@ import type { Thread } from "./thread.js";
 export const THREAD_SNOOZE_MAX_MS = 366 * 24 * 60 * 60 * 1_000;
 
 /**
+ * Snooze Until I'm Needed: a wake time no clock reaches, so every reader
+ * keeps the Thread snoozed and the minute sweep never finds it due. The
+ * Thread's next turn that finishes or fails wakes it
+ * (`apps/core/src/threads/activity.ts`), as a message from someone does.
+ */
+export const THREAD_SNOOZE_UNTIL_NEEDED_MS = Date.UTC(
+  9999,
+  11,
+  31,
+  23,
+  59,
+  59,
+  999,
+);
+
+/**
  * Where a snooze leaves a Thread at `now`:
  *
  * - `awake`: not snoozed, or the owner already saw it wake.

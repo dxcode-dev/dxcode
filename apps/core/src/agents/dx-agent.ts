@@ -49,6 +49,11 @@ import {
   workspaceRecoveryNote,
 } from "../orb-disk/read-only.js";
 import {
+  diskReliefNote,
+  takeDiskRelief,
+  WORKSPACE_DISK_RELIEF_SIGNAL,
+} from "../orb-disk/relief.js";
+import {
   takeUnsavedStop,
   unsavedStopNote,
   WORKSPACE_UNSAVED_STOP_SIGNAL,
@@ -435,6 +440,13 @@ const usePluginLifecycle = (
         kind: "signal",
         type: WORKSPACE_DISK_SIGNAL,
         body: note,
+      });
+    const diskRelief = takeDiskRelief(threadId);
+    if (diskRelief !== undefined)
+      context.append({
+        kind: "signal",
+        type: WORKSPACE_DISK_RELIEF_SIGNAL,
+        body: diskReliefNote(diskRelief),
       });
     // People's artifact edits since the agent's last save, so it reads them
     // before writing. Best effort: a failed read never fails the turn.

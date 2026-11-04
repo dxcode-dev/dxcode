@@ -1,11 +1,12 @@
-import type { ProjectDefaultsData } from "@dx/api";
-import { UserId } from "@dx/domain";
+import type { OrbProviderListData, ProjectDefaultsData } from "@dx/api";
+import { type RunnerProfileId, UserId } from "@dx/domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Schema } from "effect";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import { AuthContext } from "../../../shared/auth/auth-context.js";
+import { orbProviderKeys } from "../orb-providers/orb-providers-queries.js";
 import {
   type ProjectDefaultsTarget,
   projectDefaultsKeys,
@@ -16,9 +17,13 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
-  Link: ({ children }: { readonly children: React.ReactNode }) => (
-    <a href="/projects">{children}</a>
-  ),
+  Link: ({
+    children,
+    to,
+  }: {
+    readonly children: React.ReactNode;
+    readonly to?: string;
+  }) => <a href={to ?? "/projects"}>{children}</a>,
 }));
 
 const userId = Schema.decodeUnknownSync(UserId)("user-1");
@@ -66,11 +71,33 @@ const defaults = (
   canUpdate: true,
 });
 
+/** The providers set up for this person: what a new Thread can start on. */
+const resolvedOrbs = (
+  providerIds: ReadonlyArray<
+    OrbProviderListData["resolved"][number]["providerId"]
+  >,
+): OrbProviderListData => ({
+  scope: "personal",
+  canUpdate: true,
+  localRuntime: false,
+  providers: [],
+  personalKeysOnWorkspaceProjects: null,
+  resolved: providerIds.map((providerId) => ({
+    providerId,
+    scope: "deployment",
+    account: null,
+    status: "ready",
+    unavailableSizes: [],
+  })),
+});
+
 const renderSettings = async (
   queryClient: QueryClient,
   initial: ProjectDefaultsData,
+  orbs: OrbProviderListData = resolvedOrbs(["e2b"]),
 ) => {
   queryClient.setQueryData(projectDefaultsKeys.detail(userId, target), initial);
+  queryClient.setQueryData(orbProviderKeys.list(userId, target), orbs);
   const container = document.createElement("div");
   const root = createRoot(container);
   await React.act(() =>
@@ -268,5 +295,131 @@ describe("project defaults settings", () => {
 
     await React.act(() => root.unmount());
     vi.unstubAllGlobals();
+  });
+  // #1691: Orb Size lists only the providers set up for this person, keeps a
+  // saved default on any other provider as one unavailable size, and links to
+  // Orb Providers to add one.
+  it("lists only Orb providers that are set up, keeping a saved default on another as unavailable", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const size = (id: string, adapter: "e2b" | "cloudflare" | "freestyle") => ({
+      id: id as RunnerProfileId,
+      label: id,
+      adapter,
+      resources: { cpuCores: 2, memoryMb: 4096, diskGb: 20 },
+      isolation: "sandbox" as const,
+      availability: "available" as const,
+      capabilities: [],
+    });
+    const initial = defaults(1);
+    const { container, root } = await renderSettings(
+      queryClient,
+      {
+        ...initial,
+        overrides: {
+          ...initial.overrides,
+          runnerProfileId: "cf-standard" as RunnerProfileId,
+        },
+        resolved: {
+          ...initial.resolved,
+          runnerProfileId: {
+            value: "cf-standard" as RunnerProfileId,
+            source: "personal",
+          },
+        },
+        catalog: {
+          ...initial.catalog,
+          profiles: [
+            size("e2b-standard", "e2b"),
+            size("e2b-large", "e2b"),
+            size("cf-standard", "cloudflare"),
+            size("cf-large", "cloudflare"),
+            size("fs-standard", "freestyle"),
+          ],
+          providers: [
+            { adapter: "e2b", displayName: "E2B", pauseResume: "processes" },
+            {
+              adapter: "cloudflare",
+              displayName: "Cloudflare Containers",
+              pauseResume: "filesystem",
+            },
+            {
+              adapter: "freestyle",
+              displayName: "Freestyle",
+              pauseResume: "processes",
+            },
+          ],
+        },
+      },
+      resolvedOrbs(["e2b"]),
+    );
+
+    const card = (id: string) =>
+      [...container.querySelectorAll("label.runner-profile-card")].find(
+        (label) => label.querySelector("strong")?.textContent === id,
+      );
+    const cardIds = [
+      ...container.querySelectorAll("label.runner-profile-card strong"),
+    ].map(({ textContent }) => textContent);
+    expect(cardIds).toEqual(["e2b-standard", "e2b-large", "cf-standard"]);
+    expect(
+      [...container.querySelectorAll(".orb-size-picker-group h3")].map(
+        ({ textContent }) => textContent,
+      ),
+    ).toEqual(["E2B", "Cloudflare ContainersNot available"]);
+    expect(card("e2b-large")?.querySelector("input")?.disabled).toBe(false);
+    const saved = card("cf-standard")?.querySelector("input");
+    expect(saved?.checked).toBe(true);
+    expect(saved?.disabled).toBe(true);
+    expect(container.textContent).not.toContain("Freestyle");
+    const link = [...container.querySelectorAll("a")].find(
+      ({ textContent }) => textContent === "Orb Providers",
+    );
+    expect(link?.getAttribute("href")).toBe("/settings/orb-providers");
+
+    await React.act(() => root.unmount());
+  });
+
+  it("says no Orb provider is set up when none is, and links to Orb Providers", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const initial = defaults(1);
+    const { container, root } = await renderSettings(
+      queryClient,
+      {
+        ...initial,
+        catalog: {
+          ...initial.catalog,
+          profiles: [
+            {
+              id: "e2b-standard" as RunnerProfileId,
+              label: "e2b-standard",
+              adapter: "e2b",
+              resources: { cpuCores: 2, memoryMb: 4096, diskGb: 20 },
+              isolation: "sandbox",
+              availability: "available",
+              capabilities: [],
+            },
+          ],
+        },
+      },
+      resolvedOrbs([]),
+    );
+
+    expect(
+      container.querySelectorAll("label.runner-profile-card"),
+    ).toHaveLength(1);
+    expect(
+      container.querySelector<HTMLInputElement>(
+        "label.runner-profile-card input",
+      )?.disabled,
+    ).toBe(true);
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+      "No Orb provider is set up, so new projects can't start Threads. Add one in Orb Providers.",
+    );
+
+    await React.act(() => root.unmount());
   });
 });

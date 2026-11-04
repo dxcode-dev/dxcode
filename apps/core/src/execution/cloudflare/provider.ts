@@ -11,6 +11,7 @@ import {
   stepTiming,
 } from "../../observability/step-timing.js";
 import type { RestoredWork } from "../../orb-disk/read-only.js";
+import { rememberDiskRelief } from "../../orb-disk/relief.js";
 import { rememberUnsavedStop } from "../../orb-disk/unsaved-stop.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
 import type {
@@ -487,6 +488,16 @@ const openCloudflareWorkspaceTimed = async (
       if (result.kind === "ready") timing.set("residency", result.residency);
       // dx stopped it without saving its latest files: this activation's
       // turn tells the person (#1620).
+      // The heartbeat cleared caches while the disk ran critically low:
+      // this activation's turn tells the person (#1649).
+      if (result.kind === "ready" && result.diskRelief !== undefined) {
+        rememberDiskRelief(id, result.diskRelief);
+        orbContainerLogger.info("Orb disk relief told.", {
+          ...details,
+          event: "orb_container_disk_relief_told",
+          paths: result.diskRelief.paths.length,
+        });
+      }
       if (result.kind === "ready" && result.unsavedStop !== undefined) {
         const restored = await restoreRescue(
           stub,

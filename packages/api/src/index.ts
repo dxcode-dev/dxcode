@@ -107,6 +107,7 @@ export * from "./threads/orb-restart.js";
 export * from "./threads/pane-layout.js";
 export * from "./threads/pin-thread.js";
 export * from "./threads/portals.js";
+export * from "./threads/reply-offers.js";
 export * from "./threads/search-threads.js";
 export * from "./threads/snooze-thread.js";
 export * from "./threads/terminal.js";

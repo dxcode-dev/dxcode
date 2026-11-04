@@ -17,12 +17,14 @@ const CONFIG_KEYS = new Set([
   "githubCopilotClientId",
   "modelDeploymentProviders",
   "modelEndpointAllowlist",
+  "bugReportReaders",
   "dxdBinary",
   "integrations",
   "plugins",
   "offeredPlugins",
   "offeredEmailSending",
   "attachmentR2Credentials",
+  "configuredSettings",
   "cloudflareAuth",
   "orbProviders",
   "signIn",
@@ -62,6 +64,7 @@ export const DEPLOYMENT_SECRET_NAMES = Object.freeze([
   "DX_INTEGRATION_BITBUCKET_OAUTH",
   "SARVAM_API_KEY",
   "EXA_API_KEY",
+  "BOAT_API_KEY",
   "DX_GOOGLE_CLIENT_SECRET",
   "DX_R2_ACCESS_KEY_ID",
   "DX_R2_SECRET_ACCESS_KEY",
@@ -270,17 +273,40 @@ export const validateSelfhostConfig = (input) => {
   ])
     if (input[key] !== undefined && typeof input[key] !== "boolean")
       throw new Error(`${key} must be true or false.`);
+  // `boat`: Boat Orbs on the deployment's own Boat account (BOAT_API_KEY).
   const integrations = input.integrations ?? [];
   if (
     !Array.isArray(integrations) ||
     integrations.some(
-      (value) => !new Set(["github", "bitbucket", "sarvam", "exa"]).has(value),
+      (value) =>
+        !new Set(["github", "bitbucket", "sarvam", "exa", "boat"]).has(value),
     ) ||
     new Set(integrations).size !== integrations.length
   )
     throw new Error(
-      "integrations may contain github, bitbucket, sarvam, and exa once each.",
+      "integrations may contain github, bitbucket, sarvam, exa, and boat once each.",
     );
+  // Settings `pnpm dx:configure` has asked this deployment about
+  // (deploy/selfhost/settings.mjs); absent before it existed.
+  const configuredSettings = input.configuredSettings;
+  if (
+    configuredSettings !== undefined &&
+    (!Array.isArray(configuredSettings) ||
+      configuredSettings.some(
+        (value) => typeof value !== "string" || !/^[a-zA-Z0-9]+$/.test(value),
+      ))
+  )
+    throw new Error("configuredSettings must be a list of setting IDs.");
+  // Who reads every in-app bug report: verified emails, none by default.
+  const bugReportReaders = input.bugReportReaders ?? [];
+  if (
+    !Array.isArray(bugReportReaders) ||
+    bugReportReaders.some(
+      (value) =>
+        typeof value !== "string" || !/^[^\s@,]+@[^\s@,]+$/.test(value),
+    )
+  )
+    throw new Error("bugReportReaders must be a list of email addresses.");
   // Configs written before Containers existed installed E2B. An empty list
   // offers no provider on the deployment's account: people and workspaces
   // connect their own.
@@ -369,7 +395,17 @@ export const validateSelfhostConfig = (input) => {
       ? {}
       : { workerTraces: input.workerTraces }),
     integrations: [...integrations].sort(),
+    ...(bugReportReaders.length === 0
+      ? {}
+      : {
+          bugReportReaders: [
+            ...new Set(bugReportReaders.map((email) => email.toLowerCase())),
+          ].sort(),
+        }),
     orbProviders: [...orbProviders].sort(),
+    ...(configuredSettings === undefined
+      ? {}
+      : { configuredSettings: [...new Set(configuredSettings)].sort() }),
     // Absent means the operator was never asked; the installer asks once
     // about each plugin not yet offered.
     ...(offered.length === 0

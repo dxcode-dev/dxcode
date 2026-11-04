@@ -202,9 +202,24 @@ const exaApiKey =
   target !== "selfhost" || selfhostConfig.integrations.includes("exa")
     ? operatorEnvironment.EXA_API_KEY?.trim()
     : undefined;
-// Boat on the deployment's own account: hosted targets only, when set.
+// Boat on the deployment's own account. Hosted targets use the key when set;
+// a self-host opts in with the `boat` integration, which holds the key across
+// deploys, so it is needed only the first time or to rotate it.
 const boatApiKey =
-  target !== "selfhost" ? operatorEnvironment.BOAT_API_KEY?.trim() : undefined;
+  target !== "selfhost" || selfhostConfig.integrations.includes("boat")
+    ? operatorEnvironment.BOAT_API_KEY?.trim()
+    : undefined;
+// Who reads every in-app bug report. Self-host records the list in its
+// config (DX_BUG_REPORT_READERS overrides it); hosted targets read the
+// environment. None unless set.
+const bugReportReaders =
+  selfhostConfig !== undefined
+    ? (selfhostConfig.bugReportReaders ?? []).join(",")
+    : (process.env.DX_BUG_REPORT_READERS ?? "")
+        .split(",")
+        .map((email) => email.trim())
+        .filter(Boolean)
+        .join(",");
 // Attachment bytes move straight between browsers, dxd, and R2 when the
 // deployment can mint the bucket-scoped token Core signs URLs with. Alchemy
 // OAuth cannot create tokens, so those self-hosts carry the bytes through
@@ -670,6 +685,7 @@ const environment = {
   ...(sarvamApiKey ? { SARVAM_API_KEY: sarvamApiKey } : {}),
   ...(exaApiKey ? { EXA_API_KEY: exaApiKey } : {}),
   ...(boatApiKey ? { BOAT_API_KEY: boatApiKey } : {}),
+  ...(bugReportReaders ? { DX_BUG_REPORT_READERS: bugReportReaders } : {}),
   ...(attachmentR2Credentials === undefined
     ? {}
     : { DX_ATTACHMENT_R2_CREDENTIALS: attachmentR2Credentials }),

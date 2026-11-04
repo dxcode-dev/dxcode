@@ -1,3 +1,5 @@
+import { THREAD_SNOOZE_UNTIL_NEEDED_MS } from "@dx/domain";
+
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
@@ -83,8 +85,12 @@ export const snoozePresets = (now: number): ReadonlyArray<SnoozePreset> => {
   ];
 };
 
-/** Time left until a wake: `45m` and `3h` round up, `2d` counts whole days. */
+/**
+ * Time left until a wake: `45m` and `3h` round up, `2d` counts whole days;
+ * `when needed` for Snooze Until I'm Needed.
+ */
 export const snoozeRemainingText = (wakeAt: number, now: number) => {
+  if (wakeAt === THREAD_SNOOZE_UNTIL_NEEDED_MS) return "when needed";
   const remaining = wakeAt - now;
   if (remaining <= 0) return "now";
   if (remaining < HOUR_MS)
@@ -96,6 +102,8 @@ export const snoozeRemainingText = (wakeAt: number, now: number) => {
 
 /** A wake time in words: `5:30 PM`, `Tomorrow 9:00 AM`, `Mon 9:00 AM`, or a date. */
 export const snoozeWakeText = (wakeAt: number, now: number) => {
+  // Snooze Until I'm Needed: "Snoozed until you're needed".
+  if (wakeAt === THREAD_SNOOZE_UNTIL_NEEDED_MS) return "you're needed";
   const wake = new Date(wakeAt);
   const startOfToday = atHour(now, 0, 0).getTime();
   const days = Math.floor(

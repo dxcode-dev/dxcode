@@ -328,6 +328,31 @@ export const productionExperimentalFeatureRegistry =
             "Once automatic recovery covers every case, delete the restart route, its dialog, the menu item, and the cards' Restart Orb actions, and keep ExecutionWorkspaces.restart only if automatic recovery uses it.",
         },
       },
+      {
+        id: "composer-quick-actions",
+        title: "Composer quick actions",
+        description:
+          "When the agent ends a turn, Cloudflare's Clef Flash model on Workers AI picks which quick actions to show above the composer, and in what order: Snooze Until I'm Needed and the replies the agent offered.",
+        // Tracked in the private repository, so no public issue yet.
+        owner: { team: "dx/threads" },
+        status: "experimental",
+        defaultEnabled: false,
+        allowedScope: "personal",
+        kind: "interface",
+        risk: "low",
+        prerequisites: [],
+        incompatibilities: [],
+        activation: "immediate",
+        reviewDate: "2027-01-15",
+        lifecyclePlan: {
+          migration:
+            "Nothing is stored; turning the flag off hides the row at once.",
+          graduation:
+            "Drop the flag check from the quick-actions route and the Thread page.",
+          removal:
+            "Delete the quick-actions route, the composer row, and the offer_replies tool.",
+        },
+      },
     ],
     migrations: [],
   });

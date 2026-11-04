@@ -2356,6 +2356,98 @@ a {
   pointer-events: none;
   background: linear-gradient(to bottom, transparent, var(--surface) 32px);
 }
+/* Snooze Until I'm Needed and the agent's offered replies, above the
+   composer once its turn ends. */
+.thread-quick-actions {
+  display: flex;
+  width: 100%;
+  max-width: 41rem;
+  margin: -8px auto 0;
+  padding: 8px 0;
+  gap: 8px;
+  overflow-x: auto;
+  pointer-events: auto;
+  scrollbar-width: none;
+}
+.thread-quick-actions::-webkit-scrollbar {
+  display: none;
+}
+.thread-quick-action {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  max-width: 18rem;
+  height: 28px;
+  padding: 0 12px 0 11px;
+  color: var(--foreground);
+  border: 1px solid color-mix(in srgb, var(--foreground) 12%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--background) 92%, transparent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(8px);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 150ms;
+}
+.thread-quick-action:hover {
+  background: var(--accent);
+}
+.thread-quick-action:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.thread-quick-action:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.thread-quick-action > svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  opacity: 0.7;
+}
+.thread-quick-action > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.thread-quick-action[data-thread-quick-action="reply"] {
+  padding-left: 6px;
+}
+.thread-quick-action-send {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--primary-foreground);
+  border-radius: 50%;
+  background: var(--primary);
+}
+.thread-quick-action-send > svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 2.75;
+}
+/* Phones and touch screens: 44px targets. */
+.mobile-pane-content .thread-quick-action {
+  height: 44px;
+  padding: 0 14px 0 13px;
+  font-size: 13px;
+}
+.mobile-pane-content .thread-quick-action[data-thread-quick-action="reply"] {
+  padding-left: 12px;
+}
+@media (pointer: coarse) {
+  .thread-quick-action {
+    height: 44px;
+    font-size: 13px;
+  }
+}
 .thread-error-row {
   display: flex;
   width: 100%;

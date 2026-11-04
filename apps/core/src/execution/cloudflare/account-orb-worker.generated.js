@@ -2329,6 +2329,147 @@ getLogger([
 	"audit"
 ]);
 getLogger(["dx", "automations"]);
+//#endregion
+//#region apps/core/src/execution/disk-cleanup-script.ts
+var KIB = 1024;
+var MIB = 1024 * KIB;
+/** Package-manager caches and stores under the Orb user's home. */
+var diskCaches = (home) => [
+	".local/share/pnpm/store",
+	".pnpm-store",
+	".cache/pnpm",
+	".npm/_cacache",
+	".cache/yarn",
+	".yarn/berry/cache",
+	".bun/install/cache",
+	".cache/pip",
+	".cache/uv",
+	".cache/go-build",
+	".cargo/registry/cache"
+].map((path) => `${home}/${path}`);
+/** dx's own files a full disk may lose: its reserve and leftovers. */
+var dxLeftovers = (home) => `rm -f ${home}/.local/state/dx-disk-reserve ${home}/.local/state/dx-disk-reserve.tmp 2>/dev/null || true
+  for dx_disk_run in ${home}/.local/state/dx-claude-code/runs/*/; do
+    if [ -f "$dx_disk_run/exit" ]; then rm -rf "$dx_disk_run" 2>/dev/null || true; fi
+  done
+  rm -rf ${home}/.local/share/dx/skills.stage.* ${home}/.local/share/dx/skills.old.* ${home}/.local/state/dxd/trash 2>/dev/null || true`;
+/**
+* Shell functions. `dx_disk_kib` is the free space in KiB: `df`'s, or less on
+* btrfs when metadata is nearly out (its unused allocation plus unallocated
+* device space at its profile's ratio): a Cloudflare Orb keeps small files
+* in metadata, and once it runs out every new file fails while `df` still
+* reports gigabytes free. `dx_disk_clean` removes dx's leftovers, the
+* caches, and the Orb user's regular files in /tmp, then waits (up to 5 s)
+* for the freed space to show; it never fails.
+*/
+var diskShellFunctions = (home, startKiB = 16 * MIB / KIB) => `dx_disk_kib() {
+  dx_df="$(df -Pk ${home} 2>/dev/null | awk 'NR==2 {print $4}')"
+  [ -n "$dx_df" ] || return 0
+  dx_fs="$(findmnt -no FSTYPE,UUID -T ${home} 2>/dev/null)"
+  case "$dx_fs" in
+    btrfs\\ *)
+      dx_b="/sys/fs/btrfs/\${dx_fs#btrfs }"
+      if [ -r "$dx_b/allocation/metadata/total_bytes" ]; then
+        dx_dev=0
+        for dx_d in "$dx_b"/devices/*; do
+          dx_dev=$((dx_dev + $(cat "$dx_d/size" 2>/dev/null || echo 0) * 512))
+        done
+        dx_meta="$(awk -v dev="$dx_dev" 'FNR==1 {v[FILENAME]=$1} END {
+          m="'"$dx_b"'/allocation/metadata/"; d="'"$dx_b"'/allocation/data/"; s="'"$dx_b"'/allocation/system/"
+          alloc=v[m "disk_total"]+v[d "disk_total"]+v[s "disk_total"]
+          unalloc=dev-alloc; if (unalloc<0) unalloc=0
+          ratio=(v[m "total_bytes"]>0)?v[m "disk_total"]/v[m "total_bytes"]:1; if (ratio<1) ratio=1
+          free=v[m "total_bytes"]-v[m "bytes_used"]-v[m "bytes_reserved"]+unalloc/ratio
+          if (free<0) free=0; printf "%d", free/1024 }' \\
+          "$dx_b/allocation/metadata/total_bytes" "$dx_b/allocation/metadata/bytes_used" "$dx_b/allocation/metadata/bytes_reserved" "$dx_b/allocation/metadata/disk_total" \\
+          "$dx_b/allocation/data/disk_total" "$dx_b/allocation/system/disk_total" 2>/dev/null)"
+        if [ -n "$dx_meta" ] && [ "$dx_dev" -gt 0 ] && [ "$dx_meta" -lt "$dx_df" ]; then dx_df="$dx_meta"; fi
+      fi
+      ;;
+  esac
+  echo "$dx_df"
+}
+dx_disk_clean() {
+  ${dxLeftovers(home)}
+  rm -rf ${diskCaches(home).join(" ")} 2>/dev/null || true
+  find /tmp -xdev -mindepth 1 -user "$(id -u)" -type f -delete 2>/dev/null || true
+  dx_disk_wait=0
+  while [ "$dx_disk_wait" -lt 25 ] && [ "$(dx_disk_kib)" -lt ${startKiB} ]; do
+    sync -f ${home} 2>/dev/null || true
+    sleep 0.2
+    dx_disk_wait=$((dx_disk_wait + 1))
+  done
+}
+`;
+/** The heartbeat clears only below this much free space. */
+var DISK_RELIEF_BELOW_BYTES = 64 * MIB;
+/**
+* The Orb container object's check between commands (#1649). Below
+* `belowKiB` free, it clears dx's leftovers and the package-manager caches,
+* but never while something may be using them: a dx shell command that is
+* still running, or any package manager or build tool that reads those
+* caches (an install, fetch, or build half-way through would break; a dev
+* server or test run does not hold them). It leaves /tmp alone:
+* running programs keep files there. Its one line of output:
+*   dx-relief ok <free KiB>
+*   dx-relief busy <what> <free KiB>        deferred to a later check
+*   dx-relief nothing <free KiB>            no cache left to clear
+*   dx-relief cleaned <before KiB> <after KiB> <path>...
+*/
+var diskReliefScript = (home = "/home/user", belowKiB = DISK_RELIEF_BELOW_BYTES / KIB, onlyProcessesWith = "") => `# dx_relief_self_7f3a: this script's own processes skip themselves.
+${diskShellFunctions(home)}dx_free="$(dx_disk_kib)"
+[ -n "$dx_free" ] || { echo "dx-relief ok 0"; exit 0; }
+[ "$dx_free" -lt ${belowKiB} ] || { echo "dx-relief ok $dx_free"; exit 0; }
+for dx_s in ${home}/.local/state/dx-shell/start.*/; do
+  [ -f "$dx_s/pid" ] && [ ! -f "$dx_s/exit" ] && kill -0 "$(cat "$dx_s/pid" 2>/dev/null)" 2>/dev/null && { echo "dx-relief busy shell-command $dx_free"; exit 0; }
+done
+# Commands that read or write those caches: installs, fetches, and builds.
+# A dev server or a test run (\`pnpm dev\`, \`pnpm exec vitest\`) does not.
+dx_users='[ /](pnpm|npm|yarn|bun)(.c?js|-cli.js)? +(i|install|add|ci|update|up|upgrade|fetch|import|rebuild|dlx|store|link|unlink|remove|rm|uninstall)( |$)|[ /](npx|bunx|pnpx)( |$)|[ /](pip|pip3)( +[^ ]+)* +(install|download|wheel)( |$)|[ /]uv +(pip|sync|add|lock|tool|run)( |$)|[ /]cargo +(build|b|check|c|fetch|install|update|run|r|test|t|bench|doc|vendor)( |$)|[ /]go +(build|get|install|mod|run|test|vet|generate)( |$)'
+for dx_p in /proc/[0-9]*; do
+  dx_pid=\${dx_p#/proc/}
+  [ "$dx_pid" = "$$" ] && continue
+  dx_cmd="$(tr '\\0' ' ' < "$dx_p/cmdline" 2>/dev/null)"
+  case "$dx_cmd" in *dx_relief_self_7f3a*|"") continue ;; esac
+  case "$dx_cmd" in *"${onlyProcessesWith}"*) ;; *) continue ;; esac
+  if printf '%s' " $dx_cmd" | grep -Eq "$dx_users"; then
+    echo "dx-relief busy $(printf '%s' "$dx_cmd" | cut -c1-60 | tr ' ' '_') $dx_free"; exit 0
+  fi
+done
+dx_present=""
+for dx_c in ${diskCaches(home).join(" ")}; do [ -e "$dx_c" ] && dx_present="$dx_present $dx_c"; done
+[ -n "$dx_present" ] || { echo "dx-relief nothing $dx_free"; exit 0; }
+${dxLeftovers(home)}
+rm -rf $dx_present 2>/dev/null || true
+sync -f ${home} 2>/dev/null || true
+echo "dx-relief cleaned $dx_free $(dx_disk_kib)$dx_present"
+`;
+/** The script's line, read; undefined when it did not run to the end. */
+var parseDiskRelief = (stdout) => {
+	const line = stdout.split("\n").reverse().find((candidate) => candidate.startsWith("dx-relief "));
+	if (line === void 0) return void 0;
+	const parts = line.trim().split(/\s+/);
+	const number = (value) => Number(value) || 0;
+	switch (parts[1]) {
+		case "ok":
+		case "nothing": return {
+			kind: parts[1],
+			freeKiB: number(parts[2])
+		};
+		case "busy": return {
+			kind: "busy",
+			what: parts[2] ?? "",
+			freeKiB: number(parts[3])
+		};
+		case "cleaned": return {
+			kind: "cleaned",
+			beforeKiB: number(parts[2]),
+			afterKiB: number(parts[3]),
+			paths: parts.slice(4)
+		};
+		default: return;
+	}
+};
 var UNSAVED_WORK_SCRIPT = `set -u
 root=/home/user/workspace
 [ -d "$root" ] || { echo none; exit 0; }
@@ -2426,6 +2567,7 @@ var ORB_SNAPSHOT_REFRESH_MS = 216e7;
 var ORB_SNAPSHOT_RETRY_MS = 3e4;
 /** Failed idle-pause snapshots back off, doubling, up to this. */
 var ORB_SNAPSHOT_RETRY_MAX_MS = 36e5;
+var DISK_RELIEF_TIMEOUT_MS = 12e4;
 /** One stored piece of a rescue archive (a SQLite value holds 2 MB). */
 var RESCUE_CHUNK_BYTES = 1048576;
 /** Raw bytes read back per command: about 5.3 MB of base64 output. */
@@ -2562,6 +2704,8 @@ var OrbContainerController = class {
 	#lifecycle = Promise.resolve();
 	#busy = 0;
 	#inflight = 0;
+	#diskCheckedAt = 0;
+	#relieving = false;
 	/** The restart work (`resumeAfterRestart`) while it runs. */
 	#restart;
 	constructor(input) {
@@ -2831,7 +2975,8 @@ var OrbContainerController = class {
 					sandboxId: this.#sandboxId,
 					residency: "running",
 					...state.startedAt === void 0 ? {} : { processesStartedAt: state.startedAt },
-					...await this.#tellUnsavedStop(input.allowReset === true)
+					...await this.#tellUnsavedStop(input.allowReset === true),
+					...await this.#tellDiskRelief(input.allowReset === true)
 				};
 			}
 			if (!fresh && input.allowReset === false) this.#refuseReset(state, "open");
@@ -2842,7 +2987,8 @@ var OrbContainerController = class {
 				sandboxId: this.#sandboxId,
 				residency,
 				...started?.startedAt === void 0 ? {} : { processesStartedAt: started.startedAt },
-				...await this.#tellUnsavedStop(input.allowReset === true)
+				...await this.#tellUnsavedStop(input.allowReset === true),
+				...await this.#tellDiskRelief(input.allowReset === true)
 			};
 		});
 	}
@@ -2860,6 +3006,81 @@ var OrbContainerController = class {
 			await this.#save(rest);
 		}
 		return { unsavedStop };
+	}
+	/** The caches the heartbeat cleared, for an activation, and forgotten. */
+	async #tellDiskRelief(activation) {
+		if (!activation) return {};
+		const state = await this.#load();
+		const diskRelief = state?.diskRelief;
+		if (state === void 0 || diskRelief === void 0) return {};
+		const { diskRelief: _told, ...rest } = state;
+		await this.#save(rest);
+		return { diskRelief };
+	}
+	/**
+	* The heartbeat's disk check (#1649), outside the lifecycle lock: a disk
+	* whose metadata runs out mid-turn fails every new file, even the agent's
+	* own commands, until the next activation's guard. Below the critical
+	* line, and only when nothing is installing or building and no agent
+	* command is running, it clears the package-manager caches (see
+	* disk-cleanup-script.ts). Never throws.
+	*/
+	async #checkDisk() {
+		if (this.#relieving) return;
+		this.#relieving = true;
+		this.#diskCheckedAt = this.#now();
+		try {
+			const result = await this.#run([
+				"bash",
+				"-c",
+				diskReliefScript()
+			], {
+				cwd: "/home/user",
+				timeoutMs: DISK_RELIEF_TIMEOUT_MS
+			});
+			const relief = parseDiskRelief(textDecoder().decode(result.stdout));
+			if (relief === void 0 || relief.kind === "ok") return;
+			if (relief.kind !== "cleaned") {
+				orbContainerLogger.warn("Orb disk is critically low.", {
+					event: "orb_container_disk_relief",
+					sandboxId: this.#sandboxId,
+					outcome: relief.kind === "busy" ? "deferred" : "nothing",
+					freeKiB: relief.freeKiB,
+					...relief.kind === "busy" ? { busy: relief.what } : {}
+				});
+				return;
+			}
+			const record = {
+				at: this.#now(),
+				beforeKiB: relief.beforeKiB,
+				afterKiB: relief.afterKiB,
+				paths: relief.paths
+			};
+			await this.#exclusive(async () => {
+				const state = await this.#load();
+				if (state !== void 0) await this.#save({
+					...state,
+					diskRelief: record
+				});
+			});
+			orbContainerLogger.warn("Orb disk was critically low; dx cleared caches.", {
+				event: "orb_container_disk_relief",
+				sandboxId: this.#sandboxId,
+				outcome: "cleaned",
+				beforeKiB: relief.beforeKiB,
+				afterKiB: relief.afterKiB,
+				paths: relief.paths.join(" ")
+			});
+		} catch (cause) {
+			orbContainerLogger.warn("Orb disk check failed.", {
+				event: "orb_container_disk_relief",
+				sandboxId: this.#sandboxId,
+				outcome: "error",
+				error: cause instanceof Error ? cause.message.slice(0, 300) : "failed"
+			});
+		} finally {
+			this.#relieving = false;
+		}
 	}
 	/**
 	* Stops the container without a snapshot of its latest files, keeping its
@@ -3443,8 +3664,9 @@ var OrbContainerController = class {
 	* The heartbeat while running (idle pause), and the snapshot refresh while
 	* paused. A failure throws, and Cloudflare retries the alarm.
 	*/
-	alarm() {
-		return this.#exclusive(async () => {
+	async alarm() {
+		let checkDisk = false;
+		await this.#exclusive(async () => {
 			const state = await this.#load();
 			if (state === void 0 || state.status === "destroyed") return;
 			const now = this.#now();
@@ -3453,6 +3675,7 @@ var OrbContainerController = class {
 					if (await this.#idlePause(state, now) === "paused") return;
 				}
 				await this.#schedule(this.#now() + ORB_HEARTBEAT_MS);
+				checkDisk = state.status === "active" && now - this.#diskCheckedAt >= 6e4;
 				return;
 			}
 			if (state.status === "active") {
@@ -3475,6 +3698,7 @@ var OrbContainerController = class {
 				await this.#schedule((refreshed.snapshot?.refreshedAt ?? now) + ORB_SNAPSHOT_REFRESH_MS);
 			} else await this.#schedule(due);
 		});
+		if (checkDisk && this.#container.running) await this.#checkDisk();
 	}
 	/**
 	* After this object restarts with its container still running, re-arm the

@@ -1,0 +1,6 @@
+/* Links in Orb Size copy read as links, as in settings headings. */
+.project-defaults-orb-size a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

@@ -1106,6 +1106,14 @@ function ThreadSessionContent({
   };
   const settingsQuery = useQuery(settingsContextQueryOptions(identity.id));
   const dictationAvailable = settingsQuery.data?.dictationAvailable === true;
+  // The composer's quick-action row (experimental): the settings context
+  // says the person's flag is on and Clef Flash is there; viewers get none.
+  const quickActions =
+    settingsQuery.data?.composerQuickActions === true &&
+    thread.access !== "view" &&
+    thread.lifecycleState === "active"
+      ? { thread }
+      : undefined;
   const workspace = settingsQuery.data?.workspace;
   const modelRoutingDestination =
     project.workspaceId === undefined
@@ -1160,6 +1168,7 @@ function ThreadSessionContent({
       workspaceReady={thread.executionWorkspace.ready}
       workspaceStatus={workspaceStatus}
       composerNotice={composerNotice}
+      {...(quickActions === undefined ? {} : { quickActions })}
       optimisticCreation={optimisticCreation}
       onInitialSubmissionObserved={onInitialSubmissionObserved}
       initialDispatch={thread.initialDispatch}

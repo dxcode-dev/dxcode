@@ -29,6 +29,11 @@ export const PersonalSettingsContextDataSchema = Schema.Struct({
   dictation: Schema.optional(DictationProviderDataSchema),
   /** The deployment's Portal domain; absent when Portals are off. */
   portalDomain: Schema.optional(Schema.String),
+  /**
+   * The person's `composer-quick-actions` flag is on and the deployment
+   * has Workers AI's Clef Flash, so the composer may show its row.
+   */
+  composerQuickActions: Schema.optional(Schema.Boolean),
 });
 
 export const WorkspaceSettingsContextDataSchema = Schema.Struct({
@@ -36,6 +41,7 @@ export const WorkspaceSettingsContextDataSchema = Schema.Struct({
   workspace: SettingsWorkspaceDataSchema,
   dictationAvailable: Schema.optional(Schema.Boolean),
   portalDomain: Schema.optional(Schema.String),
+  composerQuickActions: Schema.optional(Schema.Boolean),
 });
 
 export const SettingsContextDataSchema = Schema.Union([

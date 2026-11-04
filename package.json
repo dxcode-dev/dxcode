@@ -1,7 +1,7 @@
 {
   "name": "dx",
   "private": true,
-  "version": "0.2.66",
+  "version": "0.2.67",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "packageManager": "pnpm@12.14.0",
@@ -33,6 +33,7 @@
     "dev:web": "pnpm --filter @dx/web dev",
     "deploy:selfhost": "node scripts/run-alchemy-deployment.mjs deploy selfhost",
     "dx:deploy": "node scripts/dx-deploy.mjs",
+    "dx:configure": "node scripts/dx-deploy.mjs --configure",
     "deploy:selfhost:destroy": "node scripts/run-alchemy-deployment.mjs destroy selfhost",
     "deploy:selfhost:template": "node deploy/e2b/build.mjs",
     "deploy:selfhost:dxd": "node scripts/build-dxd.mjs --target x86_64-unknown-linux-musl",

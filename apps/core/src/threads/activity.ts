@@ -1,4 +1,9 @@
-import { ThreadId, Timestamp, type UserId } from "@dx/domain";
+import {
+  THREAD_SNOOZE_UNTIL_NEEDED_MS,
+  ThreadId,
+  Timestamp,
+  type UserId,
+} from "@dx/domain";
 import type { FlueEventContext, FlueObservation } from "@flue/runtime";
 import { Data, DateTime, Effect, Option, Schema } from "effect";
 import {
@@ -133,6 +138,26 @@ const record = (bindings: Bindings, activity: ThreadActivityInput) =>
         : { planResetAt: activity.planResetAt }),
       recordedAt,
     });
+    // Snooze Until I'm Needed: a turn that finishes after the snooze needs
+    // its owner, so it wakes the Thread as a message from someone does.
+    // One that settled before it, observed late, does not; a snooze with a
+    // wake time sleeps through turns.
+    const wakeUntilNeeded = finished
+      ? db
+          .prepare(
+            `UPDATE threads
+                SET snooze_woke_at = ?2,
+                    snoozed_until = NULL,
+                    snoozed_at = NULL,
+                    updated_at = ?2
+              WHERE id = ?1 AND snoozed_until = ?3 AND snoozed_at < ?2`,
+          )
+          .bind(
+            activity.threadId,
+            occurredAt,
+            new Date(THREAD_SNOOZE_UNTIL_NEEDED_MS).toISOString(),
+          )
+      : undefined;
     const [, recorded, projected, ...after] = yield* Effect.tryPromise({
       try: () =>
         db.batch([
@@ -249,6 +274,8 @@ const record = (bindings: Bindings, activity: ThreadActivityInput) =>
             ),
           ...(needsYou === undefined ? [] : [needsYou]),
           ...(planWait === undefined ? [] : [planWait]),
+          // Last, so the results read above keep their places.
+          ...(wakeUntilNeeded === undefined ? [] : [wakeUntilNeeded]),
         ]),
       catch: (cause) => new ThreadActivityPersistenceError({ cause }),
     });

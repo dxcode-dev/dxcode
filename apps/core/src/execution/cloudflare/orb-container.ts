@@ -1,5 +1,6 @@
 import type { CloudflareContainerInstance } from "@dx/domain";
 import { orbContainerLogger } from "../../logging.js";
+import { diskReliefScript, parseDiskRelief } from "../disk-cleanup-script.js";
 import {
   parseUnsavedWork,
   UNSAVED_WORK_SCRIPT,
@@ -139,11 +140,24 @@ export interface OrbWorkspaceState {
   readonly unsavedStop?: UnsavedStop;
   /** Pieces of a rescue archive still stored, until Core clears them. */
   readonly rescueChunks?: number;
+  /** The latest caches the heartbeat cleared, until an activation tells. */
+  readonly diskRelief?: DiskRelief;
   /**
    * When the running container last started (a create, a wake, or a
    * restart); every process in it, Terminal shells included, is younger.
    */
   readonly startedAt?: number;
+}
+
+/**
+ * Caches dx cleared while the disk ran critically low between commands
+ * (#1649), for the next activation to tell the person.
+ */
+export interface DiskRelief {
+  readonly at: number;
+  readonly beforeKiB: number;
+  readonly afterKiB: number;
+  readonly paths: ReadonlyArray<string>;
 }
 
 /** A stop that kept only the last good save, for the person to be told. */
@@ -186,6 +200,8 @@ export type OrbOpenResult =
       readonly processesStartedAt?: number;
       /** Only for an activation (`allowReset`), once: see `unsavedStop`. */
       readonly unsavedStop?: UnsavedStop;
+      /** Only for an activation, once: caches the heartbeat cleared. */
+      readonly diskRelief?: DiskRelief;
     }
   | { readonly kind: "missing" }
   | { readonly kind: "destroyed" };
@@ -231,6 +247,12 @@ export const ORB_SNAPSHOT_RETRY_MAX_MS = 3_600_000;
  * otherwise run, and bill, until someone notices (#1620).
  */
 export const ORB_SNAPSHOT_GIVE_UP_FAILURES = 8;
+/**
+ * While the container runs, its free space is read this often, between
+ * commands, and caches are cleared when it is critically low (#1649).
+ */
+export const ORB_DISK_CHECK_MS = 60_000;
+const DISK_RELIEF_TIMEOUT_MS = 120_000;
 /** One stored piece of a rescue archive (a SQLite value holds 2 MB). */
 const RESCUE_CHUNK_BYTES = 1024 * 1024;
 /** Raw bytes read back per command: about 5.3 MB of base64 output. */
@@ -410,6 +432,8 @@ export class OrbContainerController {
   #lifecycle: Promise<unknown> = Promise.resolve();
   #busy = 0;
   #inflight = 0;
+  #diskCheckedAt = 0;
+  #relieving = false;
   /** The restart work (`resumeAfterRestart`) while it runs. */
   #restart: Promise<void> | undefined;
 
@@ -786,6 +810,7 @@ export class OrbContainerController {
             ? {}
             : { processesStartedAt: state.startedAt }),
           ...(await this.#tellUnsavedStop(input.allowReset === true)),
+          ...(await this.#tellDiskRelief(input.allowReset === true)),
         };
       }
       if (!fresh && input.allowReset === false)
@@ -805,6 +830,7 @@ export class OrbContainerController {
           ? {}
           : { processesStartedAt: started.startedAt }),
         ...(await this.#tellUnsavedStop(input.allowReset === true)),
+        ...(await this.#tellDiskRelief(input.allowReset === true)),
       };
     });
   }
@@ -825,6 +851,80 @@ export class OrbContainerController {
       await this.#save(rest);
     }
     return { unsavedStop };
+  }
+
+  /** The caches the heartbeat cleared, for an activation, and forgotten. */
+  async #tellDiskRelief(activation: boolean) {
+    if (!activation) return {};
+    const state = await this.#load();
+    const diskRelief = state?.diskRelief;
+    if (state === undefined || diskRelief === undefined) return {};
+    const { diskRelief: _told, ...rest } = state;
+    await this.#save(rest);
+    return { diskRelief };
+  }
+
+  /**
+   * The heartbeat's disk check (#1649), outside the lifecycle lock: a disk
+   * whose metadata runs out mid-turn fails every new file, even the agent's
+   * own commands, until the next activation's guard. Below the critical
+   * line, and only when nothing is installing or building and no agent
+   * command is running, it clears the package-manager caches (see
+   * disk-cleanup-script.ts). Never throws.
+   */
+  async #checkDisk() {
+    if (this.#relieving) return;
+    this.#relieving = true;
+    this.#diskCheckedAt = this.#now();
+    try {
+      const result = await this.#run(["bash", "-c", diskReliefScript()], {
+        cwd: "/home/user",
+        timeoutMs: DISK_RELIEF_TIMEOUT_MS,
+      });
+      const relief = parseDiskRelief(textDecoder().decode(result.stdout));
+      if (relief === undefined || relief.kind === "ok") return;
+      if (relief.kind !== "cleaned") {
+        orbContainerLogger.warn("Orb disk is critically low.", {
+          event: "orb_container_disk_relief",
+          sandboxId: this.#sandboxId,
+          outcome: relief.kind === "busy" ? "deferred" : "nothing",
+          freeKiB: relief.freeKiB,
+          ...(relief.kind === "busy" ? { busy: relief.what } : {}),
+        });
+        return;
+      }
+      const record: DiskRelief = {
+        at: this.#now(),
+        beforeKiB: relief.beforeKiB,
+        afterKiB: relief.afterKiB,
+        paths: relief.paths,
+      };
+      await this.#exclusive(async () => {
+        const state = await this.#load();
+        if (state !== undefined)
+          await this.#save({ ...state, diskRelief: record });
+      });
+      orbContainerLogger.warn(
+        "Orb disk was critically low; dx cleared caches.",
+        {
+          event: "orb_container_disk_relief",
+          sandboxId: this.#sandboxId,
+          outcome: "cleaned",
+          beforeKiB: relief.beforeKiB,
+          afterKiB: relief.afterKiB,
+          paths: relief.paths.join(" "),
+        },
+      );
+    } catch (cause) {
+      orbContainerLogger.warn("Orb disk check failed.", {
+        event: "orb_container_disk_relief",
+        sandboxId: this.#sandboxId,
+        outcome: "error",
+        error: cause instanceof Error ? cause.message.slice(0, 300) : "failed",
+      });
+    } finally {
+      this.#relieving = false;
+    }
   }
 
   /**
@@ -1562,8 +1662,9 @@ export class OrbContainerController {
    * The heartbeat while running (idle pause), and the snapshot refresh while
    * paused. A failure throws, and Cloudflare retries the alarm.
    */
-  alarm(): Promise<void> {
-    return this.#exclusive(async () => {
+  async alarm(): Promise<void> {
+    let checkDisk = false;
+    await this.#exclusive(async () => {
       const state = await this.#load();
       if (state === undefined || state.status === "destroyed") return;
       const now = this.#now();
@@ -1576,6 +1677,9 @@ export class OrbContainerController {
           if ((await this.#idlePause(state, now)) === "paused") return;
         }
         await this.#schedule(this.#now() + ORB_HEARTBEAT_MS);
+        checkDisk =
+          state.status === "active" &&
+          now - this.#diskCheckedAt >= ORB_DISK_CHECK_MS;
         return;
       }
       if (state.status === "active") {
@@ -1599,6 +1703,7 @@ export class OrbContainerController {
         );
       } else await this.#schedule(due);
     });
+    if (checkDisk && this.#container.running) await this.#checkDisk();
   }
 
   /**

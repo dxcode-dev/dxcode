@@ -98,6 +98,7 @@ import {
   SourceControlGrantId,
   SourceControlProviderFailure,
   THREAD_SNOOZE_MAX_MS,
+  THREAD_SNOOZE_UNTIL_NEEDED_MS,
   type Thread,
   type ThreadColor,
   type ThreadExecutionPin,
@@ -2131,8 +2132,10 @@ export const createThreadRoutes = (
         body.snoozedUntil === null
           ? undefined
           : DateTime.toEpochMillis(body.snoozedUntil);
+      // Until needed has no wake time a person picked, so no cap applies.
       if (
         until !== undefined &&
+        until !== THREAD_SNOOZE_UNTIL_NEEDED_MS &&
         (until <= now || until > now + THREAD_SNOOZE_MAX_MS)
       )
         return yield* new InvalidSnoozeTime();

@@ -324,7 +324,8 @@ export default Alchemy.Stack(
         Config.NonEmptyString("CLOUDFLARE_ACCOUNT_ID"),
       ),
       exaApiKey: Config.option(Config.Redacted("EXA_API_KEY")),
-      // Optional: Boat on the deployment's own account (hosted targets).
+      // Optional: Boat on the deployment's own account. Self-host opts in
+      // with the `boat` integration.
       boatApiKey: Config.option(Config.Redacted("BOAT_API_KEY")),
       // Self-host sign-in providers and admission, validated by the runner.
       signIn: Config.option(Config.NonEmptyString("DX_DEPLOYMENT_SIGN_IN")),
@@ -506,6 +507,15 @@ export default Alchemy.Stack(
           })).value
         : undefined
       : Option.getOrUndefined(configuration.exaApiKey);
+    // Boat on the deployment's own account. A self-host's `boat` integration
+    // holds the key across deploys, as the other integration keys are held.
+    const boatApiKey = selfhost
+      ? integrations.has("boat")
+        ? (yield* HeldSecret("BoatApiKey", {
+            value: Option.getOrUndefined(configuration.boatApiKey),
+          })).value
+        : undefined
+      : Option.getOrUndefined(configuration.boatApiKey);
     // Every deployment that installs E2B builds its Orb templates from the
     // recipe at deploy time and rebuilds them when the recipe changes, as
     // OrbContainers does for Cloudflare. Staging and branch previews share
@@ -925,9 +935,7 @@ export default Alchemy.Stack(
         ...(e2bApiKey === undefined ? {} : { E2B_API_KEY: e2bApiKey }),
         ...(sarvamApiKey !== undefined ? { SARVAM_API_KEY: sarvamApiKey } : {}),
         ...(exaApiKey !== undefined ? { EXA_API_KEY: exaApiKey } : {}),
-        ...(!selfhost && Option.isSome(configuration.boatApiKey)
-          ? { BOAT_API_KEY: configuration.boatApiKey.value }
-          : {}),
+        ...(boatApiKey !== undefined ? { BOAT_API_KEY: boatApiKey } : {}),
         ...(googleClientSecret !== undefined
           ? { DX_GOOGLE_CLIENT_SECRET: googleClientSecret }
           : {}),

@@ -22,6 +22,10 @@
 // on its own (workspaceDiskCleanup) and retries, and a disk that is still
 // full starts the turn in recovery mode (see recovery.ts).
 
+import {
+  diskCaches,
+  diskShellFunctions,
+} from "../execution/disk-cleanup-script.js";
 import { markRunFailure } from "../runtime/run-failure.js";
 
 export const WORKSPACE_DISK_RESERVE_PATH =
@@ -56,79 +60,10 @@ export interface WorkspaceDiskReading {
   readonly after?: "cleaned" | "recovery";
 }
 
-/**
- * Package-manager caches and temporary files under the Orb user's home and
- * /tmp. Each is rebuilt on demand; none holds work. Exported for the tests
- * that check nothing else is ever removed.
- */
-export const WORKSPACE_DISK_CACHES = [
-  "/home/user/.local/share/pnpm/store",
-  "/home/user/.pnpm-store",
-  "/home/user/.cache/pnpm",
-  "/home/user/.npm/_cacache",
-  "/home/user/.cache/yarn",
-  "/home/user/.yarn/berry/cache",
-  "/home/user/.bun/install/cache",
-  "/home/user/.cache/pip",
-  "/home/user/.cache/uv",
-  "/home/user/.cache/go-build",
-  "/home/user/.cargo/registry/cache",
-] as const;
+/** Package-manager caches the guard may clear; see disk-cleanup-script.ts. */
+export const WORKSPACE_DISK_CACHES = diskCaches("/home/user");
 
-/**
- * Shell functions the guard and the cleanup share. `dx_disk_kib` is the free
- * space in KiB: `df`'s, or less on btrfs when metadata is nearly out (its
- * unused allocation plus unallocated device space at its profile's ratio).
- * `dx_disk_clean` removes dx's reserve and leftovers, the caches, and the
- * Orb user's regular files in /tmp (not sockets, not other users' files);
- * it never fails.
- */
-const diskFunctions = `dx_disk_kib() {
-  dx_df="$(df -Pk /home/user 2>/dev/null | awk 'NR==2 {print $4}')"
-  [ -n "$dx_df" ] || return 0
-  dx_fs="$(findmnt -no FSTYPE,UUID -T /home/user 2>/dev/null)"
-  case "$dx_fs" in
-    btrfs\\ *)
-      dx_b="/sys/fs/btrfs/\${dx_fs#btrfs }"
-      if [ -r "$dx_b/allocation/metadata/total_bytes" ]; then
-        dx_dev=0
-        for dx_d in "$dx_b"/devices/*; do
-          dx_dev=$((dx_dev + $(cat "$dx_d/size" 2>/dev/null || echo 0) * 512))
-        done
-        dx_meta="$(awk -v dev="$dx_dev" 'FNR==1 {v[FILENAME]=$1} END {
-          m="'"$dx_b"'/allocation/metadata/"; d="'"$dx_b"'/allocation/data/"; s="'"$dx_b"'/allocation/system/"
-          alloc=v[m "disk_total"]+v[d "disk_total"]+v[s "disk_total"]
-          unalloc=dev-alloc; if (unalloc<0) unalloc=0
-          ratio=(v[m "total_bytes"]>0)?v[m "disk_total"]/v[m "total_bytes"]:1; if (ratio<1) ratio=1
-          free=v[m "total_bytes"]-v[m "bytes_used"]-v[m "bytes_reserved"]+unalloc/ratio
-          if (free<0) free=0; printf "%d", free/1024 }' \\
-          "$dx_b/allocation/metadata/total_bytes" "$dx_b/allocation/metadata/bytes_used" "$dx_b/allocation/metadata/bytes_reserved" "$dx_b/allocation/metadata/disk_total" \\
-          "$dx_b/allocation/data/disk_total" "$dx_b/allocation/system/disk_total" 2>/dev/null)"
-        if [ -n "$dx_meta" ] && [ "$dx_dev" -gt 0 ] && [ "$dx_meta" -lt "$dx_df" ]; then dx_df="$dx_meta"; fi
-      fi
-      ;;
-  esac
-  echo "$dx_df"
-}
-dx_disk_clean() {
-  rm -f ${WORKSPACE_DISK_RESERVE_PATH} ${WORKSPACE_DISK_RESERVE_PATH}.tmp 2>/dev/null || true
-  for dx_disk_run in /home/user/.local/state/dx-claude-code/runs/*/; do
-    if [ -f "$dx_disk_run/exit" ]; then rm -rf "$dx_disk_run" 2>/dev/null || true; fi
-  done
-  rm -rf /home/user/.local/share/dx/skills.stage.* /home/user/.local/share/dx/skills.old.* /home/user/.local/state/dxd/trash 2>/dev/null || true
-  rm -rf ${WORKSPACE_DISK_CACHES.join(" ")} 2>/dev/null || true
-  find /tmp -xdev -mindepth 1 -user "$(id -u)" -type f -delete 2>/dev/null || true
-  # A Cloudflare Orb's filesystem returns deleted blocks a moment later, so
-  # the reading waits (up to 5 s) for the freed space instead of reporting
-  # the disk as still full.
-  dx_disk_wait=0
-  while [ "$dx_disk_wait" -lt 25 ] && [ "$(dx_disk_kib)" -lt ${START_BYTES / KIB} ]; do
-    sync -f /home/user 2>/dev/null || true
-    sleep 0.2
-    dx_disk_wait=$((dx_disk_wait + 1))
-  done
-}
-`;
+const diskFunctions = diskShellFunctions("/home/user", START_BYTES / KIB);
 
 const reading = (full: string) =>
   `df -Pk /home/user 2>/dev/null | awk -v full="${full}" -v avail="$(dx_disk_kib)" 'NR==2 {print "dx-disk", $2, avail, full}' >&2

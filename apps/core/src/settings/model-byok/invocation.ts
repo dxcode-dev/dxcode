@@ -77,6 +77,7 @@ import {
   storeSubmissionUsageAttribution,
 } from "../usage/submission-attribution.js";
 import { PROXY_STREAM } from "./flue-provider.js";
+import { applyOpenRouterAttribution } from "./openrouter-attribution.js";
 import {
   decodeProxyEnvelope,
   PROXY_ENVELOPE_HEADER,
@@ -1168,6 +1169,7 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       if (STRIPPED_HEADER_NAMES.has(lowered)) continue;
       headers.set(name, value);
     }
+    applyOpenRouterAttribution(target, headers);
     for (const header of connection.headers) {
       if (STRIPPED_HEADER_NAMES.has(header.name.toLowerCase())) continue;
       headers.set(header.name, header.value);

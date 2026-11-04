@@ -1759,6 +1759,97 @@ describe("ByokCredentialCoordinatorObject", () => {
     });
   });
 
+  it("attributes calls routed through OpenRouter to dx, and only those", async () => {
+    await seed();
+    // A call to another endpoint carries no OpenRouter attribution.
+    const otherHeaders: Headers[] = [];
+    stubFetch((request) => {
+      otherHeaders.push(request.headers);
+      return Response.json({ ok: true });
+    });
+    expect((await callProxy(proxyEnvelope())).status).toBe(200);
+    expect(otherHeaders).toHaveLength(1);
+    for (const name of ["http-referer", "x-openrouter-title", "x-title"])
+      expect(otherHeaders[0]?.get(name)).toBeNull();
+
+    // The same owner's OpenRouter connection, keyed and with a custom header
+    // that renames the app, as a self-host would.
+    const canonical = "openrouter/deepseek/deepseek-v4-flash";
+    await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE model_connection SET kind = 'provider', provider_id = 'openrouter', base_url = NULL, format = NULL WHERE id = ?",
+      ).bind(CONNECTION),
+      env.DB.prepare(
+        "DELETE FROM model_connection_model WHERE connection_id = ?",
+      ).bind(CONNECTION),
+      env.DB.prepare(
+        "INSERT INTO model_connection_header (connection_id, name, value, position) VALUES (?, ?, ?, 1)",
+      ).bind(CONNECTION, "X-Title", "self-hosted fork"),
+      env.DB.prepare(
+        "UPDATE threads SET model_selection = ? WHERE id = ?",
+      ).bind(JSON.stringify({ kind: "model", model: canonical }), THREAD),
+    ]);
+    expect((await prepare("sub-openrouter")).status).toBe(200);
+    const { provider, options } = createDxModelRoutingProvider("openrouter", {
+      namespace: env.BYOK_CREDENTIAL_COORDINATOR,
+      identity: () => ({ name: THREAD }) as never,
+      invocation: () =>
+        ({
+          scope: { kind: "prompt", submissionId: "sub-openrouter" },
+        }) as never,
+    });
+    assert.exists(options.resolveModel);
+    const model = await options.resolveModel(
+      { providerId: "openrouter", modelId: "deepseek/deepseek-v4-flash" },
+      {
+        instanceId: THREAD,
+        agentName: "dx-agent",
+        recovery: false,
+        scope: { kind: "prompt", submissionId: "sub-openrouter" },
+        signal: new AbortController().signal,
+      },
+    );
+    if (!model) throw new Error("Missing resolved model");
+    const calls: { url: string; headers: Headers }[] = [];
+    stubFetch((request) => {
+      calls.push({ url: request.url, headers: request.headers });
+      return new Response(
+        `${[
+          { index: 0, delta: { role: "assistant", content: "attributed" } },
+          { index: 0, delta: {}, finish_reason: "stop" },
+        ]
+          .map(
+            (choice) =>
+              `data: ${JSON.stringify({ id: "or", object: "chat.completion.chunk", created: 0, model: "deepseek/deepseek-v4-flash", choices: [choice] })}\n\n`,
+          )
+          .join("")}data: [DONE]\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    const models = createModels();
+    models.setProvider(provider);
+    const result = await models
+      .streamSimple(
+        model,
+        {
+          messages: [{ role: "user", content: "Say attributed", timestamp: 0 }],
+        },
+        { reasoning: "low" },
+      )
+      .result();
+    expect(result.stopReason).toBe("stop");
+    expect(calls).toHaveLength(1);
+    const call = calls[0];
+    assert.exists(call);
+    expect(call.url).toBe("https://openrouter.ai/api/v1/chat/completions");
+    expect(call.headers.get("authorization")).toBe("Bearer sk-litellm-real");
+    expect(call.headers.get("http-referer")).toBe("https://dxcode.dev");
+    expect(call.headers.get("x-openrouter-title")).toBe("dx");
+    // The connection's own header replaces dx's value.
+    expect(call.headers.get("x-title")).toBe("self-hosted fork");
+    expect(call.headers.get("x-tenant")).toBe("tenant-1");
+  });
+
   it("sends an Anthropic custom endpoint saved with /v1 to one /v1/messages and probes the same base", async () => {
     await seed();
     await env.DB.prepare(

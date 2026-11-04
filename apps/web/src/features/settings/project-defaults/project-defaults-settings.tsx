@@ -1,3 +1,4 @@
+import "./project-defaults.css";
 import type {
   CommitAuthorPreference,
   ProjectDefaultOverrides,
@@ -6,11 +7,14 @@ import type {
   RunnerProfileId,
 } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { AlertTriangle } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Button } from "../../../shared/ui/button.js";
 import { OrbSizePicker } from "../../../shared/ui/orb-size-grid.js";
+import { orbProvidersQueryOptions } from "../orb-providers/orb-providers-queries.js";
+import { setUpOrbSizeGroups } from "../orb-providers/orb-size-groups.js";
 import {
   SettingsBackgroundError,
   SettingsCard,
@@ -20,7 +24,10 @@ import {
   SettingsSelect,
   SettingsToggle,
 } from "../settings-primitives.js";
-import type { SettingsSectionProps } from "../settings-registration.js";
+import {
+  type SettingsSectionProps,
+  settingsPath,
+} from "../settings-registration.js";
 import { projectDefaultsMutationOptions } from "./project-defaults-mutations.js";
 import {
   type ProjectDefaultsData,
@@ -37,35 +44,39 @@ const headingDescription = {
     "Settings for new workspace projects. Existing projects keep their own.",
 } as const;
 
-/** Catalog sizes grouped by provider; a single provider needs no label. */
-const orbSizeGroups = (catalog: RunnerProfileCatalog) => {
-  const adapters = [...new Set(catalog.profiles.map(({ adapter }) => adapter))];
-  return adapters.map((adapter) => {
-    const name =
-      adapters.length === 1
-        ? undefined
-        : (catalog.providers?.find((provider) => provider.adapter === adapter)
-            ?.displayName ?? adapter);
-    return {
-      key: adapter,
-      ...(name === undefined ? {} : { name }),
-      label:
-        name === undefined ? "Default Orb size" : `Default ${name} Orb size`,
-      profiles: catalog.profiles.filter(
-        (profile) => profile.adapter === adapter,
-      ),
-    };
-  });
-};
+function OrbProvidersLink({
+  target,
+}: {
+  readonly target: ProjectDefaultsTarget;
+}) {
+  return (
+    <Link
+      to={settingsPath({ ...target, section: "orb-providers" })}
+      // Keep where Settings returns to.
+      state={(previous) => previous}
+    >
+      Orb Providers
+    </Link>
+  );
+}
 
+/**
+ * The default Orb size: only sizes of providers set up for this scope (the
+ * same set the new-Thread Orb picker offers), plus the saved default when its
+ * provider is no longer set up, shown as not available.
+ */
 function OrbSizeDefault({
+  target,
   catalog,
+  savedId,
   selectedId,
   allowedRunnerProfileIds,
   disabled,
   onChange,
 }: {
+  readonly target: ProjectDefaultsTarget;
   readonly catalog: RunnerProfileCatalog;
+  readonly savedId: RunnerProfileId;
   readonly selectedId: RunnerProfileId;
   readonly allowedRunnerProfileIds:
     | ReadonlyArray<RunnerProfileId>
@@ -74,34 +85,77 @@ function OrbSizeDefault({
   readonly disabled: boolean;
   readonly onChange: (runnerProfileId: RunnerProfileId) => void;
 }) {
+  const { identity } = useAuthenticatedIdentity();
+  const orbProviders = useQuery(orbProvidersQueryOptions(identity.id, target));
+  const resolved = orbProviders.data?.resolved;
+  const groups =
+    resolved === undefined
+      ? undefined
+      : setUpOrbSizeGroups(catalog, resolved, savedId, (name) =>
+          name === undefined ? "Default Orb size" : `Default ${name} Orb size`,
+        );
   const allowed =
     allowedRunnerProfileIds == null
       ? undefined
       : new Set(allowedRunnerProfileIds);
-  const isDisabled = (profile: RunnerProfile) =>
-    disabled ||
-    profile.availability !== "available" ||
-    (allowed !== undefined && !allowed.has(profile.id));
-  const anyAvailable = catalog.profiles.some(
-    (profile) =>
-      profile.availability === "available" &&
-      (allowed === undefined || allowed.has(profile.id)),
+  const unavailable = new Set(
+    groups?.flatMap((group) =>
+      group.available ? [] : group.profiles.map(({ id }) => id),
+    ),
   );
+  const choosable = (profile: RunnerProfile) =>
+    !unavailable.has(profile.id) &&
+    profile.availability === "available" &&
+    (allowed === undefined || allowed.has(profile.id));
+  const anyChoosable =
+    groups?.some(({ profiles }) => profiles.some(choosable)) ?? true;
   return (
     <div className="project-defaults-orb-size">
       <div className="settings-row-copy">
         <div className="settings-row-title">
           <strong>Orb Size</strong>
         </div>
-        <p>Choose the default Orb size for new projects.</p>
+        <p>
+          Choose the default Orb size for new projects.
+          {resolved === undefined || resolved.length === 0 ? null : (
+            <>
+              {" "}
+              Add a provider in <OrbProvidersLink target={target} />.
+            </>
+          )}
+        </p>
       </div>
-      <OrbSizePicker
-        groups={orbSizeGroups(catalog)}
-        selectedId={selectedId}
-        isDisabled={isDisabled}
-        onSelect={onChange}
-      />
-      {anyAvailable ? null : (
+      {groups === undefined ? (
+        orbProviders.isPending ? (
+          <p className="project-defaults-hint" aria-busy="true">
+            Loading Orb providers…
+          </p>
+        ) : (
+          <div className="project-defaults-hint" role="alert">
+            Orb providers could not be loaded.{" "}
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => void orbProviders.refetch()}
+            >
+              Retry
+            </Button>
+          </div>
+        )
+      ) : (
+        <OrbSizePicker
+          groups={groups}
+          selectedId={selectedId}
+          isDisabled={(profile) => disabled || !choosable(profile)}
+          onSelect={onChange}
+        />
+      )}
+      {resolved !== undefined && resolved.length === 0 ? (
+        <p className="project-defaults-hint" role="alert">
+          No Orb provider is set up, so new projects can't start Threads. Add
+          one in <OrbProvidersLink target={target} />.
+        </p>
+      ) : anyChoosable ? null : (
         <p className="project-defaults-hint" role="alert">
           No Orb size is available, so new projects can't be created.
         </p>
@@ -231,7 +285,12 @@ function ProjectDefaultsForm({
           />
         ) : null}
         <OrbSizeDefault
+          target={target}
           catalog={initial.catalog}
+          savedId={
+            baseline.overrides.runnerProfileId ??
+            baseline.resolved.runnerProfileId.value
+          }
           selectedId={
             overrides.runnerProfileId ?? initial.resolved.runnerProfileId.value
           }

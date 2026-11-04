@@ -1,9 +1,11 @@
 import {
+  COMPOSER_QUICK_ACTIONS_FEATURE,
   type DictationProviderData,
   GetSettingsContextForbiddenResponseSchema,
   GetSettingsContextPersistenceUnavailableResponseSchema,
   GetSettingsContextResponseSchema,
 } from "@dx/api";
+import type { ExperimentalFeatureId } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Match, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
@@ -27,6 +29,7 @@ import {
 } from "../plugins/routes.js";
 import { resolveDictation } from "../plugins/speech/transcription.js";
 import { portalConfiguration } from "../portals/host.js";
+import { clefAvailable } from "../workers-ai/clef.js";
 import { personalAccountRoutes } from "./account/routes.js";
 import { personalAgentInstructionsRoutes } from "./agent-instructions/routes.js";
 import { workspaceApplicationRoutes } from "./applications/routes.js";
@@ -34,7 +37,10 @@ import {
   personalEnvironmentVariableRoutes,
   workspaceEnvironmentVariableRoutes,
 } from "./environment-variables/routes.js";
-import { personalExperimentalFeaturesRoutes } from "./experimental-features/routes.js";
+import {
+  experimentalFeatureEnabled,
+  personalExperimentalFeaturesRoutes,
+} from "./experimental-features/routes.js";
 import { personalIntegrationRoutes } from "./integrations/routes.js";
 import { personalSigningKeyRoutes } from "./keys/routes.js";
 import {
@@ -74,9 +80,12 @@ const responseData = (
   access: SettingsAccessContext,
   dictation: DictationProviderData | undefined,
   portalDomain: string | undefined,
+  composerQuickActions: boolean,
 ) => ({
   activeScope: access.activeScope,
   dictationAvailable: dictation !== undefined,
+  // Only when on, so a person without the flag gets the context unchanged.
+  ...(composerQuickActions ? { composerQuickActions } : {}),
   ...(dictation === undefined ? {} : { dictation }),
   ...(portalDomain === undefined ? {} : { portalDomain }),
   workspace:
@@ -127,12 +136,25 @@ const handlePersonalSettingsContext = async (context: Context<AppEnv>) => {
         return undefined;
       }),
     );
+    // Composer quick actions need the person's flag and Clef Flash; the
+    // Thread page reads this instead of asking for the flags. A failed read
+    // hides the row rather than failing the settings context.
+    const composerQuickActions =
+      clefAvailable(context.env) &&
+      (yield* Effect.promise(() =>
+        experimentalFeatureEnabled(
+          context.env,
+          context.get("principal"),
+          COMPOSER_QUICK_ACTIONS_FEATURE as ExperimentalFeatureId,
+        ).catch(() => false),
+      ));
     return yield* Schema.encodeUnknownEffect(GetSettingsContextResponseSchema)({
       status: "success",
       data: responseData(
         access,
         dictation,
         portalConfiguration(context.env)?.domain,
+        composerQuickActions,
       ),
     });
   });

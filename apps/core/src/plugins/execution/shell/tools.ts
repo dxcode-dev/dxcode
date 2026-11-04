@@ -100,6 +100,51 @@ const stoppedError = (signal: AbortSignal) => {
   return error;
 };
 
+/** A write failed because the Orb's filesystem has no room left. */
+const DISK_FULL = /No space left on device|ENOSPC|Disk quota exceeded/i;
+/** The direct run's output kept, as the background runner's tail. */
+const DIRECT_OUTPUT_BYTES = 50 * 1024;
+
+/**
+ * shell_command on a disk too full for its state (#1649): btrfs metadata
+ * runs out, every new file fails, yet reading, `du`, and `rm` still work.
+ * The command runs directly, in the foreground, bounded by the wait, with
+ * no state files, through the same sandbox, so the same authorization and
+ * output redaction apply. The agent hears why, and that background commands
+ * and shell_command_status come back once space is freed.
+ */
+const runDirect = async (
+  guestExec: (
+    script: string,
+    timeoutMs: number,
+  ) => Promise<Awaited<ReturnType<Sandbox["exec"]>>>,
+  cwd: string,
+  command: string,
+  wait: number,
+  note: string | undefined,
+) => {
+  const result = await guestExec(
+    `cd -- ${quote(cwd)} || exit 1\n${command}`,
+    wait,
+  );
+  const combined = `${result.stdout}${result.stderr}`;
+  const output =
+    combined.length > DIRECT_OUTPUT_BYTES
+      ? `[Output truncated to the last 50 KB]\n${combined.slice(-DIRECT_OUTPUT_BYTES)}`
+      : combined;
+  const exitCode = result.exitCode ?? 0;
+  const lines = [
+    `<output>${output}</output>`,
+    `<exitCode>${String(exitCode)}</exitCode>`,
+    "<note>The Orb's disk is full: dx could not write the state a background command needs, so it ran this one directly and waited for it. Commands that create files fail until space is freed; reading, du, and rm still work. Find what fills the disk (du -xh -d 2 ~ 2>/dev/null | sort -h | tail -n 20). Delete only caches and build output that a command can rebuild (node_modules, target, dist, .cache, package-manager caches); for anything else, even a file that looks like junk, tell the person what it is and its size and ask before deleting it. Background commands and shell_command_status work again once there is room.</note>",
+    ...(note === undefined ? [] : [`<note>${note}</note>`]),
+  ];
+  return {
+    content: [{ type: "text" as const, text: lines.join("\n") }],
+    details: { pid: 0, running: false, exitCode },
+  };
+};
+
 export const createShellTools = (
   sandbox: Sandbox,
   options?: { defaultWorkdir?: string },
@@ -203,6 +248,11 @@ printf '%s' "$pid"`,
             );
           });
           signal?.throwIfAborted();
+          if (
+            started.exitCode !== 0 &&
+            DISK_FULL.test(`${started.stderr}\n${started.stdout}`)
+          )
+            return await runDirect(guestExec, cwd, params.command, wait, note);
           if (started.exitCode !== 0)
             throw new Error(
               started.stderr ||

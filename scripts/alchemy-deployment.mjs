@@ -289,6 +289,9 @@ const deploymentResourceTypes = ({
           ...(integrations.includes("exa")
             ? [["ExaApiKey", "Dx.HeldSecret"]]
             : []),
+          ...(integrations.includes("boat")
+            ? [["BoatApiKey", "Dx.HeldSecret"]]
+            : []),
         ]
       : []),
   ]);
@@ -1018,6 +1021,13 @@ export const loadSelfhostConfig = ({ environment, workspaceRoot }) => {
     ...(environment.DX_DEPLOYMENT_PLUGINS !== undefined
       ? {
           plugins: environment.DX_DEPLOYMENT_PLUGINS.split(",").filter(Boolean),
+        }
+      : {}),
+    ...(environment.DX_BUG_REPORT_READERS?.trim()
+      ? {
+          bugReportReaders: environment.DX_BUG_REPORT_READERS.split(",")
+            .map((email) => email.trim())
+            .filter(Boolean),
         }
       : {}),
   });
@@ -2793,7 +2803,8 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
     id === "BitbucketOAuthSecret" ||
     id === "E2BApiKey" ||
     id === "GitHubAppSecret" ||
-    id === "SarvamApiKey"
+    id === "SarvamApiKey" ||
+    id === "BoatApiKey"
   )
     assertExactHeldSecretIdentity(node, operation, id);
   if (id === "E2BProfiles")
@@ -2966,6 +2977,8 @@ export const isolatedAlchemyEnvironment = (inherited, deployment) => ({
           "SARVAM_API_KEY",
           "EXA_API_KEY",
           "BOAT_API_KEY",
+          // The runner forwards the validated reader list itself.
+          "DX_BUG_REPORT_READERS",
           "USERPROFILE",
           "XDG_CONFIG_HOME",
         ]).has(name),

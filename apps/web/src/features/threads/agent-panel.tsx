@@ -7,6 +7,8 @@ import {
   type ClaudePlanLimit,
   claudePlanWindowName,
   parseClaudePlanLimit,
+  THREAD_SNOOZE_UNTIL_NEEDED_MS,
+  threadSnoozeState,
 } from "@dx/domain";
 import type { FailedSend, UseFlueAgentResult } from "@flue/react";
 import {
@@ -20,6 +22,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { settle } from "../../shared/settle.js";
+import { useOptionalThreadSnooze } from "../../shared/thread-snooze.js";
 import { Button } from "../../shared/ui/button.js";
 import { buttonVariants } from "../../shared/ui/button-variants.js";
 import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
@@ -76,6 +79,73 @@ import {
   useThreadPresentation,
   useThreadPresentationValue,
 } from "./use-thread-presentation.js";
+
+/**
+ * The quick-action row's code loads when a row first shows, after the
+ * composer has painted, so it stays out of the Thread page's first load. A
+ * chunk that cannot load shows no row.
+ */
+const ClefQuickActions = React.lazy(() =>
+  import("./thread-quick-actions.js").then(
+    (module) => ({ default: module.ClefQuickActions }),
+    () => ({ default: () => null }),
+  ),
+);
+
+/**
+ * The composer's quick-action row (experimental). It follows the agent's
+ * response that ends the conversation, while the agent waits: none after a
+ * failed or stopped turn, or once anything newer arrives. Reply chips hide
+ * while the person types or attaches, so a click never takes what they
+ * wrote. Everything here uses code the page already has; the row, its Clef
+ * request, and who may snooze load late.
+ */
+function ComposerQuickActions({
+  source,
+  thread,
+  draft,
+  attaching,
+  onReply,
+}: {
+  readonly source: AgentSource<PanelAgent>;
+  readonly thread: ThreadDetailData;
+  readonly draft: PresentationValue<string>;
+  readonly attaching: boolean;
+  readonly onReply: (reply: string) => void;
+}) {
+  const endingReplyId = useAgentSelection(source, (agent) => {
+    if (agent.status === "submitted" || agent.status === "streaming")
+      return undefined;
+    const last = agent.messages.findLast(({ role }) => role !== "system");
+    return last?.purpose === "assistant" && last.settlement === undefined
+      ? last.id
+      : undefined;
+  });
+  const typing = usePresentationValue(draft).trim() !== "";
+  const snooze = useOptionalThreadSnooze();
+  if (endingReplyId === undefined) return null;
+  return (
+    <React.Suspense fallback={null}>
+      <ClefQuickActions
+        thread={thread}
+        messageId={endingReplyId}
+        composing={typing || attaching}
+        replyIcon={<ArrowUp />}
+        onReply={onReply}
+        snoozedAt={(now) => threadSnoozeState(thread, now) === "snoozed"}
+        {...(snooze === undefined
+          ? {}
+          : {
+              snoozeUntilNeeded: () =>
+                snooze.snooze(
+                  thread.id,
+                  new Date(THREAD_SNOOZE_UNTIL_NEEDED_MS),
+                ),
+            })}
+      />
+    </React.Suspense>
+  );
+}
 
 /** The first message until Flue exposes it, rendered as Flue's row will be. */
 function OptimisticInitialMessage({
@@ -746,6 +816,7 @@ const observeComposerDock = (node: HTMLDivElement) => {
 
 function AgentComposer({
   agentActive,
+  quickActions,
   stopAvailable,
   dictationAvailable,
   draftValue,
@@ -763,6 +834,8 @@ function AgentComposer({
 }: {
   readonly mentions?: ComposerMentions;
   readonly agentActive: boolean;
+  /** The quick-action row, which hides while a message is being sent. */
+  readonly quickActions?: React.ReactNode;
   readonly stopAvailable: boolean;
   readonly dictationAvailable: boolean;
   /** Only the composer subscribes, so typing never re-renders the transcript. */
@@ -816,6 +889,7 @@ function AgentComposer({
       {errorCard}
       {composerMentions.popover}
       {composerMentions.banner}
+      {draftLocked ? null : quickActions}
       <form
         className="agent-composer"
         data-chat-mode={composerMentions.chatMode ? "" : undefined}
@@ -1159,6 +1233,12 @@ export interface AgentPanelOptions {
     | ((send: (message: string) => void) => React.ReactNode);
   /** The transcript's last line while no run is active. */
   readonly transcriptEnd?: React.ReactNode;
+  /**
+   * The composer quick-action row, which Clef Flash fills once the agent's
+   * turn ends: present only while this person's `composer-quick-actions`
+   * flag is on and they can send.
+   */
+  readonly quickActions?: { readonly thread: ThreadDetailData };
   readonly optimisticCreation?: OptimisticThreadCreation;
   readonly onInitialSubmissionObserved?: (submissionId: string) => void;
   /** The first message while the agent has not admitted it. */
@@ -1592,6 +1672,7 @@ export function AgentPanel({
   workspaceStatus,
   composerNotice,
   transcriptEnd,
+  quickActions,
   optimisticCreation,
   initialDispatch,
   onRetryInitialDispatch,
@@ -1779,6 +1860,18 @@ export function AgentPanel({
         ) : (
           <AgentComposer
             agentActive={agentActive}
+            quickActions={
+              quickActions === undefined ||
+              statusMessage !== undefined ? null : (
+                <ComposerQuickActions
+                  source={source}
+                  thread={quickActions.thread}
+                  draft={draftValue}
+                  attaching={images.length > 0}
+                  onReply={(reply) => void submit(reply)}
+                />
+              )
+            }
             stopAvailable={stopAvailable}
             dictationAvailable={dictationAvailable}
             draftValue={draftValue}

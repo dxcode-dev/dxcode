@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { classifyRunFailure } from "../../runtime/run-failure.js";
 import {
+  ORB_DISK_CHECK_MS,
   ORB_HEARTBEAT_MS,
   ORB_SNAPSHOT_REFRESH_MS,
   ORB_STOP_NOTICE_ADDRESS,
@@ -435,6 +436,60 @@ describe("Orb container object", () => {
     await orb.controller.open(create);
     orb.container.snapshotContainer.mockRejectedValue(new Error("internal"));
     await expect(orb.controller.pause()).rejects.toThrow();
+    expect(orb.container.running).toBe(true);
+  });
+
+  it("clears caches between commands when the disk runs critically low mid-turn, and the next turn hears what was freed (#1649)", async () => {
+    let answer = "dx-relief ok 9000000";
+    const checks: number[] = [];
+    const orb = setup(({ argv }) => {
+      if (!argv.join(" ").includes("dx_relief_self_7f3a")) return {};
+      checks.push(orb.now());
+      return { stdout: `${answer}\n` };
+    });
+    await orb.controller.open(create);
+    await orb.controller.setIdleDeadline(3_600_000);
+    const heartbeats = async (count: number) => {
+      for (let beat = 0; beat < count; beat += 1) {
+        orb.advance(ORB_HEARTBEAT_MS);
+        await orb.controller.alarm();
+      }
+    };
+    // Room to spare: checked about once a minute, never more.
+    await heartbeats(13);
+    // 130 s of heartbeats: the first one, then a minute apart.
+    expect(checks.length).toBe(3);
+    for (let index = 1; index < checks.length; index += 1)
+      expect(
+        (checks[index] ?? 0) - (checks[index - 1] ?? 0),
+      ).toBeGreaterThanOrEqual(ORB_DISK_CHECK_MS);
+
+    // An install is running: deferred, nothing cleared or recorded.
+    answer = "dx-relief busy node_/usr/bin/pnpm_install 900";
+    await heartbeats(7);
+    const activation = { ...create, allowReset: true } as const;
+    await expect(orb.controller.open(activation)).resolves.not.toHaveProperty(
+      "diskRelief",
+    );
+
+    // Between commands: cleared, and the next activation is told, once.
+    answer =
+      "dx-relief cleaned 900 812000 /home/user/.local/share/pnpm/store /home/user/.npm/_cacache";
+    await heartbeats(7);
+    await expect(orb.controller.open(activation)).resolves.toMatchObject({
+      diskRelief: {
+        beforeKiB: 900,
+        afterKiB: 812_000,
+        paths: [
+          "/home/user/.local/share/pnpm/store",
+          "/home/user/.npm/_cacache",
+        ],
+      },
+    });
+    await expect(orb.controller.open(activation)).resolves.not.toHaveProperty(
+      "diskRelief",
+    );
+    // The container keeps running throughout.
     expect(orb.container.running).toBe(true);
   });
 

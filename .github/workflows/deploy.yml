@@ -84,6 +84,10 @@ jobs:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
           DX_ADMIN_PASSWORD: ${{ secrets.DX_ADMIN_PASSWORD }}
           DX_DXD_GITHUB_TOKEN: ${{ secrets.DX_UPSTREAM_TOKEN }}
+          # Only with the `boat` integration; the deployment holds it after.
+          BOAT_API_KEY: ${{ secrets.BOAT_API_KEY }}
+          # Optional: overrides the config's bugReportReaders.
+          DX_BUG_REPORT_READERS: ${{ vars.DX_BUG_REPORT_READERS }}
           DX_SELFHOST_CONFIG: .dx/deploy.selfhost.json
           DX_DEPLOY_APPROVE: "1"
         run: node scripts/run-alchemy-deployment.mjs deploy selfhost

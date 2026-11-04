@@ -865,6 +865,7 @@ export {
 } from "./threads/thread-search-query.js";
 export {
   THREAD_SNOOZE_MAX_MS,
+  THREAD_SNOOZE_UNTIL_NEEDED_MS,
   type ThreadSnoozeState,
   threadReturnedAt,
   threadSnoozeState,

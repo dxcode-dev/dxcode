@@ -17,7 +17,7 @@ const usedPercent = (reading: WorkspaceDiskReading) =>
     ((reading.totalBytes - reading.availableBytes) * 100) / reading.totalBytes,
   );
 
-const HOW_TO_FREE = `Free regenerable space yourself; you do not need to ask first: build outputs and caches you can recreate, such as node_modules, target, dist, build, .next, .turbo, .cache, and package manager caches (npm, pnpm, yarn, pip, cargo). Find the largest folders with \`du -xh -d 2 ~ 2>/dev/null | sort -h | tail -n 20\`. Never delete source files, uncommitted work, or anything you cannot rebuild; ask the person if only those take the space.`;
+const HOW_TO_FREE = `Free regenerable space yourself; you do not need to ask first: build outputs and caches you can recreate, such as node_modules, target, dist, build, .next, .turbo, .cache, and package manager caches (npm, pnpm, yarn, pip, cargo). Find the largest folders with \`du -xh -d 2 ~ 2>/dev/null | sort -h | tail -n 20\`. Never delete source files, uncommitted work, data files, or anything you cannot rebuild, even if it looks like junk (a large zero-filled or generated-looking file may be someone's test data): name it and its size and ask the person first.`;
 
 const FREED = `dx cleared its emergency reserve, package-manager caches (pnpm, npm, yarn, pip, and the like), and temporary files in /tmp so this turn could start`;
 

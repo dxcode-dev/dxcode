@@ -6,6 +6,7 @@ import type {
 import type { UserId } from "@dx/domain";
 import type { Bindings } from "../http/types.js";
 import { notificationLogger } from "../logging.js";
+import { type ClefCall, clefAvailable, runClef } from "../workers-ai/clef.js";
 
 /**
  * Needs-you Prioritize (#1447): one Workers AI call to Cloudflare's Clef, a
@@ -34,7 +35,6 @@ export const DEFAULT_RANKING_MODEL: RankingModelId = RANKING_MODELS[0].model;
 /** Clef answers at most 64 questions a call; each ask takes two. */
 const ASKS_PER_CALL = 32;
 const ASK_LIMIT = 300;
-const CALL_TIMEOUT_MS = 60_000;
 
 /** Lowest first, as Clef's score rubric reads them. */
 const URGENCY = [
@@ -69,7 +69,7 @@ export interface RankingModel {
 export const rankingModels = (
   bindings: Bindings,
 ): ReadonlyArray<RankingModel> =>
-  bindings.AI === undefined || bindings.DX_MODEL_WORKERS_AI_ENABLED === "false"
+  !clefAvailable(bindings)
     ? []
     : RANKING_MODELS.map(({ model, name }) => ({
         model,
@@ -148,9 +148,7 @@ export const rankingQuestions = (
     ]),
   );
 
-export type RankingCall =
-  | { readonly ok: true; readonly answers: Record<string, unknown> }
-  | { readonly ok: false };
+export type RankingCall = ClefCall;
 
 /** Runs one Clef call; never rejects. Tests replace it. */
 export type RankingCaller = (input: {
@@ -169,29 +167,9 @@ export const workersAiRanking: RankingCaller = async ({
   const selector = RANKING_MODELS.find(
     (entry) => entry.model === model,
   )?.selector;
-  if (bindings.AI === undefined || selector === undefined) return { ok: false };
+  if (selector === undefined) return { ok: false };
   try {
-    const run = bindings.AI.run as (
-      model: string,
-      input: unknown,
-      options?: unknown,
-    ) => Promise<unknown>;
-    const response = await Promise.race([
-      run.call(bindings.AI, model, { model: selector, state, questions }),
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new Error("Clef did not answer in time.")),
-          CALL_TIMEOUT_MS,
-        ),
-      ),
-    ]);
-    const answers =
-      typeof response === "object" && response !== null
-        ? (response as { answers?: unknown }).answers
-        : undefined;
-    return typeof answers === "object" && answers !== null
-      ? { ok: true, answers: answers as Record<string, unknown> }
-      : { ok: false };
+    return await runClef({ bindings, model, selector, state, questions });
   } catch (cause) {
     notificationLogger.warn("Needs-you ranking call failed.", {
       event: "needs_you_ranking_call_failed",

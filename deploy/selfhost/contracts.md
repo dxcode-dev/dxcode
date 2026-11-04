@@ -102,6 +102,15 @@ before Speech was a plugin that has the `sarvam` integration keeps dictation:
 validation installs Speech and marks it asked. A deployment that omits a plugin
 shows no settings, tools, composer affordance, or readiness requirement for it.
 
+The `boat` integration adds `BOAT_API_KEY`: Boat Orbs on the deployment's own
+Boat account, held across deploys like the other integration keys. Without it
+a self-host binds no Boat key, whatever the environment holds.
+`configuredSettings` lists the settings in `deploy/selfhost/settings.mjs` that
+`pnpm dx:configure` has asked this deployment about, so a later release's new
+settings are asked once. `bugReportReaders` lists the emails that read every in-app bug report and
+becomes the `DX_BUG_REPORT_READERS` binding; the environment variable of that
+name overrides it for one deploy.
+
 Apply starts only after account, zone, E2B, release checksum, and package
 preflight complete. Cancellation before the review confirmation does not mutate
 Cloudflare or E2B.

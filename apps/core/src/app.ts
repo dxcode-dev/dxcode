@@ -35,6 +35,7 @@ import { portalHostRouting } from "./portals/host-routing.js";
 import { threadPortalRoutes } from "./portals/routes.js";
 import { projectRepositoryBrowseRoutes } from "./projects/repository-browse.js";
 import { projectRoutes } from "./projects/routes.js";
+import { threadQuickActionsRoutes } from "./quick-actions/routes.js";
 import { readinessHandler } from "./readiness/handler.js";
 import { realtimeRoutes } from "./realtime/realtime-hub.js";
 import {
@@ -162,6 +163,8 @@ app.route("/v1/threads", threadOrbRestartRoutes);
 // `/automations/*` also matches `/automations`; see Portals above.
 app.use("/v1/threads/:threadId/automations/*", authorizeThread);
 app.route("/v1/threads", threadAutomationRoutes);
+app.use("/v1/threads/:threadId/quick-actions", authorizeThread);
+app.route("/v1/threads", threadQuickActionsRoutes);
 app.use("/v1/threads/:threadId/desktop/*", authorizeThread);
 app.use("/v1/threads/:threadId/desktop/*", enforceThreadActive);
 app.route("/v1/threads", threadDesktopRoutes);

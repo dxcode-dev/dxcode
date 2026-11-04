@@ -1,11 +1,14 @@
 import { env } from "cloudflare:test";
-import type { ThreadId } from "@dx/domain";
+import { THREAD_SNOOZE_UNTIL_NEEDED_MS, type ThreadId } from "@dx/domain";
+import type { FlueObservation } from "@flue/runtime";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { useAgentAdmission } from "../../src/agents/admission.js";
 import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv } from "../../src/http/types.js";
+import { dueSnoozedThreads } from "../../src/notifications/snooze-wake.js";
+import { recordFlueThreadActivity } from "../../src/threads/activity.js";
 import {
   bindings,
   createProductApp,
@@ -30,6 +33,11 @@ import {
  * 7. Archiving keeps the snooze, so unarchiving brings back a hidden Thread.
  * 8. A message someone sends leaves the Thread asleep, or a message another
  *    Thread's agent sends wakes it.
+ * 9. Snooze Until I'm Needed is refused for being over a year out, or the
+ *    minute sweep finds it due.
+ * 10. The next turn that finishes leaves it asleep, or wakes a snooze with a
+ *     wake time, or a turn that finished before the snooze (observed late),
+ *     or one the person stopped, wakes it.
  */
 
 const HOUR_MS = 60 * 60 * 1_000;
@@ -103,6 +111,24 @@ const sendMessage = (threadId: string, sourceThreadId?: ThreadId) =>
       }),
     },
     bindings,
+  );
+
+/** Flue's settlement of one submission, as its observer records it. */
+const settle = (
+  threadId: string,
+  submissionId: string,
+  at: number,
+  outcome: "completed" | "failed" | "aborted",
+) =>
+  recordFlueThreadActivity(
+    {
+      type: "submission_settled",
+      instanceId: threadId,
+      submissionId,
+      outcome,
+      timestamp: new Date(at).toISOString(),
+    } as unknown as FlueObservation,
+    { id: "fixture", agentName: "dx", env: bindings } as never,
   );
 
 describe("Thread snooze in workerd with real D1", () => {
@@ -240,5 +266,50 @@ describe("Thread snooze in workerd with real D1", () => {
     expect((await sendMessage(thread.data.id)).status).toBe(202);
     expect(await row(thread.data.id)).toMatchObject({ snoozed_until: null });
     expect((await row(thread.data.id))?.snooze_woke_at).not.toBeNull();
+  });
+
+  it("snoozes until needed, and only the next turn that finishes wakes it", async () => {
+    const project = await createProjectViaApi("snooze-until-needed");
+    const thread = await createThreadViaApi(project.data.id);
+    const timed = await createThreadViaApi(project.data.id);
+    const untilNeeded = new Date(THREAD_SNOOZE_UNTIL_NEEDED_MS).toISOString();
+    const snoozedAt = Date.now();
+
+    const snoozed = await snooze(thread.data.id, untilNeeded);
+    expect(snoozed.status).toBe(200);
+    expect((await json(snoozed)).data).toMatchObject({
+      snoozedUntil: untilNeeded,
+    });
+    const wakeAt = new Date(Date.now() + HOUR_MS).toISOString();
+    await snooze(timed.data.id, wakeAt);
+    expect(
+      (await dueSnoozedThreads(env.DB, new Date(Date.now() + 2 * HOUR_MS))).map(
+        ({ id }) => id,
+      ),
+    ).not.toContain(thread.data.id);
+
+    await settle(
+      thread.data.id,
+      "sub-before",
+      snoozedAt - HOUR_MS,
+      "completed",
+    );
+    await settle(thread.data.id, "sub-stopped", Date.now() + 1_000, "aborted");
+    expect((await row(thread.data.id))?.snoozed_until).toBe(untilNeeded);
+
+    const finishedAt = Date.now() + 2_000;
+    await settle(thread.data.id, "sub-finished", finishedAt, "completed");
+    await settle(timed.data.id, "sub-timed", finishedAt, "completed");
+    expect(await row(thread.data.id)).toMatchObject({
+      snoozed_until: null,
+      snoozed_at: null,
+      snooze_woke_at: new Date(finishedAt).toISOString(),
+    });
+    expect((await row(timed.data.id))?.snoozed_until).toBe(wakeAt);
+
+    // A failed turn needs its owner too.
+    await snooze(thread.data.id, untilNeeded);
+    await settle(thread.data.id, "sub-failed", Date.now() + 3_000, "failed");
+    expect((await row(thread.data.id))?.snoozed_until).toBeNull();
   });
 });

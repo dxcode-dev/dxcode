@@ -34,12 +34,24 @@ import {
   validateSelfhostConfig,
 } from "../deploy/selfhost/config.mjs";
 import {
+  appSlugOf,
+  checkGitHubApp,
+} from "../deploy/selfhost/github-app-check.mjs";
+import {
   ALCHEMY_OAUTH_RELOGIN,
   listPortalZoneCandidates,
   missingPortalOAuthScopes,
   PORTAL_OAUTH_SCOPES,
   preflightPortalZone,
 } from "../deploy/selfhost/portals.mjs";
+import {
+  configureSettings,
+  readDeploymentBindings,
+  SELFHOST_SETTINGS,
+  secretHeld,
+  unseenSettings,
+  validateSettingsFile,
+} from "../deploy/selfhost/settings.mjs";
 import { assertToolchain } from "../deploy/selfhost/toolchain.mjs";
 import {
   resourceName,
@@ -572,12 +584,61 @@ const provisionalDeploymentConfigPath = (configPath, nonce = randomUUID()) =>
     `.${basename(configPath)}.${nonce}.pending`,
   );
 
+/**
+ * `--configure` (`pnpm dx:configure`) walks the settings registry with the
+ * deployment's current values as defaults; `--all` asks every setting, not
+ * only new ones. `--non-interactive --file <settings.json>` answers by
+ * setting ID and takes secrets from the environment. `--no-deploy` (only
+ * with a wrapper's afterApply) hands the settings on without deploying.
+ */
+export const parseDeployArguments = (argv) => {
+  const values = argv.filter((value) => value !== "--");
+  const fileIndex = values.findIndex(
+    (value) => value === "--file" || value.startsWith("--file="),
+  );
+  const file =
+    fileIndex === -1
+      ? undefined
+      : values[fileIndex].startsWith("--file=")
+        ? values[fileIndex].slice("--file=".length)
+        : values[fileIndex + 1];
+  if (fileIndex !== -1 && !file) throw new Error("--file needs a path.");
+  const flags = new Set(
+    values.filter(
+      (value, index) =>
+        value.startsWith("--") &&
+        !value.startsWith("--file") &&
+        !(fileIndex !== -1 && index === fileIndex + 1),
+    ),
+  );
+  if (flags.has("--non-interactive") && file === undefined)
+    throw new Error("--non-interactive needs --file <settings.json>.");
+  if (file !== undefined && !flags.has("--non-interactive"))
+    throw new Error("--file is read only with --non-interactive.");
+  if (flags.has("--non-interactive")) flags.add("--configure");
+  return { flags, file };
+};
+
 export const runDxDeploy = async ({
   defaults = {},
   configPath = process.env.DX_SELFHOST_CONFIG || "deploy.selfhost.json",
   argv = process.argv.slice(2),
+  settings = SELFHOST_SETTINGS,
+  afterApply,
 } = {}) => {
-  const flags = new Set(argv.filter((value) => value !== "--"));
+  const { flags, file } = parseDeployArguments(argv);
+  const interactive = !flags.has("--non-interactive");
+  const settingValues =
+    file === undefined ? undefined : JSON.parse(readFileSync(file, "utf8"));
+  // Before any prompt or sign-in: a bad file fails at once.
+  if (settingValues !== undefined)
+    try {
+      validateSettingsFile(settingValues, settings);
+    } catch (cause) {
+      throw new Error(
+        `${file}: ${cause instanceof Error ? cause.message : "invalid"}`,
+      );
+    }
   const existingInput = existsSync(configPath)
     ? JSON.parse(readFileSync(configPath, "utf8"))
     : undefined;
@@ -586,19 +647,31 @@ export const runDxDeploy = async ({
       ? undefined
       : validateSelfhostConfig(existingInput);
   if (existing !== undefined) assertInstallerDefaults(existing, defaults);
+  if (!interactive && existing === undefined)
+    throw new Error(
+      `--non-interactive configures an existing deployment; ${configPath} does not exist. Run pnpm dx:deploy first.`,
+    );
   let rl = createInterface({ input: stdin, output: stdout });
+  // Non-interactive runs take every other step's default, and fail on a
+  // question that has none rather than guess.
   const answer = async (label, fallback) => {
+    if (!interactive) {
+      if (fallback === undefined)
+        throw new Error(`--non-interactive cannot answer: ${label}`);
+      return fallback;
+    }
     const value = (
       await rl.question(`${label}${fallback ? ` [${fallback}]` : ""}: `)
     ).trim();
     return value || fallback;
   };
   const yes = async (label, fallback = false) => {
+    if (!interactive) return fallback;
     const value = await answer(`${label} (${fallback ? "Y/n" : "y/N"})`, "");
     if (value === "") return fallback;
     return value.toLowerCase() === "y" || value.toLowerCase() === "yes";
   };
-  const secret = createHiddenPrompt({
+  const hiddenPrompt = createHiddenPrompt({
     input: stdin,
     output: stdout,
     pause: () => rl.close(),
@@ -606,6 +679,11 @@ export const runDxDeploy = async ({
       rl = createInterface({ input: stdin, output: stdout });
     },
   });
+  const secret = async (label) => {
+    if (!interactive)
+      throw new Error(`--non-interactive cannot ask for a secret: ${label}`);
+    return hiddenPrompt(label);
+  };
   const environment = { ...process.env };
   // A sender needs Email Sending and Turnstile, which Alchemy's OAuth login
   // cannot manage, so decide before signing in to Cloudflare.
@@ -824,6 +902,7 @@ export const runDxDeploy = async ({
         bitbucket: "DX_INTEGRATION_BITBUCKET_OAUTH",
         sarvam: "SARVAM_API_KEY",
         exa: "EXA_API_KEY",
+        boat: "BOAT_API_KEY",
       }[integration];
       if (await yes(`Rotate ${integration}`))
         environment[variable] = await secret(`New ${integration} secret`);
@@ -951,6 +1030,84 @@ export const runDxDeploy = async ({
     environment.DX_ADMIN_PASSWORD_RESET = "true";
   }
 
+  // The settings registry: `pnpm dx:configure` asks, with the live
+  // deployment's values as defaults; a new deployment is asked what the
+  // first-run questions above did not cover; a plain deploy only names
+  // settings this deployment has never been asked about.
+  const bindings =
+    existing === undefined
+      ? new Map()
+      : await readDeploymentBindings({
+          auth: cloudflareAuth,
+          workerName: resourceName("app", selfhostStage(config.name)),
+        });
+  let secretsSupplied = [];
+  if (flags.has("--configure") || existing === undefined) {
+    if (interactive)
+      stdout.write(
+        flags.has("--all")
+          ? "\nEvery setting, with its current value. Enter keeps it.\n"
+          : "\nSettings this deployment has not been asked about, and required secrets that are not set. Enter keeps the current value; --all asks every setting.\n",
+      );
+    const configured = await configureSettings({
+      config,
+      validate: validateSelfhostConfig,
+      settings,
+      environment,
+      bindings,
+      all: flags.has("--all"),
+      values: settingValues,
+      ui: {
+        answer,
+        yes,
+        secret,
+        log: (message) => stdout.write(message),
+      },
+    });
+    config = configured.config;
+    secretsSupplied = configured.supplied;
+    if (config.integrations.includes("github")) {
+      // The App's JSON signs in as the App; without it, or when GitHub
+      // refuses its key, a public App is read by its slug, which needs no key.
+      const appJson = environment.DX_INTEGRATION_GITHUB_APP?.trim();
+      const slug = appJson
+        ? appSlugOf(appJson)
+        : interactive
+          ? await answer(
+              "GitHub App slug, to check its events and permissions (github.com/apps/<slug>; Enter skips)",
+              "",
+            )
+          : undefined;
+      for (const request of [
+        ...(appJson ? [{ appJson }] : []),
+        ...(slug ? [{ slug }] : []),
+      ])
+        try {
+          if (request.slug && appJson)
+            stdout.write(`Reading the public App ${request.slug} instead.\n`);
+          const report = await checkGitHubApp(request);
+          stdout.write(
+            report.length === 0
+              ? "The GitHub App has every event and permission dx needs.\n"
+              : `${report.join("\n")}\n`,
+          );
+          break;
+        } catch (cause) {
+          stdout.write(
+            `Could not check the GitHub App: ${cause instanceof Error ? cause.message : "unknown error"}\n`,
+          );
+        }
+    }
+  } else {
+    const unseen = unseenSettings(config, settings);
+    if (unseen.length > 0)
+      stdout.write(
+        `This release has settings this deployment has never been asked about: ${unseen
+          .map((setting) => setting.label)
+          .join(", ")}. Run pnpm dx:configure to set them.\n`,
+      );
+  }
+
   const review = {
     ...config,
     cloudflareAuth: environment.CLOUDFLARE_API_TOKEN
@@ -965,6 +1122,7 @@ export const runDxDeploy = async ({
           "DX_INTEGRATION_BITBUCKET_OAUTH",
           "SARVAM_API_KEY",
           "EXA_API_KEY",
+          "BOAT_API_KEY",
           "DX_GOOGLE_CLIENT_SECRET",
           "DX_R2_ACCESS_KEY_ID",
           "DX_R2_SECRET_ACCESS_KEY",
@@ -972,18 +1130,58 @@ export const runDxDeploy = async ({
       )
       .sort()
       .map((name) => `${name}=<redacted>`),
+    // Whether each secret this deployment uses is set; never its value.
+    secretSettings: Object.fromEntries(
+      settings
+        .filter(
+          (setting) =>
+            setting.kind === "secret" &&
+            (setting.when === undefined || setting.when(config)),
+        )
+        .map((setting) => [
+          setting.env,
+          secretsSupplied.includes(setting.env) ||
+          environment[setting.env]?.trim()
+            ? "new value this deploy"
+            : secretHeld(setting, { bindings, deployed: existing })
+              ? "kept"
+              : "not set",
+        ]),
+    ),
   };
   stdout.write(`\nDeployment review\n${JSON.stringify(review, null, 2)}\n`);
-  if (!(await yes("Apply this deployment"))) {
+  // --no-deploy only hands the settings to a wrapper's afterApply, which
+  // syncs them elsewhere. The config file keeps describing what is live, so
+  // a later deploy reads held secrets correctly.
+  if (flags.has("--no-deploy")) {
+    rl.close();
+    if (afterApply === undefined)
+      throw new Error(
+        "--no-deploy is only for a wrapper that syncs the settings elsewhere; a self-hosted deployment's config is written by its deploy.",
+      );
+    await afterApply({
+      config,
+      environment,
+      secretsSupplied,
+      deployed: false,
+    });
+    stdout.write(`Nothing was deployed, and ${configPath} is unchanged.\n`);
+    return;
+  }
+  if (!interactive && process.env.DX_DEPLOY_APPROVE !== "1")
+    throw new Error(
+      "A non-interactive apply needs DX_DEPLOY_APPROVE=1 after reviewing the settings above. Nothing was deployed.",
+    );
+  if (interactive && !(await yes("Apply this deployment"))) {
     rl.close();
     stdout.write("Cancelled before deployment mutation.\n");
     return;
   }
   rl.close();
-  const deploymentConfigPath =
-    existing === undefined
-      ? provisionalDeploymentConfigPath(configPath)
-      : configPath;
+  // Deploy from a pending copy and replace the config only once the deploy
+  // succeeds, so the config always describes what is live; pnpm
+  // dx:configure reads it as the current values.
+  const deploymentConfigPath = provisionalDeploymentConfigPath(configPath);
   mkdirSync(dirname(configPath), { recursive: true, mode: 0o700 });
   mkdirSync(dirname(deploymentConfigPath), { recursive: true, mode: 0o700 });
   writeFileSync(deploymentConfigPath, `${JSON.stringify(config, null, 2)}\n`, {
@@ -998,22 +1196,21 @@ export const runDxDeploy = async ({
         ...environment,
         DX_DEPLOY_APPROVE: "1",
         DX_SELFHOST_CONFIG: deploymentConfigPath,
-        ...(existing === undefined
-          ? { DX_SELFHOST_CONFIG_PROVISIONAL: "1" }
-          : {}),
+        DX_SELFHOST_CONFIG_PROVISIONAL: "1",
       },
       stdio: "inherit",
     },
   );
   if (result.error) {
-    if (existing === undefined) rmSync(deploymentConfigPath, { force: true });
+    rmSync(deploymentConfigPath, { force: true });
     throw result.error;
   }
   if (result.status !== 0) {
-    if (existing === undefined) rmSync(deploymentConfigPath, { force: true });
+    rmSync(deploymentConfigPath, { force: true });
     throw new Error(`Deployment failed with status ${result.status ?? 1}.`);
   }
-  if (existing === undefined) renameSync(deploymentConfigPath, configPath);
+  renameSync(deploymentConfigPath, configPath);
+  await afterApply?.({ config, environment, secretsSupplied, deployed: true });
 };
 
 if (

@@ -16,6 +16,9 @@ const { takeUnsavedStop, unsavedStopNote } = await import(
   "../../orb-disk/unsaved-stop.js"
 );
 const { OrbContainerController } = await import("./orb-container.js");
+const { takeDiskRelief, diskReliefNote } = await import(
+  "../../orb-disk/relief.js"
+);
 
 const threadId = Schema.decodeUnknownSync(ThreadId)(
   "thr_00000000-0000-4000-8000-0000000000cf",
@@ -405,6 +408,43 @@ describe("Cloudflare Containers Orb provider", () => {
       "with them the copy was 300 MB compressed, over dx's 48 MB limit",
     );
     expect(note).toContain("untracked files changed after the save are lost");
+  });
+
+  it("tells the turn which caches dx cleared while the disk ran critically low (#1649)", async () => {
+    const { stub } = bind({
+      provider: "cloudflare",
+      state: "initialized",
+      provider_sandbox_id: "orb-object-id",
+      initialization_attempt_id: null,
+    });
+    const relief = {
+      at: Date.parse("2026-11-04T03:10:00Z"),
+      beforeKiB: 900,
+      afterKiB: 812_000,
+      paths: ["/home/user/.local/share/pnpm/store", "/home/user/.npm/_cacache"],
+    };
+    stub.open.mockImplementationOnce(
+      async () =>
+        ({
+          kind: "ready",
+          sandboxId: "orb-object-id",
+          residency: "running",
+          diskRelief: relief,
+        }) as never,
+    );
+    await cloudflareExecutionProvider.workspace.create(
+      context,
+      { threadId },
+      { authorize: async () => undefined },
+    );
+    const told = takeDiskRelief(threadId);
+    expect(told).toEqual(relief);
+    const note = diskReliefNote(told as NonNullable<typeof told>);
+    expect(note).toContain("~/.local/share/pnpm/store, ~/.npm/_cacache");
+    expect(note).toContain("only 1 MB left");
+    expect(note).toContain("793 MB free");
+    expect(note).toContain("dx deleted nothing else");
+    expect(takeDiskRelief(threadId)).toBeUndefined();
   });
 
   it("starts, claims, and wakes nothing until the Thread's admission passes", async () => {
