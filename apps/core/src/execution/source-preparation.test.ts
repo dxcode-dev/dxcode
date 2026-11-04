@@ -1,6 +1,19 @@
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { Bindings } from "../http/types.js";
 import { executionWorkspaceLogger } from "../logging.js";
+import { sourceAccessDenied } from "../source-control/authority.js";
+import { takeAdditionalRepositoryNote } from "./additional-repository-note.js";
 import {
   additionalRepositoryDirectories,
   cloneAdditionalRepositories,
@@ -171,5 +184,303 @@ describe("GitHub CLI wrapper installation", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+// The real clone command, run by bash against a local Git server. The runner
+// stands in for the Orb provider: it kills the command at its timeout and
+// throws the provider's message, as E2B does.
+describe("additional repository clone failures", { timeout: 30_000 }, () => {
+  const hermetic = {
+    PATH: process.env.PATH ?? "",
+    HOME: tmpdir(),
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+  };
+  const git = (args: ReadonlyArray<string>, cwd?: string) => {
+    const result = spawnSync("git", args, {
+      cwd,
+      env: {
+        ...hermetic,
+        GIT_AUTHOR_NAME: "dx",
+        GIT_AUTHOR_EMAIL: "dx@example.test",
+        GIT_COMMITTER_NAME: "dx",
+        GIT_COMMITTER_EMAIL: "dx@example.test",
+      },
+      encoding: "utf8",
+    });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  const shellSandbox = (root: string, capMs = 20_000) => ({
+    commands: {
+      run: (
+        command: string,
+        options: {
+          readonly envs: Record<string, string>;
+          readonly timeoutMs: number;
+        },
+      ) =>
+        new Promise<{ exitCode?: number; stdout?: string }>(
+          (resolve, reject) => {
+            const child = spawn("bash", ["-c", command], {
+              env: {
+                ...hermetic,
+                ...options.envs,
+                DX_REPOSITORIES_ROOT: root,
+                DX_CLONE_STALL_SECONDS: "2",
+              },
+            });
+            let stdout = "";
+            child.stdout.on("data", (chunk) => {
+              stdout += String(chunk);
+            });
+            const timer = setTimeout(
+              () => {
+                child.kill("SIGKILL");
+                reject(
+                  new Error(
+                    `Command timed out after ${String(options.timeoutMs)} ms.`,
+                  ),
+                );
+              },
+              Math.min(options.timeoutMs, capMs),
+            );
+            child.on("close", (code) => {
+              clearTimeout(timer);
+              if (code === 0) resolve({ exitCode: 0, stdout });
+              else reject(new Error(`exit status ${String(code)}`));
+            });
+          },
+        ),
+    },
+  });
+  /** Serves `root` with `git http-backend`; `intercept` may answer first. */
+  const gitServer = async (
+    root: string,
+    intercept?: (request: IncomingMessage, response: ServerResponse) => boolean,
+  ) => {
+    const requests: Array<{ url: string; authorization?: string }> = [];
+    const server = createServer((request, response) => {
+      requests.push({
+        url: request.url ?? "",
+        ...(request.headers.authorization === undefined
+          ? {}
+          : { authorization: request.headers.authorization }),
+      });
+      if (intercept?.(request, response)) return;
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      const child = spawn("git", ["http-backend"], {
+        env: {
+          ...hermetic,
+          GIT_PROJECT_ROOT: root,
+          GIT_HTTP_EXPORT_ALL: "1",
+          PATH_INFO: url.pathname,
+          QUERY_STRING: url.search.slice(1),
+          REQUEST_METHOD: request.method ?? "GET",
+          CONTENT_TYPE: request.headers["content-type"] ?? "",
+          HTTP_CONTENT_ENCODING: request.headers["content-encoding"] ?? "",
+          GIT_PROTOCOL: String(request.headers["git-protocol"] ?? ""),
+        },
+      });
+      request.pipe(child.stdin);
+      const chunks: Buffer[] = [];
+      child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
+      child.on("close", () => {
+        const output = Buffer.concat(chunks);
+        const split = output.indexOf("\r\n\r\n");
+        const head = output.subarray(0, split).toString();
+        let status = 200;
+        for (const line of head.split("\r\n")) {
+          const [name, ...rest] = line.split(":");
+          const value = rest.join(":").trim();
+          if (name?.toLowerCase() === "status")
+            status = Number(value.split(" ")[0]);
+          else if (name) response.setHeader(name, value);
+        }
+        response.statusCode = status;
+        response.end(output.subarray(split + 4));
+      });
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const { port } = server.address() as AddressInfo;
+    return {
+      origin: `http://127.0.0.1:${String(port)}`,
+      requests,
+      close: () => {
+        server.closeAllConnections();
+        server.close();
+      },
+    };
+  };
+  const fixture = async () => {
+    const base = await mkdtemp(join(tmpdir(), "dx-additional-"));
+    const served = join(base, "served");
+    const work = join(base, "work");
+    mkdirSync(join(served, "team"), { recursive: true });
+    git(["init", "--quiet", "--bare", join(served, "team", "lib.git")]);
+    git(["init", "--quiet", "-b", "main", work]);
+    writeFileSync(join(work, "README.md"), "lib\n");
+    git(["add", "README.md"], work);
+    git(["commit", "--quiet", "-m", "initial"], work);
+    git(["push", "--quiet", join(served, "team", "lib.git"), "main"], work);
+    git([
+      "--git-dir",
+      join(served, "team", "lib.git"),
+      "symbolic-ref",
+      "HEAD",
+      "refs/heads/main",
+    ]);
+    const repositories = join(base, "repos");
+    return {
+      base,
+      served,
+      repositories,
+      head: git(["rev-parse", "HEAD"], work),
+    };
+  };
+  const bitbucketRow = (origin: string) => ({
+    provider: "bitbucket",
+    full_name: "team/lib",
+    clone_url: `${origin}/team/lib.git`,
+    owner_user_id: "user-1",
+  });
+  const clone = (
+    repositories: string,
+    origin: string,
+    threadId: string,
+    token: () => Promise<string>,
+  ) =>
+    cloneAdditionalRepositories(
+      {} as Bindings,
+      fakeDb([]),
+      threadId,
+      shellSandbox(repositories),
+      token,
+      Promise.resolve([bitbucketRow(origin)]),
+    );
+
+  it("clones with the owner's Bitbucket token and leaves the agent no note", async () => {
+    const f = await fixture();
+    const server = await gitServer(f.served, (request, response) => {
+      if (
+        request.headers.authorization ===
+        `Basic ${btoa("x-token-auth:bitbucket-token")}`
+      )
+        return false;
+      response.writeHead(401, { "WWW-Authenticate": 'Basic realm="git"' });
+      response.end();
+      return true;
+    });
+    try {
+      await clone(
+        f.repositories,
+        server.origin,
+        "thr_ok",
+        async () => "bitbucket-token",
+      );
+      expect(git(["rev-parse", "HEAD"], join(f.repositories, "lib"))).toBe(
+        f.head,
+      );
+      expect(takeAdditionalRepositoryNote("thr_ok")).toBeUndefined();
+    } finally {
+      server.close();
+    }
+  });
+
+  it("stops a stalled Bitbucket clone early and tells the agent which repository failed and why", async () => {
+    const f = await fixture();
+    // Bitbucket accepts the connection and then sends nothing.
+    const server = await gitServer(f.served, () => true);
+    const started = Date.now();
+    try {
+      await clone(
+        f.repositories,
+        server.origin,
+        "thr_stall",
+        async () => "bitbucket-token",
+      );
+    } finally {
+      server.close();
+    }
+    // Two stalled attempts of about two seconds each, not the timeout.
+    expect(Date.now() - started).toBeLessThan(15_000);
+    expect(server.requests.length).toBe(2);
+    expect(existsSync(join(f.repositories, "lib"))).toBe(false);
+    const note = takeAdditionalRepositoryNote("thr_stall");
+    expect(note).toContain("team/lib");
+    expect(note).toContain("Bitbucket");
+    expect(note).toContain("~/workspace/repos/lib");
+    expect(note).toMatch(/stopped sending data/);
+    // Taken once: a later turn gets no stale note.
+    expect(takeAdditionalRepositoryNote("thr_stall")).toBeUndefined();
+  });
+
+  it("retries a clone whose first attempt stalls", async () => {
+    const f = await fixture();
+    let stalled = false;
+    const server = await gitServer(f.served, () => {
+      if (stalled) return false;
+      stalled = true;
+      return true;
+    });
+    try {
+      await clone(
+        f.repositories,
+        server.origin,
+        "thr_retry",
+        async () => "bitbucket-token",
+      );
+    } finally {
+      server.close();
+    }
+    expect(git(["rev-parse", "HEAD"], join(f.repositories, "lib"))).toBe(
+      f.head,
+    );
+    expect(takeAdditionalRepositoryNote("thr_retry")).toBeUndefined();
+  });
+
+  it("names Bitbucket and asks for a reconnect when its authorization is gone", async () => {
+    const f = await fixture();
+    const server = await gitServer(f.served, (_request, response) => {
+      response.writeHead(401, { "WWW-Authenticate": 'Basic realm="git"' });
+      response.end();
+      return true;
+    });
+    // Another additional repository is already in place.
+    mkdirSync(join(f.repositories, "web"), { recursive: true });
+    try {
+      await cloneAdditionalRepositories(
+        {} as Bindings,
+        fakeDb([]),
+        "thr_auth",
+        shellSandbox(f.repositories),
+        async () => {
+          throw sourceAccessDenied(
+            "connection-reauthorization-required",
+            "reconnect",
+          );
+        },
+        Promise.resolve([
+          bitbucketRow(server.origin),
+          {
+            provider: "github",
+            full_name: "acme/web",
+            clone_url: "https://github.com/acme/web.git",
+            owner_user_id: "user-1",
+          },
+        ]),
+      );
+    } finally {
+      server.close();
+    }
+    const note = takeAdditionalRepositoryNote("thr_auth");
+    // The agent is told what is there, so it need not guess.
+    expect(note).toContain("~/workspace/repos holds the others: web.");
+    expect(note).toContain("team/lib");
+    expect(note).toMatch(/reconnect Bitbucket in Settings → Integrations/);
+    expect(note).not.toMatch(/connect GitHub/i);
   });
 });

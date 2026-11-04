@@ -114,6 +114,15 @@ const row = (container: HTMLElement, path: string) =>
     ?.shadowRoot?.querySelector<HTMLElement>(`[data-item-path="${path}"]`) ??
   null;
 
+/** The open dialog whose accessible name is `title`. */
+const dialogTitled = (title: string) =>
+  [...document.querySelectorAll<HTMLElement>('[role="dialog"]')].find(
+    (dialog) =>
+      document
+        .getElementById(dialog.getAttribute("aria-labelledby") ?? "")
+        ?.textContent?.trim() === title,
+  ) ?? null;
+
 /** Right-clicks a row and returns its menu's item labels. */
 const openMenu = async (container: HTMLElement, path: string) => {
   const target = row(container, path);
@@ -277,8 +286,9 @@ describe("Files tree write actions", () => {
     const { container, root } = await render(true, api);
     await openMenu(container, "src/");
     await clickMenuItem("Delete");
-    const dialog = () =>
-      document.querySelector<HTMLElement>('[aria-label="Delete folder"]');
+    const dialog = () => dialogTitled("Delete Folder?");
+    // The dialog's code loads the first time one opens.
+    await vi.waitFor(() => expect(dialog()).not.toBeNull());
     expect(dialog()?.textContent).toContain(
       "“src” and everything in it will be deleted from the workspace.",
     );
@@ -293,10 +303,9 @@ describe("Files tree write actions", () => {
 
     await openMenu(container, "README.md");
     await clickMenuItem("Delete");
+    await vi.waitFor(() => expect(dialogTitled("Delete File?")).not.toBeNull());
     const confirm = [
-      ...(document
-        .querySelector('[aria-label="Delete file"]')
-        ?.querySelectorAll("button") ?? []),
+      ...(dialogTitled("Delete File?")?.querySelectorAll("button") ?? []),
     ].find((candidate) => candidate.textContent?.trim() === "Delete");
     await React.act(() => confirm?.click());
     await settle();
@@ -305,9 +314,7 @@ describe("Files tree write actions", () => {
       { action: "delete", path: "README.md" },
       "primary",
     );
-    await vi.waitFor(() =>
-      expect(document.querySelector('[aria-label="Delete file"]')).toBeNull(),
-    );
+    await vi.waitFor(() => expect(dialogTitled("Delete File?")).toBeNull());
     await React.act(() => root.unmount());
   });
 

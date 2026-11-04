@@ -230,6 +230,72 @@ describe("Sidebar layout", () => {
       expect((await choose(owner, entry)).status).toBe(400);
   });
 
+  it("keeps each person's Sidebar Layout and Sidebar Order with their panel", async () => {
+    const owner = "sidebar-arrangement-owner" as UserId;
+    const read = async (userId: UserId) =>
+      (
+        await (
+          await app(userId).request("/sidebar-layout", {}, bindings)
+        ).json<{ data: unknown }>()
+      ).data;
+
+    // By Project and Recent Activity until the person chooses otherwise.
+    expect(await read(owner)).toEqual({ entries: [] });
+
+    const listed = await choose(owner, { kind: "grouping", grouping: "list" });
+    expect(listed.status).toBe(200);
+    await expect(listed.json()).resolves.toEqual({
+      status: "success",
+      data: { entries: [], grouping: "list" },
+    });
+    expect(
+      (await choose(owner, { kind: "order", order: "created" })).status,
+    ).toBe(200);
+    expect((await choose(owner, { kind: "width", width: 320 })).status).toBe(
+      200,
+    );
+    expect(
+      (await choose(owner, { kind: "collapsed", collapsed: true })).status,
+    ).toBe(200);
+    expect(await read(owner)).toEqual({
+      entries: [],
+      width: 320,
+      collapsed: true,
+      grouping: "list",
+      order: "created",
+    });
+    expect(await read("sidebar-arrangement-other" as UserId)).toEqual({
+      entries: [],
+    });
+
+    // Choosing the defaults again is kept as the person's choice.
+    expect(
+      (await choose(owner, { kind: "grouping", grouping: "project" })).status,
+    ).toBe(200);
+    expect(
+      (await choose(owner, { kind: "order", order: "activity" })).status,
+    ).toBe(200);
+    expect(await read(owner)).toEqual({
+      entries: [],
+      width: 320,
+      collapsed: true,
+      grouping: "project",
+      order: "activity",
+    });
+
+    for (const entry of [
+      { kind: "grouping" },
+      { kind: "grouping", grouping: "folders" },
+      { kind: "order", order: "name" },
+      { kind: "order", order: 1 },
+    ])
+      expect((await choose(owner, entry)).status).toBe(400);
+    expect(await read(owner)).toMatchObject({
+      grouping: "project",
+      order: "activity",
+    });
+  });
+
   it("keeps only the newest 500 choices", async () => {
     const owner = "sidebar-pruned" as UserId;
     const old = new Date("2026-01-01T00:00:00.000Z").toISOString();

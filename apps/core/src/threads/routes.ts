@@ -721,11 +721,38 @@ const createPhase = (name: string) =>
     attributes: { "dx.kind": "phase" },
   });
 
+/**
+ * How long archive waits for each agent to stop: a hung agent object must
+ * not hold the archive open. A stop that times out is logged like a failure.
+ */
+const ARCHIVE_AGENT_STOP_TIMEOUT_MS = 5_000;
+
+const withTimeout = <A>(work: Promise<A>, ms: number) => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    work,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`Timed out after ${ms} ms.`)),
+        ms,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
+};
+
+/** Ends a Thread's running turn and the messages queued behind it. */
+export type ThreadAgentStopper = (
+  threadId: ThreadId,
+  env: AppEnv["Bindings"],
+) => Promise<void>;
+
 export const createThreadRoutes = (
   dispatchInitialMessage: InitialThreadDispatcher = dispatchInitialThreadMessage,
   titleAgent: DxTitleAgentRunner = runDxTitleAgent,
   warmInitialAgent: InitialThreadAgentWarmer = warmInitialThreadAgent,
   initialOrb: InitialThreadOrb = noInitialThreadOrb,
+  stopAgent: ThreadAgentStopper = async (threadId, env) =>
+    (await import("../agents/routes.js")).stopThreadAgent(threadId, env),
 ) => {
   const threadRoutes = new Hono<AppEnv>();
 
@@ -2453,6 +2480,29 @@ export const createThreadRoutes = (
           ),
         );
       if (body.archived) {
+        // The agent stops before its Orb: a turn left running would fail
+        // once the Orb is gone, and every message queued behind it with it
+        // (#1668). Admission already refuses an archived Thread's Stop.
+        yield* Effect.promise(() =>
+          Promise.all(
+            [thread, ...children].map(({ id }) =>
+              withTimeout(
+                stopAgent(id, context.env),
+                ARCHIVE_AGENT_STOP_TIMEOUT_MS,
+              ).catch((cause: unknown) => {
+                threadPersistenceLogger.warn(
+                  "Archived Thread's agent stop failed.",
+                  {
+                    event: "thread_archive_agent_stop_failed",
+                    requestId,
+                    threadId: id,
+                    cause,
+                  },
+                );
+              }),
+            ),
+          ),
+        );
         yield* Effect.tryPromise({
           try: () =>
             Promise.all(

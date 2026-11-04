@@ -92,6 +92,14 @@ const page = {
     () => import("./features/threads/bug-reports/bug-report-page.js"),
     "BugReportRoute",
   ),
+  allBugReports: lazyRouteComponent(
+    () => import("./features/threads/bug-reports/all-bug-reports-page.js"),
+    "AllBugReportsRoute",
+  ),
+  allBugReport: lazyRouteComponent(
+    () => import("./features/threads/bug-reports/all-bug-reports-page.js"),
+    "AllBugReportRoute",
+  ),
   needsYou: lazyRouteComponent(
     () => import("./features/navigation/needs-you-page.js"),
     "NeedsYouPage",
@@ -240,6 +248,18 @@ const bugReportRoute = createRoute({
   getParentRoute: () => productRoute,
   path: "/bug-reports/$reportId",
   component: page.bugReport,
+});
+
+const allBugReportsRoute = createRoute({
+  getParentRoute: () => productRoute,
+  path: "/bug-reports/all",
+  component: page.allBugReports,
+});
+
+const allBugReportRoute = createRoute({
+  getParentRoute: () => productRoute,
+  path: "/bug-reports/all/$reportId",
+  component: page.allBugReport,
 });
 
 const needsYouRoute = createRoute({
@@ -561,6 +581,8 @@ const routeTree = rootRoute.addChildren([
     threadTreeRoute,
     bugReportsRoute,
     bugReportRoute,
+    allBugReportsRoute,
+    allBugReportRoute,
     needsYouRoute,
   ]),
   personalSettingsRoute,

@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { absoluteThreadUrl } from "../../../shared/thread-url.js";
 import { Button } from "../../../shared/ui/button.js";
+import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
 import {
   DialogContent,
   DialogDescription,
@@ -41,7 +42,7 @@ const MULTIPLAYER_CONSENT =
  * "Enable Multiplayer for Thread?" Shown before Contribute unless the owner
  * chose "Don't ask me again".
  */
-function MultiplayerConfirmDialog({
+function MultiplayerConfirmation({
   open,
   pending,
   onCancel,
@@ -54,42 +55,26 @@ function MultiplayerConfirmDialog({
 }) {
   const [skipNextTime, setSkipNextTime] = React.useState(false);
   return (
-    <DialogRoot
+    <ConfirmDialog
       open={open}
       onOpenChange={(next) => {
-        if (!next && !pending) onCancel();
+        if (!next) onCancel();
       }}
+      title="Enable Multiplayer for Thread?"
+      description={MULTIPLAYER_CONSENT}
+      confirmLabel="Enable Multiplayer"
+      pending={pending}
+      onConfirm={() => onConfirm(skipNextTime)}
     >
-      <DialogContent className="thread-share-confirm">
-        <DialogTitle>Enable Multiplayer for Thread?</DialogTitle>
-        <DialogDescription>{MULTIPLAYER_CONSENT}</DialogDescription>
-        <label className="thread-share-checkbox">
-          <input
-            type="checkbox"
-            checked={skipNextTime}
-            onChange={(event) => setSkipNextTime(event.currentTarget.checked)}
-          />
-          Don't ask me again
-        </label>
-        <footer className="thread-share-actions">
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={pending}
-            onClick={onCancel}
-          >
-            Cancel
-          </Button>
-          <Button
-            size="xs"
-            disabled={pending}
-            onClick={() => onConfirm(skipNextTime)}
-          >
-            Enable Multiplayer
-          </Button>
-        </footer>
-      </DialogContent>
-    </DialogRoot>
+      <label className="thread-share-checkbox">
+        <input
+          type="checkbox"
+          checked={skipNextTime}
+          onChange={(event) => setSkipNextTime(event.currentTarget.checked)}
+        />
+        Don't ask me again
+      </label>
+    </ConfirmDialog>
   );
 }
 
@@ -371,6 +356,12 @@ export function ShareDialog({
                 </span>
               </div>
             )}
+            {own && workspace !== undefined ? (
+              <p className="thread-share-note">
+                Contributors can also read this thread's Orb, including its
+                files and secrets.
+              </p>
+            ) : null}
             {mutation.error === null ? null : (
               <p className="thread-share-error" role="alert">
                 {mutation.error instanceof Error
@@ -382,7 +373,7 @@ export function ShareDialog({
           <SharingStatus thread={thread} ownerName={ownerName} />
         </DialogContent>
       </DialogRoot>
-      <MultiplayerConfirmDialog
+      <MultiplayerConfirmation
         key={confirming ? "open" : "closed"}
         open={open && confirming}
         pending={mutation.isPending}

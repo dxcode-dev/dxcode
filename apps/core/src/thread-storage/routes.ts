@@ -7,6 +7,7 @@ import {
 import { attachmentTransfer } from "../attachments/transfer.js";
 import type { AppEnv } from "../http/types.js";
 import { threadStorageLogger } from "../logging.js";
+import { mayReadOrbContents } from "../thread-sharing/access.js";
 import {
   findThreadStorageFile,
   isReadableThreadStorageFile,
@@ -16,6 +17,12 @@ import {
 } from "./store.js";
 
 const LIST_LIMIT = 200;
+
+/**
+ * Work a read-only Orb restart rescued (`restoreUnsavedWork` names it): a
+ * copy of the Orb's uncommitted files, which can hold an untracked `.env`.
+ */
+const RESCUED_WORK_NAME = /^dx-recovered-[0-9T-]+\.tar\.gz$/;
 
 const refuse = (context: Context<AppEnv>, error: string, status: 404 | 503) => {
   context.header("Cache-Control", "no-store");
@@ -43,7 +50,9 @@ const handle =
 /**
  * Reading a Thread's storage, mounted at `/v1/threads` behind
  * `authorizeThread`: whoever can read the Thread, its owner or a member it is
- * shared with, reads its files. Nothing here needs the Thread's Orb or its
+ * shared with, reads the files its agent shared. Listing them, and the work a
+ * read-only restart rescued, are Orb contents: `authorizeThread` refuses the
+ * list, and this route the rescued work, to a View-only member. Nothing here needs the Thread's Orb or its
  * execution object, so a file stays readable after the Orb sleeps, stops, or
  * is destroyed, and while the Thread is archived. There is no write route:
  * only the Thread's own dxd writes, through the daemon ingress.
@@ -91,6 +100,16 @@ export const threadStorageRoutes = new Hono<AppEnv>()
         row.thread_id !== context.req.param("threadId")
       )
         return refuse(context, "File not found.", 404);
+      if (
+        RESCUED_WORK_NAME.test(row.name) &&
+        !mayReadOrbContents(context.get("threadAccess"))
+      ) {
+        context.header("Cache-Control", "no-store");
+        return context.json<ThreadStorageError>(
+          { error: "Only contributors can open the Orb's rescued work." },
+          403,
+        );
+      }
       // The bytes come straight from R2; Core only authorizes and signs.
       const location = await transfer.readUrl(
         row.object_key,

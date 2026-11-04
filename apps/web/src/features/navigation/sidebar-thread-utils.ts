@@ -1,4 +1,9 @@
-import type { ProjectData, ThreadData } from "@dx/api";
+import type {
+  ProjectData,
+  SidebarGrouping,
+  SidebarOrder,
+  ThreadData,
+} from "@dx/api";
 import {
   PROJECTLESS_PROJECT_NAME,
   type ProjectId,
@@ -42,6 +47,9 @@ const PENDING_PROJECTLESS_ID = "prj_pending-no-project" as ProjectId;
  * Project per scope (personal, and each workspace they joined).
  */
 const NO_PROJECT_SECTION_ID = "no-project";
+
+/** The one section a One List Sidebar Layout shows below Pinned. */
+const ONE_LIST_SECTION_ID = "threads";
 
 /**
  * The listed Threads plus those this browser is still creating. A pending
@@ -112,6 +120,11 @@ const byActivity = (left: ThreadData, right: ThreadData) =>
   right.lastActivityAt.epochMilliseconds -
     left.lastActivityAt.epochMilliseconds || right.id.localeCompare(left.id);
 
+/** The newest Thread first. */
+const byCreation = (left: ThreadData, right: ThreadData) =>
+  right.createdAt.epochMilliseconds - left.createdAt.epochMilliseconds ||
+  right.id.localeCompare(left.id);
+
 const byPin = (left: ThreadData, right: ThreadData) =>
   (right.pinnedAt?.epochMilliseconds ?? 0) -
     (left.pinnedAt?.epochMilliseconds ?? 0) || byActivity(left, right);
@@ -157,6 +170,11 @@ export const nextSnoozeWake = (
  *
  * `archiveAvailable`, true for a signed-in person, keeps Snoozed and
  * Archived listed while empty.
+ *
+ * `arrangement` is the person's Sidebar Layout and Order. One List puts the
+ * Threads every Project section would hold in one section without a heading,
+ * and Inactive's without Project subheaders. The order sorts the Threads
+ * within each section, except Pinned (by pin) and Snoozed (by wake).
  */
 export function buildThreadSections(
   projects: ReadonlyArray<ProjectData>,
@@ -165,7 +183,12 @@ export function buildThreadSections(
   archiveAvailable = false,
   sharedThreads: ReadonlyArray<ThreadData> = [],
   projectsComplete = true,
+  arrangement: {
+    readonly grouping: SidebarGrouping;
+    readonly order: SidebarOrder;
+  } = { grouping: "project", order: "activity" },
 ): ReadonlyArray<ThreadSection> {
+  const oneList = arrangement.grouping === "list";
   const projectNames = new Map<string, string>(
     sharedThreads.flatMap((thread) =>
       thread.projectName === undefined
@@ -184,7 +207,7 @@ export function buildThreadSections(
   for (const thread of [
     ...threads,
     ...sharedThreads.filter(({ id }) => !owned.has(id)),
-  ].toSorted(byActivity)) {
+  ].toSorted(arrangement.order === "created" ? byCreation : byActivity)) {
     if (thread.lifecycleState === "archived") {
       archived.push(thread);
     } else if (thread.lifecycleState === "active") {
@@ -200,9 +223,11 @@ export function buildThreadSections(
       ) {
         inactive.push(thread);
       } else {
-        const key = thread.projectless
-          ? NO_PROJECT_SECTION_ID
-          : thread.projectId;
+        const key = oneList
+          ? ONE_LIST_SECTION_ID
+          : thread.projectless
+            ? NO_PROJECT_SECTION_ID
+            : thread.projectId;
         const group = groups.get(key) ?? [];
         group.push(thread);
         groups.set(key, group);
@@ -215,7 +240,7 @@ export function buildThreadSections(
     id === NO_PROJECT_SECTION_ID
       ? PROJECTLESS_PROJECT_NAME
       : projectNames.get(id);
-  // Inactive groups by Project, the most recently active Project first.
+  // Inactive groups by Project, the Project of its first Thread first.
   const inactiveByProject = new Map<string, Array<ThreadData>>();
   for (const thread of inactive) {
     const key = thread.projectless ? NO_PROJECT_SECTION_ID : thread.projectId;
@@ -237,6 +262,7 @@ export function buildThreadSections(
   return [
     ...(pinned.length === 0 ? [] : [{ id: "pinned", threads: pinned }]),
     ...Array.from(groups, ([id, groupedThreads]): ThreadSection => {
+      if (id === ONE_LIST_SECTION_ID) return { id, threads: groupedThreads };
       const name = nameOf(id);
       if (name !== undefined)
         return { id, label: name, project: true, threads: groupedThreads };
@@ -263,8 +289,12 @@ export function buildThreadSections(
           {
             id: "inactive",
             label: "Inactive Last 72h",
-            threads: inactiveGroups.flatMap(({ threads }) => threads),
-            groups: inactiveGroups,
+            ...(oneList
+              ? { threads: inactive }
+              : {
+                  threads: inactiveGroups.flatMap(({ threads }) => threads),
+                  groups: inactiveGroups,
+                }),
           },
         ]),
     // Snoozed stays listed, at 0, wherever a Thread can be snoozed.

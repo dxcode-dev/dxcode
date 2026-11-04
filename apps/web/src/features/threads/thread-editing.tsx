@@ -3,7 +3,6 @@ import type { ThreadData } from "@dx/api";
 import { THREAD_TITLE_MAX_LENGTH } from "@dx/domain";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
-import { LoaderCircle, Trash2 } from "lucide-react";
 import * as React from "react";
 import { toast } from "sonner";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
@@ -12,6 +11,7 @@ import {
   type ThreadEditingController,
 } from "../../shared/thread-editing.js";
 import { Button } from "../../shared/ui/button.js";
+import { LazyConfirmDialog } from "../../shared/ui/lazy-confirm-dialog.js";
 import {
   ModalSurface,
   ModalSurfaceClose,
@@ -183,7 +183,6 @@ function DeleteThreadDialog({
   const remove = useMutation(
     deleteThreadMutationOptions(queryClient, identity.id),
   );
-  const cancel = React.useRef<HTMLButtonElement>(null);
   const family = thread.children > 0;
   const confirm = () =>
     remove.mutate(
@@ -214,63 +213,27 @@ function DeleteThreadDialog({
           ? "The threads could not be deleted."
           : "The thread could not be deleted.";
   return (
-    <Dialog.Root
+    <LazyConfirmDialog
       open
-      onOpenChange={(open) =>
-        open || remove.isPending ? undefined : onClose()
+      onOpenChange={(open) => (open ? undefined : onClose())}
+      title={
+        family ? `Delete ${thread.children + 1} Threads?` : "Delete Thread?"
       }
-    >
-      <ModalSurface
-        className="delete-thread-dialog"
-        ariaLabel={family ? "Delete threads" : "Delete thread"}
-        initialFocus={cancel}
-      >
-        <ModalSurfaceHeader>
-          <Dialog.Title className="delete-thread-dialog-title">
-            {family
-              ? `Delete ${thread.children + 1} Threads?`
-              : "Delete Thread?"}
-          </Dialog.Title>
-          <ModalSurfaceClose />
-        </ModalSurfaceHeader>
-        <div className="delete-thread-dialog-body">
-          <Dialog.Description>
-            <span className="delete-thread-dialog-name">
-              &ldquo;{thread.title}&rdquo;
-            </span>{" "}
-            {family
-              ? `and its ${thread.children} ${thread.children === 1 ? "subthread" : "subthreads"} will be permanently deleted, with their conversation histories and sandboxes.`
-              : "will be permanently deleted, with its conversation history and sandbox."}
-          </Dialog.Description>
-          {error === undefined ? null : (
-            <div className="notice error-notice" role="alert">
-              {error}
-            </div>
-          )}
-          <Button
-            type="button"
-            variant="destructive"
-            disabled={remove.isPending}
-            onClick={confirm}
-          >
-            {remove.isPending ? (
-              <LoaderCircle className="spin" aria-hidden="true" />
-            ) : (
-              <Trash2 aria-hidden="true" />
-            )}
-            {remove.isPending ? "Deleting…" : "Delete"}
-          </Button>
-          <Button
-            ref={cancel}
-            type="button"
-            variant="outline"
-            disabled={remove.isPending}
-            onClick={onClose}
-          >
-            Cancel
-          </Button>
-        </div>
-      </ModalSurface>
-    </Dialog.Root>
+      description={
+        <>
+          <span className="delete-thread-dialog-name">
+            &ldquo;{thread.title}&rdquo;
+          </span>{" "}
+          {family
+            ? `and its ${thread.children} ${thread.children === 1 ? "subthread" : "subthreads"} will be permanently deleted, with their conversation histories and sandboxes.`
+            : "will be permanently deleted, with its conversation history and sandbox."}
+        </>
+      }
+      error={error}
+      confirmLabel={remove.isPending ? "Deleting…" : "Delete"}
+      destructive
+      pending={remove.isPending}
+      onConfirm={confirm}
+    />
   );
 }

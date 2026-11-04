@@ -1,18 +1,7 @@
 import type { ThreadId } from "@dx/domain";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle, Power } from "lucide-react";
 import { toast } from "sonner";
-import { Button } from "../../../shared/ui/button.js";
-import {
-  DialogDescription,
-  DialogRoot,
-  DialogTitle,
-} from "../../../shared/ui/dialog.js";
-import {
-  ModalSurface,
-  ModalSurfaceClose,
-  ModalSurfaceHeader,
-} from "../../../shared/ui/modal-surface.js";
+import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
 import {
   lastSaveOf,
   restartOrbMutationOptions,
@@ -57,76 +46,45 @@ export function RestartOrbDialog({
       },
     });
   return (
-    <DialogRoot
+    <ConfirmDialog
       open
-      onOpenChange={(next) =>
-        next || restart.isPending ? undefined : onClose()
+      onOpenChange={(next) => (next ? undefined : onClose())}
+      title={
+        lastSave === undefined
+          ? "Restart the Orb?"
+          : "Restart the Orb from its last save?"
       }
-    >
-      <ModalSurface className="restart-orb-dialog" ariaLabel="Restart Orb">
-        <ModalSurfaceHeader>
-          <DialogTitle className="delete-scope-dialog-title">
-            {lastSave === undefined
-              ? "Restart the Orb?"
-              : "Restart the Orb from its last save?"}
-          </DialogTitle>
-          <ModalSurfaceClose />
-        </ModalSurfaceHeader>
-        <div className="delete-scope-dialog-body">
-          {lastSave === undefined ? (
-            <DialogDescription>
-              dx saves the Orb and starts it again. Its files are kept. Running
-              processes, such as dev servers, tests, and the Terminal's
-              commands, stop.
-            </DialogDescription>
-          ) : (
-            <DialogDescription>
-              dx couldn't save the Orb's files, so it didn't restart it. Its
-              disk may be full. It can start again from its last save, made{" "}
-              {savedTime.format(lastSave)}. Everything that changed since is
-              lost. Before that, dx tries to copy the checkout's uncommitted
-              changes, untracked files, and unpushed commits into
-              ~/dx-recovered/ and the Thread's storage.
-            </DialogDescription>
-          )}
-          {restart.isError && lastSave === undefined ? (
-            <div className="notice error-notice" role="alert">
-              {restart.error instanceof Error && restart.error.message !== ""
-                ? restart.error.message
-                : "The Orb could not be restarted."}
-            </div>
-          ) : null}
-          <footer>
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              disabled={restart.isPending}
-              onClick={onClose}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              size="xs"
-              variant={lastSave === undefined ? "default" : "destructive"}
-              disabled={restart.isPending}
-              onClick={() => confirm(lastSave !== undefined)}
-            >
-              {restart.isPending ? (
-                <LoaderCircle className="spin" aria-hidden="true" />
-              ) : (
-                <Power aria-hidden="true" />
-              )}
-              {restart.isPending
-                ? "Restarting…"
-                : lastSave === undefined
-                  ? "Restart Orb"
-                  : "Restart From Last Save"}
-            </Button>
-          </footer>
-        </div>
-      </ModalSurface>
-    </DialogRoot>
+      description={
+        lastSave === undefined ? (
+          "dx saves the Orb and starts it again. Its files are kept. Running processes, such as dev servers, tests, and the Terminal's commands, stop."
+        ) : (
+          <>
+            dx couldn't save the Orb's files, so it didn't restart it. Its disk
+            may be full. It can start again from its last save, made{" "}
+            {savedTime.format(lastSave)}. Everything that changed since is lost.
+            Before that, dx tries to copy the checkout's uncommitted changes,
+            untracked files, and unpushed commits into ~/dx-recovered/ and the
+            Thread's storage.
+          </>
+        )
+      }
+      error={
+        restart.isError && lastSave === undefined
+          ? restart.error instanceof Error && restart.error.message !== ""
+            ? restart.error.message
+            : "The Orb could not be restarted."
+          : undefined
+      }
+      confirmLabel={
+        restart.isPending
+          ? "Restarting…"
+          : lastSave === undefined
+            ? "Restart Orb"
+            : "Restart From Last Save"
+      }
+      destructive={lastSave !== undefined}
+      pending={restart.isPending}
+      onConfirm={() => confirm(lastSave !== undefined)}
+    />
   );
 }

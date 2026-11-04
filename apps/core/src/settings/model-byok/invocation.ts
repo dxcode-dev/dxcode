@@ -575,6 +575,17 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     return pin;
   }
 
+  /** Read at the primary, after the liveness check refused the Thread. */
+  async #threadArchived(threadId: string, ownerUserId: string) {
+    const row = await this.#db()
+      .prepare(
+        "SELECT 1 AS archived FROM threads WHERE id = ? AND owner_user_id = ? AND lifecycle_state = 'archived'",
+      )
+      .bind(threadId, ownerUserId)
+      .first();
+    return row !== null;
+  }
+
   async #renewPin(submissionId: string, expiresAt: number) {
     if (expiresAt - Date.now() >= SUBMISSION_ROUTE_RETENTION_MS / 2) return;
     await this.ctx.blockConcurrencyWhile(async () => {
@@ -824,6 +835,10 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     atPrimary.catch(() => undefined);
     const confirmed = async () => {
       if (await atPrimary) return;
+      // An archived Thread keeps its connection: it is refused for what it
+      // is, and keeps the token for when it is restored (#1668).
+      if (await this.#threadArchived(threadId, pin.ownerUserId))
+        throw new Error("THREAD_ARCHIVED");
       await this.ctx.blockConcurrencyWhile(async () => {
         const current = await this.#readPin(submissionId);
         if (
@@ -901,16 +916,19 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
           try {
             await live;
             confirmed = true;
-          } catch {
+          } catch (error) {
             await reader.cancel().catch(() => undefined);
+            const code =
+              error instanceof Error && error.message === "THREAD_ARCHIVED"
+                ? "THREAD_ARCHIVED"
+                : "CONNECTION_REMOVED";
             // An account failure: Flue settles the turn instead of retrying.
             controller.error(
               new Error(
                 markRunFailure({
                   class: "account",
-                  code: "CONNECTION_REMOVED",
-                  message:
-                    "The model connection was deleted or is no longer accessible.",
+                  code,
+                  message: LIVENESS_FAILURE_MESSAGES[code],
                   retryable: false,
                 }),
               ),
@@ -1999,14 +2017,8 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       return jsonResponse(
         {
           code,
-          ...(code === "CONNECTION_REMOVED"
-            ? {
-                error: {
-                  message:
-                    "The model connection was deleted or is no longer accessible.",
-                  code,
-                },
-              }
+          ...(code === "CONNECTION_REMOVED" || code === "THREAD_ARCHIVED"
+            ? { error: { code, message: LIVENESS_FAILURE_MESSAGES[code] } }
             : {}),
         },
         permanent ? 400 : 502,
@@ -2017,6 +2029,13 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
 
 class ClaudePlanLimitReached extends Error {}
 
+/** Why a Thread's request was refused after it was admitted. */
+const LIVENESS_FAILURE_MESSAGES = {
+  CONNECTION_REMOVED:
+    "The model connection was deleted or is no longer accessible.",
+  THREAD_ARCHIVED: "This Thread is archived. Restore it to continue.",
+} as const;
+
 const PERMANENT_FAILURE_CODES = new Set([
   "ENDPOINT_NOT_ALLOWED",
   "WORKSPACE_MEMBERSHIP_INVALID",
@@ -2024,6 +2043,7 @@ const PERMANENT_FAILURE_CODES = new Set([
   "SUBMISSION_ROUTE_UNAVAILABLE",
   "SUBMISSION_MODEL_MISMATCH",
   "CONNECTION_REMOVED",
+  "THREAD_ARCHIVED",
   "THREAD_ROUTE_NOT_FOUND",
   "MODEL_NOT_SERVED",
   "ENDPOINT_REDIRECT",

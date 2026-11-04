@@ -21,6 +21,7 @@ import { Button } from "../../shared/ui/button.js";
 import { NeedsYouInbox } from "./needs-you-inbox.js";
 import { NotificationInbox } from "./notification-inbox.js";
 import { SidebarAccountMenu } from "./sidebar-account-menu.js";
+import { SidebarAccountMenuSlot } from "./sidebar-account-menu-slot.js";
 import { SidebarArchive } from "./sidebar-archive.js";
 import { ProjectsIcon } from "./sidebar-icons.js";
 import {
@@ -322,6 +323,7 @@ function AppSidebarContent({
     archiveAvailable,
     sharedThreads,
     projectsComplete,
+    layout,
   );
 
   return (
@@ -449,11 +451,20 @@ function AppSidebarContent({
       </nav>
 
       <AppUpdateRow />
-      <SidebarAccountMenu
-        personalAccount={personalAccount}
-        settingsContext={settingsContext}
-        onNavigate={onNavigate}
-      />
+      {userId === undefined ? (
+        <SidebarAccountMenu
+          personalAccount={personalAccount}
+          settingsContext={settingsContext}
+          onNavigate={onNavigate}
+        />
+      ) : (
+        <SidebarAccountMenuSlot
+          userId={userId}
+          personalAccount={personalAccount}
+          settingsContext={settingsContext}
+          onNavigate={onNavigate}
+        />
+      )}
       {preview === undefined || userId === undefined ? null : (
         <ThreadHoverPreview
           key={preview.thread.id}

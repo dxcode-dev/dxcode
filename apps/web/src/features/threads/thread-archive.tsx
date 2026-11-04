@@ -1,7 +1,7 @@
 import type { ThreadId } from "@dx/domain";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Archive, ArchiveRestore } from "lucide-react";
-import type * as React from "react";
+import * as React from "react";
 import { toast } from "sonner";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import {
@@ -12,6 +12,14 @@ import {
   setThreadArchivedMutationOptions,
   setThreadsArchivedMutationOptions,
 } from "./thread-mutations.js";
+import { threadSeenWorking } from "./thread-queries.js";
+
+/** "Stop and archive?", loaded the first time a working Thread is archived. */
+const ConfirmDialog = React.lazy(() =>
+  import("../../shared/ui/confirm-dialog.js").then((module) => ({
+    default: module.ConfirmDialog,
+  })),
+);
 
 /** One toast at a time: each notice replaces the one before it. */
 const ARCHIVE_TOAST_ID = "thread-archive";
@@ -33,6 +41,21 @@ export function ThreadArchiveProvider({
     setThreadsArchivedMutationOptions(queryClient, identity.id),
   );
   const archiveManyAsync = bulk.mutateAsync;
+  /** An archive that waits for the person to confirm stopping work. */
+  const [confirming, setConfirming] = React.useState<
+    { readonly working: number; readonly archive: () => void } | undefined
+  >();
+  /** Asks first when any of these Threads is working; otherwise archives. */
+  const archiveAfterAsking = (
+    threadIds: ReadonlyArray<ThreadId>,
+    archive: () => void,
+  ) => {
+    const working = threadIds.filter((threadId) =>
+      threadSeenWorking(queryClient, identity.id, threadId),
+    ).length;
+    if (working === 0) archive();
+    else setConfirming({ working, archive });
+  };
 
   /**
    * The Thread changes on the page at once, so the notice shows at once too;
@@ -112,7 +135,12 @@ export function ThreadArchiveProvider({
     threadId: ThreadId,
     archived: boolean,
     includeChildren = false,
-  ) => changeArchived(threadId, archived, includeChildren ? true : undefined);
+  ) => {
+    const change = () =>
+      changeArchived(threadId, archived, includeChildren ? true : undefined);
+    if (archived) archiveAfterAsking([threadId], change);
+    else change();
+  };
 
   /** Archives many at once, or with `archived` false restores them. */
   const changeManyArchived = (
@@ -167,7 +195,8 @@ export function ThreadArchiveProvider({
 
   const controller: ThreadArchiveController = {
     setArchived,
-    archiveMany: (threadIds) => changeManyArchived(threadIds, true),
+    archiveMany: (threadIds) =>
+      archiveAfterAsking(threadIds, () => changeManyArchived(threadIds, true)),
     pendingThreadId: isPending ? variables.threadId : undefined,
     pendingArchived: isPending ? variables.archived : undefined,
   };
@@ -175,6 +204,28 @@ export function ThreadArchiveProvider({
   return (
     <ThreadArchiveContext.Provider value={controller}>
       {children}
+      {confirming === undefined ? null : (
+        <React.Suspense fallback={null}>
+          <ConfirmDialog
+            open
+            onOpenChange={(open) => {
+              if (!open) setConfirming(undefined);
+            }}
+            title="Stop and archive?"
+            description={
+              confirming.working > 1
+                ? `${confirming.working} of these threads are still working. Archiving stops their turns and any queued messages.`
+                : "This thread is still working. Archiving stops its turn and any queued messages."
+            }
+            confirmLabel="Stop and archive"
+            destructive
+            onConfirm={() => {
+              confirming.archive();
+              setConfirming(undefined);
+            }}
+          />
+        </React.Suspense>
+      )}
     </ThreadArchiveContext.Provider>
   );
 }

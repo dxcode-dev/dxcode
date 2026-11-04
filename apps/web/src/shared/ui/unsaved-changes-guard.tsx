@@ -1,11 +1,5 @@
 import { useBlocker } from "@tanstack/react-router";
-import { Button } from "./button.js";
-import {
-  DialogContent,
-  DialogDescription,
-  DialogRoot,
-  DialogTitle,
-} from "./dialog.js";
+import { ConfirmDialog } from "./confirm-dialog.js";
 
 interface GuardedLocation {
   readonly pathname: string;
@@ -40,42 +34,20 @@ export function UnsavedChangesGuard({
   if (blocker.status !== "blocked") return null;
 
   return (
-    <DialogRoot
+    <ConfirmDialog
       open
       onOpenChange={(open) => {
         if (!open) blocker.reset();
       }}
-    >
-      <DialogContent>
-        <div className="dialog-form">
-          <div>
-            <DialogTitle>Discard unsaved changes?</DialogTitle>
-            <DialogDescription>
-              Changes on this settings page have not been saved.
-            </DialogDescription>
-          </div>
-          <div className="dialog-actions">
-            <Button
-              size="sm"
-              variant="outline"
-              autoFocus
-              onClick={blocker.reset}
-            >
-              Stay on page
-            </Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={() => {
-                onDiscard();
-                blocker.proceed();
-              }}
-            >
-              Discard and leave
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </DialogRoot>
+      title="Discard unsaved changes?"
+      description="Changes on this settings page have not been saved."
+      cancelLabel="Stay on page"
+      confirmLabel="Discard and leave"
+      destructive
+      onConfirm={() => {
+        onDiscard();
+        blocker.proceed();
+      }}
+    />
   );
 }

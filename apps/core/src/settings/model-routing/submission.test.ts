@@ -1,6 +1,9 @@
 import type { StoredModelConnection } from "@dx/domain";
 import { type Model, normalizeContext, type Tool } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
+import { streamSimple as streamResponses } from "@earendil-works/pi-ai/api/openai-responses";
+import { toJsonSchema } from "@valibot/to-json-schema";
+import * as v from "valibot";
 import { describe, expect, it } from "vitest";
 import { connectionModel, withEffectiveContextWindow } from "./submission.js";
 
@@ -179,7 +182,67 @@ describe("connectionModel", () => {
       [{ type: "adaptive", display: "summarized" }, { effort: "medium" }],
     ]);
   });
+
+  // The Responses API treats a tool without `strict` as strict, which makes
+  // every property required: GPT then fills each optional dx field with a
+  // placeholder, so "markdown or edits" tools fail on every call (#1733).
+  it("sends dx tools to GPT through a Copilot subscription as non-strict", async () => {
+    const input = v.object({
+      action: v.picklist(["create", "update"]),
+      markdown: v.optional(v.string()),
+      edits: v.optional(
+        v.pipe(
+          v.array(v.object({ old_str: v.string(), new_str: v.string() })),
+          v.minLength(1),
+        ),
+      ),
+    });
+    const { $schema: _schema, ...parameters } = toJsonSchema(input);
+    const model = connectionModel(
+      connection("subscription"),
+      "openai/gpt-6.1-sol",
+    );
+    expect(model.api).toBe("openai-responses");
+    const bodies: ResponsesBody[] = [];
+    const events = streamResponses(
+      model as Model<"openai-responses">,
+      normalizeContext({
+        systemPrompt: "Be terse.",
+        tools: [
+          {
+            name: "artifact",
+            description: "Create or update an artifact",
+            parameters: parameters as unknown as Tool["parameters"],
+          },
+        ],
+        messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+      }),
+      {
+        apiKey: "copilot-token",
+        maxRetries: 0,
+        fetch: async (_url, init) => {
+          bodies.push(JSON.parse(String(init?.body)));
+          return new Response("{}", { status: 400 });
+        },
+      },
+    );
+    for await (const _event of events);
+
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]?.tools).toEqual([
+      expect.objectContaining({
+        type: "function",
+        name: "artifact",
+        strict: false,
+        parameters: expect.objectContaining({ required: ["action"] }),
+      }),
+    ]);
+  });
 });
+
+interface ResponsesBody {
+  readonly tools?: ReadonlyArray<Record<string, unknown>>;
+}
 
 interface AnthropicBody {
   readonly messages: ReadonlyArray<{ readonly role: string }>;

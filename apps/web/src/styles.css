@@ -7221,62 +7221,15 @@ span.usage-day-toggle {
 .new-thread-dialog {
   min-height: 209px;
 }
-.delete-thread-dialog {
-  width: min(400px, 100%);
-}
-.delete-thread-dialog .modal-surface-header {
-  height: auto;
-  padding: 18px 14px 0 22px;
-}
-.delete-thread-dialog-title {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  line-height: 22px;
-}
-.delete-thread-dialog-body {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 6px 22px 22px;
-}
-.delete-thread-dialog-body p {
-  margin: 0 0 8px;
-  color: var(--muted-foreground);
-  font-size: 13px;
-  line-height: 19px;
-  overflow-wrap: anywhere;
-}
 .delete-thread-dialog-name {
   color: var(--foreground);
 }
 /* Deleting a workspace or project: what happens to its Threads, then the
-   typed name. Laid out like the delete-thread dialog. */
-.delete-scope-dialog {
-  width: min(440px, 100%);
-}
-.delete-scope-dialog .modal-surface-header {
-  height: auto;
-  padding: 18px 14px 0 22px;
-}
-.delete-scope-dialog-title {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  line-height: 22px;
-  overflow-wrap: anywhere;
-}
-.delete-scope-dialog-body {
-  display: flex;
-  flex-direction: column;
+   typed name, inside ConfirmDialog. */
+.delete-scope-form {
+  display: grid;
   gap: 12px;
-  padding: 6px 22px 22px;
-}
-.delete-scope-dialog-body > p {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: 13px;
-  line-height: 19px;
+  min-width: 0;
 }
 .delete-scope-choices {
   display: grid;
@@ -7289,7 +7242,6 @@ span.usage-day-toggle {
 .delete-scope-choices > legend {
   margin-bottom: 8px;
   padding: 0;
-  font-size: 12px;
   font-weight: 500;
 }
 .delete-scope-choices > label {
@@ -7297,31 +7249,18 @@ span.usage-day-toggle {
   align-items: flex-start;
   gap: 8px;
   color: var(--foreground);
-  font-size: 13px;
-  line-height: 18px;
   cursor: pointer;
 }
 .delete-scope-choices input {
   flex: none;
-  margin: 3px 0 0;
+  margin: 1px 0 0;
   accent-color: var(--foreground);
 }
 .delete-scope-confirm {
-  margin-top: 2px;
-  font-size: 12px;
   overflow-wrap: anywhere;
 }
-.delete-scope-dialog-body > input {
+.delete-scope-form > input {
   margin-top: -6px;
-}
-.delete-scope-dialog-body .notice {
-  margin: 0;
-}
-.delete-scope-dialog-body > footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 4px;
 }
 .rename-thread-dialog {
   width: min(560px, 100%);

@@ -12,6 +12,7 @@ import desktopStart from "../../../../../deploy/orb/desktop/start?raw";
 import desktopStop from "../../../../../deploy/orb/desktop/stop?raw";
 import orbHostname from "../../../../../deploy/orb/dx-orb-hostname.sh?raw";
 import orbInit from "../../../../../deploy/orb/dx-orb-init?raw";
+import orbOpenFiles from "../../../../../deploy/orb/dx-orb-open-files.sh?raw";
 import orbTmuxConfig from "../../../../../deploy/orb/tmux.conf?raw";
 import terminalStub from "../../../../dxd/assets/dx-terminal-stub.sh?raw";
 import { sourceAssetsTemplateCommands } from "../../source-control/workspace-assets.js";
@@ -30,6 +31,7 @@ const COPIED_FILES: Readonly<Record<string, string>> = {
   "apps/dxd/assets/dx-terminal-stub.sh": terminalStub,
   "deploy/orb/dx-orb-init": orbInit,
   "deploy/orb/dx-orb-hostname.sh": orbHostname,
+  "deploy/orb/dx-orb-open-files.sh": orbOpenFiles,
   "deploy/orb/tmux.conf": orbTmuxConfig,
   "deploy/orb/desktop/start": desktopStart,
   "deploy/orb/desktop/stop": desktopStop,

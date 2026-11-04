@@ -795,7 +795,7 @@ describe("ThreadSession panes", () => {
     await React.act(() => root.unmount());
   });
 
-  it("gives a View-only member of a shared Thread no composer, Terminal, or Share", async () => {
+  it("gives a View-only member of a shared Thread no composer, Orb views, or Share", async () => {
     viewport.mobile = false;
     vi.stubGlobal(
       "ResizeObserver",
@@ -837,11 +837,18 @@ describe("ThreadSession panes", () => {
       ),
     ).toBe(false);
 
-    await openView(container, "Terminal");
-    expect(
-      container.querySelector('[role="tabpanel"][aria-label="Terminal"]')
-        ?.textContent,
-    ).toContain("Only contributors can use the terminal");
+    // The Orb's files, Terminal, Portals, and Desktop can hold secrets: the
+    // Views menu offers only Changes.
+    await click(container.querySelector('[aria-label="Views"]'));
+    const offered = [
+      ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    ].map((item) => item.textContent ?? "");
+    expect(offered.some((label) => label.includes("Changes"))).toBe(true);
+    for (const view of ["Files", "Terminal", "Portal", "Desktop"])
+      expect(
+        offered.some((label) => label.includes(view)),
+        view,
+      ).toBe(false);
     expect(Terminal).not.toHaveBeenCalled();
     await React.act(() => root.unmount());
   });

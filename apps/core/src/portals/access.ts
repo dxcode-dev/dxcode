@@ -13,6 +13,7 @@ import { Principal, type ThreadId } from "@dx/domain";
 import { Effect, Option, Schema } from "effect";
 import { authorizeThreadRequest } from "../auth/authorize-thread.js";
 import { readSessionExpiry } from "../auth/session-sockets.js";
+import { mayReadOrbContents } from "../thread-sharing/access.js";
 import type { PortalSession } from "./session.js";
 
 export type PortalAccess = "allowed" | "not-found" | "read-only" | "archived";
@@ -31,7 +32,7 @@ export const evaluatePortalAccess = async (
     authorizeThreadRequest(threadId, principal.value, db),
   );
   if (!result.authorized) return "not-found";
-  if (result.access === "view") return "read-only";
+  if (!mayReadOrbContents(result.access ?? "owner")) return "read-only";
   if (result.lifecycleState !== "active") return "archived";
   return "allowed";
 };

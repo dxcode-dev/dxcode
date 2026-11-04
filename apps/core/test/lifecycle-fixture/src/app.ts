@@ -83,6 +83,12 @@ const scenarioResponses = {
     }),
     fauxAssistantMessage("after-stop-complete"),
   ],
+  "archive-queue": () => [
+    fauxAssistantMessage([fauxToolCall("bash", { command: "hold-turn" })], {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage("after-restore-complete"),
+  ],
   "stop-deaf": () => [
     fauxAssistantMessage([fauxToolCall("bash", { command: "deaf-hold" })], {
       stopReason: "toolUse",
@@ -137,6 +143,17 @@ const threadRoutes = createThreadRoutes(
   },
   // The reference lifecycle makes no model calls beyond its faux provider.
   async () => undefined,
+  undefined,
+  undefined,
+  // Archiving stops the fixture's agent, as it stops DxAgent in Core.
+  async (threadId, env) => {
+    const response = await createAgentRouter(FixtureLifecycleAgent).request(
+      `/${threadId}/abort`,
+      { method: "POST" },
+      env,
+    );
+    if (!response.ok) throw new Error(`Abort failed (${response.status}).`);
+  },
 );
 const app = new Hono<AppEnv>();
 app.use("*", async (context, next) => {

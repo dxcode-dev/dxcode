@@ -2,6 +2,7 @@ import { Menu } from "@base-ui/react/menu";
 import type { PersonalAccountData, SettingsContextData } from "@dx/api";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import {
+  Bug,
   Building2,
   ChevronsUpDown,
   Command,
@@ -18,10 +19,13 @@ import { settingsNavigationState } from "../../shared/navigation/settings-return
 export function SidebarAccountMenu({
   personalAccount,
   settingsContext,
+  bugReportReader = false,
   onNavigate,
 }: {
   readonly personalAccount?: PersonalAccountData;
   readonly settingsContext?: SettingsContextData;
+  /** One of the deployment's report readers, who see every report. */
+  readonly bugReportReader?: boolean;
   readonly onNavigate: () => void;
 }) {
   const auth = useIdentity();
@@ -95,6 +99,17 @@ export function SidebarAccountMenu({
                 <span className="sidebar-menu-label">Command Palette</span>
                 <ShortcutKeycaps keycaps={commandSurfaces.paletteKeycaps} />
               </Menu.Item>
+              {bugReportReader ? (
+                <Menu.Item
+                  className="sidebar-menu-item"
+                  onClick={() => {
+                    onNavigate();
+                    void navigate({ to: "/bug-reports/all" });
+                  }}
+                >
+                  <Bug /> All Bug Reports
+                </Menu.Item>
+              ) : null}
               {workspace === undefined ? null : (
                 <Menu.Item
                   className="sidebar-menu-item"

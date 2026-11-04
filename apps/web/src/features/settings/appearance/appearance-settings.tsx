@@ -20,6 +20,7 @@ import {
 } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
 import { CodeFontSettings } from "./code-font-settings.js";
+import { SidebarSettings } from "./sidebar-settings.js";
 
 /** One row that chooses one stored appearance value from its options. */
 type ChoiceField = {
@@ -105,6 +106,8 @@ export function AppearanceSettings(_props: SettingsSectionProps) {
           options={threadWidthOptions}
         />
       </SettingsCard>
+
+      <SidebarSettings />
 
       <SettingsCard title="Terminal">
         <PreferenceRow

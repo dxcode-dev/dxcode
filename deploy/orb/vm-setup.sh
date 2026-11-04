@@ -9,7 +9,7 @@
 #   vm-setup.sh <files-directory> <state-directory>
 #
 # The files directory holds dx-terminal.sh, dx-orb-init, dx-orb-hostname.sh,
-# and tmux.conf. The state directory receives `status` (running, done, or
+# dx-orb-open-files.sh, and tmux.conf. The state directory receives `status` (running, done, or
 # failed) and this script's log is the caller's to keep.
 #
 # Keep each step in step with the Dockerfile: the same packages, the same
@@ -70,6 +70,7 @@ ln -sfn /opt/dx/bin/tmux /usr/local/bin/tmux
 install -o root -g root -m 0644 "$files/dx-terminal.sh" /etc/profile.d/dx-terminal.sh
 install -o root -g root -m 0755 "$files/dx-orb-init" /usr/local/bin/dx-orb-init
 install -o root -g root -m 0644 "$files/dx-orb-hostname.sh" /etc/profile.d/dx-orb-hostname.sh
+install -o root -g root -m 0644 "$files/dx-orb-open-files.sh" /etc/profile.d/dx-orb-open-files.sh
 install -o root -g root -m 0644 "$files/tmux.conf" /opt/dx/share/tmux.conf
 chown -R root:root /opt/dx
 ln -sfn /home/user/.local/state/dxd/bin/dxd /usr/local/bin/dxd

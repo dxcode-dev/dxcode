@@ -12,7 +12,9 @@ import { scheduleUserInvalidation } from "../realtime/publication.js";
 import {
   readSidebarLayout,
   writeSidebarCollapsed,
+  writeSidebarGrouping,
   writeSidebarLayoutEntry,
+  writeSidebarOrder,
   writeSidebarWidth,
 } from "./repository.js";
 
@@ -82,11 +84,23 @@ export const sidebarLayoutRoutes = new Hono<AppEnv>()
           }),
           400,
         );
-      if (entry.value.kind === "width")
-        await writeSidebarWidth(db, userId, entry.value.width);
-      else if (entry.value.kind === "collapsed")
-        await writeSidebarCollapsed(db, userId, entry.value.collapsed);
-      else await writeSidebarLayoutEntry(db, userId, entry.value);
+      const update = entry.value;
+      switch (update.kind) {
+        case "width":
+          await writeSidebarWidth(db, userId, update.width);
+          break;
+        case "collapsed":
+          await writeSidebarCollapsed(db, userId, update.collapsed);
+          break;
+        case "grouping":
+          await writeSidebarGrouping(db, userId, update.grouping);
+          break;
+        case "order":
+          await writeSidebarOrder(db, userId, update.order);
+          break;
+        default:
+          await writeSidebarLayoutEntry(db, userId, update);
+      }
       // The person's other devices refetch the layout.
       await scheduleUserInvalidation(
         () => context.executionCtx,

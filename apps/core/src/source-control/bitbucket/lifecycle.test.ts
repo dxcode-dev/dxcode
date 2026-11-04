@@ -300,7 +300,7 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
       f.sqlite.prepare("SELECT * FROM integration_credential").all(),
     ).toEqual([]);
   });
-  it("rotates tokens once and rejects simultaneous refresh without replay", async () => {
+  it("rotates tokens once and lets a simultaneous request wait for the rotation", async () => {
     const f = await fixture();
     const connection = await f.connect();
     f.sqlite
@@ -311,6 +311,7 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
     const started = new Promise<void>((resolve) => {
       entered = resolve;
     });
+    f.fetcher.mockClear();
     f.fetcher.mockImplementationOnce(() => {
       entered();
       return new Promise<Response>((resolve) => {
@@ -323,9 +324,14 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
       async () => "done",
     );
     await started;
-    await expect(
-      f.service.withConnection(userId, connection.id, async () => "bad"),
-    ).rejects.toThrow();
+    // The second request arrives mid-rotation. It must neither replay the
+    // refresh token nor fail: it waits and uses the rotated access token.
+    const second = f.service.withConnection(
+      userId,
+      connection.id,
+      async (token) => token,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
     release(
       Response.json({
         access_token: "rotated-access",
@@ -334,6 +340,12 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
       }),
     );
     expect(await first).toBe("done");
+    expect(await second).toBe("rotated-access");
+    expect(
+      f.fetcher.mock.calls.filter(([url]) =>
+        String(url).includes("/access_token"),
+      ),
+    ).toHaveLength(1);
     expect(
       f.sqlite.prepare("SELECT count(*) AS n FROM integration_credential").get()
         ?.n,
@@ -492,7 +504,7 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
     }
   });
   it.each(["zero-row", "lost-ack"] as const)(
-    "requires reauthorization when the replacement commit has a %s result",
+    "settles a replacement commit with a %s result from what D1 holds",
     async (failure) => {
       const f = await fixture();
       const connection = await f.connect();
@@ -536,30 +548,47 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
         });
       }
 
-      await expect(
-        f.service.withConnection(
-          userId,
-          connection.id,
-          async () => "unreachable",
-        ),
-      ).rejects.toThrow();
-
-      expect(await readBitbucketConnection(f.db, userId)).toMatchObject({
-        status: "reauthorization-required",
-        authorization_epoch: connection.authorization_epoch + 1,
+      const result = f.service.withConnection(
+        userId,
+        connection.id,
+        async (token) => token,
+      );
+      if (failure === "zero-row") {
+        // Something else ended the authorization mid-rotation.
+        await expect(result).rejects.toThrow();
+        expect(await readBitbucketConnection(f.db, userId)).toMatchObject({
+          status: "reauthorization-required",
+          authorization_epoch: connection.authorization_epoch + 1,
+          refresh_lock_id: null,
+          refresh_lock_until: null,
+        });
+        return;
+      }
+      // The commit landed; only its acknowledgement was lost. The rotated
+      // credentials are the connection's, so it stays connected on them.
+      await expect(result).resolves.toBe("access-secret-2");
+      const row = await readBitbucketConnection(f.db, userId);
+      expect(row).toMatchObject({
+        status: "active",
+        authorization_epoch: connection.authorization_epoch,
         refresh_lock_id: null,
         refresh_lock_until: null,
       });
+      expect(row?.access_credential_id).not.toBe(
+        connection.access_credential_id,
+      );
     },
   );
   it.each([
     "refresh-read-rpc",
     "provider-refresh-rpc",
+    "provider-5xx",
+    "provider-rate-limit",
     "access-store-rpc",
     "refresh-store-rpc",
     "commit-rpc",
   ] as const)(
-    "requires reauthorization after a pre-commit %s failure",
+    "keeps the connection after a transient pre-commit %s failure, and the next use refreshes",
     async (failure) => {
       const f = await fixture();
       const connection = await f.connect();
@@ -577,6 +606,17 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
       } else if (failure === "provider-refresh-rpc") {
         f.fetcher.mockRejectedValueOnce(
           new Error("transient provider RPC failure"),
+        );
+      } else if (failure === "provider-5xx") {
+        f.fetcher.mockResolvedValueOnce(
+          new Response("upstream error", { status: 502 }),
+        );
+      } else if (failure === "provider-rate-limit") {
+        f.fetcher.mockResolvedValueOnce(
+          new Response("slow down", {
+            status: 429,
+            headers: { "retry-after": "1" },
+          }),
         );
       } else if (
         failure === "access-store-rpc" ||
@@ -601,9 +641,12 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
             )
           )
             return statement;
+          let failed = false;
           return {
-            bind: () => ({
+            bind: (...parameters: unknown[]) => ({
               run: async () => {
+                if (failed) return statement.bind(...parameters).run();
+                failed = true;
                 throw new Error("transient replacement commit RPC failure");
               },
             }),
@@ -618,13 +661,26 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
 
       expect(callback).not.toHaveBeenCalled();
       expect(await readBitbucketConnection(f.db, userId)).toMatchObject({
-        status: "reauthorization-required",
-        authorization_epoch: connection.authorization_epoch + 1,
+        status: "active",
+        authorization_epoch: connection.authorization_epoch,
         access_credential_id: connection.access_credential_id,
         refresh_credential_id: connection.refresh_credential_id,
         refresh_lock_id: null,
         refresh_lock_until: null,
       });
+      // Nothing half-stored is left behind: the two original secrets remain.
+      expect(
+        f.sqlite
+          .prepare("SELECT count(*) AS n FROM integration_credential")
+          .get()?.n,
+      ).toBe(2);
+      vi.restoreAllMocks();
+      await expect(
+        f.service.withConnection(userId, connection.id, async (token) => token),
+      ).resolves.toMatch(/^access-secret-/);
+      expect((await readBitbucketConnection(f.db, userId))?.status).toBe(
+        "active",
+      );
     },
   );
   it("marks revoked consent for reconnect but leaves outages retryable", async () => {
@@ -637,7 +693,12 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
     expect((await readBitbucketConnection(f.db, userId))?.status).toBe(
       "active",
     );
+    // Revoked consent: Bitbucket refuses the access token, and then the
+    // refresh token with invalid_grant.
     f.fetcher.mockResolvedValueOnce(new Response("revoked", { status: 401 }));
+    f.fetcher.mockResolvedValueOnce(
+      Response.json({ error: "invalid_grant" }, { status: 400 }),
+    );
     expect(await f.service.status(userId)).toMatchObject({
       connection: { status: "reauthorization-required" },
     });
@@ -645,22 +706,75 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
       (await readBitbucketConnection(f.db, userId))?.authorization_epoch,
     ).toBe(2);
   });
-  it("requires reauthorization after an uncertain or crashed refresh", async () => {
+  it("refreshes instead of disconnecting when Bitbucket refuses an access token it rotated away", async () => {
+    const f = await fixture();
+    await f.connect();
+    f.fetcher.mockResolvedValueOnce(new Response("expired", { status: 401 }));
+    expect(await f.service.status(userId)).toMatchObject({
+      connection: { status: "active" },
+    });
+    const row = await readBitbucketConnection(f.db, userId);
+    expect(row).toMatchObject({ status: "active", authorization_epoch: 1 });
+    await expect(
+      f.service.withConnection(userId, row?.id, async (token) => token),
+    ).resolves.toBe("access-secret-2");
+  });
+  it("finishes a refresh whose request was abandoned mid-flight instead of disconnecting", async () => {
+    const f = await fixture();
+    const row = await f.connect();
+    f.sqlite
+      .prepare("UPDATE bitbucket_connection SET expires_at = ?")
+      .run("2000-01-01T00:00:00.000Z");
+    // The first request takes the refresh lock, then its Worker invocation
+    // is cancelled (the browser left the page) before Bitbucket answers.
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    f.fetcher.mockImplementationOnce(() => {
+      entered();
+      return new Promise<Response>(() => undefined);
+    });
+    void f.service.withConnection(userId, row.id, async () => "abandoned");
+    await started;
+    expect(
+      (await readBitbucketConnection(f.db, userId))?.refresh_lock_id,
+    ).not.toBeNull();
+    // The lock outlives its holder.
+    f.sqlite
+      .prepare("UPDATE bitbucket_connection SET refresh_lock_until = ?")
+      .run("2000-01-01T00:00:00.000Z");
+
+    await expect(
+      f.service.withConnection(userId, row.id, async (token) => token),
+    ).resolves.toBe("access-secret-2");
+    expect(await readBitbucketConnection(f.db, userId)).toMatchObject({
+      status: "active",
+      authorization_epoch: 1,
+      refresh_lock_id: null,
+      refresh_lock_until: null,
+    });
+  });
+  it("requires reauthorization once Bitbucket refuses the refresh token", async () => {
     const f = await fixture();
     const row = await f.connect();
     f.sqlite
       .prepare(
-        "UPDATE bitbucket_connection SET refresh_lock_id='crashed',refresh_lock_until='2000-01-01T00:00:00.000Z'",
+        "UPDATE bitbucket_connection SET expires_at = ?, refresh_lock_id = 'abandoned', refresh_lock_until = ?",
       )
-      .run();
-    f.fetcher.mockClear();
-    await expect(
-      f.service.withConnection(userId, row.id, async () => undefined),
-    ).rejects.toThrow();
-    expect(f.fetcher).not.toHaveBeenCalled();
-    expect((await readBitbucketConnection(f.db, userId))?.status).toBe(
-      "reauthorization-required",
+      .run("2000-01-01T00:00:00.000Z", "2000-01-01T00:00:00.000Z");
+    f.fetcher.mockResolvedValueOnce(
+      Response.json({ error: "invalid_grant" }, { status: 400 }),
     );
+    const callback = vi.fn();
+    await expect(
+      f.service.withConnection(userId, row.id, callback),
+    ).rejects.toThrow();
+    expect(callback).not.toHaveBeenCalled();
+    expect(await readBitbucketConnection(f.db, userId)).toMatchObject({
+      status: "reauthorization-required",
+      authorization_epoch: 2,
+    });
   });
   it("scopes guest leases to a live immutable Thread and stops them on disconnect", async () => {
     const f = await fixture();

@@ -221,7 +221,7 @@ import {
   type SetFirstPartyPluginConfigurationRequest,
   type SettingsContextData,
   type SettingsFieldError,
-  type SidebarLayoutEntry,
+  type SidebarLayoutChoice,
   SidebarLayoutResponseSchema,
   type SigningKeySetupGuidance,
   type SigningKeysData,
@@ -3117,7 +3117,7 @@ export const getSidebarLayout = async (signal?: AbortSignal) =>
     .data;
 
 /** Records one sidebar choice and returns the whole layout. */
-export const putSidebarLayoutEntry = async (entry: SidebarLayoutEntry) =>
+export const putSidebarLayoutEntry = async (entry: SidebarLayoutChoice) =>
   (
     await request("/v1/sidebar-layout", SidebarLayoutResponseSchema, {
       method: "PUT",

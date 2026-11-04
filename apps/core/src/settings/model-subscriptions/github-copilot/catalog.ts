@@ -62,6 +62,12 @@ const ENDPOINTS = {
 const isCopilotProtocol = (api: string): api is CopilotProtocol =>
   Object.hasOwn(ENDPOINTS, api);
 
+/**
+ * `supportsStrictMode` makes pi send `strict: false` on Responses tools, as it
+ * does for OpenAI's own API. Without it pi leaves `strict` out, the Responses
+ * API applies its strict default and requires every property, and GPT fills
+ * each optional dx tool field with a placeholder (#1733).
+ */
 const model = (input: ModelInput): CopilotCatalogModel => ({
   id: input.id,
   name: input.name,
@@ -75,7 +81,10 @@ const model = (input: ModelInput): CopilotCatalogModel => ({
     toolUse: true,
   },
   cost: input.cost,
-  compatibility: input.compatibility ?? {},
+  compatibility:
+    input.protocol === "openai-responses"
+      ? { ...input.compatibility, supportsStrictMode: true }
+      : (input.compatibility ?? {}),
   ...(input.thinkingLevelMap === undefined
     ? {}
     : { thinkingLevelMap: input.thinkingLevelMap }),

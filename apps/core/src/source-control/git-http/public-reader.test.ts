@@ -333,7 +333,9 @@ describe("public Git repository over smart HTTP", () => {
         expect(Buffer.from(object?.data ?? []).equals(expected)).toBe(true);
       }
     }
-  });
+    // It runs git once per object: about 1.5 s alone, past 5 s when a full
+    // verify loads every core.
+  }, 20_000);
 
   it("reads a server without partial clones with one shallow fetch", async () => {
     const requests: string[] = [];

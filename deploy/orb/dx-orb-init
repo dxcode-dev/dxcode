@@ -30,6 +30,12 @@ if [ -n "${DX_ORB_HOSTNAME:-}" ] && [ "$(hostname)" != "$DX_ORB_HOSTNAME" ]; the
   fi
 fi
 
+# Raise the open-file hard limit the runtime started this process at, so
+# dxd and everything it starts inherit the usual Linux default (#1681).
+if [ -r /etc/profile.d/dx-orb-open-files.sh ]; then
+  . /etc/profile.d/dx-orb-open-files.sh
+fi
+
 state=/home/user/.local/state/dxd
 binary="$state/bin/dxd"
 config="$state/config.json"

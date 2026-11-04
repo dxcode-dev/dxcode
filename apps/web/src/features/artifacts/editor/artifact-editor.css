@@ -715,6 +715,11 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.artifact-comment-body a {
+  color: var(--link, #3b82f6);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 .artifact-comment-composer {
   display: flex;
   flex-direction: column;

@@ -17,6 +17,7 @@ import {
 } from "../artifact-comments-queries.js";
 import { ArtifactApiError } from "../artifacts-api.js";
 import type { ArtifactSessionSnapshot } from "./artifact-session.js";
+import { CommentText } from "./comment-text.js";
 
 /** A comment being written on a quote in the current revision. */
 export interface CommentDraft {
@@ -182,7 +183,9 @@ function CommentThread({
               }
             />
           </div>
-          <p className="artifact-comment-body">{entry.body}</p>
+          <p className="artifact-comment-body">
+            <CommentText text={entry.body} />
+          </p>
         </div>
       ))}
       {readOnly ? null : (

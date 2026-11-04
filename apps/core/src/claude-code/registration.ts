@@ -44,10 +44,14 @@ export const registerClaudeCodeProvider = (input: {
           const { code } = await response
             .json<{ code?: string }>()
             .catch(() => ({ code: undefined }));
+          // An archived Thread keeps its plan; only a removed plan asks the
+          // owner to connect it again (#1668).
           throw new Error(
-            code === "CONNECTION_REMOVED"
-              ? "The Claude Pro/Max connection was removed. Connect it again in Settings → Model Routing."
-              : `Claude Pro/Max credential unavailable (${code ?? response.status}).`,
+            code === "THREAD_ARCHIVED"
+              ? "This Thread is archived. Restore it to continue."
+              : code === "CONNECTION_REMOVED"
+                ? "The Claude Pro/Max connection was removed. Connect it again in Settings → Model Routing."
+                : `Claude Pro/Max credential unavailable (${code ?? response.status}).`,
           );
         }
         return response.json<{ token: string; plan: ClaudePlanAccess }>();

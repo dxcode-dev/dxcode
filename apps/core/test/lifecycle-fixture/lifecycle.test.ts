@@ -756,6 +756,94 @@ describe("generated Flue Worker lifecycle", () => {
     });
   });
 
+  // #1668: archiving a Thread mid-turn stopped its Orb but not its agent.
+  // The running turn failed once the Orb was gone, and every message queued
+  // behind it failed with it, each saying the Thread's plan was removed.
+  it("ends the running turn and the messages queued behind it as stopped when the Thread is archived, and runs the next message once restored", async () => {
+    const first = "Hold this turn open until archived.";
+    const threadId = await startScenarioThread("archive-queue", first);
+    await waitUntil(
+      async () =>
+        (
+          await (
+            await fixtureRequest(`/__fixture/holding/${threadId}`)
+          ).json<{ holding: boolean }>()
+        ).holding,
+      "the first turn to hold",
+    );
+    const client = threadClient(threadId);
+    const queued = ["First message queued before archive.", "Second one."];
+    const receipts = [];
+    for (const [index, body] of queued.entries())
+      receipts.push(
+        await client.send({
+          message: { kind: "user", body },
+          idempotencyKey: `archive-queue-${index}`,
+        }),
+      );
+
+    const archive = (archived: boolean) =>
+      fixtureRequest(`/v1/threads/${threadId}/archive`, {
+        method: "PATCH",
+        headers: { ...authorization, "content-type": "application/json" },
+        body: JSON.stringify({ archived }),
+      });
+    // The fixture has no Orb provider to stop (503); the archive commits.
+    await archive(true);
+    for (const receipt of receipts)
+      await expect(client.wait(receipt)).rejects.toThrow(/abort/i);
+    await waitUntil(
+      async () =>
+        !(
+          await (
+            await fixtureRequest(`/__fixture/holding/${threadId}`)
+          ).json<{ holding: boolean }>()
+        ).holding,
+      "archive to release the held turn",
+    );
+    const archivedHistory = await threadClient(threadId).history();
+    const outcomes = new Map(
+      archivedHistory.settlements.map(({ submissionId, outcome }) => [
+        submissionId,
+        outcome,
+      ]),
+    );
+    // Before the fix nothing was settled here: the turn kept holding.
+    for (const receipt of receipts)
+      expect(outcomes.get(receipt.submissionId)).toBe("aborted");
+    expect(
+      archivedHistory.settlements.filter(({ outcome }) => outcome === "failed"),
+    ).toEqual([]);
+    expect(textsOf(archivedHistory, "user")).toEqual([first, ...queued]);
+
+    // Restored, nothing stale is left queued: the next message runs alone.
+    expect((await archive(false)).status).toBe(200);
+    const after = await client.send({
+      message: { kind: "user", body: "Continue after restore." },
+      idempotencyKey: "archive-queue-after",
+    });
+    await client.wait(after);
+    const continued = await threadClient(threadId).history();
+    expect(textsOf(continued, "user")).toEqual([
+      first,
+      ...queued,
+      "Continue after restore.",
+    ]);
+    expect(textsOf(continued, "assistant")).toEqual(["after-restore-complete"]);
+    writeProof("archive-queue", {
+      threadId,
+      queuedSubmissionIds: receipts.map(({ submissionId }) => submissionId),
+      afterArchive: {
+        userMessages: textsOf(archivedHistory, "user"),
+        settlements: archivedHistory.settlements,
+      },
+      afterRestore: {
+        userMessages: textsOf(continued, "user"),
+        assistantMessages: textsOf(continued, "assistant"),
+      },
+    });
+  });
+
   // #1584: thr_6352fb61 looked stuck after a Stop that a running turn did not
   // honor. Flue settles such a Stop after its grace period; this keeps it so
   // for a tool that ignores Stop and for an activation that hangs, as one did

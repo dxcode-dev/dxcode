@@ -3,26 +3,38 @@ import {
   BUG_REPORT_IMAGE_MAX_BYTES,
   BUG_REPORT_JSON_MAX_BYTES,
   BUG_REPORT_MAX_IMAGES,
+  BugReportAccessResponseSchema,
   BugReportDetailResponseSchema,
   type BugReportDiagnosticKind,
   BugReportErrorResponseSchema,
   type BugReportId,
   BugReportIdSchema,
+  BugReportInvestigationFailedResponseSchema,
+  BugReportInvestigationResponseSchema,
   CreateAppBugReportRequestSchema,
   CreateBugReportRequestSchema,
   CreateBugReportResponseSchema,
+  ListAllBugReportsResponseSchema,
   ListBugReportsResponseSchema,
+  StartBugReportInvestigationRequestSchema,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import type { AppEnv } from "../http/types.js";
 import { bugReportLogger } from "../logging.js";
+import { mayReadOrbContents } from "../thread-sharing/access.js";
+import {
+  investigateBugReport,
+  mayOpenThread,
+  readInvestigation,
+} from "./investigation.js";
 import { redactBugReportText, redactBugReportValue } from "./redaction.js";
 import {
   BUG_REPORT_FILE_NAME,
   bugReportFileKey,
   insertBugReport,
+  isBugReportReader,
   listBugReportFiles,
   listBugReports,
   mayReadBugReport,
@@ -279,6 +291,9 @@ export const threadBugReportRoutes = new Hono<AppEnv>().post(
         context.env,
         context.get("principal").userId,
         threadId as ThreadId,
+        // The reporter reads the report back: a View-only member's report
+        // never reads the Orb.
+        mayReadOrbContents(context.get("threadAccess")),
       );
       bundle.threadAndApp = redactBugReportValue(threadAndApp, server.secrets);
       bundle.thread = redactBugReportValue(server.value, server.secrets);
@@ -308,6 +323,41 @@ export const threadBugReportRoutes = new Hono<AppEnv>().post(
   },
 );
 
+/** Reports per page of All Bug Reports. */
+const ALL_REPORTS_PAGE = 50;
+
+/** Each reporter's display name and username, by dx user ID. */
+const reporterNames = async (
+  db: D1Database,
+  userIds: ReadonlyArray<string>,
+) => {
+  if (userIds.length === 0)
+    return new Map<string, { name: string; username?: string }>();
+  const rows = await db
+    .prepare(
+      `SELECT u.id, u.name, account.display_name, account.username
+         FROM "user" AS u
+         LEFT JOIN personal_account AS account ON account.user_id = u.id
+        WHERE u.id IN (${userIds.map((_, index) => `?${index + 1}`).join(", ")})`,
+    )
+    .bind(...userIds)
+    .all<{
+      id: string;
+      name: string | null;
+      display_name: string | null;
+      username: string | null;
+    }>();
+  return new Map(
+    rows.results.map((row) => [
+      row.id,
+      {
+        name: row.display_name ?? row.name ?? row.username ?? "Unknown",
+        ...(row.username === null ? {} : { username: row.username }),
+      },
+    ]),
+  );
+};
+
 /** The report, when this person may open it. */
 const readableReport = async (context: Context<AppEnv>, db: D1Database) => {
   const id = Option.getOrUndefined(
@@ -330,9 +380,10 @@ const readableReport = async (context: Context<AppEnv>, db: D1Database) => {
 
 /**
  * Mounted at `/v1/bug-reports`: a report sent from Settings, about no
- * Thread; Your Reports, the signed-in person's own; and one report with its
+ * Thread; Your Reports, the signed-in person's own; one report with its
  * images and diagnostics for its reporter and the deployment's report
- * readers.
+ * readers; and the one Thread that investigates it, which only a person
+ * who clicks Investigate starts.
  */
 export const bugReportRoutes = new Hono<AppEnv>()
   .post("/", async (context) => {
@@ -372,20 +423,187 @@ export const bugReportRoutes = new Hono<AppEnv>()
       200,
     );
   })
+  .get("/access", async (context) => {
+    const db = context.env.DB;
+    if (db === undefined)
+      return failure(context, "PERSISTENCE_UNAVAILABLE", 503);
+    const reader = await isBugReportReader(
+      db,
+      context.get("principal").userId,
+      context.env.DX_BUG_REPORT_READERS,
+    );
+    context.header("Cache-Control", "no-store");
+    return context.json(
+      Schema.encodeUnknownSync(BugReportAccessResponseSchema)({
+        status: "success",
+        data: { reader },
+      }),
+      200,
+    );
+  })
+  .get("/all", async (context) => {
+    const db = context.env.DB;
+    if (db === undefined)
+      return failure(context, "PERSISTENCE_UNAVAILABLE", 503);
+    const userId = context.get("principal").userId;
+    // Everyone else is told there is nothing here.
+    if (
+      !(await isBugReportReader(db, userId, context.env.DX_BUG_REPORT_READERS))
+    )
+      return failure(context, "NOT_FOUND", 404);
+    const beforeId = context.req.query("before");
+    const before =
+      beforeId === undefined
+        ? undefined
+        : Option.getOrUndefined(
+            Schema.decodeUnknownOption(BugReportIdSchema)(beforeId),
+          );
+    if (beforeId !== undefined && before === undefined)
+      return failure(context, "INVALID_REQUEST", 400);
+    const after =
+      before === undefined
+        ? undefined
+        : await readBugReport(db, before as BugReportId);
+    if (before !== undefined && after === undefined)
+      return failure(context, "INVALID_REQUEST", 400);
+    const page = await listBugReports(db, {
+      limit: ALL_REPORTS_PAGE + 1,
+      ...(after === undefined
+        ? {}
+        : {
+            before: {
+              createdAt: after.report.createdAt,
+              id: after.report.id,
+            },
+          }),
+    });
+    const items = page.slice(0, ALL_REPORTS_PAGE);
+    const reporters = await reporterNames(db, [
+      ...new Set(items.map(({ reporterUserId }) => reporterUserId)),
+    ]);
+    const last = items.at(-1);
+    context.header("Cache-Control", "no-store");
+    return context.json(
+      Schema.encodeUnknownSync(ListAllBugReportsResponseSchema)({
+        status: "success",
+        data: {
+          items: items.map(({ report, reporterUserId }) => ({
+            ...report,
+            reporter: {
+              ...(reporters.get(reporterUserId) ?? { name: "Unknown" }),
+              you: reporterUserId === userId,
+            },
+          })),
+          ...(page.length > ALL_REPORTS_PAGE && last !== undefined
+            ? { nextCursor: last.report.id }
+            : {}),
+        },
+      }),
+      200,
+    );
+  })
   .get("/:id", async (context) => {
     const db = context.env.DB;
     if (db === undefined)
       return failure(context, "PERSISTENCE_UNAVAILABLE", 503);
     const report = await readableReport(context, db);
     if (report === undefined) return failure(context, "NOT_FOUND", 404);
-    const files = await listBugReportFiles(context.env.DX_STORAGE, report.id);
+    const [files, investigation] = await Promise.all([
+      listBugReportFiles(context.env.DX_STORAGE, report.id),
+      readInvestigation(db, report.id),
+    ]);
+    const principal = context.get("principal");
     context.header("Cache-Control", "no-store");
     return context.json(
       Schema.encodeUnknownSync(BugReportDetailResponseSchema)({
         status: "success",
-        data: { report, files },
+        data: {
+          report,
+          files,
+          ...(investigation === undefined
+            ? {}
+            : {
+                investigation: (await mayOpenThread(
+                  db,
+                  principal,
+                  investigation.threadId,
+                ))
+                  ? { threadId: investigation.threadId }
+                  : {},
+              }),
+        },
       }),
       200,
+    );
+  })
+  .post("/:id/investigation", async (context) => {
+    const db = context.env.DB;
+    if (db === undefined)
+      return failure(context, "PERSISTENCE_UNAVAILABLE", 503);
+    const id = Option.getOrUndefined(
+      Schema.decodeUnknownOption(BugReportIdSchema)(context.req.param("id")),
+    );
+    if (id === undefined) return failure(context, "NOT_FOUND", 404);
+    const text = await context.req.text().catch(() => undefined);
+    const input = Option.getOrUndefined(
+      Schema.decodeUnknownOption(StartBugReportInvestigationRequestSchema)(
+        (() => {
+          try {
+            return text === undefined || text.trim() === ""
+              ? {}
+              : (JSON.parse(text) as unknown);
+          } catch {
+            return undefined;
+          }
+        })(),
+      ),
+    );
+    if (input === undefined) return failure(context, "INVALID_REQUEST", 400);
+    const execution = (() => {
+      try {
+        return context.executionCtx;
+      } catch {
+        return undefined;
+      }
+    })();
+    const outcome = await investigateBugReport({
+      bindings: context.env,
+      principal: context.get("principal"),
+      reportId: id as BugReportId,
+      ...(input.selection === undefined ? {} : { selection: input.selection }),
+      ...(input.claudeConnectionId === undefined
+        ? {}
+        : { claudeConnectionId: input.claudeConnectionId }),
+      ...(execution === undefined
+        ? {}
+        : { waitUntil: (promise) => execution.waitUntil(promise) }),
+    });
+    if (outcome.kind === "not-found") return failure(context, "NOT_FOUND", 404);
+    if (outcome.kind === "failed")
+      return context.json(
+        Schema.encodeUnknownSync(BugReportInvestigationFailedResponseSchema)({
+          status: "error",
+          data: {
+            code: "INVESTIGATION_NOT_STARTED",
+            message: outcome.message,
+            requestId: context.get("requestId"),
+          },
+        }),
+        outcome.status >= 400 && outcome.status < 600
+          ? (outcome.status as 400)
+          : 503,
+      );
+    return context.json(
+      Schema.encodeUnknownSync(BugReportInvestigationResponseSchema)({
+        status: "success",
+        data: {
+          ...(outcome.threadId === undefined
+            ? {}
+            : { threadId: outcome.threadId }),
+          started: outcome.kind === "started",
+        },
+      }),
+      outcome.kind === "started" ? 201 : 200,
     );
   })
   .get("/:id/files/:name", async (context) => {

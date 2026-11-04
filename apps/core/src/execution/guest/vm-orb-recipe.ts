@@ -1,5 +1,6 @@
 import orbHostname from "../../../../../deploy/orb/dx-orb-hostname.sh?raw";
 import orbInit from "../../../../../deploy/orb/dx-orb-init?raw";
+import orbOpenFiles from "../../../../../deploy/orb/dx-orb-open-files.sh?raw";
 import orbTmuxConfig from "../../../../../deploy/orb/tmux.conf?raw";
 import vmSetup from "../../../../../deploy/orb/vm-setup.sh?raw";
 import terminalStub from "../../../../dxd/assets/dx-terminal-stub.sh?raw";
@@ -28,6 +29,7 @@ const FILES: ReadonlyArray<readonly [string, string]> = [
   [`${DIRECTORY}/files/dx-terminal.sh`, terminalStub],
   [`${DIRECTORY}/files/dx-orb-init`, orbInit],
   [`${DIRECTORY}/files/dx-orb-hostname.sh`, orbHostname],
+  [`${DIRECTORY}/files/dx-orb-open-files.sh`, orbOpenFiles],
   [`${DIRECTORY}/files/tmux.conf`, orbTmuxConfig],
 ];
 

@@ -190,6 +190,11 @@
   border-radius: 999px;
   background: currentColor;
 }
+.thread-share-section > .thread-share-note {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
 .thread-share-section > .thread-share-error {
   margin: 0;
   color: var(--destructive);
@@ -229,30 +234,17 @@
   line-height: 1.45;
 }
 
-.dialog-popup.thread-share-confirm {
-  width: min(440px, 100%);
-}
-.thread-share-confirm p {
-  line-height: 1.5;
-}
-.dialog-popup .thread-share-checkbox {
+.thread-share-checkbox {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 16px;
-  font-size: 11.5px;
   cursor: pointer;
 }
 .thread-share-checkbox > input {
   width: 14px;
   height: 14px;
+  margin: 0;
   accent-color: var(--primary);
-}
-.thread-share-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-  margin-top: 18px;
 }
 
 /* Who sent a message in a shared Thread. */

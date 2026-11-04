@@ -1,7 +1,7 @@
 {
   "registry": "ghcr.io",
   "repository": "dxcode-dev/dx-orb",
-  "digest": "sha256:e2ec39a142e0111a71dfbae9090bf45279f00335b8f1fcb04a716ff7882e1a72",
+  "digest": "sha256:f82c95087854e37bac0f33e4d20c8a1a14154b7be07fcbc21e51b503fc534997",
   "dockerHubRepository": "dxcodedev/dx-orb",
-  "source": "5cea08b91966bd19a898dad59398ed9e1b15e476dc8064c44a85840fedd2b9f3"
+  "source": "f65c4bb953edb2ea7a5eeb5c4e6c403c39bcf266d3cef3da59afaeae686e0934"
 }

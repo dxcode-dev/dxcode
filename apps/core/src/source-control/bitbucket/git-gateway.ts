@@ -165,6 +165,8 @@ bitbucketGitGatewayRoutes.all("/*", async (context) => {
         }
         return result;
       },
+      // A request body streams through once; only a bodiless read replays.
+      { replayable: context.req.method === "GET" && !lfs },
     );
     return new Response(response.body, {
       status: response.status,

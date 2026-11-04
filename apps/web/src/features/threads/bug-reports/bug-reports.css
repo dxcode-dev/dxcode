@@ -325,3 +325,24 @@ a.bug-report-status {
 .bug-report-detail audio {
   width: 100%;
 }
+.bug-report-investigation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--divider);
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.bug-report-investigation .bug-report-error {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.bug-reports-more {
+  display: flex;
+  justify-content: center;
+  max-width: 860px;
+  margin: 12px auto 0;
+}

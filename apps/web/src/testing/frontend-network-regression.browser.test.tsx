@@ -29,6 +29,7 @@ import {
 } from "../features/settings/account/personal-account-queries.js";
 import { settingsContextQueryOptions } from "../features/settings/settings-context-queries.js";
 import { automationKeys } from "../features/threads/automations/automations-queries.js";
+import { bugReportAccessQueryOptions } from "../features/threads/bug-reports/bug-report-queries.js";
 import { cacheCreatedThread } from "../features/threads/thread-mutations.js";
 import {
   threadKeys,
@@ -432,6 +433,7 @@ describe("ProductShell route ownership across the mobile breakpoint", () => {
       activeScope: "personal",
     });
     client.setQueryData(threadKeys.shared(userId), []);
+    client.setQueryData(bugReportAccessQueryOptions(userId).queryKey, false);
     runtime.createFlueClient.mockReturnValue(runtime.client);
     runtime.useFlueAgent.mockReturnValue({});
   });

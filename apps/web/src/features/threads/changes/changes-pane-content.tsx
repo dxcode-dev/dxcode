@@ -79,6 +79,11 @@ export interface ChangesPaneProps {
     worktreeLabel?: string,
   ) => void;
   readonly transport?: ChangesTransport;
+  /**
+   * A View-only member sees which files changed and by how much, never
+   * their contents: diffs and Open File read the Orb.
+   */
+  readonly contentsHidden?: boolean;
 }
 
 export function ChangesPaneContent({
@@ -87,6 +92,7 @@ export function ChangesPaneContent({
   onReviewPrompt,
   onOpenFile,
   transport = defaultChangesTransport,
+  contentsHidden = false,
 }: ChangesPaneProps) {
   const queryClient = useQueryClient();
   const [range, setRange] = React.useState<ThreadChangesRange>({ kind: "all" });
@@ -319,7 +325,8 @@ export function ChangesPaneContent({
                 captureId={changes.captureId}
                 diffStyle={diffStyle}
                 overflow={overflow}
-                onOpenFile={onOpenFile}
+                onOpenFile={contentsHidden ? undefined : onOpenFile}
+                contentsHidden={contentsHidden}
               />
             )}
           </>
@@ -569,6 +576,7 @@ function ChangesFileList({
   diffStyle,
   overflow,
   onOpenFile,
+  contentsHidden,
 }: {
   readonly worktrees: ReadonlyArray<ThreadChangesWorktree>;
   readonly projectName: string;
@@ -589,6 +597,7 @@ function ChangesFileList({
     path: ThreadChangesPath,
     worktreeLabel?: string,
   ) => void;
+  readonly contentsHidden: boolean;
 }) {
   const [collapsed, setCollapsed] = React.useState<ReadonlySet<string>>(
     () => new Set(),
@@ -625,6 +634,7 @@ function ChangesFileList({
         diffStyle={diffStyle}
         overflow={overflow}
         onOpenFile={openFile}
+        contentsHidden={contentsHidden}
       />
     );
   };
@@ -881,6 +891,7 @@ interface ChangedFileProps {
     path: ThreadChangesPath,
     worktreeLabel?: string,
   ) => void;
+  readonly contentsHidden: boolean;
 }
 
 /** A row takes only its own values and stable handlers, so it renders alone. */
@@ -900,6 +911,7 @@ function ChangedFile({
   diffStyle,
   overflow,
   onOpenFile,
+  contentsHidden,
 }: ChangedFileProps) {
   const copyPath = async () => {
     try {
@@ -986,7 +998,11 @@ function ChangedFile({
       </div>
       {expanded ? (
         <div className="changes-diff-region">
-          {file.binary ? (
+          {contentsHidden ? (
+            <ChangesState>
+              Only contributors can see what changed inside a file.
+            </ChangesState>
+          ) : file.binary ? (
             <ChangesState icon={<FileWarning />}>
               Binary file preview is unavailable.
             </ChangesState>

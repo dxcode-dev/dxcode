@@ -108,6 +108,7 @@ export const bitbucketRuntimeBroker = (
                 throw sourceAccessDenied("stale-binding", "rebind");
               return row;
             },
+            { replayable: true },
           );
           if (
             authority !== undefined &&

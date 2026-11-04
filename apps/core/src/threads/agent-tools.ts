@@ -16,6 +16,8 @@ import {
 import { defineTool, type ToolDefinition } from "@flue/runtime";
 import { Effect, Result, Schema } from "effect";
 import * as v from "valibot";
+import { reportIdFrom } from "../bug-reports/agent-tools.js";
+import { investigateBugReport } from "../bug-reports/investigation.js";
 import { loadRunnerProfileCatalog } from "../execution/runner-profiles/catalog.js";
 import type { Bindings } from "../http/types.js";
 import { publishRealtimeInvalidation } from "../realtime/publication.js";
@@ -489,14 +491,27 @@ export const createThreadTools = (
         "Files do not transfer on their own. The child starts from its project's repository, not from this Orb, so uncommitted changes here are invisible to it. Put everything it needs in the prompt and push any commits it must build on first; for unpushed work, tell the child to copy it from this Thread with download_thread_changes or download_thread_file, naming the repository and branch.",
         "Returns the child's thread ID. The child sends its result to this Thread as a message when it finishes, and that message starts a new turn here. Use send_thread_message for follow-ups.",
         "Before choosing an Orb or a mode, call list_orbs for the providers and sizes the owner can start, and list_agent_modes for the modes and the models they run. Omit them to use the project's Orb and this Thread's mode.",
+        "To investigate a bug report (when asked to \"investigate bug_...\"), pass bug_report instead of prompt. A report has at most one investigating Thread: if it already has one, you get that Thread instead of a new one. dx writes its first message, which has the child load the report with read_bug_report; never copy a report's text into a prompt. Like any child, it starts in this Thread's Project unless you pass project_id.",
       ]),
       input: v.object({
-        prompt: v.pipe(
-          v.string(),
-          v.minLength(1),
-          v.maxLength(MESSAGE_MAX_CHARS),
-          v.description(
-            "The complete task for the child's agent. It cannot see this conversation.",
+        prompt: v.optional(
+          v.pipe(
+            v.string(),
+            v.minLength(1),
+            v.maxLength(MESSAGE_MAX_CHARS),
+            v.description(
+              "The complete task for the child's agent. It cannot see this conversation. Required unless bug_report is set.",
+            ),
+          ),
+        ),
+        bug_report: v.optional(
+          v.pipe(
+            v.string(),
+            v.minLength(1),
+            v.maxLength(2_048),
+            v.description(
+              "A bug report ID (bug_...) or dx bug report URL: start the Thread that investigates it, instead of a prompt.",
+            ),
           ),
         ),
         title: v.optional(
@@ -555,6 +570,10 @@ export const createThreadTools = (
       }),
       run: async ({ data, toolCallId, signal }) =>
         withContext(async (context, owner) => {
+          if ((data.prompt === undefined) === (data.bug_report === undefined))
+            throw new Error(
+              "create_thread needs either prompt or bug_report, not both.",
+            );
           const selection: ThreadModelSelection | undefined =
             data.agent_mode === undefined
               ? owner.selection
@@ -570,6 +589,72 @@ export const createThreadTools = (
           const projectId = data.project_id ?? defaultProjectId(owner);
           // A retried tool call reuses its Thread.
           const threadId = await idempotentThreadId(callSeed(toolCallId));
+          if (data.bug_report !== undefined) {
+            // Reports hold other people's private transcripts.
+            if (owner.sharedFamilyRoot !== undefined)
+              throw new Error(
+                "A Thread shared with the workspace cannot start a bug report's investigation.",
+              );
+            const reportId = reportIdFrom(data.bug_report);
+            signal?.throwIfAborted();
+            const outcome = await investigateBugReport({
+              bindings: context.bindings,
+              principal: {
+                userId: owner.ownerUserId,
+                credentialScopes: ["personal", "workspace"],
+              },
+              reportId,
+              threadId,
+              parentThreadId: callingThreadId,
+              sourceThreadId: callingThreadId,
+              ...(projectId === undefined ? {} : { projectId }),
+              ...(selection === undefined ? {} : { selection }),
+              ...(data.claude_plan === undefined
+                ? {}
+                : { claudeConnectionId: data.claude_plan }),
+              ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
+              ...(context.waitUntil === undefined
+                ? {}
+                : { waitUntil: context.waitUntil }),
+            });
+            if (outcome.kind === "not-found")
+              throw new Error(`Bug report ${reportId} was not found.`);
+            if (outcome.kind === "failed")
+              throw new Error(`create_thread failed: ${outcome.message}`);
+            if (outcome.kind === "existing")
+              return {
+                output: {
+                  ...(outcome.threadId === undefined
+                    ? {
+                        note: "Another person's Thread already investigates this report.",
+                      }
+                    : {
+                        threadId: outcome.threadId,
+                        note: "This report already has an investigating Thread; no new one was started.",
+                      }),
+                  bugReport: reportId,
+                  started: false,
+                },
+              };
+            // The child counts as working until its activity shows.
+            if (outcome.submissionId !== undefined) {
+              const children =
+                startedChildren.get(callingThreadId) ?? new Map();
+              children.set(outcome.threadId, {
+                submissionId: outcome.submissionId,
+                until: Date.now() + STARTED_CHILD_MS,
+              });
+              startedChildren.set(callingThreadId, children);
+            }
+            return {
+              output: {
+                threadId: outcome.threadId,
+                projectId: outcome.projectId ?? null,
+                bugReport: reportId,
+                started: true,
+              },
+            };
+          }
           signal?.throwIfAborted();
           const { response, payload } = await ownerRequest(
             context,
@@ -589,7 +674,7 @@ export const createThreadTools = (
               ...(data.claude_plan === undefined
                 ? {}
                 : { claudeConnectionId: data.claude_plan }),
-              initialMessage: { body: data.prompt, attachments: [] },
+              initialMessage: { body: data.prompt ?? "", attachments: [] },
             },
           );
           const created = payload?.data as

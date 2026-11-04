@@ -1,17 +1,11 @@
-import { Dialog } from "@base-ui/react/dialog";
 import type { ProjectData } from "@dx/api";
 import type { UserId } from "@dx/domain";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { LoaderCircle, Trash2 } from "lucide-react";
 import * as React from "react";
 import { Button } from "../../shared/ui/button.js";
+import { ConfirmDialog } from "../../shared/ui/confirm-dialog.js";
 import { Input } from "../../shared/ui/input.js";
-import {
-  ModalSurface,
-  ModalSurfaceClose,
-  ModalSurfaceHeader,
-} from "../../shared/ui/modal-surface.js";
 import { SettingsCard, SettingsRow } from "../../shared/ui/settings.js";
 import {
   deleteProjectMutationOptions,
@@ -69,8 +63,8 @@ function DeleteProjectDialog({
   const confirmInput = React.useRef<HTMLInputElement>(null);
   const confirmed =
     confirmation.trim().toLowerCase() === project.name.trim().toLowerCase();
-  const submit = (event: React.FormEvent) => {
-    event.preventDefault();
+  const submit = (event?: React.FormEvent) => {
+    event?.preventDefault();
     if (!confirmed || remove.isPending) return;
     remove.mutate(
       { confirmName: confirmation, threads },
@@ -87,97 +81,64 @@ function DeleteProjectDialog({
     );
   };
   return (
-    <Dialog.Root
+    <ConfirmDialog
       open
-      onOpenChange={(next) =>
-        next || remove.isPending ? undefined : onClose()
+      onOpenChange={(next) => (next ? undefined : onClose())}
+      title={`Delete ${project.name}?`}
+      description="Its settings, secrets, and environment variables are deleted, and it leaves every project list. This cannot be undone."
+      error={
+        remove.isError
+          ? remove.error instanceof Error && remove.error.message !== ""
+            ? remove.error.message
+            : "The project could not be deleted."
+          : undefined
       }
+      confirmLabel={remove.isPending ? "Deleting…" : "Delete Project"}
+      destructive
+      pending={remove.isPending}
+      confirmDisabled={!confirmed}
+      initialFocus={confirmInput}
+      onConfirm={() => submit()}
     >
-      <ModalSurface
-        className="delete-scope-dialog"
-        ariaLabel="Delete project"
-        initialFocus={confirmInput}
-      >
-        <ModalSurfaceHeader>
-          <Dialog.Title className="delete-scope-dialog-title">
-            Delete {project.name}?
-          </Dialog.Title>
-          <ModalSurfaceClose />
-        </ModalSurfaceHeader>
-        <form className="delete-scope-dialog-body" onSubmit={submit}>
-          <Dialog.Description>
-            Its settings, secrets, and environment variables are deleted, and it
-            leaves every project list. This cannot be undone.
-          </Dialog.Description>
-          <fieldset className="delete-scope-choices">
-            <legend>Threads in this project</legend>
-            <label>
-              <input
-                type="radio"
-                name={`${formId}-threads`}
-                checked={threads === "keep"}
-                onChange={() => setThreads("keep")}
-              />
-              <span>
-                Keep them archived. Each person keeps the threads they started,
-                read-only, and they can never be unarchived.
-              </span>
-            </label>
-            <label>
-              <input
-                type="radio"
-                name={`${formId}-threads`}
-                checked={threads === "delete"}
-                onChange={() => setThreads("delete")}
-              />
-              <span>Delete them, with their conversations and sandboxes.</span>
-            </label>
-          </fieldset>
-          <label className="delete-scope-confirm" htmlFor={`${formId}-name`}>
-            Type <strong>{project.name}</strong> to confirm
+      {/* A form, so Enter in the name field confirms. */}
+      <form className="delete-scope-form" onSubmit={submit}>
+        <fieldset className="delete-scope-choices">
+          <legend>Threads in this project</legend>
+          <label>
+            <input
+              type="radio"
+              name={`${formId}-threads`}
+              checked={threads === "keep"}
+              onChange={() => setThreads("keep")}
+            />
+            <span>
+              Keep them archived. Each person keeps the threads they started,
+              read-only, and they can never be unarchived.
+            </span>
           </label>
-          <Input
-            ref={confirmInput}
-            id={`${formId}-name`}
-            autoComplete="off"
-            spellCheck={false}
-            value={confirmation}
-            disabled={remove.isPending}
-            onChange={(event) => setConfirmation(event.target.value)}
-          />
-          {remove.isError ? (
-            <div className="notice error-notice" role="alert">
-              {remove.error instanceof Error && remove.error.message !== ""
-                ? remove.error.message
-                : "The project could not be deleted."}
-            </div>
-          ) : null}
-          <footer>
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              disabled={remove.isPending}
-              onClick={onClose}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              size="xs"
-              variant="destructive"
-              disabled={!confirmed || remove.isPending}
-            >
-              {remove.isPending ? (
-                <LoaderCircle className="spin" aria-hidden="true" />
-              ) : (
-                <Trash2 aria-hidden="true" />
-              )}
-              {remove.isPending ? "Deleting…" : "Delete Project"}
-            </Button>
-          </footer>
-        </form>
-      </ModalSurface>
-    </Dialog.Root>
+          <label>
+            <input
+              type="radio"
+              name={`${formId}-threads`}
+              checked={threads === "delete"}
+              onChange={() => setThreads("delete")}
+            />
+            <span>Delete them, with their conversations and sandboxes.</span>
+          </label>
+        </fieldset>
+        <label className="delete-scope-confirm" htmlFor={`${formId}-name`}>
+          Type <strong>{project.name}</strong> to confirm
+        </label>
+        <Input
+          ref={confirmInput}
+          id={`${formId}-name`}
+          autoComplete="off"
+          spellCheck={false}
+          value={confirmation}
+          disabled={remove.isPending}
+          onChange={(event) => setConfirmation(event.target.value)}
+        />
+      </form>
+    </ConfirmDialog>
   );
 }

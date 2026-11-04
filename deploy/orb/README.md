@@ -92,6 +92,20 @@ root: it wakes the entrypoint with `SIGUSR1` (or starts it if something
 killed it), nudges a running dxd with `SIGHUP`, and restarts an incompatible
 one with `SIGTERM`. Guests built from older templates keep the systemd path.
 
+Cloudflare Containers start every process at an open-file hard limit of
+1024; E2B starts commands at 524288. That is too low for Chromium: it keeps a
+few hundred descriptors per page load until its next garbage collection, so
+a tab that reloads a large app crashes or stops loading within a few loads
+(#1681). The login hook
+[`/etc/profile.d/dx-orb-open-files.sh`](dx-orb-open-files.sh) raises a
+login shell's hard limit to 524288 with `ulimit`, which the runtime's
+`CAP_SYS_RESOURCE` (already in the image user's capability sets) allows,
+falling back to passwordless `sudo` where a host withholds it; Core runs
+every Orb command, agent runs included, as `bash -l`, and `dx-orb-init`
+sources the hook before it starts dxd, so the Terminal, services, and the
+Desktop inherit the same limit. The soft limit stays at 1024; programs that
+need more raise it themselves.
+
 A Core from before this image (for example after a rollback) installs dxd as
 a systemd unit. The entrypoint stands down while
 `/etc/systemd/system/dxd.service` exists, and the current installer treats

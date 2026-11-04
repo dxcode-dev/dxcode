@@ -4,6 +4,7 @@ import type { Hono, MiddlewareHandler } from "hono";
 import { DxAgent } from "../agents/dx-agent.js";
 import { linkMessageAttachments } from "../attachments/message.js";
 import type { AppEnv, Bindings } from "../http/types.js";
+import { threadPersistenceLogger } from "../logging.js";
 import { publishRealtimeInvalidation } from "../realtime/publication.js";
 import {
   deliverInitialDispatch,
@@ -89,14 +90,14 @@ export const deliverFirstMessageBeforeCreatingSend: MiddlewareHandler<
 /** What answers a read of the Thread's agent: Flue's router. */
 type AgentReader = Pick<Hono<AppEnv>, "fetch">;
 
-const firstMessagePending = async (db: D1Database, threadId: ThreadId) =>
-  (await db
-    .prepare(
-      `SELECT 1 AS pending FROM thread_initial_dispatch
-        WHERE thread_id = ? AND state = 'pending'`,
-    )
-    .bind(threadId)
-    .first<{ pending: number }>()) !== null;
+/** The Thread's first message: on its way, failed, or gone (delivered). */
+const firstMessageState = async (db: D1Database, threadId: ThreadId) =>
+  (
+    await db
+      .prepare("SELECT state FROM thread_initial_dispatch WHERE thread_id = ?")
+      .bind(threadId)
+      .first<{ state: "pending" | "failed" }>()
+  )?.state;
 
 /** Flue holds an agent for the Thread: its first message was admitted. */
 const agentExists = async (threadId: ThreadId) =>
@@ -113,11 +114,14 @@ const pause = (ms: number) =>
  * until the conversation is readable. When Flue answers a read 404 while
  * the Thread's first message is pending, or while its agent exists but its
  * conversation is not readable yet, the read waits: it asks Flue again
- * every `pollMs` and answers with Flue's real answer. The read delivers
- * nothing: whoever reads, viewers included, starts no run. Only a 404 looks
- * further, so other reads cost nothing. A Thread with neither (made without
- * a first message, or whose first message failed) gets Flue's 404 at once,
- * and so does any read still unanswered after `waitMs`.
+ * every `pollMs` and answers with Flue's real answer. Once waiting, it
+ * waits until Flue answers, the first message is marked failed, or `waitMs`
+ * passes: the delivery deleting the row means the message was admitted, so
+ * the conversation is about to be readable (#1626, seen on staging). The
+ * read delivers nothing: whoever reads, viewers included, starts no run.
+ * Only a 404 looks further, so other reads cost nothing. A Thread with
+ * neither (made without a first message, or whose first message failed)
+ * gets Flue's 404 at once.
  */
 export const answerReadsWhileFirstMessagePending =
   (
@@ -134,16 +138,41 @@ export const answerReadsWhileFirstMessagePending =
     } = {},
   ): MiddlewareHandler<AppEnv> =>
   async (context, next) => {
+    // Read before `next()`: afterwards Hono resolves params against Flue's
+    // own route, which names the Thread `:id`, so `threadId` is gone.
+    const threadId = context.req.param("threadId") as ThreadId | undefined;
     await next();
     if (context.req.method !== "GET" || context.res.status !== 404) return;
-    const threadId = context.req.param("threadId") as ThreadId | undefined;
     if (threadId === undefined) return;
+    const startedAt = Date.now();
+    let state: "pending" | "failed" | undefined;
+    let agent: boolean | "error" | undefined;
+    let attempts = 0;
+    // One line per read Flue answered 404, so a read that still ends 404 says why.
+    const report = (outcome: string, cause?: unknown) =>
+      threadPersistenceLogger.info("A new Thread's agent read waited.", {
+        event: "agent_read_first_message_wait",
+        threadId,
+        outcome,
+        state: state ?? "none",
+        agent: agent === undefined ? "unchecked" : String(agent),
+        attempts,
+        waitedMs: Date.now() - startedAt,
+        ...(cause === undefined
+          ? {}
+          : {
+              code: cause instanceof Error ? cause.name : "UNKNOWN",
+              detail: cause instanceof Error ? cause.message.slice(0, 200) : "",
+            }),
+      });
     try {
       const db = context.env.DB as D1Database;
-      const arriving = async () =>
-        (await firstMessagePending(db, threadId)) ||
-        (await agentStarted(threadId));
-      if (!(await arriving())) return;
+      state = await firstMessageState(db, threadId);
+      if (state === undefined)
+        agent = await agentStarted(threadId).catch(() => "error" as const);
+      // A failed lookup is not a reason to wait.
+      const waiting = state === "pending" || agent === true;
+      if (!waiting) return report("not-waiting");
       // The same read again: Flue's router serves its own paths from the
       // Thread ID on.
       const url = new URL(context.req.url);
@@ -164,30 +193,28 @@ export const answerReadsWhileFirstMessagePending =
           executionContext,
         );
       const deadline = Date.now() + waitMs;
-      for (let attempt = 1; Date.now() < deadline; attempt++) {
-        if (context.req.raw.signal.aborted) return;
+      for (attempts = 1; Date.now() < deadline; attempts++) {
+        if (context.req.raw.signal.aborted) return report("aborted");
         await pause(pollMs);
         const answer = await read();
         if (answer.status !== 404) {
           context.res = undefined;
           context.res = answer;
-          return;
+          return report(`answered-${answer.status}`);
         }
         await answer.body?.cancel().catch(() => undefined);
-        // About once a second: a message that failed stops the wait.
+        // About once a second: a message that failed stops the wait. One
+        // delivered (row gone) or still on its way keeps it.
         if (
-          attempt % Math.max(1, Math.round(1_000 / pollMs)) === 0 &&
-          !(await arriving())
-        ) {
-          const last = await read();
-          if (last.status !== 404) {
-            context.res = undefined;
-            context.res = last;
-          }
-          return;
-        }
+          attempts % Math.max(1, Math.round(1_000 / pollMs)) === 0 &&
+          (await firstMessageState(db, threadId).catch(() => undefined)) ===
+            "failed"
+        )
+          return report("failed");
       }
-    } catch {
+      report("timed-out");
+    } catch (cause) {
       // Flue's answer stands; the page reads again.
+      report("error", cause);
     }
   };

@@ -55,6 +55,11 @@ vi.mock("./sidebar-account-menu.js", async (importOriginal) => ({
   SidebarAccountMenu: () => null,
 }));
 
+vi.mock("./sidebar-account-menu-slot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./sidebar-account-menu-slot.js")>()),
+  SidebarAccountMenuSlot: () => null,
+}));
+
 vi.mock("./notification-inbox.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./notification-inbox.js")>()),
   NotificationInbox: () => null,

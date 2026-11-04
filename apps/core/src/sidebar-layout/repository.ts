@@ -1,7 +1,11 @@
 import {
+  type SidebarGrouping,
+  SidebarGroupingSchema,
   type SidebarLayoutData,
   type SidebarLayoutEntry,
   SidebarLayoutEntrySchema,
+  type SidebarOrder,
+  SidebarOrderSchema,
   SidebarWidthSchema,
 } from "@dx/api";
 import type { UserId } from "@dx/domain";
@@ -12,6 +16,8 @@ const ENTRY_LIMIT = 500;
 
 const decodeEntry = Schema.decodeUnknownOption(SidebarLayoutEntrySchema);
 const decodeWidth = Schema.decodeUnknownOption(SidebarWidthSchema);
+const decodeGrouping = Schema.decodeUnknownOption(SidebarGroupingSchema);
+const decodeOrder = Schema.decodeUnknownOption(SidebarOrderSchema);
 
 export const readSidebarLayout = async (
   db: D1Database,
@@ -25,7 +31,10 @@ export const readSidebarLayout = async (
       )
       .bind(userId),
     db
-      .prepare(`SELECT width, collapsed FROM sidebar_panel WHERE user_id = ?1`)
+      .prepare(
+        `SELECT width, collapsed, thread_grouping, thread_order
+           FROM sidebar_panel WHERE user_id = ?1`,
+      )
       .bind(userId),
   ]);
   // A row the current schema no longer accepts keeps the default.
@@ -36,11 +45,55 @@ export const readSidebarLayout = async (
   );
   const panel = panelRows?.results[0];
   const width = Option.getOrUndefined(decodeWidth(panel?.width));
+  const grouping = Option.getOrUndefined(
+    decodeGrouping(panel?.thread_grouping),
+  );
+  const order = Option.getOrUndefined(decodeOrder(panel?.thread_order));
   return {
     entries,
     ...(width === undefined ? {} : { width }),
     ...(panel?.collapsed === 1 ? { collapsed: true } : {}),
+    ...(grouping === undefined ? {} : { grouping }),
+    ...(order === undefined ? {} : { order }),
   };
+};
+
+/** Records the person's Sidebar Layout: by Project, or one list. */
+export const writeSidebarGrouping = async (
+  db: D1Database,
+  userId: UserId,
+  grouping: SidebarGrouping,
+  now = new Date(),
+) => {
+  await db
+    .prepare(
+      `INSERT INTO sidebar_panel (user_id, thread_grouping, updated_at)
+       VALUES (?1, ?2, ?3)
+       ON CONFLICT (user_id) DO UPDATE SET
+         thread_grouping = excluded.thread_grouping,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(userId, grouping, now.toISOString())
+    .run();
+};
+
+/** Records the person's Sidebar Order: by last activity, or by creation. */
+export const writeSidebarOrder = async (
+  db: D1Database,
+  userId: UserId,
+  order: SidebarOrder,
+  now = new Date(),
+) => {
+  await db
+    .prepare(
+      `INSERT INTO sidebar_panel (user_id, thread_order, updated_at)
+       VALUES (?1, ?2, ?3)
+       ON CONFLICT (user_id) DO UPDATE SET
+         thread_order = excluded.thread_order,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(userId, order, now.toISOString())
+    .run();
 };
 
 /** Records the width the person dragged their desktop sidebar to. */

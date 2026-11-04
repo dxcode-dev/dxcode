@@ -9,6 +9,7 @@ import { Hono } from "hono";
 import { setBrowserSessionHeaders } from "../auth/session-sockets.js";
 import type { AppEnv } from "../http/types.js";
 import { selectWorkspaceRuntime } from "../runtime/workspace-composition.js";
+import { mayReadOrbContents } from "../thread-sharing/access.js";
 
 /** The guest's Waymote gateway listens here on loopback only. */
 export const DESKTOP_GATEWAY_PORT = 5900;
@@ -67,7 +68,7 @@ export const threadDesktopRoutes = new Hono<AppEnv>()
       context.req.param("threadId"),
     );
     if (Option.isNone(threadId)) return context.notFound();
-    if (context.get("threadAccess") === "view")
+    if (!mayReadOrbContents(context.get("threadAccess")))
       return context.json(
         Schema.encodeUnknownSync(ThreadDesktopReadOnlyResponseSchema)({
           status: "error",

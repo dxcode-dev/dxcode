@@ -33,14 +33,15 @@ RUN curl -fsSL -o /tmp/tmux.tar.gz https://github.com/tmux/tmux-builds/releases/
 
 # dxd. Core installs and updates the binary under the user's state directory;
 # the image only carries the root-owned pieces, so no install needs root:
-# the static login hook that sources the shell profile dxd writes, the
-# /usr/local/bin/dxd link, the entrypoint that runs dxd, and the Terminal's
+# the static login hook that sources the shell profile dxd writes, the login
+# hook that raises the open-file limit, the /usr/local/bin/dxd link, the entrypoint that runs dxd, and the Terminal's
 # tmux configuration.
 COPY apps/dxd/assets/dx-terminal-stub.sh /etc/profile.d/dx-terminal.sh
 COPY deploy/orb/dx-orb-init /usr/local/bin/dx-orb-init
 COPY deploy/orb/dx-orb-hostname.sh /etc/profile.d/dx-orb-hostname.sh
+COPY deploy/orb/dx-orb-open-files.sh /etc/profile.d/dx-orb-open-files.sh
 COPY deploy/orb/tmux.conf /opt/dx/share/tmux.conf
-RUN chown root:root /etc/profile.d/dx-terminal.sh /etc/profile.d/dx-orb-hostname.sh /usr/local/bin/dx-orb-init /opt/dx/share/tmux.conf && chmod 0644 /etc/profile.d/dx-terminal.sh /etc/profile.d/dx-orb-hostname.sh /opt/dx/share/tmux.conf && chmod 0755 /usr/local/bin/dx-orb-init && ln -sfn /home/user/.local/state/dxd/bin/dxd /usr/local/bin/dxd
+RUN chown root:root /etc/profile.d/dx-terminal.sh /etc/profile.d/dx-orb-hostname.sh /etc/profile.d/dx-orb-open-files.sh /usr/local/bin/dx-orb-init /opt/dx/share/tmux.conf && chmod 0644 /etc/profile.d/dx-terminal.sh /etc/profile.d/dx-orb-hostname.sh /etc/profile.d/dx-orb-open-files.sh /opt/dx/share/tmux.conf && chmod 0755 /usr/local/bin/dx-orb-init && ln -sfn /home/user/.local/state/dxd/bin/dxd /usr/local/bin/dxd
 
 # The Desktop (README.md#desktop): headless labwc with Xwayland, foot,
 # Chromium, and Waymote. Debian 13's labwc 0.8.3 runs on wlroots 0.18, which

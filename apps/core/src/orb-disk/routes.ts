@@ -18,6 +18,7 @@ import { type Context, Hono } from "hono";
 import type { AppEnv } from "../http/types.js";
 import { threadDaemonLogger } from "../logging.js";
 import { selectWorkspaceRuntime } from "../runtime/workspace-composition.js";
+import { mayReadOrbContents } from "../thread-sharing/access.js";
 import type { OrbDiskRelayResult } from "./execution-object.js";
 
 /** The Thread execution object, when this runtime relays to a resident. */
@@ -69,7 +70,7 @@ const diskRequest = (context: Context<AppEnv>) => {
   );
   if (Option.isNone(threadId)) return { response: context.notFound() };
   const requestId = context.get("requestId");
-  if (context.get("threadAccess") === "view")
+  if (!mayReadOrbContents(context.get("threadAccess")))
     return {
       response: context.json(
         Schema.encodeUnknownSync(ThreadOrbDiskReadOnlyResponseSchema)({

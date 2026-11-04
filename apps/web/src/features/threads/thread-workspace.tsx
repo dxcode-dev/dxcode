@@ -478,36 +478,25 @@ type ThreadDesktopComponent = React.ComponentType<{
   readonly threadId: ThreadId;
 }>;
 
-/**
- * The Preview tool: absent without a Portal domain, a note for a view-only
- * member (Portals and the Desktop take input), otherwise the Portals pane.
- */
+/** The Preview tool: absent without a Portal domain, else the Portals pane. */
 const previewTool = (
   thread: ThreadDetailData,
   portalDomain: string | undefined,
 ) =>
-  portalDomain === undefined ? undefined : thread.access === "view" ? (
-    <div className="thread-files-state" role="note">
-      Only contributors can open Portals in a shared thread.
-    </div>
-  ) : (
-    (active: boolean) => (
-      <ThreadPortalsPane active={active} threadId={thread.id} />
-    )
-  );
+  portalDomain === undefined
+    ? undefined
+    : (active: boolean) => (
+        <ThreadPortalsPane active={active} threadId={thread.id} />
+      );
 
-/** The Desktop tool, gated like Preview; absent when the router gives none. */
+/** The Desktop tool; absent when the router gives none. */
 const desktopTool = (
   thread: ThreadDetailData,
   Desktop: ThreadDesktopComponent | undefined,
 ) =>
-  Desktop === undefined ? undefined : thread.access === "view" ? (
-    <div className="thread-files-state" role="note">
-      Only contributors can use the desktop in a shared thread.
-    </div>
-  ) : (
-    (active: boolean) => <Desktop active={active} threadId={thread.id} />
-  );
+  Desktop === undefined
+    ? undefined
+    : (active: boolean) => <Desktop active={active} threadId={thread.id} />;
 
 type ThreadSessionProps = {
   readonly thread: ThreadDetailData;
@@ -832,14 +821,11 @@ function FilesView({
   threadId,
   projectName,
   onOpenFile,
-  canWrite,
 }: {
   readonly active: boolean;
   readonly threadId: ThreadId;
   readonly projectName: string;
   readonly onOpenFile: (location: ThreadFileLocation) => void;
-  /** View members read Files; they never get write actions. */
-  readonly canWrite: boolean;
 }) {
   const { layout } = usePaneLayout(threadId);
   // The shown file: the focused pane's, else the first pane showing one.
@@ -861,7 +847,8 @@ function FilesView({
       projectName={projectName}
       selectedFile={selectedFile}
       onOpenFile={onOpenFile}
-      canWrite={canWrite}
+      // Only the owner and contributors see Files.
+      canWrite
     />
   );
 }
@@ -923,20 +910,19 @@ function usePaneViewContents({
 }): PaneContents["views"] {
   const [fileNavigationError, setFileNavigationError] =
     React.useState<string>();
+  // A View-only member sees the Changes file list and no view of the Orb:
+  // its files, Terminal, Portals, and Desktop can hold secrets.
+  const orbVisible = thread.access !== "view";
   const terminal =
-    Terminal === undefined ? undefined : thread.access === "view" ? (
-      <div className="thread-files-state" role="note">
-        Only contributors can use the terminal in a shared thread.
-      </div>
-    ) : (
-      (active: boolean) => (
-        <Terminal
-          active={active}
-          threadId={thread.id}
-          onWorkspaceStatusChange={onWorkspaceStatusChange}
-        />
-      )
-    );
+    Terminal === undefined
+      ? undefined
+      : (active: boolean) => (
+          <Terminal
+            active={active}
+            threadId={thread.id}
+            onWorkspaceStatusChange={onWorkspaceStatusChange}
+          />
+        );
   const portal = previewTool(thread, portalDomain);
   const desktop = desktopTool(thread, Desktop);
   const changes = (
@@ -950,6 +936,7 @@ function usePaneViewContents({
         threadId={thread.id}
         projectName={project.name}
         onReviewPrompt={onReviewPrompt}
+        contentsHidden={!orbVisible}
         onOpenFile={(worktree, path, worktreeLabel) => {
           const validated = filesPath(path);
           if (validated === undefined) {
@@ -972,7 +959,6 @@ function usePaneViewContents({
       threadId={thread.id}
       projectName={project.name}
       onOpenFile={openFile}
-      canWrite={thread.access !== "view"}
     />
   );
   const artifacts = (active: boolean) => (
@@ -984,6 +970,7 @@ function usePaneViewContents({
       }
     />
   );
+  if (!orbVisible) return { changes, artifacts };
   return {
     changes,
     files,
@@ -1220,7 +1207,8 @@ function ThreadSessionContent({
       )}
     />
   );
-  if (!toolsAvailable) return page;
+  // A View-only member's transcript links never open the Orb's files.
+  if (!toolsAvailable || thread.access === "view") return page;
   return (
     <ThreadFileNavigationContext value={fileNavigation}>
       <MarkdownFileLinkContext value={resolveFileLink}>

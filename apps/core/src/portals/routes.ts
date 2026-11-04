@@ -13,6 +13,7 @@ import { DateTime, Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import type { AppEnv } from "../http/types.js";
 import { portalLogger } from "../logging.js";
+import { mayReadOrbContents } from "../thread-sharing/access.js";
 import {
   type PortalConfiguration,
   parsePortalPort,
@@ -57,7 +58,7 @@ const portalRequest = (context: Context<AppEnv>) => {
   if (configuration === undefined || Option.isNone(threadId))
     return { response: context.notFound() };
   const requestId = context.get("requestId");
-  if (context.get("threadAccess") === "view")
+  if (!mayReadOrbContents(context.get("threadAccess")))
     return {
       response: context.json(
         Schema.encodeUnknownSync(ThreadPortalsReadOnlyResponseSchema)({

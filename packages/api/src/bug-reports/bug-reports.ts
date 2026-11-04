@@ -1,4 +1,4 @@
-import { ThreadId } from "@dx/domain";
+import { ModelConnectionId, ThreadId, ThreadModelSelection } from "@dx/domain";
 import { Schema } from "effect";
 import { errorResponse, successResponse } from "../http/response.js";
 
@@ -195,6 +195,35 @@ export const ListBugReportsResponseSchema = successResponse(
   Schema.Struct({ items: Schema.Array(BugReportDataSchema) }),
 );
 
+/** `GET /v1/bug-reports/access`: whether this person reads every report. */
+export const BugReportAccessResponseSchema = successResponse(
+  Schema.Struct({ reader: Schema.Boolean }),
+);
+
+/** A report in All Bug Reports, with who sent it. */
+export const BugReportListItemSchema = Schema.Struct({
+  ...BugReportDataSchema.fields,
+  reporter: Schema.Struct({
+    /** Their display name, or their username without one. */
+    name: Schema.String,
+    username: Schema.optional(Schema.String),
+    you: Schema.Boolean,
+  }),
+});
+export type BugReportListItem = typeof BugReportListItemSchema.Type;
+
+/**
+ * `GET /v1/bug-reports/all`: every report this deployment keeps, newest
+ * first, for its report readers alone. `nextCursor` is the `before` of the
+ * next page.
+ */
+export const ListAllBugReportsResponseSchema = successResponse(
+  Schema.Struct({
+    items: Schema.Array(BugReportListItemSchema),
+    nextCursor: Schema.optional(BugReportIdSchema),
+  }),
+);
+
 /** A file Core keeps with a report: an image or `diagnostics.json`. */
 export const BugReportFileSchema = Schema.Struct({
   name: Schema.String.check(Schema.isPattern(/^[a-z0-9-]+\.[a-z]+$/)),
@@ -202,6 +231,14 @@ export const BugReportFileSchema = Schema.Struct({
   contentType: Text(128),
 });
 export type BugReportFile = typeof BugReportFileSchema.Type;
+
+/**
+ * The Thread investigating a report. `threadId` is absent when it is
+ * another person's Thread that the person asking cannot open.
+ */
+export const BugReportInvestigationSchema = Schema.Struct({
+  threadId: Schema.optional(ThreadId),
+});
 
 /**
  * `GET /v1/bug-reports/:id`: one report and its files, for its reporter and
@@ -212,10 +249,52 @@ export const BugReportDetailResponseSchema = successResponse(
   Schema.Struct({
     report: BugReportDataSchema,
     files: Schema.Array(BugReportFileSchema),
+    /** The Thread investigating the report, while it exists. */
+    investigation: Schema.optional(BugReportInvestigationSchema),
   }),
 );
 export type BugReportDetail =
   (typeof BugReportDetailResponseSchema.Type)["data"];
+
+/**
+ * The body of `POST /v1/bug-reports/:id/investigation`: the mode or model,
+ * and Claude plan, the investigating Thread runs on, as the New Thread
+ * composer would start it. Core picks its Project.
+ */
+export const StartBugReportInvestigationRequestSchema = Schema.Struct({
+  selection: Schema.optional(ThreadModelSelection),
+  claudeConnectionId: Schema.optional(ModelConnectionId),
+});
+export type StartBugReportInvestigationRequest =
+  typeof StartBugReportInvestigationRequestSchema.Type;
+
+/**
+ * `POST /v1/bug-reports/:id/investigation`: the Thread investigating the
+ * report, started now (201) or already there (200). A report has at most
+ * one; it runs as the person who started it.
+ */
+export const BugReportInvestigationResponseSchema = successResponse(
+  Schema.Struct({
+    ...BugReportInvestigationSchema.fields,
+    started: Schema.Boolean,
+  }),
+);
+export type BugReportInvestigation =
+  (typeof BugReportInvestigationResponseSchema.Type)["data"];
+
+/**
+ * The investigating Thread could not be started: Thread creation refused it,
+ * for the reason in `message` (a Claude plan used up, a Project the person
+ * cannot start Threads in).
+ */
+export const BugReportInvestigationFailedResponseSchema = Schema.Struct({
+  status: Schema.Literal("error"),
+  data: Schema.Struct({
+    code: Schema.Literal("INVESTIGATION_NOT_STARTED"),
+    message: Schema.String,
+    requestId: Schema.String,
+  }),
+});
 
 export const BugReportErrorResponseSchema = Schema.Union([
   errorResponse("INVALID_REQUEST", "The bug report is invalid."),

@@ -40,6 +40,11 @@ import {
 } from "../source-control/source-workspace.js";
 import { SourceWorkspaceRepositoryD1 } from "../source-control/source-workspace-repository-d1.js";
 import { GIT_CREDENTIAL_HELPER_PATH } from "../source-control/workspace-assets.js";
+import {
+  type AdditionalRepositoryFailure,
+  type AdditionalRepositoryFailureReason,
+  rememberAdditionalRepositoryFailures,
+} from "./additional-repository-note.js";
 import { withSourceCommandAdmission } from "./guest/source-command-admission.js";
 import { workspacePreparationFor } from "./workspace-preparation.js";
 
@@ -358,12 +363,19 @@ export const additionalRepositoryDirectories = (
  * into place, so an interrupted clone never leaves a partial repository. An
  * existing directory is the user's work and is never touched. A GitHub
  * credential reaches Git only through the template's exact-repository helper.
+ * A transfer that sends nothing for `DX_CLONE_STALL_SECONDS` (Git's
+ * keepalives count, so a slow pack still passes) is stopped and tried once
+ * more, so a stalled connection fails in about a minute instead of holding
+ * the turn for the whole timeout (#1689). A failure prints
+ * `dx-clone-failed: <status>` and Git's last lines, and exits 0: providers
+ * may reject a nonzero exit, and the reason is what the agent needs.
  */
 const ADDITIONAL_CLONE_COMMAND = `set -u
 target="$DX_REPOSITORIES_ROOT/$DX_REPOSITORY_DIRECTORY"
 test -e "$target" && exit 0
 mkdir -p -- "$DX_REPOSITORIES_ROOT" || exit 1
 temporary="$DX_REPOSITORIES_ROOT/.dx-clone-$DX_INVOCATION_ID"
+errors="$temporary.err"
 rm -rf -- "$temporary"
 if test -n "\${GH_TOKEN:-}" && test -x "$DX_GIT_HELPER"; then
   set -- -c credential.helper= -c "credential.helper=$DX_GIT_HELPER" -c credential.useHttpPath=true
@@ -371,13 +383,49 @@ else
   unset GH_TOKEN
   set -- -c credential.helper=
 fi
-if git "$@" -c credential.interactive=false -c protocol.file.allow=never -c protocol.ext.allow=never -c protocol.ssh.allow=never clone --quiet -- "$DX_CLONE_URL" "$temporary"; then
-  mv -T -- "$temporary" "$target"
-else
+set -- "$@" -c credential.interactive=false -c protocol.file.allow=never -c protocol.ext.allow=never -c protocol.ssh.allow=never -c http.lowSpeedLimit=1 -c "http.lowSpeedTime=\${DX_CLONE_STALL_SECONDS:-60}"
+attempt=1
+while :; do
+  if git "$@" clone --quiet -- "$DX_CLONE_URL" "$temporary" 2> "$errors"; then
+    rm -f -- "$errors"
+    exec mv -T -- "$temporary" "$target"
+  fi
   status=$?
   rm -rf -- "$temporary"
-  exit "$status"
-fi`;
+  # Refused credentials and missing repositories fail the same way again.
+  if test "$attempt" -ge 2 || grep -qiE 'authentication|(could not read|unable to get) (username|password)|not found|requested URL returned error: 40[134]' "$errors"; then
+    break
+  fi
+  attempt=2
+done
+echo "dx-clone-failed: $status"
+tail -c 600 "$errors" | tr -d '\\r' | tail -n 4
+rm -f -- "$errors"`;
+
+const CLONE_FAILED = /^dx-clone-failed: (\d+)\n?/m;
+
+/** Git's words, without URL userinfo, bounded for logs and the agent. */
+const cloneDetail = (text: string) =>
+  text
+    .replace(/(\w+:\/\/)[^/\s@]+@/g, "$1")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(" ")
+    .slice(0, 300);
+
+const cloneFailureReason = (
+  detail: string,
+): AdditionalRepositoryFailureReason =>
+  /operation too slow|transfer rate|lowSpeed/i.test(detail)
+    ? "stalled"
+    : /authentication|(could not read|unable to get) (username|password)|returned error: 40[13]/i.test(
+          detail,
+        )
+      ? "authorization"
+      : /not found|returned error: 404/i.test(detail)
+        ? "not-found"
+        : "failed";
 
 /**
  * The Project's additional repositories for the Thread, or undefined when
@@ -453,6 +501,8 @@ export const cloneAdditionalRepositories = async (
   const directories = additionalRepositoryDirectories(
     rows.map(({ full_name }) => full_name),
   );
+  const failures: Array<AdditionalRepositoryFailure> = [];
+  const present: Array<string> = [];
   const ownerTokens = new Map<string, Promise<string | undefined>>();
   const ownerToken = (provider: "github" | "bitbucket", userId: string) => {
     const key = `${provider}:${userId}`;
@@ -476,14 +526,18 @@ export const cloneAdditionalRepositories = async (
       GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_CONFIG_NOSYSTEM: "1",
     };
+    let token: string | undefined;
     try {
       // Providers may reject a nonzero exit, so presence is printed.
-      const present = await sandbox.commands.run(
+      const presence = await sandbox.commands.run(
         'if test -e "$DX_REPOSITORIES_ROOT/$DX_REPOSITORY_DIRECTORY"; then echo present; else echo absent; fi',
         { envs: base, timeoutMs: 10_000 },
       );
-      if (present.stdout?.trim() !== "absent") continue;
-      const token =
+      if (presence.stdout?.trim() !== "absent") {
+        present.push(directory);
+        continue;
+      }
+      token =
         row.provider === "github" || row.provider === "bitbucket"
           ? await ownerToken(row.provider, row.owner_user_id)
           : undefined;
@@ -510,6 +564,14 @@ export const cloneAdditionalRepositories = async (
       });
       if ((result.exitCode ?? 0) !== 0)
         throw new Error(`git clone exited with ${result.exitCode}.`);
+      const failed = CLONE_FAILED.exec(result.stdout ?? "");
+      if (failed !== null) {
+        const detail = cloneDetail(
+          (result.stdout ?? "").slice(failed.index + failed[0].length),
+        );
+        throw new AdditionalCloneFailed(cloneFailureReason(detail), detail);
+      }
+      present.push(directory);
       executionWorkspaceLogger.info("Additional repository cloned.", {
         event: "additional_repository_clone",
         threadId,
@@ -518,19 +580,49 @@ export const cloneAdditionalRepositories = async (
         outcome: "cloned",
       });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const reason =
+        error instanceof AdditionalCloneFailed
+          ? error.reason
+          : /timed out/i.test(message)
+            ? "timed-out"
+            : "failed";
+      const detail =
+        error instanceof AdditionalCloneFailed
+          ? error.detail
+          : cloneDetail(message);
       executionWorkspaceLogger.warn("Additional repository clone failed.", {
         event: "additional_repository_clone",
         threadId,
         directory,
+        provider: row.provider,
         outcome: "error",
-        error: (error instanceof Error ? error.message : String(error)).slice(
-          0,
-          300,
-        ),
+        reason,
+        error: detail,
+      });
+      failures.push({
+        provider: row.provider,
+        fullName: row.full_name,
+        cloneUrl: row.clone_url,
+        directory,
+        reason,
+        authenticated: token !== undefined,
+        ...(detail === "" ? {} : { detail }),
       });
     }
   }
+  // The turn this activation starts tells its agent (#1689).
+  rememberAdditionalRepositoryFailures(threadId, failures, present);
 };
+
+class AdditionalCloneFailed extends Error {
+  constructor(
+    readonly reason: AdditionalRepositoryFailureReason,
+    readonly detail: string,
+  ) {
+    super(`git clone failed (${reason}): ${detail}`);
+  }
+}
 
 /**
  * Admits the agent's source commands (push, repository reads) through the

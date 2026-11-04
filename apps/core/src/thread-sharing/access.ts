@@ -92,16 +92,41 @@ export const impersonateThreadOwner = (
   ownerUserId: UserId,
 ): Principal => ({ ...actor, userId: ownerUserId });
 
+/** Someone's access to a Thread: its owner, or a member it is shared with. */
+export type ThreadAccess = "owner" | SharedThreadAccess;
+
+/**
+ * Whether someone may read the Thread's Orb: its files, Changes diffs,
+ * Terminal, Portals, Desktop, processes and folders, and copies of its files
+ * the Thread keeps. Owners and contributors may; a View-only member reads
+ * the transcript, the Changes file list, and what the agent shared, never
+ * the Orb, which can hold secrets such as `.env` files and shell history.
+ */
+export const mayReadOrbContents = (access: ThreadAccess) => access !== "view";
+
+/**
+ * The Thread routes that read the Orb, below `/threads/:threadId`. Thread
+ * authorization refuses them to anyone who may not read Orb contents.
+ * `/storage` is only the list: it names every stored copy, the read-only
+ * restart's rescued work included. A single stored file decides by itself.
+ */
+const ORB_CONTENT_ROUTE =
+  /^\/(?:(?:files|terminal|desktop|portals|memory|disk)(?:\/.*)?|files-sandbox|changes\/diff|storage)\/?$/;
+
+/** Whether this Thread request path reads the Orb's contents. */
+export const readsOrbContents = (path: string) => {
+  const below = /\/threads\/[^/]+(\/.*)$/.exec(path)?.[1];
+  return below !== undefined && ORB_CONTENT_ROUTE.test(below);
+};
+
 /**
  * Whether a member with View access may make this request. Viewers read the
- * conversation, Changes, and Files, and follow the Thread; they cannot
- * prompt, stop, write files, or open the terminal.
+ * conversation and the Changes file list, and follow the Thread; they cannot
+ * prompt, stop, or write, and `authorizeThread` keeps them out of the Orb
+ * (`readsOrbContents`).
  */
 export const viewerMayRequest = (method: string, path: string) =>
-  (["GET", "HEAD", "OPTIONS"].includes(method) &&
-    !/\/terminal\/?$/.test(path) &&
-    // The Desktop's sockets carry keyboard and pointer input.
-    !/\/desktop\/[a-z]+\/?$/.test(path)) ||
+  ["GET", "HEAD", "OPTIONS"].includes(method) ||
   // Following changes only the viewer's own sidebar.
   (["PUT", "DELETE"].includes(method) && /\/follow\/?$/.test(path)) ||
   // A bug report is the viewer's own and changes nothing in the Thread.

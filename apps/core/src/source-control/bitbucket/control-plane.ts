@@ -6,6 +6,7 @@ import {
 } from "@dx/domain";
 import { Effect, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
+import { sourceControlLogger } from "../../logging.js";
 import {
   type ConfigEncryptionKeyring,
   loadConfigEncryptionKeyring,
@@ -54,6 +55,11 @@ const owner = (userId: string): IntegrationOwner => ({
 const reference = (id: string) =>
   integrationCredentialReferenceFor(id as never);
 const now = () => new Date().toISOString();
+/** Longer than a refresh can take: Bitbucket's 10 s fetch limit plus vault writes. */
+const REFRESH_LOCK_MS = 30_000;
+/** How long a request waits for another request's refresh to commit. */
+const REFRESH_WAIT_MS = 15_000;
+const REFRESH_POLL_MS = 200;
 const denied = () =>
   sourceAccessDenied("connection-reauthorization-required", "reconnect");
 const unavailable = () =>
@@ -157,57 +163,80 @@ export const createBitbucketControlPlane = (input: {
       throw denied();
     return row;
   };
-  const accessToken = async (
-    initial: BitbucketConnectionRow,
+  const logRefresh = (
+    row: BitbucketConnectionRow,
+    outcome: "refreshed" | "retryable" | "refused",
+    reason: string,
+  ) => {
+    const properties = {
+      event: "bitbucket_token_refresh",
+      connectionId: row.id,
+      outcome,
+      reason,
+    };
+    if (outcome === "refreshed")
+      sourceControlLogger.info("Bitbucket token refresh settled.", properties);
+    else
+      sourceControlLogger.warn("Bitbucket token refresh settled.", properties);
+  };
+  const reasonOf = (cause: unknown) =>
+    cause instanceof BitbucketProviderError
+      ? cause.category
+      : cause instanceof SourceControlAccessDenied
+        ? cause.reason
+        : "internal";
+  /** Gives the lock back so the next use refreshes at once. Best effort: an
+   * expired lock is taken over anyway. */
+  const releaseLock = (row: BitbucketConnectionRow, lockId: string) =>
+    db
+      .prepare(
+        "UPDATE bitbucket_connection SET refresh_lock_id = NULL, refresh_lock_until = NULL WHERE id = ? AND refresh_lock_id = ?",
+      )
+      .bind(row.id, lockId)
+      .run()
+      .catch(() => undefined);
+  /**
+   * Rotates the tokens under a lock this call holds. Only Bitbucket refusing
+   * the refresh token (`invalid_grant`) ends the authorization. Anything else
+   * — a network error, a 5xx, a rate limit, a vault or D1 failure — keeps the
+   * stored credentials, releases the lock, and fails retryably: Bitbucket's
+   * own answer to the next refresh settles whether the grant still stands.
+   */
+  const refresh = async (
+    row: BitbucketConnectionRow,
+    lockId: string,
   ): Promise<{ row: BitbucketConnectionRow; token: string }> => {
-    if (initial.refresh_lock_id !== null) {
+    let tokens: BitbucketTokenSet;
+    let refs: { access: string; refresh: string };
+    try {
+      tokens = await provider.refreshToken(
+        await read(row, "refresh-token", row.refresh_credential_id as string),
+      );
+    } catch (cause) {
       if (
-        initial.refresh_lock_until !== null &&
-        initial.refresh_lock_until <= now()
+        cause instanceof BitbucketProviderError &&
+        cause.category === "invalid-grant"
       ) {
-        // A crashed refresh may have rotated remotely. Never replay the old token.
-        await invalidate(initial);
+        logRefresh(row, "refused", cause.category);
+        await invalidate(row);
         throw denied();
       }
+      logRefresh(row, "retryable", reasonOf(cause));
+      await releaseLock(row, lockId);
+      throw cause instanceof BitbucketProviderError &&
+        cause.category === "rate-limited"
+        ? cause
+        : unavailable();
+    }
+    try {
+      refs = await store(row.user_id, tokens);
+    } catch (cause) {
+      logRefresh(row, "retryable", `store:${reasonOf(cause)}`);
+      await releaseLock(row, lockId);
       throw unavailable();
     }
-    if (
-      initial.expires_at !== null &&
-      Date.parse(initial.expires_at) > Date.now() + 60_000
-    )
-      return {
-        row: initial,
-        token: await read(
-          initial,
-          "access-token",
-          initial.access_credential_id as string,
-        ),
-      };
-    const lockId = crypto.randomUUID();
-    const lock = await db
-      .prepare(
-        "UPDATE bitbucket_connection SET refresh_lock_id = ?, refresh_lock_until = ? WHERE id = ? AND status = 'active' AND authorization_epoch = ? AND refresh_lock_id IS NULL AND access_credential_id = ?",
-      )
-      .bind(
-        lockId,
-        new Date(Date.now() + 60_000).toISOString(),
-        initial.id,
-        initial.authorization_epoch,
-        initial.access_credential_id,
-      )
-      .run();
-    if (lock.meta.changes !== 1) throw unavailable();
-    let refs: { access: string; refresh: string } | undefined;
-    let committed = false;
+    let committed: boolean;
     try {
-      const tokens = await provider.refreshToken(
-        await read(
-          initial,
-          "refresh-token",
-          initial.refresh_credential_id as string,
-        ),
-      );
-      refs = await store(initial.user_id, tokens);
       const result = await db
         .prepare(
           "UPDATE bitbucket_connection SET access_credential_id = ?, refresh_credential_id = ?, expires_at = ?, refresh_lock_id = NULL, refresh_lock_until = NULL, updated_at = ? WHERE id = ? AND status = 'active' AND authorization_epoch = ? AND refresh_lock_id = ?",
@@ -217,37 +246,126 @@ export const createBitbucketControlPlane = (input: {
           refs.refresh,
           tokens.expiresAt.toISOString(),
           now(),
-          initial.id,
-          initial.authorization_epoch,
+          row.id,
+          row.authorization_epoch,
           lockId,
         )
         .run();
-      if (result.meta.changes !== 1) {
-        await erase(initial.user_id, [refs.access, refs.refresh]);
-        throw denied();
-      }
-      committed = true;
-      // Reclaim superseded secrets before the fallible post-commit re-read.
-      // Cleanup failure must not invalidate the active replacements.
-      await erase(initial.user_id, [
-        initial.access_credential_id,
-        initial.refresh_credential_id,
-      ]).catch(() => undefined);
-      const activeResult = {
-        row: await active(initial.user_id, initial.id),
-        token: tokens.accessToken,
-      };
-      return activeResult;
-    } catch (cause) {
-      // Pre-commit uncertainty requires fresh consent. A confirmed commit does
-      // not become invalid because a later read failed.
-      if (committed) {
-        if (cause instanceof SourceControlAccessDenied) throw cause;
+      committed = result.meta.changes === 1;
+    } catch {
+      // A lost acknowledgement: what D1 now holds says whether it landed.
+      const settled = await readBitbucketConnection(
+        db,
+        row.user_id,
+        row.id,
+      ).catch(() => undefined);
+      if (settled === undefined) {
+        // Unknown either way. Keep both credential sets; the lock expires
+        // and the next use takes it over from whatever D1 holds.
+        logRefresh(row, "retryable", "commit-unknown");
         throw unavailable();
       }
-      await invalidate(initial);
+      committed = settled?.access_credential_id === refs.access;
+      if (!committed) await releaseLock(row, lockId);
+    }
+    if (!committed) {
+      await erase(row.user_id, [refs.access, refs.refresh]).catch(
+        () => undefined,
+      );
+      const current = await readBitbucketConnection(db, row.user_id, row.id);
+      // The authorization ended meanwhile (disconnect, reconnect, revoke).
+      if (
+        current?.status !== "active" ||
+        current.authorization_epoch !== row.authorization_epoch
+      )
+        throw denied();
+      logRefresh(row, "retryable", "commit");
+      throw unavailable();
+    }
+    logRefresh(row, "refreshed", "expiring");
+    // Reclaim superseded secrets before the fallible post-commit re-read.
+    // Cleanup failure must not invalidate the active replacements.
+    await erase(row.user_id, [
+      row.access_credential_id,
+      row.refresh_credential_id,
+    ]).catch(() => undefined);
+    try {
+      return {
+        row: await active(row.user_id, row.id),
+        token: tokens.accessToken,
+      };
+    } catch (cause) {
+      // A confirmed commit does not become invalid because a later read failed.
       if (cause instanceof SourceControlAccessDenied) throw cause;
-      throw denied();
+      throw unavailable();
+    }
+  };
+  /**
+   * The connection's access token, refreshed when it is about to expire (or
+   * when `stale` names the credential Bitbucket just refused). One request
+   * refreshes at a time; the others wait for its commit instead of failing.
+   * A lock that outlived its holder (a cancelled request or a crashed
+   * isolate) is taken over: the stored refresh token is replayed, and
+   * Bitbucket's answer decides whether the grant still stands.
+   */
+  const accessToken = async (
+    initial: BitbucketConnectionRow,
+    stale?: string,
+  ): Promise<{
+    row: BitbucketConnectionRow;
+    token: string;
+    refreshed: boolean;
+  }> => {
+    const deadline = Date.now() + REFRESH_WAIT_MS;
+    let row = initial;
+    while (true) {
+      const lockHeld =
+        row.refresh_lock_id !== null &&
+        row.refresh_lock_until !== null &&
+        row.refresh_lock_until > now();
+      if (lockHeld) {
+        if (Date.now() >= deadline) throw unavailable();
+        await new Promise((resolve) => setTimeout(resolve, REFRESH_POLL_MS));
+        row = await active(row.user_id, row.id);
+        continue;
+      }
+      const usable =
+        row.refresh_lock_id === null &&
+        row.access_credential_id !== stale &&
+        row.expires_at !== null &&
+        Date.parse(row.expires_at) > Date.now() + 60_000;
+      if (usable)
+        return {
+          row,
+          token: await read(
+            row,
+            "access-token",
+            row.access_credential_id as string,
+          ),
+          refreshed: false,
+        };
+      const lockId = crypto.randomUUID();
+      const lock = await db
+        .prepare(
+          "UPDATE bitbucket_connection SET refresh_lock_id = ?, refresh_lock_until = ? WHERE id = ? AND status = 'active' AND authorization_epoch = ? AND access_credential_id = ? AND refresh_lock_id IS ?",
+        )
+        .bind(
+          lockId,
+          new Date(Date.now() + REFRESH_LOCK_MS).toISOString(),
+          row.id,
+          row.authorization_epoch,
+          row.access_credential_id,
+          row.refresh_lock_id,
+        )
+        .run();
+      if (lock.meta.changes === 1) {
+        if (row.refresh_lock_id !== null)
+          logRefresh(row, "retryable", "abandoned-lock-taken-over");
+        return { ...(await refresh(row, lockId)), refreshed: true };
+      }
+      // Another request locked or rotated first: read what it left.
+      if (Date.now() >= deadline) throw unavailable();
+      row = await active(row.user_id, row.id);
     }
   };
   const withConnection = async <A>(
@@ -258,25 +376,47 @@ export const createBitbucketControlPlane = (input: {
       row: BitbucketConnectionRow,
       api: ReturnType<typeof createBitbucketProvider>,
     ) => Promise<A>,
+    options: {
+      /** The callback may run again after a refused token is refreshed. */
+      readonly replayable?: boolean;
+    } = {},
   ): Promise<A> => {
-    const { row, token } = await accessToken(
+    let { row, token, refreshed } = await accessToken(
       await active(userId, connectionId),
     );
-    try {
-      const result = await callback(token, row, provider);
-      const after = await active(userId, row.id);
-      if (after.authorization_epoch !== row.authorization_epoch) throw denied();
-      return result;
-    } catch (cause) {
-      if (
-        cause instanceof BitbucketProviderError &&
-        (cause.category === "unauthorized" ||
-          cause.category === "invalid-grant")
-      ) {
-        await invalidate(row);
-        throw denied();
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const result = await callback(token, row, provider);
+        const after = await active(userId, row.id);
+        if (after.authorization_epoch !== row.authorization_epoch)
+          throw denied();
+        return result;
+      } catch (cause) {
+        if (
+          !(cause instanceof BitbucketProviderError) ||
+          (cause.category !== "unauthorized" &&
+            cause.category !== "invalid-grant")
+        )
+          throw cause;
+        // A token minted moments ago and still refused is a definite
+        // refusal. An older one may have been rotated away: refresh it, and
+        // let the refresh token's answer decide.
+        if (refreshed || cause.category === "invalid-grant") {
+          sourceControlLogger.warn("Bitbucket refused a fresh access token.", {
+            event: "bitbucket_token_refresh",
+            connectionId: row.id,
+            outcome: "refused",
+            reason: cause.category,
+          });
+          await invalidate(row);
+          throw denied();
+        }
+        ({ row, token, refreshed } = await accessToken(
+          await active(userId, row.id),
+          row.access_credential_id ?? undefined,
+        ));
+        if (!options.replayable || attempt > 0) throw unavailable();
       }
-      throw cause;
     }
   };
   const cacheRepositoryStatement = (
@@ -411,13 +551,18 @@ export const createBitbucketControlPlane = (input: {
       let row = await readBitbucketConnection(db, userId);
       if (row?.status === "active") {
         try {
-          await withConnection(userId, row.id, async (token, connection) => {
-            const user = await provider.getUser(token);
-            if (user.id !== connection.provider_account_id) {
-              await invalidate(connection);
-              throw denied();
-            }
-          });
+          await withConnection(
+            userId,
+            row.id,
+            async (token, connection) => {
+              const user = await provider.getUser(token);
+              if (user.id !== connection.provider_account_id) {
+                await invalidate(connection);
+                throw denied();
+              }
+            },
+            { replayable: true },
+          );
         } catch (cause) {
           if (!(cause instanceof SourceControlAccessDenied)) throw cause;
         }
@@ -432,18 +577,23 @@ export const createBitbucketControlPlane = (input: {
       };
     },
     repositories: (userId: string) =>
-      withConnection(userId, undefined, async (token, row) => {
-        const repositories = await provider.listRepositories(token);
-        // Cached rows are identity hints only. Every operation rechecks live access.
-        for (let offset = 0; offset < repositories.length; offset += 100) {
-          await db.batch(
-            repositories
-              .slice(offset, offset + 100)
-              .map((repo) => cacheRepositoryStatement(row, repo)),
-          );
-        }
-        return { connectionId: row.id, repositories };
-      }),
+      withConnection(
+        userId,
+        undefined,
+        async (token, row) => {
+          const repositories = await provider.listRepositories(token);
+          // Cached rows are identity hints only. Every operation rechecks live access.
+          for (let offset = 0; offset < repositories.length; offset += 100) {
+            await db.batch(
+              repositories
+                .slice(offset, offset + 100)
+                .map((repo) => cacheRepositoryStatement(row, repo)),
+            );
+          }
+          return { connectionId: row.id, repositories };
+        },
+        { replayable: true },
+      ),
   };
 };
 
@@ -553,6 +703,7 @@ export const authorizeBitbucketSource = async (input: {
           ...(presentPaths === undefined ? {} : { presentPaths }),
         };
       },
+      { replayable: true },
     );
   } catch (cause) {
     throw mapBitbucketSourceError(cause);

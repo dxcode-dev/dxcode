@@ -64,6 +64,7 @@ import { ChipInsertItems, ChipPicker, ViewFrames } from "./chip-picker.js";
 import { SuggestMenu } from "./suggest-menu.js";
 import "prosemirror-view/style/prosemirror.css";
 import "prosemirror-tables/style/tables.css";
+import { linkClickProps, linkToOpen } from "./link-clicks.js";
 import "./artifact-editor.css";
 
 const authorName = (author: ArtifactSessionSnapshot["merged"]) =>
@@ -750,8 +751,11 @@ export function ArtifactEditor({
       clipboardTextParser: artifactClipboardTextParser,
       ...(readOnly ? {} : imageDropProps(session)),
       dispatchTransaction: session.dispatch,
-      // Clicking highlighted text opens its comment.
-      handleClick: (_view, pos) => {
+      // A link opens in a new tab, in a table cell as anywhere else.
+      ...linkClickProps,
+      // Clicking highlighted text opens its comment, unless it is a link.
+      handleClick: (clicked, pos, event) => {
+        if (linkToOpen(clicked, event) !== undefined) return false;
         const id = session.commentAt(pos);
         if (id === undefined) return false;
         session.selectComment(id);

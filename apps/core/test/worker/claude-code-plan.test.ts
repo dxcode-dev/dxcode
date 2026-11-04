@@ -790,7 +790,9 @@ describe("Claude Pro/Max plan usage", () => {
     const six = "claude-plan-fallback-thread-6";
     await seedThread(userId, six);
     expect((await tokenOf(six)).token).toBe(TOKEN);
-  });
+    // It signs up, connects two plans, and resolves many turns across six
+    // Threads: under 1 s alone, past 5 s when a full verify loads every core.
+  }, 20_000);
 
   it("keeps a Thread that ran before it had a plan on the plan of its last turn", async () => {
     const { cookie, userId } = await signup(

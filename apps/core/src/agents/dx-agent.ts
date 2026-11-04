@@ -30,6 +30,10 @@ import {
 import { rememberClaudeCodeSandbox } from "../claude-code/runs.js";
 import { claudeCodeMirrorTools } from "../claude-code/tools.js";
 import { createClaudeCodeViewMediaTool } from "../claude-code/view-media.js";
+import {
+  ADDITIONAL_REPOSITORIES_SIGNAL,
+  takeAdditionalRepositoryNote,
+} from "../execution/additional-repository-note.js";
 import { takeDxFilesSandbox } from "../execution/dx-files-sandbox.js";
 import { withoutRepositorySkills } from "../execution/workspace-context.js";
 import { createNeedsYouTools } from "../needs-you/agent-tools.js";
@@ -451,6 +455,13 @@ const usePluginLifecycle = (
         kind: "signal",
         type: WORKSPACE_UNSAVED_STOP_SIGNAL,
         body: unsavedStopNote(unsavedStop),
+      });
+    const clones = takeAdditionalRepositoryNote(threadId);
+    if (clones !== undefined)
+      context.append({
+        kind: "signal",
+        type: ADDITIONAL_REPOSITORIES_SIGNAL,
+        body: clones,
       });
     const recovery = takeWorkspaceRecovery(threadId);
     if (recovery !== undefined)

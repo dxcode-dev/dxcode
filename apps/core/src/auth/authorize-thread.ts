@@ -18,6 +18,8 @@ import {
   canUseSharedThreads,
   findSharedThreadGrant,
   impersonateThreadOwner,
+  mayReadOrbContents,
+  readsOrbContents,
   viewerMayRequest,
 } from "../thread-sharing/access.js";
 import { ThreadRepositoryD1 } from "../threads/repository-d1.js";
@@ -99,7 +101,7 @@ const logAuthorization = (
     authorizationLogger.info("Thread authorization succeeded.", properties);
   } else if (outcome === "read_only") {
     authorizationLogger.info(
-      "Thread authorization denied a write to a View-only member.",
+      "Thread authorization denied a View-only member a write or the Orb.",
       properties,
     );
   } else if (outcome === "not_found") {
@@ -167,9 +169,11 @@ export const authorizeThread: MiddlewareHandler<AppEnv> = async (
   }
 
   const access = result.access ?? "owner";
+  const orbRead = readsOrbContents(context.req.path);
   if (
-    access === "view" &&
-    !viewerMayRequest(context.req.method, context.req.path)
+    (orbRead && !mayReadOrbContents(access)) ||
+    (access === "view" &&
+      !viewerMayRequest(context.req.method, context.req.path))
   ) {
     logAuthorization("read_only", requestId, startedAt, result.threadId);
     return context.json(
@@ -177,8 +181,9 @@ export const authorizeThread: MiddlewareHandler<AppEnv> = async (
         status: "error",
         data: {
           code: "THREAD_READ_ONLY",
-          message:
-            "You can view this Thread. Ask its owner for Contribute access.",
+          message: orbRead
+            ? "Only contributors can see this Thread's Orb: its files, Terminal, Portals, and Desktop."
+            : "You can view this Thread. Ask its owner for Contribute access.",
           requestId,
         },
       },

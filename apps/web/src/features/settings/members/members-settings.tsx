@@ -9,6 +9,7 @@ import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { useNowMinute } from "../../../shared/hooks/use-clock.js";
 import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
+import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
 import {
   DialogContent,
   DialogDescription,
@@ -59,69 +60,6 @@ interface Confirmation {
   readonly action: string;
   readonly destructive?: boolean;
   readonly run: () => Promise<unknown>;
-}
-
-function ConfirmDialog({
-  confirmation,
-  onClose,
-}: {
-  readonly confirmation: Confirmation | undefined;
-  readonly onClose: () => void;
-}) {
-  const [pending, setPending] = React.useState(false);
-  const [error, setError] = React.useState<string>();
-  const confirm = async () => {
-    if (confirmation === undefined) return;
-    setPending(true);
-    setError(undefined);
-    const outcome = await settle(async () => {
-      await confirmation.run();
-      onClose();
-    });
-    if (!outcome.ok) {
-      setError(message(outcome.error));
-    }
-    setPending(false);
-  };
-  return (
-    <DialogRoot
-      open={confirmation !== undefined}
-      onOpenChange={(open) => {
-        if (!open && !pending) {
-          setError(undefined);
-          onClose();
-        }
-      }}
-    >
-      <DialogContent className="members-dialog">
-        <DialogTitle>{confirmation?.title}</DialogTitle>
-        <DialogDescription>{confirmation?.body}</DialogDescription>
-        {error === undefined ? null : (
-          <p className="members-error" role="alert">
-            {error}
-          </p>
-        )}
-        <footer className="members-dialog-actions">
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={pending}
-            onClick={onClose}
-          >
-            Cancel
-          </Button>
-          <Button
-            size="xs"
-            variant={confirmation?.destructive ? "destructive" : "default"}
-            disabled={pending}
-            onClick={() => void confirm()}
-          >
-            {confirmation?.action}
-          </Button>
-        </footer>
-      </DialogContent>
-    </DialogRoot>
-  );
 }
 
 function MemberMenu({
@@ -592,6 +530,23 @@ function MembersList({
   const [search, setSearch] = React.useState("");
   const [filter, setFilter] = React.useState<MemberFilter>("all");
   const [confirmation, setConfirmation] = React.useState<Confirmation>();
+  const [confirming, setConfirming] = React.useState(false);
+  const [confirmError, setConfirmError] = React.useState<string>();
+  const closeConfirmation = () => {
+    setConfirmError(undefined);
+    setConfirmation(undefined);
+  };
+  const confirm = async () => {
+    if (confirmation === undefined) return;
+    setConfirming(true);
+    setConfirmError(undefined);
+    const outcome = await settle(async () => {
+      await confirmation.run();
+      closeConfirmation();
+    });
+    if (!outcome.ok) setConfirmError(message(outcome.error));
+    setConfirming(false);
+  };
   const [inviteDialog, setInviteDialog] = React.useState(0);
   const [inviteOpen, setInviteOpen] = React.useState(false);
   const members = useQuery(
@@ -746,8 +701,17 @@ function MembersList({
         </>
       ) : null}
       <ConfirmDialog
-        confirmation={confirmation}
-        onClose={() => setConfirmation(undefined)}
+        open={confirmation !== undefined}
+        onOpenChange={(open) => {
+          if (!open) closeConfirmation();
+        }}
+        title={confirmation?.title}
+        description={confirmation?.body}
+        error={confirmError}
+        confirmLabel={confirmation?.action}
+        destructive={confirmation?.destructive}
+        pending={confirming}
+        onConfirm={() => void confirm()}
       />
     </div>
   );

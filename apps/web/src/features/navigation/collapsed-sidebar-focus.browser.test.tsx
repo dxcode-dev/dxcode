@@ -213,11 +213,15 @@ it("keeps focus in the sidebar when a frame measures the opening sidebar at 0%",
 
   button("Open sidebar").focus();
   await userEvent.keyboard("{Enter}");
-  const opening = document
-    .querySelector<HTMLElement>(".product-panel-group > :first-child")
-    ?.getAnimations()
-    .at(-1);
-  expect(opening?.playState).toBe("running");
+  const openingAnimation = () =>
+    document
+      .querySelector<HTMLElement>(".product-panel-group > :first-child")
+      ?.getAnimations()
+      .at(-1);
+  // The sidebar starts opening on React's next render, which a loaded
+  // machine delays.
+  await expect.poll(() => openingAnimation()?.playState).toBe("running");
+  const opening = openingAnimation();
   if (opening !== undefined) {
     opening.currentTime = 0;
     opening.playbackRate = 1e-6;

@@ -1,16 +1,18 @@
 /* ConfirmDialog: a 13px type scale, 16px title, 12px description, 24px
    padding, 8px radius, and right-aligned buttons that stack full width on
    phones. */
+/* Above ModalSurface (110), since a confirmation can open from one, and
+   below menus and popovers (200 and up). */
 .confirm-dialog-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: 120;
   background: rgba(0, 0, 0, 0.52);
 }
 .confirm-dialog-viewport {
   position: fixed;
   inset: 0;
-  z-index: 51;
+  z-index: 121;
   display: grid;
   place-items: center;
   padding: 16px;
@@ -43,12 +45,28 @@
   font-weight: 600;
   line-height: 1;
   text-wrap: pretty;
+  overflow-wrap: anywhere;
 }
 .confirm-dialog-description {
   margin: 0;
   color: var(--muted-foreground);
   font-size: 12px;
   line-height: 16px;
+  overflow-wrap: anywhere;
+}
+.confirm-dialog-body {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 16px;
+}
+.confirm-dialog-error {
+  margin: 0;
+  color: var(--destructive);
+  font-size: 12px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
 }
 .confirm-dialog-footer {
   display: flex;

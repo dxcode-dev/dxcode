@@ -38,6 +38,7 @@ export const orbRecipeFiles = [
   "deploy/orb/Dockerfile.dockerignore",
   "deploy/orb/dx-orb-init",
   "deploy/orb/dx-orb-hostname.sh",
+  "deploy/orb/dx-orb-open-files.sh",
   "deploy/orb/tmux.conf",
   "deploy/orb/desktop/start",
   "deploy/orb/desktop/stop",

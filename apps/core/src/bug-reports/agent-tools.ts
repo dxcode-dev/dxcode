@@ -4,6 +4,7 @@ import { Option, Schema } from "effect";
 import * as v from "valibot";
 import type { ThreadToolsContext } from "../threads/agent-tools.js";
 import { readCallingThread } from "../threads/calling-thread.js";
+import { reportInvestigatedBy } from "./investigation.js";
 import { redactBugReportText } from "./redaction.js";
 import {
   bugReportFileKey,
@@ -11,6 +12,7 @@ import {
   type KeptBugReport,
   listBugReportFiles,
   listBugReports,
+  mayReadBugReport,
   readBugReport,
 } from "./repository.js";
 
@@ -46,7 +48,7 @@ const untrusted = (text: string) =>
 const decodeId = Schema.decodeUnknownOption(BugReportIdSchema);
 
 /** The report an ID or a dx report URL names. */
-const reportIdFrom = (value: string) => {
+export const reportIdFrom = (value: string) => {
   const id = Option.getOrUndefined(
     decodeId(/bug_[0-9a-f]{32}/.exec(value)?.[0]),
   );
@@ -58,38 +60,59 @@ const reportIdFrom = (value: string) => {
 };
 
 /**
- * Whether the calling Thread's agent gets the bug report tools: its owner
- * is one of the deployment's report readers, the people whose verified
- * email `DX_BUG_REPORT_READERS` lists, set when the deployment is deployed.
- * A Thread shared with the workspace never does: reports hold other
+ * Whom the bug report tools act for in the calling Thread, or undefined
+ * when its agent gets none. A report reader (a person whose verified email
+ * `DX_BUG_REPORT_READERS` lists, set when the deployment is deployed) reads
+ * every report. In the Thread investigating a report, its owner reads the
+ * reports they may open: every report for a reader, else their own. A
+ * Thread shared with the workspace never gets them: reports hold other
  * people's private Thread transcripts.
  */
-export const mayUseBugReportTools = async (
+const bugReportToolsActor = async (
   context: Pick<ThreadToolsContext, "db" | "bindings">,
   callingThreadId: string,
 ) => {
   const calling = await readCallingThread(context.db, callingThreadId);
-  return (
-    calling.sharedFamilyRoot === undefined &&
-    (await isBugReportReader(
+  if (calling.sharedFamilyRoot !== undefined) return undefined;
+  const userId = calling.ownerUserId as string;
+  if (
+    await isBugReportReader(
       context.db,
-      calling.ownerUserId,
+      userId,
       context.bindings.DX_BUG_REPORT_READERS,
-    ))
-  );
+    )
+  )
+    return { userId, reader: true };
+  const investigated = await reportInvestigatedBy(context.db, callingThreadId);
+  const report =
+    investigated === undefined
+      ? undefined
+      : await readBugReport(context.db, investigated);
+  return report !== undefined && report.reporterUserId === userId
+    ? { userId, reader: false }
+    : undefined;
 };
 
-/** The reader the tools act for; anyone else is refused. */
+/**
+ * Whether the calling Thread's agent gets the bug report tools: a report
+ * reader's Thread, or the Thread investigating a report its owner sent.
+ */
+export const mayUseBugReportTools = async (
+  context: Pick<ThreadToolsContext, "db" | "bindings">,
+  callingThreadId: string,
+) => (await bugReportToolsActor(context, callingThreadId)) !== undefined;
+
+/** Whom the tools act for; anyone else is refused. */
 const readerOf = async (
   context: ThreadToolsContext,
   callingThreadId: string,
 ) => {
-  if (!(await mayUseBugReportTools(context, callingThreadId)))
+  const actor = await bugReportToolsActor(context, callingThreadId);
+  if (actor === undefined)
     throw new Error(
-      "Only the deployment's report readers can read bug reports, and never from a Thread shared with the workspace.",
+      "Only the deployment's report readers, and a report's investigating Thread, can read bug reports, and never from a Thread shared with the workspace.",
     );
-  const calling = await readCallingThread(context.db, callingThreadId);
-  return { userId: calling.ownerUserId as string };
+  return actor;
 };
 
 const reportUrl = (context: ThreadToolsContext, id: string) => {
@@ -118,8 +141,8 @@ const reportFields = (
 /**
  * `list_bug_reports` and `read_bug_report`: the bug reports this deployment
  * keeps, which are never filed anywhere else. dx mounts them only for a
- * report reader's own Threads (`mayUseBugReportTools`), and each call
- * checks again.
+ * report reader's own Threads and a report's investigating Thread
+ * (`mayUseBugReportTools`), and each call checks again.
  */
 export const createBugReportTools = (
   callingThreadId: string,
@@ -129,7 +152,7 @@ export const createBugReportTools = (
     name: "list_bug_reports",
     description: description([
       "List the bug reports people sent with Report Bug in this dx deployment, newest first. dx keeps every report here and never files it on GitHub.",
-      "Only the deployment's report readers get this tool, and it lists every report. Each report has its ID, where it was sent from (a Thread, or Settings with no Thread), the reporter's dx user ID, when, the start of its message, and which diagnostics it holds. Read one with read_bug_report.",
+      "It lists the reports this Thread's owner may open: every report for the deployment's report readers, else only their own. Each report has its ID, where it was sent from (a Thread, or Settings with no Thread), the reporter's dx user ID, when, the start of its message, and which diagnostics it holds. Read one with read_bug_report.",
       "When you open a GitHub issue for a report, put only a summary and the report's url there, never its diagnostics or transcript.",
       UNTRUSTED,
     ]),
@@ -155,13 +178,19 @@ export const createBugReportTools = (
       const context = getContext();
       const reader = await readerOf(context, callingThreadId);
       const limit = data.limit ?? LIST_DEFAULT_LIMIT;
-      const after =
+      const cursor =
         data.cursor === undefined
           ? undefined
           : await readBugReport(context.db, reportIdFrom(data.cursor));
+      const after =
+        cursor === undefined ||
+        (!reader.reader && cursor.reporterUserId !== reader.userId)
+          ? undefined
+          : cursor;
       if (data.cursor !== undefined && after === undefined)
         throw new Error("list_bug_reports: the cursor is no longer valid.");
       const page = await listBugReports(context.db, {
+        ...(reader.reader ? {} : { reporterUserId: reader.userId }),
         limit: limit + 1,
         ...(after === undefined
           ? {}
@@ -197,7 +226,7 @@ export const createBugReportTools = (
     description: description([
       "Read one bug report this dx deployment keeps: its full message, where and when it was sent, and the files sent with it. Secrets in them were redacted when the report was sent.",
       `It saves the report's files into this workspace under ${SAVE_ROOT}/<report ID>/: the images, diagnostics.json (the Thread's transcript, app errors, failed requests, connection events, Worker logs, Orb and agent state, setup scripts, diffs, and dictation details, as chosen), and dictation.wav. Read them there. Without a workspace, the result carries the start of diagnostics.json instead.`,
-      "Only the deployment's report readers get this tool, and it reads any report.",
+      "It reads a report this Thread's owner may open: any report for the deployment's report readers, else only their own.",
       UNTRUSTED,
     ]),
     harness: true,
@@ -214,7 +243,15 @@ export const createBugReportTools = (
       const reader = await readerOf(context, callingThreadId);
       const id = reportIdFrom(data.report);
       const kept = await readBugReport(context.db, id);
-      if (kept === undefined)
+      if (
+        kept === undefined ||
+        !(await mayReadBugReport(
+          context.db,
+          reader.userId,
+          kept.reporterUserId,
+          context.bindings.DX_BUG_REPORT_READERS,
+        ))
+      )
         throw new Error(`Bug report ${id} was not found.`);
       const bucket = context.bindings.DX_STORAGE;
       const files = await listBugReportFiles(bucket, id);

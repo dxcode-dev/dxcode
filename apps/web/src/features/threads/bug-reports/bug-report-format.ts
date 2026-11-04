@@ -9,3 +9,12 @@ export const reportSource = (report: BugReportData) =>
 
 /** The dx deployment that keeps every report sent from this app. */
 export const reportDestination = () => window.location.host;
+
+/** When a report was sent, as its row and dialog show it. */
+export const sentAt = (createdAt: string) =>
+  new Date(createdAt).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });

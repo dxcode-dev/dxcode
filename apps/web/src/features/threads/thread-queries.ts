@@ -1,4 +1,4 @@
-import type { ThreadData } from "@dx/api";
+import type { ThreadData, ThreadDetailData } from "@dx/api";
 import type { PageCursor, ProjectId, ThreadId, UserId } from "@dx/domain";
 import {
   type InfiniteData,
@@ -310,3 +310,29 @@ export const sharedThreadsQueryOptions = (userId: UserId) =>
     refetchOnWindowFocus: "always",
     refetchOnReconnect: "always",
   });
+
+/**
+ * Whether the page last saw the Thread working: a turn running, with any
+ * messages queued behind it. Archiving stops both (#1668).
+ */
+export const threadSeenWorking = (
+  client: QueryClient,
+  userId: UserId,
+  threadId: ThreadId,
+) => {
+  const detail = client.getQueryData<ThreadDetailData>(
+    threadKeys.detail(userId, threadId),
+  );
+  if (detail !== undefined) return detail.activityStatus === "working";
+  return client
+    .getQueriesData<InfiniteData<ThreadPage, unknown>>({
+      queryKey: threadKeys.lists(userId),
+    })
+    .some(([, data]) =>
+      data?.pages.some((page) =>
+        [...page.items, ...(page.children ?? [])].some(
+          (row) => row.id === threadId && row.activityStatus === "working",
+        ),
+      ),
+    );
+};

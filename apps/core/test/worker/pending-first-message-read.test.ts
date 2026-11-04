@@ -10,6 +10,7 @@ import {
   bindings,
   createProjectViaApi,
   createThreadViaApi,
+  otherPrincipal,
   owner,
   principal,
 } from "./product-route-fixture.js";
@@ -32,38 +33,45 @@ const fakeFlue = (
   admitAfterMs?: number,
   /** Flue already holds the agent; its conversation is not readable yet. */
   agentStarted = false,
+  /**
+   * What Flue's instance lookup says once the conversation is readable;
+   * staging showed it can lag, or fail, while the read waits.
+   */
+  agentLookup?: () => Promise<boolean>,
+  { reader = principal, waitMs = 1_500 } = {},
 ) => {
   let admitted = false;
   const reads: string[] = [];
   const sends: string[] = [];
+  // Flue's router names the Thread `:id`, as `createAgentRouter` does.
   const flue = new Hono<AppEnv>();
-  flue.get("/:threadId", (context) => {
+  flue.get("/:id", (context) => {
     reads.push(`history ${new URL(context.req.url).search}`);
     return admitted
       ? context.json({ entries: ["first message"] }, 200)
       : context.json({ error: { type: "stream_not_found" } }, 404);
   });
-  flue.get("/:threadId/:subpath{.+}", (context) => {
+  flue.get("/:id/:subpath{.+}", (context) => {
     reads.push(context.req.param("subpath"));
     return admitted
       ? context.json({ live: true }, 200)
       : context.json({ error: { type: "stream_not_found" } }, 404);
   });
-  flue.post("/:threadId", (context) => {
-    sends.push(context.req.param("threadId"));
+  flue.post("/:id", (context) => {
+    sends.push(context.req.param("id"));
     return context.json({ error: { type: "invalid_request" } }, 404);
   });
   const app = new Hono<AppEnv>();
   app.use("*", requestId);
   app.use("*", async (context, next) => {
-    context.set("principal", principal);
+    context.set("principal", reader);
     await next();
   });
   const routes = useAgentAdmission(new Hono<AppEnv>());
   const pendingReads = answerReadsWhileFirstMessagePending(flue, {
     pollMs: 50,
-    waitMs: 1_500,
-    agentStarted: async () => agentStarted || admitted,
+    waitMs,
+    agentStarted: agentLookup ?? (async () => agentStarted || admitted),
   });
   routes.use("/:threadId", pendingReads);
   routes.use("/:threadId/:subpath{.+}", pendingReads);
@@ -141,6 +149,90 @@ describe("A new Thread's agent read while its first message is pending", () => {
     expect((await request(thread.id)).status).toBe(200);
     expect(reads.length).toBeGreaterThan(1);
     expect(sends).toEqual([]);
+  });
+
+  it("keeps waiting after the delivery removes the row, even when Flue's instance lookup lags or fails", async () => {
+    // #1626 on staging: the delivery admits the message and deletes the
+    // row about a second in; Flue's conversation is readable a little
+    // later. The instance lookup must not be what keeps the read waiting.
+    for (const agentLookup of [
+      async () => false,
+      async () => {
+        throw new Error("instance lookup failed");
+      },
+    ]) {
+      const thread = await newThread(
+        `delivered-first-read-${crypto.randomUUID().slice(0, 8)}`,
+      );
+      await storeFirstMessage(thread.id);
+      setTimeout(() => {
+        void env.DB.prepare(
+          "DELETE FROM thread_initial_dispatch WHERE thread_id = ?",
+        )
+          .bind(thread.id)
+          .run();
+      }, 100);
+      const { request, sends } = fakeFlue(1_300, false, agentLookup);
+
+      expect((await request(thread.id)).status).toBe(200);
+      expect(sends).toEqual([]);
+    }
+  });
+
+  it("answers a Thread that is unknown or not the reader's at once, before any wait", async () => {
+    // The access check runs first: no Flue read, no D1 row read, no hold,
+    // even when the Thread has a pending first message.
+    const unknown = fakeFlue(undefined, true, undefined, { waitMs: 10_000 });
+    let started = Date.now();
+    const missing = await unknown.request(`thr_${crypto.randomUUID()}`);
+    expect(missing.status).toBe(404);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(unknown.reads).toEqual([]);
+
+    const thread = await newThread(
+      `not-yours-${crypto.randomUUID().slice(0, 8)}`,
+    );
+    await storeFirstMessage(thread.id);
+    const stranger = fakeFlue(undefined, true, undefined, {
+      reader: otherPrincipal,
+      waitMs: 10_000,
+    });
+    started = Date.now();
+    const refused = await stranger.request(thread.id);
+    expect(refused.status).toBe(404);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(stranger.reads).toEqual([]);
+  });
+
+  it("returns promptly when the first message's delivery fails, before or during the wait", async () => {
+    // Failed before the read: no wait at all.
+    const failedEarlier = await newThread(
+      `failed-before-${crypto.randomUUID().slice(0, 8)}`,
+    );
+    await storeFirstMessage(failedEarlier.id, "failed");
+    const before = fakeFlue(undefined, false, undefined, { waitMs: 10_000 });
+    let started = Date.now();
+    expect((await before.request(failedEarlier.id)).status).toBe(404);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(before.reads).toHaveLength(1);
+
+    // Fails while the read waits: the read returns within about a second
+    // of the failure, not at the end of its 10 s wait.
+    const failing = await newThread(
+      `failed-during-${crypto.randomUUID().slice(0, 8)}`,
+    );
+    await storeFirstMessage(failing.id);
+    setTimeout(() => {
+      void env.DB.prepare(
+        "UPDATE thread_initial_dispatch SET state = 'failed', failure_code = 'INITIAL_MESSAGE_REJECTED' WHERE thread_id = ?",
+      )
+        .bind(failing.id)
+        .run();
+    }, 200);
+    const during = fakeFlue(undefined, false, undefined, { waitMs: 10_000 });
+    started = Date.now();
+    expect((await during.request(failing.id)).status).toBe(404);
+    expect(Date.now() - started).toBeLessThan(2_500);
   });
 
   it("answers the live stream the same way", async () => {

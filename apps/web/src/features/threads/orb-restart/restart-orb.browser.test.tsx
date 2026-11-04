@@ -101,6 +101,15 @@ const restartItem = () =>
     ),
   ).find((item) => item.textContent?.trim() === "Restart Orb…");
 
+/** The open Restart Orb dialog, found by its title. */
+const restartDialog = () =>
+  Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]')).find(
+    (dialog) =>
+      document
+        .getElementById(dialog.getAttribute("aria-labelledby") ?? "")
+        ?.textContent?.startsWith("Restart the Orb"),
+  ) ?? null;
+
 const button = (name: string) =>
   Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
     (candidate) => candidate.textContent?.trim() === name,
@@ -163,9 +172,7 @@ describe("Restart Orb", () => {
     await openMenu(thread);
     await React.act(() => restartItem()?.click());
     const dialog = await vi.waitFor(() => {
-      const found = document.querySelector<HTMLElement>(
-        '[aria-label="Restart Orb"]',
-      );
+      const found = restartDialog();
       expect(found).not.toBeNull();
       return found as HTMLElement;
     });
@@ -182,9 +189,7 @@ describe("Restart Orb", () => {
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(`/v1/threads/${thread.id}/orb/restart`);
     expect(init.method).toBe("POST");
-    await vi.waitFor(() =>
-      expect(document.querySelector('[aria-label="Restart Orb"]')).toBeNull(),
-    );
+    await vi.waitFor(() => expect(restartDialog()).toBeNull());
   });
 
   it("keeps the dialog open with the reason when the restart is refused", async () => {
@@ -210,9 +215,8 @@ describe("Restart Orb", () => {
     await vi.waitFor(() => expect(button("Restart Orb")).toBeDefined());
     await React.act(() => button("Restart Orb")?.click());
     const alert = await vi.waitFor(() => {
-      const found = document.querySelector<HTMLElement>(
-        '[aria-label="Restart Orb"] [role="alert"]',
-      );
+      const found =
+        restartDialog()?.querySelector<HTMLElement>('[role="alert"]');
       expect(found).not.toBeNull();
       return found as HTMLElement;
     });
@@ -258,9 +262,7 @@ describe("Restart Orb", () => {
     await vi.waitFor(() =>
       expect(button("Restart From Last Save")).toBeDefined(),
     );
-    const dialog = document.querySelector<HTMLElement>(
-      '[aria-label="Restart Orb"]',
-    );
+    const dialog = restartDialog();
     expect(dialog?.textContent).toContain(
       "Everything that changed since is lost.",
     );
@@ -299,8 +301,7 @@ describe("Restart Orb", () => {
     await React.act(() => button("Restart Orb")?.click());
     await vi.waitFor(() =>
       expect(
-        document.querySelector('[aria-label="Restart Orb"] [role="alert"]')
-          ?.textContent,
+        restartDialog()?.querySelector('[role="alert"]')?.textContent,
       ).toContain("no earlier save"),
     );
     expect(button("Restart From Last Save")).toBeUndefined();
